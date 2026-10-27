@@ -28,7 +28,7 @@ use crate::slots::{collect_expression_names, condition_of_slot, expression_of_sl
 pub(crate) const EXPRESSION_ROOT_PROBE: &str = "__movement_expression_root__";
 
 /// The scalar names a value type may be written as (`<number>`).
-const SCALAR_TYPE_NAMES: &[&str] = &["text", "number", "boolean", "date", "datetime", "file", "json"];
+pub(crate) const SCALAR_TYPE_NAMES: &[&str] = &["text", "number", "boolean", "date", "datetime", "file", "json"];
 
 pub struct Checker<'c> {
     pub catalog: &'c CatalogSnapshot,

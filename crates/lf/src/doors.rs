@@ -35,6 +35,7 @@ use crate::inbound::{
 use crate::json::Js;
 use crate::obj;
 use crate::run_host::{await_wake_work, queue_await_wake};
+use crate::routing::{Arrival, Listen, event_matches_trigger_scope};
 use crate::runs::{Delivered, Fired, Session};
 use crate::secrets::{Binding, Credential, Credentials, install_of, signer_of};
 use crate::backend::RunHostStore;
@@ -139,6 +140,8 @@ pub struct LfDoors<'a, R: Reader> {
     pub sink: EventSink<'a>,
     /// Poke the drain: work rows were queued.
     pub notify: &'a dyn Fn(),
+    /// The listens a delivery's events would reach, as the doors were opened.
+    pub listens: Vec<Listen>,
 }
 
 impl<'a> LfDoors<'a, SessionReader<'a>> {
@@ -151,6 +154,7 @@ impl<'a> LfDoors<'a, SessionReader<'a>> {
             reader: SessionReader { session },
             sink,
             notify,
+            listens: session.file_set().listens.clone(),
         }
     }
 }
@@ -324,6 +328,27 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         self.list(&work);
         self.run_inline(&receipt).await?;
         Ok(true)
+    }
+
+    /// A delivery none of whose events fits the payload every listen it
+    /// would reach declares (`payload: <Payment>`) is refused, naming the
+    /// fields. A listen that declares none takes any event.
+    fn refuse_events(&self, source: &Source, events: &[Js]) -> Option<String> {
+        let credential = self.delivering_credential(source);
+        let mut lines = Vec::new();
+        for event in events {
+            let reached: Vec<&Listen> =
+                self.listens.iter().filter(|l| l.adapter == source.adapter_type && l.hears(credential) && event_matches_trigger_scope(event, &l.config, Arrival::Pushed)).collect();
+            if reached.is_empty() || reached.iter().any(|l| l.takes(event)) {
+                continue;
+            }
+            let payload = event.get("payload").unwrap_or(&Js::Null);
+            for listen in reached {
+                let Some(declared) = &listen.payload else { continue };
+                lines.push(format!("{}, as the listen firing {}:{} declares it: {}", declared.name, listen.file, listen.movement_name, declared.misfits(payload).join("; ")));
+            }
+        }
+        (!lines.is_empty()).then(|| format!("the body does not fit what the listens on {} declare — {}", source.install, lines.join(" | ")))
     }
 
     fn notify(&self) {
@@ -612,6 +637,8 @@ pub async fn receive_webhook(session: &Session, webhook: Webhook<'_>) -> Result<
     let code = answer.body.get("error").and_then(Js::as_str).unwrap_or("unreadable");
     Err(if code == "signature_invalid" {
         format!("signature did not verify for external \"{external}\"")
+    } else if let Some(message) = answer.body.get("message").and_then(Js::as_str) {
+        format!("delivery refused: {message} ({})", answer.status)
     } else {
         format!("delivery refused: {code} ({})", answer.status)
     })

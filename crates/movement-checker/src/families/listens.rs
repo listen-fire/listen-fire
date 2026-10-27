@@ -91,6 +91,9 @@ struct ConfigRead {
     selected: Option<Vec<String>>,
     /// A `fields`-format key's bare names, and where they are written.
     fields: Option<(Vec<String>, Span)>,
+    /// A `type`-format key's node (`payload: <Payment>`): what the listen's
+    /// events are, as the program declares it.
+    payload: Option<SymbolId>,
 }
 
 /// `suggestedListenKey`: a movement's name as a slug.
@@ -304,6 +307,8 @@ impl Checker<'_> {
             let format = spec.and_then(|s| s.trigger_config_formats.as_ref()).and_then(|f| f.0.get(required));
             let example = if format == Some(&TriggerConfigFormat::Cron) {
                 "\"0 9 * * 1\"".to_string()
+            } else if format == Some(&TriggerConfigFormat::Type) {
+                "<Payment>".to_string()
             } else if required == "key" {
                 format!("\"{}\"", suggested_listen_key(&statement.movement))
             } else {
@@ -432,6 +437,9 @@ impl Checker<'_> {
         }
         let param = &params[0];
         let Some(type_) = &param.type_ else { return };
+        if let Some(payload) = read.payload {
+            return self.check_listen_payload_param(payload, param, type_, decl_scope, statement);
+        }
         if is_value_param_type(self, type_, decl_scope) {
             self.report(
                 codes::LISTEN_PARAM_MISMATCH,
@@ -502,6 +510,41 @@ impl Checker<'_> {
             ),
             statement.span,
         );
+    }
+
+    /// A listen that declares its events' type (`payload: <Payment>`) fires
+    /// its movement with that node: the parameter is checked against it as a
+    /// parameter is against its argument, field by field.
+    fn check_listen_payload_param(&mut self, payload: SymbolId, param: &MovementParam, type_: &ParamTypeRef, decl_scope: ScopeId, statement: &ListenDeclaration) {
+        let Some(payload) = self.declared_node(payload).map(|d| d.instance.clone()) else { return };
+        let declared = match type_ {
+            ParamTypeRef::Name(declared) if declared.hops_raw.is_none() => match self.scopes.resolve(decl_scope, &declared.graph) {
+                Resolution::Found(id) => self.declared_node(id).map(|d| d.instance.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(declared) = declared else {
+            self.report(
+                codes::LISTEN_PARAM_MISMATCH,
+                format!(
+                    "'{}' takes '{}: <{}>', but this listener fires with its declared payload '{}' — type the parameter as it: '{}: <{}>'",
+                    statement.movement,
+                    param.name,
+                    spell_param_type(type_),
+                    payload.name,
+                    param.name,
+                    spell_name(&payload.name)
+                ),
+                statement.span,
+            );
+            return;
+        };
+        if declared.name == payload.name {
+            return;
+        }
+        let mut visited = HashSet::new();
+        self.conform_shape_node(&declared.schema, &declared.name, &payload.schema, &payload.name, statement, &mut visited, "");
     }
 
     /// `checkListenShapeConformance`: the instance's event position against
@@ -662,6 +705,38 @@ impl Checker<'_> {
         }
     }
 
+    /// A `type`-format key's value: a node the program declares, or the
+    /// reason it is not one.
+    fn listen_payload_node(&mut self, arg: &NamedArg, scope: ScopeId) -> Option<SymbolId> {
+        let key = &arg.name;
+        let raw = arg.value.raw.trim();
+        if arg.is_type != Some(true) {
+            self.report(
+                codes::LISTEN_BAD_CONFIG,
+                format!("'{key}' takes a node the program declares, as a type — e.g. `{key}: <Payment>` after `node Payment {{ amount: <number> }}`"),
+                arg.value.span,
+            );
+            return None;
+        }
+        let name = raw.strip_prefix('`').and_then(|n| n.strip_suffix('`')).unwrap_or(raw);
+        let found = match self.scopes.resolve(scope, name) {
+            Resolution::Found(id) => Some(id),
+            _ => None,
+        };
+        if let Some(id) = found.filter(|id| self.declared_node(*id).is_some()) {
+            return Some(id);
+        }
+        let message = if crate::checker::SCALAR_TYPE_NAMES.contains(&name) {
+            format!("'{key}' takes a node the program declares, not the value type '<{raw}>' — declare the fields it carries: `node Payment {{ amount: <number> }}`, then `{key}: <Payment>`")
+        } else if let Some(id) = found {
+            format!("'{raw}' is {}, not a node the program declares — '{key}' takes one: `node {raw} {{ … }}`", self.scopes.symbol(id).kind.describe())
+        } else {
+            format!("no node '{raw}' is declared — declare the fields its events carry: `node {raw} {{ amount: <number> }}`")
+        };
+        self.report(codes::LISTEN_BAD_CONFIG, message, arg.value.span);
+        None
+    }
+
     /// One config key of a listen, against the adapter's vocabulary and formats.
     fn check_listen_config_arg(
         &mut self,
@@ -702,6 +777,11 @@ impl Checker<'_> {
             return;
         }
         let raw = arg.value.raw.trim();
+        let format = spec.and_then(|s| s.trigger_config_formats.as_ref()).and_then(|f| f.0.get(&arg.name)).copied();
+        if format == Some(TriggerConfigFormat::Type) {
+            read.payload = self.listen_payload_node(arg, scope);
+            return;
+        }
         if arg.is_type == Some(true) {
             self.report(
                 codes::LISTEN_BAD_CONFIG,
@@ -743,7 +823,6 @@ impl Checker<'_> {
                 }
             }
         }
-        let format = spec.and_then(|s| s.trigger_config_formats.as_ref()).and_then(|f| f.0.get(&arg.name)).copied();
         match format {
             Some(TriggerConfigFormat::Cron) => match static_string_values(&arg.value).as_deref() {
                 Some([value]) => {
@@ -808,7 +887,7 @@ impl Checker<'_> {
                 }
                 return;
             }
-            None => {}
+            Some(TriggerConfigFormat::Type) | None => {}
         }
         self.check_expr_slot(&arg.value, scope);
     }

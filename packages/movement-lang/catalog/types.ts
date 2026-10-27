@@ -122,8 +122,12 @@ export interface AdapterSpec {
    *
    * `'strings'` is a non-empty list of non-empty quoted strings — the shape
    * only; the values are the source system's own (Gmail's `labels`).
+   *
+   * `'type'` is a node the program declares (`payload: <Payment>`): the
+   * listen's events are of that type, and the movement it fires is checked
+   * against it.
    */
-  triggerConfigFormats?: Record<string, 'cron' | 'timezone' | 'fields' | 'strings'>;
+  triggerConfigFormats?: Record<string, 'cron' | 'timezone' | 'fields' | 'strings' | 'type'>;
   /**
    * Interactive "connect" actions the adapter offers when authoring against
    * one of its instances. The checker never reads these — they're carried

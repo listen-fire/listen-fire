@@ -218,6 +218,7 @@ impl Observed<'_> {
             reader: SuiteReader { wake_keys_fail: self.faults.wake_keys },
             sink: EventSink::Queue,
             notify: &|| {},
+            listens: Vec::new(),
         }
     }
 

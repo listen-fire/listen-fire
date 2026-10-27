@@ -753,7 +753,7 @@ export const WireListenDeclarations = z.object({
       z.object({
         key: z.string().min(1),
         required: z.boolean().optional(),
-        format: z.enum(['cron', 'timezone', 'fields', 'strings']).optional(),
+        format: z.enum(['cron', 'timezone', 'fields', 'strings', 'type']).optional(),
       }),
     )
     .optional(),

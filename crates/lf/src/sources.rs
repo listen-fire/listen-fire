@@ -9,7 +9,6 @@ use movement_parser::ast::Program;
 
 use crate::check::ParseError;
 use crate::project::Project;
-use crate::routing::Listen;
 
 pub const MOVEMENT_EXTENSION: &str = ".mvt";
 
@@ -24,8 +23,7 @@ pub struct MovementFile {
     pub version: Option<String>,
 }
 
-/// One movement file's text read once: its program, and the listens it
-/// routes. A set refreshed keeps the parse of each file whose text did not
+/// One movement file's text read once: its program. A set refreshed keeps the parse of each file whose text did not
 /// change (`Parsed::each`), so a refresh parses only what moved.
 pub struct Parsed {
     /// The file's name, as an import names it.
@@ -34,15 +32,12 @@ pub struct Parsed {
     /// The text it was read from.
     source: String,
     pub program: Result<Program, ParseError>,
-    /// Empty when it does not parse (`check` says why).
-    pub listens: Vec<Listen>,
 }
 
 impl Parsed {
     pub fn of(file: &MovementFile) -> Parsed {
         let program = crate::check::parse(&file.source);
-        let listens = program.as_ref().map(|program| crate::routing::listens_of(&file.name, program)).unwrap_or_default();
-        Parsed { name: file.name.clone(), path: file.path.clone(), source: file.source.clone(), program, listens }
+        Parsed { name: file.name.clone(), path: file.path.clone(), source: file.source.clone(), program }
     }
 
     /// Each file read, in order: `held`'s reading of a file kept while its
@@ -79,12 +74,12 @@ mod tests {
     fn a_file_whose_text_is_unchanged_keeps_its_parse() {
         let hello = "function hello(run: <manual-[:Invocation]->>) {\n  return \"v1\"\n}\nlisten to manual fire hello\n";
         let held = Parsed::each(&[file("hello", hello), file("other", hello.replace("hello", "other").as_str())], &[]);
-        assert_eq!(held[0].listens.len(), 1, "its listen is read with it");
+        assert_eq!(crate::routing::listens_across(&held).len(), 2, "each file's listen is read");
         let again = Parsed::each(&[file("hello", hello), file("other", "function other(")], &held);
         assert!(Rc::ptr_eq(&again[0], &held[0]), "the unchanged file is not parsed again");
         assert!(!Rc::ptr_eq(&again[1], &held[1]), "the changed one is");
-        assert!(again[1].program.is_err() && again[1].listens.is_empty(), "a file that does not parse routes nothing");
+        assert!(again[1].program.is_err() && crate::routing::listens_across(&again).len() == 1, "a file that does not parse routes nothing");
         let moved = Parsed::each(&[file("renamed", hello)], &held);
-        assert!(!Rc::ptr_eq(&moved[0], &held[0]) && moved[0].listens[0].file == "renamed", "a parse is kept by its file and its text");
+        assert!(!Rc::ptr_eq(&moved[0], &held[0]) && crate::routing::listens_across(&moved)[0].file == "renamed", "a parse is kept by its file and its text");
     }
 }

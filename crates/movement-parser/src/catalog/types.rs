@@ -514,6 +514,9 @@ pub enum TriggerConfigFormat {
     Timezone,
     Fields,
     Strings,
+    /// A node the program declares (`payload: <Payment>`): the listen's
+    /// events are of that type.
+    Type,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

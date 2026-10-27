@@ -330,7 +330,7 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     let files = scan_movements(&project)?;
     let parsed = Parsed::each(&files, &parsed);
     let catalog = catalog_of(&running, &schemas, credentials, &files);
-    let listens = parsed.iter().flat_map(|p| p.listens.iter().cloned()).collect();
+    let listens = crate::routing::listens_across(&parsed);
     let user = local_identity(&project.user, |k| std::env::var(k).ok());
     let public_url = project
         .public_url
@@ -546,7 +546,12 @@ impl Session {
         let mut fired = Fired::default();
         let keyed = set.running.iter().any(|r| r.external.manifest.name == external && routes_by_key(&r.listen));
         let routed = |l: &Listen| !keyed || address_matches_key(event, &l.config);
-        let reached: Vec<&Listen> = set.listens.iter().filter(|l| l.adapter == external && event_matches_trigger_scope(event, &l.config, arrival) && routed(l) && to(l)).collect();
+        let heard: Vec<&Listen> = set.listens.iter().filter(|l| l.adapter == external && event_matches_trigger_scope(event, &l.config, arrival) && routed(l) && to(l)).collect();
+        let (reached, misfit): (Vec<&Listen>, Vec<&Listen>) = heard.into_iter().partition(|l| l.takes(event));
+        for listen in misfit {
+            let declared = listen.payload.as_ref().map(|p| (p.name.as_str(), p.misfits(event.get("payload").unwrap_or(&Js::Null)).join("; "))).unwrap_or_default();
+            fired.redelivered.push(format!("{}:{} declares the payload {}, which this event does not fit ({}): it runs nothing", listen.file, listen.movement_name, declared.0, declared.1));
+        }
         if keyed && reached.is_empty() {
             fired.redelivered.push(unrouted_line(external, event));
         }
@@ -1584,7 +1589,7 @@ impl Session {
             return self.refuse(log, pairs, rose);
         }
 
-        let listens = parsed.iter().flat_map(|p| p.listens.iter().cloned()).collect();
+        let listens = crate::routing::listens_across(&parsed);
         let _holds = hold_all(&running, self.role.keep());
         let taken = Rc::new(FileSet { files, parsed, catalog, listens, running, schemas, errors: OnceCell::from(counts), _holds });
         self.file_set.replace(taken.clone());
@@ -1968,7 +1973,7 @@ mod tests {
     }
 
     fn polled(config: Obj) -> Listen {
-        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None }
+        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None, payload: None }
     }
 
     #[test]
