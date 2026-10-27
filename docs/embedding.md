@@ -11,6 +11,7 @@ A working example is in [`examples/embed-saas`](../examples/embed-saas): a small
 | `@listen-fire/engine` | The engine and its host contract. Reached only through its public entries, `@listen-fire/engine/public/<entry>`. |
 | `@listen-fire/engine-contracts` | The data the engine is handed: a run's input, the tenant id, the event, the parked state, the module protocol. |
 | `@listen-fire/module-kit` | How a module is defined (`defineModule`) and loaded, in your process or served as a process. |
+| `@listen-fire/embed` | The embedded host, `createEmbeddedHost`: connections, checking, routing and parked runs in one call, over the engine's public entries and the module kit. |
 | `@listen-fire/movement-lang` | The language: parser, checker, catalog types. The engine depends on it. |
 | `@listen-fire/model-providers` | Chat vendors beyond Anthropic (OpenAI, Gemini, Claude on Vertex): the models slot. Optional. |
 | `@listen-fire/embedding-providers`, `@listen-fire/image-providers`, `@listen-fire/transcription-providers` | Embeddings, image generation and transcription over OpenAI and Gemini, each its own package on `model-providers`' host type. Optional. |
@@ -19,17 +20,17 @@ A working example is in [`examples/embed-saas`](../examples/embed-saas): a small
 | `@listen-fire/file-text` | A file's text: PDF, decks, spreadsheets, audio. The file-reading slot's default module; leave it out and an `extract` over a file is refused by the file's name. Optional. |
 | `@lf/<name>` | Ready-made modules: `@lf/attio`, `@lf/slack`, `@lf/google-sheets`, `@lf/web`, and the rest. |
 
-Every package has the same version as the engine. The TypeScript engine is not part of the kit: the kit runs the language of its own release, which is also the pin a movement is saved with (`ENGINE_VERSION`). Node 22 or later. With TypeScript, use `moduleResolution` `node16`, `nodenext` or `bundler` (plain `node` works too, through the packages' `typesVersions`).
+The core packages (`engine`, `engine-contracts`, `movement-lang`) share one version; every other package (`embed`, `module-kit`, the modules) has its own, and takes any core from 0.12 up to 1.0. The TypeScript engine is not part of the kit: the kit runs the language of its own release, which is also the pin a movement is saved with (`ENGINE_VERSION`). Node 22 or later. With TypeScript, use `moduleResolution` `node16`, `nodenext` or `bundler` (plain `node` works too, through the packages' `typesVersions`).
 
 ```sh
-npm install @listen-fire/engine @listen-fire/module-kit
+npm install @listen-fire/embed @listen-fire/engine @listen-fire/engine-contracts @listen-fire/module-kit
 ```
 
 The public entries of `@listen-fire/engine` you will use:
 
 | entry | for |
 |---|---|
-| `public/embed` | `createEmbeddedHost`: the whole host, from connections to parked runs. Underneath: `inProcessHost`, `introspectAdapter`, `collectFileListeners`, `pricedModels`, `MovementEngineError` |
+| `public/embed` | `inProcessHost`, `introspectAdapter`, `collectFileListeners`, `pricedModels`, `MovementEngineError` |
 | `public/catalog` | `buildCatalogSnapshot`: what a customer's movements are checked and run against |
 | `public/movement-engine` | `runMovement`, `resumeMovement`, `checkPinnedInRust`, `parsePinned` |
 | `public/inbound` | `listenerHearsDelivery`, `triggerEventOf`: from your event to a run |
@@ -48,7 +49,7 @@ The public entries of `@listen-fire/engine` you will use:
 - **A movement says what it listens for.** When something happens in your product, the movements that listen for it run.
 - **A run that waits parks.** `await sleep(1h)` stores the run; a tick past its wake steps it on.
 
-`createEmbeddedHost` (`public/embed`) does all of this. You write your module (its `describe`, its reads and writes), hand the host your events, and call its tick from a scheduler.
+`createEmbeddedHost` (`@listen-fire/embed`) does all of this. You write your module (its `describe`, its reads and writes), hand the host your events, and call its tick from a scheduler.
 
 ## 1. Your product as a module
 
@@ -71,7 +72,8 @@ export const crm = defineModule({
 ## 2. The embedded host
 
 ```ts
-import { createEmbeddedHost, pricedModels } from '@listen-fire/engine/public/embed';
+import { createEmbeddedHost } from '@listen-fire/embed';
+import { pricedModels } from '@listen-fire/engine/public/embed';
 import { slackModule } from '@listen-fire/slack';
 
 const host = createEmbeddedHost({
@@ -110,7 +112,7 @@ The example, `examples/embed-saas/src/embedding.ts`, is this and nothing else: a
 
 ## 3. The parts underneath
 
-The embedded host is built from public parts, for a host that needs another shape:
+The embedded host is built from the engine's public parts, for a host that needs another shape:
 
 - **Load a module:** `adapterInProcess(module, context)` (module kit), with `secretsCredential` for its credential and `memoryKv` for its state.
 - **Build a catalog:** `introspectAdapter(adapter, manifest)` per connection, then `buildCatalogSnapshot` (`public/catalog`), each schema keyed by its connection's name.

@@ -44,6 +44,8 @@ const PACKAGES = [
   { dir: 'packages/files-s3' },
   { dir: 'packages/ocr-google' },
   { dir: 'packages/module-kit' },
+  // The embedded host: the engine's public entries and the module kit.
+  { dir: 'packages/embed' },
   { dir: 'modules/google-sheets' },
   // packages/handbook joins here once it exists (PLAN-01 Task 4).
   ...fs

@@ -3,12 +3,11 @@
 // for), a run that sleeps is stepped on by the tick past its wake, and a
 // tenant's catalog is rebuilt when its connection or its schema changes.
 
-import type { Adapter } from 'module-runtime';
+import type { Adapter, DiscriminableEvent } from 'movement-engine/public/adapter';
 import { BASE_RUNTIME_CAPABILITIES } from 'engine-contracts';
 import { defineModule, type AdapterModuleMethods, type ModuleContext } from 'module-kit';
 
-import type { DiscriminableEvent } from '../../translation_graph/adapter';
-import { createEmbeddedHost } from '../embedded_host';
+import { createEmbeddedHost } from '..';
 
 const NOTE_CREATED = 'note.created';
 

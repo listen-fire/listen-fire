@@ -20,7 +20,7 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
-- An embedder's host is one call: `createEmbeddedHost` (`@listen-fire/engine/public/embed`) connects each tenant's modules over its own credentials, checks and keeps its movements, routes an event from the embedder's product to every listen that hears it (by connection, as `lf` routes), and steps on runs that sleep at each `tick`. The embedder writes its module and its events; the example SaaS's host integration went from 512 lines to 245. See docs/embedding.md.
+- An embedder's host is one call: `createEmbeddedHost` (a new package, `@listen-fire/embed`) connects each tenant's modules over its own credentials, checks and keeps its movements, routes an event from the embedder's product to every listen that hears it (by connection, as `lf` routes), and steps on runs that sleep at each `tick`. The embedder writes its module and its events; the example SaaS's host integration went from 512 lines to 238. The routing rule it applies is public in the engine (`listenerHearsDelivery`, `public/inbound`), held to `lf`'s by a shared table of cases. See docs/embedding.md.
 
 ## [0.12.9] - 2026-10-26
 

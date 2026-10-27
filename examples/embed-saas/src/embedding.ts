@@ -4,17 +4,10 @@
 // own). The engine's embedded host does the rest: it checks a customer's
 // movement when it is saved, runs each one that listens when the CRM raises
 // an event, and parks a run that waits (`await sleep(1h)`) until the `tick()`
-// past its wake. Everything here comes from the engine's public entries.
+// past its wake (`@listen-fire/embed`, over the engine's public entries).
 
-import {
-  createEmbeddedHost,
-  pricedModels,
-  type EmbeddedHost,
-  type EmbeddedRunLimits,
-  type EmbeddedRunOutcome,
-  type ModelClient,
-  type SaveAnswer,
-} from '@listen-fire/engine/public/embed';
+import { createEmbeddedHost, type EmbeddedHost, type EmbeddedRunLimits, type EmbeddedRunOutcome, type SaveAnswer } from '@listen-fire/embed';
+import { pricedModels, type ModelClient } from '@listen-fire/engine/public/embed';
 import type { DiscriminableEvent } from '@listen-fire/engine/public/adapter';
 import { slackModule } from '@listen-fire/slack';
 

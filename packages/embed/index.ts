@@ -6,8 +6,9 @@
 // a timer once it is due. Every rule is the engine's own: the checker, the
 // listen table read off the source, the routing rule (`listenerHearsDelivery`),
 // the park sink and the timer drain. The embedder supplies its modules, a
-// store, and its events; the parts this is built from stay public for a host
-// that needs another shape (docs/embedding.md).
+// store, and its events; the engine's public parts this is built from serve a
+// host that needs another shape (docs/embedding.md). Its own package, outside
+// the core, because it loads modules through the module kit.
 
 import { randomUUID } from 'node:crypto';
 
@@ -24,27 +25,35 @@ import {
   type ModuleHost,
   type ModuleLog,
 } from 'module-kit';
-import { createSecretsFamily, type SecretFields, type SecretsBackend } from 'module-runtime/secrets/family';
-import { createMemoryVault } from 'module-runtime/secrets/memory';
-import { LANGUAGE_VERSION, type InstanceSchema } from 'movement-lang';
-
-import { MovementEngineError } from '../movement_engine/errors';
-import { checkPinnedInRust, parsePinned } from '../movement_engine/program_check';
-import { resumeMovement, runMovement, settleRaceFrame } from '../movement_engine/rust_run';
-import type { MovementRunResult, MovementWriteRecord } from '../movement_engine/run_types';
-import type { EngineHost } from '../movement_engine/host';
-import { drainDueTimers, nextTimerWake, type StepLeaf } from '../run_host/drain';
-import { RUN_LEASE_TTL_MS, withRunLease } from '../run_host/lease';
-import { memoryRunHostStore } from '../run_host/memory_store';
-import { armTimerWake, parkSources, runParkSink, type RunHost } from '../run_host/rules';
-import type { RunHostStore } from '../run_host/store';
-import type { DiscriminableEvent } from '../translation_graph/adapter';
-import { buildCatalogSnapshot, type CatalogAdapterInput } from '../translation_graph/movement/catalog_snapshot';
-import { collectFileListeners, type FileListener } from '../translation_graph/movement/file_listeners';
-import { listenerHearsDelivery } from '../translation_graph/triggers/listen_config';
-import { triggerEventOf } from '../translation_graph/triggers/trigger_event';
-import { inProcessHost, type InProcessHostOptions } from './in_process_host';
-import { introspectAdapter } from './introspect';
+import type { DiscriminableEvent } from 'movement-engine/public/adapter';
+import { buildCatalogSnapshot, type CatalogAdapterInput } from 'movement-engine/public/catalog';
+import { MovementEngineError, inProcessHost, introspectAdapter, type InProcessHostOptions } from 'movement-engine/public/embed';
+import type { EngineHost } from 'movement-engine/public/host';
+import { collectFileListeners, listenerHearsDelivery, triggerEventOf, type FileListener } from 'movement-engine/public/inbound';
+import {
+  ENGINE_VERSION,
+  checkPinnedInRust,
+  parsePinned,
+  resumeMovement,
+  runMovement,
+  settleRaceFrame,
+  type MovementRunResult,
+  type MovementWriteRecord,
+} from 'movement-engine/public/movement-engine';
+import {
+  RUN_LEASE_TTL_MS,
+  armTimerWake,
+  drainDueTimers,
+  memoryRunHostStore,
+  nextTimerWake,
+  parkSources,
+  runParkSink,
+  withRunLease,
+  type RunHost,
+  type RunHostStore,
+  type StepLeaf,
+} from 'movement-engine/public/run-host';
+import { createMemoryVault, createSecretsFamily, type SecretFields, type SecretsBackend } from 'movement-engine/public/secrets';
 
 type CatalogSnapshot = RunInput['catalog'];
 
@@ -237,7 +246,7 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
 
   const buildCatalog = async (tenant: string): Promise<CatalogSnapshot> => {
     const connections = await store.connections.list(tenant);
-    const adapters = new Map<string, CatalogAdapterInput & { schemas: Record<string, InstanceSchema> }>();
+    const adapters = new Map<string, CatalogAdapterInput & { schemas: NonNullable<CatalogAdapterInput['schemas']> }>();
     for (const connection of connections) {
       const { module, instance } = load(tenant, connection);
       const { schema } = await introspectAdapter(instance.adapter, module.manifest);
@@ -421,13 +430,13 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
     async save(tenant, { name, source }) {
       const snapshot = await catalog(tenant);
       try {
-        checkPinnedInRust({ source, catalog: snapshot, languageVersion: LANGUAGE_VERSION });
+        checkPinnedInRust({ source, catalog: snapshot, languageVersion: ENGINE_VERSION });
       } catch (error) {
         if (error instanceof MovementEngineError) return { saved: false, problems: [error.message] };
         throw error;
       }
-      const listeners = collectFileListeners(parsePinned({ source, languageVersion: LANGUAGE_VERSION }));
-      await store.programs.put(tenant, { name, source, languageVersion: LANGUAGE_VERSION, listeners });
+      const listeners = collectFileListeners(parsePinned({ source, languageVersion: ENGINE_VERSION }));
+      await store.programs.put(tenant, { name, source, languageVersion: ENGINE_VERSION, listeners });
       return { saved: true, listens: listeners.length };
     },
 

@@ -27,6 +27,7 @@ const CONSUMER_ROOTS = [
   'packages/model-providers',
   'packages/ocr-google',
   'packages/module-kit',
+  'packages/embed',
   'packages/file-text',
   'examples/embed-saas/src',
   ...fs.readdirSync(modulesDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => `modules/${e.name}`),

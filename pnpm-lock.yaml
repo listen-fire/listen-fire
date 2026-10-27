@@ -93,6 +93,9 @@ importers:
       '@listen-fire/anthropic':
         specifier: workspace:*
         version: link:../../modules/anthropic
+      '@listen-fire/embed':
+        specifier: workspace:*
+        version: link:../../packages/embed
       '@listen-fire/engine':
         specifier: workspace:*
         version: link:../../packages/movement-engine
@@ -1112,6 +1115,40 @@ importers:
         specifier: 5.5.4
         version: 5.5.4
 
+  packages/embed:
+    dependencies:
+      '@listen-fire/module-kit':
+        specifier: workspace:^
+        version: link:../module-kit
+    devDependencies:
+      '@listen-fire/engine':
+        specifier: workspace:^
+        version: link:../movement-engine
+      '@listen-fire/engine-contracts':
+        specifier: workspace:^
+        version: link:../engine-contracts
+      '@listen-fire/movement-lang':
+        specifier: workspace:^
+        version: link:../movement-lang
+      '@types/jest':
+        specifier: 29.5.14
+        version: 29.5.14
+      '@types/node':
+        specifier: 20.16.5
+        version: 20.16.5
+      engine-contracts:
+        specifier: workspace:@listen-fire/engine-contracts@*
+        version: link:../engine-contracts
+      module-kit:
+        specifier: workspace:@listen-fire/module-kit@*
+        version: link:../module-kit
+      movement-engine:
+        specifier: workspace:@listen-fire/engine@*
+        version: link:../movement-engine
+      typescript:
+        specifier: 5.5.4
+        version: 5.5.4
+
   packages/engine-contracts:
     dependencies:
       '@listen-fire/movement-lang':
@@ -1370,9 +1407,6 @@ importers:
       '@listen-fire/engine-contracts':
         specifier: workspace:^
         version: link:../engine-contracts
-      '@listen-fire/module-kit':
-        specifier: workspace:^
-        version: link:../module-kit
       '@listen-fire/module-runtime':
         specifier: workspace:^
         version: link:../module-runtime
