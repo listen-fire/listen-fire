@@ -794,7 +794,8 @@ impl Run<'_> {
         }
     }
 
-    /// `telemetry`: the model, how long the call took, and the cache's part.
+    /// `telemetry`: the tier, the model and its effort, how long the call
+    /// took, and the cache's part.
     #[allow(clippy::too_many_arguments)]
     async fn telemetry_into(
         &self,
@@ -806,7 +807,9 @@ impl Run<'_> {
         shared_items: usize,
         usage: &[Js],
     ) -> Result<(), Stop> {
+        entry.set("tier", settings.tier.map_or(Js::Null, Js::str));
         entry.set("model", Js::str(settings.model.clone()));
+        entry.set("effort", settings.effort.clone().map_or(Js::Null, Js::str));
         let now = self.clock_now().await.map_err(thrown)?;
         entry.set("durationMs", Js::Number(now - started));
         let mut cache = vec![

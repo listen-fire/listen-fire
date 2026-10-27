@@ -143,8 +143,11 @@ pub fn holds_records(value: &Js) -> bool {
 
 /// `heldRecords`: the record(s) a value binding holds, as the binding a walk
 /// starts from. A read that walks (a hop, or an `EXISTS` that hops or
-/// filters) always starts from what `walk_starts` finds, none included; any
-/// other read takes one record as itself and a list as the value it is.
+/// filters) always starts from what `walk_starts` finds, none included. A
+/// field read off a list of records (`row = a-[:E]->` then `row.F`) reads
+/// each record's field, as the walk the list was bound from reads it in
+/// place (`a-[:E]->.F`). Any other read takes one record as itself and a
+/// list as the value it is.
 pub fn held_records(value: &Js, expr: &Expression) -> Option<Binding> {
     let Expression::Traverse { steps, expression, .. } = expr else { return None };
     let walks = !steps.is_empty() || matches!(expression.as_ref(), Expression::Exists { steps, where_ } if !steps.is_empty() || where_.is_some());
@@ -152,7 +155,13 @@ pub fn held_records(value: &Js, expr: &Expression) -> Option<Binding> {
         let mut starts = walk_starts(value);
         return Some(if starts.len() == 1 && !matches!(value, Js::Array(_)) { starts.remove(0) } else { Binding::Positions(starts) });
     }
-    if matches!(value, Js::Array(_)) { None } else { binding_of(value) }
+    match value {
+        Js::Array(list) if crate::eval::field_terminal(expression).is_some() && list.items().iter().all(|item| binding_of(item).is_some()) => {
+            Some(Binding::Positions(walk_starts(value)))
+        }
+        Js::Array(_) => None,
+        _ => binding_of(value),
+    }
 }
 
 /// Where a walk off a value starts: the record it holds, or each record
@@ -594,6 +603,11 @@ mod tests {
         let bare = Expression::Traverse { alias_root: Some("v".into()), steps: Vec::new(), expression: Box::new(Expression::Exists { steps: Vec::new(), where_: None }) };
         assert!(held_records(&Js::array(vec![record.clone()]), &bare).is_none());
         assert!(matches!(held_records(&record, &bare), Some(Binding::Event)));
+        // A field read off a list of records reads each record's; off a list
+        // holding anything else, the list's own (none).
+        let field = Expression::Traverse { alias_root: Some("v".into()), steps: Vec::new(), expression: Box::new(Expression::Property { property_type_id: "Name".into(), field_only: false }) };
+        assert!(matches!(held_records(&Js::array(vec![record.clone(), record.clone()]), &field), Some(Binding::Positions(landings)) if landings.len() == 2));
+        assert!(held_records(&Js::array(vec![record.clone(), Js::str("x")]), &field).is_none());
     }
 
     /// A dict is data whatever its `kind` says: a binding kind, an

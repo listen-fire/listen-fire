@@ -23,19 +23,34 @@ pub const RECORDED_BYTES: usize = 64 * 1024;
 /// The value as the run's history keeps it.
 pub fn recorded(value: &Hv) -> Js {
     let plain = plain(value);
-    let text = plain.to_json();
-    if text.len() <= RECORDED_BYTES {
-        return Js::Obj(obj! { "value" => plain });
+    match cut(&plain, RECORDED_BYTES) {
+        Some(truncated) => truncated,
+        None => Js::Obj(obj! { "value" => plain }),
     }
-    let mut cut = RECORDED_BYTES;
+}
+
+/// A value a write set, as the run's history lists it: plain, files by
+/// reference, or cut as a returned value is when its JSON is over `cap`.
+pub fn written(value: &Hv, cap: usize) -> Js {
+    let plain = plain(value);
+    cut(&plain, cap).unwrap_or(plain)
+}
+
+/// `{truncated: true, bytes, preview}` for a value whose JSON is over `cap`.
+fn cut(plain: &Js, cap: usize) -> Option<Js> {
+    let text = plain.to_json();
+    if text.len() <= cap {
+        return None;
+    }
+    let mut cut = cap;
     while !text.is_char_boundary(cut) {
         cut -= 1;
     }
-    Js::Obj(obj! {
+    Some(Js::Obj(obj! {
         "truncated" => Js::Bool(true),
         "bytes" => Js::Num((text.len() as u64).into()),
         "preview" => Js::str(&text[..cut]),
-    })
+    }))
 }
 
 /// A value the engine could not write out, with why.

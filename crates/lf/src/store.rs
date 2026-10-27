@@ -193,6 +193,8 @@ pub struct RunRow {
     pub movement: String,
     pub status: String,
     pub started_at: String,
+    /// When it last settled completed or failed; none while it runs or is parked.
+    pub finished_at: Option<String>,
     /// The run's facts a resume needs, as JSON.
     pub input: String,
     pub outcome: Option<String>,
@@ -200,7 +202,7 @@ pub struct RunRow {
     pub delivery_id: Option<String>,
 }
 
-const RUN_COLUMNS: &str = "id, file, movement, status, started_at, input, outcome, delivery_id";
+const RUN_COLUMNS: &str = "id, file, movement, status, started_at, input, outcome, delivery_id, finished_at";
 
 fn run_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RunRow> {
     Ok(RunRow {
@@ -212,6 +214,7 @@ fn run_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RunRow> {
         input: r.get(5)?,
         outcome: r.get(6)?,
         delivery_id: r.get(7)?,
+        finished_at: r.get(8)?,
     })
 }
 

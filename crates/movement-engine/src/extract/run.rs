@@ -38,6 +38,8 @@ pub(crate) const REASONING_OUTPUT_TOKENS: u64 = 64000;
 /// One model call's settings (`TierCallSettings` / `ExtractionCallSettings`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct CallSettings {
+    /// The tier the call was written with, none when it named none.
+    pub tier: Option<&'static str>,
     pub model: String,
     pub effort: Option<String>,
     pub max_tokens: Option<u64>,
@@ -70,7 +72,7 @@ pub(crate) fn extraction_call_settings_over(
     let Some(named) = ai_tier(tier) else {
         let effort = effort_over.unwrap_or(EXTRACTION_EFFORT).to_string();
         let max_tokens = room_to_think(Some(&effort));
-        return CallSettings { model: model_over.unwrap_or(density_model).into(), effort: Some(effort), max_tokens };
+        return CallSettings { tier: None, model: model_over.unwrap_or(density_model).into(), effort: Some(effort), max_tokens };
     };
     let (mut row_model, mut effort) = match named {
         "careful" => ("sonnet".to_string(), "high".to_string()),
@@ -92,15 +94,16 @@ pub(crate) fn extraction_call_settings_over(
         row_model = m.to_string();
     }
     let max_tokens = room_to_think(Some(&effort));
-    CallSettings { model: row_model, effort: Some(effort), max_tokens }
+    CallSettings { tier: Some(named), model: row_model, effort: Some(effort), max_tokens }
 }
 
 /// `aiExpressionSettings`: an `AI(prompt[, tier])` call's.
 pub(crate) fn ai_expression_settings(tier: Option<&str>) -> CallSettings {
-    match ai_tier(tier) {
-        Some("careful") => CallSettings { model: "sonnet".into(), effort: None, max_tokens: None },
-        Some("thorough") => CallSettings { model: "opus5".into(), effort: None, max_tokens: Some(REASONING_OUTPUT_TOKENS) },
-        _ => CallSettings { model: "haiku".into(), effort: Some(EXTRACTION_EFFORT.into()), max_tokens: None },
+    let tier = ai_tier(tier);
+    match tier {
+        Some("careful") => CallSettings { tier, model: "sonnet".into(), effort: None, max_tokens: None },
+        Some("thorough") => CallSettings { tier, model: "opus5".into(), effort: None, max_tokens: Some(REASONING_OUTPUT_TOKENS) },
+        _ => CallSettings { tier, model: "haiku".into(), effort: Some(EXTRACTION_EFFORT.into()), max_tokens: None },
     }
 }
 

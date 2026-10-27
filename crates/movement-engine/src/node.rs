@@ -414,7 +414,7 @@ impl Run<'_> {
     }
 
     /// `eventRecord`: the trigger's own record, as the source position it is.
-    fn event_record(&self) -> Binding {
+    pub(crate) fn event_record(&self) -> Binding {
         let source = self.source.borrow().clone().expect("the event is seeded before the body runs");
         Binding::Landed(Rc::new(crate::bindings::Landed::new(source.position.to_js(), None, source.read.clone())))
     }

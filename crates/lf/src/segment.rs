@@ -106,6 +106,8 @@ pub struct SegmentInput<'a> {
 /// What a segment that ran came to.
 pub struct Ran {
     pub writes: usize,
+    /// Each write the segment made, as the run's history lists it (`write_summary`).
+    pub write_records: Vec<Js>,
     pub parked_address: Option<String>,
     pub cancelled: bool,
     pub deferred_race_frames: Vec<String>,
@@ -495,10 +497,10 @@ fn read_result(host: &SegmentHost<'_>, done: &Json) -> Result<Ran, Ended> {
     let Some(result) = done.get("result") else {
         return Err(Ended::Failed(format!("the Rust engine finished with {done}, which this host does not decode")));
     };
-    let writes = match result.get("writes") {
-        None => 0,
+    let write_records = match result.get("writes") {
+        None => Vec::new(),
         Some(wire) => match host.wire.borrow_mut().read(wire) {
-            Ok(Hv::List(items)) => items.len(),
+            Ok(Hv::List(items)) => items.iter().map(write_summary).collect(),
             _ => return Err(Ended::Failed("the Rust engine result writes are write records".into())),
         },
     };
@@ -515,7 +517,8 @@ fn read_result(host: &SegmentHost<'_>, done: &Json) -> Result<Ran, Ended> {
     };
     Ok(Ran {
         returned,
-        writes,
+        writes: write_records.len(),
+        write_records,
         parked_address: parked.then(|| result.get("parkedAddress").and_then(Json::as_str).unwrap_or_default().to_string()),
         cancelled: result.get("cancelled") == Some(&json!(true)),
         deferred_race_frames: result
@@ -525,6 +528,34 @@ fn read_result(host: &SegmentHost<'_>, done: &Json) -> Result<Ran, Ended> {
             .unwrap_or_default(),
         captured: host.adapters.captured.borrow().clone(),
     })
+}
+
+/// The most JSON of one write's values a run's history keeps.
+const WRITTEN_VALUES_BYTES: usize = 2 * 1024;
+
+/// One of the engine's write records as a run's history lists it: its
+/// target (adapter, record type, record id), what was done (`create`,
+/// `update`, `attach`, `noop`, `delete`, `link`, `unlink` or `match`),
+/// whether it reached the system, and the values it set.
+fn write_summary(record: &Hv) -> Js {
+    let record = match record {
+        Hv::Record { descriptor, .. } => descriptor.as_ref(),
+        other => other,
+    };
+    let text = |key: &str| record.get(key).and_then(Hv::as_str).map_or(Js::Null, Js::str);
+    let action = record.get("kind").or_else(|| record.get("outcome")).and_then(Hv::as_str).map_or(Js::Null, Js::str);
+    let mut summary = obj! {
+        "adapter" => text("adapterType"),
+        "recordType" => text("recordType"),
+        "recordId" => record.get("externalId").map_or(Js::Null, Hv::js),
+        "action" => action,
+        "committed" => Js::Bool(matches!(record.get("committed"), Some(Hv::Bool(true)))),
+        "values" => record.get("writtenValues").map_or(Js::Obj(Obj::new()), |values| crate::returned::written(values, WRITTEN_VALUES_BYTES)),
+    };
+    if let Some(link) = record.get("link") {
+        summary.insert("link".into(), link.js());
+    }
+    Js::Obj(summary)
 }
 
 /// The error a run failed with, as its message: a host call's own failure
@@ -1226,7 +1257,7 @@ async fn file_text(host: &SegmentHost<'_>, file: &Obj, remaining: Option<f64>) -
     let bytes = match owner_of(file.get("source")) {
         Some(Owner::Document { object_uri }) if host.documents.owns(&object_uri, TEAM) => host.documents.open(&object_uri),
         Some(Owner::Document { object_uri }) => Err(format!("the file {object_uri} is not a stored document of this project")),
-        Some(Owner::Adapter { adapter_type, .. }) => Err(format!("a file '{adapter_type}' owns is not read by lf yet")),
+        Some(Owner::Adapter { .. }) => host.adapters.redeem(file).await.map(|(bytes, _)| bytes).map_err(|failure| failure.message().to_string()),
         None => Err("a file with no owner has no bytes".into()),
     };
     let bytes = match bytes {

@@ -1967,7 +1967,7 @@ impl Run<'_> {
         let answer = self.priced(host::llm::client_call(self.segment(), call, self.ledger.budget())).await?;
         let value = ai_answer(&event_get(&answer, "parsedJson"));
         let traced = crate::extract::emission::cut(prompt, AI_TRACE_PROMPT_CHARS);
-        self.trace.push(TraceEntry::Ai { prompt: traced, has_value: !value.is_nullish() });
+        self.trace.push(TraceEntry::Ai { prompt: traced, has_value: !value.is_nullish(), tier: settings.tier, model: settings.model, effort: settings.effort });
         Ok(value)
     }
 

@@ -31,9 +31,9 @@ pub enum TraceEntry {
     Extraction(Members),
     /// One plugin invocation, a stage's or a plain call's.
     Plugin(Members),
-    /// One `AI()` call: its prompt (cut at 300 characters) and whether
-    /// the model answered.
-    Ai { prompt: String, has_value: bool },
+    /// One `AI()` call: its prompt (cut at 300 characters), whether the
+    /// model answered, and the tier, model and effort it was asked at.
+    Ai { prompt: String, has_value: bool, tier: Option<&'static str>, model: String, effort: Option<String> },
     /// One `READ(file)`: the file's name and type, and its text's length or
     /// why there is none.
     Read(Members),
@@ -80,9 +80,14 @@ impl TraceEntry {
                 ("field", Js::str(field.clone())),
                 ("available", Js::array(available.iter().map(|k| Js::str(k.clone())).collect())),
             ]),
-            TraceEntry::Ai { prompt, has_value } => {
-                env::object_of(vec![kind("ai"), ("prompt", Js::str(prompt.clone())), ("hasValue", Js::Bool(*has_value))])
-            }
+            TraceEntry::Ai { prompt, has_value, tier, model, effort } => env::object_of(vec![
+                kind("ai"),
+                ("prompt", Js::str(prompt.clone())),
+                ("hasValue", Js::Bool(*has_value)),
+                ("tier", tier.map_or(Js::Null, Js::str)),
+                ("model", Js::str(model.clone())),
+                ("effort", effort.clone().map_or(Js::Null, Js::str)),
+            ]),
             TraceEntry::Block { root, positions } => {
                 env::object_of(vec![kind("block"), ("root", Js::str(root.clone())), ("positions", Js::Number(*positions as f64))])
             }

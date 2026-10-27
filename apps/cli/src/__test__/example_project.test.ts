@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHmac } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { companies, crmCompanies, externalPort, lf, lfCommand, project, served } from './example';
@@ -48,8 +48,81 @@ test('lf run --event writes through the external, parks on sleep, and lf resume 
   assert.equal(resumed.code, 0, resumed.out);
   assert.match(resumed.out, /companies:welcome completed/);
   assert.deepEqual(companies(dir), ['Welcome Vireo Robotics', 'Follow up Vireo Robotics']);
+  // The run's history counts and lists the writes of both entries into it.
+  const shown = JSON.parse(lf(dir, 'runs', 'show', runId, '--json').out) as { run: { writes: number; writeRecords: Array<{ values: { Name: string } }> } };
+  assert.equal(shown.run.writes, 2);
+  assert.deepEqual(shown.run.writeRecords.map((w) => w.values.Name), ['Welcome Vireo Robotics', 'Follow up Vireo Robotics']);
 
   assert.match(lf(dir, 'resume').out, /no parked runs/);
+});
+
+test('lf run --event: a write to the event parameter updates the record the event fired on', () => {
+  const dir = project();
+  mkdirSync(join(dir, '.lf/externals/acme_crm'), { recursive: true });
+  writeFileSync(join(dir, '.lf/externals/acme_crm/state.json'), JSON.stringify({ companies: [{ externalId: 'c-1', fields: { Name: 'Vireo Robotics' } }] }));
+  writeFileSync(
+    join(dir, 'movements/companies.mvt'),
+    `import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+function onboard(company: <crm-[:Company]->>) {
+  write company { Name: "Onboarded \${company.Name}" }
+}
+
+listen to crm { events: ["company.created"] } fire onboard
+`,
+  );
+  // Tagged as the CRM's webhook tags it, so the event names the record it fired on.
+  const event = { external: 'acme_crm', event: { payload: { id: 'c-1', Name: 'Vireo Robotics' }, externalId: 'c-1', tag: 'company.created', eventType: 'company.created', changeType: 'create', recordType: 'Company' } };
+  writeFileSync(join(dir, 'events/company_tagged.json'), JSON.stringify(event));
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  const run = lf(dir, 'run', '--event', 'events/company_tagged.json');
+  assert.equal(run.code, 0, run.out);
+  assert.match(run.out, /companies:onboard completed — 1 write\(s\)/);
+  assert.deepEqual(crmCompanies(dir), [{ externalId: 'c-1', fields: { Name: 'Onboarded Vireo Robotics' } }]);
+});
+
+test('lf runs show --json: when the run started and finished, and each write: its target, action and values', () => {
+  const dir = project();
+  mkdirSync(join(dir, '.lf/externals/acme_crm'), { recursive: true });
+  writeFileSync(join(dir, '.lf/externals/acme_crm/state.json'), JSON.stringify({ companies: [{ externalId: 'c-1', fields: { Name: 'Vireo Robotics' } }] }));
+  writeFileSync(
+    join(dir, 'movements/companies.mvt'),
+    `import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+function onboard(company: <crm-[:Company]->>) {
+  write crm-[:Company]-> { Name: "Welcome \${company.Name}" }
+  write company { Name: "Onboarded \${company.Name}" }
+}
+
+listen to crm { events: ["company.created"] } fire onboard
+`,
+  );
+  const event = { external: 'acme_crm', event: { payload: { id: 'c-1', Name: 'Vireo Robotics' }, externalId: 'c-1', tag: 'company.created', eventType: 'company.created', changeType: 'create', recordType: 'Company' } };
+  writeFileSync(join(dir, 'events/company_tagged.json'), JSON.stringify(event));
+  const run = lf(dir, 'run', '--event', 'events/company_tagged.json');
+  assert.equal(run.code, 0, run.out);
+  // The human line stays a count.
+  assert.match(run.out, /companies:onboard completed — 2 write\(s\)/);
+  const runId = /^run (\S+) /m.exec(run.out)?.[1] ?? '';
+  const shown = JSON.parse(lf(dir, 'runs', 'show', runId, '--json').out) as { run: Record<string, unknown> };
+  const { startedAt, finishedAt, writes, writeRecords } = shown.run;
+  assert.match(String(startedAt), /^\d{4}-\d\d-\d\dT/);
+  assert.match(String(finishedAt), /^\d{4}-\d\d-\d\dT/);
+  assert.ok(String(finishedAt) >= String(startedAt), `${startedAt} → ${finishedAt}`);
+  assert.equal(writes, 2);
+  assert.deepEqual(writeRecords, [
+    { adapter: 'acme_crm', recordType: 'Company', recordId: 'company-2', action: 'create', committed: true, values: { Name: 'Welcome Vireo Robotics' } },
+    { adapter: 'acme_crm', recordType: 'Company', recordId: 'c-1', action: 'update', committed: true, values: { Name: 'Onboarded Vireo Robotics' } },
+  ]);
+  const listed = JSON.parse(lf(dir, 'runs', '--json').out) as { runs: Array<Record<string, unknown>> };
+  assert.equal(listed.runs[0]?.finishedAt, finishedAt);
 });
 
 test('lf run --webhook refuses a delivery whose signature does not verify', () => {

@@ -859,8 +859,7 @@ function traceEntry(value: unknown): MovementRunResult['trace'][number] {
     case 'read':
       return readTraceEntry(entry);
     case 'ai':
-      if (typeof entry.hasValue !== 'boolean') throw new RustShimError('an ai trace entry says whether the model answered');
-      return { kind: 'ai', prompt: string(entry.prompt, 'an ai prompt'), hasValue: entry.hasValue };
+      return aiTraceEntry(entry);
     case 'extraction':
       return extractionTraceEntry(entry);
     case 'plugin':
@@ -926,6 +925,25 @@ function readTraceEntry(entry: Record<string, unknown>): ReadTraceEntry {
   return { kind: 'read', ...parsed.data };
 }
 
+type AiTraceEntry = Extract<MovementRunResult['trace'][number], { kind: 'ai' }>;
+
+/** An `AI()` call's trace entry as crates/movement-engine/src/trace.rs writes
+ *  it; an artifact built before it named its tier, model and effort names none. */
+const aiTraceEntrySchema: z.ZodType<AiTraceEntry> = z.strictObject({
+  kind: z.literal('ai'),
+  prompt: z.string(),
+  hasValue: z.boolean(),
+  tier: z.string().nullable().optional(),
+  model: z.string().optional(),
+  effort: z.string().nullable().optional(),
+});
+
+function aiTraceEntry(entry: Record<string, unknown>): AiTraceEntry {
+  const parsed = aiTraceEntrySchema.safeParse(entry);
+  if (!parsed.success) throw new RustShimError(`an ai trace entry does not read: ${parsed.error.message}`);
+  return parsed.data;
+}
+
 /** An extraction's trace entry as crates/movement-engine/src/extract/run.rs
  *  (and extract/call.rs, `form: 'call'`) writes it, held to expression.ts's
  *  type member by member. */
@@ -938,7 +956,9 @@ const extractionTraceEntrySchema: z.ZodType<ExtractionTraceEntry> = z.strictObje
   inputsTruncated: z.number().optional(),
   files: z.array(tracedFile).optional(),
   filesTruncated: z.number().optional(),
+  tier: z.string().nullable().optional(),
   model: z.string().optional(),
+  effort: z.string().nullable().optional(),
   durationMs: z.number().optional(),
   effortSteppedDown: z.object({ from: z.string(), to: z.string() }).optional(),
   continued: z.literal(true).optional(),

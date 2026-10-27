@@ -63,13 +63,15 @@ impl Wire for RunRow {
             "movement" => Js::str(&self.movement),
             "status" => Js::str(&self.status),
             "startedAt" => Js::str(&self.started_at),
+            "finishedAt" => opt(self.finished_at.as_deref()),
             "input" => Js::str(&self.input),
             "outcome" => opt(self.outcome.as_deref()),
             "deliveryId" => opt(self.delivery_id.as_deref()),
         })
     }
 
-    /// A module written before delivery receipts answers no `deliveryId`: none.
+    /// A module written before delivery receipts answers no `deliveryId`, and
+    /// one written before finish times no `finishedAt`: none.
     fn from_wire(v: &Js) -> Option<Self> {
         Some(RunRow {
             id: text(v, "id")?,
@@ -77,6 +79,7 @@ impl Wire for RunRow {
             movement: text(v, "movement")?,
             status: text(v, "status")?,
             started_at: text(v, "startedAt")?,
+            finished_at: opt_text(v, "finishedAt")?,
             input: text(v, "input")?,
             outcome: opt_text(v, "outcome")?,
             delivery_id: opt_text(v, "deliveryId")?,
@@ -380,12 +383,13 @@ mod tests {
             movement: "m".into(),
             status: "parked".into(),
             started_at: "2026-10-17T00:00:00.000Z".into(),
+            finished_at: Some("2026-10-17T00:00:01.000Z".into()),
             input: "{}".into(),
             outcome: None,
             delivery_id: Some("d".into()),
         };
         let back = RunRow::from_wire(&run.to_wire()).unwrap();
-        assert_eq!((back.id, back.status, back.outcome, back.delivery_id), (run.id, run.status, None, run.delivery_id));
+        assert_eq!((back.id, back.status, back.outcome, back.delivery_id, back.finished_at), (run.id, run.status, None, run.delivery_id, run.finished_at));
         let callback = CallbackRecord {
             id: "c".into(),
             team_id: "t".into(),

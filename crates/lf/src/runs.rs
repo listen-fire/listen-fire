@@ -474,6 +474,9 @@ pub enum Returned {
     Withheld,
 }
 
+/// The most writes a run's history lists; its `writes` counts them all.
+const LISTED_WRITES: usize = 100;
+
 /// What a run entry has done so far: its writes, and how many segments ran.
 #[derive(Default, Clone, Copy)]
 struct Tally {
@@ -726,7 +729,13 @@ impl Session {
         let raw = rpc_in(running, credentials, credential, LOCAL_TENANT, "poll", params, running.position_settings(&listen.args)).await?;
         let answer = wire_results::check("poll", &listen.adapter, &raw)?;
         let mut fired = Fired::default();
-        for event in answer.get("events").and_then(Js::as_array).unwrap_or(&[]) {
+        let events = answer.get("events").and_then(Js::as_array).unwrap_or(&[]);
+        // A source's first poll only sets its mark (Gmail's does): say so,
+        // or a listen that is live looks like one that is not.
+        if state.is_none() && events.is_empty() {
+            fired.redelivered.push(format!("{}: {}:{} armed; it fires on changes from now", listen.adapter, set.file(&listen.file).name, listen.movement_name));
+        }
+        for event in events {
             if event.get("eventType").and_then(Js::as_str).is_none() {
                 note_unlabelled_poll_event(&listen.adapter);
             }
@@ -866,24 +875,29 @@ impl Session {
         if let Some(captured) = captured {
             captured.borrow_mut().extend(ran.captured.iter().cloned());
         }
-        let writes = {
-            let mut tally = tally.borrow_mut();
-            tally.writes += ran.writes;
-            tally.writes
-        };
+        tally.borrow_mut().writes += ran.writes;
         let at = iso(0);
         if ran.cancelled {
             let reason = self.store.cancel_request(run_id).map_err(|e| e.to_string())?.flatten();
             return Ok(StepOutcome::Cancelled(reason));
         }
+        // What the run's earlier segments settled with, this entry's and any
+        // before it (a resume, a callback's continuation): the run's history
+        // counts and lists every write it made, and keeps what it returned.
+        let before = self.store.run(run_id).map_err(|e| e.to_string())?.and_then(|row| row.outcome).and_then(|text| Js::parse(text.as_bytes()).ok()).unwrap_or(Js::Null);
+        let earlier = match before.get("writes") {
+            Some(Js::Num(n)) => n.as_u64().unwrap_or(0),
+            _ => 0,
+        };
+        let writes = earlier + ran.writes as u64;
         let mut outcome = obj! { "writes" => Js::Num(writes.into()) };
+        let mut listed: Vec<Js> = before.get("writeRecords").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default();
+        listed.extend(ran.write_records.into_iter());
+        listed.truncate(LISTED_WRITES);
+        outcome.insert("writeRecords".into(), Js::Arr(listed));
         // The body returns in one segment; a later one (a callback's body, a
         // branch the run still waited on) keeps what it returned.
-        let returned = match ran.returned {
-            Some(returned) => Some(returned),
-            None => self.store.run(run_id).map_err(|e| e.to_string())?.and_then(|row| crate::returned::of_outcome(row.outcome.as_deref())),
-        };
-        if let Some(returned) = returned {
+        if let Some(returned) = ran.returned.or_else(|| before.get("returned").cloned()) {
             outcome.insert("returned".into(), returned);
         }
         let outcome = Js::Obj(outcome);

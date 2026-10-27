@@ -51,6 +51,15 @@ named in [`RELEASING.md`](RELEASING.md).
 
 - `lf check` refuses an Airtable listen's `field` or `becomes` when the fired movement's signature names no table, since nothing then describes the row and the field cannot be checked (`MOV_LISTEN_BAD_CONFIG`). The message shows the signature that names it: `function f(change: <hiring-[e:`Record Change` WHERE e.table == "tbl…"]->>)`. The event is narrowed only by the address the signature names, as on the platform; the listen's own `table` does not type it. A read of an unaddressed event's row (`MOV_UNDESCRIBED_POSITION`) now suggests the same form. Both keys are new in this unreleased cycle, so no released program changes.
 
+### Fixed
+
+- `lf` reads a file a module owns (a Gmail attachment) for an extraction or `File.read`, through the module's `resolveFileRef` as a write already did; before, the extraction saw nothing and the run warned `MOVENG_FILE_BYTES_UNAVAILABLE`.
+- A write to the movement's event parameter (`write company { … }`) updates the record the event fired on through the module's `updateRecord`; it checked clean but failed every run (`MOVENG_RUNTIME: 'company' is the movement parameter`).
+- A field read off a name bound to a walk reads the records the walk landed on: after `row = change-[:Record]->`, `"${row.Stage}"` is the Stage, where it read as empty while `change-[:Record]->.Stage` worked.
+- `lf runs show --json` shows when a run finished (`finishedAt`) and lists its writes (`writeRecords`: target, action, committed, values); `writes` counts every entry into the run, where after a resume it counted only the resumed entry's.
+- `lf` prints a line when a polled listen's first poll arms it (`gmail: inbox:invoice armed; it fires on changes from now`); it printed nothing.
+- A run's trace names each model call's `tier`, `model` and `effort` (an extraction's entry and an `ai()` call's), so `quick` and `careful`, which share a model, read differently.
+
 ## [0.12.9] - 2026-10-26
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Two behaviours change for an existing project under `lf`, both from routing inbound events by connection:
