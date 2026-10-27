@@ -106,12 +106,12 @@ const FETCH_TWICE: PluginDeclaration = {
   },
 };
 
-function pacedModule(options: { hostLimits: boolean }) {
+function pacedModule(options: { hostLimits: boolean; limits?: boolean }) {
   return defineModule({
     kind: 'plugin',
     name: '@lf/paced',
     credentials: [],
-    limits: [{ scope: 'credential', calls: 10, per: '1s' }],
+    ...(options.limits === false ? {} : { limits: [{ scope: 'credential' as const, calls: 10, per: '1s' }] }),
     ...(options.hostLimits ? { hostLimits: true as const } : {}),
     plugins: [FETCH_TWICE],
     create: (ctx) => ({
@@ -164,4 +164,19 @@ test('a call handed no door (the host counted it) asks nobody', async () => {
   const body = await post(impl, invoke);
   expect(body.ok).toBe(true);
   expect(log).toEqual([`provider:${PROVIDER}`, `provider:${PROVIDER}`]);
+});
+
+test('a 503 that names a Retry-After is reported as a throttle too; one that does not is not', async () => {
+  const { impl, log } = fakeFetch({ statuses: [{ status: 503, retryAfter: '7' }, { status: 503 }] });
+  const limited = limitedFetch(impl, door);
+  await limited(PROVIDER);
+  await limited(PROVIDER);
+  expect(log.filter((line) => line.startsWith('door:throttle'))).toEqual(['door:throttle:7000']);
+});
+
+test('hostLimits alone, with no limits declared, still says the module asks per request', async () => {
+  const { impl } = fakeFetch();
+  const manifest = await post(impl, { method: 'manifest', params: {} }, pacedModule({ hostLimits: true, limits: false }));
+  expect(manifest.result).toMatchObject({ hostLimits: true });
+  expect(manifest.result).not.toHaveProperty('limits');
 });

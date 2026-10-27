@@ -70,10 +70,12 @@ function statedMinor(definition: ModuleDefinition, methods: readonly string[]): 
 /** `hostLimits` is the author's word, never inferred from `limits`: it moves
  *  the counting from the host's calls to the module's own requests
  *  (`ctx.fetch` asks the host's limits door, `host_limits.ts`), which only
- *  holds if the module sends every request through `ctx.fetch`. */
+ *  holds if the module sends every request through `ctx.fetch`. A module with
+ *  no limits of its own may still declare it, to have a provider's throttle
+ *  (429, or 503 with a Retry-After) held across every instance. */
 function declaredLimits(definition: ModuleDefinition): { limits?: unknown[]; hostLimits?: true } {
-  if (definition.limits === undefined || definition.limits.length === 0) return {};
-  return { limits: [...definition.limits], ...(definition.hostLimits === true ? { hostLimits: true } : {}) };
+  const limits = definition.limits === undefined || definition.limits.length === 0 ? {} : { limits: [...definition.limits] };
+  return { ...limits, ...(definition.hostLimits === true ? { hostLimits: true as const } : {}) };
 }
 
 function pluginManifest(definition: PluginModuleDefinition, instance: PluginModuleMethods): unknown {

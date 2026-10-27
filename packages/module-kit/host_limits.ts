@@ -1,7 +1,7 @@
 // The limits door, asked by `ctx.fetch` so a module author never thinks of
 // it: before each request to the provider the module asks the host "may I
 // call now?", waits as long as the host says, releases the permit once the
-// answer is in, and reports a 429 (with its Retry-After) as a throttle. One
+// answer is in, and reports a 429 (with its Retry-After), or a 503 that carries one, as a throttle. One
 // call to the module can become several provider requests and retries; each
 // is counted, and the module never sees a counter. A host that hands no door
 // on the call (a platform loading the module in process, an embedder, a host
@@ -55,7 +55,11 @@ export function limitedFetch(fetchImpl: typeof fetch, door: WireHostLimitsDoorSh
     try {
       const response = await fetchImpl(input, init);
       // Before the release, so a request waiting on this permit sees the quiet.
-      if (response.status === 429) await ask({ op: 'throttle', retryAfterMs: vendorWaitMs(response, now()) ?? DEFAULT_THROTTLE_MS });
+      // A 503 is a throttle only when it says for how long.
+      const asked = vendorWaitMs(response, now());
+      if (response.status === 429 || (response.status === 503 && asked !== undefined)) {
+        await ask({ op: 'throttle', retryAfterMs: asked ?? DEFAULT_THROTTLE_MS });
+      }
       return response;
     } finally {
       // A permit left held is freed by the host when the call answers.

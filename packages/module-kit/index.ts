@@ -13,6 +13,7 @@ export * from './serve';
 export * from './host_models';
 export * from './host_ocr';
 export * from './host_limits';
+export * from './retry_fetch';
 export * from './embed';
 export * from './inbound';
 export {

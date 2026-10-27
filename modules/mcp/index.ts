@@ -15,7 +15,10 @@ import { MCP_MANIFEST } from './manifest';
 /** The connection the context's credential names, reached through the host's
  *  fetch, as every module's provider requests are. */
 export function connectionFrom(ctx: ModuleContext): ConnectionSource {
-  return async () => new McpConnection(addressOf(ctx.credential.name, await ctx.credential.fields()), ctx.fetch);
+  return async () =>
+    new McpConnection(addressOf(ctx.credential.name, await ctx.credential.fields()), ctx.fetch, {
+      onRetry: (note) => ctx.log.warn(`@lf/mcp: retrying after ${note.because} (attempt ${note.attempt} of ${note.of}), waiting ${note.waitMs / 1000}s`, { ...note }),
+    });
 }
 
 const URL_FIELD = { name: 'url', label: 'The MCP server URL (streamable HTTP)', secret: false } as const;
@@ -24,6 +27,10 @@ export const mcpModule = defineModule({
   kind: 'adapter',
   name: '@lf/mcp',
   manifest: MCP_MANIFEST,
+  // Every request goes through ctx.fetch, so a server's 429 (or 503 with a
+  // Retry-After) holds this connection on every instance, not only in the
+  // call that met it.
+  hostLimits: true,
   credentials: [
     {
       name: OAUTH_CREDENTIAL,
