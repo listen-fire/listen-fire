@@ -728,7 +728,13 @@ impl Session {
         let raw = rpc_in(running, credentials, credential, LOCAL_TENANT, "poll", params, running.position_settings(&listen.args)).await?;
         let answer = wire_results::check("poll", &listen.adapter, &raw)?;
         let mut fired = Fired::default();
-        for event in answer.get("events").and_then(Js::as_array).unwrap_or(&[]) {
+        let events = answer.get("events").and_then(Js::as_array).unwrap_or(&[]);
+        // A source's first poll only sets its mark (Gmail's does): say so,
+        // or a listen that is live looks like one that is not.
+        if state.is_none() && events.is_empty() {
+            fired.redelivered.push(format!("{}: {}:{} armed; it fires on changes from now", listen.adapter, set.file(&listen.file).name, listen.movement_name));
+        }
+        for event in events {
             if event.get("eventType").and_then(Js::as_str).is_none() {
                 note_unlabelled_poll_event(&listen.adapter);
             }

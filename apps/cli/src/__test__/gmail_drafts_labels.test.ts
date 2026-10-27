@@ -105,9 +105,10 @@ test('labelling an existing message fires a listen on that label, named as a per
     const checked = lfSync(dir, 'check');
     assert.equal(checked.code, 0, checked.out);
 
-    // The first poll sets the mark and fires nothing.
+    // The first poll sets the mark, fires nothing, and says so.
     const first = lfSync(dir, 'run', '--poll', 'tagged');
     assert.doesNotMatch(first.out, /MOVENG_ERROR: tagged/, first.out);
+    assert.match(first.out, /^gmail: hello:tagged armed; it fires on changes from now$/m, first.out);
 
     await fake.label('m-old', [deals]);
     await fake.label('m-other', [newsletters]);
@@ -116,9 +117,10 @@ test('labelling an existing message fires a listen on that label, named as a per
     assert.doesNotMatch(fired.out, /tagged Newsletter/, fired.out);
     assert.equal(fired.out.split('MOVENG_ERROR: tagged').length - 1, 1, fired.out);
 
-    // A second poll finds nothing new: the label fires once.
+    // A second poll finds nothing new: the label fires once. Armed already, it says nothing of it.
     const again = lfSync(dir, 'run', '--poll', 'tagged');
     assert.doesNotMatch(again.out, /MOVENG_ERROR: tagged/, again.out);
+    assert.doesNotMatch(again.out, /armed/, again.out);
 
     // A new arrival is not a label being added.
     await fake.message({ id: 'm-new', subject: 'Fresh deal', labelIds: ['INBOX', deals] });

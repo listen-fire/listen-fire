@@ -69,8 +69,8 @@ test('lf serve: an extraction over a Gmail PDF attachment reads the PDF through 
     const pdf = Buffer.from(renderPlainTextPdf('INVOICE PW-20417 from Pinewood Supplies Ltd, net thirty days. Amount due: TOTAL EUR 4,812.50').bytes);
     const server = await served(dir);
     try {
-      // The first poll sets the mark; mail after it fires.
-      await new Promise((settled) => setTimeout(settled, 1500));
+      // The first poll sets the mark, and says so; mail after it fires.
+      await server.waitFor(/^lf: gmail: hello:invoice armed; it fires on changes from now$/);
       await fake.message({ id: 'm-pw', subject: 'Invoice PW-20417', bodyText: 'Attached.', attachments: [{ filename: 'PW-20417.pdf', contentType: 'application/pdf', content: pdf.toString('latin1') }] });
       const line = await server.waitFor(/^run \S+ hello:invoice failed/);
       assert.match(line, /PW-20417\.pdf total EUR 4,812\.50/);
