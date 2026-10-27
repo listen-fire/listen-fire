@@ -116,10 +116,12 @@ test('a declared oauth2 credential is refreshed from the declaration, sent with 
 test("a credentialUpdate the module answers is written back to the credential it was sent, from a failed answer too", async () => {
   const token = await tokenServer();
   try {
-    // listEntryPoints rotates the refresh token; the first describe is refused
-    // as unauthorized and rotates the webhook secret; the host stores both,
-    // refreshes with the module's refresh token, and retries.
-    const answering = `method === 'listEntryPoints'
+    // The first listEntryPoints rotates the refresh token; the first describe
+    // is refused as unauthorized and rotates the webhook secret; the host
+    // stores both, refreshes with the module's refresh token, and retries.
+    // Once only: a typed event's run lists entry points again after the
+    // refresh, and a second rotation would rightly overwrite r2.
+    const answering = `method === 'listEntryPoints' && calls === 1
       ? { ok: true, result, credentialUpdate: { name: 'acme', fields: { refresh_token: 'r-module' } } }
       : method === 'describe' && calls === 1
         ? { ok: false, error: { code: 'unauthorized', message: 'token revoked', retryable: false }, credentialUpdate: { name: 'acme', fields: { webhook_secret: 'w2' } } }

@@ -25,7 +25,7 @@ use crate::obj;
 use crate::project::Project;
 use movement_parser::version::{LANGUAGE_VERSION, Standing, standing};
 use crate::remote::{Externals, SegmentAdapters};
-use crate::routing::{Arrival, Listen, address_matches_key, event_matches_trigger_scope, routes_by_key, trigger_event_of, unrouted_line};
+use crate::routing::{Arrival, Listen, address_matches_key, event_matches_trigger_scope, routes_by_key, trigger_event_of, unrouted_line, untyped_event_line};
 use crate::run_host::{
     BUSY_RETRY_MS, CANCELLED_BY_OPERATOR, FailedWork, Lease, Settled, StepOutcome, StepRequest, Stepper, WORKER_LOST, after_step, arm_timer_wake,
     clear_if_quiescent, drain_due_timers, drain_run, fail_lost_runs, fail_run, give_up_work, next_timer_wake, past_cap, run_complete_without, run_quiescent,
@@ -629,7 +629,12 @@ impl Session {
             }
             let trigger = trigger_event_of(&pipeline, external, event, &event_types, &iso(0));
             match self.run_listen(set, &run_id, listen, trigger, dry_run, receipt.map(|key| (pipeline.as_str(), key)), delivery_id).await? {
-                Some(outcome) => fired.outcomes.push(outcome),
+                Some(mut outcome) => {
+                    if let (Some(error), Some(untyped)) = (outcome.error.as_mut(), untyped_event_line(external, event, &event_types)) {
+                        error.push_str(&format!("\n  {untyped}"));
+                    }
+                    fired.outcomes.push(outcome)
+                }
                 None => fired.redelivered.push(ran_before(key.unwrap_or_default())),
             }
         }

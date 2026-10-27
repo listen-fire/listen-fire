@@ -572,6 +572,21 @@ fn select_event_type<'a>(event: &Js, event_types: &'a [Js]) -> Option<&'a Js> {
     })
 }
 
+/// Why an event names no record when it matches none of its module's event
+/// types: the run is handed no record type for it, so a write to the
+/// event's record cannot update it. `None` when it matches one, or the
+/// module declares none.
+pub fn untyped_event_line(external: &str, event: &Js, event_types: &[Js]) -> Option<String> {
+    if event_types.is_empty() || select_event_type(event, event_types).is_some() {
+        return None;
+    }
+    let tags: Vec<&str> = event_types.iter().filter_map(|t| t.get("tag").and_then(Js::as_str)).collect();
+    Some(format!(
+        "the event matched none of {external}'s event types (it carries no `tag`, and no type's `match` fits its payload), so it names no record of its own; its types' tags: {}",
+        tags.join(", ")
+    ))
+}
+
 /// `triggerEventOf`: the event as a run is handed it.
 pub fn trigger_event_of(pipeline_input_id: &str, adapter_type: &str, event: &Js, event_types: &[Js], now: &str) -> Js {
     let root_record_type =
@@ -848,5 +863,16 @@ mod tests {
         );
         let tagged = js(r#"{"payload":{},"tag":"company.created"}"#);
         assert_eq!(trigger_event_of("p", "a", &tagged, &types, "t").get("rootRecordType").and_then(Js::as_str), Some("Company"));
+    }
+
+    #[test]
+    fn an_event_matching_no_event_type_is_said_to_name_no_record() {
+        let types = vec![js(r#"{"tag":"company.created","positionType":"Company"}"#), js(r#"{"tag":"company.updated","positionType":"Company"}"#)];
+        let labelled_only = js(r#"{"payload":{},"eventType":"company.created"}"#);
+        let line = untyped_event_line("acme_crm", &labelled_only, &types).expect("an eventType is not a tag");
+        assert!(line.contains("matched none of acme_crm's event types"), "{line}");
+        assert!(line.ends_with("company.created, company.updated"), "{line}");
+        assert_eq!(untyped_event_line("acme_crm", &js(r#"{"payload":{},"tag":"company.created"}"#), &types), None);
+        assert_eq!(untyped_event_line("acme_crm", &labelled_only, &[]), None);
     }
 }

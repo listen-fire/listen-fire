@@ -74,15 +74,23 @@ function onboard(company: <crm-[:Company]->>) {
 listen to crm { events: ["company.created"] } fire onboard
 `,
   );
-  // Tagged as the CRM's webhook tags it, so the event names the record it fired on.
-  const event = { external: 'acme_crm', event: { payload: { id: 'c-1', Name: 'Vireo Robotics' }, externalId: 'c-1', tag: 'company.created', eventType: 'company.created', changeType: 'create', recordType: 'Company' } };
-  writeFileSync(join(dir, 'events/company_tagged.json'), JSON.stringify(event));
+  // The shipped event is tagged as the CRM's webhook tags it, so it names the record it fired on.
   const check = lf(dir, 'check');
   assert.equal(check.code, 0, check.out);
-  const run = lf(dir, 'run', '--event', 'events/company_tagged.json');
+  const run = lf(dir, 'run', '--event', 'events/company_created.json');
   assert.equal(run.code, 0, run.out);
   assert.match(run.out, /companies:onboard completed — 1 write\(s\)/);
   assert.deepEqual(crmCompanies(dir), [{ externalId: 'c-1', fields: { Name: 'Onboarded Vireo Robotics' } }]);
+
+  // Untagged, it matches none of the CRM's event types: the failure says so, not only that nothing is stable.
+  const shipped = JSON.parse(readFileSync(join(dir, 'events/company_created.json'), 'utf8'));
+  delete shipped.event.tag;
+  writeFileSync(join(dir, 'events/company_untagged.json'), JSON.stringify(shipped));
+  const untagged = lf(dir, 'run', '--event', 'events/company_untagged.json');
+  assert.notEqual(untagged.code, 0, untagged.out);
+  assert.match(untagged.out, /no stable record to update/);
+  assert.match(untagged.out, /matched none of acme_crm's event types \(it carries no `tag`, and no type's `match` fits its payload\)/);
+  assert.match(untagged.out, /company\.created, company\.updated/);
 });
 
 test('lf runs show --json: when the run started and finished, and each write: its target, action and values', () => {
