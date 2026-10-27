@@ -8,19 +8,24 @@
 //   POST /customers/:tenant/companies        { Name } → the company, and the runs it fired
 //   GET  /customers/:tenant/companies
 //   POST /tick                               step on every parked run whose time has come
+//   *    /customers/:tenant/mcp              the authoring tools over MCP, the customer's API key as a bearer token
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
 import { companyCreated, type FieldDefinition } from './crm';
-import { Embedding } from './embedding';
+import { Embedding, tenantOfPath } from './embedding';
 import { modelsFromEnv } from './models';
 
 export function saasServer(embedding: Embedding): Server {
+  const authoring = embedding.authoringHandler();
   return createServer((req, res) => {
-    handle(embedding, req).then(
-      ([status, body]) => send(res, status, body),
-      (error: unknown) => send(res, 500, { error: error instanceof Error ? error.message : String(error) }),
-    );
+    const failed = (error: unknown) => send(res, 500, { error: error instanceof Error ? error.message : String(error) });
+    // The MCP handler reads its own body and answers for itself.
+    if (tenantOfPath(req.url ?? '/') !== undefined) {
+      authoring(req, res).catch(failed);
+      return;
+    }
+    handle(embedding, req).then(([status, body]) => send(res, status, body), failed);
   });
 }
 

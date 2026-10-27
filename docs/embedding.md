@@ -12,6 +12,7 @@ A working example is in [`examples/embed-saas`](../examples/embed-saas): a small
 | `@listen-fire/engine-contracts` | The data the engine is handed: a run's input, the tenant id, the event, the parked state, the module protocol. |
 | `@listen-fire/module-kit` | How a module is defined (`defineModule`) and loaded, in your process or served as a process. |
 | `@listen-fire/embed` | The embedded host, `createEmbeddedHost`: connections, checking, routing and parked runs in one call, over the engine's public entries and the module kit. |
+| `@listen-fire/authoring-mcp` | The authoring tools an agent writes, checks, saves and runs movements with, over MCP for one of your tenants (section 7). Optional. |
 | `@listen-fire/movement-lang` | The language: parser, checker, catalog types. The engine depends on it. |
 | `@listen-fire/model-providers` | Chat vendors beyond Anthropic (OpenAI, Gemini, Claude on Vertex): the models slot. Optional. |
 | `@listen-fire/embedding-providers`, `@listen-fire/image-providers`, `@listen-fire/transcription-providers` | Embeddings, image generation and transcription over OpenAI and Gemini, each its own package on `model-providers`' host type. Optional. |
@@ -155,9 +156,47 @@ The full table is [docs/contracts/run-limits.md](contracts/run-limits.md).
 - Before it builds an instance for the credential a run names, the host asks whether that credential is the run's tenant's; one that is not is refused (`CredentialNotTenants`). The embedded host answers from the tenant's connections. On `inProcessHost` directly, you answer (`credentials.belongsTo`), and a host told nothing refuses every run that names one.
 - A movement reaches the network only through modules. The engine has no network code, and no family takes a URL from a movement.
 
+## 7. Serving the authoring tools
+
+An agent (Claude, or any MCP client) can author your customers' movements for them: read the handbook, see the customer's systems and fields, save a movement (checked first), fix it, and run it. `@listen-fire/authoring-mcp` serves those tools over MCP. You mount one handler; it asks you which customer each request is for.
+
+```ts
+import { createAuthoringHandler } from '@listen-fire/authoring-mcp';
+
+const authoring = createAuthoringHandler({
+  // Your own auth, on every request, before any tool is listed.
+  tenant: async (request) => {
+    const tenant = customerOf(request);
+    if (tenant === undefined) return { ok: false, status: 401, message: 'sign in first' };
+    return {
+      ok: true,
+      tenant: {
+        catalog: async ({ fresh }) => ({ snapshot: await host.catalog(tenant), connections: await connectionsOf(tenant) }),
+        programs: programStoreFor(tenant),
+        runs: runsFor(tenant), // optional: without it, the four run tools are not offered
+      },
+    };
+  },
+});
+
+http.createServer((req, res) => void authoring(req, res));
+```
+
+- **The handler.** Streamable HTTP, no sessions: each request is answered on its own. Mount it at any path, for POST, GET and DELETE.
+- **The tenant.** `tenant(request)` runs first, every time. It returns that customer's functions, or a refusal with a status; a refused request sees no tools. The package is handed one customer's functions per request, so it has no way to ask about another.
+- **The catalog.** What `host.catalog(tenant)` returns, and the customer's connections with the system each serves. `fresh: true` asks for the schema as it is now (describeConnection asks, so a field the customer just added shows).
+- **The programs.** List, get by id or by name, save and delete. A save carries the revision the agent read (`revisionOf`, the sha256 of the text): refuse it, in the same atomic step as the write, when the stored text's revision differs, and return the stored program. A save also carries the listens the text declares, so you can route events without parsing it.
+- **The runs (optional).** Start a run of one program on text or files (with a request id, so a retry returns the first run), read its status, list a program's runs, and read its trace. On the embedded host, `run(tenant, { program, text })` fires a program's `listen to manual`.
+- **Also optional:** a checker of your own (the default is this release's), a deeper describe from live adapter calls (the default answers from the catalog snapshot), handbook chapters for your own systems, tools of your own, and one paragraph of instructions.
+
+The package does the rest: the handbook and its search, the digest of the customer's systems, the check (a save is refused while it has errors, unless the agent passes the user's consent), and diagnostics that name the handbook section showing the fix. The tool names and descriptions are the hosted product's, so an agent or skill written against one works against the other.
+
+The example mounts it at `/customers/:tenant/mcp`, the customer's API key as a bearer token (`src/authoring.ts`, `test/authoring.test.ts`: getStarted, a save refused with `MOV_ENUM_UNKNOWN_VALUE`, the fix through `editAutomation`, a run and `checkRun`).
+
 ## What the example leaves out
 
 - Parks that outlive the process. The example uses the embedded host's in-memory store; a restart forgets its connections, movements and parked runs.
 - A real vault and a database for write locks.
 - Awaits and callbacks: the embedded host steps on timers only. It has no wake for an adapter's `await` or for a callback.
+- Real auth on the MCP endpoint: the customer's API key stands in for it.
 - The live Anthropic path is wired (`ANTHROPIC_API_KEY`) but the test uses the fake model.

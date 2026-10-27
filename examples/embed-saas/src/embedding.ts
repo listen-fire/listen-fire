@@ -6,11 +6,15 @@
 // an event, and parks a run that waits (`await sleep(1h)`) until the `tick()`
 // past its wake (`@listen-fire/embed`, over the engine's public entries).
 
+import type { IncomingMessage } from 'node:http';
+
+import { createAuthoringHandler, type AuthoringHandler } from '@listen-fire/authoring-mcp';
 import { createEmbeddedHost, type EmbeddedHost, type EmbeddedRunLimits, type EmbeddedRunOutcome, type SaveAnswer } from '@listen-fire/embed';
 import { pricedModels, type ModelClient } from '@listen-fire/engine/public/embed';
 import type { DiscriminableEvent } from '@listen-fire/engine/public/adapter';
 import { slackModule } from '@listen-fire/slack';
 
+import { authoringStore, authoringTenant } from './authoring';
 import { CompanyStore, crmModule, type FieldDefinition } from './crm';
 
 export type { SaveAnswer };
@@ -47,10 +51,15 @@ export class Embedding {
   readonly companies = new CompanyStore();
   private readonly crm = crmModule(this.companies);
   private readonly host: EmbeddedHost;
+  private readonly kept: ReturnType<typeof authoringStore>;
+  /** Each customer's API key: its CRM's credential, and the demo auth of its MCP endpoint. */
+  private readonly apiKeys = new Map<string, string>();
 
   constructor(options: { models?: ModelClient; limits?: EmbeddedRunLimits; now?: () => Date } = {}) {
+    this.kept = authoringStore(options.now ?? (() => new Date()));
     this.host = createEmbeddedHost({
       modules: [this.crm, slackModule],
+      store: this.kept.store,
       limits: options.limits ?? DEFAULT_LIMITS,
       ...(options.now !== undefined ? { now: options.now } : {}),
       ...(options.models !== undefined ? { engine: { llm: pricedModels({ client: options.models }) } } : {}),
@@ -61,6 +70,7 @@ export class Embedding {
    *  the API key its CRM workspace is reached with. */
   async addCustomer(tenant: string, apiKey: string, fields: FieldDefinition[] = []): Promise<void> {
     this.companies.defineFields(tenant, fields);
+    this.apiKeys.set(tenant, apiKey);
     await this.host.connect(tenant, { name: CREDENTIAL, module: this.crm, credential: { api_key: apiKey } });
   }
 
@@ -77,13 +87,33 @@ export class Embedding {
   /** Something happened in a customer's CRM: run each of its movements that
    *  listens for it. */
   async fire(tenant: string, event: DiscriminableEvent): Promise<FiredRun[]> {
-    return (await this.host.dispatch(tenant, { adapterType: 'crm', event })).map(firedRun);
+    return this.kept.runs.record(await this.host.dispatch(tenant, { adapterType: 'crm', event })).map(firedRun);
   }
 
   /** Step on every parked run whose timer is due. The SaaS calls this from a
    *  scheduler (or the `POST /tick` route). */
   async tick(): Promise<FiredRun[]> {
-    return (await this.host.tick()).map(firedRun);
+    return this.kept.runs.record(await this.host.tick()).map(firedRun);
+  }
+
+  /**
+   * The authoring tools over MCP, mounted at `/customers/:tenant/mcp`: the
+   * tenant is the path's, and the request must carry that customer's API key
+   * as a bearer token (the example's demo auth; a product uses its own).
+   */
+  authoringHandler(): AuthoringHandler {
+    const { store, programs, runs } = this.kept;
+    return createAuthoringHandler({
+      tenant: async (request: IncomingMessage) => {
+        const tenant = tenantOfPath(request.url ?? '/');
+        const key = this.apiKeys.get(tenant ?? '');
+        if (tenant === undefined || key === undefined || request.headers.authorization !== `Bearer ${key}`) {
+          return { ok: false, status: 401, message: "send the customer's API key as a bearer token" };
+        }
+        return { ok: true, tenant: authoringTenant({ tenant, host: this.host, store, programs, runs }) };
+      },
+      instructions: "This is the SaaS's own CRM: a customer's movements read and write its companies, with the fields it defined.",
+    });
   }
 }
 
@@ -91,4 +121,10 @@ function firedRun({ program, outcome }: EmbeddedRunOutcome): FiredRun {
   if (!outcome.ok) return { movement: program, outcome };
   const { writes, spentMicrodollars, parked } = outcome;
   return { movement: program, outcome: { ok: true, writes: writes.length, spentMicrodollars, ...(parked ? { parked: true as const } : {}) } };
+}
+
+/** `acme` from `/customers/acme/mcp`. */
+export function tenantOfPath(url: string): string | undefined {
+  const [customers, tenant, mcp, ...rest] = url.split('?')[0].split('/').filter(Boolean).map(decodeURIComponent);
+  return customers === 'customers' && mcp === 'mcp' && rest.length === 0 ? tenant : undefined;
 }
