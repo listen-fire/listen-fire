@@ -104,13 +104,14 @@ test('lf check holds Airtable select values to the base\'s choices, and lf run w
   }
 });
 
-// The checker types a multiple select as a list of its enum, but holds only a
-// text literal against an enum, so a list literal of unknown choices passes.
-// That is the checker's (crates/movement-checker families/writes), not lf's.
-test('an unknown choice inside a multiple select write is refused', { todo: 'the checker does not hold a list literal against a list of enum' }, async () => {
+// A multiple select is a list of its enum: each literal of a list written into
+// it is one of the base's choices, and a WHERE inside a parameter's type is
+// held against the choices as one in a body is.
+test('an unknown choice inside a multiple select write, or in a parameter type WHERE, is refused', async () => {
   const { dir, fake } = await connected();
   try {
-    refused(check(dir, { body: write('Tags: ["Cold"]') }), /MOV_ENUM_UNKNOWN_VALUE "Cold"/);
+    refused(check(dir, { body: write('Tags: ["Hot", "Cold"]') }), /MOV_ENUM_UNKNOWN_VALUE "Cold"/);
+    refused(check(dir, { param: 'crm-[c:Companies WHERE c.`Stage` == "Lost"]->' }), /MOV_ENUM_UNKNOWN_VALUE "Lost"/);
   } finally {
     await fake.stop();
   }
