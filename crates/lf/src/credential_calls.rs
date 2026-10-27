@@ -81,6 +81,8 @@ pub struct Sending<'a> {
     pub method: &'a str,
     pub cache_scope_id: &'a str,
     pub params: serde_json::Value,
+    /// The construction's position args, sent as the request's `settings`.
+    pub settings: Option<serde_json::Value>,
 }
 
 /// One call as `credential`, its bearer secret read off `signer` (the entry
@@ -215,6 +217,15 @@ async fn post(target: &Target<'_>, credentials: &Credentials, sending: &Sending<
         let fields = current_fields(install);
         serde_json::Value::Object(target.settings.iter().filter_map(|s| fields.get(s).map(|v| (s.clone(), json!(v)))).collect())
     });
+    // The construction's position args lie over the install's settings.
+    let settings = match (settings, &sending.settings) {
+        (Some(serde_json::Value::Object(mut base)), Some(serde_json::Value::Object(position))) => {
+            base.extend(position.clone());
+            Some(serde_json::Value::Object(base))
+        }
+        (base, None) => base,
+        (_, position) => position.clone(),
+    };
     let carried = Carried {
         credential: presented.sent,
         settings: settings.filter(|s| s.as_object().is_some_and(|o| !o.is_empty())),
@@ -296,7 +307,7 @@ fn declared_refresher<'a>(
             Box::pin(async move {
                 let bearer = bearer_for(&current).map_err(String::from)?;
                 let sent = json!({ "name": declaration.name, "fields": declared_fields(declaration, &current.fields) });
-                let refreshing = Sending { tenant: sending.tenant, method: "refreshCredential", cache_scope_id: sending.cache_scope_id, params: json!({}) };
+                let refreshing = Sending { tenant: sending.tenant, method: "refreshCredential", cache_scope_id: sending.cache_scope_id, params: json!({}), settings: None };
                 let presented = Presented { entry: Some(entry.as_str()), sent: Some(sent) };
                 let Answered { answer, update, .. } = post(target, credentials, &refreshing, bearer.as_deref(), presented).await;
                 let result = answer.map_err(|e| e.message())?;

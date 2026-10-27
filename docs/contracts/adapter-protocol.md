@@ -194,6 +194,11 @@ The manifest file registers your server with a team:
 - `supportedTriggers` is `["webhook"]` if your system announces events, else `[]`.
 - `description` (optional): one or two sentences about your system. An
   author's editor shows it when they hover your adapter or a connection to it.
+- `positionArgs` (optional): `[{ name, optionsFrom, label? }]`, the construction
+  args that pin an entry position (an Airtable `base`). A program writes one on
+  the connection (`connect airtable using acme { base: "CRM" }`); the host
+  describes the module once per value a program constructs it with, and sends
+  that value on every call of the connection as `"settings": { "base": "CRM" }`.
 - Optional fields: `handbookSection` (`{ title, content }`, prose the authoring
   handbook shows about your system), `vocabulary` (an icon and event phrasing),
   `webhookEventTypeId`.

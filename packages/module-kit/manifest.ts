@@ -50,6 +50,7 @@ function adapterManifest(definition: AdapterModuleDefinition, instance: AdapterM
           })),
         }
       : {}),
+    ...(manifest.positionArgs !== undefined && manifest.positionArgs.length > 0 ? { positionArgs: manifest.positionArgs.map((arg) => ({ ...arg })) } : {}),
     ...(definition.credentials.length > 0 ? { credentials: [...definition.credentials] } : {}),
     ...(definition.inbound !== undefined ? { inbound: definition.inbound } : {}),
     ...(definition.poll !== undefined ? { poll: definition.poll } : {}),

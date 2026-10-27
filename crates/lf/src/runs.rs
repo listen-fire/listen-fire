@@ -1607,7 +1607,7 @@ impl Session {
     }
 
     /// One external a refreshed set newly imports, started and described.
-    async fn start_external(&self, external: &External, imported: &BTreeSet<String>) -> Result<(Rc<RunningExternal>, Option<ConnectionSchemas>), String> {
+    async fn start_external(&self, external: &External, imported: &crate::secrets::Imported) -> Result<(Rc<RunningExternal>, Option<ConnectionSchemas>), String> {
         let secrets = self.secrets();
         let credentials = secrets.credentials();
         let one = start_externals(&self.project, std::slice::from_ref(external), credentials, LOCAL_TENANT).await?.into_iter().next().ok_or("it did not answer its manifest")?;

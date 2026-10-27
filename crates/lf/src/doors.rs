@@ -412,7 +412,7 @@ impl SessionReader<'_> {
         // Signed by the install, carrying no user credential.
         let lease = running.reach.lease().await?;
         let target = Target { external: &running.external, base_url: &lease.address, declarations: &[], methods: &running.methods, settings: &running.settings, limits: &running.limits };
-        let sending = Sending { tenant: LOCAL_TENANT, method, cache_scope_id: "<none>", params };
+        let sending = Sending { tenant: LOCAL_TENANT, method, cache_scope_id: "<none>", params, settings: None };
         let raw = send(&target, self.session.secrets().credentials(), None, Some(install), sending).await?;
         module_wire::results::check(method, external, &raw)
     }
@@ -474,7 +474,7 @@ impl Reader for SessionReader<'_> {
             settings: &running.settings,
             limits: &running.limits,
         };
-        let sending = Sending { tenant: LOCAL_TENANT, method: "checkInbound", cache_scope_id: "<none>", params };
+        let sending = Sending { tenant: LOCAL_TENANT, method: "checkInbound", cache_scope_id: "<none>", params, settings: None };
         let raw = send(&target, credentials, carried, signer_of(credentials, external, carried).or(Some(install)), sending).await?;
         module_wire::results::check("checkInbound", external, &raw)
     }

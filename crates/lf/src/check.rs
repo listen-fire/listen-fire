@@ -3,7 +3,6 @@
 //! `check_program` export runs), against the catalog the externals answer.
 //! Its output: one line per diagnostic, then a count; exit 1 when any is an error.
 
-use std::collections::BTreeSet;
 use std::io::Write;
 use std::rc::Rc;
 
@@ -11,17 +10,19 @@ use indexmap::IndexMap;
 use movement_checker::host::native::NativeZones;
 use movement_checker::{CheckOptions, Severity};
 use movement_parser::ast::Program;
-use movement_parser::catalog::types::CatalogSnapshot;
+use movement_parser::catalog::helpers::position_key;
+use movement_parser::catalog::snapshot::{Args, instance_schema_key};
+use movement_parser::catalog::types::{ArgKind, CatalogSnapshot, ConstructionArg, JsMap};
 use movement_parser::util::form::{external_text, form_of_text, read_json_text};
 use serde_json::json;
 
 use crate::catalog::{ConnectionSchemas, catalog_of, connections_of};
-use crate::externals::{RunningExternal, needed_externals, rpc_as, scan_externals, start_externals};
+use crate::externals::{RunningExternal, needed_externals, rpc_in, scan_externals, start_externals};
 use crate::json::Js;
 use crate::project::Project;
 use crate::protocol::shape_error;
 use crate::schema::describe_external_schema;
-use crate::secrets::{Credential, Credentials, MissingCredential, Secrets, imported_credentials, missing_credentials};
+use crate::secrets::{Construction, Credential, Credentials, Imported, MissingCredential, Secrets, imported_credentials, missing_credentials};
 use crate::sources::{MovementFile, Parsed, scan_movements};
 
 /// The one tenant a local project is (`LOCAL_TENANT`).
@@ -143,25 +144,85 @@ pub async fn open_checking(project: &Project) -> Result<Opened, String> {
 /// describe per credential bound to it that the files import (one bound but
 /// never imported is never asked, so a server it names that is down fails no
 /// check). `known` is kept: only a connection it lacks is described.
-pub async fn describe_external(running: &RunningExternal, credentials: &Credentials, imported: &BTreeSet<String>, known: ConnectionSchemas) -> Result<ConnectionSchemas, String> {
+pub async fn describe_external(running: &RunningExternal, credentials: &Credentials, imported: &Imported, known: ConnectionSchemas) -> Result<ConnectionSchemas, String> {
     let connections = connections_of(running, credentials);
     let mut schemas = known;
     if !connections.credential_required && !schemas.contains_key("") {
-        schemas.insert(String::new(), describe_as(running, credentials, None).await?);
+        schemas.insert(String::new(), describe_as(running, credentials, None, None).await?);
     }
-    for credential in connections.credentials.into_iter().filter(|c| imported.contains(&c.name)) {
+    for credential in connections.credentials.iter().copied().filter(|c| imported.contains(&c.name)) {
         if !schemas.contains_key(&credential.name) {
-            schemas.insert(credential.name.clone(), describe_as(running, credentials, Some(credential)).await?);
+            schemas.insert(credential.name.clone(), describe_as(running, credentials, Some(credential), None).await?);
+        }
+    }
+    // A connection that pins an entry position (`base: "CRM"`) is described in
+    // that position, under a key of its own: its schema is that position's.
+    for (construction, position) in positions_of(running, imported) {
+        let credential = match &construction.credential {
+            Some(name) => match connections.credentials.iter().find(|c| c.name == *name) {
+                Some(credential) => Some(*credential),
+                None => continue,
+            },
+            None if connections.credential_required => continue,
+            None => None,
+        };
+        let key = instance_schema_key(construction.credential.as_deref(), Some(&position.key));
+        if !schemas.contains_key(&key) {
+            schemas.insert(key, describe_as(running, credentials, credential, Some(position.settings)).await?);
         }
     }
     Ok(schemas)
 }
 
+/// The position a construction pins: the key its schema is stored under (the
+/// checker's own `position_key`) and the `settings` a call in it carries.
+struct Position {
+    key: String,
+    settings: serde_json::Value,
+}
+
+/// The constructions of this module that pin a position, each with its position.
+fn positions_of<'a>(running: &RunningExternal, imported: &'a Imported) -> Vec<(&'a Construction, Position)> {
+    let declared = running.position_args();
+    if declared.is_empty() {
+        return Vec::new();
+    }
+    let manifest = &running.external.manifest;
+    let construction_args: Vec<ConstructionArg> =
+        declared.iter().map(|d| ConstructionArg { name: d.name.clone(), kind: ArgKind::Position, required: false, options_from_type: Some(d.options_from.clone()), label: d.label.clone() }).collect();
+    let mut positions = Vec::new();
+    for construction in imported.constructions.iter().filter(|c| manifest.name == c.adapter || manifest.module.as_deref() == Some(c.adapter.as_str())) {
+        let args: Args = JsMap(construction.args.iter().cloned().collect());
+        let key = position_key(&construction_args, Some(&args));
+        if key.is_empty() {
+            continue;
+        }
+        let settings = declared
+            .iter()
+            .filter_map(|d| {
+                let value = unquoted(args.get(&d.name)?);
+                (!value.is_empty()).then(|| (d.name.clone(), json!(value)))
+            })
+            .collect();
+        positions.push((construction, Position { key, settings: serde_json::Value::Object(settings) }));
+    }
+    positions
+}
+
+/// A position arg's source text as its value: a quoted string loses its quotes.
+fn unquoted(raw: &str) -> String {
+    let trimmed = raw.trim();
+    match trimmed.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+        Some(inner) => inner.replace("\\\"", "\"").replace("\\\\", "\\"),
+        None => trimmed.to_string(),
+    }
+}
+
 /// `describeExternal`: its entry points and one `describe` per entry point,
 /// asked as one connection, projected as the hosted product projects them.
-async fn describe_as(running: &RunningExternal, credentials: &Credentials, credential: Option<&Credential>) -> Result<Js, String> {
+async fn describe_as(running: &RunningExternal, credentials: &Credentials, credential: Option<&Credential>, settings: Option<serde_json::Value>) -> Result<Js, String> {
     let name = &running.external.manifest.name;
-    let rpc = |method: &'static str, params: serde_json::Value| rpc_as(running, credentials, credential, LOCAL_TENANT, method, params);
+    let rpc = |method: &'static str, params: serde_json::Value| rpc_in(running, credentials, credential, LOCAL_TENANT, method, params, settings.clone());
     let entries = rpc("listEntryPoints", json!({})).await?;
     let entry_list = entries
         .as_array()

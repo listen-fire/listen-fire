@@ -99,11 +99,18 @@ pub fn catalog_of(running: &[Rc<RunningExternal>], schemas: &IndexMap<String, Co
             }
         }
         movement_parser::util::js::object_key_order(&mut adapter_schemas);
-        let construction_args = if connections.credentialed {
+        let mut construction_args = if connections.credentialed {
             vec![Js::from(obj! { "name" => Js::str("credentials"), "kind" => Js::str("credential"), "required" => Js::Bool(connections.credential_required) })]
         } else {
             Vec::new()
         };
+        for position in r.position_args() {
+            let mut arg = obj! { "name" => Js::str(&position.name), "kind" => Js::str("position"), "required" => Js::Bool(false), "optionsFromType" => Js::str(&position.options_from) };
+            if let Some(label) = &position.label {
+                arg.insert("label".into(), Js::str(label));
+            }
+            construction_args.push(Js::from(arg));
+        }
         let description = r.manifest_answer.get("description").and_then(Js::as_str).filter(|d| !d.is_empty()).map(str::to_string);
         adapters.insert(
             name.clone(),

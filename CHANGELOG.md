@@ -20,6 +20,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- `lf` types a connection that names a position (`connect airtable using acme { base: "CRM" }`): the module's `positionArgs` reach the catalog and every call, so an Airtable base's tables are checked (unknown fields, and with `@listen-fire/airtable`, select choices) under `lf` as they are on the platform. A module declares them in its manifest (`positionArgs`).
+
 ## [0.12.9] - 2026-10-26
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Two behaviours change for an existing project under `lf`, both from routing inbound events by connection:

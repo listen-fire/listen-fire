@@ -1099,6 +1099,12 @@ export const WireManifestResult = z.object({
   webhookEventTypeId: z.string().optional(),
   /** What the adapter is, in one or two sentences: shown when an author hovers it. */
   description: z.string().optional(),
+  /** Construction args that pin an entry position (an Airtable `base`): a host
+   *  describes the module once per value a program constructs it with, and
+   *  sends the value as the request's `settings`. */
+  positionArgs: z
+    .array(z.object({ name: z.string().min(1), optionsFrom: z.string().min(1), label: z.string().optional() }))
+    .optional(),
 }).superRefine(refuseUnpairedDeclarations);
 export type WireManifestResultShape = z.infer<typeof WireManifestResult>;
 

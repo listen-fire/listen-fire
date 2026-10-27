@@ -331,20 +331,81 @@ pub struct MissingCredential {
     pub message: String,
 }
 
-/// The credentials the files import (`import { … } from credentials`): the
-/// connections a check or a session describes.
-pub fn imported_credentials(files: &[Rc<Parsed>]) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
+/// One construction a file writes that names arguments beyond its credential
+/// (`connect airtable using acme { base: "CRM" }`): which module, under which
+/// credential, with which arguments as their source text. Whether an argument
+/// is a position arg is the module's to say (its manifest's `positionArgs`).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Construction {
+    pub adapter: String,
+    pub credential: Option<String>,
+    pub args: Vec<(String, String)>,
+}
+
+/// What the files import and construct: the connections a check or a session
+/// describes.
+#[derive(Clone, Debug, Default)]
+pub struct Imported {
+    credentials: BTreeSet<String>,
+    pub constructions: BTreeSet<Construction>,
+}
+
+impl Imported {
+    pub fn contains(&self, credential: &str) -> bool {
+        self.credentials.contains(credential)
+    }
+}
+
+/// The credentials the files import (`import { … } from credentials`) and the
+/// constructions with arguments beyond the credential.
+pub fn imported_credentials(files: &[Rc<Parsed>]) -> Imported {
+    let mut imported = Imported::default();
     for file in files {
         let Ok(program) = &file.program else { continue };
+        let mut originals: BTreeMap<String, String> = BTreeMap::new();
         for statement in &program.statements {
             let Statement::Import(import) = statement else { continue };
+            for name in &import.names {
+                if let Some(alias) = &name.alias {
+                    originals.insert(alias.clone(), name.name.clone());
+                }
+            }
             if matches!(&import.source, ImportSource::Builtin { namespace } if namespace == "credentials") {
-                names.extend(import.names.iter().map(|n| n.name.clone()));
+                imported.credentials.extend(import.names.iter().map(|n| n.name.clone()));
             }
         }
+        collect_constructions(&program.statements, &originals, &mut imported.constructions);
     }
-    names
+    imported
+}
+
+fn collect_constructions(statements: &[Statement], originals: &BTreeMap<String, String>, out: &mut BTreeSet<Construction>) {
+    let add = |out: &mut BTreeSet<Construction>, construct: &movement_parser::ast::ConstructionCall| {
+        let original = |name: &str| originals.get(name).cloned().unwrap_or_else(|| name.to_string());
+        let credential = construct.args.iter().find(|a| a.name == "credentials").and_then(|a| movement_parser::catalog::helpers::unwrap_credential_arg(&a.value.raw)).map(|c| original(&c));
+        let mut args: Vec<(String, String)> = construct.args.iter().filter(|a| a.name != "credentials").map(|a| (a.name.clone(), a.value.raw.clone())).collect();
+        if args.is_empty() {
+            return;
+        }
+        args.sort();
+        out.insert(Construction { adapter: original(&construct.callee), credential, args });
+    };
+    for statement in statements {
+        match statement {
+            Statement::Assign(assign) => {
+                if let movement_parser::ast::RValue::Construct { construct } = &assign.value {
+                    add(out, construct);
+                }
+            }
+            Statement::Listen(listen) => {
+                if let Some(construct) = &listen.construct {
+                    add(out, construct);
+                }
+            }
+            Statement::Movement(movement) => collect_constructions(&movement.body, originals, out),
+            _ => {}
+        }
+    }
 }
 
 /// Every credential the project's programs import, that the secrets do not hold.
@@ -382,7 +443,17 @@ pub fn missing_credentials(files: &[Rc<Parsed>], secrets: &Secrets) -> Vec<Missi
 
 #[cfg(test)]
 mod tests {
-    use super::{Binding, Credential, Credentials, Origin, apply_environment, parse_entry};
+    use super::{Binding, Construction, Credential, Credentials, Origin, apply_environment, imported_credentials, parse_entry};
+
+    #[test]
+    fn a_construction_with_arguments_beyond_its_credential_is_collected_with_its_alias_resolved() {
+        let source = "import { `@lf/airtable` as air } from adapters\nimport { acme as a } from credentials\n\ncrm = connect air using a { base: \"CRM\" }\nplain = connect air using a\n";
+        let file = crate::sources::MovementFile { name: "m".into(), path: "m.mvt".into(), source: source.into(), version: None };
+        let imported = imported_credentials(&crate::sources::Parsed::each(&[file], &[]));
+        assert!(imported.contains("acme"));
+        let wanted = Construction { adapter: "airtable".into(), credential: Some("acme".into()), args: vec![("base".into(), "\"CRM\"".into())] };
+        assert_eq!(imported.constructions.into_iter().collect::<Vec<_>>(), vec![wanted], "a construction with no argument beyond the credential pins nothing");
+    }
 
     #[cfg(unix)]
     #[test]

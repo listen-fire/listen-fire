@@ -881,7 +881,12 @@ export function seedDefaults(store: EntityStore) {
       appTEST001: [
         { id: 'tblCOMPANIES', name: 'Companies', primaryFieldId: 'fldName', fields: [
           { id: 'fldName', name: 'Name', type: 'singleLineText' },
-          { id: 'fldStage', name: 'Stage', type: 'singleSelect' },
+          { id: 'fldStage', name: 'Stage', type: 'singleSelect', options: { choices: [
+            { id: 'selOpen', name: 'Open' }, { id: 'selWon', name: 'Won' },
+          ] } },
+          { id: 'fldTags', name: 'Tags', type: 'multipleSelects', options: { choices: [
+            { id: 'selHot', name: 'Hot' }, { id: 'selWarm', name: 'Warm' },
+          ] } },
           { id: 'fldNotes', name: 'Notes', type: 'multilineText' },
         ]},
         { id: 'tblCONTACTS', name: 'Contacts', primaryFieldId: 'fldFullName', fields: [

@@ -288,9 +288,31 @@ impl Reach {
     }
 }
 
+/// One entry-position construction arg a module declares.
+pub struct PositionArg {
+    pub name: String,
+    pub options_from: String,
+    pub label: Option<String>,
+}
+
 impl RunningExternal {
     pub fn is_plugin(&self) -> bool {
         self.external.manifest.kind == "plugin"
+    }
+
+    /// The construction args its manifest declares as entry positions (`positionArgs`).
+    pub fn position_args(&self) -> Vec<PositionArg> {
+        let declared = self.manifest_answer.get("positionArgs").and_then(Js::as_array).unwrap_or_default();
+        declared
+            .iter()
+            .filter_map(|arg| {
+                Some(PositionArg {
+                    name: arg.get("name")?.as_str()?.to_string(),
+                    options_from: arg.get("optionsFrom")?.as_str()?.to_string(),
+                    label: arg.get("label").and_then(Js::as_str).map(str::to_string),
+                })
+            })
+            .collect()
     }
 
     /// The package tag its plugins are imported from.
@@ -350,6 +372,11 @@ pub async fn rpc(running: &RunningExternal, credentials: &Credentials, tenant: &
 
 /// One call made as `credential` (one connection's), or as none.
 pub async fn rpc_as(running: &RunningExternal, credentials: &Credentials, credential: Option<&Credential>, tenant: &str, method: &str, params: serde_json::Value) -> Result<Js, String> {
+    rpc_in(running, credentials, credential, tenant, method, params, None).await
+}
+
+/// `rpc_as`, with the construction's position args (`settings`) carried on the call.
+pub async fn rpc_in(running: &RunningExternal, credentials: &Credentials, credential: Option<&Credential>, tenant: &str, method: &str, params: serde_json::Value, settings: Option<serde_json::Value>) -> Result<Js, String> {
     let lease = running.reach.lease().await?;
     let target = Target {
         external: &running.external,
@@ -359,16 +386,16 @@ pub async fn rpc_as(running: &RunningExternal, credentials: &Credentials, creden
         settings: &running.settings,
         limits: &running.limits,
     };
-    call_as(&target, credentials, credential, tenant, method, params).await
+    call_as(&target, credentials, credential, tenant, method, params, settings).await
 }
 
 async fn call(target: &Target<'_>, credentials: &Credentials, tenant: &str, method: &str, params: serde_json::Value) -> Result<Js, String> {
-    call_as(target, credentials, credential_for(credentials, &target.external.manifest.name), tenant, method, params).await
+    call_as(target, credentials, credential_for(credentials, &target.external.manifest.name), tenant, method, params, None).await
 }
 
-async fn call_as(target: &Target<'_>, credentials: &Credentials, credential: Option<&Credential>, tenant: &str, method: &str, params: serde_json::Value) -> Result<Js, String> {
+async fn call_as(target: &Target<'_>, credentials: &Credentials, credential: Option<&Credential>, tenant: &str, method: &str, params: serde_json::Value, settings: Option<serde_json::Value>) -> Result<Js, String> {
     let signer = signer_of(credentials, &target.external.manifest.name, credential);
-    Ok(send(target, credentials, credential, signer, Sending { tenant, method, cache_scope_id: "<none>", params }).await?)
+    Ok(send(target, credentials, credential, signer, Sending { tenant, method, cache_scope_id: "<none>", params, settings }).await?)
 }
 
 /// The externals the files import (`from adapters`, `from plugins`), by
