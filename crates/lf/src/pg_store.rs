@@ -51,7 +51,7 @@ use crate::json::Js;
 use crate::obj;
 use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind,
-    Release, Result, RunRow, RunStart, StoreError, WORK_KINDS, timer_work_key, timer_work_payload,
+    Release, Rerun, Result, RunRow, RunStart, StoreError, WORK_KINDS, timer_work_key, timer_work_payload,
 };
 
 type Params<'a> = [&'a (dyn ToSql + Sync)];
@@ -132,6 +132,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (5, include_str!("pg_store_schema_5.sql")),
     (6, include_str!("pg_store_schema_6.sql")),
     (7, include_str!("pg_store_schema_7.sql")),
+    (8, include_str!("pg_store_schema_8.sql")),
 ];
 
 /// The advisory lock the migrations run under: "lf-store" as a number.
@@ -162,7 +163,8 @@ const RUN_COLUMNS: &str = concat!(
     "id::text, trigger_payload->>'file', trigger_payload->>'movement', status, ",
     iso!("started_at"),
     ", trigger_payload->>'facts', nodes_written::int8, failure_reason, returned::text, delivery_id::text, ",
-    iso!("coalesce(completed_at, failed_at)")
+    iso!("coalesce(completed_at, failed_at)"),
+    ", write_records::text, attempt::int8, attempts::text"
 );
 
 fn run_of(row: &Row) -> Result<RunRow> {
@@ -172,15 +174,20 @@ fn run_of(row: &Row) -> Result<RunRow> {
     };
     let status = lf_status(row.get(3));
     let failure: Option<String> = row.get(7);
-    let outcome = if status == "failed" {
-        Js::Obj(obj! { "error" => Js::str(failure.unwrap_or_default()) })
-    } else {
-        let mut outcome = obj! { "writes" => Js::Num(row.get::<_, i64>(6).into()) };
-        if let Some(returned) = row.get::<_, Option<String>>(8) {
-            outcome.insert("returned".into(), parse_text(&returned)?);
-        }
-        Js::Obj(outcome)
-    };
+    // A failed run keeps the writes it made: they were made.
+    let mut outcome = crate::json::Obj::new();
+    if status == "failed" {
+        outcome.insert("error".into(), Js::str(failure.unwrap_or_default()));
+    }
+    outcome.insert("writes".into(), Js::Num(row.get::<_, i64>(6).into()));
+    if let Some(records) = row.get::<_, Option<String>>(11) {
+        outcome.insert("writeRecords".into(), parse_text(&records)?);
+    }
+    if let Some(returned) = row.get::<_, Option<String>>(8).filter(|_| status != "failed") {
+        outcome.insert("returned".into(), parse_text(&returned)?);
+    }
+    let outcome = Js::Obj(outcome);
+    let attempts = parse_text(row.get(13))?;
     Ok(RunRow {
         file: lf_field(1, "file")?,
         movement: lf_field(2, "movement")?,
@@ -189,6 +196,8 @@ fn run_of(row: &Row) -> Result<RunRow> {
         outcome: Some(outcome.to_json()),
         delivery_id: row.get(9),
         finished_at: row.get(10),
+        attempt: row.get(12),
+        attempts: attempts.as_array().map(<[Js]>::to_vec).unwrap_or_default(),
         status,
         id,
     })
@@ -444,6 +453,7 @@ impl RunHostStore for PgStore {
         let writes = outcome.get("writes").and_then(|w| if let Js::Num(n) = w { n.as_i64() } else { None });
         let error = outcome.get("error").and_then(Js::as_str);
         let returned = outcome.get("returned").map(Js::to_json);
+        let records = outcome.get("writeRecords").map(Js::to_json);
         let ended = status == "success" || status == "failed";
         self.transaction(|| {
             self.execute(
@@ -453,9 +463,10 @@ impl RunHostStore for PgStore {
                    failure_reason = case when $2::text = 'failed' then $4::text else failure_reason end,
                    completed_at = case when $2::text = 'success' then $5::text::timestamptz else completed_at end,
                    failed_at = case when $2::text = 'failed' then $5::text::timestamptz else failed_at end,
-                   returned = $6::text::json
+                   returned = $6::text::json,
+                   write_records = coalesce($7::text::json, write_records)
                  where id = $1::text::uuid",
-                &[&id, &status, &writes, &error, &at, &returned],
+                &[&id, &status, &writes, &error, &at, &returned, &records],
             )?;
             if ended {
                 self.revoke_run_callbacks(id)?;
@@ -477,6 +488,40 @@ impl RunHostStore for PgStore {
                 &[&id, &message],
             )?;
             self.revoke_run_callbacks(id)
+        })
+    }
+
+    fn rerun_run(&self, run_id: &str, rerun: &Rerun<'_>) -> Result<Option<i64>> {
+        if uuid::Uuid::parse_str(run_id).is_err() {
+            return Ok(None);
+        }
+        self.transaction(|| {
+            // Held for the transaction: the lease cannot change hands
+            // between the check and the write.
+            let held = self.query_opt(
+                &format!("select {RUN_COLUMNS} from lf.trigger_run where id = $1::text::uuid and team_id = $2::text::uuid and {LEASED_TO}$3::text for update"),
+                &[&run_id, &self.tenant, &rerun.fence],
+            )?;
+            let Some(row) = held else { return Err(Self::not_written(run_id, Some(rerun.fence))) };
+            let run = run_of(&row)?;
+            if run.status != "failed" {
+                return Ok(None);
+            }
+            let mut attempts = run.attempts.clone();
+            attempts.push(crate::store::kept_attempt(&run));
+            let attempts = Js::Arr(attempts).to_json();
+            let next = run.attempt + 1;
+            self.execute(
+                "update lf.trigger_run set
+                   status = 'running', attempt = $2::int8, attempts = $3::text::json,
+                   trigger_payload = jsonb_set(trigger_payload, '{facts}', to_jsonb($4::text)),
+                   started_at = $5::text::timestamptz, completed_at = null, failed_at = null, failure_reason = null,
+                   nodes_written = 0, write_records = null, returned = null, cancel_requested_at = null, cancel_reason = null,
+                   cost_cap_baseline_microdollars = round(coalesce((diagnostics ->> 'costMicrodollars')::float8, 0))::int8
+                 where id = $1::text::uuid",
+                &[&run_id, &next, &attempts, &rerun.input, &rerun.at],
+            )?;
+            Ok(Some(next))
         })
     }
 

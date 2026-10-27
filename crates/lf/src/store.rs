@@ -25,7 +25,9 @@ create table if not exists run (
   input text not null,
   outcome text,
   lease_token text,
-  lease_until text
+  lease_until text,
+  attempt integer not null default 1,
+  attempts text not null default '[]'
 );
 create table if not exists trace (
   run_id text not null,
@@ -153,6 +155,8 @@ pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", "f
 
 /// Columns a state file written by an earlier lf lacks, added on open.
 const ADDED_RUN_COLUMNS: &[&str] = &["cancel_requested_at", "cancel_reason", "delivery_id"];
+/// Added to a state file written before a failed run could be run again.
+const ATTEMPT_COLUMNS: &[(&str, &str)] = &[("attempt", "integer not null default 1"), ("attempts", "text not null default '[]'")];
 const ADDED_WORK_COLUMNS: &[(&str, &str)] = &[("attempts", "integer not null default 0"), ("dead_at", "text"), ("dead_reason", "text")];
 
 #[derive(Debug)]
@@ -200,9 +204,16 @@ pub struct RunRow {
     pub outcome: Option<String>,
     /// The delivery whose event started it, when one did.
     pub delivery_id: Option<String>,
+    /// The latest attempt's number, from 1: a rerun (`lf runs rerun`) is
+    /// the run's next attempt. `status`, `started_at`, `finished_at`,
+    /// `input` and `outcome` are that attempt's.
+    pub attempt: i64,
+    /// The earlier attempts, oldest first, each as the rerun kept it:
+    /// `{ attempt, status, startedAt, finishedAt, outcome }`.
+    pub attempts: Vec<Js>,
 }
 
-const RUN_COLUMNS: &str = "id, file, movement, status, started_at, input, outcome, delivery_id, finished_at";
+const RUN_COLUMNS: &str = "id, file, movement, status, started_at, input, outcome, delivery_id, finished_at, attempt, attempts";
 
 fn run_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RunRow> {
     Ok(RunRow {
@@ -215,6 +226,25 @@ fn run_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RunRow> {
         outcome: r.get(6)?,
         delivery_id: r.get(7)?,
         finished_at: r.get(8)?,
+        attempt: r.get(9)?,
+        attempts: attempts_of(&r.get::<_, String>(10)?),
+    })
+}
+
+/// A run's earlier attempts as kept: a list that does not read is none.
+fn attempts_of(text: &str) -> Vec<Js> {
+    Js::parse(text.as_bytes()).ok().and_then(|list| list.as_array().map(<[Js]>::to_vec)).unwrap_or_default()
+}
+
+/// The attempt a rerun keeps beside the run: the run's latest, as it settled.
+pub fn kept_attempt(run: &RunRow) -> Js {
+    let outcome = run.outcome.as_deref().and_then(|text| Js::parse(text.as_bytes()).ok()).unwrap_or(Js::Null);
+    Js::Obj(crate::obj! {
+        "attempt" => Js::Num(run.attempt.into()),
+        "status" => Js::str(&run.status),
+        "startedAt" => Js::str(&run.started_at),
+        "finishedAt" => run.finished_at.as_deref().map_or(Js::Null, Js::str),
+        "outcome" => outcome,
     })
 }
 
@@ -340,6 +370,15 @@ impl ParkKind<'_> {
             ParkKind::Limit => "limit",
         }
     }
+}
+
+/// A failed run's next attempt (`runs.rerun`), written under its lease.
+pub struct Rerun<'a> {
+    /// The attempt's facts, as `RunStart::input`.
+    pub input: &'a str,
+    /// When the attempt starts: the run's `started_at` from now on.
+    pub at: &'a str,
+    pub fence: &'a str,
 }
 
 /// A new run's row (`runs.start`).
@@ -508,6 +547,11 @@ impl Store {
                 db.execute_batch(&format!("alter table run add column {column} text"))?;
             }
         }
+        for (column, declared) in ATTEMPT_COLUMNS {
+            if !columns.iter().any(|c| c == column) {
+                db.execute_batch(&format!("alter table run add column {column} {declared}"))?;
+            }
+        }
         db.execute_batch("create index if not exists run_delivery on run (delivery_id)")?;
         // Added to a state file written before the cost cap kept run spend.
         for column in SPEND_COLUMNS {
@@ -625,15 +669,36 @@ impl Store {
         Ok(())
     }
 
-    /// The run is over without completing. A run already settled stays.
+    /// The run is over without completing. A run already settled stays. The
+    /// writes it settled with stay in its outcome: they were made.
     pub fn mark_failed(&self, id: &str, message: &str) -> Result<()> {
-        let outcome = Js::Obj(crate::obj! { "error" => Js::str(message) });
         self.transaction(|db| {
             db.execute(
-                "update run set status = 'failed', outcome = ?, finished_at = ? where id = ? and status in ('running', 'parked')",
-                params![text_of(&outcome), iso(0), id],
+                "update run set status = 'failed', outcome = json_set(coalesce(outcome, '{}'), '$.error', ?), finished_at = ?
+                 where id = ? and status in ('running', 'parked')",
+                params![message, iso(0), id],
             )?;
             Self::revoke_callbacks(db, id)
+        })
+    }
+
+    /// crate::backend::RunHostStore::rerun_run.
+    pub fn rerun_run(&self, run_id: &str, rerun: &Rerun<'_>) -> Result<Option<i64>> {
+        self.fenced(run_id, Some(rerun.fence), |db| {
+            let Some(run) = db.query_row(&format!("select {RUN_COLUMNS} from run where id = ?"), params![run_id], run_row).optional()? else { return Ok(None) };
+            if run.status != "failed" {
+                return Ok(None);
+            }
+            let mut attempts = run.attempts.clone();
+            attempts.push(kept_attempt(&run));
+            let next = run.attempt + 1;
+            db.execute(
+                "update run set status = 'running', attempt = ?, attempts = ?, input = ?, started_at = ?, finished_at = null, outcome = null,
+                   cancel_requested_at = null, cancel_reason = null, cost_cap_baseline_microdollars = spent_microdollars
+                 where id = ?",
+                params![next, Js::Arr(attempts).to_json(), rerun.input, rerun.at, run_id],
+            )?;
+            Ok(Some(next))
         })
     }
 

@@ -17,8 +17,10 @@ import {
   callbackContractCases,
   cancelContractCases,
   deliveryContractCases,
+  rerunContractCases,
   runHostContractCases,
   type DeliveryContractBackend,
+  type RerunContractBackend,
   type RecordsContractBackend,
 } from 'movement-engine/services/run_host/contract';
 import { RpcStoreBackend } from 'movement-engine/services/run_host/rpc_store';
@@ -90,4 +92,29 @@ for (const contractCase of deliveryContractCases) {
       await backend.close();
     }
   });
+}
+
+for (const bridge of bridges)
+for (const contractCase of rerunContractCases) {
+  test(`${bridge.over}: ${contractCase.name}`, async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'lf-contract-')), 'state.db');
+    const backend = new RpcStoreBackend(lfBinary(), bridge.args(path));
+    try {
+      await contractCase.run(rerunBackend(backend));
+    } finally {
+      await backend.close();
+    }
+  });
+}
+
+function rerunBackend(backend: RpcStoreBackend): RerunContractBackend {
+  return {
+    startRun: (input) => backend.startRun(input),
+    runGet: (input) => backend.runGet(input),
+    runSettle: (input) => backend.runSettle(input),
+    runRerun: (input) => backend.runRerun(input),
+    markFailed: (input) => backend.runs.markFailed(input),
+    claimLease: (input) => backend.store.leases.claim(input),
+    releaseLease: (input) => backend.store.leases.release(input),
+  };
 }

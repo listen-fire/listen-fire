@@ -67,11 +67,14 @@ impl Wire for RunRow {
             "input" => Js::str(&self.input),
             "outcome" => opt(self.outcome.as_deref()),
             "deliveryId" => opt(self.delivery_id.as_deref()),
+            "attempt" => Js::Num(self.attempt.into()),
+            "attempts" => Js::Arr(self.attempts.clone()),
         })
     }
 
-    /// A module written before delivery receipts answers no `deliveryId`, and
-    /// one written before finish times no `finishedAt`: none.
+    /// A module written before delivery receipts answers no `deliveryId`, one
+    /// written before finish times no `finishedAt`: none; and one written
+    /// before reruns no `attempt` or `attempts`: the run's first, alone.
     fn from_wire(v: &Js) -> Option<Self> {
         Some(RunRow {
             id: text(v, "id")?,
@@ -83,6 +86,14 @@ impl Wire for RunRow {
             input: text(v, "input")?,
             outcome: opt_text(v, "outcome")?,
             delivery_id: opt_text(v, "deliveryId")?,
+            attempt: match v.get("attempt") {
+                None | Some(Js::Null) => 1,
+                Some(n) => int(n)?,
+            },
+            attempts: match v.get("attempts") {
+                None | Some(Js::Null) => Vec::new(),
+                Some(list) => list.as_array()?.to_vec(),
+            },
         })
     }
 }
@@ -387,9 +398,12 @@ mod tests {
             input: "{}".into(),
             outcome: None,
             delivery_id: Some("d".into()),
+            attempt: 2,
+            attempts: vec![Js::Obj(obj! { "attempt" => Js::Num(1.into()), "status" => Js::str("failed") })],
         };
         let back = RunRow::from_wire(&run.to_wire()).unwrap();
         assert_eq!((back.id, back.status, back.outcome, back.delivery_id, back.finished_at), (run.id, run.status, None, run.delivery_id, run.finished_at));
+        assert_eq!((back.attempt, back.attempts), (run.attempt, run.attempts));
         let callback = CallbackRecord {
             id: "c".into(),
             team_id: "t".into(),

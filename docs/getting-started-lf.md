@@ -124,7 +124,15 @@ lf run --event events/company_created.json --dry-run
 lf run --poll summarise                        # poll now the polled source of each listen that fires it
 lf runs                                        # the runs, most recent first
 lf resume [<run-id>]                           # step a parked run, or every due one
+lf runs rerun <run-id> [--force]               # run a failed run again, as its next attempt
 ```
+
+A run that failed can be run again with `lf runs rerun <run-id>`. The rerun is the same run's next attempt: it runs on the event (or manual text) the run ran on, against the movement as the project holds it now, so fix the movement first and the fix takes effect. It runs from the start. `lf runs show <run-id>` lists every attempt with its status, times, writes and error, and the run's status is its latest attempt's.
+
+- Only a run whose latest attempt failed is rerun. A run that succeeded is refused (`run <id> succeeded on attempt 2; nothing to rerun`), so running the command twice never repeats what worked.
+- An attempt may have made writes before it failed: sent an email, created a record. A rerun from the start makes them again, so lf refuses it and lists those writes. `--force` reruns it anyway.
+- Two reruns at once: one runs, the other is refused while the first holds the run.
+- `lf deliveries replay` is a different thing: it sends a delivery's events through again, which starts new runs whatever the old ones came to.
 
 What a movement returns is its run's output, as a cron job's output is. Every run records it in its history, however the run started, and `lf runs show <run-id>` shows it. `lf run`, `lf resume` and `lf call` also print it when they complete the run:
 

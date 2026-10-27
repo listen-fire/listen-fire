@@ -62,6 +62,18 @@ pub const ADAPTER_METHODS: &[&str] = &[
 pub const WRITE_METHODS: &[&str] =
     &["createRecord", "updateRecord", "deleteRecord", "linkRecords", "unlinkRecords", "ensureEventSubscription", "removeEventSubscription"];
 
+/// The record write a method makes, as a run's history names its action.
+fn committed_action(method: &str) -> Option<&'static str> {
+    match method {
+        "createRecord" => Some("create"),
+        "updateRecord" => Some("update"),
+        "deleteRecord" => Some("delete"),
+        "linkRecords" => Some("link"),
+        "unlinkRecords" => Some("unlink"),
+        _ => None,
+    }
+}
+
 /// `OPTIONAL_REMOTE_METHODS`: a remote instance has one only when the
 /// external advertises it.
 const OPTIONAL_REMOTE_METHODS: &[&str] = &[
@@ -192,6 +204,10 @@ pub struct SegmentAdapters<'s> {
     /// The record writes made to sources that can echo them, read back for
     /// the loop guard (crate::loop_guard).
     pub wrote: RefCell<Vec<crate::loop_guard::Wrote>>,
+    /// Every record write the system took, as a run's history lists a write
+    /// (`{ adapter, recordType, recordId, action, committed }`): what a
+    /// segment that then failed had already done.
+    pub committed: RefCell<Vec<Js>>,
 }
 
 impl<'s> SegmentAdapters<'s> {
@@ -210,6 +226,7 @@ impl<'s> SegmentAdapters<'s> {
             minted: RefCell::new(HashSet::new()),
             captured: RefCell::new(Vec::new()),
             wrote: RefCell::new(Vec::new()),
+            committed: RefCell::new(Vec::new()),
         }
     }
 
@@ -457,6 +474,18 @@ impl<'s> SegmentAdapters<'s> {
         };
         if matches!(method, "createRecord" | "updateRecord" | "deleteRecord") {
             self.note_write(&instance, &plain, &answer).await;
+        }
+        if let Some(action) = committed_action(method)
+            && answer.get("notFound").is_none()
+        {
+            let record_id = answer.get("externalId").or_else(|| plain.get("externalId")).or_else(|| plain.get("recordId")).cloned().unwrap_or(Js::Null);
+            self.committed.borrow_mut().push(Js::Obj(obj! {
+                "adapter" => Js::str(&adapter_type),
+                "recordType" => plain.get("recordType").cloned().unwrap_or(Js::Null),
+                "recordId" => record_id,
+                "action" => Js::str(action),
+                "committed" => Js::Bool(true),
+            }));
         }
         Ok(Some(answer))
     }

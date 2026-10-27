@@ -47,6 +47,7 @@ The first request is always `store.open`. The others are the run host's store fa
 | `runs.lapsed` | `{ staleMs, limit }` | the ids of runs still `running` whose lease lapsed or was never taken, started more than `staleMs` ago, oldest first: their worker is gone (a live first firing holds its lease and renews it every third of its length) |
 | `runs.settle` | `{ runId, status, outcome, at }`; status `completed`, `parked`, `running` or `failed`; an ending revokes the run's live callbacks | `null` |
 | `runs.markParked` | `{ runId }` | `null` |
+| `runs.rerun` | `{ runId, input, at, fence }` | `{ attempt }`: the run's next attempt's number; `null`, and nothing written, when the run's status is not `failed`. One write, fenced as `parks.commit` is (a lost fence is `run_lease_lost`): the run's latest attempt is kept on its row as `{ attempt, status, startedAt, finishedAt, outcome }` (`outcome` the JSON object it settled with) at the end of `attempts`; the row's `attempt` goes up by one; and the run is `running` again, with `input` as its input, `at` as its `startedAt`, no `finishedAt` or outcome, no cancel request, and its spend baseline moved to what it has spent (the cost cap counts the new attempt alone). lf calls it under the run's lease, for `lf runs rerun` |
 | `runs.get` | `{ runId }` | a run row, or `null` |
 | `runs.list` | `{ limit }` | run rows, most recent first |
 | `runs.appendTrace` | `{ runId, segmentId, entries: [...] }` | `null` |
@@ -56,7 +57,7 @@ The first request is always `store.open`. The others are the run host's store fa
 | `runs.resetSpendBaseline` | `{ runId }` | `null` |
 | `runs.requestCancel` | `{ runId, reason }` | `null` |
 | `records.cancelRequest` | `{ runId }` | `{ reason }`, or `null` when none was asked |
-| `records.markFailed` | `{ runId, message }` | `null` |
+| `records.markFailed` | `{ runId, message }` | `null`. A `running` or `parked` run settles `failed` with `message` as its outcome's `error`; the writes its outcome lists (`writes`, `writeRecords`) stay |
 | `records.closeRun` | `{ runId }` | `null`. The run is over: its live callbacks are revoked (`callbacks.revokeRun`) |
 | `parks.putLeaf` | `{ runId, address, reason, wakeAt, state, fence }` | `null` |
 | `parks.claimLeaf` | `{ runId, address, reason }` | `{ reason, state }`, or `null` |
@@ -109,7 +110,12 @@ The first request is always `store.open`. The others are the run host's store fa
 The rows:
 
 ```ts
-type RunRow = { id: string; file: string; movement: string; status: string; startedAt: string; finishedAt?: string | null; input: string; outcome: string | null; deliveryId: string | null };
+type RunRow = {
+  id: string; file: string; movement: string; status: string; startedAt: string; finishedAt?: string | null;
+  input: string; outcome: string | null; deliveryId: string | null;
+  attempt?: number;      // the latest attempt's number; absent: 1
+  attempts?: { attempt: number; status: string; startedAt: string; finishedAt: string | null; outcome: unknown }[];  // the earlier ones, oldest first
+};
 type DeliveryRow = {
   id: string; subscriptionId: string; externalId: string | null; receivedAt: string;
   source: 'webhook' | 'hook' | 'emit' | 'cli'; inline: boolean; replayOf: string | null;
@@ -123,11 +129,13 @@ type CallbackRow = {
 };
 ```
 
-A run's `outcome` is the JSON object lf settled it with: `{ writes, writeRecords?, returned? }`, or `{ error }` for a failed run. `writeRecords` lists the run's writes (`lf runs show`); a store that drops it still works with lf, and its runs list no writes. `finishedAt` is when the run settled completed or failed; a store that answers none leaves `lf runs` showing `null`. `returned` is what the movement returned, as lf records it (at most 64 KiB of JSON, a file by its reference). A store hands the outcome back as it was given (its members may be kept in columns of their own, as `@lf/postgres-store` keeps them). A store that drops `returned` still works with lf: its runs show no returned value.
+A run's `outcome` is the JSON object lf settled it with: `{ writes, writeRecords?, returned? }`, or `{ error, writes?, writeRecords? }` for a failed run, which keeps the writes it made before it failed. A run's `status`, `startedAt`, `finishedAt`, `input` and `outcome` are its latest attempt's. `writeRecords` lists the run's writes (`lf runs show`); a store that drops it still works with lf, and its runs list no writes. `finishedAt` is when the run settled completed or failed; a store that answers none leaves `lf runs` showing `null`. `returned` is what the movement returned, as lf records it (at most 64 KiB of JSON, a file by its reference). A store hands the outcome back as it was given (its members may be kept in columns of their own, as `@lf/postgres-store` keeps them). A store that drops `returned` still works with lf: its runs show no returned value.
 
 `lf --contract-store <state.db|postgres://…>` serves these methods over lf's own stores, as a store module on a Unix socket. A module may forward to it, as the test module does (`apps/cli/src/__test__/store_module/forward.mjs`). `runs.status` and `runs.complete` are the contract suite's helpers and are not called by lf.
 
 ## Changes
+
+- **2026-10-27, later** (within adapter protocol 2): `runs.rerun` starts a failed run's next attempt (`lf runs rerun`), and a run row may answer `attempt` and `attempts`. A failed run's outcome keeps the writes it made (`records.markFailed` and `runs.settle` with `failed` alike). A store that answers no `attempt` or `attempts` still works, its runs each one attempt; one without `runs.rerun` works for everything but `lf runs rerun`. `@lf/postgres-store` keeps them from its migration 8, and now keeps `writeRecords` as well.
 
 - **2026-10-27** (within adapter protocol 2): a run row may answer `finishedAt`, and a run's settled `outcome` carries `writeRecords`. Both are optional: a store that answers neither still works, and its runs show no finish time and list no writes.
 - **2026-10-22** (within adapter protocol 2; lf 0.12.0-rc.9 requires it): a delivery's receipt. `inbound.keepDelivery` takes the `delivery` (the events it produced) and answers `{ kept }`, `false` for a redelivery under the same `externalId` at the same subscription, which writes nothing. Every store module must take the new shape: lf treats a `null` answer as malformed. `inbound.deliveries`, `inbound.delivery` and `inbound.sweepDeliveries` list, read and forget kept deliveries, and `inbound.forgetDeliveryId` clears a kept delivery's `externalId`. `runs.start` and `events.startRun` take `deliveryId`, and a run row answers it. `runs.status`, `runs.complete` and `records.closeRun`, served all along, are now in the table.

@@ -477,6 +477,29 @@ pub enum Returned {
 /// The most writes a run's history lists; its `writes` counts them all.
 const LISTED_WRITES: usize = 100;
 
+/// The run's outcome once a segment's writes are added to what its earlier
+/// segments settled with (`before`, this attempt's and any before it: a
+/// resume, a callback's continuation): the run's history counts and lists
+/// every write it made, and keeps what it returned.
+fn with_writes(before: Option<&str>, writes: usize, records: Vec<Js>, returned: Option<Js>) -> Js {
+    let before = before.and_then(|text| Js::parse(text.as_bytes()).ok()).unwrap_or(Js::Null);
+    let earlier = match before.get("writes") {
+        Some(Js::Num(n)) => n.as_u64().unwrap_or(0),
+        _ => 0,
+    };
+    let mut outcome = obj! { "writes" => Js::Num((earlier + writes as u64).into()) };
+    let mut listed: Vec<Js> = before.get("writeRecords").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default();
+    listed.extend(records);
+    listed.truncate(LISTED_WRITES);
+    outcome.insert("writeRecords".into(), Js::Arr(listed));
+    // The body returns in one segment; a later one (a callback's body, a
+    // branch the run still waited on) keeps what it returned.
+    if let Some(returned) = returned.or_else(|| before.get("returned").cloned()) {
+        outcome.insert("returned".into(), returned);
+    }
+    Js::Obj(outcome)
+}
+
 /// What a run entry has done so far: its writes, and how many segments ran.
 #[derive(Default, Clone, Copy)]
 struct Tally {
@@ -869,11 +892,13 @@ impl Session {
         completing: Option<&str>,
     ) -> Result<StepOutcome, String> {
         tally.borrow_mut().stepped += 1;
-        let ran = match self.segment(set, run_id, facts, fence, entry).await {
+        let (ran, committed) = self.segment(set, run_id, facts, fence, entry).await;
+        let ran = match ran {
             Ok(ran) => ran,
             Err(Ended::LeaseLost) => return Ok(StepOutcome::LeaseLost),
             Err(Ended::Failed(message)) => {
-                self.store.mark_failed(run_id, &message).map_err(|e| e.to_string())?;
+                tally.borrow_mut().writes += committed.len();
+                self.fail_keeping_writes(run_id, &message, committed)?;
                 return Ok(StepOutcome::Failed(message));
             }
         };
@@ -886,26 +911,8 @@ impl Session {
             let reason = self.store.cancel_request(run_id).map_err(|e| e.to_string())?.flatten();
             return Ok(StepOutcome::Cancelled(reason));
         }
-        // What the run's earlier segments settled with, this entry's and any
-        // before it (a resume, a callback's continuation): the run's history
-        // counts and lists every write it made, and keeps what it returned.
-        let before = self.store.run(run_id).map_err(|e| e.to_string())?.and_then(|row| row.outcome).and_then(|text| Js::parse(text.as_bytes()).ok()).unwrap_or(Js::Null);
-        let earlier = match before.get("writes") {
-            Some(Js::Num(n)) => n.as_u64().unwrap_or(0),
-            _ => 0,
-        };
-        let writes = earlier + ran.writes as u64;
-        let mut outcome = obj! { "writes" => Js::Num(writes.into()) };
-        let mut listed: Vec<Js> = before.get("writeRecords").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default();
-        listed.extend(ran.write_records.into_iter());
-        listed.truncate(LISTED_WRITES);
-        outcome.insert("writeRecords".into(), Js::Arr(listed));
-        // The body returns in one segment; a later one (a callback's body, a
-        // branch the run still waited on) keeps what it returned.
-        if let Some(returned) = ran.returned.or_else(|| before.get("returned").cloned()) {
-            outcome.insert("returned".into(), returned);
-        }
-        let outcome = Js::Obj(outcome);
+        let row = self.store.run(run_id).map_err(|e| e.to_string())?;
+        let outcome = with_writes(row.and_then(|row| row.outcome).as_deref(), ran.writes, ran.write_records, ran.returned);
         if let Some(address) = ran.parked_address {
             self.store.settle_run(run_id, "parked", &outcome, &at).map_err(|e| e.to_string())?;
             return Ok(StepOutcome::Parked { address: Some(address), deferred_race_frames: ran.deferred_race_frames });
@@ -918,8 +925,24 @@ impl Session {
         Ok(StepOutcome::Completed { deferred_race_frames: ran.deferred_race_frames })
     }
 
-    /// One engine segment of the run, entered as `entry`, under `fence`.
-    async fn segment(&self, set: &FileSet, run_id: &str, facts: &RunFacts, fence: Option<&str>, entry: Entry) -> Result<Ran, Ended> {
+    /// The run fails with `message`, the writes its failed segment had
+    /// already made (`committed`) kept beside the ones before it: a rerun
+    /// reads them to say what the failed attempt already did. A run already
+    /// settled stays, as `mark_failed` leaves it.
+    fn fail_keeping_writes(&self, run_id: &str, message: &str, committed: Vec<Js>) -> Result<(), String> {
+        if !committed.is_empty()
+            && let Some(row) = self.store.run(run_id).map_err(|e| e.to_string())?
+            && (row.status == "running" || row.status == "parked")
+        {
+            let outcome = with_writes(row.outcome.as_deref(), committed.len(), committed, None);
+            self.store.settle_run(run_id, &row.status, &outcome, &iso(0)).map_err(|e| e.to_string())?;
+        }
+        self.store.mark_failed(run_id, message).map_err(|e| e.to_string())
+    }
+
+    /// One engine segment of the run, entered as `entry`, under `fence`, and
+    /// the record writes the systems took during it, whatever it came to.
+    async fn segment(&self, set: &FileSet, run_id: &str, facts: &RunFacts, fence: Option<&str>, entry: Entry) -> (Result<Ran, Ended>, Vec<Js>) {
         let secrets = self.secrets();
         let externals = self.externals_in(set, &secrets);
         let segment_id = uuid::Uuid::new_v4().to_string();
@@ -946,7 +969,7 @@ impl Session {
         };
         let ran = run_segment(&host, input).await;
         self.remember_writes(run_id, &host.adapters.wrote.borrow());
-        ran
+        (ran, host.adapters.committed.take())
     }
 
     /// The record writes a segment made, told to the loop guard for its
@@ -1118,6 +1141,78 @@ impl Session {
             Parked::NotStepped => Err(format!("run {run_id} is parked but has no parked leaf")),
             Parked::Stepped(outcome) => Ok(*outcome),
         }
+    }
+
+    /// `lf runs rerun <run>`: a failed run run again as its next attempt —
+    /// its own event, the movement as the project holds it now (a fix to it
+    /// takes effect), from the start — under the run's lease, so two reruns
+    /// at once run once. Refused when the run's latest attempt did not fail
+    /// (a rerun after a rerun that succeeded runs nothing), when another lf
+    /// holds the run, and, unless `force`, when the failed attempt already
+    /// committed writes (a rerun from the start makes them again).
+    pub async fn rerun(&self, run_id: &str, force: bool) -> Result<Rerun, String> {
+        let set = self.file_set();
+        let row = self.store.run(run_id).map_err(|e| e.to_string())?.ok_or_else(|| format!("no run {run_id}"))?;
+        if row.status != "failed" {
+            return Ok(Rerun::Refused(RerunRefused::NotFailed { status: row.status, attempt: row.attempt }));
+        }
+        let tally = RefCell::new(Tally::default());
+        let captured = RefCell::new(Vec::new());
+        let held = with_run_lease(&*self.store, run_id, async |lease: &Lease| -> Result<Result<(i64, bool, bool), RerunRefused>, String> {
+            let fence = Some(lease.token.as_str());
+            // Read again under the lease: another rerun may have run it meanwhile.
+            let row = self.store.run(run_id).map_err(|e| e.to_string())?.ok_or_else(|| format!("no run {run_id}"))?;
+            if row.status != "failed" {
+                return Ok(Err(RerunRefused::NotFailed { status: row.status, attempt: row.attempt }));
+            }
+            let committed = committed_writes(row.outcome.as_deref());
+            if !committed.is_empty() && !force {
+                return Ok(Err(RerunRefused::CommittedWrites { attempt: row.attempt, writes: committed }));
+            }
+            let facts = self.rerun_facts(&set, &row)?;
+            let input = facts.to_js().to_json();
+            let rerun = crate::store::Rerun { input: &input, at: &facts.fired_at, fence: &lease.token };
+            let Some(attempt) = self.store.rerun_run(run_id, &rerun).map_err(|e| e.to_string())? else {
+                return Ok(Err(RerunRefused::NotFailed { status: row.status, attempt: row.attempt }));
+            };
+            let outcome = self.record_segment(&set, run_id, &facts, fence, &tally, facts.dry_run.then_some(&captured), Entry::Run, None).await?;
+            if let Settled::Continue = after_step(&*self.store, run_id, fence, &outcome)? {
+                clear_if_quiescent(&*self.store, run_id, fence)?;
+            }
+            Ok(Ok((attempt, outcome == StepOutcome::LeaseLost, facts.dry_run)))
+        })
+        .await?;
+        let Some(ran) = held else { return Ok(Rerun::Refused(RerunRefused::Busy)) };
+        let (attempt, lease_lost, dry_run) = match ran? {
+            Ok(ran) => ran,
+            Err(refused) => return Ok(Rerun::Refused(refused)),
+        };
+        let mut outcome = self.settled_outcome(run_id, "rerun", *tally.borrow(), lease_lost)?;
+        if dry_run {
+            outcome.captured = Some(captured.into_inner());
+        }
+        Ok(Rerun::Ran { attempt, outcome: Box::new(outcome) })
+    }
+
+    /// A rerun's facts: the run's own event, and the movement's file as the
+    /// project holds it now, at this release's language. The file must still
+    /// have a listen that fires the movement, and check clean.
+    fn rerun_facts(&self, set: &FileSet, row: &crate::store::RunRow) -> Result<RunFacts, String> {
+        if !set.listens.iter().any(|l| l.file == row.file && l.movement_name == row.movement) {
+            return Err(format!("run {}: no listen in {} fires {} now, so there is nothing to rerun it on", row.id, row.file, row.movement));
+        }
+        if let Some(errors) = file_errors(set)?.get(&row.file).filter(|n| **n > 0) {
+            return Err(format!("run {}: {} has {errors} check error(s); fix them (lf check), then rerun", row.id, row.file));
+        }
+        let first = Js::parse(row.input.as_bytes()).map_err(|e| format!("run {}: its facts are not JSON: {e}", row.id))?;
+        Ok(RunFacts {
+            source: set.file(&row.file).source.clone(),
+            language_version: self.project.language_version.clone(),
+            event: first.get("event").cloned().unwrap_or(Js::Null),
+            movement_name: row.movement.clone(),
+            fired_at: iso(0),
+            dry_run: first.get("dryRun") == Some(&Js::Bool(true)),
+        })
     }
 
     /// `lf resume` with no run: drain the due work, then step what is due in
@@ -1876,7 +1971,7 @@ impl Session {
         let facts = RunFacts::of_row(&row.id, &row.input)?;
         tally.stepped += 1;
         let entry = Entry::Fire { state: state.clone(), values: values.clone(), call_index };
-        Ok(match self.segment(set, &row.id, &facts, Some(&lease.token), entry).await {
+        Ok(match self.segment(set, &row.id, &facts, Some(&lease.token), entry).await.0 {
             Err(Ended::LeaseLost) => BodyOutcome::LeaseLost,
             Err(Ended::Failed(message)) => BodyOutcome::Failed(message),
             Ok(ran) => {
@@ -1889,6 +1984,70 @@ impl Session {
             }
         })
     }
+}
+
+// ── Rerun ───────────────────────────────────────────────────────────────────
+
+/// What `lf runs rerun` came to.
+pub enum Rerun {
+    /// The run ran again as `attempt`.
+    Ran { attempt: i64, outcome: Box<RunOutcome> },
+    Refused(RerunRefused),
+}
+
+/// Why a rerun ran nothing.
+pub enum RerunRefused {
+    /// The run's latest attempt did not fail.
+    NotFailed { status: String, attempt: i64 },
+    /// Another lf process holds the run.
+    Busy,
+    /// The failed attempt committed these writes before it failed.
+    CommittedWrites { attempt: i64, writes: Vec<Js> },
+}
+
+impl RerunRefused {
+    /// Its name in `--json` (`refused`).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            RerunRefused::NotFailed { .. } => "notFailed",
+            RerunRefused::Busy => "busy",
+            RerunRefused::CommittedWrites { .. } => "committedWrites",
+        }
+    }
+
+    pub fn message(&self, run_id: &str) -> String {
+        match self {
+            RerunRefused::NotFailed { status, attempt } => match status.as_str() {
+                "completed" => format!("run {run_id} succeeded on attempt {attempt}; nothing to rerun"),
+                other => format!("run {run_id} is {other} on attempt {attempt}; only a failed run is rerun"),
+            },
+            RerunRefused::Busy => format!("run {run_id} is held by another lf process; it is being stepped or rerun there"),
+            RerunRefused::CommittedWrites { attempt, writes } => {
+                let mut message = format!("run {run_id}: attempt {attempt} committed {} write(s) before it failed, which a rerun from the start makes again:", writes.len());
+                for write in writes {
+                    message.push_str(&format!("\n  {}", write_line(write)));
+                }
+                message.push_str(&format!("\nrerun it anyway with lf runs rerun {run_id} --force"));
+                message
+            }
+        }
+    }
+}
+
+/// One write as a refusal lists it: `<adapter> <record type> <record id>: <action>`.
+fn write_line(write: &Js) -> String {
+    let text = |key: &str| match write.get(key) {
+        Some(Js::Str(s)) => s.clone(),
+        Some(Js::Null) | None => "?".into(),
+        Some(other) => other.to_json(),
+    };
+    format!("{} {} {}: {}", text("adapter"), text("recordType"), text("recordId"), text("action"))
+}
+
+/// The writes a settled outcome lists as committed.
+fn committed_writes(outcome: Option<&str>) -> Vec<Js> {
+    let outcome = outcome.and_then(|text| Js::parse(text.as_bytes()).ok()).unwrap_or(Js::Null);
+    outcome.get("writeRecords").and_then(Js::as_array).unwrap_or(&[]).iter().filter(|w| w.get("committed") == Some(&Js::Bool(true))).cloned().collect()
 }
 
 // ── Cancel ──────────────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ use crate::backend::RunHostStore;
 use crate::check::FileDiagnostic;
 use crate::json::{Js, Obj};
 use crate::obj;
-use crate::runs::{Fired, RunOutcome};
+use crate::runs::{Fired, RerunRefused, RunOutcome};
 use crate::secrets::MissingCredential;
 use crate::store::{DeliveryRow, RunRow};
 use crate::store_wire::Wire;
@@ -123,6 +123,35 @@ pub fn call_doc(callback: &str, result: &str, message: Option<&str>, queued: boo
     })
 }
 
+/// `runs rerun`: the attempt the run ran as, and what it came to.
+pub fn rerun_doc(attempt: i64, outcome: &RunOutcome) -> Js {
+    let mut doc = match runs_doc(std::slice::from_ref(outcome), &[]) {
+        Js::Obj(doc) => doc,
+        _ => unreachable!("runs_doc is an object"),
+    };
+    doc.insert("attempt".into(), num(attempt));
+    Js::Obj(doc)
+}
+
+/// `runs rerun` refused: why (`notFailed`, `busy` or `committedWrites`),
+/// the latest attempt's status and number, and the writes it committed.
+pub fn rerun_refused_doc(run_id: &str, refused: &RerunRefused) -> Js {
+    let (status, attempt, writes) = match refused {
+        RerunRefused::NotFailed { status, attempt } => (Js::str(status), num(*attempt), Js::Null),
+        RerunRefused::Busy => (Js::Null, Js::Null, Js::Null),
+        RerunRefused::CommittedWrites { attempt, writes } => (Js::str("failed"), num(*attempt), Js::Arr(writes.clone())),
+    };
+    Js::Obj(obj! {
+        "ok" => Js::Bool(false),
+        "runId" => Js::str(run_id),
+        "refused" => Js::str(refused.kind()),
+        "error" => Js::str(refused.message(run_id)),
+        "status" => status,
+        "attempt" => attempt,
+        "committedWrites" => writes,
+    })
+}
+
 /// `cancel`: `result` is cancelled or cancelRequested.
 pub fn cancel_doc(run_id: &str, result: &str) -> Js {
     Js::Obj(obj! { "ok" => Js::Bool(true), "runId" => Js::str(run_id), "result" => Js::str(result) })
@@ -142,7 +171,27 @@ fn row_summary(run: &RunRow) -> Obj {
         "status" => Js::str(&run.status),
         "startedAt" => Js::str(&run.started_at),
         "finishedAt" => opt(run.finished_at.as_deref()),
+        "attempt" => num(run.attempt),
     }
+}
+
+/// Every attempt of the run, the latest (the run's own row) last.
+fn attempts(run: &RunRow) -> Js {
+    let shown = |attempt: &Js| {
+        let outcome = attempt.get("outcome").cloned().unwrap_or(Js::Null);
+        let field = |key: &str| outcome.get(key).cloned().unwrap_or(Js::Null);
+        Js::Obj(obj! {
+            "attempt" => attempt.get("attempt").cloned().unwrap_or(Js::Null),
+            "status" => attempt.get("status").cloned().unwrap_or(Js::Null),
+            "startedAt" => attempt.get("startedAt").cloned().unwrap_or(Js::Null),
+            "finishedAt" => attempt.get("finishedAt").cloned().unwrap_or(Js::Null),
+            "writes" => field("writes"),
+            "writeRecords" => field("writeRecords"),
+            "error" => field("error"),
+        })
+    };
+    let latest = crate::store::kept_attempt(run);
+    Js::Arr(run.attempts.iter().chain(std::iter::once(&latest)).map(shown).collect())
 }
 
 pub fn runs_list_doc(rows: &[RunRow]) -> Js {
@@ -180,6 +229,7 @@ pub fn run_show_doc(store: &dyn RunHostStore, run_id: &str) -> Result<Js, String
                 .collect(),
         ),
     );
+    shown.insert("attempts".into(), attempts(&run));
     shown.insert("cancelRequested".into(), Js::Bool(cancel.is_some()));
     shown.insert("cancelReason".into(), cancel.flatten().map_or(Js::Null, Js::Str));
     Ok(Js::Obj(obj! { "run" => Js::Obj(shown) }))

@@ -20,6 +20,15 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+### lf
+
+- **`lf runs rerun <run-id>` runs a failed run again.** The rerun is the same run's next attempt, not a new run. It uses the event (or manual text) the run ran on, and the movement as the project holds it now, so a fix to the movement takes effect. It runs from the start. `lf runs show` lists every attempt with its status, times, writes and error; the run's status is its latest attempt's. Before this, an agent woken by a failure replayed the delivery, which made a new run every time (`lf deliveries replay` is unchanged, and its help now points here).
+  - Only a run whose latest attempt failed is rerun. A succeeded, running or parked run is refused by name (`run <id> succeeded on attempt 2; nothing to rerun`), so a second rerun after one that succeeded sends nothing twice.
+  - A failed attempt that committed writes before it failed is refused unless `--force`; the refusal lists each write (target and action).
+  - A rerun holds the run's lease: of two at once, one runs and the other is refused. `--json` and exit codes as `lf run` (1 for a refusal or a failed attempt).
+- **A failed run keeps the writes it made.** Its outcome (`lf runs show`'s `writes` and `writeRecords`) used to be replaced by the error alone; a write the run made before it failed, and one made by the segment that failed, are now listed. `@lf/postgres-store` now keeps `writeRecords` too (migration 8).
+- **Store slot.** `runs.rerun { runId, input, at, fence }` starts a failed run's next attempt as one fenced write; a run row may answer `attempt` and `attempts`; `records.markFailed` keeps the writes in the run's outcome. A store module without `runs.rerun` still works, except for `lf runs rerun` (docs/contracts/store-slot.md).
+
 ## [0.12.10] - 2026-10-27
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Two new checks are warnings for every 0.12 pin and wait for the next compatibility key (0.13) to refuse: a value handed to a plugin outside the type it declares, and a plugin value outside its declared type at run time. The new refusals reject only text no released program could run correctly, or keys new in this release.

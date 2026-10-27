@@ -107,6 +107,22 @@ export interface RunRow {
   input: string;
   outcome: string | null;
   deliveryId: string | null;
+  /** When it last settled completed or failed; a store that keeps none answers none. */
+  finishedAt?: string | null;
+  /** The latest attempt's number; a store that keeps no attempts answers none (1). */
+  attempt?: number;
+  /** The run's earlier attempts, oldest first. */
+  attempts?: RunAttempt[];
+}
+
+/** One earlier attempt of a run, as `runs.rerun` kept it. */
+export interface RunAttempt {
+  attempt: number;
+  status: string;
+  startedAt: string;
+  finishedAt: string | null;
+  /** The JSON object it settled with: `{ error, writes?, writeRecords? }` for a failed one. */
+  outcome: unknown;
 }
 
 const Delivery: z.ZodType<DeliveryRow> = z.object({
@@ -130,6 +146,11 @@ const Run: z.ZodType<RunRow> = z.object({
   input: z.string(),
   outcome: z.string().nullable(),
   deliveryId: z.string().nullable(),
+  finishedAt: z.string().nullable().optional(),
+  attempt: z.number().optional(),
+  attempts: z
+    .array(z.object({ attempt: z.number(), status: z.string(), startedAt: z.string(), finishedAt: z.string().nullable(), outcome: z.unknown() }))
+    .optional(),
 });
 
 /** The work claim the server reads: no more than it needs, whatever the caller spreads in. */
@@ -183,6 +204,18 @@ export class RpcStoreBackend {
   /** A run's row, or null (`runs.get`). */
   runGet(input: { runId: string }): Promise<RunRow | null> {
     return this.call('runs.get', input, Run.nullable());
+  }
+
+  /** Where the run stands (`runs.settle`): an ending revokes its callbacks. */
+  async runSettle(input: { runId: string; status: string; outcome: unknown; at: string }): Promise<void> {
+    await this.call('runs.settle', input, Nothing);
+  }
+
+  /** The run's next attempt, under its lease (`runs.rerun`): its number, or
+   *  null when the run's latest attempt did not fail. */
+  async runRerun(input: { runId: string; input: string; at: string; fence: string }): Promise<number | null> {
+    const answer = await this.call('runs.rerun', input, z.object({ attempt: z.number() }).nullable());
+    return answer?.attempt ?? null;
   }
 
   /** The door's one write: the receipt, the cursor (absent: left as it is)

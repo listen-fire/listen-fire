@@ -101,7 +101,9 @@ test('lf cancel: a parked run is settled failed with the reason, and its callbac
   const db = new DatabaseSync(join(dir, '.lf', 'state.db'));
   try {
     const row = db.prepare('select outcome from run where id = ?').get(runId) as { outcome: string } | undefined;
-    assert.deepEqual(JSON.parse(row?.outcome ?? 'null'), { error: 'no longer needed' });
+    // The write it made before it parked stays on the failed run: it was made.
+    const outcome = JSON.parse(row?.outcome ?? 'null') as { error: string; writes: number; writeRecords: Array<{ action: string; committed: boolean }> };
+    assert.deepEqual([outcome.error, outcome.writes, outcome.writeRecords.map((w) => [w.action, w.committed])], ['no longer needed', 1, [['create', true]]]);
   } finally {
     db.close();
   }

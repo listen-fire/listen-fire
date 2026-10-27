@@ -1211,3 +1211,112 @@ export const deliveryContractCases: DeliveryContractCase[] = [
     },
   },
 ];
+
+// ── Reruns ──────────────────────────────────────────────────────────────────
+// A failed run run again (`lf runs rerun`) is the same run's next attempt:
+// one fenced write keeps the failed attempt beside the run and starts the
+// next with the input it is given. Their own list over their own backend:
+// the TypeScript `RunHostStore` has no run rows, since only lf's runs do.
+
+export interface RerunContractBackend {
+  startRun(input: { id: string; file: string; movement: string; startedAt: string; input: string }): Promise<void>;
+  runGet(input: { runId: string }): Promise<RunRow | null>;
+  runSettle(input: { runId: string; status: string; outcome: unknown; at: string }): Promise<void>;
+  runRerun(input: { runId: string; input: string; at: string; fence: string }): Promise<number | null>;
+  markFailed(input: { runId: string; message: string }): Promise<void>;
+  claimLease(input: { runId: string; ttlMs: number }): Promise<{ token: string } | null>;
+  releaseLease(input: { runId: string; token: string }): Promise<void>;
+}
+
+export interface RerunContractCase {
+  name: string;
+  run(backend: RerunContractBackend): Promise<void>;
+}
+
+const WROTE = { adapter: 'crm', recordType: 'Company', recordId: 'c-1', action: 'create', committed: true, values: {} };
+
+/** A run started then settled `status` with `outcome`, a millisecond apart. */
+async function settledRun(backend: RerunContractBackend, status: string, outcome: unknown): Promise<string> {
+  const id = randomUUID();
+  await backend.startRun({ id, file: 'f', movement: 'm', startedAt: PAST(10), input: '{"attempt":1}' });
+  await backend.runSettle({ runId: id, status, outcome, at: PAST(9) });
+  return id;
+}
+
+async function leased(backend: RerunContractBackend, runId: string): Promise<string> {
+  const lease = await backend.claimLease({ runId, ttlMs: 60_000 });
+  assert.ok(lease, 'the run is not held');
+  return lease.token;
+}
+
+export const rerunContractCases: RerunContractCase[] = [
+  {
+    name: "reruns: a failed run's rerun is its next attempt, the failed one kept beside it",
+    async run(backend) {
+      const runId = await settledRun(backend, 'failed', { error: 'boom', writes: 1, writeRecords: [WROTE] });
+      const before = await backend.runGet({ runId });
+      assert.equal(before?.attempt ?? 1, 1);
+      assert.deepEqual(before?.attempts ?? [], []);
+      assert.deepEqual(JSON.parse(before?.outcome ?? 'null'), { error: 'boom', writes: 1, writeRecords: [WROTE] }, 'a failed outcome keeps its writes');
+      const fence = await leased(backend, runId);
+      const at = PAST(1);
+      assert.equal(await backend.runRerun({ runId, input: '{"attempt":2}', at, fence }), 2);
+      const row = await backend.runGet({ runId });
+      assert.ok(row);
+      assert.deepEqual([row.status, row.attempt, row.input, row.startedAt, row.finishedAt ?? null], ['running', 2, '{"attempt":2}', at, null]);
+      // The new attempt has written nothing yet (a store may answer `{ writes: 0 }` for none).
+      const fresh = JSON.parse(row.outcome ?? '{}') as { error?: unknown; writes?: number; writeRecords?: unknown };
+      assert.deepEqual([fresh.error, fresh.writes ?? 0, fresh.writeRecords], [undefined, 0, undefined]);
+      assert.equal(row.attempts?.length, 1);
+      const [first] = row.attempts!;
+      assert.deepEqual([first!.attempt, first!.status, first!.startedAt, first!.finishedAt], [1, 'failed', before!.startedAt, before!.finishedAt]);
+      assert.deepEqual(first!.outcome, { error: 'boom', writes: 1, writeRecords: [WROTE] });
+
+      await backend.runSettle({ runId, status: 'failed', outcome: { error: 'boom again', writes: 0, writeRecords: [] }, at: PAST(0.5) });
+      assert.equal(await backend.runRerun({ runId, input: '{"attempt":3}', at: PAST(0.2), fence }), 3);
+      const third = await backend.runGet({ runId });
+      assert.deepEqual(third?.attempts?.map((a) => [a.attempt, a.status]), [[1, 'failed'], [2, 'failed']]);
+      assert.equal(third?.attempt, 3);
+      await backend.releaseLease({ runId, token: fence });
+    },
+  },
+  {
+    name: 'reruns: a run whose latest attempt did not fail is not rerun, and nothing is written',
+    async run(backend) {
+      const completed = await settledRun(backend, 'completed', { writes: 0, writeRecords: [] });
+      const running = randomUUID();
+      await backend.startRun({ id: running, file: 'f', movement: 'm', startedAt: PAST(1), input: '{}' });
+      const parked = await settledRun(backend, 'parked', { writes: 0 });
+      for (const runId of [completed, running, parked]) {
+        const before = await backend.runGet({ runId });
+        const fence = await leased(backend, runId);
+        assert.equal(await backend.runRerun({ runId, input: '{"attempt":2}', at: PAST(0), fence }), null, before?.status);
+        const after = await backend.runGet({ runId });
+        assert.deepEqual([after?.status, after?.attempt ?? 1, after?.input, after?.attempts ?? []], [before?.status, 1, before?.input, []]);
+        await backend.releaseLease({ runId, token: fence });
+      }
+    },
+  },
+  {
+    name: 'reruns: a rerun is fenced by the run lease',
+    async run(backend) {
+      const runId = await settledRun(backend, 'failed', { error: 'boom' });
+      await assert.rejects(backend.runRerun({ runId, input: '{}', at: PAST(0), fence: randomUUID() }), RunLeaseLost);
+      const fence = await leased(backend, runId);
+      await assert.rejects(backend.runRerun({ runId, input: '{}', at: PAST(0), fence: randomUUID() }), RunLeaseLost, 'another token');
+      const row = await backend.runGet({ runId });
+      assert.deepEqual([row?.status, row?.attempt ?? 1], ['failed', 1]);
+      await backend.releaseLease({ runId, token: fence });
+    },
+  },
+  {
+    name: "reruns: a run failed by markFailed keeps the writes it settled with",
+    async run(backend) {
+      const runId = await settledRun(backend, 'parked', { writes: 1, writeRecords: [WROTE] });
+      await backend.markFailed({ runId, message: 'cancelled by the operator' });
+      const row = await backend.runGet({ runId });
+      assert.equal(row?.status, 'failed');
+      assert.deepEqual(JSON.parse(row?.outcome ?? 'null'), { error: 'cancelled by the operator', writes: 1, writeRecords: [WROTE] });
+    },
+  },
+];

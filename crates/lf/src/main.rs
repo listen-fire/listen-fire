@@ -9,6 +9,7 @@
 //!   lf resume [<run-id>]                step a parked run's every leaf now, or drain what is due in every parked run
 //!   lf upgrade [--check] [--all]        rewrite the movement files into the language of this release
 //!   lf runs [show <run-id>]             the runs, most recent first; one run in full
+//!   lf runs rerun <run-id> [--force]    run a failed run again as its next attempt
 //!   lf deliveries [show|replay <id>]    the kept deliveries; one in full; one queued again
 //!   --json                              (check, catalog, run, resume, runs, deliveries, call, cancel, connect, credential list) one JSON document
 //!   lf drain [--until-idle] [--max-seconds N]  a worker over the work queue (scale from zero)
@@ -177,6 +178,7 @@ const USAGE: &str = "usage: lf <init|check|catalog|lsp|run|resume|runs|deliverie
        lf call <callback-id> [--body <values.json>]
        lf cancel <run-id> [--reason <text>]
        lf runs [show <run-id>]
+       lf runs rerun <run-id> [--force]
        lf deliveries [show <id> | replay <id>] [--subscription <id>] [--since <ISO instant | <n>h | <n>d>]
        lf --contract-store <state.db|postgres://…> [--team <uuid>]
        lf --contract-store-slot [--dir <project>]
@@ -200,8 +202,8 @@ const USAGE: &str = "usage: lf <init|check|catalog|lsp|run|resume|runs|deliverie
   run       run <movement>: one manual invocation, to the `listen to manual fire <movement>` listens (--text: the Invocation's Text); --event: route the event file's event to the listens it matches and run each; --poll <movement>: poll now, once, the source of each listen that fires it on a polled source (its manifest declares `poll`), and run the listen on each new event
   resume    step every parked leaf of one run now; with no run, drain the due work and what is due in every parked run (a timer not yet come stays parked)
   upgrade   rewrite the movement files by the fixes that keep their meaning (--all: every fix offered; --check: print the diff, write nothing)
-  runs      the runs in the state file, most recent first (as `lf runs`); `runs show <run-id>`: one run, its event, trace and park
-  deliveries  the deliveries the doors kept (events, not bytes), most recent first, at most 50 (--subscription: one subscription's; --since: received at or after an instant, or <n>h or <n>d ago); `deliveries show <id>`: one, its events and runs; `deliveries replay <id>`: queue its events again as a delivery of its own, for lf serve or lf drain to run against the project as it is now
+  runs      the runs in the state file, most recent first (as `lf runs`); `runs show <run-id>`: one run, its event, trace, park and attempts; `runs rerun <run-id>`: run a failed run again as its next attempt, with its own event and the movement as the project holds it now (so a fix to the movement takes effect), from the start; refused unless the run's latest attempt failed, while another lf holds the run, and when the failed attempt already committed writes (they are listed; --force reruns it anyway, making them again)
+  deliveries  the deliveries the doors kept (events, not bytes), most recent first, at most 50 (--subscription: one subscription's; --since: received at or after an instant, or <n>h or <n>d ago); `deliveries show <id>`: one, its events and runs; `deliveries replay <id>`: queue its events again as a delivery of its own, for lf serve or lf drain to run against the project as it is now (new runs, whatever its runs came to; a failed run: lf runs rerun <run-id>)
   --json    check, catalog, run, resume, runs, deliveries, call, cancel, connect, credential list: one JSON document (docs/lf-json.md); a failure is {\"error\": …}
   drain     fire each cron listen's due tick (once, however many workers drain), then claim due work rows one at a time and run them (a polled listen's row is its next poll, due every interval its source declares); with --until-idle exit once none is due, with --max-seconds stop claiming after n seconds, with --kinds only rows of those kinds (resume_timer, wake_await, fire_event, fire_callback, poll_listen, refresh_subscription) and the cron ticks only when it names cron
   serve     the inbound doors, the callback door and the work queue's drain (as `lf serve`)
@@ -246,6 +248,8 @@ struct Args {
     headers: Vec<String>,
     port: Option<String>,
     reason: Option<String>,
+    /// `lf runs rerun --force`: rerun a failed attempt that committed writes.
+    force: bool,
     subscription: Option<String>,
     since: Option<String>,
     contract_store: Option<String>,
@@ -294,6 +298,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         headers: Vec::new(),
         port: None,
         reason: None,
+        force: false,
         subscription: None,
         since: None,
         contract_store: None,
@@ -339,6 +344,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--header" => args.headers.push(value("--header")?),
             "--port" => args.port = Some(value("--port")?),
             "--reason" => args.reason = Some(value("--reason")?),
+            "--force" => args.force = true,
             "--subscription" => args.subscription = Some(value("--subscription")?),
             "--since" => args.since = Some(value("--since")?),
             "--contract-doors" => args.contract_doors = true,
@@ -513,6 +519,16 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
             }
             report_runs(&outcomes, args.json, &mut out)
         }
+        "runs" if args.rest.first().map(String::as_str) == Some("rerun") => {
+            let Some(run_id) = args.rest.get(1) else {
+                eprintln!("lf runs rerun needs a run id");
+                return Ok(2);
+            };
+            let project = load()?;
+            let store = store_of(&args, &project)?;
+            let session = runs::open_session(project, &runs::Opening { ephemeral: false, store: &store, role: runs::Role::Command }).await?;
+            report_rerun(run_id, session.rerun(run_id, args.force).await?, args.json, &mut out)
+        }
         "runs" => {
             let project = load()?;
             let store = backend::open_store(&store_of(&args, &project)?)?;
@@ -533,7 +549,8 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
                 return lfjson::emit(&mut out, &lfjson::runs_list_doc(&rows), 0);
             }
             for run in rows {
-                writeln!(out, "{} {} {}:{} {}", run.id, run.started_at, run.file, run.movement, run.status).map_err(|e| e.to_string())?;
+                let attempt = if run.attempt > 1 { format!(" (attempt {})", run.attempt) } else { String::new() };
+                writeln!(out, "{} {} {}:{} {}{attempt}", run.id, run.started_at, run.file, run.movement, run.status).map_err(|e| e.to_string())?;
             }
             Ok(0)
         }
@@ -587,6 +604,26 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
 
 fn report_runs(outcomes: &[runs::RunOutcome], json: bool, out: &mut impl Write) -> Result<i32, String> {
     if json { lfjson::emit(out, &lfjson::runs_doc(outcomes, &[]), lfjson::exit_of(outcomes)) } else { runs::report(outcomes, runs::Returned::Shown, out) }
+}
+
+fn report_rerun(run_id: &str, rerun: runs::Rerun, json: bool, out: &mut impl Write) -> Result<i32, String> {
+    match rerun {
+        runs::Rerun::Ran { attempt, outcome } => {
+            let outcomes = [*outcome];
+            if json {
+                return lfjson::emit(out, &lfjson::rerun_doc(attempt, &outcomes[0]), lfjson::exit_of(&outcomes));
+            }
+            writeln!(out, "run {run_id}: attempt {attempt}, on its own event and the movement as the project holds it now").map_err(|e| e.to_string())?;
+            runs::report(&outcomes, runs::Returned::Shown, out)
+        }
+        runs::Rerun::Refused(refused) => {
+            if json {
+                return lfjson::emit(out, &lfjson::rerun_refused_doc(run_id, &refused), 1);
+            }
+            eprintln!("lf: {}", refused.message(run_id));
+            Ok(1)
+        }
+    }
 }
 
 fn report_fired(fired: &runs::Fired, json: bool, out: &mut impl Write) -> Result<i32, String> {
