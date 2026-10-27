@@ -20,6 +20,7 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 - The checker holds every value handed to a plugin to the type the plugin declares for it: `fetchUrl(5)` or a text where a list is taken is refused with `MOV_CALL_ARG_TYPE`, where it used to pass and fail at run. A text written in place against a plugin's option set is judged as that option.
+- A plugin's plain value reaches the program in the type it declares (a number as a number, a list as a list), answered under `data.value`; before, every value but a file arrived as text. A value outside the declared type fails the call, naming the plugin.
 
 ## [0.12.9] - 2026-10-26
 

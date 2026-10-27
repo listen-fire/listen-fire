@@ -31,7 +31,11 @@ const CATALOG: &str = r#"{
     }
   } } } },
   "credentials": {},
-  "plugins": { "lookup": { "args": ["q"], "requiredArgs": ["q"], "priced": false, "output": { "kind": "value", "type": "text" } } },
+  "plugins": {
+    "lookup": { "args": ["q"], "requiredArgs": ["q"], "priced": false, "output": { "kind": "value", "type": "text" } },
+    "weigh": { "args": ["q"], "requiredArgs": ["q"], "argTypes": { "q": "text" }, "priced": false, "output": { "kind": "value", "type": "number" } },
+    "tags": { "args": ["q"], "requiredArgs": ["q"], "argTypes": { "q": "text" }, "priced": false, "output": { "kind": "value", "type": { "kind": "list", "of": "text" } } }
+  },
   "models": ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5"]
 }"#;
 
@@ -550,6 +554,45 @@ fn a_plugin_call_runs_the_same_through_both_routes() {
     });
     let (mut served, mut unused) = (World::default(), Plugins(Vec::new()));
     assert_eq!(typed, json.drive(&input(&source), Entry::Run, &mut Hosts::new().adapters(&mut served).modules(&mut unused)));
+}
+
+/// A plugin that answers what it was asked for with one fixed reply.
+struct Answers(PluginReply);
+
+impl Modules for Answers {
+    fn invoke(&mut self, _call: PluginCall) -> HostFuture<PluginReply> {
+        ready(Ok(self.0.clone()))
+    }
+}
+
+fn answered(source: &str, reply: PluginReply) -> (Outcome, World) {
+    assert_eq!(errors(source), vec![]);
+    let mut world = World::default();
+    let outcome = block_on(run(&mut Hosts::new().adapters(&mut world).modules(&mut Answers(reply)), &input(source))).unwrap();
+    (outcome, world)
+}
+
+#[test]
+fn a_plugin_s_plain_value_arrives_as_the_type_it_declares() {
+    let weighed = movement("import { weigh } from plugins\n", "  p = weigh(monster.Name)\n  if (p >= 0.5) {\n    write game-[:notes]-> { Title: \"heavy\" }\n  }\n");
+    let number = PluginReply { data: Some(Data::map([("value", Data::Number(0.8))])), ..PluginReply::default() };
+    let (outcome, world) = answered(&weighed, number);
+    finished(Ok(outcome));
+    assert_eq!(titles(&world), vec!["heavy"]);
+
+    let tagged = movement("import { tags } from plugins\n", "  t = tags(monster.Name)\n  write game-[:notes]-> { Title: coalesce(first(t), \"none\") }\n");
+    let list = PluginReply { data: Some(Data::map([("value", Data::List(vec![Data::text("scaly"), Data::text("old")]))])), ..PluginReply::default() };
+    let (outcome, world) = answered(&tagged, list);
+    finished(Ok(outcome));
+    assert_eq!(titles(&world), vec!["scaly"]);
+}
+
+#[test]
+fn a_plugin_s_value_that_does_not_fit_its_declared_type_fails_the_call_by_name() {
+    let weighed = movement("import { weigh } from plugins\n", "  p = weigh(monster.Name)\n  if (p >= 0.5) {\n    write game-[:notes]-> { Title: \"heavy\" }\n  }\n");
+    let as_text = PluginReply { text: Some("0.8".into()), ..PluginReply::default() };
+    let Outcome::Failed(failure) = answered(&weighed, as_text).0 else { panic!("the run went on") };
+    assert!(failure.message.contains("'weigh'") && failure.message.contains("declares it hands back number"), "{}", failure.message);
 }
 
 /// A model that refuses on its budget ends the run as the JSON route's

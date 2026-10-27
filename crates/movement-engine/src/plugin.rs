@@ -4,7 +4,8 @@
 //! its config; the invocation is timed (`clock.now` either side), refused
 //! before the host is asked when the plugin is priced and the cap is spent,
 //! and traced; what comes back is bound as the plugin's DECLARED output
-//! (`PluginSpec.output`): a `value` output its text, a
+//! (`PluginSpec.output`): a `value` output its value, in the type it
+//! declares (a value of another type fails the call by the plugin's name), a
 //! `record` output a node of the fields it attached (its text under `text`),
 //! a `records` output one such node per record it found.
 
@@ -12,7 +13,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use movement_parser::catalog::plugin_args::{EXTRACTED_RECORD_PARAM, PluginCallSite};
-use movement_parser::catalog::types::{JsMap, PluginOutput, PluginSpec};
+use movement_parser::catalog::types::{Composite, FieldType, JsMap, PluginOutput, PluginSpec, Scalar};
 
 use crate::bindings::{Binding, Node, Scope};
 use crate::env::{Trail, ValueBinding};
@@ -158,16 +159,10 @@ impl Run<'_> {
         let (binding, handed_back) = match declared {
             None => (Binding::Value(ValueBinding { value: Js::Undefined, trail: None, many: false }), false),
             Some(PluginOutput::Value { type_ }) => {
-                // A plugin that hands back a file answers it as `data.value`;
-                // any other value is the text it fetched.
-                let value = if matches!(type_, movement_parser::catalog::types::FieldType::Scalar(movement_parser::catalog::types::Scalar::File)) {
-                    match &result.data {
-                        Some(Js::Object(data)) => data.get("value").cloned().unwrap_or(Js::Null),
-                        _ => Js::Null,
-                    }
-                } else {
-                    result.text().map_or(Js::Null, Js::str)
-                };
+                let value = declared_value(&result, &type_);
+                if !matches!(value, Js::Null) && !fits(&value, &type_) {
+                    return Err(Stop::Thrown(misfit(written, &type_, &value)));
+                }
                 let handed_back = !matches!(value, Js::Null);
                 (Binding::Value(ValueBinding { value, trail: Some(trail), many: false }), handed_back)
             }
@@ -218,6 +213,71 @@ impl Run<'_> {
         }
         Ok(binding)
     }
+}
+
+/// A `value` output's value: a plugin answers it as `data.value`, in its own
+/// type; a text output may answer it as the text it fetched instead.
+fn declared_value(result: &crate::extract::run::PluginResult, declared: &FieldType) -> Js {
+    let data_value = match &result.data {
+        Some(Js::Object(data)) => data.get("value").cloned().filter(|value| !value.is_nullish()),
+        _ => None,
+    };
+    let text = result.text().map(Js::str);
+    let first = if matches!(declared, FieldType::Scalar(Scalar::Text)) { text.or(data_value) } else { data_value.or(text) };
+    first.unwrap_or(Js::Null)
+}
+
+/// Whether a plugin's value is of the type it declares, as the checker
+/// typed the call's value.
+fn fits(value: &Js, declared: &FieldType) -> bool {
+    match declared {
+        FieldType::Scalar(scalar) => match scalar {
+            Scalar::Text | Scalar::Date | Scalar::Datetime => matches!(value, Js::String(_)),
+            Scalar::Number => matches!(value, Js::Number(_)),
+            Scalar::Boolean => matches!(value, Js::Bool(_)),
+            Scalar::File => matches!(value, Js::File(_)),
+            Scalar::Json => !matches!(value, Js::Undefined),
+            Scalar::Absent => value.is_nullish(),
+            Scalar::Never => false,
+        },
+        FieldType::Composite(composite) => match composite {
+            Composite::List { of, .. } => matches!(value, Js::Array(list) if list.items().iter().all(|member| fits(member, of))),
+            Composite::Tuple { of, rest } => match value {
+                Js::Array(list) => {
+                    let items = list.items();
+                    let fixed = items.len() == of.len() || rest.is_some();
+                    fixed && items.iter().zip(of).all(|(member, slot)| slot.as_ref().is_none_or(|slot| fits(member, slot)))
+                }
+                _ => false,
+            },
+            Composite::Dict { of, shape } => match value {
+                Js::Object(object) => match shape {
+                    Some(shape) => shape.iter().all(|(key, slot)| match (object.get(key), slot) {
+                        (Some(member), Some(slot)) => fits(member, slot),
+                        (None, Some(slot)) => fits(&Js::Null, slot),
+                        (_, None) => true,
+                    }),
+                    None => object.entries().iter().all(|(_, member)| fits(member, of)),
+                },
+                _ => false,
+            },
+            Composite::Enum { options, open } => matches!(value, Js::String(text) if open.is_some() || options.iter().any(|o| o.as_str() == text.as_str())),
+            Composite::MaybeAbsent { of } => value.is_nullish() || fits(value, of),
+            Composite::Union { of } => of.iter().any(|arm| fits(value, arm)),
+            Composite::Record { .. } => matches!(value, Js::Object(_) | Js::Record(_)),
+        },
+    }
+}
+
+/// The call failed by the plugin's name: what it handed back is not what it
+/// declares, and the movement was checked against the declaration.
+fn misfit(written: &str, declared: &FieldType, value: &Js) -> Failure {
+    let declared = movement_parser::catalog::helpers::describe_field_type(declared).unwrap_or_else(|_| "another type".into());
+    let printed: String = crate::js::json_stringify(value, 0).chars().take(80).collect();
+    Failure::engine(
+        "MOVENG_RUNTIME",
+        format!("'{written}' declares it hands back {declared}, and it handed back {} ({printed}): the plugin answered outside its declaration", value.type_of()),
+    )
 }
 
 #[cfg(test)]
