@@ -47,6 +47,7 @@ function adapterManifest(definition: AdapterModuleDefinition, instance: AdapterM
             key: entry.key,
             ...(entry.required !== undefined ? { required: entry.required } : {}),
             ...(entry.format !== undefined ? { format: entry.format } : {}),
+            ...(entry.narrows !== undefined ? { narrows: { collection: entry.narrows.collection, matchField: entry.narrows.matchField } } : {}),
           })),
         }
       : {}),

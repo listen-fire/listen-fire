@@ -6,8 +6,11 @@
 use std::io::Write;
 use std::rc::Rc;
 
+use std::collections::BTreeMap;
+
 use indexmap::IndexMap;
 use movement_checker::host::native::NativeZones;
+use movement_checker::types::event_address::EventAddress;
 use movement_checker::{CheckOptions, Severity};
 use movement_parser::ast::Program;
 use movement_parser::catalog::helpers::position_key;
@@ -16,7 +19,8 @@ use movement_parser::catalog::types::{ArgKind, CatalogSnapshot, ConstructionArg,
 use movement_parser::util::form::{external_text, form_of_text, read_json_text};
 use serde_json::json;
 
-use crate::catalog::{ConnectionSchemas, catalog_of, connections_of};
+use crate::catalog::{ConnectionSchemas, Described, catalog_of, connections_of};
+use crate::listen_narrowing::{Narrowing, Walk, address_hops, narrow_event_positions, with_event_narrowing_keys};
 use crate::externals::{RunningExternal, needed_externals, rpc_in, scan_externals, start_externals};
 use crate::json::Js;
 use crate::project::Project;
@@ -143,17 +147,17 @@ pub async fn open_checking(project: &Project) -> Result<Opened, String> {
 /// the credential-free instance when the external works without one, and one
 /// describe per credential bound to it that the files import (one bound but
 /// never imported is never asked, so a server it names that is down fails no
-/// check). `known` is kept: only a connection it lacks is described.
+/// check). `known` is kept: only a connection it lacks is described. Each is
+/// narrowed by the event addresses the files' signatures name against it
+/// (crate::listen_narrowing), again whenever those change.
 pub async fn describe_external(running: &RunningExternal, credentials: &Credentials, imported: &Imported, known: ConnectionSchemas) -> Result<ConnectionSchemas, String> {
     let connections = connections_of(running, credentials);
-    let mut schemas = known;
-    if !connections.credential_required && !schemas.contains_key("") {
-        schemas.insert(String::new(), describe_as(running, credentials, None, None).await?);
+    let mut wanted: Vec<Wanted> = Vec::new();
+    if !connections.credential_required {
+        wanted.push(Wanted { key: String::new(), credential: None, settings: None, position_values: BTreeMap::new() });
     }
     for credential in connections.credentials.iter().copied().filter(|c| imported.contains(&c.name)) {
-        if !schemas.contains_key(&credential.name) {
-            schemas.insert(credential.name.clone(), describe_as(running, credentials, Some(credential), None).await?);
-        }
+        wanted.push(Wanted { key: credential.name.clone(), credential: Some(credential), settings: None, position_values: BTreeMap::new() });
     }
     // A connection that pins an entry position (`base: "CRM"`) is described in
     // that position, under a key of its own: its schema is that position's.
@@ -167,11 +171,80 @@ pub async fn describe_external(running: &RunningExternal, credentials: &Credenti
             None => None,
         };
         let key = instance_schema_key(construction.credential.as_deref(), Some(&position.key));
-        if !schemas.contains_key(&key) {
-            schemas.insert(key, describe_as(running, credentials, credential, Some(position.settings)).await?);
-        }
+        let position_values = position.settings.as_object().into_iter().flatten().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect();
+        wanted.push(Wanted { key, credential, settings: Some(position.settings), position_values });
+    }
+    let mut schemas = known;
+    for connection in wanted {
+        let addresses = addresses_of(running, imported, &connection.key);
+        let walk = ConnectionWalk { running, credentials, credential: connection.credential, settings: connection.settings.clone() };
+        let (entries, described) = match schemas.get(&connection.key) {
+            Some(held) if held.addresses == addresses => continue,
+            Some(held) => (held.entries.clone(), held.described.clone()),
+            None => describe_as(running, credentials, connection.credential, connection.settings.clone()).await?,
+        };
+        let hops = address_hops(&running.listen, &connection.position_values);
+        let narrowing = Narrowing {
+            adapter: &running.external.manifest.name,
+            adapter_type: running.manifest_answer.get("adapterType").and_then(Js::as_str).unwrap_or(&running.external.manifest.name),
+            hops: &hops,
+            addresses: &addresses,
+            entries: &entries,
+            walk: &walk,
+        };
+        let schema = narrow_event_positions(with_event_narrowing_keys(described.clone(), &hops), &narrowing).await;
+        schemas.insert(connection.key, Described { entries, described, addresses, schema });
     }
     Ok(schemas)
+}
+
+/// One connection `describe_external` serves.
+struct Wanted<'c> {
+    key: String,
+    credential: Option<&'c Credential>,
+    /// What a call in its position carries.
+    settings: Option<serde_json::Value>,
+    /// Its position's values, by position arg.
+    position_values: BTreeMap<String, String>,
+}
+
+/// The event addresses the files' signatures name against the connection
+/// filed under `key`, in the files' order.
+fn addresses_of(running: &RunningExternal, imported: &Imported, key: &str) -> Vec<EventAddress> {
+    let manifest = &running.external.manifest;
+    let construction_args = position_construction_args(running);
+    imported
+        .event_addresses
+        .iter()
+        .filter(|a| manifest.name == a.construction.adapter || manifest.module.as_deref() == Some(a.construction.adapter.as_str()))
+        .filter(|a| {
+            let args: Args = JsMap(a.construction.args.iter().cloned().collect());
+            instance_schema_key(a.construction.credential.as_deref(), Some(&position_key(&construction_args, Some(&args)))) == key
+        })
+        .map(|a| a.address.clone())
+        .collect()
+}
+
+/// A walk of one connection: its module's `edgesFrom`, asked as that
+/// connection, in its position.
+struct ConnectionWalk<'a> {
+    running: &'a RunningExternal,
+    credentials: &'a Credentials,
+    credential: Option<&'a Credential>,
+    settings: Option<serde_json::Value>,
+}
+
+impl Walk for ConnectionWalk<'_> {
+    async fn edges_from(&self, position: &Js, cursor: Option<&Js>) -> Result<Js, String> {
+        if !self.running.methods.iter().any(|m| m == "edgesFrom") {
+            return Ok(Js::Null);
+        }
+        let mut params = json!({ "position": crate::wire::json_of_js(position) });
+        if let Some(cursor) = cursor {
+            params["cursor"] = crate::wire::json_of_js(cursor);
+        }
+        rpc_in(self.running, self.credentials, self.credential, LOCAL_TENANT, "edgesFrom", params, self.settings.clone()).await
+    }
 }
 
 /// The position a construction pins: the key its schema is stored under (the
@@ -181,15 +254,22 @@ struct Position {
     settings: serde_json::Value,
 }
 
+/// The module's position args, as the catalog's construction args.
+fn position_construction_args(running: &RunningExternal) -> Vec<ConstructionArg> {
+    running
+        .position_args()
+        .into_iter()
+        .map(|d| ConstructionArg { name: d.name, kind: ArgKind::Position, required: false, options_from_type: Some(d.options_from), label: d.label })
+        .collect()
+}
+
 /// The constructions of this module that pin a position, each with its position.
 fn positions_of<'a>(running: &RunningExternal, imported: &'a Imported) -> Vec<(&'a Construction, Position)> {
-    let declared = running.position_args();
-    if declared.is_empty() {
+    let construction_args = position_construction_args(running);
+    if construction_args.is_empty() {
         return Vec::new();
     }
     let manifest = &running.external.manifest;
-    let construction_args: Vec<ConstructionArg> =
-        declared.iter().map(|d| ConstructionArg { name: d.name.clone(), kind: ArgKind::Position, required: false, options_from_type: Some(d.options_from.clone()), label: d.label.clone() }).collect();
     let mut positions = Vec::new();
     for construction in imported.constructions.iter().filter(|c| manifest.name == c.adapter || manifest.module.as_deref() == Some(c.adapter.as_str())) {
         let args: Args = JsMap(construction.args.iter().cloned().collect());
@@ -202,7 +282,7 @@ fn positions_of<'a>(running: &RunningExternal, imported: &'a Imported) -> Vec<(&
 
 /// `describeExternal`: its entry points and one `describe` per entry point,
 /// asked as one connection, projected as the hosted product projects them.
-async fn describe_as(running: &RunningExternal, credentials: &Credentials, credential: Option<&Credential>, settings: Option<serde_json::Value>) -> Result<Js, String> {
+async fn describe_as(running: &RunningExternal, credentials: &Credentials, credential: Option<&Credential>, settings: Option<serde_json::Value>) -> Result<(Vec<Js>, Js), String> {
     let name = &running.external.manifest.name;
     let rpc = |method: &'static str, params: serde_json::Value| rpc_in(running, credentials, credential, LOCAL_TENANT, method, params, settings.clone());
     let entries = rpc("listEntryPoints", json!({})).await?;
@@ -223,7 +303,8 @@ async fn describe_as(running: &RunningExternal, credentials: &Credentials, crede
             _ => return Err(shape_error("describe", name, &descriptor, "expected null or { typeId, displayName, fields, references }")),
         }
     }
-    Ok(describe_external_schema(name, &entry_list, &descriptors))
+    let schema = describe_external_schema(name, &entry_list, &descriptors);
+    Ok((entry_list, schema))
 }
 
 /// `WireSchemaEntryPoint`'s envelope (the rest passes through).

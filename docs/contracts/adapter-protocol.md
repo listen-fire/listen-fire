@@ -222,6 +222,16 @@ The manifest file registers your server with a team:
     (`field: "Stage"`). A `field-value` key is a value of that field
     (`becomes: "Interview"`), checked against the field's type; declare it
     only beside exactly one `field` key.
+    An entry may also carry `narrows: { collection, matchField }`: the key is
+    one hop of the address an event is narrowed by, in declaration order
+    (Airtable's `base` then `table`). A movement whose signature names the
+    address (`<at-[:`Record Change` WHERE `table` == "tbl…"]->>`) reads the
+    event's edges onto the last hop's `collection` as the node the address
+    walks to. The host walks it with your `edgesFrom`, from the connection's
+    root, choosing at each hop the member of `collection` whose data has
+    `matchField` equal to the value. A connection's entry position consumes
+    the leading hops it pins (`base:` on the connection), so its signatures
+    name only the rest.
   Declare them and the checker refuses any other key or event. Declare none
   and a listen's config goes unchecked.
 
@@ -1476,6 +1486,7 @@ from `apps/cli`.
 
 ## Changes
 
+- **`narrows` on a listen config key** (within version 2, no bump; 2026-10-27; additive). A `listenConfig` entry may say which hop of an event's address it is ([The manifest and installing](#the-manifest-and-installing)). `lf` narrows a signature's event to the node the address walks to, as the hosted product does. An older host ignores the field; a module that declares none is unchanged.
 - **Adapter protocol 2.3: labelled poll events** (within version 2; 2026-10-26; lf 0.12.8). A polled source labels each event it returns with its kind (`eventType`), as a pushed event is labelled, and the host narrows a listen's `events` by it either way ([Polled sources](#polled-sources-and-periodic-tasks)). It is a rule for sources and a host behaviour, not a feature a module states: an older host routes a labelled event correctly, so a module labelling its events states no higher minor for it. An unlabelled poll event still reaches the listen that polled it, with a notice. The bundled polled modules (Gmail, Evertrace, Dealroom, Granola) label theirs.
 - **`poll`'s `movementId`** (within version 2, no bump; 2026-10-26). `lf` sends the listen's pipeline, `listen:<file>:<movement>`, rather than the movement's bare name, so a source can tell two same-named movements in different files apart.
 - **Adapter protocol 2.N** (within version 2, no bump; 2026-10-25; lf 0.12.6). The manifest may state `protocolMinor`, the minor of version 2 it uses, computed by the kits from the features it lists ([Versioning](#versioning)). `lf` and the engine speak 2.0 to 2.2 and refuse a module outside that range by name, a core module included. The rule from here on: an addition a manifest can show bumps the minor. An unstated minor is 2.0, so every module published before is unchanged; an older host ignores the field.

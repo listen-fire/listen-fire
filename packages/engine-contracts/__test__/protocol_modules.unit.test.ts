@@ -75,6 +75,13 @@ describe('a module manifest', () => {
     expect(WireManifestResult.parse(manifest)).toEqual(manifest);
   });
 
+  it('keeps the hop of the event address a listen config key narrows', () => {
+    const manifest = { ...OLD_MANIFEST, listenConfig: [{ key: 'table', required: true, narrows: { collection: 'Table', matchField: 'Id' } }] };
+    expect(WireManifestResult.parse(manifest)).toEqual(manifest);
+    const half = { ...OLD_MANIFEST, listenConfig: [{ key: 'table', narrows: { collection: 'Table' } }] };
+    expect(WireManifestResult.safeParse(half).success).toBe(false);
+  });
+
   it('keeps the listen config keys that scope an event subscription', () => {
     const manifest = { ...OLD_MANIFEST, subscriptionScopeKeys: ['base', 'table'] };
     expect(WireManifestResult.parse(manifest)).toEqual(manifest);

@@ -741,8 +741,9 @@ export const WireInvokeFieldFunctionInput = z.object({
  *     `eventType` is matched against them when routing);
  *   - `defaultSubscribedEvents`: what a listen with no `events` receives
  *     (absent ⇒ every subscribable event);
- *   - `listenConfig`: further keys, whether a listen must carry each, and a
- *     static value format the checker validates.
+ *   - `listenConfig`: further keys, whether a listen must carry each, a
+ *     static value format the checker validates, and whether the key is one
+ *     hop of the address the event is narrowed by (`narrows`).
  * All optional: an adapter declaring none leaves its listen config unchecked.
  */
 export const WireListenDeclarations = z.object({
@@ -758,6 +759,10 @@ export const WireListenDeclarations = z.object({
         format: z
           .union([z.enum(['cron', 'timezone', 'fields', 'strings', 'field', 'field-value']), z.string().min(1)])
           .optional(),
+        // One hop of the address the listen's event is narrowed by
+        // (`ListenConfigKey.narrows`): the collection walked and the member
+        // field its value is matched on.
+        narrows: z.object({ collection: z.string().min(1), matchField: z.string().min(1) }).optional(),
       }),
     )
     // A `field-value` key is a value of the field the `field` key names:

@@ -4,10 +4,10 @@
 // its own scope, door and secret. A change reaches only its table's webhook
 // and runs only that table's listen; the field-change listen (`field: "Stage",
 // becomes: "Interview"`) runs only when Stage becomes Interview, and reads
-// the fields the change touched; removing a listen removes only its webhook.
-// (Under lf the event's `Record` and `Old Record` edges are not narrowed to
-// the table, so the movement cannot read the Stage it was: the check refuses
-// `Old Record`.Stage as undescribed. The engine path reads it.)
+// the fields the change touched and the Stage it was; removing a listen
+// removes only its webhook. The movement's signature names the table, so the
+// event's `Record` and `Old Record` edges land on it: the Stage it was is the
+// Stage enum, and a typo of one of its values is refused at check.
 
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -93,6 +93,7 @@ const HIRING = [
       primaryFieldId: 'fldICand',
       fields: [
         { id: 'fldICand', name: 'Candidate', type: 'singleLineText' },
+        { id: 'fldIFrom', name: 'From', type: 'singleLineText' },
         { id: 'fldIChanged', name: 'Changed', type: 'singleLineText' },
       ],
     },
@@ -109,10 +110,13 @@ import { henry_airtable } from credentials
 
 hiring = connect airtable using henry_airtable { base: "Hiring" }
 
-function schedule_interview(change: <hiring-[:\`Record Change\`]->>) {
-  write hiring-[:Interviews]-> {
-    Candidate: change.record
-    Changed: Text.join(change.\`Changed Fields\`, ", ")
+function schedule_interview(change: <hiring-[:\`Record Change\` WHERE \`table\` == "tblCAND01"]->>) {
+  if (change-[:\`Old Record\`]->.Stage == "Applied") {
+    write hiring-[:Interviews]-> {
+      Candidate: change.record
+      From: change-[:\`Old Record\`]->.Stage
+      Changed: Text.join(change.\`Changed Fields\`, ", ")
+    }
   }
 }
 
@@ -161,6 +165,12 @@ test('two tables of one connection each have a webhook of their own, and Stage b
     writeFileSync(movement, HEAD + ROLES);
     const checked = lfSync(dir, 'check');
     assert.equal(checked.code, 0, checked.out);
+    // The Stage it was is the Stage enum: a typo of one of its values is refused.
+    writeFileSync(movement, (HEAD + ROLES).replace('== "Applied"', '== "Aplied"'));
+    const typo = lfSync(dir, 'check');
+    assert.equal(typo.code, 1, typo.out);
+    assert.match(typo.out, /MOV_ENUM_UNKNOWN_VALUE "Aplied" isn't a value of enum \(Applied \| Interview \| Rejected\)/);
+    writeFileSync(movement, HEAD + ROLES);
 
     const port = await freePort();
     const publicUrl = `http://127.0.0.1:${port}`;
@@ -194,6 +204,7 @@ test('two tables of one connection each have a webhook of their own, and Stage b
       // The fake keeps a written row's cells by field id.
       assert.match(written, /"fldICand":"recADA"/);
       assert.match(written, /"fldIChanged":"Name, Stage"/, 'it read the fields the change touched');
+      assert.match(written, /"fldIFrom":"Applied"/, 'it read the Stage it was');
 
       // Stage becomes Rejected: the webhook is pinged, and nothing runs.
       const toRejected = await deliver({ changeType: 'update', tableId: 'tblCAND01', recordId: 'recBOB', fields: { Stage: 'Rejected' }, previous: { Stage: 'Applied' } });

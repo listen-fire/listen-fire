@@ -111,6 +111,7 @@ mod listener {
         Ok(())
     }
 }
+mod listen_narrowing;
 mod lsp;
 mod models;
 mod module_hosts;

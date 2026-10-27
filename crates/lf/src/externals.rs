@@ -659,6 +659,15 @@ fn listen_declarations(raw: &Js) -> Result<Obj, String> {
                 let format = format.as_str().filter(|f| !f.is_empty());
                 entry.insert("format".into(), Js::str(format.ok_or("listenConfig.format: expected a non-empty string")?));
             }
+            if let Some(narrows) = item.get("narrows") {
+                // One hop of the address a listen's event is narrowed by
+                // (crate::listen_narrowing).
+                let named = |k: &str| narrows.get(k).and_then(Js::as_str).filter(|v| !v.is_empty()).map(Js::str);
+                let (Some(collection), Some(match_field)) = (named("collection"), named("matchField")) else {
+                    return Err("listenConfig.narrows: expected { collection, matchField }, each a non-empty string".into());
+                };
+                entry.insert("narrows".into(), Js::Obj(crate::obj! { "collection" => collection, "matchField" => match_field }));
+            }
             entries.push(Js::Obj(entry));
         }
         let formats = |format: &str| entries.iter().filter(|e| e.get("format").and_then(Js::as_str) == Some(format)).count();
@@ -907,6 +916,15 @@ mod tests {
         let raw = Js::parse(br#"{ "subscribableEvents": ["a"], "other": 1, "listenConfig": [{ "key": "schedule", "required": true, "extra": 2 }] }"#).unwrap();
         let listen = listen_declarations(&raw).unwrap();
         assert_eq!(Js::Obj(listen).to_json(), r#"{"subscribableEvents":["a"],"listenConfig":[{"key":"schedule","required":true}]}"#);
+    }
+
+    #[test]
+    fn a_listen_key_that_narrows_keeps_its_hop() {
+        let raw = Js::parse(br#"{ "listenConfig": [{ "key": "table", "required": true, "narrows": { "collection": "Table", "matchField": "Id", "extra": 1 } }] }"#).unwrap();
+        let listen = listen_declarations(&raw).unwrap();
+        assert_eq!(Js::Obj(listen).to_json(), r#"{"listenConfig":[{"key":"table","required":true,"narrows":{"collection":"Table","matchField":"Id"}}]}"#);
+        let half = Js::parse(br#"{ "listenConfig": [{ "key": "table", "narrows": { "collection": "Table" } }] }"#).unwrap();
+        assert!(listen_declarations(&half).unwrap_err().contains("listenConfig.narrows"));
     }
 
     #[test]

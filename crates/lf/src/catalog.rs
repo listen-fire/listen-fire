@@ -23,7 +23,22 @@ fn instance_schema_key(credential_name: Option<&str>) -> String {
 
 /// Each connection's schema, by the key the catalog files it under
 /// (`instanceSchemaKey`): `''` for the instance made with no credential.
-pub type ConnectionSchemas = IndexMap<String, Js>;
+pub type ConnectionSchemas = IndexMap<String, Described>;
+
+/// One connection as its module described it, and as the catalog serves it:
+/// with an event position grafted for each address the signatures name
+/// against it (crate::listen_narrowing).
+#[derive(Clone)]
+pub struct Described {
+    /// Its `listEntryPoints` answer.
+    pub entries: Vec<Js>,
+    /// Its schema as projected from its introspection.
+    pub described: Js,
+    /// The addresses `schema` is narrowed by.
+    pub addresses: Vec<movement_checker::types::event_address::EventAddress>,
+    /// What the checker reads.
+    pub schema: Js,
+}
 
 /// What one adapter external's instances are made with.
 pub struct Connections<'c> {
@@ -94,8 +109,8 @@ pub fn catalog_of(running: &[Rc<RunningExternal>], schemas: &IndexMap<String, Co
         // typed by another's.
         let mut adapter_schemas = Obj::new();
         if let Some(described) = schemas.get(name) {
-            for (key, schema) in described {
-                adapter_schemas.insert(key.clone(), schema.clone());
+            for (key, connection) in described {
+                adapter_schemas.insert(key.clone(), connection.schema.clone());
             }
         }
         movement_parser::util::js::object_key_order(&mut adapter_schemas);

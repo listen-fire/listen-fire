@@ -348,6 +348,9 @@ pub struct Construction {
 pub struct Imported {
     credentials: BTreeSet<String>,
     pub constructions: BTreeSet<Construction>,
+    /// The event addresses the movements' signatures name
+    /// (crate::listen_narrowing), which the connections' schemas graft.
+    pub event_addresses: Vec<crate::listen_narrowing::SignatureAddress>,
 }
 
 impl Imported {
@@ -375,20 +378,27 @@ pub fn imported_credentials(files: &[Rc<Parsed>]) -> Imported {
             }
         }
         collect_constructions(&program.statements, &originals, &mut imported.constructions);
+        imported.event_addresses.extend(crate::listen_narrowing::signature_addresses(&program.statements, &originals));
     }
     imported
 }
 
+/// The construction a `connect` writes, its module and credential named as
+/// imported (an alias read back to its original).
+pub fn construction_of(construct: &movement_parser::ast::ConstructionCall, originals: &BTreeMap<String, String>) -> Construction {
+    let original = |name: &str| originals.get(name).cloned().unwrap_or_else(|| name.to_string());
+    let credential = construct.args.iter().find(|a| a.name == "credentials").and_then(|a| movement_parser::catalog::helpers::unwrap_credential_arg(&a.value.raw)).map(|c| original(&c));
+    let mut args: Vec<(String, String)> = construct.args.iter().filter(|a| a.name != "credentials").map(|a| (a.name.clone(), a.value.raw.clone())).collect();
+    args.sort();
+    Construction { adapter: original(&construct.callee), credential, args }
+}
+
 fn collect_constructions(statements: &[Statement], originals: &BTreeMap<String, String>, out: &mut BTreeSet<Construction>) {
     let add = |out: &mut BTreeSet<Construction>, construct: &movement_parser::ast::ConstructionCall| {
-        let original = |name: &str| originals.get(name).cloned().unwrap_or_else(|| name.to_string());
-        let credential = construct.args.iter().find(|a| a.name == "credentials").and_then(|a| movement_parser::catalog::helpers::unwrap_credential_arg(&a.value.raw)).map(|c| original(&c));
-        let mut args: Vec<(String, String)> = construct.args.iter().filter(|a| a.name != "credentials").map(|a| (a.name.clone(), a.value.raw.clone())).collect();
-        if args.is_empty() {
-            return;
+        let construction = construction_of(construct, originals);
+        if !construction.args.is_empty() {
+            out.insert(construction);
         }
-        args.sort();
-        out.insert(Construction { adapter: original(&construct.callee), credential, args });
     };
     for statement in statements {
         match statement {
