@@ -50,7 +50,7 @@ function notesModule(written: Written[], schemas: Map<string, string[]>, updated
       },
       updateRecord: async ({ externalId, recordType, fields }) => {
         updated.push({ externalId, Title: String(fields.Title) });
-        return { adapterType: 'notes', externalId, recordType, data: { ...fields } };
+        return { adapterType: 'notes', externalId, recordType, data: { ...fields }, association: 'none' as const };
       },
       deleteRecord: async () => {
         throw new Error('not used');
