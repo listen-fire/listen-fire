@@ -122,8 +122,14 @@ export interface AdapterSpec {
    *
    * `'strings'` is a non-empty list of non-empty quoted strings — the shape
    * only; the values are the source system's own (Gmail's `labels`).
+   *
+   * `'field'` is one quoted field name of the record the listen's address
+   * lands on (TypeScript's `keyof T`); `'field-value'` is a literal value of
+   * the field the listen's `'field'`-format key names (`T[K]`): an enum
+   * field's choice, a number field's number. Paired by format, so an adapter
+   * declares at most one `'field'` key.
    */
-  triggerConfigFormats?: Record<string, 'cron' | 'timezone' | 'fields' | 'strings'>;
+  triggerConfigFormats?: Record<string, 'cron' | 'timezone' | 'fields' | 'strings' | 'field' | 'field-value'>;
   /**
    * Interactive "connect" actions the adapter offers when authoring against
    * one of its instances. The checker never reads these — they're carried

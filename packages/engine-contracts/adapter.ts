@@ -469,8 +469,11 @@ export interface ListenConfigKey {
    *  the listen's address lands on (the changed-attribute filter — any adapter
    *  with a "only fire when one of these changed" surface declares it);
    *  `'strings'` = a non-empty list of non-empty quoted strings (Gmail's
-   *  `labels`). */
-  format?: 'cron' | 'timezone' | 'fields' | 'strings';
+   *  `labels`); `'field'` = one quoted field name of the record the listen's
+   *  address lands on; `'field-value'` = a literal value of the field the
+   *  `'field'`-format key names, held to that field's type (an adapter
+   *  declaring it declares exactly one `'field'` key). */
+  format?: 'cron' | 'timezone' | 'fields' | 'strings' | 'field' | 'field-value';
   /**
    * This key is one HOP of the address that narrows the event's record edge.
    *

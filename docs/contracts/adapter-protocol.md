@@ -212,7 +212,11 @@ The manifest file registers your server with a team:
   - `defaultSubscribedEvents`: what a listen with no `events` receives
     (absent means every subscribable event).
   - `listenConfig`: further keys, as `[{ key, required?, format? }]`, where
-    `format` is `cron`, `timezone`, `fields` or `strings`.
+    `format` is `cron`, `timezone`, `fields`, `strings`, `field` or
+    `field-value`. A `field` key is one field of the watched record
+    (`field: "Stage"`). A `field-value` key is a value of that field
+    (`becomes: "Interview"`), checked against the field's type; declare it
+    only beside exactly one `field` key.
   Declare them and the checker refuses any other key or event. Declare none
   and a listen's config goes unchecked.
 

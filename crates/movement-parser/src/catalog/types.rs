@@ -508,6 +508,11 @@ pub enum TriggerConfigFormat {
     Timezone,
     Fields,
     Strings,
+    /// One field of the record the listen watches, by name (`keyof T`).
+    Field,
+    /// A value of the field the listen's `field`-format key names (`T[K]`).
+    #[serde(rename = "field-value")]
+    FieldValue,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

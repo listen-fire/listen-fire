@@ -753,8 +753,15 @@ export const WireListenDeclarations = z.object({
       z.object({
         key: z.string().min(1),
         required: z.boolean().optional(),
-        format: z.enum(['cron', 'timezone', 'fields', 'strings']).optional(),
+        format: z.enum(['cron', 'timezone', 'fields', 'strings', 'field', 'field-value']).optional(),
       }),
+    )
+    // A `field-value` key is a value of the field the `field` key names:
+    // paired by format, so there must be exactly one to pair with.
+    .refine(
+      (entries) =>
+        !entries.some((e) => e.format === 'field-value') || entries.filter((e) => e.format === 'field').length === 1,
+      { message: "a 'field-value' listen key needs exactly one 'field' key to be a value of" },
     )
     .optional(),
 });

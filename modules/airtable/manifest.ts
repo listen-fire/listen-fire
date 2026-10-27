@@ -80,10 +80,10 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
     // `becomes: "Interview"` (with `field`) only when its new value is that
     // and its previous one was not. Gated by the host's listen scope gate
     // over the event's `changedFields` and its new and previous values. The
-    // checker accepts both keys; it does not yet hold `field` against the
-    // table's fields or `becomes` against the field's choices.
-    { key: 'field' },
-    { key: 'becomes' },
+    // checker holds `field` to the narrowed table's fields and `becomes` to
+    // that field's type (a select's choices).
+    { key: 'field', format: 'field' },
+    { key: 'becomes', format: 'field-value' },
   ],
   triggerExpectation:
     'A listener watches ONE Airtable table — the base + table named on the ' +

@@ -646,10 +646,14 @@ fn listen_declarations(raw: &Js) -> Result<Obj, String> {
                 entry.insert("required".into(), Js::Bool(*required));
             }
             if let Some(format) = item.get("format") {
-                let format = format.as_str().filter(|f| ["cron", "timezone", "fields", "strings"].contains(f));
-                entry.insert("format".into(), Js::str(format.ok_or("listenConfig.format: expected cron, timezone, fields or strings")?));
+                let format = format.as_str().filter(|f| ["cron", "timezone", "fields", "strings", "field", "field-value"].contains(f));
+                entry.insert("format".into(), Js::str(format.ok_or("listenConfig.format: expected cron, timezone, fields, strings, field or field-value")?));
             }
             entries.push(Js::Obj(entry));
+        }
+        let formats = |format: &str| entries.iter().filter(|e| e.get("format").and_then(Js::as_str) == Some(format)).count();
+        if formats("field-value") > 0 && formats("field") != 1 {
+            return Err("listenConfig: a 'field-value' key needs exactly one 'field' key to be a value of".into());
         }
         out.insert("listenConfig".into(), Js::Arr(entries));
     }
@@ -893,5 +897,13 @@ mod tests {
         let raw = Js::parse(br#"{ "subscribableEvents": ["a"], "other": 1, "listenConfig": [{ "key": "schedule", "required": true, "extra": 2 }] }"#).unwrap();
         let listen = listen_declarations(&raw).unwrap();
         assert_eq!(Js::Obj(listen).to_json(), r#"{"subscribableEvents":["a"],"listenConfig":[{"key":"schedule","required":true}]}"#);
+    }
+
+    #[test]
+    fn a_field_value_key_needs_exactly_one_field_key() {
+        let paired = Js::parse(br#"{ "listenConfig": [{ "key": "field", "format": "field" }, { "key": "becomes", "format": "field-value" }] }"#).unwrap();
+        assert!(listen_declarations(&paired).is_ok());
+        let alone = Js::parse(br#"{ "listenConfig": [{ "key": "becomes", "format": "field-value" }] }"#).unwrap();
+        assert!(listen_declarations(&alone).unwrap_err().contains("exactly one 'field' key"));
     }
 }

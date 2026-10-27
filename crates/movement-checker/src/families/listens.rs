@@ -44,7 +44,7 @@ const POLL_INTERVAL_KEY: &str = "pollIntervalSeconds";
 use crate::slots::{expression_of_slot, is_bare_ident};
 
 pub(crate) mod event_types;
-use event_types::{EventRef, Kind};
+mod watched_field;
 
 /// `SUPPRESS_SELF_KEY`: the listen key every listener accepts.
 const SUPPRESS_SELF_KEY: &str = "suppress_self";
@@ -91,6 +91,10 @@ struct ConfigRead {
     selected: Option<Vec<String>>,
     /// A `fields`-format key's bare names, and where they are written.
     fields: Option<(Vec<String>, Span)>,
+    /// A `field`-format key's field name, and where it is written.
+    field: Option<(String, Span)>,
+    /// A `field-value`-format key, its literal, and where it is written.
+    field_value: Option<(String, Expression, Span)>,
 }
 
 /// `suggestedListenKey`: a movement's name as a slug.
@@ -356,9 +360,11 @@ impl Checker<'_> {
             };
             self.record_node(statement.span, scope, what);
         }
-        if let (Some((names, span)), Some(schema), Some(event_types)) = (&read.fields, schema, &event_types) {
-            self.check_listen_fields(schema, event_types, names, *span);
+        let watched = schema.zip(event_types.as_deref()).and_then(|(schema, event_types)| watched_field::watched_properties(schema, event_types));
+        if let (Some((names, span)), Some(watched)) = (&read.fields, &watched) {
+            self.check_listen_fields(watched, names, *span);
         }
+        self.check_watched_field(&read, spec, watched.as_ref());
 
         let mut config: Vec<String> = statement.config.iter().map(|a| format!("{}={}", a.name, a.value.raw.trim())).collect();
         config.sort();
@@ -625,31 +631,8 @@ impl Checker<'_> {
 
     /// The `fields:` names, against what the listen's events land on (or the
     /// record each is about, where the event declares a subject edge).
-    fn check_listen_fields(
-        &mut self,
-        schema: &movement_parser::catalog::types::InstanceSchema,
-        event_types: &[EventRef],
-        names: &[String],
-        span: Span,
-    ) {
-        let mut known: Vec<&String> = Vec::new();
-        let mut described = false;
-        for type_ in event_types.iter().filter(|t| t.kind == Kind::Position) {
-            let Some(landed) = schema.positions.get(&type_.key) else { continue };
-            let position = event_types::subject_of(schema, landed).map_or(landed, |(_, _, p)| p);
-            if position.undescribed == Some(true) {
-                continue;
-            }
-            described = true;
-            for name in position.properties.keys() {
-                if !known.contains(&name) {
-                    known.push(name);
-                }
-            }
-        }
-        if !described {
-            return;
-        }
+    fn check_listen_fields(&mut self, watched: &IndexMap<&String, &movement_parser::catalog::types::FieldType>, names: &[String], span: Span) {
+        let known: Vec<&String> = watched.keys().copied().collect();
         let mut sorted: Vec<&String> = known.clone();
         sorted.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
         let one_of = if sorted.is_empty() {
@@ -797,6 +780,28 @@ impl Checker<'_> {
                     return;
                 }
             }
+            Some(TriggerConfigFormat::Field) => match static_string_values(&arg.value).as_deref() {
+                Some([name]) if !is_list_slot(&arg.value) => read.field = Some((name.clone(), span)),
+                _ => {
+                    self.report(
+                        codes::LISTEN_BAD_CONFIG,
+                        format!("'{}' takes one quoted field name of what this listener watches — e.g. {}: \"Stage\"", arg.name, arg.name),
+                        span,
+                    );
+                    return;
+                }
+            },
+            Some(TriggerConfigFormat::FieldValue) => match watched_field::literal_value(&arg.value) {
+                Some(value) => read.field_value = Some((arg.name.clone(), value, span)),
+                None => {
+                    self.report(
+                        codes::LISTEN_BAD_CONFIG,
+                        format!("'{}' takes a literal value of the field this listen names — e.g. {}: \"…\", a number, true or false, or a list of them", arg.name, arg.name),
+                        span,
+                    );
+                    return;
+                }
+            },
             Some(TriggerConfigFormat::Fields) => {
                 match bare_name_values(&arg.value) {
                     None => self.report(
