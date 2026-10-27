@@ -21,7 +21,7 @@ The movement core speaks seven contracts. Six are written down here with an inte
 
 The rule mirrors the language's ([language-versions.md](language-versions.md)):
 
-- **An addition a reader can ignore keeps the version.** A new optional field, or a new optional method or family, whose absence means what it meant before. The adapter protocol counts such additions as minors of its version (2.N): one a manifest can show, such as a method a slot gains, raises the minor, and a host reads every minor up to its own ([Versioning](adapter-protocol.md#versioning)).
+- **An addition a reader can ignore keeps the version.** A new optional field, or a new optional method or family, whose absence means what it meant before. The adapter protocol counts such additions as minors of its version (2.N): each names what hosts speak, such as a method a host may call. A module states a minor only for a host behaviour it relies on, never for a method it offers, and a host reads every minor up to its own ([Versioning](adapter-protocol.md#versioning)).
 - **A change in meaning bumps it.** A field removed or renamed, a field whose meaning changed, a required field added, an answer reshaped.
 - **A break lands as a conditional, never a fork.** The writer sends the new version; a reader that reads both branches on the version at the point of difference. Never a second reader, a second host interface or a second engine.
 - **An unsupported version is refused at the boundary, loudly.** The refusal names the contract, the version it was handed and the versions it reads. It is never read as though it were the current version.

@@ -23,8 +23,8 @@ pub trait Module {
 /// The manifest's frame every kind shares: the protocol version and the minor
 /// of it the module uses, the kind, the module's name, the triggers it
 /// supports, what traversal it offers and the methods it implements.
-/// `declarations` follow (and may replace `runtimeCapabilities`); a declared
-/// `protocolMinor` raises the minor its methods use, never lowers it.
+/// `declarations` follow (and may replace `runtimeCapabilities`); the minor is
+/// the declared `protocolMinor`, else 0: the methods it offers never raise it.
 pub(crate) fn manifest_frame(kind: &str, name: &str, supported_triggers: &[String], methods: &[String], declarations: &Obj) -> Js {
     let mut manifest = Obj::new();
     manifest.insert("protocolVersion".into(), Js::Num(2.into()));
@@ -37,11 +37,7 @@ pub(crate) fn manifest_frame(kind: &str, name: &str, supported_triggers: &[Strin
     for (key, value) in declarations {
         manifest.insert(key.clone(), value.clone());
     }
-    let declared = match declarations.get("protocolMinor") {
-        Some(Js::Num(n)) => n.as_u64().unwrap_or(0),
-        _ => 0,
-    };
-    let minor = module_wire::envelope::protocol_minor_of(&Js::Obj(manifest.clone())).max(declared);
+    let minor = module_wire::envelope::protocol_minor_of(&Js::Obj(manifest.clone()));
     manifest.insert("protocolMinor".into(), Js::Num(minor.into()));
     Js::Obj(manifest)
 }
@@ -54,4 +50,18 @@ fn no_traversal() -> Js {
     capabilities.insert("traversal".into(), Js::Obj(traversal));
     capabilities.insert("resources".into(), Js::Bool(false));
     Js::Obj(capabilities)
+}
+
+#[cfg(test)]
+mod stated_minor_tests {
+    use super::*;
+
+    #[test]
+    fn a_module_states_the_minor_its_author_declares_never_what_it_offers() {
+        let methods: Vec<String> = ["listEntryPoints", "refreshEventSubscription", "movements.watch", "work.enqueueIfAbsent"].map(String::from).to_vec();
+        let minor = |declarations: Obj| manifest_frame("adapter", "acme", &[], &methods, &declarations).get("protocolMinor").map(Js::to_json);
+        assert_eq!(minor(Obj::new()).as_deref(), Some("0"));
+        let declared: Obj = [("protocolMinor".to_string(), Js::Num(3.into()))].into_iter().collect();
+        assert_eq!(minor(declared).as_deref(), Some("3"));
+    }
 }

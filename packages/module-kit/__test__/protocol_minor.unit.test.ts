@@ -1,6 +1,6 @@
-// A module's manifest states the minor of adapter protocol 2 it uses: the
-// highest among the features it lists, raised (never lowered) by the
-// definition's own `protocolMinor` for a host feature the manifest cannot show.
+// A module's manifest states the minor of adapter protocol 2 it needs its host
+// to speak: the definition's own `protocolMinor`, else 0. The methods it
+// offers never raise it, so an older host still reads it.
 
 import { Readable } from 'node:stream';
 
@@ -61,8 +61,9 @@ test('a module using no later feature states 2.0', async () => {
   expect(await manifestOf(echo())).toMatchObject({ protocolVersion: 2, protocolMinor: 0 });
 });
 
-test("the definition's protocolMinor raises the stated minor", async () => {
+test("the definition's protocolMinor is the stated minor", async () => {
   expect(await manifestOf(echo(1))).toMatchObject({ protocolMinor: 1 });
+  expect(await manifestOf(echo(3))).toMatchObject({ protocolMinor: 3 });
 });
 
 test('an adapter served from its instance states the minor its methods use', () => {
@@ -73,4 +74,14 @@ test('an adapter served from its instance states the minor its methods use', () 
     webhookEventTypeId: undefined,
   };
   expect(adapterManifestResult(adapter as never, ['manifest', 'describe'])).toMatchObject({ protocolVersion: 2, protocolMinor: 0 });
+});
+
+test('an adapter offering a newer method (refreshEventSubscription, 2.4) still states 2.0', () => {
+  const adapter = {
+    adapterType: 'acme',
+    supportedTriggers: ['webhook'],
+    runtimeCapabilities: () => ({ traversal: { incoming: false, edgeProperties: false }, resources: false }),
+    webhookEventTypeId: undefined,
+  };
+  expect(adapterManifestResult(adapter as never, ['manifest', 'ensureEventSubscription', 'refreshEventSubscription'])).toMatchObject({ protocolMinor: 0 });
 });

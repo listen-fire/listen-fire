@@ -46,7 +46,9 @@ impl Refusal {
 /// `slots/wire.ts` `WireSlotManifest`).
 pub fn manifest(name: &str, slot: &str, methods: &[&str]) -> Js {
     let listed = Js::Arr(methods.iter().map(|m| Js::str(*m)).collect());
-    let minor = module_wire::envelope::protocol_minor_of(&Js::from(obj! { "methods" => listed.clone() }));
+    // A slot module lf serves needs nothing of its host beyond 2.0: the
+    // methods it offers never raise its minor.
+    let minor = 0;
     Js::from(obj! {
         "protocolVersion" => Js::Num(2.into()),
         "protocolMinor" => Js::Num(minor.into()),

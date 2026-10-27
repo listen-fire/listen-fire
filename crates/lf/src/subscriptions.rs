@@ -432,6 +432,11 @@ async fn reconcile_one(session: &Session, webhook: &Webhook) -> Result<Option<(S
     if let Some(expires) = expires.and_then(ms_of) {
         schedule_refresh(session, running, &Refreshing { credential: &credential.name, key: &webhook.key }, Some(refresh_due_ms(session.now_ms(), expires)))?;
     }
+    // Another webhook than the one held (its events or its door changed):
+    // its payload feed starts at its beginning, not at the old one's cursor.
+    if registered.id.as_deref() != Some(id.as_str()) {
+        session.store.save_inbound_checkpoint(&subscription_id(&credential.name, &webhook.key), &Js::Null).map_err(|e| e.to_string())?;
+    }
     Ok(Some((format!("registered webhook {id} for {events} at {callback}"), true)))
 }
 
@@ -483,6 +488,12 @@ fn schedule_refresh(session: &Session, running: &RunningExternal, webhook: &Refr
     session.store.enqueue(REFRESH_WORK_KIND, &key, &payload, due.as_deref(), None).map_err(|e| e.to_string())?;
     crate::wake::queued(REFRESH_WORK_KIND, due.as_deref());
     Ok(())
+}
+
+/// The id a webhook's deliveries (receipts, pull cursor) are kept under: its
+/// credential, then `/<key>` for a scoped one, as its door names it.
+fn subscription_id(credential: &str, key: &str) -> String {
+    if key.is_empty() { credential.to_string() } else { format!("{credential}/{key}") }
 }
 
 fn refresh_row_of(external: &str, webhook: &Refreshing<'_>) -> (String, Js) {
@@ -579,7 +590,7 @@ async fn refresh_one(session: &Session, external: &str, webhook: &Refreshing<'_>
                 return retry(format!("{label}: webhook {id} lapsed and was registered anew as {new_id}, which could not be kept — {message}"));
             }
             // The new webhook's payload feed starts at its beginning.
-            let subscription = if webhook.key.is_empty() { webhook.credential.to_string() } else { format!("{}/{}", webhook.credential, webhook.key) };
+            let subscription = subscription_id(webhook.credential, webhook.key);
             let mut line = format!("{label}: webhook {id} lapsed at {}; registered webhook {new_id} for {} at {url}", iso_of(expires), registered.events.join(","));
             if let Err(e) = session.store.save_inbound_checkpoint(&subscription, &Js::Null) {
                 line.push_str(&format!(" (its pull cursor was not reset: {e})"));
@@ -880,6 +891,23 @@ mod tests {
             let refreshed = project.session().await;
             assert_eq!(follow_refresh(&refreshed, &before, &refreshed.file_set()).await, ["inbox (shelf red): no listen needs its webhook any more; removed webhook wh-1"]);
             assert_eq!(project.registrations.lock().unwrap().len(), 3, "the blue webhook was left as it is");
+        });
+    }
+
+    #[test]
+    fn a_webhook_replaced_for_other_events_reads_its_feed_from_the_start() {
+        let held = format!("{SCOPED_SECRETS}  webhook_subscriptions: '{{\"red\":{{\"scope\":{{\"shelf\":\"red\"}},\"id\":\"wh-0\",\"events\":[\"note.updated\"],\"url\":\"https://lf.example/api/public/webhook-sync/inbox/inbox_a/red\",\"secret\":\"secret-red\"}}}}'\n");
+        let project = InboxProject::scoped(&on_shelves(&["red"]), &held, "publicUrl: https://lf.example\n");
+        in_local(async {
+            let session = project.session().await;
+            let cursor = Js::parse(br#"{"cursor":7}"#).unwrap();
+            session.store.save_inbound_checkpoint("inbox_a/red", &cursor).unwrap();
+            assert_eq!(reconcile(&session).await, ["inbox (shelf red): registered webhook wh-1 for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a/red"]);
+            assert_eq!(session.store.inbound_checkpoint("inbox_a/red").unwrap(), None, "the new webhook's feed is read from its start");
+            // The same webhook left as it is keeps its cursor.
+            session.store.save_inbound_checkpoint("inbox_a/red", &cursor).unwrap();
+            assert_eq!(reconcile(&session).await, ["inbox (shelf red): webhook wh-1 is registered for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a/red"]);
+            assert_eq!(session.store.inbound_checkpoint("inbox_a/red").unwrap(), Some(cursor));
         });
     }
 

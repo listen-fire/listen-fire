@@ -108,26 +108,29 @@ Every module kind — adapter, plugin, and every core slot (store, models, judge
 The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
 
 - **The major is a change in meaning.** A request carries `"protocolVersion": "2"` (the major alone). A server built on the reference kit answers any other with the error code `protocol_version`.
-- **The minor is an addition.** Each feature added within version 2 that a manifest can show (a method a slot gains) raises the minor by one. An older server never lists it, and an older host never calls it.
+- **A minor is what hosts speak.** Each addition within version 2 that hosts speak (a method a host may call, a host behaviour) raises the minor hosts speak by one. An older server never lists the method, and an older host never calls it.
 - **Your `manifest` answer carries both, as numbers:** `"protocolVersion": 2` and `"protocolMinor": N`.
-  - The minor is computed, not the kit's latest: the highest minor among the features your manifest lists ([Minors of version 2](#minors-of-version-2)). The reference kits stamp it. An author may raise it for a host feature the manifest cannot show (`protocolMinor` on the module's definition), never lower it.
-  - So rebuilding a module with a newer kit never makes an older host refuse it.
+  - The minor you state is what you need your host to speak: 0 unless your module relies on a host behaviour of a later minor, which its author declares (`protocolMinor` on the module's definition). The reference kits stamp it.
+  - A method you offer never raises it, whatever minor introduced the method: a host calls only the methods it speaks, so an older host leaves a newer one alone and your module works there as before.
+  - So rebuilding a module with a newer kit, or offering a newer method, never makes an older host refuse it.
   - An absent `protocolMinor` is unstated, read as 2.0. Every module published up to 0.12.5 states none.
 - **What a host refuses, by name.** `lf` and the engine speak 2.0 to 2.4. They refuse a manifest that states another major (newer or older), or a minor above 4. `lf` reads a core module's manifest before any other method it asks of it: as `lf drain` opens, for the modules it starts then, and at the first call otherwise. The text names the module, its package and version when the host finds them, what it speaks and what the host speaks, and what to upgrade. Installing probes your server the same way: Listen-Fire calls `manifest` with the secret and refuses it outside that range.
-- **The floor stays 2.0 within the major.** A host reads every minor from 2.0 up, so a module that predates a feature still loads. A feature a module must have is checked by name where it is needed, and the refusal names its minor: `lf serve` refuses a movements module that does not answer `movements.watch` (adapter protocol 2.1), and arming a polled listen fails on a store module that does not answer `work.enqueueIfAbsent` (adapter protocol 2.2).
+- **The floor stays 2.0 within the major.** A host reads every minor from 2.0 up, so a module that predates a feature still loads. A method a host needs a module to have is checked by name where it is needed, never by the stated minor, and the refusal names the minor that introduced it: `lf serve` refuses a movements module that does not answer `movements.watch` (adapter protocol 2.1), and arming a polled listen fails on a store module that does not answer `work.enqueueIfAbsent` (adapter protocol 2.2).
 - **An addition that names nothing in the manifest keeps the minor.** A new optional field or declaration is learned from the manifest, never from the version: a method is called only when it is listed in `methods`, and a declaration (`credentials`, `inbound`, `poll`, `periodic`) is acted on only when it is present. An older server sends neither and is unchanged; an older host ignores both.
 - An install made before its secret is supplied stores the version the manifest file claims. The probe runs when the secret is linked.
 - **Where it is held.** `MANIFEST_PROTOCOL_VERSION`, `PROTOCOL_VERSION` and `PROTOCOL_MINOR` (`packages/engine-contracts/protocol.ts`) hold the major and the minor, and a test holds them equal to the lines at the top of this page. The table of minors is `PROTOCOL_MINORS` there, and its Rust twin (`crates/module-wire`) is test-held equal to it. [The contracts index](README.md) lists what each release supports.
 
 ### Minors of version 2
 
-| minor | what a manifest using it lists | since |
+| minor | what hosts speaking it add | since |
 |---|---|---|
 | 2.0 | everything before minors were counted | 0.12.0 |
 | 2.1 | a `<slot>.watch` method ([Watching for changes](#watching-for-changes-slotwatch)) | lf 0.12.2 |
 | 2.2 | `work.enqueueIfAbsent` ([the store slot](store-slot.md)) | lf 0.12.5 |
-| 2.3 | nothing. A rule for sources and a host behaviour, not a feature a module states: a polled source labels each poll event with its kind, `eventType`, and a host delivers an unlabelled one to the listen that polled it, with a notice ([Polled sources](#polled-sources-and-periodic-tasks)). An older host routes a labelled event correctly, so no module needs to state 2.3 | lf 0.12.8 |
+| 2.3 | a host behaviour: a polled source labels each poll event with its kind, `eventType`, and a host delivers an unlabelled one to the listen that polled it, with a notice ([Polled sources](#polled-sources-and-periodic-tasks)). An older host routes a labelled event correctly, so no module needs to state 2.3 | lf 0.12.8 |
 | 2.4 | `refreshEventSubscription` ([Event subscriptions that expire](#event-subscriptions-that-expire)) | lf 0.12.10 |
+
+A module offering one of these methods states no minor for it. Until 0.12.9 the kits stamped a module with the minor of the methods it offered; from 0.12.10 they stamp only what its author declares.
 
 The first `lf` that reads `protocolMinor` is 0.12.6. An `lf` up to 0.12.5 ignores the field and loads the module as before.
 
@@ -1110,7 +1113,7 @@ page = web.fetchUrl(u)
   [browser](browser-slot.md), each over [the transport](#transport). A core
   module answers `manifest` with `{ protocolVersion: 2, protocolMinor, name,
   kind: "core", slot, methods }` (`protocolMinor` as [Versioning](#versioning)
-  says: optional, computed from `methods`).
+  says: optional, what the module needs its host to speak, never raised by its `methods`).
   Without `kind`, a module is an adapter, or a plugin package when it
   declares `plugins`.
 - **Settings.** Construction arguments the install supplies (an Airtable
@@ -1507,7 +1510,7 @@ from `apps/cli`.
 
 ## Changes
 
-- **Adapter protocol 2.4: subscriptions that expire** (within version 2; 2026-10-27; lf 0.12.10). `ensureEventSubscription` may answer `expiresAt`, and a new optional method, `refreshEventSubscription`, extends a subscription before it lapses ([Event subscriptions that expire](#event-subscriptions-that-expire)). A manifest listing the method states 2.4, which an `lf` up to 0.12.9 refuses by name; a module that does not list it is unchanged. `@lf/airtable` lists it.
+- **Adapter protocol 2.4: subscriptions that expire** (within version 2; 2026-10-27; lf 0.12.10). `ensureEventSubscription` may answer `expiresAt`, and a new optional method, `refreshEventSubscription`, extends a subscription before it lapses ([Event subscriptions that expire](#event-subscriptions-that-expire)). Offering the method states no minor: an `lf` up to 0.12.9 reads a module that lists it and never calls it, so its webhooks lapse there as before. `@lf/airtable` lists it. With this change the kits stop raising a module's stated minor for the methods it offers (`.watch`, `work.enqueueIfAbsent`, `refreshEventSubscription`): it is what the author declares, else 0.
 - **`narrows` on a listen config key** (within version 2, no bump; 2026-10-27; additive). A `listenConfig` entry may say which hop of an event's address it is ([The manifest and installing](#the-manifest-and-installing)). `lf` narrows a signature's event to the node the address walks to, as the hosted product does. An older host ignores the field; a module that declares none is unchanged.
 - **Adapter protocol 2.3: labelled poll events** (within version 2; 2026-10-26; lf 0.12.8). A polled source labels each event it returns with its kind (`eventType`), as a pushed event is labelled, and the host narrows a listen's `events` by it either way ([Polled sources](#polled-sources-and-periodic-tasks)). It is a rule for sources and a host behaviour, not a feature a module states: an older host routes a labelled event correctly, so a module labelling its events states no higher minor for it. An unlabelled poll event still reaches the listen that polled it, with a notice. The bundled polled modules (Gmail, Evertrace, Dealroom, Granola) label theirs.
 - **`poll`'s `movementId`** (within version 2, no bump; 2026-10-26). `lf` sends the listen's pipeline, `listen:<file>:<movement>`, rather than the movement's bare name, so a source can tell two same-named movements in different files apart.

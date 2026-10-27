@@ -1,19 +1,31 @@
-// Adapter protocol 2.N: a module states the minor it uses, computed from what
-// its manifest lists, and a host refuses one outside the range it speaks by
-// name, in either direction. An unstated minor (every module published up to
-// 0.12.5) is 2.0 and always passes.
-import { PROTOCOL_MINOR, PROTOCOL_MINORS, WireManifestResult, protocolMinorOf, protocolStanding } from '../index';
+// Adapter protocol 2.N: a module states the minor it needs its host to speak
+// (what its author declares, else 0; the methods it offers never raise it),
+// and a host refuses one outside the range it speaks by name, in either
+// direction. An unstated minor (every module published up to 0.12.5) is 2.0
+// and always passes.
+import { PROTOCOL_MINOR, PROTOCOL_MINORS, WireManifestResult, minorIntroducing, protocolMinorOf, protocolStanding } from '../index';
 import { WireSlotManifest } from '../slots';
 
 const LF = { name: 'lf', version: '0.12.6' };
 const SLACK = { name: 'slack', package: { name: '@listen-fire/slack', version: '0.13.1' }, host: LF };
 
-describe('the minor a manifest uses', () => {
-  it('is the highest minor among the features it lists', () => {
+describe('the minor a manifest states', () => {
+  it('is never raised by a method it offers: an older host simply never calls it', () => {
     expect(protocolMinorOf({ methods: ['manifest', 'describe'] })).toBe(0);
-    expect(protocolMinorOf({ methods: ['manifest', 'movements.list', 'movements.watch'] })).toBe(1);
-    expect(protocolMinorOf({ methods: ['manifest', 'store.watch', 'work.enqueueIfAbsent'] })).toBe(2);
-    expect(protocolMinorOf({ methods: ['manifest', 'ensureEventSubscription', 'refreshEventSubscription'] })).toBe(4);
+    expect(protocolMinorOf({ methods: ['manifest', 'movements.list', 'movements.watch'] })).toBe(0);
+    expect(protocolMinorOf({ methods: ['manifest', 'store.watch', 'work.enqueueIfAbsent'] })).toBe(0);
+    expect(protocolMinorOf({ methods: ['manifest', 'ensureEventSubscription', 'refreshEventSubscription'] })).toBe(0);
+  });
+
+  it('is what its author declares, for a host behaviour it relies on', () => {
+    expect(protocolMinorOf({ methods: ['manifest', 'refreshEventSubscription'], protocolMinor: 3 })).toBe(3);
+  });
+
+  it('names the minor whose hosts first speak a method, for a host that needs it', () => {
+    expect(minorIntroducing('movements.watch')).toBe(1);
+    expect(minorIntroducing('work.enqueueIfAbsent')).toBe(2);
+    expect(minorIntroducing('refreshEventSubscription')).toBe(4);
+    expect(minorIntroducing('describe')).toBeUndefined();
   });
 
   it('ends at the minor this release speaks', () => {

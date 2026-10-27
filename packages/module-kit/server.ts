@@ -281,6 +281,7 @@ export async function readProtocolRequest(
 export function adapterManifestResult(adapter: Adapter, methods: readonly string[]): Record<string, unknown> {
   return {
     protocolVersion: MANIFEST_PROTOCOL_VERSION,
+    // Offered methods need nothing of the host (`protocolMinorOf`).
     protocolMinor: protocolMinorOf({ methods }),
     adapterType: adapter.adapterType,
     supportedTriggers: adapter.supportedTriggers,

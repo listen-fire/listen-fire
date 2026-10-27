@@ -246,9 +246,9 @@ interface Common {
    *  A request made any other way (the global `fetch`, another client) would
    *  go uncounted. Default: the host counts each call once. */
   hostLimits?: true;
-  /** The minor of adapter protocol 2 it needs, for a host feature its
-   *  manifest cannot show. The manifest states the higher of this and the
-   *  minor its own methods use (`protocolMinorOf`); it never lowers that. */
+  /** The minor of adapter protocol 2 it needs its host to speak, for a host
+   *  behaviour it relies on. The manifest states it; absent, it states 0. The
+   *  methods it offers never raise it (`protocolMinorOf`). */
   protocolMinor?: number;
 }
 
