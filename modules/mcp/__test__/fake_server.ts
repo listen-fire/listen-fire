@@ -19,8 +19,26 @@ import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, typ
 
 export type FakeKind = 'issues' | 'crm';
 
+/** A fault the next matching requests meet before the server reads them. */
+export interface Fault {
+  /** The JSON-RPC method it hits (any if absent) and, for tools/call, the tool. */
+  rpc?: string;
+  tool?: string;
+  /** How many matching requests it hits; default 1. */
+  times?: number;
+  /** Answer this status (with the Retry-After, if given)... */
+  status?: number;
+  retryAfter?: string;
+  /** ...or drop the connection without an answer. */
+  drop?: true;
+}
+
 export interface FakeMcpServer {
   url: string;
+  /** Faults to inject, in order; the first that matches a request hits it. */
+  faults: Fault[];
+  /** Every JSON-RPC request that reached the server, as `method` or `tools/call:<tool>`, faulted ones included. */
+  requests: string[];
   /** Every tool call, with the arguments it was sent. */
   calls: Array<{ tool: string; args: Record<string, unknown> }>;
   /** Every request's Authorization (or the configured header's) value. */
@@ -132,6 +150,8 @@ export async function startFakeMcpServer(options: FakeMcpOptions): Promise<FakeM
   let http: HttpServer | undefined;
   const fake: FakeMcpServer = {
     url: '',
+    faults: [],
+    requests: [],
     calls: [],
     presented: [],
     issues: ['Login page is slow'],
@@ -151,6 +171,17 @@ export async function startFakeMcpServer(options: FakeMcpOptions): Promise<FakeM
         res.end(JSON.stringify({ error: 'invalid_token' }));
         return;
       }
+      const body = await bodyOf(req);
+      const rpc = typeof body === 'object' && body !== null ? (body as { method?: string; params?: { name?: string } }) : {};
+      fake.requests.push(rpc.method === 'tools/call' ? `tools/call:${rpc.params?.name}` : String(rpc.method));
+      const fault = fake.faults.find((f) => (f.rpc === undefined || f.rpc === rpc.method) && (f.tool === undefined || f.tool === rpc.params?.name));
+      if (fault !== undefined) {
+        fault.times = (fault.times ?? 1) - 1;
+        if (fault.times <= 0) fake.faults.splice(fake.faults.indexOf(fault), 1);
+        if (fault.drop) return void req.socket.destroy();
+        res.writeHead(fault.status ?? 500, { 'content-type': 'text/plain', ...(fault.retryAfter === undefined ? {} : { 'retry-after': fault.retryAfter }) });
+        return void res.end(`fault ${fault.status ?? 500}`);
+      }
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       const server = mcpServer(fake, options.kind);
       res.on('close', () => {
@@ -158,7 +189,7 @@ export async function startFakeMcpServer(options: FakeMcpOptions): Promise<FakeM
         void server.close();
       });
       await server.connect(transport);
-      await transport.handleRequest(req, res, await bodyOf(req));
+      await transport.handleRequest(req, res, body);
     })().catch((error: unknown) => {
       if (!res.headersSent) res.writeHead(500);
       res.end(String(error));

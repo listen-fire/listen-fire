@@ -5,9 +5,11 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { CredentialFields } from 'module-kit';
+import { RetriesExhaustedError, networkErrorCode, retryingFetch, type AttemptFailure, type CredentialFields, type RetryFetchOptions, type RetryNote } from 'module-kit';
 
-import type { McpCallResult, McpTool } from './tools';
+import { isReadOnly, type McpCallResult, type McpTool } from './tools';
+
+export type { RetryNote };
 
 /** The two credentials a connection may name. */
 export const OAUTH_CREDENTIAL = 'mcp';
@@ -37,13 +39,38 @@ export function addressOf(credential: string, fields: CredentialFields): ServerA
   return { url, header: { name: 'authorization', value: `Bearer ${token}` } };
 }
 
+/** Errors that say the request never reached the server: the only network
+ *  failures after which a tool that changes things may be sent again. A reset
+ *  or a closed socket may come after the server acted. */
+const NEVER_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN']);
+
+function isToolCall(init: RequestInit | undefined): boolean {
+  if (typeof init?.body !== 'string') return false;
+  try {
+    const message: unknown = JSON.parse(init.body);
+    return typeof message === 'object' && message !== null && Reflect.get(message, 'method') === 'tools/call';
+  } catch {
+    return false;
+  }
+}
+
+/** Whether a failed request may be sent again. initialize, tools/list and a
+ *  read-only tool's call can be, whatever failed; a call to a tool that
+ *  changes things only when the server clearly did not act on it: it asked
+ *  for the wait (429, 503 with a Retry-After) or was never reached. */
+function mayResend(failure: AttemptFailure, init: RequestInit | undefined, readOnlyCall: boolean): boolean {
+  if (readOnlyCall || !isToolCall(init)) return true;
+  if (failure.kind === 'network') return NEVER_SENT.has(networkErrorCode(failure.error) ?? '');
+  return failure.status === 429 || (failure.status === 503 && failure.retryAfterMs !== undefined);
+}
+
 /** What a failed exchange with the server says, the server's own words kept. */
 function failure(address: ServerAddress, error: unknown): Error {
   if (error instanceof StreamableHTTPError && (error.code === 401 || error.code === 403)) {
     return new Error(`MCP server ${address.url} refused the credential (HTTP ${error.code}).`);
   }
   const message = error instanceof Error ? error.message : String(error);
-  return new Error(`MCP server ${address.url}: ${message}`);
+  return new Error(`MCP server ${address.url}: ${message}`, error instanceof RetriesExhaustedError ? { cause: error } : undefined);
 }
 
 /** The tools each server last listed, by server and sign-in: a describe lists
@@ -63,17 +90,31 @@ function keyOf(address: ServerAddress): string {
  * fetch belongs to the call, so a session kept past it would send later
  * calls' requests through a fetch whose call has ended.
  */
+export interface ConnectionOptions {
+  /** The retry policy's numbers (attempts, delays, budget); the defaults of `retryingFetch`. */
+  retry?: Pick<RetryFetchOptions, 'attempts' | 'baseDelayMs' | 'maxDelayMs' | 'budgetMs' | 'sleep' | 'now' | 'random'>;
+  /** Told before each retry's wait. */
+  onRetry?: (note: RetryNote) => void;
+}
+
 export class McpConnection {
   constructor(
     readonly address: ServerAddress,
     private readonly fetch: typeof globalThis.fetch,
+    private readonly options: ConnectionOptions = {},
   ) {}
 
-  private async session<T>(work: (client: Client) => Promise<T>): Promise<T> {
+  /** `readOnlyCall`: the one tool call this session makes (if any) is a
+   *  read-only tool's, so it may be sent again whatever failed. */
+  private async session<T>(work: (client: Client) => Promise<T>, readOnlyCall = false): Promise<T> {
     const client = new Client({ name: 'listen-fire', version: '1' });
     const transport = new StreamableHTTPClientTransport(new URL(this.address.url), {
       requestInit: { headers: { [this.address.header.name]: this.address.header.value } },
-      fetch: this.fetch,
+      fetch: retryingFetch(this.fetch, {
+        ...this.options.retry,
+        mayRetry: (failure, init) => mayResend(failure, init, readOnlyCall),
+        ...(this.options.onRetry === undefined ? {} : { onRetry: this.options.onRetry }),
+      }),
     });
     try {
       await client.connect(transport);
@@ -120,6 +161,8 @@ export class McpConnection {
 
   /** One call. A refused call (`isError`) is an answer, not a failure here. */
   async call(name: string, args: Record<string, unknown>): Promise<McpCallResult> {
-    return this.session((client) => client.callTool({ name, arguments: args }) as Promise<McpCallResult>);
+    // A tool not listed (yet) is taken to change things.
+    const tool = listed.get(keyOf(this.address))?.find((t) => t.name === name);
+    return this.session((client) => client.callTool({ name, arguments: args }) as Promise<McpCallResult>, tool !== undefined && isReadOnly(tool));
   }
 }

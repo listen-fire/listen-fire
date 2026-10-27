@@ -147,6 +147,37 @@ test('a call the server refuses fails the run with the server’s text', async (
   }
 });
 
+test('a flaky server: a 429 on a write and a 500 on a read are retried, and a run still completes', async () => {
+  const { issues, dir, close } = await twoServers();
+  try {
+    const check = await lfAsync(dir, 'check');
+    assert.equal(check.code, 0, check.out);
+    issues.faults.push({ rpc: 'tools/call', tool: 'create_issue', status: 429, retryAfter: '1' }, { rpc: 'tools/call', tool: 'search_issues', status: 500 });
+    const run = await lfAsync(dir, 'run', '--event', 'events/company_created.json');
+    assert.equal(run.code, 0, run.out);
+    // The write was sent once to the server's logic (the 429 never reached it); the read twice at the wire.
+    assert.equal(issues.calls.filter((c) => c.tool === 'create_issue').length, 1);
+    assert.equal(issues.requests.filter((r) => r === 'tools/call:create_issue').length, 2);
+    assert.equal(issues.requests.filter((r) => r === 'tools/call:search_issues').length, 2);
+  } finally {
+    await close();
+  }
+});
+
+test('a 500 on a tool that changes things fails the run without a second try', async () => {
+  const { issues, dir, close } = await twoServers();
+  try {
+    assert.equal((await lfAsync(dir, 'check')).code, 0);
+    issues.faults.push({ rpc: 'tools/call', tool: 'create_issue', status: 500 });
+    const run = await lfAsync(dir, 'run', '--event', 'events/company_created.json');
+    assert.equal(run.code, 1, run.out);
+    assert.match(run.out, /500/);
+    assert.equal(issues.requests.filter((r) => r === 'tools/call:create_issue').length, 1);
+  } finally {
+    await close();
+  }
+});
+
 test('lf check refuses a read that does not pin a required argument in its WHERE, and accepts the pinned form', async () => {
   const { issues, dir, close } = await twoServers();
   try {
