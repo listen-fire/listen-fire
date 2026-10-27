@@ -129,7 +129,9 @@ export const limiterContractCases: LimiterContractCase[] = [
     name: 'a throttle refuses its key until then, and no other key',
     async run(limiter) {
       const throttled = request([]);
-      const until = Date.now() + 400;
+      // Seconds, not milliseconds: over a module's wire the throttle and the
+      // acquire are two round trips, which have outlasted a 400 ms window.
+      const until = Date.now() + 3_000;
       await limiter.throttle({ key: throttled.key, until: new Date(until).toISOString() });
       assert.ok(refusedUntil(await limiter.acquire(throttled)) >= until - 1, 'refused until the throttle ends');
       permitOf(await limiter.acquire(request([])));
