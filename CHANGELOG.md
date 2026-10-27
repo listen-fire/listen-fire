@@ -20,6 +20,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.12.12] - 2026-10-27
+
+A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. It fixes `lf serve` never becoming ready with an MCP connection imported, a regression in 0.12.11.
+
 ### Fixed
 
 - `lf serve` and `lf serve --doors-only` become ready with an `@lf/mcp` connection imported (or any module that declares `hostLimits`). In 0.12.11 they printed nothing and never became ready: the module asked lf's limits door while lf described its connection at startup, and serve answered no request until that describe returned. Serve now answers the limits door from the moment it binds its port; every other request still waits until serve is ready. `lf run` and `lf drain` were not affected.
@@ -2393,7 +2397,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.11...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.12...HEAD
+[0.12.12]: https://github.com/listen-fire/listen-fire/compare/v0.12.11...v0.12.12
 [0.12.11]: https://github.com/listen-fire/listen-fire/compare/v0.12.10...v0.12.11
 [0.12.10]: https://github.com/listen-fire/listen-fire/compare/v0.12.9...v0.12.10
 [0.12.9]: https://github.com/listen-fire/listen-fire/compare/v0.12.8...v0.12.9
