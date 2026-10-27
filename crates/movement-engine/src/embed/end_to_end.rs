@@ -565,34 +565,66 @@ impl Modules for Answers {
     }
 }
 
-fn answered(source: &str, reply: PluginReply) -> (Outcome, World) {
+/// The trace a run appends, entry by entry.
+#[derive(Default)]
+struct Traced(Vec<Data>);
+
+impl Trace for Traced {
+    fn append(&mut self, entries: Vec<Data>) -> HostFuture<()> {
+        self.0.extend(entries);
+        ready(Ok(()))
+    }
+}
+
+fn answered(source: &str, reply: PluginReply) -> (Outcome, World, Traced) {
     assert_eq!(errors(source), vec![]);
-    let mut world = World::default();
-    let outcome = block_on(run(&mut Hosts::new().adapters(&mut world).modules(&mut Answers(reply)), &input(source))).unwrap();
-    (outcome, world)
+    let (mut world, mut traced) = (World::default(), Traced::default());
+    let outcome = block_on(run(&mut Hosts::new().adapters(&mut world).modules(&mut Answers(reply)).trace(&mut traced), &input(source))).unwrap();
+    (outcome, world, traced)
+}
+
+const WEIGHED: &str = "  p = weigh(monster.Name)\n  if (p >= 0.5) {\n    write game-[:notes]-> { Title: \"heavy\" }\n  }\n";
+
+fn warnings(traced: &Traced) -> Vec<String> {
+    traced.0.iter().filter(|e| e.get("kind").and_then(Data::as_text) == Some("warning")).filter_map(|e| e.get("message").and_then(Data::as_text).map(str::to_string)).collect()
 }
 
 #[test]
 fn a_plugin_s_plain_value_arrives_as_the_type_it_declares() {
-    let weighed = movement("import { weigh } from plugins\n", "  p = weigh(monster.Name)\n  if (p >= 0.5) {\n    write game-[:notes]-> { Title: \"heavy\" }\n  }\n");
+    let weighed = movement("import { weigh } from plugins\n", WEIGHED);
     let number = PluginReply { data: Some(Data::map([("value", Data::Number(0.8))])), ..PluginReply::default() };
-    let (outcome, world) = answered(&weighed, number);
+    let (outcome, world, traced) = answered(&weighed, number);
     finished(Ok(outcome));
     assert_eq!(titles(&world), vec!["heavy"]);
+    assert_eq!(warnings(&traced), Vec::<String>::new());
 
     let tagged = movement("import { tags } from plugins\n", "  t = tags(monster.Name)\n  write game-[:notes]-> { Title: coalesce(first(t), \"none\") }\n");
     let list = PluginReply { data: Some(Data::map([("value", Data::List(vec![Data::text("scaly"), Data::text("old")]))])), ..PluginReply::default() };
-    let (outcome, world) = answered(&tagged, list);
+    let (outcome, world, _) = answered(&tagged, list);
     finished(Ok(outcome));
     assert_eq!(titles(&world), vec!["scaly"]);
 }
 
 #[test]
-fn a_plugin_s_value_that_does_not_fit_its_declared_type_fails_the_call_by_name() {
-    let weighed = movement("import { weigh } from plugins\n", "  p = weigh(monster.Name)\n  if (p >= 0.5) {\n    write game-[:notes]-> { Title: \"heavy\" }\n  }\n");
-    let as_text = PluginReply { text: Some("0.8".into()), ..PluginReply::default() };
-    let Outcome::Failed(failure) = answered(&weighed, as_text).0 else { panic!("the run went on") };
-    assert!(failure.message.contains("'weigh'") && failure.message.contains("declares it hands back number"), "{}", failure.message);
+fn a_number_answered_as_its_text_is_read_as_the_number_under_0_12() {
+    let weighed = movement("import { weigh } from plugins\n", WEIGHED);
+    let as_text = PluginReply { text: Some(" 0.8".into()), ..PluginReply::default() };
+    let (outcome, world, traced) = answered(&weighed, as_text);
+    finished(Ok(outcome));
+    assert_eq!(titles(&world), vec!["heavy"]);
+    assert_eq!(warnings(&traced), Vec::<String>::new());
+}
+
+#[test]
+fn a_value_outside_its_declared_type_runs_on_as_text_and_is_noted_under_0_12() {
+    let weighed = movement("import { weigh } from plugins\n", "  p = weigh(monster.Name)\n  write game-[:notes]-> { Title: \"${p}\" }\n");
+    let as_text = PluginReply { text: Some("heavy-ish".into()), ..PluginReply::default() };
+    let (outcome, world, traced) = answered(&weighed, as_text);
+    finished(Ok(outcome));
+    assert_eq!(titles(&world), vec!["heavy-ish"]);
+    let noted = warnings(&traced);
+    assert_eq!(noted.len(), 1, "{:?}", traced.0);
+    assert!(noted[0].contains("'weigh' declares it hands back number, and it handed back string"), "{}", noted[0]);
 }
 
 /// A model that refuses on its budget ends the run as the JSON route's

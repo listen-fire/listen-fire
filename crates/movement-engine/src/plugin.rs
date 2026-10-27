@@ -5,7 +5,8 @@
 //! before the host is asked when the plugin is priced and the cap is spent,
 //! and traced; what comes back is bound as the plugin's DECLARED output
 //! (`PluginSpec.output`): a `value` output its value, in the type it
-//! declares (a value of another type fails the call by the plugin's name), a
+//! declares (a text spelling a declared number or boolean read as one; any
+//! other misfit bound as before and noted on the run), a
 //! `record` output a node of the fields it attached (its text under `text`),
 //! a `records` output one such node per record it found.
 
@@ -156,13 +157,23 @@ impl Run<'_> {
         let started = self.clock_now().await.map_err(Stop::Thrown)?;
         let result = self.invoke(&registered, &config, &extracted_context).await.map_err(Stop::Thrown)?;
         let duration = self.clock_now().await.map_err(Stop::Thrown)? - started;
+        let mut misfit_note: Option<String> = None;
         let (binding, handed_back) = match declared {
             None => (Binding::Value(ValueBinding { value: Js::Undefined, trail: None, many: false }), false),
             Some(PluginOutput::Value { type_ }) => {
-                let value = declared_value(&result, &type_);
-                if !matches!(value, Js::Null) && !fits(&value, &type_) {
-                    return Err(Stop::Thrown(misfit(written, &type_, &value)));
-                }
+                let answered = declared_value(&result, &type_);
+                let value = if matches!(answered, Js::Null) || fits(&answered, &type_) {
+                    answered
+                } else if let Some(converted) = text_as(&answered, &type_) {
+                    converted
+                } else {
+                    // The 0.12 releases bound a misfit as they always had (a
+                    // file's `data.value`, else the text), so a saved movement
+                    // runs as written; the run notes it. Failing the call is
+                    // a tightened rule, for the next compatibility key.
+                    misfit_note = Some(misfit(written, &type_, &answered));
+                    if matches!(type_, FieldType::Scalar(Scalar::File)) { answered } else { result.text().map_or(Js::Null, Js::str) }
+                };
                 let handed_back = !matches!(value, Js::Null);
                 (Binding::Value(ValueBinding { value, trail: Some(trail), many: false }), handed_back)
             }
@@ -208,6 +219,9 @@ impl Run<'_> {
         result.trace_into(&mut entry);
         entry.set("returned", Js::str(if handed_back { "value" } else { "absent" }));
         self.trace(TraceEntry::Plugin(entry));
+        if let Some(message) = misfit_note {
+            self.trace(TraceEntry::Warning { code: "MOVENG_PLUGIN_WARNING".into(), message });
+        }
         for message in &result.warnings {
             self.trace(TraceEntry::Warning { code: "MOVENG_PLUGIN_WARNING".into(), message: message.clone() });
         }
@@ -269,15 +283,29 @@ fn fits(value: &Js, declared: &FieldType) -> bool {
     }
 }
 
-/// The call failed by the plugin's name: what it handed back is not what it
-/// declares, and the movement was checked against the declaration.
-fn misfit(written: &str, declared: &FieldType, value: &Js) -> Failure {
+/// A text answered for a number or a boolean, read as one where it spells
+/// one (`"0.8"`, `"true"`): what a plugin answering only text could say.
+fn text_as(value: &Js, declared: &FieldType) -> Option<Js> {
+    let Js::String(text) = value else { return None };
+    let text = text.as_str();
+    let text = text.trim();
+    match declared {
+        FieldType::Scalar(Scalar::Number) => text.parse::<f64>().ok().filter(|n| n.is_finite()).map(Js::Number),
+        FieldType::Scalar(Scalar::Boolean) => match text {
+            "true" => Some(Js::Bool(true)),
+            "false" => Some(Js::Bool(false)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// What the run notes of a plugin whose value is not of the type it
+/// declares, naming the plugin.
+fn misfit(written: &str, declared: &FieldType, value: &Js) -> String {
     let declared = movement_parser::catalog::helpers::describe_field_type(declared).unwrap_or_else(|_| "another type".into());
     let printed: String = crate::js::json_stringify(value, 0).chars().take(80).collect();
-    Failure::engine(
-        "MOVENG_RUNTIME",
-        format!("'{written}' declares it hands back {declared}, and it handed back {} ({printed}): the plugin answered outside its declaration", value.type_of()),
-    )
+    format!("'{written}' declares it hands back {declared}, and it handed back {} ({printed}); the value is bound as the 0.12 releases bind it", value.type_of())
 }
 
 #[cfg(test)]
