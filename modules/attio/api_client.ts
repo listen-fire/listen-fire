@@ -10,6 +10,7 @@ import {
   KNOWN_ATTIO_ATTRIBUTE_TYPES,
 } from './attributes';
 import { reportAttioFieldRejected } from './field_rejections';
+import { RetriesExhaustedError, retryingFetch, type RetryFetchOptions } from 'module-kit';
 
 /** Attio's own page cap for attribute listings is generous; this is well under
  *  it and keeps a wide object to a couple of round trips. */
@@ -201,7 +202,6 @@ async function parseJsonResponse(response: Response, serviceName: string): Promi
 const RETRY_LIMIT = 5;
 const INITIAL_DELAY = 1 * SECOND;
 const TIME_MULTIPLE = 5;
-const RATE_LIMIT_DELAY = 30 * SECOND;
 
 const attioCredsParser = z.object({
   accessToken: z.string(),
@@ -525,7 +525,13 @@ class AttioAPIClient implements AttioConfigurer {
 
   private workspaceSlugCache: string | null = null;
 
-  constructor(creds: z.infer<typeof attioCredsParser>) {
+  // Transient failures (429, 5xx, network) are retried here, so a 429 waits as
+  // long as Attio's Retry-After asked and no longer. The backOff below only
+  // re-sends a body Attio rejected as invalid.
+  private readonly transportFetch: typeof fetch;
+
+  constructor(creds: z.infer<typeof attioCredsParser>, options: { retry?: RetryFetchOptions } = {}) {
+    this.transportFetch = retryingFetch((input, init) => fetch(input, init), options.retry);
     this.accessToken = creds.accessToken;
     this.baseUrl = creds.baseUrl ?? 'https://api.attio.com';
   }
@@ -587,7 +593,7 @@ class AttioAPIClient implements AttioConfigurer {
     return this.rateLimitQueue.enqueue(async () => {
       return backOff(
         async (): Promise<T> => {
-          const response = await fetch(url, {
+          const response = await this.transportFetch(url, {
             method,
             headers,
             body: currentBody ? JSON.stringify(currentBody) : formData,
@@ -631,13 +637,9 @@ class AttioAPIClient implements AttioConfigurer {
           startingDelay: INITIAL_DELAY,
           timeMultiple: TIME_MULTIPLE, // 0s, 1s, 4s, 16s, 64s
           retry: async (e, attempt) => {
-            if (e instanceof Error && e.message.includes('429')) {
-              // rate limit
-              // extra delay to lower the odds of hitting the rate limit again
-              logger.info(
-                `Hit rate limit, waiting an additional ${RATE_LIMIT_DELAY / SECOND} seconds`,
-              );
-              await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_DELAY));
+            if (e instanceof RetriesExhaustedError) {
+              // The transport already retried and waited as Attio asked.
+              return false;
             } else if (e instanceof Error && e.message.includes('401')) {
               // invalid api key
               return false;
@@ -656,7 +658,7 @@ class AttioAPIClient implements AttioConfigurer {
               }
             }
 
-            // A 4xx (other than 429, handled above) is a DETERMINISTIC client
+            // A 4xx is a DETERMINISTIC client
             // error — the identical request will fail identically, so retrying
             // it just burns the backoff budget (a webhook validation 400 was
             // costing ~85s of pointless retries before surfacing). Only
@@ -666,7 +668,7 @@ class AttioAPIClient implements AttioConfigurer {
             const statusMatch = e instanceof Error ? e.message.match(/Attio Error: (\d{3})/) : null;
             if (statusMatch) {
               const status = Number(statusMatch[1]);
-              if (status >= 400 && status < 500 && status !== 429) return false;
+              if (status >= 400 && status < 500) return false;
             }
 
             if (attempt < RETRY_LIMIT) {
