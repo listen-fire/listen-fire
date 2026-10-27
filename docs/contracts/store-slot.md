@@ -109,7 +109,7 @@ The first request is always `store.open`. The others are the run host's store fa
 The rows:
 
 ```ts
-type RunRow = { id: string; file: string; movement: string; status: string; startedAt: string; input: string; outcome: string | null; deliveryId: string | null };
+type RunRow = { id: string; file: string; movement: string; status: string; startedAt: string; finishedAt?: string | null; input: string; outcome: string | null; deliveryId: string | null };
 type DeliveryRow = {
   id: string; subscriptionId: string; externalId: string | null; receivedAt: string;
   source: 'webhook' | 'hook' | 'emit' | 'cli'; inline: boolean; replayOf: string | null;
@@ -123,12 +123,13 @@ type CallbackRow = {
 };
 ```
 
-A run's `outcome` is the JSON object lf settled it with: `{ writes, returned? }`, or `{ error }` for a failed run. `returned` is what the movement returned, as lf records it (at most 64 KiB of JSON, a file by its reference). A store hands the outcome back as it was given (its members may be kept in columns of their own, as `@lf/postgres-store` keeps them). A store that drops `returned` still works with lf: its runs show no returned value.
+A run's `outcome` is the JSON object lf settled it with: `{ writes, writeRecords?, returned? }`, or `{ error }` for a failed run. `writeRecords` lists the run's writes (`lf runs show`); a store that drops it still works with lf, and its runs list no writes. `finishedAt` is when the run settled completed or failed; a store that answers none leaves `lf runs` showing `null`. `returned` is what the movement returned, as lf records it (at most 64 KiB of JSON, a file by its reference). A store hands the outcome back as it was given (its members may be kept in columns of their own, as `@lf/postgres-store` keeps them). A store that drops `returned` still works with lf: its runs show no returned value.
 
 `lf --contract-store <state.db|postgres://…>` serves these methods over lf's own stores, as a store module on a Unix socket. A module may forward to it, as the test module does (`apps/cli/src/__test__/store_module/forward.mjs`). `runs.status` and `runs.complete` are the contract suite's helpers and are not called by lf.
 
 ## Changes
 
+- **2026-10-27** (within adapter protocol 2): a run row may answer `finishedAt`, and a run's settled `outcome` carries `writeRecords`. Both are optional: a store that answers neither still works, and its runs show no finish time and list no writes.
 - **2026-10-22** (within adapter protocol 2; lf 0.12.0-rc.9 requires it): a delivery's receipt. `inbound.keepDelivery` takes the `delivery` (the events it produced) and answers `{ kept }`, `false` for a redelivery under the same `externalId` at the same subscription, which writes nothing. Every store module must take the new shape: lf treats a `null` answer as malformed. `inbound.deliveries`, `inbound.delivery` and `inbound.sweepDeliveries` list, read and forget kept deliveries, and `inbound.forgetDeliveryId` clears a kept delivery's `externalId`. `runs.start` and `events.startRun` take `deliveryId`, and a run row answers it. `runs.status`, `runs.complete` and `records.closeRun`, served all along, are now in the table.
 
 - **2026-10-20** (within adapter protocol 2): a run's settled `outcome` may carry `returned`, what its movement returned. No method changed: a store that hands the outcome back as it was given keeps it.

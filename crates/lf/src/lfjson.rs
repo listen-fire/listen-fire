@@ -141,6 +141,7 @@ fn row_summary(run: &RunRow) -> Obj {
         "movement" => Js::str(&run.movement),
         "status" => Js::str(&run.status),
         "startedAt" => Js::str(&run.started_at),
+        "finishedAt" => opt(run.finished_at.as_deref()),
     }
 }
 
@@ -163,6 +164,7 @@ pub fn run_show_doc(store: &dyn RunHostStore, run_id: &str) -> Result<Js, String
     shown.insert("languageVersion".into(), facts.get("languageVersion").cloned().unwrap_or(Js::Null));
     shown.insert("event".into(), facts.get("event").cloned().unwrap_or(Js::Null));
     shown.insert("writes".into(), outcome.get("writes").cloned().unwrap_or(Js::Null));
+    shown.insert("writeRecords".into(), outcome.get("writeRecords").cloned().unwrap_or(Js::Null));
     shown.insert("error".into(), outcome.get("error").cloned().unwrap_or(Js::Null));
     shown.insert("returned".into(), outcome.get("returned").cloned().unwrap_or(Js::Null));
     shown.insert("outcome".into(), outcome);

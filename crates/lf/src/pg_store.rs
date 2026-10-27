@@ -161,7 +161,8 @@ fn callback_of(row: &Row) -> Result<CallbackRecord> {
 const RUN_COLUMNS: &str = concat!(
     "id::text, trigger_payload->>'file', trigger_payload->>'movement', status, ",
     iso!("started_at"),
-    ", trigger_payload->>'facts', nodes_written::int8, failure_reason, returned::text, delivery_id::text"
+    ", trigger_payload->>'facts', nodes_written::int8, failure_reason, returned::text, delivery_id::text, ",
+    iso!("coalesce(completed_at, failed_at)")
 );
 
 fn run_of(row: &Row) -> Result<RunRow> {
@@ -187,6 +188,7 @@ fn run_of(row: &Row) -> Result<RunRow> {
         started_at: row.get(4),
         outcome: Some(outcome.to_json()),
         delivery_id: row.get(9),
+        finished_at: row.get(10),
         status,
         id,
     })

@@ -55,13 +55,13 @@ When credentials are missing: `{ "error", "missingCredentials": [diagnostic…] 
 
 ## `lf runs --json`
 
-`{ "runs": [{ "runId", "file", "movement", "status", "startedAt" }] }`, most recent first (50).
+`{ "runs": [{ "runId", "file", "movement", "status", "startedAt", "finishedAt" }] }`, most recent first (50). `finishedAt` is when the run completed or failed, `null` while it runs or is parked.
 
 ## `lf runs show <run-id> --json`
 
 ```json
-{ "run": { "runId", "file", "movement", "status", "startedAt", "deliveryId", "firedAt", "languageVersion",
-  "event": {…}, "writes": 0, "error": null, "returned": { "value": … }, "outcome": {…},
+{ "run": { "runId", "file", "movement", "status", "startedAt", "finishedAt", "deliveryId", "firedAt", "languageVersion",
+  "event": {…}, "writes": 0, "writeRecords": [ … ], "error": null, "returned": { "value": … }, "outcome": {…},
   "costMicrodollars": 0.0, "traceEntries": 0, "trace": [ … ],
   "parked": [{ "address": "…", "reason": "timer", "wakeAt": "…" }],
   "cancelRequested": false, "cancelReason": null } }
@@ -70,6 +70,8 @@ When credentials are missing: `{ "error", "missingCredentials": [diagnostic…] 
 - `deliveryId`: the delivery the run came from (`lf deliveries show`), or `null` for a run started by `lf run`, a cron tick, a poll or a callback.
 - `languageVersion`: the version string the run is pinned to (a store from before pins were versions, holding the integer 5, is read as this release's version).
 - `event`: the event that fired the run. `outcome`: what the store recorded when the run last settled.
+- `writes`: how many writes the run made, over every entry into it (a resume's and a callback continuation's included).
+- `writeRecords`: each write, in order, as `{ "adapter", "recordType", "recordId", "action", "committed", "values" }` (`link` too, for a link: `{ "edgeName", "toRecordType", "toExternalId" }`). `action` is `create`, `update`, `attach` (an update that changed nothing), `noop`, `delete`, `link`, `unlink` or `match`; `committed` is false for a rehearsed write. `values` are the fields the write set, a file by its reference; over 2 KiB of JSON they are `{ "truncated": true, "bytes", "preview" }`. The first 100 writes are listed. `null` for a run settled before lf kept them, and a store that keeps the outcome in columns of its own (`@lf/postgres-store`) lists none.
 - `returned`: what the movement returned, as under `lf run` above. Every run records it, however it was started.
 - `trace` is `null` when the run's store cannot hand entries back (a store module over its wire); `traceEntries` is always the count.
 - `parked`: what the run waits on now; empty unless `status` is `parked`.
