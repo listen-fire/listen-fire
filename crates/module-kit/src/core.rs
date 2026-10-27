@@ -104,6 +104,31 @@ pub struct RunRow {
     /// The delivery whose event started it (`runs.start`'s `deliveryId`).
     #[serde(default)]
     pub delivery_id: Option<String>,
+    /// The latest attempt's number, from 1; left out by a store that keeps no
+    /// attempts (one attempt).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<i64>,
+    /// The earlier attempts (`runs.rerun` keeps them), oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<RunAttempt>,
+}
+
+/// One earlier attempt of a run, as `runs.rerun` kept it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunAttempt {
+    pub attempt: i64,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    /// The JSON object the attempt settled with.
+    pub outcome: Js,
+}
+
+/// `runs.rerun`'s answer: the attempt the run now runs as.
+#[derive(Debug, Clone, Serialize)]
+pub struct Rerun {
+    pub attempt: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -346,6 +371,9 @@ slot! {
         /// `status`: `completed`, `parked`, `running` or `failed`; an ending
         /// revokes the run's live callbacks.
         "runs.settle" => fn settle_run(RunsSettle { run_id: String, status: String, outcome: Js, at: String }) -> ();
+        /// A failed run's next attempt, as one write fenced like `parks.commit`:
+        /// `None`, and nothing written, when the run's status is not `failed`.
+        "runs.rerun" => fn rerun_run(RunsRerun { run_id: String, input: String, at: String, fence: String }) -> Option<Rerun>;
         "runs.markParked" => fn mark_parked(RunsMarkParked { run_id: String }) -> ();
         "runs.get" => fn run(RunsGet { run_id: String }) -> Option<RunRow>;
         /// Most recent first.
