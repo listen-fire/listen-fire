@@ -123,8 +123,8 @@ const STAGE_TO_REJECTED = updated({
 
 const LISTEN = { base: BASE, table: CANDIDATES, events: ['record.updated'], field: 'Stage', becomes: 'Interview' };
 
-describe('createWebhook asks Airtable for previous cell values', () => {
-  it('sends includes.includePreviousCellValues beside the filters', async () => {
+describe('createWebhook asks Airtable for previous cell values and every current one', () => {
+  it('sends includes.includePreviousCellValues and includeCellValuesInFieldIds beside the filters', async () => {
     const sent: unknown[] = [];
     const client = new AirtableAPIClient({
       tokens: { accessToken: async () => 'token', refresh: async () => undefined },
@@ -140,7 +140,7 @@ describe('createWebhook asks Airtable for previous cell values', () => {
         specification: {
           options: {
             filters: { dataTypes: ['tableData'], changeTypes: ['update'], recordChangeScope: CANDIDATES },
-            includes: { includePreviousCellValues: true },
+            includes: { includePreviousCellValues: true, includeCellValuesInFieldIds: 'all' },
           },
         },
       },
@@ -192,6 +192,82 @@ describe('a record change names its changed fields and their previous values', (
     expect((created.payload as AirtableEventData)['Changed Fields']).toEqual(['Name', 'Stage']);
     expect((created.payload as AirtableEventData).previous).toEqual({});
     expect((deleted.payload as AirtableEventData)['Changed Fields']).toEqual([]);
+  });
+});
+
+describe('a change carries the whole row when the webhook asked for every cell', () => {
+  const adapter = () => new AirtableAdapter({ tenant: 'team-air-fieldchange-row', client: noClient, files: testFiles });
+  const STAGE_WITH_ROW = {
+    timestamp: '2026-10-27T09:00:00.000Z',
+    changedTablesById: {
+      [CANDIDATES]: {
+        changedRecordsById: {
+          recADA: {
+            current: { cellValuesByFieldId: { fldStage: choice('selI', 'Interview') } },
+            previous: { cellValuesByFieldId: { fldStage: choice('selA', 'Applied') } },
+            unchanged: { cellValuesByFieldId: { fldName: 'Ada Lovelace', fldSkills: [choice('selT', 'TypeScript')] } },
+          },
+        },
+      },
+    },
+  };
+
+  it('the row holds every field, and what changed is still only what changed', () => {
+    const [event] = eventsOf(STAGE_WITH_ROW);
+    const data = event.payload as AirtableEventData;
+    expect(data.fields).toEqual({ Name: 'Ada Lovelace', Skills: ['TypeScript'], Stage: 'Interview' });
+    expect(data['Changed Fields']).toEqual(['Stage']);
+    expect(event.changedFields).toEqual(['Stage']);
+    expect(data.previous).toEqual({ Stage: 'Applied' });
+  });
+
+  it('the `Record` edge reads the fields the change did not touch, and the row\'s id as `Id`', async () => {
+    const [event] = eventsOf(STAGE_WITH_ROW);
+    const position = makeUnstablePosition({ adapterType: 'airtable', recordType: 'Record Change', data: event.payload });
+    const [landed] = await adapter().getRelated({ position, fieldId: 'Record', direction: 'outgoing' });
+    const read = (fieldId: string) => adapter().getFieldValue({ position: landed.position, fieldId });
+    expect(await read('Name')).toBe('Ada Lovelace');
+    expect(await read('Stage')).toBe('Interview');
+    expect(await read('Id')).toBe('recADA');
+  });
+
+  it('a table describes its rows\' id as a read-only `Id`, unless the table has a field of that name', async () => {
+    const { client } = fakeHiring([]);
+    const hiring = new AirtableAdapter({ tenant: `team-air-id-${Math.random()}`, client: async () => client, files: testFiles });
+    const described = await hiring.describe('Candidates');
+    expect(described?.fields.find((f) => f.displayName === 'Id')).toMatchObject({ kind: 'string', writable: false });
+  });
+});
+
+describe('a webhook registered before it asked for every cell is registered anew', () => {
+  function subscriptions(specification: Record<string, unknown>) {
+    const calls: string[] = [];
+    const client = {
+      listWebhooks: async ({ baseId }: { baseId: string }) => (calls.push(`list ${baseId}`), [{ id: 'achOLD', specification }]),
+      deleteWebhook: async ({ webhookId }: { webhookId: string }) => void calls.push(`delete ${webhookId}`),
+      createWebhook: async () => (calls.push('create'), { webhookId: 'achNEW', macSecretBase64: 'c2VjcmV0' }),
+    };
+    const adapter = new AirtableAdapter({ tenant: `team-air-respec-${Math.random()}`, client: async () => client as unknown as AirtableAPIClient, files: testFiles });
+    const ensure = () =>
+      adapter.ensureEventSubscription({
+        events: ['record.updated'],
+        callbackUrl: 'https://example.test/hook',
+        scope: { base: BASE, table: CANDIDATES },
+        current: { externalId: 'achOLD', events: ['record.updated'] },
+      });
+    return { calls, ensure };
+  }
+
+  it('one that asked only for previous values is replaced', async () => {
+    const { calls, ensure } = subscriptions({ options: { filters: {}, includes: { includePreviousCellValues: true } } });
+    expect(await ensure()).toEqual({ externalId: 'achNEW', secret: 'c2VjcmV0' });
+    expect(calls).toEqual([`list ${BASE}`, 'delete achOLD', 'create']);
+  });
+
+  it('one that asked for every cell is kept', async () => {
+    const { calls, ensure } = subscriptions({ options: { filters: {}, includes: { includePreviousCellValues: true, includeCellValuesInFieldIds: 'all' } } });
+    expect(await ensure()).toBeUndefined();
+    expect(calls).toEqual([`list ${BASE}`]);
   });
 });
 

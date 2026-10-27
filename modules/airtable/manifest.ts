@@ -98,8 +98,9 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
     'A listen can narrow to one field (`field: "Stage"`) and to the value it ' +
     'changes to (`becomes: "Interview"`); the movement\'s signature must then name ' +
     'the table (`<hiring-[:`Record Change` WHERE `table` == "tbl…"]->>`), which also ' +
-    'types the row\'s fields on `Record` and `Old Record`. The event names its changed fields ' +
-    'and its `Old Record` edge holds their previous values. ' +
+    'types the row\'s fields on `Record` and `Old Record`. The event names its changed fields; ' +
+    'its `Record` edge is the whole row as the change left it (its id is `Id`), and its ' +
+    '`Old Record` edge holds the changed fields\' previous values. ' +
     'Do not promise cross-table or whole-base capture from one listener — ' +
     'each watched table is its own listen.',
 };

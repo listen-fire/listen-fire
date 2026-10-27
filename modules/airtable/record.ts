@@ -40,6 +40,7 @@ import {
   LINK_FIELD_TYPE,
   NUMERIC_FIELD_TYPES,
   READ_ONLY_FIELD_TYPES,
+  RECORD_ID_FIELD,
   type AirtableTableId,
   type AirtableFieldMeta,
   type AirtableTableMeta,
@@ -509,6 +510,10 @@ export async function getFieldValue(input: {
     );
   }
   const data = positionData(input.get.position) as Record<string, unknown> | null | undefined;
+  // A row's id is its identity, not one of its cells: read off the position.
+  if (input.get.fieldId === RECORD_ID_FIELD && (data == null || !(RECORD_ID_FIELD in data))) {
+    return positionRecordId(input.get.position) ?? null;
+  }
   if (!data) return null;
   return data[input.get.fieldId] ?? null;
 }

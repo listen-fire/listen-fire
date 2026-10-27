@@ -40,7 +40,7 @@ import type {
 } from 'movement-engine/public/catalog';
 
 import { logger } from 'movement-engine/public/log';
-import { AirtableAPIClient } from './api_client';
+import { AirtableAPIClient, asksForWebhookIncludes } from './api_client';
 import { AIRTABLE_MANIFEST } from './manifest';
 import {
   META_RECORD_TYPE,
@@ -848,8 +848,8 @@ export class AirtableAdapter extends BaseAdapter {
       const unchanged =
         input.current.events.length === input.events.length &&
         input.current.events.every((e) => input.events.includes(e));
-      if (unchanged) return undefined;
-      // Recreate with the new selection — drop the superseded webhook first so
+      if (unchanged && (await this.asksForEveryInclude(client, scope.base, input.current.externalId))) return undefined;
+      // Recreate with the new selection, or the new specification — drop the superseded webhook first so
       // we don't leak registrations (best-effort; a stale one expires anyway).
       await client.deleteWebhook({ baseId: scope.base, webhookId: input.current.externalId }).catch((err) => {
         logger.warn('[AirtableAdapter] failed to delete superseded webhook before recreate', {
@@ -872,6 +872,21 @@ export class AirtableAdapter extends BaseAdapter {
       secret: created.macSecretBase64,
       ...(created.expirationTime !== undefined ? { expiresAt: created.expirationTime } : {}),
     };
+  }
+
+  /** Whether the held webhook was created asking for what a webhook asks for
+   *  now (`WEBHOOK_INCLUDES`); one this cannot find or read is taken as it
+   *  is, since a lapsed or vanished webhook is the host's to register anew. */
+  private async asksForEveryInclude(client: AirtableAPIClient, baseId: string, webhookId: string): Promise<boolean> {
+    try {
+      const held = (await client.listWebhooks({ baseId })).find((w) => w.id === webhookId);
+      return held === undefined || asksForWebhookIncludes(held.specification);
+    } catch (err) {
+      logger.warn('[AirtableAdapter] could not read the webhook\'s specification; keeping it', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return true;
+    }
   }
 
   async removeEventSubscription(input: RemoveEventSubscriptionInput): Promise<void> {

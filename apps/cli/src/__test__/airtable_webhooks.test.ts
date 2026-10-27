@@ -80,6 +80,7 @@ const HIRING = [
       primaryFieldId: 'fldCName',
       fields: [
         { id: 'fldCName', name: 'Name', type: 'singleLineText' },
+        { id: 'fldCEmail', name: 'Email', type: 'email' },
         { id: 'fldStage', name: 'Stage', type: 'singleSelect', options: { choices: [{ id: 'selApplied', name: 'Applied' }, { id: 'selInterview', name: 'Interview' }, { id: 'selRejected', name: 'Rejected' }] } },
       ],
     },
@@ -98,6 +99,7 @@ const HIRING = [
       ],
     },
   },
+  { entity_type: 'record:appHIRE01:tblCAND01', id: 'recADA', data: { id: 'recADA', fields: { Name: 'Ada Lovelace', Email: 'ada@example.com', Stage: 'Applied' } } },
   {
     entity_type: 'table:appHIRE01',
     id: 'tblROLE01',
@@ -300,6 +302,38 @@ test('a listen that names no base is scoped to the base its connection is positi
       assert.deepEqual(registered.map((w) => [w.baseId, w.recordChangeScope]), [['appHIRE01', 'tblCAND01']]);
       await fake.json('/airtable/control/deliver', { baseId: 'appHIRE01', changeType: 'update', tableId: 'tblCAND01', recordId: 'recADA', fields: { Stage: 'Interview' }, previous: { Stage: 'Applied' } });
       await serving.waitFor(/^run \S+ hiring:schedule_interview completed$/);
+    } finally {
+      await serving.stop();
+    }
+  } finally {
+    await fake.stop();
+  }
+});
+
+// A change carries only the cells it touched; the webhook asks Airtable for
+// every other cell too, so the event's `Record` is the whole row, and its id
+// reads as `Id`.
+test('a change to Stage reads the row\'s Name, Email and Id from its Record', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    const whole = HEAD.replace('Candidate: change.record', 'Candidate: change-[:Record]->.Name')
+      .replace('From: change-[:`Old Record`]->.Stage', 'From: change-[:Record]->.Email')
+      .replace('Changed: Text.join(change.`Changed Fields`, ", ")', 'Changed: change-[:Record]->.Id');
+    writeFileSync(join(dir, 'movements/hiring.mvt'), whole);
+    const checked = lfSync(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+    const port = await freePort();
+    appendFileSync(join(dir, 'lf.yaml'), `publicUrl: http://127.0.0.1:${port}\n`);
+    const serving = await served(dir, ['--port', String(port)]);
+    try {
+      await serving.waitFor(/^airtable \(base appHIRE01, table tblCAND01\): registered webhook ach\d+ for /);
+      await fake.json('/airtable/control/deliver', { baseId: 'appHIRE01', changeType: 'update', tableId: 'tblCAND01', recordId: 'recADA', fields: { Stage: 'Interview' }, previous: { Stage: 'Applied' } });
+      await serving.waitFor(/^run \S+ hiring:schedule_interview completed$/);
+      const written = JSON.stringify(await fake.json('/airtable/v0/appHIRE01/tblINTV01'));
+      assert.match(written, /"fldICand":"Ada Lovelace"/, 'it read the Name the change did not touch');
+      assert.match(written, /"fldIFrom":"ada@example.com"/, 'it read the Email the change did not touch');
+      assert.match(written, /"fldIChanged":"recADA"/, 'it read the row\'s id');
     } finally {
       await serving.stop();
     }

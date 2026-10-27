@@ -17,6 +17,7 @@ import type { AirtableAPIClient } from './api_client';
 import {
   LINK_FIELD_TYPE,
   READ_ONLY_FIELD_TYPES,
+  RECORD_ID_FIELD,
   type AirtableTableId,
   type AirtableFieldMeta,
   type AirtableTableMeta,
@@ -632,6 +633,17 @@ async function tableDescriptor(input: {
   const baseName = baseNames.get(input.baseId) ?? input.baseId;
 
   const fields = table.fields.map(fieldDescriptor);
+  if (!table.fields.some((f) => f.name === RECORD_ID_FIELD)) {
+    fields.push({
+      fieldId: RECORD_ID_FIELD,
+      displayName: RECORD_ID_FIELD,
+      kind: 'string',
+      cardinality: 'one',
+      writable: false,
+      required: false,
+      description: "Airtable's id for the row (rec…).",
+    });
+  }
   const references = table.fields
     .map((field) => referenceDescriptor({ field, baseName, tables }))
     .filter((r): r is SchemaReferenceDescriptor => r !== null);

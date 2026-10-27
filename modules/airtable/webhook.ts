@@ -119,8 +119,9 @@ export interface AirtableEventData {
   tableName: string;
   /** The base's id (`app…`) — what the listen config names. */
   base: string;
-  /** The changed cells' new values, keyed by natural field name. Empty for a
-   *  delete. */
+  /** The row's cells as the change left them, keyed by natural field name:
+   *  every field, as the webhook asks Airtable for them all; only the changed
+   *  ones from a webhook registered before it asked. Empty for a delete. */
   fields: Record<string, unknown>;
   /** The changed cells' previous values, keyed by natural field name. Empty
    *  for a create, a delete, or a webhook registered before previous values
@@ -238,21 +239,26 @@ export function eventsFromPayload(input: {
     const at = { baseId, tableId, tableName, occurredAt };
 
     for (const [recordId, change] of Object.entries(changes.createdRecordsById ?? {})) {
-      events.push(makeEvent({ ...at, recordId, event: 'record.created', fields: nameKeyed(change.cellValuesByFieldId), previous: {} }));
+      const fields = nameKeyed(change.cellValuesByFieldId);
+      events.push(makeEvent({ ...at, recordId, event: 'record.created', fields, changed: Object.keys(fields), previous: {} }));
     }
     for (const [recordId, change] of Object.entries(changes.changedRecordsById ?? {})) {
+      // `current` holds the changed cells; `unchanged` every other one, when
+      // the webhook asked for them (a webhook made before that sends none).
+      const current = nameKeyed(change.current?.cellValuesByFieldId);
       events.push(
         makeEvent({
           ...at,
           recordId,
           event: 'record.updated',
-          fields: nameKeyed(change.current?.cellValuesByFieldId),
+          fields: { ...nameKeyed(change.unchanged?.cellValuesByFieldId), ...current },
+          changed: Object.keys(current),
           previous: nameKeyed(change.previous?.cellValuesByFieldId),
         }),
       );
     }
     for (const recordId of changes.destroyedRecordIds ?? []) {
-      events.push(makeEvent({ ...at, recordId, event: 'record.deleted', fields: {}, previous: {} }));
+      events.push(makeEvent({ ...at, recordId, event: 'record.deleted', fields: {}, changed: [], previous: {} }));
     }
   }
 
@@ -275,12 +281,12 @@ function makeEvent(input: {
   recordId: string;
   event: AirtableSubscribableEvent;
   fields: Record<string, unknown>;
+  /** The fields the change touched, by natural name. */
+  changed: string[];
   previous: Record<string, unknown>;
   occurredAt?: string;
 }): DiscriminableEvent {
-  // The `current` cells ARE the changed ones (the webhook asks for no
-  // unchanged values), so their names are what changed.
-  const changed = Object.keys(input.fields);
+  const changed = input.changed;
   const data: AirtableEventData = {
     action: input.event,
     record: input.recordId,

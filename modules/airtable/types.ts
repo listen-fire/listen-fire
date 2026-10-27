@@ -99,3 +99,8 @@ export interface AirtableTableMeta {
 /** The meta types a walk lands on: a base, and a table within it. */
 export const BASE_META_TYPE = 'Base';
 export const TABLE_META_TYPE = 'Table';
+
+/** The read-only field a row's Airtable id reads as (`rec…`), as other
+ *  modules publish theirs. A table with a field of its own by this name keeps
+ *  it, and the id is then reached as the row it is (or as `change.record`). */
+export const RECORD_ID_FIELD = 'Id';
