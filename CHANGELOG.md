@@ -20,46 +20,49 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
-### Added
+## [0.12.10] - 2026-10-27
 
-- The checker compares every value handed to a plugin with the type the plugin declares for it: `fetchUrl(5)` or a text where a list is taken is a `MOV_CALL_ARG_TYPE` warning, where it passed silently. It stays a warning for every 0.12 pin, so a saved movement still checks; refusing it waits for the next compatibility key (0.13). A text written in place against a plugin's option set is judged as that option, and one naming no option is refused (`MOV_ENUM_UNKNOWN_VALUE`), as it already is for a function's parameter.
-- A plugin's plain value reaches the program in the type it declares (a number as a number, a list as a list), answered under `data.value`; before, every value but a file arrived as text. A text that spells a declared number or boolean (`"0.8"`, `"true"`) is read as one. Any other value outside the declared type is bound as before (its text) and the run notes it, naming the plugin; failing the call waits for the next compatibility key (0.13).
-- `lf credential add` for a plugin module prints the plugin import (``import { `@lf/jev` as jev } from plugins``) instead of an adapter's `connect … using …`.
-- A describe may mark a field `pinned: true`, meaning a read of that type must pin it in its `WHERE` with `==`. `lf check` refuses a read that does not (`MOV_HOP_PIN_REQUIRED`), naming the fields and the form to write. `@lf/mcp` marks each read-only tool's required arguments this way, so a read that leaves one out is refused at check rather than failing the run. No other module sets the flag, so nothing else that checked before changes.
-- An embedder's host is one call: `createEmbeddedHost` (a new package, `@listen-fire/embed`) connects each tenant's modules over its own credentials, checks and keeps its movements, routes an event from the embedder's product to every listen that hears it (by connection, as `lf` routes), and steps on runs that sleep at each `tick`. The embedder writes its module and its events; the example SaaS's host integration went from 512 lines to 238. The routing rule it applies is public in the engine (`listenerHearsDelivery`, `public/inbound`), held to `lf`'s by a shared table of cases. See docs/embedding.md.
-- A listen can declare what its events are, as a node the program declares: `listen to stripe { payload: <Payment> } fire \`Payment Failed\``. This works for a listen-config key of the new catalog format `type`, such as `@lf/webhook`'s `payload`.
-  - The movement's parameter is checked against that node field by field, as a parameter is against its argument. Reads in the body are checked against it too.
-  - A plain value, a value type, or a name that is not a declared node is refused by name. So is a parameter typed as the connection's own event.
-  - The change is additive: it accepts only text this release refused before, so every 0.12 pin reads as it did.
-  - Under `lf`, an event whose payload does not fit the node fires nothing. A delivery that fits none of the listens it would reach is answered 400 `payload_mismatch`, naming the fields.
-  - The engine holds such a parameter as the event's payload, so `e.amount` reads the body. Before, a parameter typed by a declared node failed every run (`MOVENG_UNSUPPORTED`).
-- New module `@lf/webhook`: incoming webhooks from any sender (Stripe, a form service, your own app).
-  - Each connection is one URL at `/hooks/webhook/<credential>`. `lf serve` now prints each webhook connection's URL when it starts.
-  - The connection's credential holds the signing scheme and secret: `stripe`, `hmac-sha256` or `none`. An unsigned, mis-signed or stale delivery is answered 401 and runs nothing.
-  - A retried delivery runs once. `stripe` uses the body's `id`; the other schemes use the credential's optional `idField` (a top-level body field), and without it nothing is deduplicated. The repeat is answered 200 `duplicate: true`.
-- A module's `checkInbound` answer in TypeScript can carry `deliveryId` (`InboundCheck`, and `accepted(events, { deliveryId })` in module-kit). The wire and lf already took it.
-- Under `lf`, a listen's `payload:` node imported from another movement file now gates deliveries, as the checker already typed it. Before, such a listen took any body.
-- An Airtable listen can name a field and the value it becomes (`field: "Stage", becomes: "Interview"`) and then fires only on that change, not on any other edit of the table. The `Record Change` event names its changed fields (`Changed Fields`) and reaches the row as it was through `Old Record`, typed like the table. Airtable webhooks created from now on ask for previous cell values and for every field's current value, so `Record` is the whole row (a change to `Stage` reads `Name` too), and a row's id reads as `Id`. A webhook created before this is registered anew the next time its listens are reconciled (`lf serve` starting), since its specification asks for less. `lf` applies the `field`/`becomes` gate as the engine does.
-- Under `lf`, a movement whose signature names its event's table (`<hiring-[:`Record Change` WHERE `table` == "tbl…"]->>`) reads that table's fields on the event's `Record` and `Old Record` edges, typed (a select as its enum), as on the platform: `lf` walks the module's `edgesFrom` to the table the address names and checks a listen's table id against the base's (`MOV_ENUM_UNKNOWN_VALUE`, with a did-you-mean). A module marks the listen config keys that form the address with `narrows`. A signature that names no table reads the event as before.
-- Adapter protocol 2.4: a source whose event subscriptions lapse says when (`expiresAt` from `ensureEventSubscription`) and lists `refreshEventSubscription`. `lf` keeps each webhook's expiry and refreshes it a day before it lapses, as a `refresh_subscription` work row: `lf serve` runs it on its tick, and `lf drain` takes it where a deployment scales to zero (its wake slot told when it is due). A failed refresh is printed once and tried again in 15 minutes; a webhook that lapsed while nothing ran is registered anew, its pull cursor started over. `@lf/airtable` lists the method, so a quiet table's webhook no longer lapses after 7 days. Offering the method asks nothing of an older `lf`, which reads `@lf/airtable` as before and never refreshes.
-- A module's stated adapter protocol minor is what it needs its host to speak: what its author declares, else 0. The kits no longer raise it for the methods a module offers (`<slot>.watch`, `work.enqueueIfAbsent`, `refreshEventSubscription`), since a host calls only the methods it speaks. Before, a store module offering `work.enqueueIfAbsent` stated 2.2 and a movements module offering `movements.watch` stated 2.1, so an older host refused them for nothing; they now state 2.0. A host that needs a method still checks for it by name. A webhook `lf serve` replaces because its events or door changed now reads its new payload feed from the start.
-- `lf` types a connection that names a position (`connect airtable using acme { base: "CRM" }`): the module's `positionArgs` reach the catalog and every call, so an Airtable base's tables are checked (unknown fields, and with `@listen-fire/airtable`, select choices) under `lf` as they are on the platform. A module declares them in its manifest (`positionArgs`).
-- `lf` polls a listen on a positioned connection (`connect notes using X { space: "alpha" }`) in that position, under a checkpoint of its own, so two connections that differ only in position are two sources. A listen on a connection with no position keeps its checkpoint. A webhook's scope takes what the listen leaves out from its connection's position, as on the platform: `listen to hiring { table: "tbl…" }` on `connect airtable using X { base: "Hiring" }` registers its webhook for base Hiring (its name resolved to its id by walking the connection) and hears its deliveries; before, it had no webhook ("names no 'base' for its webhook").
-- The checker refuses an unknown value in two more places it already refused one elsewhere (`MOV_ENUM_UNKNOWN_VALUE`): each text literal of a list written into a list of enum (`Tags: ["Hot", "Cold"]` into an Airtable multiple select), and a comparison in a WHERE written inside a parameter's type (`<crm-[c:Companies WHERE c.Stage == "Lost"]->>`). A program that checks today and fails now was writing or matching a value the field cannot hold.
+A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Two new checks are warnings for every 0.12 pin and wait for the next compatibility key (0.13) to refuse: a value handed to a plugin outside the type it declares, and a plugin value outside its declared type at run time. The new refusals reject only text no released program could run correctly, or keys new in this release.
 
-### Changed
+### Connectors
 
-- `lf check` refuses an Airtable listen's `field` or `becomes` when the fired movement's signature names no table, since nothing then describes the row and the field cannot be checked (`MOV_LISTEN_BAD_CONFIG`). The message shows the signature that names it: `function f(change: <hiring-[e:`Record Change` WHERE e.table == "tbl…"]->>)`. The event is narrowed only by the address the signature names, as on the platform; the listen's own `table` does not type it. A read of an unaddressed event's row (`MOV_UNDESCRIBED_POSITION`) now suggests the same form. Both keys are new in this unreleased cycle, so no released program changes.
+- **Airtable fires on one field's change.** A listen can name a field and the value it becomes (`field: "Stage", becomes: "Interview"`), and then fires only on that change. The fired movement's signature names the table (`function f(change: <hiring-[e:`Record Change` WHERE e.table == "tbl…"]->>)`); then the event's `Record` and `Old Record` are the table's rows, typed like the table (a select as its enum), and `Changed Fields` names what changed. `lf check` refuses `field` or `becomes` when the signature names no table, since nothing then describes the row (`MOV_LISTEN_BAD_CONFIG`, showing the signature to write). Webhooks created from now on ask for previous values and every field's current value, so `Record` is the whole row and a row's id reads as `Id`; an older webhook is registered anew the next time `lf serve` starts.
+- **A new module, `@lf/webhook`,** takes incoming webhooks from any sender (Stripe, a form service, your own app). Each connection is one URL, `/hooks/webhook/<credential>`, which `lf serve` prints when it starts. The credential holds the signing scheme (`stripe`, `hmac-sha256` or `none`) and its secret; an unsigned, mis-signed or stale delivery is answered 401, and a retried one runs once. A listen can declare what its events are as a node the program declares (`listen to stripe { payload: <Payment> } fire \`Payment Failed\``): the movement's parameter and its reads are checked against that node, and under `lf` a delivery that fits no listen is answered 400 `payload_mismatch`.
+- **`@lf/mcp` read tools** mark their required arguments as fields a read must pin in its `WHERE`, so `lf check` refuses a read that leaves one out (`MOV_HOP_PIN_REQUIRED`) rather than the run failing. Any describe may mark a field `pinned: true`; no other module does yet.
+- **Gmail and Drive.** Gmail keeps drafts (opt-in at sign-in, under a second credential), and a listen can fire when a label is added to a message. Drive can copy a file into a folder. Their own `CHANGELOG.md` files have the detail.
+- **WhatsApp** states who reaches a listen on either host: anyone, on the project's own number under `lf`; linked phones only, on the shared number.
 
-### Fixed
+### Embedding
 
-- `lf` reads a file a module owns (a Gmail attachment) for an extraction or `File.read`, through the module's `resolveFileRef` as a write already did; before, the extraction saw nothing and the run warned `MOVENG_FILE_BYTES_UNAVAILABLE`.
-- A write to the movement's event parameter (`write company { … }`) updates the record the event fired on through the module's `updateRecord`; it checked clean but failed every run (`MOVENG_RUNTIME: 'company' is the movement parameter`).
-- A field read off a name bound to a walk reads the records the walk landed on: after `row = change-[:Record]->`, `"${row.Stage}"` is the Stage, where it read as empty while `change-[:Record]->.Stage` worked.
-- `lf runs show --json` shows when a run finished (`finishedAt`) and lists its writes (`writeRecords`: target, action, committed, values); `writes` counts every entry into the run, where after a resume it counted only the resumed entry's.
-- `lf` prints a line when a polled listen's first poll arms it (`gmail: inbox:invoice armed; it fires on changes from now`); it printed nothing.
-- A run's trace names each model call's `tier`, `model` and `effort` (an extraction's entry and an `ai()` call's), so `quick` and `careful`, which share a model, read differently.
-- `lf run --event` with an event that matches none of its module's event types (no `tag`, and no type's `match` fits its payload) says so when the run fails, naming the types' tags; such an event names no record, so a write to the event's record could only say "no stable record to update". The example project's `events/company_created.json` carries its `tag`, so a write to its event's record updates it.
+An embedder's host is one call: `createEmbeddedHost`, in the new package `@listen-fire/embed`. It connects each tenant's modules over that tenant's own credentials, checks and keeps its movements, routes an event from the embedder's product to every listen that hears it (by connection, as `lf` routes), and steps on runs that sleep at each `tick`. The example SaaS's host integration went from 512 lines to 238. The routing rule is public in the engine (`listenerHearsDelivery`, `public/inbound`) and held to `lf`'s by a shared table of cases. A new package, `@listen-fire/authoring-mcp`, serves the tools an agent uses to write, check, save and run movements over MCP, for one tenant of the host that mounts it. See docs/embedding.md.
+
+### Checks
+
+- A value handed to a plugin is compared with the type the plugin declares for it: `fetchUrl(5)`, or a text where a list is taken, is a `MOV_CALL_ARG_TYPE` warning. A text naming none of a plugin's options is refused (`MOV_ENUM_UNKNOWN_VALUE`), as it already is for a function's parameter.
+- A plugin's plain value reaches the program in the type it declares (a number as a number, a list as a list), where every value but a file arrived as text. A value outside the declared type is bound as its text, as before, and the run notes it.
+- An unknown enum value is refused in two more places (`MOV_ENUM_UNKNOWN_VALUE`): each text in a list written into a list of enum (an Airtable multiple select), and a comparison inside a parameter type's `WHERE`. Such a program was writing or matching a value the field cannot hold.
+
+### lf
+
+- `lf` types a connection that names a position (`connect airtable using acme { base: "CRM" }`): the module's `positionArgs` reach the catalog and every call, so a base's tables are checked under `lf` as on the platform. A movement whose signature names its event's table reads that table's fields on the event, typed.
+- A polled listen on a positioned connection polls in that position, under a checkpoint of its own. A webhook's scope takes what the listen leaves out from its connection's position: `listen to hiring { table: "tbl…" }` on a connection to base Hiring registers its webhook for that base, where it registered none.
+- `lf credential add` for a plugin module prints the plugin import instead of an adapter's `connect … using …`.
+
+### Protocol 2.4, and the minor a module states
+
+Adapter protocol 2.4 lets a source whose event subscriptions lapse say when (`expiresAt` from `ensureEventSubscription`) and list `refreshEventSubscription`. `lf` refreshes each such webhook a day before it lapses: `lf serve` on its tick, `lf drain` where a deployment scales to zero. A failed refresh is printed once and retried in 15 minutes; a webhook that lapsed while nothing ran is registered anew. `@lf/airtable` lists the method, so a quiet table's webhook no longer lapses after 7 days; an older `lf` reads `@lf/airtable` as before.
+
+A module's stated protocol minor is now what it needs its host to speak: what its author declares, else 0. The kits no longer raise it for the methods a module offers, since a host calls only the methods it speaks and checks for a method by name. Before, a store module offering `work.enqueueIfAbsent` stated 2.2 and an older host refused it for nothing; it now states 2.0. `lf --version` reads `adapter protocol 2.0–2.4`.
+
+### Fixes from running `lf` on real projects
+
+- A file a module owns (a Gmail attachment) can be read by an extraction or `File.read`: `lf` redeems it through the module, as a write already did. Before, the extraction saw nothing.
+- A write to the movement's event parameter (`write company { … }`) updates the record the event fired on. It checked clean but failed every run.
+- A field read off a name bound to a walk reads the records the walk landed on: after `row = change-[:Record]->`, `row.Stage` is the Stage, where it read as empty.
+- `lf runs show --json` shows when a run finished (`finishedAt`) and lists its writes (`writeRecords`); `writes` counts every entry into the run, where a resume reset it.
+- `lf` prints a line when a polled listen's first poll arms it (`gmail: inbox:invoice armed; it fires on changes from now`).
+- A run's trace names each model call's `tier`, `model` and `effort`, so `quick` and `careful`, which share a model, read differently.
+- An event that matches none of its module's event types (no `tag`, and no type's `match` fits its payload) names no record. When such an event's run fails, `lf run --event` now says so, naming the types' tags. The example project's `events/company_created.json` carries its `tag`.
 
 ## [0.12.9] - 2026-10-26
 
@@ -2367,7 +2370,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.9...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.10...HEAD
+[0.12.10]: https://github.com/listen-fire/listen-fire/compare/v0.12.9...v0.12.10
 [0.12.9]: https://github.com/listen-fire/listen-fire/compare/v0.12.8...v0.12.9
 [0.12.8]: https://github.com/listen-fire/listen-fire/compare/v0.12.7...v0.12.8
 [0.12.7]: https://github.com/listen-fire/listen-fire/compare/v0.12.6...v0.12.7

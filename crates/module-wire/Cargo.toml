@@ -4,7 +4,7 @@
 # (the host) and the module kit (crates/module-kit, the module side) share it.
 # Not part of the core: it carries its own version and publishes on its own.
 name = "listen-fire-module-wire"
-version = "0.12.7"
+version = "0.12.8"
 edition.workspace = true
 publish = true
 license.workspace = true

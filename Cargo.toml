@@ -7,7 +7,7 @@ members = ["crates/lf", "crates/module-kit", "crates/module-wire", "crates/movem
 # `scripts/release/sync-core-version.mjs` writes it from movement-lang's
 # package.json. module-wire and module-kit carry versions of their own.
 [workspace.package]
-version = "0.12.9"
+version = "0.12.10"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/listen-fire/listen-fire"

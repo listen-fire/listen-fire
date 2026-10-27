@@ -1,5 +1,11 @@
 # @listen-fire/engine-contracts
 
+## 0.12.10
+
+### Patch Changes
+
+- 1cddbb8: A module's `checkInbound` answer can carry `deliveryId` in TypeScript: `InboundCheck`'s `accepted` outcome has it, and module-kit's `accepted(events, { deliveryId })` sets it. The wire and `lf` already took it (a repeat under the same id is answered `duplicate: true` and runs nothing). Additive.
+
 ## 0.12.9
 
 No changes in this release.

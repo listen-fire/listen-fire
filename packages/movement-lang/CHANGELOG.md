@@ -1,5 +1,9 @@
 # @listen-fire/movement-lang
 
+## 0.12.10
+
+No changes in this release.
+
 ## 0.12.9
 
 No changes in this release.
