@@ -19,6 +19,9 @@ named in [`RELEASING.md`](RELEASING.md).
 ## [Unreleased]
 
 <!-- add merged PRs here -->
+- The checker compares every value handed to a plugin with the type the plugin declares for it: `fetchUrl(5)` or a text where a list is taken is a `MOV_CALL_ARG_TYPE` warning, where it passed silently. It stays a warning for every 0.12 pin, so a saved movement still checks; refusing it waits for the next compatibility key (0.13). A text written in place against a plugin's option set is judged as that option, and one naming no option is refused (`MOV_ENUM_UNKNOWN_VALUE`), as it already is for a function's parameter.
+- A plugin's plain value reaches the program in the type it declares (a number as a number, a list as a list), answered under `data.value`; before, every value but a file arrived as text. A text that spells a declared number or boolean (`"0.8"`, `"true"`) is read as one. Any other value outside the declared type is bound as before (its text) and the run notes it, naming the plugin; failing the call waits for the next compatibility key (0.13).
+- `lf credential add` for a plugin module prints the plugin import (``import { `@lf/jev` as jev } from plugins``) instead of an adapter's `connect … using …`.
 
 ### Added
 

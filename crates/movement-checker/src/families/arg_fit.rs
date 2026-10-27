@@ -103,7 +103,7 @@ fn value_of_return(shape: &ReturnShape) -> Option<Ty> {
 }
 
 /// `stringLiteralOf`.
-fn string_literal_of(expr: Option<&Expression>) -> Option<&str> {
+pub(crate) fn string_literal_of(expr: Option<&Expression>) -> Option<&str> {
     match expr {
         Some(Expression::Static { value: StaticValue::String(text) }) => Some(text),
         _ => None,
@@ -297,6 +297,7 @@ impl Checker<'_> {
                 value: typed.ty.as_ref(),
                 held: typed.held,
                 may_hold: typed.may_hold.as_ref(),
+                literal: string_literal_of(typed.expr.as_ref()),
                 span: expr.span,
             });
             return;
@@ -600,7 +601,7 @@ impl Checker<'_> {
 
     /// `reportEnumLiteral`: a string literal against a closed option set.
     /// True when the target is one (the literal has then been judged).
-    fn report_enum_literal(&mut self, literal: &str, target: &Ty, span: Span) -> bool {
+    pub(crate) fn report_enum_literal(&mut self, literal: &str, target: &Ty, span: Span) -> bool {
         if !matches!(target, Ty::Enum { .. }) {
             return false;
         }

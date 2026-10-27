@@ -675,6 +675,52 @@ importers:
         specifier: 5.5.4
         version: 5.5.4
 
+  modules/jev:
+    dependencies:
+      '@listen-fire/module-kit':
+        specifier: workspace:^
+        version: link:../../packages/module-kit
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@listen-fire/engine':
+        specifier: workspace:^
+        version: link:../../packages/movement-engine
+      '@listen-fire/engine-contracts':
+        specifier: workspace:^
+        version: link:../../packages/engine-contracts
+      '@listen-fire/handbook':
+        specifier: workspace:^
+        version: link:../../packages/handbook
+      '@listen-fire/movement-lang':
+        specifier: workspace:^
+        version: link:../../packages/movement-lang
+      '@types/jest':
+        specifier: 29.5.14
+        version: 29.5.14
+      '@types/node':
+        specifier: 20.16.5
+        version: 20.16.5
+      engine-contracts:
+        specifier: workspace:@listen-fire/engine-contracts@*
+        version: link:../../packages/engine-contracts
+      handbook:
+        specifier: workspace:@listen-fire/handbook@*
+        version: link:../../packages/handbook
+      module-kit:
+        specifier: workspace:@listen-fire/module-kit@*
+        version: link:../../packages/module-kit
+      movement-engine:
+        specifier: workspace:@listen-fire/engine@*
+        version: link:../../packages/movement-engine
+      movement-lang:
+        specifier: workspace:@listen-fire/movement-lang@*
+        version: link:../../packages/movement-lang
+      typescript:
+        specifier: 5.5.4
+        version: 5.5.4
+
   modules/judge-llm:
     dependencies:
       '@listen-fire/module-kit':
