@@ -7,8 +7,9 @@
 // apart from another's; the module only answers the adapter protocol over
 // them.
 
-import type { Adapter, AdapterManifest, DiscriminableEvent } from '@listen-fire/engine/public/adapter';
+import type { Adapter, AdapterManifest, DiscriminableEvent, GetRelatedInput, ResolveEntityInput } from '@listen-fire/engine/public/adapter';
 import { BASE_RUNTIME_CAPABILITIES, containerAssociation } from '@listen-fire/engine/public/adapter';
+import { makeStablePosition } from '@listen-fire/engine/public/catalog';
 import { defineModule, type AdapterModuleMethods, type ModuleContext } from '@listen-fire/module-kit';
 
 export const COMPANY = 'Company';
@@ -74,6 +75,39 @@ const MANIFEST: AdapterManifest = {
   introspectedSchema: true,
 };
 
+/** The company names a hop's WHERE pins (`c.Name == "Vireo"`, alone or in a
+ *  conjunction), so a read fetches only those; none when it pins no name.
+ *  The engine still applies the whole WHERE to what comes back. */
+function pinnedName(where: GetRelatedInput['where']): string | undefined {
+  if (where === undefined) return undefined;
+  if (where.type === 'logical' && where.op === 'and') return where.operands.map(pinnedName).find((name) => name !== undefined);
+  if (where.type !== 'compare' || where.op !== 'eq') return undefined;
+  const [left, right] = [where.left, where.right];
+  // A hop's WHERE reads the landed record's field as an edge property.
+  const named = (side: typeof left) => (side.type === 'property' || side.type === 'edge_property') && side.propertyTypeId === NAME_FIELD.name;
+  const text = (side: typeof left) => (side.type === 'static' && typeof side.value === 'string' ? side.value : undefined);
+  if (named(left)) return text(right);
+  if (named(right)) return text(left);
+  return undefined;
+}
+
+/** Whether two values are the same identity key: text, compared without
+ *  case; an empty one is no key at all. */
+function sameKey(asserted: unknown, held: unknown): boolean {
+  if (typeof asserted !== 'string' || typeof held !== 'string' || asserted.trim() === '' || held.trim() === '') return false;
+  return asserted.toLowerCase() === held.toLowerCase();
+}
+
+/** The companies a write would update: those it is already linked to (by
+ *  id), else those matching every field of some `unique by` branch. */
+function existingCompanies(companies: Company[], input: ResolveEntityInput): Company[] {
+  const linked = companies.filter((company) => input.candidates.some((candidate) => candidate.external_id === company.id));
+  if (linked.length > 0) return linked;
+  return companies.filter((company) =>
+    input.constraints.any.some((branch) => branch.all.length > 0 && branch.all.every(({ field }) => sameKey(input.record[field], company[field]))),
+  );
+}
+
 /** The text values among `fields`, for the customer's defined fields only. */
 function definedTexts(defined: FieldDefinition[], fields: Record<string, unknown>): Record<string, string> {
   return Object.fromEntries(defined.flatMap(({ name }) => (typeof fields[name] === 'string' ? [[name, fields[name]]] : [])));
@@ -106,12 +140,28 @@ function crmAdapter(ctx: ModuleContext, store: CompanyStore): AdapterModuleMetho
             references: [],
           }
         : null,
-    resolveEntity: async () => ({ candidates: [] }),
+    resolveEntity: async (input) => ({
+      candidates: existingCompanies(store.list(tenant), input).map((company) => ({
+        adapterType: 'crm',
+        externalId: company.id,
+        recordType: COMPANY,
+        data: { ...company },
+      })),
+    }),
     getFieldValue: async ({ position, fieldId }) => {
       const data = position.identity.kind === 'stable' ? position.identity.data : undefined;
       return data !== null && typeof data === 'object' ? (Reflect.get(data, fieldId) ?? null) : null;
     },
-    getRelated: async () => [],
+    // The instance's `Company` edge: the customer's companies, each as the
+    // record it is, so a read can find one and a write update it.
+    getRelated: async ({ fieldId, direction, where }) => {
+      if (direction !== 'outgoing' || fieldId !== COMPANY) return [];
+      const name = pinnedName(where);
+      return store
+        .list(tenant)
+        .filter((company) => name === undefined || company.Name === name)
+        .map((company) => ({ position: makeStablePosition({ adapterType: 'crm', recordType: COMPANY, recordId: company.id, data: { ...company } }) }));
+    },
     createRecord: async ({ recordType, fields }) => {
       await authorised();
       const company = store.add(tenant, { Name: '', ...definedTexts(store.fieldsOf(tenant), fields) });

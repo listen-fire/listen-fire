@@ -135,3 +135,36 @@ listen to app { events: ["company.created"] } fire follow_up
   // Done with: nothing is left to step.
   assert.deepEqual(await embedding.tick(), []);
 });
+
+const ONBOARD = `${PRELUDE}
+function onboard(company: <app-[:Company]->>) {
+  vireo = only(app-[c:Company WHERE c.Name == "Vireo"]->)
+  if (vireo == null) { fail("no Vireo") }
+  write vireo { Note: "Onboarding \${company.Name}" }
+  write app-[:Company]-> { unique by (Name), Name: "Vireo", Stage: "Customer" }
+}
+
+listen to app { events: ["company.created"] } fire onboard
+`;
+
+test("an automation updates one customer's existing company, and a unique-by write updates it rather than adding another", async () => {
+  const fields = [{ name: 'Note' }, { name: 'Stage' }];
+  for (const tenant of ['umbrella', 'wayne']) {
+    assert.equal((await call('POST', '/customers', { tenant, apiKey: `${tenant}-key`, fields })).status, 201);
+    assert.equal((await call('POST', `/customers/${tenant}/companies`, { Name: 'Vireo' })).status, 201);
+  }
+  assert.deepEqual(await call('PUT', '/customers/umbrella/movements/onboard', ONBOARD), { status: 200, body: { saved: true, listens: 1 } });
+
+  const created = await call('POST', '/customers/umbrella/companies', { Name: 'Initech' });
+  assert.deepEqual(created.body.runs, [{ movement: 'onboard', outcome: { ok: true, writes: 2, spentMicrodollars: 0 } }]);
+  const umbrella = (await call('GET', '/customers/umbrella/companies')).body;
+  assert.deepEqual(
+    umbrella.map(({ id, Name, Note, Stage }: Record<string, string>) => ({ id, Name, Note, Stage })),
+    [
+      { id: 'company-1', Name: 'Vireo', Note: 'Onboarding Initech', Stage: 'Customer' },
+      { id: 'company-2', Name: 'Initech', Note: undefined, Stage: undefined },
+    ],
+  );
+  // The other customer's Vireo is its own, and untouched.
+  assert.deepEqual((await call('GET', '/customers/wayne/companies')).body, [{ id: 'company-1', Name: 'Vireo' }]);
+});
