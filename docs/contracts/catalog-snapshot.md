@@ -125,6 +125,7 @@ interface PositionSchema {
   pending?: boolean;
   writeOnlyProperties?: string[];
   ambiguousProperties?: string[];
+  pinnedProperties?: string[];                    // fields a read's WHERE must pin with == (arguments of the read); a read without them is MOV_HOP_PIN_REQUIRED
   deletable?: boolean;                            // the system removes a record of this type; a `delete` of a type without it is refused
   description?: string;                           // the adapter's words for the type (its describe's, else its entry point's, `description`); shown, never checked
   fieldDocs?: Record<string, string>;             // the adapter's words for each field it described, readable or write-only, by name
