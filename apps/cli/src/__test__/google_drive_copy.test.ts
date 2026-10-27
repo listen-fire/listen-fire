@@ -94,7 +94,7 @@ const COPY_AND_RELINK = `  template = only(drive-[t:Files WHERE t.Name == "Brief
   if (template == null) { fail("no Brief template") }
   made = write (folder-[:Files]->, template-[:Copies]->) { Name: "Acme brief" }
   again = write (folder-[:Files]->, made-[:Copies]->) { Name: "Acme brief v2" }
-  return "\${made.Name} / \${again.Name}"`;
+  return "\${made.Id}|\${made.Name}|\${made.\`Mime Type\`}|\${made.Url} / \${again.Name}"`;
 
 test('a granted file is copied into a granted folder, and a later write copies the copy', async () => {
   const fake = await fakeChannels();
@@ -109,12 +109,18 @@ test('a granted file is copied into a granted folder, and a later write copies t
     assert.equal(run.code, 0, run.out);
     assert.match(run.out, /2 write\(s\)/);
     const returned = /returned "(.*)"/.exec(run.out)?.[1] ?? '';
-    assert.equal(returned, 'Acme brief / Acme brief v2', run.out);
+    const [first, second] = returned.split(' / ');
+    const [id, name, mimeType, url] = first.split('|');
+    assert.equal(`${name} ${mimeType}`, `Acme brief ${DOC}`, run.out);
+    assert.equal(second, 'Acme brief v2', run.out);
+    assert.match(id, /\S+/);
+    assert.match(url, /^https:\/\/drive\.google\.com\/file\/d\//, run.out);
 
     // The fake holds both copies, in the Briefs folder, the second made from the first.
     const copies = (await (await fetch(`${fake.url}/drive/v3/files?q=${encodeURIComponent("'fold-briefs' in parents and trashed = false")}`)).json()) as { files: Array<{ id: string; name: string; mimeType: string }> };
     assert.deepEqual(copies.files.map((f) => f.name).sort(), ['Acme brief', 'Acme brief v2']);
     assert.ok(copies.files.every((f) => f.mimeType === DOC));
+    assert.equal(id, copies.files.find((f) => f.name === 'Acme brief')?.id, 'the handle carries the new file\'s id');
     // The second copy was made from the first, by the id the first write returned.
     assert.match(run.out, new RegExp(`Copied doc-template → (\\S+)[\\s\\S]*Copied \\1 → `));
   } finally {

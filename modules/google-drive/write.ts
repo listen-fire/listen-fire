@@ -209,9 +209,16 @@ async function copyFile(input: {
   return {
     adapterType: GOOGLE_DRIVE_ADAPTER_TYPE,
     externalId: copy.id,
-    // The record as a read of the file would hold it, so the copy reads
-    // (Id, Name, Mime Type, Url) like any other file afterwards.
-    data: { ...copy, webViewLink: copy.webViewLink ?? driveUrl(copy.id, 'file') },
+    // Keyed by the catalog's field names: the engine keeps this bag on the
+    // write's handle, so the copy reads (Id, Name, Mime Type, Url, Size)
+    // like any other file afterwards.
+    data: {
+      Id: copy.id,
+      Name: copy.name,
+      'Mime Type': copy.mimeType,
+      Url: copy.webViewLink ?? driveUrl(copy.id, 'file'),
+      Size: copy.size,
+    },
   };
 }
 
