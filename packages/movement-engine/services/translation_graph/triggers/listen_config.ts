@@ -39,7 +39,7 @@ export function channelScopeMatches(config: unknown, channelName: string | null)
 }
 
 /**
- * Does this event clear a trigger's `listen` scope? Two gates, both from the
+ * Does this event clear a trigger's `listen` scope? Gates, all from the
  * trigger's `config`:
  *   • `events: [...]` — the chosen change types (`record.created`, …). The
  *     authored selection that the source registration already narrowed to;
@@ -48,9 +48,14 @@ export function channelScopeMatches(config: unknown, channelName: string | null)
  *     a delivery for base B reaches every trigger on B's credential; this keeps
  *     a table-T listen from firing on table-U changes (no cross-leak, no wasted
  *     run). The event names its table in `recordType`.
+ *   • `field: "Stage"` — only a change that touched that field (the event's
+ *     `changedFields`). With `becomes: <value>`, only a change that made the
+ *     field that value: its new value is it, and its previous value was not
+ *     (`FieldChangePayload`). An event that names no changed fields never
+ *     clears a `field` gate: we don't fire on a change we can't confirm.
  */
 export function eventMatchesTriggerScope(event: DiscriminableEvent, config: unknown): boolean {
-  const c = config as { events?: unknown; table?: unknown } | null;
+  const c = config as { events?: unknown; table?: unknown; field?: unknown; becomes?: unknown } | null;
 
   const events = eventConfigList(c?.events);
   if (events.length > 0) {
@@ -61,5 +66,37 @@ export function eventMatchesTriggerScope(event: DiscriminableEvent, config: unkn
     if (event.recordType !== undefined && event.recordType !== c.table) return false;
   }
 
+  if (typeof c?.field === 'string' && c.field.length > 0) {
+    if (!(event.changedFields ?? []).includes(c.field)) return false;
+    if (c.becomes !== undefined && !becameValue(event.payload, c.field, c.becomes)) return false;
+  }
+
   return true;
+}
+
+/**
+ * What an event payload carries for a `becomes` gate to read: the changed
+ * fields' new values (`fields`) and their previous ones (`previous`), keyed by
+ * the name a listen's `field` uses. An adapter that declares a `becomes` listen
+ * key shapes its event payload so. A field missing from `previous` (a created
+ * record, or a source that did not send previous values) had no value before.
+ */
+export interface FieldChangePayload {
+  fields: Record<string, unknown>;
+  previous?: Record<string, unknown>;
+}
+
+function becameValue(payload: unknown, field: string, value: unknown): boolean {
+  const cells = (key: keyof FieldChangePayload): Record<string, unknown> => {
+    const held: unknown = typeof payload === 'object' && payload !== null ? Reflect.get(payload, key) : undefined;
+    return typeof held === 'object' && held !== null ? (held as Record<string, unknown>) : {};
+  };
+  return sameValue(cells('fields')[field], value) && !sameValue(cells('previous')[field], value);
+}
+
+/** Equal as data: a list or an object by its contents. */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
 }

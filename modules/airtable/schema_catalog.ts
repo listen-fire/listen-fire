@@ -22,6 +22,9 @@ import {
   type AirtableTableMeta,
 } from './types';
 import {
+  AIRTABLE_EVENT_CHANGED_FIELDS,
+  AIRTABLE_EVENT_OLD_RECORD_EDGE,
+  AIRTABLE_EVENT_OLD_RECORD_EDGE_NAME,
   AIRTABLE_EVENT_RECORD_EDGE,
   AIRTABLE_EVENT_RECORD_EDGE_NAME,
   AIRTABLE_EVENT_TYPE_NAME,
@@ -425,6 +428,19 @@ export function describeRecordChange(): SchemaTypeDescriptor {
       idField('base', "The base the change happened in — the id a `listen` names."),
       idField('table', "The table the change happened in — the id a `listen` names."),
       idField('record', 'The changed row’s id.'),
+      // Text, not an enum of the table's field names: this node is one node
+      // for every table, and the platform's narrowing retargets the node's
+      // EDGES at the table a listen names, never its fields.
+      {
+        fieldId: AIRTABLE_EVENT_CHANGED_FIELDS,
+        displayName: AIRTABLE_EVENT_CHANGED_FIELDS,
+        kind: 'string' as const,
+        cardinality: 'many' as const,
+        writable: false,
+        required: false,
+        description:
+          'The names of the row’s fields this change touched — every field given for a created row, none for a deleted one.',
+      },
     ],
     references: [
       {
@@ -439,6 +455,18 @@ export function describeRecordChange(): SchemaTypeDescriptor {
         subject: true,
         // Reached, never written along: a movement writes to a TABLE, not
         // through an event.
+        writable: false,
+      },
+      {
+        fieldId: AIRTABLE_EVENT_OLD_RECORD_EDGE,
+        name: AIRTABLE_EVENT_OLD_RECORD_EDGE_NAME,
+        // The same target as `Record`, so wherever the record edge is typed
+        // as a table, this one is typed as that table too: the previous
+        // `Stage` reads as the `Stage` enum.
+        targetTypeId: TABLE_META_TYPE,
+        cardinality: 'one' as const,
+        description:
+          'The row as it was before this change: the changed fields’ previous values. A field the change did not touch reads as null here, as it does on `Record`.',
         writable: false,
       },
     ],

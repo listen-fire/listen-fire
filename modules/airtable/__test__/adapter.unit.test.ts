@@ -864,7 +864,7 @@ describe('eventsFromPayload — the event node carries the row identity', () => 
     const events = eventsFromPayload({
       baseId: 'appCRM01',
       tableNamesById: new Map([['tblDEALS01', 'Deals']]),
-      fieldNamesByTable: new Map([['tblDEALS01', new Map([['fldNAME', 'Name']])]]),
+      fieldsByTable: new Map([['tblDEALS01', new Map([['fldNAME', { name: 'Name', type: 'singleLineText' }]])]]),
       payload: {
         timestamp: '2026-07-17T00:00:00Z',
         changedTablesById: {
@@ -883,6 +883,8 @@ describe('eventsFromPayload — the event node carries the row identity', () => 
       tableName: 'Deals',
       base: 'appCRM01',
       fields: { Name: 'Acme' },
+      previous: {},
+      'Changed Fields': ['Name'],
     });
     // Unchanged, and load-bearing: the dispatch filter compares `recordType` to
     // the listen's `table` — it predates the event node and must keep working.
@@ -895,7 +897,7 @@ describe('eventsFromPayload — the event node carries the row identity', () => 
   it('degrades to the bare id when table metadata is unavailable', () => {
     const events = eventsFromPayload({
       baseId: 'appCRM01',
-      fieldNamesByTable: new Map(),
+      fieldsByTable: new Map(),
       payload: {
         changedTablesById: {
           tblDEALS01: { destroyedRecordIds: ['recGONE'] },
@@ -910,6 +912,8 @@ describe('eventsFromPayload — the event node carries the row identity', () => 
       tableName: 'tblDEALS01',
       base: 'appCRM01',
       fields: {},
+      previous: {},
+      'Changed Fields': [],
     });
   });
 });
