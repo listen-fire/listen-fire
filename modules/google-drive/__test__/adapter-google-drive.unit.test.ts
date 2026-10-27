@@ -104,6 +104,7 @@ function makeAdapter(options?: { existingFolderId?: string; copyError?: Error })
         name: args.name ?? 'Copy of template',
         mimeType: 'application/vnd.google-apps.document',
         webViewLink: 'https://docs.google.com/document/d/copyNEW01',
+        size: null,
       };
     },
   };
@@ -371,7 +372,7 @@ describe('GoogleDriveAdapter.createRecord — copy (a file written along two edg
     expect(calls.createDocument).toHaveLength(0);
     expect(calls.uploadFile).toHaveLength(0);
     expect(result.externalId).toBe('copyNEW01');
-    expect(result.data).toMatchObject({ name: 'Acme brief', url: 'https://docs.google.com/document/d/copyNEW01' });
+    expect(result.data).toMatchObject({ id: 'copyNEW01', name: 'Acme brief', webViewLink: 'https://docs.google.com/document/d/copyNEW01' });
   });
 
   it('is order-independent and lets Drive name the copy when no Name is given', async () => {
