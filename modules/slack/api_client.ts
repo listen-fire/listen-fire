@@ -44,9 +44,10 @@ class WebClientWithCache extends WebClient {
 
     if (ttl && key) {
       this.cache[key] = result;
+      // Unref'd: an eviction timer must not keep a host process alive.
       setTimeout(() => {
         delete this.cache[key];
-      }, ttl);
+      }, ttl).unref();
     }
 
     return result;

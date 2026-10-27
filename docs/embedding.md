@@ -2,7 +2,7 @@
 
 Your product can let its customers write movements and run them inside it. The engine runs in your own Node process, as WebAssembly: no server of ours, no network of its own. You give it what it needs: your product as a module, a place for each customer's secrets, the models it may call, and the limits it must keep.
 
-A working example is in [`examples/embed-saas`](../examples/embed-saas): a small HTTP app where a customer saves a movement, the app checks it, and the app's own event runs it. Its test runs it end to end.
+A working example is in [`examples/embed-saas`](../examples/embed-saas): a small HTTP app where a customer saves a movement, the app checks it, and the app's own event runs it. Its tests run it end to end, with customers whose schemas differ and a ready-made module loaded for each.
 
 ## The packages
 
@@ -11,6 +11,8 @@ A working example is in [`examples/embed-saas`](../examples/embed-saas): a small
 | `@listen-fire/engine` | The engine and its host contract. Reached only through its public entries, `@listen-fire/engine/public/<entry>`. |
 | `@listen-fire/engine-contracts` | The data the engine is handed: a run's input, the tenant id, the event, the parked state, the module protocol. |
 | `@listen-fire/module-kit` | How a module is defined (`defineModule`) and loaded, in your process or served as a process. |
+| `@listen-fire/embed` | The embedded host, `createEmbeddedHost`: connections, checking, routing and parked runs in one call, over the engine's public entries and the module kit. |
+| `@listen-fire/authoring-mcp` | The authoring tools an agent writes, checks, saves and runs movements with, over MCP for one of your tenants (section 7). Optional. |
 | `@listen-fire/movement-lang` | The language: parser, checker, catalog types. The engine depends on it. |
 | `@listen-fire/model-providers` | Chat vendors beyond Anthropic (OpenAI, Gemini, Claude on Vertex): the models slot. Optional. |
 | `@listen-fire/embedding-providers`, `@listen-fire/image-providers`, `@listen-fire/transcription-providers` | Embeddings, image generation and transcription over OpenAI and Gemini, each its own package on `model-providers`' host type. Optional. |
@@ -19,20 +21,20 @@ A working example is in [`examples/embed-saas`](../examples/embed-saas): a small
 | `@listen-fire/file-text` | A file's text: PDF, decks, spreadsheets, audio. The file-reading slot's default module; leave it out and an `extract` over a file is refused by the file's name. Optional. |
 | `@lf/<name>` | Ready-made modules: `@lf/attio`, `@lf/slack`, `@lf/google-sheets`, `@lf/web`, and the rest. |
 
-Every package has the same version as the engine. The TypeScript engine is not part of the kit: the kit runs the language of its own release, which is also the pin a movement is saved with (`ENGINE_VERSION`). Node 22 or later. With TypeScript, use `moduleResolution` `node16`, `nodenext` or `bundler` (plain `node` works too, through the packages' `typesVersions`).
+The core packages (`engine`, `engine-contracts`, `movement-lang`) share one version; every other package (`embed`, `module-kit`, the modules) has its own, and takes any core from 0.12 up to 1.0. The TypeScript engine is not part of the kit: the kit runs the language of its own release, which is also the pin a movement is saved with (`ENGINE_VERSION`). Node 22 or later. With TypeScript, use `moduleResolution` `node16`, `nodenext` or `bundler` (plain `node` works too, through the packages' `typesVersions`).
 
 ```sh
-npm install @listen-fire/engine @listen-fire/engine-contracts @listen-fire/module-kit
+npm install @listen-fire/embed @listen-fire/engine @listen-fire/engine-contracts @listen-fire/module-kit
 ```
 
 The public entries of `@listen-fire/engine` you will use:
 
 | entry | for |
 |---|---|
-| `public/movement-engine` | `runMovement`, `resumeMovement`, `checkPinnedInRust`, `parsePinned` |
 | `public/embed` | `inProcessHost`, `introspectAdapter`, `collectFileListeners`, `pricedModels`, `MovementEngineError` |
 | `public/catalog` | `buildCatalogSnapshot`: what a customer's movements are checked and run against |
-| `public/inbound` | `eventMatchesTriggerScope`, `triggerEventOf`: from your event to a run |
+| `public/movement-engine` | `runMovement`, `resumeMovement`, `checkPinnedInRust`, `parsePinned` |
+| `public/inbound` | `listenerHearsDelivery`, `triggerEventOf`: from your event to a run |
 | `public/secrets` | the secrets family, and an in-memory vault to start from |
 | `public/adapter` | what an adapter is |
 | `public/models` | the model registry and map, the run's spend and cost cap |
@@ -42,10 +44,13 @@ The public entries of `@listen-fire/engine` you will use:
 
 ## The shape of it
 
-- **One customer is one tenant.** Every run names its tenant (`teamId`), and everything the run reaches is answered for that tenant only.
-- **A customer's movement is checked when it is saved.** The checker reads the customer's catalog: your modules as that customer sees them, and the connections that customer holds.
-- **A movement says what it listens for.** Its `listen … fire …` statements are your routing table: when something happens in your product, you run each movement that listens for it.
-- **The engine asks your host for everything.** Adapter calls, model calls, the clock, ids, parks, file text: each is a family on the host you build. A piece you do not supply is refused by name when a run reaches it, never answered with a silent default.
+- **One customer is one tenant.** Every run names its tenant, and everything the run reaches is answered for that tenant only.
+- **A customer connects modules.** Your product is one module; a ready-made one (`@lf/slack`, …) is another. Each connection is loaded for that customer over that customer's credential.
+- **A customer's movement is checked when it is saved.** The checker reads the customer's catalog: the modules it connected, as that customer sees them.
+- **A movement says what it listens for.** When something happens in your product, the movements that listen for it run.
+- **A run that waits parks.** `await sleep(1h)` stores the run; a tick past its wake steps it on.
+
+`createEmbeddedHost` (`@listen-fire/embed`) does all of this. You write your module (its `describe`, its reads and writes), hand the host your events, and call its tick from a scheduler.
 
 ## 1. Your product as a module
 
@@ -63,91 +68,79 @@ export const crm = defineModule({
 });
 ```
 
-Load it in your process for one tenant with `adapterInProcess(crm, host)`. The `host` is the module's context: the tenant, its credential, a log, files, and a small store of its own (`kv`). `secretsCredential` reads the credential from your secrets; `memoryKv` keeps module state in memory. Set `validateResults: true` while you develop: every answer is checked against the protocol.
+`describe` answers for the tenant the module was loaded for (`ctx.config.tenant`), so each customer's schema can differ: one customer's `Stage` a select of `Lead | Customer`, another's `Prospect | Partner`. A value outside the customer's options is refused when its movement is saved (`MOV_ENUM_UNKNOWN_VALUE`). See `examples/embed-saas/src/crm.ts`.
 
-The ready-made modules (`@lf/attio`, `@lf/slack`, …) load the same way. A module can also run as its own process (`serve-module`, in `@listen-fire/module-kit`), reached over the module protocol (`public/modules`); see [docs/contracts/adapter-protocol.md](contracts/adapter-protocol.md).
-
-## 2. The catalog
-
-The catalog is what a customer's movements are checked and run against, as plain data. Build it per tenant.
+## 2. The embedded host
 
 ```ts
-const { schema } = await introspectAdapter(adapterFor(tenant), crm.manifest);
-const catalog = buildCatalogSnapshot({
-  adapters: [{ manifest: crm.manifest, schemas: { workspace: schema } }],
-  credentials: { workspace: { adapters: ['crm'], credential: 'crm' } },
-  plugins: {},
+import { createEmbeddedHost } from '@listen-fire/embed';
+import { pricedModels } from '@listen-fire/engine/public/embed';
+import { slackModule } from '@listen-fire/slack';
+
+const host = createEmbeddedHost({
+  modules: [crm, slackModule],
+  engine: { llm: pricedModels({ client: models }) },
+  limits: { maxSteps: 100_000, costCapMicrodollars: 50_000 },
 });
+
+await host.connect('acme', { name: 'workspace', module: crm, credential: { api_key } });
+await host.connect('acme', { name: 'slack_workspace', module: slackModule, credential: { accessToken } });
+
+await host.save('acme', { name: 'welcome', source });    // { saved: true, listens: 1 } or { saved: false, problems }
+await host.dispatch('acme', { adapterType: 'crm', event }); // one outcome per run it started
+await host.tick();                                          // one outcome per parked run it stepped on
 ```
 
-- `introspectAdapter` asks the adapter its entry points and describes each one.
-- A schema is keyed by the connection's name, here `workspace`: the name a movement imports (`import { workspace } from credentials`).
-- The connection fills the module's declared credential (`credential: 'crm'`).
+- **`connect(tenant, { name, module, credential })`.** `name` is what the customer's movement imports (`import { workspace } from credentials`). The credential is kept in the host's secrets, under an id only that tenant's runs may name; the module is loaded once per connection, its context built for you.
+- **`save(tenant, { name, source })`.** Checks the movement against the tenant's catalog and keeps it, pinned to this release (`ENGINE_VERSION`), with its listens read off the source.
+- **`dispatch(tenant, { adapterType, connection?, event })`.** Runs every listen of the tenant's saved movements that hears the event: a listen on that module, whose `events` (and Airtable's `table`) admit it. With `connection`, only the listens on that connection hear it, as lf and the hosted product route; without, it is the module's own event and every connection's listens hear it. `event` is your product's event (`{ payload, externalId, eventType, recordType, … }`).
+- **`tick(now?)`.** Steps on every parked run whose timer is due. Call it from a scheduler.
+- **The catalog** is built per tenant from its connections, by asking each module its entry points and describing each one, and kept until the tenant's connections change. When a tenant's schema changes another way (a field added in your product), call `schemaChanged(tenant)`.
+- **An outcome** is `{ runId, tenant, program, movement, outcome }`: `outcome` is `{ ok: true, writes, spentMicrodollars, parked }` or `{ ok: false, error }`.
 
-## 3. Check a customer's movement
+Options beyond `modules`:
 
-```ts
-checkPinnedInRust({ source, catalog, languageVersion: ENGINE_VERSION });
-```
+| option | default | what it is |
+|---|---|---|
+| `store` | in memory | Connections, saved movements, run records, and the run host's store (`RunHostStore`, for parked runs). Over your database, each is a table; the run host's store must pass the contract suite in `public/testing`. |
+| `secrets` | in memory | Your vault: a `SecretsBackend` (`public/secrets`) with a `put` to store a new credential. |
+| `engine` | none | The engine's other slots: models (`llm`), files, write locks, a trace (section 4). |
+| `limits` | the engine's | Each run's limits and cost cap (section 5). |
+| `now` | the wall clock | The clock runs read and timers are due by. |
+| `moduleHost` | quiet log, no files, state in memory | What a loaded module's context holds besides its tenant and credential. |
 
-It throws `MovementEngineError` when the movement does not check, with the code `MOVENG_CHECK` (or `MOVENG_PARSE`, `MOVENG_LANGUAGE_VERSION`) and every problem in its message. `isCheckFailure(error)` tells a check failure from anything else. Save the source with the version you checked it under (`ENGINE_VERSION`): a saved movement is pinned to it ([language versions](contracts/language-versions.md)).
+The example, `examples/embed-saas/src/embedding.ts`, is this and nothing else: a customer connects its CRM and, optionally, Slack, and its HTTP routes call `save`, `dispatch` and `tick`.
 
-Read its routing table once, as you save it:
+## 3. The parts underneath
 
-```ts
-const listeners = collectFileListeners(parsePinned({ source, languageVersion: ENGINE_VERSION }));
-// [{ adapter: 'crm', config: { events: ['company.created'] }, movementName: 'welcome', … }]
-```
+The embedded host is built from the engine's public parts, for a host that needs another shape:
 
-## 4. Run it when its event happens
+- **Load a module:** `adapterInProcess(module, context)` (module kit), with `secretsCredential` for its credential and `memoryKv` for its state.
+- **Build a catalog:** `introspectAdapter(adapter, manifest)` per connection, then `buildCatalogSnapshot` (`public/catalog`), each schema keyed by its connection's name.
+- **Check and save:** `checkPinnedInRust({ source, catalog, languageVersion: ENGINE_VERSION })` throws `MovementEngineError` (`MOVENG_CHECK`, `MOVENG_PARSE`, `MOVENG_LANGUAGE_VERSION`) when the movement does not check; `collectFileListeners(parsePinned(…))` reads its listens.
+- **Route an event:** `listenerHearsDelivery(listener, { adapterType, credentialName, event })` (`public/inbound`) is the whole routing rule; `triggerEventOf` turns your event into the run's event.
+- **Run:** `runMovement({ source, languageVersion, movementName, event, teamId, catalog, credentialIds, limits, costCapMicrodollars, host })`, over `inProcessHost` (`public/embed`).
+- **Park and resume:** `runParkSink` for each run's parks, then `drainDueTimers` under the run's lease (`withRunLease`) and `armTimerWake` for its next timer (`public/run-host`).
 
-```ts
-if (listener.adapter === 'crm' && eventMatchesTriggerScope(event, listener.config)) {
-  const { triggerEvent } = triggerEventOf({ pipelineInputId, adapterType: 'crm', triggerType: 'webhook', event, eventTypes, now: new Date() });
-  const result = await runMovement({
-    source, languageVersion: ENGINE_VERSION, movementName: listener.movementName,
-    event: triggerEvent,
-    teamId: tenantIdOf(tenant),
-    catalog,
-    credentialIds: { workspace: credentialRef(tenant) },
-    costCapMicrodollars: 50_000,
-    limits: { maxSteps: 100_000, maxTextBytes: 1 << 20, maxCollectionItems: 10_000, maxResultBytes: 4 << 20 },
-    host,
-  });
-}
-```
+## 4. The host's slots
 
-- `event` is your product's event (`{ payload, externalId, eventType, recordType, … }`); `eventTypes` are your adapter's `listEventTypes()`, which turn it into a typed record the movement receives.
-- `credentialIds` maps each connection name to your own id for it. Your adapter resolver receives that id; it never crosses into the movement.
-- `result.writes` lists what the run wrote; `result.runSpentMicrodollars` what it spent. A run that fails throws; its message says why.
-
-## 5. The host: filling the slots
-
-```ts
-const host = inProcessHost({
-  adapters: { resolve: ({ adapterType, teamId, credentialsId }) => adapterFor(teamId, credentialsId) },
-  credentials: { belongsTo: ({ teamId, credentialsId }) => vault.tenantOf(credentialsId) === teamId },
-  llm: pricedModels({ client: models }),
-});
-```
-
-`lf.yaml`'s `core:` section has eight slots ([core slots](core-slots.md)): models, judge, store, files, limiter, loopGuard, browser and wake. An embedded engine's host has the first four; you fill each with your own part. The rest belong to lf's run host.
+`lf.yaml`'s `core:` section has eight slots ([core slots](core-slots.md)): models, judge, store, files, limiter, loopGuard, browser and wake. An embedded engine has the first four; you fill each with your own part (`engine` on the embedded host, or `inProcessHost` directly). The rest belong to lf's run host.
 
 | slot | what a run asks of it | how you fill it |
 |---|---|---|
 | models | `ai(…)` and `extract(…)` calls | `llm: pricedModels({ client, extractCall })`. A client answers `{ parsedJson }` and may report what it cost. The Anthropic clients are `makeAnthropicLlmClient` and `makeAnthropicExtractCallClient`, over `anthropicClient`, all from `@listen-fire/anthropic` (the models slot's module for Claude, which also holds the price table). |
 | judge | whether a written record is one already there, when the rules alone cannot tell | `llm.arbitrateEntities`. Absent: such a write fails, naming it. |
-| store | parks: `await`, `sleep`, callbacks | `park.sink`, `park.wake`, `park.bindings`, `park.callbacks`, with the run-host store (`public/run-host`) behind them. Absent: a movement that parks fails. `memoryRunHostStore` (`public/embed`) holds parked runs for one process; a store that must outlive a restart implements `RunHostStore` over your database and must pass the contract suite in `public/testing`. The store keeps library texts too (`sources`: a text kept once under its hash, read back by it); `RunHostStore` requires it, and the suite checks it. In a Rust embedding (`listen-fire-engine`), `Store` requires `save_source` and `load_source` the same way: an implementation that omits them does not compile. |
+| store | parks: `await`, `sleep`, callbacks | The embedded host's `store`. `memoryRunHostStore` holds parked runs for one process; a store that must outlive a restart implements `RunHostStore` over your database and must pass the contract suite in `public/testing`. The store keeps library texts too (`sources`: a text kept once under its hash, read back by it). In a Rust embedding (`listen-fire-engine`), `Store` requires `save_source` and `load_source` the same way: an implementation that omits them does not compile. |
 | files | reading a file's text, rendering a file | `files.resolveFileText` (`@listen-fire/file-text` reads PDFs, decks and sheets), `files.render`. |
 
 Two more pieces are yours and have safe defaults:
 
-- **Secrets.** `createSecretsFamily({ backend })` over your vault: one entry per connection, never shared between tenants. `createMemoryVault` is the in-memory one; a real vault implements `SecretsBackend` (resolve, write back at a version, a lock), and the contract cases in `public/secrets-testing` hold it. An OAuth 2 credential a module reads through `secretsCredential` (module kit) is refreshed when given `oauth2: { declaration, client }`: before a call when it is about to expire, and when the provider refuses its token, one refresh at a time.
+- **Secrets.** One entry per connection, never shared between tenants. `createMemoryVault` (`public/secrets`) is the in-memory one; a real vault implements `SecretsBackend` (resolve, write back at a version, a lock), and the contract cases in `public/secrets-testing` hold it. The embedded host refreshes an OAuth 2 credential by its module's declaration, with the credential's own `client_id` and `client_secret`: before a call when it is about to expire, and when the provider refuses its token, one refresh at a time. Loading a module yourself, `secretsCredential` (module kit) takes `oauth2: { declaration, client }` for your own app at the provider.
 - **Write locks.** Two runs writing the same record take turns. The default is in memory, which holds within one process; across processes, supply `locks` over your database.
 
-## 6. Limits and the cost cap
+## 5. Limits and the cost cap
 
-A customer's movement is code you did not write. Set every limit, and a cost cap on every run.
+A customer's movement is code you did not write. Set every limit, and a cost cap on every run: the embedded host's `limits` takes all of them, flat, and puts them on each run's input.
 
 - **`limits`** on the run's input: steps (statements and expressions, the CPU bound), one text's size, one collection's size, and the result's size. Past one, the run fails with `MOVENG_LIMIT_STEPS`, `MOVENG_LIMIT_TEXT_SIZE`, `MOVENG_LIMIT_COLLECTION_SIZE` or `MOVENG_LIMIT_RESULT_SIZE`. Nothing in the movement can catch it. Absent, each is the engine's default, which is generous.
 - **`costCapMicrodollars`** on the run's input: the most the run may spend on model calls and priced plugins. Past it, the engine refuses the next priced call itself. One call already under way may overshoot by its own cost.
@@ -156,15 +149,54 @@ A customer's movement is code you did not write. Set every limit, and a cost cap
 
 The full table is [docs/contracts/run-limits.md](contracts/run-limits.md).
 
-## 7. One tenant cannot reach another
+## 6. One tenant cannot reach another
 
 - Every run names its tenant, and the host answers every call for the tenant of the segment it was made in.
-- Build each tenant's catalog from that tenant's connections only, and keep each tenant's credentials under its own ids.
-- Tell the host which tenant owns each credential (`credentials.belongsTo` on `inProcessHost`). Before it builds an instance for the credential a run names, the host asks; a credential that is not the run's tenant's is refused (`CredentialNotTenants`), and a host told nothing refuses every run that names one.
+- A tenant's catalog holds that tenant's connections only, and each credential is kept under an id of its own.
+- Before it builds an instance for the credential a run names, the host asks whether that credential is the run's tenant's; one that is not is refused (`CredentialNotTenants`). The embedded host answers from the tenant's connections. On `inProcessHost` directly, you answer (`credentials.belongsTo`), and a host told nothing refuses every run that names one.
 - A movement reaches the network only through modules. The engine has no network code, and no family takes a URL from a movement.
+
+## 7. Serving the authoring tools
+
+An agent (Claude, or any MCP client) can author your customers' movements for them: read the handbook, see the customer's systems and fields, save a movement (checked first), fix it, and run it. `@listen-fire/authoring-mcp` serves those tools over MCP. You mount one handler; it asks you which customer each request is for.
+
+```ts
+import { createAuthoringHandler } from '@listen-fire/authoring-mcp';
+
+const authoring = createAuthoringHandler({
+  // Your own auth, on every request, before any tool is listed.
+  tenant: async (request) => {
+    const tenant = customerOf(request);
+    if (tenant === undefined) return { ok: false, status: 401, message: 'sign in first' };
+    return {
+      ok: true,
+      tenant: {
+        catalog: async ({ fresh }) => ({ snapshot: await host.catalog(tenant), connections: await connectionsOf(tenant) }),
+        programs: programStoreFor(tenant),
+        runs: runsFor(tenant), // optional: without it, the four run tools are not offered
+      },
+    };
+  },
+});
+
+http.createServer((req, res) => void authoring(req, res));
+```
+
+- **The handler.** Streamable HTTP, no sessions: each request is answered on its own. Mount it at any path, for POST, GET and DELETE.
+- **The tenant.** `tenant(request)` runs first, every time. It returns that customer's functions, or a refusal with a status; a refused request sees no tools. The package is handed one customer's functions per request, so it has no way to ask about another.
+- **The catalog.** What `host.catalog(tenant)` returns, and the customer's connections with the system each serves. `fresh: true` asks for the schema as it is now (describeConnection asks, so a field the customer just added shows).
+- **The programs.** List, get by id or by name, save and delete. A save carries the revision the agent read (`revisionOf`, the sha256 of the text): refuse it, in the same atomic step as the write, when the stored text's revision differs, and return the stored program. A save also carries the listens the text declares, so you can route events without parsing it.
+- **The runs (optional).** Start a run of one program on text or files (with a request id, so a retry returns the first run), read its status, list a program's runs, and read its trace. On the embedded host, `run(tenant, { program, text })` fires a program's `listen to manual`.
+- **Also optional:** a checker of your own (the default is this release's), a deeper describe from live adapter calls (the default answers from the catalog snapshot), handbook chapters for your own systems, tools of your own, and one paragraph of instructions.
+
+The package does the rest: the handbook and its search, the digest of the customer's systems, the check (a save is refused while it has errors, unless the agent passes the user's consent), and diagnostics that name the handbook section showing the fix. The tool names and descriptions are the hosted product's, so an agent or skill written against one works against the other.
+
+The example mounts it at `/customers/:tenant/mcp`, the customer's API key as a bearer token (`src/authoring.ts`, `test/authoring.test.ts`: getStarted, a save refused with `MOV_ENUM_UNKNOWN_VALUE`, the fix through `editAutomation`, a run and `checkRun`).
 
 ## What the example leaves out
 
-- Parks that outlive the process. The example parks a sleeping run in `memoryRunHostStore` and steps it on with `tick()` (each run gets its own park sink, `runParkSink`, and its due timers are drained under the run's lease, `drainDueTimers`); a restart forgets them.
+- Parks that outlive the process. The example uses the embedded host's in-memory store; a restart forgets its connections, movements and parked runs.
 - A real vault and a database for write locks.
+- Awaits and callbacks: the embedded host steps on timers only. It has no wake for an adapter's `await` or for a callback.
+- Real auth on the MCP endpoint: the customer's API key stands in for it.
 - The live Anthropic path is wired (`ANTHROPIC_API_KEY`) but the test uses the fake model.

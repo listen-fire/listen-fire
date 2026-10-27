@@ -1,0 +1,11 @@
+// The compiled artifact. A SOURCE package: `main`/`types` point at
+// `index.ts` while you work; the application build emits into its own tree.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": false,
+    "sourceMap": true
+  },
+  "exclude": ["node_modules", "dist", "jest.config.cjs", "**/__test__/**"]
+}

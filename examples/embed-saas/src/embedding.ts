@@ -1,69 +1,45 @@
 // The engine inside the SaaS's own process: each customer is a tenant with its
-// own saved movements, its own CRM records and its own API key; a customer's
-// movement is checked when saved and run when one of its events happens. A run
-// that waits (`await sleep(1h)`) parks in an in-memory run-host store and is
-// stepped on by `tick()` once its time comes. Everything here comes from the
-// engine's public entries and the module kit.
+// own CRM records and fields, its own API key and, when it connects one, its
+// own Slack workspace (a ready-made module loaded the same way as the SaaS's
+// own). The engine's embedded host does the rest: it checks a customer's
+// movement when it is saved, runs each one that listens when the CRM raises
+// an event, and parks a run that waits (`await sleep(1h)`) until the `tick()`
+// past its wake (`@listen-fire/embed`, over the engine's public entries).
 
-import { randomUUID } from 'node:crypto';
+import type { IncomingMessage } from 'node:http';
 
-import { tenantIdOf, type RunInput } from '@listen-fire/engine-contracts';
-import { ENGINE_VERSION, runMovement, resumeMovement, settleRaceFrame, checkPinnedInRust, parsePinned, type MovementRunResult } from '@listen-fire/engine/public/movement-engine';
-import { inProcessHost, introspectAdapter, collectFileListeners, memoryRunHostStore, pricedModels, type FileListener, type ModelClient } from '@listen-fire/engine/public/embed';
-import {
-  armTimerWake,
-  drainDueTimers,
-  nextTimerWake,
-  parkSources,
-  runParkSink,
-  withRunLease,
-  type RunHost,
-  type StepLeaf,
-  type StepOutcome,
-} from '@listen-fire/engine/public/run-host';
-import { buildCatalogSnapshot } from '@listen-fire/engine/public/catalog';
-import { eventMatchesTriggerScope, triggerEventOf } from '@listen-fire/engine/public/inbound';
-import { createMemoryVault, createSecretsFamily, type MemoryVault } from '@listen-fire/engine/public/secrets';
-import type { Adapter, DiscriminableEvent } from '@listen-fire/engine/public/adapter';
-import type { EngineHost } from '@listen-fire/engine/public/host';
-import { adapterInProcess, memoryKv, refusingFiles, secretsCredential, type ModuleLog } from '@listen-fire/module-kit';
+import { createAuthoringHandler, type AuthoringHandler } from '@listen-fire/authoring-mcp';
+import { createEmbeddedHost, type EmbeddedHost, type EmbeddedRunLimits, type EmbeddedRunOutcome, type SaveAnswer } from '@listen-fire/embed';
+import { pricedModels, type ModelClient } from '@listen-fire/engine/public/embed';
+import type { DiscriminableEvent } from '@listen-fire/engine/public/adapter';
+import { slackModule } from '@listen-fire/slack';
 
-import { CompanyStore, crmModule } from './crm';
+import { authoringStore, authoringTenant } from './authoring';
+import { CompanyStore, crmModule, type FieldDefinition } from './crm';
 
-/** The language version every customer's movement is pinned to: the
- *  engine's release. */
-export const LANGUAGE_VERSION = ENGINE_VERSION;
+export type { SaveAnswer };
 
-/** The one connection a customer's movement imports: its CRM workspace. */
+/** The connection a customer's movement imports for its CRM workspace, and,
+ *  once the customer connects Slack, for its Slack workspace. */
 export const CREDENTIAL = 'workspace';
+export const SLACK_CREDENTIAL = 'slack_workspace';
 
-/** What a run may consume. A customer's movement is code the SaaS did not
- *  write: every limit is set, and every run has a cost cap. */
-export interface Limits {
-  maxSteps: number;
-  maxTextBytes: number;
-  maxCollectionItems: number;
-  maxResultBytes: number;
-  /** The most one run may spend on models, in microdollars. */
-  costCapMicrodollars: number;
+/** A customer's Slack: the bot token, and the API it is reached at (the
+ *  workspace's own, unless a test points it elsewhere). */
+export interface SlackConnection {
+  accessToken: string;
+  baseUrl?: string;
 }
 
-export const DEFAULT_LIMITS: Limits = {
+/** What a run may consume. A customer's movement is code the SaaS did not
+ *  write: every limit is set, and every run has a cost cap (in microdollars). */
+export const DEFAULT_LIMITS = {
   maxSteps: 100_000,
   maxTextBytes: 1024 * 1024,
   maxCollectionItems: 10_000,
   maxResultBytes: 4 * 1024 * 1024,
   costCapMicrodollars: 50_000,
-};
-
-interface SavedMovement {
-  name: string;
-  source: string;
-  listeners: FileListener[];
-}
-
-/** What a save answers: saved, or why not (the checker's words). */
-export type SaveAnswer = { saved: true; listens: number } | { saved: false; problems: string[] };
+} satisfies EmbeddedRunLimits;
 
 export interface FiredRun {
   movement: string;
@@ -71,246 +47,84 @@ export interface FiredRun {
   outcome: { ok: true; writes: number; spentMicrodollars: number; parked?: true } | { ok: false; error: string };
 }
 
-/** A run the SaaS keeps between its segments: what to re-enter it with. */
-interface RunRecord {
-  tenant: string;
-  movement: string;
-  input: Omit<RunInput, 'runId'>;
-  spentMicrodollars: number;
-  status: 'running' | 'parked' | 'completed' | 'failed';
-}
-
-type CatalogSnapshot = RunInput['catalog'];
-
-const quietLog: ModuleLog = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
-
 export class Embedding {
   readonly companies = new CompanyStore();
   private readonly crm = crmModule(this.companies);
-  private readonly vault: MemoryVault = createMemoryVault();
-  private readonly secrets = createSecretsFamily({ backend: this.vault });
-  private readonly movements = new Map<string, Map<string, SavedMovement>>();
-  private readonly runs = new Map<string, RunRecord>();
-  private readonly now: () => Date;
-  /** Where parked runs wait: their leaves, joins, timers and pinned texts. */
-  private readonly runHost: RunHost;
+  private readonly host: EmbeddedHost;
+  private readonly kept: ReturnType<typeof authoringStore>;
+  /** Each customer's API key: its CRM's credential, and the demo auth of its MCP endpoint. */
+  private readonly apiKeys = new Map<string, string>();
 
-  constructor(private readonly options: { models?: ModelClient; limits?: Limits; now?: () => Date } = {}) {
-    this.now = options.now ?? (() => new Date());
-    this.runHost = {
-      store: memoryRunHostStore({ now: () => this.now().getTime() }),
-      keepers: [],
-      runs: {
-        cancelRequest: async () => null,
-        markFailed: async ({ runId }) => this.settle(runId, 'failed'),
-      },
-    };
-  }
-
-  /** The host one run's segments run against: the SaaS's parts, and the run's
-   *  own park sink (a park names no run, so the sink is the run's). */
-  private hostFor(runId: string, tenant: string): EngineHost {
-    return inProcessHost({
-      adapters: { resolve: ({ adapterType, teamId, credentialsId }) => this.crmFor({ adapterType, tenant: teamId, credentialsId }) },
-      // A run reaches only its own tenant's connection: the host asks this
-      // before it builds an instance for the credential a run names.
-      credentials: { belongsTo: ({ teamId, credentialsId }) => credentialsId === credentialRef(teamId) },
-      ...(this.options.models !== undefined ? { llm: pricedModels({ client: this.options.models }) } : {}),
-      clock: { now: async () => ({ nowIso: this.now().toISOString() }) },
-      park: {
-        sink: runParkSink(this.runHost, {
-          runId,
-          teamId: tenant,
-          records: { ensureRun: async () => {}, markParked: async () => this.settle(runId, 'parked') },
-        }),
-        sources: parkSources(this.runHost.store.sources, tenant),
-      },
+  constructor(options: { models?: ModelClient; limits?: EmbeddedRunLimits; now?: () => Date } = {}) {
+    this.kept = authoringStore(options.now ?? (() => new Date()));
+    this.host = createEmbeddedHost({
+      modules: [this.crm, slackModule],
+      store: this.kept.store,
+      limits: options.limits ?? DEFAULT_LIMITS,
+      ...(options.now !== undefined ? { now: options.now } : {}),
+      ...(options.models !== undefined ? { engine: { llm: pricedModels({ client: options.models }) } } : {}),
     });
   }
 
-  private settle(runId: string, status: RunRecord['status']): void {
-    const run = this.runs.get(runId);
-    if (run !== undefined) run.status = status;
+  /** A new customer: its own tenant, the fields it defines on `Company`, and
+   *  the API key its CRM workspace is reached with. */
+  async addCustomer(tenant: string, apiKey: string, fields: FieldDefinition[] = []): Promise<void> {
+    this.companies.defineFields(tenant, fields);
+    this.apiKeys.set(tenant, apiKey);
+    await this.host.connect(tenant, { name: CREDENTIAL, module: this.crm, credential: { api_key: apiKey } });
   }
 
-  /** A new customer: its own tenant, and the API key its CRM workspace is
-   *  reached with, kept in the SaaS's vault. */
-  addCustomer(tenant: string, apiKey: string): void {
-    this.vault.put(credentialRef(tenant), { api_key: apiKey });
-    this.movements.set(tenant, new Map());
+  /** The customer's own Slack workspace: its movements may now import it. */
+  async connectSlack(tenant: string, slack: SlackConnection): Promise<void> {
+    await this.host.connect(tenant, { name: SLACK_CREDENTIAL, module: slackModule, credential: { ...slack } });
   }
 
   /** Check a customer's movement against its own catalog; save it if clean. */
-  async save(tenant: string, name: string, source: string): Promise<SaveAnswer> {
-    const saved = this.savedOf(tenant);
-    const catalog = await this.catalogFor(tenant);
-    try {
-      checkPinnedInRust({ source, catalog, languageVersion: LANGUAGE_VERSION });
-    } catch (error) {
-      return { saved: false, problems: [error instanceof Error ? error.message : String(error)] };
-    }
-    const listeners = collectFileListeners(parsePinned({ source, languageVersion: LANGUAGE_VERSION }));
-    saved.set(name, { name, source, listeners });
-    return { saved: true, listens: listeners.length };
+  save(tenant: string, name: string, source: string): Promise<SaveAnswer> {
+    return this.host.save(tenant, { name, source });
   }
 
   /** Something happened in a customer's CRM: run each of its movements that
    *  listens for it. */
   async fire(tenant: string, event: DiscriminableEvent): Promise<FiredRun[]> {
-    const catalog = await this.catalogFor(tenant);
-    const runs: FiredRun[] = [];
-    for (const movement of this.savedOf(tenant).values()) {
-      for (const listener of movement.listeners) {
-        if (listener.adapter !== 'crm' || !eventMatchesTriggerScope(event, listener.config)) continue;
-        runs.push({ movement: movement.name, outcome: await this.run(tenant, movement, listener, event, catalog) });
-      }
-    }
-    return runs;
+    return this.kept.runs.record(await this.host.dispatch(tenant, { adapterType: 'crm', event })).map(firedRun);
   }
 
-  private async run(tenant: string, movement: SavedMovement, listener: FileListener, event: DiscriminableEvent, catalog: CatalogSnapshot): Promise<FiredRun['outcome']> {
-    const limits = this.options.limits ?? DEFAULT_LIMITS;
-    const { triggerEvent } = triggerEventOf({
-      pipelineInputId: `${movement.name}:${listener.movementName}`,
-      adapterType: 'crm',
-      triggerType: 'webhook',
-      event,
-      eventTypes: (await this.crmFor({ adapterType: 'crm', tenant, credentialsId: credentialRef(tenant) }).listEventTypes?.()) ?? [],
-      now: this.now(),
-    });
-    const runId = randomUUID();
-    const run: RunRecord = {
-      tenant,
-      movement: movement.name,
-      input: {
-        source: movement.source,
-        languageVersion: LANGUAGE_VERSION,
-        movementName: listener.movementName,
-        event: triggerEvent,
-        teamId: tenantIdOf(tenant),
-        catalog,
-        credentialIds: { [CREDENTIAL]: credentialRef(tenant) },
-        costCapMicrodollars: limits.costCapMicrodollars,
-        limits: {
-          maxSteps: limits.maxSteps,
-          maxTextBytes: limits.maxTextBytes,
-          maxCollectionItems: limits.maxCollectionItems,
-          maxResultBytes: limits.maxResultBytes,
-        },
-      },
-      spentMicrodollars: 0,
-      status: 'running',
-    };
-    this.runs.set(runId, run);
-    try {
-      const result = await runMovement({ ...run.input, runId, host: this.hostFor(runId, tenant) });
-      run.status = result.parked === true ? 'parked' : 'completed';
-      return this.ran(run, result);
-    } catch (error) {
-      run.status = 'failed';
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  }
-
-  /** What one segment came to, kept on the run. */
-  private ran(run: RunRecord, result: MovementRunResult): FiredRun['outcome'] {
-    run.spentMicrodollars = result.runSpentMicrodollars ?? run.spentMicrodollars + (result.spentMicrodollars ?? 0);
-    return {
-      ok: true,
-      writes: result.writes.length,
-      spentMicrodollars: run.spentMicrodollars,
-      ...(result.parked === true ? { parked: true as const } : {}),
-    };
-  }
-
-  /** Step on every parked run whose timer is due: each under its run lease,
-   *  its due leaves resumed, its next timer re-armed. The SaaS calls this from
-   *  a scheduler (or the `POST /tick` route). */
+  /** Step on every parked run whose timer is due. The SaaS calls this from a
+   *  scheduler (or the `POST /tick` route). */
   async tick(): Promise<FiredRun[]> {
-    const { store } = this.runHost;
-    const stepped: FiredRun[] = [];
-    for (const work of await store.work.claimDue({ limit: 100, leaseMs: 60_000, dueBy: this.now().toISOString() })) {
-      const runId = String(Reflect.get(Object(work.payload), 'runId'));
-      const run = this.runs.get(runId);
-      if (work.kind !== 'resume_timer' || run === undefined) {
-        await store.work.complete(work);
-        continue;
-      }
-      const outcomes: Array<FiredRun['outcome']> = [];
-      await withRunLease(store.leases, runId, (lease) =>
-        drainDueTimers(this.runHost, { runId, dueBy: this.now().toISOString(), lease, step: this.stepFor(runId, run, outcomes) }),
-      );
-      await store.work.complete(work);
-      const next = await nextTimerWake(this.runHost, { runId });
-      if (next !== null) await armTimerWake(store, { runId, teamId: run.tenant, wakeAt: next });
-      for (const outcome of outcomes) stepped.push({ movement: run.movement, outcome });
-    }
-    return stepped;
+    return this.kept.runs.record(await this.host.tick()).map(firedRun);
   }
 
-  /** One parked run's step: a segment re-entered from its leaf (or a race
-   *  settled), on the run's own host, its cost counted from what it spent. */
-  private stepFor(runId: string, run: RunRecord, outcomes: Array<FiredRun['outcome']>): StepLeaf {
-    return async (request, settle): Promise<StepOutcome> => {
-      const input = {
-        ...run.input,
-        runId,
-        priorSpentMicrodollars: run.spentMicrodollars,
-        state: request.state,
-        host: this.hostFor(runId, run.tenant),
-      };
-      try {
-        const result =
-          request.kind === 'leaf'
-            ? await resumeMovement({ ...input, ...(request.reenter ? { reenter: true } : {}), deferRaceSettlement: request.deferRaceSettlement })
-            : await settleRaceFrame({ ...input, frameAddress: request.frameAddress });
-        outcomes.push(this.ran(run, result));
-        const deferredRaceFrames = result.deferredRaceFrames ?? [];
-        if (result.parked === true) return { kind: 'parked', parkedAddress: result.parkedAddress, deferredRaceFrames };
-        if (await settle.runComplete()) run.status = 'completed';
-        return { kind: 'completed', deferredRaceFrames };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        run.status = 'failed';
-        outcomes.push({ ok: false, error: message });
-        return { kind: 'failed', error: message };
-      }
-    };
-  }
-
-  /** What a customer's movements are checked against: the CRM, introspected
-   *  for that customer, and the one connection it holds. */
-  private async catalogFor(tenant: string): Promise<CatalogSnapshot> {
-    const { schema } = await introspectAdapter(this.crmFor({ adapterType: 'crm', tenant, credentialsId: credentialRef(tenant) }), this.crm.manifest);
-    return buildCatalogSnapshot({
-      adapters: [{ manifest: this.crm.manifest, schemas: { [CREDENTIAL]: schema } }],
-      credentials: { [CREDENTIAL]: { adapters: ['crm'], credential: 'crm' } },
-      plugins: {},
+  /**
+   * The authoring tools over MCP, mounted at `/customers/:tenant/mcp`: the
+   * tenant is the path's, and the request must carry that customer's API key
+   * as a bearer token (the example's demo auth; a product uses its own).
+   */
+  authoringHandler(): AuthoringHandler {
+    const { store, programs, runs } = this.kept;
+    return createAuthoringHandler({
+      tenant: async (request: IncomingMessage) => {
+        const tenant = tenantOfPath(request.url ?? '/');
+        const key = this.apiKeys.get(tenant ?? '');
+        if (tenant === undefined || key === undefined || request.headers.authorization !== `Bearer ${key}`) {
+          return { ok: false, status: 401, message: "send the customer's API key as a bearer token" };
+        }
+        return { ok: true, tenant: authoringTenant({ tenant, host: this.host, store, programs, runs }) };
+      },
+      instructions: "This is the SaaS's own CRM: a customer's movements read and write its companies, with the fields it defined.",
     });
-  }
-
-  /** The customer's CRM, loaded in process, over the connection named. */
-  private crmFor(input: { adapterType: string; tenant: string; credentialsId: string | undefined }): Adapter {
-    const { adapterType, tenant, credentialsId } = input;
-    if (adapterType !== 'crm') throw new Error(`no adapter "${adapterType}" here`);
-    if (credentialsId === undefined) throw new Error(`the CRM needs a connection`);
-    return adapterInProcess(this.crm, {
-      tenant,
-      credential: secretsCredential({ name: 'crm', ref: credentialsId, secrets: this.secrets }),
-      log: quietLog,
-      files: refusingFiles('the CRM keeps no files'),
-      kv: memoryKv(),
-      validateResults: true,
-    }).adapter;
-  }
-
-  private savedOf(tenant: string): Map<string, SavedMovement> {
-    const saved = this.movements.get(tenant);
-    if (saved === undefined) throw new Error(`no customer ${tenant}`);
-    return saved;
   }
 }
 
-function credentialRef(tenant: string): string {
-  return `crm:${tenant}`;
+function firedRun({ program, outcome }: EmbeddedRunOutcome): FiredRun {
+  if (!outcome.ok) return { movement: program, outcome };
+  const { writes, spentMicrodollars, parked } = outcome;
+  return { movement: program, outcome: { ok: true, writes: writes.length, spentMicrodollars, ...(parked ? { parked: true as const } : {}) } };
+}
+
+/** `acme` from `/customers/acme/mcp`. */
+export function tenantOfPath(url: string): string | undefined {
+  const [customers, tenant, mcp, ...rest] = url.split('?')[0].split('/').filter(Boolean).map(decodeURIComponent);
+  return customers === 'customers' && mcp === 'mcp' && rest.length === 0 ? tenant : undefined;
 }

@@ -181,4 +181,4 @@ A module of your own, started from its `command` or reached at its `url`, fills 
 
 ## Embedding
 
-An embedded engine has four of these slots (models, judge, store, files); you fill each with your own part of the host. The limiter, loop guard, browser, wake and ocr slots are lf's (an embedder's file-to-text is its own, OCR included). See [`embedding.md`](embedding.md#5-the-host-filling-the-slots).
+An embedded engine has four of these slots (models, judge, store, files); you fill each with your own part of the host. The limiter, loop guard, browser, wake and ocr slots are lf's (an embedder's file-to-text is its own, OCR included). See [`embedding.md`](embedding.md#4-the-hosts-slots).
