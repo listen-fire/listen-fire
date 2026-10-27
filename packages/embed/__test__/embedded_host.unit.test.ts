@@ -18,8 +18,9 @@ interface Written {
 }
 
 /** A notes service: each tenant's fields on `Note` from `schemas`, every
- *  write recorded with the tenant and the book its credential names. */
-function notesModule(written: Written[], schemas: Map<string, string[]>) {
+ *  write recorded with the tenant and the book its credential names, every
+ *  update with the record's id. */
+function notesModule(written: Written[], schemas: Map<string, string[]>, updated: Array<{ externalId: string; Title: string }> = []) {
   const create = (ctx: ModuleContext): AdapterModuleMethods => {
     const tenant = ctx.config.tenant;
     const adapter: Adapter = {
@@ -47,7 +48,10 @@ function notesModule(written: Written[], schemas: Map<string, string[]>) {
         written.push({ tenant, book, Title: String(fields.Title) });
         return { adapterType: 'notes', externalId: `note-${written.length}`, recordType, data: { ...fields } };
       },
-      updateRecord: async () => ({ notFound: true }),
+      updateRecord: async ({ externalId, recordType, fields }) => {
+        updated.push({ externalId, Title: String(fields.Title) });
+        return { adapterType: 'notes', externalId, recordType, data: { ...fields } };
+      },
       deleteRecord: async () => {
         throw new Error('not used');
       },
@@ -94,10 +98,11 @@ function noteCreated(title: string): DiscriminableEvent {
 
 function setup(options: { now?: () => Date } = {}) {
   const written: Written[] = [];
+  const updated: Array<{ externalId: string; Title: string }> = [];
   const schemas = new Map<string, string[]>();
-  const notes = notesModule(written, schemas);
+  const notes = notesModule(written, schemas, updated);
   const host = createEmbeddedHost({ modules: [notes], ...options, moduleHost: () => ({ validateResults: true }) });
-  return { host, notes, written, schemas };
+  return { host, notes, written, updated, schemas };
 }
 
 describe('the embedded host', () => {
@@ -126,6 +131,27 @@ describe('the embedded host', () => {
     // An event outside a listen's scope, or from another module, runs nothing.
     expect(await host.dispatch('acme', { adapterType: 'notes', event: { ...noteCreated('x'), eventType: 'note.deleted' } })).toEqual([]);
     expect(await host.dispatch('acme', { adapterType: 'crm', event: noteCreated('x') })).toEqual([]);
+  });
+
+  it('a write to the event parameter updates the record the event fired on, through updateRecord', async () => {
+    const { host, notes, written, updated } = setup();
+    await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
+    const source = `import { notes } from adapters
+import { north } from credentials
+
+book = connect notes using north
+
+function seen(note: <book-[:Note]->>) {
+  write note { Title: "Seen \${note.Title}" }
+}
+
+listen to book { events: ["${NOTE_CREATED}"] } fire seen
+`;
+    expect(await host.save('acme', { name: 'seen', source })).toEqual({ saved: true, listens: 1 });
+    const [fired] = await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    expect(fired?.outcome).toMatchObject({ ok: true });
+    expect(updated).toEqual([{ externalId: 'n1', Title: 'Seen one' }]);
+    expect(written).toEqual([]);
   });
 
   it('parks a run that sleeps, and the tick past its wake steps it on to its write', async () => {

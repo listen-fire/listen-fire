@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHmac } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { companies, crmCompanies, externalPort, lf, lfCommand, project, served } from './example';
@@ -50,6 +50,35 @@ test('lf run --event writes through the external, parks on sleep, and lf resume 
   assert.deepEqual(companies(dir), ['Welcome Vireo Robotics', 'Follow up Vireo Robotics']);
 
   assert.match(lf(dir, 'resume').out, /no parked runs/);
+});
+
+test('lf run --event: a write to the event parameter updates the record the event fired on', () => {
+  const dir = project();
+  mkdirSync(join(dir, '.lf/externals/acme_crm'), { recursive: true });
+  writeFileSync(join(dir, '.lf/externals/acme_crm/state.json'), JSON.stringify({ companies: [{ externalId: 'c-1', fields: { Name: 'Vireo Robotics' } }] }));
+  writeFileSync(
+    join(dir, 'movements/companies.mvt'),
+    `import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+function onboard(company: <crm-[:Company]->>) {
+  write company { Name: "Onboarded \${company.Name}" }
+}
+
+listen to crm { events: ["company.created"] } fire onboard
+`,
+  );
+  // Tagged as the CRM's webhook tags it, so the event names the record it fired on.
+  const event = { external: 'acme_crm', event: { payload: { id: 'c-1', Name: 'Vireo Robotics' }, externalId: 'c-1', tag: 'company.created', eventType: 'company.created', changeType: 'create', recordType: 'Company' } };
+  writeFileSync(join(dir, 'events/company_tagged.json'), JSON.stringify(event));
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  const run = lf(dir, 'run', '--event', 'events/company_tagged.json');
+  assert.equal(run.code, 0, run.out);
+  assert.match(run.out, /companies:onboard completed — 1 write\(s\)/);
+  assert.deepEqual(crmCompanies(dir), [{ externalId: 'c-1', fields: { Name: 'Onboarded Vireo Robotics' } }]);
 });
 
 test('lf run --webhook refuses a delivery whose signature does not verify', () => {

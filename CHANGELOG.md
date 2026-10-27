@@ -50,6 +50,7 @@ named in [`RELEASING.md`](RELEASING.md).
 ### Fixed
 
 - `lf` reads a file a module owns (a Gmail attachment) for an extraction or `File.read`, through the module's `resolveFileRef` as a write already did; before, the extraction saw nothing and the run warned `MOVENG_FILE_BYTES_UNAVAILABLE`.
+- A write to the movement's event parameter (`write company { … }`) updates the record the event fired on through the module's `updateRecord`; it checked clean but failed every run (`MOVENG_RUNTIME: 'company' is the movement parameter`).
 
 ## [0.12.9] - 2026-10-26
 

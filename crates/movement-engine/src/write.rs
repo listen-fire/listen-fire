@@ -1428,7 +1428,7 @@ impl Run<'_> {
     /// `executePositionWrite`: an update by the id of the record the alias
     /// stands on — a write's handle, or a traversed record.
     async fn position_write(&self, alias: &str, lines: &[Line], binding_name: Option<&str>, scope: &Rc<Scope>) -> Result<Binding, Stop> {
-        let binding = scope.resolve(alias);
+        let binding = self.record_in_scope(alias, scope);
         let PositionTarget { target, graph, external_id } = self.position_target_of(alias, binding.clone(), "update").await?;
         let fields = self.write_fields(lines, &target.adapter, &target.record_type, scope).await?;
         let lock = unique::record_lock_name(&target.adapter.adapter_type, &external_id);
@@ -1471,7 +1471,16 @@ impl Run<'_> {
     /// is written through its graph's target adapter, under the type its
     /// position names; a handle under the type it stands on.
     pub(crate) async fn position_target(&self, alias: &str, scope: &Rc<Scope>, action: &str) -> Result<PositionTarget, Stop> {
-        self.position_target_of(alias, scope.resolve(alias), action).await
+        self.position_target_of(alias, self.record_in_scope(alias, scope), action).await
+    }
+
+    /// What `alias` names, the event parameter as the record the event fired
+    /// on (its source position), so a write or a delete reaches that record.
+    fn record_in_scope(&self, alias: &str, scope: &Scope) -> Option<Binding> {
+        match scope.resolve(alias) {
+            Some(Binding::Event) => Some(self.event_record()),
+            other => other,
+        }
     }
 
     /// `resolvePositionWriteTarget` of a binding in hand, `alias` naming it

@@ -25,9 +25,11 @@ const CATALOG: &str = r#"{
     },
     "collections": { "notes": { "target": "Note" }, "tickets": { "target": "Ticket" } },
     "eventPosition": "Monster",
+    "supportsInPlaceUpdate": true,
     "writableRoots": {
       "Note": { "fields": { "Title": "text", "Attachment": "file" }, "resultShape": { "externalId": "text", "Title": "text" }, "fuzzyResolution": true },
-      "Ticket": { "fields": { "Subject": "text" }, "resultShape": { "externalId": "text" } }
+      "Ticket": { "fields": { "Subject": "text" }, "resultShape": { "externalId": "text" } },
+      "Monster": { "fields": { "Slayer": "text" }, "resultShape": { "externalId": "text" } }
     }
   } } } },
   "credentials": {},
@@ -428,6 +430,28 @@ fn an_extraction_runs_the_same_through_the_typed_and_the_json_route() {
     let through_json = json.drive(&input(&source), Entry::Run, &mut Hosts::new().adapters(&mut served).models(&mut unused));
     assert_eq!(typed, through_json);
     assert_eq!(json.args_of("llm.extractCall.call").len(), 1);
+}
+
+/// The event parameter is the record the event fired on (`eventRecord`), so a
+/// write to it updates that record in place, as a write to a traversal alias does.
+#[test]
+fn a_write_to_the_event_parameter_updates_the_record_the_event_fired_on() {
+    let source = movement("", "  write monster { Slayer: \"Grace\" }\n");
+    assert_eq!(errors(&source), vec![]);
+    let mut world = World::default();
+    let typed = block_on(run(&mut Hosts::new().adapters(&mut world), &input(&source))).unwrap();
+    let ran = finished(Ok(typed.clone()));
+    assert_eq!(ran.writes.len(), 1, "{ran:?}");
+    let updates: Vec<&Data> = world.calls.iter().filter(|(method, _)| method == "updateRecord").map(|(_, args)| args).collect();
+    assert_eq!(updates.len(), 1, "{:?}", world.calls);
+    assert_eq!(updates[0].get("externalId").and_then(Data::as_text), Some("m1"));
+    assert_eq!(updates[0].get("recordType").and_then(Data::as_text), Some("Monster"));
+    assert_eq!(updates[0].get("fields").and_then(|f| f.get("Slayer")).and_then(Data::as_text), Some("Grace"));
+    assert!(world.calls.iter().all(|(method, _)| method != "createRecord"));
+
+    let mut json = Wire::new(WireWorld::default(), |_, _| None);
+    let mut served = World::default();
+    assert_eq!(typed, json.drive(&input(&source), Entry::Run, &mut Hosts::new().adapters(&mut served)));
 }
 
 struct Judging(Verdict, usize);
