@@ -1,5 +1,11 @@
 # @listen-fire/gmail
 
+## 0.12.9
+
+### Patch Changes
+
+- 254d98e: The handbook text says "listen for both" where it said "ask for both" (the assembled handbook keeps the word "ask" for approvals).
+
 ## 0.12.8
 
 ### Patch Changes

@@ -1,5 +1,9 @@
 # @listen-fire/engine-contracts
 
+## 0.12.11
+
+No changes in this release.
+
 ## 0.12.10
 
 ### Patch Changes

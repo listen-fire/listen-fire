@@ -20,6 +20,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.12.11] - 2026-10-27
+
+A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. It adds `lf runs rerun`, keeps a failed run's writes, and makes MCP connections retry.
+
 ### lf
 
 - **`lf runs rerun <run-id>` runs a failed run again.** The rerun is the same run's next attempt, not a new run. It uses the event (or manual text) the run ran on, and the movement as the project holds it now, so a fix to the movement takes effect. It runs from the start. `lf runs show` lists every attempt with its status, times, writes and error; the run's status is its latest attempt's. Before this, an agent woken by a failure replayed the delivery, which made a new run every time (`lf deliveries replay` is unchanged, and its help now points here).
@@ -27,7 +31,13 @@ named in [`RELEASING.md`](RELEASING.md).
   - A failed attempt that committed writes before it failed is refused unless `--force`; the refusal lists each write (target and action).
   - A rerun holds the run's lease: of two at once, one runs and the other is refused. `--json` and exit codes as `lf run` (1 for a refusal or a failed attempt).
 - **A failed run keeps the writes it made.** Its outcome (`lf runs show`'s `writes` and `writeRecords`) used to be replaced by the error alone; a write the run made before it failed, and one made by the segment that failed, are now listed. `@lf/postgres-store` now keeps `writeRecords` too (migration 8).
-- **Store slot.** `runs.rerun { runId, input, at, fence }` starts a failed run's next attempt as one fenced write; a run row may answer `attempt` and `attempts`; `records.markFailed` keeps the writes in the run's outcome. A store module without `runs.rerun` still works, except for `lf runs rerun` (docs/contracts/store-slot.md).
+- **Store slot.** `runs.rerun { runId, input, at, fence }` starts a failed run's next attempt as one fenced write; a run row may answer `attempt` and `attempts`; `records.markFailed` keeps the writes in the run's outcome. A store module without `runs.rerun` still works, except for `lf runs rerun`, which fails with the module's "method not implemented" (docs/contracts/store-slot.md). The platform's store module needs `runs.rerun` (and run rows that answer `attempt` and `attempts`) before `lf runs rerun` works against it.
+
+### Connectors
+
+- **An MCP connection retries a request that failed in passing.** A 429, a 5xx or a network error is retried with exponential backoff and jitter (four attempts, at most 20 seconds of waiting), and a server's `Retry-After` is honoured. Reads (`initialize`, `tools/list` and tools marked read only) are retried on all of these. A tool that changes things is retried only where nothing can have happened: a 429, a 503 that carries `Retry-After`, or a connection refused or not found. A 401 or 403 names the credential. The connection declares that it reports throttles to the host, so every instance of the module slows down together.
+- **`retryingFetch` in `@listen-fire/module-kit`** wraps a module's `ctx.fetch` with the same backoff for any module to adopt. The limits door now treats a 503 with a usable `Retry-After` as a throttle too (it was a 429 only), and a module that declares `hostLimits: true` without any `limits` of its own now has it kept (it was dropped silently). The `listen-fire-module-kit` crate's store table now serves `runs.rerun`, so a store module written in Rust can serve `lf runs rerun`.
+- **The Gmail handbook** says "listen for both" where it said "ask for both" (`@listen-fire/gmail` 0.12.9); the assembled handbook keeps the word "ask" for approvals.
 
 ## [0.12.10] - 2026-10-27
 
@@ -2379,7 +2389,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.10...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.11...HEAD
+[0.12.11]: https://github.com/listen-fire/listen-fire/compare/v0.12.10...v0.12.11
 [0.12.10]: https://github.com/listen-fire/listen-fire/compare/v0.12.9...v0.12.10
 [0.12.9]: https://github.com/listen-fire/listen-fire/compare/v0.12.8...v0.12.9
 [0.12.8]: https://github.com/listen-fire/listen-fire/compare/v0.12.7...v0.12.8

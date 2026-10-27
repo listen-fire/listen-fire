@@ -4,7 +4,7 @@
 # never links into `lf`; lf speaks to it as to any other module server.
 # Not part of the core: it carries its own version and publishes on its own.
 name = "listen-fire-module-kit"
-version = "0.12.7"
+version = "0.12.8"
 edition.workspace = true
 publish = true
 license.workspace = true

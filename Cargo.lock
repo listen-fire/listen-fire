@@ -778,7 +778,7 @@ dependencies = [
 
 [[package]]
 name = "listen-fire"
-version = "0.12.10"
+version = "0.12.11"
 dependencies = [
  "base64",
  "bytes",
@@ -815,7 +815,7 @@ dependencies = [
 
 [[package]]
 name = "listen-fire-checker"
-version = "0.12.10"
+version = "0.12.11"
 dependencies = [
  "indexmap",
  "jiff",
@@ -827,7 +827,7 @@ dependencies = [
 
 [[package]]
 name = "listen-fire-engine"
-version = "0.12.10"
+version = "0.12.11"
 dependencies = [
  "icu_normalizer",
  "jiff",
@@ -842,7 +842,7 @@ dependencies = [
 
 [[package]]
 name = "listen-fire-language"
-version = "0.12.10"
+version = "0.12.11"
 dependencies = [
  "listen-fire-checker",
  "listen-fire-parser",
@@ -852,7 +852,7 @@ dependencies = [
 
 [[package]]
 name = "listen-fire-module-kit"
-version = "0.12.7"
+version = "0.12.8"
 dependencies = [
  "base64",
  "bytes",
@@ -877,7 +877,7 @@ dependencies = [
 
 [[package]]
 name = "listen-fire-parser"
-version = "0.12.10"
+version = "0.12.11"
 dependencies = [
  "indexmap",
  "serde",
