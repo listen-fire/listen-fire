@@ -16,7 +16,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use tokio::net::TcpListener;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 
 use crate::backend::StoreSpec;
 use crate::callbacks::CallOutcome;
@@ -129,6 +129,25 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     let env: Vec<(String, String)> = std::env::vars().collect();
     crate::movements_slot::require_watch(&project, &env, "lf serve")?;
     let role = if doors_only { Role::Doors } else { Role::Serve };
+    // Accepting before the session opens: opening it calls modules (each
+    // connection's describe), and a module that declares `hostLimits` asks
+    // the limits door, on this listener, before its provider request. The
+    // door needs no session, so it answers at once; every other request
+    // waits until the session is open and its subscriptions reconciled.
+    let (opened, listening) = watch::channel::<Option<Rc<Listening>>>(None);
+    let doors = tokio::task::spawn_local(crate::http::serve(listener, body_limit, move |request| {
+        let mut listening = listening.clone();
+        async move {
+            if let Some(response) = limits_door_request(&request) {
+                return response;
+            }
+            let opened = listening.wait_for(Option::is_some).await.ok().and_then(|opened| opened.clone());
+            let Some(listening) = opened else {
+                return Response::json(503, &Js::Obj(obj! { "error" => Js::str("unavailable"), "message" => Js::str("lf serve stopped before it opened") }));
+            };
+            route(&listening, request).await.unwrap_or_else(|message| Response::json(500, &Js::Obj(obj! { "error" => Js::Str(message) })))
+        }
+    }));
     let session = open_session(project, &Opening { ephemeral, store, role }).await?;
     // Before the doors answer, so a delivery is verified by the secret the
     // source issued. A refresh registers again what its listens move.
@@ -139,12 +158,7 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     // A file exposed to an external is fetched from this listener.
     session.documents.serve_at(port);
     let poke = Rc::new(Notify::new());
-    let listening = Rc::new(Listening { session: session.clone(), poke: poke.clone(), doors_only });
-
-    let doors = tokio::task::spawn_local(crate::http::serve(listener, body_limit, move |request| {
-        let listening = listening.clone();
-        async move { route(&listening, request).await.unwrap_or_else(|message| Response::json(500, &Js::Obj(obj! { "error" => Js::Str(message) }))) }
-    }));
+    opened.send_replace(Some(Rc::new(Listening { session: session.clone(), poke: poke.clone(), doors_only })));
     // In both modes: a doors-only process takes a changed set too, so a
     // newly imported external's door answers.
     let watching = tokio::task::spawn_local({
@@ -330,7 +344,6 @@ async fn route(listening: &Listening, request: Request) -> Result<Response, Stri
     match segments(&request.path, "/api/public/adapter/").as_deref() {
         Some([_, "models"]) => return Ok(models_door(session.secrets().credentials(), &request).await),
         Some([_, "ocr"]) => return Ok(ocr_door(&request).await),
-        Some([module, crate::limits_door::DOOR_VERB]) => return Ok(limits_door(module, &request)),
         _ => {}
     }
 
@@ -436,6 +449,18 @@ async fn ocr_door(request: &Request) -> Response {
     };
     let (status, answer) = crate::ocr::door(crate::ocr::module().as_deref(), &body).await;
     Response::json(status, &answer)
+}
+
+/// The limits door's answer when `request` is for it; None for any other.
+/// `lf serve` answers it ahead of its session (`run`).
+fn limits_door_request(request: &Request) -> Option<Response> {
+    if request.method != "POST" || request.too_large {
+        return None;
+    }
+    match segments(&request.path, "/api/public/adapter/").as_deref() {
+        Some([module, crate::limits_door::DOOR_VERB]) => Some(limits_door(module, request)),
+        _ => None,
+    }
 }
 
 /// The limits door: a module asking before a request to its provider, under

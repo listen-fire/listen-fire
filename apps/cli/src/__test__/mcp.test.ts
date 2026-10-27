@@ -10,11 +10,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createHmac } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { companies, project } from './example';
+import { companies, project, served } from './example';
 import { lf, ok } from './interactive';
 import { startFakeMcpServer, type FakeMcpServer } from '../../../../modules/mcp/__test__/fake_server';
 
@@ -163,6 +164,47 @@ test('a flaky server: a 429 on a write and a 500 on a read are retried, and a ru
     await close();
   }
 });
+
+/** One webhook delivery to `lf serve` at the example's door, signed as the CRM signs it; the runs it fired. */
+async function deliverToServe(dir: string, port: number): Promise<Array<{ status: string; error?: string }>> {
+  const body = readFileSync(join(dir, 'events/webhook_body.json'));
+  const signature = createHmac('sha256', 'dev-acme-webhook-secret').update(body).digest('hex');
+  const response = await fetch(`http://127.0.0.1:${port}/hooks/acme_crm/acme`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-listen-fire-signature': signature },
+    body,
+  });
+  assert.equal(response.status, 202, await response.clone().text());
+  return ((await response.json()) as { runs: Array<{ status: string; error?: string }> }).runs;
+}
+
+// `@lf/mcp` declares hostLimits, so under `lf serve` it asks the limits door
+// on serve's own listener, from the describe at startup on.
+for (const host of ['lf run', 'lf serve'] as const) {
+  test(`${host}: a 429 with Retry-After on a write and a 503 on a read are retried, and the run completes`, async () => {
+    const { issues, dir, close } = await twoServers();
+    try {
+      issues.faults.push({ rpc: 'tools/call', tool: 'create_issue', status: 429, retryAfter: '1' }, { rpc: 'tools/call', tool: 'search_issues', status: 503 });
+      if (host === 'lf run') {
+        const run = await lfAsync(dir, 'run', '--event', 'events/company_created.json');
+        assert.equal(run.code, 0, run.out);
+      } else {
+        const serving = await served(dir);
+        try {
+          const runs = await deliverToServe(dir, serving.port);
+          assert.deepEqual(runs.map((r) => [r.status, r.error]), [['completed', undefined]]);
+        } finally {
+          await serving.stop();
+        }
+      }
+      assert.equal(issues.calls.filter((c) => c.tool === 'create_issue').length, 1);
+      assert.equal(issues.requests.filter((r) => r === 'tools/call:create_issue').length, 2);
+      assert.equal(issues.requests.filter((r) => r === 'tools/call:search_issues').length, 2);
+    } finally {
+      await close();
+    }
+  });
+}
 
 test('a 500 on a tool that changes things fails the run without a second try', async () => {
   const { issues, dir, close } = await twoServers();

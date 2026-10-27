@@ -80,7 +80,11 @@ export async function served(dir: string, args: string[] = [], env: Record<strin
     exited.then(() => {
       throw new Error(`lf serve exited:\n${lines.join('\n')}`);
     }),
-  ]);
+  ]).catch((error: unknown) => {
+    // A serve that never became ready is stopped, so the test run can end.
+    server.kill('SIGKILL');
+    throw error;
+  });
   const port = Number(/:(\d+)\//.exec(line)?.[1]);
   return {
     port,

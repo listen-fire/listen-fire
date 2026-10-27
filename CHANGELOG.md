@@ -20,6 +20,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+### Fixed
+
+- `lf serve` and `lf serve --doors-only` become ready with an `@lf/mcp` connection imported (or any module that declares `hostLimits`). In 0.12.11 they printed nothing and never became ready: the module asked lf's limits door while lf described its connection at startup, and serve answered no request until that describe returned. Serve now answers the limits door from the moment it binds its port; every other request still waits until serve is ready. `lf run` and `lf drain` were not affected.
+
 ## [0.12.11] - 2026-10-27
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. It adds `lf runs rerun`, keeps a failed run's writes, and makes MCP connections retry.
