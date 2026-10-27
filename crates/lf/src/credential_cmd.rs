@@ -106,10 +106,31 @@ pub async fn add_credential(project: &Project, input: AddInput<'_>, prompter: &m
     }
     let binding = Binding::Credential(declaration.name.clone());
     secrets.store().create(&name, entry_content(&module, &binding, &fields)).await?;
+    // A plugin module's calls carry its credential themselves: a movement
+    // imports the package and calls it, and connects nothing.
+    if let Some(package) = plugin_package(&external, &facts.answer) {
+        prompter.print(&format!("added {name} ({module}, credential {}); its plugins use it, and a movement calls them as:", declaration.name));
+        prompter.print(&format!("  import {{ `{package}` as {} }} from plugins", movement_parser::stmt::local_name_for_tag(&package)));
+        return Ok(());
+    }
     prompter.print(&format!("added {name} ({module}, credential {}); a movement uses it as:", declaration.name));
     prompter.print(&format!("  import {{ {name} }} from credentials"));
     prompter.print(&format!("  x = connect {module} using {name}"));
     Ok(())
+}
+
+/// The package a plugin module's manifest serves its plugins under, which a
+/// movement imports them by.
+fn plugin_package(external: &crate::externals::External, manifest: &Js) -> Option<String> {
+    if external.manifest.kind != "plugin" {
+        return None;
+    }
+    let Js::Obj(manifest) = manifest else { return None };
+    let Some(Js::Obj(plugins)) = manifest.get("plugins") else { return None };
+    match plugins.get("package") {
+        Some(Js::Str(package)) => Some(package.clone()),
+        _ => None,
+    }
 }
 
 pub struct UpdateInput<'a> {

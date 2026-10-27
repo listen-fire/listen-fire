@@ -42,6 +42,9 @@ async function jevProject(fake: FakeJev, movement = TRIAGE): Promise<string> {
   assert.match(readFileSync(join(dir, 'externals/jev/lf-external.yaml'), 'utf8'), /^kind: plugin$/m);
   const added = await ok(lf(dir, ['credential', 'add', '--module', '@lf/jev', 'typesafe'], { answers: ['jev-key', fake.url] }));
   console.log(added.trim());
+  // A plugin module's credential is used by its plugins, never connected.
+  assert.match(added, /import \{ `@lf\/jev` as jev \} from plugins/);
+  assert.doesNotMatch(added, /connect/);
   return dir;
 }
 
