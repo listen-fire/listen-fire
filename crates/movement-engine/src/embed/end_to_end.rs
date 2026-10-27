@@ -18,7 +18,7 @@ use crate::executor::{Answer, PendingRequest, Step};
 const CATALOG: &str = r#"{
   "adapters": { "world": { "constructionArgs": [], "canFire": true, "triggerConfig": ["events"], "schemas": { "": {
     "positions": {
-      "Monster": { "properties": { "Name": "text", "Slayer": "text", "Scroll": "file" }, "edges": {} },
+      "Monster": { "properties": { "Name": "text", "Slayer": "text", "Scroll": "file" }, "edges": { "Lair": { "target": "Note" } } },
       "Note": { "properties": { "Title": "text", "Attachment": "file" }, "edges": {} },
       "Ticket": { "properties": { "Subject": "text" }, "edges": { "Reply": { "target": "Reply", "awaitable": true, "watchable": true } } },
       "Reply": { "properties": { "Body": "text" }, "edges": {} }
@@ -89,7 +89,10 @@ impl World {
 impl Adapters for World {
     fn resolve(&mut self, request: AdapterRequest) -> HostFuture<AdapterInstance> {
         assert_eq!(request.adapter_type, "world");
-        ready(Ok(AdapterInstance { id: "w".into(), methods: ["createRecord", "updateRecord", "resolveEntity", "getFieldValue", "resolveAwait", "describe"].map(String::from).to_vec() }))
+        ready(Ok(AdapterInstance {
+            id: "w".into(),
+            methods: ["createRecord", "updateRecord", "resolveEntity", "getFieldValue", "getRelated", "resolveAwait", "describe"].map(String::from).to_vec(),
+        }))
     }
 
     fn call(&mut self, call: AdapterCall) -> HostFuture<AdapterReply> {
@@ -105,6 +108,14 @@ impl Adapters for World {
                 AdapterReply::ok(data.and_then(|d| d.get(&field).cloned()).unwrap_or(Data::Null))
             }
             "describe" => AdapterReply::ok(Data::Null),
+            // The monster's lair: one note, its fields on the landing.
+            "getRelated" => AdapterReply::ok(Data::List(vec![Data::map([(
+                "position",
+                Data::map([
+                    ("recordType", Data::text("Note")),
+                    ("identity", Data::map([("kind", Data::text("stable")), ("recordId", Data::text("note-lair")), ("data", Data::map([("Title", Data::text("Cave"))]))])),
+                ]),
+            )])])),
             "createRecord" => {
                 let record_type = call.args.get("recordType").and_then(Data::as_text).unwrap_or_default().to_string();
                 let fields = call.args.get("fields").cloned().unwrap_or(Data::Null);
@@ -452,6 +463,17 @@ fn a_write_to_the_event_parameter_updates_the_record_the_event_fired_on() {
     let mut json = Wire::new(WireWorld::default(), |_, _| None);
     let mut served = World::default();
     assert_eq!(typed, json.drive(&input(&source), Entry::Run, &mut Hosts::new().adapters(&mut served)));
+}
+
+/// A walk bound to a name is a second name for the walk: a field read off the
+/// name reads each landing's field, as the walk read in place does.
+#[test]
+fn a_field_of_a_walk_bound_to_a_name_reads_as_the_walk_does() {
+    let source = movement("", "  lair = monster-[:Lair]->\n  write game-[:notes]-> { Title: \"bound ${lair.Title} / walked ${monster-[:Lair]->.Title}\" }\n");
+    assert_eq!(errors(&source), vec![]);
+    let mut world = World::default();
+    finished(block_on(run(&mut Hosts::new().adapters(&mut world), &input(&source))));
+    assert_eq!(titles(&world), vec!["bound Cave / walked Cave"]);
 }
 
 struct Judging(Verdict, usize);
