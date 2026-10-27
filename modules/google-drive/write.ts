@@ -5,6 +5,8 @@
 //
 //   • folder — `files.create` with the folder mimeType, after a by-name
 //              reuse search within the parent.
+//   • copy   — a file written along its destination folder's `Files` edge AND
+//              the source file's `Copies` edge (`files.copy`).
 //   • file   — ONE type, two byte channels, the write choosing by which
 //              field arrives: `File` (a FileRef descriptor, or inline
 //              text) uploads bytes as-is; `Content`
@@ -36,8 +38,9 @@ import type {
   WriteResult,
 } from 'movement-engine/public/adapter';
 
-import { singleParentLink } from 'movement-engine/public/adapter';
+import { singleParentLink, writeParentLinks } from 'movement-engine/public/adapter';
 import { hasFileSource } from 'movement-engine/public/files';
+import { DRIVE_FILE_COPIES_EDGE, DRIVE_FOLDER_EDGE_NAMES } from './schema_catalog';
 import {
   GOOGLE_DRIVE_ADAPTER_TYPE,
   driveUrl,
@@ -132,6 +135,8 @@ async function createFile(input: {
   write: WriteInput;
 }): Promise<WriteResult> {
   const { client, readFile, log, write } = input;
+  const copySource = writeParentLinks(write).find((l) => l.edgeName === DRIVE_FILE_COPIES_EDGE.name);
+  if (copySource) return copyFile({ client, log, write, sourceId: copySource.externalId });
   const parentId = resolveParentId(write);
   if (!parentId) {
     throw new Error(
@@ -160,6 +165,56 @@ async function createFile(input: {
   return hasContent
     ? createDocument({ client, log, write, parentId })
     : createUpload({ client, readFile, log, write, parentId });
+}
+
+/** Copy a file the app was granted into a folder (`files.copy`). The copy is
+ *  created by the app, so it is granted too and reads like any other file.
+ *  Drive answers 404 for a source outside the grant; that is said plainly. */
+async function copyFile(input: {
+  client: GoogleDriveClient;
+  log: ModuleLog;
+  write: WriteInput;
+  sourceId: string;
+}): Promise<WriteResult> {
+  const { client, log, write, sourceId } = input;
+  const folderLink = writeParentLinks(write).find((l) => l.edgeName === DRIVE_FOLDER_EDGE_NAMES.files);
+  const parentId = folderLink?.externalId;
+  if (!parentId) {
+    throw new Error(
+      'GoogleDriveAdapter.createRecord(File): a copy has no parent folder — write it along the ' +
+        'destination folder\'s edge too (write (folder-[:Files]->, file-[:Copies]->) { … }).',
+    );
+  }
+  if (write.fields.content != null || write.fields.file != null) {
+    throw new Error(
+      'GoogleDriveAdapter.createRecord(File): a copy takes its bytes from the source file — ' +
+        'drop `Content` / `File` (only `Name` applies).',
+    );
+  }
+  const name = typeof write.fields.name === 'string' && write.fields.name !== '' ? write.fields.name : undefined;
+  let copy;
+  try {
+    copy = await client.copyFile({ fileId: sourceId, name, parentId });
+  } catch (err) {
+    if (err !== null && typeof err === 'object' && Reflect.get(err, 'code') === 404) {
+      throw new Error(
+        `Google Drive cannot copy ${sourceId}: it was not found, or this connection was not granted it ` +
+          '(or the destination folder). Pick the file with the Drive picker, or copy a file this connection created.',
+        { cause: err },
+      );
+    }
+    throw err;
+  }
+  log.info(`[GDrive] Copied ${sourceId} → ${copy.id}`);
+  return {
+    adapterType: GOOGLE_DRIVE_ADAPTER_TYPE,
+    externalId: copy.id,
+    data: {
+      name: name ?? copy.name,
+      mimeType: copy.mimeType,
+      url: copy.webViewLink || driveUrl(copy.id, 'file'),
+    },
+  };
 }
 
 /** The Google-Doc channel: import the PROVIDED text as a Doc (`files.create`

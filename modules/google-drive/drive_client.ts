@@ -156,6 +156,23 @@ export class GoogleDriveClient {
     return { id: response.data.id, webViewLink: response.data.webViewLink ?? '' };
   }
 
+  /** `files.copy`: a copy of a file the app may read, placed in `parentId`.
+   *  Under drive.file the copy is created by the app, so it is granted. */
+  async copyFile(options: { fileId: string; name?: string; parentId: string }): Promise<DriveItem> {
+    const response = await (await this.authorized()).files.copy({
+      fileId: options.fileId,
+      requestBody: {
+        ...(options.name !== undefined ? { name: options.name } : {}),
+        parents: [options.parentId],
+      },
+      fields: 'id,name,mimeType,webViewLink,size',
+    });
+    if (!response.data.id) {
+      throw new Error('Google Drive: failed to copy file');
+    }
+    return toDriveItem(response.data);
+  }
+
   // ── Read surface ──────────────────────────────────────────────────────────
 
   /** The children of a folder ('root' = My Drive), folders and files alike. */

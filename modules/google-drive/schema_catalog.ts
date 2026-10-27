@@ -9,6 +9,7 @@
 //
 // The graph (rule 0 — the natural shape under the drive.file scope):
 //
+//   (a File also offers a write-only `Copies` edge back to File: see below)
 //   meta ─[Folders ro]→ Folder ─[Folders r/w]→ Folder
 //        └[Files ro]──→ File   ←[Files r/w]───┘
 //
@@ -20,6 +21,11 @@
 // parentless root create would mint a record the granted-items read could
 // never show again — the surface must not claim writes it cannot then
 // witness (rule 0's second clause).
+//
+// A copy is a File written along TWO edges at once — the destination folder's
+// `Files` edge and the source file's `Copies` edge — the language's N-parent
+// write, so no new field kind is needed to name "the other record":
+//   write (folder-[:Files]->, template-[:Copies]->) { Name: "…" }
 //
 // `Folders`/`Files` are ONE edge each: readable (list children) AND
 // creatable (rule 6). Files publish no parent up-hop today — the API offers
@@ -42,6 +48,8 @@ export const DRIVE_FOLDER_EDGES = { folders: 'folders', files: 'files' } as cons
  *  internal read currency (`getRelated` dispatch); this is what a movement
  *  writes (`folder-[:Files]->`) and what `edgeWriteName` resolves to. */
 export const DRIVE_FOLDER_EDGE_NAMES = { folders: 'Folders', files: 'Files' } as const;
+/** The edge a file offers for being copied: only ever written, never listed. */
+export const DRIVE_FILE_COPIES_EDGE = { fieldId: 'copies', name: 'Copies' } as const;
 
 function field(
   fieldId: string,
@@ -121,7 +129,11 @@ function describeFile(): SchemaTypeDescriptor {
     description:
       'A file in Google Drive. On a create (along a folder\'s `Files` edge), ' +
       'provide EITHER `File` (upload bytes) OR `Content` (text imported as a ' +
-      'Google Doc) — not both. `File` reads the content back as bytes.',
+      'Google Doc) — not both. `File` reads the content back as bytes. To copy ' +
+      'a file you were granted into a folder, write it along both edges: ' +
+      '`write (folder-[:Files]->, template-[:Copies]->) { Name: "…" }` ' +
+      '(Name optional; Drive names the copy otherwise). The copy is a normal ' +
+      'file afterwards.',
     fields: [
       field('name', {
         displayName: 'Name',
@@ -152,7 +164,19 @@ function describeFile(): SchemaTypeDescriptor {
       readOnlyField('url', { displayName: 'Url', kind: 'string' }),
       readOnlyField('size', { displayName: 'Size', kind: 'number' }),
     ],
-    references: [],
+    references: [
+      {
+        fieldId: DRIVE_FILE_COPIES_EDGE.fieldId,
+        targetTypeId: DRIVE_FILE_TYPE,
+        cardinality: 'many',
+        direction: 'outgoing',
+        name: DRIVE_FILE_COPIES_EDGE.name,
+        description:
+          'Write-only: a copy of this file. Write along it together with the ' +
+          'destination folder\'s `Files` edge: `write (folder-[:Files]->, file-[:Copies]->) { Name: "…" }`.',
+        writable: true,
+      },
+    ],
     uniquenessConstraints: undefined,
     uniquenessAuthorable: false,
   };

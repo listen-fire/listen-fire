@@ -8,7 +8,8 @@ import { GOOGLE_DRIVE_ADAPTER_TYPE } from './types';
 
 /**
  * Static manifest. Create-only target (no inbound triggers); `createRecord`
- * is a real write. `updateRecord` / `deleteRecord` are NOT listed — Drive is
+ * is a real write — an upload, a Doc import, a folder, or a copy of a granted
+ * file. `updateRecord` / `deleteRecord` are NOT listed — Drive is
  * create-only and they throw.
  */
 export const GOOGLE_DRIVE_MANIFEST: AdapterManifest = {
@@ -17,7 +18,8 @@ export const GOOGLE_DRIVE_MANIFEST: AdapterManifest = {
   website: 'https://www.google.com/drive/',
   category: 'Files',
   description:
-    'Google Drive. Save files into Drive folders from your movements, and ' +
+    'Google Drive. Save files into Drive folders from your movements, copy a ' +
+    'granted file (a template) into a folder, and ' +
     'read the Drive tree — folders, files, and file content.',
   supportedTriggers: [],
   methods: [
