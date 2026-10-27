@@ -469,8 +469,9 @@ export interface ListenConfigKey {
    *  the listen's address lands on (the changed-attribute filter — any adapter
    *  with a "only fire when one of these changed" surface declares it);
    *  `'strings'` = a non-empty list of non-empty quoted strings (Gmail's
-   *  `labels`). */
-  format?: 'cron' | 'timezone' | 'fields' | 'strings';
+   *  `labels`); `'type'` = a node the program declares (`payload: <Payment>`),
+   *  which the listen's events are typed as. */
+  format?: 'cron' | 'timezone' | 'fields' | 'strings' | 'type';
   /**
    * This key is one HOP of the address that narrows the event's record edge.
    *

@@ -593,8 +593,8 @@ fn listen_declarations(raw: &Js) -> Result<Obj, String> {
                 entry.insert("required".into(), Js::Bool(*required));
             }
             if let Some(format) = item.get("format") {
-                let format = format.as_str().filter(|f| ["cron", "timezone", "fields", "strings"].contains(f));
-                entry.insert("format".into(), Js::str(format.ok_or("listenConfig.format: expected cron, timezone, fields or strings")?));
+                let format = format.as_str().filter(|f| ["cron", "timezone", "fields", "strings", "type"].contains(f));
+                entry.insert("format".into(), Js::str(format.ok_or("listenConfig.format: expected cron, timezone, fields, strings or type")?));
             }
             entries.push(Js::Obj(entry));
         }
