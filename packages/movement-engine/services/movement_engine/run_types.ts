@@ -321,9 +321,14 @@ export type MovementTraceEntry =
       files?: ExtractionTraceFile[];
       /** How many source files `files` left out at its cap. */
       filesTruncated?: number;
-      /** Which model answered, and how long it took (both attempts, when
-       *  the call was retried). */
+      /** The tier the call was written with (`null` when it named none),
+       *  which model answered and how hard it was asked to think, and how
+       *  long it took (both attempts, when the call was retried). The tiers
+       *  share a model and differ in effort, so the model alone does not
+       *  name the tier. */
+      tier?: string | null;
       model?: string;
+      effort?: string | null;
       durationMs?: number;
       /** Present when the answer came back only because the call was asked
        *  less deeply than its tier says: the first attempt spent its whole
@@ -520,7 +525,16 @@ export type MovementTraceEntry =
        *  — which is the only way that ever becomes visible. */
       expectedEntities?: number[];
     }
-  | { kind: 'ai'; prompt: string; hasValue: boolean }
+  | {
+      kind: 'ai';
+      prompt: string;
+      hasValue: boolean;
+      /** The tier written (`null` for none), the model asked and its effort
+       *  (`null` when the tier leaves it to the model). */
+      tier?: string | null;
+      model?: string;
+      effort?: string | null;
+    }
   /**
    * A warning about the run that did not stop it — a movement pinned to a
    * deprecated language version (`code` is the diagnostic's; `message` names

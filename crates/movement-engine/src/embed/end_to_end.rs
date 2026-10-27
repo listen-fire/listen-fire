@@ -476,6 +476,38 @@ fn a_field_of_a_walk_bound_to_a_name_reads_as_the_walk_does() {
     assert_eq!(titles(&world), vec!["bound Cave / walked Cave"]);
 }
 
+/// A model call's trace entry names the tier it was written with, the model
+/// it ran on and how hard that model thought: `quick` and `careful` run on
+/// one model at different efforts, so the model alone cannot tell them apart.
+#[test]
+fn a_model_call_s_trace_entry_names_its_tier_model_and_effort() {
+    let traced_by = |source: &str, reply: Json| {
+        assert_eq!(errors(source), vec![]);
+        let (mut world, mut model, mut traced) = (World::default(), Model { reply: Data::from(reply), calls: Vec::new() }, Traced::default());
+        finished(block_on(run(&mut Hosts::new().adapters(&mut world).models(&mut model).trace(&mut traced), &input(source))));
+        traced.0
+    };
+    let of_kind = |entries: &[Data], kind: &str| -> Vec<(Option<String>, Option<String>, Option<String>)> {
+        let text = |e: &Data, key: &str| e.get(key).and_then(Data::as_text).map(str::to_string);
+        entries.iter().filter(|e| e.get("kind").and_then(Data::as_text) == Some(kind)).map(|e| (text(e, "tier"), text(e, "model"), text(e, "effort"))).collect()
+    };
+
+    let ai = movement("", "  line = ai(\"Describe ${monster.Name}\", { tier: \"careful\" })\n  plain = ai(\"Name ${monster.Name}\")\n  write game-[:notes]-> { Title: \"${line} ${plain}\" }\n");
+    let traced = traced_by(&ai, json!({ "value": "x", "has_value": true }));
+    assert_eq!(of_kind(&traced, "ai"), vec![(Some("careful".into()), Some("sonnet".into()), None), (None, Some("haiku".into()), Some("low".into()))]);
+
+    let shape = "node Person: \"each person named\" { name: <text> \"their name\" }";
+    let reply = json!({ "records": [{ "name": { "value": "Ada", "evidence": { "item": 0, "quote": "Ada" } } }] });
+    for (settings, expected) in [
+        (", { tier: \"quick\" }", (Some("quick".to_string()), Some("sonnet".to_string()), Some("low".to_string()))),
+        (", { tier: \"careful\" }", (Some("careful".into()), Some("sonnet".into()), Some("high".into()))),
+        ("", (None, Some("sonnet".into()), Some("low".into()))),
+    ] {
+        let source = movement("", &format!("  people = extract([monster.Slayer], {shape}{settings})\n  map(people, (p) => {{ write game-[:notes]-> {{ Title: p.name }} }})\n"));
+        assert_eq!(of_kind(&traced_by(&source, reply.clone()), "extraction"), vec![expected], "{settings}");
+    }
+}
+
 struct Judging(Verdict, usize);
 
 impl Judge for Judging {

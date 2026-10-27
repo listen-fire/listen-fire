@@ -54,6 +54,7 @@ named in [`RELEASING.md`](RELEASING.md).
 - A field read off a name bound to a walk reads the records the walk landed on: after `row = change-[:Record]->`, `"${row.Stage}"` is the Stage, where it read as empty while `change-[:Record]->.Stage` worked.
 - `lf runs show --json` shows when a run finished (`finishedAt`) and lists its writes (`writeRecords`: target, action, committed, values); `writes` counts every entry into the run, where after a resume it counted only the resumed entry's.
 - `lf` prints a line when a polled listen's first poll arms it (`gmail: inbox:invoice armed; it fires on changes from now`); it printed nothing.
+- A run's trace names each model call's `tier`, `model` and `effort` (an extraction's entry and an `ai()` call's), so `quick` and `careful`, which share a model, read differently.
 
 ## [0.12.9] - 2026-10-26
 
