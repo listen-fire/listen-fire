@@ -753,7 +753,11 @@ export const WireListenDeclarations = z.object({
       z.object({
         key: z.string().min(1),
         required: z.boolean().optional(),
-        format: z.enum(['cron', 'timezone', 'fields', 'strings', 'field', 'field-value']).optional(),
+        // Open: a format this release does not know is a newer module's, and
+        // its key's value goes unchecked rather than refusing the manifest.
+        format: z
+          .union([z.enum(['cron', 'timezone', 'fields', 'strings', 'field', 'field-value']), z.string().min(1)])
+          .optional(),
       }),
     )
     // A `field-value` key is a value of the field the `field` key names:

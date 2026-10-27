@@ -646,8 +646,10 @@ fn listen_declarations(raw: &Js) -> Result<Obj, String> {
                 entry.insert("required".into(), Js::Bool(*required));
             }
             if let Some(format) = item.get("format") {
-                let format = format.as_str().filter(|f| ["cron", "timezone", "fields", "strings", "field", "field-value"].contains(f));
-                entry.insert("format".into(), Js::str(format.ok_or("listenConfig.format: expected cron, timezone, fields, strings, field or field-value")?));
+                // Open: a format this lf does not know is a newer module's;
+                // the checker reads its key's value as unchecked.
+                let format = format.as_str().filter(|f| !f.is_empty());
+                entry.insert("format".into(), Js::str(format.ok_or("listenConfig.format: expected a non-empty string")?));
             }
             entries.push(Js::Obj(entry));
         }
@@ -905,5 +907,12 @@ mod tests {
         assert!(listen_declarations(&paired).is_ok());
         let alone = Js::parse(br#"{ "listenConfig": [{ "key": "becomes", "format": "field-value" }] }"#).unwrap();
         assert!(listen_declarations(&alone).unwrap_err().contains("exactly one 'field' key"));
+    }
+
+    #[test]
+    fn a_format_this_lf_does_not_know_is_kept_for_the_checker() {
+        let raw = Js::parse(br#"{ "listenConfig": [{ "key": "within", "format": "duration-window" }] }"#).unwrap();
+        let listen = listen_declarations(&raw).unwrap();
+        assert_eq!(Js::Obj(listen).to_json(), r#"{"listenConfig":[{"key":"within","format":"duration-window"}]}"#);
     }
 }

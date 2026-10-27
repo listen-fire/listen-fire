@@ -726,7 +726,7 @@ impl Checker<'_> {
                 }
             }
         }
-        let format = spec.and_then(|s| s.trigger_config_formats.as_ref()).and_then(|f| f.0.get(&arg.name)).copied();
+        let format = spec.and_then(|s| s.trigger_config_formats.as_ref()).and_then(|f| f.0.get(&arg.name)).cloned();
         match format {
             Some(TriggerConfigFormat::Cron) => match static_string_values(&arg.value).as_deref() {
                 Some([value]) => {
@@ -812,6 +812,15 @@ impl Checker<'_> {
                     Some(names) => read.fields = Some((names, span)),
                 }
                 return;
+            }
+            Some(TriggerConfigFormat::Unknown(format)) => {
+                let mut info = Diagnostic::error(
+                    codes::LISTEN_BAD_CONFIG,
+                    format!("this checker does not know the format '{format}' of '{}', so its value is not checked — a newer release does", arg.name),
+                    span,
+                );
+                info.severity = Some(Severity::Info);
+                self.push(info);
             }
             None => {}
         }

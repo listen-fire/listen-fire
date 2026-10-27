@@ -41,6 +41,9 @@ export interface ConstructionArg {
 }
 
 
+/** The listen config formats this release's checker validates. */
+export type KnownTriggerConfigFormat = 'cron' | 'timezone' | 'fields' | 'strings' | 'field' | 'field-value';
+
 export interface AdapterSpec {
   /**
    * The adapter's full construction signature — the credential (if any) folded
@@ -128,8 +131,13 @@ export interface AdapterSpec {
    * the field the listen's `'field'`-format key names (`T[K]`): an enum
    * field's choice, a number field's number. Paired by format, so an adapter
    * declares at most one `'field'` key.
+   *
+   * Any other string is a format a newer module declares and this release
+   * does not know: the key's value is a plain value, unchecked, and the
+   * checker says so once (an Info), so a module release never breaks a host
+   * on an older core.
    */
-  triggerConfigFormats?: Record<string, 'cron' | 'timezone' | 'fields' | 'strings' | 'field' | 'field-value'>;
+  triggerConfigFormats?: Record<string, KnownTriggerConfigFormat | (string & {})>;
   /**
    * Interactive "connect" actions the adapter offers when authoring against
    * one of its instances. The checker never reads these — they're carried
