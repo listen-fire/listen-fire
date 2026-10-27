@@ -84,10 +84,28 @@ function stringsOf(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String) : [];
 }
 
+/** `content` is text (utf-8); `contentBase64` is bytes, for a binary file
+ *  such as a PDF. A message stores every attachment as base64 of its bytes,
+ *  so what the attachment endpoint serves is exactly what was seeded. */
 interface SeedAttachment {
   filename: string;
   contentType?: string;
   content?: string;
+  contentBase64?: string;
+}
+
+function bytesOf(attachment: SeedAttachment): Buffer {
+  return attachment.contentBase64 !== undefined
+    ? Buffer.from(attachment.contentBase64, 'base64')
+    : Buffer.from(attachment.content ?? '', 'utf8');
+}
+
+function storedContent(id: string, attachments: SeedAttachment[]): Record<string, string> {
+  const stored: Record<string, string> = {};
+  attachments.forEach((attachment, index) => {
+    stored[`${id}-att-${index + 1}`] = bytesOf(attachment).toString('base64');
+  });
+  return stored;
 }
 
 /** The MIME tree a seeded message gets: multipart/mixed over a
@@ -148,7 +166,6 @@ function buildPayload(input: {
       parts: alternatives,
     },
     ...input.attachments.map((attachment, index) => {
-      const content = attachment.content ?? '';
       return {
         partId: String(index + 1),
         mimeType: attachment.contentType ?? 'application/octet-stream',
@@ -158,7 +175,7 @@ function buildPayload(input: {
         ],
         body: {
           attachmentId: `${input.messageId}-att-${index + 1}`,
-          size: Buffer.byteLength(content, 'utf8'),
+          size: bytesOf(attachment).length,
         },
       };
     }),
@@ -252,10 +269,10 @@ function splitEntity(entity: string): { headers: Map<string, string>; body: stri
   return { headers, body };
 }
 
-function decodeBody(body: string, encoding: string): string {
+function decodeBody(body: string, encoding: string): Buffer {
   return encoding.toLowerCase() === 'base64'
-    ? Buffer.from(body.replace(/\s+/g, ''), 'base64').toString('utf8')
-    : body;
+    ? Buffer.from(body.replace(/\s+/g, ''), 'base64')
+    : Buffer.from(body, 'utf8');
 }
 
 function filenameOf(headers: Map<string, string>): string | undefined {
@@ -285,11 +302,11 @@ function collect(entity: string, into: ParsedMessage): void {
 
   const decoded = decodeBody(body, headers.get('content-transfer-encoding') ?? '7bit');
   if (filename !== undefined) {
-    into.attachments.push({ filename, contentType: mime, content: decoded });
+    into.attachments.push({ filename, contentType: mime, contentBase64: decoded.toString('base64') });
     return;
   }
-  if (mime === 'text/html') into.html = decoded;
-  else into.text = decoded;
+  if (mime === 'text/html') into.html = decoded.toString('utf8');
+  else into.text = decoded.toString('utf8');
 }
 
 function parseRfc2822(raw: string): ParsedMessage {
@@ -420,10 +437,7 @@ export function gmailRoutes(store: EntityStore): Router {
       extraHeaders: replyHeaders,
     });
 
-    const attachmentContent: Record<string, string> = {};
-    parsed.attachments.forEach((attachment, index) => {
-      attachmentContent[`${id}-att-${index + 1}`] = attachment.content ?? '';
-    });
+    const attachmentContent = storedContent(id, parsed.attachments);
 
     store.create(
       SVC,
@@ -528,7 +542,8 @@ export function gmailRoutes(store: EntityStore): Router {
     if (typeof content !== 'string') {
       return res.status(404).json({ error: { code: 404, message: 'Attachment not found' } });
     }
-    res.json({ size: Buffer.byteLength(content, 'utf8'), data: Buffer.from(content, 'utf8').toString('base64url') });
+    const bytes = Buffer.from(content, 'base64');
+    res.json({ size: bytes.length, data: bytes.toString('base64url') });
   });
 
   r.get('/gmail/v1/users/:userId/history', (req, res) => {
@@ -693,10 +708,7 @@ export function gmailRoutes(store: EntityStore): Router {
       messageId: id,
     });
 
-    const attachmentContent: Record<string, string> = {};
-    attachments.forEach((attachment, index) => {
-      attachmentContent[`${id}-att-${index + 1}`] = attachment.content ?? '';
-    });
+    const attachmentContent = storedContent(id, attachments);
 
     const data: Record<string, unknown> = {
       id,
