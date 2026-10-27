@@ -1357,12 +1357,64 @@ impl crate::checker::Checker<'_> {
             Some(Position::Meta { instance }) => instance.schema.clone(),
             _ => return,
         };
-        let Some(address) = crate::types::event_address::event_address_of_hops(hops) else { return };
-        for found in address_pin_diagnostics(&schema, &address) {
+        let address = crate::types::event_address::event_address_of_hops(hops);
+        let pinned = address.as_ref().map(|address| address_pin_diagnostics(&schema, address)).unwrap_or_default();
+        for found in pinned.into_iter().chain(type_where_enum_diagnostics(&schema, hops)) {
             let mut diagnostic = crate::diagnostic::Diagnostic::error(found.code, found.message, span);
             diagnostic.severity = found.severity;
             self.push(diagnostic);
         }
+    }
+}
+
+/// A WHERE written inside a parameter's type compares a field of the records
+/// its hop lands on to a text literal, as a WHERE in a body does, and the
+/// literal is held against the field's enum the same way
+/// (`checkEnumLiteralOperand`). The pins the address check above already
+/// holds (`action`, and the keys the adapter narrows events by) are its.
+fn type_where_enum_diagnostics(schema: &movement_parser::catalog::types::InstanceSchema, hops: &str) -> Vec<EnumDiagnostic> {
+    let probe = format!("__movement_path_root__{}.`__movement_path_probe__`", hops.trim());
+    let Ok(Expression::Traverse { steps, .. }) = crate::slots::expression_of_text(&probe) else { return Vec::new() };
+    let [movement_parser::lowering::expression::TraversalStep::Edge(step)] = steps.as_slice() else { return Vec::new() };
+    let Some(filter) = step.expression_filter.as_deref() else { return Vec::new() };
+    let landing = schema
+        .positions
+        .get(&step.edge_type_id)
+        .or_else(|| schema.collections.get(&step.edge_type_id).and_then(|c| schema.positions.get(&c.target)));
+    let Some(landing) = landing else { return Vec::new() };
+    let address_pinned = |key: &str| {
+        key == "action" || (schema.event_narrowing_values.is_some() && schema.event_narrowing_keys.as_ref().is_some_and(|keys| keys.iter().any(|k| k == key)))
+    };
+    let field_enum = |expr: &Expression| -> Option<Ty> {
+        let (Expression::Property { property_type_id, .. } | Expression::EdgeProperty { property_type_id, .. }) = expr else { return None };
+        if address_pinned(property_type_id) {
+            return None;
+        }
+        let ty = unwrap_list(strip_absent(&Ty::from_schema(landing.properties.get(property_type_id)?)));
+        matches!(ty, Ty::Enum { .. }).then_some(ty)
+    };
+    let mut found = Vec::new();
+    let mut compares = Vec::new();
+    where_compares(filter, &mut compares);
+    for (op, left, right) in compares {
+        if matches!(compare_rule(op), CompareRule::None | CompareRule::Duration) {
+            continue;
+        }
+        for (field, literal) in [(left, right), (right, left)] {
+            let (Some(enum_ty), Expression::Static { value: StaticValue::String(literal) }) = (field_enum(field), literal) else { continue };
+            found.extend(check_enum_literal(literal, &enum_ty));
+        }
+    }
+    found
+}
+
+/// Every comparison a WHERE makes, under its ANDs, ORs and NOTs.
+fn where_compares<'a>(expr: &'a Expression, into: &mut Vec<(FilterOperator, &'a Expression, &'a Expression)>) {
+    match expr {
+        Expression::Compare { op, left, right } => into.push((*op, left, right)),
+        Expression::Logical { operands, .. } => operands.iter().for_each(|operand| where_compares(operand, into)),
+        Expression::Not { expression } => where_compares(expression, into),
+        _ => {}
     }
 }
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `protocol_minor_of` is what a manifest declares (`protocolMinor`), else 0: the methods it lists no longer raise it. `minor_introducing(method)` names the minor that introduced a method, for a host that requires it.
+- `PROTOCOL_MINOR` is 4: adapter protocol 2.4, `refreshEventSubscription`. `PROTOCOL_MINORS` gains its row, and the results check takes its answer (`{ expiresAt? }` or `null`) and `ensureEventSubscription`'s `expiresAt`.
+
 ## 0.12.7 - 2026-10-26
 
 - `PROTOCOL_MINOR` is 3: adapter protocol 2.3, labelled poll events. It is a rule for sources and a host behaviour, not a feature a module states, so `PROTOCOL_MINORS` gains no row.

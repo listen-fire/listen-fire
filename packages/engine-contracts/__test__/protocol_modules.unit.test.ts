@@ -70,6 +70,23 @@ describe('a module manifest', () => {
     expect(WireManifestResult.parse(JSON.parse(JSON.stringify(parsed)))).toEqual(MODULE_MANIFEST);
   });
 
+  it('keeps a listen config format this release does not know: a newer module declares it, and its value goes unchecked', () => {
+    const manifest = { ...OLD_MANIFEST, listenConfig: [{ key: 'within', format: 'duration-window' }] };
+    expect(WireManifestResult.parse(manifest)).toEqual(manifest);
+  });
+
+  it('keeps the hop of the event address a listen config key narrows', () => {
+    const manifest = { ...OLD_MANIFEST, listenConfig: [{ key: 'table', required: true, narrows: { collection: 'Table', matchField: 'Id' } }] };
+    expect(WireManifestResult.parse(manifest)).toEqual(manifest);
+    const half = { ...OLD_MANIFEST, listenConfig: [{ key: 'table', narrows: { collection: 'Table' } }] };
+    expect(WireManifestResult.safeParse(half).success).toBe(false);
+  });
+
+  it('keeps the listen config keys that scope an event subscription', () => {
+    const manifest = { ...OLD_MANIFEST, subscriptionScopeKeys: ['base', 'table'] };
+    expect(WireManifestResult.parse(manifest)).toEqual(manifest);
+  });
+
   it('accepts each declared signature scheme', () => {
     for (const scheme of INBOUND_SIGNATURE_SCHEMES) {
       const manifest = { ...MODULE_MANIFEST, inbound: { ...MODULE_MANIFEST.inbound, scheme } };

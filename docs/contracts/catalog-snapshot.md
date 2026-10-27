@@ -45,7 +45,7 @@ interface AdapterSpec {
   defaultEvents?: string[];
   triggerConfigRequired?: string[];
   triggerConfigRequiredWhy?: Record<string, string>;
-  triggerConfigFormats?: Record<string, 'cron' | 'timezone' | 'fields' | 'strings'>;
+  triggerConfigFormats?: Record<string, 'cron' | 'timezone' | 'fields' | 'strings' | 'field' | 'field-value'>;
   connectActions?: Array<{ kind: string; label: string }>;
   connect?: 'oauth' | 'key-entry' | 'intrinsic' | 'handshake' | 'app-only';
   triggerExpectation?: string;

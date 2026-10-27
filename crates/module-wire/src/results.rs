@@ -231,7 +231,8 @@ fn result_schema(method: &str) -> Option<S> {
         "deleteRecord" => loose(vec![opt("events", arr(S::Unknown))]),
         "linkRecords" => obj(vec![req("created", S::Bool)]),
         "unlinkRecords" => obj(vec![req("removed", S::Bool)]),
-        "ensureEventSubscription" => nullable(obj(vec![opt("externalId", S::Str), opt("secret", S::Str)])),
+        "ensureEventSubscription" => nullable(obj(vec![opt("externalId", S::Str), opt("secret", S::Str), opt("expiresAt", S::Str)])),
+        "refreshEventSubscription" => nullable(obj(vec![opt("expiresAt", S::Str)])),
         "removeEventSubscription" => S::Null,
         "resolveAwait" => S::Tagged {
             key: "status",

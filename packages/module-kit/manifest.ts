@@ -47,9 +47,12 @@ function adapterManifest(definition: AdapterModuleDefinition, instance: AdapterM
             key: entry.key,
             ...(entry.required !== undefined ? { required: entry.required } : {}),
             ...(entry.format !== undefined ? { format: entry.format } : {}),
+            ...(entry.narrows !== undefined ? { narrows: { collection: entry.narrows.collection, matchField: entry.narrows.matchField } } : {}),
           })),
         }
       : {}),
+    ...(manifest.positionArgs !== undefined && manifest.positionArgs.length > 0 ? { positionArgs: manifest.positionArgs.map((arg) => ({ ...arg })) } : {}),
+    ...(manifest.subscriptionScopeKeys !== undefined && manifest.subscriptionScopeKeys.length > 0 ? { subscriptionScopeKeys: [...manifest.subscriptionScopeKeys] } : {}),
     ...(definition.credentials.length > 0 ? { credentials: [...definition.credentials] } : {}),
     ...(definition.inbound !== undefined ? { inbound: definition.inbound } : {}),
     ...(definition.poll !== undefined ? { poll: definition.poll } : {}),
@@ -61,7 +64,7 @@ function adapterManifest(definition: AdapterModuleDefinition, instance: AdapterM
 /** The minor of adapter protocol 2 the manifest states: what its methods use,
  *  raised by the definition's own `protocolMinor`, never lowered by it. */
 function statedMinor(definition: ModuleDefinition, methods: readonly string[]): number {
-  return Math.max(protocolMinorOf({ methods }), definition.protocolMinor ?? 0);
+  return protocolMinorOf({ methods, ...(definition.protocolMinor !== undefined ? { protocolMinor: definition.protocolMinor } : {}) });
 }
 
 /** `hostLimits` is the author's word, never inferred from `limits`: it moves

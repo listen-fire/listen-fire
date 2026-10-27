@@ -156,8 +156,18 @@ describe('AirtableAdapter.describe', () => {
     expect(byId.get('fldName')!.writable).toBe(true);
     expect(byId.get('fldAmount')!.kind).toBe('number');
     expect(byId.get('fldClosed')!.kind).toBe('boolean');
-    expect(byId.get('fldTags')!.kind).toBe('string');
+    expect(byId.get('fldTags')!.kind).toBe('enum');
     expect(byId.get('fldTags')!.cardinality).toBe('many');
+    expect(byId.get('fldTags')!.enumValues).toEqual(['Hot', 'Warm']);
+    expect(byId.get('fldStage')!.kind).toBe('enum');
+    expect(byId.get('fldStage')!.cardinality).toBe('one');
+    expect(byId.get('fldStage')!.enumValues).toEqual(['Open', 'Won']);
+    // A select with no choices stays text: an empty enum would refuse every value.
+    expect(byId.get('fldRegion')!.kind).toBe('string');
+    expect(byId.get('fldRegion')!.enumValues).toBeUndefined();
+    expect(byId.get('fldSource')!.kind).toBe('string');
+    expect(byId.get('fldSource')!.cardinality).toBe('many');
+    expect(byId.get('fldSource')!.enumValues).toBeUndefined();
     expect(byId.get('fldCreated')!.kind).toBe('date');
     // Read-only field types are surfaced but writable:false.
     expect(byId.get('fldCreated')!.writable).toBe(false);
@@ -854,7 +864,7 @@ describe('eventsFromPayload — the event node carries the row identity', () => 
     const events = eventsFromPayload({
       baseId: 'appCRM01',
       tableNamesById: new Map([['tblDEALS01', 'Deals']]),
-      fieldNamesByTable: new Map([['tblDEALS01', new Map([['fldNAME', 'Name']])]]),
+      fieldsByTable: new Map([['tblDEALS01', new Map([['fldNAME', { name: 'Name', type: 'singleLineText' }]])]]),
       payload: {
         timestamp: '2026-07-17T00:00:00Z',
         changedTablesById: {
@@ -873,6 +883,8 @@ describe('eventsFromPayload — the event node carries the row identity', () => 
       tableName: 'Deals',
       base: 'appCRM01',
       fields: { Name: 'Acme' },
+      previous: {},
+      'Changed Fields': ['Name'],
     });
     // Unchanged, and load-bearing: the dispatch filter compares `recordType` to
     // the listen's `table` — it predates the event node and must keep working.
@@ -885,7 +897,7 @@ describe('eventsFromPayload — the event node carries the row identity', () => 
   it('degrades to the bare id when table metadata is unavailable', () => {
     const events = eventsFromPayload({
       baseId: 'appCRM01',
-      fieldNamesByTable: new Map(),
+      fieldsByTable: new Map(),
       payload: {
         changedTablesById: {
           tblDEALS01: { destroyedRecordIds: ['recGONE'] },
@@ -900,6 +912,8 @@ describe('eventsFromPayload — the event node carries the row identity', () => 
       tableName: 'tblDEALS01',
       base: 'appCRM01',
       fields: {},
+      previous: {},
+      'Changed Fields': [],
     });
   });
 });
@@ -963,5 +977,18 @@ movement m(x: <air-[:\`Record Change\`]->>) {
     // base hop. Both standpoints must promise it, because both dispatch into
     // the same `createRecord`.
     expect(projection.schema.writableRoots.Deals?.fields).toMatchObject({ Name: 'text' });
+  });
+
+  it('select choices reach the projection as enums, one value or many; an empty select stays text', async () => {
+    const { adapter } = makeMultiBaseAdapter({
+      teamId: 'team-air-checker-enums',
+      bases: [crm(), ops()],
+      base: 'CRM',
+    });
+    const { projection } = await projectUnpositioned(adapter);
+    const deals = projection.schema.positions.Deals?.properties;
+    expect(deals?.Stage).toMatchObject({ kind: 'enum', options: ['Open', 'Won'] });
+    expect(deals?.Tags).toMatchObject({ kind: 'list', of: { kind: 'enum', options: ['Hot', 'Warm'] } });
+    expect(deals?.Region).toBe('text');
   });
 });

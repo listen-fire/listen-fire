@@ -79,6 +79,16 @@ export const AIRTABLE_EVENT_RECORD_EDGE = 'record';
  *  surface (the id above stays the `getRelated` dispatch currency). */
 export const AIRTABLE_EVENT_RECORD_EDGE_NAME = 'Record';
 
+/** The event node's edge to the row AS IT WAS before the change: the changed
+ *  fields' previous values, typed like the row itself. */
+export const AIRTABLE_EVENT_OLD_RECORD_EDGE = 'oldRecord';
+export const AIRTABLE_EVENT_OLD_RECORD_EDGE_NAME = 'Old Record';
+
+/** The event node's field naming which of the row's fields changed. Its
+ *  display name is also its key in the event's data: a read of the event
+ *  node arrives by display name. */
+export const AIRTABLE_EVENT_CHANGED_FIELDS = 'Changed Fields';
+
 /** The event node's own type name. JUST A NODE: its change kind is its
  *  `action` field, narrowed in the address —
  *  `<at-[:`Record Change` WHERE `action` == "record.created" AND …]->>`. */
@@ -109,8 +119,16 @@ export interface AirtableEventData {
   tableName: string;
   /** The base's id (`app…`) — what the listen config names. */
   base: string;
-  /** The changed cells, keyed by natural field name. Empty for a delete. */
+  /** The changed cells' new values, keyed by natural field name. Empty for a
+   *  delete. */
   fields: Record<string, unknown>;
+  /** The changed cells' previous values, keyed by natural field name. Empty
+   *  for a create, a delete, or a webhook registered before previous values
+   *  were asked for. */
+  previous: Record<string, unknown>;
+  /** Which of the row's fields this change touched, by natural name. Every
+   *  field given for a create; none for a delete. */
+  [AIRTABLE_EVENT_CHANGED_FIELDS]: string[];
 }
 
 /** Read the event node's data back, or null when the position isn't one of
@@ -127,8 +145,16 @@ export function eventRecordRef(data: unknown): AirtableEventData | null {
     table: typeof d.table === 'string' ? d.table : '',
     tableName: d.tableName,
     base: typeof d.base === 'string' ? d.base : '',
-    fields: typeof d.fields === 'object' && d.fields !== null ? d.fields : {},
+    fields: cellsOf(d.fields),
+    previous: cellsOf(d.previous),
+    [AIRTABLE_EVENT_CHANGED_FIELDS]: Array.isArray(d[AIRTABLE_EVENT_CHANGED_FIELDS])
+      ? d[AIRTABLE_EVENT_CHANGED_FIELDS].filter((name): name is string => typeof name === 'string')
+      : [],
   };
+}
+
+function cellsOf(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? { ...value } : {};
 }
 
 /** The discrimination union: one entry per change kind. Every event the adapter
@@ -155,52 +181,78 @@ export function airtableScope(
   return null;
 }
 
-/** Per-table `fieldId → fieldName` maps, so changed cell values (which Airtable
- *  keys by field id) become name-keyed record data the movement reads by
- *  natural field name. */
-export type FieldNamesByTable = Map<string, Map<string, string>>;
+/** Per-table `fieldId → { name, type }` maps, so changed cell values (which
+ *  Airtable keys by field id) become name-keyed record data the movement reads
+ *  by natural field name, each value in the shape its field type reads as. */
+export type FieldsByTable = Map<string, Map<string, { name: string; type?: string }>>;
+
+/**
+ * A cell as the movement reads it. A webhook payload carries select cells in
+ * Airtable's cell format V2 — `{ id, name, color }` per choice — where a read
+ * of the row returns the plain name. The name is the value: it is what the
+ * field's enum holds and what a `becomes` names. Anything else is unchanged.
+ */
+function readCell(value: unknown, type: string | undefined): unknown {
+  const nameOf = (cell: unknown): unknown =>
+    typeof cell === 'object' && cell !== null && typeof Reflect.get(cell, 'name') === 'string'
+      ? Reflect.get(cell, 'name')
+      : cell;
+  if (type === 'singleSelect') return nameOf(value);
+  if (type === 'multipleSelects' && Array.isArray(value)) return value.map(nameOf);
+  return value;
+}
 
 /**
  * Split one Airtable payload into one `DiscriminableEvent` per record change.
  * `recordType` is the bare table id (the dispatch filter compares it to
  * `config.table`); `tag`/`eventType` carry the `record.*` change kind (the
- * change-type narrowing); `payload` is the name-keyed changed fields (the
- * seeded position's data). A delete carries no fields.
+ * change-type narrowing); `changedFields` names the fields the change touched
+ * (a listen's `field` gate); `payload` is the event node's data. A delete
+ * carries no fields.
  */
 export function eventsFromPayload(input: {
   payload: AirtableWebhookPayload;
-  fieldNamesByTable: FieldNamesByTable;
+  fieldsByTable: FieldsByTable;
   /** The delivery's base — off the ping, so it costs nothing. Rides the event
    *  data so the `Record` edge can name the row without a lookup. */
   baseId: string;
-  /** `tableId → display name`, from the same metadata the field-name map came
+  /** `tableId → display name`, from the same metadata the field map came
    *  from. The row position's TYPE; absent ⇒ the bare id, as with fields. */
   tableNamesById?: Map<string, string>;
 }): DiscriminableEvent[] {
-  const { payload, fieldNamesByTable, baseId } = input;
+  const { payload, fieldsByTable, baseId } = input;
   const occurredAt = payload.timestamp;
   const events: DiscriminableEvent[] = [];
 
   for (const [tableId, changes] of Object.entries(payload.changedTablesById ?? {})) {
-    const names = fieldNamesByTable.get(tableId);
+    const tableFields = fieldsByTable.get(tableId);
     const tableName = input.tableNamesById?.get(tableId) ?? tableId;
     const nameKeyed = (cells: Record<string, unknown> | undefined): Record<string, unknown> => {
       const data: Record<string, unknown> = {};
       for (const [fieldId, value] of Object.entries(cells ?? {})) {
-        data[names?.get(fieldId) ?? fieldId] = value;
+        const field = tableFields?.get(fieldId);
+        data[field?.name ?? fieldId] = readCell(value, field?.type);
       }
       return data;
     };
     const at = { baseId, tableId, tableName, occurredAt };
 
     for (const [recordId, change] of Object.entries(changes.createdRecordsById ?? {})) {
-      events.push(makeEvent({ ...at, recordId, event: 'record.created', fields: nameKeyed(change.cellValuesByFieldId) }));
+      events.push(makeEvent({ ...at, recordId, event: 'record.created', fields: nameKeyed(change.cellValuesByFieldId), previous: {} }));
     }
     for (const [recordId, change] of Object.entries(changes.changedRecordsById ?? {})) {
-      events.push(makeEvent({ ...at, recordId, event: 'record.updated', fields: nameKeyed(change.current?.cellValuesByFieldId) }));
+      events.push(
+        makeEvent({
+          ...at,
+          recordId,
+          event: 'record.updated',
+          fields: nameKeyed(change.current?.cellValuesByFieldId),
+          previous: nameKeyed(change.previous?.cellValuesByFieldId),
+        }),
+      );
     }
     for (const recordId of changes.destroyedRecordIds ?? []) {
-      events.push(makeEvent({ ...at, recordId, event: 'record.deleted', fields: {} }));
+      events.push(makeEvent({ ...at, recordId, event: 'record.deleted', fields: {}, previous: {} }));
     }
   }
 
@@ -223,8 +275,12 @@ function makeEvent(input: {
   recordId: string;
   event: AirtableSubscribableEvent;
   fields: Record<string, unknown>;
+  previous: Record<string, unknown>;
   occurredAt?: string;
 }): DiscriminableEvent {
+  // The `current` cells ARE the changed ones (the webhook asks for no
+  // unchanged values), so their names are what changed.
+  const changed = Object.keys(input.fields);
   const data: AirtableEventData = {
     action: input.event,
     record: input.recordId,
@@ -232,6 +288,8 @@ function makeEvent(input: {
     tableName: input.tableName,
     base: input.baseId,
     fields: input.fields,
+    previous: input.previous,
+    [AIRTABLE_EVENT_CHANGED_FIELDS]: changed,
   };
   return {
     payload: data,
@@ -240,6 +298,7 @@ function makeEvent(input: {
     eventType: input.event,
     tag: input.event,
     changeType: EVENT_TO_CHANGE_TYPE[input.event],
+    changedFields: changed,
     ...(input.occurredAt ? { occurredAt: input.occurredAt } : {}),
   };
 }

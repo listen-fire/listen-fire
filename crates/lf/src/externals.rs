@@ -288,9 +288,56 @@ impl Reach {
     }
 }
 
+/// One entry-position construction arg a module declares.
+pub struct PositionArg {
+    pub name: String,
+    pub options_from: String,
+    pub label: Option<String>,
+}
+
 impl RunningExternal {
     pub fn is_plugin(&self) -> bool {
         self.external.manifest.kind == "plugin"
+    }
+
+    /// The construction args its manifest declares as entry positions (`positionArgs`).
+    pub fn position_args(&self) -> Vec<PositionArg> {
+        let declared = self.manifest_answer.get("positionArgs").and_then(Js::as_array).unwrap_or_default();
+        declared
+            .iter()
+            .filter_map(|arg| {
+                Some(PositionArg {
+                    name: arg.get("name")?.as_str()?.to_string(),
+                    options_from: arg.get("optionsFrom")?.as_str()?.to_string(),
+                    label: arg.get("label").and_then(Js::as_str).map(str::to_string),
+                })
+            })
+            .collect()
+    }
+
+    /// The listen config keys whose values scope a webhook subscription
+    /// (`subscriptionScopeKeys`: Airtable's base and table), in order: one
+    /// webhook per credential and scope. Empty for a module that declares none.
+    pub fn subscription_scope_keys(&self) -> Vec<String> {
+        let declared = self.manifest_answer.get("subscriptionScopeKeys").and_then(Js::as_array).unwrap_or_default();
+        declared.iter().filter_map(Js::as_str).filter(|k| !k.is_empty()).map(str::to_string).collect()
+    }
+
+    /// The position a construction with `args` (source text, by name) puts a
+    /// connection of this module in: each declared position arg it gives a
+    /// value, as the `settings` a call in that position carries. None for a
+    /// construction in no position.
+    pub fn position_settings(&self, args: &[(String, String)]) -> Option<serde_json::Value> {
+        let declared = self.position_args();
+        let settings: serde_json::Map<String, serde_json::Value> = declared
+            .iter()
+            .filter_map(|d| {
+                let (_, raw) = args.iter().find(|(name, _)| *name == d.name)?;
+                let value = unquoted(raw);
+                (!value.is_empty()).then(|| (d.name.clone(), serde_json::Value::String(value)))
+            })
+            .collect();
+        (!settings.is_empty()).then_some(serde_json::Value::Object(settings))
     }
 
     /// The package tag its plugins are imported from.
@@ -348,8 +395,22 @@ pub async fn rpc(running: &RunningExternal, credentials: &Credentials, tenant: &
     rpc_as(running, credentials, credential_for(credentials, &running.external.manifest.name), tenant, method, params).await
 }
 
+/// A position arg's source text as its value: a quoted string loses its quotes.
+fn unquoted(raw: &str) -> String {
+    let trimmed = raw.trim();
+    match trimmed.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+        Some(inner) => inner.replace("\\\"", "\"").replace("\\\\", "\\"),
+        None => trimmed.to_string(),
+    }
+}
+
 /// One call made as `credential` (one connection's), or as none.
 pub async fn rpc_as(running: &RunningExternal, credentials: &Credentials, credential: Option<&Credential>, tenant: &str, method: &str, params: serde_json::Value) -> Result<Js, String> {
+    rpc_in(running, credentials, credential, tenant, method, params, None).await
+}
+
+/// `rpc_as`, with the construction's position args (`settings`) carried on the call.
+pub async fn rpc_in(running: &RunningExternal, credentials: &Credentials, credential: Option<&Credential>, tenant: &str, method: &str, params: serde_json::Value, settings: Option<serde_json::Value>) -> Result<Js, String> {
     let lease = running.reach.lease().await?;
     let target = Target {
         external: &running.external,
@@ -359,16 +420,16 @@ pub async fn rpc_as(running: &RunningExternal, credentials: &Credentials, creden
         settings: &running.settings,
         limits: &running.limits,
     };
-    call_as(&target, credentials, credential, tenant, method, params).await
+    call_as(&target, credentials, credential, tenant, method, params, settings).await
 }
 
 async fn call(target: &Target<'_>, credentials: &Credentials, tenant: &str, method: &str, params: serde_json::Value) -> Result<Js, String> {
-    call_as(target, credentials, credential_for(credentials, &target.external.manifest.name), tenant, method, params).await
+    call_as(target, credentials, credential_for(credentials, &target.external.manifest.name), tenant, method, params, None).await
 }
 
-async fn call_as(target: &Target<'_>, credentials: &Credentials, credential: Option<&Credential>, tenant: &str, method: &str, params: serde_json::Value) -> Result<Js, String> {
+async fn call_as(target: &Target<'_>, credentials: &Credentials, credential: Option<&Credential>, tenant: &str, method: &str, params: serde_json::Value, settings: Option<serde_json::Value>) -> Result<Js, String> {
     let signer = signer_of(credentials, &target.external.manifest.name, credential);
-    Ok(send(target, credentials, credential, signer, Sending { tenant, method, cache_scope_id: "<none>", params }).await?)
+    Ok(send(target, credentials, credential, signer, Sending { tenant, method, cache_scope_id: "<none>", params, settings }).await?)
 }
 
 /// The externals the files import (`from adapters`, `from plugins`), by
@@ -593,10 +654,25 @@ fn listen_declarations(raw: &Js) -> Result<Obj, String> {
                 entry.insert("required".into(), Js::Bool(*required));
             }
             if let Some(format) = item.get("format") {
-                let format = format.as_str().filter(|f| ["cron", "timezone", "fields", "strings", "type"].contains(f));
-                entry.insert("format".into(), Js::str(format.ok_or("listenConfig.format: expected cron, timezone, fields, strings or type")?));
+                // Open: a format this lf does not know is a newer module's;
+                // the checker reads its key's value as unchecked.
+                let format = format.as_str().filter(|f| !f.is_empty());
+                entry.insert("format".into(), Js::str(format.ok_or("listenConfig.format: expected a non-empty string")?));
+            }
+            if let Some(narrows) = item.get("narrows") {
+                // One hop of the address a listen's event is narrowed by
+                // (crate::listen_narrowing).
+                let named = |k: &str| narrows.get(k).and_then(Js::as_str).filter(|v| !v.is_empty()).map(Js::str);
+                let (Some(collection), Some(match_field)) = (named("collection"), named("matchField")) else {
+                    return Err("listenConfig.narrows: expected { collection, matchField }, each a non-empty string".into());
+                };
+                entry.insert("narrows".into(), Js::Obj(crate::obj! { "collection" => collection, "matchField" => match_field }));
             }
             entries.push(Js::Obj(entry));
+        }
+        let formats = |format: &str| entries.iter().filter(|e| e.get("format").and_then(Js::as_str) == Some(format)).count();
+        if formats("field-value") > 0 && formats("field") != 1 {
+            return Err("listenConfig: a 'field-value' key needs exactly one 'field' key to be a value of".into());
         }
         out.insert("listenConfig".into(), Js::Arr(entries));
     }
@@ -840,5 +916,29 @@ mod tests {
         let raw = Js::parse(br#"{ "subscribableEvents": ["a"], "other": 1, "listenConfig": [{ "key": "schedule", "required": true, "extra": 2 }] }"#).unwrap();
         let listen = listen_declarations(&raw).unwrap();
         assert_eq!(Js::Obj(listen).to_json(), r#"{"subscribableEvents":["a"],"listenConfig":[{"key":"schedule","required":true}]}"#);
+    }
+
+    #[test]
+    fn a_listen_key_that_narrows_keeps_its_hop() {
+        let raw = Js::parse(br#"{ "listenConfig": [{ "key": "table", "required": true, "narrows": { "collection": "Table", "matchField": "Id", "extra": 1 } }] }"#).unwrap();
+        let listen = listen_declarations(&raw).unwrap();
+        assert_eq!(Js::Obj(listen).to_json(), r#"{"listenConfig":[{"key":"table","required":true,"narrows":{"collection":"Table","matchField":"Id"}}]}"#);
+        let half = Js::parse(br#"{ "listenConfig": [{ "key": "table", "narrows": { "collection": "Table" } }] }"#).unwrap();
+        assert!(listen_declarations(&half).unwrap_err().contains("listenConfig.narrows"));
+    }
+
+    #[test]
+    fn a_field_value_key_needs_exactly_one_field_key() {
+        let paired = Js::parse(br#"{ "listenConfig": [{ "key": "field", "format": "field" }, { "key": "becomes", "format": "field-value" }] }"#).unwrap();
+        assert!(listen_declarations(&paired).is_ok());
+        let alone = Js::parse(br#"{ "listenConfig": [{ "key": "becomes", "format": "field-value" }] }"#).unwrap();
+        assert!(listen_declarations(&alone).unwrap_err().contains("exactly one 'field' key"));
+    }
+
+    #[test]
+    fn a_format_this_lf_does_not_know_is_kept_for_the_checker() {
+        let raw = Js::parse(br#"{ "listenConfig": [{ "key": "within", "format": "duration-window" }] }"#).unwrap();
+        let listen = listen_declarations(&raw).unwrap();
+        assert_eq!(Js::Obj(listen).to_json(), r#"{"listenConfig":[{"key":"within","format":"duration-window"}]}"#);
     }
 }

@@ -200,11 +200,11 @@ export class SlotRefusal extends Error {
   }
 }
 
-/** A slot manifest as written, stating the minor of adapter protocol 2 its
- *  methods use: a hand-written one needs no change when a slot gains one. */
+/** A slot manifest as written, stating the minor of adapter protocol 2 it
+ *  needs its host to speak (`protocolMinorOf`): what it declares, else 0. */
 function stamped(manifest: WireSlotManifestShape): WireSlotManifestShape {
   const { protocolVersion, protocolMinor, ...rest } = manifest;
-  return { protocolVersion, protocolMinor: Math.max(protocolMinorOf(manifest), protocolMinor ?? 0), ...rest };
+  return { protocolVersion, protocolMinor: protocolMinorOf(protocolMinor !== undefined ? { protocolMinor } : {}), ...rest };
 }
 
 /** The envelope rules for one request whose body is already read as JSON,

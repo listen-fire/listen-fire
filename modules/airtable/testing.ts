@@ -65,7 +65,21 @@ export function dealsTable() {
       { id: 'fldName', name: 'Name', type: 'singleLineText' },
       { id: 'fldAmount', name: 'Amount', type: 'currency' },
       { id: 'fldClosed', name: 'Closed', type: 'checkbox' },
-      { id: 'fldTags', name: 'Tags', type: 'multipleSelects' },
+      {
+        id: 'fldTags',
+        name: 'Tags',
+        type: 'multipleSelects',
+        options: { choices: [{ id: 'selA', name: 'Hot' }, { id: 'selB', name: 'Warm' }] },
+      },
+      {
+        id: 'fldStage',
+        name: 'Stage',
+        type: 'singleSelect',
+        options: { choices: [{ id: 'selC', name: 'Open' }, { id: 'selD', name: 'Won' }] },
+      },
+      // A select whose base has no choices yet (or whose meta omits them).
+      { id: 'fldRegion', name: 'Region', type: 'singleSelect', options: { choices: [] } },
+      { id: 'fldSource', name: 'Source', type: 'multipleSelects' },
       { id: 'fldCreated', name: 'Created', type: 'createdTime' },
       { id: 'fldFormula', name: 'Score', type: 'formula' },
       { id: 'fldDeck', name: 'Deck', type: 'multipleAttachments' },

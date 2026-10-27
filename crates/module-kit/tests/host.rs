@@ -147,7 +147,8 @@ async fn over_tcp_each_module_answers_at_its_own_path() {
             assert!(body.starts_with(r#"{"ok":true,"result":{"protocolVersion":2,"protocolMinor":0,"kind":"adapter","adapterType":"tiny","#), "{body}");
             assert!(body.contains(r#""wakeKeys"]"#), "{body}");
             let (_, body) = post(tcp().await, "/watcher", Some("sesame"), &call("manifest", "{}")).await;
-            assert!(body.starts_with(r#"{"ok":true,"result":{"protocolVersion":2,"protocolMinor":1,"kind":"adapter","adapterType":"watcher","#), "{body}");
+            // Offering a `.watch` (2.1) asks nothing of an older host: it states 0.
+            assert!(body.starts_with(r#"{"ok":true,"result":{"protocolVersion":2,"protocolMinor":0,"kind":"adapter","adapterType":"watcher","#), "{body}");
             let (_, body) = post(tcp().await, "/raised", Some("sesame"), &call("manifest", "{}")).await;
             assert!(body.starts_with(r#"{"ok":true,"result":{"protocolVersion":2,"protocolMinor":2,"kind":"adapter","adapterType":"raised","#), "{body}");
             assert_eq!(body.matches("protocolMinor").count(), 1, "{body}");

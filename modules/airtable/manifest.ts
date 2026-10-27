@@ -37,7 +37,7 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
   methods: [
     'listEntryPoints', 'describe', 'edgesFrom', 'resolveEntity', 'getFieldValue',
     'getRelated', 'createRecord', 'updateRecord', 'deleteRecord', 'readRecord',
-    'preprocessInbound', 'listEventTypes', 'ensureEventSubscription', 'removeEventSubscription',
+    'preprocessInbound', 'listEventTypes', 'ensureEventSubscription', 'removeEventSubscription', 'refreshEventSubscription',
   ],
   requiredCredentialType: 'AIRTABLE',
   triggerKinds: ['AIRTABLE'],
@@ -76,6 +76,14 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
   listenConfig: [
     { key: 'base', required: true, narrows: { collection: BASE_META_TYPE, matchField: 'Id' } },
     { key: 'table', required: true, narrows: { collection: TABLE_META_TYPE, matchField: 'Id' } },
+    // `field: "Stage"` fires only on a change that touched that field;
+    // `becomes: "Interview"` (with `field`) only when its new value is that
+    // and its previous one was not. Gated by the host's listen scope gate
+    // over the event's `changedFields` and its new and previous values. The
+    // checker holds `field` to the narrowed table's fields and `becomes` to
+    // that field's type (a select's choices).
+    { key: 'field', format: 'field' },
+    { key: 'becomes', format: 'field-value' },
   ],
   triggerExpectation:
     'A listener watches ONE Airtable table — the base + table named on the ' +
@@ -83,6 +91,9 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
     'something changed and Listen-Fire pulls the actual changes, so events arrive ' +
     'as record created/updated/deleted for that table, usually within ' +
     'seconds but coalesced by Airtable (rapid edits can land as one batch). ' +
+    'A listen can narrow to one field (`field: "Stage"`) and to the value it ' +
+    'changes to (`becomes: "Interview"`); the event names its changed fields ' +
+    'and its `Old Record` edge holds their previous values. ' +
     'Do not promise cross-table or whole-base capture from one listener — ' +
     'each watched table is its own listen.',
 };

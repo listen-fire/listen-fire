@@ -1227,17 +1227,30 @@ impl Checker<'_> {
 
     /// `reportFieldValueType`: a value the field's type does not take.
     /// `checkEnumLiteralWrite`: a string literal written into an enum field is
-    /// one of its options. A value that is not a literal is unknown at author
+    /// one of its options, and so is each literal element of a list written
+    /// into a list of enum. A value that is not a literal is unknown at author
     /// time, which is a reason for silence only while some value could still
     /// be right — so an empty domain is refused whatever is written.
     fn check_enum_literal_write(&mut self, value: &movement_parser::ast::ExprSlot, target: Option<&Ty>, subject: &str) {
-        let Some(target @ Ty::Enum { .. }) = target else { return };
-        let found = crate::families::values::check_enum_domain(target, subject)
-            .or_else(|| static_string_literal_of(value).and_then(|literal| crate::families::values::check_enum_literal(&literal, target)));
-        let Some(found) = found else { return };
-        match found.severity {
-            Some(severity) => self.report_with(found.code, found.message, value.span, severity),
-            None => self.report(found.code, found.message, value.span),
+        let found: Vec<_> = match target.map(strip_absent) {
+            Some(target @ Ty::Enum { .. }) => crate::families::values::check_enum_domain(target, subject)
+                .or_else(|| static_string_literal_of(value).and_then(|literal| crate::families::values::check_enum_literal(&literal, target)))
+                .into_iter()
+                .collect(),
+            Some(Ty::List { of, .. }) if matches!(strip_absent(of), Ty::Enum { .. }) => {
+                let element = strip_absent(of);
+                let Ok(expression) = expression_of_slot(value) else { return };
+                let mut literals = Vec::new();
+                list_element_literals(&expression, &mut literals);
+                literals.iter().filter_map(|literal| crate::families::values::check_enum_literal(literal, element)).collect()
+            }
+            _ => return,
+        };
+        for found in found {
+            match found.severity {
+                Some(severity) => self.report_with(found.code, found.message, value.span, severity),
+                None => self.report(found.code, found.message, value.span),
+            }
         }
     }
 
@@ -1710,6 +1723,30 @@ fn static_string_literal_of(slot: &movement_parser::ast::ExprSlot) -> Option<Str
     match expression_of_slot(slot).ok()? {
         Expression::Static { value: StaticValue::String(value) } => Some(value),
         _ => None,
+    }
+}
+
+/// The text literals a list value statically holds: a list literal's literal
+/// elements, those of a list literal spread into it, and those of either
+/// branch of a conditional. An element that is not a literal is unknown at
+/// author time and adds nothing.
+fn list_element_literals(expression: &Expression, into: &mut Vec<String>) {
+    use movement_parser::lowering::expression::ListElement;
+    match expression {
+        Expression::List { elements } => {
+            for element in elements {
+                match element {
+                    ListElement::Expression(Expression::Static { value: StaticValue::String(value) }) => into.push(value.clone()),
+                    ListElement::Expression(_) => {}
+                    ListElement::Spread(spread) => list_element_literals(&spread.expression, into),
+                }
+            }
+        }
+        Expression::Conditional { then, else_, .. } => {
+            list_element_literals(then, into);
+            list_element_literals(else_, into);
+        }
+        _ => {}
     }
 }
 

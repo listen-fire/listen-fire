@@ -37,31 +37,36 @@ export const MANIFEST_PROTOCOL_VERSION = 2;
 
 /** The highest minor of version 2 this release speaks: a host reads 2.0 to
  *  2.`PROTOCOL_MINOR` (docs/contracts/adapter-protocol.md "Minors of version 2"). */
-export const PROTOCOL_MINOR = 3;
+export const PROTOCOL_MINOR = 4;
 
-/** What a manifest shows of a feature: a method it lists, by name or by its
- *  ending (`<slot>.watch`). Data, so the Rust twin
- *  (module-wire `envelope::PROTOCOL_MINORS`) is test-held equal to it. */
+/** The method that names a minor's feature, by name or by its ending
+ *  (`<slot>.watch`). Data, so the Rust twin (module-wire
+ *  `envelope::PROTOCOL_MINORS`) is test-held equal to it. */
 export type ProtocolMinorUse = { method: string } | { methodEndingWith: string };
 
-/** Each minor of version 2 and the feature that a manifest using it lists. A
- *  minor that is no feature a manifest shows has no row: 2.0, and 2.3 (a rule
- *  for sources, labelled poll events, and a host behaviour; no module states
- *  it). */
+/** Each minor of version 2 whose hosts speak a method, and that method. A host
+ *  speaking the minor may call it; a module offering it needs nothing of an
+ *  older host, which never calls it, so offering one never raises the minor
+ *  a module states. A minor that names no method has no row: 2.0, and 2.3
+ *  (labelled poll events, a host behaviour). */
 export const PROTOCOL_MINORS: readonly { minor: number; feature: string; uses: ProtocolMinorUse }[] = [
   { minor: 1, feature: 'a <slot>.watch method', uses: { methodEndingWith: '.watch' } },
   { minor: 2, feature: 'work.enqueueIfAbsent', uses: { method: 'work.enqueueIfAbsent' } },
+  { minor: 4, feature: 'refreshEventSubscription', uses: { method: 'refreshEventSubscription' } },
 ];
 
-function lists(methods: readonly string[], uses: ProtocolMinorUse): boolean {
-  return 'method' in uses ? methods.includes(uses.method) : methods.some((method) => method.endsWith(uses.methodEndingWith));
+/** The minor a manifest states: what it needs its host to speak. That is 0
+ *  unless its author declares a host behaviour the module relies on
+ *  (`protocolMinor`). The methods it lists never raise it: a host calls only
+ *  the methods it speaks, so an older host leaves a newer one alone. */
+export function protocolMinorOf(manifest: { methods?: readonly string[]; protocolMinor?: number }): number {
+  return manifest.protocolMinor ?? 0;
 }
 
-/** The minor a manifest states: the highest among the features it lists, so a
- *  module rebuilt with a newer kit is never refused by an older host for a
- *  feature it does not use. */
-export function protocolMinorOf(manifest: { methods: readonly string[] }): number {
-  return PROTOCOL_MINORS.reduce((highest, { minor, uses }) => (lists(manifest.methods, uses) ? Math.max(highest, minor) : highest), 0);
+/** The minor whose hosts first speak `method`, for a host's refusal of a
+ *  module that lacks a method the host needs (`movements.watch`, 2.1). */
+export function minorIntroducing(method: string): number | undefined {
+  return PROTOCOL_MINORS.find(({ uses }) => ('method' in uses ? uses.method === method : method.endsWith(uses.methodEndingWith)))?.minor;
 }
 
 function olderProtocolText(got: unknown, module: 'adapter' | 'module'): string {
@@ -741,8 +746,9 @@ export const WireInvokeFieldFunctionInput = z.object({
  *     `eventType` is matched against them when routing);
  *   - `defaultSubscribedEvents`: what a listen with no `events` receives
  *     (absent ⇒ every subscribable event);
- *   - `listenConfig`: further keys, whether a listen must carry each, and a
- *     static value format the checker validates.
+ *   - `listenConfig`: further keys, whether a listen must carry each, a
+ *     static value format the checker validates, and whether the key is one
+ *     hop of the address the event is narrowed by (`narrows`).
  * All optional: an adapter declaring none leaves its listen config unchecked.
  */
 export const WireListenDeclarations = z.object({
@@ -753,8 +759,23 @@ export const WireListenDeclarations = z.object({
       z.object({
         key: z.string().min(1),
         required: z.boolean().optional(),
-        format: z.enum(['cron', 'timezone', 'fields', 'strings', 'type']).optional(),
+        // Open: a format this release does not know is a newer module's, and
+        // its key's value goes unchecked rather than refusing the manifest.
+        format: z
+          .union([z.enum(['cron', 'timezone', 'fields', 'strings', 'type', 'field', 'field-value']), z.string().min(1)])
+          .optional(),
+        // One hop of the address the listen's event is narrowed by
+        // (`ListenConfigKey.narrows`): the collection walked and the member
+        // field its value is matched on.
+        narrows: z.object({ collection: z.string().min(1), matchField: z.string().min(1) }).optional(),
       }),
+    )
+    // A `field-value` key is a value of the field the `field` key names:
+    // paired by format, so there must be exactly one to pair with.
+    .refine(
+      (entries) =>
+        !entries.some((e) => e.format === 'field-value') || entries.filter((e) => e.format === 'field').length === 1,
+      { message: "a 'field-value' listen key needs exactly one 'field' key to be a value of" },
     )
     .optional(),
 });
@@ -1099,6 +1120,17 @@ export const WireManifestResult = z.object({
   webhookEventTypeId: z.string().optional(),
   /** What the adapter is, in one or two sentences: shown when an author hovers it. */
   description: z.string().optional(),
+  /** Construction args that pin an entry position (an Airtable `base`): a host
+   *  describes the module once per value a program constructs it with, and
+   *  sends the value as the request's `settings`. */
+  positionArgs: z
+    .array(z.object({ name: z.string().min(1), optionsFrom: z.string().min(1), label: z.string().optional() }))
+    .optional(),
+  /** The listen config keys whose values scope an event subscription (an
+   *  Airtable webhook watches one `base` and `table`): a host keeps one
+   *  subscription per credential and scope, and sends the scope as
+   *  `ensureEventSubscription`'s and `removeEventSubscription`'s `scope`. */
+  subscriptionScopeKeys: z.array(z.string().min(1)).optional(),
 }).superRefine(refuseUnpairedDeclarations);
 export type WireManifestResultShape = z.infer<typeof WireManifestResult>;
 
@@ -1278,6 +1310,19 @@ export const WireEnsureEventSubscriptionInput = z.object({
 export const WireEventSubscriptionRegistration = z.object({
   externalId: z.string().optional(),
   secret: z.string().optional(),
+  /** When the source lets the subscription lapse unless it is refreshed (an
+   *  ISO time); absent for one that never expires. */
+  expiresAt: z.string().optional(),
+});
+
+export const WireRefreshEventSubscriptionInput = z.object({
+  externalId: z.string(),
+  scope: z.record(z.string(), z.string()).optional(),
+});
+
+/** A refreshed subscription: when it now expires. */
+export const WireEventSubscriptionRefresh = z.object({
+  expiresAt: z.string().optional(),
 });
 
 export const WireRemoveEventSubscriptionInput = z.object({
@@ -1437,6 +1482,11 @@ export const METHODS = {
   removeEventSubscription: {
     params: WireRemoveEventSubscriptionInput,
     result: z.null(),
+  },
+  // Adapter protocol 2.4: extend a subscription the source would let lapse.
+  refreshEventSubscription: {
+    params: WireRefreshEventSubscriptionInput,
+    result: WireEventSubscriptionRefresh.nullable(),
   },
   resolveAwait: {
     params: WireAwaitPoint,

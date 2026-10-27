@@ -119,6 +119,7 @@ const VALIDATED_METHODS: ReadonlySet<string> = new Set<MethodName>([
   'unlinkRecords',
   'ensureEventSubscription',
   'removeEventSubscription',
+  'refreshEventSubscription',
   'wakeKeys',
   'readRecord',
   'translateFilter',

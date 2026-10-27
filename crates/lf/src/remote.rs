@@ -170,6 +170,8 @@ struct Instance {
     resolved_type: String,
     resolved_credential: Option<String>,
     dry_run: bool,
+    /// The construction's position args, carried on each call as `settings`.
+    settings: Option<serde_json::Value>,
     cache_scope: String,
     /// The external's own catalog entries, by type, asked once each.
     described: RefCell<HashMap<String, Js>>,
@@ -217,12 +219,13 @@ impl<'s> SegmentAdapters<'s> {
             .map(|a| a.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string())).collect())
             .unwrap_or_default();
         args.sort();
+        let position_settings = self.position_settings(adapter_type, &args);
         let key = serde_json::json!([adapter_type, credentials_id, args, dry_run]).to_string();
         let existing = self.ids.borrow().get(&key).cloned();
         let id = match existing {
             Some(id) => id,
             None => {
-                let instance = self.construct(adapter_type, credentials_id, dry_run)?;
+                let instance = self.construct(adapter_type, credentials_id, dry_run, position_settings)?;
                 let id = instance.id.clone();
                 self.instances.borrow_mut().push(std::rc::Rc::new(instance));
                 self.ids.borrow_mut().insert(key, id.clone());
@@ -233,7 +236,16 @@ impl<'s> SegmentAdapters<'s> {
         Ok(self.describe_instance(&instance))
     }
 
-    fn construct(&self, adapter_type: &str, credentials_id: Option<&str>, dry_run: bool) -> Result<Instance, String> {
+    /// The arguments the module declares as position args (`positionArgs`), as the `settings` each call carries.
+    fn position_settings(&self, adapter_type: &str, args: &[(String, String)]) -> Option<serde_json::Value> {
+        let running = self.externals.running.iter().find(|r| r.external.manifest.name == adapter_type)?;
+        let declared = running.position_args();
+        let settings: serde_json::Map<String, serde_json::Value> =
+            args.iter().filter(|(name, value)| !value.is_empty() && declared.iter().any(|d| d.name == *name)).map(|(name, value)| (name.clone(), serde_json::json!(value))).collect();
+        (!settings.is_empty()).then_some(serde_json::Value::Object(settings))
+    }
+
+    fn construct(&self, adapter_type: &str, credentials_id: Option<&str>, dry_run: bool, settings: Option<serde_json::Value>) -> Result<Instance, String> {
         let ext = self.externals;
         let names = ext.running.iter().filter(|r| !r.is_plugin()).map(|r| r.external.manifest.name.as_str());
         if let Some(unit) = crate::units::unit_named(adapter_type, names) {
@@ -247,6 +259,7 @@ impl<'s> SegmentAdapters<'s> {
                 resolved_type: unit.to_string(),
                 resolved_credential: None,
                 dry_run,
+                settings: None,
                 cache_scope: uuid::Uuid::new_v4().to_string(),
                 described: RefCell::new(HashMap::new()),
             });
@@ -273,6 +286,7 @@ impl<'s> SegmentAdapters<'s> {
             resolved_type: adapter_type.to_string(),
             resolved_credential: credentials_id.map(str::to_string),
             dry_run,
+            settings,
             cache_scope: uuid::Uuid::new_v4().to_string(),
             described: RefCell::new(HashMap::new()),
         })
@@ -351,7 +365,7 @@ impl<'s> SegmentAdapters<'s> {
             settings: &running.settings,
             limits: &running.limits,
         };
-        let sending = Sending { tenant: ext.tenant, method, cache_scope_id: &instance.cache_scope, params: json_of_js(&params) };
+        let sending = Sending { tenant: ext.tenant, method, cache_scope_id: &instance.cache_scope, params: json_of_js(&params), settings: instance.settings.clone() };
         // The install's server secret signs a call made as a user credential.
         let signer = signer_of(ext.credentials, &running.external.manifest.name, credential);
         let raw = send(&target, ext.credentials, credential, signer, sending).await?;

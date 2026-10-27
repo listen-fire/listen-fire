@@ -15,6 +15,7 @@ import type {
   DiscriminableEvent,
   EdgesFromResult,
   EnsureEventSubscriptionInput,
+  EventSubscriptionRefresh,
   EventSubscriptionRegistration,
   EventType,
   GetFieldValueInput,
@@ -22,6 +23,7 @@ import type {
   ParentLink,
   RelatedResult,
   ReadInput,
+  RefreshEventSubscriptionInput,
   RemoveEventSubscriptionInput,
   ResolveEntityInput,
   ResolveEntityResult,
@@ -43,6 +45,7 @@ import { AIRTABLE_MANIFEST } from './manifest';
 import {
   META_RECORD_TYPE,
   makeStablePosition,
+  makeUnstablePosition,
   positionData,
 } from 'movement-engine/public/catalog';
 import { BaseAdapter } from 'module-kit/adapter/base';
@@ -73,6 +76,8 @@ import {
   type TableCatalog,
 } from './schema_catalog';
 import {
+  AIRTABLE_EVENT_OLD_RECORD_EDGE,
+  AIRTABLE_EVENT_OLD_RECORD_EDGE_NAME,
   AIRTABLE_EVENT_RECORD_EDGE,
   AIRTABLE_EVENT_RECORD_EDGE_NAME,
   AIRTABLE_EVENT_TYPE_NAME,
@@ -83,7 +88,7 @@ import {
   airtableScope,
   eventRecordRef,
   eventsFromPayload,
-  type FieldNamesByTable,
+  type FieldsByTable,
 } from './webhook';
 import {
   resolveEntity as recordResolveEntity,
@@ -576,6 +581,26 @@ export class AirtableAdapter extends BaseAdapter {
       ];
     }
 
+    // The event node's `Old Record` edge: the row as it was, minted from the
+    // previous values the event carries. UNSTABLE, unlike `Record`: a past
+    // state of the row cannot be re-read, and stamping it with the live row's
+    // identity would let it pass for the row as it is now.
+    const namesOldRecordEdge =
+      input.fieldId === AIRTABLE_EVENT_OLD_RECORD_EDGE ||
+      input.fieldId === AIRTABLE_EVENT_OLD_RECORD_EDGE_NAME;
+    if (input.direction === 'outgoing' && namesOldRecordEdge) {
+      if (!event) return [];
+      return [
+        {
+          position: makeUnstablePosition({
+            adapterType: this.adapterType,
+            recordType: event.tableName,
+            data: event.previous,
+          }),
+        },
+      ];
+    }
+
     // The `Base` collection off the meta root — the `base:` entry-position
     // options. Each base projects as a stable position labelled by its name, so
     // the catalog can enumerate/validate the `base:` arg (and the author gets a
@@ -760,20 +785,18 @@ export class AirtableAdapter extends BaseAdapter {
     const { base, webhook } = ping.data;
     const client = await this.getApiClient();
 
-    // The base's `fieldId → name` maps, so changed cell values (Airtable keys
-    // them by field id) become name-keyed record data the movement reads by
-    // natural field name. A metadata failure degrades to id-keyed data rather
-    // than dropping the delivery.
-    const fieldNamesByTable: FieldNamesByTable = new Map();
+    // The base's `fieldId → { name, type }` maps, so changed cell values
+    // (Airtable keys them by field id) become name-keyed record data the
+    // movement reads by natural field name. A metadata failure degrades to
+    // id-keyed data rather than dropping the delivery.
+    const fieldsByTable: FieldsByTable = new Map();
     // …and each table's display NAME, off the same metadata — the row position's
     // type, so the event's `Record` edge names the row without a second lookup.
     const tableNamesById = new Map<string, string>();
     try {
       const tables = await cachedTables({ client, teamId: this.teamId, baseId: base.id });
       for (const table of tables) {
-        const byId = new Map<string, string>();
-        for (const f of table.fields) byId.set(f.id, f.name);
-        fieldNamesByTable.set(table.id, byId);
+        fieldsByTable.set(table.id, new Map(table.fields.map((f) => [f.id, { name: f.name, type: f.type }])));
         tableNamesById.set(table.id, table.name);
       }
     } catch (err) {
@@ -794,7 +817,7 @@ export class AirtableAdapter extends BaseAdapter {
       const result = await client.listPayloads({ baseId: base.id, webhookId: webhook.id, cursor });
       for (const payload of result.payloads) {
         events.push(
-          ...eventsFromPayload({ payload, fieldNamesByTable, baseId: base.id, tableNamesById }),
+          ...eventsFromPayload({ payload, fieldsByTable, baseId: base.id, tableNamesById }),
         );
       }
       cursor = result.cursor;
@@ -842,7 +865,13 @@ export class AirtableAdapter extends BaseAdapter {
       changeTypes,
     });
     // macSecretBase64 is issued ONLY here — persist it as the inbound HMAC key.
-    return { externalId: created.webhookId, secret: created.macSecretBase64 };
+    // A webhook lapses 7 days on unless refreshed: the host refreshes it
+    // before `expiresAt`.
+    return {
+      externalId: created.webhookId,
+      secret: created.macSecretBase64,
+      ...(created.expirationTime !== undefined ? { expiresAt: created.expirationTime } : {}),
+    };
   }
 
   async removeEventSubscription(input: RemoveEventSubscriptionInput): Promise<void> {
@@ -857,17 +886,16 @@ export class AirtableAdapter extends BaseAdapter {
    * Extend a registered webhook's 7-day expiry. Airtable disables inactive
    * webhooks after 7 days; an inbound delivery (which pulls payloads) already
    * extends the window, so only quiet webhooks need this — driven by the
-   * airtable_webhook_refresh worker. Not on the `Adapter` interface (Airtable
-   * is the only source that expires); the worker calls it on the concrete type.
+   * platform's airtable_webhook_refresh worker, and by `lf` before the
+   * `expiresAt` the registration returned (adapter protocol 2.4). Answers
+   * when it now expires.
    */
-  async refreshEventSubscription(input: {
-    externalId: string;
-    scope: Record<string, string>;
-  }): Promise<void> {
+  async refreshEventSubscription(input: RefreshEventSubscriptionInput): Promise<EventSubscriptionRefresh | undefined> {
     const scope = airtableScope(input.scope);
-    if (!scope) return;
+    if (!scope) return undefined;
     const client = await this.getApiClient();
-    await client.refreshWebhook({ baseId: scope.base, webhookId: input.externalId });
+    const refreshed = await client.refreshWebhook({ baseId: scope.base, webhookId: input.externalId });
+    return refreshed.expirationTime !== undefined ? { expiresAt: refreshed.expirationTime } : {};
   }
 
   // ── Internal: lazy API client construction ──────────────────────────────

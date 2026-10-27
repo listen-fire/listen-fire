@@ -470,8 +470,11 @@ export interface ListenConfigKey {
    *  with a "only fire when one of these changed" surface declares it);
    *  `'strings'` = a non-empty list of non-empty quoted strings (Gmail's
    *  `labels`); `'type'` = a node the program declares (`payload: <Payment>`),
-   *  which the listen's events are typed as. */
-  format?: 'cron' | 'timezone' | 'fields' | 'strings' | 'type';
+   *  which the listen's events are typed as; `'field'` = one quoted field name
+   *  of the record the listen's address lands on; `'field-value'` = a literal
+   *  value of the field the `'field'`-format key names, held to that field's
+   *  type (an adapter declaring it declares exactly one `'field'` key). */
+  format?: 'cron' | 'timezone' | 'fields' | 'strings' | 'type' | 'field' | 'field-value';
   /**
    * This key is one HOP of the address that narrows the event's record edge.
    *
@@ -550,6 +553,22 @@ export interface EventSubscriptionRegistration {
   externalId?: string;
   /** HMAC secret for inbound signature verification, when issued. */
   secret?: string;
+  /** When the source lets the subscription lapse unless it is refreshed
+   *  ({@link Adapter.refreshEventSubscription}), as an ISO time. Absent for
+   *  one that never expires. */
+  expiresAt?: string;
+}
+
+export interface RefreshEventSubscriptionInput {
+  /** The source-issued id of the subscription to extend. */
+  externalId: string;
+  /** The channel's scope (mirrors {@link EnsureEventSubscriptionInput.scope}). */
+  scope?: Record<string, string>;
+}
+
+/** A refreshed subscription: when it now expires, when the source says. */
+export interface EventSubscriptionRefresh {
+  expiresAt?: string;
 }
 
 export interface RemoveEventSubscriptionInput {
@@ -748,6 +767,12 @@ export interface Adapter {
   /** Tear down the registration `ensureEventSubscription` created — called
    *  when the last listen on the (adapter, credential) channel retires. */
   removeEventSubscription?(input: RemoveEventSubscriptionInput): Promise<void>;
+
+  /** Extend a subscription the source lets lapse (Airtable's webhooks expire
+   *  7 days after their last refresh): the host calls it before the
+   *  `expiresAt` the registration or the last refresh returned. Adapter
+   *  protocol 2.4. */
+  refreshEventSubscription?(input: RefreshEventSubscriptionInput): Promise<EventSubscriptionRefresh | undefined>;
 
   // ── 2. Entity resolution ──────────────────────────────────────────────
   /**

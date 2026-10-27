@@ -17,7 +17,7 @@ use crate::catalog::{ConnectionSchemas, catalog_of};
 use crate::check::{LOCAL_TENANT, check_parsed, describe_external, missing_line};
 use crate::documents::Documents;
 use crate::loop_guard::{Answer, Asked, Current, LoopGuard, Wrote};
-use crate::externals::{External, Reach, RunningExternal, needed_externals, rpc, rpc_as, scan_externals, start_externals};
+use crate::externals::{External, Reach, RunningExternal, needed_externals, rpc, rpc_in, scan_externals, start_externals};
 use crate::module_hosts::{Hold, Keep, ModuleProcess};
 use movement_engine::executor::join_all;
 use crate::json::{Js, Obj};
@@ -108,7 +108,15 @@ impl FileSet {
             let running = self.running.iter().find(|r| !r.is_plugin() && r.external.manifest.name == listen.adapter && r.poll_interval_seconds.is_some())?;
             let file = self.file(&listen.file);
             let config = Js::Obj(listen.config.clone()).to_json();
-            Some((listen, &**running, format!("poll:{}:{}:{}:{config}", listen.adapter, file.name, listen.movement_name)))
+            let subscription = format!("poll:{}:{}:{}:{config}", listen.adapter, file.name, listen.movement_name);
+            // A positioned connection's listen is polled under a key of its
+            // own; one in no position keeps the key it always had, and with
+            // it the checkpoint an earlier lf kept.
+            let subscription = match running.position_settings(&listen.args) {
+                Some(position) => format!("{subscription}:{position}"),
+                None => subscription,
+            };
+            Some((listen, &**running, subscription))
         })
     }
 }
@@ -379,6 +387,40 @@ pub struct Delivered<'a> {
     /// The connection it came for (crate::routing::Listen::hears); None
     /// reaches every listen.
     pub credential: Option<&'a str>,
+    /// The webhook subscription it came through, by its key
+    /// (crate::routing::subscription_key); None for a credential's own door,
+    /// which the credential alone narrows.
+    pub subscription: Option<&'a str>,
+}
+
+impl<'a> Delivered<'a> {
+    /// What a kept event or a queued `fire_event` row says it came for,
+    /// under delivery `id`. Rows from before rows named a connection or a
+    /// subscription name none.
+    pub fn of_row(row: &'a Js, id: Option<&'a str>) -> Delivered<'a> {
+        let text = |key: &str| row.get(key).and_then(Js::as_str);
+        Delivered { id, credential: text("credential"), subscription: text("subscription") }
+    }
+
+    /// Its connection and subscription, written into a kept event or a row.
+    pub fn write_into(&self, row: &mut Obj) {
+        if let Some(credential) = self.credential {
+            row.insert("credential".into(), Js::str(credential));
+        }
+        if let Some(subscription) = self.subscription {
+            row.insert("subscription".into(), Js::str(subscription));
+        }
+    }
+
+    /// Whether `listen` takes it, under the module's `scope_keys`.
+    fn reaches(&self, listen: &Listen, scope_keys: &[String]) -> bool {
+        listen.hears_through(self.credential, self.subscription, scope_keys)
+    }
+}
+
+/// The external's `subscriptionScopeKeys`, when it is running.
+fn scope_keys_of(set: &FileSet, external: &str) -> Vec<String> {
+    set.running.iter().find(|r| r.external.manifest.name == external).map(|r| r.subscription_scope_keys()).unwrap_or_default()
 }
 
 /// What firing one event came to: the runs it started, and a line for each
@@ -528,13 +570,20 @@ impl Session {
         iso(self.due_offset_ms)
     }
 
+    /// Now, as this session judges what is due (`LF_CLOCK_AHEAD_MS` on).
+    pub fn now_ms(&self) -> i64 {
+        crate::limiter::now_ms() + self.due_offset_ms
+    }
+
     /// Route one event to every listen it matches, and run each (`fireEvent`).
     /// An event with an `idempotencyKey` runs a listen once: a redelivery
     /// runs nothing. A dry run notes no receipt, so the real delivery after
     /// it still runs. Each run names the delivery the event came in, when it
     /// came in one, and only the listens of the connection it came for take it.
     pub async fn fire_event(&self, external: &str, event: &Js, dry_run: bool, delivered: Delivered<'_>) -> Result<Fired, String> {
-        self.fire_to(&self.file_set(), external, event, Arrival::Pushed, dry_run, delivered.id, |l| l.hears(delivered.credential)).await
+        let set = self.file_set();
+        let scope_keys = scope_keys_of(&set, external);
+        self.fire_to(&set, external, event, Arrival::Pushed, dry_run, delivered.id, |l| delivered.reaches(l, &scope_keys)).await
     }
 
     /// `fire_event`, to the listens `to` keeps of those the event reaches.
@@ -673,7 +722,7 @@ impl Session {
             Some(name) => Some(credentials.iter().find(|c| c.name == *name).ok_or_else(|| format!("no credential \"{name}\" in the secrets file"))?),
             None => credential_for(credentials, &listen.adapter),
         };
-        let raw = rpc_as(running, credentials, credential, LOCAL_TENANT, "poll", params).await?;
+        let raw = rpc_in(running, credentials, credential, LOCAL_TENANT, "poll", params, running.position_settings(&listen.args)).await?;
         let answer = wire_results::check("poll", &listen.adapter, &raw)?;
         let mut fired = Fired::default();
         for event in answer.get("events").and_then(Js::as_array).unwrap_or(&[]) {
@@ -1156,8 +1205,9 @@ impl Session {
                 // Rows queued before deliveries were kept name none, and
                 // rows queued before they named their connection name none.
                 let delivery_id = payload.get("deliveryId").and_then(Js::as_str);
-                let credential = payload.get("credential").and_then(Js::as_str);
-                let fired = self.fire_to(set, &external, &event, Arrival::Pushed, false, delivery_id, |l| l.hears(credential)).await?;
+                let delivered = Delivered::of_row(payload, delivery_id);
+                let scope_keys = scope_keys_of(set, &external);
+                let fired = self.fire_to(set, &external, &event, Arrival::Pushed, false, delivery_id, |l| delivered.reaches(l, &scope_keys)).await?;
                 for line in &fired.redelivered {
                     eprintln!("lf: {line}");
                 }
@@ -1209,6 +1259,13 @@ impl Session {
                 })
             }
             POLL_WORK_KIND => self.poll_row(set, &text("subscription")?).await,
+            crate::subscriptions::REFRESH_WORK_KIND => Ok((
+                match crate::subscriptions::refresh_row(self, payload).await? {
+                    Some(at) => Next::DueAt(at),
+                    None => Next::Done,
+                },
+                Vec::new(),
+            )),
             other => Err(format!("not a work kind: {other}")),
         }
     }
@@ -1612,7 +1669,7 @@ impl Session {
     }
 
     /// One external a refreshed set newly imports, started and described.
-    async fn start_external(&self, external: &External, imported: &BTreeSet<String>) -> Result<(Rc<RunningExternal>, Option<ConnectionSchemas>), String> {
+    async fn start_external(&self, external: &External, imported: &crate::secrets::Imported) -> Result<(Rc<RunningExternal>, Option<ConnectionSchemas>), String> {
         let secrets = self.secrets();
         let credentials = secrets.credentials();
         let one = start_externals(&self.project, std::slice::from_ref(external), credentials, LOCAL_TENANT).await?.into_iter().next().ok_or("it did not answer its manifest")?;
@@ -1973,7 +2030,7 @@ mod tests {
     }
 
     fn polled(config: Obj) -> Listen {
-        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None, payload: None }
+        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None, args: Vec::new(), payload: None }
     }
 
     #[test]

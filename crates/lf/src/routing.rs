@@ -33,6 +33,10 @@ pub struct Listen {
     /// The node its config declares its events are (`payload: <Payment>`):
     /// an event whose payload does not fit it never reaches the listen.
     pub payload: Option<DeclaredPayload>,
+    /// Its construction's other arguments (`{ base: "CRM" }`), by name, as
+    /// their source text: those the module declares as position args say
+    /// which position the connection is in (RunningExternal::position_settings).
+    pub args: Vec<(String, String)>,
 }
 
 impl Listen {
@@ -60,6 +64,52 @@ impl Listen {
     pub fn takes(&self, event: &Js) -> bool {
         self.payload.as_ref().is_none_or(|declared| declared.misfits(event.get("payload").unwrap_or(&Js::Null)).is_empty())
     }
+
+    /// Whether an event delivered for `credential` through the webhook
+    /// subscription `subscription` (a scope's key, `subscription_key`)
+    /// reaches this listen: it hears the credential, and its own scope under
+    /// the module's `scope_keys` is that subscription's. A delivery through
+    /// no subscription (a credential's own door, or a row queued before
+    /// rows named one) is narrowed by the credential alone.
+    pub fn hears_through(&self, credential: Option<&str>, subscription: Option<&str>, scope_keys: &[String]) -> bool {
+        self.hears(credential)
+            && subscription.is_none_or(|key| scope_of(&self.config, scope_keys).is_ok_and(|scope| subscription_key(&scope) == key))
+    }
+}
+
+/// A webhook subscription's scope: the listen config's value of each of the
+/// module's `subscriptionScopeKeys`, in their order (the platform's channel
+/// scope, Airtable's base and table). Empty for a module that declares none.
+pub type Scope = Vec<(String, String)>;
+
+/// The scope `config` names under `keys`; the keys it gives no non-empty
+/// text when it misses any (the platform refuses such a listen's channel).
+pub fn scope_of(config: &Obj, keys: &[String]) -> Result<Scope, Vec<String>> {
+    let mut scope = Scope::new();
+    let mut missing = Vec::new();
+    for key in keys {
+        match config.get(key).and_then(Js::as_str).filter(|v| !v.is_empty()) {
+            Some(value) => scope.push((key.clone(), value.to_string())),
+            None => missing.push(key.clone()),
+        }
+    }
+    if missing.is_empty() { Ok(scope) } else { Err(missing) }
+}
+
+/// The scope's key: its values in order, joined by `.`, each byte outside
+/// `[A-Za-z0-9_-]` written `~` and two hex digits. A URL path segment that
+/// no sender rewrites (`~` is unreserved), and one per scope.
+pub fn subscription_key(scope: &Scope) -> String {
+    let escaped = |value: &str| -> String {
+        value
+            .bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' => (b as char).to_string(),
+                other => format!("~{other:02x}"),
+            })
+            .collect()
+    };
+    scope.iter().map(|(_, value)| escaped(value)).collect::<Vec<_>>().join(".")
 }
 
 /// A listen's declared payload: the node, as lf checks a body against it
@@ -307,8 +357,8 @@ pub fn listens_across(parsed: &[Rc<crate::sources::Parsed>]) -> Vec<Listen> {
 fn listens_of(file: &str, program: &movement_parser::ast::Program, scopes: &HashMap<String, FileScope<'_>>) -> Vec<Listen> {
     let mut listens = Vec::new();
     let mut originals: HashMap<String, String> = HashMap::new();
-    // Each instance's adapter and credential, by the instance's name.
-    let mut constructions: HashMap<String, (String, Option<String>)> = HashMap::new();
+    // Each instance's adapter, credential and other arguments, by the instance's name.
+    let mut constructions: HashMap<String, (String, Option<String>, Vec<(String, String)>)> = HashMap::new();
     let mut declared = Vec::new();
     let scope = &scopes[file];
     for statement in &program.statements {
@@ -328,7 +378,10 @@ fn listens_of(file: &str, program: &movement_parser::ast::Program, scopes: &Hash
                         .iter()
                         .find(|a| a.name == CREDENTIAL_ARG)
                         .and_then(|a| movement_parser::catalog::helpers::unwrap_credential_arg(&a.value.raw));
-                    constructions.insert(assign.name.clone(), (adapter, credential));
+                    let mut args: Vec<(String, String)> =
+                        construct.args.iter().filter(|a| a.name != CREDENTIAL_ARG).map(|a| (a.name.clone(), a.value.raw.clone())).collect();
+                    args.sort();
+                    constructions.insert(assign.name.clone(), (adapter, credential, args));
                 }
             }
             Statement::Listen(listen) => declared.push(listen),
@@ -338,7 +391,7 @@ fn listens_of(file: &str, program: &movement_parser::ast::Program, scopes: &Hash
     for listen in declared {
         // A unit the file does not bind itself is the host's own.
         let unit = movement_parser::version::RUN_HOST_UNITS.iter().find(|u| **u == listen.instance).map(|u| u.to_string());
-        let Some((adapter, credential)) = constructions.get(&listen.instance).cloned().or(unit.map(|u| (u, None))) else { continue };
+        let Some((adapter, credential, args)) = constructions.get(&listen.instance).cloned().or(unit.map(|u| (u, None, Vec::new()))) else { continue };
         let credential = credential.map(|local| originals.get(&local).cloned().unwrap_or(local));
         let mut config = Obj::new();
         for arg in &listen.config {
@@ -354,6 +407,7 @@ fn listens_of(file: &str, program: &movement_parser::ast::Program, scopes: &Hash
             movement_name: listen.movement.clone(),
             credential,
             payload,
+            args,
         });
     }
     listens
@@ -376,8 +430,9 @@ pub enum Arrival {
     Polled,
 }
 
-/// `eventMatchesTriggerScope`: the listen's chosen events, and an
-/// Airtable-style table scope. A source labels each event with its kind
+/// `eventMatchesTriggerScope`: the listen's chosen events, an
+/// Airtable-style table scope, and a changed field (`field`) with the value
+/// it became (`becomes`). A source labels each event with its kind
 /// (`eventType`), pushed or polled, and the chosen events narrow by it. A
 /// polled event with no label (a module older than adapter protocol 2.3)
 /// still reaches its listen: the poll was made for that listen with its
@@ -398,7 +453,37 @@ pub fn event_matches_trigger_scope(event: &Js, config: &Obj, arrival: Arrival) -
     {
         return false;
     }
+    if let Some(Js::Str(field)) = config.get("field")
+        && !field.is_empty()
+    {
+        let changed = event.get("changedFields").and_then(Js::as_array).unwrap_or(&[]);
+        if !changed.iter().any(|f| f.as_str() == Some(field.as_str())) {
+            return false;
+        }
+        if let Some(value) = config.get("becomes")
+            && !became_value(event.get("payload"), field, value)
+        {
+            return false;
+        }
+    }
     true
+}
+
+/// `becameValue`: the field's new value (`payload.fields`) is the value and
+/// its previous one (`payload.previous`, `FieldChangePayload`) was not; a
+/// field missing from `previous` had no value before.
+fn became_value(payload: Option<&Js>, field: &str, value: &Js) -> bool {
+    let cell = |key: &str| payload.and_then(|p| p.get(key)).and_then(|cells| cells.get(field));
+    same_value(cell("fields"), value) && !same_value(cell("previous"), value)
+}
+
+/// `sameValue`: equal as data, a list or an object by its contents.
+fn same_value(held: Option<&Js>, value: &Js) -> bool {
+    match (held, value) {
+        (None, _) => false,
+        (Some(Js::Num(a)), Js::Num(b)) => a.as_f64() == b.as_f64(),
+        (Some(held), value) => held.to_json() == value.to_json(),
+    }
 }
 
 /// The listen config key that routes inbound mail: a module that declares
@@ -544,9 +629,37 @@ mod tests {
                 movement_name: "m".into(),
                 credential: case["listen"].as_str().map(str::to_string),
                 payload: None,
+                args: Vec::new(),
             };
             assert_eq!(listen.hears(case["delivery"].as_str()), case["hears"].as_bool().unwrap(), "{}", case["case"]);
         }
+    }
+
+    #[test]
+    fn a_listens_scope_is_its_configs_values_of_the_scope_keys_in_order() {
+        let config = match js(r#"{"table":"tblC","base":"appH","events":["record.updated"]}"#) {
+            Js::Obj(config) => config,
+            _ => unreachable!(),
+        };
+        let keys = ["base".to_string(), "table".to_string()];
+        let scope = scope_of(&config, &keys).unwrap();
+        assert_eq!(scope, [("base".to_string(), "appH".to_string()), ("table".to_string(), "tblC".to_string())]);
+        assert_eq!(subscription_key(&scope), "appH.tblC");
+        assert_eq!(scope_of(&config, &["base".to_string(), "shelf".to_string()]), Err(vec!["shelf".to_string()]));
+        assert_eq!(scope_of(&config, &[]), Ok(vec![]), "a module that declares no scope keys has the empty scope");
+        assert_eq!(subscription_key(&vec![("a".into(), "x.y/z ü".into())]), "x~2ey~2fz~20~c3~bc", "a key is one path segment, its separator unambiguous");
+    }
+
+    #[test]
+    fn a_delivery_through_a_subscription_reaches_only_the_listens_of_its_scope() {
+        let mut listen = Listen { file: "f".into(), adapter: "airtable".into(), config: Obj::new(), movement_name: "m".into(), credential: Some("acme".into()), args: vec![] };
+        listen.config.insert("base".into(), Js::str("appH"));
+        listen.config.insert("table".into(), Js::str("tblC"));
+        let keys = ["base".to_string(), "table".to_string()];
+        assert!(listen.hears_through(Some("acme"), Some("appH.tblC"), &keys));
+        assert!(!listen.hears_through(Some("acme"), Some("appH.tblI"), &keys), "another table's subscription");
+        assert!(!listen.hears_through(Some("other"), Some("appH.tblC"), &keys), "another credential's");
+        assert!(listen.hears_through(Some("acme"), None, &keys), "a delivery through no subscription is the credential's");
     }
 
     #[test]
@@ -591,6 +704,35 @@ mod tests {
         assert!(!event_matches_trigger_scope(&js(r#"{"eventType":"company.updated"}"#), &config, Arrival::Pushed));
         assert!(!event_matches_trigger_scope(&js(r#"{}"#), &config, Arrival::Pushed));
         assert!(event_matches_trigger_scope(&js(r#"{}"#), &Obj::new(), Arrival::Pushed));
+    }
+
+    /// The table of cases the engine's TypeScript is held to as well
+    /// (`eventMatchesTriggerScope`).
+    #[test]
+    fn the_field_and_becomes_gates_match_the_shared_table_of_cases() {
+        let table = js(include_str!("../../../packages/engine-contracts/conformance/listen-field-change.json"));
+        let cases = table.get("cases").and_then(Js::as_array).unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let Some(Js::Obj(config)) = case.get("config") else { panic!("a case has a config") };
+            let event = case.get("event").unwrap();
+            let expected = Js::is_true(case.get("matches"));
+            for arrival in [Arrival::Pushed, Arrival::Polled] {
+                assert_eq!(event_matches_trigger_scope(event, config, arrival), expected, "{:?}", case.get("case"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_becomes_gate_compares_numbers_as_numbers() {
+        let config = match js(r#"{"field":"Score","becomes":3}"#) {
+            Js::Obj(map) => map,
+            _ => unreachable!(),
+        };
+        let event = js(r#"{"changedFields":["Score"],"payload":{"fields":{"Score":3.0},"previous":{"Score":2}}}"#);
+        assert!(event_matches_trigger_scope(&event, &config, Arrival::Pushed));
+        let unchanged = js(r#"{"changedFields":["Score"],"payload":{"fields":{"Score":3.0},"previous":{"Score":3}}}"#);
+        assert!(!event_matches_trigger_scope(&unchanged, &config, Arrival::Pushed));
     }
 
     #[test]

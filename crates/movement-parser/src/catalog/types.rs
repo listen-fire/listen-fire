@@ -507,7 +507,7 @@ pub struct ConnectAction {
     pub label: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TriggerConfigFormat {
     Cron,
@@ -517,6 +517,16 @@ pub enum TriggerConfigFormat {
     /// A node the program declares (`payload: <Payment>`): the listen's
     /// events are of that type.
     Type,
+    /// One field of the record the listen watches, by name (`keyof T`).
+    Field,
+    /// A value of the field the listen's `field`-format key names (`T[K]`).
+    #[serde(rename = "field-value")]
+    FieldValue,
+    /// A format a newer module declares and this release does not know. Its
+    /// key's value is a plain, unchecked value: a module release must never
+    /// break a host on an older core.
+    #[serde(untagged)]
+    Unknown(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
