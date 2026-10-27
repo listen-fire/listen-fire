@@ -134,15 +134,38 @@ const createWebhookResponseParser = z.object({
   expirationTime: z.string().optional(),
 });
 
+/** What every webhook asks Airtable to carry beside a change. Previous cell
+ *  values, so an event can say what a field held before and a listen can fire
+ *  on a field BECOMING a value; every field's current value, so the event's
+ *  `Record` is the whole row and not just the cells that changed. A webhook
+ *  whose specification lacks any of these is registered anew
+ *  (`asksForWebhookIncludes`). */
+export const WEBHOOK_INCLUDES = { includePreviousCellValues: true, includeCellValuesInFieldIds: 'all' } as const;
+
+/** Whether a webhook's specification asks for every one of `WEBHOOK_INCLUDES`. */
+export function asksForWebhookIncludes(specification: unknown): boolean {
+  const includes = z
+    .object({ options: z.object({ includes: z.record(z.string(), z.unknown()).optional() }).passthrough() })
+    .passthrough()
+    .safeParse(specification);
+  const held = includes.success ? (includes.data.options.includes ?? {}) : {};
+  return Object.entries(WEBHOOK_INCLUDES).every(([key, value]) => held[key] === value);
+}
+
+const listWebhooksResponseParser = z
+  .object({ webhooks: z.array(z.object({ id: z.string(), specification: z.unknown().optional() }).passthrough()) })
+  .passthrough();
+
 const refreshWebhookResponseParser = z
   .object({ expirationTime: z.string().optional() })
   .passthrough();
 
 // One record change inside a payload. Airtable keys cell values by field ID
 // (`fldXXX`), and an UPDATE nests them under `current` (the changed fields'
-// new values) and `previous` (their old values, sent because the webhook asks
-// for them); a CREATE carries them flat. `passthrough` keeps the shape
-// tolerant of Airtable's optional extras (`unchanged`, …).
+// new values), `previous` (their old values) and `unchanged` (every other
+// field's value), the last two sent because the webhook asks for them; a
+// CREATE carries them flat. `passthrough` keeps the shape tolerant of
+// Airtable's optional extras.
 const webhookCellsParser = z
   .object({ cellValuesByFieldId: z.record(z.string(), z.unknown()).optional() })
   .passthrough();
@@ -151,6 +174,7 @@ const webhookRecordChangeParser = z
   .object({
     current: webhookCellsParser.optional(),
     previous: webhookCellsParser.optional(),
+    unchanged: webhookCellsParser.optional(),
     cellValuesByFieldId: z.record(z.string(), z.unknown()).optional(),
     createdTime: z.string().optional(),
   })
@@ -498,13 +522,10 @@ class AirtableAPIClient {
       changeTypes,
       ...(tableId ? { recordChangeScope: tableId } : {}),
     };
-    // Previous cell values ride every change, so an event can say what a
-    // field held before and a listen can fire on a field BECOMING a value.
-    const includes = { includePreviousCellValues: true };
     const result = await this.fetch({
       route: `/v0/bases/${baseId}/webhooks`,
       method: 'POST',
-      body: { notificationUrl, specification: { options: { filters, includes } } },
+      body: { notificationUrl, specification: { options: { filters, includes: WEBHOOK_INCLUDES } } },
       responseValidator: createWebhookResponseParser,
     });
     return {
@@ -512,6 +533,16 @@ class AirtableAPIClient {
       macSecretBase64: result.macSecretBase64,
       ...(result.expirationTime ? { expirationTime: result.expirationTime } : {}),
     };
+  }
+
+  /** The base's webhooks, each with the specification it was created with. */
+  async listWebhooks({ baseId }: { baseId: string }): Promise<Array<{ id: string; specification?: unknown }>> {
+    const result = await this.fetch({
+      route: `/v0/bases/${baseId}/webhooks`,
+      method: 'GET',
+      responseValidator: listWebhooksResponseParser,
+    });
+    return result.webhooks;
   }
 
   async deleteWebhook({ baseId, webhookId }: { baseId: string; webhookId: string }): Promise<void> {

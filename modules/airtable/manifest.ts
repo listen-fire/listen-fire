@@ -67,9 +67,12 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
   // `base` + `table` are required routing config — a listen must name the
   // watched table; `events` (optional) defaults to all change kinds.
   //
-  // They are also the ADDRESS of the table the event's `Record` edge lands on:
-  // a listen is shorthand for a WHERE, so naming the table here is what narrows
-  // the edge, and the author never restates it in the movement. A two-hop path
+  // They are also the ADDRESS of the table the event's `Record` edge lands on.
+  // A listen is shorthand for a WHERE checked against the movement's signature;
+  // the event is narrowed only by the address the SIGNATURE names
+  // (`<hiring-[:\`Record Change\` WHERE \`table\` == "tbl…"]->>`), so a
+  // movement that reads the row's fields, or a listen with `field`, names the
+  // table there too. A two-hop path
   // (base first, then only THAT base's tables) — never a fanout across bases.
   // Both match on `Id` because a listen names by id while type-space addresses
   // by name; `rootHop`/`baseHop` publish `Id` on the members for exactly this.
@@ -81,7 +84,8 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
     // and its previous one was not. Gated by the host's listen scope gate
     // over the event's `changedFields` and its new and previous values. The
     // checker holds `field` to the narrowed table's fields and `becomes` to
-    // that field's type (a select's choices).
+    // that field's type (a select's choices), and refuses both when the
+    // movement's signature names no table.
     { key: 'field', format: 'field' },
     { key: 'becomes', format: 'field-value' },
   ],
@@ -92,8 +96,11 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
     'as record created/updated/deleted for that table, usually within ' +
     'seconds but coalesced by Airtable (rapid edits can land as one batch). ' +
     'A listen can narrow to one field (`field: "Stage"`) and to the value it ' +
-    'changes to (`becomes: "Interview"`); the event names its changed fields ' +
-    'and its `Old Record` edge holds their previous values. ' +
+    'changes to (`becomes: "Interview"`); the movement\'s signature must then name ' +
+    'the table (`<hiring-[:`Record Change` WHERE `table` == "tbl…"]->>`), which also ' +
+    'types the row\'s fields on `Record` and `Old Record`. The event names its changed fields; ' +
+    'its `Record` edge is the whole row as the change left it (its id is `Id`), and its ' +
+    '`Old Record` edge holds the changed fields\' previous values. ' +
     'Do not promise cross-table or whole-base capture from one listener — ' +
     'each watched table is its own listen.',
 };

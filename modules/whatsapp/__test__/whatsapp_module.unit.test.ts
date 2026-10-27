@@ -51,8 +51,17 @@ describe('@lf/whatsapp', () => {
     expect(own.manifest.credentials?.[0]?.name).toBe('whatsapp');
     expect(own.manifest.inbound).toEqual({ providerKey: 'whatsapp', scheme: 'module' });
     expect(own.manifest.methods).toContain('checkInbound');
-    expect(whatsappModule.manifest.description).toMatch(/^WhatsApp on the shared Listen-Fire number\. /);
     expect(whatsappModuleWith({ movementsNumber: '+44 7700 900000' }).manifest.description).toContain('(+44 7700 900000)');
+  });
+
+  it('says who reaches a listen on either host: anyone messaging a number of the project\'s own, only linked phones on a shared one', () => {
+    for (const manifest of [whatsappModule.manifest, whatsappModuleWith({ movementsNumber: '+44 7700 900000' }).manifest]) {
+      for (const text of [manifest.description, manifest.triggerExpectation ?? '']) {
+        expect(text).not.toMatch(/^WhatsApp on the shared/);
+        expect(text).toMatch(/number is the project's own.*every message (sent )?to it/);
+        expect(text).toMatch(/shared Listen-Fire number.*linked/);
+      }
+    }
   });
 
   it('replies from the number its message arrived on, at Meta, with the credential’s token', async () => {

@@ -18,6 +18,11 @@ interface FakeWebhook {
   recordChangeScope?: string;
   macSecretBase64: string;
   expirationTime: string;
+  /** `specification.options.includes` as sent: what each change carries
+   *  beside its changed cells. */
+  includes?: { includePreviousCellValues?: boolean; includeCellValuesInFieldIds?: 'all' | string[] };
+  /** The specification as sent, listed back as Airtable lists it. */
+  specification?: unknown;
 }
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -57,7 +62,8 @@ function changeOf(body: unknown): RecordChange | undefined {
 
 /** Queue `change` on the webhook's payload feed, as Airtable builds a payload
  *  (cell values keyed by field id; an update's previous values beside its
- *  current ones, as a webhook asking `includePreviousCellValues` gets them).
+ *  current ones, and the row's other cells as `unchanged` when the webhook
+ *  asked for them).
  *  A change kind or a table the webhook didn't subscribe to is dropped. */
 function appendChange(store: EntityStore, baseId: string, wh: FakeWebhook, change: RecordChange): Record<string, unknown> & { appended: boolean } {
   if (!wh.changeTypes.includes(change.changeType)) {
@@ -84,6 +90,13 @@ function appendChange(store: EntityStore, baseId: string, wh: FakeWebhook, chang
     changedRecordsById?: Record<string, unknown>;
     destroyedRecordIds?: string[];
   } = {};
+  // The row's other cells, as a webhook asking `includeCellValuesInFieldIds`
+  // gets them: from the stored row (cells by name or by id), less the changed.
+  const asked = wh.includes?.includeCellValuesInFieldIds;
+  const row = store.get(SVC, `record:${baseId}:${change.tableId}`, change.recordId)?.data as { fields?: Record<string, unknown> } | undefined;
+  const unchanged = Object.fromEntries(
+    Object.entries(byFieldId(row?.fields ?? {})).filter(([id]) => !(id in cellValuesByFieldId) && (asked === 'all' || (asked ?? []).includes(id))),
+  );
   if (change.changeType === 'add') {
     tableChange.createdRecordsById = { [change.recordId]: { cellValuesByFieldId } };
   } else if (change.changeType === 'update') {
@@ -91,6 +104,7 @@ function appendChange(store: EntityStore, baseId: string, wh: FakeWebhook, chang
       [change.recordId]: {
         current: { cellValuesByFieldId },
         ...(change.previous !== undefined ? { previous: { cellValuesByFieldId: byFieldId(change.previous) } } : {}),
+        ...(asked !== undefined ? { unchanged: { cellValuesByFieldId: unchanged } } : {}),
       },
     };
   } else {
@@ -140,6 +154,7 @@ export function airtableRoutes(store: EntityStore): Router {
       changeTypes?: string[];
       recordChangeScope?: string;
     };
+    const includes = (req.body?.specification?.options?.includes ?? {}) as FakeWebhook['includes'];
     const id = `ach${store.nextId(SVC, 'webhook')}`;
     const webhook: FakeWebhook = {
       id,
@@ -150,6 +165,8 @@ export function airtableRoutes(store: EntityStore): Router {
       ...(filters.recordChangeScope ? { recordChangeScope: filters.recordChangeScope } : {}),
       macSecretBase64: randomBytes(32).toString('base64'),
       expirationTime: new Date(now() + SEVEN_DAYS_MS).toISOString(),
+      includes,
+      specification: req.body?.specification ?? {},
     };
     store.create(SVC, 'webhook', { ...webhook }, id);
     res.json({
@@ -157,6 +174,16 @@ export function airtableRoutes(store: EntityStore): Router {
       macSecretBase64: webhook.macSecretBase64,
       expirationTime: webhook.expirationTime,
     });
+  });
+
+  // List a base's webhooks, each with the specification it was created with.
+  r.get('/v0/bases/:baseId/webhooks', (req, res) => {
+    const webhooks = store
+      .list(SVC, 'webhook')
+      .map((w) => w.data as unknown as FakeWebhook)
+      .filter((w) => w.baseId === req.params.baseId)
+      .map((w) => ({ id: w.id, notificationUrl: w.notificationUrl, expirationTime: w.expirationTime, specification: w.specification ?? {} }));
+    res.json({ webhooks });
   });
 
   // Delete a webhook + drain its payload feed.

@@ -26,9 +26,14 @@ use indexmap::IndexMap;
 use movement_checker::types::event_address::{EventAddress, event_address_key, event_address_of_hops, narrowing_prefix_key};
 use movement_parser::ast::{ParamTypeRef, RValue, Statement};
 
+use std::rc::Rc;
+
+use crate::check::ConnectionWalk;
+use crate::externals::RunningExternal;
 use crate::json::{Js, Obj};
 use crate::obj;
-use crate::secrets::{Construction, construction_of};
+use crate::routing::Listen;
+use crate::secrets::{Construction, Credentials, construction_of, credential_for};
 
 /// `EVENT_ACTION_FIELD`: the change-kind axis an event node may declare.
 const EVENT_ACTION_FIELD: &str = "action";
@@ -122,6 +127,84 @@ pub fn address_hops(listen: &Obj, position_values: &BTreeMap<String, String>) ->
         .collect();
     let consumed = declared.iter().take_while(|hop| position_values.contains_key(&hop.key)).count();
     declared.into_iter().skip(consumed).collect()
+}
+
+/// `resolveListenAddress`: each declared hop's value, from the listen's
+/// config (already an id) or else from the connection's entry position (a
+/// member's label, or its id), the latter resolved by walking the hop's
+/// members from the root. A hop neither names, or a position naming no
+/// member, fails the whole address, naming why. Unlike the platform, a
+/// config value is taken as written rather than walked to validate it: the
+/// checker has already held it to the walked values.
+pub async fn resolve_listen_address<W: Walk>(
+    walk: &W,
+    adapter_type: &str,
+    hops: &[AddressHop],
+    config: &Obj,
+    position_values: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, String> {
+    let walker = Walker { walk, adapter_type, hops: RefCell::new(BTreeMap::new()) };
+    let mut address = BTreeMap::new();
+    let mut steps: Vec<Step> = Vec::new();
+    for hop in hops {
+        let value = match (config.get(&hop.key).and_then(Js::as_str).filter(|v| !v.is_empty()), position_values.get(&hop.key)) {
+            (Some(named), _) => named.to_string(),
+            (None, Some(positioned)) => {
+                let members = walker.members_at(&steps, &hop.collection).await?;
+                if members.is_empty() {
+                    return Err(format!("couldn't read the connection's {} options to resolve its '{}' \"{positioned}\"", hop.collection, hop.key));
+                }
+                let id = |m: &Js| m.get(&hop.match_field).and_then(Js::as_str).map(str::to_string);
+                let found = members.iter().find(|m| member_label(m) == Some(positioned.as_str()) || id(m).as_deref() == Some(positioned.as_str()));
+                match found.and_then(id) {
+                    Some(id) => id,
+                    None => {
+                        let known: Vec<&str> = members.iter().filter_map(member_label).collect();
+                        return Err(format!("its connection is positioned at '{}' \"{positioned}\", which isn't one the connection can see — it has: {}", hop.key, known.join(", ")));
+                    }
+                }
+            }
+            (None, None) => return Err(format!("it names no '{}' and its connection isn't positioned at one", hop.key)),
+        };
+        steps.push(Step { collection: hop.collection.clone(), match_field: hop.match_field.clone(), value: value.clone() });
+        address.insert(hop.key.clone(), value);
+    }
+    Ok(address)
+}
+
+/// Each listen's address where its config leaves one of its module's webhook
+/// scope keys (`subscriptionScopeKeys`) to its connection's position (`connect
+/// airtable … { base: "Hiring" }`): what the platform keeps as a trigger's
+/// `resolved_address`. A listen that names every scope key, or whose
+/// connection names no position, is left as it is.
+pub async fn resolve_listen_addresses(listens: &mut [Listen], running: &[Rc<RunningExternal>], credentials: &Credentials) {
+    for listen in listens.iter_mut() {
+        let Some(external) = running.iter().find(|r| r.external.manifest.name == listen.adapter && !r.is_plugin()) else { continue };
+        let keys = external.subscription_scope_keys();
+        if keys.iter().all(|k| listen.config.get(k).and_then(Js::as_str).is_some_and(|v| !v.is_empty())) {
+            continue;
+        }
+        let position_values: BTreeMap<String, String> = match external.position_settings(&listen.args) {
+            Some(serde_json::Value::Object(settings)) => settings.into_iter().filter_map(|(k, v)| Some((k, v.as_str()?.to_string()))).collect(),
+            _ => continue,
+        };
+        let credential = match &listen.credential {
+            Some(name) => credentials.iter().find(|c| c.name == *name),
+            None => credential_for(credentials, &listen.adapter),
+        };
+        // The root unpositioned: the position is what is being resolved.
+        let walk = ConnectionWalk { running: external, credentials, credential, settings: None };
+        let adapter_type = external.manifest_answer.get("adapterType").and_then(Js::as_str).unwrap_or(&external.external.manifest.name);
+        let hops = address_hops(&external.listen, &BTreeMap::new());
+        listen.address = resolve_listen_address(&walk, adapter_type, &hops, &listen.config, &position_values).await;
+    }
+}
+
+/// `memberLabel`: the label a position arg names a member by.
+fn member_label(data: &Js) -> Option<&str> {
+    let Js::Obj(data) = data else { return None };
+    let named = ["Title", "Name", "name", "title"].iter().find_map(|k| data.get(*k).and_then(Js::as_str).filter(|v| !v.is_empty()));
+    named.or_else(|| data.values().find_map(|v| v.as_str().filter(|v| !v.is_empty())))
 }
 
 /// `withEventNarrowingKeys`.
@@ -270,9 +353,7 @@ fn position_data(position: &Js) -> Option<&Js> {
 
 /// `positionLabel`.
 fn position_label(position: &Js) -> Option<&str> {
-    let Some(Js::Obj(data)) = position_data(position) else { return None };
-    let named = ["Title", "Name", "name", "title"].iter().find_map(|k| data.get(*k).and_then(Js::as_str).filter(|v| !v.is_empty()));
-    named.or_else(|| data.values().find_map(|v| v.as_str().filter(|v| !v.is_empty())))
+    position_data(position).and_then(member_label)
 }
 
 /// `stepTo` for a pinned hop: the first member of the hop's collection

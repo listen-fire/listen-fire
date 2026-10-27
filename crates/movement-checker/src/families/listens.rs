@@ -369,7 +369,17 @@ impl Checker<'_> {
         if let (Some((names, span)), Some(watched)) = (&read.fields, &watched) {
             self.check_listen_fields(watched, names, *span);
         }
-        self.check_watched_field(&read, spec, watched.as_ref());
+        match (watched.as_ref(), schema, event_types.as_deref()) {
+            (None, Some(schema), Some(fires)) if read.field.is_some() || read.field_value.is_some() => {
+                let param = self
+                    .scopes
+                    .resolve_function(scope, &statement.movement)
+                    .and_then(|id| self.listens.movements.get(&id))
+                    .and_then(|info| info.params.first().cloned());
+                self.refuse_unchecked_field(&read, spec, schema, fires, statement, param.as_ref());
+            }
+            _ => self.check_watched_field(&read, spec, watched.as_ref()),
+        }
 
         let mut config: Vec<String> = statement.config.iter().map(|a| format!("{}={}", a.name, a.value.raw.trim())).collect();
         config.sort();

@@ -80,6 +80,7 @@ const HIRING = [
       primaryFieldId: 'fldCName',
       fields: [
         { id: 'fldCName', name: 'Name', type: 'singleLineText' },
+        { id: 'fldCEmail', name: 'Email', type: 'email' },
         { id: 'fldStage', name: 'Stage', type: 'singleSelect', options: { choices: [{ id: 'selApplied', name: 'Applied' }, { id: 'selInterview', name: 'Interview' }, { id: 'selRejected', name: 'Rejected' }] } },
       ],
     },
@@ -98,6 +99,7 @@ const HIRING = [
       ],
     },
   },
+  { entity_type: 'record:appHIRE01:tblCAND01', id: 'recADA', data: { id: 'recADA', fields: { Name: 'Ada Lovelace', Email: 'ada@example.com', Stage: 'Applied' } } },
   {
     entity_type: 'table:appHIRE01',
     id: 'tblROLE01',
@@ -233,6 +235,105 @@ test('two tables of one connection each have a webhook of their own, and Stage b
       // And still delivers.
       await deliver({ changeType: 'update', tableId: 'tblCAND01', recordId: 'recCY', fields: { Stage: 'Interview' }, previous: { Stage: 'Rejected' } });
       await until(() => seen(interviews) === 2, serving.lines);
+    } finally {
+      await serving.stop();
+    }
+  } finally {
+    await fake.stop();
+  }
+});
+
+// The event is narrowed only by the address its movement's signature names
+// (the platform's rule): a listen's `field` and `becomes` are held to the table
+// the signature names, and refused where the signature names none.
+test('lf check holds a field-change listen to the table its movement\'s signature names', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    const movement = join(dir, 'movements/hiring.mvt');
+    const reading = HEAD.replace('Candidate: change.record', 'Candidate: change-[:Record]->.Name');
+    const check = (source: string) => (writeFileSync(movement, source), lfSync(dir, 'check'));
+
+    const clean = check(reading);
+    assert.equal(clean.code, 0, clean.out);
+
+    const notAChoice = check(reading.replace('becomes: "Interview"', 'becomes: "Interviewing"'));
+    assert.equal(notAChoice.code, 1, notAChoice.out);
+    assert.match(notAChoice.out, /MOV_ENUM_UNKNOWN_VALUE "Interviewing" isn't a value of enum \(Applied \| Interview \| Rejected\)/);
+
+    const notAField = check(reading.replace('field: "Stage"', 'field: "Stagez"'));
+    assert.equal(notAField.code, 1, notAField.out);
+    assert.match(notAField.out, /MOV_LISTEN_BAD_CONFIG 'Stagez' is not a field of what this listener watches — its fields: .*Name.*Stage.*did you mean 'Stage'/);
+
+    const misspelledRead = check(reading.replace('->.Name', '->.Nmae'));
+    assert.equal(misspelledRead.code, 1, misspelledRead.out);
+    assert.match(misspelledRead.out, /MOV_UNKNOWN_PROPERTY .*has no field 'Nmae'.*did you mean 'Name'/);
+
+    const unaddressed = check(reading.replace('<hiring-[:`Record Change` WHERE `table` == "tblCAND01"]->>', '<hiring-[:`Record Change`]->>'));
+    assert.equal(unaddressed.code, 1, unaddressed.out);
+    assert.ok(
+      unaddressed.out.includes("MOV_LISTEN_BAD_CONFIG 'field' can't be checked: 'schedule_interview''s parameter names no table") &&
+        unaddressed.out.includes('function schedule_interview(change: <hiring-[e:`Record Change` WHERE e.table == "tblCAND01"]->>)'),
+      unaddressed.out,
+    );
+    assert.ok(unaddressed.out.includes('MOV_UNDESCRIBED_POSITION') && unaddressed.out.includes('<hiring-[e:`Record Change` WHERE e.table == "…"]->>'), unaddressed.out);
+  } finally {
+    await fake.stop();
+  }
+});
+
+// A listen that names no base takes it from its connection's position
+// (`connect airtable … { base: "Hiring" }`), the base's name resolved to its id
+// by walking the connection, as the platform resolves a listen's address.
+test('a listen that names no base is scoped to the base its connection is positioned at', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), HEAD.replace('{ base: "appHIRE01", table: "tblCAND01"', '{ table: "tblCAND01"'));
+    const checked = lfSync(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+    const port = await freePort();
+    const publicUrl = `http://127.0.0.1:${port}`;
+    appendFileSync(join(dir, 'lf.yaml'), `publicUrl: ${publicUrl}\n`);
+    const serving = await served(dir, ['--port', String(port)]);
+    try {
+      await serving.waitFor(/^airtable \(base appHIRE01, table tblCAND01\): registered webhook ach\d+ for record\.updated at /);
+      const registered = (await fake.json('/admin/airtable/webhook/state')) as Webhook[];
+      assert.deepEqual(registered.map((w) => [w.baseId, w.recordChangeScope]), [['appHIRE01', 'tblCAND01']]);
+      await fake.json('/airtable/control/deliver', { baseId: 'appHIRE01', changeType: 'update', tableId: 'tblCAND01', recordId: 'recADA', fields: { Stage: 'Interview' }, previous: { Stage: 'Applied' } });
+      await serving.waitFor(/^run \S+ hiring:schedule_interview completed$/);
+    } finally {
+      await serving.stop();
+    }
+  } finally {
+    await fake.stop();
+  }
+});
+
+// A change carries only the cells it touched; the webhook asks Airtable for
+// every other cell too, so the event's `Record` is the whole row, and its id
+// reads as `Id`.
+test('a change to Stage reads the row\'s Name, Email and Id from its Record', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    const whole = HEAD.replace('Candidate: change.record', 'Candidate: change-[:Record]->.Name')
+      .replace('From: change-[:`Old Record`]->.Stage', 'From: change-[:Record]->.Email')
+      .replace('Changed: Text.join(change.`Changed Fields`, ", ")', 'Changed: change-[:Record]->.Id');
+    writeFileSync(join(dir, 'movements/hiring.mvt'), whole);
+    const checked = lfSync(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+    const port = await freePort();
+    appendFileSync(join(dir, 'lf.yaml'), `publicUrl: http://127.0.0.1:${port}\n`);
+    const serving = await served(dir, ['--port', String(port)]);
+    try {
+      await serving.waitFor(/^airtable \(base appHIRE01, table tblCAND01\): registered webhook ach\d+ for /);
+      await fake.json('/airtable/control/deliver', { baseId: 'appHIRE01', changeType: 'update', tableId: 'tblCAND01', recordId: 'recADA', fields: { Stage: 'Interview' }, previous: { Stage: 'Applied' } });
+      await serving.waitFor(/^run \S+ hiring:schedule_interview completed$/);
+      const written = JSON.stringify(await fake.json('/airtable/v0/appHIRE01/tblINTV01'));
+      assert.match(written, /"fldICand":"Ada Lovelace"/, 'it read the Name the change did not touch');
+      assert.match(written, /"fldIFrom":"ada@example.com"/, 'it read the Email the change did not touch');
+      assert.match(written, /"fldIChanged":"recADA"/, 'it read the row\'s id');
     } finally {
       await serving.stop();
     }

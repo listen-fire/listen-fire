@@ -227,11 +227,11 @@ fn addresses_of(running: &RunningExternal, imported: &Imported, key: &str) -> Ve
 
 /// A walk of one connection: its module's `edgesFrom`, asked as that
 /// connection, in its position.
-struct ConnectionWalk<'a> {
-    running: &'a RunningExternal,
-    credentials: &'a Credentials,
-    credential: Option<&'a Credential>,
-    settings: Option<serde_json::Value>,
+pub(crate) struct ConnectionWalk<'a> {
+    pub(crate) running: &'a RunningExternal,
+    pub(crate) credentials: &'a Credentials,
+    pub(crate) credential: Option<&'a Credential>,
+    pub(crate) settings: Option<serde_json::Value>,
 }
 
 impl Walk for ConnectionWalk<'_> {

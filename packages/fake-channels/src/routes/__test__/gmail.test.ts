@@ -302,3 +302,34 @@ test('gmail labels: a user label made by name gets an id, is listed beside the s
     await close();
   }
 });
+
+test('gmail attachments: a binary file seeded as base64 is served back byte for byte', async () => {
+  const { baseUrl, close } = await bootApp();
+  try {
+    // Bytes that are not utf-8: a utf-8 round trip would replace them.
+    const bytes = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x00, 0xff, 0xfe, 0x80, 0xc3, 0x0a]);
+    const seeded = await fetch(`${baseUrl}/fake-gmail/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        subject: 'Invoice',
+        bodyText: 'Attached.',
+        attachments: [{ filename: 'invoice.pdf', contentType: 'application/pdf', contentBase64: bytes.toString('base64') }],
+      }),
+    });
+    const { id } = (await seeded.json()) as { id: string };
+    const message = (await (await fetch(`${baseUrl}/gmail/v1/users/me/messages/${id}`)).json()) as {
+      payload: { parts: { filename: string; body: { attachmentId?: string; size: number } }[] };
+    };
+    const part = message.payload.parts.find((p) => p.filename === 'invoice.pdf');
+    assert.ok(part?.body.attachmentId);
+    assert.equal(part.body.size, bytes.length);
+    const served = (await (
+      await fetch(`${baseUrl}/gmail/v1/users/me/messages/${id}/attachments/${part.body.attachmentId}`)
+    ).json()) as { size: number; data: string };
+    assert.equal(served.size, bytes.length);
+    assert.ok(Buffer.from(served.data, 'base64url').equals(bytes));
+  } finally {
+    await close();
+  }
+});

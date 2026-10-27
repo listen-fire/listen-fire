@@ -50,7 +50,7 @@ use crate::doors::inbound_of;
 use crate::externals::{RunningExternal, rpc_as};
 use crate::check::LOCAL_TENANT;
 use crate::json::{Js, Obj};
-use crate::routing::{Scope, scope_of, subscription_key};
+use crate::routing::{Scope, subscription_key};
 use crate::runs::{FileSet, Session};
 use crate::secrets_slot::SecretsStore;
 use crate::secrets::{Binding, Credential, Credentials, credential_for};
@@ -187,8 +187,12 @@ fn wanted(set: &FileSet, running: &RunningExternal, credentials: &Credentials) -
     let mut wanted: BTreeMap<Channel, Want> = BTreeMap::new();
     let mut notes = Vec::new();
     for listen in set.listens.iter().filter(|l| l.adapter == *name) {
-        let scope = match scope_of(&listen.config, &scope_keys) {
+        let scope = match listen.scope(&scope_keys) {
             Ok(scope) => scope,
+            Err(_) if let Err(why) = &listen.address => {
+                notes.push(format!("{name}: {} has no webhook: {why}", listen.pipeline()));
+                continue;
+            }
             Err(missing) => {
                 let missing: Vec<String> = missing.iter().map(|k| format!("'{k}'")).collect();
                 notes.push(format!("{name}: {} names no {} for its webhook, so none is registered for it", listen.pipeline(), missing.join(" or ")));

@@ -5,7 +5,7 @@
 //! event a run is handed (`triggers/trigger_event.ts`, with
 //! `engine/inbound/discriminate.ts`).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use std::rc::Rc;
 
@@ -37,9 +37,29 @@ pub struct Listen {
     /// their source text: those the module declares as position args say
     /// which position the connection is in (RunningExternal::position_settings).
     pub args: Vec<(String, String)>,
+    /// The values its connection's position gives the module's address hops
+    /// the listen does not name, resolved to ids (the platform's
+    /// `resolved_address`; `listen_narrowing::resolve_listen_addresses`), or
+    /// why they could not be. Empty until resolved.
+    pub address: Result<BTreeMap<String, String>, String>,
 }
 
 impl Listen {
+    /// Its webhook scope under the module's `scope_keys`: each key's value
+    /// in its config, else in its resolved address; the keys neither gives
+    /// when it misses any.
+    pub fn scope(&self, scope_keys: &[String]) -> Result<Scope, Vec<String>> {
+        let resolved = self.address.as_ref().ok();
+        let mut config = self.config.clone();
+        for key in scope_keys {
+            let named = config.get(key).and_then(Js::as_str).is_some_and(|v| !v.is_empty());
+            if let Some(value) = resolved.and_then(|a| a.get(key)).filter(|_| !named) {
+                config.insert(key.clone(), Js::str(value));
+            }
+        }
+        scope_of(&config, scope_keys)
+    }
+
     /// The listen's pipeline, `listen:<file>:<movement>`: what its receipts,
     /// its runs and its polls name it by.
     pub fn pipeline(&self) -> String {
@@ -73,7 +93,7 @@ impl Listen {
     /// rows named one) is narrowed by the credential alone.
     pub fn hears_through(&self, credential: Option<&str>, subscription: Option<&str>, scope_keys: &[String]) -> bool {
         self.hears(credential)
-            && subscription.is_none_or(|key| scope_of(&self.config, scope_keys).is_ok_and(|scope| subscription_key(&scope) == key))
+            && subscription.is_none_or(|key| self.scope(scope_keys).is_ok_and(|scope| subscription_key(&scope) == key))
     }
 }
 
@@ -408,6 +428,7 @@ fn listens_of(file: &str, program: &movement_parser::ast::Program, scopes: &Hash
             credential,
             payload,
             args,
+            address: Ok(BTreeMap::new()),
         });
     }
     listens
@@ -630,6 +651,7 @@ mod tests {
                 credential: case["listen"].as_str().map(str::to_string),
                 payload: None,
                 args: Vec::new(),
+                address: Ok(BTreeMap::new()),
             };
             assert_eq!(listen.hears(case["delivery"].as_str()), case["hears"].as_bool().unwrap(), "{}", case["case"]);
         }
@@ -652,7 +674,7 @@ mod tests {
 
     #[test]
     fn a_delivery_through_a_subscription_reaches_only_the_listens_of_its_scope() {
-        let mut listen = Listen { file: "f".into(), adapter: "airtable".into(), config: Obj::new(), movement_name: "m".into(), credential: Some("acme".into()), args: vec![], payload: None };
+        let mut listen = Listen { file: "f".into(), adapter: "airtable".into(), config: Obj::new(), movement_name: "m".into(), credential: Some("acme".into()), args: vec![], payload: None, address: Ok(BTreeMap::new()) };
         listen.config.insert("base".into(), Js::str("appH"));
         listen.config.insert("table".into(), Js::str("tblC"));
         let keys = ["base".to_string(), "table".to_string()];
