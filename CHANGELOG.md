@@ -20,6 +20,16 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- A listen can declare what its events are, as a node the program declares: `listen to stripe { payload: <Payment> } fire \`Payment Failed\``. This works for a listen-config key of the new catalog format `type`, such as `@lf/webhook`'s `payload`.
+  - The movement's parameter is checked against that node field by field, as a parameter is against its argument. Reads in the body are checked against it too.
+  - A plain value, a value type, or a name that is not a declared node is refused by name. So is a parameter typed as the connection's own event.
+  - The change is additive: it accepts only text this release refused before, so every 0.12 pin reads as it did.
+  - Under `lf`, an event whose payload does not fit the node fires nothing. A delivery that fits none of the listens it would reach is answered 400 `payload_mismatch`, naming the fields.
+  - The engine holds such a parameter as the event's payload, so `e.amount` reads the body. Before, a parameter typed by a declared node failed every run (`MOVENG_UNSUPPORTED`).
+- New module `@lf/webhook`: incoming webhooks from any sender (Stripe, a form service, your own app).
+  - Each connection is one URL at `/hooks/webhook/<credential>`. `lf serve` now prints each webhook connection's URL when it starts.
+  - The connection's credential holds the signing scheme and secret: `stripe`, `hmac-sha256` or `none`. An unsigned, mis-signed or stale delivery is answered 401 and runs nothing.
+
 ## [0.12.9] - 2026-10-26
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Two behaviours change for an existing project under `lf`, both from routing inbound events by connection:
