@@ -6,6 +6,9 @@
 // a run is never stalled past the call that holds it; past either, the error
 // says which status, how many attempts and how long was waited.
 //
+// An error carrying `POLICY_REFUSAL_CODE` is a refusal, not a network error,
+// and is thrown at once.
+//
 // Wrap `ctx.fetch`, not the global one: each retry then asks the host's limits
 // door again (a module that declares `hostLimits`), and a 429 or 503 the
 // server answered with a Retry-After has already been reported there as a
@@ -72,6 +75,16 @@ export function networkErrorCode(error: unknown): string | undefined {
   return undefined;
 }
 
+/** The `code` a host sets on the error its fetch throws when it refuses a
+ *  request by policy (a non-public address, a disallowed scheme). A refusal is
+ *  deterministic, so it is never retried and its own message reaches the caller. */
+export const POLICY_REFUSAL_CODE = 'LF_POLICY_REFUSAL';
+
+/** Whether `error`, or a cause under it, is a host's refusal by policy. */
+export function isPolicyRefusal(error: unknown): boolean {
+  return networkErrorCode(error) === POLICY_REFUSAL_CODE;
+}
+
 function transient(status: number): boolean {
   return status === 429 || (status >= 500 && status !== 501);
 }
@@ -100,6 +113,7 @@ export function retryingFetch(fetchImpl: typeof fetch, options: RetryFetchOption
         failure = { kind: 'status', status: response.status, ...(asked === undefined ? {} : { retryAfterMs: asked }) };
       } catch (error) {
         if (typeof error === 'object' && error !== null && Reflect.get(error, 'name') === 'AbortError') throw error;
+        if (isPolicyRefusal(error)) throw error;
         thrown = error;
         failure = { kind: 'network', error };
       }
