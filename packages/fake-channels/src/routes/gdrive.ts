@@ -3,7 +3,8 @@
 // multipart upload endpoint (/upload/drive/v3/…) work. Entities: one 'file'
 // per Drive item (folders are files with the folder mimeType), fields
 // mirroring the real API: { id, name, mimeType, parents, size, webViewLink,
-// content }.
+// content }. A file seeded with `granted: false` stands for one outside the
+// app's drive.file grant: like the real API, the fake answers 404 for it.
 
 import { Router } from 'express';
 import express from 'express';
@@ -13,7 +14,7 @@ const SVC = 'gdrive';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
 function fileOut(data: Record<string, unknown>): Record<string, unknown> {
-  const { content: _content, ...rest } = data;
+  const { content: _content, granted: _granted, ...rest } = data;
   return rest;
 }
 
@@ -118,6 +119,35 @@ export function gdriveRoutes(store: EntityStore): Router {
       return res.send(String(file.data.content ?? ''));
     }
     res.json(fileOut(file.data));
+  });
+
+  // files.copy: the copy lands in `parents` (the source's own when none are
+  // given), named `name` (or "Copy of <source>"). A source or destination
+  // folder outside the grant is a 404, as under drive.file. The copy is the
+  // app's own, so it is granted.
+  r.post('/drive/v3/files/:id/copy', (req, res) => {
+    const notFound = (id: string) => res.status(404).json({ error: { code: 404, message: `File not found: ${id}.` } });
+    const source = store.get(SVC, 'file', req.params.id);
+    if (!source || source.data.granted === false) return notFound(req.params.id);
+    const parents = (req.body?.parents as string[] | undefined) ?? (source.data.parents as string[]);
+    for (const parent of parents) {
+      const folder = store.get(SVC, 'file', parent);
+      if (parent !== 'root' && (!folder || folder.data.granted === false)) return notFound(parent);
+    }
+    const id = store.nextId(SVC, 'file');
+    const entity = store.create(
+      SVC,
+      'file',
+      {
+        ...source.data,
+        id,
+        name: req.body?.name ?? `Copy of ${String(source.data.name)}`,
+        parents,
+        webViewLink: `https://drive.google.com/file/d/${id}`,
+      },
+      id,
+    );
+    res.json(fileOut(entity.data));
   });
 
   return r;

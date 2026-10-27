@@ -15,7 +15,6 @@
 import { Readable } from 'node:stream';
 
 import type { ModuleLog } from 'module-kit';
-import type { GoogleDriveClient } from '../drive_client';
 import type {
   ResolveEntityInput,
   WriteInput,
@@ -25,6 +24,7 @@ import type {
 
 import { refusingKv } from 'module-kit';
 import { GoogleDriveAdapter } from '../adapter';
+import { GoogleDriveClient } from '../drive_client';
 import {
   DISPLAY_NAME_BY_KIND,
   structuredIdFor,
@@ -54,9 +54,10 @@ interface FakeClientCalls {
   createFolder: Array<{ name: string; parentId: string }>;
   createDocument: Array<{ name: string; content: string; parentId: string }>;
   uploadFile: Array<{ name: string; parentId: string; mimeType?: string; body: string }>;
+  copyFile: Array<{ fileId: string; name?: string; parentId: string }>;
 }
 
-function makeAdapter(options?: { existingFolderId?: string }): {
+function makeAdapter(options?: { existingFolderId?: string; copyError?: Error }): {
   adapter: GoogleDriveAdapter;
   calls: FakeClientCalls;
 } {
@@ -75,6 +76,7 @@ function makeAdapter(options?: { existingFolderId?: string }): {
     createFolder: [],
     createDocument: [],
     uploadFile: [],
+    copyFile: [],
   };
   const fakeClient = {
     findFolder: async (args: { name: string; parentId: string }) => {
@@ -93,6 +95,17 @@ function makeAdapter(options?: { existingFolderId?: string }): {
       const body = await streamToString(args.stream);
       calls.uploadFile.push({ name: args.name, parentId: args.parentId, mimeType: args.mimeType, body });
       return { id: 'fileNEW01', webViewLink: 'https://drive.google.com/file/d/fileNEW01' };
+    },
+    copyFile: async (args: { fileId: string; name?: string; parentId: string }) => {
+      calls.copyFile.push(args);
+      if (options?.copyError) throw options.copyError;
+      return {
+        id: 'copyNEW01',
+        name: args.name ?? 'Copy of template',
+        mimeType: 'application/vnd.google-apps.document',
+        webViewLink: 'https://docs.google.com/document/d/copyNEW01',
+        size: null,
+      };
     },
   };
   return { adapter, calls };
@@ -188,7 +201,7 @@ describe('GoogleDriveAdapter schema introspection', () => {
     expect(fields.get('name')!.required).toBe(false);
     expect(fields.get('id')!.writable).toBe(false);
     expect(fields.get('mimeType')!.writable).toBe(false);
-    expect(file!.references).toEqual([]);
+    expect(file!.references.map((r) => [r.name, r.targetTypeId, r.writable])).toEqual([['Copies', FILE_TYPE, true]]);
   });
 
   it('returns null for a foreign / unknown / retired typeId', async () => {
@@ -216,7 +229,8 @@ describe('GoogleDriveAdapter.createRecord — folder', () => {
     expect(calls.findFolder).toEqual([{ name: 'Acme Corp', parentId: PARENT_FOLDER }]);
     expect(calls.createFolder).toEqual([{ name: 'Acme Corp', parentId: PARENT_FOLDER }]);
     expect(result.externalId).toBe('fldrNEW01');
-    expect(result.data!.url).toBe('https://drive.google.com/drive/folders/fldrNEW01');
+    expect(result.data).toMatchObject({ Id: 'fldrNEW01', Name: 'Acme Corp' });
+    expect(result.data!.Url).toBe('https://drive.google.com/drive/folders/fldrNEW01');
   });
 
   it('reuses an existing folder found by name (tier-1), skipping create', async () => {
@@ -337,6 +351,133 @@ describe('GoogleDriveAdapter.createRecord — file (one noun, two byte channels)
         mutationContext: {} as never,
       } as WriteInput),
     ).rejects.toThrow(/no parent folder/);
+  });
+});
+
+describe('GoogleDriveAdapter.createRecord — copy (a file written along two edges)', () => {
+  const links = [
+    { recordType: FOLDER_TYPE, externalId: PARENT_FOLDER, edgeName: 'Files' },
+    { recordType: FILE_TYPE, externalId: 'docTEMPLATE', edgeName: 'Copies' },
+  ];
+
+  it('copies the source into the folder under the new name and returns the new file', async () => {
+    const { adapter, calls } = makeAdapter();
+    const result = await adapter.createRecord({
+      recordType: FILE_TYPE,
+      fields: { name: 'Acme brief' },
+      mutationContext: {} as never,
+      parentLinks: links,
+    } as WriteInput);
+
+    expect(calls.copyFile).toEqual([{ fileId: 'docTEMPLATE', name: 'Acme brief', parentId: PARENT_FOLDER }]);
+    expect(calls.createDocument).toHaveLength(0);
+    expect(calls.uploadFile).toHaveLength(0);
+    expect(result.externalId).toBe('copyNEW01');
+    expect(result.data).toMatchObject({ Id: 'copyNEW01', Name: 'Acme brief', 'Mime Type': 'application/vnd.google-apps.document', Url: 'https://docs.google.com/document/d/copyNEW01' });
+  });
+
+  it('is order-independent and lets Drive name the copy when no Name is given', async () => {
+    const { adapter, calls } = makeAdapter();
+    await adapter.createRecord({
+      recordType: FILE_TYPE,
+      fields: {},
+      mutationContext: {} as never,
+      parentLinks: [...links].reverse(),
+    } as WriteInput);
+    expect(calls.copyFile).toEqual([{ fileId: 'docTEMPLATE', name: undefined, parentId: PARENT_FOLDER }]);
+  });
+
+  it('the copy is a normal file: a later write can name it as a parent', async () => {
+    const { adapter, calls } = makeAdapter();
+    const copy = await adapter.createRecord({
+      recordType: FILE_TYPE,
+      fields: { name: 'Acme brief' },
+      mutationContext: {} as never,
+      parentLinks: links,
+    } as WriteInput);
+    await adapter.createRecord({
+      recordType: FILE_TYPE,
+      fields: { name: 'Acme brief v2' },
+      mutationContext: {} as never,
+      parentLinks: [
+        { recordType: FOLDER_TYPE, externalId: PARENT_FOLDER, edgeName: 'Files' },
+        { recordType: FILE_TYPE, externalId: copy.externalId, edgeName: 'Copies', data: copy.data },
+      ],
+    } as WriteInput);
+    expect(calls.copyFile[1].fileId).toBe('copyNEW01');
+  });
+
+  it('refuses a copy with no folder, and a copy that also carries Content or File', async () => {
+    const { adapter } = makeAdapter();
+    await expect(
+      adapter.createRecord({
+        recordType: FILE_TYPE,
+        fields: { name: 'x' },
+        mutationContext: {} as never,
+        parentLinks: [links[1]],
+      } as WriteInput),
+    ).rejects.toThrow(/no parent folder/);
+    await expect(
+      adapter.createRecord({
+        recordType: FILE_TYPE,
+        fields: { name: 'x', content: 'text' },
+        mutationContext: {} as never,
+        parentLinks: links,
+      } as WriteInput),
+    ).rejects.toThrow(/copy.*`Content`/is);
+  });
+
+  it('says plainly when Drive refuses the source because the app was not granted it', async () => {
+    const { adapter } = makeAdapter({ copyError: Object.assign(new Error('File not found: docTEMPLATE.'), { code: 404 }) });
+    await expect(
+      adapter.createRecord({
+        recordType: FILE_TYPE,
+        fields: { name: 'x' },
+        mutationContext: {} as never,
+        parentLinks: links,
+      } as WriteInput),
+    ).rejects.toThrow(/cannot copy docTEMPLATE.*not granted/i);
+  });
+});
+
+describe('GoogleDriveClient.copyFile over a fake Drive (files.copy)', () => {
+  // A Drive that knows two granted files and one folder, answers only what
+  // drive.file would, and records what it was asked.
+  function fakeDrive() {
+    const requests: Array<{ method: string; path: string; body: unknown }> = [];
+    const granted = new Set(['docTEMPLATE', 'fldrDEST']);
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+      const method = init?.method ?? 'GET';
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+      requests.push({ method, path: url.pathname, body });
+      const match = /^\/drive\/v3\/files\/([^/]+)\/copy$/.exec(url.pathname);
+      const json = (status: number, payload: unknown) =>
+        new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } });
+      if (method !== 'POST' || !match) return json(400, { error: { code: 400, message: 'unexpected' } });
+      const [, fileId] = match;
+      if (!granted.has(fileId) || !granted.has(body.parents?.[0])) {
+        return json(404, { error: { code: 404, message: `File not found: ${fileId}.` } });
+      }
+      return json(200, { id: 'copyNEW01', name: body.name ?? 'Copy of template', mimeType: 'application/vnd.google-apps.document', webViewLink: 'https://docs.google.com/document/d/copyNEW01' });
+    };
+    return { requests, fetchImpl };
+  }
+
+  it('POSTs /drive/v3/files/{id}/copy with the name and parent and returns the new file', async () => {
+    const { requests, fetchImpl } = fakeDrive();
+    const client = new GoogleDriveClient({ accessToken: async () => 't', fetch: fetchImpl });
+    const copy = await client.copyFile({ fileId: 'docTEMPLATE', name: 'Acme brief', parentId: 'fldrDEST' });
+    expect(requests).toEqual([
+      { method: 'POST', path: '/drive/v3/files/docTEMPLATE/copy', body: { name: 'Acme brief', parents: ['fldrDEST'] } },
+    ]);
+    expect(copy).toMatchObject({ id: 'copyNEW01', name: 'Acme brief' });
+  });
+
+  it('is refused for a file the app was not granted', async () => {
+    const { fetchImpl } = fakeDrive();
+    const client = new GoogleDriveClient({ accessToken: async () => 't', fetch: fetchImpl });
+    await expect(client.copyFile({ fileId: 'docSTRANGER', parentId: 'fldrDEST' })).rejects.toMatchObject({ code: 404 });
   });
 });
 
