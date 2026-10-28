@@ -20,6 +20,13 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- New module `@lf/github`: your GitHub notifications, repositories, pull requests and issues.
+  - A listen on `Notification` fires once per notification thread that is new or has changed since the last poll (review requests, mentions, assignments). `events` selects GitHub's reasons, and `lf check` refuses one GitHub never sends. The first poll delivers nothing.
+  - Polls are conditional, so an unchanged feed is a 304 that costs no quota, and never sooner than GitHub's `X-Poll-Interval`.
+  - A notification leads to the pull request or issue it is about (`Pull Request`, `Issue`). A repository holds its `Pull Requests` and `Issues`; each holds its `Comments` and `Labels`. Field names are GitHub's.
+  - Writes: a comment (`write pr-[:Comments]-> { Body: "…" }`) and a label (`write issue-[:Labels]-> { Name: "…" }`).
+  - The credential is a personal access token. The notifications feed needs a classic one; GitHub serves it to no other kind.
+
 ## [0.12.12] - 2026-10-27
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. It fixes `lf serve` never becoming ready with an MCP connection imported, a regression in 0.12.11.

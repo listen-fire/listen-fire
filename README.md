@@ -50,7 +50,7 @@ run efde8ee1-… hello:hello completed — 0 write(s), 0 trace entries
 
 [Getting started with `lf`](docs/getting-started-lf.md) goes on to connect a system (`lf connect @lf/attio`), add a credential, route a recorded event through your programs (`lf run --event …`) and serve webhooks (`lf serve`).
 
-**What it connects to:** Slack, email and Gmail, WhatsApp, Telegram, Attio, Affinity, Airtable, Google Sheets, Google Drive, Dropbox, Granola meeting notes, a schedule, and your own system through a module ([connect anything](#connect-anything)).
+**What it connects to:** Slack, email and Gmail, WhatsApp, Telegram, Attio, Affinity, Airtable, Google Sheets, Google Drive, Dropbox, Granola meeting notes, GitHub, a schedule, and your own system through a module ([connect anything](#connect-anything)).
 
 **Where it runs:** as one binary on your machine; as the same binary split into a web-facing service and on-demand workers on cloud compute that can scale to zero; or inside your own Node or Rust product ([deploy options](#deploy-options)).
 
@@ -128,6 +128,7 @@ The ready-made modules in this repository today, each a starting point rather th
 | `google_drive` | Google Drive |
 | `dropbox` | Dropbox |
 | `granola` | Granola meeting notes |
+| `github` | GitHub notifications, pull requests and issues |
 | `evertrace` | Evertrace |
 | `dealroom` | Dealroom |
 
