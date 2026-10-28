@@ -16,6 +16,7 @@ export * from './host_limits';
 export * from './retry_fetch';
 export * from './embed';
 export * from './inbound';
+export * from './stripe_signature';
 export {
   AdapterBadRequestError,
   DRAINED_PAGE_LIMIT,
