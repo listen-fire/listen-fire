@@ -63,13 +63,16 @@ function field(
 }
 
 /** An amount, in major units of the record's `Currency`. */
-function money(fieldId: string, displayName: string, what: string): SchemaFieldDescriptor {
+function money(fieldId: string, displayName: string, what: string, extra: Partial<SchemaFieldDescriptor> = {}): SchemaFieldDescriptor {
   return field(fieldId, displayName, 'number', {
     description: `${what}, in major units of \`Currency\` (Stripe's \`${fieldId}\` is in minor units; this is already divided: 19.99 usd, 500 jpy).`,
+    ...extra,
   });
 }
 
 const EQ = { filterOperators: ['eq' as const] };
+/** Never null in Stripe's object. */
+const REQUIRED = { required: true };
 
 /** A listing Stripe filters by query parameters and answers newest first. */
 const NEWEST_FIRST = {
@@ -237,26 +240,26 @@ const INVOICE_DESCRIPTOR: SchemaTypeDescriptor = {
     field('number', 'Number', 'string', { description: 'The number on the invoice, once it is finalized.' }),
     field('status', 'Status', 'enum', { enumValues: [...STRIPE_INVOICE_STATUSES], capability: EQ }),
     field('currency', 'Currency', 'string', { required: true, description: 'The three-letter ISO code, lowercase (`usd`). `Currency.formatFigure(amount, code)` writes an amount with it.' }),
-    money('amount_due', 'Amount Due', 'What the customer owes'),
-    money('amount_paid', 'Amount Paid', 'What has been paid'),
-    money('amount_remaining', 'Amount Remaining', 'What is still owed'),
-    money('subtotal', 'Subtotal', 'The total before discounts and tax'),
-    money('total', 'Total', 'The total after discounts and tax'),
+    money('amount_due', 'Amount Due', 'What the customer owes', REQUIRED),
+    money('amount_paid', 'Amount Paid', 'What has been paid', REQUIRED),
+    money('amount_remaining', 'Amount Remaining', 'What is still owed', REQUIRED),
+    money('subtotal', 'Subtotal', 'The total before discounts and tax', REQUIRED),
+    money('total', 'Total', 'The total after discounts and tax', REQUIRED),
     field('customer_email', 'Customer Email', 'string', { description: 'The customer’s email when the invoice was finalized.' }),
     field('customer_name', 'Customer Name', 'string', { description: 'The customer’s name when the invoice was finalized.' }),
     field('hosted_invoice_url', 'Hosted Invoice URL', 'string', { description: 'Where the customer sees and pays it; unset until it is finalized.' }),
     field('invoice_pdf', 'Invoice PDF', 'string', { description: 'The PDF’s URL; unset until it is finalized.' }),
     field('billing_reason', 'Billing Reason', 'enum', { enumValues: [...STRIPE_BILLING_REASONS], description: 'Why it was made (`subscription_cycle`, `subscription_create`, `manual`, …).' }),
-    field('collection_method', 'Collection Method', 'enum', { enumValues: [...STRIPE_COLLECTION_METHODS], capability: EQ }),
-    field('attempt_count', 'Attempt Count', 'number', { description: 'Payment attempts made so far.' }),
-    field('attempted', 'Attempted', 'boolean'),
+    field('collection_method', 'Collection Method', 'enum', { enumValues: [...STRIPE_COLLECTION_METHODS], capability: EQ, required: true }),
+    field('attempt_count', 'Attempt Count', 'number', { required: true, description: 'Payment attempts made so far.' }),
+    field('attempted', 'Attempted', 'boolean', REQUIRED),
     field('next_payment_attempt', 'Next Payment Attempt', 'date', { description: 'When Stripe tries again; unset when it will not.' }),
     field('due_date', 'Due Date', 'date'),
-    field('period_start', 'Period Start', 'date'),
-    field('period_end', 'Period End', 'date'),
-    field('created', 'Created', 'date'),
+    field('period_start', 'Period Start', 'date', REQUIRED),
+    field('period_end', 'Period End', 'date', REQUIRED),
+    field('created', 'Created', 'date', REQUIRED),
     field('description', 'Description', 'string'),
-    field('livemode', 'Livemode', 'boolean'),
+    field('livemode', 'Livemode', 'boolean', REQUIRED),
     field('metadata', 'Metadata', 'json', { description: 'Your own key-value pairs.' }),
   ],
   references: [
@@ -279,19 +282,19 @@ const SUBSCRIPTION_DESCRIPTOR: SchemaTypeDescriptor = {
   fields: [
     field('id', 'Id', 'string', { required: true, description: 'The subscription id (`sub_…`).' }),
     field('status', 'Status', 'enum', { required: true, enumValues: [...STRIPE_SUBSCRIPTION_STATUSES], capability: EQ }),
-    field('currency', 'Currency', 'string', { description: 'The three-letter ISO code, lowercase.' }),
-    field('collection_method', 'Collection Method', 'enum', { enumValues: [...STRIPE_COLLECTION_METHODS], capability: EQ }),
-    field('cancel_at_period_end', 'Cancel At Period End', 'boolean'),
+    field('currency', 'Currency', 'string', { required: true, description: 'The three-letter ISO code, lowercase.' }),
+    field('collection_method', 'Collection Method', 'enum', { enumValues: [...STRIPE_COLLECTION_METHODS], capability: EQ, required: true }),
+    field('cancel_at_period_end', 'Cancel At Period End', 'boolean', REQUIRED),
     field('cancel_at', 'Cancel At', 'date'),
     field('canceled_at', 'Canceled At', 'date'),
     field('ended_at', 'Ended At', 'date'),
-    field('start_date', 'Start Date', 'date'),
+    field('start_date', 'Start Date', 'date', REQUIRED),
     field('trial_start', 'Trial Start', 'date'),
     field('trial_end', 'Trial End', 'date'),
-    field('created', 'Created', 'date'),
+    field('created', 'Created', 'date', REQUIRED),
     field('description', 'Description', 'string'),
     field('days_until_due', 'Days Until Due', 'number', { description: 'For `send_invoice`: days the customer has to pay each invoice.' }),
-    field('livemode', 'Livemode', 'boolean'),
+    field('livemode', 'Livemode', 'boolean', REQUIRED),
     field('metadata', 'Metadata', 'json', { description: 'Your own key-value pairs (`s.Metadata.crm_id`).' }),
   ],
   references: [
