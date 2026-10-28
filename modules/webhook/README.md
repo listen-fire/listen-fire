@@ -1,6 +1,6 @@
 # @listen-fire/webhook
 
-Incoming webhooks from any sender as a Listen-Fire module (`@lf/webhook`, bundled with `lf`). Each connection is one URL; its credential says how deliveries to it are signed. The program declares only what a delivery carries.
+Incoming webhooks from any sender as a Listen-Fire module (`@lf/webhook`, bundled with `lf`). Each connection is one URL; its credential says how deliveries to it are signed. The program declares only what a delivery carries. For Stripe, [`@lf/stripe`](../stripe/README.md) types its events, objects and amounts for you.
 
 ## Setting it up
 

@@ -11,7 +11,7 @@ export const DELIVERY_TAG = 'delivery';
 
 const HANDBOOK = `## Incoming webhooks
 
-\`webhook\` takes a POST from any sender (Stripe, a form service, your own app). Each connection is one URL under \`lf serve\`, \`/hooks/webhook/<credential>\`, which \`lf serve\` prints when it starts. The connection's credential says how deliveries are signed. The program declares only what they carry.
+\`webhook\` takes a POST from any sender (Stripe, a form service, your own app). Each connection is one URL under \`lf serve\`, \`/hooks/webhook/<credential>\`, which \`lf serve\` prints when it starts. The connection's credential says how deliveries are signed. The program declares only what they carry. A sender with its own module types its events for you: for Stripe, use \`@lf/stripe\`.
 
 \`\`\`
 import { webhook, acme_crm } from adapters
