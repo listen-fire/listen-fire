@@ -6,7 +6,7 @@ import type { AdapterManifest } from 'movement-engine/public/adapter';
 
 import { GITHUB_ADAPTER_TYPE, GITHUB_NOTIFICATION_REASONS } from './types';
 
-const GITHUB_HANDBOOK_CONTENT = `GitHub as a graph: your notifications feed, your repositories, their pull requests and issues, and each one's comments and labels. The credential is a personal access token (fine-grained or classic); a program never holds it.
+const GITHUB_HANDBOOK_CONTENT = `GitHub as a graph: your notifications feed, your repositories, their pull requests and issues, and each one's comments and labels. The credential is a personal access token; a program never holds it. The notifications feed takes only a classic token (scopes \`notifications\` and \`repo\`); a fine-grained one reaches repositories, pull requests and issues.
 
 ### listening — your notifications
 

@@ -46,7 +46,7 @@ export const githubModule = defineModule({
       name: 'github',
       kind: 'static',
       fields: [
-        { name: 'token', label: 'Personal access token (fine-grained or classic)' },
+        { name: 'token', label: 'Personal access token (classic, scopes notifications and repo, for the notifications feed; fine-grained reaches the rest)' },
         { name: 'baseUrl', label: 'API base URL (GitHub Enterprise Server: https://<host>/api/v3)', secret: false, optional: true },
       ],
     },
