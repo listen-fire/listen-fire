@@ -26,10 +26,15 @@ gh   = connect github using henry_github
 chat = connect slack using team_slack
 
 function triage(n: <gh-[:Notification]->>) {
-  pr = only(n-[:`Pull Request`]->)
   general = only(chat-[ch:Channels WHERE ch.Name == "general"]->)
-  link = pr == null ? n.Title : "${pr.Title} ${pr.`HTML URL`}"
-  write general-[:Messages]-> { Message: "${n.Reason}: ${link}" }
+  if (general == null) { fail("no #general channel") }
+  pr = only(n-[:`Pull Request`]->)
+  if (pr != null) {
+    write general-[:Messages]-> { Message: "Review requested by ${pr.Author}: ${pr.Title} ${pr.`HTML URL`}" }
+    write pr-[:Labels]-> { Name: "triaged" }
+  } else {
+    write general-[:Messages]-> { Message: "${n.Reason} in ${n-[:Repository]->.`Full Name`}: ${n.Title}" }
+  }
 }
 
 listen to gh { events: ["review_requested", "mention", "assign"] } fire triage
