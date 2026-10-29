@@ -20,6 +20,16 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+### Checks
+
+- A dot read off a record reads one field, whole; anything past it is refused, where it checked clean and then failed the run with `MOVENG_UNSUPPORTED` ("this read shape … is not supported"). Refused for every 0.12 pin, since no such read could ever run:
+  - a name the record lacks, read on past (`n.subject.title`): `MOV_UNKNOWN_PROPERTY`, naming the record's fields and its edges;
+  - a text, number or true/false field read on past (`n.Title.length`): `MOV_TEXT_HAS_NO_FIELDS`;
+  - any other field read on past (`c.Metadata.crm_id`): the new `MOV_READ_THROUGH_FIELD`, whose remedy is to bind the field first (`metadata = c.Metadata`, then `metadata.crm_id`), which runs.
+- An edge read as a field (`n.Repository`) says it is an edge and shows the walk (`n-[:Repository]->`, or `n-[:Repository]->.Name` for `n.Repository.Name`). A field a record lacks (`MOV_UNKNOWN_PROPERTY`) now lists the record's edges after its fields.
+- A text in a list an enum is tested against (`n.Reason IN ["review_request", "mention"]`, or `List.includes([…], n.Reason)`), in a body or in a WHERE inside a parameter's type, is held to the enum as `==` holds one: `MOV_ENUM_UNKNOWN_VALUE`, with a did-you-mean. A warning for every 0.12 pin, since the list's other values still match and a saved movement runs as written; it waits for the next compatibility key (0.13) to refuse.
+- A statement word bound as a name (`link = …`, `write = …`, `delete = …`) is refused as "'link' is reserved; pick another name". It was refused before as a malformed statement, naming the arrow it expected.
+
 ## [0.12.13] - 2026-10-29
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. The command is renamed to `listen-fire`, and two modules arrive: `@lf/github` and `@lf/stripe`.

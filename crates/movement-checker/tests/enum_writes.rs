@@ -71,3 +71,59 @@ fn a_known_option_in_a_parameter_type_where_passes() {
     let found = codes("function m(co: <c-[x:Companies WHERE x.Stage == \"Won\"]->>) {\n  return co.Name\n}\n");
     assert!(unknown_values(&found).is_empty(), "{found:#?}");
 }
+
+/// Each diagnostic's code, whether it is an error, and its message.
+fn judged(body: &str) -> Vec<(String, bool, String)> {
+    let source = format!("{HEAD}{body}");
+    let catalog = CatalogSnapshot::load(CRM).unwrap();
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    check_source(&source, &catalog, options).unwrap().into_iter().map(|d| (d.code, d.severity.is_none(), d.message)).collect()
+}
+
+fn unknown_judged(found: &[(String, bool, String)]) -> Vec<&(String, bool, String)> {
+    found.iter().filter(|(code, _, _)| code == "MOV_ENUM_UNKNOWN_VALUE").collect()
+}
+
+// A text in a list an enum is tested against (`IN`, `List.includes`) is held
+// to the enum as `==` holds one. A warning while the 0.12 pins read: those
+// releases admitted it, and its other values still match.
+
+#[test]
+fn each_text_of_a_list_an_enum_is_tested_in_is_one_of_its_options() {
+    let found = judged("function m() {\n  return c-[x:Companies WHERE x.Stage IN [\"Won\", \"Leed\", \"Lost\"]]->\n}\n");
+    let unknown = unknown_judged(&found);
+    assert_eq!(unknown.len(), 2, "{found:#?}");
+    assert!(unknown[0].2.starts_with("\"Leed\" isn't a value of") && unknown[0].2.ends_with("expected one of: Lead | Won. Did you mean \"Lead\"?"), "{unknown:#?}");
+    assert!(unknown[1].2.starts_with("\"Lost\" isn't a value of"), "{unknown:#?}");
+    assert!(unknown.iter().all(|(_, error, _)| !error), "a warning under every 0.12 pin: {unknown:#?}");
+}
+
+#[test]
+fn list_includes_is_in_and_is_held_to_the_enum_the_same() {
+    let found = judged("function m(co: <c-[:Company]->>) {\n  if (List.includes([\"Leed\"], co.Stage)) {\n    write c-[:Companies]-> { Name: \"A\" }\n  }\n}\n");
+    let unknown = unknown_judged(&found);
+    assert_eq!(unknown.len(), 1, "{found:#?}");
+    assert!(unknown[0].2.ends_with("Did you mean \"Lead\"?") && !unknown[0].1, "{unknown:#?}");
+}
+
+#[test]
+fn a_list_in_a_parameter_type_where_is_held_against_the_enum() {
+    let found = judged("function m(co: <c-[x:Companies WHERE x.Stage IN [\"Won\", \"Leed\"]]->>) {\n  return co.Name\n}\n");
+    let unknown = unknown_judged(&found);
+    assert_eq!(unknown.len(), 1, "{found:#?}");
+    assert!(!unknown[0].1, "{unknown:#?}");
+}
+
+#[test]
+fn a_list_of_known_options_or_of_names_tested_against_an_enum_passes() {
+    let found = judged("function m(t: <text>) {\n  return c-[x:Companies WHERE x.Stage IN [\"Lead\", \"Won\", t]]->\n}\n");
+    assert!(unknown_judged(&found).is_empty(), "{found:#?}");
+}
+
+#[test]
+fn equality_with_an_unknown_value_stays_refused() {
+    let found = judged("function m() {\n  return c-[x:Companies WHERE x.Stage == \"Leed\"]->\n}\n");
+    let unknown = unknown_judged(&found);
+    assert_eq!(unknown.len(), 1, "{found:#?}");
+    assert!(unknown[0].1, "an error: {unknown:#?}");
+}

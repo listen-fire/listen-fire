@@ -30,7 +30,7 @@
 //! named ones it calls mid-node); the statement rules (a write's absent
 //! field, a collection operation's order) are the walk's, in `checker.rs`.
 
-use movement_parser::lowering::expression::{AggregationFunction, ArithmeticOp, Expression, FilterOperator, LogicalOp, StaticValue};
+use movement_parser::lowering::expression::{AggregationFunction, ArithmeticOp, Expression, FilterOperator, ListElement, LogicalOp, StaticValue};
 
 use crate::codes;
 use crate::families::calls::is_nested_call_name;
@@ -515,6 +515,8 @@ fn check_compare_operands(typing: &mut Typing, op: FilterOperator, left: &Expres
             check_comparable(typing, lu.as_ref(), ru.as_ref(), true);
             check_enum_literal_operand(typing, left, lu.as_ref(), ru.as_ref());
             check_enum_literal_operand(typing, right, ru.as_ref(), lu.as_ref());
+            check_enum_list_operand(typing, left, ru.as_ref());
+            check_enum_list_operand(typing, right, lu.as_ref());
         }
         CompareRule::SameCategory => {
             if require_transparent(typing, l, "ordered") || require_transparent(typing, r, "ordered") {
@@ -627,6 +629,40 @@ fn check_enum_literal_operand(typing: &mut Typing, operand: &Expression, operand
     if let Some(found) = check_enum_literal(literal, other) {
         report_enum(typing, found);
     }
+}
+
+/// A list written in place against an enum (`x IN ["a", "b"]`, which is
+/// `List.includes(["a", "b"], x)`): each text in it is one of the enum's
+/// values, as a text compared with `==` is. A warning while the 0.12 pins
+/// read: those releases admitted it, and the list's other values still
+/// match, so a saved movement still runs as written. Refusing it is a
+/// tightened rule, for a release of the next compatibility key.
+fn check_enum_list_operand(typing: &mut Typing, operand: &Expression, other: Option<&Ty>) {
+    let Some(enum_ty @ Ty::Enum { .. }) = other else { return };
+    for found in enum_list_diagnostics(operand, enum_ty) {
+        report_enum(typing, found);
+    }
+}
+
+/// `check_enum_list_operand`'s findings for `operand`, when it is a list
+/// written in place, against `enum_ty`.
+fn enum_list_diagnostics(operand: &Expression, enum_ty: &Ty) -> Vec<EnumDiagnostic> {
+    let Expression::List { elements } = operand else { return Vec::new() };
+    let literals = elements.iter().filter_map(|element| match element {
+        ListElement::Expression(Expression::Static { value: StaticValue::String(literal) }) => Some(literal),
+        _ => None,
+    });
+    let mut found = Vec::new();
+    for literal in literals {
+        let Some(diagnostic) = check_enum_literal(literal, enum_ty) else { continue };
+        // An enum with no values refuses the field, not each text.
+        let whole_field = diagnostic.code == codes::ENUM_EMPTY_DOMAIN;
+        found.push(EnumDiagnostic { severity: Some(diagnostic.severity.unwrap_or(Severity::Warning)), ..diagnostic });
+        if whole_field {
+            break;
+        }
+    }
+    found
 }
 
 /// `checkNullComparison`.
@@ -1400,9 +1436,12 @@ fn type_where_enum_diagnostics(schema: &movement_parser::catalog::types::Instanc
         if matches!(compare_rule(op), CompareRule::None | CompareRule::Duration) {
             continue;
         }
-        for (field, literal) in [(left, right), (right, left)] {
-            let (Some(enum_ty), Expression::Static { value: StaticValue::String(literal) }) = (field_enum(field), literal) else { continue };
-            found.extend(check_enum_literal(literal, &enum_ty));
+        for (field, other) in [(left, right), (right, left)] {
+            let Some(enum_ty) = field_enum(field) else { continue };
+            match other {
+                Expression::Static { value: StaticValue::String(literal) } => found.extend(check_enum_literal(literal, &enum_ty)),
+                list => found.extend(enum_list_diagnostics(list, &enum_ty)),
+            }
         }
     }
     found

@@ -20,6 +20,7 @@ use movement_parser::lowering::expression::{
 };
 
 use crate::codes;
+use crate::families::walks::FieldRead;
 use crate::diagnostic::{Diagnostic, Severity};
 
 use super::field::*;
@@ -672,6 +673,50 @@ impl<'a> Typing<'a> {
         self.read_dict_member(&held, member, false)
     }
 
+    /// A dot read off a record, `root` (past its hops, `steps`), that is not a
+    /// field read: a name that is one of the record's edges, or a read on
+    /// past the field (`n.subject.title`). The engine reads a record's field
+    /// whole and nothing past it, so such a read fails every run that
+    /// reaches it, and is refused. `None` for any other read, typed as
+    /// it always was.
+    fn read_off_record(&mut self, root: &str, steps: &[TraversalStep], record: &Position, terminal: &Expression) -> Option<Option<Ty>> {
+        let (property, past) = match terminal {
+            Expression::Property { property_type_id, .. } => (property_type_id.as_str(), None),
+            Expression::Traverse { alias_root: Some(head), steps: past_steps, expression: past } => (head.as_str(), Some((past_steps, &**past))),
+            _ => return None,
+        };
+        let chain = dot_chain(terminal).unwrap_or_default();
+        // The walk is spelled from the root only when no hop comes between.
+        let read = FieldRead { root: steps.is_empty().then_some(root), property, rest: chain.get(1..).unwrap_or_default() };
+        if crate::families::walks::report_edge_read_as_field(self, record, &read) {
+            return Some(None);
+        }
+        let (past_steps, past) = past?;
+        let before = self.diagnostics.len();
+        let field = self.read_property(Some(record), property);
+        if self.diagnostics.len() > before {
+            return Some(None);
+        }
+        let next = match past {
+            Expression::Property { property_type_id, .. } if past_steps.is_empty() => Some(property_type_id.as_str()),
+            Expression::Traverse { alias_root: Some(next), .. } if past_steps.is_empty() => Some(next.as_str()),
+            _ => None,
+        };
+        let scalar = field.as_ref().and_then(|ty| match strip_absent(ty) {
+            Ty::Text | Ty::Enum { .. } => Some(FieldlessScalar::Text),
+            Ty::Number => Some(FieldlessScalar::Number),
+            Ty::Boolean => Some(FieldlessScalar::Boolean),
+            _ => None,
+        });
+        match (scalar, next) {
+            (Some(scalar), Some(next)) => {
+                self.report_scalar_field_read(&ScalarFieldRead { root: read.label(), field: next.to_string(), scalar });
+            }
+            _ => crate::families::walks::report_read_through_field(self, &read, field.as_ref(), next),
+        }
+        Some(None)
+    }
+
     /// `scalarFieldRead`: `t.Name` (and `t.Name.x`) where `t` holds text, a
     /// number or a true/false value — the field read off a value that has
     /// none.
@@ -815,6 +860,11 @@ impl<'a> Typing<'a> {
                 self.walk_orderings.insert(key(expr), (self.last_ordering, self.last_ordering_edge.clone()));
                 if let Some(destination) = &destination {
                     self.walk_destinations.insert(key(expr), destination.clone());
+                }
+                if let (Some(root), Some(record)) = (alias_root.as_deref(), destination.as_ref())
+                    && let Some(read) = self.read_off_record(root, steps, record, expression)
+                {
+                    return (read, Vec::new());
                 }
                 if !steps.is_empty() && is_position_terminal(expression) {
                     return (Some(list_of(Ty::record(destination), self.last_ordering)), Vec::new());
@@ -1529,6 +1579,19 @@ struct ScalarFieldRead {
     root: String,
     field: String,
     scalar: FieldlessScalar,
+}
+
+/// `a.b.c`'s names, when the read is dots and nothing else.
+fn dot_chain(expr: &Expression) -> Option<Vec<&str>> {
+    match expr {
+        Expression::Property { property_type_id, .. } => Some(vec![property_type_id.as_str()]),
+        Expression::Traverse { alias_root: Some(head), steps, expression } if steps.is_empty() => {
+            let mut chain = vec![head.as_str()];
+            chain.extend(dot_chain(expression)?);
+            Some(chain)
+        }
+        _ => None,
+    }
 }
 
 /// `closedFieldsOf`: every field a hop landing on `position` carries — read

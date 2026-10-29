@@ -25,6 +25,7 @@
 //! - MOV_NARROWING
 //! - MOV_OLD_EDGE_NOT_A_WRITE
 //! - MOV_PARENT_READ_RETIRED
+//! - MOV_READ_THROUGH_FIELD
 //! - MOV_SHAPE_HOP_RETIRED
 //! - MOV_TRANSFORM_HOP_RETIRED
 //! - MOV_TRAVERSE_UNKNOWN_EDGE
@@ -42,6 +43,7 @@ use movement_parser::lowering::expression::{EdgeStep, Expression, FilterOperator
 use movement_parser::surface::phrase::spell_word;
 
 use crate::codes;
+use crate::families::values::quote_name;
 use crate::diagnostic::Severity;
 use crate::scope::{Resolution, ScopeId};
 use crate::types::field::{CollectionOrder, Ty, describe_field_type, holds_records, record_head_position};
@@ -235,6 +237,78 @@ fn it_has(available: &[&str]) -> String {
     if available.is_empty() { String::new() } else { format!(" — it has: {}", available.join(", ")) }
 }
 
+/// The edges a record of `schema` has, which a walk reaches and a dot read
+/// does not.
+fn and_edges(schema: &PositionSchema) -> String {
+    let edges: Vec<&str> = schema.edges.keys().map(String::as_str).filter(|e| !e.starts_with('#') && !is_artificial_edge(e)).collect();
+    if edges.is_empty() { String::new() } else { format!("; and edges, walked (`-[:…]->`) rather than read: {}", edges.join(", ")) }
+}
+
+/// A dot read off a record (`n.Repository`, `n.Metadata.crm_id`): the name it
+/// is written off when the read starts at one (`n`), the name read, and the
+/// names it reads on past that (`crm_id`).
+pub struct FieldRead<'a> {
+    pub root: Option<&'a str>,
+    pub property: &'a str,
+    pub rest: &'a [&'a str],
+}
+
+impl FieldRead<'_> {
+    /// `n.Metadata`, or `'Metadata'` when the read starts at no name.
+    pub fn label(&self) -> String {
+        match self.root {
+            Some(root) => format!("{}.{}", quote_name(root), quote_name(self.property)),
+            None => quote_name(self.property),
+        }
+    }
+}
+
+/// A name read as a field off a record that is one of its edges instead,
+/// said with the walk that reaches it (`n.Repository` is
+/// `n-[:Repository]->`). True when it fired.
+pub fn report_edge_read_as_field(typing: &mut Typing, position: &Position, read: &FieldRead) -> bool {
+    if let Position::MaybeEmpty(of) = position {
+        return report_edge_read_as_field(typing, of, read);
+    }
+    let Some(schema) = position_schema_of_ref(position) else { return false };
+    if schema.properties.contains_key(read.property) || !schema.edges.contains_key(read.property) {
+        return false;
+    }
+    let after: String = read.rest.iter().map(|name| format!(".{}", quote_name(name))).collect();
+    let walk = format!("{}-[:{}]->{after}", read.root.map(quote_name).unwrap_or_default(), quote_name(read.property));
+    typing.report(
+        codes::UNKNOWN_PROPERTY,
+        format!("'{}' is an edge of {}, not a field — walk it: `{walk}`", read.property, describe_position(position)),
+    );
+    true
+}
+
+/// A read that goes on past a record's field (`n.Metadata.crm_id`): the
+/// engine reads a record's field whole and nothing past it, so the read
+/// fails every run that reaches it. Bound to a name first, the field is a
+/// value, and a value's own members read. `field` is the field's type when
+/// known; `next`, the name read past it when that is a name.
+pub fn report_read_through_field(typing: &mut Typing, read: &FieldRead, field: Option<&Ty>, next: Option<&str>) {
+    let label = read.label();
+    let is = field.map_or("a field".to_string(), |ty| format!("a field of {}", describe_field_type(ty)));
+    let remedy = match (read.root, next) {
+        (Some(_), Some(next)) => {
+            let bound = bound_name_for(read.property);
+            let next = quote_name(next);
+            format!(": `{label}.{next}` does not run. Bind the field to a name first — `{bound} = {label}` — then read `{bound}.{next}`")
+        }
+        _ => ", and nothing past it runs. Bind the field to a name first, then read on from the name".to_string(),
+    };
+    typing.report(codes::READ_THROUGH_FIELD, format!("'{label}' is {is}, which a record hands over whole{remedy}"));
+}
+
+/// A name to bind a field to: its own, lowercased, in the letters a bare name takes.
+fn bound_name_for(field: &str) -> String {
+    let name: String = field.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
+    let name = name.trim_matches('_');
+    if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) { "field".to_string() } else { name.to_string() }
+}
+
 /// `UndescribedEvent`: the event a movement's parameter is typed against
 /// (`<runs-[:Invocation]->>`) when the catalog holds no description of the
 /// instance it is on, so the parameter has no position type.
@@ -365,6 +439,9 @@ fn report_read(typing: &mut Typing, position: &Position, property: &str) {
             {
                 return;
             }
+            if report_edge_read_as_field(typing, position, &FieldRead { root: None, property, rest: &[] }) {
+                return;
+            }
             let mut available: Vec<String> = h.result_shape.keys().cloned().collect();
             for name in schema.iter().flat_map(|s| s.properties.keys()) {
                 if !available.contains(name) {
@@ -391,7 +468,7 @@ fn report_read(typing: &mut Typing, position: &Position, property: &str) {
             if is_write_only(schema, property) || report_undescribed(typing, position, schema, &format!("the field '{property}'")) {
                 return;
             }
-            if schema.open_properties == Some(true) {
+            if schema.open_properties == Some(true) || report_edge_read_as_field(typing, position, &FieldRead { root: None, property, rest: &[] }) {
                 return;
             }
             let available: Vec<&str> = schema.properties.keys().map(String::as_str).collect();
@@ -411,7 +488,13 @@ fn report_read(typing: &mut Typing, position: &Position, property: &str) {
             };
             typing.report(
                 codes::UNKNOWN_PROPERTY,
-                format!("{} has no field '{property}'{}{}{hint}", describe_position(position), it_has(&available), did_you_mean(property, &available)),
+                format!(
+                    "{} has no field '{property}'{}{}{}{hint}",
+                    describe_position(position),
+                    it_has(&available),
+                    and_edges(schema),
+                    did_you_mean(property, &available)
+                ),
             );
         }
         Position::Union(u) => {
