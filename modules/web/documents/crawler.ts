@@ -96,10 +96,8 @@ abstract class Crawler {
   }
 
   protected async errorAlert() {
+    const errorScreenshotUrl = await keepErrorScreenshot(this.page);
     try {
-      const screenshot = await this.page.screenshot();
-      const errorScreenshotUrl = await readerHost().keepScreenshot(screenshot);
-
       await alert({
         channel: 'DEALFLOW',
         text: `:arrow_right_hook: crawler failed to fetch anything (from url: ${this.url}, screenshot: ${errorScreenshotUrl})`,
@@ -311,6 +309,18 @@ async function buildPdf(
     data: Readable.from(Buffer.from(await pdfBlob.arrayBuffer())),
     name: filename,
   };
+}
+
+/** A screenshot of a page a crawl failed on, kept for the alert to link to;
+ *  null when it cannot be taken or kept. Never throws: it runs on the failure
+ *  path, and must not take the alert or the original error with it. */
+async function keepErrorScreenshot(page: BrowserPage): Promise<string | null> {
+  try {
+    return await readerHost().keepScreenshot(await page.screenshot());
+  } catch (err) {
+    logger.warn('Could not keep a screenshot of the failed crawl', { err: err instanceof Error ? err.message : String(err) });
+    return null;
+  }
 }
 
 /** Ask `ready` every `every` ms until it answers yes or `timeout` has
