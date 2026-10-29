@@ -1,9 +1,9 @@
 # Homebrew tap
 
-The tap is live: `brew install listen-fire/tap/lf`.
+The tap is live: `brew install listen-fire/tap/listen-fire`.
 
-`lf.rb` is the reference shape of the formula. The live one is
-`Formula/lf.rb` in `listen-fire/homebrew-tap`, and the `homebrew` job in
+`listen-fire.rb` is the reference shape of the formula. The live one is
+`Formula/listen-fire.rb` in `listen-fire/homebrew-tap`, and the `homebrew` job in
 `.github/workflows/lf-release.yml` renders it, not this file.
 
 On every `lf-v*` tag (pre-releases included) that job waits for the release, reads

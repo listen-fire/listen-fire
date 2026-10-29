@@ -1,8 +1,8 @@
 # The human-readable reference for the formula live at listen-fire/homebrew-tap
-# (Formula/lf.rb). The lf-release workflow does not copy this file: on every
+# (Formula/listen-fire.rb). The lf-release workflow does not copy this file: on every
 # lf-v* tag it renders the live formula from the same shape, so keep the two in step.
 # Pinned to rc.4 here; see README.md.
-class Lf < Formula
+class ListenFire < Formula
   desc "Listen-Fire: the movement language and its local runner"
   homepage "https://github.com/listen-fire/listen-fire"
   version "0.12.0-rc.4"

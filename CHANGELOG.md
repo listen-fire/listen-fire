@@ -41,6 +41,7 @@ named in [`RELEASING.md`](RELEASING.md).
   - To move over: install again (the install script, Homebrew, or `cargo install listen-fire`), then delete the old `lf` where the earlier install put it: `~/.local/bin/lf` for the install script, `<prefix>/bin/lf` for `scripts/dist/install.sh`. Both scripts print a one-line note when they find an `lf` that an earlier install of theirs left; they never delete it.
   - Rename `lf` in scripts, CI jobs, cron entries and container commands. In Zed, the language server's settings key is now `lsp.listen-fire`.
   - A release archive carries `bin/listen-fire`. The install scripts refuse an archive from before the rename, which carries `bin/lf`.
+  - The Homebrew formula is now `listen-fire` (`brew install listen-fire/tap/listen-fire`), no longer `lf`.
 
 ## [0.12.12] - 2026-10-27
 

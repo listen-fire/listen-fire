@@ -166,7 +166,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         # The whole formula is generated here, in the shape of
-        # deploy/homebrew/lf.rb, rather than edited by line number or pattern:
+        # deploy/homebrew/listen-fire.rb, rather than edited by line number or pattern:
         # each hash is looked up by its tarball's name in SHA256SUMS.
         run: |
           version="${GITHUB_REF_NAME#lf-v}"
@@ -185,8 +185,8 @@ jobs:
           linux_arm="$(sha aarch64-unknown-linux-musl)"
           linux_intel="$(sha x86_64-unknown-linux-musl)"
           mkdir -p tap/Formula
-          cat > tap/Formula/lf.rb <<RUBY
-          class Lf < Formula
+          cat > tap/Formula/listen-fire.rb <<RUBY
+          class ListenFire < Formula
             desc "Listen-Fire: the movement language and its local runner"
             homepage "https://github.com/listen-fire/listen-fire"
             version "${version}"
@@ -231,12 +231,12 @@ jobs:
         if: steps.token.outputs.ready == 'true'
         run: |
           cd tap
-          if git diff --quiet -- Formula/lf.rb && [ -z "$(git ls-files --others --exclude-standard Formula)" ]; then
-            echo "Formula/lf.rb is unchanged"
+          if git diff --quiet -- Formula/listen-fire.rb && [ -z "$(git ls-files --others --exclude-standard Formula)" ]; then
+            echo "Formula/listen-fire.rb is unchanged"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/lf.rb
+          git add Formula/listen-fire.rb
           git commit -m "listen-fire ${GITHUB_REF_NAME#lf-v}"
           git push
