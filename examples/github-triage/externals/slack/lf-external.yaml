@@ -1,0 +1,3 @@
+# Installed by `listen-fire connect @lf/slack`.
+name: slack
+module: "@lf/slack"

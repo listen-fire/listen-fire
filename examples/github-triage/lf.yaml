@@ -1,0 +1,4 @@
+# The project file. `engine` pins the language version this project is written against.
+engine: 0.12.0
+movements: movements
+externals: externals

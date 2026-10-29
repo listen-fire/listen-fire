@@ -1,0 +1,18 @@
+import { `@lf/github` as github, `@lf/slack` as slack } from adapters
+import { my_github, my_slack } from credentials
+
+gh   = connect github using my_github
+chat = connect slack using my_slack
+
+function triage(t: <cron-[:Tick]->>) {
+  lines = gh-[n:Notifications WHERE n.Reason IN ["review_requested", "mention"] ORDER BY n.`Updated At` DESC]-> {
+    url = coalesce(n-[:`Pull Request`]->.html_url, n-[:Issue]->.html_url, "")
+    return "• ${n-[:Repository]->.`Full Name`}: ${n.Title} (${n.Reason}) ${url}"
+  }
+  if (count(lines) == 0) { return "nothing needs you" }
+  channel = only(chat-[ch:Channels WHERE ch.Name == "general"]->)
+  if (channel == null) { fail("no #general channel") }
+  write channel-[:Messages]-> { Message: "GitHub needs you:\n${Text.join(lines, "\n")}" }
+}
+
+listen to cron { schedule: "30 8 * * 1-5" } fire triage   # weekdays, 08:30 UTC

@@ -1,0 +1,3 @@
+# Installed by `listen-fire connect @lf/github`.
+name: github
+module: "@lf/github"
