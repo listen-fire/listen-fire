@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Readable } from 'node:stream';
+import { Readable, pipeline } from 'node:stream';
 import { ReadableStream as WebReadableStream } from 'node:stream/web';
 
 import {
@@ -94,15 +94,28 @@ class S3Adapter implements DocumentProvider {
     const key = this.generateObjectKey({ filename, keyPrefix });
     const checksumTransform = new ChecksumTransform();
 
-    await this.client.send(
-      new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-        Body: readable.pipe(checksumTransform),
-        ContentLength: contentLength,
-        ContentType: mimeType,
-      }),
-    );
+    // The SDK pipes the body into its request without listening for the
+    // body's errors, so a source that dies mid-stream would leave the PUT
+    // waiting forever for the rest of its declared length. The source's error
+    // aborts the send instead.
+    const sourceFailed = new AbortController();
+    const body = pipeline(readable, checksumTransform, (err) => {
+      if (err) sourceFailed.abort(err);
+    });
+    try {
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+          Body: body,
+          ContentLength: contentLength,
+          ContentType: mimeType,
+        }),
+        { abortSignal: sourceFailed.signal },
+      );
+    } catch (err) {
+      throw sourceFailed.signal.aborted ? sourceFailed.signal.reason : err;
+    }
 
     const checksum = checksumTransform.getDigest();
 
