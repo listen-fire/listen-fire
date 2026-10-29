@@ -22,6 +22,7 @@ named in [`RELEASING.md`](RELEASING.md).
 
 ### Checks
 
+- A text in a list an enum is tested against (`n.Reason IN ["review_request", "mention"]`, or `List.includes([…], n.Reason)`) is held to the enum as `==` holds one: `MOV_ENUM_UNKNOWN_VALUE`, with a did-you-mean. A warning for every 0.12 pin, since the list's other values still match and a saved movement runs as written; it waits for the next compatibility key (0.13) to refuse.
 - A statement word bound as a name (`link = …`, `write = …`, `delete = …`) is refused as "'link' is reserved; pick another name". It was refused before as a malformed statement, naming the arrow it expected.
 
 ## [0.12.13] - 2026-10-29
