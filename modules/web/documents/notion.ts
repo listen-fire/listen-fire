@@ -31,7 +31,7 @@ class NotionCrawler extends Crawler {
     try {
       await this.setup();
 
-      await this.page.goto(this.url);
+      await this.navigate();
 
       const result = await (async () => {
         const authenticationError = await this.authenticate();

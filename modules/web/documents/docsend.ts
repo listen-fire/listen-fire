@@ -2,12 +2,24 @@ import type { ExternalUrl, PdfStream } from './reader';
 
 import { alert, readerHost, reportError } from './host';
 import { MINUTE, SECOND, pipeThroughTmpFile, retryUntilResolves, setJitteredTimeout } from './waits';
-import { Crawler, Screenshot, waitFor } from './crawler';
+import { Crawler, Screenshot, anyVisible, pollUntil, waitFor, READY_TIMEOUT as VIEWER_READY_TIMEOUT } from './crawler';
 
 import { DOCSEND_REGEX } from 'engine-contracts/document_sources';
 
 const DOWNLOAD_TIMEOUT = 2 * MINUTE;
 const READY_TIMEOUT = 15 * SECOND;
+
+// What a DocSend link shows once it has rendered, and what `authenticate` and
+// `takeScreenshotsOfAllPages` act on: its email gate, the Spaces email gate, a
+// Space's listing, or the viewer (paginated or scrolling). The page-count
+// toolbar is not one: it is drawn before the gate.
+const READY_SELECTORS = [
+  '#link_auth_form_email',
+  '#email',
+  '.dig-Table-row--selectable',
+  '#nextPageIcon',
+  'div.carousel.vertical',
+];
 
 class InvalidCredentialsError extends Error {}
 
@@ -25,6 +37,19 @@ class DocsendCrawler extends Crawler {
     await this.page.route('**/metrics/events', async (route) => {
       await route.abort();
     });
+  }
+
+  /** Ready once its gate or its viewer is visible, or once DocSend has
+   *  handed the visitor to another site (`createPdfFromScreenshots` follows). */
+  protected async waitUntilReady(): Promise<void> {
+    const ready = await pollUntil(
+      this.page,
+      async () => !DOCSEND_REGEX.test(this.page.url()) || (await anyVisible(this.page, READY_SELECTORS)),
+      { timeout: VIEWER_READY_TIMEOUT },
+    );
+    if (!ready) {
+      throw new Error(`DocSend showed neither its email gate nor its viewer within ${VIEWER_READY_TIMEOUT / SECOND}s`);
+    }
   }
 
   protected async authenticate(): Promise<Error | null> {

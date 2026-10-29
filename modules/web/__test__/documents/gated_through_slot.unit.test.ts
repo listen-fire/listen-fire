@@ -7,58 +7,15 @@
 
 import { noCredential, pluginsInProcess, refusingKv, type ModuleFiles } from 'module-kit';
 import type { FileRef } from 'engine-contracts';
-import { fakeBrowser, type FakeDocument, type FakeSite } from 'movement-engine/public/testing';
+import { fakeBrowser } from 'movement-engine/public/testing';
 
 import { webModule } from '../../index';
 import { documentReader } from '../../documents/reader';
 import { readerHost } from './reader_host';
+import { BRIEFLINK_SLIDES, BRIEFLINK_URL, brieflinkSite, bytesOf, pageCount } from './sites';
 
-const DECK_URL = 'https://brieflink.com/v/acme-seed';
-const SLIDES = 3;
-
-/** BriefLink as the crawler sees it: an email form, then a gallery. */
-function brieflinkSite(): FakeSite & { typed: string[] } {
-  const typed: string[] = [];
-  let authenticated = false;
-  let slide = 0;
-  const document: FakeDocument = {
-    title: () => 'Acme Seed Deck',
-    query(selector) {
-      switch (selector) {
-        case 'input[name="email"]':
-          return authenticated ? [] : [{ fill: (value) => void typed.push(value) }];
-        case 'input[name="passcode"]':
-          return [];
-        case 'button[type="submit"]':
-          return authenticated ? [] : [{ click: () => (authenticated = true) }];
-        case '.DeckGalleryPageContainer':
-          return authenticated ? [{ box: { x: 0, y: 0, width: 1024, height: 576 } }] : [];
-        case 'button.Button.Right':
-          return [{ enabled: slide < SLIDES - 1, click: () => (slide += 1) }];
-        default:
-          return [];
-      }
-    },
-  };
-  return {
-    typed,
-    open(url) {
-      if (url !== DECK_URL) throw new Error(`fake BriefLink: nothing at ${url}`);
-      return document;
-    },
-  };
-}
-
-async function bytesOf(stream: NodeJS.ReadableStream): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
-  return Buffer.concat(chunks);
-}
-
-/** The pages of a PDF jsPDF wrote. */
-function pageCount(pdf: Buffer): number {
-  return pdf.toString('latin1').match(/\/Type \/Page\b/g)?.length ?? 0;
-}
+const DECK_URL = BRIEFLINK_URL;
+const SLIDES = BRIEFLINK_SLIDES;
 
 describe('a gated source through the browser slot', () => {
   it('reads a BriefLink deck behind its email form into a PDF of its slides', async () => {

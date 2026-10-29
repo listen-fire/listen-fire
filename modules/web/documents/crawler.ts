@@ -7,8 +7,18 @@ import type { AICrawlResult } from './ai_crawler';
 
 import { aiCaptureContent, reportAIResult, getScrollTiles } from './ai_crawler';
 import { alert, logger, readerHost, reportError } from './host';
+import { SECOND } from './waits';
 
 type Screenshot = { width: number; height: number; data: Buffer };
+
+// A document viewer holds connections open (analytics beacons, long polls), so
+// the page's `load` event can come late or never, and a navigation that waits
+// for it loses a deck whose viewer was already up. Navigation waits only for
+// the DOM; each source then waits for its own sign that it has rendered. Both
+// sit well inside the browser slot's session limit, so a stall fails here,
+// with the source's reason.
+const NAVIGATION_TIMEOUT = 30 * SECOND;
+const READY_TIMEOUT = 30 * SECOND;
 
 type PdfStream = {
   type: 'PDF_STREAM';
@@ -59,6 +69,21 @@ abstract class Crawler {
     return;
   }
 
+  protected async navigate(): Promise<void> {
+    await this.page.goto(this.url, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT });
+    await this.waitUntilReady();
+  }
+
+  /**
+   * Wait for the document once its DOM is in. A source that knows its
+   * viewer's markup waits for that instead, and fails saying what never
+   * appeared. This default gives the page its `load` event if it comes and
+   * carries on without it: each source's capture waits for its own elements.
+   */
+  protected async waitUntilReady(): Promise<void> {
+    await this.page.waitForLoadState('load', { timeout: READY_TIMEOUT }).catch(() => undefined);
+  }
+
   /**
    * Provide username and/or passcode if requested, and wait
    * for the user to be authenticated and the basic document UI to become visible.
@@ -96,7 +121,7 @@ abstract class Crawler {
     try {
       await this.setup();
 
-      await this.page.goto(this.url);
+      await this.navigate();
 
       const result = await (async () => {
         const authenticationError = await this.authenticate();
@@ -288,6 +313,26 @@ async function buildPdf(
   };
 }
 
+/** Ask `ready` every `every` ms until it answers yes or `timeout` has
+ *  passed; whether it answered yes. */
+async function pollUntil(
+  page: BrowserPage,
+  ready: () => Promise<boolean>,
+  { timeout, every = 250 }: { timeout: number; every?: number },
+): Promise<boolean> {
+  for (let waited = 0; ; waited += every) {
+    if (await ready()) return true;
+    if (waited >= timeout) return false;
+    await page.waitForTimeout(every);
+  }
+}
+
+/** Whether any of `selectors` finds a visible element. */
+async function anyVisible(page: BrowserPage, selectors: readonly string[]): Promise<boolean> {
+  const visible = await Promise.all(selectors.map((selector) => page.locator(selector).first().isVisible()));
+  return visible.includes(true);
+}
+
 async function waitFor(el: BrowserLocator, options: Parameters<BrowserLocator['waitFor']>[0]) {
   try {
     return await el.waitFor(options);
@@ -296,4 +341,4 @@ async function waitFor(el: BrowserLocator, options: Parameters<BrowserLocator['w
   }
 }
 
-export { Crawler, Screenshot, FetchedDocument, waitFor, buildPdf };
+export { Crawler, Screenshot, FetchedDocument, waitFor, pollUntil, anyVisible, buildPdf, READY_TIMEOUT };
