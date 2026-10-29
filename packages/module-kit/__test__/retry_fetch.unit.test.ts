@@ -4,7 +4,7 @@
 // budget with an error naming both, and never retries what the caller's rule
 // refuses or a status that is not transient.
 
-import { RetriesExhaustedError, retryingFetch, networkErrorCode } from '../retry_fetch';
+import { POLICY_REFUSAL_CODE, RetriesExhaustedError, retryingFetch, networkErrorCode } from '../retry_fetch';
 
 const URL_ = 'https://api.example.com/x';
 
@@ -132,5 +132,21 @@ test('an aborted request is not retried', async () => {
   const aborted = Object.assign(new Error('aborted'), { name: 'AbortError' });
   const { impl, sent } = script([{ error: aborted }]);
   await expect(retryingFetch(impl, { ...clock() })(URL_)).rejects.toBe(aborted);
+  expect(sent).toHaveLength(1);
+});
+
+test('a policy refusal is attempted once and its own message surfaces', async () => {
+  const refusal = Object.assign(new Error('10.0.0.5 is not a public address, so it is not reached.'), { code: POLICY_REFUSAL_CODE });
+  const { impl, sent } = script([{ error: refusal }]);
+  const c = clock();
+  await expect(retryingFetch(impl, { ...c })(URL_)).rejects.toBe(refusal);
+  expect(sent).toHaveLength(1);
+  expect(c.waits).toEqual([]);
+});
+
+test('a policy refusal under a wrapping error is not retried either', async () => {
+  const refusal = Object.assign(new Error('not public'), { code: POLICY_REFUSAL_CODE });
+  const { impl, sent } = script([{ error: Object.assign(new TypeError('fetch failed'), { cause: refusal }) }]);
+  await expect(retryingFetch(impl, { ...clock() })(URL_)).rejects.toThrow('fetch failed');
   expect(sent).toHaveLength(1);
 });

@@ -8,6 +8,12 @@
 //   crm:     find_customer { email } -> { name, plan }
 //            add_note      { customer, body } -> text; body "fail" refused
 //
+// A third kind, `billing`, is the site demo's CRM, with one read-only tool
+// over the fixed customers in BILLING_CUSTOMERS (`@lf/stripe`'s end-to-end
+// test looks a failed payment's customer up in it):
+//
+//   billing: find_customer_by_email { email } -> { found, name?, company?, plan?, account_manager? }
+//
 // The bearer is checked against a fixed token, or (`introspect`) by asking an
 // OAuth provider's protected endpoint whether it accepts it.
 
@@ -17,7 +23,14 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 
-export type FakeKind = 'issues' | 'crm';
+export type FakeKind = 'issues' | 'crm' | 'billing';
+
+/** The `billing` kind's customers, by email. */
+export const BILLING_CUSTOMERS: Record<string, { name: string; company: string; plan: 'monthly' | 'yearly'; account_manager: string }> = {
+  'diego@alvareztiles.es': { name: 'Diego Alvarez', company: 'Alvarez Tiles', plan: 'monthly', account_manager: 'Marcus Lind' },
+  'amara@okonkwolegal.com': { name: 'Amara Okonkwo', company: 'Okonkwo Legal', plan: 'yearly', account_manager: 'Priya Shah' },
+  'kenji@hoshinotea.jp': { name: 'Kenji Hoshino', company: 'Hoshino Tea', plan: 'monthly', account_manager: 'Marcus Lind' },
+};
 
 /** A fault the next matching requests meet before the server reads them. */
 export interface Fault {
@@ -92,6 +105,19 @@ const TOOLS: Record<FakeKind, Tool[]> = {
       annotations: { destructiveHint: false },
     },
   ],
+  billing: [
+    {
+      name: 'find_customer_by_email',
+      description: 'The customer with this email, and whether there is one.',
+      inputSchema: { type: 'object', properties: { email: { type: 'string' } }, required: ['email'] },
+      outputSchema: {
+        type: 'object',
+        properties: { found: { type: 'boolean' }, name: { type: 'string' }, company: { type: 'string' }, plan: { type: 'string' }, account_manager: { type: 'string' } },
+        required: ['found'],
+      },
+      annotations: { readOnlyHint: true },
+    },
+  ],
 };
 
 function text(value: string, isError = false): CallToolResult {
@@ -115,6 +141,10 @@ function answer(fake: FakeMcpServer, kind: FakeKind, tool: string, args: Record<
     case 'crm.add_note':
       if (s('body') === 'fail') return text(`notes for ${s('customer')} are closed`, true);
       return text(`noted on ${s('customer')}`);
+    case 'billing.find_customer_by_email': {
+      const customer = BILLING_CUSTOMERS[s('email')];
+      return { content: [{ type: 'text', text: customer === undefined ? `no customer ${s('email')}` : `found ${s('email')}` }], structuredContent: { found: customer !== undefined, ...customer } };
+    }
     default:
       return text(`no tool ${tool}`, true);
   }

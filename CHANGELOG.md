@@ -20,6 +20,20 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- New module `@lf/github`: your GitHub notifications, repositories, pull requests and issues.
+  - A listen on `Notification` fires once per notification thread that is new or has changed since the last poll (review requests, mentions, assignments). `events` selects GitHub's reasons, and `listen-fire check` refuses one GitHub never sends. The first poll delivers nothing.
+  - Polls are conditional, so an unchanged feed is a 304 that costs no quota, and never sooner than GitHub's `X-Poll-Interval`.
+  - A notification leads to the pull request or issue it is about (`Pull Request`, `Issue`). A repository holds its `Pull Requests` and `Issues`; each holds its `Comments` and `Labels`. Field names are GitHub's.
+  - Writes: a comment (`write pr-[:Comments]-> { Body: "…" }`) and a label (`write issue-[:Labels]-> { Name: "…" }`).
+  - The credential is a personal access token. The notifications feed needs a classic one; GitHub serves it to no other kind.
+- New module `@lf/stripe`: Stripe's events, and your customers, invoices and subscriptions. Read-only.
+  - A listen on `Event` fires once per Stripe event delivered to the connection's URL (`/hooks/stripe/<credential>`) and signed by the endpoint's secret. A retry of the same event runs once. `events` selects Stripe's event types (the invoice, subscription and customer events), and `listen-fire check` refuses one Stripe never sends.
+  - An event leads to the object it is about, typed: `Invoice`, `Subscription` or `Customer`. No hand-declared event node, no `data.object` to dig into.
+  - Every amount is in major units of its `Currency`, by Stripe's own zero-decimal and three-decimal lists: 19.99 for 1999 cents, 500 for ¥500. ``Currency.formatFigure(inv.`Amount Due`, inv.Currency)`` is right for every currency.
+  - Customers, invoices and subscriptions are joined by edges. `Email` on customers and `Status` on invoices and subscriptions reach Stripe.
+  - The credential is an API key (a restricted read-only key is enough) and the webhook endpoint's signing secret.
+- `@lf/webhook`'s `stripe` scheme and `@lf/stripe` check Stripe's signature with one shared check in module-kit. Nothing changes for a webhook connection.
+
 ### Changed
 
 - **The command is now `listen-fire`, formerly `lf`.** `lf` is also a popular terminal file manager, which owns `lf` on Homebrew core, so the two collided on a PATH and in what people and models take `lf` to mean. `listen-fire` matches the crate (`cargo install listen-fire`), the domain and the Homebrew tap. Only the binary's name changed: every subcommand and flag is the same (`listen-fire check`, `listen-fire run`, `listen-fire runs show`). No `lf` alias ships.

@@ -17,14 +17,16 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
+import { STRIPE_TOLERANCE_SECONDS, verifyStripeSignature, type SignatureVerdict, type SignedRequest } from 'module-kit';
+
+// Stripe's check is module-kit's, shared with `@lf/stripe`.
+export { STRIPE_SIGNATURE_HEADER, STRIPE_TOLERANCE_SECONDS, stripeSignature } from 'module-kit';
+
 export const SCHEMES = ['stripe', 'hmac-sha256', 'none'] as const;
 export type SchemeName = (typeof SCHEMES)[number];
 
 /** A Stripe event's id, the same on every retry. */
 export const STRIPE_ID_FIELD = 'id';
-export const STRIPE_SIGNATURE_HEADER = 'stripe-signature';
-/** Stripe's own default tolerance. */
-export const STRIPE_TOLERANCE_SECONDS = 5 * 60;
 
 export type Signing = (
   | { scheme: 'stripe'; secret: string; toleranceSeconds: number }
@@ -75,12 +77,9 @@ export function signingOf(name: string, fields: Readonly<Record<string, string |
 }
 
 /** What a check reads of a request. */
-export interface Signed {
-  header(name: string): string | undefined;
-  bytes: Buffer;
-}
+export type Signed = SignedRequest;
 
-export type Verdict = { ok: true } | { ok: false; reason: string };
+export type Verdict = SignatureVerdict;
 
 const REFUSED = (reason: string): Verdict => ({ ok: false, reason });
 
@@ -90,23 +89,6 @@ function sameBytes(a: Buffer, b: Buffer): boolean {
 
 function hmac(secret: string, data: Buffer): Buffer {
   return createHmac('sha256', secret).update(data).digest();
-}
-
-function verifyStripe(signing: Extract<Signing, { scheme: 'stripe' }>, request: Signed, nowSeconds: number): Verdict {
-  const header = request.header(STRIPE_SIGNATURE_HEADER);
-  if (header === undefined || header.trim() === '') return REFUSED(`no ${STRIPE_SIGNATURE_HEADER} header`);
-  const parts = header.split(',').map((part) => part.trim().split('=', 2) as [string, string | undefined]);
-  const timestamp = parts.find(([key]) => key === 't')?.[1];
-  const signatures = parts.filter(([key, value]) => key === 'v1' && value !== undefined).map(([, value]) => value as string);
-  if (timestamp === undefined || !/^\d+$/.test(timestamp) || signatures.length === 0) return REFUSED(`the ${STRIPE_SIGNATURE_HEADER} header has no t= and v1=`);
-  const expected = hmac(signing.secret, Buffer.concat([Buffer.from(`${timestamp}.`, 'utf-8'), request.bytes]));
-  if (!signatures.some((signature) => /^[0-9a-f]+$/i.test(signature) && sameBytes(expected, Buffer.from(signature, 'hex')))) {
-    return REFUSED('the signature does not match the secret');
-  }
-  if (nowSeconds - Number(timestamp) > signing.toleranceSeconds) {
-    return REFUSED(`the signature is older than ${signing.toleranceSeconds} seconds`);
-  }
-  return { ok: true };
 }
 
 function verifyHmac(signing: Extract<Signing, { scheme: 'hmac-sha256' }>, request: Signed): Verdict {
@@ -122,7 +104,7 @@ export function verify(signing: Signing, request: Signed, nowSeconds: number): V
     case 'none':
       return { ok: true };
     case 'stripe':
-      return verifyStripe(signing, request, nowSeconds);
+      return verifyStripeSignature(request, { secret: signing.secret, nowSeconds, toleranceSeconds: signing.toleranceSeconds });
     case 'hmac-sha256':
       return verifyHmac(signing, request);
     default: {
@@ -130,9 +112,4 @@ export function verify(signing: Signing, request: Signed, nowSeconds: number): V
       return REFUSED(`unknown scheme ${String(unknown)}`);
     }
   }
-}
-
-/** Stripe's header for `body` at `timestamp`: what a test (or a sender) signs with. */
-export function stripeSignature(secret: string, body: string, timestamp: number): string {
-  return `t=${timestamp},v1=${hmac(secret, Buffer.from(`${timestamp}.${body}`, 'utf-8')).toString('hex')}`;
 }

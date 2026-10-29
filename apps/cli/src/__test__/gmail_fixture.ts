@@ -56,10 +56,10 @@ export async function fakeChannels(): Promise<Fake> {
 }
 
 /** A project with Gmail installed against the fake and the mailbox signed in
- *  as henry_mail, under the credential named (`gmail`, or `gmail_drafts` for
- *  a sign-in that also asks for the compose scope). Returns the scope the
- *  sign-in asked for. */
-export async function gmailProject(fake: Fake, credential: 'gmail' | 'gmail_drafts'): Promise<{ dir: string; asked: string }> {
+ *  as `name` (henry_mail unless a test names its own), under the credential
+ *  named (`gmail`, or `gmail_drafts` for a sign-in that also asks for the
+ *  compose scope). Returns the scope the sign-in asked for. */
+export async function gmailProject(fake: Fake, credential: 'gmail' | 'gmail_drafts', name = 'henry_mail'): Promise<{ dir: string; asked: string }> {
   const F = fake.url;
   const dir = join(mkdtempSync(join(tmpdir(), 'lf-gmail-')), 'gmail-project');
   assert.equal(lfSync(join(dir, '..'), 'init', 'gmail-project').code, 0);
@@ -71,7 +71,7 @@ export async function gmailProject(fake: Fake, credential: 'gmail' | 'gmail_draf
   assert.match(connected, /connected gmail/);
   // The mailbox, then the optional fields a host fills for a delegated mailbox.
   const optional = credential === 'gmail' ? 4 : 6;
-  const adding = lf(dir, ['credential', 'add', '--module', 'gmail', 'henry_mail', '--credential', credential, '--headless'], {
+  const adding = lf(dir, ['credential', 'add', '--module', 'gmail', name, '--credential', credential, '--headless'], {
     answers: [MAILBOX, ...Array<string>(optional).fill('')],
   });
   const authorize = (await adding.line(/^\s+http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/)).trim();
@@ -79,6 +79,6 @@ export async function gmailProject(fake: Fake, credential: 'gmail' | 'gmail_draf
   assert.ok(location !== null, 'the fake provider redirects back with a code');
   await adding.line(/paste the URL your browser was sent back to/);
   adding.answer(location);
-  assert.match(await ok(adding), /added henry_mail/);
+  assert.match(await ok(adding), new RegExp(`added ${name}`));
   return { dir, asked: new URL(authorize).searchParams.get('scope') ?? '' };
 }
