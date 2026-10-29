@@ -1,4 +1,4 @@
-// The Document AI module, started as the process lf starts (serve.ts), over
+// The Document AI module, started as the process listen-fire starts (serve.ts), over
 // the wire against a fake Document AI, driven by Google's own client in its
 // REST mode: the ocr slot's conformance kit, the price per page, and what
 // reaches the processor. A generated service account key signs its own

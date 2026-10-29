@@ -12,7 +12,7 @@
 // any record of what it sent.
 //
 // The host hands the module the provider keys as the install's credential
-// (`credential.ts`): the platform from its environment, lf from the user's own
+// (`credential.ts`): the platform from its environment, listen-fire from the user's own
 // Resend or Mailgun account.
 
 import { defineModule, type ModuleContext } from 'module-kit';

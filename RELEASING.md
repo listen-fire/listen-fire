@@ -1,6 +1,6 @@
 # Releasing
 
-This repository releases the language: the crates on crates.io, the `@listen-fire/*` packages on npm, the `lf` binaries and the documentation site. The platform's images are released from `lf-platform`, in the same GitHub organisation, under its own `v*` tags. The two version numbers were aligned once, at 0.12.0, and are independent from then on.
+This repository releases the language: the crates on crates.io, the `@listen-fire/*` packages on npm, the `listen-fire` binaries and the documentation site. The platform's images are released from `lf-platform`, in the same GitHub organisation, under its own `v*` tags. The two version numbers were aligned once, at 0.12.0, and are independent from then on.
 
 Two kinds of release exist, because two kinds of version exist.
 
@@ -8,15 +8,15 @@ Two kinds of release exist, because two kinds of version exist.
 
 | What changed | Moves | Release |
 | --- | --- | --- |
-| The parser, checker, language or engine crate; `lf` (the `listen-fire` crate); `movement-lang`, `engine` or `engine-contracts` | the core: those 5 crates and 3 packages, together, to the language's one version | core release |
+| The parser, checker, language or engine crate; `listen-fire` (the `listen-fire` crate); `movement-lang`, `engine` or `engine-contracts` | the core: those 5 crates and 3 packages, together, to the language's one version | core release |
 | `module-runtime` (the engine depends on it) | the package, and a patch of the core | core release |
 | Any other package (a module, `module-kit`, `embed`, `authoring-mcp`, `handbook`, `fake-channels`, `file-text`, `files-s3`, `model-providers`, `ocr-google`) | that package alone, on its own version | packages-only release |
 | The `module-wire` or `module-kit` crate | that crate alone, on its own version (edit its `Cargo.toml`) | packages-only release |
 
 - The language version is `packages/movement-lang/package.json`'s `version`. `scripts/release/sync-core-version.mjs` copies it everywhere else the core carries it, and CI runs `--check` on every push.
 - Every package outside the core has its own `CHANGELOG.md` (changesets writes it). The root `CHANGELOG.md` is the language's.
-- A module's contract with `lf` is the adapter protocol minor its manifest states, not a core version. Its `peerDependencies` on the core are wide (`>=0.12.0 <1.0.0`); a core release that breaks `movement-engine/public/*`, `engine-contracts` or `movement-lang` exports raises the floor of each package it breaks, in its own changeset.
-- A bundled module reaches `lf` users at the next `lf-v*` release, which builds the bundle from the tagged commit. Users who need a module sooner install it in their project: a project's own `node_modules` wins for a name the bundle does not carry. `lf --version` lists the bundle's modules and their versions.
+- A module's contract with `listen-fire` is the adapter protocol minor its manifest states, not a core version. Its `peerDependencies` on the core are wide (`>=0.12.0 <1.0.0`); a core release that breaks `movement-engine/public/*`, `engine-contracts` or `movement-lang` exports raises the floor of each package it breaks, in its own changeset.
+- A bundled module reaches `listen-fire` users at the next `lf-v*` release, which builds the bundle from the tagged commit. Users who need a module sooner install it in their project: a project's own `node_modules` wins for a name the bundle does not carry. `listen-fire --version` lists the bundle's modules and their versions.
 
 Every change to a published package adds a changeset (`corepack pnpm changeset`) naming the packages it touches and the bump.
 
@@ -45,7 +45,7 @@ The core is at the new version; the plain tags move npm `latest`, make the GitHu
    ```sh
    git push origin main
    ```
-7. Push the three tags, in separate pushes: GitHub creates no push event when more than three tags arrive in one push, and a tag pushed together with others has gone unbuilt before. `v*` marks the crates and npm release; `lf-v*` builds the `lf` binaries and the GitHub release; `docs-v*` publishes the docs under `/docs/0.12/`. Then tag the packages (`changeset tag`) and push those; no workflow reads them.
+7. Push the three tags, in separate pushes: GitHub creates no push event when more than three tags arrive in one push, and a tag pushed together with others has gone unbuilt before. `v*` marks the crates and npm release; `lf-v*` builds the `listen-fire` binaries and the GitHub release; `docs-v*` publishes the docs under `/docs/0.12/`. Then tag the packages (`changeset tag`) and push those; no workflow reads them.
    ```sh
    git tag v0.12.12 && git tag lf-v0.12.12 && git tag docs-v0.12.12
    git push origin v0.12.12

@@ -178,7 +178,7 @@ export interface EmbeddedHost {
   /** Run every listen of the tenant's programs that hears `delivery`. */
   dispatch(tenant: string, delivery: Delivery): Promise<EmbeddedRunOutcome[]>;
   /** Run one program now: every `listen to manual` it declares fires, with
-   *  `text` as the Invocation's `Text` (lf's `lf run <movement> --text`).
+   *  `text` as the Invocation's `Text` (listen-fire's `listen-fire run <movement> --text`).
    *  None, when the program is not saved or declares no such listen. */
   run(tenant: string, request: { program: string; text?: string }): Promise<EmbeddedRunOutcome[]>;
   /** Step on every run whose timer is due by `now`: one outcome per segment. */

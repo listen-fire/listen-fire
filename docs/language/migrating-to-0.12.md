@@ -31,7 +31,7 @@ Section 2 respells the whole surface; nothing in it changes what a program means
 ## 1. How the pin moves
 
 - A new automation is written in 0.12. An existing automation moves up to it only when someone upgrades it; a release's deploy check reports which ones validate cleanly there, and moves none.
-- Every change below is a refusal under 0.12, not a move-up warning: an automation that uses a retired form has an error under 0.12, so its pin cannot move. It stays on its version, shows **Review**, lists the diagnostics, and runs exactly as before. Rewrite each form as below, then upgrade (`lf upgrade`, or `upgradeAutomation` through the API). The respellings of [section 2](#2-the-everyday-spelling) carry their rewrite, so the upgrade applies them itself.
+- Every change below is a refusal under 0.12, not a move-up warning: an automation that uses a retired form has an error under 0.12, so its pin cannot move. It stays on its version, shows **Review**, lists the diagnostics, and runs exactly as before. Rewrite each form as below, then upgrade (`listen-fire upgrade`, or `upgradeAutomation` through the API). The respellings of [section 2](#2-the-everyday-spelling) carry their rewrite, so the upgrade applies them itself.
 
 ## 2. The everyday spelling
 
@@ -44,7 +44,7 @@ Section 2 respells the whole surface; nothing in it changes what a program means
 
 ### Upgrading
 
-- An upgrade runs only when someone asks for it: `lf upgrade <file>` (the CLI), the API's upgrade (`upgradeAutomation`), or the agent tool. It applies the fixes marked safe (they provably keep the meaning), checks again, and repeats until no fix is left. Every other fix is listed with its rewrite; `lf upgrade --all` (the API's `applyAllFixes`) applies those too. An outer rewrite is written from the original text, so a fix inside it comes round on the next pass.
+- An upgrade runs only when someone asks for it: `listen-fire upgrade <file>` (the CLI), the API's upgrade (`upgradeAutomation`), or the agent tool. It applies the fixes marked safe (they provably keep the meaning), checks again, and repeats until no fix is left. Every other fix is listed with its rewrite; `listen-fire upgrade --all` (the API's `applyAllFixes`) applies those too. An outer rewrite is written from the original text, so a fix inside it comes round on the next pass.
 - The result is checked under 0.12. The pin moves only when it checks clean; otherwise the automation stays on its version, runs as before, and lists what is left.
 - A release's deploy check never rewrites an automation and never moves a pin. It reports an automation whose text, as written, is already clean under 0.12 as ready to upgrade; for one in an older spelling, the team is told that an upgrade can rewrite it.
 - Check a few rewrites by hand, because the right one depends on what the value is:
@@ -424,7 +424,7 @@ found = extractOne([m.Body], FoundShape, { tier: "careful" })
 - The fix is offered, never applied on its own. Check three things: the record may be absent where the keyword's result never was, so a field read off it where a value is needed is `MOV_ABSENT_REQUIRED` (write `coalesce(found.summary, "")`, which that diagnostic offers); a field written without a type becomes `<text>`; and the model is asked through the call's prompt, which lays out the content for the prompt cache.
 - A `through […]` stage has no fix. It hands each record's plugin answers to a further extraction of that record and merges what that finds into it; plugins called as functions hand back values of their own, so no rewrite is provably the same. Write the composition out: declare the shape, `extract` it, `map` over the records calling each plugin, `extractOne` over the content plus what the plugin returned, and merge the two with a spread into `graph<Shape> { ...c, ...details }`. The handbook's enrichment example is exactly this.
 - A null test on a `<text>` field of the call's record is refused (`MOV_PRESENCE_TEST_ON_TEXT`), as it was on the keyword's result: `if (found.website != null)` always answers true, since a text the model did not find is `""`. Annotate the field `<text | null>` to keep the test, or test `found.website != ""`. Under 3 and 4 the call's test runs as before; a move up across 0.12 is an upgrade warning.
-- The Rust engine does not run the keyword on any version, and runs no version below 0.12. An automation pinned to an integer version 1 to 4 that holds one runs on the TypeScript engine by its version, exactly as before. `lf` runs only 0.12 and refuses such a project; the platform upgrades an integer pin to 0.12.
+- The Rust engine does not run the keyword on any version, and runs no version below 0.12. An automation pinned to an integer version 1 to 4 that holds one runs on the TypeScript engine by its version, exactly as before. `listen-fire` runs only 0.12 and refuses such a project; the platform upgrades an integer pin to 0.12.
 
 ## 17. A value that may be one of several records reads only what every one offers
 

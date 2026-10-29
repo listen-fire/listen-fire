@@ -4,12 +4,12 @@
 // the PKCE pair when the declaration asks for one, and the exchange of the
 // returned code for tokens. Every shell connects through this: the platform's
 // own OAuth flows (each a declaration plus the URLs and stored shapes it has
-// always had) and `lf connect` (a loopback redirect, written to lf's secrets
+// always had) and `listen-fire connect` (a loopback redirect, written to listen-fire's secrets
 // file). Storing the result goes through the secrets family like any other
 // write of a credential.
 //
 // What stays with the shell: where the redirect lands (a platform callback
-// route, lf's loopback listener), who the attempt belongs to, and where the
+// route, listen-fire's loopback listener), who the attempt belongs to, and where the
 // host's own client id and secret come from.
 
 import { createHash, randomBytes } from 'node:crypto';

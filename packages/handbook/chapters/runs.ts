@@ -5,7 +5,7 @@ export const runs: Chapter = {
   title: 'Runs — reading what an automation did',
   content: `## Runs — reading what an automation did
 
-Every firing of an automation — a live event arriving, a "run now" backfill, a dry-run rehearsal — is recorded by the engine as a **run**: one record holding what the automation wrote, where, and why — the record for verifying it does what the text says, and for tracing any written value back to its source. Wherever you read runs (\`lf runs show\` in a project, or the platform's run history), you are reading this same record.
+Every firing of an automation — a live event arriving, a "run now" backfill, a dry-run rehearsal — is recorded by the engine as a **run**: one record holding what the automation wrote, where, and why — the record for verifying it does what the text says, and for tracing any written value back to its source. Wherever you read runs (\`listen-fire runs show\` in a project, or the platform's run history), you are reading this same record.
 
 ### run-history
 

@@ -17,7 +17,7 @@
 //     available off the platform.
 //   - Gated documents (a deck host, a data room, a Notion page) are read
 //     through the host's browser slot (`ctx.browser`), the downloaded file
-//     kept in the host's files (`ctx.files`). Where the slot is empty — lf
+//     kept in the host's files (`ctx.files`). Where the slot is empty — listen-fire
 //     and serve-module today — a document source fails naming the slot.
 //     A page whose body is not HTML or text is not kept.
 //   - A plain PDF, PowerPoint or spreadsheet link is fetched and read through

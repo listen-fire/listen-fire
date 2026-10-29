@@ -1,12 +1,12 @@
 # @listen-fire/webhook
 
-Incoming webhooks from any sender as a Listen-Fire module (`@lf/webhook`, bundled with `lf`). Each connection is one URL; its credential says how deliveries to it are signed. The program declares only what a delivery carries.
+Incoming webhooks from any sender as a Listen-Fire module (`@lf/webhook`, bundled with `listen-fire`). Each connection is one URL; its credential says how deliveries to it are signed. The program declares only what a delivery carries.
 
 ## Setting it up
 
 ```
-lf connect @lf/webhook
-lf credential add --module webhook StripeHook
+listen-fire connect @lf/webhook
+listen-fire credential add --module webhook StripeHook
 ```
 
 The credential asks for:
@@ -19,7 +19,7 @@ The credential asks for:
 - `header` and `encoding` (`hex` or `base64`, default `hex`): for `hmac-sha256` only.
 - `idField` (optional): a top-level body field holding the sender's id for a delivery, for `hmac-sha256` and `none`. A retry of a delivery with the same id runs once: the repeat is answered 200 `duplicate: true` and runs nothing. Without `idField` nothing is deduplicated. `stripe` always uses the body's `id` (the Stripe event id).
 
-`lf serve` prints each connection's URL when it starts: `/hooks/webhook/<credential>`, under `publicUrl` when `lf.yaml` names one. Give that URL to the sender.
+`listen-fire serve` prints each connection's URL when it starts: `/hooks/webhook/<credential>`, under `publicUrl` when `lf.yaml` names one. Give that URL to the sender.
 
 ## What a movement sees
 
@@ -43,7 +43,7 @@ listen to stripe { payload: <Payment> } fire `Payment Failed`
 ```
 
 - `payload:` is required. It names a node the program declares, and the event is that node.
-- `lf check` refuses a read of a field the node does not declare. It also checks the movement's parameter against the node.
+- `listen-fire check` refuses a read of a field the node does not declare. It also checks the movement's parameter against the node.
 - The node's fields are the body's top-level JSON keys.
 
 ## What a sender gets back

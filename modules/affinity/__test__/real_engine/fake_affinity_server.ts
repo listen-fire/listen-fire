@@ -1,4 +1,4 @@
-// The deal sync's fake Affinity on a real port, so `lf run` can drive the
+// The deal sync's fake Affinity on a real port, so `listen-fire run` can drive the
 // module through the real engine and its requests can be counted.
 //
 //   node --require tsx/cjs fake_affinity_server.ts <plan.json> <requests.log>

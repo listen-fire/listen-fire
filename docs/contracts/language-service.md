@@ -1,6 +1,6 @@
 # The language service
 
-`lf lsp` is a language server over stdio (LSP 3.17, UTF-16 positions). Its answers come from the crate `listen-fire-language` (crates/movement-language), written for the language of its own release. The Rust parser and checker are its reference. It is not a port of the TypeScript service.
+`listen-fire lsp` is a language server over stdio (LSP 3.17, UTF-16 positions). Its answers come from the crate `listen-fire-language` (crates/movement-language), written for the language of its own release. The Rust parser and checker are its reference. It is not a port of the TypeScript service.
 
 Not a versioned contract: an editor speaks LSP, and LSP is the contract. This page says what the service answers, and from where.
 
@@ -25,7 +25,7 @@ Not a versioned contract: an editor speaks LSP, and LSP is the contract. This pa
 | a built-in | its current spelling and signature | the spelling table (crates/movement-parser/src/surface/table.rs) and the standard library's signatures |
 | inside `import { … } from adapters` / `plugins` | module tags (`` `@lf/<name>` ``) and plugin names | the catalog's adapters (host units left out), plugin packages and plugins |
 | inside `listen to x { … }` | the listen's settings keys | the source's `triggerConfig` (`every` replaces `pollIntervalSeconds`), and `suppress_self` |
-| after `connect x using` | credential names serving that module | the catalog's credentials, built from lf's secrets bindings (names only, never values) |
+| after `connect x using` | credential names serving that module | the catalog's credentials, built from listen-fire's secrets bindings (names only, never values) |
 
 ## The LSP methods
 
@@ -37,12 +37,12 @@ Not a versioned contract: an editor speaks LSP, and LSP is the contract. This pa
 
 ## The project
 
-- `lf lsp` reads the project the way `lf check` does: lf.yaml, the movement files, and the externals' described schemas.
+- `listen-fire lsp` reads the project the way `listen-fire check` does: lf.yaml, the movement files, and the externals' described schemas.
 - If the externals cannot start (a missing credential, a module that fails), the service falls back to a catalog of the host units, the credentials and the files alone, and says so in a log message.
 
 ## Over the wasm
 
-The same service is an export of the movement artifact (`packages/movement-lang/wasm/movement.wasm`), `language_query(src, catalog, query)`, so a host that already loads the artifact answers editor questions from the one Rust implementation instead of keeping a second. `lf lsp` stays native: it reads the project from disk, and an editor speaks LSP, not this export.
+The same service is an export of the movement artifact (`packages/movement-lang/wasm/movement.wasm`), `language_query(src, catalog, query)`, so a host that already loads the artifact answers editor questions from the one Rust implementation instead of keeping a second. `listen-fire lsp` stays native: it reads the project from disk, and an editor speaks LSP, not this export.
 
 - **The call.** `src` is the file's text, `catalog` the [catalog snapshot](catalog-snapshot.md) as JSON, `query` the question below. The reply is a status and a JSON body: status 0 and the answer, or status 1 and `{ "error": { "message" } }` when the snapshot does not load, the query does not read, or the text is not UTF-8.
 - **The snapshot is the project.** The snapshot's `files` are the library files an import resolves against. Nothing is read from disk.

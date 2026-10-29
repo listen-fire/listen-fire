@@ -26,7 +26,7 @@ export function isMovementPath(path: string): boolean {
 /** Opaque; it changes whenever the text changes. */
 const Version = z.string().min(1);
 
-/** One file `movements.list` names; without a version, `lf` reads it on every scan. */
+/** One file `movements.list` names; without a version, `listen-fire` reads it on every scan. */
 export const MovementsListed = z.object({ path: MovementPath, version: Version.optional() });
 
 export const MovementsListAnswer = z.array(MovementsListed);
@@ -44,7 +44,7 @@ export const MovementsWriteAnswer = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('written'), version: Version }),
   /** `current`: the version there now, or null when there is none. */
   z.object({ kind: z.literal('conflict'), current: Version.nullable() }),
-  /** The module keeps the project's movements where `lf` cannot change them. */
+  /** The module keeps the project's movements where `listen-fire` cannot change them. */
   z.object({ kind: z.literal('read_only'), reason: z.string().min(1) }),
 ]);
 export type MovementsWriteAnswerShape = z.infer<typeof MovementsWriteAnswer>;

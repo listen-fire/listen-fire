@@ -1,6 +1,6 @@
 // `@lf/webhook`: incoming webhooks from any sender. A connection's credential
-// (`lf credential add --module webhook <name>`) holds how its deliveries are
-// signed and the secret; `lf serve` serves it at `/hooks/webhook/<name>`.
+// (`listen-fire credential add --module webhook <name>`) holds how its deliveries are
+// signed and the secret; `listen-fire serve` serves it at `/hooks/webhook/<name>`.
 
 import { defineModule, type ModuleContext } from 'module-kit';
 
@@ -34,7 +34,7 @@ export const webhookModule = defineModule({
       ],
     },
   ],
-  // The sender's provider issues the secret (Stripe, at the endpoint), so lf
+  // The sender's provider issues the secret (Stripe, at the endpoint), so listen-fire
   // connect generates none; the check reads it off the connection's credential.
   inbound: { providerKey: 'webhook', scheme: 'module', secretIssuedBy: 'provider' },
   create: (ctx) => new WebhookAdapter(webhookSourcesFrom(ctx)),

@@ -26,7 +26,7 @@ export interface ServerAddress {
  *  holding the token as written; an OAuth one's access token, as a bearer. */
 export function addressOf(credential: string, fields: CredentialFields): ServerAddress {
   const url = fields.url?.trim() ?? '';
-  if (url === '') throw new Error(`MCP: the credential holds no server url. Add it: lf credential update <name>.`);
+  if (url === '') throw new Error(`MCP: the credential holds no server url. Add it: listen-fire credential update <name>.`);
   if (!/^https?:\/\//.test(url)) throw new Error(`MCP: the server url "${url}" is not an http(s) URL; a connection reaches its server over streamable HTTP only.`);
   if (credential === TOKEN_CREDENTIAL) {
     const token = fields.token ?? '';
@@ -35,7 +35,7 @@ export function addressOf(credential: string, fields: CredentialFields): ServerA
     return { url, header: header === '' ? { name: 'authorization', value: `Bearer ${token}` } : { name: header, value: token } };
   }
   const token = fields.access_token ?? '';
-  if (token === '') throw new Error('MCP: the credential holds no access token. Sign in again: lf credential update <name>.');
+  if (token === '') throw new Error('MCP: the credential holds no access token. Sign in again: listen-fire credential update <name>.');
   return { url, header: { name: 'authorization', value: `Bearer ${token}` } };
 }
 
@@ -85,7 +85,7 @@ function keyOf(address: ServerAddress): string {
 
 /**
  * One adapter call's reach to its server, through the host's fetch for that
- * call (`ctx.fetch`: the limiter's door under lf, the host's own client in
+ * call (`ctx.fetch`: the limiter's door under listen-fire, the host's own client in
  * process). A session lives for the one exchange it opens for: the host's
  * fetch belongs to the call, so a session kept past it would send later
  * calls' requests through a fetch whose call has ended.

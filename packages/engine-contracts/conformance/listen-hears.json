@@ -1,5 +1,5 @@
 {
-  "about": "Whether an inbound delivery reaches a listen, by the credential each names. `listen` is the credential the listen's construction names (`connect … using X`), null when it names none. `delivery` is the credential the delivery came for, null for one addressed to the module's install (the door that serves every connection). Held by lf's Rust (crates/lf/src/routing.rs, Listen::hears), the engine's TypeScript (listenHearsCredential, listenerHearsDelivery) and the hosted product.",
+  "about": "Whether an inbound delivery reaches a listen, by the credential each names. `listen` is the credential the listen's construction names (`connect … using X`), null when it names none. `delivery` is the credential the delivery came for, null for one addressed to the module's install (the door that serves every connection). Held by listen-fire's Rust (crates/lf/src/routing.rs, Listen::hears), the engine's TypeScript (listenHearsCredential, listenerHearsDelivery) and the hosted product.",
   "cases": [
     { "case": "a listen naming none hears the install door", "listen": null, "delivery": null, "hears": true },
     { "case": "a listen naming none hears a connection's delivery", "listen": null, "delivery": "X", "hears": true },

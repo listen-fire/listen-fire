@@ -7,7 +7,7 @@ It is the platform's own Document AI reader (`packages/ocr-google`), served as a
 - a file of up to 15 pages and 20 MB goes to the processor's online endpoint;
 - a longer one is uploaded to your Cloud Storage bucket, processed in batch, read back and deleted.
 
-lf asks it only of a file that needs it: an image, or a PDF with no usable text layer of its own (lf reads a born-digital PDF's text itself, by the platform's rule).
+listen-fire asks it only of a file that needs it: an image, or a PDF with no usable text layer of its own (listen-fire reads a born-digital PDF's text itself, by the platform's rule).
 
 ## Install
 
@@ -19,7 +19,7 @@ lf asks it only of a file that needs it: an image, or a PDF with no usable text 
      ocr: document_ai
    ```
 
-3. Run `lf connect document_ai` to give it its settings. They go to the project's secrets file (or `LF_SECRET__DOCUMENT_AI__<SETTING>` in containers and CI), never into `lf.yaml`.
+3. Run `listen-fire connect document_ai` to give it its settings. They go to the project's secrets file (or `LF_SECRET__DOCUMENT_AI__<SETTING>` in containers and CI), never into `lf.yaml`.
 
 ## Settings
 
@@ -35,8 +35,8 @@ lf asks it only of a file that needs it: an image, or a PDF with no usable text 
 
 ## Cost
 
-Every read reports its cost: the pages Document AI read times `price_per_page`, labelled `document-ai/ocr`. lf adds it to the run's spend, so `maxRunCostUsd` counts it. The module publishes the price (`ocr.prices`), so lf refuses before reading a file whose pages alone cost more than the run has left.
+Every read reports its cost: the pages Document AI read times `price_per_page`, labelled `document-ai/ocr`. listen-fire adds it to the run's spend, so `maxRunCostUsd` counts it. The module publishes the price (`ocr.prices`), so listen-fire refuses before reading a file whose pages alone cost more than the run has left.
 
 ## Tests
 
-`pnpm test` in this folder starts the module as the process lf starts and runs the ocr slot's conformance kit and the module's own cases against a fake Document AI and Cloud Storage, driven by Google's own clients. A generated service account key signs its own tokens, so nothing reaches Google.
+`pnpm test` in this folder starts the module as the process listen-fire starts and runs the ocr slot's conformance kit and the module's own cases against a fake Document AI and Cloud Storage, driven by Google's own clients. A generated service account key signs its own tokens, so nothing reaches Google.

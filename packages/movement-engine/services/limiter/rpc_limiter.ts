@@ -1,7 +1,7 @@
 // A limiter a limiter module serves: the limiter slot's methods
 // (docs/contracts/limiter-slot.md) carried as adapter protocol 2 calls over
 // HTTP (a Unix socket on this box). How the contract suite (contract.ts)
-// holds lf's limiter (`lf --contract-limiter`), and a limiter module lf
+// holds listen-fire's limiter (`listen-fire --contract-limiter`), and a limiter module listen-fire
 // drives, to the meaning every limiter has.
 
 import { z } from 'zod';

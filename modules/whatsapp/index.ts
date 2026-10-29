@@ -8,7 +8,7 @@
 //
 // Which Meta app speaks for an install is the host's call, made in the
 // credential it hands over: the platform hands its one shared app (the
-// deployment's `WHATSAPP_*`), lf the user's own. Who may message it (OTP,
+// deployment's `WHATSAPP_*`), listen-fire the user's own. Who may message it (OTP,
 // phone links, team membership) stays with the host's doors.
 
 import { z } from 'zod';
@@ -41,7 +41,7 @@ export interface WhatsappHost {
    *  downloads each media item and hands the adapter such a URL. */
   exposedFileUrl?(url: string): boolean;
   /** The host takes media by Meta's id (`meta-media:<id>`), downloaded with
-   *  the install's own token. Only where an install is its own Meta app (lf):
+   *  the install's own token. Only where an install is its own Meta app (listen-fire):
    *  on a shared app any team could name any team's media id. */
   mediaById?: boolean;
 }
@@ -136,7 +136,7 @@ export function whatsappModuleWith(host: WhatsappHost): AdapterModuleDefinition 
 }
 
 /** The module for a host with no shared number and no exposed files, where
- *  each install is its own Meta app (lf). */
+ *  each install is its own Meta app (listen-fire). */
 export const whatsappModule = whatsappModuleWith({ mediaById: true });
 
 export default whatsappModule;

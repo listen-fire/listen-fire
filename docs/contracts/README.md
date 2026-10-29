@@ -77,7 +77,7 @@ A divergence over a request with no recorded counterpart also carries that reque
 
 **Recording your own host.** Wrap any `EngineHost` with a recorder: it hands the engine and the host each other's own values, keeps JSON copies, and refuses a request or answer JSON cannot carry, and any request made after the entry ended. The recording and replay rules are `packages/engine-contracts/conformance/`.
 
-**What proves the host contract here.** The language's proof is the engine package's shim tests (the Rust engine run through its shim against a host, `packages/movement-engine`), `apps/cli`'s slot conformance (`slot_conformance.test.ts`, every slot module held to the same cases over the wire) and its run-host contract (`run_host_contract.test.ts`, the host `lf` itself provides). The recorded-run harness, with its corpora, its HTTP host double and its re-harvest command, is a host's own proof and belongs to the host that records them: [lf-platform](https://github.com/listen-fire/lf-platform) has one, under `apps/api/src/services/movement_engine/conformance/`.
+**What proves the host contract here.** The language's proof is the engine package's shim tests (the Rust engine run through its shim against a host, `packages/movement-engine`), `apps/cli`'s slot conformance (`slot_conformance.test.ts`, every slot module held to the same cases over the wire) and its run-host contract (`run_host_contract.test.ts`, the host `listen-fire` itself provides). The recorded-run harness, with its corpora, its HTTP host double and its re-harvest command, is a host's own proof and belongs to the host that records them: [lf-platform](https://github.com/listen-fire/lf-platform) has one, under `apps/api/src/services/movement_engine/conformance/`.
 
 ### The language kit: checked programs
 
@@ -85,4 +85,4 @@ Every program the test suites check, with its catalog snapshot, language version
 
 ### The adapter kit
 
-A vendor's server is run through the adapter protocol with `lf` itself (`lf check`, `lf catalog`, `lf run --webhook`, `lf serve`) against [`examples/lf-acme`](../../examples/lf-acme): see [Build your first adapter](adapter-protocol.md#build-your-first-adapter).
+A vendor's server is run through the adapter protocol with `listen-fire` itself (`listen-fire check`, `listen-fire catalog`, `listen-fire run --webhook`, `listen-fire serve`) against [`examples/lf-acme`](../../examples/lf-acme): see [Build your first adapter](adapter-protocol.md#build-your-first-adapter).

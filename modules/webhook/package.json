@@ -2,7 +2,7 @@
   "name": "@listen-fire/webhook",
   "license": "Apache-2.0",
   "version": "0.12.8",
-  "description": "Incoming webhooks from any sender as a module: each connection is one signed URL under lf serve, its credential the signing scheme and secret (Stripe's signature, an HMAC-SHA256 header, or explicitly unsigned), its events typed by the node the listen declares. Loaded in process by the platform, served by serve-module everywhere else.",
+  "description": "Incoming webhooks from any sender as a module: each connection is one signed URL under listen-fire serve, its credential the signing scheme and secret (Stripe's signature, an HMAC-SHA256 header, or explicitly unsigned), its events typed by the node the listen declares. Loaded in process by the platform, served by serve-module everywhere else.",
   "engines": {
     "node": ">=22.23.4 <23"
   },

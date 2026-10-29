@@ -2,7 +2,7 @@
 // `/api/public/webhook-sync/email/<install>`, that either provider may post
 // to. A Resend (Svix) notification is told apart by its `svix-*` headers;
 // anything else is read as a Mailgun form post. The key each is signed with
-// is the subscription's secret (lf: the install's `webhook_secret`): the
+// is the subscription's secret (listen-fire: the install's `webhook_secret`): the
 // Mailgun HTTP webhook signing key, or Resend's `whsec_` secret.
 //
 // The answers keep the platform's own mail doors' statuses, so a provider

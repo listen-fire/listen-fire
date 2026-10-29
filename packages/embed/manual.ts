@@ -1,9 +1,9 @@
-// The run host's `manual` unit, as `lf` builds it in (crates/lf/src/units.rs):
+// The run host's `manual` unit, as `listen-fire` builds it in (crates/lf/src/units.rs):
 // a source every host has, which a movement listens to with no import and no
 // `connect` (`listen to manual fire backfill`). It fires when the embedder
 // asks (`run`), with the text given as the Invocation's `Text`. A module the
 // embedder registers under the adapter type `manual` replaces it, as a
-// project external of that name replaces the unit in `lf`.
+// project external of that name replaces the unit in `listen-fire`.
 
 import { BASE_RUNTIME_CAPABILITIES } from 'engine-contracts';
 import type { Adapter, AdapterManifest, DiscriminableEvent } from 'movement-engine/public/adapter';

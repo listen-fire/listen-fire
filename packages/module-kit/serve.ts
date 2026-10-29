@@ -1,9 +1,9 @@
-// `serve-module`: any module as a protocol-2 process, so lf, the Rust host,
+// `serve-module`: any module as a protocol-2 process, so listen-fire, the Rust host,
 // the cloud and an embedder run a module one way. It prints
 // `listening <port>` (or `listening unix:<path>` on the socket MODULE_SOCKET
-// names) once it answers (the line lf's externals wait for), logs as JSON
+// names) once it answers (the line listen-fire's externals wait for), logs as JSON
 // lines on stderr, and binds loopback unless told otherwise. One process may
-// serve several modules, each under its own path (lf's shared host for
+// serve several modules, each under its own path (listen-fire's shared host for
 // trusted modules); an untrusted module gets a process of its own.
 
 import { rmSync } from 'node:fs';
@@ -97,7 +97,7 @@ export interface ServedModules {
 
 const MOUNT_PATH = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
-/** Several modules in one process (lf's shared host for trusted modules),
+/** Several modules in one process (listen-fire's shared host for trusted modules),
  *  each under its own path, each with its own options, log and token. A
  *  module's file URLs are under its own path. */
 export async function serveModules(options: { mounts: readonly ModuleMount[]; port?: number; host?: string; socket?: string }): Promise<ServedModules> {

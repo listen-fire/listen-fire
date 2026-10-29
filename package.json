@@ -2,7 +2,7 @@
   "name": "listen-fire",
   "private": true,
   "license": "UNLICENSED",
-  "description": "The movement language: crates, the engine package, lf and the modules.",
+  "description": "The movement language: crates, the engine package, listen-fire and the modules.",
   "version": "0.1.0",
   "engines": {
     "pnpm": "^9.5.0"

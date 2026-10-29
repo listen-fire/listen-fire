@@ -421,7 +421,7 @@ answer: PricedAnswer<{
 
 `through` stages and plugin calls. What the engine knows of a plugin comes from the snapshot; invoking it is the host's.
 
-- The bundled plugins are declared as data in the engine package (`movement-engine/public/plugins`: each one's signature and whether it is priced). A host builds the snapshot's `plugins` from those declarations and answers `invoke` for the ones it implements. The hosted product implements all of them, and fails as its plugins load if its implementations and the declarations differ. `lf` does not build its snapshot from those declarations: it serves the plugins that modules provide, lists them in the snapshot, and answers an `invoke` by calling the module that provides the plugin.
+- The bundled plugins are declared as data in the engine package (`movement-engine/public/plugins`: each one's signature and whether it is priced). A host builds the snapshot's `plugins` from those declarations and answers `invoke` for the ones it implements. The hosted product implements all of them, and fails as its plugins load if its implementations and the declarations differ. `listen-fire` does not build its snapshot from those declarations: it serves the plugins that modules provide, lists them in the snapshot, and answers an `invoke` by calling the module that provides the plugin.
 
 #### `llm.transforms.invoke`
 
@@ -733,7 +733,7 @@ request: { segmentId: string; content: string; type: 'pdf' | 'text' }
 answer:  FileRef            // a document-store descriptor
 ```
 
-- `FILE(content, type)`: the host renders the composed string (the older language; a `pdf` is the text on A4 in Helvetica, wrapped at the page edge, drawn without a browser by `@lf/pdf`'s writer; a character outside WinAnsi prints as `?`. Now a PDF is the `@lf/pdf` plugin's `pdf.render(text)`, and lf refuses a `pdf` kind that only meets this family at run time), stores the artifact under the team's key prefix (what makes it the team's to read again), and answers its descriptor.
+- `FILE(content, type)`: the host renders the composed string (the older language; a `pdf` is the text on A4 in Helvetica, wrapped at the page edge, drawn without a browser by `@lf/pdf`'s writer; a character outside WinAnsi prints as `?`. Now a PDF is the `@lf/pdf` plugin's `pdf.render(text)`, and listen-fire refuses a `pdf` kind that only meets this family at run time), stores the artifact under the team's key prefix (what makes it the team's to read again), and answers its descriptor.
 - **Persist:** the artifact's bytes in the document store. **Retry:** not idempotent (each call stores a new artifact).
 
 ### `lookup`

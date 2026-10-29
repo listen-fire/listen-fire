@@ -2,7 +2,7 @@
 // manifest (and whatever instance schemas it introspected), the credentials,
 // the plugins, the movement files and the models. Pure — no database, no
 // registry, no network — so the hosted product (which gathers these from its
-// tables and live introspection) and `lf` (which gathers them from a project
+// tables and live introspection) and `listen-fire` (which gathers them from a project
 // folder and its externals) hand the checker and the engine the same catalog.
 //
 // It lives here rather than in movement-lang because its input is the
@@ -169,7 +169,7 @@ export interface CatalogAdapterInput {
   /**
    * The construction signature when it is not the manifest's own. A remote
    * install the hosted product holds the credential for constructs
-   * credential-free; the same external run by `lf` takes the credential its
+   * credential-free; the same external run by `listen-fire` takes the credential its
    * secrets name — a fact about the shell holding the secret, not the adapter.
    */
   constructionArgs?: ConstructionArg[];

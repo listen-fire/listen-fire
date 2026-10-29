@@ -1,7 +1,7 @@
 // The run host's backend: the durable state a run leaves between its segments
 // (parked leaves, the joins they hold, await correlations, the run lease, the
 // work queue), as the families every backend serves. The hosted product serves
-// them from Postgres and `lf` from SQLite; the rules that read and write them
+// them from Postgres and `listen-fire` from SQLite; the rules that read and write them
 // (when a run is complete, how a wake finds its parks, how a race settles,
 // how a cancel or a failure tears a run down) are the core's (rules.ts,
 // drain.ts), written once over these families.

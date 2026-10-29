@@ -6,7 +6,7 @@
 import { PROTOCOL_MINOR, PROTOCOL_MINORS, WireManifestResult, minorIntroducing, protocolMinorOf, protocolStanding } from '../index';
 import { WireSlotManifest } from '../slots';
 
-const LF = { name: 'lf', version: '0.12.6' };
+const LF = { name: 'listen-fire', version: '0.12.6' };
 const SLACK = { name: 'slack', package: { name: '@listen-fire/slack', version: '0.13.1' }, host: LF };
 
 describe('the minor a manifest states', () => {
@@ -60,21 +60,21 @@ describe('a host refuses a module outside the range it speaks, by name', () => {
     expect(protocolStanding({ protocolVersion: 2, protocolMinor: 5 }, SLACK)).toEqual({
       ok: false,
       message:
-        'external "slack" (@listen-fire/slack 0.13.1) speaks adapter protocol 2.5; this lf (0.12.6) speaks 2.0–2.4. ' +
-        "Upgrade lf to a release that speaks 2.5 (the protocol's Changes list names it), or use a @listen-fire/slack that speaks 2.4 or lower.",
+        'external "slack" (@listen-fire/slack 0.13.1) speaks adapter protocol 2.5; this listen-fire (0.12.6) speaks 2.0–2.4. ' +
+        "Upgrade listen-fire to a release that speaks 2.5 (the protocol's Changes list names it), or use a @listen-fire/slack that speaks 2.4 or lower.",
     });
     expect(protocolStanding({ protocolVersion: 2, protocolMinor: 5 }, { name: 'slack', host: LF })).toEqual({
       ok: false,
       message:
-        'external "slack" speaks adapter protocol 2.5; this lf (0.12.6) speaks 2.0–2.4. ' +
-        "Upgrade lf to a release that speaks 2.5 (the protocol's Changes list names it), or use a version of it that speaks 2.4 or lower.",
+        'external "slack" speaks adapter protocol 2.5; this listen-fire (0.12.6) speaks 2.0–2.4. ' +
+        "Upgrade listen-fire to a release that speaks 2.5 (the protocol's Changes list names it), or use a version of it that speaks 2.4 or lower.",
     });
   });
 
   it('refuses a newer major', () => {
     expect(protocolStanding({ protocolVersion: 3 }, { name: 'slack', host: LF })).toEqual({
       ok: false,
-      message: 'external "slack": speaks adapter protocol 3; this lf (0.12.6) speaks 2.0–2.4. Upgrade lf.',
+      message: 'external "slack": speaks adapter protocol 3; this listen-fire (0.12.6) speaks 2.0–2.4. Upgrade listen-fire.',
     });
   });
 
@@ -96,10 +96,10 @@ describe('a host refuses a module outside the range it speaks, by name', () => {
   it("names a slot module's slot", () => {
     const acme = { name: 'acme_store', slot: 'store', host: LF };
     expect(protocolStanding({ protocolVersion: 2, protocolMinor: 9 }, acme)).toMatchObject({
-      message: expect.stringMatching(/^core module "acme_store" \(store slot\) speaks adapter protocol 2\.9; this lf \(0\.12\.6\) speaks 2\.0–2\.4\./),
+      message: expect.stringMatching(/^core module "acme_store" \(store slot\) speaks adapter protocol 2\.9; this listen-fire \(0\.12\.6\) speaks 2\.0–2\.4\./),
     });
     expect(protocolStanding({ protocolVersion: 3 }, acme)).toMatchObject({
-      message: 'core module "acme_store" (store slot): speaks adapter protocol 3; this lf (0.12.6) speaks 2.0–2.4. Upgrade lf.',
+      message: 'core module "acme_store" (store slot): speaks adapter protocol 3; this listen-fire (0.12.6) speaks 2.0–2.4. Upgrade listen-fire.',
     });
     expect(protocolStanding({ protocolVersion: 1 }, acme)).toMatchObject({
       message: 'core module "acme_store" (store slot): protocolVersion: expected 2, got 1 — this module targets an older adapter protocol; update it to protocol version 2.',

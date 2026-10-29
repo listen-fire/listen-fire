@@ -15,10 +15,10 @@ What keeps a movement someone else wrote from harming the host that runs it. An 
 | One text's size, in UTF-8 bytes | engine | 16 MiB | `limits.maxTextBytes` | `MOVENG_LIMIT_TEXT_SIZE` |
 | One list's members, or one map's keys | engine | 1,000,000 | `limits.maxCollectionItems` | `MOVENG_LIMIT_COLLECTION_SIZE` |
 | The segment's result, as JSON text | engine | 64 MiB | `limits.maxResultBytes` | `MOVENG_LIMIT_RESULT_SIZE` |
-| Call depth: named calls nested in one run | engine | 32 | `maxCallDepth` | `CallDepthExceeded` (lf prints `MOVENG_CALL_DEPTH`) |
+| Call depth: named calls nested in one run | engine | 32 | `maxCallDepth` | `CallDepthExceeded` (listen-fire prints `MOVENG_CALL_DEPTH`) |
 | Wall clock per segment, waits included | run host | 900 s | `MOVEMENT_MAX_SEGMENT_SECONDS` (TypeScript: also `RunInput.maxSegmentSeconds`) | `MOVENG_LIMIT_WALL_CLOCK` |
-| Cost per run: model calls and priced plugins | engine and run host | no cap | `spend.capMicrodollars` (lf: `maxRunCostUsd` in lf.yaml) | `RunCostCapExceeded` (the flow suspends where the host can park it) |
-| Module calls per run | run host | 2,000 | lf: `REMOTE_ADAPTER_MAX_CALLS_PER_RUN` | `AdapterCallCeilingExceeded` |
+| Cost per run: model calls and priced plugins | engine and run host | no cap | `spend.capMicrodollars` (listen-fire: `maxRunCostUsd` in lf.yaml) | `RunCostCapExceeded` (the flow suspends where the host can park it) |
+| Module calls per run | run host | 2,000 | listen-fire: `REMOTE_ADAPTER_MAX_CALLS_PER_RUN` | `AdapterCallCeilingExceeded` |
 
 ```ts
 type SegmentLimits = {          // on the segment's input, beside maxCallDepth
@@ -29,7 +29,7 @@ type SegmentLimits = {          // on the segment's input, beside maxCallDepth
 };
 ```
 
-lf and the TypeScript host read each engine limit from the environment, as they read the call depth: `MOVEMENT_MAX_STEPS`, `MOVEMENT_MAX_TEXT_BYTES`, `MOVEMENT_MAX_COLLECTION_ITEMS`, `MOVEMENT_MAX_RESULT_BYTES`. A value that is set but is not a positive whole number refuses the run; it is never read as no limit. On the TypeScript host a run's own `limits` override the environment's, one limit at a time.
+listen-fire and the TypeScript host read each engine limit from the environment, as they read the call depth: `MOVEMENT_MAX_STEPS`, `MOVEMENT_MAX_TEXT_BYTES`, `MOVEMENT_MAX_COLLECTION_ITEMS`, `MOVEMENT_MAX_RESULT_BYTES`. A value that is set but is not a positive whole number refuses the run; it is never read as no limit. On the TypeScript host a run's own `limits` override the environment's, one limit at a time.
 
 ## Provider limits
 
@@ -37,15 +37,15 @@ Separate from the bounds above: what keeps a host's calls to modules and models 
 
 - A module declares its provider's limits in its manifest (`limits`: at most `calls` per `per`, at most `concurrent` at once, counted per credential, module, install or team). See [the adapter protocol](adapter-protocol.md#kinds-settings-spend-and-the-hosts-models).
 - An answer's `retryAfter` (seconds) holds every later call made as that credential (or install) until then.
-- The host keeps them through its limiter slot, not the engine ([the limiter slot's wire](limiter-slot.md)). lf's default, `@lf/memory-limiter`, counts in one process; a shared limiter is a module filling the slot.
+- The host keeps them through its limiter slot, not the engine ([the limiter slot's wire](limiter-slot.md)). listen-fire's default, `@lf/memory-limiter`, counts in one process; a shared limiter is a module filling the slot.
 - A refused call waits in the host's process, holding its segment's place. The segment's wall clock still runs, so a long wait can end the segment with `MOVENG_LIMIT_WALL_CLOCK`.
-- Model requests: `@lf/anthropic` allows 8 in flight at once per process, on lf and on the platform alike.
+- Model requests: `@lf/anthropic` allows 8 in flight at once per process, on listen-fire and on the platform alike.
 
 ## How each is kept
 
 - **Steps are the CPU bound.** The engine reads no clock (it runs as WASM, and must stay deterministic), so it counts work instead: one step per statement, one per expression evaluated. Members of a collection op are expressions, so a loop over a list pays per member.
 - **The wall clock is the host's.** The engine hands control back to its host at every statement (the cancel gate asks the host). So the host checks its deadline between requests, and the step budget bounds the work between two of them. Past the deadline the host feeds the engine nothing more, and no write is cut off half-sent; then the segment fails.
-  - lf: what is still in flight gets a five-second grace to finish. After the grace, a read or a model call still waiting is dropped, and a write to an external system (a record created, updated, deleted, linked or unlinked, or an event subscription changed) is waited for to its end.
+  - listen-fire: what is still in flight gets a five-second grace to finish. After the grace, a read or a model call still waiting is dropped, and a write to an external system (a record created, updated, deleted, linked or unlinked, or an event subscription changed) is waited for to its end.
   - The TypeScript host: the requests already at the host finish first.
 - **Sizes are checked on every value an expression produces.** A value is checked for its own size, not its members' (each member was checked when it was produced). So a text doubled in a loop fails as soon as it passes the limit.
 - **The result size is checked once, as the segment ends.** It replaces the result with the limit error; the cost lines still go back, because that money is spent.
@@ -65,13 +65,13 @@ Reviewed for this release:
 
 - **The engine makes no request of its own.** It has no network code: everything it needs it asks its host for, by family (adapters, llm, files, park, trace, clock, ids, check, log, lookup, locks, control).
 - **No family takes a URL from the movement.** Adapter calls go to the module the movement imported. Model calls go to the host's configured provider. Plugins go to the plugin's module.
-- **A file's bytes are fetched only from a URL a module gave.** A file value names its owner module and handle; lf asks that module to resolve it, and fetches the URL the module answered. A movement can forge a file value, but only the named module decides what is fetched.
+- **A file's bytes are fetched only from a URL a module gave.** A file value names its owner module and handle; listen-fire asks that module to resolve it, and fetches the URL the module answered. A movement can forge a file value, but only the named module decides what is fetched.
 - **A stored document is read only inside the project's own folder.** A handle with `..` or an empty part is refused, and a handle outside the team's folder is not this project's.
-- **lf's other outbound requests are the host's, not the movement's:** a credential's token refresh, a provider's OAuth exchange, the model provider.
+- **listen-fire's other outbound requests are the host's, not the movement's:** a credential's token refresh, a provider's OAuth exchange, the model provider.
 
 ## Measured peaks, and why the defaults stand
 
-Measured 2026-10-18 by instrumenting the engine (a counter beside each check, not kept): every program the repository's tests run on the Rust engine. That is the Rust crates' tests (the oracle and frozen programs, lf, the embedding example), the TypeScript engine package's tests and the platform's `movement_engine` tests (both on the WASM build), 3,378 + 743 + 721 tests. The lf examples were not run: they need a live external system.
+Measured 2026-10-18 by instrumenting the engine (a counter beside each check, not kept): every program the repository's tests run on the Rust engine. That is the Rust crates' tests (the oracle and frozen programs, listen-fire, the embedding example), the TypeScript engine package's tests and the platform's `movement_engine` tests (both on the WASM build), 3,378 + 743 + 721 tests. The listen-fire examples were not run: they need a live external system.
 
 | limit | highest observed in one segment | default | default over peak |
 |---|---|---|---|

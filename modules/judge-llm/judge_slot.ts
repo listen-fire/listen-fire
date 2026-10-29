@@ -1,5 +1,5 @@
 // @lf/judge-llm served as the judge slot's module (docs/contracts/judge-slot.md)
-// for a host that starts it, such as lf: the identity judge's rules and
+// for a host that starts it, such as listen-fire: the identity judge's rules and
 // prompts, with its one model call made through the host's models door
 // (LF_HOST_URL), so it runs on whatever fills the host's models slot — Claude,
 // or Gemini through @lf/models — and needs no key of its own. What the door

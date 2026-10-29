@@ -1,5 +1,5 @@
 // What one segment may consume, as a deployment sets it
-// (docs/contracts/run-limits.md). The same settings lf reads: the engine's
+// (docs/contracts/run-limits.md). The same settings listen-fire reads: the engine's
 // limits ride the segment's input; the wall clock is this host's, kept by the
 // shim that drives the segment (rust_engine.ts `driveEngine`).
 //

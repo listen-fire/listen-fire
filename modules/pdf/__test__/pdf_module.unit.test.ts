@@ -1,5 +1,5 @@
 // `@lf/pdf` as a module: its manifest, an invocation in process, and the same
-// module served as a process over the protocol (the way lf runs it).
+// module served as a process over the protocol (the way listen-fire runs it).
 
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';

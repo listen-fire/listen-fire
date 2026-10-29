@@ -1,4 +1,4 @@
-// The `field` and `becomes` gates against the table of cases lf's Rust is held
+// The `field` and `becomes` gates against the table of cases listen-fire's Rust is held
 // to as well (packages/engine-contracts/conformance/listen-field-change.json).
 
 import { readFileSync } from 'node:fs';

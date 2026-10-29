@@ -5,7 +5,7 @@
 // the host redeems it by `objectUri` (`redeemFileRef`).
 //
 // The store is a host family: every shell has a backend. The hosted product's
-// is object storage behind its API's blob route; `lf`'s is the project's
+// is object storage behind its API's blob route; `listen-fire`'s is the project's
 // `.lf/files/` folder.
 
 import type { Readable } from 'node:stream';

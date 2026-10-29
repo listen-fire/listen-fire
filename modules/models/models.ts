@@ -35,7 +35,7 @@ function chatModelOf(name: string): ChatModelName | undefined {
  *  vendor does not serve Claude under its own names. */
 const DEFAULT_MODEL: Record<'gemini' | 'openai', string> = { gemini: 'gemini-3.8-flash', openai: 'gpt-5-mini' };
 
-/** The answer's output ceiling when the request names none: lf's built-in
+/** The answer's output ceiling when the request names none: listen-fire's built-in
  *  module's flat ceiling, so moving a project to this module changes no call's room. */
 const DEFAULT_MAX_TOKENS = 32_000;
 
@@ -56,7 +56,7 @@ function isProvider(value: string): value is Provider {
   return providers.some((provider) => provider === value);
 }
 
-const missing = (name: string, why: string) => new SlotRefusal('missing_setting', `models has no \`${name}\` setting (${why}): run \`lf connect models\``);
+const missing = (name: string, why: string) => new SlotRefusal('missing_setting', `models has no \`${name}\` setting (${why}): run \`listen-fire connect models\``);
 
 function accessOf(vendor: Provider, settings: Record<string, unknown>): VendorAccess {
   const baseUrl = text(settings, 'base_url');
@@ -226,7 +226,7 @@ function priced(spent: readonly LlmUsage[]): Pick<ModelsCallAnswerShape, 'cost' 
   return { cost, usage };
 }
 
-/** The slot's answers, reading the install once per distinct settings (lf
+/** The slot's answers, reading the install once per distinct settings (listen-fire
  *  carries them on every request). The vendor's client is built at the first
  *  call: publishing prices reaches no vendor. */
 export function modelsAnswer(): SlotAnswer {

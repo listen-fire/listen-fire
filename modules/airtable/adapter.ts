@@ -901,7 +901,7 @@ export class AirtableAdapter extends BaseAdapter {
    * Extend a registered webhook's 7-day expiry. Airtable disables inactive
    * webhooks after 7 days; an inbound delivery (which pulls payloads) already
    * extends the window, so only quiet webhooks need this — driven by the
-   * platform's airtable_webhook_refresh worker, and by `lf` before the
+   * platform's airtable_webhook_refresh worker, and by `listen-fire` before the
    * `expiresAt` the registration returned (adapter protocol 2.4). Answers
    * when it now expires.
    */

@@ -1,6 +1,6 @@
 # Contributing to Listen-Fire (the language)
 
-This is the language repository: the Rust crates, the `lf` command, the engine package, the modules and the documentation site. The hosted platform is `lf-platform`, a separate repository in the same GitHub organisation, which installs this repository's published packages. This repository serves the language of its own release.
+This is the language repository: the Rust crates, the `listen-fire` command, the engine package, the modules and the documentation site. The hosted platform is `lf-platform`, a separate repository in the same GitHub organisation, which installs this repository's published packages. This repository serves the language of its own release.
 
 ## Setting up
 
@@ -52,7 +52,7 @@ test(engine): the seam guard's engine cases live with the engine
 
 Write the subject as a fact about the resulting code, not as an instruction. Comments in the code explain *why*, never *what*.
 
-A pull request that changes what an author writes, or what an `lf` user sees, adds a line under Unreleased in [`CHANGELOG.md`](CHANGELOG.md), in the same pull request. This repository's Unreleased section takes only its own entries.
+A pull request that changes what an author writes, or what a `listen-fire` user sees, adds a line under Unreleased in [`CHANGELOG.md`](CHANGELOG.md), in the same pull request. This repository's Unreleased section takes only its own entries.
 
 ## Claude Code
 

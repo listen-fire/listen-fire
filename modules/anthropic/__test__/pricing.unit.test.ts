@@ -1,5 +1,5 @@
 // What a call costs under the price table, case by case from the fixture the
-// Rust lf's pricing test reads too (crates/lf/src/models.rs): the two bill a
+// Rust listen-fire's pricing test reads too (crates/lf/src/models.rs): the two bill a
 // call to the same microdollar.
 
 import { readFileSync } from 'node:fs';

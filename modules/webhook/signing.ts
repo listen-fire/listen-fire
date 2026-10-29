@@ -44,7 +44,7 @@ export function signingOf(name: string, fields: Readonly<Record<string, string |
   const scheme = (fields['scheme'] ?? '').trim();
   if (!isScheme(scheme)) {
     const wrote = scheme === '' ? 'names no scheme' : `names the scheme "${scheme}"`;
-    throw new Error(`the webhook credential ${name} ${wrote}: it is one of ${SCHEMES.join(', ')} (lf credential add --module webhook ${name})`);
+    throw new Error(`the webhook credential ${name} ${wrote}: it is one of ${SCHEMES.join(', ')} (listen-fire credential add --module webhook ${name})`);
   }
   const secret = (fields['secret'] ?? '').trim();
   const needsSecret = () => {

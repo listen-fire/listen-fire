@@ -1,5 +1,5 @@
 // The secrets family's contract suite: one set of cases every store passes
-// (the in-memory vault, the platform's encrypted credentials table, lf's
+// (the in-memory vault, the platform's encrypted credentials table, listen-fire's
 // plain and SOPS files and the environment). Each case drives the store only
 // through `createSecretsFamily`, as every shell does.
 //

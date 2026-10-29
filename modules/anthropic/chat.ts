@@ -6,7 +6,7 @@
 // wander onto an endpoint (batches, files) that only one vendor has.
 //
 // Which provider answers a name is the shell's to decide (the hosted product
-// routes by its MODEL_MAP and environment; `lf` by its secrets file), so the
+// routes by its MODEL_MAP and environment; `listen-fire` by its secrets file), so the
 // shared client is handed a `ChatCallFor` rather than reading either.
 
 import type Anthropic from '@anthropic-ai/sdk';

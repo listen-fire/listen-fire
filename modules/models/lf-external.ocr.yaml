@@ -1,6 +1,6 @@
-# The OCR install entry for lf: put this file in <project>/externals/models_ocr/
+# The OCR install entry for listen-fire: put this file in <project>/externals/models_ocr/
 # as lf-external.yaml (with the package installed there), run
-# `lf connect models_ocr`, and name it in lf.yaml:
+# `listen-fire connect models_ocr`, and name it in lf.yaml:
 #   core:
 #     ocr: models_ocr
 # It reads files on Gemini only; its settings are the models install's.

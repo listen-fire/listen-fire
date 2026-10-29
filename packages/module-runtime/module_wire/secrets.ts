@@ -2,7 +2,7 @@
 // (`SecretsBackend`, secrets/family.ts): how the family's contract cases
 // (movement-engine services/secrets/contract.ts) hold any module of the
 // secrets slot to the meaning every store has, whether the module is served
-// by lf (`lf --contract-secrets-slot`) or is a third party's.
+// by listen-fire (`listen-fire --contract-secrets-slot`) or is a third party's.
 
 import { SecretsLockAnswer, SecretsWriteBackAnswer, SecretsRecord } from 'engine-contracts/slots';
 

@@ -18,7 +18,7 @@ export interface RunScopes {
   open(): number;
 }
 
-// The ids hosts send on a call that belongs to no run: lf's and the engine's
+// The ids hosts send on a call that belongs to no run: listen-fire's and the engine's
 // own reads (a manifest, an inbound check) and a slot's calls. One scope for
 // either would be shared by every run the process ever serves, so a call
 // under one is answered outside any run, as it is in process.

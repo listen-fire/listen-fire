@@ -1,8 +1,8 @@
 // A loop guard a loop guard module serves: the slot's methods
 // (docs/contracts/loop-guard-slot.md) carried as adapter protocol 2 calls
 // over HTTP (a Unix socket on this box). How the contract suite
-// (contract.ts) holds lf's guard (`lf --contract-guard`), and a guard module
-// lf drives, to the meaning every guard has.
+// (contract.ts) holds listen-fire's guard (`listen-fire --contract-guard`), and a guard module
+// listen-fire drives, to the meaning every guard has.
 
 import { z } from 'zod';
 import { SlotClient, startModule, type SlotAddress } from 'module-runtime/module_wire/wire';

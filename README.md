@@ -24,7 +24,7 @@ flowchart LR
 
 ## Fastest path to a first run
 
-Install the `lf` command (macOS or Linux; it verifies the download and keeps the binary and its modules together):
+Install the `listen-fire` command (macOS or Linux; it verifies the download and keeps the binary and its modules together):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/listen-fire/listen-fire/main/scripts/install.sh | sh
@@ -35,20 +35,20 @@ The archives it installs are on the [releases page](https://github.com/listen-fi
 Then:
 
 ```sh
-lf init my-project && cd my-project
-lf check
-lf run hello
+listen-fire init my-project && cd my-project
+listen-fire check
+listen-fire run hello
 ```
 
 ```
-$ lf run hello
+$ listen-fire run hello
 run efde8ee1-… hello:hello completed — 0 write(s), 0 trace entries
   returned "Hello, <username>!"
 ```
 
-`lf init` writes a project folder: `lf.yaml`, a starter program in `movements/hello.mvt`, and `.lf/` for run state and secrets. The starter listens to `manual`, a built-in source that fires when you run it by hand, so it needs no account and no key. `lf runs` lists every run and `lf runs show <run-id>` opens one.
+`listen-fire init` writes a project folder: `lf.yaml`, a starter program in `movements/hello.mvt`, and `.lf/` for run state and secrets. The starter listens to `manual`, a built-in source that fires when you run it by hand, so it needs no account and no key. `listen-fire runs` lists every run and `listen-fire runs show <run-id>` opens one.
 
-[Getting started with `lf`](docs/getting-started-lf.md) goes on to connect a system (`lf connect @lf/attio`), add a credential, route a recorded event through your programs (`lf run --event …`) and serve webhooks (`lf serve`).
+[Getting started with `listen-fire`](docs/getting-started-lf.md) goes on to connect a system (`listen-fire connect @lf/attio`), add a credential, route a recorded event through your programs (`listen-fire run --event …`) and serve webhooks (`listen-fire serve`).
 
 **What it connects to:** Slack, email and Gmail, WhatsApp, Telegram, Attio, Affinity, Airtable, Google Sheets, Google Drive, Dropbox, Granola meeting notes, a schedule, and your own system through a module ([connect anything](#connect-anything)).
 
@@ -87,9 +87,9 @@ The fund's programs do what the example above does, and then what the language i
 
 ## Deploy options
 
-**One binary.** `lf serve` receives webhooks and callbacks, fires scheduled programs, polls systems that have no webhooks, and runs due work. Run state lives in SQLite under `.lf/`. This is enough for one machine. See [Getting started, section 6](docs/getting-started-lf.md#6-serve).
+**One binary.** `listen-fire serve` receives webhooks and callbacks, fires scheduled programs, polls systems that have no webhooks, and runs due work. Run state lives in SQLite under `.lf/`. This is enough for one machine. See [Getting started, section 6](docs/getting-started-lf.md#6-serve).
 
-**Cloud, scaling from zero.** The same binary splits into two commands. `lf serve --doors-only` answers webhooks and callbacks by queuing them (so it suits compute billed by the request), and `lf drain --until-idle --max-seconds N` is a worker that claims queued work, runs it, and exits when nothing is due. State lives in Postgres, containers keep none, and any number of workers can drain at once. [`deploy/lf`](deploy/lf) holds the image and [its guide](deploy/lf/README.md) describes the platform shape: a service, a scheduled or queue-triggered job, and an optional wake module that starts a worker the moment work is due. A local trial runs under Docker Compose.
+**Cloud, scaling from zero.** The same binary splits into two commands. `listen-fire serve --doors-only` answers webhooks and callbacks by queuing them (so it suits compute billed by the request), and `listen-fire drain --until-idle --max-seconds N` is a worker that claims queued work, runs it, and exits when nothing is due. State lives in Postgres, containers keep none, and any number of workers can drain at once. [`deploy/lf`](deploy/lf) holds the image and [its guide](deploy/lf/README.md) describes the platform shape: a service, a scheduled or queue-triggered job, and an optional wake module that starts a worker the moment work is due. A local trial runs under Docker Compose.
 
 **Inside your product.** The engine runs in your own Node process as WebAssembly, with your product defined as one more system a program can read and write, each customer as a tenant, and every outside call answered by a host you build. [`docs/embedding.md`](docs/embedding.md) is the guide and [`examples/embed-saas`](examples/embed-saas) is a small HTTP app with an end-to-end test. The engine is a Rust crate too: [`examples/rust-embed`](examples/rust-embed) runs programs from a Rust host with its own tests.
 
@@ -99,18 +99,18 @@ The fund's programs do what the example above does, and then what the language i
 
 The handbook is the interface an agent uses. It ships in this repository as data ([`packages/handbook`](packages/handbook)): a [front page](packages/handbook/front_page.ts) that names where the language differs from TypeScript and the few ideas it adds, chapters addressed by anchor, and a keyword search over built-ins, recipes and system behaviour. Every example on the front page is checked by the engine in the handbook's tests, so it cannot teach something that does not compile. The same content is published at [listen-fire.github.io/listen-fire/docs/next](https://listen-fire.github.io/listen-fire/docs/next/).
 
-An agent's loop with `lf`:
+An agent's loop with `listen-fire`:
 
 1. Read the handbook's front page, then look up what the program needs.
 2. Write the `.mvt` file into `movements/`.
-3. `lf check`: every diagnostic names the rule it broke, with the file and line.
-4. `lf run --event <recorded-event.json>`, or `--dry-run`, to see what the program would do; `lf runs show <run-id>` to read the trace.
+3. `listen-fire check`: every diagnostic names the rule it broke, with the file and line.
+4. `listen-fire run --event <recorded-event.json>`, or `--dry-run`, to see what the program would do; `listen-fire runs show <run-id>` to read the trace.
 
-The hosted platform exposes the same handbook, the search, and save, run and inspect to agents over MCP (the Model Context Protocol), so an agent in a chat can author and run a program without a terminal. For editors, `lf lsp` is a language server over stdio; [`docs/editor-zed.md`](docs/editor-zed.md) wires it into Zed.
+The hosted platform exposes the same handbook, the search, and save, run and inspect to agents over MCP (the Model Context Protocol), so an agent in a chat can author and run a program without a terminal. For editors, `listen-fire lsp` is a language server over stdio; [`docs/editor-zed.md`](docs/editor-zed.md) wires it into Zed.
 
 ## Connect anything
 
-The engine knows no system. Everything a program touches is a module: a separate program that presents one system as records joined by links, and that handles its sign-in, rate limits and paging. A project installs the modules it needs (`lf connect @lf/attio`), and a program imports only what is installed. Two sources are built in and need nothing: `manual`, a run you start by hand, and `cron`, a schedule.
+The engine knows no system. Everything a program touches is a module: a separate program that presents one system as records joined by links, and that handles its sign-in, rate limits and paging. A project installs the modules it needs (`listen-fire connect @lf/attio`), and a program imports only what is installed. Two sources are built in and need nothing: `manual`, a run you start by hand, and `cron`, a schedule.
 
 The ready-made modules in this repository today, each a starting point rather than a fixture of the language:
 
@@ -137,15 +137,15 @@ The same holds for everything else the engine needs. Where runs are stored, whic
 
 ## Repository layout
 
-This repository is the language: the parser, checker and engine (Rust, compiled to WebAssembly), the `lf` command, the modules that connect systems, and the embedding kit. It serves the language of its own release; upgrading an older program is the platform's.
+This repository is the language: the parser, checker and engine (Rust, compiled to WebAssembly), the `listen-fire` command, the modules that connect systems, and the embedding kit. It serves the language of its own release; upgrading an older program is the platform's.
 
-- [`crates/`](crates): the Rust crates: parser, checker, engine, language service, module wire and kit, and the `lf` command (`crates/lf`).
+- [`crates/`](crates): the Rust crates: parser, checker, engine, language service, module wire and kit, and the `listen-fire` command (`crates/lf`).
 - [`packages/movement-lang`](packages/movement-lang): the wasm artifacts, their bindings, the version table, the expression AST and the catalog types.
 - [`packages/movement-engine`](packages/movement-engine) (`@listen-fire/engine`): the host contract, the Rust shim and the embed kit. [`packages/engine-contracts`](packages/engine-contracts), [`packages/module-kit`](packages/module-kit) and [`packages/module-runtime`](packages/module-runtime): the contracts and kits modules are written against.
 - [`packages/handbook`](packages/handbook): the language handbook.
 - [`modules/`](modules): the modules that connect systems.
-- [`apps/cli`](apps/cli): the `lf` command's TypeScript tests and fixtures.
-- [`examples/`](examples): runnable projects: an `lf` project, the Attio walkthrough, a custom plugin, the embedded engine in Node and in Rust, and a module served from Rust.
+- [`apps/cli`](apps/cli): the `listen-fire` command's TypeScript tests and fixtures.
+- [`examples/`](examples): runnable projects: a `listen-fire` project, the Attio walkthrough, a custom plugin, the embedded engine in Node and in Rust, and a module served from Rust.
 - [`docs/`](docs/README.md): the guides and the versioned contracts. [`docs/positioning/`](docs/positioning): the hero variants for positioning tests.
 
 ## Developing

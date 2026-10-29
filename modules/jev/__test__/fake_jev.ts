@@ -1,4 +1,4 @@
-// A fake Jev for the module's tests and lf's: the wire shapes are the
+// A fake Jev for the module's tests and listen-fire's: the wire shapes are the
 // platform's client's (lf-platform apps/api/src/lib/jev/client.ts), served on
 // a loopback port under `/v1/systemone`.
 //

@@ -7,7 +7,7 @@
 //
 // Which bot speaks for an install is the host's call, made in the credential
 // it hands over: the platform fills a team's empty credential with its shared
-// bot's token; lf hands the user's own.
+// bot's token; listen-fire hands the user's own.
 
 import { z } from 'zod';
 

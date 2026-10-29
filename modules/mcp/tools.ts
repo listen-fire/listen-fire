@@ -62,7 +62,7 @@ export function descriptorOf(tool: McpTool): SchemaTypeDescriptor {
     ...p.shape,
     writable: writes,
     required: writes && p.required,
-    // A read's required argument comes from the hop's WHERE: `lf check`
+    // A read's required argument comes from the hop's WHERE: `listen-fire check`
     // refuses a read that does not pin it there.
     ...(!writes && p.required ? { pinned: true } : {}),
     ...(p.description !== undefined ? { description: p.description } : {}),
@@ -160,7 +160,7 @@ export function argumentsOf(where: Expression | undefined): Record<string, unkno
   return args;
 }
 
-/** The required arguments a read left unpinned, refused by name. `lf check`
+/** The required arguments a read left unpinned, refused by name. `listen-fire check`
  *  already refuses a read that does not pin one (they are `pinned`); this
  *  catches what it cannot see, such as a value in scope that is empty at
  *  run time, which the engine does not write into the WHERE it sends. */

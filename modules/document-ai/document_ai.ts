@@ -31,7 +31,7 @@ function text(settings: Record<string, unknown>, name: string): string | undefin
 
 function required(settings: Record<string, unknown>, name: string, why: string): string {
   const value = text(settings, name);
-  if (value === undefined) throw new SlotRefusal('missing_setting', `document_ai has no \`${name}\` setting (${why}): run \`lf connect document_ai\``);
+  if (value === undefined) throw new SlotRefusal('missing_setting', `document_ai has no \`${name}\` setting (${why}): run \`listen-fire connect document_ai\``);
   return value;
 }
 
@@ -87,7 +87,7 @@ export async function readFile(install: DocumentAiInstall, bytes: Buffer, conten
   return { text: read.text ?? '', pages: read.pages, cost: [{ label: 'document-ai/ocr', microdollars }] };
 }
 
-/** The slot's answers, reading the install once per distinct settings (lf
+/** The slot's answers, reading the install once per distinct settings (listen-fire
  *  carries them on every request). */
 export function documentAiAnswer(): SlotAnswer {
   const installs = new Map<string, DocumentAiInstall>();

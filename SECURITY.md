@@ -34,6 +34,6 @@ We will credit you in the release notes for the fix unless you ask us not to. Th
 
 ## Scope
 
-In scope: the code in this repository and the `lf` container image built from `deploy/lf/`. The hosted platform, its images and its deployment guidance are `lf-platform`'s.
+In scope: the code in this repository and the `listen-fire` container image built from `deploy/lf/`. The hosted platform, its images and its deployment guidance are `lf-platform`'s.
 
 Out of scope: vulnerabilities in third-party services Listen-Fire connects to (report those to the service), and findings against an installation you do not operate and are not authorised to test.

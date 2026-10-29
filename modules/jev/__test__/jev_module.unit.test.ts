@@ -123,7 +123,7 @@ describe('@lf/jev', () => {
     );
     expect(fake.requests).toHaveLength(1);
     await expect(call('score', { subject: 'a', question: 'b' }, { baseUrl: fake.url })).rejects.toThrow(
-      '@lf/jev has no API key: add a credential with `lf credential add --module @lf/jev <name>`',
+      '@lf/jev has no API key: add a credential with `listen-fire credential add --module @lf/jev <name>`',
     );
     expect(fake.requests).toHaveLength(1);
   });

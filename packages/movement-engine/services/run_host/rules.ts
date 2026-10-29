@@ -1,7 +1,7 @@
 // The run host's rules, written once over the backend families (store.ts):
 // what a park writes and in which order, when a run counts as complete, how a
 // run that failed or was cancelled is torn down, and how a race's losing
-// subtrees are withdrawn. The hosted product and `lf` both run these; neither
+// subtrees are withdrawn. The hosted product and `listen-fire` both run these; neither
 // keeps a copy.
 
 import { createHash, randomUUID } from 'node:crypto';

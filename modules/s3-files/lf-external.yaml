@@ -1,5 +1,5 @@
-# The install entry for lf: put this file in <project>/externals/s3_files/
-# (with the package installed there), run `lf connect s3_files`, and name it
+# The install entry for listen-fire: put this file in <project>/externals/s3_files/
+# (with the package installed there), run `listen-fire connect s3_files`, and name it
 # in lf.yaml:
 #   core:
 #     files: s3_files

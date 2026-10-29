@@ -3,7 +3,7 @@
 // carried as adapter protocol 2 calls over HTTP (a Unix socket on this box).
 // It is how the contract suite (contract.ts), written once in TypeScript,
 // holds a backend in another language to the same meaning —
-// `lf --contract-store <state.db>` (crates/lf) first.
+// `listen-fire --contract-store <state.db>` (crates/lf) first.
 //
 // A method is `<family>.<method>` as `RunHostStore` names it, its params the
 // method's one input object, its result the method's answer; the callback
@@ -51,7 +51,7 @@ const Claim: z.ZodType<CallbackClaim> = z.discriminatedUnion('kind', [
 
 // ── Delivery receipts (`inbound.*`) ─────────────────────────────────────────
 // What a door keeps of one delivery: the events it produced, in the door's one
-// write. Only lf's doors call these, so they live on this client rather than
+// write. Only listen-fire's doors call these, so they live on this client rather than
 // on `RunHostStore`.
 
 export const DELIVERY_SOURCES = ['webhook', 'hook', 'emit', 'cli'] as const;

@@ -10,7 +10,7 @@
 // of that listen's own write (`isEcho`). Everything else is the guard's: how
 // long it remembers, what "unchanged" means, where its memory lives. The
 // contract is docs/contracts/loop-guard-slot.md; the built-in,
-// `@lf/fingerprint-guard`, is `FingerprintGuard` here and in lf
+// `@lf/fingerprint-guard`, is `FingerprintGuard` here and in listen-fire
 // (crates/lf/src/loop_guard.rs).
 
 import { createHash } from 'node:crypto';

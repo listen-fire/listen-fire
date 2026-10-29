@@ -2,8 +2,8 @@
 // (store.ts): how a callback is minted for the engine, how a call is
 // validated and recorded, how its body runs (once, under the run's lease),
 // and how an `await cb-[:Called]->` learns that a call landed. The hosted
-// product's Postgres backend and `lf`'s SQLite one serve the family; a door
-// (`/api/cb/<id>`, `lf call`) and the work drain call these rules.
+// product's Postgres backend and `listen-fire`'s SQLite one serve the family; a door
+// (`/api/cb/<id>`, `listen-fire call`) and the work drain call these rules.
 //
 // A call's life: the door records it (validated first, so a bad payload never
 // consumes a single-use callback), which queues its body as work in the same

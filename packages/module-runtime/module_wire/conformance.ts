@@ -2,7 +2,7 @@
 // (models, judge, files, wake, ocr), the movements slot's, and the secrets slot's own cases beside
 // the family's (`services/secrets/contract.ts`), and the cases every slot module answers alike (its
 // manifest, the envelope's refusals). Each runs against any server over the
-// wire: written once here, they hold lf's built-ins (`lf --contract-<slot>`)
+// wire: written once here, they hold listen-fire's built-ins (`listen-fire --contract-<slot>`)
 // and a third-party module in any language to the same meaning. The store,
 // limiter and loop guard are held to their families' contract cases
 // (`services/run_host/contract.ts`, `limiter/contract.ts`,
@@ -473,7 +473,7 @@ export const secretsSlotCases: SlotConformanceCase[] = [
   },
 ];
 
-/** What a module that keeps its credentials where lf cannot change them
+/** What a module that keeps its credentials where listen-fire cannot change them
  *  answers: `client` reaches one. Entries are refused by name with a reason;
  *  everything a refresh needs still works. */
 export const secretsReadOnlySlotCases: SlotConformanceCase[] = [
@@ -760,7 +760,7 @@ export const movementsWatchCapCase: SlotConformanceCase = {
   },
 };
 
-/** What a module that keeps the project's movements where lf cannot change
+/** What a module that keeps the project's movements where listen-fire cannot change
  *  them answers: `client` reaches one. A write is refused by name with a
  *  reason; listing and reading still work. */
 export const movementsReadOnlySlotCases: SlotConformanceCase[] = [

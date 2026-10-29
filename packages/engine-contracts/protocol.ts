@@ -100,7 +100,7 @@ export interface ProtocolSpeaker {
 }
 
 /** Whether a host speaking 2.0 to 2.`PROTOCOL_MINOR` reads a module whose
- *  manifest is `raw`, and if not, why in words naming both sides. lf's twin
+ *  manifest is `raw`, and if not, why in words naming both sides. listen-fire's twin
  *  is `protocol::protocol_standing` (crates/lf), in the same words. */
 export function protocolStanding(raw: unknown, speaker: ProtocolSpeaker): { ok: true } | { ok: false; message: string } {
   const field = (key: string) => (raw !== null && typeof raw === 'object' ? Reflect.get(raw, key) : undefined);
@@ -859,7 +859,7 @@ const HEADER_NAME = /^[a-z0-9-]+$/;
 const WireProviderKey = z.string().regex(/^[a-z][a-z0-9_-]*$/, 'providerKey must be ASCII lower case');
 
 /** Who sets the secret deliveries are signed with. `installer` (the
- *  default): whoever installs the module sets it (`lf connect` generates or
+ *  default): whoever installs the module sets it (`listen-fire connect` generates or
  *  asks for it). `provider`: the provider issues it when the webhook is
  *  registered (`ensureEventSubscription` returns it), so nobody is asked,
  *  and a registration that returns none is refused. */
@@ -977,17 +977,17 @@ export type WireModuleKindShape = z.infer<typeof WireModuleKind>;
  *  and `wake`, which stays empty unless named (nobody is told work is due;
  *  a scheduled worker finds it), and `ocr`, which stays empty unless named
  *  (a scanned file is refused, saying the slot is empty). `secrets` is
- *  where credentials are kept (`lf`'s default: its secrets file); a secrets
+ *  where credentials are kept (`listen-fire`'s default: its secrets file); a secrets
  *  module's own settings come from the environment or that file, never
  *  from itself. `movements` answers the project's movement files by name
- *  (`lf`'s default: the movements folder); its module's own settings come
+ *  (`listen-fire`'s default: the movements folder); its module's own settings come
  *  from the same two places. */
 export const CORE_SLOTS = ['models', 'judge', 'store', 'files', 'limiter', 'loopGuard', 'browser', 'wake', 'ocr', 'secrets', 'movements'] as const;
 export const WireCoreSlot = z.enum(CORE_SLOTS);
 export type WireCoreSlotShape = z.infer<typeof WireCoreSlot>;
 
 /** One construction argument the install supplies (an Airtable `base`, a
- *  Sheets `spreadsheet`): asked for when the module is set up (`lf connect`,
+ *  Sheets `spreadsheet`): asked for when the module is set up (`listen-fire connect`,
  *  the platform's install screen) and sent on every request (`settings`). */
 export const WireModuleSetting = z.object({
   name: declaredName('a setting name'),
@@ -1538,7 +1538,7 @@ export const METHODS = {
   // One solicited pull of a polled source: `config` is the listen's options,
   // `checkpoint` whatever the previous poll returned (absent the first time),
   // `movementId` the automation the listen belongs to where the host knows it
-  // (`lf` sends the listen's pipeline, `listen:<file>:<movement>`).
+  // (`listen-fire` sends the listen's pipeline, `listen:<file>:<movement>`).
   poll: {
     params: z.object({ config: z.unknown(), checkpoint: z.unknown().optional(), movementId: z.string().optional() }),
     result: z.object({

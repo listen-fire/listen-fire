@@ -39,11 +39,11 @@ const company = (n: number) => ({
  *
  * - `run scope`: each adapter call inside its run's scope, so a record or
  *   search read once in a run is read once (the run memo). In process on the
- *   platform, and under `lf` since module-kit answers each served call inside
- *   the run scope its `cacheScopeId` names. Measured through `lf run` of
+ *   platform, and under `listen-fire` since module-kit answers each served call inside
+ *   the run scope its `cacheScopeId` names. Measured through `listen-fire run` of
  *   `Upsert Deal` (real_engine/): the requests match these rows call for call,
  *   less the two `Deal Created` reads the copy run there could not check.
- * - `no run scope`: a host that opens none, as `lf` was before that module-kit
+ * - `no run scope`: a host that opens none, as `listen-fire` was before that module-kit
  *   release, so every read goes to Affinity.
  */
 type Host = 'run scope' | 'no run scope';

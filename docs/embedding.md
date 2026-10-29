@@ -93,7 +93,7 @@ await host.tick();                                          // one outcome per p
 
 - **`connect(tenant, { name, module, credential })`.** `name` is what the customer's movement imports (`import { workspace } from credentials`). The credential is kept in the host's secrets, under an id only that tenant's runs may name; the module is loaded once per connection, its context built for you.
 - **`save(tenant, { name, source })`.** Checks the movement against the tenant's catalog and keeps it, pinned to this release (`ENGINE_VERSION`), with its listens read off the source.
-- **`dispatch(tenant, { adapterType, connection?, event })`.** Runs every listen of the tenant's saved movements that hears the event: a listen on that module, whose `events` (and Airtable's `table`) admit it. With `connection`, only the listens on that connection hear it, as lf and the hosted product route; without, it is the module's own event and every connection's listens hear it. `event` is your product's event (`{ payload, externalId, eventType, recordType, … }`).
+- **`dispatch(tenant, { adapterType, connection?, event })`.** Runs every listen of the tenant's saved movements that hears the event: a listen on that module, whose `events` (and Airtable's `table`) admit it. With `connection`, only the listens on that connection hear it, as listen-fire and the hosted product route; without, it is the module's own event and every connection's listens hear it. `event` is your product's event (`{ payload, externalId, eventType, recordType, … }`).
 - **`tick(now?)`.** Steps on every parked run whose timer is due. Call it from a scheduler.
 - **The catalog** is built per tenant from its connections, by asking each module its entry points and describing each one, and kept until the tenant's connections change. When a tenant's schema changes another way (a field added in your product), call `schemaChanged(tenant)`.
 - **An outcome** is `{ runId, tenant, program, movement, outcome }`: `outcome` is `{ ok: true, writes, spentMicrodollars, parked }` or `{ ok: false, error }`.
@@ -124,7 +124,7 @@ The embedded host is built from the engine's public parts, for a host that needs
 
 ## 4. The host's slots
 
-`lf.yaml`'s `core:` section has eight slots ([core slots](core-slots.md)): models, judge, store, files, limiter, loopGuard, browser and wake. An embedded engine has the first four; you fill each with your own part (`engine` on the embedded host, or `inProcessHost` directly). The rest belong to lf's run host.
+`lf.yaml`'s `core:` section has eight slots ([core slots](core-slots.md)): models, judge, store, files, limiter, loopGuard, browser and wake. An embedded engine has the first four; you fill each with your own part (`engine` on the embedded host, or `inProcessHost` directly). The rest belong to listen-fire's run host.
 
 | slot | what a run asks of it | how you fill it |
 |---|---|---|

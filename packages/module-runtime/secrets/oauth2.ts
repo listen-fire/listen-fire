@@ -30,7 +30,7 @@ export function oauth2Refresher(input: {
    *  default) or the form body. */
   clientAuth?: 'basic' | 'body';
   /** The host's app. Absent: the credential's own `client_id` and
-   *  `client_secret` fields, if it has them (lf's secrets file). */
+   *  `client_secret` fields, if it has them (listen-fire's secrets file). */
   client?: OAuth2ClientApp;
   fetch?: typeof fetch;
   now?: () => number;

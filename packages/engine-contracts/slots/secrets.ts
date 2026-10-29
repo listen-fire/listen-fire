@@ -1,8 +1,8 @@
-// The secrets slot's methods (docs/contracts/secrets-slot.md): where lf's
+// The secrets slot's methods (docs/contracts/secrets-slot.md): where listen-fire's
 // credentials are kept. A module resolves and lists what it holds, takes a
 // write-back by version, holds a credential under a lease while a refresh
-// spends its token, and changes whole entries for `lf connect` and
-// `lf credential`. Token refresh stays in lf; a module only stores.
+// spends its token, and changes whole entries for `listen-fire connect` and
+// `listen-fire credential`. Token refresh stays in listen-fire; a module only stores.
 
 import { z } from 'zod';
 
@@ -41,7 +41,7 @@ export const SecretsListed = z.object({ ref: z.string().min(1), external: z.stri
 export const SecretsLockAnswer = z.object({ token: z.string().min(1) }).nullable();
 
 /** What `secrets.assertWritable`, `create`, `replace` and `delete` answer
- *  besides null: the module keeps its credentials where lf cannot change them. */
+ *  besides null: the module keeps its credentials where listen-fire cannot change them. */
 export const SecretsReadOnlyAnswer = z.object({ kind: z.literal('read_only'), reason: z.string().min(1) });
 export const SecretsEntryAnswer = SecretsReadOnlyAnswer.nullable();
 

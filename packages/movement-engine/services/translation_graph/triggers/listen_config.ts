@@ -78,7 +78,7 @@ export function eventMatchesTriggerScope(event: DiscriminableEvent, config: unkn
 /**
  * Whether a delivery for `delivered` reaches a listen whose construction names
  * `listened` (the credential each names, by its imported name): the
- * platform's per-trigger credential narrowing, which lf keeps too
+ * platform's per-trigger credential narrowing, which listen-fire keeps too
  * (crates/lf/src/routing.rs, `Listen::hears`). A listen that names a
  * credential hears only that credential's deliveries; a listen that names
  * none hears every delivery, and a delivery that names none (addressed to the

@@ -23,7 +23,7 @@ export interface ConstructionArg {
   name: string;
   /**
    * `credential` = names an imported credential whose `adapter` is this adapter
-   * (required unless the adapter works without one: lf's email). `position` = an entry-position arg (e.g. Sheets'
+   * (required unless the adapter works without one: listen-fire's email). `position` = an entry-position arg (e.g. Sheets'
    * `spreadsheet`) that pins where the instance starts.
    */
   kind: 'credential' | 'position';

@@ -3,7 +3,7 @@
 // WhatsApp without loading the adapter.
 //
 // The number people message belongs to the deployment, so the host names it:
-// the platform quotes its shared number; a host with none (lf, where the
+// the platform quotes its shared number; a host with none (listen-fire, where the
 // number is the user's own) quotes no number.
 
 import type { AdapterManifest } from 'movement-engine/public/adapter';
@@ -27,7 +27,7 @@ export function whatsappManifest(movementsNumber: string | null): AdapterManifes
       `WhatsApp: message the number${movementsNumber ? ` (${movementsNumber})` : ''} and a movement ` +
       'runs on each message — text and media included (voice notes transcribe). ' +
       'Movements can reply (threaded), react with an emoji, and show the typing ' +
-      "indicator. Where the number is the project's own (lf), every message sent to it " +
+      "indicator. Where the number is the project's own (listen-fire), every message sent to it " +
       'reaches its movements; on the shared Listen-Fire number, the sender\'s phone ' +
       'must first be linked to their Listen-Fire account, or their messages are ignored.',
     supportedTriggers: ['webhook'],
@@ -47,7 +47,7 @@ export function whatsappManifest(movementsNumber: string | null): AdapterManifes
       `Fires when a WhatsApp message arrives at the number` +
       `${movementsNumber ? ` (${movementsNumber})` : ''} — each message (text and media; ` +
       `voice notes transcribe) is one event. Who reaches the movements depends on whose ` +
-      `number it is. Where the number is the project's own (lf), every message sent to it ` +
+      `number it is. Where the number is the project's own (listen-fire), every message sent to it ` +
       `reaches the listen, from any sender. On the shared Listen-Fire number, common to ` +
       `every Listen-Fire user, routing identifies the sender by their linked phone, so ONLY ` +
       `messages the user sends from their own linked number reach their movements; a ` +

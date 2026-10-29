@@ -1,6 +1,6 @@
 # @listen-fire/jev
 
-[Jev](https://typesafe.ai), Typesafe AI's non-generative judge, as two cheap classifier plugins (`@lf/jev`, bundled with `lf`). Jev answers a question with a probability instead of writing text: about half a second a call, at $0.042 per million input tokens.
+[Jev](https://typesafe.ai), Typesafe AI's non-generative judge, as two cheap classifier plugins (`@lf/jev`, bundled with `listen-fire`). Jev answers a question with a probability instead of writing text: about half a second a call, at $0.042 per million input tokens.
 
 ```
 import { `@lf/jev` as jev } from plugins
@@ -16,8 +16,8 @@ kind   = jev.classify({ subject: m.Subject, body: m.Body }, ["introduction", "sa
 ## Setting it up
 
 ```
-lf connect @lf/jev
-lf credential add --module @lf/jev typesafe   # the API key, and an address only for another Jev
+listen-fire connect @lf/jev
+listen-fire credential add --module @lf/jev typesafe   # the API key, and an address only for another Jev
 ```
 
 ## Cost, limits and failures

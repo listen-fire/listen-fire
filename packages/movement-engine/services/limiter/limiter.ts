@@ -9,7 +9,7 @@
 // again), so a limiter shared by many hosts is just another module filling
 // the slot. Every request carries the limits it is under, so no limiter reads
 // a manifest. The built-in, `@lf/memory-limiter`, keeps them in this process
-// (`MemoryLimiter`); lf's Rust one is the same (crates/lf/src/limiter.rs).
+// (`MemoryLimiter`); listen-fire's Rust one is the same (crates/lf/src/limiter.rs).
 
 import { randomUUID } from 'node:crypto';
 import type { WireDeclaredLimitShape, WireLimitScopeShape } from 'engine-contracts';

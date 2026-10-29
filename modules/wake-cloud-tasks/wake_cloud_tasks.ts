@@ -15,7 +15,7 @@ function badRequest(method: string, issues: ReadonlyArray<{ path: PropertyKey[];
   return new SlotRefusal('bad_request', `${method}: ${issues.map((issue) => `${issue.path.map(String).join('.') || 'request'}: ${issue.message}`).join('; ')}`);
 }
 
-/** The slot's answers, reading the install once per distinct settings (lf
+/** The slot's answers, reading the install once per distinct settings (listen-fire
  *  carries them on every request). */
 export function wakeCloudTasksAnswer(): SlotAnswer {
   const installs = new Map<string, CloudTasksWake>();
@@ -33,7 +33,7 @@ export function wakeCloudTasksAnswer(): SlotAnswer {
       await wake(wakeOf(settings));
       return null;
     } catch (error) {
-      if (error instanceof WakeSettingError) throw new SlotRefusal(error.code, `${error.message}: run \`lf connect wake_cloud_tasks\``);
+      if (error instanceof WakeSettingError) throw new SlotRefusal(error.code, `${error.message}: run \`listen-fire connect wake_cloud_tasks\``);
       if (error instanceof CloudTasksError) throw new SlotRefusal('module_error', error.message);
       throw error;
     }

@@ -14,7 +14,7 @@ It is the platform's own model layer, served as a module: the platform's model m
      models: models
    ```
 
-3. Run `lf connect models` to give it its settings. They go to the project's secrets file (or `LF_SECRET__MODELS__<SETTING>` in containers and CI), never into `lf.yaml`.
+3. Run `listen-fire connect models` to give it its settings. They go to the project's secrets file (or `LF_SECRET__MODELS__<SETTING>` in containers and CI), never into `lf.yaml`.
 
 ## Settings
 
@@ -40,18 +40,18 @@ So a Gemini install with `model_map: {"claude-opus-5": "gemini/gemini-3.1-pro-pr
 
 ## Prices
 
-- Every answer's `cost` is its tokens priced from the shared price table (`modules/anthropic/prices.json`) at the vendor model that answered, labelled `<vendor>/<model>` (`gemini/gemini-3.8-flash`). lf adds it to the run's spend, so `maxRunCostUsd` counts it.
-- The module publishes its prices (`models.prices`): every name a call may write, at the price of the vendor model it goes to. lf reads them to refuse, before calling, a call whose prompt alone costs more than the run has left.
+- Every answer's `cost` is its tokens priced from the shared price table (`modules/anthropic/prices.json`) at the vendor model that answered, labelled `<vendor>/<model>` (`gemini/gemini-3.8-flash`). listen-fire adds it to the run's spend, so `maxRunCostUsd` counts it.
+- The module publishes its prices (`models.prices`): every name a call may write, at the price of the vendor model it goes to. listen-fire reads them to refuse, before calling, a call whose prompt alone costs more than the run has left.
 - An install whose map names a model the table has no price for is refused at its first call, naming the model: an answer the module cannot price would count as free.
 
 ## Reading scanned files (the ocr slot)
 
 On Gemini, whose models read PDFs and images themselves, the package also fills the ocr slot: the text of a scanned PDF or an image, for `extract(…)` and for a plugin's `ctx.ocr`.
 
-- It is a second install entry, `models_ocr`: copy `lf-external.ocr.yaml` (shipped in the package) to `externals/models_ocr/lf-external.yaml`, name it (`core: { ocr: models_ocr }`) and run `lf connect models_ocr` with the same settings as `models`.
-- Why a second entry rather than one process in two slots: lf holds a module to one slot (its manifest names it; `lf connect` and the conformance kit check it), and that rule stays simple for every slot. The cost is connecting the settings twice.
+- It is a second install entry, `models_ocr`: copy `lf-external.ocr.yaml` (shipped in the package) to `externals/models_ocr/lf-external.yaml`, name it (`core: { ocr: models_ocr }`) and run `listen-fire connect models_ocr` with the same settings as `models`.
+- Why a second entry rather than one process in two slots: listen-fire holds a module to one slot (its manifest names it; `listen-fire connect` and the conformance kit check it), and that rule stays simple for every slot. The cost is connecting the settings twice.
 - A file goes to the model `sonnet` goes to, with an instruction to transcribe it page by page (each page begins with a `>>PAGE_START<<` line, as Document AI's reader marks it).
-- Each read is priced from the table like a call. It publishes a page's least cost (`ocr.prices`: Gemini's 258 tokens a page at the model's input price), so lf refuses up front a file the run cannot afford.
+- Each read is priced from the table like a call. It publishes a page's least cost (`ocr.prices`: Gemini's 258 tokens a page at the model's input price), so listen-fire refuses up front a file the run cannot afford.
 - A transcription cut short at the output ceiling is refused, never returned.
 - Other vendors are refused by name.
 
@@ -61,4 +61,4 @@ On Gemini, whose models read PDFs and images themselves, the package also fills 
 
 ## Tests
 
-`pnpm test` in this folder runs the models and ocr slots' conformance kits and the module's own cases against fake Gemini and OpenAI APIs, driven by the real vendor SDKs. No key reaches a vendor. `apps/cli/src/__test__/models.test.ts` runs it under the real `lf` against the fake Gemini: an `ai(…)` call completes and its price lands on the run.
+`pnpm test` in this folder runs the models and ocr slots' conformance kits and the module's own cases against fake Gemini and OpenAI APIs, driven by the real vendor SDKs. No key reaches a vendor. `apps/cli/src/__test__/models.test.ts` runs it under the real `listen-fire` against the fake Gemini: an `ai(…)` call completes and its price lands on the run.

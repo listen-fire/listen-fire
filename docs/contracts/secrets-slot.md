@@ -2,15 +2,15 @@
 
 Part of [the adapter protocol](adapter-protocol.md), version 2 (an addition within it; no version of its own).
 
-A secrets module is where lf's credentials are kept. lf asks it for what it holds, and:
+A secrets module is where listen-fire's credentials are kept. listen-fire asks it for what it holds, and:
 
 - reads a credential and writes a refreshed one back, by version
 - holds a credential under a lease while a refresh spends its token
-- changes whole entries for `lf connect`, `lf credential add|update|delete` and a webhook's registration
+- changes whole entries for `listen-fire connect`, `listen-fire credential add|update|delete` and a webhook's registration
 
 The default, `@lf/file-secrets`, is the secrets file (plain or SOPS) and its lock file, in process. A module of your own fills the slot when many workers share one vault: a token one worker refreshes is kept for all, and two workers refresh it once.
 
-**A module only stores.** Refreshing a token, signing in against a provider and every other decision stay in lf.
+**A module only stores.** Refreshing a token, signing in against a provider and every other decision stay in listen-fire.
 
 ## Installing one
 
@@ -21,7 +21,7 @@ name: acme_vault
 kind: core
 slot: secrets
 url: https://vault.example.com   # a remote module; or command: [node, vault.mjs], started in this folder
-settings:                        # what lf asks it with on every request
+settings:                        # what listen-fire asks it with on every request
   - { name: vault, label: the vault credentials are kept in }
 ```
 
@@ -29,11 +29,11 @@ settings:                        # what lf asks it with on every request
 
 ## Its own settings come from outside it
 
-A module cannot be asked for the settings it is asked with. They come from the environment (`LF_SECRET__ACME_VAULT__EXTERNAL=acme_vault` with `LF_SECRET__ACME_VAULT__VAULT=…`) or the project's secrets file, never from the module. `lf connect acme_vault` writes them to the secrets file.
+A module cannot be asked for the settings it is asked with. They come from the environment (`LF_SECRET__ACME_VAULT__EXTERNAL=acme_vault` with `LF_SECRET__ACME_VAULT__VAULT=…`) or the project's secrets file, never from the module. `listen-fire connect acme_vault` writes them to the secrets file.
 
 - A project naming a secrets module with settings neither source holds is refused as it loads: "the secrets module's own settings come from LF_SECRET__… or the secrets file, not from the module".
 - A module that declares no required setting has nothing to bootstrap, and is not refused.
-- `LF_SECRET__<CREDENTIAL>__<FIELD>` lies over what the module holds, field by field, whichever module it is. That overlay is lf's, not the module's.
+- `LF_SECRET__<CREDENTIAL>__<FIELD>` lies over what the module holds, field by field, whichever module it is. That overlay is listen-fire's, not the module's.
 
 ## The envelope
 
@@ -65,15 +65,15 @@ The store slot's envelope ([store-slot.md](store-slot.md#the-envelope)): adapter
 
 - **`version`** is opaque and changes whenever the stored fields change. `secrets.list` answers the same version `secrets.resolve` does for an entry.
 - **A write-back merges `fields` over the stored ones** and keeps the ones it does not name. It is compare-and-swap: if the stored version is not `expectedVersion` it changes nothing and answers `conflict` with the current record. A `ref` the module does not hold is `missing`.
-- **`not_persisted`** says the module took the write for this process only (an environment store); `why` names no value. lf warns once per credential and carries on.
+- **`not_persisted`** says the module took the write for this process only (an environment store); `why` names no value. listen-fire warns once per credential and carries on.
 - **No secret value in an error.** A refusal's message, a log line and anything else the module prints must not carry a field value.
 
 ### The lease
 
-A refresh spends a refresh token that rotates: two lf processes must not both do it. lf takes the credential's lease around a refresh, and around a whole-entry change.
+A refresh spends a refresh token that rotates: two listen-fire processes must not both do it. listen-fire takes the credential's lease around a refresh, and around a whole-entry change.
 
-- **`secrets.lock`** answers `{ token }` when `ref` is free, and `null` when a lease on it is held. lf asks again every 20 ms for up to 10 s, then fails the command, naming the credential.
-- **A lease lapses on its own** `ttlMs` after it was granted, so a holder that died frees it. lf asks for 30 s.
+- **`secrets.lock`** answers `{ token }` when `ref` is free, and `null` when a lease on it is held. listen-fire asks again every 20 ms for up to 10 s, then fails the command, naming the credential.
+- **A lease lapses on its own** `ttlMs` after it was granted, so a holder that died frees it. listen-fire asks for 30 s.
 - **`secrets.unlock`** with the lease's token frees it. A token that is not the lease's frees nothing, and answers `null`.
 - **A token is new each time.** A lease granted after an unlock or a lapse has a token of its own.
 - **A module that cannot hold a lease** (a store with a compare-and-swap of its own, that makes a concurrent refresh a conflict anyway) may grant every lock. The cost is a refresh token spent twice, and the second refresh is refused by the provider, so grant honestly where you can.
@@ -89,16 +89,16 @@ A refresh spends a refresh token that rotates: two lf processes must not both do
 
 ### Read-only
 
-A module whose credentials come from somewhere lf cannot write (a platform's credential store, a secret manager the deployment fills) answers the three entry methods and `secrets.assertWritable` with `{ kind: "read_only", reason }`, and keeps nothing.
+A module whose credentials come from somewhere listen-fire cannot write (a platform's credential store, a secret manager the deployment fills) answers the three entry methods and `secrets.assertWritable` with `{ kind: "read_only", reason }`, and keeps nothing.
 
-- lf then refuses by name, exit 2, writing nothing: `<module> holds its credentials read-only: <reason>. Add it where it lives.` A webhook's registration adds `Register the webhook where the credentials live.`
-- **`assertWritable` is lf's probe before a sign-in.** `lf credential add` and `update` ask it before sending a person through the provider, so a read-only module refuses before anything leaves the machine. It answers `null` when entries can be changed. The file module's answer is its permission check (SOPS runs).
+- listen-fire then refuses by name, exit 2, writing nothing: `<module> holds its credentials read-only: <reason>. Add it where it lives.` A webhook's registration adds `Register the webhook where the credentials live.`
+- **`assertWritable` is listen-fire's probe before a sign-in.** `listen-fire credential add` and `update` ask it before sending a person through the provider, so a read-only module refuses before anything leaves the machine. It answers `null` when entries can be changed. The file module's answer is its permission check (SOPS runs).
 - **Read-only is for whole entries.** A read-only module still lists, resolves, leases and takes a write-back: a refreshed token is kept.
 - A refusal that is not `read_only` (the module is down, the vault said no) fails the command with the message, exit 1.
 
 ## The redirect relay
 
-The provider's redirect URI is lf's, not the module's: signing in runs in lf whichever module stores the grant. Where the provider's registered callback is held by something in front of the fleet, `lf.yaml`'s `oauth: { redirectUri: https://… }` is what lf sends at authorize and at the token exchange, and the relay forwards the `code` and `state` query to `lf serve`'s `GET /oauth/callback`. A module sees only the entry written once the sign-in finishes.
+The provider's redirect URI is listen-fire's, not the module's: signing in runs in listen-fire whichever module stores the grant. Where the provider's registered callback is held by something in front of the fleet, `lf.yaml`'s `oauth: { redirectUri: https://… }` is what listen-fire sends at authorize and at the token exchange, and the relay forwards the `code` and `state` query to `listen-fire serve`'s `GET /oauth/callback`. A module sees only the entry written once the sign-in finishes.
 
 ## What a module must pass
 
@@ -129,8 +129,8 @@ await contractCase.run({
 ## Running the cases
 
 - **Against a module of your own**, with the three kits above, as `apps/cli/src/__test__/secrets_slot_contract.test.ts` does for the test vault (`secrets_module/serve.ts`): serve the module, make a `SlotClient` at its address with its settings, and run each case.
-- **Through lf's own client of it**: `lf --contract-secrets-slot --dir <project>` serves the project's secrets slot as a secrets module, every method passed on through lf's client of the module `core: { secrets: … }` names (or the file module, by default). The same cases then hold lf's side of the wire to the meaning they hold the module to. The module's settings come from the environment, as for any command; the runner answers a `secrets.lock` another holds with `null` after a short wait, as the wire says.
-- **`lf --contract-secrets <secrets file | env>`** is the family's bridge over stdio, for lf's own stores.
+- **Through listen-fire's own client of it**: `listen-fire --contract-secrets-slot --dir <project>` serves the project's secrets slot as a secrets module, every method passed on through listen-fire's client of the module `core: { secrets: … }` names (or the file module, by default). The same cases then hold listen-fire's side of the wire to the meaning they hold the module to. The module's settings come from the environment, as for any command; the runner answers a `secrets.lock` another holds with `null` after a short wait, as the wire says.
+- **`listen-fire --contract-secrets <secrets file | env>`** is the family's bridge over stdio, for listen-fire's own stores.
 
 ## Changes
 

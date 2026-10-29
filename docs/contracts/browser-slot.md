@@ -10,7 +10,7 @@ Some web reading needs a real browser: a deck behind a share link's email form, 
 |---|---|
 | the platform, `api` image (`ghcr.io/listen-fire/api`) | `@lf/chromium`: a headless Chromium launched through Playwright |
 | the platform, `api-slim` image | empty: the image carries no Chromium |
-| lf, `serve-module` | empty unless `core: { browser: <module> }` names a browser module (a process or a remote url): lf builds none in, and hands the named one's address to the modules it starts (`LF_BROWSER_URL`, `LF_BROWSER_TOKEN`), whose `serve-module` fills `ctx.browser` with a client of it |
+| listen-fire, `serve-module` | empty unless `core: { browser: <module> }` names a browser module (a process or a remote url): listen-fire builds none in, and hands the named one's address to the modules it starts (`LF_BROWSER_URL`, `LF_BROWSER_TOKEN`), whose `serve-module` fills `ctx.browser` with a client of it |
 | an embedder | whatever it lends a module it loads (`ModuleHost.browser`, `serveModule({ browser })`); empty when it lends none |
 
 An empty slot refuses every page, naming the slot and why it is empty, e.g. `the browser slot is empty: this is the api-slim image, which carries no Chromium; run the api image (ghcr.io/listen-fire/api, build target api-browser) to fill it`. A module can read why before asking (`ctx.browser.emptyBecause`), so a read that swallows its errors still refuses by name.
@@ -60,4 +60,4 @@ Over the wire, the same cases hold the scripted page served as a browser module,
 
 ## Changes
 
-- **2026-10-19** (within adapter protocol 2): a browser module over the wire (`browser.open`, `browser.page`, `browser.close`); lf fills the slot with one named in `core:` and hands it to the modules it starts.
+- **2026-10-19** (within adapter protocol 2): a browser module over the wire (`browser.open`, `browser.page`, `browser.close`); listen-fire fills the slot with one named in `core:` and hands it to the modules it starts.

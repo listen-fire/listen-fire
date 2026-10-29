@@ -2,7 +2,7 @@
 
 Part of [the adapter protocol](adapter-protocol.md), version 2 (an addition within it; no version of its own).
 
-A files module keeps the documents a host's runs make and read. lf ships `@lf/local-files` (the project's `.lf/files/`). Another (`@listen-fire/s3-files`: a bucket of AWS S3, Google Cloud Storage, R2 or MinIO) is a module lf starts, or reaches at its URL, over [the transport](adapter-protocol.md#transport), installed with `slot: files` and named in `core: { files: … }`.
+A files module keeps the documents a host's runs make and read. listen-fire ships `@lf/local-files` (the project's `.lf/files/`). Another (`@listen-fire/s3-files`: a bucket of AWS S3, Google Cloud Storage, R2 or MinIO) is a module listen-fire starts, or reaches at its URL, over [the transport](adapter-protocol.md#transport), installed with `slot: files` and named in `core: { files: … }`.
 
 ## Methods
 
@@ -31,7 +31,7 @@ type StoredFile = {
 
 ## Conformance
 
-`filesSlotCases` and `commonSlotCases('files', …)` (`@listen-fire/module-runtime/module-wire`, re-exported by `movement-engine/public/module-wire`); `apps/cli` runs them against `lf --contract-files`.
+`filesSlotCases` and `commonSlotCases('files', …)` (`@listen-fire/module-runtime/module-wire`, re-exported by `movement-engine/public/module-wire`); `apps/cli` runs them against `listen-fire --contract-files`.
 
 ## Changes
 

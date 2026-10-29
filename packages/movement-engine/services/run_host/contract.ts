@@ -1,9 +1,9 @@
 // The run host's contract suite: one set of cases, written against the backend
 // families (store.ts) and the core's rules over them, run against every
-// backend (the hosted Postgres one in lf-platform's apps/api integration set, `lf`'s
+// backend (the hosted Postgres one in lf-platform's apps/api integration set, `listen-fire`'s
 // SQLite one in apps/cli's tests). Ported from the hosted integration tests
 // (work store, join_pending, park sink, run lease, await correlation, the
-// resume drivers) and lf's state tests, keeping the cases about what the
+// resume drivers) and listen-fire's state tests, keeping the cases about what the
 // state MEANS rather than how one database stores it.
 //
 // Runner-agnostic: each case is a name and an async body that throws on
@@ -1021,7 +1021,7 @@ export const cancelContractCases: RecordsContractCase[] = [
 // cursor and its work rows in the door's one write (`inbound.keepDelivery`),
 // a redelivery under the provider's delivery id kept out by that write. Their
 // own list over their own backend: the TypeScript `RunHostStore` (store.ts)
-// has no inbound family, since only lf's doors call it.
+// has no inbound family, since only listen-fire's doors call it.
 
 export interface DeliveryContractBackend {
   /** The tenant every row of the case belongs to. */
@@ -1058,7 +1058,7 @@ function newDelivery(extra: Partial<NewDelivery> = {}): NewDelivery {
   };
 }
 
-/** One of the delivery's events queued for the drain, as lf's doors queue it. */
+/** One of the delivery's events queued for the drain, as listen-fire's doors queue it. */
 function fireRow(deliveryId: string, n: number): NewWorkRow {
   return { kind: 'fire_event', key: uniqueKey('fire_event'), payload: { external: 'crm', event: { n }, deliveryId }, dueAt: PAST(1), teamId: null };
 }
@@ -1213,10 +1213,10 @@ export const deliveryContractCases: DeliveryContractCase[] = [
 ];
 
 // ── Reruns ──────────────────────────────────────────────────────────────────
-// A failed run run again (`lf runs rerun`) is the same run's next attempt:
+// A failed run run again (`listen-fire runs rerun`) is the same run's next attempt:
 // one fenced write keeps the failed attempt beside the run and starts the
 // next with the input it is given. Their own list over their own backend:
-// the TypeScript `RunHostStore` has no run rows, since only lf's runs do.
+// the TypeScript `RunHostStore` has no run rows, since only listen-fire's runs do.
 
 export interface RerunContractBackend {
   startRun(input: { id: string; file: string; movement: string; startedAt: string; input: string }): Promise<void>;

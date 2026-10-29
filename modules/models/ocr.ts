@@ -4,8 +4,8 @@
 // answer is priced from the shared price table, as a model call is.
 //
 // Its own install entry (lf-external.ocr.yaml, `models_ocr`), not a second
-// slot on the models install: lf holds one module to one slot (a manifest
-// names its slot, `lf connect` and the conformance kit check it), so filling
+// slot on the models install: listen-fire holds one module to one slot (a manifest
+// names its slot, `listen-fire connect` and the conformance kit check it), so filling
 // two would change that rule for every slot; a second entry costs only its
 // settings, connected once more.
 

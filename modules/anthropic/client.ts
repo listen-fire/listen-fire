@@ -48,7 +48,7 @@ const SECOND = 1000;
 // The client reads no environment and bills nothing itself: which provider
 // (and key) answers a model name, and where a call's usage is recorded, are
 // the shell's — the hosted product routes by its MODEL_MAP and bills its
-// database, `lf` calls Anthropic on the key in its secrets file.
+// database, `listen-fire` calls Anthropic on the key in its secrets file.
 
 /** One live call's usage, as the shell's billing hook hears it. */
 interface LlmUsage {
@@ -76,14 +76,14 @@ function modelsCaller(provider: ChatProvider): Caller {
 }
 
 /** Requests in flight at once, per key: `@lf/anthropic`'s own declared limit,
- *  kept by the limiter slot (services/limiter), as lf's Rust client keeps it.
+ *  kept by the limiter slot (services/limiter), as listen-fire's Rust client keeps it.
  *  A request holds its place through its retries, but not through a vendor's
  *  rate limit: that is a throttle on the caller, waited out in the queue. */
 function modelsRequest(caller: Caller) {
   return limitRequest(caller, [{ scope: 'credential', concurrent: behaviour.concurrentRequests }]);
 }
 
-// behaviour.json, which the Rust lf's client is held to as well.
+// behaviour.json, which the Rust listen-fire's client is held to as well.
 const RETRY_LIMIT = behaviour.retry.attempts;
 const INITIAL_DELAY = behaviour.retry.initialDelayMs;
 const TIME_MULTIPLE = behaviour.retry.multiple;

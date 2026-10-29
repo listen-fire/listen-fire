@@ -1,9 +1,9 @@
-// The model replies the Rust lf's reader is held to. A reply the model
+// The model replies the Rust listen-fire's reader is held to. A reply the model
 // wrapped, truncated or got slightly wrong is read here by parseJsonReply
-// (over the npm jsonrepair); lf reads it in Rust (over its port of
+// (over the npm jsonrepair); listen-fire reads it in Rust (over its port of
 // jsonrepair). The fixture pairs each reply with this module's reading: this
 // test holds the fixture to the module, and a cargo test
-// (crates/lf/src/llm_calls.rs) holds lf to the fixture.
+// (crates/lf/src/llm_calls.rs) holds listen-fire to the fixture.
 //
 // Adding a case: append `{ "reply": "…" }` to the fixture and run this test
 // with LF_UPDATE_FIXTURES=1, which writes every case's reading.

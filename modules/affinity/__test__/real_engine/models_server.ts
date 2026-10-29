@@ -1,4 +1,4 @@
-// A models module for measuring a deal sync through `lf`: the Affinity
+// A models module for measuring a deal sync through `listen-fire`: the Affinity
 // matcher's model calls answered the way the unit fixture's `plainModels`
 // answers them — affixes come off nothing, a split is the last token, and
 // every judge declines — so a match is always a rule's.
@@ -12,7 +12,7 @@ void serveSlot({
     if (method !== 'models.call') throw new Error(`no method "${method}"`);
     const call = params as { label: string; userMessage: string; schema?: unknown };
     const usage = { usage: { inputTokens: 1, outputTokens: 1 }, cost: [{ label: 'plain_models', microdollars: 1 }] };
-    // lf asks for structured data in words and reads the reply's text as JSON.
+    // listen-fire asks for structured data in words and reads the reply's text as JSON.
     if (call.schema !== undefined || call.label === 'affinity.findMatchingPerson') {
       return { text: '{"id":null}', data: { id: null }, ...usage };
     }

@@ -1,5 +1,5 @@
 {
-  "about": "Whether an event clears a listen's `field` and `becomes` gates. `field` passes only an event whose `changedFields` names it; `becomes` (with `field`) passes only when the field's new value (`payload.fields`) equals it and its previous value (`payload.previous`) did not. Held by lf's Rust (crates/lf/src/routing.rs, event_matches_trigger_scope) and the engine's TypeScript (eventMatchesTriggerScope).",
+  "about": "Whether an event clears a listen's `field` and `becomes` gates. `field` passes only an event whose `changedFields` names it; `becomes` (with `field`) passes only when the field's new value (`payload.fields`) equals it and its previous value (`payload.previous`) did not. Held by listen-fire's Rust (crates/lf/src/routing.rs, event_matches_trigger_scope) and the engine's TypeScript (eventMatchesTriggerScope).",
   "cases": [
     { "case": "no field gate passes any change", "config": {}, "event": { "changedFields": ["Name"], "payload": { "fields": { "Name": "Ada" } } }, "matches": true },
     { "case": "an empty field gates nothing", "config": { "field": "" }, "event": { "changedFields": ["Name"], "payload": { "fields": { "Name": "Ada" } } }, "matches": true },

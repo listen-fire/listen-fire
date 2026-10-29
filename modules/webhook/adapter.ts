@@ -1,7 +1,7 @@
 // The webhook adapter: one connection's door. A delivery is checked against
 // the connection's signing (signing.ts), and its JSON body becomes one event.
 // Its fields are read as the body holds them; what they are is the node the
-// listen declares, which lf checks the body against before any run.
+// listen declares, which listen-fire checks the body against before any run.
 
 import type { InboundCheck, InboundCheckInput } from 'movement-engine/public/adapter';
 import type { EventType, SchemaEntryPoint, SchemaTypeDescriptor } from 'engine-contracts';
@@ -32,7 +32,7 @@ export class WebhookAdapter extends BaseAdapter {
   }
 
   /** The one event edge. Reading the signing first means a misconfigured
-   *  credential fails `lf check`, naming what to set, before any delivery. */
+   *  credential fails `listen-fire check`, naming what to set, before any delivery. */
   async listEntryPoints(): Promise<SchemaEntryPoint[]> {
     await this.sources.signing();
     return [{ typeId: DELIVERY_TYPE, displayName: DELIVERY_TYPE, writable: false, readable: false, fires: true }];

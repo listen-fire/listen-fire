@@ -1,6 +1,6 @@
 # Documentation
 
-- [`getting-started-lf.md`](getting-started-lf.md): running movements from a project folder with the `lf` command. [`core-slots.md`](core-slots.md): the modules `lf.yaml`'s `core:` chooses (models, judge, store, files). [`embedding.md`](embedding.md): running the engine inside your own product.
+- [`getting-started-lf.md`](getting-started-lf.md): running movements from a project folder with the `listen-fire` command. [`core-slots.md`](core-slots.md): the modules `lf.yaml`'s `core:` chooses (models, judge, store, files). [`embedding.md`](embedding.md): running the engine inside your own product.
 - [`editor-zed.md`](editor-zed.md): highlighting and the language server for `.mvt` files in the Zed editor.
 - [`contracts/`](contracts/README.md): the versioned contracts the movement core speaks, with an index of the versions each release supports and deprecates. The catalog snapshot, the parked run state, the host families (the boundary between the engine and the code that runs it, and the entry points), the adapter protocol a remote adapter serves, and the language versions.
 - [`language/migrating-to-0.12.md`](language/migrating-to-0.12.md): migrating an automation written before 0.12 (the integer versions 1–4). This repository serves 0.12 only; upgrading an older automation is the platform's.

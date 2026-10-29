@@ -1,5 +1,5 @@
 // @lf/s3-files: the files slot (docs/contracts/files-slot.md) over an S3
-// interface bucket, with the meaning of lf's own @lf/local-files: a put makes
+// interface bucket, with the meaning of listen-fire's own @lf/local-files: a put makes
 // a new document, only the tenant that put it owns it, and opening what was
 // never stored is refused.
 
@@ -33,7 +33,7 @@ function text(settings: Record<string, unknown>, name: string): string | undefin
 export function readSettings(settings: Record<string, unknown>): S3FilesSettings {
   const required = (name: string) => {
     const value = text(settings, name);
-    if (value === undefined) throw new SlotRefusal('missing_setting', `s3_files has no \`${name}\` setting: run \`lf connect s3_files\``);
+    if (value === undefined) throw new SlotRefusal('missing_setting', `s3_files has no \`${name}\` setting: run \`listen-fire connect s3_files\``);
     return value;
   };
   const accessKeyId = text(settings, 'access_key_id');
@@ -137,7 +137,7 @@ function isNotFound(error: unknown): boolean {
   return error instanceof S3ServiceException && error.$metadata.httpStatusCode === 404;
 }
 
-/** The slot's answers, building the client once per distinct settings (lf
+/** The slot's answers, building the client once per distinct settings (listen-fire
  *  carries them on every request). */
 export function s3FilesAnswer(options: { clientOf?: (settings: S3FilesSettings) => S3Client } = {}): SlotAnswer {
   const clientOf = options.clientOf ?? s3ClientOf;

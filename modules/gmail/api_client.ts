@@ -328,7 +328,7 @@ export function gmailMissingComposeScopeMessage(
         head +
         'drafts are opted into at sign-in, and this one did not. Sign the mailbox ' +
         'in again with drafts enabled, under the `gmail_drafts` credential (with ' +
-        'lf: `lf credential delete <name>`, then `lf credential add --module ' +
+        'listen-fire: `listen-fire credential delete <name>`, then `listen-fire credential add --module ' +
         'gmail <name> --credential gmail_drafts`).'
       );
     case 'delegated':

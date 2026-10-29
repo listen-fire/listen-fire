@@ -14,7 +14,7 @@ Never amend commits. Always create new commits on top. Pushed commits must never
 
 ## Verifying changes
 
-The language has no stack to boot. `lf` is the end-to-end tool: build a project folder, `lf check` it, `lf run` it against the fake modules under `examples/` and `apps/cli/src/__test__/`, and read the run with `lf runs show`. If a change touches a module or a slot, verify it through a test that drives `lf` or the module over its wire. If the tooling can't verify a kind of change, extend the tooling. The hosted platform is `lf-platform`, a separate repository in the same GitHub organisation, with its own dev loop; a language change does not need it.
+The language has no stack to boot. `listen-fire` is the end-to-end tool: build a project folder, `listen-fire check` it, `listen-fire run` it against the fake modules under `examples/` and `apps/cli/src/__test__/`, and read the run with `listen-fire runs show`. If a change touches a module or a slot, verify it through a test that drives `listen-fire` or the module over its wire. If the tooling can't verify a kind of change, extend the tooling. The hosted platform is `lf-platform`, a separate repository in the same GitHub organisation, with its own dev loop; a language change does not need it.
 
 ## Language work (movement-lang)
 
@@ -60,7 +60,7 @@ Broad runs do not block the inner loop:
 **Standing prohibitions**:
 - Never build `packages/movement-lang` in place with `tsc`: emitted `.js` files shadow the `.ts` sources and break jest resolution.
 - Never wait on a long test run by polling its pid in a shell loop — use `run_in_background` and wait for the completion notification.
-- A worktree symlinks its `target` to the main checkout's target directory (never grows its own) and sets `CARGO_INCREMENTAL=0`; gates build the default and the cli-only feature sets only; `cargo clean` of stale artifacts is fine after a gate. An `LF_BIN` copy for a gate lives beside the original (`target/debug/lf-gate`): a workspace-built `lf` finds the bundled `@lf/*` modules by walking up from its own path to the repository, so a copy outside it cannot find them.
+- A worktree symlinks its `target` to the main checkout's target directory (never grows its own) and sets `CARGO_INCREMENTAL=0`; gates build the default and the cli-only feature sets only; `cargo clean` of stale artifacts is fine after a gate. An `LF_BIN` copy for a gate lives beside the original (`target/debug/lf-gate`): a workspace-built `listen-fire` finds the bundled `@lf/*` modules by walking up from its own path to the repository, so a copy outside it cannot find them.
 
 ## CI philosophy
 

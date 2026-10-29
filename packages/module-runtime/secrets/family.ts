@@ -1,6 +1,6 @@
 // The secrets host family: where a credential's fields are read from, written
 // back to, and refreshed through, whatever stores them (a SOPS or plain file
-// and the environment for lf, the encrypted credentials table for the
+// and the environment for listen-fire, the encrypted credentials table for the
 // platform, an embedder's vault). A store implements `SecretsBackend`; every
 // shell drives it through the one `SecretsFamily` below, so the rules a
 // refresh must keep are stated once:

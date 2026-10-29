@@ -2,7 +2,7 @@
 
 The wake slot on Google Cloud Tasks: when work is due, a Cloud Run job starts to drain it. With it, a webhook's event starts a worker at once, and a parked timer, a poll's next interval or a cron's next fire starts one when it is due, instead of a blind scheduled tick finding them.
 
-Each wake becomes a Cloud Tasks task whose target runs the job (`POST https://run.googleapis.com/v2/<job>:run`). One module fills both hosts' wake slots: lf starts it as a process (`serve.ts`), and the platform imports the wake itself in-process (`@listen-fire/wake-cloud-tasks/cloud_tasks`).
+Each wake becomes a Cloud Tasks task whose target runs the job (`POST https://run.googleapis.com/v2/<job>:run`). One module fills both hosts' wake slots: listen-fire starts it as a process (`serve.ts`), and the platform imports the wake itself in-process (`@listen-fire/wake-cloud-tasks/cloud_tasks`).
 
 ## Install
 
@@ -14,7 +14,7 @@ Each wake becomes a Cloud Tasks task whose target runs the job (`POST https://ru
      wake: wake_cloud_tasks
    ```
 
-3. Run `lf connect wake_cloud_tasks` to give it its settings. They go to the project's secrets file (or `LF_SECRET__WAKE_CLOUD_TASKS__<SETTING>` in containers and CI), never into `lf.yaml`.
+3. Run `listen-fire connect wake_cloud_tasks` to give it its settings. They go to the project's secrets file (or `LF_SECRET__WAKE_CLOUD_TASKS__<SETTING>` in containers and CI), never into `lf.yaml`.
 
 ## Settings
 
@@ -53,4 +53,4 @@ A failed wake loses no work: the row is already in the store. Keep a scheduled d
 
 ## Tests
 
-`pnpm test` in this folder runs the wake in-process against the fake Cloud Tasks shipped in this package (`fake_cloud_tasks.ts`, also used by the platform's tests and dev loop), and starts the module as the process lf starts for the wake slot's conformance kit. A generated service account key signs its own tokens, so nothing reaches Google. `apps/cli/src/__test__/wake_cloud_tasks_contract.test.ts` runs the same kit through lf's own client of the module.
+`pnpm test` in this folder runs the wake in-process against the fake Cloud Tasks shipped in this package (`fake_cloud_tasks.ts`, also used by the platform's tests and dev loop), and starts the module as the process listen-fire starts for the wake slot's conformance kit. A generated service account key signs its own tokens, so nothing reaches Google. `apps/cli/src/__test__/wake_cloud_tasks_contract.test.ts` runs the same kit through listen-fire's own client of the module.

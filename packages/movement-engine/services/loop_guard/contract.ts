@@ -1,7 +1,7 @@
 // The loop guard slot's contract suite: one set of cases every guard is held
-// to — the built-in in this process (FingerprintGuard), lf's Rust one over
-// the guard wire (`lf --contract-guard`, a file and a Postgres database), and
-// a guard module lf drives as a process (`lf --contract-guard-slot`), all in
+// to — the built-in in this process (FingerprintGuard), listen-fire's Rust one over
+// the guard wire (`listen-fire --contract-guard`, a file and a Postgres database), and
+// a guard module listen-fire drives as a process (`listen-fire --contract-guard-slot`), all in
 // apps/cli's tests. How long a guard remembers is its own business, so no
 // case waits on it.
 //

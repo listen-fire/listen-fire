@@ -1,4 +1,4 @@
-// The connection routing rule against the table of cases lf's Rust is held
+// The connection routing rule against the table of cases listen-fire's Rust is held
 // to as well (packages/engine-contracts/conformance/listen-hears.json).
 
 import { readFileSync } from 'node:fs';

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// The process lf starts for the models module (lf-external.yaml's `command`):
-// it listens where lf says (`MODULE_SOCKET`) and prints the `listening …`
-// line lf reads its address from.
+// The process listen-fire starts for the models module (lf-external.yaml's `command`):
+// it listens where listen-fire says (`MODULE_SOCKET`) and prints the `listening …`
+// line listen-fire reads its address from.
 
 import { serveSlot } from 'module-runtime/module-wire';
 

@@ -63,7 +63,7 @@ export interface JevEndpoint {
 export function endpointOf(fields: Readonly<Record<string, string | undefined>>): JevEndpoint {
   const apiKey = fields.apiKey?.trim();
   if (apiKey === undefined || apiKey === '') {
-    throw new Error('@lf/jev has no API key: add a credential with `lf credential add --module @lf/jev <name>`');
+    throw new Error('@lf/jev has no API key: add a credential with `listen-fire credential add --module @lf/jev <name>`');
   }
   const baseUrl = fields.baseUrl?.trim();
   return { apiKey, baseUrl: (baseUrl === undefined || baseUrl === '' ? DEFAULT_JEV_BASE_URL : baseUrl).replace(/\/+$/, '') };

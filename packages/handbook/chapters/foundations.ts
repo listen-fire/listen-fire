@@ -36,8 +36,8 @@ and refuses any other by name:
 - a pin of an older key is refused; validate the text under the current release,
   then upgrade it
 
-An \`lf\` project pins in \`lf.yaml\`'s \`engine:\` (\`lf init\` writes the current
-release; \`lf upgrade\` moves it). An embedder pins with the run input's
+A \`listen-fire\` project pins in \`lf.yaml\`'s \`engine:\` (\`listen-fire init\` writes the current
+release; \`listen-fire upgrade\` moves it). An embedder pins with the run input's
 \`languageVersion\`; absent means the engine's own release.
 
 A warning on an automation says something keeps it on an older release: the

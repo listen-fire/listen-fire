@@ -8,7 +8,7 @@
 // The end to end runs on the engine package's own path, in process: the real
 // adapter drains a fake payload feed, the engine's listen gate decides which
 // events reach the listen, and the engine runs the movement against a catalog
-// projected from the real adapter. lf cannot register an Airtable webhook yet
+// projected from the real adapter. listen-fire cannot register an Airtable webhook yet
 // (it sends no subscription scope), so this is the most real path in this
 // repository.
 
@@ -377,7 +377,7 @@ function fakeHiring(feed: unknown[]) {
  * catalog adds, which lives in the platform repository: the address a
  * signature names (`table`) gets positions of its own, one per `action`, each a
  * copy of the event node whose edges onto the unnarrowed `Table` land on the
- * table it names (lf-platform listen_narrowing.ts, `graftAddress`; lf's port is
+ * table it names (lf-platform listen_narrowing.ts, `graftAddress`; listen-fire's port is
  * crates/lf/src/listen_narrowing.rs). That is what makes both `Record` and
  * `Old Record` typed as `Candidates`, and what the listen's `field` is checked
  * against. Emulated here, by the same rule.

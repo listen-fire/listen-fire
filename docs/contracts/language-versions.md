@@ -38,7 +38,7 @@ Breaking changes never break a saved movement.
 
 - **A break lands in a new key.** A spelling retired, a construct's meaning changed, a plugin's output reshaped, an engine rule tightened: each ships in a release of a new compatibility key, never within one.
 - **A changed meaning is diagnosed.** Any construct whose meaning changed gets a checker diagnostic under the new key, so "validates clean under the new release" can never hide a silent behaviour change.
-- **The pin moves only by an explicit upgrade.** A person asks for it (`lf upgrade`, the API's or an agent's upgrade). Never automatically, and never by an ordinary edit.
+- **The pin moves only by an explicit upgrade.** A person asks for it (`listen-fire upgrade`, the API's or an agent's upgrade). Never automatically, and never by an ordinary edit.
 - **The CHANGELOG says why.** The entry for a break names the release that introduces it and why.
 
 Movements pinned to the integer versions of earlier releases (1 to 4) are the platform's: it keeps their parser, checker and engine until they are upgraded. The integer 5 is the 0.12 line.

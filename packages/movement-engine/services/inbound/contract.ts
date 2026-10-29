@@ -1,5 +1,5 @@
 // The inbound doors' contract suite: one set of HTTP-level cases every host's
-// doors must pass — the hosted express app, `lf serve` (TypeScript and Rust).
+// doors must pass — the hosted express app, `listen-fire serve` (TypeScript and Rust).
 // A case arranges a small world (one provider, one subscription, an adapter
 // whose behaviour is read off the delivery itself, injected faults), sends real
 // requests, and checks the answer and what the host queued.
@@ -450,7 +450,7 @@ export const INBOUND_CONTRACT_CASES: InboundContractCase[] = [
 
 // ── The delivery receipt ──────────────────────────────────────────────────
 //
-// A host that keeps each delivery as a receipt (lf's doors): a redelivery
+// A host that keeps each delivery as a receipt (listen-fire's doors): a redelivery
 // under the provider's id, at the same subscription, is acked as a duplicate
 // and queues nothing. A separate list: the door core here (deliver.ts) and
 // memoryInboundStores keep no deliveries yet.

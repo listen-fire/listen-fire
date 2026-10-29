@@ -1,4 +1,4 @@
-// The Cloud Tasks module started as the process lf starts (serve.ts), over
+// The Cloud Tasks module started as the process listen-fire starts (serve.ts), over
 // the wire against the shipped fake in timer mode: the wake slot's
 // conformance kit (a worker started is a task the fake dispatched), and the
 // credential the module calls Cloud Tasks with. A generated service account
@@ -114,11 +114,11 @@ describe('wake_cloud_tasks', () => {
     expect(message).not.toMatch(/Bearer|BEGIN PRIVATE KEY/);
   });
 
-  it('a missing setting is refused naming it and lf connect', async () => {
+  it('a missing setting is refused naming it and listen-fire connect', async () => {
     const { queue: _queue, ...rest } = settings();
     const refused: unknown = await new SlotClient(served.address, rest).call('wake.now', { kind: 'fire_event' }).catch((error: unknown) => error);
     expect(refused).toBeInstanceOf(SlotRefused);
     expect(Reflect.get(Object(refused), 'code')).toBe('missing_setting');
-    expect(String(Reflect.get(Object(refused), 'message'))).toMatch(/`queue`.*lf connect wake_cloud_tasks/);
+    expect(String(Reflect.get(Object(refused), 'message'))).toMatch(/`queue`.*listen-fire connect wake_cloud_tasks/);
   });
 });

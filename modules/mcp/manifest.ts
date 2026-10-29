@@ -8,7 +8,7 @@ export const MCP_ADAPTER_TYPE = 'mcp';
 
 const HANDBOOK = `## MCP servers
 
-\`mcp\` connects any remote MCP server (streamable HTTP). Each connection names its own server, so one project can connect several, and each connection's types are that server's tools, read when it is described (\`lf check\`). A changed tool list takes effect at the next check.
+\`mcp\` connects any remote MCP server (streamable HTTP). Each connection names its own server, so one project can connect several, and each connection's types are that server's tools, read when it is described (\`listen-fire check\`). A changed tool list takes effect at the next check.
 
 - A tool that changes things is a type you write: its arguments are the fields, and its answer is read off the handle.
 - A read-only tool (its server marks it \`readOnlyHint\`, and not destructive) is a type you read from the connection: its arguments are the \`==\` tests of the hop's \`WHERE\`, and it answers one record holding them and the answer.

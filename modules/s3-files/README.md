@@ -1,12 +1,12 @@
 # @lf/s3-files
 
-The files slot over an S3 interface bucket. lf keeps the documents a run stores in your bucket instead of the project's `.lf/files/` folder, so they survive a container that is replaced.
+The files slot over an S3 interface bucket. listen-fire keeps the documents a run stores in your bucket instead of the project's `.lf/files/` folder, so they survive a container that is replaced.
 
 Works against AWS S3, Google Cloud Storage (its S3 interoperability endpoint), Cloudflare R2, MinIO, and any service that speaks the S3 API.
 
 ## Install
 
-The lf cloud image (`deploy/lf`) already carries this module with a ready install entry (`s3_files`); see its README. Elsewhere:
+The listen-fire cloud image (`deploy/lf`) already carries this module with a ready install entry (`s3_files`); see its README. Elsewhere:
 
 1. Install the package into the project's externals folder and keep `lf-external.yaml` (shipped in the package) beside it, as `externals/s3_files/lf-external.yaml`.
 2. Name it in `lf.yaml`:
@@ -16,7 +16,7 @@ The lf cloud image (`deploy/lf`) already carries this module with a ready instal
      files: s3_files
    ```
 
-3. Run `lf connect s3_files` to give it its settings. They go to the project's secrets file (or `LF_SECRET__S3_FILES__<SETTING>` in containers and CI), never into `lf.yaml`.
+3. Run `listen-fire connect s3_files` to give it its settings. They go to the project's secrets file (or `LF_SECRET__S3_FILES__<SETTING>` in containers and CI), never into `lf.yaml`.
 
 ## Settings
 
@@ -42,7 +42,7 @@ The lf cloud image (`deploy/lf`) already carries this module with a ready instal
 - Two puts of one name are two documents (the uuid differs).
 - `files.owns` is true only for the tenant whose folder the key sits in, and only if the object exists. A handle from another bucket, outside the prefix, or shaped any other way is not owned.
 - `files.open` of a document never stored is refused.
-- Bytes travel base64 inside lf's request (the files slot has no streaming), so a document is held in memory whole.
+- Bytes travel base64 inside listen-fire's request (the files slot has no streaming), so a document is held in memory whole.
 
 ## Tests
 

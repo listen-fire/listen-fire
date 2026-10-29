@@ -1,7 +1,7 @@
 // The language service (crates/movement-language), through the movement
 // artifact's `language_query` export: completion, hover, go-to-definition
 // and quick fixes for a program in this release's language, answered as the
-// native service answers `lf lsp`.
+// native service answers `listen-fire lsp`.
 //
 // Positions are UTF-16 offsets into the source string (CodeMirror's unit,
 // and a JavaScript string's own); the wasm counts 0-based lines and UTF-16

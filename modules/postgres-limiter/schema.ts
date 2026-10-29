@@ -1,5 +1,5 @@
 // The limiter's tables, in a schema of their own so they cannot collide with
-// lf's store or anything else sharing the database. Every statement here is
+// listen-fire's store or anything else sharing the database. Every statement here is
 // safe to run again, and safe to run from many hosts at once.
 
 export const DEFAULT_SCHEMA = 'lf_postgres_limiter';

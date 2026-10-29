@@ -114,8 +114,8 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
   - A method you offer never raises it, whatever minor introduced the method: a host calls only the methods it speaks, so an older host leaves a newer one alone and your module works there as before.
   - So rebuilding a module with a newer kit, or offering a newer method, never makes an older host refuse it.
   - An absent `protocolMinor` is unstated, read as 2.0. Every module published up to 0.12.5 states none.
-- **What a host refuses, by name.** `lf` and the engine speak 2.0 to 2.4. They refuse a manifest that states another major (newer or older), or a minor above 4. `lf` reads a core module's manifest before any other method it asks of it: as `lf drain` opens, for the modules it starts then, and at the first call otherwise. The text names the module, its package and version when the host finds them, what it speaks and what the host speaks, and what to upgrade. Installing probes your server the same way: Listen-Fire calls `manifest` with the secret and refuses it outside that range.
-- **The floor stays 2.0 within the major.** A host reads every minor from 2.0 up, so a module that predates a feature still loads. A method a host needs a module to have is checked by name where it is needed, never by the stated minor, and the refusal names the minor that introduced it: `lf serve` refuses a movements module that does not answer `movements.watch` (adapter protocol 2.1), and arming a polled listen fails on a store module that does not answer `work.enqueueIfAbsent` (adapter protocol 2.2).
+- **What a host refuses, by name.** `listen-fire` and the engine speak 2.0 to 2.4. They refuse a manifest that states another major (newer or older), or a minor above 4. `listen-fire` reads a core module's manifest before any other method it asks of it: as `listen-fire drain` opens, for the modules it starts then, and at the first call otherwise. The text names the module, its package and version when the host finds them, what it speaks and what the host speaks, and what to upgrade. Installing probes your server the same way: Listen-Fire calls `manifest` with the secret and refuses it outside that range.
+- **The floor stays 2.0 within the major.** A host reads every minor from 2.0 up, so a module that predates a feature still loads. A method a host needs a module to have is checked by name where it is needed, never by the stated minor, and the refusal names the minor that introduced it: `listen-fire serve` refuses a movements module that does not answer `movements.watch` (adapter protocol 2.1), and arming a polled listen fails on a store module that does not answer `work.enqueueIfAbsent` (adapter protocol 2.2).
 - **An addition that names nothing in the manifest keeps the minor.** A new optional field or declaration is learned from the manifest, never from the version: a method is called only when it is listed in `methods`, and a declaration (`credentials`, `inbound`, `poll`, `periodic`) is acted on only when it is present. An older server sends neither and is unchanged; an older host ignores both.
 - An install made before its secret is supplied stores the version the manifest file claims. The probe runs when the secret is linked.
 - **Where it is held.** `MANIFEST_PROTOCOL_VERSION`, `PROTOCOL_VERSION` and `PROTOCOL_MINOR` (`packages/engine-contracts/protocol.ts`) hold the major and the minor, and a test holds them equal to the lines at the top of this page. The table of minors is `PROTOCOL_MINORS` there, and its Rust twin (`crates/module-wire`) is test-held equal to it. [The contracts index](README.md) lists what each release supports.
@@ -125,14 +125,14 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
 | minor | what hosts speaking it add | since |
 |---|---|---|
 | 2.0 | everything before minors were counted | 0.12.0 |
-| 2.1 | a `<slot>.watch` method ([Watching for changes](#watching-for-changes-slotwatch)) | lf 0.12.2 |
-| 2.2 | `work.enqueueIfAbsent` ([the store slot](store-slot.md)) | lf 0.12.5 |
-| 2.3 | a host behaviour: a polled source labels each poll event with its kind, `eventType`, and a host delivers an unlabelled one to the listen that polled it, with a notice ([Polled sources](#polled-sources-and-periodic-tasks)). An older host routes a labelled event correctly, so no module needs to state 2.3 | lf 0.12.8 |
-| 2.4 | `refreshEventSubscription` ([Event subscriptions that expire](#event-subscriptions-that-expire)) | lf 0.12.10 |
+| 2.1 | a `<slot>.watch` method ([Watching for changes](#watching-for-changes-slotwatch)) | listen-fire 0.12.2 |
+| 2.2 | `work.enqueueIfAbsent` ([the store slot](store-slot.md)) | listen-fire 0.12.5 |
+| 2.3 | a host behaviour: a polled source labels each poll event with its kind, `eventType`, and a host delivers an unlabelled one to the listen that polled it, with a notice ([Polled sources](#polled-sources-and-periodic-tasks)). An older host routes a labelled event correctly, so no module needs to state 2.3 | listen-fire 0.12.8 |
+| 2.4 | `refreshEventSubscription` ([Event subscriptions that expire](#event-subscriptions-that-expire)) | listen-fire 0.12.10 |
 
 A module offering one of these methods states no minor for it. Until 0.12.9 the kits stamped a module with the minor of the methods it offered; from 0.12.10 they stamp only what its author declares.
 
-The first `lf` that reads `protocolMinor` is 0.12.6. An `lf` up to 0.12.5 ignores the field and loads the module as before.
+The first `listen-fire` that reads `protocolMinor` is 0.12.6. A `listen-fire` up to 0.12.5 ignores the field and loads the module as before.
 
 ## Authentication
 
@@ -272,7 +272,7 @@ Each example shows `params` → `result` (the `result` inside `ok: true`).
 ```
 
 The hosted product reads only `protocolVersion` from it (see
-[installing](#the-manifest-and-installing)). `lf`, which has no manifest file,
+[installing](#the-manifest-and-installing)). `listen-fire`, which has no manifest file,
 reads every declaration from it, the listen declarations included.
 
 `webhookEventTypeId` (a string) is optional.
@@ -504,12 +504,12 @@ webhooks expire 7 days after their last refresh). Such a module says when:
 - It lists `refreshEventSubscription`, which extends the subscription named by
   `externalId` (and `scope`) and answers its new `expiresAt`.
 
-`lf` keeps each subscription's `expiresAt` and refreshes it a day before then,
+`listen-fire` keeps each subscription's `expiresAt` and refreshes it a day before then,
 or halfway there when less than two days remain. The refresh is a work row
-(`refresh_subscription`), so `lf serve` runs it on its tick, and `lf drain`
+(`refresh_subscription`), so `listen-fire serve` runs it on its tick, and `listen-fire drain`
 takes it in a scale-from-zero deployment, whose wake slot is told when it is
 due. A refresh that fails is said once and tried again 15 minutes on. A
-subscription whose `expiresAt` has passed has lapsed: `lf` registers it anew
+subscription whose `expiresAt` has passed has lapsed: `listen-fire` registers it anew
 (`ensureEventSubscription` with no `current`) and keeps the new id and secret.
 A module that answers no `expiresAt` is never refreshed.
 
@@ -697,7 +697,7 @@ Answers:
 - `deliveryId` (optional, a non-empty string, else 400 at path `deliveryId`)
   names the batch. The host keeps the batch as one delivery; a second batch
   with the same `deliveryId` from the same adapter is kept out and answered
-  202 `{ accepted: 0, duplicate: true }`. `lf` honours it from this release;
+  202 `{ accepted: 0, duplicate: true }`. `listen-fire` honours it from this release;
   the hosted platform honours it from its own release. Without `deliveryId`,
   `emit` is not idempotent: sending an event twice runs its automations twice
   (an event's `idempotencyKey` still dedupes per listen).
@@ -846,7 +846,7 @@ hs_bob = connect hubspot using bob_hubspot
 and every call made through `hs_alice` is signed with the install's secret
 and carries Alice's credential, every call through `hs_bob` Bob's. The host
 binds each stored credential to one module and one of its declared
-credentials (the platform's credential row; lf's `module:` + `credential:`
+credentials (the platform's credential row; listen-fire's `module:` + `credential:`
 secrets entry), and refuses at check a connection naming a credential bound
 to another module, or to a credential the module does not declare. The OAuth
 app you register at your provider (its client id and secret) belongs to the
@@ -945,7 +945,7 @@ host verifies each delivery before `preprocessInbound` sees it:
 - `intercepts` (optional) names requests the host answers itself, unsigned,
   before verifying: `slack_url_verification` echoes Slack's `challenge`.
 - `secretIssuedBy` (optional) says who sets the key deliveries are signed
-  with. `installer`, the default: whoever installs the module sets it (`lf
+  with. `installer`, the default: whoever installs the module sets it (`listen-fire
   connect` generates one or takes the one typed). `provider`: the provider
   issues it when the webhook is registered, as `ensureEventSubscription`'s
   `secret`; nobody is asked for it, and a registration that returns none is
@@ -1028,7 +1028,7 @@ A source with no webhooks is polled:
 - `poll`: `{ config, checkpoint?, movementId? }` → `{ events, checkpoint? }`.
   `config` is the listen's options. `checkpoint` is whatever the previous poll
   returned, absent the first time. `movementId` names the listener, where the
-  host knows it: `lf` sends the listen's pipeline, `listen:<file>:<movement>`.
+  host knows it: `listen-fire` sends the listen's pipeline, `listen:<file>:<movement>`.
   Each event has the `emit` door's shape ([emit](#emit-new-data)).
 - Label each event with its kind, `eventType`, as a pushed event is: one of
   your `subscribableEvents`, or your one kind when you declare none (adapter
@@ -1036,7 +1036,7 @@ A source with no webhooks is polled:
   one, so a listen's `events` keeps only the kinds it names.
 - An event with no `eventType` (a module older than 2.3) still reaches the
   listen that polled it, since the poll was made for that listen with its
-  config. `lf` says so once per module per process.
+  config. `listen-fire` says so once per module per process.
 - Return only what is new since the checkpoint. A backfill is not a poll.
 
 Housekeeping on a schedule, per install (renewing a webhook the provider
@@ -1101,7 +1101,7 @@ page = web.fetchUrl(u)
 - **`files`** (a plugin that makes a file): `{ "<field>": { name?, contentType?, base64 } }`.
   Bytes do not ride the envelope as a URL a plugin could serve, so the plugin
   hands them over inline and the host stores each file (the platform under the
-  team's key prefix, lf as one of the run's documents) and puts the file it
+  team's key prefix, listen-fire as one of the run's documents) and puts the file it
   made at `data.<field>`. A plugin declaring a `value` output of type `file`
   answers it as `files.value`: the call's value is that file.
 - **`warnings`**: text the run's author should know; each is a warning on the
@@ -1136,7 +1136,7 @@ page = web.fetchUrl(u)
   "settings": [{ "name": "base", "label": "The Airtable base id" }]
   ```
 
-  The host asks for them when the module is set up (`lf connect`, the
+  The host asks for them when the module is set up (`listen-fire connect`, the
   platform's install screen) and sends them on every request as
   `"settings": { "base": "app123" }`.
 - **One credential.** A request carries `credential`, the one the connection
@@ -1223,7 +1223,7 @@ page = web.fetchUrl(u)
     then is released by the host.
   - A call that carries `hostLimits` is not counted by the host itself, so
     no request counts twice. A call without it was counted by the host as a
-    whole (lf offers the door only to a module on its own box, from a
+    whole (listen-fire offers the door only to a module on its own box, from a
     process that listens). The module then asks nobody.
   - The module kit does all of this inside `ctx.fetch`. A module declares
     `hostLimits` (TypeScript: `hostLimits: true` in `defineModule`; Rust:
@@ -1339,17 +1339,17 @@ A file ref anywhere else is data to Listen-Fire, whatever keys it carries.
 
 ## Watching for changes (`<slot>.watch`)
 
-A core slot may let lf hear of a change instead of asking on a timer. The movements slot is the first to ask for it ([movements.watch](movements-slot.md#methods)). The shape is the same for any slot that adopts it.
+A core slot may let listen-fire hear of a change instead of asking on a timer. The movements slot is the first to ask for it ([movements.watch](movements-slot.md#methods)). The shape is the same for any slot that adopts it.
 
 `<slot>.watch` takes `{ cursor?: string, waitMs: number }` and answers `{ cursor: string, events: [...] }` or `{ resync: true }`.
 
 - `waitMs` is a non-negative integer. A module honours at most 30,000 ms (30 s) and may answer sooner, including at once with `events: []`. A missing or negative `waitMs`, or a cursor that is not a string, is `bad_request`.
 - A request with no `cursor` answers the module's current cursor and no events.
-- A `cursor` is a position in the module's own log of events, and only the module reads it. It is not one caller's: every caller that holds a cursor sees every event after it, so two lf processes watching one module each get each event.
+- A `cursor` is a position in the module's own log of events, and only the module reads it. It is not one caller's: every caller that holds a cursor sees every event after it, so two listen-fire processes watching one module each get each event.
 - The events after a cursor come in order. A cursor the module has answered is never answered again with fewer events.
 - A cursor the module never gave, or can no longer serve (it restarted, or its log moved on), is answered `{ resync: true }`. The caller then lists what it needs once and asks for a fresh cursor.
-- A module answers before the request timeout of the platform it runs behind. A platform that cuts a request off sooner than 30 s must have its module answer earlier with `events: []`; lf then asks again at once, since that answer was not immediate.
-- lf asks for 30 s and gives up on the request after 40 s. While a watch is held, a module that lf started is not stopped as idle, and the module's other methods are answered as usual.
+- A module answers before the request timeout of the platform it runs behind. A platform that cuts a request off sooner than 30 s must have its module answer earlier with `events: []`; listen-fire then asks again at once, since that answer was not immediate.
+- listen-fire asks for 30 s and gives up on the request after 40 s. While a watch is held, a module that listen-fire started is not stopped as idle, and the module's other methods are answered as usual.
 
 ## Limits and timeouts
 
@@ -1360,7 +1360,7 @@ A core slot may let lf hear of a change instead of asking on a timer. The moveme
   `content-type: application/json`, up to 100 KB. A larger body is answered
   413. A body of any other content type is not read, so its signature cannot
   verify (401).
-- **Watch**: a `<slot>.watch` request is held up to 30 s ([Watching for changes](#watching-for-changes-slotwatch)); lf gives up on it after 40 s.
+- **Watch**: a `<slot>.watch` request is held up to 30 s ([Watching for changes](#watching-for-changes-slotwatch)); listen-fire gives up on it after 40 s.
 - **Calls to your server**: Listen-Fire sets no timeout of its own; Node's
   `fetch` defaults apply (about 5 minutes for the response headers, and 5
   minutes between body chunks). A call is never retried in place, and the
@@ -1391,39 +1391,39 @@ The Acme CRM is a complete protocol-2 adapter in one dependency-free file:
 [`examples/lf-acme/externals/acme_crm/server.mjs`](../../examples/lf-acme/externals/acme_crm/server.mjs).
 It has one type, `Company`, with a comment thread. It uses both push doors
 and the host door's methods, and it pages. Read it next to this walkthrough,
-and drive it with `lf`, the same binary a user runs your adapter under.
+and drive it with `listen-fire`, the same binary a user runs your adapter under.
 
-`lf` has no adapter conformance command. These three commands make up the
+`listen-fire` has no adapter conformance command. These three commands make up the
 check, and each runs against the example project:
 
-- `lf check` and `lf catalog` start your server and read its `describe`: a
-  catalog `lf` cannot read fails here, and a movement written against a type
+- `listen-fire check` and `listen-fire catalog` start your server and read its `describe`: a
+  catalog `listen-fire` cannot read fails here, and a movement written against a type
   or field you did not publish is a diagnostic.
-- `lf run --webhook` hands a delivery to the doors as a provider would,
+- `listen-fire run --webhook` hands a delivery to the doors as a provider would,
   signature and all, and shows the event it became.
-- `lf serve` is the real host: your server pushes to its doors, and a
+- `listen-fire serve` is the real host: your server pushes to its doors, and a
   parked run resumes.
 
 The doors themselves are held to the cases every host's doors pass by
-`lf --contract-doors`, which is not a command to type: it serves the doors
+`listen-fire --contract-doors`, which is not a command to type: it serves the doors
 for the contract suite over a JSON-RPC bridge on stdin and stdout. Run it as
 `node --conditions=movement-engine-internals --test --require tsx/cjs src/__test__/inbound_contract.test.ts`
 from `apps/cli`.
 
-1. **Install the example and keep `lf check` green as you build.** Copy
+1. **Install the example and keep `listen-fire check` green as you build.** Copy
    `examples/lf-acme` to a folder of your own, give it its secrets, and check:
 
    ```bash
    cp -R examples/lf-acme my-adapter && cd my-adapter
    mkdir .lf && cp secrets.example.yaml .lf/secrets.yaml && chmod 600 .lf/secrets.yaml
-   lf check                 # 1 file(s), 0 error(s)
-   lf catalog               # the catalog, with acme_crm's types, fields and the awaitable Comments edge
+   listen-fire check                 # 1 file(s), 0 error(s)
+   listen-fire catalog               # the catalog, with acme_crm's types, fields and the awaitable Comments edge
    ```
 
    To build your own, replace `externals/acme_crm/` with a folder of the same
    shape (`lf-external.yaml` names the command that serves it, or a `url:` already
-   serving) and put your credential in `.lf/secrets.yaml`. `lf` refuses a
-   secrets file other users can read. `lf catalog` shows what `describe`
+   serving) and put your credential in `.lf/secrets.yaml`. `listen-fire` refuses a
+   secrets file other users can read. `listen-fire catalog` shows what `describe`
    published: a field you meant to be writable, a file field, a missing
    `awaitable` edge, are all visible there before any movement uses them.
 
@@ -1432,15 +1432,15 @@ from `apps/cli`.
 
    ```bash
    SIG=$(openssl dgst -sha256 -hmac dev-acme-webhook-secret -hex < events/webhook_body.json | awk '{print $NF}')
-   lf run --webhook acme_crm --body events/webhook_body.json --install acme \
+   listen-fire run --webhook acme_crm --body events/webhook_body.json --install acme \
      --header "x-listen-fire-signature:$SIG"
    ```
 
    Without the header, or with a wrong one, it refuses
    (`signature did not verify for external "acme_crm"`) and runs nothing.
-   `lf run --event events/company_created.json` routes one event, as your
+   `listen-fire run --event events/company_created.json` routes one event, as your
    server's `preprocessInbound` would have shaped it, to the listens it
-   matches. `lf runs` and `lf runs show <run-id>` show what each run saw.
+   matches. `listen-fire runs` and `listen-fire runs show <run-id>` show what each run saw.
    The fake CRM passes all of this. What a real host does with a push is
    step 7.
 
@@ -1474,7 +1474,7 @@ from `apps/cli`.
    to `/wake`. When somebody creates a company, it `POST`s the event to
    `/emit`. Both send `Authorization: Bearer <secret>`.
 
-7. **Try it under `lf serve`.** Start clean (`rm -rf .lf/state.db .lf/externals`,
+7. **Try it under `listen-fire serve`.** Start clean (`rm -rf .lf/state.db .lf/externals`,
    so the ids below are the CRM's first) and replace the example's
    `movements/companies.mvt` with `movements/discuss.mvt`:
 
@@ -1493,18 +1493,18 @@ from `apps/cli`.
    listen to crm {} fire discuss
    ```
 
-   Serve the project and read the port `lf` started the CRM on; the example
+   Serve the project and read the port `listen-fire` started the CRM on; the example
    keeps its companies in `.lf/externals/acme_crm/state.json`, and the CRM
-   pushes to the host's doors with the credential `lf` hands it:
+   pushes to the host's doors with the credential `listen-fire` hands it:
 
    ```bash
-   lf serve --port 5871 &      # wait for its address line, and for .lf/externals/acme_crm/port to appear
+   listen-fire serve --port 5871 &      # wait for its address line, and for .lf/externals/acme_crm/port to appear
    CRM=http://127.0.0.1:$(cat .lf/externals/acme_crm/port)
    curl -s -XPOST $CRM/dev/companies -d '{"Name":"Larch Bio"}'
    # the CRM pushes emit: {"id":"company-1","pushed":{"status":202,"body":{"accepted":1}}}
-   # lf serve prints: run … discuss:discuss parked   (it wrote "Discuss Larch Bio", then awaits its first comment)
+   # listen-fire serve prints: run … discuss:discuss parked   (it wrote "Discuss Larch Bio", then awaits its first comment)
    curl -s -XPOST $CRM/dev/comments -d '{"company":"company-2","text":"approved"}'
-   # the CRM pushes wake for thread:company-2; lf serve prints: resumed … discuss:discuss completed
+   # the CRM pushes wake for thread:company-2; listen-fire serve prints: resumed … discuss:discuss completed
    curl -s $CRM/dev/state      # every company the CRM holds, ending in "Answered approved"
    ```
 
@@ -1517,21 +1517,21 @@ from `apps/cli`.
      http://127.0.0.1:5871/api/public/adapter/acme_crm/wake       # 401
    ```
 
-   Stop `lf serve` when done. `lf runs show <run-id>` shows the park and the
+   Stop `listen-fire serve` when done. `listen-fire runs show <run-id>` shows the park and the
    wake that ended it.
 
 ## Changes
 
-- **Adapter protocol 2.4: subscriptions that expire** (within version 2; 2026-10-27; lf 0.12.10). `ensureEventSubscription` may answer `expiresAt`, and a new optional method, `refreshEventSubscription`, extends a subscription before it lapses ([Event subscriptions that expire](#event-subscriptions-that-expire)). Offering the method states no minor: an `lf` up to 0.12.9 reads a module that lists it and never calls it, so its webhooks lapse there as before. `@lf/airtable` lists it. With this change the kits stop raising a module's stated minor for the methods it offers (`.watch`, `work.enqueueIfAbsent`, `refreshEventSubscription`): it is what the author declares, else 0.
-- **`narrows` on a listen config key** (within version 2, no bump; 2026-10-27; additive). A `listenConfig` entry may say which hop of an event's address it is ([The manifest and installing](#the-manifest-and-installing)). `lf` narrows a signature's event to the node the address walks to, as the hosted product does. An older host ignores the field; a module that declares none is unchanged.
-- **Adapter protocol 2.3: labelled poll events** (within version 2; 2026-10-26; lf 0.12.8). A polled source labels each event it returns with its kind (`eventType`), as a pushed event is labelled, and the host narrows a listen's `events` by it either way ([Polled sources](#polled-sources-and-periodic-tasks)). It is a rule for sources and a host behaviour, not a feature a module states: an older host routes a labelled event correctly, so a module labelling its events states no higher minor for it. An unlabelled poll event still reaches the listen that polled it, with a notice. The bundled polled modules (Gmail, Evertrace, Dealroom, Granola) label theirs.
-- **`poll`'s `movementId`** (within version 2, no bump; 2026-10-26). `lf` sends the listen's pipeline, `listen:<file>:<movement>`, rather than the movement's bare name, so a source can tell two same-named movements in different files apart.
-- **Adapter protocol 2.N** (within version 2, no bump; 2026-10-25; lf 0.12.6). The manifest may state `protocolMinor`, the minor of version 2 it uses, computed by the kits from the features it lists ([Versioning](#versioning)). `lf` and the engine speak 2.0 to 2.2 and refuse a module outside that range by name, a core module included. The rule from here on: an addition a manifest can show bumps the minor. An unstated minor is 2.0, so every module published before is unchanged; an older host ignores the field.
-- **`<slot>.watch`** (within version 2, no bump; 2026-10-23; additive for adapters). A held, bounded request that answers a cursor and the events after it ([Watching for changes](#watching-for-changes-slotwatch)). Adapters and other slots are unchanged. A movements module must answer `movements.watch`: `lf serve` and `lf drain` (without `--until-idle`) refuse a module that does not.
+- **Adapter protocol 2.4: subscriptions that expire** (within version 2; 2026-10-27; listen-fire 0.12.10). `ensureEventSubscription` may answer `expiresAt`, and a new optional method, `refreshEventSubscription`, extends a subscription before it lapses ([Event subscriptions that expire](#event-subscriptions-that-expire)). Offering the method states no minor: a `listen-fire` up to 0.12.9 reads a module that lists it and never calls it, so its webhooks lapse there as before. `@lf/airtable` lists it. With this change the kits stop raising a module's stated minor for the methods it offers (`.watch`, `work.enqueueIfAbsent`, `refreshEventSubscription`): it is what the author declares, else 0.
+- **`narrows` on a listen config key** (within version 2, no bump; 2026-10-27; additive). A `listenConfig` entry may say which hop of an event's address it is ([The manifest and installing](#the-manifest-and-installing)). `listen-fire` narrows a signature's event to the node the address walks to, as the hosted product does. An older host ignores the field; a module that declares none is unchanged.
+- **Adapter protocol 2.3: labelled poll events** (within version 2; 2026-10-26; listen-fire 0.12.8). A polled source labels each event it returns with its kind (`eventType`), as a pushed event is labelled, and the host narrows a listen's `events` by it either way ([Polled sources](#polled-sources-and-periodic-tasks)). It is a rule for sources and a host behaviour, not a feature a module states: an older host routes a labelled event correctly, so a module labelling its events states no higher minor for it. An unlabelled poll event still reaches the listen that polled it, with a notice. The bundled polled modules (Gmail, Evertrace, Dealroom, Granola) label theirs.
+- **`poll`'s `movementId`** (within version 2, no bump; 2026-10-26). `listen-fire` sends the listen's pipeline, `listen:<file>:<movement>`, rather than the movement's bare name, so a source can tell two same-named movements in different files apart.
+- **Adapter protocol 2.N** (within version 2, no bump; 2026-10-25; listen-fire 0.12.6). The manifest may state `protocolMinor`, the minor of version 2 it uses, computed by the kits from the features it lists ([Versioning](#versioning)). `listen-fire` and the engine speak 2.0 to 2.2 and refuse a module outside that range by name, a core module included. The rule from here on: an addition a manifest can show bumps the minor. An unstated minor is 2.0, so every module published before is unchanged; an older host ignores the field.
+- **`<slot>.watch`** (within version 2, no bump; 2026-10-23; additive for adapters). A held, bounded request that answers a cursor and the events after it ([Watching for changes](#watching-for-changes-slotwatch)). Adapters and other slots are unchanged. A movements module must answer `movements.watch`: `listen-fire serve` and `listen-fire drain` (without `--until-idle`) refuse a module that does not.
 - **Delivery ids** (within version 2, no bump; 2026-10-22; additive). `inbound.deliveryId: { header }` in a declared scheme, `deliveryId` in `checkInbound`'s `accepted` answer and in `emit`'s body name the provider's id for a delivery, and the host keeps a repeat of it out. An older server declares and sends none and is unchanged; an older host ignores the field. See [Declared inbound signatures](#declared-inbound-signatures) and [emit](#emit-new-data).
 - **The ocr slot and the host's OCR door** (within version 2, no bump; 2026-10-20; additive). A ninth core slot, `ocr` ([ocr-slot.md](ocr-slot.md)), and `POST …/{adapterType}/ocr` for a module's `ctx.ocr`.
 - **One transport for every module kind** (within version 2, no bump; 2026-10-19). Every core slot's methods ride this envelope ([Transport](#transport)): a Unix socket on the host's box, loopback TCP without one, HTTPS for a remote module; the store, limiter and loop guard slots' stdin/stdout JSON-RPC wire is retired. New slot methods for models, judge, files and browser; a core module's manifest; per-install outgoing auth; `ctx.kv.compareAndSet`. Additive for adapters and plugins: an older server is unchanged.
-- **Checking an adapter.** `lf check` and `lf catalog` read a server's `describe`, and `lf run --webhook` and `lf serve` drive its push doors ([Build your first adapter](#build-your-first-adapter)). lf-platform keeps its own conformance CLI for the hosted platform.
+- **Checking an adapter.** `listen-fire check` and `listen-fire catalog` read a server's `describe`, and `listen-fire run --webhook` and `listen-fire serve` drive its push doors ([Build your first adapter](#build-your-first-adapter)). lf-platform keeps its own conformance CLI for the hosted platform.
 - **Version 2** (current; the only version this release speaks). Breaking for a server built against version 1:
   - Requests carry `protocolVersion: "2"`, and the `manifest` answers `protocolVersion: 2`. Installing probes the server and refuses anything older.
   - Names on the wire are the natural display names; `typeId` and `fieldId` are the server's own ids.
@@ -1539,7 +1539,7 @@ from `apps/cli`.
   - New: awaits (`resolveAwait`, `wakeKeys`), the two push doors (`emit`, `wake`), paging (`iterateRelatedPage`), and files by URL.
   - A webhook subscription must return a secret, and deliveries are signed.
   - Clarified within version 2 (no bump; the reference adapter declares no file field, and conformance is unchanged for it): a file is read only at a field the catalog declares `kind: "file"` or in a resource's `fileRef`; a file ref anywhere else is data. File refs Listen-Fire sends (in a write, a position's resources, evidence) name no credential. The CLI gains `files-declared`.
-- **`inbound.secretIssuedBy`** (within version 2, no bump; additive, absent means `installer`). A module says whether the installer sets its webhook signing secret or the provider issues it at registration; for `provider`, `lf connect` asks for none ([Declared inbound signatures](#declared-inbound-signatures)).
+- **`inbound.secretIssuedBy`** (within version 2, no bump; additive, absent means `installer`). A module says whether the installer sets its webhook signing secret or the provider issues it at registration; for `provider`, `listen-fire connect` asks for none ([Declared inbound signatures](#declared-inbound-signatures)).
 - **`deletable` on a type** (within version 2, no bump; since 0.12). A type's `describe` may say `"deletable": true` when `deleteRecord` removes one. The field is additive: an older server that never sends it still installs, speaks version 2 and passes conformance, and an automation pinned to an earlier language deletes as before. The ruling: no protocol version bump. An adapter that omits it has every `delete` of its types refused when the automation is checked (`MOV_DELETE_NOT_DECLARED`); declare it to allow them.
 - **Modules** (within version 2, no bump). The manifest may declare
   `credentials`, `inbound`, `poll` and `periodic`; a request may carry

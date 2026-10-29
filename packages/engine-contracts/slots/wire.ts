@@ -51,7 +51,7 @@ export type WireSlotManifestShape = z.infer<typeof WireSlotManifest>;
 /** The error code a store answers when a fenced write finds the run's lease gone. */
 export const RUN_LEASE_LOST_CODE = 'run_lease_lost';
 
-/** The most a module must hold a `<slot>.watch` request: lf asks for at most
+/** The most a module must hold a `<slot>.watch` request: listen-fire asks for at most
  *  this, and a module honours at most this whatever `waitMs` says. */
 export const WATCH_WAIT_CAP_MS = 30_000;
 

@@ -1,7 +1,7 @@
 // The limiter slot's contract suite: one set of cases every limiter is held
-// to — the built-in in this process (MemoryLimiter), lf's Rust one over the
-// limiter wire (`lf --contract-limiter`), and a limiter module lf drives as
-// a process (`lf --contract-limiter-slot`), all in apps/cli's tests. A
+// to — the built-in in this process (MemoryLimiter), listen-fire's Rust one over the
+// limiter wire (`listen-fire --contract-limiter`), and a limiter module listen-fire drives as
+// a process (`listen-fire --contract-limiter-slot`), all in apps/cli's tests. A
 // limiter shared by many hosts passes these cases to fill the slot.
 //
 // Runner-agnostic, as the run host's suite is: each case is a name and an

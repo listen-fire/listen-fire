@@ -101,9 +101,9 @@ export const EMAIL_MANIFEST: AdapterManifest = {
     return emailTriggerConfig();
   },
   // The same `key`, declared where a host without the settings form reads a
-  // listen's vocabulary (lf: `listen to inbox { key: "deals" }`). lf routes
+  // listen's vocabulary (listen-fire: `listen to inbox { key: "deals" }`). listen-fire routes
   // by it too: a message to `<box>+deals@…` fires the listen keyed "deals".
-  // Not required here: under lf a listen with no key hears the mail sent to
+  // Not required here: under listen-fire a listen with no key hears the mail sent to
   // the box itself; the platform still requires one through the block above.
   listenConfig: [{ key: 'key', required: false }],
   // Without an address there is no door for mail to arrive at, so an author

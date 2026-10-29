@@ -2,7 +2,7 @@
 // connection carries data only, the server's URL and how to sign in, in one of
 // two credentials: a token (`mcp_token`, sent as a bearer or under a header
 // the credential names) or an OAuth sign-in (`mcp`). The OAuth endpoints and
-// app belong to the install (`lf connect @lf/mcp --oauth-authorize-url …
+// app belong to the install (`listen-fire connect @lf/mcp --oauth-authorize-url …
 // --oauth-token-url …`), so OAuth reaches one server per install; a token
 // reaches any number.
 
@@ -37,7 +37,7 @@ export const mcpModule = defineModule({
       kind: 'oauth2',
       fields: [URL_FIELD],
       // An MCP server names its own authorization server, so these are only
-      // where the install's override has not been set: lf connect @lf/mcp
+      // where the install's override has not been set: listen-fire connect @lf/mcp
       // --oauth-authorize-url … --oauth-token-url … sets it.
       oauth2: {
         authorizeUrl: 'https://mcp-authorization.invalid/authorize',
