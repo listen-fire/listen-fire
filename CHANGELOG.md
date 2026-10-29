@@ -1,16 +1,16 @@
 # Changelog
 
-Every pull request that changes what an author writes, or what an `lf` user sees, adds a line under
+Every pull request that changes what an author writes, or what a `listen-fire` user sees, adds a line under
 Unreleased in the same pull request. Tagging a release moves the Unreleased entries under a heading
 for the new version, with the date. When a new minor line is cut, move the previous minor's sections
 (with their link references) into `docs/changelog/v0.N.md` and list it under Earlier releases.
 
-This file is the language's changelog: the core (the parser, checker, language and engine crates, `lf`, and the `movement-lang`, `engine` and `engine-contracts` packages, which share the language's one version). Every other package (the modules, `module-kit`, `module-runtime`, the helpers) and the `module-wire` and `module-kit` crates keep a `CHANGELOG.md` of their own from 0.12.6; their earlier entries are here.
+This file is the language's changelog: the core (the parser, checker, language and engine crates, `listen-fire`, and the `movement-lang`, `engine` and `engine-contracts` packages, which share the language's one version). Every other package (the modules, `module-kit`, `module-runtime`, the helpers) and the `module-wire` and `module-kit` crates keep a `CHANGELOG.md` of their own from 0.12.6; their earlier entries are here.
 
 This file is shared history. Up to the split into two repositories (0.12.0) it was one file for two
 audiences, an operator running a self-hosted installation and an author writing automations in the
 movement language, and both repositories keep it in full. From the split on, this repository's
-Unreleased section takes only the language's entries (constructs, the checker, the engine, `lf`,
+Unreleased section takes only the language's entries (constructs, the checker, the engine, `listen-fire`,
 modules, the docs); the platform's entries live in `lf-platform`'s `CHANGELOG.md`. This repository
 is versioned by its release; the entry for a break names the release that introduces it and which older pins it no longer reads.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are the git tags
@@ -19,6 +19,14 @@ named in [`RELEASING.md`](RELEASING.md).
 ## [Unreleased]
 
 <!-- add merged PRs here -->
+
+### Changed
+
+- **The command is now `listen-fire`, formerly `lf`.** `lf` is also a popular terminal file manager, which owns `lf` on Homebrew core, so the two collided on a PATH and in what people and models take `lf` to mean. `listen-fire` matches the crate (`cargo install listen-fire`), the domain and the Homebrew tap. Only the binary's name changed: every subcommand and flag is the same (`listen-fire check`, `listen-fire run`, `listen-fire runs show`). No `lf` alias ships.
+  - Unchanged, so every saved project and program runs as it is: module names in movement source (`@lf/stripe`), the project file `lf.yaml` and the `.lf/` state folder, the `LF_*` environment variables, the release tags (`lf-v<version>`), the bundled modules' folder (`share/lf/modules`), the Postgres store's `lf` schema, and the crate and package names.
+  - To move over: install again (the install script, Homebrew, or `cargo install listen-fire`), then delete the old `lf` where the earlier install put it: `~/.local/bin/lf` for the install script, `<prefix>/bin/lf` for `scripts/dist/install.sh`. Both scripts print a one-line note when they find an `lf` that an earlier install of theirs left; they never delete it.
+  - Rename `lf` in scripts, CI jobs, cron entries and container commands. In Zed, the language server's settings key is now `lsp.listen-fire`.
+  - A release archive carries `bin/listen-fire`. The install scripts refuse an archive from before the rename, which carries `bin/lf`.
 
 ## [0.12.12] - 2026-10-27
 
