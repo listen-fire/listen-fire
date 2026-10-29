@@ -1,6 +1,6 @@
 //! The movement language service (docs/contracts/language-service.md): what
 //! a position in a movement file answers, from one check of it by the Rust
-//! checker. Written for the current language; `lf lsp` serves it.
+//! checker. Written for the current language; `listen-fire lsp` serves it.
 
 pub mod abi;
 mod builtins;

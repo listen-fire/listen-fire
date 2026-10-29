@@ -337,7 +337,7 @@ fn symbol_card(service: &Service, analysis: &Analysis, text: &Text<'_>, id: move
         }
         SymbolKind::Instance if symbol.unit => {
             let adapter = service.catalog.adapters.get(name);
-            let mut lines = vec!["Built into lf; no import needed.".to_string()];
+            let mut lines = vec!["Built into listen-fire; no import needed.".to_string()];
             lines.extend(adapter.and_then(listen_settings_line));
             lines.extend(adapter.and_then(any_schema).and_then(gives_line));
             card(name, &lines, docs)
@@ -382,7 +382,7 @@ fn symbol_card(service: &Service, analysis: &Analysis, text: &Text<'_>, id: move
                 Some([]) | None => "A sign-in".to_string(),
                 Some(adapters) => format!("Sign-in for {}", adapters.join(" or ")),
             };
-            let line = format!("{what}. lf reads it from secrets.yaml or the environment when the movement runs; it never appears in the file.");
+            let line = format!("{what}. listen-fire reads it from secrets.yaml or the environment when the movement runs; it never appears in the file.");
             card(name, &[line], docs)
         }
         SymbolKind::Plugin => match plugin_of(service, symbol) {

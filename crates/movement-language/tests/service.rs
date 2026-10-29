@@ -223,7 +223,7 @@ fn hover_shows_the_type_a_doc_line_and_a_versioned_link() {
     let hover = service.hover(PROGRAM, after(PROGRAM, "function hel", 0)).unwrap();
     assert!(hover.contents.contains("Runs when: `listen to manual`."), "{}", hover.contents);
     let hover = service.hover(PROGRAM, after(PROGRAM, "<manu", 0)).unwrap();
-    assert!(hover.contents.contains("Built into lf; no import needed.\n\nGives: Invocation (Text, `Run by (name)`)"), "{}", hover.contents);
+    assert!(hover.contents.contains("Built into listen-fire; no import needed.\n\nGives: Invocation (Text, `Run by (name)`)"), "{}", hover.contents);
     let hover = service.hover(PROGRAM, after(PROGRAM, "  greeti", 0)).unwrap();
     assert!(hover.contents.contains("Set on line 6."), "{}", hover.contents);
 }
