@@ -20,6 +20,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+### Checks
+
+- A statement word bound as a name (`link = …`, `write = …`, `delete = …`) is refused as "'link' is reserved; pick another name". It was refused before as a malformed statement, naming the arrow it expected.
+
 ## [0.12.13] - 2026-10-29
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. The command is renamed to `listen-fire`, and two modules arrive: `@lf/github` and `@lf/stripe`.

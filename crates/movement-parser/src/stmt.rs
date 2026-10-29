@@ -41,6 +41,14 @@ pub type SResult<T> = Result<T, ParseError>;
 const NODE_ENTRY_EFFECTS: [&str; 10] =
     ["write", "match", "link", "unlink", "delete", "extract", "await", "race", "parallel", "callback"];
 
+/// The words that always begin their own statement, so none of them can be a
+/// name a statement binds. (`match`, `node`, `type`, `race`, `all` and `fail`
+/// begin one only when what follows fits, so `match = …` still binds.)
+const STATEMENT_KEYWORDS: [&str; 19] = [
+    "import", "export", "shape", "movement", "function", "listen", "run", "write", "link", "edge", "unlink", "delete", "refresh", "await",
+    "if", "ERROR", "extract", "callback", "else",
+];
+
 const LAZY_AWAIT: &str = "'lazy await' can't be both: 'await' waits for the edge to resolve and continues the run there, 'lazy' waits to look until something reads. Pick the one you meant";
 
 const ELVIS_MISUSE: &str = "`?:` is the set-if-empty write-field marker (`Field ?: value`), only valid inside a write body — for a value fallback use `{}`; to branch, use an `if` block";
@@ -363,6 +371,15 @@ impl Parser {
 
     fn starts_with(&self, text: &str) -> bool {
         self.src.starts_with(self.pos, text)
+    }
+
+    /// `word = …` here: the word, blanks, then `=` (not `==`).
+    fn assigned_after(&self, word: &str) -> bool {
+        let mut i = self.pos + word.len();
+        while matches!(self.src.at(i), Some(u) if u == unit(' ') || u == unit('\t')) {
+            i += 1;
+        }
+        self.src.at(i) == Some(unit('=')) && self.src.at(i + 1) != Some(unit('='))
     }
 
     fn starts_hop(&self) -> bool {
@@ -968,6 +985,11 @@ impl Parser {
                 ),
                 start,
             );
+        }
+        // Each of these words claims the statement below, so `link = …` would
+        // otherwise fail as a malformed `link` statement, naming its arrow.
+        if STATEMENT_KEYWORDS.contains(&word.as_str()) && self.assigned_after(&word) {
+            return self.fail_at(format!("'{word}' is reserved; pick another name"), start);
         }
         match word.as_str() {
             "import" => return Ok(Statement::Import(self.parse_import()?)),
@@ -4939,6 +4961,21 @@ mod tests {
             .join();
         if let Err(panic) = checked {
             std::panic::resume_unwind(panic);
+        }
+    }
+
+    #[test]
+    fn a_statement_keyword_bound_as_a_name_is_reserved() {
+        assert_eq!(
+            error("function m() {\n  link = 1\n}\n"),
+            json!({ "message": "'link' is reserved; pick another name", "loc": { "line": 2, "col": 3 } })
+        );
+        assert_eq!(error("write\t= 1\n"), json!({ "message": "'write' is reserved; pick another name", "loc": { "line": 1, "col": 1 } }));
+        // A comparison is no binding, and a word that begins a statement only
+        // when what follows fits binds as any name does.
+        assert_ne!(error("link == 1\n").pointer("/message"), Some(&json!("'link' is reserved; pick another name")));
+        for bound in ["match = 1\n", "`link` = 1\n", "links = 1\n"] {
+            program(bound);
         }
     }
 
