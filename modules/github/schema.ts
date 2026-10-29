@@ -6,7 +6,7 @@
 // notification is ABOUT one subject, reached along `Pull Request` or `Issue`
 // rather than by an id the program would have to carry. Field names are
 // GitHub's (`html_url` reads as `HTML URL`, `user.login` as `Author`), so a
-// program written against the REST docs reads as it expects and `lf check`
+// program written against the REST docs reads as it expects and `listen-fire check`
 // refuses a field GitHub does not have.
 //
 // Everything here is STATIC — no credential, no network — so `describe` is

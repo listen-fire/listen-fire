@@ -1,4 +1,4 @@
-// A fake GitHub REST API for the module's tests and lf's, served on a loopback
+// A fake GitHub REST API for the module's tests and listen-fire's, served on a loopback
 // port at the root (as api.github.com is). The shapes are GitHub's own (REST
 // API 2022-11-28: notifications, repositories, pulls, issues, issue comments,
 // issue labels), and so is the polling contract of `GET /notifications`:

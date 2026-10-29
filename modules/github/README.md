@@ -1,12 +1,12 @@
 # @listen-fire/github
 
-GitHub as a Listen-Fire module (`@lf/github`, bundled with `lf`). A program listens to your notifications feed (review requests, mentions, assignments) and walks from each one to the pull request or issue it is about. It reads repositories, pull requests, issues, comments and labels as records joined by edges, and it can comment and add a label.
+GitHub as a Listen-Fire module (`@lf/github`, bundled with `listen-fire`). A program listens to your notifications feed (review requests, mentions, assignments) and walks from each one to the pull request or issue it is about. It reads repositories, pull requests, issues, comments and labels as records joined by edges, and it can comment and add a label.
 
 ## Setting it up
 
 ```
-lf connect @lf/github
-lf credential add --module github henry_github
+listen-fire connect @lf/github
+listen-fire credential add --module github henry_github
 ```
 
 The credential asks for:
@@ -41,7 +41,7 @@ listen to gh { events: ["review_requested", "mention", "assign"] } fire triage
 ```
 
 - The listen fires once per notification thread that is new or has changed since the last poll. A new comment on a thread already delivered fires it again.
-- `events` selects GitHub's reasons. `lf check` refuses a reason GitHub does not send. Leave it out for every reason.
+- `events` selects GitHub's reasons. `listen-fire check` refuses a reason GitHub does not send. Leave it out for every reason.
 - `participating: true` keeps only threads you take part in or are mentioned in.
 - The first poll sets the mark and delivers nothing, so going live never replays your inbox. Walk `Notifications` for what is unread now.
 - Polls are conditional: an unchanged feed costs GitHub a 304 and no quota. GitHub sets how often the feed may be polled (`X-Poll-Interval`, usually a minute). A shorter `every:` polls no faster.

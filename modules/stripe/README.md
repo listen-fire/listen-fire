@@ -1,12 +1,12 @@
 # @listen-fire/stripe
 
-Stripe as a Listen-Fire module (`@lf/stripe`, bundled with `lf`). A program listens to Stripe's events (a failed payment, a new or canceled subscription, a new customer) and walks from each one to the invoice, subscription or customer it is about. It reads customers, invoices and subscriptions as records joined by edges. Every amount is in major units of its currency. It writes nothing to Stripe.
+Stripe as a Listen-Fire module (`@lf/stripe`, bundled with `listen-fire`). A program listens to Stripe's events (a failed payment, a new or canceled subscription, a new customer) and walks from each one to the invoice, subscription or customer it is about. It reads customers, invoices and subscriptions as records joined by edges. Every amount is in major units of its currency. It writes nothing to Stripe.
 
 ## Setting it up
 
 ```
-lf connect @lf/stripe
-lf credential add --module stripe stripe_account
+listen-fire connect @lf/stripe
+listen-fire credential add --module stripe stripe_account
 ```
 
 The credential asks for:
@@ -16,7 +16,7 @@ The credential asks for:
   - A test-mode key (`rk_test_…`) reads test-mode data.
 - `webhookSecret`: the webhook endpoint's signing secret (`whsec_…`). Leave it empty if the program only reads.
 
-`lf serve` prints the connection's URL when it starts: `/hooks/stripe/<credential>`, under `publicUrl` when `lf.yaml` names one. Add it as an endpoint in Stripe's dashboard (Developers, Webhooks), choose the events the program listens for, and copy the endpoint's signing secret into the credential.
+`listen-fire serve` prints the connection's URL when it starts: `/hooks/stripe/<credential>`, under `publicUrl` when `lf.yaml` names one. Add it as an endpoint in Stripe's dashboard (Developers, Webhooks), choose the events the program listens for, and copy the endpoint's signing secret into the credential.
 
 ## What a movement sees
 
@@ -59,7 +59,7 @@ listen to pay { events: ["invoice.payment_failed"] } fire `Payment Failed`
 ```
 
 - A listen fires once per Stripe event delivered to the connection's URL.
-- `events` selects Stripe's event types. `lf check` refuses a type Stripe does not send, naming the ones it does. Leave it out for every type below.
+- `events` selects Stripe's event types. `listen-fire check` refuses a type Stripe does not send, naming the ones it does. Leave it out for every type below.
 - An event's `Type` says which it is. Its `Invoice`, `Subscription` or `Customer` edge is the object it is about, as it was when the event happened; the other two are empty.
 - The event carries its object, so walking to it reads nothing from Stripe. Walking on from it (an invoice's `Customer`) does.
 
@@ -103,7 +103,7 @@ The event types:
 | signed by the endpoint's secret, of a type above | 202, its runs (none when no listen selects its type) |
 | the same event again (a retry) | 2xx `duplicate: true`, nothing runs |
 | unsigned, mis-signed, or older than five minutes | 401, nothing runs |
-| to a connection whose credential has no `webhookSecret` | 401, nothing runs; `lf serve` says what to set |
+| to a connection whose credential has no `webhookSecret` | 401, nothing runs; `listen-fire serve` says what to set |
 | of a type this module does not type (`charge.*`, `payout.*`, …) | 2xx, nothing runs |
 | not a Stripe event | 400 `not_a_stripe_event` |
 

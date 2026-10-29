@@ -22,7 +22,7 @@ export function githubClientFrom(ctx: ModuleContext): GithubClientSource {
     if (last?.fields === fields) return last.client;
     const parsed = githubCredsParser.safeParse(fields);
     if (!parsed.success) {
-      throw new Error('GitHub: the connected credential holds no token. Add one: lf credential add --module github <name>.');
+      throw new Error('GitHub: the connected credential holds no token. Add one: listen-fire credential add --module github <name>.');
     }
     const baseUrl = ctx.config.baseUrlOverride ?? parsed.data.baseUrl;
     const client = new GithubClient({

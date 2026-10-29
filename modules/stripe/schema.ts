@@ -7,7 +7,7 @@
 // reached along `Invoice`, `Subscription` or `Customer` rather than through
 // an untyped `data.object`. Field names are Stripe's (`amount_due` reads as
 // `Amount Due`, `hosted_invoice_url` as `Hosted Invoice URL`), so a program
-// written against Stripe's API reference reads as it expects and `lf check`
+// written against Stripe's API reference reads as it expects and `listen-fire check`
 // refuses a field Stripe does not have.
 //
 // Money: every amount is in MAJOR units of the record's `Currency` (19.99 for

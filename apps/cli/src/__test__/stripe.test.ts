@@ -1,14 +1,14 @@
-// `@lf/stripe` in lf, end to end: the site's failed-payment demo, rewritten for
+// `@lf/stripe` in listen-fire, end to end: the site's failed-payment demo, rewritten for
 // the Stripe module. A project connects the bundled Stripe module against the
 // fake Stripe (modules/stripe/__test__/fake_stripe.ts), the demo's CRM as an
 // MCP server (modules/mcp/__test__/fake_server.ts, kind `billing`), and Gmail
 // and Slack against packages/fake-channels, each with a credential added as a
-// person adds it. `lf check` types the program against Stripe's fields and
-// event types and refuses a wrong one by name; `lf serve` runs a signed
+// person adds it. `listen-fire check` types the program against Stripe's fields and
+// event types and refuses a wrong one by name; `listen-fire serve` runs a signed
 // delivery once (a monthly customer is emailed, an annual one's account
 // manager told in #accounts, a yen amount written in yen), refuses an
 // unsigned one, runs nothing for a redelivery or an event no listen selects;
-// `lf runs show` shows each run. A second movement reads customers and their
+// `listen-fire runs show` shows each run. A second movement reads customers and their
 // invoices through the module's graph.
 
 import assert from 'node:assert/strict';
@@ -68,8 +68,8 @@ function \`Payment Failed\`(e: <pay-[:Event]->>) {
 listen to pay { events: ["invoice.payment_failed"] } fire \`Payment Failed\`
 `;
 
-// A workspace-built lf finds its bundled modules beside its own (canonical)
-// path; a worktree's lf may be the main checkout's, so the modules and
+// A workspace-built listen-fire finds its bundled modules beside its own (canonical)
+// path; a worktree's listen-fire may be the main checkout's, so the modules and
 // serve-module this tree holds are named.
 const REPO = resolve(__dirname, '../../../..');
 const HOST = { LF_MODULES_DIR: join(REPO, 'modules'), LF_SERVE_MODULE: join(REPO, 'apps/cli/node_modules/.bin/serve-module') };
@@ -94,7 +94,7 @@ async function paymentsWorld(): Promise<World> {
   try {
     const { dir } = await gmailProject(channels, 'gmail', 'billing_mail');
     const connected = await ok(lf(dir, ['connect', '@lf/stripe', '--yes', '--base-url', stripe.url], { answers: [] }));
-    assert.doesNotMatch(connected, /webhooks are signed with/, 'Stripe issues the secret: lf connect generates none');
+    assert.doesNotMatch(connected, /webhooks are signed with/, 'Stripe issues the secret: listen-fire connect generates none');
     // Asked as a person answers: the API key, then the endpoint's signing secret.
     assert.match(await ok(lf(dir, ['credential', 'add', '--module', 'stripe', 'stripe_account'], { answers: [API_KEY, SECRET] })), /added stripe_account/);
     await ok(lf(dir, ['connect', '@lf/mcp', '--yes'], { answers: [] }));
@@ -153,7 +153,7 @@ async function slackMessages(channels: Fake): Promise<string[]> {
   return rows.filter((m) => m.user === 'bot').map((m) => `${m.channel} ${m.text}`);
 }
 
-test('lf check types the program against Stripe: a field an invoice lacks, an event type Stripe never sends', async () => {
+test('listen-fire check types the program against Stripe: a field an invoice lacks, an event type Stripe never sends', async () => {
   const world = await paymentsWorld();
   try {
     const check = await run(world.dir, 'check');
@@ -175,7 +175,7 @@ test('lf check types the program against Stripe: a field an invoice lacks, an ev
   }
 });
 
-test('lf serve runs a signed failed payment once: the monthly customer is emailed, the annual one’s manager told in Slack', async () => {
+test('listen-fire serve runs a signed failed payment once: the monthly customer is emailed, the annual one’s manager told in Slack', async () => {
   const world = await paymentsWorld();
   const serving = await served(world.dir);
   try {

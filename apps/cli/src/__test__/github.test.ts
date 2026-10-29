@@ -1,11 +1,11 @@
-// `@lf/github` in lf, end to end: the morning triage. A project connects the
+// `@lf/github` in listen-fire, end to end: the morning triage. A project connects the
 // bundled GitHub module against the fake GitHub
 // (modules/github/__test__/fake_github.ts) and Slack against the fake in
 // packages/fake-channels, each with a credential added as a person adds it.
-// `lf check` types the program against GitHub's fields and reasons, and
-// refuses a wrong one by name; `lf run --poll` arms, then fires once per new
+// `listen-fire check` types the program against GitHub's fields and reasons, and
+// refuses a wrong one by name; `listen-fire run --poll` arms, then fires once per new
 // notification its listen selects, posting to Slack and labelling the pull
-// request; an unchanged feed is a 304 that fires nothing; `lf runs show`
+// request; an unchanged feed is a 304 that fires nothing; `listen-fire runs show`
 // shows each run.
 
 import assert from 'node:assert/strict';
@@ -73,7 +73,7 @@ async function checkWith(dir: string, from: string, to: string): Promise<{ code:
   return checked;
 }
 
-test('lf check types the triage against GitHub: a field GitHub lacks, a reason it never sends, an edge it does not have', async () => {
+test('listen-fire check types the triage against GitHub: a field GitHub lacks, a reason it never sends, an edge it does not have', async () => {
   const github = await startFakeGithub({ token: TOKEN });
   const channels = await fakeChannels();
   try {
@@ -100,7 +100,7 @@ test('lf check types the triage against GitHub: a field GitHub lacks, a reason i
   }
 });
 
-test('lf run --poll arms, fires once per new notification the listen selects, and nothing on an unchanged feed', async () => {
+test('listen-fire run --poll arms, fires once per new notification the listen selects, and nothing on an unchanged feed', async () => {
   const github = await startFakeGithub({ token: TOKEN, pollIntervalSeconds: 0 });
   const channels = await fakeChannels();
   try {

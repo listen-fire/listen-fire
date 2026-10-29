@@ -1,4 +1,4 @@
-// A fake Stripe API for the module's tests and lf's, served on a loopback port
+// A fake Stripe API for the module's tests and listen-fire's, served on a loopback port
 // at the root (as api.stripe.com is). It answers the reads this module makes,
 // in Stripe's shapes: retrieving a customer, an invoice or a subscription
 // (`/v1/<kind>/<id>`, a 404 with Stripe's error body for none), and listing

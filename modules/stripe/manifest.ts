@@ -21,9 +21,9 @@ function \`Payment Failed\`(e: <pay-[:Event]->>) {
 listen to pay { events: ["invoice.payment_failed"] } fire \`Payment Failed\`
 \`\`\`
 
-\`lf serve\` prints the connection's URL (\`/hooks/stripe/<credential>\`): add it as the endpoint in Stripe's dashboard, with the events you listen for. A delivery is checked against the endpoint's signing secret; an unsigned, mis-signed or stale one (older than five minutes) runs nothing. Stripe retries a delivery, and the same event runs once.
+\`listen-fire serve\` prints the connection's URL (\`/hooks/stripe/<credential>\`): add it as the endpoint in Stripe's dashboard, with the events you listen for. A delivery is checked against the endpoint's signing secret; an unsigned, mis-signed or stale one (older than five minutes) runs nothing. Stripe retries a delivery, and the same event runs once.
 
-\`events\` selects Stripe's event types: the invoice events (\`invoice.payment_failed\`, \`invoice.paid\`, \`invoice.upcoming\`, …), the subscription events (\`customer.subscription.created\`, \`.updated\`, \`.deleted\`, \`.trial_will_end\`, …) and \`customer.created\`, \`.updated\`, \`.deleted\`. \`lf check\` refuses a type Stripe never sends. An event's \`Type\` says which it is. Walk \`Invoice\`, \`Subscription\` or \`Customer\` for the object it is about, as it was when the event happened (nothing along the other two).
+\`events\` selects Stripe's event types: the invoice events (\`invoice.payment_failed\`, \`invoice.paid\`, \`invoice.upcoming\`, …), the subscription events (\`customer.subscription.created\`, \`.updated\`, \`.deleted\`, \`.trial_will_end\`, …) and \`customer.created\`, \`.updated\`, \`.deleted\`. \`listen-fire check\` refuses a type Stripe never sends. An event's \`Type\` says which it is. Walk \`Invoice\`, \`Subscription\` or \`Customer\` for the object it is about, as it was when the event happened (nothing along the other two).
 
 ### reading — customers, invoices, subscriptions
 
@@ -45,7 +45,7 @@ Every amount (\`Amount Due\`, \`Total\`, a customer's \`Balance\`) is in major u
  * against the endpoint's signing secret) and a read-only graph. Nothing is
  * SUBSCRIBED to: `subscribableEvents` is Stripe's event types this module
  * types, which the door labels each event with, so a listen's `events`
- * narrows by type and `lf check` refuses one Stripe never sends.
+ * narrows by type and `listen-fire check` refuses one Stripe never sends.
  */
 export const STRIPE_MANIFEST: AdapterManifest = {
   adapterType: STRIPE_ADAPTER_TYPE,

@@ -55,7 +55,7 @@ export async function checkStripeDelivery(input: InboundCheckInput, sources: Str
   if (request.method !== 'POST') return reply(405, { json: { error: 'method_not_allowed', message: 'a Stripe webhook is a POST' } });
   const secret = await sources.webhookSecret();
   if (secret === undefined) {
-    sources.log.warn('stripe delivery refused: the credential holds no webhookSecret (the endpoint’s whsec_… signing secret); set it with lf credential add --module stripe <name>');
+    sources.log.warn('stripe delivery refused: the credential holds no webhookSecret (the endpoint’s whsec_… signing secret); set it with listen-fire credential add --module stripe <name>');
     return refused(401);
   }
   const verdict = verifyStripeSignature(request, { secret, nowSeconds: sources.now() });

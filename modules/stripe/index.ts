@@ -1,7 +1,7 @@
 // `@lf/stripe`: Stripe as a module. The host hands it the connection's
 // credential (an API key, and the webhook endpoint's signing secret) and a
 // fetch; the module builds a client per call from them, so a credential
-// edited between calls is read by the next one. `lf serve` serves the door at
+// edited between calls is read by the next one. `listen-fire serve` serves the door at
 // `/hooks/stripe/<credential>`. `ctx.config.baseUrlOverride` (the dev loop's
 // fake) replaces api.stripe.com.
 
@@ -12,7 +12,7 @@ import { StripeAdapter, type StripeClientSource } from './adapter';
 import type { StripeDoorSources } from './inbound';
 import { STRIPE_MANIFEST } from './manifest';
 
-const ADD = 'lf credential add --module stripe <name>';
+const ADD = 'listen-fire credential add --module stripe <name>';
 
 /** The client the context's credential reaches Stripe with. */
 export function stripeClientFrom(ctx: ModuleContext): StripeClientSource {
@@ -58,7 +58,7 @@ export const stripeModule = defineModule({
       ],
     },
   ],
-  // Stripe issues the signing secret (at the endpoint), so lf connect
+  // Stripe issues the signing secret (at the endpoint), so listen-fire connect
   // generates none; the door reads it off the connection's credential.
   inbound: { providerKey: 'stripe', scheme: 'module', secretIssuedBy: 'provider' },
   create: (ctx) => new StripeAdapter(stripeClientFrom(ctx), stripeDoorFrom(ctx)),

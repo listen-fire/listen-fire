@@ -47,7 +47,7 @@ A comment goes into the conversation (a pull request's issue comments, not a rev
  * Static manifest. A polled source (the notifications feed has no webhook)
  * and a target for two writes. Nothing is SUBSCRIBED to: `subscribableEvents`
  * is the reason vocabulary, which the poll labels each event with, so a
- * listen's `events` narrows by reason and `lf check` refuses a reason GitHub
+ * listen's `events` narrows by reason and `listen-fire check` refuses a reason GitHub
  * does not send.
  */
 export const GITHUB_MANIFEST: AdapterManifest = {

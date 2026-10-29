@@ -39,7 +39,7 @@ function contextOver(fields: () => CredentialFields, config: { baseUrlOverride?:
 
 describe('stripeClientFrom', () => {
   it('says how to add a key when the credential holds none', async () => {
-    await expect(stripeClientFrom(contextOver(() => ({})).ctx)()).rejects.toThrow(/holds no API key\. Add one: lf credential add --module stripe/);
+    await expect(stripeClientFrom(contextOver(() => ({})).ctx)()).rejects.toThrow(/holds no API key\. Add one: listen-fire credential add --module stripe/);
   });
 
   it('reaches api.stripe.com through the host fetch, with the key and the pinned API version', async () => {

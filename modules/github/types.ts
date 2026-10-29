@@ -55,7 +55,7 @@ export const GITHUB_LABELS_EDGE_NAME = 'Labels';
 
 /** Why the user got a notification: GitHub's documented `reason` values
  *  (REST "Activity › Notifications", 2022-11-28). They are also the `events:`
- *  vocabulary, so a listen selects reasons and `lf check` refuses a misspelt
+ *  vocabulary, so a listen selects reasons and `listen-fire check` refuses a misspelt
  *  one. */
 export const GITHUB_NOTIFICATION_REASONS = [
   'agent_session_finished',

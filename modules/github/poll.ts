@@ -4,7 +4,7 @@
 //   - a conditional request (`If-Modified-Since` with the last
 //     `Last-Modified`), so an unchanged feed is a 304 that costs no quota;
 //   - never sooner than `X-Poll-Interval` asks: a poll that comes early (a
-//     short `every:`, `lf run --poll`) answers nothing and calls nothing.
+//     short `every:`, `listen-fire run --poll`) answers nothing and calls nothing.
 //
 // It fires once per thread that is new or changed since the high-water
 // `updated_at`, labelled with the thread's reason (`eventType`), so a listen's

@@ -40,7 +40,7 @@ function contextOver(fields: () => CredentialFields, config: { baseUrlOverride?:
 describe('githubClientFrom', () => {
   it('says how to add a token when the credential holds none', async () => {
     const source = githubClientFrom(contextOver(() => ({})).ctx);
-    await expect(source()).rejects.toThrow(/holds no token\. Add one: lf credential add --module github/);
+    await expect(source()).rejects.toThrow(/holds no token\. Add one: listen-fire credential add --module github/);
   });
 
   it('reaches api.github.com through the host fetch, with the token and the pinned API version', async () => {
