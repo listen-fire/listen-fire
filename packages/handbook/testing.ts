@@ -15,6 +15,12 @@
 // untrue. Captured schemas make "passes the test" and "true about the adapter"
 // the same statement.
 //
+// `github` is the one entry not from that capture: it comes from the real
+// `@lf/github` module's own schema (`lf catalog` over `examples/github-triage`,
+// recorded in the fixture's `capturedFrom.supplements`), because the module is
+// built in this repository and the README's lead program is checked against
+// it. The next full platform capture replaces it.
+//
 // The capture is driven FROM the handbook's probes (`--handbook`), through the
 // very catalog build a save performs, so what gets described is what the
 // examples demand: the fixture is the union of what the examples demand, and an
@@ -66,6 +72,8 @@ const CREDENTIAL_ADAPTERS: Record<string, string> = {
   team_chat: 'slack',
   team_workspace: 'slack',
   team_telegram: 'telegram',
+  my_github: 'github',
+  my_slack: 'slack',
 };
 
 /** The snapshot a run of any example would be handed. */

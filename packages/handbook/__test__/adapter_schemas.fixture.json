@@ -2,7 +2,13 @@
   "capturedAt": "2026-09-04T11:55:00.772Z",
   "capturedFrom": {
     "mode": "demand",
-    "sources": 88
+    "sources": 88,
+    "supplements": {
+      "github": {
+        "capturedAt": "2026-10-29",
+        "via": "lf catalog --dir examples/github-triage (the real @lf/github module, offline)"
+      }
+    }
   },
   "specs": {
     "email": {
@@ -132,6 +138,41 @@
       "defaultEvents": [
         "Run Failed"
       ]
+    },
+    "github": {
+      "constructionArgs": [
+        {
+          "name": "credentials",
+          "kind": "credential",
+          "required": true
+        }
+      ],
+      "canFire": true,
+      "triggerConfig": [
+        "events",
+        "participating",
+        "pollIntervalSeconds"
+      ],
+      "triggerConfigOptions": {
+        "events": [
+          "agent_session_finished",
+          "approval_requested",
+          "assign",
+          "author",
+          "ci_activity",
+          "comment",
+          "invitation",
+          "manual",
+          "member_feature_requested",
+          "mention",
+          "review_requested",
+          "security_advisory_credit",
+          "security_alert",
+          "state_change",
+          "subscribed",
+          "team_mention"
+        ]
+      }
     }
   },
   "schemas": {
@@ -2494,6 +2535,418 @@
           "on": [
             "Release Applied"
           ]
+        }
+      ]
+    },
+    "github": {
+      "positions": {
+        "Repository": {
+          "properties": {
+            "Name": "text",
+            "Full Name": "text",
+            "Owner": "text",
+            "Description": "text",
+            "Private": "boolean",
+            "Fork": "boolean",
+            "Archived": "boolean",
+            "Default Branch": "text",
+            "HTML URL": "text",
+            "Id": "text",
+            "Created At": "date",
+            "Updated At": "date",
+            "Pushed At": "date"
+          },
+          "edges": {
+            "Pull Requests": {
+              "target": "Pull Request",
+              "capability": {
+                "filter": "native",
+                "order": "bounded",
+                "supportsLimit": true,
+                "naturalOrder": {
+                  "field": "Created At",
+                  "direction": "desc"
+                }
+              },
+              "sequenced": "chronological",
+              "description": "Pull requests, open and closed, newest first. `State` reaches GitHub; other filters run over what comes back, so pin `State` == \"open\" on a busy repository."
+            },
+            "Issues": {
+              "target": "Issue",
+              "capability": {
+                "filter": "native",
+                "order": "bounded",
+                "supportsLimit": true,
+                "naturalOrder": {
+                  "field": "Created At",
+                  "direction": "desc"
+                }
+              },
+              "sequenced": "chronological",
+              "description": "Issues (not pull requests), open and closed, newest first. `State`, `Author`, a label in `Label Names`, an assignee in `Assignees` and an `Updated At` lower bound reach GitHub."
+            }
+          },
+          "propertyCapabilities": {
+            "Full Name": {
+              "filterOperators": [
+                "eq"
+              ]
+            }
+          },
+          "description": "A repository: its pull requests and its issues.",
+          "fieldDocs": {
+            "Full Name": "`owner/name`. An `==` in a `Repositories` WHERE fetches that repository directly.",
+            "Owner": "The owner’s login (`owner.login`)."
+          }
+        },
+        "Notification": {
+          "properties": {
+            "Id": "text",
+            "Reason": {
+              "kind": "enum",
+              "options": [
+                "agent_session_finished",
+                "approval_requested",
+                "assign",
+                "author",
+                "ci_activity",
+                "comment",
+                "invitation",
+                "manual",
+                "member_feature_requested",
+                "mention",
+                "review_requested",
+                "security_advisory_credit",
+                "security_alert",
+                "state_change",
+                "subscribed",
+                "team_mention"
+              ]
+            },
+            "Unread": "boolean",
+            "Updated At": "date",
+            "Last Read At": "date",
+            "Title": "text",
+            "Subject Type": {
+              "kind": "enum",
+              "options": [
+                "PullRequest",
+                "Issue",
+                "Commit",
+                "Release",
+                "Discussion",
+                "CheckSuite",
+                "RepositoryVulnerabilityAlert",
+                "RepositoryDependabotAlertsThread"
+              ],
+              "open": {}
+            }
+          },
+          "edges": {
+            "Repository": {
+              "target": "Repository",
+              "required": true,
+              "description": "The repository the thread is in."
+            },
+            "Pull Request": {
+              "target": "Pull Request",
+              "description": "The pull request it is about; nothing when `Subject Type` is not `PullRequest`."
+            },
+            "Issue": {
+              "target": "Issue",
+              "description": "The issue it is about; nothing when `Subject Type` is not `Issue`."
+            }
+          },
+          "propertyCapabilities": {
+            "Updated At": {
+              "filterOperators": [
+                "gt",
+                "gte",
+                "lt",
+                "lte"
+              ]
+            }
+          },
+          "description": "A notification thread: why you were told (`Reason`), what about (`Title`, `Subject Type`), and where. Walk `Pull Request` or `Issue` for the subject itself.",
+          "fieldDocs": {
+            "Id": "The thread id.",
+            "Reason": "Why you got it (`review_requested`, `mention`, `assign`, …). A thread’s reason can change as it moves.",
+            "Title": "The subject’s title (`subject.title`).",
+            "Subject Type": "What it is about (`subject.type`): `PullRequest`, `Issue`, `Release`, `Discussion`, `Commit`, `CheckSuite`, …"
+          }
+        },
+        "Pull Request": {
+          "properties": {
+            "Number": "number",
+            "Title": "text",
+            "Body": "text",
+            "State": {
+              "kind": "enum",
+              "options": [
+                "open",
+                "closed"
+              ]
+            },
+            "Author": "text",
+            "HTML URL": "text",
+            "Created At": "date",
+            "Updated At": "date",
+            "Closed At": "date",
+            "Assignees": {
+              "kind": "list",
+              "of": "text"
+            },
+            "Label Names": {
+              "kind": "list",
+              "of": "text"
+            },
+            "Id": "text",
+            "Draft": "boolean",
+            "Merged": "boolean",
+            "Merged At": "date",
+            "Requested Reviewers": {
+              "kind": "list",
+              "of": "text"
+            },
+            "Head Ref": "text",
+            "Base Ref": "text"
+          },
+          "edges": {
+            "Comments": {
+              "target": "Comment",
+              "capability": {
+                "filter": "bounded",
+                "order": "bounded",
+                "supportsLimit": true,
+                "naturalOrder": {
+                  "field": "Created At",
+                  "direction": "asc"
+                }
+              },
+              "sequenced": "chronological",
+              "writable": true,
+              "description": "The conversation, oldest first (a pull request’s are its issue comments, not its review comments). Comment here: `write pr-[:Comments]-> { Body: \"…\" }`."
+            },
+            "Labels": {
+              "target": "Label",
+              "capability": {
+                "filter": "bounded",
+                "order": "bounded",
+                "supportsLimit": true
+              },
+              "writable": true,
+              "description": "The labels it carries. Add one: `write issue-[:Labels]-> { Name: \"bug\" }` (GitHub creates a label the repository does not have yet; adding one it already carries changes nothing)."
+            },
+            "Repository": {
+              "target": "Repository",
+              "required": true,
+              "description": "The repository it belongs to."
+            }
+          },
+          "propertyCapabilities": {
+            "State": {
+              "filterOperators": [
+                "eq"
+              ]
+            }
+          },
+          "description": "A pull request. Comment on it along `Comments`; label it along `Labels`.",
+          "fieldDocs": {
+            "Author": "The login of who opened it (`user.login`).",
+            "Assignees": "The assignees’ logins.",
+            "Label Names": "The names of its labels; `Labels` are the labels themselves.",
+            "Merged": "Closed by merging (`merged_at` is set).",
+            "Requested Reviewers": "The logins asked to review it.",
+            "Head Ref": "The branch it merges from (`head.ref`).",
+            "Base Ref": "The branch it merges into (`base.ref`)."
+          }
+        },
+        "Issue": {
+          "properties": {
+            "Number": "number",
+            "Title": "text",
+            "Body": "text",
+            "State": {
+              "kind": "enum",
+              "options": [
+                "open",
+                "closed"
+              ]
+            },
+            "Author": "text",
+            "HTML URL": "text",
+            "Created At": "date",
+            "Updated At": "date",
+            "Closed At": "date",
+            "Assignees": {
+              "kind": "list",
+              "of": "text"
+            },
+            "Label Names": {
+              "kind": "list",
+              "of": "text"
+            },
+            "Id": "text",
+            "State Reason": "text",
+            "Comment Count": "number"
+          },
+          "edges": {
+            "Comments": {
+              "target": "Comment",
+              "capability": {
+                "filter": "bounded",
+                "order": "bounded",
+                "supportsLimit": true,
+                "naturalOrder": {
+                  "field": "Created At",
+                  "direction": "asc"
+                }
+              },
+              "sequenced": "chronological",
+              "writable": true,
+              "description": "The conversation, oldest first (a pull request’s are its issue comments, not its review comments). Comment here: `write pr-[:Comments]-> { Body: \"…\" }`."
+            },
+            "Labels": {
+              "target": "Label",
+              "capability": {
+                "filter": "bounded",
+                "order": "bounded",
+                "supportsLimit": true
+              },
+              "writable": true,
+              "description": "The labels it carries. Add one: `write issue-[:Labels]-> { Name: \"bug\" }` (GitHub creates a label the repository does not have yet; adding one it already carries changes nothing)."
+            },
+            "Repository": {
+              "target": "Repository",
+              "required": true,
+              "description": "The repository it belongs to."
+            }
+          },
+          "propertyCapabilities": {
+            "State": {
+              "filterOperators": [
+                "eq"
+              ]
+            },
+            "Author": {
+              "filterOperators": [
+                "eq"
+              ]
+            },
+            "Updated At": {
+              "filterOperators": [
+                "gt",
+                "gte"
+              ]
+            },
+            "Assignees": {
+              "filterOperators": [
+                "contains"
+              ]
+            },
+            "Label Names": {
+              "filterOperators": [
+                "contains"
+              ]
+            }
+          },
+          "description": "An issue. Comment on it along `Comments`; label it along `Labels`.",
+          "fieldDocs": {
+            "Author": "The login of who opened it (`user.login`).",
+            "Assignees": "The assignees’ logins.",
+            "Label Names": "The names of its labels; `Labels` are the labels themselves.",
+            "State Reason": "Why it was closed (`completed`, `not_planned`, …), or reopened.",
+            "Comment Count": "How many comments it has (`comments`)."
+          }
+        },
+        "Comment": {
+          "properties": {
+            "Body": "text",
+            "Author": "text",
+            "Author Association": "text",
+            "HTML URL": "text",
+            "Created At": "date",
+            "Updated At": "date",
+            "Id": "text"
+          },
+          "edges": {},
+          "description": "A comment in a pull request’s or an issue’s conversation.",
+          "fieldDocs": {
+            "Body": "The comment, in GitHub Markdown.",
+            "Author": "The commenter’s login (`user.login`).",
+            "Author Association": "`OWNER`, `MEMBER`, `CONTRIBUTOR`, `NONE`, …"
+          }
+        },
+        "Label": {
+          "properties": {
+            "Name": "text",
+            "Color": "text",
+            "Description": "text",
+            "Id": "text"
+          },
+          "edges": {},
+          "description": "A label on a pull request or an issue.",
+          "fieldDocs": {
+            "Color": "Hex, without the `#`."
+          }
+        }
+      },
+      "collections": {
+        "Repositories": {
+          "target": "Repository"
+        },
+        "Notifications": {
+          "target": "Notification"
+        }
+      },
+      "writableRoots": {},
+      "createShapes": {
+        "Comment": {
+          "fields": {
+            "Body": "text"
+          },
+          "resultShape": {
+            "externalId": "text",
+            "url": "text",
+            "Body": "text",
+            "Author": "text",
+            "Author Association": "text",
+            "HTML URL": "text",
+            "Created At": "date",
+            "Updated At": "date",
+            "Id": "text"
+          },
+          "requiredFields": [
+            "Body"
+          ],
+          "fieldDocs": {
+            "Body": "The comment, in GitHub Markdown."
+          },
+          "uniquenessAuthorable": false
+        },
+        "Label": {
+          "fields": {
+            "Name": "text"
+          },
+          "resultShape": {
+            "externalId": "text",
+            "url": "text",
+            "Name": "text",
+            "Color": "text",
+            "Description": "text",
+            "Id": "text"
+          },
+          "requiredFields": [
+            "Name"
+          ],
+          "uniquenessAuthorable": false
+        }
+      },
+      "supportsInPlaceUpdate": true,
+      "eventPosition": "Notification",
+      "eventPositions": [
+        {
+          "position": "Notification"
         }
       ]
     }
