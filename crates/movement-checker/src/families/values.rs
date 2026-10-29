@@ -638,21 +638,31 @@ fn check_enum_literal_operand(typing: &mut Typing, operand: &Expression, operand
 /// match, so a saved movement still runs as written. Refusing it is a
 /// tightened rule, for a release of the next compatibility key.
 fn check_enum_list_operand(typing: &mut Typing, operand: &Expression, other: Option<&Ty>) {
-    let Expression::List { elements } = operand else { return };
-    let Some(other @ Ty::Enum { .. }) = other else { return };
+    let Some(enum_ty @ Ty::Enum { .. }) = other else { return };
+    for found in enum_list_diagnostics(operand, enum_ty) {
+        report_enum(typing, found);
+    }
+}
+
+/// `check_enum_list_operand`'s findings for `operand`, when it is a list
+/// written in place, against `enum_ty`.
+fn enum_list_diagnostics(operand: &Expression, enum_ty: &Ty) -> Vec<EnumDiagnostic> {
+    let Expression::List { elements } = operand else { return Vec::new() };
     let literals = elements.iter().filter_map(|element| match element {
         ListElement::Expression(Expression::Static { value: StaticValue::String(literal) }) => Some(literal),
         _ => None,
     });
+    let mut found = Vec::new();
     for literal in literals {
-        let Some(found) = check_enum_literal(literal, other) else { continue };
+        let Some(diagnostic) = check_enum_literal(literal, enum_ty) else { continue };
         // An enum with no values refuses the field, not each text.
-        let whole_field = found.code == codes::ENUM_EMPTY_DOMAIN;
-        report_enum(typing, EnumDiagnostic { severity: Some(found.severity.unwrap_or(Severity::Warning)), ..found });
+        let whole_field = diagnostic.code == codes::ENUM_EMPTY_DOMAIN;
+        found.push(EnumDiagnostic { severity: Some(diagnostic.severity.unwrap_or(Severity::Warning)), ..diagnostic });
         if whole_field {
-            return;
+            break;
         }
     }
+    found
 }
 
 /// `checkNullComparison`.
@@ -1426,9 +1436,12 @@ fn type_where_enum_diagnostics(schema: &movement_parser::catalog::types::Instanc
         if matches!(compare_rule(op), CompareRule::None | CompareRule::Duration) {
             continue;
         }
-        for (field, literal) in [(left, right), (right, left)] {
-            let (Some(enum_ty), Expression::Static { value: StaticValue::String(literal) }) = (field_enum(field), literal) else { continue };
-            found.extend(check_enum_literal(literal, &enum_ty));
+        for (field, other) in [(left, right), (right, left)] {
+            let Some(enum_ty) = field_enum(field) else { continue };
+            match other {
+                Expression::Static { value: StaticValue::String(literal) } => found.extend(check_enum_literal(literal, &enum_ty)),
+                list => found.extend(enum_list_diagnostics(list, &enum_ty)),
+            }
         }
     }
     found

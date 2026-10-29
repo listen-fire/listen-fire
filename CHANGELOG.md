@@ -27,7 +27,7 @@ named in [`RELEASING.md`](RELEASING.md).
   - a text, number or true/false field read on past (`n.Title.length`): `MOV_TEXT_HAS_NO_FIELDS`;
   - any other field read on past (`c.Metadata.crm_id`): the new `MOV_READ_THROUGH_FIELD`, whose remedy is to bind the field first (`metadata = c.Metadata`, then `metadata.crm_id`), which runs.
 - An edge read as a field (`n.Repository`) says it is an edge and shows the walk (`n-[:Repository]->`, or `n-[:Repository]->.Name` for `n.Repository.Name`). A field a record lacks (`MOV_UNKNOWN_PROPERTY`) now lists the record's edges after its fields.
-- A text in a list an enum is tested against (`n.Reason IN ["review_request", "mention"]`, or `List.includes([…], n.Reason)`) is held to the enum as `==` holds one: `MOV_ENUM_UNKNOWN_VALUE`, with a did-you-mean. A warning for every 0.12 pin, since the list's other values still match and a saved movement runs as written; it waits for the next compatibility key (0.13) to refuse.
+- A text in a list an enum is tested against (`n.Reason IN ["review_request", "mention"]`, or `List.includes([…], n.Reason)`), in a body or in a WHERE inside a parameter's type, is held to the enum as `==` holds one: `MOV_ENUM_UNKNOWN_VALUE`, with a did-you-mean. A warning for every 0.12 pin, since the list's other values still match and a saved movement runs as written; it waits for the next compatibility key (0.13) to refuse.
 - A statement word bound as a name (`link = …`, `write = …`, `delete = …`) is refused as "'link' is reserved; pick another name". It was refused before as a malformed statement, naming the arrow it expected.
 
 ## [0.12.13] - 2026-10-29

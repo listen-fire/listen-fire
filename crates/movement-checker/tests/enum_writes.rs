@@ -107,6 +107,14 @@ fn list_includes_is_in_and_is_held_to_the_enum_the_same() {
 }
 
 #[test]
+fn a_list_in_a_parameter_type_where_is_held_against_the_enum() {
+    let found = judged("function m(co: <c-[x:Companies WHERE x.Stage IN [\"Won\", \"Leed\"]]->>) {\n  return co.Name\n}\n");
+    let unknown = unknown_judged(&found);
+    assert_eq!(unknown.len(), 1, "{found:#?}");
+    assert!(!unknown[0].1, "{unknown:#?}");
+}
+
+#[test]
 fn a_list_of_known_options_or_of_names_tested_against_an_enum_passes() {
     let found = judged("function m(t: <text>) {\n  return c-[x:Companies WHERE x.Stage IN [\"Lead\", \"Won\", t]]->\n}\n");
     assert!(unknown_judged(&found).is_empty(), "{found:#?}");
