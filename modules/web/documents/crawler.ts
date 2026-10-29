@@ -323,6 +323,25 @@ async function keepErrorScreenshot(page: BrowserPage): Promise<string | null> {
   }
 }
 
+/**
+ * Keep what `selector` finds hidden on the page's current document, however
+ * late it is drawn: a stylesheet rule, where a check of what is visible now
+ * loses to a banner that grows in a moment later. A navigation brings a fresh
+ * document, so a source applies it again after one. Best effort: a page that
+ * refuses it is read with them showing.
+ */
+async function keepHidden(page: BrowserPage, selector: string): Promise<void> {
+  try {
+    await page.evaluate((css) => {
+      const style = document.createElement('style');
+      style.textContent = css;
+      (document.head ?? document.documentElement).appendChild(style);
+    }, `${selector} { display: none !important; }`);
+  } catch (err) {
+    logger.warn('Could not keep page chrome hidden', { selector, err: err instanceof Error ? err.message : String(err) });
+  }
+}
+
 /** Ask `ready` every `every` ms until it answers yes or `timeout` has
  *  passed; whether it answered yes. */
 async function pollUntil(
@@ -351,4 +370,4 @@ async function waitFor(el: BrowserLocator, options: Parameters<BrowserLocator['w
   }
 }
 
-export { Crawler, Screenshot, FetchedDocument, waitFor, pollUntil, anyVisible, buildPdf, READY_TIMEOUT };
+export { Crawler, Screenshot, FetchedDocument, waitFor, pollUntil, anyVisible, keepHidden, buildPdf, READY_TIMEOUT };

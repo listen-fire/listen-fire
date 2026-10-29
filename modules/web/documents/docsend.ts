@@ -2,7 +2,7 @@ import type { ExternalUrl, PdfStream } from './reader';
 
 import { alert, readerHost, reportError } from './host';
 import { MINUTE, SECOND, pipeThroughTmpFile, retryUntilResolves, setJitteredTimeout } from './waits';
-import { Crawler, Screenshot, anyVisible, pollUntil, waitFor, READY_TIMEOUT as VIEWER_READY_TIMEOUT } from './crawler';
+import { Crawler, Screenshot, anyVisible, keepHidden, pollUntil, waitFor, READY_TIMEOUT as VIEWER_READY_TIMEOUT } from './crawler';
 
 import { DOCSEND_REGEX } from 'engine-contracts/document_sources';
 
@@ -20,6 +20,12 @@ const READY_SELECTORS = [
   '#nextPageIcon',
   'div.carousel.vertical',
 ];
+
+// Page chrome that must never cover the gate or reach a capture: Dropbox's
+// consent banner (an iframe on top of everything, in the DOM at zero height
+// for a moment before it grows) and DocSend's side drawer tab. The gate's
+// Continue reloads the page, which brings a fresh banner.
+const CHROME = '#ccpa-iframe, div.drawer_tab';
 
 class InvalidCredentialsError extends Error {}
 
@@ -53,6 +59,10 @@ class DocsendCrawler extends Crawler {
   }
 
   protected async authenticate(): Promise<Error | null> {
+    // A field under the banner cannot be clicked: the click waits out its
+    // timeout for a pointer that never reaches it.
+    await keepHidden(this.page, CHROME);
+
     const emailField = this.page.locator('#link_auth_form_email').nth(0);
     const passcodeField = this.page.locator('#link_auth_form_passcode').nth(0);
     const continueBtn = this.page.getByRole('button', { name: 'Continue' });
@@ -138,7 +148,7 @@ class DocsendCrawler extends Crawler {
     await this.page.waitForLoadState('domcontentloaded');
     await setJitteredTimeout({ baseMs: 5000, jitterMs: 500 });
 
-    await this.hideChrome();
+    await keepHidden(this.page, CHROME);
 
     const nextButton = this.page.locator('#nextPageIcon').nth(0);
     const scrollable = this.page.locator('div.carousel.vertical').nth(0);
@@ -164,18 +174,6 @@ class DocsendCrawler extends Crawler {
   }
 
   // ── Docsend-specific helpers ─────────────────────────────────────────────
-
-  private async hideChrome(): Promise<void> {
-    const consent = this.page.locator('#ccpa-iframe').nth(0);
-    const drawer = this.page.locator('div.drawer_tab').nth(0);
-
-    if (await consent.isVisible()) {
-      await consent.evaluate((el) => el.setAttribute('style', 'display: none'));
-    }
-    if (await drawer.isVisible()) {
-      await drawer.evaluate((el) => el.setAttribute('style', 'display: none'));
-    }
-  }
 
   private async capturePaginated(): Promise<Screenshot[]> {
     const slide = this.page.locator('div.item.active img.page-view').nth(0);
