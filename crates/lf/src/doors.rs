@@ -1,10 +1,10 @@
-//! lf's inbound doors, on the inbound core (crate::inbound): the core owns
+//! listen-fire's inbound doors, on the inbound core (crate::inbound): the core owns
 //! verification, the delivery pipeline and the push doors' answers; this file
-//! is what lf keeps behind them.
+//! is what listen-fire keeps behind them.
 //!
 //!   POST /api/public/webhook-sync/<provider>/<install>   a provider's delivery
 //!        (`…/<install>/<key>`: one of the install's scoped webhooks, crate::subscriptions)
-//!        (`/hooks/<external>/<install>` is the same door under lf's older name)
+//!        (`/hooks/<external>/<install>` is the same door under listen-fire's older name)
 //!   POST /api/public/adapter/<external>/emit  { events }  an external's new data
 //!   POST /api/public/adapter/<external>/wake  { keys }    resume what is parked
 //!
@@ -20,7 +20,7 @@
 //! holding the events it produced; one under a provider's delivery id kept
 //! before at its subscription is a duplicate, acked and kept out. Events are
 //! queued as `fire_event` work rows naming their delivery, and wakes as
-//! `wake_await` rows in lf's state, drained by `lf serve`.
+//! `wake_await` rows in listen-fire's state, drained by `listen-fire serve`.
 
 use std::cell::RefCell;
 
@@ -109,7 +109,7 @@ fn served_of(running: &RunningExternal) -> Served {
 }
 
 /// What reads a delivery for the doors: the external, over the protocol, in
-/// lf; the inbound contract suite's adapter in its bridge.
+/// listen-fire; the inbound contract suite's adapter in its bridge.
 pub trait Reader {
     /// Whether the external reads deliveries (`preprocessInbound`).
     fn reads_deliveries(&self, external: &str) -> bool;
@@ -125,14 +125,14 @@ pub trait Reader {
 pub enum EventSink<'a> {
     /// A `fire_event` work row, for the drain.
     Queue,
-    /// The same, each row listed for the answer (`/hooks/…` under `lf serve --doors-only`).
+    /// The same, each row listed for the answer (`/hooks/…` under `listen-fire serve --doors-only`).
     Listed(&'a RefCell<Vec<Js>>),
     /// Run now, inside the request, once its receipt is kept: its runs, or
-    /// the line a duplicate ran nothing with (`/hooks/…`, `lf run --webhook`).
+    /// the line a duplicate ran nothing with (`/hooks/…`, `listen-fire run --webhook`).
     Inline { session: &'a Session, fired: &'a RefCell<Fired> },
 }
 
-/// lf's side of the core's two store interfaces (`createLfInboundStores`).
+/// listen-fire's side of the core's two store interfaces (`createLfInboundStores`).
 pub struct LfDoors<'a, R: Reader> {
     pub store: &'a dyn RunHostStore,
     pub served: Vec<Served>,
@@ -193,7 +193,7 @@ impl<R: Reader> LfDoors<'_, R> {
             match session.fire_event(external, event, false, delivered).await {
                 Ok(one) => {
                     for line in &one.redelivered {
-                        eprintln!("lf: {line}");
+                        eprintln!("listen-fire: {line}");
                     }
                     fired.borrow_mut().outcomes.extend(one.outcomes);
                 }
@@ -239,7 +239,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         let (name, key) = subscription_of(id);
         let Some(credential) = self.install(name) else { return Ok(None) };
         let Some(setup) = self.setup_of(&credential.external) else { return Ok(None) };
-        // A scoped webhook lf holds no record of has no door.
+        // A scoped webhook listen-fire holds no record of has no door.
         if let Some(key) = key
             && !has_scoped(credential, key)
         {
@@ -250,7 +250,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         let own = key.and_then(|key| scoped_secret(credential, key)).or_else(|| credential.fields.get(&setup.secret_field).cloned());
         // A module that checks its own inbound may be addressed by a user
         // credential (it carries the provider keys the check reads) while the
-        // secret `lf connect` set is the install's.
+        // secret `listen-fire connect` set is the install's.
         let secret = match own {
             None if setup.declaration.scheme == Scheme::Module => {
                 install_of(&self.installs, &credential.external).and_then(|install| install.fields.get(&setup.secret_field)).cloned()
@@ -439,7 +439,7 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
 // ── The external, as the reader ─────────────────────────────────────────────
 
 /// Deliveries read by the external over the protocol, under the install's
-/// credential. No `listEventTypes`: lf routes by the event itself, so a
+/// credential. No `listEventTypes`: listen-fire routes by the event itself, so a
 /// delivery never costs the external a second call.
 pub struct SessionReader<'a> {
     session: &'a Session,
@@ -625,7 +625,7 @@ impl Store {
 
 // ── The legacy name: /hooks/<external>/<install> ───────────────────────────
 
-/// The door's provider segment and subscription for lf's older
+/// The door's provider segment and subscription for listen-fire's older
 /// `/hooks/<external>[/<install>]` (`hookTarget`): the install is the
 /// external's only credential when the URL names none. None: the external
 /// takes no webhooks.
@@ -638,7 +638,7 @@ pub fn hook_target(session: &Session, external: &str, install: Option<&str>) -> 
 }
 
 /// One delivery through the core with its events run inside the request, as
-/// `/hooks/...` and `lf run --webhook` have always answered (`deliverInline`):
+/// `/hooks/...` and `listen-fire run --webhook` have always answered (`deliverInline`):
 /// its runs, or the line a duplicate ran nothing with.
 pub async fn deliver_inline(session: &Session, delivery: Delivery<'_>, notify: &dyn Fn()) -> (Answer, Fired) {
     let fired = RefCell::new(Fired::default());
@@ -648,7 +648,7 @@ pub async fn deliver_inline(session: &Session, delivery: Delivery<'_>, notify: &
     (answer, fired.into_inner())
 }
 
-/// A delivery addressed by external, as `lf run --webhook` names it.
+/// A delivery addressed by external, as `listen-fire run --webhook` names it.
 pub struct Webhook<'a> {
     pub external: &'a str,
     /// The install it is for; the external's only one when None.
@@ -657,7 +657,7 @@ pub struct Webhook<'a> {
     pub headers: &'a [(String, String)],
 }
 
-/// `lf run --webhook`: a delivery taken as production takes one, its runs
+/// `listen-fire run --webhook`: a delivery taken as production takes one, its runs
 /// returned (a duplicate's: none, and the line saying so); a refusal is an
 /// error (`receiveWebhook`).
 pub async fn receive_webhook(session: &Session, webhook: Webhook<'_>) -> Result<Fired, String> {

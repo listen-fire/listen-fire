@@ -1,11 +1,11 @@
 // The run host's contract suite (packages/movement-engine/services/run_host/
-// contract.ts) against lf's SQLite backend, driven over its stdio JSON-RPC
-// bridge (`lf --contract-store`) by `RpcStoreBackend`: the same cases the
+// contract.ts) against listen-fire's SQLite backend, driven over its stdio JSON-RPC
+// bridge (`listen-fire --contract-store`) by `RpcStoreBackend`: the same cases the
 // hosted Postgres backend is held to (the live state families, the callbacks
 // and the cancel cases), one fresh state file per case. Then the same cases
 // through a third-party store module filling a project's store slot
-// (`lf --contract-store-slot`): lf drives the module over the store wire,
-// and the module (store_module/forward.mjs) forwards to `lf --contract-store`.
+// (`listen-fire --contract-store-slot`): listen-fire drives the module over the store wire,
+// and the module (store_module/forward.mjs) forwards to `listen-fire --contract-store`.
 // The delivery receipt's cases (`inbound.*`) run over both bridges too.
 
 import { test } from 'node:test';

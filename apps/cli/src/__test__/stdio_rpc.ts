@@ -1,6 +1,6 @@
 // A test bridge another process serves over its stdin and stdout, one
-// JSON-RPC 2.0 message per line: how `lf --contract-secrets` and
-// `lf --contract-doors` arrange and read their test worlds. (Core slot
+// JSON-RPC 2.0 message per line: how `listen-fire --contract-secrets` and
+// `listen-fire --contract-doors` arrange and read their test worlds. (Core slot
 // modules are not spoken to this way: they speak adapter protocol 2 over
 // HTTP, movement-engine `public/module-wire`.)
 

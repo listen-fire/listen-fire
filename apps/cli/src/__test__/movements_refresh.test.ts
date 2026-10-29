@@ -1,4 +1,4 @@
-// A long-running `lf serve` takes a changed movement without a restart: the
+// A long-running `listen-fire serve` takes a changed movement without a restart: the
 // folder's watcher (the OS's own) tells it what changed, at the default
 // settings, and it swaps the files it runs.
 // A listen keeps its name across the swap, so its checkpoint and the

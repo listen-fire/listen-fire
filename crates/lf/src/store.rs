@@ -150,10 +150,10 @@ create table if not exists work (
 pub const CORE_PARK_REASONS: &[&str] = &["timer", "await", "limit"];
 /// A polled listen's row in the work queue: its next poll.
 pub const POLL_WORK_KIND: &str = "poll_listen";
-/// The work kinds lf queues.
+/// The work kinds listen-fire queues.
 pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", "fire_callback", "poll_listen", "refresh_subscription"];
 
-/// Columns a state file written by an earlier lf lacks, added on open.
+/// Columns a state file written by an earlier listen-fire lacks, added on open.
 const ADDED_RUN_COLUMNS: &[&str] = &["cancel_requested_at", "cancel_reason", "delivery_id"];
 /// Added to a state file written before a failed run could be run again.
 const ATTEMPT_COLUMNS: &[(&str, &str)] = &[("attempt", "integer not null default 1"), ("attempts", "text not null default '[]'")];
@@ -204,7 +204,7 @@ pub struct RunRow {
     pub outcome: Option<String>,
     /// The delivery whose event started it, when one did.
     pub delivery_id: Option<String>,
-    /// The latest attempt's number, from 1: a rerun (`lf runs rerun`) is
+    /// The latest attempt's number, from 1: a rerun (`listen-fire runs rerun`) is
     /// the run's next attempt. `status`, `started_at`, `finished_at`,
     /// `input` and `outcome` are that attempt's.
     pub attempt: i64,
@@ -261,13 +261,13 @@ pub struct ClaimDue<'a> {
     pub lease_ms: i64,
     /// None: now.
     pub due_by: Option<&'a str>,
-    /// Only rows of these kinds (a drain pool's, `lf drain --kinds`); None:
-    /// every kind lf drains.
+    /// Only rows of these kinds (a drain pool's, `listen-fire drain --kinds`); None:
+    /// every kind listen-fire drains.
     pub kinds: Option<&'a [String]>,
 }
 
 impl ClaimDue<'_> {
-    /// The kinds the claim takes, each one lf drains.
+    /// The kinds the claim takes, each one listen-fire drains.
     pub fn kinds(&self) -> Result<Vec<String>> {
         let Some(kinds) = self.kinds else { return Ok(WORK_KINDS.iter().map(|k| k.to_string()).collect()) };
         match kinds.iter().find(|k| !WORK_KINDS.contains(&k.as_str())) {
@@ -398,11 +398,11 @@ pub struct RunStart<'a> {
 pub enum DeliverySource {
     /// A provider's webhook at its door.
     Webhook,
-    /// lf's older `/hooks/<external>` door.
+    /// listen-fire's older `/hooks/<external>` door.
     Hook,
     /// An external's own push (`emit`).
     Emit,
-    /// `lf run --webhook`, or a replay by `lf deliveries replay`.
+    /// `listen-fire run --webhook`, or a replay by `listen-fire deliveries replay`.
     Cli,
 }
 
@@ -431,7 +431,7 @@ impl DeliverySource {
 /// the events it produced, never its raw body, headers or signature.
 #[derive(Debug, Clone)]
 pub struct NewDelivery {
-    /// lf's own id for it.
+    /// listen-fire's own id for it.
     pub id: String,
     /// The provider's id for it, when the door has one: a second delivery
     /// under it, at the same subscription, is kept out.
@@ -773,7 +773,7 @@ impl Store {
     // ── Parks ───────────────────────────────────────────────────────────────
 
     pub fn put_leaf(&self, run_id: &str, address: &str, reason: &str, wake_at: Option<&str>, state: &Js, fence: Option<&str>) -> Result<()> {
-        // `rewritten` is not kept: lf has no limit resume to read it.
+        // `rewritten` is not kept: listen-fire has no limit resume to read it.
         reason_of(reason.to_string())?;
         self.fenced(run_id, fence, |db| Self::put_leaf_in(db, run_id, address, reason, wake_at, state))
     }
@@ -1630,7 +1630,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lf-state-{}", uuid()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("state.db");
-        // A run table as an lf before delivery receipts wrote it.
+        // A run table as a listen-fire before delivery receipts wrote it.
         Connection::open(&path)
             .unwrap()
             .execute_batch(

@@ -1,11 +1,11 @@
 // The secrets slot's conformance cases against a test vault module
-// (secrets_module/serve.ts) spoken to directly, and through lf's own client
-// of it (`lf --contract-secrets-slot`, the project's secrets slot), so lf's
+// (secrets_module/serve.ts) spoken to directly, and through listen-fire's own client
+// of it (`listen-fire --contract-secrets-slot`, the project's secrets slot), so listen-fire's
 // side of the wire is held to the meaning the module is. Both are held to the
 // family's eleven contract cases (movement-engine services/secrets/
 // contract.ts) as a store, and to the slot's own cases (module-runtime
 // `module_wire/conformance.ts`): the list, the lease, whole entries, and the
-// read-only answer. lf's default module (`@lf/file-secrets`) is served and
+// read-only answer. listen-fire's default module (`@lf/file-secrets`) is served and
 // held the same way, so the runner is held to what it serves.
 
 import { test } from 'node:test';
@@ -56,7 +56,7 @@ const bridges: Array<{ over: string; readOnly: boolean; reach(options: { readOnl
     },
   },
   {
-    over: "lf's client of a secrets module",
+    over: "listen-fire's client of a secrets module",
     readOnly: true,
     reach: async ({ readOnly }) => {
       const vault = await serveSecretsModule({ listen: 0, ...(readOnly !== undefined ? { readOnly } : {}) });
@@ -74,7 +74,7 @@ const bridges: Array<{ over: string; readOnly: boolean; reach(options: { readOnl
     },
   },
   {
-    over: "lf's file secrets module",
+    over: "listen-fire's file secrets module",
     readOnly: false,
     reach: async () => {
       const served = await startModule(lfBinary(), ['--contract-secrets-slot', '--dir', project(null)]);

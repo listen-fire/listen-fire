@@ -4,7 +4,7 @@
 // calls.jsonl in its working folder with the space it was asked in, as the
 // request's `settings` carry it. It is a polled source too: each poll of a
 // space logs the checkpoint it was handed and returns one note of that space.
-// Listens where lf says (`MODULE_SOCKET`, else `PORT`).
+// Listens where listen-fire says (`MODULE_SOCKET`, else `PORT`).
 
 import { createServer } from 'node:http';
 import { appendFileSync, unlinkSync } from 'node:fs';

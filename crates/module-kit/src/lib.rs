@@ -12,7 +12,7 @@
 //! with [`Ctx::ocr`].
 //!
 //! A [`Host`] serves one or several modules, each at `/<name>`, over HTTP on
-//! loopback TCP or a Unix socket. It is its own process: lf speaks to it as
+//! loopback TCP or a Unix socket. It is its own process: listen-fire speaks to it as
 //! to any module server, never linking it in. Trusted modules may share a
 //! host; an untrusted one gets a host of its own.
 //!

@@ -1,12 +1,12 @@
-//! The listening half of `lf serve` (the `serve` cargo feature): the hyper
+//! The listening half of `listen-fire serve` (the `serve` cargo feature): the hyper
 //! listener, the inbound doors, the callback door, the models door and the
-//! work queue's drain. A light build leaves it out; `lf call`, `lf cancel`
-//! and `lf run --webhook` (src/serve.rs) need no listener.
+//! work queue's drain. A light build leaves it out; `listen-fire call`, `listen-fire cancel`
+//! and `listen-fire run --webhook` (src/serve.rs) need no listener.
 //!
 //! `--doors-only` (or `LF_DOORS_ONLY=1`) is serve for compute billed by the
 //! request, which is frozen or stopped once a response is sent: nothing
 //! drains in this process, and `/hooks/…` queues its events (and `/api/cb/…`
-//! its callback's body) instead of running them inside the request. Workers (`lf drain`) run the work, started
+//! its callback's body) instead of running them inside the request. Workers (`listen-fire drain`) run the work, started
 //! by the wake slot's module (crate::wake) or a schedule.
 
 
@@ -28,7 +28,7 @@ use crate::json::{Js, Obj};
 use crate::oauth_signin::deliver_public_redirect;
 #[cfg(not(feature = "oauth"))]
 fn deliver_public_redirect(_: &std::path::Path, _: &str) -> (u16, String) {
-    (404, "this lf was built without the `oauth` feature, so it takes no sign-in redirect".into())
+    (404, "this listen-fire was built without the `oauth` feature, so it takes no sign-in redirect".into())
 }
 use crate::obj;
 use crate::project::Project;
@@ -41,7 +41,7 @@ pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 const MAX_OCR_BODY_BYTES: usize = 96 * 1024 * 1024;
 
 /// What a request's body may hold: a file to read at the OCR door, else the
-/// doors' megabyte. Only a module lf started holds the door's token, but the
+/// doors' megabyte. Only a module listen-fire started holds the door's token, but the
 /// body is read before the token is checked, so the larger limit is the
 /// door's alone.
 fn body_limit(path: &str) -> usize {
@@ -55,7 +55,7 @@ fn body_limit(path: &str) -> usize {
 const MAX_DELIVERY_BYTES: usize = 100 * 1024;
 /// How often due work is drained when nothing pokes it.
 const TICK: Duration = Duration::from_millis(1000);
-/// Where a provider's OAuth redirect for `lf credential add --public` lands.
+/// Where a provider's OAuth redirect for `listen-fire credential add --public` lands.
 const PUBLIC_CALLBACK_PATH: &str = "/oauth/callback";
 
 /// Open the models door alone, unless this process already serves its doors.
@@ -79,13 +79,13 @@ pub async fn open_models_door(credentials: &crate::secrets::Credentials) -> Resu
                     _ => {}
                 }
             }
-            Response::json(404, &Js::Obj(obj! { "error" => Js::str("not_found"), "message" => Js::str("outside lf serve, lf serves only the models, OCR and limits doors") }))
+            Response::json(404, &Js::Obj(obj! { "error" => Js::str("not_found"), "message" => Js::str("outside listen-fire serve, listen-fire serves only the models, OCR and limits doors") }))
         }
     }));
     Ok(())
 }
 
-/// How `lf serve` runs.
+/// How `listen-fire serve` runs.
 pub struct Serving<'a> {
     pub ephemeral: bool,
     pub store: &'a StoreSpec,
@@ -112,7 +112,7 @@ struct Listening {
     doors_only: bool,
 }
 
-/// `lf serve [--port N] [--doors-only]`: until SIGINT or SIGTERM.
+/// `listen-fire serve [--port N] [--doors-only]`: until SIGINT or SIGTERM.
 pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> {
     let Serving { ephemeral, store, port, doors_only } = serving;
     let port = match port {
@@ -127,7 +127,7 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     let _ = HOST_URL.set(format!("http://127.0.0.1:{port}"));
     let _ = HOST_TOKEN.set(crate::http_out::hex(&crate::http_out::random_bytes(24)?));
     let env: Vec<(String, String)> = std::env::vars().collect();
-    crate::movements_slot::require_watch(&project, &env, "lf serve")?;
+    crate::movements_slot::require_watch(&project, &env, "listen-fire serve")?;
     let role = if doors_only { Role::Doors } else { Role::Serve };
     // Accepting before the session opens: opening it calls modules (each
     // connection's describe), and a module that declares `hostLimits` asks
@@ -143,7 +143,7 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
             }
             let opened = listening.wait_for(Option::is_some).await.ok().and_then(|opened| opened.clone());
             let Some(listening) = opened else {
-                return Response::json(503, &Js::Obj(obj! { "error" => Js::str("unavailable"), "message" => Js::str("lf serve stopped before it opened") }));
+                return Response::json(503, &Js::Obj(obj! { "error" => Js::str("unavailable"), "message" => Js::str("listen-fire serve stopped before it opened") }));
             };
             route(&listening, request).await.unwrap_or_else(|message| Response::json(500, &Js::Obj(obj! { "error" => Js::Str(message) })))
         }
@@ -166,12 +166,12 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
         async move { match session.watch_movements(&mut std::io::stdout()).await {} }
     });
     let drain = (!doors_only).then(|| tokio::task::spawn_local(drain_forever(session.clone(), poke.clone())));
-    println!("lf serving on http://127.0.0.1:{port}/hooks/<external>/<install>");
+    println!("listen-fire serving on http://127.0.0.1:{port}/hooks/<external>/<install>");
     for line in hook_urls(&session, &format!("http://127.0.0.1:{port}")) {
         println!("{line}");
     }
     if doors_only {
-        println!("doors only: nothing drains in this process; workers (`lf drain`) run what the doors queue");
+        println!("doors only: nothing drains in this process; workers (`listen-fire drain`) run what the doors queue");
     }
 
     stopped().await;
@@ -179,7 +179,7 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
         task.abort();
         let _ = task.await;
     }
-    // The last holder: the session goes; its module processes stop as lf exits (crate::module_hosts::stop_all).
+    // The last holder: the session goes; its module processes stop as listen-fire exits (crate::module_hosts::stop_all).
     drop(session);
     Ok(0)
 }
@@ -230,7 +230,7 @@ async fn stopped() {
 }
 
 /// The drain: one pass at a time in this process (the run lease keeps any
-/// other lf process from stepping the same run meanwhile); a poke while a
+/// other listen-fire process from stepping the same run meanwhile); a poke while a
 /// pass runs is one more pass after it.
 async fn drain_forever(session: Rc<Session>, poke: Rc<Notify>) {
     let mut tick = tokio::time::interval(TICK);
@@ -247,7 +247,7 @@ async fn drain_forever(session: Rc<Session>, poke: Rc<Notify>) {
     }
 }
 
-/// Each run an entry stepped, as `lf serve` logs it.
+/// Each run an entry stepped, as `listen-fire serve` logs it.
 fn log_runs(outcomes: &[RunOutcome]) {
     let mut out = std::io::stdout();
     for o in outcomes {
@@ -353,7 +353,7 @@ async fn route(listening: &Listening, request: Request) -> Result<Response, Stri
         return Ok(response);
     }
 
-    // lf's older name for the delivery door. Its events run inside the
+    // listen-fire's older name for the delivery door. Its events run inside the
     // request and the answer lists the runs, as it always has.
     let Some(hook) = segments(&request.path, "/hooks/").filter(|s| s.len() <= 2) else { return Ok(not_found()) };
     let external = decoded(hook[0])?;
@@ -409,7 +409,7 @@ async fn hook_queued(session: &Session, delivery: Delivery<'_>, notify: &dyn Fn(
 }
 
 /// The models door: a model call by the models slot's module, for an
-/// external this process started (it holds LF_HOST_TOKEN). Served by `lf
+/// external this process started (it holds LF_HOST_TOKEN). Served by `listen-fire
 /// serve`'s listener, and alone outside it (`open_models_door`).
 async fn models_door(credentials: &crate::secrets::Credentials, request: &Request) -> Response {
     let presented = request.headers.iter().find(|(k, _)| k == "authorization").map(|(_, v)| v.as_str());
@@ -424,7 +424,7 @@ async fn models_door(credentials: &crate::secrets::Credentials, request: &Reques
     #[cfg(not(feature = "anthropic"))]
     let _ = (&body, credentials);
     #[cfg(not(feature = "anthropic"))]
-    return Response::json(502, &Js::Obj(obj! { "error" => Js::str("model_call_failed"), "message" => Js::str("this lf was built without the `anthropic` feature, so its models slot is empty") }));
+    return Response::json(502, &Js::Obj(obj! { "error" => Js::str("model_call_failed"), "message" => Js::str("this listen-fire was built without the `anthropic` feature, so its models slot is empty") }));
     #[cfg(feature = "anthropic")]
     match crate::llm_calls::host_model_call(&body, credentials).await {
         Ok(answer) => Response::json(200, &answer),
@@ -452,7 +452,7 @@ async fn ocr_door(request: &Request) -> Response {
 }
 
 /// The limits door's answer when `request` is for it; None for any other.
-/// `lf serve` answers it ahead of its session (`run`).
+/// `listen-fire serve` answers it ahead of its session (`run`).
 fn limits_door_request(request: &Request) -> Option<Response> {
     if request.method != "POST" || request.too_large {
         return None;
@@ -464,7 +464,7 @@ fn limits_door_request(request: &Request) -> Option<Response> {
 }
 
 /// The limits door: a module asking before a request to its provider, under
-/// the ticket of the call lf is making to it (crate::limits_door).
+/// the ticket of the call listen-fire is making to it (crate::limits_door).
 fn limits_door(module: &str, request: &Request) -> Response {
     let bad = |message: String| Response::json(400, &Js::Obj(obj! { "error" => Js::str("bad_request"), "message" => Js::Str(message) }));
     let module = match decoded(module) {
@@ -480,7 +480,7 @@ fn limits_door(module: &str, request: &Request) -> Response {
     Response::json(status, &answer)
 }
 
-/// The webhook door and the push doors, over any host's stores: `lf serve`'s,
+/// The webhook door and the push doors, over any host's stores: `listen-fire serve`'s,
 /// and the inbound contract suite's bridge (crate::contract_doors). None for
 /// a path that is neither.
 pub async fn doors_route<S: InboundStore + PushStore>(stores: &S, request: &Request) -> Result<Option<Response>, String> {

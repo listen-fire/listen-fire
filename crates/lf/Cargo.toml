@@ -1,9 +1,9 @@
 [package]
-# The facade: `cargo install listen-fire` installs the `lf` command, and the
+# The facade: `cargo install listen-fire` installs the `listen-fire` command, and the
 # library re-exports the parser, checker and engine crates (src/lib.rs).
 name = "listen-fire"
 # The release version: a tag lf-v<version> must name it (lf-release.yml
-# refuses a tag that does not), and `lf --version` prints it.
+# refuses a tag that does not), and `listen-fire --version` prints it.
 version.workspace = true
 edition.workspace = true
 publish = true
@@ -11,7 +11,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
-description = "listen-fire: the movement language's parser, checker and engine, and the `lf` command that runs movements locally"
+description = "listen-fire: the movement language's parser, checker and engine, and the `listen-fire` command that runs movements locally"
 readme = "README.md"
 keywords = ["movement", "automation", "dsl", "workflow", "listen-fire"]
 categories = ["command-line-utilities", "compilers", "development-tools"]
@@ -27,16 +27,16 @@ path = "src/lib.rs"
 # builds it): a library user takes `default-features = false` and gets the
 # three re-exported crates alone.
 [[bin]]
-name = "lf"
+name = "listen-fire"
 path = "src/main.rs"
 required-features = ["cli"]
 
 [features]
-# The `lf` command, in the pieces a light build can leave out. The default is
-# the full `lf`; `--no-default-features --features cli` builds the light one
+# The `listen-fire` command, in the pieces a light build can leave out. The default is
+# the full `listen-fire`; `--no-default-features --features cli` builds the light one
 # (SQLite store, loopback and remote modules, no TLS stack, no provider
 # client, no sign-in flow, no inbound doors), the host to embed or to run
-# `lf check` and a manual run with. Each omitted piece refuses by name when a
+# `listen-fire check` and a manual run with. Each omitted piece refuses by name when a
 # project asks for it.
 default = ["cli", "anthropic", "oauth", "postgres", "serve", "pdf"]
 cli = ["dep:module-wire", "dep:serde", "dep:serde_json", "dep:serde_yaml", "dep:indexmap", "dep:tokio", "dep:hyper", "dep:hyper-util", "dep:hmac", "dep:base64", "dep:http-body-util", "dep:bytes", "dep:rusqlite", "dep:getrandom", "dep:uuid", "dep:sha2", "dep:jiff", "dep:url", "dep:notify"]
@@ -49,7 +49,7 @@ anthropic = ["cli", "tls"]
 oauth = ["cli", "tls"]
 # The Postgres store, its TLS, and the fingerprint guard's Postgres memory.
 postgres = ["cli", "tls", "dep:tokio-postgres"]
-# The hyper server bits: `lf serve`, the inbound doors and their signature checks.
+# The hyper server bits: `listen-fire serve`, the inbound doors and their signature checks.
 serve = ["cli", "hyper/server"]
 # A PDF's own text layer (src/pdf_text.rs), read before the ocr slot is asked.
 pdf = ["cli", "dep:lopdf", "dep:libc"]
@@ -69,7 +69,7 @@ movement-checker = { package = "listen-fire-checker", version = "0.12.12", path 
 # The engine, natively: a segment runs in this process, its requests served
 # by the run host here (src/segment.rs), with the native environment
 # services (zones, URLs, Unicode data) the engine's default feature links.
-# The language service `lf lsp` serves (src/lsp.rs).
+# The language service `listen-fire lsp` serves (src/lsp.rs).
 movement-language = { package = "listen-fire-language", version = "0.12.12", path = "../movement-language" }
 movement-engine = { package = "listen-fire-engine", version = "0.12.12", path = "../movement-engine" }
 # Adapter protocol 2's envelope, JSON in JavaScript's key order and the
@@ -97,7 +97,7 @@ rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 # automations tables. Every value crosses as text, so no type features.
 tokio-postgres = { version = "0.7", optional = true }
 # The movements folder watched (src/movements_slot.rs `FolderWatch`):
-# FSEvents on macOS, inotify on Linux, so `lf serve` sees an edit at once.
+# FSEvents on macOS, inotify on Linux, so `listen-fire serve` sees an edit at once.
 notify = { version = "8", default-features = false, features = ["macos_fsevent"], optional = true }
 # Random bytes: a callback id (`newCallbackId`), and a sign-in's state and
 # PKCE verifier (src/oauth2.rs).
@@ -118,7 +118,7 @@ webpki-roots = { version = "1", optional = true }
 # and PKCE verifier of a sign-in.
 url = { version = "2", optional = true }
 # A PDF's pages and the text its fonts draw (src/pdf_text.rs). Its default
-# features are dates and threads lf does not need.
+# features are dates and threads listen-fire does not need.
 lopdf = { version = "0.42", default-features = false, optional = true }
 # The PDF reader child's address-space limit (setrlimit before exec).
 libc = { version = "0.2", optional = true }
@@ -126,6 +126,6 @@ libc = { version = "0.2", optional = true }
 [dev-dependencies]
 # Paused time: a test of the wall clock's grace runs in no time.
 tokio = { version = "1", features = ["test-util"] }
-# tests/module_host.rs: lf drives crate modules served by a module host.
+# tests/module_host.rs: listen-fire drives crate modules served by a module host.
 module-kit = { package = "listen-fire-module-kit", path = "../module-kit" }
 rust-module-example = { path = "../../examples/rust-module" }

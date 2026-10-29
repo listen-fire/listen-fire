@@ -1,5 +1,5 @@
 //! The ocr slot (docs/contracts/ocr-slot.md): a scanned PDF's or an image's
-//! bytes in, their text out. lf builds no OCR in, so the slot is empty unless
+//! bytes in, their text out. listen-fire builds no OCR in, so the slot is empty unless
 //! lf.yaml's `core: { ocr: … }` names a module (a process or a remote url),
 //! reached over the slot's methods (crate::slot_client).
 //!
@@ -8,7 +8,7 @@
 //!   a file's text use): an image always, a PDF only when it has no usable
 //!   text layer of its own (crate::pdf_text). The read's cost is charged to
 //!   the run, as a model call's is, under `ocr:<the module's label>`.
-//! - a module lf started, through the OCR door (`ctx.ocr`): the door bills
+//! - a module listen-fire started, through the OCR door (`ctx.ocr`): the door bills
 //!   nothing itself; the module charges the read to the call that asked, so
 //!   the cost reaches the run on that call's answer, as the models door's does.
 //!
@@ -155,7 +155,7 @@ impl OcrModule {
 /// A file the host's file-to-text hands to OCR.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Scanned {
-    /// A PDF with no usable text layer, and its pages where lf could count them.
+    /// A PDF with no usable text layer, and its pages where listen-fire could count them.
     /// A build without the `pdf` feature reads no PDF, so hands none on.
     #[cfg_attr(not(feature = "pdf"), allow(dead_code))]
     Pdf { pages: Option<u32> },
@@ -226,7 +226,7 @@ pub async fn file_text(module: Option<&OcrModule>, scanned: Scanned, bytes: &[u8
     }
 }
 
-/// A read asked over the wire (the OCR door, `lf --contract-ocr-slot`):
+/// A read asked over the wire (the OCR door, `listen-fire --contract-ocr-slot`):
 /// `{ bytes, contentType, name?, label }`, its bytes decoded.
 pub fn request_of(params: &Js) -> Result<(Vec<u8>, String, Option<String>, String), String> {
     let text = |key: &str| params.get(key).and_then(Js::as_str).filter(|v| !v.is_empty());

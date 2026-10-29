@@ -43,7 +43,7 @@ use module_wire::results as wire_results;
 /// a run's segment starts from a copy of its file's, a fifth of parsing it.
 const KEPT_PARSES: usize = 128;
 
-/// How many due work rows one drain of `lf resume` or `lf serve` claims.
+/// How many due work rows one drain of `listen-fire resume` or `listen-fire serve` claims.
 pub const WORK_ROWS_PER_DRAIN: i64 = 100;
 
 /// How long a work row's claim lasts (`LEASE_TTL_MS`).
@@ -51,7 +51,7 @@ const WORK_LEASE_MS: i64 = 60_000;
 /// How often a drain looks for runs whose worker was lost (the platform's
 /// `run_orphan_sweep` interval).
 const LOST_RUN_SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
-/// Where `lf serve` listens unless told otherwise (`DEFAULT_PORT`).
+/// Where `listen-fire serve` listens unless told otherwise (`DEFAULT_PORT`).
 pub const DEFAULT_PORT: u16 = 4400;
 
 /// The files a session runs and what is built from them: the catalog they
@@ -83,7 +83,7 @@ async fn start_and_check(slots: &[crate::slot_client::SlotProcess]) -> Result<()
     started.into_iter().collect()
 }
 
-/// The set's claim on each external's process lf started.
+/// The set's claim on each external's process listen-fire started.
 fn hold_all(running: &[Rc<RunningExternal>], keep: Keep) -> Vec<Hold> {
     running
         .iter()
@@ -111,7 +111,7 @@ impl FileSet {
             let subscription = format!("poll:{}:{}:{}:{config}", listen.adapter, file.name, listen.movement_name);
             // A positioned connection's listen is polled under a key of its
             // own; one in no position keeps the key it always had, and with
-            // it the checkpoint an earlier lf kept.
+            // it the checkpoint an earlier listen-fire kept.
             let subscription = match running.position_settings(&listen.args) {
                 Some(position) => format!("{subscription}:{position}"),
                 None => subscription,
@@ -124,16 +124,16 @@ impl FileSet {
 /// What a session is opened for, which its module processes follow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
-    /// One command (`lf run`, `lf resume`, `lf call`, …): a module stops when idle.
+    /// One command (`listen-fire run`, `listen-fire resume`, `listen-fire call`, …): a module stops when idle.
     Command,
-    /// `lf drain`: every module the files use is started as the session
+    /// `listen-fire drain`: every module the files use is started as the session
     /// opens and kept up for the worker's life, so no run pays a start.
     Drain,
-    /// `lf serve`: a module stops when idle, and starts again for the
+    /// `listen-fire serve`: a module stops when idle, and starts again for the
     /// delivery or the run that needs it; a refresh registers the webhooks
     /// the new listens need (crate::subscriptions).
     Serve,
-    /// `lf serve --doors-only`: as `Serve`, and the slots' modules a door
+    /// `listen-fire serve --doors-only`: as `Serve`, and the slots' modules a door
     /// calls (`DOOR_SLOTS`) are started as it opens, never the others.
     Doors,
 }
@@ -185,7 +185,7 @@ pub struct Session {
     /// Never borrowed across an await: a webhook registration replaces it
     /// with what it wrote (crate::subscriptions).
     secrets: RefCell<Rc<Secrets>>,
-    /// What `lf serve` has said of its webhooks' registration, so a failure
+    /// What `listen-fire serve` has said of its webhooks' registration, so a failure
     /// a refresh meets again is not said again.
     pub registrations: crate::subscriptions::Registrations,
     pub documents: Documents,
@@ -195,11 +195,11 @@ pub struct Session {
     due_offset_ms: i64,
     /// The principal every event acts as (`localIdentity`).
     user: Js,
-    /// Where lf is reached from outside: a callback's url is under it.
+    /// Where listen-fire is reached from outside: a callback's url is under it.
     public_url: String,
     /// The temporary folder an ephemeral session's state lives in.
     ephemeral_dir: Option<std::path::PathBuf>,
-    /// The work this session's drains take (`lf drain --kinds`): all of it,
+    /// The work this session's drains take (`listen-fire drain --kinds`): all of it,
     /// unless a pool is named.
     pub pool: crate::drain::Pool,
     /// The loopGuard slot's module; None unless lf.yaml names one.
@@ -308,7 +308,7 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
         (open_store(store)?, None)
     };
     let store: std::rc::Rc<dyn RunHostStore> = store.into();
-    // Before any module starts: what an earlier lf left running is
+    // Before any module starts: what an earlier listen-fire left running is
     // stopped, and what this one starts is listed in the store.
     crate::module_hosts::track_in(store.clone());
     // The files slot's module: @lf/local-files (crate::core), or one reached over the wire.
@@ -316,7 +316,7 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     // The slots' modules the role starts now, with the externals: a
     // worker's every one, a door's the ones a door calls.
     // Each one's manifest is read as it starts: one outside the protocol
-    // range lf speaks fails the open by name, before any work is claimed.
+    // range listen-fire speaks fails the open by name, before any work is claimed.
     let slots: Vec<crate::slot_client::SlotProcess> = crate::slot_client::slot_processes().into_iter().filter(|slot| role.starts_slot(&slot.kind)).collect();
     let slot_processes: Vec<ModuleProcess> = slots.iter().map(|slot| slot.process.clone()).collect();
     let (started, running) = tokio::join!(start_and_check(&slots), start_externals(&project, &externals, credentials, LOCAL_TENANT));
@@ -534,7 +534,7 @@ impl RunFacts {
         Js::Obj(facts)
     }
 
-    /// A run's facts, refused when its pin is one lf does not run.
+    /// A run's facts, refused when its pin is one listen-fire does not run.
     fn of_row(run_id: &str, input: &str) -> Result<RunFacts, String> {
         let facts = Js::parse(input.as_bytes()).map_err(|e| format!("run {run_id}: its facts are not JSON: {e}"))?;
         let text = |k: &str| facts.get(k).and_then(Js::as_str).map(str::to_string).ok_or_else(|| format!("run {run_id}: its facts have no {k}"));
@@ -543,18 +543,18 @@ impl RunFacts {
                 let own = LANGUAGE_VERSION;
                 match standing(pin, own) {
                     Standing::Compatible => pin.to_string(),
-                    Standing::Newer => return Err(format!("run {run_id}: pinned to language {pin}, newer than this lf ({own}); upgrade lf")),
+                    Standing::Newer => return Err(format!("run {run_id}: pinned to language {pin}, newer than this listen-fire ({own}); upgrade listen-fire")),
                     Standing::OlderKey | Standing::Malformed => {
-                        return Err(format!("run {run_id}: pinned to language {pin}, which this lf ({own}) does not read; it cannot resume: upgrade its movement and fire it again"));
+                        return Err(format!("run {run_id}: pinned to language {pin}, which this listen-fire ({own}) does not read; it cannot resume: upgrade its movement and fire it again"));
                     }
                 }
             }
             // A store from before pins were versions wrote the integer 5 (the
-            // only integer lf ever ran): read it once as this release, so a
+            // only integer listen-fire ever ran): read it once as this release, so a
             // parked run still resumes.
             Some(Js::Num(n)) if n.as_u64().is_some_and(|n| n >= 5) => LANGUAGE_VERSION.to_string(),
             Some(Js::Num(n)) => {
-                return Err(format!("run {run_id}: pinned to the integer {n}, from before pins were releases, which lf does not run; it cannot resume: upgrade its movement and fire it again"));
+                return Err(format!("run {run_id}: pinned to the integer {n}, from before pins were releases, which listen-fire does not run; it cannot resume: upgrade its movement and fire it again"));
             }
             _ => return Err(format!("run {run_id}: its facts have no languageVersion")),
         };
@@ -582,7 +582,7 @@ impl Session {
         self.secrets.borrow().clone()
     }
 
-    /// Read the secrets again, after lf wrote to them (crate::subscriptions).
+    /// Read the secrets again, after listen-fire wrote to them (crate::subscriptions).
     pub fn reload_secrets(&self) -> Result<(), String> {
         let read = Secrets::open(&self.project, &std::env::vars().collect::<Vec<_>>())?;
         self.secrets.replace(Rc::new(read));
@@ -664,13 +664,13 @@ impl Session {
         Ok(fired)
     }
 
-    /// `lf run <movement>`: one invocation on the manual unit, to the listens
+    /// `listen-fire run <movement>`: one invocation on the manual unit, to the listens
     /// that fire `movement` (`listen to manual fire <movement>`).
     pub async fn run_manual(&self, movement: &str, text: Option<&str>, dry_run: bool) -> Result<Fired, String> {
         let manual = |l: &Listen| l.adapter == crate::units::MANUAL && l.movement_name == movement;
         let set = self.file_set();
         if !set.listens.iter().any(manual) {
-            return Err(format!("no listen fires '{movement}' on manual: add `listen to manual fire {movement}` to run it with `lf run {movement}`"));
+            return Err(format!("no listen fires '{movement}' on manual: add `listen to manual fire {movement}` to run it with `listen-fire run {movement}`"));
         }
         let event = crate::units::manual_event(&iso(0), &self.user, text);
         self.fire_to(&set, crate::units::MANUAL, &event, Arrival::Pushed, dry_run, None, |l| l.movement_name == movement).await
@@ -789,7 +789,7 @@ impl Session {
         };
         let fired = self.poll_once(set, listen, running, subscription).await?;
         for line in &fired.redelivered {
-            eprintln!("lf: {line}");
+            eprintln!("listen-fire: {line}");
         }
         // `every: 5m` now, `pollIntervalSeconds: 300` before.
         let every = listen.config.get("every").and_then(Js::as_str).and_then(movement_engine::park::duration_ms).filter(|ms| *ms >= 1000.0).map(|ms| (ms / 1000.0) as u64);
@@ -801,7 +801,7 @@ impl Session {
         Ok((Next::DueAt(iso(self.due_offset_ms + interval_ms)), fired.outcomes))
     }
 
-    /// `lf run --poll <movement>`: poll now, once, the source of every listen
+    /// `listen-fire run --poll <movement>`: poll now, once, the source of every listen
     /// that fires `movement` on a polled source.
     pub async fn run_poll(&self, movement: &str) -> Result<Fired, String> {
         let set = self.file_set();
@@ -984,7 +984,7 @@ impl Session {
             wrote.iter().try_for_each(|one| guard.record_write(one, &writer))
         };
         if let Err(message) = remembering() {
-            eprintln!("lf: telling the loop guard run {run_id}'s writes: {message} (their echoes will fire)");
+            eprintln!("listen-fire: telling the loop guard run {run_id}'s writes: {message} (their echoes will fire)");
         }
     }
 
@@ -1017,7 +1017,7 @@ impl Session {
     }
 
     fn guard_failed(&self, message: &str) -> bool {
-        eprintln!("lf: the loop guard: {message} (the event fires)");
+        eprintln!("listen-fire: the loop guard: {message} (the event fires)");
         false
     }
 
@@ -1035,7 +1035,7 @@ impl Session {
         match read {
             Ok(record) => Some(record),
             Err(message) => {
-                eprintln!("lf: {external}: reading {record_type} {external_id} to tell an echo of a write from a change: {message} (it fires)");
+                eprintln!("listen-fire: {external}: reading {record_type} {external_id} to tell an echo of a write from a change: {message} (it fires)");
                 None
             }
         }
@@ -1130,7 +1130,7 @@ impl Session {
         Ok(Some(LeafStepper { session: self, set, run_id: run_id.to_string(), facts, lease, tally: RefCell::new(Tally::default()), captured: RefCell::new(Vec::new()) }))
     }
 
-    /// `lf resume <run>`: every parked leaf of the run, now.
+    /// `listen-fire resume <run>`: every parked leaf of the run, now.
     pub async fn resume_run(&self, run_id: &str) -> Result<RunOutcome, String> {
         let row = self.store.run(run_id).map_err(|e| e.to_string())?.ok_or_else(|| format!("no run {run_id}"))?;
         if row.status != "parked" {
@@ -1143,11 +1143,11 @@ impl Session {
         }
     }
 
-    /// `lf runs rerun <run>`: a failed run run again as its next attempt —
+    /// `listen-fire runs rerun <run>`: a failed run run again as its next attempt —
     /// its own event, the movement as the project holds it now (a fix to it
     /// takes effect), from the start — under the run's lease, so two reruns
     /// at once run once. Refused when the run's latest attempt did not fail
-    /// (a rerun after a rerun that succeeded runs nothing), when another lf
+    /// (a rerun after a rerun that succeeded runs nothing), when another listen-fire
     /// holds the run, and, unless `force`, when the failed attempt already
     /// committed writes (a rerun from the start makes them again).
     pub async fn rerun(&self, run_id: &str, force: bool) -> Result<Rerun, String> {
@@ -1202,7 +1202,7 @@ impl Session {
             return Err(format!("run {}: no listen in {} fires {} now, so there is nothing to rerun it on", row.id, row.file, row.movement));
         }
         if let Some(errors) = file_errors(set)?.get(&row.file).filter(|n| **n > 0) {
-            return Err(format!("run {}: {} has {errors} check error(s); fix them (lf check), then rerun", row.id, row.file));
+            return Err(format!("run {}: {} has {errors} check error(s); fix them (listen-fire check), then rerun", row.id, row.file));
         }
         let first = Js::parse(row.input.as_bytes()).map_err(|e| format!("run {}: its facts are not JSON: {e}", row.id))?;
         Ok(RunFacts {
@@ -1215,10 +1215,10 @@ impl Session {
         })
     }
 
-    /// `lf resume` with no run: drain the due work, then step what is due in
+    /// `listen-fire resume` with no run: drain the due work, then step what is due in
     /// every parked run: its timers that have come, and its awaits that can
     /// resolve now. A timer not yet due stays parked, so a timeout arm
-    /// beside an approval never fires early; `lf resume <run>` runs a run's
+    /// beside an approval never fires early; `listen-fire resume <run>` runs a run's
     /// every leaf out.
     pub async fn resume_all(&self, log: &mut impl Write) -> Result<Vec<RunOutcome>, String> {
         let set = self.file_set();
@@ -1324,13 +1324,13 @@ impl Session {
                 let scope_keys = scope_keys_of(set, &external);
                 let fired = self.fire_to(set, &external, &event, Arrival::Pushed, false, delivery_id, |l| delivered.reaches(l, &scope_keys)).await?;
                 for line in &fired.redelivered {
-                    eprintln!("lf: {line}");
+                    eprintln!("listen-fire: {line}");
                 }
                 if let Some(id) = delivery_id
                     && fired.outcomes.is_empty()
                     && fired.redelivered.is_empty()
                 {
-                    eprintln!("lf: {}", no_listen_line(id, &external));
+                    eprintln!("listen-fire: {}", no_listen_line(id, &external));
                 }
                 Ok((Next::Done, fired.outcomes))
             }
@@ -1428,7 +1428,7 @@ enum Parked {
 }
 
 fn run_busy(run_id: &str) -> String {
-    format!("run {run_id} is being stepped by another lf process right now; try again in a moment")
+    format!("run {run_id} is being stepped by another listen-fire process right now; try again in a moment")
 }
 
 /// A parked run's leaves, stepped one segment each (`parkedStepper`).
@@ -1468,7 +1468,7 @@ impl Stepper for LeafStepper<'_> {
 // ── Refreshing the files ────────────────────────────────────────────────────
 
 /// What a refresh's header says before it lists why nothing was taken.
-const KEPT: &str = "movements: kept the files lf has;";
+const KEPT: &str = "movements: kept the files listen-fire has;";
 
 /// How a listing differs from the files held, each by path, in the listing's
 /// order: the files whose version is the one held, those to read (a new
@@ -1515,7 +1515,7 @@ const WATCH_WAIT: Duration = crate::movements_slot::WATCH_WAIT_CAP;
 const ANSWERED_AT_ONCE: Duration = Duration::from_secs(1);
 
 /// The listing the events say there is now: each one applied, in order, to
-/// the files (path, version) lf last saw listed. An add or a change without
+/// the files (path, version) listen-fire last saw listed. An add or a change without
 /// a version is a file listed without one, which is read and compared.
 fn apply_events(held: &[Listed], events: &[Change]) -> Vec<Listed> {
     let mut listing = held.to_vec();
@@ -1532,7 +1532,7 @@ fn apply_events(held: &[Listed], events: &[Change]) -> Vec<Listed> {
 }
 
 impl Session {
-    /// `lf serve` and `lf drain`'s one refresher, for the process's life:
+    /// `listen-fire serve` and `listen-fire drain`'s one refresher, for the process's life:
     /// the module's cursor taken, then the files listed once (so nothing
     /// changed between the open and the cursor is missed), then each change
     /// it reports taken as a listing is (`take_listing`). A `resync` starts
@@ -1817,9 +1817,9 @@ const CALLBACK_BACKSTOP_MS: i64 = 30_000;
 /// What calling a callback came to (`CallOutcome`).
 pub struct Called {
     pub call: CallOutcome,
-    /// The body waits on its work row, due now, for whichever lf process
+    /// The body waits on its work row, due now, for whichever listen-fire process
     /// drains next: the run was being stepped elsewhere, or the door only
-    /// records (`lf serve --doors-only`).
+    /// records (`listen-fire serve --doors-only`).
     pub queued: bool,
     pub outcomes: Vec<RunOutcome>,
 }
@@ -1857,7 +1857,7 @@ impl Session {
     /// Call a callback (`callCallback`): validate and record the call (its
     /// body queued with it), then run the body now under the run's lease and
     /// wake whatever awaits the callback. The door (`POST /api/cb/<id>`) and
-    /// `lf call` both come here.
+    /// `listen-fire call` both come here.
     pub async fn call_callback(&self, id: &str, values: &Obj) -> Result<Called, String> {
         let backstop = iso(CALLBACK_BACKSTOP_MS);
         let call = record_callback_call(&*self.store, id, values, &backstop, &backstop).map_err(|e| e.to_string())?;
@@ -1874,7 +1874,7 @@ impl Session {
         }
     }
 
-    /// Call a callback without running its body (the door under `lf serve
+    /// Call a callback without running its body (the door under `listen-fire serve
     /// --doors-only`, on compute frozen once it answers): the call recorded
     /// with its body's row due now, and the wake slot told, so a worker runs
     /// the body and wakes the callback's awaits.
@@ -1988,7 +1988,7 @@ impl Session {
 
 // ── Rerun ───────────────────────────────────────────────────────────────────
 
-/// What `lf runs rerun` came to.
+/// What `listen-fire runs rerun` came to.
 pub enum Rerun {
     /// The run ran again as `attempt`.
     Ran { attempt: i64, outcome: Box<RunOutcome> },
@@ -1999,7 +1999,7 @@ pub enum Rerun {
 pub enum RerunRefused {
     /// The run's latest attempt did not fail.
     NotFailed { status: String, attempt: i64 },
-    /// Another lf process holds the run.
+    /// Another listen-fire process holds the run.
     Busy,
     /// The failed attempt committed these writes before it failed.
     CommittedWrites { attempt: i64, writes: Vec<Js> },
@@ -2021,13 +2021,13 @@ impl RerunRefused {
                 "completed" => format!("run {run_id} succeeded on attempt {attempt}; nothing to rerun"),
                 other => format!("run {run_id} is {other} on attempt {attempt}; only a failed run is rerun"),
             },
-            RerunRefused::Busy => format!("run {run_id} is held by another lf process; it is being stepped or rerun there"),
+            RerunRefused::Busy => format!("run {run_id} is held by another listen-fire process; it is being stepped or rerun there"),
             RerunRefused::CommittedWrites { attempt, writes } => {
                 let mut message = format!("run {run_id}: attempt {attempt} committed {} write(s) before it failed, which a rerun from the start makes again:", writes.len());
                 for write in writes {
                     message.push_str(&format!("\n  {}", write_line(write)));
                 }
-                message.push_str(&format!("\nrerun it anyway with lf runs rerun {run_id} --force"));
+                message.push_str(&format!("\nrerun it anyway with listen-fire runs rerun {run_id} --force"));
                 message
             }
         }
@@ -2052,16 +2052,16 @@ fn committed_writes(outcome: Option<&str>) -> Vec<Js> {
 
 // ── Cancel ──────────────────────────────────────────────────────────────────
 
-/// What `lf cancel` came to (`CancelOutcome`).
+/// What `listen-fire cancel` came to (`CancelOutcome`).
 pub enum Cancelled {
     /// The run was not being stepped: it is settled failed now.
     Now,
-    /// Another lf process is stepping it: its segment stops at the next
+    /// Another listen-fire process is stepping it: its segment stops at the next
     /// statement boundary, and the run settles failed there.
     Requested,
 }
 
-/// `lf cancel <run>` (`cancelRun`): stamp the operator's request on the run's
+/// `listen-fire cancel <run>` (`cancelRun`): stamp the operator's request on the run's
 /// row, then settle it through the core's cancel path (failed with the
 /// reason, its live state torn down, its callbacks revoked) when no one
 /// holds it. Settling starts no segment, so it needs no session.
@@ -2125,13 +2125,13 @@ pub fn read_event_file(path: &std::path::Path) -> Result<(String, Js), String> {
 }
 
 /// What a drain says of a delivery's event that no listen takes: the
-/// delivery is kept (`lf deliveries` lists it) and ran nothing.
+/// delivery is kept (`listen-fire deliveries` lists it) and ran nothing.
 fn no_listen_line(delivery_id: &str, external: &str) -> String {
     format!("delivery {delivery_id}: no listen takes its {external} event; it is kept and ran nothing")
 }
 
 /// A poll event with no `eventType` (a module older than adapter protocol
-/// 2.3) still reaches the listen that polled it; lf says so once per module
+/// 2.3) still reaches the listen that polled it; listen-fire says so once per module
 /// per process, so an unlabelled source is never silent.
 fn note_unlabelled_poll_event(module: &str) {
     static NOTED: std::sync::LazyLock<std::sync::Mutex<std::collections::BTreeSet<String>>> = std::sync::LazyLock::new(Default::default);
@@ -2164,7 +2164,7 @@ mod tests {
         let version = |pin: &str| RunFacts::of_row("r", &facts_with(pin)).map(|f| f.language_version);
         assert_eq!(version(&format!("\"{LANGUAGE_VERSION}\"")), Ok(LANGUAGE_VERSION.to_string()));
         assert_eq!(version("5"), Ok(LANGUAGE_VERSION.to_string()));
-        assert!(version("\"0.13.0\"").unwrap_err().contains("newer than this lf"));
+        assert!(version("\"0.13.0\"").unwrap_err().contains("newer than this listen-fire"));
         assert!(version("\"0.11.0\"").unwrap_err().contains("upgrade its movement and fire it again"));
         assert!(version("4").unwrap_err().contains("upgrade its movement and fire it again"));
     }
@@ -2389,7 +2389,7 @@ mod tests {
             let store = Scripted::over(&root, vec![events("e:0", vec![]), down(), down(), at_once, down()]);
             let mut cursor = None;
             step(session, &store, &mut cursor).await;
-            let said = "movements: kept the files lf has; the movements module did not answer watch: the movements module acme: movements.watch: could not be reached\n";
+            let said = "movements: kept the files listen-fire has; the movements module did not answer watch: the movements module acme: movements.watch: could not be reached\n";
             let pause = Some(session.watch_pause);
             assert_eq!(step(session, &store, &mut cursor).await, (pause, said.to_string()));
             assert_eq!(step(session, &store, &mut cursor).await, (pause, String::new()), "said once");
@@ -2399,7 +2399,7 @@ mod tests {
             assert_eq!(step(session, &store, &mut cursor).await, (pause, said.to_string()), "said again after an answer");
             let malformed = Scripted::over(&root, vec![Err(crate::movements_slot::watched_of("the movements module acme", &Js::parse(br#"{"secret":"text"}"#).unwrap()).unwrap_err())]);
             let (_, log) = step(session, &malformed, &mut cursor).await;
-            assert_eq!(log, "movements: kept the files lf has; the movements module did not answer watch: the movements module acme: movements.watch answered an object with secret, not the slot's shape\n", "named by its shape");
+            assert_eq!(log, "movements: kept the files listen-fire has; the movements module did not answer watch: the movements module acme: movements.watch answered an object with secret, not the slot's shape\n", "named by its shape");
         });
     }
 
@@ -2532,7 +2532,7 @@ mod tests {
         with_session_as(&root.clone(), Role::Command, async |session| {
             put(&root, "acme_h.mvt", &acme_movement("acme_h").replace("company.Name", "company.Nope"));
             let log = refreshed(session).await;
-            assert!(log.starts_with("movements: kept the files lf has; the new ones do not check:\n"), "{log}");
+            assert!(log.starts_with("movements: kept the files listen-fire has; the new ones do not check:\n"), "{log}");
             assert!(!crate::module_hosts::external_is_running("acme_h"), "the module only the refused set imported was stopped with it");
             assert!(crate::module_hosts::external_is_running("acme_g"), "the running set's module runs on");
         });
@@ -2551,7 +2551,7 @@ mod tests {
     }
 
     /// The refresh's and a run's cost over a 200-file set: run with
-    /// `cargo test --release -p listen-fire --bin lf -- --ignored --nocapture measure_a_large_set`.
+    /// `cargo test --release -p listen-fire --bin listen-fire -- --ignored --nocapture measure_a_large_set`.
     #[test]
     #[ignore]
     fn measure_a_large_set() {
@@ -2602,7 +2602,7 @@ mod tests {
 
     const MANUAL_V1: &str = "function hello(run: <manual-[:Invocation]->>) {\n  return \"v1\"\n}\nlisten to manual fire hello\n";
 
-    /// A started project (`lf init`, its own empty secrets) with `files`
+    /// A started project (`listen-fire init`, its own empty secrets) with `files`
     /// written into its movements folder.
     fn refresh_project(files: &[(&str, &str)]) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!("lf-runs-refresh-{}", uuid::Uuid::new_v4()));
@@ -2626,7 +2626,7 @@ mod tests {
         std::fs::remove_file(root.join("movements").join(path)).unwrap();
     }
 
-    /// `body` on a session over `root`, as lf serve runs one: one thread, one LocalSet.
+    /// `body` on a session over `root`, as listen-fire serve runs one: one thread, one LocalSet.
     fn with_session(root: &std::path::Path, body: impl AsyncFnOnce(&mut Session)) {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         tokio::task::LocalSet::new().block_on(&runtime, async {
@@ -2684,7 +2684,7 @@ mod tests {
             assert_eq!(refreshed(session).await, "movements: lib/greet.mvt added\nmovements: other.mvt changed\n");
             put(&root, "lib/greet.mvt", "export function greet(name: <number>) {\n  return name\n}\n");
             let log = refreshed(session).await;
-            assert!(log.starts_with("movements: kept the files lf has; the new ones do not check:\n") && log.contains("other.mvt:"), "{log}");
+            assert!(log.starts_with("movements: kept the files listen-fire has; the new ones do not check:\n") && log.contains("other.mvt:"), "{log}");
         });
     }
 
@@ -2734,7 +2734,7 @@ mod tests {
             put(&root, "hello.mvt", "function hello(");
             let log = refreshed(session).await;
             let lines: Vec<&str> = log.lines().collect();
-            assert_eq!(lines[0], "movements: kept the files lf has; the new ones do not check:", "{log}");
+            assert_eq!(lines[0], "movements: kept the files listen-fire has; the new ones do not check:", "{log}");
             assert!(lines[1].contains("hello.mvt:") && lines[1].contains(" error MOV_PARSE "), "{log}");
             assert_eq!(returns(session, "hello").await, "v1", "the previous text runs");
             assert_eq!(refreshed(session).await, "", "warned once");
@@ -2750,7 +2750,7 @@ mod tests {
 
             put(&root, "lib/greet.mvt", "export function greet(name: <number>) {\n  return \"Hello, ${name}!\"\n}\n");
             let log = refreshed(session).await;
-            assert!(log.starts_with("movements: kept the files lf has; the new ones do not check:\n"), "{log}");
+            assert!(log.starts_with("movements: kept the files listen-fire has; the new ones do not check:\n"), "{log}");
             assert!(log.lines().skip(1).all(|l| l.contains("hello.mvt:")), "the importer it breaks is named: {log}");
             assert_eq!(returns(session, "hello").await, "Hello, v4!", "the set that checked runs on");
         });

@@ -180,7 +180,7 @@ pub fn client_from_fields(fields: &Fields) -> Option<ClientApp> {
 #[cfg(feature = "oauth")]
 pub use crate::oauth2_flow::refresh_grant;
 
-/// Without the `oauth` feature this lf refreshes no token: a credential that
+/// Without the `oauth` feature this listen-fire refreshes no token: a credential that
 /// needs one fails by name.
 #[cfg(not(feature = "oauth"))]
 pub async fn refresh_grant(_: &crate::secrets_family::Record, _: &str, _: Option<ClientAuth>, _: Option<&ClientApp>) -> Result<Fields, String> {

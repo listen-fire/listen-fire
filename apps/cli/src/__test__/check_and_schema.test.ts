@@ -1,4 +1,4 @@
-// `lf catalog` and `lf check` on the example, clean and refused; and the
+// `listen-fire catalog` and `listen-fire check` on the example, clean and refused; and the
 // schema projection (checked against the TypeScript reference in
 // movement-engine) over introspection shapes the example never sends.
 
@@ -21,7 +21,7 @@ function edit(dir: string, change: (source: string) => string): void {
   writeFileSync(path, changed);
 }
 
-test('lf catalog: the snapshot of the example\'s external, as one JSON document', () => {
+test('listen-fire catalog: the snapshot of the example\'s external, as one JSON document', () => {
   const dir = project();
   const run = spawnSync(lfBinary(), ['catalog'], { cwd: dir, encoding: 'utf8' });
   assert.equal(run.status, 0, run.stderr);
@@ -39,7 +39,7 @@ const CHECKED: Array<{ name: string; change?: (source: string) => string; noSecr
 ];
 
 for (const c of CHECKED) {
-  test(`lf check: ${c.name}`, () => {
+  test(`listen-fire check: ${c.name}`, () => {
     const dir = project();
     if (c.change !== undefined) edit(dir, c.change);
     if (c.noSecrets === true) rmSync(join(dir, '.lf/secrets.yaml'));
@@ -176,7 +176,7 @@ const EXERCISES: Record<string, { members: string[]; notes: number }> = {
 };
 
 for (const [name, raw] of Object.entries(INTROSPECTIONS)) {
-  test(`lf projects a schema as the reference projection does: ${name}`, () => {
+  test(`listen-fire projects a schema as the reference projection does: ${name}`, () => {
     const input = Introspection.parse(raw);
     const expected = instanceSchemaFromDescriptors({ ...input, descriptors: new Map(input.descriptors) });
     const exercised = EXERCISES[name];

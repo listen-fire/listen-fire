@@ -1,7 +1,7 @@
 //! What a run's movement returned, treated as a cron job's output: every
 //! run records it in its history (the `returned` member of the run's
 //! outcome), however the run was started; it is shown to a person who
-//! started or drove the run (`lf run`, `lf resume`, `lf call`), and it never
+//! started or drove the run (`listen-fire run`, `listen-fire resume`, `listen-fire call`), and it never
 //! reaches an external system — no door answers with it, so what a run
 //! returns can never be a side door for an effect.
 //!
@@ -16,7 +16,7 @@ use crate::wire::Hv;
 
 /// The most JSON text a run's history keeps of what it returned. A run's
 /// outcome is read back on every segment that settles it and on every
-/// `lf runs`, so it stays small; 64 KiB holds any summary a person reads,
+/// `listen-fire runs`, so it stays small; 64 KiB holds any summary a person reads,
 /// and anything bigger belongs in a file, which is recorded by reference.
 pub const RECORDED_BYTES: usize = 64 * 1024;
 
@@ -99,7 +99,7 @@ pub fn shown(recorded: &Js) -> String {
         return format!("returned {}", value.to_json());
     }
     if let Some(why) = recorded.get("unwritable").and_then(Js::as_str) {
-        return format!("returned a value lf cannot record: {why}");
+        return format!("returned a value listen-fire cannot record: {why}");
     }
     let bytes = recorded.get("bytes").map(Js::to_json).unwrap_or_default();
     let preview = recorded.get("preview").and_then(Js::as_str).unwrap_or_default();
@@ -156,6 +156,6 @@ mod tests {
         assert_eq!(of_outcome(Some(r#"{"writes":0,"returned":{"value":"hi"}}"#)).map(|r| r.to_json()), Some(r#"{"value":"hi"}"#.into()));
         assert_eq!(of_outcome(Some(r#"{"writes":0}"#)), None);
         assert_eq!(of_outcome(None), None);
-        assert_eq!(shown(&unwritable("a function")), "returned a value lf cannot record: a function");
+        assert_eq!(shown(&unwritable("a function")), "returned a value listen-fire cannot record: a function");
     }
 }

@@ -741,7 +741,7 @@ run that meets one fails with MOVENG_UNSUPPORTED naming `legacy_extraction`
 The checker refuses it (`MOV_EXTRACT_KEYWORD_RETIRED`, with the upgrade to a
 declared shape and `extract(…)` where that is mechanical), and a program of
 the platform's earlier integer pins holding one runs on the TypeScript
-engine, which keeps the keyword as those languages' reference. `lf` refuses
+engine, which keeps the keyword as those languages' reference. `listen-fire` refuses
 such a project, saying to upgrade it on the platform. The
 extraction call (`extract(content, Shape, { … })`, `extractOne(…)`) runs
 whole (crate::extract::call).

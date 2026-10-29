@@ -1,7 +1,7 @@
 // The skeleton's end-to-end proof, through the real binary entry point: the
 // example project (examples/lf-acme) checks clean, an event runs and its write
-// lands in the sample external, the run parks on `await sleep` and `lf resume
-// <run-id>` finishes it, and `lf serve` takes one signed webhook.
+// lands in the sample external, the run parks on `await sleep` and `listen-fire resume
+// <run-id>` finishes it, and `listen-fire serve` takes one signed webhook.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,14 +12,14 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { companies, crmCompanies, externalPort, lf, lfCommand, project, served } from './example';
 
-test('lf check: the example is clean', () => {
+test('listen-fire check: the example is clean', () => {
   const dir = project();
   const { code, out } = lf(dir, 'check');
   assert.equal(code, 0, out);
   assert.match(out, /1 file\(s\), 0 error\(s\)/);
 });
 
-test('lf check: reports what the Rust checker refuses, by file, line and code', () => {
+test('listen-fire check: reports what the Rust checker refuses, by file, line and code', () => {
   const dir = project();
   const file = join(dir, 'movements', 'companies.mvt');
   writeFileSync(file, readFileSync(file, 'utf8').replace('Name: "Welcome ${company.Name}"', 'Nme: "Welcome ${nobody}"'));
@@ -29,7 +29,7 @@ test('lf check: reports what the Rust checker refuses, by file, line and code', 
   assert.match(out, /1 file\(s\), [1-9]\d* error\(s\)/);
 });
 
-test('lf run --event writes through the external, parks on sleep, and lf resume finishes it', () => {
+test('listen-fire run --event writes through the external, parks on sleep, and listen-fire resume finishes it', () => {
   const dir = project();
   const run = lf(dir, 'run', '--event', 'events/company_created.json');
   assert.equal(run.code, 0, run.out);
@@ -56,7 +56,7 @@ test('lf run --event writes through the external, parks on sleep, and lf resume 
   assert.match(lf(dir, 'resume').out, /no parked runs/);
 });
 
-test('lf run --event: a write to the event parameter updates the record the event fired on', () => {
+test('listen-fire run --event: a write to the event parameter updates the record the event fired on', () => {
   const dir = project();
   mkdirSync(join(dir, '.lf/externals/acme_crm'), { recursive: true });
   writeFileSync(join(dir, '.lf/externals/acme_crm/state.json'), JSON.stringify({ companies: [{ externalId: 'c-1', fields: { Name: 'Vireo Robotics' } }] }));
@@ -93,7 +93,7 @@ listen to crm { events: ["company.created"] } fire onboard
   assert.match(untagged.out, /company\.created, company\.updated/);
 });
 
-test('lf runs show --json: when the run started and finished, and each write: its target, action and values', () => {
+test('listen-fire runs show --json: when the run started and finished, and each write: its target, action and values', () => {
   const dir = project();
   mkdirSync(join(dir, '.lf/externals/acme_crm'), { recursive: true });
   writeFileSync(join(dir, '.lf/externals/acme_crm/state.json'), JSON.stringify({ companies: [{ externalId: 'c-1', fields: { Name: 'Vireo Robotics' } }] }));
@@ -133,14 +133,14 @@ listen to crm { events: ["company.created"] } fire onboard
   assert.equal(listed.runs[0]?.finishedAt, finishedAt);
 });
 
-test('lf run --webhook refuses a delivery whose signature does not verify', () => {
+test('listen-fire run --webhook refuses a delivery whose signature does not verify', () => {
   const dir = project();
   const { code, out } = lf(dir, 'run', '--ephemeral', '--webhook', 'acme_crm', '--body', 'events/webhook_body.json', '--header', 'x-listen-fire-signature:00');
   assert.equal(code, 1);
   assert.match(out, /signature did not verify/);
 });
 
-test('lf serve takes one signed webhook at /hooks/<external>/<install>', async () => {
+test('listen-fire serve takes one signed webhook at /hooks/<external>/<install>', async () => {
   const dir = project();
   const server = spawn(...lfCommand(['serve', '--ephemeral', '--port', '0']), {
     cwd: dir,
@@ -149,7 +149,7 @@ test('lf serve takes one signed webhook at /hooks/<external>/<install>', async (
   });
   try {
     const port = await new Promise<number>((resolvePort, reject) => {
-      server.once('exit', (c) => reject(new Error(`lf serve exited ${c}`)));
+      server.once('exit', (c) => reject(new Error(`listen-fire serve exited ${c}`)));
       createInterface({ input: server.stdout! }).on('line', (line) => {
         const m = /serving on http:\/\/127\.0\.0\.1:(\d+)/.exec(line);
         if (m?.[1] !== undefined) resolvePort(Number(m[1]));
@@ -195,7 +195,7 @@ test('a park inside an `all` arm: each arm resumes in its own process, and the j
   assert.deepEqual(companies(dir), ['early late Vireo Robotics']);
 });
 
-test('lf serve: the external emits a company, the run awaits its first comment, and the external\'s wake resumes it', async () => {
+test('listen-fire serve: the external emits a company, the run awaits its first comment, and the external\'s wake resumes it', async () => {
   const dir = project('await');
   const serving = await served(dir);
   try {
@@ -235,7 +235,7 @@ test('lf serve: the external emits a company, the run awaits its first comment, 
   }
 });
 
-test('lf serve drains a due timer: the example\'s hour-long sleep, judged two hours on', async () => {
+test('listen-fire serve drains a due timer: the example\'s hour-long sleep, judged two hours on', async () => {
   const dir = project();
   const run = lf(dir, 'run', '--event', 'events/company_created.json');
   assert.equal(run.code, 0, run.out);

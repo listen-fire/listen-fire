@@ -182,14 +182,14 @@ thread_local! {
 pub fn warn_unpriced_once(key: &str) {
     let first = UNPRICED_WARNED.with(|warned| warned.borrow_mut().insert(key.to_string()));
     if first {
-        eprintln!("lf: no price for \"{key}\": its usage counts as free. Add it to modules/anthropic/prices.json.");
+        eprintln!("listen-fire: no price for \"{key}\": its usage counts as free. Add it to modules/anthropic/prices.json.");
     }
 }
 
 // ── The provider key ────────────────────────────────────────────────────────
 
 /// The Anthropic key and endpoint: the settings of the models slot's
-/// module, @lf/anthropic (`lf connect @lf/anthropic`).
+/// module, @lf/anthropic (`listen-fire connect @lf/anthropic`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderKey {
     pub api_key: String,
@@ -203,7 +203,7 @@ pub fn provider_key(credentials: &Credentials) -> Result<ProviderKey, String> {
     match settings.get("api_key") {
         Some(api_key) => Ok(ProviderKey { api_key: api_key.clone(), base_url: settings.get("base_url").cloned() }),
         None => Err(format!(
-            "a model call needs a provider key: run `lf connect {}`",
+            "a model call needs a provider key: run `listen-fire connect {}`",
             module.name
         )),
     }

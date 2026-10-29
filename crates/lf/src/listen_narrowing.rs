@@ -1,7 +1,7 @@
-//! Event-address narrowing under lf: lf-platform's
+//! Event-address narrowing under listen-fire: lf-platform's
 //! `translation_graph/movement/listen_narrowing.ts` (`narrowEventPositions`,
 //! `graftAddress`), ported rule for rule. The why of each rule is there; the
-//! comments here say only what lf does differently.
+//! comments here say only what listen-fire does differently.
 //!
 //! A movement's signature names the full address of the event it takes
 //! (`<hiring-[:`Record Change` WHERE `table` == "tblCAND01"]->>`). Each
@@ -432,7 +432,7 @@ pub async fn narrow_event_positions<W: Walk>(schema: Js, input: &Narrowing<'_, W
         }
         // An address that pins nothing is the wide type (`EventAddressRef`'s
         // own word): nothing to graft. The platform's code unions it by
-        // action all the same, which under lf would refuse a 0.12.9 program
+        // action all the same, which under listen-fire would refuse a 0.12.9 program
         // that reads a live-record edge off an unnarrowed signature (the Attio
         // walkthrough's `<crm-[e:`Webhook Event`]->>`).
         if address.narrowing.is_empty() {
@@ -449,7 +449,7 @@ pub async fn narrow_event_positions<W: Walk>(schema: Js, input: &Narrowing<'_, W
             let Some(steps) = address_of(hops, &hop_pins) else { continue };
             let record_key = format!("{}::record::{}", input.adapter, Js::Arr(steps.iter().map(Step::js).collect()).to_json());
             if !walked.contains_key(&record_key) {
-                // A walk that fails narrows nothing (the platform notes it; lf has nowhere to).
+                // A walk that fails narrows nothing (the platform notes it; listen-fire has nowhere to).
                 let landed = match walker.walk_to(&steps).await {
                     Ok(Some(descriptor)) => project_record_position(input, &descriptor, &record_key),
                     Ok(None) | Err(_) => None,

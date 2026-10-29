@@ -21,7 +21,7 @@ export function psql(sql: string): string[][] {
 
 let schemaReady = false;
 
-/** lf's own schema (`lf.*`), as the Postgres store's setup creates it: the
+/** listen-fire's own schema (`lf.*`), as the Postgres store's setup creates it: the
  *  contract bridge runs that setup before it listens, so it is done once the
  *  bridge says where it listens (and the bridge is then stopped). */
 function ensureLfSchema(): void {

@@ -1,4 +1,4 @@
-// A PDF attached to a Gmail message, filed in Drive with lf, against the fake
+// A PDF attached to a Gmail message, filed in Drive with listen-fire, against the fake
 // Gmail and fake Drive in packages/fake-channels: the bytes arrive exactly,
 // and Drive takes the file's type from the upload's media part (the module
 // names no type in the metadata), so it stays application/pdf.

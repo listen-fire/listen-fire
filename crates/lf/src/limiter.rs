@@ -1,6 +1,6 @@
 //! The limiter slot (plans/cloud-native-2026-10-06/22_everywhere_plan.md,
-//! Henry 2026-10-18): what keeps lf's calls to modules and models inside
-//! the provider's limits. The engine knows nothing of limits; lf asks the
+//! Henry 2026-10-18): what keeps listen-fire's calls to modules and models inside
+//! the provider's limits. The engine knows nothing of limits; listen-fire asks the
 //! slot before each call to a module (crate::credential_calls) and each
 //! model request (crate::anthropic), and holds the call until it is granted.
 //! A module that declares `hostLimits` asks instead, before each request to
@@ -10,7 +10,7 @@
 //! answers granted (with a permit to release) or refused (with when to ask
 //! again), so a limiter shared by many hosts is just another module filling
 //! the slot. Every request carries the limits it is under, so no limiter
-//! reads a manifest. lf's built-in, `@lf/memory-limiter`, keeps them in
+//! reads a manifest. listen-fire's built-in, `@lf/memory-limiter`, keeps them in
 //! process (MemoryLimiter); a process module is crate::limiter_module.
 
 use std::collections::{HashMap, VecDeque};
@@ -67,7 +67,7 @@ pub struct DeclaredLimit {
 pub struct ModuleLimits {
     pub declared: Vec<DeclaredLimit>,
     /// Counted per provider request at the limits door (crate::limits_door)
-    /// on a call lf hands the door; per call otherwise.
+    /// on a call listen-fire hands the door; per call otherwise.
     pub per_request: bool,
 }
 
@@ -311,7 +311,7 @@ pub struct Held {
 impl Drop for Held {
     fn drop(&mut self) {
         if let Err(message) = self.limiter.release(&self.permit) {
-            eprintln!("lf: the limiter did not release a permit: {message}");
+            eprintln!("listen-fire: the limiter did not release a permit: {message}");
         }
     }
 }
@@ -331,7 +331,7 @@ pub async fn acquire(limiter: &Arc<dyn Limiter>, request: &Acquire) -> Result<He
         };
         // THE PAUSE SEAM (CONCERNS.md, r-limits): a host that parks a segment
         // on a limit (park reason `limit`, woken at `retry_at_ms`) would hand
-        // the run back here instead of holding it in process. Today lf waits.
+        // the run back here instead of holding it in process. Today listen-fire waits.
         let wait = Duration::from_millis(u64::try_from(retry_at_ms - now_ms()).unwrap_or(0));
         match released {
             Some(released) => {
@@ -342,7 +342,7 @@ pub async fn acquire(limiter: &Arc<dyn Limiter>, request: &Acquire) -> Result<He
     }
 }
 
-// ── The slot lf's calls ask ─────────────────────────────────────────────────
+// ── The slot listen-fire's calls ask ─────────────────────────────────────────────────
 
 static SLOT: RwLock<Option<Arc<dyn Limiter>>> = RwLock::new(None);
 

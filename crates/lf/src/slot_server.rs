@@ -1,9 +1,9 @@
-//! One of lf's built-in core modules served as a module: its slot's methods
+//! One of listen-fire's built-in core modules served as a module: its slot's methods
 //! as adapter protocol 2 calls over HTTP (docs/contracts/adapter-protocol.md),
 //! on a Unix socket (or loopback TCP), so the language-neutral conformance
 //! suites (engine-contracts `slots/`, and the run host's, limiter's and loop
 //! guard's contract cases) hold it to its slot's meaning over the wire, the
-//! same wire a third-party module is held to. `lf --contract-<slot>` runs one.
+//! same wire a third-party module is held to. `listen-fire --contract-<slot>` runs one.
 //!
 //! Where it listens: `--listen unix:<path>` or `--listen <port>`, else the
 //! environment a host starts a module with (`MODULE_SOCKET`, else `PORT`),
@@ -46,7 +46,7 @@ impl Refusal {
 /// `slots/wire.ts` `WireSlotManifest`).
 pub fn manifest(name: &str, slot: &str, methods: &[&str]) -> Js {
     let listed = Js::Arr(methods.iter().map(|m| Js::str(*m)).collect());
-    // A slot module lf serves needs nothing of its host beyond 2.0: the
+    // A slot module listen-fire serves needs nothing of its host beyond 2.0: the
     // methods it offers never raise its minor.
     let minor = 0;
     Js::from(obj! {

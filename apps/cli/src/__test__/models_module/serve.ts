@@ -1,6 +1,6 @@
 // A third-party models module for the tests: the models slot's one method
 // (docs/contracts/models-slot.md) served as adapter protocol 2 over HTTP, on
-// the socket lf names (`MODULE_SOCKET`). It answers every call with the same
+// the socket listen-fire names (`MODULE_SOCKET`). It answers every call with the same
 // text, priced at 2500 microdollars, and the tokens it spent; with
 // `ACME_LLM_NO_USAGE` set it leaves the tokens out, as a module must not.
 

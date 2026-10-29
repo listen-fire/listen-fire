@@ -1,5 +1,5 @@
 // The example project (examples/lf-acme), copied into a temporary folder per
-// test, and the real `lf` binary (lf_bin.ts) run against it.
+// test, and the real `listen-fire` binary (lf_bin.ts) run against it.
 
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { lfBinary } from './lf_bin';
 
-/** The command and arguments that run `lf <args>`. */
+/** The command and arguments that run `listen-fire <args>`. */
 export function lfCommand(args: readonly string[]): [string, string[]] {
   return [lfBinary(), [...args]];
 }
@@ -46,7 +46,7 @@ export interface Served {
   stop(): Promise<void>;
 }
 
-/** `lf serve` on a free port (or the `--port` in `args`), its output and
+/** `listen-fire serve` on a free port (or the `--port` in `args`), its output and
  *  its error output collected (the errors shown as they come too). */
 export async function served(dir: string, args: string[] = [], env: Record<string, string> = {}): Promise<Served> {
   const portArgs = args.includes('--port') ? [] : ['--port', '0'];
@@ -78,7 +78,7 @@ export async function served(dir: string, args: string[] = [], env: Record<strin
   const line = await Promise.race([
     waitFor(/serving on http:\/\/127\.0\.0\.1:(\d+)/),
     exited.then(() => {
-      throw new Error(`lf serve exited:\n${lines.join('\n')}`);
+      throw new Error(`listen-fire serve exited:\n${lines.join('\n')}`);
     }),
   ]).catch((error: unknown) => {
     // A serve that never became ready is stopped, so the test run can end.

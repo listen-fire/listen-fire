@@ -1,4 +1,4 @@
-// Plugin modules in lf: the bundled plugins' module, `@lf/web`, served by
+// Plugin modules in listen-fire: the bundled plugins' module, `@lf/web`, served by
 // serve-module as any external is and called by its plugins' own names or
 // through the package; and a custom plugin module (examples/lf-custom-plugin)
 // dropped into a project's externals.
@@ -31,7 +31,7 @@ async function site(): Promise<{ url: string; asked: string[]; close(): void }> 
   return { url: `http://127.0.0.1:${port}`, asked, close: () => server.close() };
 }
 
-/** `lf <args>` without blocking this process, which serves the page the run
+/** `listen-fire <args>` without blocking this process, which serves the page the run
  *  fetches. */
 function lfAsync(dir: string, ...args: string[]): Promise<{ code: number; out: string }> {
   return new Promise((done) => {

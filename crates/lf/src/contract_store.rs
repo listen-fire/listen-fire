@@ -1,4 +1,4 @@
-//! `lf --contract-store <state.db|postgres://…>`: the run host's backend
+//! `listen-fire --contract-store <state.db|postgres://…>`: the run host's backend
 //! families (crate::backend) served as a store module: the store slot's
 //! methods (docs/contracts/store-slot.md) as adapter protocol 2 calls over
 //! HTTP on a Unix socket (crate::slot_server), so the TypeScript contract
@@ -45,7 +45,7 @@ pub const STORE_METHODS: &[&str] = &[
 
 pub async fn serve(spec: &StoreSpec, listen: Listen) -> Result<(), String> {
     // The bridge stands in for a set-up store: a Postgres one's setup
-    // (`lf connect @lf/postgres-store`) is run first.
+    // (`listen-fire connect @lf/postgres-store`) is run first.
     #[cfg(feature = "postgres")]
     if let StoreSpec::Postgres { url, .. } = spec {
         crate::pg_store::PgStore::migrate(url).map_err(|e| format!("{}: {e}", spec.display()))?;
@@ -403,7 +403,7 @@ mod tests {
     }
 
     /// The composite writes as a store module's client sends them
-    /// (crate::store_module), served over lf's own store.
+    /// (crate::store_module), served over listen-fire's own store.
     #[test]
     fn the_composite_writes_cross_the_store_wire() {
         let store = state_file();

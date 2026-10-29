@@ -1,14 +1,14 @@
 // A third-party secrets module for the tests: the secrets slot's methods
 // (crates/lf/src/secrets_slot.rs) served as adapter protocol 2 over HTTP,
 // over the in-memory vault an embedder starts from. It stands for a vault a
-// fleet of lf processes shares: every credential with its binding, a lease
+// fleet of listen-fire processes shares: every credential with its binding, a lease
 // per credential that lapses after its ttl, and whole entries created,
 // replaced and deleted. Its one setting, `vault`, comes from the project's
 // secrets file or the environment (the bootstrap rule), never from itself.
 //
-// Tests serve it in their own process (`serveSecretsModule`) so two lf
+// Tests serve it in their own process (`serveSecretsModule`) so two listen-fire
 // processes reach one vault at its url; run as a script it serves on the
-// socket its host names, as a module lf starts.
+// socket its host names, as a module listen-fire starts.
 
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';

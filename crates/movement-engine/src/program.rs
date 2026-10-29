@@ -297,7 +297,7 @@ pub fn parse(source: &str) -> Result<File, Json> {
 }
 
 /// Keep up to `capacity` parsed files on this thread, by their text, for a
-/// host that runs the same files segment after segment (lf, a process that
+/// host that runs the same files segment after segment (listen-fire, a process that
 /// lives for many runs): a segment then starts from a copy of the parse,
 /// which costs a fraction of parsing. Past the capacity the least recently
 /// used is let go. 0, the default, keeps none.
@@ -562,7 +562,7 @@ mod tests {
         assert!(matches!(checked.code("@lib~1deals/statements/0"), Some(crate::code::CodeAt::Movement(_))));
         assert_eq!(checked.code("/statements/9"), None);
     }
-    /// A host that keeps parses (lf) is handed a copy of the one it kept for
+    /// A host that keeps parses (listen-fire) is handed a copy of the one it kept for
     /// the same text, the least recently used let go past the capacity.
     #[test]
     fn a_kept_parse_is_the_parse_and_the_kept_are_bounded() {

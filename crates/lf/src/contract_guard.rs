@@ -1,4 +1,4 @@
-//! `lf --contract-guard`: lf's built-in loop guard (`@lf/fingerprint-guard`)
+//! `listen-fire --contract-guard`: listen-fire's built-in loop guard (`@lf/fingerprint-guard`)
 //! served as a loop guard module, the loopGuard slot's methods
 //! (docs/contracts/loop-guard-slot.md) as adapter protocol 2 calls over HTTP
 //! (crate::slot_server), so the TypeScript contract suite (movement-engine

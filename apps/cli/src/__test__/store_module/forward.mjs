@@ -1,9 +1,9 @@
 // A third-party store module for the tests, served as adapter protocol 2 over
-// HTTP on the socket lf names (`MODULE_SOCKET`, else `PORT`): it reads its
+// HTTP on the socket listen-fire names (`MODULE_SOCKET`, else `PORT`): it reads its
 // `path` setting from the store slot's opening request (`store.open`), starts
-// `lf --contract-store <path>`, which serves the same methods over a SQLite
+// `listen-fire --contract-store <path>`, which serves the same methods over a SQLite
 // state file, and forwards every request, that one included, to it.
-// Usage: node forward.mjs <lf binary>.
+// Usage: node forward.mjs <listen-fire binary>.
 
 import { spawn } from 'node:child_process';
 import { createServer, request } from 'node:http';
@@ -23,7 +23,7 @@ function startStore(path) {
   const child = spawn(lf, ['--contract-store', path], { stdio: ['pipe', 'pipe', 'inherit'], env: { ...env, LF_EXIT_WITH_PARENT: '1' } });
   process.on('exit', () => child.kill());
   return new Promise((resolve, reject) => {
-    child.on('exit', (code) => reject(new Error(`lf --contract-store exited (${code})`)));
+    child.on('exit', (code) => reject(new Error(`listen-fire --contract-store exited (${code})`)));
     createInterface({ input: child.stdout }).on('line', (line) => {
       const rest = line.startsWith('listening ') ? line.slice('listening '.length).trim() : '';
       if (rest.startsWith('unix:')) resolve({ socketPath: rest.slice('unix:'.length) });

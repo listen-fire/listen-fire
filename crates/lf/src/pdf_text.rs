@@ -37,7 +37,7 @@ fn text_layer(bytes: &[u8]) -> Layer {
     }
 }
 
-/// The largest PDF lf parses; a bigger one is refused rather than handed to the parser.
+/// The largest PDF listen-fire parses; a bigger one is refused rather than handed to the parser.
 const MAX_BYTES: usize = 64 << 20;
 /// The child's wall clock: a hostile file may send the parser into a loop.
 const TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -47,7 +47,7 @@ const MEMORY_LIMIT_BYTES: u64 = 2 << 30;
 /// The most JSON the child may answer with (the text of a 64 MiB PDF, with room for escapes).
 const MAX_ANSWER_BYTES: u64 = 256 << 20;
 
-/// The hidden `lf --pdf-text` mode: the PDF on stdin, its `Layer` as JSON on stdout.
+/// The hidden `listen-fire --pdf-text` mode: the PDF on stdin, its `Layer` as JSON on stdout.
 pub fn child_main() -> i32 {
     use std::io::{Read, Write};
     let mut bytes = Vec::new();
@@ -75,7 +75,7 @@ pub fn child_main() -> i32 {
 /// the file could not be read; that is not "no text layer" (the caller must
 /// not send a file that crashed the parser on to a paid OCR read).
 pub async fn read(bytes: &[u8]) -> Result<Layer, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("lf cannot find its own binary to read the PDF in a child process: {e}"))?;
+    let exe = std::env::current_exe().map_err(|e| format!("listen-fire cannot find its own binary to read the PDF in a child process: {e}"))?;
     let mut command = tokio::process::Command::new(exe);
     command.arg("--pdf-text");
     read_with(command, bytes).await
@@ -84,7 +84,7 @@ pub async fn read(bytes: &[u8]) -> Result<Layer, String> {
 async fn read_with(mut command: tokio::process::Command, bytes: &[u8]) -> Result<Layer, String> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     if bytes.len() > MAX_BYTES {
-        return Err(format!("the PDF is {} MiB, over the {} MiB lf reads", bytes.len() >> 20, MAX_BYTES >> 20));
+        return Err(format!("the PDF is {} MiB, over the {} MiB listen-fire reads", bytes.len() >> 20, MAX_BYTES >> 20));
     }
     command.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).kill_on_drop(true);
     #[cfg(unix)]

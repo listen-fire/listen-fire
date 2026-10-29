@@ -1,7 +1,7 @@
 // The loop guard slot's contract suite (movement-engine services/loop_guard/
-// contract.ts) against lf's built-in guard, driven over the guard wire
-// (`lf --contract-guard`), and against a third-party guard module filling a
-// project's loopGuard slot (`lf --contract-guard-slot`): lf drives the module
+// contract.ts) against listen-fire's built-in guard, driven over the guard wire
+// (`listen-fire --contract-guard`), and against a third-party guard module filling a
+// project's loopGuard slot (`listen-fire --contract-guard-slot`): listen-fire drives the module
 // as a process over the same wire. The built-in over Postgres, its shared
 // memory, is in integration/loop_guard_postgres.test.ts.
 
@@ -12,7 +12,7 @@ import { lfBinary } from './lf_bin';
 import { guardModuleProject } from './loop_guard_module/project';
 
 const bridges = [
-  { over: "lf's built-in guard", args: () => ['--contract-guard'] },
+  { over: "listen-fire's built-in guard", args: () => ['--contract-guard'] },
   { over: 'a loop guard module', args: () => ['--contract-guard-slot', '--dir', guardModuleProject()] },
 ];
 

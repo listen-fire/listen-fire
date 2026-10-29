@@ -1,11 +1,11 @@
-//! The wake slot (docs/contracts/wake-slot.md): lf tells a module that work
-//! is ready now, or will be at a time, so whatever starts lf's workers (a
+//! The wake slot (docs/contracts/wake-slot.md): listen-fire tells a module that work
+//! is ready now, or will be at a time, so whatever starts listen-fire's workers (a
 //! cloud queue, a scheduled task service) can start one then, instead of a
-//! worker running on a tick in case something is due. lf builds none in, so
+//! worker running on a tick in case something is due. listen-fire builds none in, so
 //! the slot is empty unless lf.yaml names a module: then nobody is told, and
 //! the work waits for a drain to find it.
 //!
-//! Every work row lf writes or puts back with a due time reaches `queued`
+//! Every work row listen-fire writes or puts back with a due time reaches `queued`
 //! after the write, the one place the slot is called. A wake that fails is
 //! logged, never the work's failure: the row is already in the store, and the
 //! scheduled drain (the safety net every deployment keeps) finds it.
@@ -76,7 +76,7 @@ pub fn request_of(method: &str, params: &Js) -> Result<(When, String), String> {
 
 // ── The slot, for the session on this thread ────────────────────────────────
 
-// Per thread, as the run host's store is (crate::module_hosts): lf runs on
+// Per thread, as the run host's store is (crate::module_hosts): listen-fire runs on
 // one thread, and each test's session keeps its own.
 thread_local! {
     static SLOT: RefCell<Option<Rc<dyn Wake>>> = const { RefCell::new(None) };
@@ -90,7 +90,7 @@ pub fn install(wake: Option<Rc<dyn Wake>>) {
 /// The wake module lf.yaml names, reached with its settings; None when the slot is empty.
 pub fn of_project(project: &crate::project::Project, credentials: &crate::secrets::Credentials) -> Result<Option<Rc<dyn Wake>>, String> {
     let Some(module) = &project.core.wake else { return Ok(None) };
-    let Some(process) = &module.process else { return Err(format!("{}: lf builds no wake module in", module.name)) };
+    let Some(process) = &module.process else { return Err(format!("{}: listen-fire builds no wake module in", module.name)) };
     let wake = ProcessWake::start(&module.name, process, &crate::core::settings_of(credentials, module))?;
     Ok(Some(Rc::new(wake)))
 }
@@ -100,7 +100,7 @@ pub fn of_project(project: &crate::project::Project, credentials: &crate::secret
 pub fn queued(kind: &str, due_at: Option<&str>) {
     let Some(wake) = SLOT.with(|slot| slot.borrow().clone()) else { return };
     if let Err(message) = wake.wake(when_due(due_at, crate::limiter::now_ms()), kind) {
-        eprintln!("lf: the wake slot was not told of {kind} work ({message}); a scheduled drain will find it");
+        eprintln!("listen-fire: the wake slot was not told of {kind} work ({message}); a scheduled drain will find it");
     }
 }
 

@@ -153,7 +153,7 @@ pub struct SegmentHost<'s> {
     pub documents: &'s Documents,
     /// The acting user every event acts as (`localIdentity`).
     pub user: Js,
-    /// Where lf is reached from outside: a minted callback's url is under it.
+    /// Where listen-fire is reached from outside: a minted callback's url is under it.
     pub public_url: String,
     wire: RefCell<Wire>,
     positions: RefCell<HashMap<i64, Hv>>,
@@ -587,7 +587,7 @@ fn thrown_message(error: &Json) -> String {
                 chain.len().saturating_sub(1)
             )
         }
-        // A priced call met the cap. lf serves no limit pause, so the run
+        // A priced call met the cap. listen-fire serves no limit pause, so the run
         // fails here where the platform would pause it.
         Some("RunCostCapExceeded") => {
             let dollars = |key: &str| error.get(key).and_then(Json::as_f64).map(|m| format!("${:.2}", m / 1_000_000.0)).unwrap_or_else(|| "?".into());
@@ -934,7 +934,7 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
             if kind == "pdf" {
                 // In this language a PDF is drawn by the `@lf/pdf` plugin; a kind
                 // that only meets "pdf" at run time (`File.from(t, kind)`) lands here.
-                return Ok(Err(failure("File.from(…, \"pdf\") draws no PDF in lf: import the `@lf/pdf` plugin and call pdf.render(text) (``import { `@lf/pdf` as pdf } from plugins``)")));
+                return Ok(Err(failure("File.from(…, \"pdf\") draws no PDF in listen-fire: import the `@lf/pdf` plugin and call pdf.render(text) (``import { `@lf/pdf` as pdf } from plugins``)")));
             }
             let bytes = content.as_bytes();
             match host.documents.put(TEAM, bytes, name, content_type) {
@@ -966,7 +966,7 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
         "llm.transforms.invoke" => invoke_plugin(host, args).await?,
         #[cfg(not(feature = "anthropic"))]
         "llm.client.call" | "llm.extractCall.call" | "llm.arbitrateEntities" => {
-            Err(failure(format!("{label}: this lf was built without the `anthropic` feature, so its models slot is empty and it cannot call a model (install the full lf)")))
+            Err(failure(format!("{label}: this listen-fire was built without the `anthropic` feature, so its models slot is empty and it cannot call a model (install the full listen-fire)")))
         }
         #[cfg(feature = "anthropic")]
         "llm.client.call" | "llm.extractCall.call" | "llm.arbitrateEntities" => {
@@ -979,9 +979,9 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
                 Err(crate::llm_calls::Failed::Run(message)) => Err(failure(message)),
             }
         }
-        // Families lf does not serve yet: the run fails naming them.
+        // Families listen-fire does not serve yet: the run fails naming them.
         "park.bindings.record" | "park.bindings.findBoundCounterpart" | "park.bindings.delete" => {
-            Err(failure(format!("{label}: lf keeps no record bindings yet")))
+            Err(failure(format!("{label}: listen-fire keeps no record bindings yet")))
         }
         _ => return Err(Fault(format!("the host has no route for {label}"))),
     })
@@ -1228,7 +1228,7 @@ fn set_path(value: &mut Hv, path: &[&str], to: Hv) {
     }
 }
 
-/// `files.resolveFileText` on lf: a text file's text; a PDF's own text
+/// `files.resolveFileText` on listen-fire: a text file's text; a PDF's own text
 /// layer, else the ocr slot's reading of it; an image's text from the ocr
 /// slot (crate::ocr). `remaining` is the run's budget, in microdollars, for
 /// a read OCR charges. Err fails the run.
@@ -1252,7 +1252,7 @@ async fn file_text(host: &SegmentHost<'_>, file: &Obj, remaining: Option<f64>) -
     };
     if !textual && !pdf && image.is_none() {
         let named = if !content_type.is_empty() { content_type.to_string() } else if !extension.is_empty() { extension } else { "an unknown type".into() };
-        return Ok(unreadable("unsupported_type", Some(format!("lf reads text files, PDFs and images, not {named}"))));
+        return Ok(unreadable("unsupported_type", Some(format!("listen-fire reads text files, PDFs and images, not {named}"))));
     }
     let bytes = match owner_of(file.get("source")) {
         Some(Owner::Document { object_uri }) if host.documents.owns(&object_uri, TEAM) => host.documents.open(&object_uri),
@@ -1294,7 +1294,7 @@ async fn pdf_text(ocr: Option<&crate::ocr::OcrModule>, bytes: &[u8], name: Optio
 async fn pdf_text(_: Option<&crate::ocr::OcrModule>, _: &[u8], _: Option<&str>, _: Option<f64>) -> Result<Js, String> {
     Ok(Js::Obj(obj! {
         "unreadable" => Js::str("unsupported_type"),
-        "detail" => Js::str("this lf was built without the `pdf` feature, so it reads no PDF (install the full lf)"),
+        "detail" => Js::str("this listen-fire was built without the `pdf` feature, so it reads no PDF (install the full listen-fire)"),
     }))
 }
 

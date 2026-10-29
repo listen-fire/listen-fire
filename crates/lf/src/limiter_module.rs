@@ -1,9 +1,9 @@
-//! A limiter module lf does not build in: the limiter slot filled by a
+//! A limiter module listen-fire does not build in: the limiter slot filled by a
 //! third-party module (crate::core), spoken to over the limiter slot's
 //! methods (docs/contracts/limiter-slot.md) carried as adapter protocol 2
 //! calls (crate::slot_client), opened by `limiter.open` with the module's
 //! settings. A limiter shared by many hosts (Redis, a database) is such a
-//! module; lf's in-process waiting (crate::limiter::acquire) is unchanged by it.
+//! module; listen-fire's in-process waiting (crate::limiter::acquire) is unchanged by it.
 
 use std::collections::BTreeMap;
 
@@ -23,7 +23,7 @@ pub struct ProcessLimiter {
 }
 
 impl ProcessLimiter {
-    /// The module, opened at once (`lf connect` checks it answers).
+    /// The module, opened at once (`listen-fire connect` checks it answers).
     pub fn start(name: &str, process: &ProcessModule, settings: &BTreeMap<String, String>) -> Result<ProcessLimiter, String> {
         let limiter = ProcessLimiter::reach(name, process, settings)?;
         limiter.open()?;

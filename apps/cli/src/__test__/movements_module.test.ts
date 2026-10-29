@@ -1,7 +1,7 @@
-// The movements slot filled by a module lf does not build in: the test
+// The movements slot filled by a module listen-fire does not build in: the test
 // module (movements_module/serve.ts) reached at its url, its own `tenant`
 // setting in the environment (the bootstrap rule), and no movements folder on
-// disk. The real `lf` reads the project's files from it by name, every
+// disk. The real `listen-fire` reads the project's files from it by name, every
 // request carrying the tenant, and one command reads each file once.
 
 import { test } from 'node:test';
@@ -19,7 +19,7 @@ const ENV = { LF_SECRET__ACME_MOVEMENTS__EXTERNAL: 'acme_movements', LF_SECRET__
 
 const GREET = 'export function greet(name: <text>) {\n  return "Hello, ${name}!"\n}\n';
 
-/** `lf init`'s starter, as `lf init` writes it. */
+/** `listen-fire init`'s starter, as `listen-fire init` writes it. */
 async function starter(): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), 'lf-movements-starter-'));
   const init = await lf(dir, ['init']).done;
@@ -31,7 +31,7 @@ async function starter(): Promise<string> {
 async function hello(): Promise<string> {
   const text = await starter();
   const greeting = 'return "Hello, ${run.`Run by (name)`}!"';
-  assert.ok(text.includes(greeting), "lf init's starter changed; update this test");
+  assert.ok(text.includes(greeting), "listen-fire init's starter changed; update this test");
   return `import { greet } from "lib/greet"\n${text.replace(greeting, 'return greet(run.`Run by (name)`)')}`;
 }
 
@@ -101,7 +101,7 @@ async function edited(): Promise<string> {
   return (await hello()).replace('return greet(run.`Run by (name)`)', 'return greet("again")');
 }
 
-test('lf serve only watches while nothing changes, and reads only the file that did', async () => {
+test('listen-fire serve only watches while nothing changes, and reads only the file that did', async () => {
   const module = await serveMovementsModule({ listen: 0, files: { 'hello.mvt': await hello(), 'lib/greet.mvt': GREET } });
   const asked = () => module.calls.filter((call) => call.startsWith('movements.'));
   try {
@@ -154,12 +154,12 @@ test('a run reads through the module while a watch is held', async () => {
       await until(() => asked().length >= OPEN.length + WATCHING.length, 'a held watch');
       const door = Date.now();
       const answered = await fetch(`http://127.0.0.1:${server.port}/hooks/nobody/x`, { method: 'POST', body: '{}' });
-      assert.ok(Date.now() - door < 1_000, 'lf serve answers its doors while the watch is held');
+      assert.ok(Date.now() - door < 1_000, 'listen-fire serve answers its doors while the watch is held');
       assert.ok(answered.status >= 400, `answered ${answered.status}`);
     } finally {
       await server.stop();
     }
-    // lf's own client of the module, one process: a read answers while a
+    // listen-fire's own client of the module, one process: a read answers while a
     // watch through the same client is held, so the watch is not queued
     // before the slot's other calls.
     const runner = await startModule(lfBinary(), ['--contract-movements-slot', '--dir', dir], { env: ENV });
@@ -184,7 +184,7 @@ test("a restarted module's resync is one list", async () => {
   const files = { 'hello.mvt': await hello(), 'lib/greet.mvt': GREET };
   const first = await serveMovementsModule({ listen: 0, files });
   // The test module counts its versions from v1 in each process: put once
-  // more, so the restarted one's hello.mvt is at a version lf never held.
+  // more, so the restarted one's hello.mvt is at a version listen-fire never held.
   first.put('hello.mvt', files['hello.mvt']);
   const asked = (module: MovementsModule) => module.calls.filter((call) => call.startsWith('movements.'));
   const port = Number(new URL(first.url).port);
@@ -196,7 +196,7 @@ test("a restarted module's resync is one list", async () => {
       await until(() => asked(first).length >= OPEN.length + WATCHING.length, 'a held watch');
       firstOpen = false;
       await first.close();
-      await server.waitFor(/^movements: kept the files lf has; the movements module did not answer watch: /);
+      await server.waitFor(/^movements: kept the files listen-fire has; the movements module did not answer watch: /);
       // The same address, a new process: a new epoch, and the edit made while it was down.
       second = await serveMovementsModule({ listen: port, files: { ...files, 'hello.mvt': await edited() } });
       await server.waitFor(/^movements: hello\.mvt changed$/);
@@ -218,14 +218,14 @@ test("a restarted module's resync is one list", async () => {
   }
 });
 
-test('lf serve and lf drain refuse a module that does not answer movements.watch; a one-shot does not need it', async () => {
+test('listen-fire serve and listen-fire drain refuse a module that does not answer movements.watch; a one-shot does not need it', async () => {
   const module = await serveMovementsModule({ listen: 0, files: { 'hello.mvt': await hello(), 'lib/greet.mvt': GREET }, watches: false });
   try {
     const dir = project(module);
-    for (const [command, args] of [['lf serve', ['serve', '--port', '0']], ['lf drain', ['drain']]] as const) {
+    for (const [command, args] of [['listen-fire serve', ['serve', '--port', '0']], ['listen-fire drain', ['drain']]] as const) {
       const refused = await lf(dir, [...args], { env: ENV }).done;
       assert.equal(refused.code, 1, refused.out);
-      assert.equal(refused.out, `lf: the movements module acme_movements does not answer movements.watch (adapter protocol 2.1); ${command} needs it\n`);
+      assert.equal(refused.out, `listen-fire: the movements module acme_movements does not answer movements.watch (adapter protocol 2.1); ${command} needs it\n`);
     }
     const idle = await lf(dir, ['drain', '--until-idle'], { env: ENV }).done;
     assert.equal(idle.code, 0, idle.out);
@@ -291,13 +291,13 @@ test('upgrade writes through the module, at the version it read, and the project
   }
 });
 
-test('a conflict holds the pin: a file changed since lf read it is not overwritten', async () => {
+test('a conflict holds the pin: a file changed since listen-fire read it is not overwritten', async () => {
   const module = await serveMovementsModule({ listen: 0, files: { 'companies.mvt': OLD }, changeBeforeWrite: 'companies.mvt' });
   try {
     const dir = exampleOver(module, '0.11.0');
     const upgraded = await lf(dir, ['upgrade'], { env: ENV }).done;
     assert.equal(upgraded.code, 1, upgraded.out);
-    assert.ok(upgraded.out.includes('movements/companies.mvt: changed since lf read it; nothing written (run `lf upgrade` again)'), upgraded.out);
+    assert.ok(upgraded.out.includes('movements/companies.mvt: changed since listen-fire read it; nothing written (run `listen-fire upgrade` again)'), upgraded.out);
     assert.match(upgraded.out, /engine: left at 0\.11\.0 until the 1 remaining diagnostic\(s\) are fixed/);
     assert.match(upgraded.out, /1 file\(s\), 0 rewritten, 1 left to change by hand/);
     assert.equal(module.held()['companies.mvt'], OLD);
@@ -309,7 +309,7 @@ test('a conflict holds the pin: a file changed since lf read it is not overwritt
 
 test('a read-only module refuses upgrade and init by name, writing nothing', async () => {
   const module = await serveMovementsModule({ listen: 0, files: { 'companies.mvt': OLD }, readOnly: 'the platform keeps them' });
-  const refusal = "lf: acme_movements holds the project's movements read-only: the platform keeps them. Change them where they live.\n";
+  const refusal = "listen-fire: acme_movements holds the project's movements read-only: the platform keeps them. Change them where they live.\n";
   try {
     const dir = exampleOver(module, '0.11.0');
     const pin = read(dir, 'lf.yaml');

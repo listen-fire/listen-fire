@@ -1,4 +1,4 @@
-// `@lf/email` under lf, as the handbook writes it: connected with no
+// `@lf/email` under listen-fire, as the handbook writes it: connected with no
 // credential (receiving needs none), a listen keyed per plus-suffix, and each
 // message routed to the listen whose key its address carries — to none when
 // no listen has that key.
@@ -32,7 +32,7 @@ function sentTo(dir: string, recipient: string): ReturnType<typeof lf> {
   return lf(dir, 'run', '--event', file);
 }
 
-test('lf connect @lf/email needs no credential; a listen per key checks clean and mail is routed by plus-suffix', async () => {
+test('listen-fire connect @lf/email needs no credential; a listen per key checks clean and mail is routed by plus-suffix', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'lf-email-'));
   assert.equal(lf(dir, 'init', dir).code, 0);
   const connected = await ok(lfAsked(dir, ['connect', '@lf/email'], { answers: [''] }));

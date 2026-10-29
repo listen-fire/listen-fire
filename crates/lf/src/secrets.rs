@@ -113,7 +113,7 @@ impl Secrets {
         self.store.as_ref()
     }
 
-    /// The store itself, to be held beyond these credentials (`lf --contract-secrets-slot`).
+    /// The store itself, to be held beyond these credentials (`listen-fire --contract-secrets-slot`).
     pub fn store_handle(&self) -> Rc<dyn SecretsStore> {
         self.store.clone()
     }
@@ -140,8 +140,8 @@ fn held_by(store: &dyn SecretsStore) -> Result<Credentials, String> {
         .collect())
 }
 
-/// One entry: the external it belongs to (`module:`, written by `lf connect` /
-/// `lf credential`, or a hand-written `external:`) and its fields. A user
+/// One entry: the external it belongs to (`module:`, written by `listen-fire connect` /
+/// `listen-fire credential`, or a hand-written `external:`) and its fields. A user
 /// credential's `credential:` names the declared credential it binds; it is
 /// not a field.
 pub fn parse_entry(raw: serde_yaml::Value) -> Result<(String, Binding, BTreeMap<String, String>), String> {
@@ -182,7 +182,7 @@ fn refuse_if_readable_by_others(path: &Path) -> Result<(), String> {
     let mode = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.permissions().mode();
     if mode & 0o044 != 0 {
         return Err(format!(
-            "{} is readable by other users (mode {:03o}); lf refuses to read secrets that others can read. Fix: chmod 600 {}",
+            "{} is readable by other users (mode {:03o}); listen-fire refuses to read secrets that others can read. Fix: chmod 600 {}",
             path.display(),
             mode & 0o777,
             path.display()
@@ -423,7 +423,7 @@ pub fn missing_credentials(files: &[Rc<Parsed>], secrets: &Secrets) -> Vec<Missi
     let credentials = secrets.credentials();
     let mut missing = Vec::new();
     for file in files {
-        // `lf check` reports a file that does not parse.
+        // `listen-fire check` reports a file that does not parse.
         let Ok(program) = &file.program else { continue };
         for statement in &program.statements {
             let Statement::Import(import) = statement else { continue };

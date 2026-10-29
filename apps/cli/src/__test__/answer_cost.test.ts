@@ -1,7 +1,7 @@
 // What a module answers it spent on a paid service (an answer's `cost`)
 // through the real binary: it rides the adapter call's answer into the
 // engine's ledger, so the run's spend counts it once and the engine's account
-// and lf's agree.
+// and listen-fire's agree.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

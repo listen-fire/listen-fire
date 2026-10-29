@@ -1,6 +1,6 @@
-// A polled source in lf: a module whose manifest declares `poll` is polled per
-// listen — by `lf serve` on its interval, by `lf drain` when a poll is due, and
-// by `lf run --poll <movement>` at once. Its checkpoint is kept per listen, an
+// A polled source in listen-fire: a module whose manifest declares `poll` is polled per
+// listen — by `listen-fire serve` on its interval, by `listen-fire drain` when a poll is due, and
+// by `listen-fire run --poll <movement>` at once. Its checkpoint is kept per listen, an
 // event whose idempotencyKey a listen has run is not run again, and two
 // workers draining one state never poll one listen at the same time.
 
@@ -61,7 +61,7 @@ test('drain polls a due listen once, its checkpoint advancing; a poll missed whi
   assert.equal(seen(dir), 3);
 });
 
-test('lf run --poll polls at once; an event a listen has run is not run again', () => {
+test('listen-fire run --poll polls at once; an event a listen has run is not run again', () => {
   const dir = feedProject();
   assert.equal(seen(dir), 0);
   lf(dir, 'run', '--poll', 'seen');
@@ -84,7 +84,7 @@ test('two drains at once poll a listen once', async () => {
   assert.equal(seen(dir), 2);
 });
 
-test('lf serve polls on the interval and fires each new event', async () => {
+test('listen-fire serve polls on the interval and fires each new event', async () => {
   const dir = feedProject();
   writeFileSync(join(dir, 'externals/feed/fast'), '');
   const server = await served(dir);
@@ -129,7 +129,7 @@ test('a poll names its listener by the listen\'s pipeline, file and movement', (
   assert.deepEqual(listeners(dir), ['listen:notes:seen']);
 });
 
-test('an unlabelled poll event reaches the listen that polled it, and lf says so once per module', () => {
+test('an unlabelled poll event reaches the listen that polled it, and listen-fire says so once per module', () => {
   const dir = feedProject('listen to f { events: ["note.added"] } fire seen');
   writeFileSync(join(dir, 'externals/feed/unlabelled'), '');
   const check = lf(dir, 'check');

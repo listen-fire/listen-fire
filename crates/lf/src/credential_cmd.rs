@@ -1,4 +1,4 @@
-//! `lf credential add|update|delete|list`: a
+//! `listen-fire credential add|update|delete|list`: a
 //! person's credentials for a module, as the platform's credential pages hold
 //! them (a name, the module it is for, its fields), written to the secrets
 //! file by these commands only.
@@ -12,7 +12,7 @@
 //!   delete <name>
 //!   list
 //!
-//! The OAuth app's client id and secret are the module's install's (`lf
+//! The OAuth app's client id and secret are the module's install's (`listen-fire
 //! connect <module>`), never copied into a user's credential. The command
 //! lines of `connect`, `credential` and `completion` are read here too.
 
@@ -69,12 +69,12 @@ pub async fn add_credential(project: &Project, input: AddInput<'_>, prompter: &m
     let secrets = Secrets::open(project, &process_env())?;
     let credentials = secrets.credentials();
     let Some(external) = find_external(project, input.module)? else {
-        return Err(format!("module \"{}\" is not installed here; set it up first: lf connect {}", input.module, input.module).into());
+        return Err(format!("module \"{}\" is not installed here; set it up first: listen-fire connect {}", input.module, input.module).into());
     };
     let module = external.manifest.name.clone();
     let install = install_of(credentials, &module);
     if install.is_none() && external.manifest.auth.is_some() {
-        return Err(format!("module \"{module}\" is not set up here (its server secret): lf connect {module}").into());
+        return Err(format!("module \"{module}\" is not set up here (its server secret): listen-fire connect {module}").into());
     }
     let facts = read_manifest(project, &external, install).await?;
     let declaration = choose_declared(&module, &facts.declarations, input.declared)?;
@@ -90,7 +90,7 @@ pub async fn add_credential(project: &Project, input: AddInput<'_>, prompter: &m
         return Err(format!("\"{name}\" cannot be a credential name: letters, digits and _ (a movement imports it by this name)").into());
     }
     if credentials.iter().any(|c| c.name == name) {
-        return Err(format!("there is already a credential \"{name}\"; change it with lf credential update {name}").into());
+        return Err(format!("there is already a credential \"{name}\"; change it with listen-fire credential update {name}").into());
     }
     secrets.store().entries_writable(&name)?;
     // Refused before any question: an OAuth sign-in needs the install's app.
@@ -146,11 +146,11 @@ pub async fn update_credential(project: &Project, input: UpdateInput<'_>, prompt
     let credentials = secrets.credentials();
     let credential = writable(credentials, name)?;
     if credential.binding == Binding::Install {
-        return Err(format!("\"{name}\" is the install of {}; change it with lf connect {}", credential.external, credential.external).into());
+        return Err(format!("\"{name}\" is the install of {}; change it with listen-fire connect {}", credential.external, credential.external).into());
     }
     let Some(external) = find_external(project, &credential.external)? else {
         return Err(format!(
-            "\"{name}\" is for module \"{}\", which is not installed here (lf connect {})",
+            "\"{name}\" is for module \"{}\", which is not installed here (listen-fire connect {})",
             credential.external, credential.external
         )
         .into());
@@ -224,7 +224,7 @@ pub fn list_credentials(project: &Project) -> Result<Vec<ListedCredential>, Stri
             let (what, binding, declared) = match &credential.binding {
                 Binding::Install => ("install".to_string(), "install", Js::Null),
                 Binding::Credential(declared) => (format!("credential {declared}"), "credential", Js::str(declared)),
-                Binding::Legacy => ("written by hand (lf credential update records its binding)".to_string(), "legacy", Js::Null),
+                Binding::Legacy => ("written by hand (listen-fire credential update records its binding)".to_string(), "legacy", Js::Null),
             };
             let mut where_ = Vec::new();
             if credential.origin.slot_ref.is_some() {
@@ -252,12 +252,12 @@ pub fn list_credentials(project: &Project) -> Result<Vec<ListedCredential>, Stri
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-/// A credential lf may write: held by the secrets module, no field from the environment.
+/// A credential listen-fire may write: held by the secrets module, no field from the environment.
 fn writable<'c>(credentials: &'c Credentials, name: &str) -> Result<&'c Credential, String> {
-    let credential = credentials.iter().find(|c| c.name == name).ok_or_else(|| format!("there is no credential \"{name}\" (lf credential list)"))?;
+    let credential = credentials.iter().find(|c| c.name == name).ok_or_else(|| format!("there is no credential \"{name}\" (listen-fire credential list)"))?;
     if credential.origin.slot_ref.is_none() || !credential.origin.env_fields.is_empty() {
         return Err(format!(
-            "\"{name}\" has fields from the environment ({ENV_PREFIX}{}__…), which lf cannot write; change it there, or unset them",
+            "\"{name}\" has fields from the environment ({ENV_PREFIX}{}__…), which listen-fire cannot write; change it there, or unset them",
             name.to_uppercase()
         ));
     }
@@ -312,10 +312,10 @@ fn client_of(module: &str, declaration: &Declaration, declarations: &[Declaratio
     let holder = holder.filter(|h| h.fields.get(CLIENT_ID_FIELD).is_some_and(|id| !id.is_empty()));
     let Some(holder) = holder else {
         if declarations.iter().all(|d| d.oauth2().is_some()) {
-            return Err(format!("module \"{module}\" has no OAuth app set up: lf connect {module}"));
+            return Err(format!("module \"{module}\" has no OAuth app set up: listen-fire connect {module}"));
         }
         return Err(format!(
-            "module \"{module}\" has no OAuth app set up, so its \"{}\" credential cannot sign in: lf connect {module} and answer yes to the OAuth app, or lf connect {module} --oauth-authorize-url <url> --oauth-token-url <url>",
+            "module \"{module}\" has no OAuth app set up, so its \"{}\" credential cannot sign in: listen-fire connect {module} and answer yes to the OAuth app, or listen-fire connect {module} --oauth-authorize-url <url> --oauth-token-url <url>",
             declaration.name
         ));
     };
@@ -330,13 +330,13 @@ fn redirect_mode(project: &Project, choice: &RedirectChoice, install: Option<&Cr
     let port = choice.port.unwrap_or(registered);
     match choice.how {
         How::Loopback => Ok(RedirectMode::Loopback { port, open_browser: choice.open_browser }),
-        How::Headless if port == 0 => Err("--headless needs the redirect port your app registered: --redirect-port <port>, or set it with lf connect".into()),
+        How::Headless if port == 0 => Err("--headless needs the redirect port your app registered: --redirect-port <port>, or set it with listen-fire connect".into()),
         How::Headless => Ok(RedirectMode::Headless { port }),
         How::Public => {
             let redirect_uri = match (oauth_redirect_uri(project)?, public_url(project)) {
                 (Some(relay), _) => relay,
                 (None, Some(public)) => public_redirect_uri(&public),
-                (None, None) => return Err("--public needs lf.yaml's publicUrl, where lf serve is reached (or oauth.redirectUri, where a relay forwards the redirect from)".into()),
+                (None, None) => return Err("--public needs lf.yaml's publicUrl, where listen-fire serve is reached (or oauth.redirectUri, where a relay forwards the redirect from)".into()),
             };
             Ok(RedirectMode::Public { redirect_uri, lf_dir: project.lf_dir.clone() })
         }
@@ -351,14 +351,14 @@ fn user_name() -> String {
 
 pub const COMMANDS: &[&str] = &["connect", "credential", "completion"];
 
-pub const USAGE: &str = "  lf connect [<module>] [--url <server url>] [--yes]     set a module up (a module that signs users in with OAuth ends by offering the first sign-in; --yes skips the offer): install it, its server and webhook secrets, its OAuth app (no module: list the ones known; --json: as JSON)
+pub const USAGE: &str = "  listen-fire connect [<module>] [--url <server url>] [--yes]     set a module up (a module that signs users in with OAuth ends by offering the first sign-in; --yes skips the offer): install it, its server and webhook secrets, its OAuth app (no module: list the ones known; --json: as JSON)
     pointing it elsewhere (a fake, a proxy): --base-url <its API root>  --oauth-authorize-url <url>  --oauth-token-url <url>  ('' goes back to the provider's own)
-  lf credential add --module <module> [<name>] [--credential <declared>]   a user credential for the module: sign in at the provider, or its fields
-  lf credential update <name> [--no-reauthorize]   sign in again and edit its fields
-  lf credential delete <name>
-  lf credential list [--json]
-    signing in: --redirect-port N (the port your app registered)  --no-browser  --headless (paste the redirect back)  --public (through lf serve at publicUrl; oauth.redirectUri in lf.yaml names a relay's URI instead)
-  lf completion <bash|zsh|fish>   a shell's tab completion for lf (subcommands, modules, credentials)";
+  listen-fire credential add --module <module> [<name>] [--credential <declared>]   a user credential for the module: sign in at the provider, or its fields
+  listen-fire credential update <name> [--no-reauthorize]   sign in again and edit its fields
+  listen-fire credential delete <name>
+  listen-fire credential list [--json]
+    signing in: --redirect-port N (the port your app registered)  --no-browser  --headless (paste the redirect back)  --public (through listen-fire serve at publicUrl; oauth.redirectUri in lf.yaml names a relay's URI instead)
+  listen-fire completion <bash|zsh|fish>   a shell's tab completion for listen-fire (subcommands, modules, credentials)";
 
 #[derive(Default)]
 struct Line {
@@ -444,7 +444,7 @@ async fn run(argv: &[String]) -> Result<i32, String> {
                     let doc = Js::Obj(obj! { "modules" => Js::Arr(known.into_iter().map(|m| Js::Obj(m.facts)).collect()) });
                     println!("{}", doc.to_json());
                 } else if known.is_empty() {
-                    println!("no modules known here; install one: lf connect <package or name>");
+                    println!("no modules known here; install one: listen-fire connect <package or name>");
                 } else {
                     println!("{}", known.iter().map(|m| m.line.as_str()).collect::<Vec<_>>().join("\n"));
                 }
@@ -475,7 +475,7 @@ fn refused(done: Result<(), EntryError>) -> Result<i32, String> {
     match done {
         Ok(()) => Ok(0),
         Err(refusal @ EntryError::ReadOnly { .. }) => {
-            eprintln!("lf: {}", refusal.refusal());
+            eprintln!("listen-fire: {}", refusal.refusal());
             Ok(2)
         }
         Err(EntryError::Failed(message)) => Err(message),
@@ -485,7 +485,7 @@ fn refused(done: Result<(), EntryError>) -> Result<i32, String> {
 /// How the sign-in goes back from the provider, as the command line asked.
 fn redirect_of(line: &Line) -> Result<RedirectChoice, String> {
     if line.headless && line.public {
-        return Err("lf credential: --headless and --public are two ways back from the provider; pick one".into());
+        return Err("listen-fire credential: --headless and --public are two ways back from the provider; pick one".into());
     }
     let port = match &line.redirect_port {
         Some(port) => match port.parse::<u16>() {
@@ -529,7 +529,7 @@ async fn credential(line: &Line, rest: &[String]) -> Result<i32, String> {
     match (action, name) {
         (Some("add"), _) => {
             let Some(module) = &line.module else {
-                eprintln!("lf credential add needs --module <module>");
+                eprintln!("listen-fire credential add needs --module <module>");
                 return Ok(2);
             };
             let input = AddInput { module, name, declared: line.credential.as_deref(), redirect: &redirect };
@@ -541,11 +541,11 @@ async fn credential(line: &Line, rest: &[String]) -> Result<i32, String> {
         }
         (Some("delete"), Some(name)) => refused(delete_credential(&project, name, &mut prompter).await),
         (Some(action @ ("update" | "delete")), None) => {
-            eprintln!("lf credential {action} needs a credential name");
+            eprintln!("listen-fire credential {action} needs a credential name");
             Ok(2)
         }
         (other, _) => {
-            eprintln!("lf credential: add, update, delete or list, not \"{}\"", other.unwrap_or_default());
+            eprintln!("listen-fire credential: add, update, delete or list, not \"{}\"", other.unwrap_or_default());
             Ok(2)
         }
     }

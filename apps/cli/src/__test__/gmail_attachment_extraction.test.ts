@@ -1,8 +1,8 @@
 // An extraction over a file a module owns: a Gmail PDF attachment, read under
-// `lf serve` through the module that owns it (`resolveFileRef`, as a write
+// `listen-fire serve` through the module that owns it (`resolveFileRef`, as a write
 // that files it elsewhere redeems it), then its text layer, then the model.
 // The model is a fake that answers with what it was shown, so a field only
-// the PDF holds reaches the run only if lf read the PDF.
+// the PDF holds reaches the run only if listen-fire read the PDF.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -56,7 +56,7 @@ function invoice(msg: <mail-[:Message]->>) {
 listen to mail { every: 1s } fire invoice
 `;
 
-test('lf serve: an extraction over a Gmail PDF attachment reads the PDF through Gmail, with no bytes-unavailable warning', async () => {
+test('listen-fire serve: an extraction over a Gmail PDF attachment reads the PDF through Gmail, with no bytes-unavailable warning', async () => {
   const fake = await fakeChannels();
   const anthropic = await echoingAnthropic();
   try {
@@ -70,7 +70,7 @@ test('lf serve: an extraction over a Gmail PDF attachment reads the PDF through 
     const server = await served(dir);
     try {
       // The first poll sets the mark, and says so; mail after it fires.
-      await server.waitFor(/^lf: gmail: hello:invoice armed; it fires on changes from now$/);
+      await server.waitFor(/^listen-fire: gmail: hello:invoice armed; it fires on changes from now$/);
       await fake.message({ id: 'm-pw', subject: 'Invoice PW-20417', bodyText: 'Attached.', attachments: [{ filename: 'PW-20417.pdf', contentType: 'application/pdf', content: pdf.toString('latin1') }] });
       const line = await server.waitFor(/^run \S+ hello:invoice failed/);
       assert.match(line, /PW-20417\.pdf total EUR 4,812\.50/);

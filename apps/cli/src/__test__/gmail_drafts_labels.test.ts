@@ -1,8 +1,8 @@
-// Gmail drafts and the label-added event with lf, against the fake Gmail in
-// packages/fake-channels, every step as a person types it: lf connect @lf/gmail
-// (pointed at the fake) → lf credential add --headless (the plain sign-in, or
-// the `gmail_drafts` one that also asks for the compose scope) → lf check →
-// lf run, and lf run --poll for a listen.
+// Gmail drafts and the label-added event with listen-fire, against the fake Gmail in
+// packages/fake-channels, every step as a person types it: listen-fire connect @lf/gmail
+// (pointed at the fake) → listen-fire credential add --headless (the plain sign-in, or
+// the `gmail_drafts` one that also asks for the compose scope) → listen-fire check →
+// listen-fire run, and listen-fire run --poll for a listen.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

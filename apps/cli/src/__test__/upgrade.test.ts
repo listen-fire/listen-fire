@@ -1,6 +1,6 @@
-// `lf upgrade`, through the real binary entry point, on the example project
+// `listen-fire upgrade`, through the real binary entry point, on the example project
 // (written in a retired spelling): `--check` shows the rewrite and writes
-// nothing, `lf upgrade` rewrites the file so `lf check` is clean, and a second
+// nothing, `listen-fire upgrade` rewrites the file so `listen-fire check` is clean, and a second
 // run changes nothing.
 
 import { test } from 'node:test';
@@ -23,7 +23,7 @@ movement welcome(company: <crm-[:Company]->>) {
 listen to crm { events: ["company.created"] } fire welcome
 `;
 
-test('lf upgrade --check prints the rewrite; lf upgrade makes it; a second run changes nothing', () => {
+test('listen-fire upgrade --check prints the rewrite; listen-fire upgrade makes it; a second run changes nothing', () => {
   const dir = project();
   const file = join(dir, 'movements', 'companies.mvt');
   writeFileSync(file, OLD);
@@ -50,7 +50,7 @@ test('lf upgrade --check prints the rewrite; lf upgrade makes it; a second run c
   assert.match(again.out, /1 file\(s\), 0 would be rewritten, 0 left to change by hand/);
 });
 
-test('lf upgrade reports what it cannot rewrite, by file and line', () => {
+test('listen-fire upgrade reports what it cannot rewrite, by file and line', () => {
   const dir = project();
   const file = join(dir, 'movements', 'companies.mvt');
   writeFileSync(file, OLD.replace('Name: Text.concat', 'Nme: Text.concat'));
@@ -65,7 +65,7 @@ const pinned = (dir: string, engine: string): void => {
   writeFileSync(file, readFileSync(file, 'utf8').replace(/^engine: .*$/m, `engine: ${engine}`));
 };
 
-test('lf upgrade moves an older pin to the current release once the project validates clean', () => {
+test('listen-fire upgrade moves an older pin to the current release once the project validates clean', () => {
   const dir = project();
   pinned(dir, '0.11.0');
   assert.match(lf(dir, 'check').out, /does not read/);
@@ -77,7 +77,7 @@ test('lf upgrade moves an older pin to the current release once the project vali
   assert.equal(lf(dir, 'check').code, 0);
 });
 
-test('lf upgrade leaves the pin where it was while fixes remain for the author, and says why', () => {
+test('listen-fire upgrade leaves the pin where it was while fixes remain for the author, and says why', () => {
   const dir = project();
   pinned(dir, '0.11.0');
   const file = join(dir, 'movements', 'companies.mvt');
@@ -85,7 +85,7 @@ test('lf upgrade leaves the pin where it was while fixes remain for the author, 
 
   const { code, out } = lf(dir, 'upgrade');
   assert.equal(code, 1, out);
-  assert.match(out, /engine: left at 0\.11\.0 until the 2 remaining diagnostic\(s\) are fixed; run `lf upgrade` again/);
+  assert.match(out, /engine: left at 0\.11\.0 until the 2 remaining diagnostic\(s\) are fixed; run `listen-fire upgrade` again/);
   assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.11\.0$/m);
   assert.match(readFileSync(file, 'utf8'), /^crm = connect acme_crm using acme$/m);
 });

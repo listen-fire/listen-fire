@@ -9,7 +9,7 @@
 //!   it lists one; a `credentialUpdate` it answers — on a failed answer too —
 //!   is written back to the credential it was sent.
 //! - Otherwise a credential holding `refresh_token` and `token_url` is
-//!   refreshed by lf's own convention (the client in the form body).
+//!   refreshed by listen-fire's own convention (the client in the form body).
 //!
 //! Either way the refresh runs before a call whose token expires within 30 s,
 //! and once more when the call answers `unauthorized`, through the
@@ -252,7 +252,7 @@ async fn post(target: &Target<'_>, credentials: &Credentials, sending: &Sending<
     if let Some(after) = answered.retry_after_ms
         && let Err(message) = limiter.throttle(&request.key, crate::limiter::now_ms().saturating_add(i64::try_from(after).unwrap_or(i64::MAX)))
     {
-        eprintln!("lf: the limiter did not take \"{name}\"'s throttle: {message}");
+        eprintln!("listen-fire: the limiter did not take \"{name}\"'s throttle: {message}");
     }
     answered
 }
@@ -276,7 +276,7 @@ fn is_credential_channel(base_url: &str) -> bool {
     Address::parse(base_url).is_ok_and(|address| matches!(address, Address::Tcp { tls: true, .. }) || address.is_local())
 }
 
-/// lf's own convention for a credential no manifest declares: `refresh_token`
+/// listen-fire's own convention for a credential no manifest declares: `refresh_token`
 /// and `token_url` among its fields, the client in the form body.
 fn fields_refresher<'a>(credential: &Credential) -> Option<Box<Refresher<'a>>> {
     let fields = current_fields(credential);

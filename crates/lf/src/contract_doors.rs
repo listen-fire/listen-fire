@@ -1,11 +1,11 @@
-//! `lf --contract-doors`: lf's inbound doors (crate::doors over the
+//! `listen-fire --contract-doors`: listen-fire's inbound doors (crate::doors over the
 //! inbound core) served over HTTP on a loopback port, the world they read
 //! arranged over stdin/stdout JSON-RPC, so the TypeScript inbound contract
 //! suite (movement-engine `services/inbound/contract.ts`) holds them to the
 //! cases every host's doors pass (apps/cli inbound_contract.test.ts). The world's providers and installs
 //! become externals and credentials, the suite's adapter reads each delivery
 //! (`{ events?, wake?, checkpoint? }`), and the store calls are observed, and
-//! the suite's faults injected, around lf's own stores over a scratch state
+//! the suite's faults injected, around listen-fire's own stores over a scratch state
 //! file.
 //!
 //!   doors.baseUrl     → { baseUrl }
@@ -120,7 +120,7 @@ fn text<'j>(value: &'j Js, key: &str) -> Result<&'j str, String> {
 }
 
 impl Bridge {
-    /// The world as lf holds it: each provider an external declaring its
+    /// The world as listen-fire holds it: each provider an external declaring its
     /// inbound (its key lower-cased), each subscription an install of it with
     /// its secret as `webhook_secret`, each push install a credential whose
     /// `token` its external's pushes present.
@@ -194,14 +194,14 @@ impl Bridge {
         ))
     }
 
-    /// lf's doors over the arranged world, observed.
+    /// listen-fire's doors over the arranged world, observed.
     fn doors(&self) -> Observed<'_> {
         let world = self.world.borrow();
         Observed { bridge: self, served: world.served.clone(), installs: world.installs.clone(), faults: world.faults }
     }
 }
 
-/// lf's stores over the world, each call observed and the world's faults injected.
+/// listen-fire's stores over the world, each call observed and the world's faults injected.
 struct Observed<'b> {
     bridge: &'b Bridge,
     served: Vec<Served>,
@@ -278,7 +278,7 @@ impl InboundStore for Observed<'_> {
         Ok(captured)
     }
 
-    /// lf keeps a delivery in one write, so the suite's faults land on it
+    /// listen-fire keeps a delivery in one write, so the suite's faults land on it
     /// whole: wakes that cannot be queued keep nothing; receipts that cannot
     /// be queued are each refused, the rest kept (the suite's per-receipt
     /// failure) without the delivery's id, so the sender's retry is kept,

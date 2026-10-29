@@ -1,10 +1,10 @@
-//! `lf --contract-ocr-slot`: the project's ocr slot served as an OCR module,
+//! `listen-fire --contract-ocr-slot`: the project's ocr slot served as an OCR module,
 //! its methods (docs/contracts/ocr-slot.md) as adapter protocol 2 calls over
-//! HTTP (crate::slot_server), each passed on through lf's own client of the
+//! HTTP (crate::slot_server), each passed on through listen-fire's own client of the
 //! module (crate::ocr). The conformance cases (module-runtime
-//! `module_wire/conformance.ts` `ocrSlotCases`) then hold lf's side of the
+//! `module_wire/conformance.ts` `ocrSlotCases`) then hold listen-fire's side of the
 //! wire, its reading of an answer and its cost rule included, to the meaning
-//! they hold the module to. lf builds no OCR in, so there is no `--contract-ocr`.
+//! they hold the module to. listen-fire builds no OCR in, so there is no `--contract-ocr`.
 
 use std::sync::Arc;
 
@@ -17,7 +17,7 @@ use crate::slot_client::SlotClient;
 use crate::slot_server::{Listen, Refusal};
 
 pub async fn serve(module: &CoreModule, credentials: &Credentials, listen: Listen) -> Result<(), String> {
-    let process = module.process.as_ref().ok_or_else(|| format!("{} is not a module lf starts or reaches", module.name))?;
+    let process = module.process.as_ref().ok_or_else(|| format!("{} is not a module listen-fire starts or reaches", module.name))?;
     let client = SlotClient::start("ocr", &module.name, process, &crate::core::settings_of(credentials, module))?;
     let ocr = Arc::new(OcrModule::new(Arc::new(client)));
     let listed = ocr.client.call_async("manifest", Obj::new()).await?;

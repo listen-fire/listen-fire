@@ -3,24 +3,24 @@
 //! rules stay fixed; what they lean on — the models a call reaches, the judge
 //! that settles a fuzzy identity match, the store run state lives in, where
 //! files are kept — is a module of a kind (its slot), named per slot by
-//! lf.yaml's `core:` and configured as every module is: `lf connect <module>`
+//! lf.yaml's `core:` and configured as every module is: `listen-fire connect <module>`
 //! writes its settings to its install entry in the secrets file, and runs its
 //! setup (the Postgres store creates and migrates its own schema there).
 //!
-//! lf's built-ins run in process. A slot's contract is its slot's methods
+//! listen-fire's built-ins run in process. A slot's contract is its slot's methods
 //! plus its conformance suite (docs/contracts/*-slot.md). A third-party
 //! module fills any slot: a folder in the externals folder whose
 //! lf-external.yaml says `kind: core`, the `slot` and either its `command`
-//! (lf starts it) or its `url` (a remote module), spoken to over adapter
+//! (listen-fire starts it) or its `url` (a remote module), spoken to over adapter
 //! protocol 2's HTTP — a Unix socket on this box, HTTPS elsewhere
 //! (crate::slot_client): the store (crate::store_module), the limiter
 //! (crate::limiter_module), the loopGuard — empty unless named —
 //! (crate::guard_module), and the models, judge and files slots
 //! (crate::remote_slots). The browser slot (a real page a module drives: a
-//! gated deck, a viewer that draws with script) has no built-in in lf, so it
-//! is empty unless a browser module is named; then lf hands its address to
+//! gated deck, a viewer that draws with script) has no built-in in listen-fire, so it
+//! is empty unless a browser module is named; then listen-fire hands its address to
 //! the modules it starts (docs/contracts/browser-slot.md). The wake slot
-//! (lf telling whatever starts its workers, a cloud queue, that work is
+//! (listen-fire telling whatever starts its workers, a cloud queue, that work is
 //! ready now or at a time) has no built-in either, so it is empty unless
 //! named (crate::wake, docs/contracts/wake-slot.md). The ocr slot (a scanned
 //! file's text) has no built-in either: empty unless named, a scanned file
@@ -96,7 +96,7 @@ impl Slot {
 }
 
 /// One construction argument a module declares (protocol.ts `WireModuleSetting`):
-/// prompted by `lf connect`, kept on the module's install entry.
+/// prompted by `listen-fire connect`, kept on the module's install entry.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Setting {
     pub name: Cow<'static, str>,
@@ -117,11 +117,11 @@ pub struct CoreModule {
     pub name: Cow<'static, str>,
     pub slot: Slot,
     pub settings: Cow<'static, [Setting]>,
-    /// None: built into lf. Some: a third-party module lf starts.
+    /// None: built into listen-fire. Some: a third-party module listen-fire starts.
     pub process: Option<ProcessModule>,
 }
 
-/// A core module lf does not build in (an externals folder whose
+/// A core module listen-fire does not build in (an externals folder whose
 /// lf-external.yaml says `kind: core`): started in its folder from its
 /// `command`, or reached at its `url` (a remote module), and spoken to over
 /// adapter protocol 2's HTTP (crate::slot_client).
@@ -130,7 +130,7 @@ pub struct ProcessModule {
     pub dir: PathBuf,
     pub command: Vec<String>,
     pub env: BTreeMap<String, String>,
-    /// A remote module's address; None for one lf starts.
+    /// A remote module's address; None for one listen-fire starts.
     pub url: Option<String>,
     /// The install field holding a remote module's secret (lf-external.yaml's `auth.field`).
     pub auth_field: Option<String>,
@@ -146,14 +146,14 @@ pub const SQLITE_STORE: &str = "@lf/sqlite-store";
 pub const POSTGRES_STORE: &str = "@lf/postgres-store";
 
 /// What a build without the `oauth` cargo feature says of a sign-in or a token
-/// refresh, so a light lf refuses it by name.
+/// refresh, so a light listen-fire refuses it by name.
 #[cfg(not(feature = "oauth"))]
-pub const NO_OAUTH: &str = "this lf was built without the `oauth` feature, so it cannot sign anyone in at a provider or refresh a token (install the full lf)";
+pub const NO_OAUTH: &str = "this listen-fire was built without the `oauth` feature, so it cannot sign anyone in at a provider or refresh a token (install the full listen-fire)";
 
 /// What a build without the `postgres` cargo feature says of a Postgres
-/// store, so a light lf refuses it by name instead of failing to connect.
+/// store, so a light listen-fire refuses it by name instead of failing to connect.
 #[cfg(not(feature = "postgres"))]
-pub const NO_POSTGRES: &str = "this lf was built without the `postgres` feature, so it has no Postgres store (use the SQLite store, or install the full lf)";
+pub const NO_POSTGRES: &str = "this listen-fire was built without the `postgres` feature, so it has no Postgres store (use the SQLite store, or install the full listen-fire)";
 pub const LOCAL_FILES: &str = "@lf/local-files";
 pub const MEMORY_LIMITER: &str = "@lf/memory-limiter";
 pub const FINGERPRINT_GUARD: &str = "@lf/fingerprint-guard";
@@ -167,7 +167,7 @@ const ANTHROPIC_SETTINGS: &[Setting] = &[
 const SQLITE_SETTINGS: &[Setting] = &[setting("path", "the state file, from the project folder (empty: .lf/state.db)", false, true)];
 const FINGERPRINT_GUARD_SETTINGS: &[Setting] = &[
     setting("path", "the guard's file, from the project folder (empty: .lf/guard.db)", false, true),
-    setting("url", "a Postgres database every lf worker shares, instead of a file (postgres://…)", true, true),
+    setting("url", "a Postgres database every listen-fire worker shares, instead of a file (postgres://…)", true, true),
 ];
 const POSTGRES_SETTINGS: &[Setting] = &[setting("url", "the database URL (postgres://…; add ?sslmode=verify-full for verified TLS)", true, false)];
 
@@ -178,11 +178,11 @@ pub const BUILTIN: &[CoreModule] = &[
     built_in(SQLITE_STORE, Slot::Store, SQLITE_SETTINGS),
     built_in(POSTGRES_STORE, Slot::Store, POSTGRES_SETTINGS),
     built_in(LOCAL_FILES, Slot::Files, &[]),
-    // Keeps the limits in this process: one lf's calls, not a fleet's.
+    // Keeps the limits in this process: one listen-fire's calls, not a fleet's.
     built_in(MEMORY_LIMITER, Slot::Limiter, &[]),
     // Remembers what a run wrote for an hour, so the write's echo runs nothing.
     built_in(FINGERPRINT_GUARD, Slot::LoopGuard, FINGERPRINT_GUARD_SETTINGS),
-    // The secrets file (plain or SOPS) and its lock file: lf's secrets as they always were.
+    // The secrets file (plain or SOPS) and its lock file: listen-fire's secrets as they always were.
     built_in(FILE_SECRETS, Slot::Secrets, &[]),
     // The movements folder lf.yaml names, walked as it always was.
     built_in(FOLDER_MOVEMENTS, Slot::Movements, &[]),
@@ -204,7 +204,7 @@ pub struct CoreChoice {
     pub loop_guard: Option<CoreModule>,
     /// None: a module asking for a page is refused by name.
     pub browser: Option<CoreModule>,
-    /// None: lf tells no one when work is due; a drain finds it on its own tick.
+    /// None: listen-fire tells no one when work is due; a drain finds it on its own tick.
     pub wake: Option<CoreModule>,
     /// None: a file with no text layer is unreadable, saying the slot is empty.
     pub ocr: Option<CoreModule>,
@@ -249,22 +249,22 @@ impl CoreChoice {
                 Some(module) => module.clone(),
                 None if slot == Slot::Browser => {
                     return Err(format!(
-                        "{at}: core.browser: {module_name} is not a folder in the externals folder whose lf-external.yaml says `kind: core` and `name: {module_name}`; lf builds no browser in, so the slot takes a browser module (a process or a remote url) or stays empty"
+                        "{at}: core.browser: {module_name} is not a folder in the externals folder whose lf-external.yaml says `kind: core` and `name: {module_name}`; listen-fire builds no browser in, so the slot takes a browser module (a process or a remote url) or stays empty"
                     ));
                 }
                 None if slot == Slot::Wake => {
                     return Err(format!(
-                        "{at}: core.wake: {module_name} is not a folder in the externals folder whose lf-external.yaml says `kind: core` and `name: {module_name}`; lf builds no wake in, so the slot takes a wake module (a process or a remote url) or stays empty"
+                        "{at}: core.wake: {module_name} is not a folder in the externals folder whose lf-external.yaml says `kind: core` and `name: {module_name}`; listen-fire builds no wake in, so the slot takes a wake module (a process or a remote url) or stays empty"
                     ));
                 }
                 None if slot == Slot::Ocr => {
                     return Err(format!(
-                        "{at}: core.ocr: {module_name} is not a folder in the externals folder whose lf-external.yaml says `kind: core` and `name: {module_name}`; lf builds no OCR in, so the slot takes an OCR module (a process or a remote url, such as @listen-fire/document-ai) or stays empty"
+                        "{at}: core.ocr: {module_name} is not a folder in the externals folder whose lf-external.yaml says `kind: core` and `name: {module_name}`; listen-fire builds no OCR in, so the slot takes an OCR module (a process or a remote url, such as @listen-fire/document-ai) or stays empty"
                     ));
                 }
                 None => {
                     return Err(format!(
-                        "{at}: core.{slot_name}: {module_name} is neither one of lf's built-in {slot_name} modules ({}) nor a folder in the externals folder whose lf-external.yaml says `kind: core` and `name: {module_name}`",
+                        "{at}: core.{slot_name}: {module_name} is neither one of listen-fire's built-in {slot_name} modules ({}) nor a folder in the externals folder whose lf-external.yaml says `kind: core` and `name: {module_name}`",
                         builtin_names(slot)
                     ));
                 }
@@ -291,7 +291,7 @@ fn builtin_names(slot: Slot) -> String {
     BUILTIN.iter().filter(|m| m.slot == slot).map(|m| m.name.as_ref()).collect::<Vec<_>>().join(", ")
 }
 
-/// A core module's settings as its install entry holds them (`lf connect`
+/// A core module's settings as its install entry holds them (`listen-fire connect`
 /// writes it; `LF_SECRET__<ENTRY>__<FIELD>` supplies or overrides fields).
 /// The secrets slot's own module reads its from the environment and the
 /// secrets file only (crate::secrets_slot::module_settings).
@@ -303,7 +303,7 @@ pub fn settings_of(credentials: &Credentials, module: &CoreModule) -> BTreeMap<S
 pub fn required<'a>(settings: &'a BTreeMap<String, String>, module: &CoreModule, field: &str) -> Result<&'a str, String> {
     settings.get(field).map(String::as_str).ok_or_else(|| {
         format!(
-            "{} has no `{field}` setting: run `lf connect {}` (or set LF_SECRET__<ENTRY>__{} on an entry whose module is {})",
+            "{} has no `{field}` setting: run `listen-fire connect {}` (or set LF_SECRET__<ENTRY>__{} on an entry whose module is {})",
             module.name,
             module.name,
             field.to_uppercase(),
@@ -312,7 +312,7 @@ pub fn required<'a>(settings: &'a BTreeMap<String, String>, module: &CoreModule,
     })
 }
 
-/// A module's setup, run by `lf connect` once its settings are written: what
+/// A module's setup, run by `listen-fire connect` once its settings are written: what
 /// it did, line by line.
 pub fn set_up(project: &Project, module: &CoreModule, settings: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
     if let (Some(process), Slot::LoopGuard) = (&module.process, module.slot) {
@@ -326,7 +326,7 @@ pub fn set_up(project: &Project, module: &CoreModule, settings: &BTreeMap<String
     if let (Some(process), slot @ (Slot::Models | Slot::Judge | Slot::Files | Slot::Browser | Slot::Wake | Slot::Ocr | Slot::Secrets | Slot::Movements)) = (&module.process, module.slot) {
         let client = crate::slot_client::SlotClient::start(slot.name(), &module.name, process, settings)?;
         // Read through the client, which refuses one outside the protocol
-        // range lf speaks (crate::slot_client::Reached::manifest).
+        // range listen-fire speaks (crate::slot_client::Reached::manifest).
         let manifest = client.call_text("manifest", Default::default())?;
         let answered = manifest.get("slot").and_then(crate::json::Js::as_str);
         if answered != Some(slot.name()) {
@@ -371,12 +371,12 @@ pub fn sqlite_path(project: &Project, settings: &BTreeMap<String, String>) -> Re
     state_file_at(&project.root, &project.lf_dir, settings.get("path").map(String::as_str))
 }
 
-/// A `path` setting that names no file lf could keep its state in is
+/// A `path` setting that names no file listen-fire could keep its state in is
 /// refused when it is read, not met later as a SQLite error.
 fn state_file_at(root: &std::path::Path, lf_dir: &std::path::Path, setting: Option<&str>) -> Result<std::path::PathBuf, String> {
     let Some(setting) = setting else { return Ok(lf_dir.join("state.db")) };
     let refuse = |why: &str| {
-        Err(format!("{SQLITE_STORE}'s `path` setting \"{setting}\" {why}: run `lf connect {SQLITE_STORE}` to set it again (empty for .lf/state.db)"))
+        Err(format!("{SQLITE_STORE}'s `path` setting \"{setting}\" {why}: run `listen-fire connect {SQLITE_STORE}` to set it again (empty for .lf/state.db)"))
     };
     if setting.contains("://") {
         return refuse("is a URL, not a file (a Postgres database is @lf/postgres-store's)");
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(Slot::Browser.default_module(), None);
         assert_eq!(CoreChoice::of(&BTreeMap::new(), &[], "lf.yaml").unwrap().browser, None);
         let refused = CoreChoice::of(&named(&[("browser", "@lf/chromium")]), &[], "lf.yaml").unwrap_err();
-        assert!(refused.contains("lf builds no browser in"), "{refused}");
+        assert!(refused.contains("listen-fire builds no browser in"), "{refused}");
         let installed = [process_module("acme_browser", Slot::Browser)];
         assert_eq!(CoreChoice::of(&named(&[("browser", "acme_browser")]), &installed, "lf.yaml").unwrap().browser, Some(installed[0].clone()));
     }
@@ -449,7 +449,7 @@ mod tests {
         assert_eq!(Slot::Wake.default_module(), None);
         assert_eq!(CoreChoice::of(&BTreeMap::new(), &[], "lf.yaml").unwrap().wake, None);
         let refused = CoreChoice::of(&named(&[("wake", "@lf/cloud-tasks")]), &[], "lf.yaml").unwrap_err();
-        assert!(refused.contains("lf builds no wake in"), "{refused}");
+        assert!(refused.contains("listen-fire builds no wake in"), "{refused}");
         let installed = [process_module("acme_wake", Slot::Wake)];
         assert_eq!(CoreChoice::of(&named(&[("wake", "acme_wake")]), &installed, "lf.yaml").unwrap().wake, Some(installed[0].clone()));
         assert!(CoreChoice::of(&named(&[("limiter", "acme_wake")]), &installed, "lf.yaml").unwrap_err().contains("fills the wake slot"));
@@ -461,7 +461,7 @@ mod tests {
         assert_eq!(Slot::Ocr.default_module(), None);
         assert_eq!(CoreChoice::of(&BTreeMap::new(), &[], "lf.yaml").unwrap().ocr, None);
         let refused = CoreChoice::of(&named(&[("ocr", "@listen-fire/document-ai")]), &[], "lf.yaml").unwrap_err();
-        assert!(refused.contains("lf builds no OCR in"), "{refused}");
+        assert!(refused.contains("listen-fire builds no OCR in"), "{refused}");
         let installed = [process_module("document_ai", Slot::Ocr)];
         assert_eq!(CoreChoice::of(&named(&[("ocr", "document_ai")]), &installed, "lf.yaml").unwrap().ocr, Some(installed[0].clone()));
         assert!(CoreChoice::of(&named(&[("models", "document_ai")]), &installed, "lf.yaml").unwrap_err().contains("fills the ocr slot"));

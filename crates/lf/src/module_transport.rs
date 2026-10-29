@@ -142,7 +142,7 @@ async fn tls_exchange(host: &str, stream: tokio::net::TcpStream, request: Reques
 
 #[cfg(not(feature = "tls"))]
 async fn tls_exchange(host: &str, _stream: tokio::net::TcpStream, _request: Request<Full<Bytes>>) -> Result<Answer, String> {
-    Err(format!("https://{host}: this lf was built without the `tls` feature, so it reaches no module over HTTPS (install the full lf)"))
+    Err(format!("https://{host}: this listen-fire was built without the `tls` feature, so it reaches no module over HTTPS (install the full listen-fire)"))
 }
 
 #[cfg(unix)]

@@ -1,4 +1,4 @@
-//! `lf drain`: a worker over the work queue, the scale-from-zero shape
+//! `listen-fire drain`: a worker over the work queue, the scale-from-zero shape
 //! of the run host (plans/cloud-native-2026-10-06/10_run_host.md): start,
 //! claim due work rows one at a time under their lease, run what each one
 //! asks (a timer's resume, an await's wake, a queued event), and exit.
@@ -80,7 +80,7 @@ pub struct DrainOptions {
     pub max_seconds: Option<u64>,
 }
 
-/// Each run a row stepped is reported as `lf resume` reports it, as it
+/// Each run a row stepped is reported as `listen-fire resume` reports it, as it
 /// ends. The exit code is 1 when any of them failed. A worker that runs
 /// until stopped follows the movements module's changes meanwhile; one run
 /// `--until-idle` keeps the files it opened with.
@@ -101,7 +101,7 @@ async fn passes(session: &Session, options: &DrainOptions, out: &mut impl Write)
     let past_deadline = || deadline.is_some_and(|d| Instant::now() >= d);
     let mut code = 0;
     while !past_deadline() {
-        // As `lf resume`: a row that fails is retried later, its reason on stderr.
+        // As `listen-fire resume`: a row that fails is retried later, its reason on stderr.
         let (claimed, outcomes) = session.drain_work(ROWS_PER_CLAIM, &mut std::io::stderr()).await?;
         if !outcomes.is_empty() {
             code = code.max(report(&outcomes, Returned::Withheld, out)?);

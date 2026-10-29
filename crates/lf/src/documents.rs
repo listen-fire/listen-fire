@@ -3,7 +3,7 @@
 //! document's handle is `lf-files:<key>`, its key the path under
 //! `.lf/files/`. Exposing a file (for an external that fetches it across the
 //! JSON wire) copies it under `exposed/` and serves it at `/files/<id>`:
-//! from `lf serve`'s own listener while it serves, else from a loopback
+//! from `listen-fire serve`'s own listener while it serves, else from a loopback
 //! listener of its own that lives as long as the process. The local
 //! stand-in for the hosted API's short-lived blob route.
 
@@ -29,10 +29,10 @@ fn team_prefix(tenant: &str) -> String {
 
 pub struct Documents {
     root: PathBuf,
-    /// The port exposed files are fetched from: `lf serve`'s, or this
+    /// The port exposed files are fetched from: `listen-fire serve`'s, or this
     /// store's own listener's once something was exposed.
     serving: OnceCell<u16>,
-    /// The files slot's module when it is not lf's folder: documents are
+    /// The files slot's module when it is not listen-fire's folder: documents are
     /// put, owned and opened through it (docs/contracts/files-slot.md);
     /// exposing a file for an external still copies it here.
     module: Option<crate::slot_client::SlotClient>,
@@ -103,7 +103,7 @@ impl Documents {
         std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))
     }
 
-    /// Expose files from the listener on `port` (`lf serve`'s), which answers
+    /// Expose files from the listener on `port` (`listen-fire serve`'s), which answers
     /// `/files/<id>` from `exposed`.
     pub fn serve_at(&self, port: u16) {
         let _ = self.serving.set(port);
@@ -131,7 +131,7 @@ impl Documents {
 
     #[cfg(not(feature = "serve"))]
     async fn listen(&self) -> Result<u16, String> {
-        Err("this lf was built without the `serve` feature, so it cannot expose a file at a URL".into())
+        Err("this listen-fire was built without the `serve` feature, so it cannot expose a file at a URL".into())
     }
 
     #[cfg(feature = "serve")]

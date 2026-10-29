@@ -1,11 +1,11 @@
-//! `lf completion <bash|zsh|fish>`: a shell's tab completion, printed to
-//! be sourced (`source <(lf completion bash)`, or saved where the shell
+//! `listen-fire completion <bash|zsh|fish>`: a shell's tab completion, printed to
+//! be sourced (`source <(listen-fire completion bash)`, or saved where the shell
 //! loads completions). It completes the subcommands and their flags, and asks
 //! the binary itself for what depends on the project in the current folder:
 //! `completion --list modules` (the installed externals and the `@lf/*`
 //! packages the project could install) and `completion --list credentials`
 //! (the secrets' entry names). The scripts name the binary as it was run, so
-//! they keep working when it is installed as `lf`.
+//! they keep working when it is installed as `listen-fire`.
 
 use std::path::Path;
 
@@ -37,7 +37,7 @@ pub fn run(shell: Option<&str>, list: Option<&str>, dir: Option<&Path>) -> Resul
         Some("zsh") => zsh(&program),
         Some("fish") => fish(&program),
         other => {
-            eprintln!("lf completion: bash, zsh or fish, not \"{}\"", other.unwrap_or_default());
+            eprintln!("listen-fire completion: bash, zsh or fish, not \"{}\"", other.unwrap_or_default());
             return Ok(2);
         }
     };
@@ -50,7 +50,7 @@ fn program_name() -> String {
     std::env::args()
         .next()
         .and_then(|arg0| Path::new(&arg0).file_name().map(|n| n.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "lf".into())
+        .unwrap_or_else(|| "listen-fire".into())
 }
 
 fn listed(list: &str, dir: &Path) -> Vec<String> {
@@ -175,14 +175,14 @@ mod tests {
     use super::*;
     use std::process::Command;
 
-    /// What bash completes for the words, with `lf` standing in for the
+    /// What bash completes for the words, with `listen-fire` standing in for the
     /// binary's project lists.
     fn bash_completes(words: &[&str]) -> Option<String> {
-        let script = bash("lf");
+        let script = bash("listen-fire");
         let cword = words.len() - 1;
         let quoted: Vec<String> = words.iter().map(|w| format!("'{w}'")).collect();
         let probe = format!(
-            "lf() {{ case \"$3\" in modules) echo acme_crm; echo @lf/dealroom ;; credentials) echo alice_acme ;; esac; }}\n{script}\nCOMP_WORDS=({}); COMP_CWORD={cword}; _lf_complete; echo \"${{COMPREPLY[*]}}\"",
+            "listen-fire() {{ case \"$3\" in modules) echo acme_crm; echo @lf/dealroom ;; credentials) echo alice_acme ;; esac; }}\n{script}\nCOMP_WORDS=({}); COMP_CWORD={cword}; _listen_fire_complete; echo \"${{COMPREPLY[*]}}\"",
             quoted.join(" ")
         );
         let out = Command::new("bash").arg("-c").arg(probe).output().ok()?;
@@ -191,18 +191,18 @@ mod tests {
 
     #[test]
     fn bash_completes_subcommands_modules_and_credentials() {
-        let Some(top) = bash_completes(&["lf", "cre"]) else { return };
+        let Some(top) = bash_completes(&["listen-fire", "cre"]) else { return };
         assert_eq!(top, "credential");
-        assert_eq!(bash_completes(&["lf", "connect", ""]).unwrap(), "acme_crm @lf/dealroom");
-        assert_eq!(bash_completes(&["lf", "credential", "add", "--module", "a"]).unwrap(), "acme_crm");
-        assert_eq!(bash_completes(&["lf", "credential", "u"]).unwrap(), "update");
-        assert_eq!(bash_completes(&["lf", "credential", "delete", ""]).unwrap(), "alice_acme");
-        assert_eq!(bash_completes(&["lf", "completion", "f"]).unwrap(), "fish");
+        assert_eq!(bash_completes(&["listen-fire", "connect", ""]).unwrap(), "acme_crm @lf/dealroom");
+        assert_eq!(bash_completes(&["listen-fire", "credential", "add", "--module", "a"]).unwrap(), "acme_crm");
+        assert_eq!(bash_completes(&["listen-fire", "credential", "u"]).unwrap(), "update");
+        assert_eq!(bash_completes(&["listen-fire", "credential", "delete", ""]).unwrap(), "alice_acme");
+        assert_eq!(bash_completes(&["listen-fire", "completion", "f"]).unwrap(), "fish");
     }
 
     #[test]
     fn the_zsh_and_fish_scripts_parse() {
-        for (shell, script) in [("zsh", zsh("lf")), ("fish", fish("lf"))] {
+        for (shell, script) in [("zsh", zsh("listen-fire")), ("fish", fish("listen-fire"))] {
             let Ok(out) = Command::new(shell).arg("-n").arg("-c").arg(&script).output() else { continue };
             assert!(out.status.success(), "{shell}: {}", String::from_utf8_lossy(&out.stderr));
         }

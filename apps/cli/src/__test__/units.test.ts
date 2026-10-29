@@ -1,5 +1,5 @@
-// The run host's units in lf: `manual` (fired by `lf run <movement>`) and
-// `cron` (ticks fired by `lf serve` and `lf drain`), in scope with no import — and `lf init`'s starter, which needs nothing else.
+// The run host's units in listen-fire: `manual` (fired by `listen-fire run <movement>`) and
+// `cron` (ticks fired by `listen-fire serve` and `listen-fire drain`), in scope with no import — and `listen-fire init`'s starter, which needs nothing else.
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -28,7 +28,7 @@ function ticks(dir: string): number {
   return lf(dir, 'runs').out.split('\n').filter((l) => l.includes('tick:tock')).length;
 }
 
-test('lf init → check → run works with nothing installed', () => {
+test('listen-fire init → check → run works with nothing installed', () => {
   const dir = initialised();
   const check = lf(dir, 'check');
   assert.equal(check.code, 0, check.out);
@@ -37,7 +37,7 @@ test('lf init → check → run works with nothing installed', () => {
   assert.match(run.out, /hello:hello completed/);
 });
 
-test('lf run <movement> hands the movement a manual invocation; a movement no manual listen fires is refused', () => {
+test('listen-fire run <movement> hands the movement a manual invocation; a movement no manual listen fires is refused', () => {
   const dir = initialised();
   writeFileSync(
     join(dir, 'movements/hello.mvt'),
@@ -49,7 +49,7 @@ test('lf run <movement> hands the movement a manual invocation; a movement no ma
   assert.match(missing.out, /no listen fires 'nope' on manual/);
 });
 
-test('lf run <movement> --text gives the manual Invocation its Text; an event file takes no --text', () => {
+test('listen-fire run <movement> --text gives the manual Invocation its Text; an event file takes no --text', () => {
   const dir = initialised();
   writeFileSync(join(dir, 'movements/echo.mvt'), 'function echo(run: <manual-[:Invocation]->>) {\n  return "Text: ${run.Text}"\n}\nlisten to manual fire echo\n');
   const run = lf(dir, 'run', 'echo', '--text', 'Acme Robotics');
@@ -61,7 +61,7 @@ test('lf run <movement> --text gives the manual Invocation its Text; an event fi
   assert.match(refused.out, /--text gives a manual run its text/);
 });
 
-test('lf run <movement> with no --text: the manual Invocation\'s Text is the empty string, never absent', () => {
+test('listen-fire run <movement> with no --text: the manual Invocation\'s Text is the empty string, never absent', () => {
   const dir = initialised();
   writeFileSync(
     join(dir, 'movements/echo.mvt'),
@@ -94,7 +94,7 @@ test('a cron tick missed while no worker ran fires once on the next drain, never
   assert.equal(ticks(dir), 2);
 });
 
-test('lf serve fires a cron listen when its schedule comes due', async () => {
+test('listen-fire serve fires a cron listen when its schedule comes due', async () => {
   const dir = initialised();
   writeFileSync(join(dir, 'movements/tick.mvt'), TICK);
   assert.equal(lf(dir, 'drain', '--until-idle').code, 0);
@@ -108,7 +108,7 @@ test('lf serve fires a cron listen when its schedule comes due', async () => {
   assert.equal(ticks(dir), 1);
 });
 
-/** `lf <args>` in `dir` as Ada, its clock `aheadMs` ahead. */
+/** `listen-fire <args>` in `dir` as Ada, its clock `aheadMs` ahead. */
 function spawnLf(dir: string, args: string[], aheadMs = 0): string {
   const env = { ...process.env, LF_USER: 'Ada', LF_CLOCK_AHEAD_MS: String(aheadMs) };
   const run = spawnSync(...lfCommand(args), { cwd: dir, encoding: 'utf8', env });

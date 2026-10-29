@@ -1,13 +1,13 @@
-//! `lf --contract-secrets-slot`: the project's secrets slot served as a
+//! `listen-fire --contract-secrets-slot`: the project's secrets slot served as a
 //! secrets module, its methods (docs/contracts/secrets-slot.md) as adapter
 //! protocol 2 calls over HTTP (crate::slot_server), each passed on through
-//! lf's own client of the module (crate::secrets_slot), or its in-process
+//! listen-fire's own client of the module (crate::secrets_slot), or its in-process
 //! default, `@lf/file-secrets`. The conformance cases (module-runtime
 //! `module_wire/conformance.ts` `secretsSlotCases`, and the family's
-//! `secretsContractCases` through `SecretsSlotBackend`) then hold lf's side of
+//! `secretsContractCases` through `SecretsSlotBackend`) then hold listen-fire's side of
 //! the wire to the same meaning they hold the module to. The settings a
 //! request carries are not used: the module's own come from the environment
-//! and the secrets file, as they do for every lf command.
+//! and the secrets file, as they do for every listen-fire command.
 //!
 //! The lease is the one wrinkle. A store's `lock` waits for a lease another
 //! holds; the wire's answers null instead. This runner answers null when it
@@ -59,7 +59,7 @@ fn entry_of(method: &str, params: &Js) -> Result<Entry, Refusal> {
 }
 
 /// An entry method's answer: null when changed, `read_only` with its reason
-/// when the module keeps its credentials where lf cannot change them.
+/// when the module keeps its credentials where listen-fire cannot change them.
 fn changed(done: Result<(), EntryError>) -> Result<Js, Refusal> {
     match done {
         Ok(()) => Ok(Js::Null),

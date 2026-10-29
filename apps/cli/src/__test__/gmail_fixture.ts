@@ -1,6 +1,6 @@
-// Gmail with lf against the fake Gmail in packages/fake-channels, set up as a
-// person types it: lf connect @lf/gmail (pointed at the fake), then
-// lf credential add --headless (the plain sign-in, or the `gmail_drafts` one
+// Gmail with listen-fire against the fake Gmail in packages/fake-channels, set up as a
+// person types it: listen-fire connect @lf/gmail (pointed at the fake), then
+// listen-fire credential add --headless (the plain sign-in, or the `gmail_drafts` one
 // that also asks for the compose scope).
 
 import assert from 'node:assert/strict';

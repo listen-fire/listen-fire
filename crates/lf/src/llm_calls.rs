@@ -99,7 +99,7 @@ async fn serve_guarded(label: &str, args: &Json, credentials: &Credentials, guar
             }
         }
         // The engine decides what its rules can before it asks; a question
-        // only a judge can answer goes to the judge slot's module. lf's
+        // only a judge can answer goes to the judge slot's module. listen-fire's
         // built-in one (@lf/judge, crate::core) declines and says why, the
         // answer a hosted run gives when its judge call fails.
         "llm.arbitrateEntities" if crate::remote_slots::judge().is_some() => {
@@ -108,7 +108,7 @@ async fn serve_guarded(label: &str, args: &Json, credentials: &Credentials, guar
         }
         "llm.arbitrateEntities" => Ok(Js::Obj(obj! {
             "index" => Js::Null,
-            "judgeUnavailable" => Js::str("lf's judge (@lf/judge) declines every question yet: an ambiguous match creates a new record"),
+            "judgeUnavailable" => Js::str("listen-fire's judge (@lf/judge) declines every question yet: an ambiguous match creates a new record"),
             "cost" => Js::Arr(Vec::new()),
         })),
         other => Err(Failed::Fault(format!("the host has no route for {other}"))),
@@ -575,7 +575,7 @@ mod tests {
     #[test]
     fn replies_read_as_the_typescript_engine_reads_them() {
         let cases: Vec<Json> = serde_json::from_str(include_str!("../../../modules/anthropic/fixtures/json_replies.json")).unwrap();
-        // Valid JSON whose value lf cannot hold, so it reads the raw text: a
+        // Valid JSON whose value listen-fire cannot hold, so it reads the raw text: a
         // number past a double's range (JavaScript's Infinity) and a lone
         // UTF-16 surrogate (a Rust string is UTF-8).
         const UNREPRESENTABLE: &[&str] = &[r#"{"a":1e400}"#, r#"{"a":"\ud83d"}"#];
@@ -591,7 +591,7 @@ mod tests {
                 let read = parse_json_reply(reply);
                 let expected_value: Option<Json> = serde_json::from_str(expected).ok();
                 let same = serde_json::to_value(&read).is_ok_and(|read| expected_value.is_some_and(|expected| same_value(&read, &expected)));
-                (!same).then(|| format!("{reply:?}\n  typescript: {expected}\n  lf:         {}", read.to_json()))
+                (!same).then(|| format!("{reply:?}\n  typescript:  {expected}\n  listen-fire: {}", read.to_json()))
             })
             .collect();
         assert!(differences.is_empty(), "{} of {} replies read differently:\n{}", differences.len(), cases.len(), differences.join("\n"));

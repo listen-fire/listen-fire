@@ -30,6 +30,6 @@ test('past its wall clock a segment fails, and the write in flight still lands',
   const out = `${run.stdout}${run.stderr}`;
 
   assert.match(out, /MOVENG_LIMIT_WALL_CLOCK/, out);
-  assert.ok(seconds >= WRITE_SECONDS, `lf stopped after ${seconds}s, before the write in flight finished`);
+  assert.ok(seconds >= WRITE_SECONDS, `listen-fire stopped after ${seconds}s, before the write in flight finished`);
   assert.deepEqual(companies(dir), ['Welcome Vireo Robotics']);
 });

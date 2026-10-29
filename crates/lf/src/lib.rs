@@ -1,7 +1,7 @@
 //! listen-fire: the movement language in Rust.
 //!
 //! This crate is the front door. It re-exports the three library crates, and
-//! `cargo install listen-fire` installs the `lf` command, which runs a
+//! `cargo install listen-fire` installs the `listen-fire` command, which runs a
 //! project's movements locally.
 //!
 //! - [`parser`]: source text to the syntax tree ([`listen-fire-parser`](https://crates.io/crates/listen-fire-parser)).

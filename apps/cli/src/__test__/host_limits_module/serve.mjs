@@ -1,7 +1,7 @@
-// An adapter that declares `hostLimits: true` and asks lf's limits door
+// An adapter that declares `hostLimits: true` and asks listen-fire's limits door
 // before its "provider request" inside `describe`, as `@lf/mcp` does when it
 // lists a server's tools. Each answer the door gives is logged to
-// door.jsonl in its working folder. Listens where lf says (`MODULE_SOCKET`,
+// door.jsonl in its working folder. Listens where listen-fire says (`MODULE_SOCKET`,
 // else `PORT`).
 
 import { createServer } from 'node:http';

@@ -1,12 +1,12 @@
 // Every core slot over the one transport (adapter protocol 2's HTTP, on a
-// Unix socket): lf's built-in modules served as modules (`lf --contract-
+// Unix socket): listen-fire's built-in modules served as modules (`listen-fire --contract-
 // <slot>`) are held to the slot conformance cases (movement-engine
 // `public/module-wire`) — the cases every slot module answers alike (its
 // manifest, the envelope's refusals) and the models, judge and files slots'
 // own; the secrets slot's default module is held to the envelope here and to its own
 // cases in secrets_slot_contract (the movements slot's folder module likewise, in movements_slot_contract). The store, limiter and loop guard are held to their families' contract
 // cases over the same wire in run_host_contract, limiter_contract and
-// loop_guard_contract. The browser slot, which lf builds none of, is held to
+// loop_guard_contract. The browser slot, which listen-fire builds none of, is held to
 // its contract through the wire client, against the scripted page served as a
 // browser module.
 
@@ -79,7 +79,7 @@ const builtIns: Array<{ slot: Parameters<typeof commonSlotCases>[0]; args: () =>
 
 for (const builtIn of builtIns) {
   for (const conformance of [...commonSlotCases(builtIn.slot, builtIn.methods), ...builtIn.cases]) {
-    test(`lf's built-in ${builtIn.slot} module: ${conformance.name}`, async () => {
+    test(`listen-fire's built-in ${builtIn.slot} module: ${conformance.name}`, async () => {
       const anthropic = builtIn.slot === 'models' ? await fakeAnthropic() : undefined;
       const module = await startModule(lfBinary(), builtIn.args());
       try {

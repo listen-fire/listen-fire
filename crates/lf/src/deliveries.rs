@@ -1,4 +1,4 @@
-//! `lf deliveries`: the receipts the doors keep. Listing and showing read the
+//! `listen-fire deliveries`: the receipts the doors keep. Listing and showing read the
 //! store; a replay writes a new receipt of the same events, queued as fresh
 //! work for the drain to route against the project as it is now. No session
 //! or external is started: the store is all it touches.
@@ -12,7 +12,7 @@ use crate::lfjson;
 use crate::store::{DeliveryQuery, DeliveryRow, DeliverySource, NewDelivery, NewWork, iso};
 
 const LISTED: i64 = 50;
-const USAGE: &str = "usage: lf deliveries [--subscription <id>] [--since <ISO instant | <n>h | <n>d>] [--json]\n       lf deliveries show <id>\n       lf deliveries replay <id>";
+const USAGE: &str = "usage: listen-fire deliveries [--subscription <id>] [--since <ISO instant | <n>h | <n>d>] [--json]\n       listen-fire deliveries show <id>\n       listen-fire deliveries replay <id>";
 
 pub struct Request<'a> {
     pub rest: &'a [String],
@@ -52,7 +52,7 @@ pub fn command(store: &dyn RunHostStore, request: &Request<'_>, out: &mut impl W
             if request.json {
                 return lfjson::emit(out, &lfjson::delivery_replay_doc(&new_id, id, queued), 0);
             }
-            writeln!(out, "delivery {new_id} replays {id}: {queued} event(s) queued; lf serve or lf drain runs them").map_err(io)?;
+            writeln!(out, "delivery {new_id} replays {id}: {queued} event(s) queued; listen-fire serve or listen-fire drain runs them").map_err(io)?;
             Ok(0)
         }
         Some(other) => {
@@ -63,7 +63,7 @@ pub fn command(store: &dyn RunHostStore, request: &Request<'_>, out: &mut impl W
 }
 
 fn needs_an_id(command: &str) -> Result<i32, String> {
-    eprintln!("lf deliveries {command} needs a delivery id");
+    eprintln!("listen-fire deliveries {command} needs a delivery id");
     Ok(2)
 }
 

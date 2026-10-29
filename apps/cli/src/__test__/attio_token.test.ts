@@ -1,5 +1,5 @@
 // Attio declares two credentials, an OAuth sign-in (`attio`) and a static
-// access token (`attio_token`): a connection uses one. `lf credential add`
+// access token (`attio_token`): a connection uses one. `listen-fire credential add`
 // does not pick for the person, and the token goes into the secrets file with
 // the module and credential it belongs to.
 
@@ -12,13 +12,13 @@ import { parse } from 'yaml';
 import { lf as lfSync } from './example';
 import { lf, ok } from './interactive';
 
-test('lf credential add for Attio names both credentials, and attio_token prompts its fields and writes the entry', async () => {
+test('listen-fire credential add for Attio names both credentials, and attio_token prompts its fields and writes the entry', async () => {
   const dir = join(mkdtempSync(join(tmpdir(), 'lf-attio-token-')), 'attio-token');
   assert.equal(lfSync(join(dir, '..'), 'init', 'attio-token').code, 0);
 
   // Two declarations, so no sign-in offer follows: the next step is named.
   const connected = await ok(lf(dir, ['connect', '@lf/attio', '--yes'], { answers: ['app-id', 'app-secret', '8976'] }));
-  assert.match(connected, /next, a user credential: lf credential add --module attio <name>/);
+  assert.match(connected, /next, a user credential: listen-fire credential add --module attio <name>/);
   assert.doesNotMatch(connected, /Sign in now\?/);
 
   const refused = await lf(dir, ['credential', 'add', '--module', '@lf/attio', 'henry_attio']).done;
@@ -38,7 +38,7 @@ test('lf credential add for Attio names both credentials, and attio_token prompt
   assert.deepEqual(entry, { module: 'attio', credential: 'attio_token', accessToken: 'attio-secret-token' });
 });
 
-test('lf connect @lf/attio for tokens asks for no OAuth app; the OAuth credential is then refused naming the remedy', async () => {
+test('listen-fire connect @lf/attio for tokens asks for no OAuth app; the OAuth credential is then refused naming the remedy', async () => {
   const dir = join(mkdtempSync(join(tmpdir(), 'lf-attio-token-only-')), 'attio-token-only');
   assert.equal(lfSync(join(dir, '..'), 'init', 'attio-token-only').code, 0);
   const connected = await ok(lf(dir, ['connect', '@lf/attio', '--yes'], { answers: [] }));
@@ -47,7 +47,7 @@ test('lf connect @lf/attio for tokens asks for no OAuth app; the OAuth credentia
 
   const refused = await lf(dir, ['credential', 'add', '--module', '@lf/attio', 'henry_attio', '--credential', 'attio'], { answers: [] }).done;
   assert.equal(refused.code, 1, refused.out);
-  assert.match(refused.out, /module "attio" has no OAuth app set up, so its "attio" credential cannot sign in: lf connect attio and answer yes to the OAuth app/);
+  assert.match(refused.out, /module "attio" has no OAuth app set up, so its "attio" credential cannot sign in: listen-fire connect attio and answer yes to the OAuth app/);
 
   const adding = lf(dir, ['credential', 'add', '--module', '@lf/attio', 'henry_attio', '--credential', 'attio_token'], { answers: ['attio-secret-token', ''] });
   assert.match(await ok(adding), /added henry_attio \(attio, credential attio_token\)/);

@@ -1,9 +1,9 @@
-//! `lf lsp`: the language server, over stdio (LSP 3.17, full-text sync,
+//! `listen-fire lsp`: the language server, over stdio (LSP 3.17, full-text sync,
 //! UTF-16 positions). Every answer is the language service's
 //! (movement_language, docs/contracts/language-service.md), checked against
-//! the project's catalog as `lf check` builds it. Diagnostics are published
+//! the project's catalog as `listen-fire check` builds it. Diagnostics are published
 //! per file, 200 ms after its last change. The catalog is read again when a
-//! file is saved, and when a module process lf started ends on its own (its
+//! file is saved, and when a module process listen-fire started ends on its own (its
 //! next use starts it again, so the read sees the restarted module).
 
 use std::collections::HashMap;
@@ -85,7 +85,7 @@ fn uri_of_path(path: &Path) -> String {
     out
 }
 
-/// The catalog the project's files check against: `lf check`'s, or, when
+/// The catalog the project's files check against: `listen-fire check`'s, or, when
 /// its externals cannot start, one of the host units, the credentials and
 /// the files alone.
 async fn catalog_of_project(project: Option<&Project>, log: &mut Vec<String>) -> CatalogSnapshot {
@@ -189,7 +189,7 @@ impl Server {
                         "range": range_json(d.range),
                         "severity": match d.severity { DiagSeverity::Error => 1, DiagSeverity::Warning => 2, DiagSeverity::Info => 3 },
                         "code": d.code,
-                        "source": "lf",
+                        "source": "listen-fire",
                         "message": d.message,
                     })
                 })
@@ -237,7 +237,7 @@ impl Server {
                     .collect();
                 Ok(Value::Array(actions))
             }
-            other => Err((-32601, format!("lf lsp does not answer {other}"))),
+            other => Err((-32601, format!("listen-fire lsp does not answer {other}"))),
         }
     }
 }
@@ -355,7 +355,7 @@ pub async fn run(dir: &Path, out: &mut impl Write) -> Result<i32, String> {
                 let project = load_project(&root).map_err(|e| log.push(format!("no project at {}: {e}", root.display()))).ok();
                 server = Some(Server::open(project, &mut log).await);
                 let capabilities: Value = serde_json::from_str(CAPABILITIES).expect("the capabilities are JSON");
-                write_message(out, &json!({ "jsonrpc": "2.0", "id": id, "result": { "capabilities": capabilities, "serverInfo": { "name": "lf", "version": env!("CARGO_PKG_VERSION") } } }))?;
+                write_message(out, &json!({ "jsonrpc": "2.0", "id": id, "result": { "capabilities": capabilities, "serverInfo": { "name": "listen-fire", "version": env!("CARGO_PKG_VERSION") } } }))?;
                 log_lines(out, &log)?;
             }
             "shutdown" => {

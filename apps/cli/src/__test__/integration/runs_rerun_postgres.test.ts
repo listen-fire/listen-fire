@@ -1,4 +1,4 @@
-// `lf runs rerun` over a Postgres store: a failed run that committed a write
+// `listen-fire runs rerun` over a Postgres store: a failed run that committed a write
 // is refused, then rerun with --force as attempt 2 of the same run, kept on
 // its one `trigger_run` row. Needs a Postgres (pg.ts) and psql.
 

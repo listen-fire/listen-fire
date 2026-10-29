@@ -1,4 +1,4 @@
-// `pdf.render(text)` in lf: `@lf/pdf` served by serve-module as a plugin
+// `pdf.render(text)` in listen-fire: `@lf/pdf` served by serve-module as a plugin
 // external, called by position, its PDF stored as one of the run's documents
 // and written to the CRM's file field, and the warning for a character the
 // default writer cannot draw on the run's trace.
@@ -81,7 +81,7 @@ test('@lf/pdf warns on the run, naming the module, when a character prints as "?
   assert.match(String(warnings[0]?.message), /@lf\/pdf.*東 京.*Unicode PDF module/s);
 });
 
-test('File.from(…, "pdf") is refused by lf check, with the plugin call as the fix', () => {
+test('File.from(…, "pdf") is refused by listen-fire check, with the plugin call as the fix', () => {
   const dir = project();
   writeFileSync(
     join(dir, 'movements/companies.mvt'),
@@ -95,7 +95,7 @@ test('File.from(…, "pdf") is refused by lf check, with the plugin call as the 
   assert.match(check.out, /MOV_V5_SPELLING.*@lf\/pdf.*pdf\.render\(text\)/s);
 });
 
-test('lf connect @lf/pdf installs it as a plugin external, so lf check passes with no hand edit', () => {
+test('listen-fire connect @lf/pdf installs it as a plugin external, so listen-fire check passes with no hand edit', () => {
   const dir = pdfProject('pdf.render("hi")', false);
   const connected = spawnSync(...lfCommand(['connect', '@lf/pdf']), { cwd: dir, encoding: 'utf8', input: '', env: { ...process.env, NODE_NO_WARNINGS: '1' } });
   assert.equal(connected.status, 0, `${connected.stdout}${connected.stderr}`);
@@ -104,7 +104,7 @@ test('lf connect @lf/pdf installs it as a plugin external, so lf check passes wi
   assert.equal(check.code, 0, check.out);
 });
 
-test('pdf.render names its file as the call says, and lf check takes the setting', () => {
+test('pdf.render names its file as the call says, and listen-fire check takes the setting', () => {
   const dir = pdfProject('pdf.render("Quarterly update", { name: "Report ${company.Name}" })');
   const check = lf(dir, 'check');
   assert.equal(check.code, 0, check.out);

@@ -1,15 +1,15 @@
 //! The limits door (docs/adapter-protocol.md, "The limits door"): how a
 //! module's own requests to its provider are counted against the limits it
-//! declared, rather than lf's calls to it. One lf call can become several
+//! declared, rather than listen-fire's calls to it. One listen-fire call can become several
 //! provider requests and retries inside the module, which a count per call
 //! misses.
 //!
-//! A module that declares `hostLimits` is handed, on each call lf makes to
+//! A module that declares `hostLimits` is handed, on each call listen-fire makes to
 //! it, the door's URL and a ticket for that call (the request's
 //! `hostLimits`). Before each provider request it asks the door; the door
-//! answers from the limiter slot under the caller lf resolved for the call
+//! answers from the limiter slot under the caller listen-fire resolved for the call
 //! (module, install, credential, team), so the module never sees a counter
-//! or a scope's value, only an opaque ticket. lf does not count that call
+//! or a scope's value, only an opaque ticket. listen-fire does not count that call
 //! itself: each request is counted once, at the door.
 //!
 //! The door never waits, as the slot's own contract never does: it answers
@@ -39,7 +39,7 @@ fn open() -> std::sync::MutexGuard<'static, HashMap<String, Open>> {
     OPEN.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// One call's ticket: good until dropped, when lf has its answer.
+/// One call's ticket: good until dropped, when listen-fire has its answer.
 pub struct Ticket {
     ticket: String,
 }
@@ -49,16 +49,16 @@ impl Drop for Ticket {
         let Some(open) = open().remove(&self.ticket) else { return };
         for permit in &open.permits {
             if let Err(message) = open.limiter.release(permit) {
-                eprintln!("lf: the limiter did not release a permit \"{}\" left held: {message}", open.module);
+                eprintln!("listen-fire: the limiter did not release a permit \"{}\" left held: {message}", open.module);
             }
         }
     }
 }
 
 /// The door to hand a call to the module at `base_url` (its `hostLimits`),
-/// counting under `request`; None where lf serves no door the module can
+/// counting under `request`; None where listen-fire serves no door the module can
 /// reach (no listener in this process, or a module on another box), and
-/// lf then counts the call itself.
+/// listen-fire then counts the call itself.
 pub fn offer(module: &str, base_url: &str, request: Acquire, limiter: Arc<dyn Limiter>) -> Result<Option<(Ticket, serde_json::Value)>, String> {
     let Some(url) = door_url(crate::serve::externals_host_url(), module, base_url) else { return Ok(None) };
     let ticket = crate::http_out::hex(&crate::http_out::random_bytes(24)?);
@@ -67,7 +67,7 @@ pub fn offer(module: &str, base_url: &str, request: Acquire, limiter: Arc<dyn Li
     Ok(Some((Ticket { ticket }, carried)))
 }
 
-/// Where the module at `base_url` reaches this process's door: lf's
+/// Where the module at `base_url` reaches this process's door: listen-fire's
 /// doors listen on loopback, so only a module on this box can.
 fn door_url(host: Option<&str>, module: &str, base_url: &str) -> Option<String> {
     use crate::module_transport::Address;
@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(outcome(&ask(&bearer, r#"{"op":"acquire"}"#)), "granted");
         assert_eq!(ask(&bearer, r#"{"op":"throttle","retryAfterMs":5000}"#).0, 200);
         assert_eq!(outcome(&ask(&bearer, r#"{"op":"acquire"}"#)), "wait");
-        // lf's own calls as the same credential are held by it too.
+        // listen-fire's own calls as the same credential are held by it too.
         assert!(matches!(limiter.acquire(&caller().request(&[])).unwrap(), Grant::Refused { .. }));
     }
 

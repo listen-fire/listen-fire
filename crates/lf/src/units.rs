@@ -1,10 +1,10 @@
 //! The run host's units (Henry 2026-10-16): `cron` and `manual`, in every
 //! file's scope in this language with no import
-//! (movement_parser::version::RUN_HOST_UNITS). lf builds them in, as the
+//! (movement_parser::version::RUN_HOST_UNITS). listen-fire builds them in, as the
 //! platform does (lf-platform's apps/api translation_graph/adapters/{cron,manual}): their
 //! catalog entries, the in-process adapter a run reads its event through, the
-//! event `lf run <movement>` fires on a manual listen, and the ticks `lf serve`
-//! and `lf drain` fire on a cron listen.
+//! event `listen-fire run <movement>` fires on a manual listen, and the ticks `listen-fire serve`
+//! and `listen-fire drain` fire on a cron listen.
 //!
 //! A project external of the same name replaces the unit.
 
@@ -105,7 +105,7 @@ pub const METHODS: &[&str] = &["listEntryPoints", "describe", "getFieldValue", "
 
 /// One adapter call on the unit: `listEntryPoints`, `describe`, and the
 /// event's fields read off its position's data; nothing is related (a file
-/// supplied to a manual run is the platform's; lf supplies none).
+/// supplied to a manual run is the platform's; listen-fire supplies none).
 pub fn call(unit: &str, method: &str, args: &Hv) -> Result<Js, String> {
     match method {
         "listEntryPoints" => Ok(Js::Arr(entry_points(unit))),

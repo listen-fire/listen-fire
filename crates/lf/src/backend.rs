@@ -1,5 +1,5 @@
 //! The run host's backend as one trait (movement-engine
-//! `services/run_host/store.ts` `RunHostStore`, with lf's run records and
+//! `services/run_host/store.ts` `RunHostStore`, with listen-fire's run records and
 //! its callbacks beside it), so every command runs over whichever store it
 //! was given: a SQLite state file (crate::store), the hosted product's
 //! Postgres tables (crate::pg_store), or a store module's process.
@@ -30,9 +30,9 @@ use crate::store::{
 /// The tenant a SQLite state file's rows belong to (`LOCAL_TENANT`).
 pub const SQLITE_TENANT: &str = "local";
 
-/// The tenant lf's rows belong to in a Postgres store, unless `--team`
+/// The tenant listen-fire's rows belong to in a Postgres store, unless `--team`
 /// names another: the database's team ids are uuids, so the local tenant
-/// is one too. Fixed, so every lf process pointed at one database (a
+/// is one too. Fixed, so every listen-fire process pointed at one database (a
 /// `run`, its door, the `drain` workers) shares one queue.
 pub const POSTGRES_TENANT: &str = "6c66206c-6f63-4061-8c00-000000000001";
 
@@ -156,9 +156,9 @@ pub struct MintCallback<'a> {
     pub expires_at: Option<&'a str>,
 }
 
-/// Every family a run host's backend serves, and lf's run records.
+/// Every family a run host's backend serves, and listen-fire's run records.
 pub trait RunHostStore {
-    /// The tenant this store's rows of lf's own runs belong to.
+    /// The tenant this store's rows of listen-fire's own runs belong to.
     fn tenant(&self) -> &str;
 
     // ── Run records ─────────────────────────────────────────────────────────
@@ -289,7 +289,7 @@ pub trait RunHostStore {
     /// are settled and whose `fire_event` rows are gone: how many went.
     fn sweep_deliveries(&self, before: &str, limit: i64) -> Result<i64>;
 
-    // ── The module processes lf started ─────────────────────────────────────
+    // ── The module processes listen-fire started ─────────────────────────────────────
     /// The list of module processes the lfs on this store started (so the
     /// next one stops what a killed one left behind), at its version: 0 for a
     /// list never written.

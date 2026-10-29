@@ -1,5 +1,5 @@
-// `lf connect <module>` and `lf credential add|update|delete|list` end to
-// end: the real `lf` with its answers piped in, the example's external
+// `listen-fire connect <module>` and `listen-fire credential add|update|delete|list` end to
+// end: the real `listen-fire` with its answers piped in, the example's external
 // declaring its credential (OAuth 2 at a fake provider, or static), the
 // secrets file read back after each command. The secrets file is never
 // written by the test beyond its starting state.
@@ -70,15 +70,15 @@ async function freePort(): Promise<number> {
 
 const AUTHORIZE = /^\s+http:\/\/127\.0\.0\.1:\d+\/authorize\?/;
 
-/** `lf connect acme_crm` on a fresh project: server secret, webhook secret
+/** `listen-fire connect acme_crm` on a fresh project: server secret, webhook secret
  *  (generated), the OAuth app, and the registered redirect port. */
 async function connectAcme(dir: string, port = '0'): Promise<string> {
   return ok(lf(dir, ['connect', 'acme_crm', '--yes'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, port] }));
 }
 
-// ── lf connect <module> ─────────────────────────────────────────────────────
+// ── listen-fire connect <module> ─────────────────────────────────────────────────────
 
-test('lf connect with no module lists the installed ones and whether they are set up', async () => {
+test('listen-fire connect with no module lists the installed ones and whether they are set up', async () => {
   const provider = await startFakeOAuthServer(CLIENT);
   try {
     const dir = freshProject(oauthDeclaration(provider));
@@ -92,14 +92,14 @@ test('lf connect with no module lists the installed ones and whether they are se
   }
 });
 
-test('lf connect <module> writes its install — server secret, webhook secret, OAuth app — and no user credential', async () => {
+test('listen-fire connect <module> writes its install — server secret, webhook secret, OAuth app — and no user credential', async () => {
   const provider = await startFakeOAuthServer(CLIENT);
   try {
     const dir = freshProject(oauthDeclaration(provider));
     const out = await connectAcme(dir, '8765');
     assert.match(out, /register these redirect URIs/);
     assert.match(out, /http:\/\/127\.0\.0\.1:8765\/callback/);
-    assert.match(out, /lf credential add --module acme_crm/);
+    assert.match(out, /listen-fire credential add --module acme_crm/);
     const install = secretsFile(dir).acme_crm;
     assert.ok(install !== undefined);
     assert.equal(install.module, 'acme_crm');
@@ -120,7 +120,7 @@ test('lf connect <module> writes its install — server secret, webhook secret, 
   }
 });
 
-test('lf connect ends by offering the first sign-in, and "y" runs lf credential add in the same command', async () => {
+test('listen-fire connect ends by offering the first sign-in, and "y" runs listen-fire credential add in the same command', async () => {
   const provider = await startFakeOAuthServer({ ...CLIENT, requirePkce: true });
   try {
     const dir = freshProject(oauthDeclaration(provider));
@@ -144,19 +144,19 @@ test('lf connect ends by offering the first sign-in, and "y" runs lf credential 
   }
 });
 
-test('lf connect: "n" to the sign-in offer, and --yes, leave the next-step line and no credential', async () => {
+test('listen-fire connect: "n" to the sign-in offer, and --yes, leave the next-step line and no credential', async () => {
   const provider = await startFakeOAuthServer(CLIENT);
   try {
     const declined = freshProject(oauthDeclaration(provider));
     const out = await ok(lf(declined, ['connect', 'acme_crm'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, '0', 'n'] }));
     assert.match(out, /Sign in now\? \[Y\/n\]/);
-    assert.match(out, /next, a user credential: lf credential add --module acme_crm <name>/);
+    assert.match(out, /next, a user credential: listen-fire credential add --module acme_crm <name>/);
     assert.deepEqual(Object.keys(secretsFile(declined)), ['acme_crm']);
 
     const unasked = freshProject(oauthDeclaration(provider));
     const yes = await ok(lf(unasked, ['connect', 'acme_crm', '--yes'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, '0'] }));
     assert.doesNotMatch(yes, /Sign in now/);
-    assert.match(yes, /next, a user credential: lf credential add --module acme_crm <name>/);
+    assert.match(yes, /next, a user credential: listen-fire credential add --module acme_crm <name>/);
     assert.deepEqual(Object.keys(secretsFile(unasked)), ['acme_crm']);
     assert.equal(provider.calls.length, 0);
   } finally {
@@ -164,7 +164,7 @@ test('lf connect: "n" to the sign-in offer, and --yes, leave the next-step line 
   }
 });
 
-test('lf connect installs a separately-run module at its server URL', async () => {
+test('listen-fire connect installs a separately-run module at its server URL', async () => {
   const dir = freshProject(STATIC);
   const refused = await lf(dir, ['connect', '@acme/hubspot'], { answers: ['ftp://nope'] }).done;
   assert.equal(refused.code, 1, refused.out);
@@ -177,9 +177,9 @@ test('lf connect installs a separately-run module at its server URL', async () =
   assert.equal(existsSync(join(dir, 'externals/hubspot')), false);
 });
 
-// ── lf credential add (OAuth 2) ─────────────────────────────────────────────
+// ── listen-fire credential add (OAuth 2) ─────────────────────────────────────────────
 
-test('lf credential add signs in through the loopback redirect and binds the credential to its module', async () => {
+test('listen-fire credential add signs in through the loopback redirect and binds the credential to its module', async () => {
   const provider = await startFakeOAuthServer({ ...CLIENT, requirePkce: true });
   try {
     const dir = freshProject(oauthDeclaration(provider, [{ name: 'workspace', secret: false, optional: true }]));
@@ -217,13 +217,13 @@ test('lf credential add signs in through the loopback redirect and binds the cre
 
     const again = await lf(dir, ['credential', 'add', '--module', 'acme_crm', 'alice_acme', '--no-browser']).done;
     assert.equal(again.code, 1);
-    assert.match(again.out, /already a credential "alice_acme"; change it with lf credential update/);
+    assert.match(again.out, /already a credential "alice_acme"; change it with listen-fire credential update/);
   } finally {
     await provider.close();
   }
 });
 
-test('lf credential add --headless takes the pasted redirect URL at the registered port', async () => {
+test('listen-fire credential add --headless takes the pasted redirect URL at the registered port', async () => {
   const provider = await startFakeOAuthServer(CLIENT);
   try {
     const dir = freshProject(oauthDeclaration(provider));
@@ -251,7 +251,7 @@ test('lf credential add --headless takes the pasted redirect URL at the register
   }
 });
 
-test('lf credential add --public finishes through lf serve at publicUrl', async () => {
+test('listen-fire credential add --public finishes through listen-fire serve at publicUrl', async () => {
   const provider = await startFakeOAuthServer(CLIENT);
   try {
     const dir = freshProject(oauthDeclaration(provider));
@@ -260,7 +260,7 @@ test('lf credential add --public finishes through lf serve at publicUrl', async 
     try {
       const publicUrl = `http://127.0.0.1:${serving.port}`;
       writeFileSync(join(dir, 'lf.yaml'), `${readFileSync(join(dir, 'lf.yaml'), 'utf8')}publicUrl: ${publicUrl}\n`);
-      // Nobody waits for this state: lf serve writes nothing.
+      // Nobody waits for this state: listen-fire serve writes nothing.
       const stray = await fetch(`${publicUrl}/oauth/callback?code=x&state=nobody`);
       assert.equal(stray.status, 404);
 
@@ -269,7 +269,7 @@ test('lf credential add --public finishes through lf serve at publicUrl', async 
       assert.equal(new URL(url).searchParams.get('redirect_uri'), `${publicUrl}/oauth/callback`);
       const page = await fetch(url);
       assert.equal(page.status, 200);
-      assert.match(await page.text(), /lf has the sign-in/);
+      assert.match(await page.text(), /listen-fire has the sign-in/);
       await ok(adding);
       assert.equal(secretsFile(dir).carol_acme?.access_token, 'access-1');
     } finally {
@@ -280,20 +280,20 @@ test('lf credential add --public finishes through lf serve at publicUrl', async 
   }
 });
 
-test('lf credential add --public sends the relay URI lf.yaml names; the relay forwards code and state to lf serve', async () => {
+test('listen-fire credential add --public sends the relay URI lf.yaml names; the relay forwards code and state to listen-fire serve', async () => {
   const provider = await startFakeOAuthServer(CLIENT);
   try {
     const dir = freshProject(oauthDeclaration(provider));
     const relay = 'https://relay.example.com/lf/oauth/callback';
     writeFileSync(join(dir, 'lf.yaml'), `${readFileSync(join(dir, 'lf.yaml'), 'utf8')}oauth:\n  redirectUri: ${relay}\n`);
     const connected = await ok(lf(dir, ['connect', 'acme_crm', '--yes'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, '0'] }));
-    assert.ok(connected.includes(`  ${relay}   (lf credential add --public, forwarded on to lf serve's /oauth/callback)`), connected);
+    assert.ok(connected.includes(`  ${relay}   (listen-fire credential add --public, forwarded on to listen-fire serve's /oauth/callback)`), connected);
     const serving = await served(dir);
     try {
       const adding = lf(dir, ['credential', 'add', '--module', 'acme_crm', 'dana_acme', '--public']);
       const url = (await adding.line(AUTHORIZE)).trim();
       assert.equal(new URL(url).searchParams.get('redirect_uri'), relay);
-      // The provider sends the person to the relay; the relay passes the query on to lf serve.
+      // The provider sends the person to the relay; the relay passes the query on to listen-fire serve.
       const consent = await fetch(url, { redirect: 'manual' });
       const sent = new URL(consent.headers.get('location') ?? '');
       assert.equal(`${sent.origin}${sent.pathname}`, relay);
@@ -315,18 +315,18 @@ test('lf credential add --public sends the relay URI lf.yaml names; the relay fo
   }
 });
 
-test('lf credential add refuses a module not installed, and an OAuth module with no app set up', async () => {
+test('listen-fire credential add refuses a module not installed, and an OAuth module with no app set up', async () => {
   const provider = await startFakeOAuthServer(CLIENT);
   try {
     const dir = freshProject(oauthDeclaration(provider));
     const missing = await lf(dir, ['credential', 'add', '--module', 'hubspot', 'x']).done;
     assert.equal(missing.code, 1);
-    assert.match(missing.out, /module "hubspot" is not installed here; set it up first: lf connect hubspot/);
+    assert.match(missing.out, /module "hubspot" is not installed here; set it up first: listen-fire connect hubspot/);
     // The install has only its server secret: no app at the provider.
     writeFileSync(join(dir, '.lf/secrets.yaml'), 'acme_crm:\n  module: acme_crm\n  token: dev-acme-token\n', { mode: 0o600 });
     const noApp = await lf(dir, ['credential', 'add', '--module', 'acme_crm', 'x', '--no-browser']).done;
     assert.equal(noApp.code, 1);
-    assert.match(noApp.out, /module "acme_crm" has no OAuth app set up: lf connect acme_crm/);
+    assert.match(noApp.out, /module "acme_crm" has no OAuth app set up: listen-fire connect acme_crm/);
     assert.equal(secretsFile(dir).x, undefined);
   } finally {
     await provider.close();
@@ -357,14 +357,14 @@ test('a refused sign-in writes nothing', async () => {
 
 // ── An entry written by hand: read as before, its binding recorded on update ─
 
-test('lf credential update re-authorises a hand-written entry, records its binding, and a run refreshes it', async () => {
+test('listen-fire credential update re-authorises a hand-written entry, records its binding, and a run refreshes it', async () => {
   // The update's token lives a second: the run after it finds it about to
   // expire. The refreshed one lives an hour.
   const provider = await startFakeOAuthServer({ ...CLIENT, requirePkce: true, expiresIn: (issue) => (issue === 1 ? 1 : 3600) });
   try {
     const dir = project(
       oauthDeclaration(provider, [{ name: 'webhook_secret' }]),
-      `# lf's app at the provider\nacme:\n  external: acme_crm\n  token: dev-acme-token\n  webhook_secret: w\n  client_id: ${CLIENT.clientId}\n  client_secret: ${CLIENT.clientSecret}\n`,
+      `# listen-fire's app at the provider\nacme:\n  external: acme_crm\n  token: dev-acme-token\n  webhook_secret: w\n  client_id: ${CLIENT.clientId}\n  client_secret: ${CLIENT.clientSecret}\n`,
     );
     const listed = await ok(lf(dir, ['credential', 'list']));
     assert.match(listed, /^acme {2}acme_crm {2}written by hand/m);
@@ -385,7 +385,7 @@ test('lf credential update re-authorises a hand-written entry, records its bindi
     assert.equal(acme.token, 'dev-acme-token');
     assert.equal(acme.webhook_secret, 'w');
     assert.equal(acme.client_secret, CLIENT.clientSecret);
-    assert.match(readFileSync(join(dir, '.lf/secrets.yaml'), 'utf8'), /^# lf's app at the provider/);
+    assert.match(readFileSync(join(dir, '.lf/secrets.yaml'), 'utf8'), /^# listen-fire's app at the provider/);
 
     const ran = await lf(dir, ['run', '--event', EVENT]).done;
     assert.equal(ran.code, 0, ran.out);
@@ -445,7 +445,7 @@ for (const store of ['plain', 'SOPS'] as const) {
     }
     const notSetUp = await lf(dir, ['credential', 'add', '--module', 'acme_crm', 'eve_acme'], { env }).done;
     assert.equal(notSetUp.code, 1);
-    assert.match(notSetUp.out, /module "acme_crm" is not set up here \(its server secret\): lf connect acme_crm/);
+    assert.match(notSetUp.out, /module "acme_crm" is not set up here \(its server secret\): listen-fire connect acme_crm/);
     // A static module's install: its server and webhook secrets, no app.
     await ok(lf(dir, ['connect', 'acme_crm'], { answers: ['dev-acme-token', ''], env }));
     assert.equal(read().acme_crm?.client_id, undefined);
@@ -467,7 +467,7 @@ for (const store of ['plain', 'SOPS'] as const) {
   });
 }
 
-test('lf credential refuses to write a credential from the environment, which is read-only', async () => {
+test('listen-fire credential refuses to write a credential from the environment, which is read-only', async () => {
   const dir = freshProject(STATIC);
   await ok(lf(dir, ['connect', 'acme_crm'], { answers: ['dev-acme-token', ''] }));
   const env = { LF_SECRET__ENVY__EXTERNAL: 'acme_crm', LF_SECRET__ENVY__API_KEY: 'from-env' };
@@ -476,14 +476,14 @@ test('lf credential refuses to write a credential from the environment, which is
   for (const args of [['delete', 'envy'], ['update', 'envy']]) {
     const refused = await lf(dir, ['credential', ...args], { env, answers: ['x', ''] }).done;
     assert.equal(refused.code, 1, refused.out);
-    assert.match(refused.out, /"envy" has fields from the environment \(LF_SECRET__ENVY__…\), which lf cannot write/);
+    assert.match(refused.out, /"envy" has fields from the environment \(LF_SECRET__ENVY__…\), which listen-fire cannot write/);
   }
   const taken = await lf(dir, ['credential', 'add', '--module', 'acme_crm', 'envy'], { env, answers: ['x', ''] }).done;
   assert.equal(taken.code, 1);
   assert.match(taken.out, /already a credential "envy"/);
 });
 
-test('lf connect of a core module with no settings (@lf/judge, @lf/local-files) writes no secrets entry', () => {
+test('listen-fire connect of a core module with no settings (@lf/judge, @lf/local-files) writes no secrets entry', () => {
   const dir = project(STATIC, 'acme:\n  external: acme_crm\n  token: t\n');
   const before = readFileSync(join(dir, '.lf/secrets.yaml'), 'utf8');
   for (const module of ['@lf/judge', '@lf/local-files']) {

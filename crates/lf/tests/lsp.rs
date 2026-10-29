@@ -1,4 +1,4 @@
-//! `lf lsp` end to end: the binary driven over stdio as an editor drives it —
+//! `listen-fire lsp` end to end: the binary driven over stdio as an editor drives it —
 //! initialize, didOpen, the published diagnostics, completion, hover,
 //! definition, a code action, shutdown and exit.
 
@@ -26,7 +26,7 @@ impl Client {
         let mut length = 0;
         loop {
             let mut header = String::new();
-            assert!(self.stdout.read_line(&mut header).unwrap() > 0, "lf lsp closed its output");
+            assert!(self.stdout.read_line(&mut header).unwrap() > 0, "listen-fire lsp closed its output");
             let header = header.trim_end();
             if header.is_empty() {
                 break;
@@ -79,7 +79,7 @@ listen to manual fire hello
 #[test]
 fn an_editor_session_over_stdio() {
     let dir = std::env::temp_dir().join(format!("lf-lsp-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-    let lf = env!("CARGO_BIN_EXE_lf");
+    let lf = env!("CARGO_BIN_EXE_listen-fire");
     assert!(Command::new(lf).arg("init").arg(&dir).output().unwrap().status.success());
     let file = dir.join("movements/hello.mvt");
     std::fs::write(&file, SOURCE).unwrap();
@@ -159,7 +159,7 @@ listen to n { events: [\"note.created\"] } fire title
 #[test]
 fn a_save_reads_the_catalog_again() {
     let dir = std::env::temp_dir().join(format!("lf-lsp-save-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-    let lf = env!("CARGO_BIN_EXE_lf");
+    let lf = env!("CARGO_BIN_EXE_listen-fire");
     assert!(Command::new(lf).arg("init").arg(&dir).output().unwrap().status.success());
     std::fs::remove_file(dir.join("movements/hello.mvt")).unwrap();
     let file = dir.join("movements/notes.mvt");
@@ -191,7 +191,7 @@ fn a_save_reads_the_catalog_again() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Not a test of its own: the notes adapter as a module process, when lf
+/// Not a test of its own: the notes adapter as a module process, when listen-fire
 /// starts this test binary as an external's `command` (the next test).
 #[test]
 fn notes_module_process() {
@@ -206,7 +206,7 @@ fn notes_module_process() {
 #[test]
 fn a_module_that_ends_is_started_again_and_its_catalog_read() {
     let dir = std::env::temp_dir().join(format!("lf-lsp-restart-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-    let lf = env!("CARGO_BIN_EXE_lf");
+    let lf = env!("CARGO_BIN_EXE_listen-fire");
     assert!(Command::new(lf).arg("init").arg(&dir).output().unwrap().status.success());
     std::fs::remove_file(dir.join("movements/hello.mvt")).unwrap();
     let file = dir.join("movements/notes.mvt");
@@ -233,7 +233,7 @@ fn a_module_that_ends_is_started_again_and_its_catalog_read() {
     client.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri, "languageId": "movement", "version": 1, "text": NOTES_SOURCE } }));
     let errors = |published: &Value| published["diagnostics"].as_array().unwrap().iter().filter(|d| d["severity"] == 1).cloned().collect::<Vec<_>>();
     let first = client.notification("textDocument/publishDiagnostics");
-    assert!(errors(&first).is_empty(), "the module lf started was read: {first}");
+    assert!(errors(&first).is_empty(), "the module listen-fire started was read: {first}");
     let first_pid = std::fs::read_to_string(&pid_file).unwrap();
 
     // The module ends on its own: unasked, the server reads the catalog

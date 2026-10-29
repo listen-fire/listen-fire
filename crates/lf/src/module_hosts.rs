@@ -10,12 +10,12 @@
 //! address is learned (`spawn`) is the one place that knows the transport
 //! (crate::module_transport): a Unix socket where the system has them, else
 //! loopback TCP. A host keeps one socket path for its life, so a restarted
-//! process answers where the first one did (a module lf handed the browser
+//! process answers where the first one did (a module listen-fire handed the browser
 //! slot's address to still reaches it).
 //!
-//! Every started process is told to exit with lf (`LF_EXIT_WITH_PARENT`:
-//! lf holds its stdin), and is recorded through the store slot so the next
-//! lf on the same machine stops what a killed lf left behind (`track_in`).
+//! Every started process is told to exit with listen-fire (`LF_EXIT_WITH_PARENT`:
+//! listen-fire holds its stdin), and is recorded through the store slot so the next
+//! listen-fire on the same machine stops what a killed listen-fire left behind (`track_in`).
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -32,7 +32,7 @@ use tokio::process::{Child, Command};
 use crate::backend::RunHostStore;
 use crate::json::Js;
 
-/// How long a module process may sit unused before lf stops it, when
+/// How long a module process may sit unused before listen-fire stops it, when
 /// lf.yaml's `moduleIdleTimeout` names no other.
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 /// How long one protocol call may take, when lf.yaml's `callTimeout` names
@@ -129,7 +129,7 @@ struct HostState {
 struct Running {
     /// Killed when dropped.
     _child: Child,
-    /// Set as lf lets it go, so its end is not news (`module_exited`).
+    /// Set as listen-fire lets it go, so its end is not news (`module_exited`).
     stopping: Arc<AtomicBool>,
     child_id: Option<u32>,
     address: String,
@@ -176,7 +176,7 @@ impl ModuleProcess {
         ModuleProcess::own(&format!("external:{name}"), &format!("external \"{name}\""), launch)
     }
 
-    /// A process of its own under `key` (unique among lf's module processes),
+    /// A process of its own under `key` (unique among listen-fire's module processes),
     /// named `label` in errors: a core slot's module, say.
     pub fn own(key: &str, label: &str, launch: Launch) -> ModuleProcess {
         let host = host_for(HostKey::Own(key.to_string()), launch);
@@ -204,7 +204,7 @@ impl ModuleProcess {
             if let Some(running) = &state.running {
                 let crashed = lock(&running.exited).clone();
                 if let Some(status) = crashed {
-                    eprintln!("lf: {} exited ({status}); starting it again", self.host_label());
+                    eprintln!("listen-fire: {} exited ({status}); starting it again", self.host_label());
                     state.running = None;
                 }
             }
@@ -259,7 +259,7 @@ impl ModuleProcess {
         Hold { host: self.host.clone(), mount: self.mount.clone(), keep }
     }
 
-    /// Its process started, if it is not up, on lf's module thread: a slot's
+    /// Its process started, if it is not up, on listen-fire's module thread: a slot's
     /// own client (crate::slot_client) may lease it from its thread while
     /// the caller's thread waits on that client.
     pub async fn start(&self) -> Result<(), String> {
@@ -399,7 +399,7 @@ pub struct Lease {
 }
 
 impl Lease {
-    /// An address lf does not manage (a module that is only a manifest).
+    /// An address listen-fire does not manage (a module that is only a manifest).
     pub fn remote(url: &str) -> Lease {
         Lease { address: url.to_string(), host: None }
     }
@@ -422,7 +422,7 @@ impl Drop for Lease {
 impl Drop for Running {
     fn drop(&mut self) {
         // Before the child is killed (fields drop after this), so its output
-        // closing reads as lf's stop.
+        // closing reads as listen-fire's stop.
         self.stopping.store(true, Ordering::Relaxed);
         if let Some(socket) = &self.socket {
             let _ = std::fs::remove_file(socket);
@@ -432,9 +432,9 @@ impl Drop for Running {
 
 static EXITED: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify::new);
 
-/// Resolves once a module process lf started has ended on its own (it
-/// crashed, or was killed or exited to reload), not by lf stopping it. Its
-/// next use starts it again, so whatever read its answers (`lf lsp`'s
+/// Resolves once a module process listen-fire started has ended on its own (it
+/// crashed, or was killed or exited to reload), not by listen-fire stopping it. Its
+/// next use starts it again, so whatever read its answers (`listen-fire lsp`'s
 /// catalog) reads it again. One waiter: an exit while nobody waits is kept.
 pub async fn module_exited() {
     EXITED.notified().await;
@@ -463,13 +463,13 @@ fn stop_when_idle(host: Arc<Host>, generation: u64) {
 }
 
 /// The runtime every module process is started and watched on (its output
-/// read, its idle stop timed): lf's own thread, so a process started for a
+/// read, its idle stop timed): listen-fire's own thread, so a process started for a
 /// caller on a short-lived runtime (a slot client's) is still watched after it.
 fn watcher() -> &'static tokio::runtime::Handle {
     static HANDLE: LazyLock<tokio::runtime::Handle> = LazyLock::new(|| {
         let (sender, handle) = std::sync::mpsc::channel();
         std::thread::Builder::new()
-            .name("lf module processes".into())
+            .name("listen-fire module processes".into())
             .spawn(move || {
                 let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a runtime for the module processes");
                 let _ = sender.send(runtime.handle().clone());
@@ -481,7 +481,7 @@ fn watcher() -> &'static tokio::runtime::Handle {
     &HANDLE
 }
 
-/// Stops every module process (lf is exiting).
+/// Stops every module process (listen-fire is exiting).
 pub fn stop_all() {
     let hosts: Vec<Arc<Host>> = pool().hosts.values().cloned().collect();
     for host in hosts {
@@ -503,7 +503,7 @@ async fn spawn(label: &str, launch: &Launch, socket: Option<&std::path::Path>) -
         .envs(crate::module_transport::listen_env(socket))
         .envs(launch.env.iter().map(|(k, v)| (k, v)))
         .env("LF_EXIT_WITH_PARENT", "1")
-        // lf holds its stdin: its end closing tells the process lf is gone.
+        // listen-fire holds its stdin: its end closing tells the process listen-fire is gone.
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -604,7 +604,7 @@ static UNLISTED: Mutex<Vec<Record>> = Mutex::new(Vec::new());
 #[derive(Clone, Debug, PartialEq)]
 struct Record {
     pid: u32,
-    /// The lf that started it.
+    /// The listen-fire that started it.
     lf: u32,
     machine: String,
     command: String,
@@ -627,12 +627,12 @@ impl Record {
     }
 }
 
-/// How often a change to the list is tried again when another lf changed it
+/// How often a change to the list is tried again when another listen-fire changed it
 /// between this one's read and its write.
 const SWAP_ATTEMPTS: usize = 8;
 
 /// Change the store's list by `edit`, by compare-and-set: read it at its
-/// version, write the edit over that version, and read again when another lf
+/// version, write the edit over that version, and read again when another listen-fire
 /// wrote first. The edit is applied to the list as it was when the write won.
 fn change_list(store: &dyn RunHostStore, edit: impl Fn(Vec<Record>) -> Vec<Record>) -> Result<Vec<Record>, String> {
     for _ in 0..SWAP_ATTEMPTS {
@@ -643,12 +643,12 @@ fn change_list(store: &dyn RunHostStore, edit: impl Fn(Vec<Record>) -> Vec<Recor
             return Ok(before);
         }
     }
-    Err(format!("the list kept changing under this lf ({SWAP_ATTEMPTS} tries)"))
+    Err(format!("the list kept changing under this listen-fire ({SWAP_ATTEMPTS} tries)"))
 }
 
-/// Stops the module processes an lf on this machine started and left
+/// Stops the module processes a listen-fire on this machine started and left
 /// behind (it was killed before it could stop them), then lists the ones
-/// this lf starts in `store`.
+/// this listen-fire starts in `store`.
 pub fn track_in(store: Rc<dyn RunHostStore>) {
     let (me, here) = (std::process::id(), machine());
     let leftover = |record: &Record| record.machine == here && record.lf != me && !alive(record.lf);
@@ -656,12 +656,12 @@ pub fn track_in(store: Rc<dyn RunHostStore>) {
         Ok(before) => {
             for record in before.iter().filter(|r| leftover(r)) {
                 if alive(record.pid) && command_of(record.pid).is_some_and(|c| c.contains(&record.command)) {
-                    eprintln!("lf: stopping a module process an earlier lf left running (pid {}, {})", record.pid, record.command);
+                    eprintln!("listen-fire: stopping a module process an earlier listen-fire left running (pid {}, {})", record.pid, record.command);
                     terminate(record.pid);
                 }
             }
         }
-        Err(e) => eprintln!("lf: the store did not keep the module process list ({e})"),
+        Err(e) => eprintln!("listen-fire: the store did not keep the module process list ({e})"),
     }
     TRACKER.with(|t| *t.borrow_mut() = Some(store));
     list_unlisted();
@@ -673,7 +673,7 @@ fn record(pid: Option<u32>, launch: &Launch) {
     list_unlisted();
 }
 
-/// Lists what this lf started and has not listed yet, from the thread that
+/// Lists what this listen-fire started and has not listed yet, from the thread that
 /// holds the store; elsewhere it waits for that thread's next start or call.
 fn list_unlisted() {
     let Some(store) = TRACKER.with(|t| t.borrow().clone()) else { return };
@@ -687,11 +687,11 @@ fn list_unlisted() {
         kept.chain(started.iter().cloned()).collect()
     });
     if let Err(e) = listed {
-        eprintln!("lf: the store did not keep the module process list ({e})");
+        eprintln!("listen-fire: the store did not keep the module process list ({e})");
     }
 }
 
-// ── The list in lf's SQLite store ──────────────────────────────────────────
+// ── The list in listen-fire's SQLite store ──────────────────────────────────────────
 
 impl crate::store::Store {
     pub fn module_processes(&self) -> Result<crate::backend::ModuleProcesses, crate::store::StoreError> {
@@ -798,7 +798,7 @@ mod tests {
         let store = crate::store::Store::open(&dir.join("state.db")).unwrap();
         let entry = |pid: u32, lf: u32| Record { pid, lf, machine: "box".into(), command: "node".into() };
         let other_lf_wrote = std::cell::Cell::new(false);
-        // The first edit is read, then another lf lists its process before this write lands.
+        // The first edit is read, then another listen-fire lists its process before this write lands.
         let before = change_list(&store, |list| {
             if !other_lf_wrote.replace(true) {
                 let version = store.module_processes().unwrap().version;
@@ -807,7 +807,7 @@ mod tests {
             list.into_iter().chain([entry(2, 2)]).collect()
         })
         .unwrap();
-        assert_eq!(before, vec![entry(1, 1)], "the write that won was made over the other lf's list");
+        assert_eq!(before, vec![entry(1, 1)], "the write that won was made over the other listen-fire's list");
         let listed = store.module_processes().unwrap();
         assert_eq!(listed.version, 2);
         assert_eq!(listed.processes.as_array().unwrap().iter().filter_map(Record::of).collect::<Vec<_>>(), vec![entry(1, 1), entry(2, 2)]);

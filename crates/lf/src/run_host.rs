@@ -125,7 +125,7 @@ pub async fn fail_lost_runs(store_: &dyn RunHostStore, limit: i64) -> Result<Vec
 /// elsewhere.
 pub const BUSY_RETRY_MS: i64 = 5_000;
 /// A failed row waits this long, doubled for each attempt it failed, up to
-/// FAILED_RETRY_CAP_MS (the platform's backoff, from a slower start: lf's
+/// FAILED_RETRY_CAP_MS (the platform's backoff, from a slower start: listen-fire's
 /// failures are a module or a store refusing, not a lost race).
 const FAILED_RETRY_MS: i64 = 30_000;
 const FAILED_RETRY_CAP_MS: i64 = 3_600_000;

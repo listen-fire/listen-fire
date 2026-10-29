@@ -1,8 +1,8 @@
 // An Airtable select field's choices are the checker's enum, and a base the
 // connection names (`{ base: "Pipeline Tracker" }`) is typed by its own tables,
-// against the fake Airtable (packages/fake-channels): `lf check` refuses an
+// against the fake Airtable (packages/fake-channels): `listen-fire check` refuses an
 // unknown field and an unknown choice in a write and in a WHERE comparison,
-// and accepts a known one; `lf run` writes a known one into the named base.
+// and accepts a known one; `listen-fire run` writes a known one into the named base.
 
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -80,7 +80,7 @@ function refused(result: { code: number; out: string }, pattern: RegExp) {
   assert.match(result.out, pattern);
 }
 
-test('lf check holds Airtable select values to the base\'s choices, and lf run writes a known one', async () => {
+test('listen-fire check holds Airtable select values to the base\'s choices, and listen-fire run writes a known one', async () => {
   const { dir, fake } = await connected();
   try {
     const known = check(dir, {});

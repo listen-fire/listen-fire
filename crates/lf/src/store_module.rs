@@ -1,7 +1,7 @@
-//! A store module lf does not build in: the store slot filled by a
+//! A store module listen-fire does not build in: the store slot filled by a
 //! third-party module (crate::core), spoken to over the store slot's
 //! methods (docs/contracts/store-slot.md) carried as adapter protocol 2
-//! calls (crate::slot_client) — the methods `lf --contract-store` serves
+//! calls (crate::slot_client) — the methods `listen-fire --contract-store` serves
 //! (crate::contract_store), opened by `store.open` with the module's
 //! settings. Every call blocks until the module answers, as the other
 //! stores' calls do, so the rules over the store (crate::run_host) read

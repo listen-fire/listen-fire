@@ -1,6 +1,6 @@
 // A module that answers every request with the manifest in `manifest.json`
 // beside it (read from its working folder): enough for a host to read its
-// manifest and refuse it. Listens where lf says (`MODULE_SOCKET`, else `PORT`).
+// manifest and refuse it. Listens where listen-fire says (`MODULE_SOCKET`, else `PORT`).
 
 import { createServer } from 'node:http';
 import { readFileSync, unlinkSync } from 'node:fs';

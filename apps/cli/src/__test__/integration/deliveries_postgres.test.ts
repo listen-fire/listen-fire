@@ -1,5 +1,5 @@
-// The delivery receipt over a Postgres store: `lf serve --doors-only` keeps a
-// signed webhook once however often it is sent, a worker (`lf drain`) runs it
+// The delivery receipt over a Postgres store: `listen-fire serve --doors-only` keeps a
+// signed webhook once however often it is sent, a worker (`listen-fire drain`) runs it
 // with the run naming its delivery, a replay runs again, and the drain forgets
 // the settled deliveries after their days. Needs a Postgres (pg.ts) and psql.
 

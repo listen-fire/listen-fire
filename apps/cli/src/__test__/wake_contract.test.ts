@@ -1,8 +1,8 @@
 // The wake slot's conformance cases (module-runtime `module_wire/
 // conformance.ts`) against a test wake module standing for a cloud queue
-// (wake_module/serve.ts): spoken to directly, and through lf's own client of
-// it (`lf --contract-wake-slot`, the project's wake slot), so lf's side of
-// the wire is held to the meaning the module is. lf builds no wake module in;
+// (wake_module/serve.ts): spoken to directly, and through listen-fire's own client of
+// it (`listen-fire --contract-wake-slot`, the project's wake slot), so listen-fire's side of
+// the wire is held to the meaning the module is. listen-fire builds no wake module in;
 // these cases are what keep a separately shipped one honest.
 
 import { test } from 'node:test';
@@ -35,7 +35,7 @@ const bridges: Array<{ over: string; start(target: string): Promise<{ module: St
     },
   },
   {
-    over: "lf's client of a wake module",
+    over: "listen-fire's client of a wake module",
     start: async (target) => ({
       module: await startModule(lfBinary(), ['--contract-wake-slot', '--dir', wakeModuleProject()], {
         env: { LF_SECRET__ACME_WAKE__EXTERNAL: 'acme_wake', LF_SECRET__ACME_WAKE__TARGET: target },

@@ -6,7 +6,7 @@
 // tenant each request carried.
 //
 // Tests serve it in their own process (`serveMovementsModule`); run as a
-// script it serves on the socket its host names, as a module lf starts.
+// script it serves on the socket its host names, as a module listen-fire starts.
 
 import { SlotRefusal, serveSlot } from 'movement-engine/public/module-wire';
 import { randomUUID } from 'node:crypto';

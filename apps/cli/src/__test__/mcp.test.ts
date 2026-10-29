@@ -1,8 +1,8 @@
-// `@lf/mcp` in lf, end to end, against fake MCP servers (modules/mcp/__test__
+// `@lf/mcp` in listen-fire, end to end, against fake MCP servers (modules/mcp/__test__
 // /fake_server.ts): two servers with different tools connected in one project,
 // each by a token credential (one as a bearer, one under a header it names);
-// `lf check` types writes and reads of both and refuses a wrong argument;
-// `lf run` calls them and the answers reach the CRM; a refused call fails the
+// `listen-fire check` types writes and reads of both and refuses a wrong argument;
+// `listen-fire run` calls them and the answers reach the CRM; a refused call fails the
 // run with the server's text; and an OAuth sign-in through the fake OAuth
 // provider (packages/fake-channels) reaches a server that accepts only its
 // tokens.
@@ -48,12 +48,12 @@ function mcpProject(movement: string): string {
   return dir;
 }
 
-/** `lf connect @lf/mcp --yes`, for tokens only: no OAuth app is asked for. */
+/** `listen-fire connect @lf/mcp --yes`, for tokens only: no OAuth app is asked for. */
 async function connectForTokens(dir: string): Promise<string> {
   return ok(lf(dir, ['connect', '@lf/mcp', '--yes'], { answers: [] }));
 }
 
-/** `lf credential add` for a token credential, its fields answered as asked. */
+/** `listen-fire credential add` for a token credential, its fields answered as asked. */
 async function addToken(dir: string, name: string, url: string, token: string, header = ''): Promise<string> {
   return ok(lf(dir, ['credential', 'add', '--module', '@lf/mcp', name, '--credential', 'mcp_token'], { answers: [url, token, header] }));
 }
@@ -68,7 +68,7 @@ async function twoServers(): Promise<{ issues: FakeMcpServer; crm: FakeMcpServer
   return { issues, crm, dir, close: async () => (await issues.close(), await crm.close()) };
 }
 
-/** `lf <args>`, run beside this process: the fake servers answer from it, so
+/** `listen-fire <args>`, run beside this process: the fake servers answer from it, so
  *  a synchronous spawn would leave them unable to. */
 function lfAsync(dir: string, ...args: string[]): Promise<{ code: number; out: string }> {
   return lf(dir, args).done;
@@ -108,7 +108,7 @@ test('two MCP servers in one project: each connection is typed by its own tools,
   }
 });
 
-test('lf check refuses a wrong argument type, a value the tool does not take, and a tool only the other server has', async () => {
+test('listen-fire check refuses a wrong argument type, a value the tool does not take, and a tool only the other server has', async () => {
   const { dir, close } = await twoServers();
   try {
     const wrongType = await checkWith(dir, 'team: "ENG" }', 'team: "ENG", priority: "high" }');
@@ -165,7 +165,7 @@ test('a flaky server: a 429 on a write and a 500 on a read are retried, and a ru
   }
 });
 
-/** One webhook delivery to `lf serve` at the example's door, signed as the CRM signs it; the runs it fired. */
+/** One webhook delivery to `listen-fire serve` at the example's door, signed as the CRM signs it; the runs it fired. */
 async function deliverToServe(dir: string, port: number): Promise<Array<{ status: string; error?: string }>> {
   const body = readFileSync(join(dir, 'events/webhook_body.json'));
   const signature = createHmac('sha256', 'dev-acme-webhook-secret').update(body).digest('hex');
@@ -178,14 +178,14 @@ async function deliverToServe(dir: string, port: number): Promise<Array<{ status
   return ((await response.json()) as { runs: Array<{ status: string; error?: string }> }).runs;
 }
 
-// `@lf/mcp` declares hostLimits, so under `lf serve` it asks the limits door
+// `@lf/mcp` declares hostLimits, so under `listen-fire serve` it asks the limits door
 // on serve's own listener, from the describe at startup on.
-for (const host of ['lf run', 'lf serve'] as const) {
+for (const host of ['listen-fire run', 'listen-fire serve'] as const) {
   test(`${host}: a 429 with Retry-After on a write and a 503 on a read are retried, and the run completes`, async () => {
     const { issues, dir, close } = await twoServers();
     try {
       issues.faults.push({ rpc: 'tools/call', tool: 'create_issue', status: 429, retryAfter: '1' }, { rpc: 'tools/call', tool: 'search_issues', status: 503 });
-      if (host === 'lf run') {
+      if (host === 'listen-fire run') {
         const run = await lfAsync(dir, 'run', '--event', 'events/company_created.json');
         assert.equal(run.code, 0, run.out);
       } else {
@@ -220,7 +220,7 @@ test('a 500 on a tool that changes things fails the run without a second try', a
   }
 });
 
-test('lf check refuses a read that does not pin a required argument in its WHERE, and accepts the pinned form', async () => {
+test('listen-fire check refuses a read that does not pin a required argument in its WHERE, and accepts the pinned form', async () => {
   const { issues, dir, close } = await twoServers();
   try {
     const bare = await checkWith(dir, 'tracker-[r:search_issues WHERE r.query == company.Name]->', 'tracker-[r:search_issues]->');
@@ -247,13 +247,13 @@ test('lf check refuses a read that does not pin a required argument in its WHERE
   }
 });
 
-test('lf connect @lf/mcp for tokens asks for no OAuth app, and an OAuth credential is then refused naming the remedy', async () => {
+test('listen-fire connect @lf/mcp for tokens asks for no OAuth app, and an OAuth credential is then refused naming the remedy', async () => {
   const dir = mcpProject(TRIAGE);
   const quiet = await connectForTokens(dir);
   console.log(quiet.trim());
   assert.match(quiet, /installed @lf\/mcp as externals\/mcp/);
   assert.doesNotMatch(quiet, /client id/);
-  assert.match(quiet, /mcp: no OAuth app, so its OAuth sign-in \(mcp\) is off; lf connect mcp again sets one up/);
+  assert.match(quiet, /mcp: no OAuth app, so its OAuth sign-in \(mcp\) is off; listen-fire connect mcp again sets one up/);
 
   // Asked, an empty answer is no.
   const asked = await ok(lf(dir, ['connect', '@lf/mcp'], { answers: [''] }));
@@ -265,7 +265,7 @@ test('lf connect @lf/mcp for tokens asks for no OAuth app, and an OAuth credenti
   console.log(refused.out.trim());
   assert.match(
     refused.out,
-    /module "mcp" has no OAuth app set up, so its "mcp" credential cannot sign in: lf connect mcp and answer yes to the OAuth app, or lf connect mcp --oauth-authorize-url <url> --oauth-token-url <url>/,
+    /module "mcp" has no OAuth app set up, so its "mcp" credential cannot sign in: listen-fire connect mcp and answer yes to the OAuth app, or listen-fire connect mcp --oauth-authorize-url <url> --oauth-token-url <url>/,
   );
 });
 
@@ -293,7 +293,7 @@ async function fakeChannels(): Promise<Fake> {
   return { url, stop: async () => (child.kill('SIGTERM'), exited) };
 }
 
-test('OAuth: lf connect with the provider’s endpoints, a headless sign-in, and the server accepts only the provider’s token', async () => {
+test('OAuth: listen-fire connect with the provider’s endpoints, a headless sign-in, and the server accepts only the provider’s token', async () => {
   const provider = await fakeChannels();
   const server = await startFakeMcpServer({ kind: 'issues', introspect: `${provider.url}/oauth/protected` });
   try {

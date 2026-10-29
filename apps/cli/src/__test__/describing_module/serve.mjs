@@ -2,7 +2,7 @@
 // a workspace, and each workspace's `Note` has a field of its own (`Title` in
 // "alpha", `Heading` in "beta"). Every describe and every create is logged to
 // calls.jsonl in its working folder with the workspace it was asked as.
-// Listens where lf says (`MODULE_SOCKET`, else `PORT`).
+// Listens where listen-fire says (`MODULE_SOCKET`, else `PORT`).
 
 import { createServer } from 'node:http';
 import { appendFileSync, unlinkSync } from 'node:fs';

@@ -773,7 +773,7 @@ pub mod tests {
 
     /// Reaches the real provider over TLS with a key that cannot be valid: the
     /// provider's 401 proves the handshake and the request. Run by hand
-    /// (`cargo test -p lf https -- --ignored`); it needs the network.
+    /// (`cargo test -p listen-fire https -- --ignored`); it needs the network.
     #[tokio::test]
     #[ignore]
     async fn https_reaches_the_provider() {

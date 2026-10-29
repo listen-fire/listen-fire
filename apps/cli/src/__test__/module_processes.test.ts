@@ -1,6 +1,6 @@
-// The module processes lf started, listed in the store (`processes.list`,
+// The module processes listen-fire started, listed in the store (`processes.list`,
 // `processes.swap`): a compare-and-set on the list's version, so two lfs on
-// one store never overwrite each other's entries. Over lf's SQLite store and
+// one store never overwrite each other's entries. Over listen-fire's SQLite store and
 // over a store module that forwards to it.
 
 import { test } from 'node:test';

@@ -1,12 +1,12 @@
-//! `lf --contract-movements-slot`: the project's movements slot served as a
+//! `listen-fire --contract-movements-slot`: the project's movements slot served as a
 //! movements module, its methods (docs/contracts/movements-slot.md) as adapter
 //! protocol 2 calls over HTTP (crate::slot_server), each passed on through
-//! lf's own client of the module (crate::movements_slot), or its in-process
+//! listen-fire's own client of the module (crate::movements_slot), or its in-process
 //! default, `@lf/folder-movements`. The conformance cases (module-runtime
-//! `module_wire/conformance.ts` `movementsSlotCases`) then hold lf's side of
+//! `module_wire/conformance.ts` `movementsSlotCases`) then hold listen-fire's side of
 //! the wire to the same meaning they hold the module to. The settings a
 //! request carries are not used: the module's own come from the environment
-//! and the secrets file, as they do for every lf command.
+//! and the secrets file, as they do for every listen-fire command.
 
 use std::rc::Rc;
 use std::time::Duration;

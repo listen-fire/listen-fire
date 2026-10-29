@@ -1,4 +1,4 @@
-//! A core module filling a slot from outside lf, spoken to over adapter
+//! A core module filling a slot from outside listen-fire, spoken to over adapter
 //! protocol 2's HTTP (crate::module_transport): one POST per method, the
 //! envelope `{ ok, result }` or `{ ok: false, error }`, the install's
 //! declared settings carried on every request. The slots' families are
@@ -8,15 +8,15 @@
 //! it waited on a database.
 //!
 //! The module is either reached at its `url` (a remote module: only a
-//! manifest on this box), or a process lf starts from its `command` the way
+//! manifest on this box), or a process listen-fire starts from its `command` the way
 //! it starts every module (crate::module_hosts): on its first call, stopped
-//! when idle, started again after a crash, listed for the next lf to reap.
+//! when idle, started again after a crash, listed for the next listen-fire to reap.
 //! It is told where to listen (`MODULE_SOCKET`, else `PORT=0`) and which
 //! token to require (`MODULE_TOKEN`), and read off the `listening …` line it
 //! prints.
 //!
 //! Its manifest is read once, before any other method it is asked, and
-//! checked against the adapter protocol range lf speaks
+//! checked against the adapter protocol range listen-fire speaks
 //! (crate::protocol::protocol_standing): a module outside it is refused by
 //! name at the first call, or as a session opens for one the session starts.
 
@@ -93,7 +93,7 @@ pub fn slot_processes() -> Vec<SlotProcess> {
 }
 
 /// A slot module as its client reaches it: where, under what auth, and its
-/// manifest, read once and checked against the protocol range lf speaks.
+/// manifest, read once and checked against the protocol range listen-fire speaks.
 #[derive(Clone)]
 pub struct Reached {
     label: String,
@@ -114,7 +114,7 @@ struct Standing {
 
 impl Reached {
     /// The module's manifest, checked: a module outside the protocol range
-    /// lf speaks is refused by name (`core module "<name>" (<slot> slot) …`).
+    /// listen-fire speaks is refused by name (`core module "<name>" (<slot> slot) …`).
     pub async fn manifest(&self) -> Result<Js, SlotError> {
         let standing = &self.standing;
         let read = standing.manifest.get_or_try_init(|| async {
@@ -137,7 +137,7 @@ impl Reached {
     }
 
     /// One method: the manifest first if it is not yet read, so no other
-    /// method reaches a module lf does not speak to.
+    /// method reaches a module listen-fire does not speak to.
     async fn send(&self, method: &str, body: String) -> Result<Js, SlotError> {
         let manifest = self.manifest().await.map_err(|mut error| {
             if !error.stands_alone() && method != "manifest" {
@@ -184,7 +184,7 @@ impl SlotClient {
     /// under its install's `fields` (its settings, its secret, its outgoing auth).
     pub fn start(kind: &str, name: &str, process: &ProcessModule, fields: &BTreeMap<String, String>) -> Result<SlotClient, String> {
         let label = format!("the {kind} module {name}");
-        // Its settings: every field but what proves lf to it and to its platform.
+        // Its settings: every field but what proves listen-fire to it and to its platform.
         let declared: Obj = fields
             .iter()
             .filter(|(k, _)| !k.starts_with("outgoing_") && Some(k.as_str()) != process.auth_field.as_deref())
@@ -198,7 +198,7 @@ impl SlotClient {
             None => {
                 let token = crate::http_out::hex(&crate::http_out::random_bytes(24)?);
                 let (program, args) = process.command.split_first().ok_or_else(|| format!("{label} has neither a command nor a url"))?;
-                // The host's models door too, as the externals lf starts are
+                // The host's models door too, as the externals listen-fire starts are
                 // told it: a judge module asks its model calls there.
                 let env = [("PATH".to_string(), std::env::var("PATH").unwrap_or_default()), ("MODULE_TOKEN".to_string(), token.clone())]
                     .into_iter()
@@ -227,7 +227,7 @@ impl SlotClient {
         let (jobs, received) = mpsc::channel::<Job>();
         let worker_reached = reached.clone();
         let worker = std::thread::Builder::new()
-            .name(format!("lf {name}"))
+            .name(format!("listen-fire {name}"))
             .spawn(move || {
                 let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return };
                 while let Ok((method, body, reply)) = received.recv() {
@@ -241,8 +241,8 @@ impl SlotClient {
 
     /// The module's address, its process started if it is not running, kept
     /// from an idle stop while the lease is held; and the secret it requires
-    /// (`Authorization: Bearer …`). For a module lf hands on to others (the
-    /// browser slot's), which lf cannot start again on their behalf.
+    /// (`Authorization: Bearer …`). For a module listen-fire hands on to others (the
+    /// browser slot's), which listen-fire cannot start again on their behalf.
     pub async fn hold(&self) -> Result<(Lease, Option<String>), String> {
         let (lease, bearer) = self.reached.target.lease().await.map_err(|e| self.text("start", e))?;
         Ok((lease, bearer.map(str::to_string)))

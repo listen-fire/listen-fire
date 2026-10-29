@@ -1,4 +1,4 @@
-//! `lf connect <module>`: set a module up for this project, once, by prompts —
+//! `listen-fire connect <module>`: set a module up for this project, once, by prompts —
 //! never by editing the secrets file. Everything the
 //! module needs before any user signs in:
 //!   - installed: an `externals/<name>/lf-external.yaml`, serving a module
@@ -9,7 +9,7 @@
 //!     are signed with, and the OAuth app's client id and secret, stored once
 //!     per module, with the redirect port the app registered.
 //!
-//! User credentials are not set up here: `lf credential add --module <module>`.
+//! User credentials are not set up here: `listen-fire credential add --module <module>`.
 //! With no module named, it lists the modules it knows.
 
 use std::collections::BTreeSet;
@@ -34,7 +34,7 @@ pub const CLIENT_ID_FIELD: &str = "client_id";
 pub const CLIENT_SECRET_FIELD: &str = "client_secret";
 /// The loopback port the app registered (`http://127.0.0.1:<port>/callback`); 0: any.
 pub const REDIRECT_PORT_FIELD: &str = "redirect_port";
-/// The server secret field of a separately-run module lf connect installs.
+/// The server secret field of a separately-run module listen-fire connect installs.
 const SERVER_SECRET_FIELD: &str = "server_secret";
 /// The field of an install that holds the webhook secret, unless its external says another.
 const DEFAULT_WEBHOOK_SECRET_FIELD: &str = "webhook_secret";
@@ -63,13 +63,13 @@ pub async fn read_manifest(project: &Project, external: &External, install: Opti
     Ok(ManifestFacts { declarations: started.credential_declarations.clone(), answer: started.manifest_answer.clone() })
 }
 
-/// One module `lf connect` lists: the line it prints, and the same facts as JSON.
+/// One module `listen-fire connect` lists: the line it prints, and the same facts as JSON.
 pub struct KnownModule {
     pub line: String,
     pub facts: Obj,
 }
 
-/// `lf connect` with no module: the installed externals, and module packages
+/// `listen-fire connect` with no module: the installed externals, and module packages
 /// the project can install.
 pub fn known_modules(project: &Project) -> Result<Vec<KnownModule>, String> {
     let credentials = Secrets::open(project, &process_env())?.into_credentials();
@@ -113,7 +113,7 @@ pub fn known_modules(project: &Project) -> Result<Vec<KnownModule>, String> {
         };
         let how = if module.process.is_some() { "installed" } else { "built-in" };
         modules.push(KnownModule {
-            line: format!("{}  {how} {} module; {set_up} (lf connect {})", module.name, module.slot.name(), module.name),
+            line: format!("{}  {how} {} module; {set_up} (listen-fire connect {})", module.name, module.slot.name(), module.name),
             facts: obj! {
                 "name" => Js::str(module.name.as_ref()),
                 "kind" => Js::str("core"),
@@ -128,7 +128,7 @@ pub fn known_modules(project: &Project) -> Result<Vec<KnownModule>, String> {
     for name in module_packages(&project.root) {
         if !installed_modules.contains(name.as_str()) {
             modules.push(KnownModule {
-                line: format!("{name}  not installed (lf connect {name})"),
+                line: format!("{name}  not installed (listen-fire connect {name})"),
                 facts: obj! { "name" => Js::str(&name), "kind" => Js::str("package"), "state" => Js::str("not installed") },
             });
         }
@@ -165,7 +165,7 @@ fn inbound_secret_field(external: &External, answer: &Js) -> Option<String> {
     webhook.and(secret_field)
 }
 
-/// lf.yaml's `publicUrl`, when it names one: where `lf serve` is reached.
+/// lf.yaml's `publicUrl`, when it names one: where `listen-fire serve` is reached.
 pub fn public_url(project: &Project) -> Option<String> {
     let text = std::fs::read_to_string(project.root.join(crate::project::PROJECT_FILE)).ok()?;
     let value: serde_yaml::Value = serde_yaml::from_str(&text).ok()?;
@@ -173,7 +173,7 @@ pub fn public_url(project: &Project) -> Option<String> {
 }
 
 /// lf.yaml's `oauth: { redirectUri }`: the redirect URI a public-mode sign-in sends
-/// the provider, when a relay stands between the provider and `lf serve`.
+/// the provider, when a relay stands between the provider and `listen-fire serve`.
 pub fn oauth_redirect_uri(project: &Project) -> Result<Option<String>, String> {
     let Ok(text) = std::fs::read_to_string(project.root.join(crate::project::PROJECT_FILE)) else { return Ok(None) };
     let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(&text) else { return Ok(None) };
@@ -207,7 +207,7 @@ pub fn spread(mut stored: Vec<(String, String)>, next: Vec<(String, String)>) ->
     stored
 }
 
-/// What `lf connect <module>` was told on its command line.
+/// What `listen-fire connect <module>` was told on its command line.
 #[derive(Default)]
 pub struct ConnectOptions<'a> {
     /// The server URL of a separately-run module (`--url`).
@@ -279,17 +279,17 @@ fn oauth_app_wanted(declarations: &[Declaration], fields: &[(String, String)], o
     }
 }
 
-/// The setup's last step: `lf credential add` for the first user, if they want it now.
+/// The setup's last step: `listen-fire credential add` for the first user, if they want it now.
 async fn offer_sign_in(project: &Project, module: &str, redirect: &crate::credential_cmd::RedirectChoice, prompter: &mut Prompter) -> Result<(), EntryError> {
     if !prompter.confirm("Sign in now?").await? {
-        prompter.print(&format!("next, a user credential: lf credential add --module {module} <name>"));
+        prompter.print(&format!("next, a user credential: listen-fire credential add --module {module} <name>"));
         return Ok(());
     }
     let input = crate::credential_cmd::AddInput { module, name: None, declared: None, redirect };
     crate::credential_cmd::add_credential(project, input, prompter).await
 }
 
-/// Write `kind: plugin` into an external lf connect just installed.
+/// Write `kind: plugin` into an external listen-fire connect just installed.
 fn mark_plugin(external: &External) -> Result<(), String> {
     let path = external.dir.join(EXTERNAL_MANIFEST);
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -304,7 +304,7 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
     if let Some(existing) = existing
         && (existing.origin.slot_ref.is_none() || !existing.origin.env_fields.is_empty())
     {
-        return Err(format!("the install of \"{name}\" (\"{}\") comes from the environment, which lf cannot write; change it there", existing.name).into());
+        return Err(format!("the install of \"{name}\" (\"{}\") comes from the environment, which listen-fire cannot write; change it there", existing.name).into());
     }
     let mut fields: Vec<(String, String)> = existing.map(|c| c.fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
     let mut cleared: BTreeSet<String> = BTreeSet::new();
@@ -339,7 +339,7 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
         }
     }
     if let Some(url) = current(&fields, BASE_URL_OVERRIDE_FIELD) {
-        prompter.print(&format!("{name} reaches its provider at {url} (lf connect {name} --base-url '' goes back to the provider's own)"));
+        prompter.print(&format!("{name} reaches its provider at {url} (listen-fire connect {name} --base-url '' goes back to the provider's own)"));
     }
     let install_name = match existing {
         Some(existing) => existing.name.clone(),
@@ -393,7 +393,7 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
     };
     if !oauth2.is_empty() && !wanted {
         prompter.print(&format!(
-            "{name}: no OAuth app, so its OAuth sign-in ({}) is off; lf connect {name} again sets one up",
+            "{name}: no OAuth app, so its OAuth sign-in ({}) is off; listen-fire connect {name} again sets one up",
             names.join(", ")
         ));
     } else if !oauth2.is_empty() {
@@ -418,16 +418,16 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
         prompter.print("register these redirect URIs with the provider:");
         if number == 0 {
             prompter.print(&format!(
-                "  {}   (lf credential add; a provider that matches the port exactly needs a fixed one: lf connect {name} again)",
+                "  {}   (listen-fire credential add; a provider that matches the port exactly needs a fixed one: listen-fire connect {name} again)",
                 loopback_redirect_uri(0).replace(":0", ":<any port>")
             ));
         } else {
-            prompter.print(&format!("  {}   (lf credential add, and --headless)", loopback_redirect_uri(number as u16)));
+            prompter.print(&format!("  {}   (listen-fire credential add, and --headless)", loopback_redirect_uri(number as u16)));
         }
         if let Some(relay) = oauth_redirect_uri(project)? {
-            prompter.print(&format!("  {relay}   (lf credential add --public, forwarded on to lf serve's {PUBLIC_CALLBACK_PATH})"));
+            prompter.print(&format!("  {relay}   (listen-fire credential add --public, forwarded on to listen-fire serve's {PUBLIC_CALLBACK_PATH})"));
         } else if let Some(public) = public_url(project) {
-            prompter.print(&format!("  {}   (lf credential add --public, through lf serve)", public_redirect_uri(&public)));
+            prompter.print(&format!("  {}   (listen-fire credential add --public, through listen-fire serve)", public_redirect_uri(&public)));
         }
     }
 
@@ -442,11 +442,11 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
     prompter.print(&format!("connected {name}: its install is \"{install_name}\" in {}", secrets.store().label()));
     if facts.declarations.iter().all(crate::catalog::optional_credential) {
         if !facts.declarations.is_empty() {
-            prompter.print(&format!("{name} works without a user credential; what needs one asks for it by name: lf credential add --module {name} <name>"));
+            prompter.print(&format!("{name} works without a user credential; what needs one asks for it by name: listen-fire credential add --module {name} <name>"));
         }
     } else if !(options.sign_in.is_some() && expects_one_sign_in(&facts)) {
         // The offer to sign in now follows, and says it if declined.
-        prompter.print(&format!("next, a user credential: lf credential add --module {name} <name>"));
+        prompter.print(&format!("next, a user credential: listen-fire credential add --module {name} <name>"));
     }
     Ok(facts)
 }
@@ -463,7 +463,7 @@ async fn connect_core(project: &Project, module: &crate::core::CoreModule, promp
     };
     let credentials = secrets.credentials();
     let existing = install_of(credentials, &module.name);
-    // Settings the environment supplies (a deployed lf) are not lf's to
+    // Settings the environment supplies (a deployed listen-fire) are not listen-fire's to
     // write: the setup alone runs, over them.
     if let Some(existing) = existing
         && (existing.origin.slot_ref.is_none() || !existing.origin.env_fields.is_empty())
@@ -558,7 +558,7 @@ async fn install_external(project: &Project, reference: &str, prompter: &mut Pro
         None => format!("name: {}\nmodule: {}\n", yaml_scalar(&name), yaml_scalar(&module)),
         Some(url) => format!("name: {}\nurl: {}\nauth:\n  kind: bearer\n  field: {SERVER_SECRET_FIELD}\n", yaml_scalar(&name), yaml_scalar(url)),
     };
-    let text = format!("# Installed by `lf connect {reference}`.\n{body}");
+    let text = format!("# Installed by `listen-fire connect {reference}`.\n{body}");
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = dir.join(EXTERNAL_MANIFEST);
     std::fs::write(&path, &text).map_err(|e| format!("{}: {e}", path.display()))?;

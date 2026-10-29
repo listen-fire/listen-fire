@@ -1,10 +1,10 @@
-// A module that declares `hostLimits` asks lf's limits door before each
-// request to its provider, and may make one while lf describes its
+// A module that declares `hostLimits` asks listen-fire's limits door before each
+// request to its provider, and may make one while listen-fire describes its
 // connection as a session opens (host_limits_module, as `@lf/mcp` lists a
-// server's tools). The door must answer then: `lf serve`, `lf serve
-// --doors-only` and `lf drain` become ready, and the door granted the
-// describe's request, rather than lf waiting on the module while the module
-// waits on a door lf does not yet serve.
+// server's tools). The door must answer then: `listen-fire serve`, `listen-fire serve
+// --doors-only` and `listen-fire drain` become ready, and the door granted the
+// describe's request, rather than listen-fire waiting on the module while the module
+// waits on a door listen-fire does not yet serve.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -61,13 +61,13 @@ function describeWasGranted(dir: string): void {
 }
 
 for (const args of [[], ['--doors-only']]) {
-  test(`${['lf serve', ...args].join(' ')}: a module asking the limits door while it is described at startup does not hold the start`, async () => {
+  test(`${['listen-fire serve', ...args].join(' ')}: a module asking the limits door while it is described at startup does not hold the start`, async () => {
     const dir = notesProject();
     const started = Date.now();
     const serving = await served(dir, args);
     try {
       const took = Date.now() - started;
-      assert.ok(took < READY_MS, `lf serve became ready after ${took} ms`);
+      assert.ok(took < READY_MS, `listen-fire serve became ready after ${took} ms`);
       describeWasGranted(dir);
     } finally {
       await serving.stop();
@@ -75,7 +75,7 @@ for (const args of [[], ['--doors-only']]) {
   });
 }
 
-test('lf drain --until-idle: a module asking the limits door while it is described at open does not hold the worker', async () => {
+test('listen-fire drain --until-idle: a module asking the limits door while it is described at open does not hold the worker', async () => {
   const dir = notesProject();
   const drain = spawn(...lfCommand(['drain', '--until-idle']), { cwd: dir, env: { ...process.env, NODE_NO_WARNINGS: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';

@@ -1,6 +1,6 @@
-//! `lf init [dir]`: scaffold a starter project (lf.yaml, the movements and
+//! `listen-fire init [dir]`: scaffold a starter project (lf.yaml, the movements and
 //! externals folders, and one movement that checks clean with no external and
-//! runs with `lf run hello`).
+//! runs with `listen-fire run hello`).
 //! Existing files are never overwritten; a re-run reports what it made.
 
 use std::fs;
@@ -12,7 +12,7 @@ use movement_parser::version::LANGUAGE_VERSION;
 use crate::movements_slot::{self, WriteError, Written};
 
 const STARTER_MOVEMENT: &str = r#"# A movement is a program the host runs when something happens. This one runs
-# when you ask: `lf run hello`. `manual` and `cron` are the host's own, so they
+# when you ask: `listen-fire run hello`. `manual` and `cron` are the host's own, so they
 # need no import; to run on a schedule instead, write
 #
 #   listen to cron { schedule: "0 9 * * 1" } fire hello
@@ -32,8 +32,8 @@ listen to manual fire hello
 const PROJECT_TAIL: &str = "# Who events act as on this machine (@user_name, @user_email). Defaults to the OS user;
 # LF_USER and LF_USER_EMAIL override.
 # user: { name: Your Name, email: you@example.com }
-# Where this lf is reached from outside; a callback's url is under it. Defaults to
-# where `lf serve` listens.
+# Where this listen-fire is reached from outside; a callback's url is under it. Defaults to
+# where `listen-fire serve` listens.
 # publicUrl: https://lf.example.com
 ";
 
@@ -54,7 +54,7 @@ pub fn run(dir: &Path, out: &mut impl Write) -> Result<i32, String> {
     let made = match scaffold(dir)? {
         Scaffolded::Made(made) => made,
         Scaffolded::Refused(refusal) => {
-            eprintln!("lf: {refusal}");
+            eprintln!("listen-fire: {refusal}");
             return Ok(2);
         }
     };

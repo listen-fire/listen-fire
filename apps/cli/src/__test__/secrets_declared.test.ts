@@ -1,5 +1,5 @@
 // An external whose manifest declares its credential (protocol `credentials`):
-// lf sends the install's credential on each call, with only the fields the
+// listen-fire sends the install's credential on each call, with only the fields the
 // declaration names, refreshes an `oauth2` one from the declaration's token
 // URL, and writes the refreshed token back to the secrets file.
 

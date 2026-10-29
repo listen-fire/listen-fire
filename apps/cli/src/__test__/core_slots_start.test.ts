@@ -1,6 +1,6 @@
-// Which slots' modules a session starts as it opens: `lf drain` starts every
+// Which slots' modules a session starts as it opens: `listen-fire drain` starts every
 // slot a process module fills, together with the externals, so no run waits
-// on a module's start; `lf serve --doors-only` starts only the slots a door
+// on a module's start; `listen-fire serve --doors-only` starts only the slots a door
 // calls (the limiter, the wake), never the models; a one-shot command
 // starts a slot's module at its first call, as ever. A slot module whose
 // manifest states another major of the adapter protocol is refused by name
@@ -50,7 +50,7 @@ function lfIn(dir: string, ...args: string[]): { code: number; out: string } {
   return { code: run.status ?? -1, out: `${run.stdout}${run.stderr}` };
 }
 
-test('lf drain starts every slot module as it opens, the slow one with the rest', () => {
+test('listen-fire drain starts every slot module as it opens, the slow one with the rest', () => {
   const dir = withSlots();
   const opened = Date.now();
   const drained = lfIn(dir, 'drain', '--until-idle');
@@ -68,7 +68,7 @@ test('a one-shot command starts a slot module only at its first call', () => {
   assert.ok(!started(dir).includes('acme_llm'), 'no model call, no models module');
 });
 
-test('lf serve --doors-only starts the slots a door calls, never the models', async () => {
+test('listen-fire serve --doors-only starts the slots a door calls, never the models', async () => {
   const dir = withSlots();
   const server = await served(dir, ['--doors-only'], ENV);
   try {
@@ -92,25 +92,25 @@ function withManifestModule(answered: object): string {
   return dir;
 }
 
-test('lf connect refuses a slot module answering a newer protocol major, naming its slot', () => {
+test('listen-fire connect refuses a slot module answering a newer protocol major, naming its slot', () => {
   const connected = lfIn(withManifestModule({ protocolVersion: 3 }), 'connect', 'acme_future');
   assert.equal(connected.code, 1, connected.out);
-  assert.match(connected.out, /core module "acme_future" \(models slot\) \(@acme\/future 3\.0\.0\): speaks adapter protocol 3; this lf \([^)]+\) speaks 2\.0–2\.4\. Upgrade lf\./);
+  assert.match(connected.out, /core module "acme_future" \(models slot\) \(@acme\/future 3\.0\.0\): speaks adapter protocol 3; this listen-fire \([^)]+\) speaks 2\.0–2\.4\. Upgrade listen-fire\./);
 });
 
-test('lf drain refuses at open a slot module outside the protocol range lf speaks, before it claims work', () => {
+test('listen-fire drain refuses at open a slot module outside the protocol range listen-fire speaks, before it claims work', () => {
   const major = lfIn(withManifestModule({ protocolVersion: 3 }), 'drain', '--until-idle');
   assert.equal(major.code, 1, major.out);
-  assert.match(major.out, /^lf: core module "acme_future" \(models slot\) \(@acme\/future 3\.0\.0\): speaks adapter protocol 3; this lf \([^)]+\) speaks 2\.0–2\.4\. Upgrade lf\.$/m);
+  assert.match(major.out, /^listen-fire: core module "acme_future" \(models slot\) \(@acme\/future 3\.0\.0\): speaks adapter protocol 3; this listen-fire \([^)]+\) speaks 2\.0–2\.4\. Upgrade listen-fire\.$/m);
   const minor = lfIn(withManifestModule({ protocolVersion: 2, protocolMinor: 99 }), 'drain', '--until-idle');
   assert.equal(minor.code, 1, minor.out);
   assert.match(
     minor.out,
-    /^lf: core module "acme_future" \(models slot\) \(@acme\/future 3\.0\.0\) speaks adapter protocol 2\.99; this lf \([^)]+\) speaks 2\.0–2\.4\. Upgrade lf to a release that speaks 2\.99 \(the protocol's Changes list names it\), or use a @acme\/future that speaks 2\.4 or lower\.$/m,
+    /^listen-fire: core module "acme_future" \(models slot\) \(@acme\/future 3\.0\.0\) speaks adapter protocol 2\.99; this listen-fire \([^)]+\) speaks 2\.0–2\.4\. Upgrade listen-fire to a release that speaks 2\.99 \(the protocol's Changes list names it\), or use a @acme\/future that speaks 2\.4 or lower\.$/m,
   );
 });
 
-test('lf drain opens with slot modules that state no minor, as before', () => {
+test('listen-fire drain opens with slot modules that state no minor, as before', () => {
   const dir = withManifestModule({ protocolVersion: 2 });
   const drained = lfIn(dir, 'drain', '--until-idle');
   assert.equal(drained.code, 0, drained.out);

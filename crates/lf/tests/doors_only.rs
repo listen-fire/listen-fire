@@ -1,9 +1,9 @@
-//! `lf serve --doors-only` with a wake module in the project's wake slot,
+//! `listen-fire serve --doors-only` with a wake module in the project's wake slot,
 //! both served by a module host (crates/module-kit) on a thread of the test:
 //! a signed delivery to `/hooks/inbox` is queued, not run (202, the row
 //! listed), and the wake module is told the work is ready now; its
 //! redelivery, under the same delivery id, is a duplicate that queues
-//! nothing; nothing drains in serve; a worker (`lf drain --until-idle`) runs
+//! nothing; nothing drains in serve; a worker (`listen-fire drain --until-idle`) runs
 //! the event once, the run naming its delivery, and its movement parks on a
 //! timer, and the wake module is told the timer's work is ready an hour later. A call to a callback's door is recorded, its body
 //! queued for a worker rather than run in the request.
@@ -118,7 +118,7 @@ impl Project {
     fn new(name: &str, port: u16) -> Project {
         let root = std::env::temp_dir().join(format!("lf-doors-only-{name}-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
-        assert!(Command::new(env!("CARGO_BIN_EXE_lf")).arg("init").arg(&root).output().unwrap().status.success());
+        assert!(Command::new(env!("CARGO_BIN_EXE_listen-fire")).arg("init").arg(&root).output().unwrap().status.success());
         std::fs::remove_file(root.join("movements/hello.mvt")).unwrap();
         let external = |name: &str, yaml: String| {
             std::fs::create_dir_all(root.join("externals").join(name)).unwrap();
@@ -140,7 +140,7 @@ impl Project {
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_lf"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_listen-fire"));
         command.args(args).current_dir(&self.0).env("LF_SECRET__INBOX__EXTERNAL", "inbox").env("LF_SECRET__INBOX__WEBHOOK_SECRET", SECRET);
         command
     }
@@ -157,7 +157,7 @@ impl Drop for Project {
     }
 }
 
-/// `lf serve`, stopped when dropped.
+/// `listen-fire serve`, stopped when dropped.
 struct Serving(Child);
 
 impl Drop for Serving {
@@ -167,21 +167,21 @@ impl Drop for Serving {
     }
 }
 
-/// `lf serve --doors-only` started, and the port it listens on.
+/// `listen-fire serve --doors-only` started, and the port it listens on.
 fn serve_doors_only(project: &Project) -> (Serving, u16) {
     let mut child = project.command(&["serve", "--doors-only", "--port", "0"]).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn().unwrap();
     let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
     let serving = Serving(child);
     for line in lines.by_ref() {
         let line = line.unwrap();
-        if let Some(rest) = line.strip_prefix("lf serving on http://127.0.0.1:") {
+        if let Some(rest) = line.strip_prefix("listen-fire serving on http://127.0.0.1:") {
             let port = rest.split('/').next().unwrap().parse().unwrap();
             // Keep reading its output so it never blocks on a full pipe.
             std::thread::spawn(move || lines.for_each(drop));
             return (serving, port);
         }
     }
-    panic!("lf serve stopped before it listened");
+    panic!("listen-fire serve stopped before it listened");
 }
 
 /// One signed POST, under the provider's delivery id; the status and the body.
@@ -216,7 +216,7 @@ fn serve_doors_only_queues_a_delivery_and_the_wake_module_hears_of_each_queued_r
     let told = Told::default();
     let project = Project::new("hooks", serve(told.clone()));
     let (code, out) = project.lf(&["check"]);
-    assert_eq!(code, 0, "lf check: {out}");
+    assert_eq!(code, 0, "listen-fire check: {out}");
 
     let (serving, port) = serve_doors_only(&project);
     let note = r#"{"notes":[{"id":"n-1","Title":"hello"}]}"#;
@@ -239,20 +239,20 @@ fn serve_doors_only_queues_a_delivery_and_the_wake_module_hears_of_each_queued_r
     // Past serve's drain tick: had it drained, the run would be there.
     std::thread::sleep(std::time::Duration::from_millis(2_500));
     let (code, out) = project.lf(&["runs", "--json"]);
-    assert_eq!(code, 0, "lf runs: {out}");
+    assert_eq!(code, 0, "listen-fire runs: {out}");
     assert!(!out.contains("later"), "serve ran nothing: {out}");
     drop(serving);
 
     let (code, out) = project.lf(&["drain", "--until-idle"]);
-    assert_eq!(code, 0, "lf drain: {out}");
+    assert_eq!(code, 0, "listen-fire drain: {out}");
     assert!(out.contains("parked"), "the worker ran the event to its timer: {out}");
     let (code, out) = project.lf(&["runs", "--json"]);
-    assert_eq!(code, 0, "lf runs: {out}");
+    assert_eq!(code, 0, "listen-fire runs: {out}");
     let runs: serde_json::Value = serde_json::from_str(&out).unwrap();
     let later: Vec<&str> = runs["runs"].as_array().unwrap().iter().filter(|r| r["movement"] == "later").map(|r| r["runId"].as_str().unwrap()).collect();
     assert_eq!(later.len(), 1, "the delivery ran once: {out}");
     let (code, out) = project.lf(&["runs", "show", later[0], "--json"]);
-    assert_eq!(code, 0, "lf runs show: {out}");
+    assert_eq!(code, 0, "listen-fire runs show: {out}");
     let shown: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert!(shown["run"]["deliveryId"].as_str().is_some_and(|id| !id.is_empty()), "the run names its delivery: {out}");
     let told = told.all();
@@ -271,14 +271,14 @@ fn serve_doors_only_records_a_callbacks_call_and_queues_its_body_for_a_worker() 
     )
     .unwrap();
     let (code, out) = project.lf(&["run", "ask", "--json"]);
-    assert_eq!(code, 0, "lf run: {out}");
+    assert_eq!(code, 0, "listen-fire run: {out}");
     let ran: serde_json::Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
     assert_eq!(ran["runs"][0]["status"], "parked", "{out}");
     let run_id = ran["runs"][0]["runId"].as_str().unwrap().to_string();
     let callback_id: String = rusqlite::Connection::open(project.0.join(".lf/state.db")).unwrap().query_row("select id from callback", [], |r| r.get(0)).unwrap();
     let status_of = |project: &Project| {
         let (code, out) = project.lf(&["runs", "show", &run_id, "--json"]);
-        assert_eq!(code, 0, "lf runs show: {out}");
+        assert_eq!(code, 0, "listen-fire runs show: {out}");
         let shown: serde_json::Value = serde_json::from_str(&out).unwrap();
         shown["run"]["status"].as_str().unwrap().to_string()
     };
@@ -294,6 +294,6 @@ fn serve_doors_only_records_a_callbacks_call_and_queues_its_body_for_a_worker() 
     drop(serving);
 
     let (code, out) = project.lf(&["drain", "--until-idle"]);
-    assert_eq!(code, 0, "lf drain: {out}");
+    assert_eq!(code, 0, "listen-fire drain: {out}");
     assert_eq!(status_of(&project), "completed", "the worker ran the body and woke the await: {out}");
 }

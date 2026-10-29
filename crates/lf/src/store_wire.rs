@@ -1,6 +1,6 @@
 //! The rows the store wire carries (docs/contracts/store-slot.md), each
-//! written and read in one place: `lf --contract-store` writes them
-//! (crate::contract_store) and lf reads them back from a store module
+//! written and read in one place: `listen-fire --contract-store` writes them
+//! (crate::contract_store) and listen-fire reads them back from a store module
 //! (crate::store_module). A row's keys are the TypeScript families' names
 //! (`RunHostStore`, `CallbackStore`).
 

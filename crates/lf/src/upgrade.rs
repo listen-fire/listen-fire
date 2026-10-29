@@ -1,4 +1,4 @@
-//! `lf upgrade`: the project's movement files rewritten into the language of
+//! `listen-fire upgrade`: the project's movement files rewritten into the language of
 //! this release, by the Rust checker's own fixes (the
 //! loop of lf-platform's packages/legacy-lang/checker/upgrade.ts). Check, take the fixes that do
 //! not overlap, apply them, check again, until nothing fixable is left. Only
@@ -250,7 +250,7 @@ enum PinStep {
 }
 
 /// The pin moves only when the rewritten project validates clean under the
-/// current release; otherwise a later `lf run` would read movements the
+/// current release; otherwise a later `listen-fire run` would read movements the
 /// current release still refuses.
 fn pin_step(lf_yaml: &str, remaining: usize) -> Result<PinStep, String> {
     let Some(repinned) = with_engine_pin(lf_yaml, LANGUAGE_VERSION)? else { return Ok(PinStep::Current) };
@@ -280,15 +280,15 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
                 changed += 1;
                 writeln!(out, "{}", unified_diff(&file.source, &result.source, &shown).trim_end()).map_err(io)?;
             } else {
-                // Written at the version lf read, so a file edited since is reported, not overwritten.
+                // Written at the version listen-fire read, so a file edited since is reported, not overwritten.
                 match store.write(&format!("{}{MOVEMENT_EXTENSION}", file.name), &result.source, file.version.as_deref()) {
                     Ok(Written::Written { .. }) => changed += 1,
                     Ok(Written::Conflict { .. }) => {
                         left += 1;
-                        writeln!(out, "{shown}: changed since lf read it; nothing written (run `lf upgrade` again)").map_err(io)?;
+                        writeln!(out, "{shown}: changed since listen-fire read it; nothing written (run `listen-fire upgrade` again)").map_err(io)?;
                     }
                     Err(refused @ WriteError::ReadOnly { .. }) => {
-                        eprintln!("lf: {}", refused.refusal());
+                        eprintln!("listen-fire: {}", refused.refusal());
                         return Ok(2);
                     }
                     Err(WriteError::Failed(message)) => return Err(message),
@@ -321,7 +321,7 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
             writeln!(out, "{PROJECT_FILE}: engine: {LANGUAGE_VERSION} (was {})", project.engine).map_err(io)?;
         }
         PinStep::Held { remaining } => {
-            writeln!(out, "{PROJECT_FILE}: engine: left at {} until the {remaining} remaining diagnostic(s) are fixed; run `lf upgrade` again", project.engine).map_err(io)?;
+            writeln!(out, "{PROJECT_FILE}: engine: left at {} until the {remaining} remaining diagnostic(s) are fixed; run `listen-fire upgrade` again", project.engine).map_err(io)?;
         }
     }
     let verb = if options.check_only { "would be rewritten" } else { "rewritten" };

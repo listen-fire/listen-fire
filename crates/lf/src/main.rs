@@ -1,46 +1,46 @@
-//! `lf` — the local run host as one Rust binary: the `lf` command
+//! `listen-fire` — the local run host as one Rust binary: the `listen-fire` command
 //! (plans/cloud-native-2026-10-06/22_everywhere_plan.md #7).
 //!
-//!   lf init [dir]                       scaffold a starter project
-//!   lf check [--dir <project>]          every diagnostic the project's files have
-//!   lf run <movement> [--text <text>] [--dry-run]  run a movement a `listen to manual` fires, its Invocation's Text given
-//!   lf run --event <file> [--dry-run]   route an event to its listens and run each
-//!   lf run --poll <movement>            poll now the polled sources of the listens that fire it
-//!   lf resume [<run-id>]                step a parked run's every leaf now, or drain what is due in every parked run
-//!   lf upgrade [--check] [--all]        rewrite the movement files into the language of this release
-//!   lf runs [show <run-id>]             the runs, most recent first; one run in full
-//!   lf runs rerun <run-id> [--force]    run a failed run again as its next attempt
-//!   lf deliveries [show|replay <id>]    the kept deliveries; one in full; one queued again
+//!   listen-fire init [dir]                       scaffold a starter project
+//!   listen-fire check [--dir <project>]          every diagnostic the project's files have
+//!   listen-fire run <movement> [--text <text>] [--dry-run]  run a movement a `listen to manual` fires, its Invocation's Text given
+//!   listen-fire run --event <file> [--dry-run]   route an event to its listens and run each
+//!   listen-fire run --poll <movement>            poll now the polled sources of the listens that fire it
+//!   listen-fire resume [<run-id>]                step a parked run's every leaf now, or drain what is due in every parked run
+//!   listen-fire upgrade [--check] [--all]        rewrite the movement files into the language of this release
+//!   listen-fire runs [show <run-id>]             the runs, most recent first; one run in full
+//!   listen-fire runs rerun <run-id> [--force]    run a failed run again as its next attempt
+//!   listen-fire deliveries [show|replay <id>]    the kept deliveries; one in full; one queued again
 //!   --json                              (check, catalog, run, resume, runs, deliveries, call, cancel, connect, credential list) one JSON document
-//!   lf drain [--until-idle] [--max-seconds N]  a worker over the work queue (scale from zero)
-//!   lf serve [--port N] [--doors-only]  the inbound doors, the callback door and the work drain (--doors-only: no drain)
-//!   lf call <callback-id> [--body <values.json>]
-//!   lf cancel <run-id> [--reason <text>]
-//!   lf catalog [--dir <project>]        the catalog snapshot `check` reads, as JSON
-//!   lf lsp [--dir <project>]            the language server, over stdio (src/lsp.rs)
-//!   lf connect [<module>]               set a module up (src/connect.rs)
-//!   lf credential add|update|delete|list   user credentials (src/credential_cmd.rs)
-//!   lf completion <bash|zsh|fish>       the shell's tab completion
-//!   lf --contract-store <state.db|postgres://…> [--team <uuid>]  the run host's backend served as a store module
-//!   lf --contract-store-slot [--dir <project>]                   the same, over the project's store slot
-//!   lf --contract-limiter                                        the built-in limiter served as a limiter module
-//!   lf --contract-limiter-slot [--dir <project>]                 the same, over the project's limiter slot
-//!   lf --contract-guard                                          the built-in loop guard served as a loop guard module
-//!   lf --contract-guard-slot [--dir <project>]                   the same, over the project's loopGuard slot
-//!   lf --contract-wake-slot [--dir <project>]                    the project's wake module, served through lf's client of it
-//!   lf --contract-ocr-slot [--dir <project>]                     the project's OCR module, served through lf's client of it
-//!   lf --contract-models | --contract-judge | --contract-files   the built-in models, judge, files module served
+//!   listen-fire drain [--until-idle] [--max-seconds N]  a worker over the work queue (scale from zero)
+//!   listen-fire serve [--port N] [--doors-only]  the inbound doors, the callback door and the work drain (--doors-only: no drain)
+//!   listen-fire call <callback-id> [--body <values.json>]
+//!   listen-fire cancel <run-id> [--reason <text>]
+//!   listen-fire catalog [--dir <project>]        the catalog snapshot `check` reads, as JSON
+//!   listen-fire lsp [--dir <project>]            the language server, over stdio (src/lsp.rs)
+//!   listen-fire connect [<module>]               set a module up (src/connect.rs)
+//!   listen-fire credential add|update|delete|list   user credentials (src/credential_cmd.rs)
+//!   listen-fire completion <bash|zsh|fish>       the shell's tab completion
+//!   listen-fire --contract-store <state.db|postgres://…> [--team <uuid>]  the run host's backend served as a store module
+//!   listen-fire --contract-store-slot [--dir <project>]                   the same, over the project's store slot
+//!   listen-fire --contract-limiter                                        the built-in limiter served as a limiter module
+//!   listen-fire --contract-limiter-slot [--dir <project>]                 the same, over the project's limiter slot
+//!   listen-fire --contract-guard                                          the built-in loop guard served as a loop guard module
+//!   listen-fire --contract-guard-slot [--dir <project>]                   the same, over the project's loopGuard slot
+//!   listen-fire --contract-wake-slot [--dir <project>]                    the project's wake module, served through listen-fire's client of it
+//!   listen-fire --contract-ocr-slot [--dir <project>]                     the project's OCR module, served through listen-fire's client of it
+//!   listen-fire --contract-models | --contract-judge | --contract-files   the built-in models, judge, files module served
 //!     (each --contract-<slot> server speaks adapter protocol 2 on --listen unix:<path> | <port>, default a fresh socket)
-//!   lf --contract-movements-slot [--dir <project>]               the project's movements module, served through lf's client of it
-//!   lf --contract-secrets <file|env>    a secrets store over stdio JSON-RPC
-//!   lf --contract-secrets-slot [--dir <project>]                 the project's secrets module, served through lf's client of it
-//!   lf --contract-doors                 the inbound doors over HTTP, their world arranged over stdio JSON-RPC
+//!   listen-fire --contract-movements-slot [--dir <project>]               the project's movements module, served through listen-fire's client of it
+//!   listen-fire --contract-secrets <file|env>    a secrets store over stdio JSON-RPC
+//!   listen-fire --contract-secrets-slot [--dir <project>]                 the project's secrets module, served through listen-fire's client of it
+//!   listen-fire --contract-doors                 the inbound doors over HTTP, their world arranged over stdio JSON-RPC
 //!
 //! `run`, `resume`, `runs`, `drain`, `serve`, `call` and `cancel` keep run
 //! state in the store slot's module (lf.yaml `core: { store: … }`, src/core.rs):
 //! @lf/sqlite-store, `.lf/state.db` by default, or @lf/postgres-store, its own
 //! `lf` schema; `--store <spec>` names a SQLite file or `postgres://…` outright.
-//!   lf --project-schema                 one schema projection, stdin to stdout (a parity probe)
+//!   listen-fire --project-schema                 one schema projection, stdin to stdout (a parity probe)
 //!
 //! Single-threaded: one tokio thread, every wait an await.
 
@@ -103,10 +103,10 @@ mod llm_calls;
 #[cfg(feature = "serve")]
 mod listener;
 /// Without the `serve` feature this process listens nowhere: a module that
-/// asks the host for a model call finds no door, and `lf serve` refuses.
+/// asks the host for a model call finds no door, and `listen-fire serve` refuses.
 #[cfg(not(feature = "serve"))]
 mod listener {
-    pub const NOT_BUILT: &str = "this lf was built without the `serve` feature, so it has no listener (install the full lf to serve inbound doors)";
+    pub const NOT_BUILT: &str = "this listen-fire was built without the `serve` feature, so it has no listener (install the full listen-fire to serve inbound doors)";
 
     pub async fn open_models_door(_: &crate::secrets::Credentials) -> Result<(), String> {
         Ok(())
@@ -163,70 +163,70 @@ mod wake;
 mod wire;
 
 use std::io::Write;
-// The wire a module and lf share (crates/module-wire), at the paths lf names it by.
+// The wire a module and listen-fire share (crates/module-wire), at the paths listen-fire names it by.
 pub(crate) use module_wire::{json, obj};
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: lf <init|check|catalog|lsp|run|resume|runs|deliveries|drain|serve|call|cancel|upgrade|connect|credential|completion> [--dir <project folder>] [--ephemeral] [--store <state.db|postgres://…>] [--team <uuid>]
-       lf run <movement> [--text <text>] [--dry-run]
-       lf run --event <file.json> [--dry-run]
-       lf run --poll <movement>
-       lf run --webhook <external> --body <file> [--install <credential>] [--header k:v]...
-       lf resume [<run-id>]
-       lf drain [--until-idle] [--max-seconds <n>] [--kinds <kind,…>]
-       lf serve [--port N] [--doors-only]
-       lf call <callback-id> [--body <values.json>]
-       lf cancel <run-id> [--reason <text>]
-       lf runs [show <run-id>]
-       lf runs rerun <run-id> [--force]
-       lf deliveries [show <id> | replay <id>] [--subscription <id>] [--since <ISO instant | <n>h | <n>d>]
-       lf --contract-store <state.db|postgres://…> [--team <uuid>]
-       lf --contract-store-slot [--dir <project>]
-       lf --contract-limiter
-       lf --contract-limiter-slot [--dir <project>]
-       lf --contract-guard
-       lf --contract-guard-slot [--dir <project>]
-       lf --contract-wake-slot [--dir <project>]
-       lf --contract-ocr-slot [--dir <project>]
-       lf --contract-models | --contract-judge | --contract-files
-       lf --contract-movements-slot [--dir <project>]
-       lf --contract-secrets <secrets file | env>
-       lf --contract-secrets-slot [--dir <project>]
-       lf --contract-doors
-       lf --project-schema
-       lf --version
+const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|deliveries|drain|serve|call|cancel|upgrade|connect|credential|completion> [--dir <project folder>] [--ephemeral] [--store <state.db|postgres://…>] [--team <uuid>]
+       listen-fire run <movement> [--text <text>] [--dry-run]
+       listen-fire run --event <file.json> [--dry-run]
+       listen-fire run --poll <movement>
+       listen-fire run --webhook <external> --body <file> [--install <credential>] [--header k:v]...
+       listen-fire resume [<run-id>]
+       listen-fire drain [--until-idle] [--max-seconds <n>] [--kinds <kind,…>]
+       listen-fire serve [--port N] [--doors-only]
+       listen-fire call <callback-id> [--body <values.json>]
+       listen-fire cancel <run-id> [--reason <text>]
+       listen-fire runs [show <run-id>]
+       listen-fire runs rerun <run-id> [--force]
+       listen-fire deliveries [show <id> | replay <id>] [--subscription <id>] [--since <ISO instant | <n>h | <n>d>]
+       listen-fire --contract-store <state.db|postgres://…> [--team <uuid>]
+       listen-fire --contract-store-slot [--dir <project>]
+       listen-fire --contract-limiter
+       listen-fire --contract-limiter-slot [--dir <project>]
+       listen-fire --contract-guard
+       listen-fire --contract-guard-slot [--dir <project>]
+       listen-fire --contract-wake-slot [--dir <project>]
+       listen-fire --contract-ocr-slot [--dir <project>]
+       listen-fire --contract-models | --contract-judge | --contract-files
+       listen-fire --contract-movements-slot [--dir <project>]
+       listen-fire --contract-secrets <secrets file | env>
+       listen-fire --contract-secrets-slot [--dir <project>]
+       listen-fire --contract-doors
+       listen-fire --project-schema
+       listen-fire --version
   init      scaffold a starter project in the folder (default: the current one): lf.yaml, a movement, .gitignore
-  check     every diagnostic the project's movement files have (as `lf check`)
+  check     every diagnostic the project's movement files have (as `listen-fire check`)
   catalog   the catalog snapshot the files are checked against, as JSON
   lsp       the language server (LSP over stdin/stdout): diagnostics, completion, hover, definitions and fixes for the movement files
   run       run <movement>: one manual invocation, to the `listen to manual fire <movement>` listens (--text: the Invocation's Text); --event: route the event file's event to the listens it matches and run each; --poll <movement>: poll now, once, the source of each listen that fires it on a polled source (its manifest declares `poll`), and run the listen on each new event
   resume    step every parked leaf of one run now; with no run, drain the due work and what is due in every parked run (a timer not yet come stays parked)
   upgrade   rewrite the movement files by the fixes that keep their meaning (--all: every fix offered; --check: print the diff, write nothing)
-  runs      the runs in the state file, most recent first (as `lf runs`); `runs show <run-id>`: one run, its event, trace, park and attempts; `runs rerun <run-id>`: run a failed run again as its next attempt, with its own event and the movement as the project holds it now (so a fix to the movement takes effect), from the start; refused unless the run's latest attempt failed, while another lf holds the run, and when the failed attempt already committed writes (they are listed; --force reruns it anyway, making them again)
-  deliveries  the deliveries the doors kept (events, not bytes), most recent first, at most 50 (--subscription: one subscription's; --since: received at or after an instant, or <n>h or <n>d ago); `deliveries show <id>`: one, its events and runs; `deliveries replay <id>`: queue its events again as a delivery of its own, for lf serve or lf drain to run against the project as it is now (new runs, whatever its runs came to; a failed run: lf runs rerun <run-id>)
+  runs      the runs in the state file, most recent first (as `listen-fire runs`); `runs show <run-id>`: one run, its event, trace, park and attempts; `runs rerun <run-id>`: run a failed run again as its next attempt, with its own event and the movement as the project holds it now (so a fix to the movement takes effect), from the start; refused unless the run's latest attempt failed, while another listen-fire holds the run, and when the failed attempt already committed writes (they are listed; --force reruns it anyway, making them again)
+  deliveries  the deliveries the doors kept (events, not bytes), most recent first, at most 50 (--subscription: one subscription's; --since: received at or after an instant, or <n>h or <n>d ago); `deliveries show <id>`: one, its events and runs; `deliveries replay <id>`: queue its events again as a delivery of its own, for listen-fire serve or listen-fire drain to run against the project as it is now (new runs, whatever its runs came to; a failed run: listen-fire runs rerun <run-id>)
   --json    check, catalog, run, resume, runs, deliveries, call, cancel, connect, credential list: one JSON document (docs/lf-json.md); a failure is {\"error\": …}
   drain     fire each cron listen's due tick (once, however many workers drain), then claim due work rows one at a time and run them (a polled listen's row is its next poll, due every interval its source declares); with --until-idle exit once none is due, with --max-seconds stop claiming after n seconds, with --kinds only rows of those kinds (resume_timer, wake_await, fire_event, fire_callback, poll_listen, refresh_subscription) and the cron ticks only when it names cron
-  serve     the inbound doors, the callback door and the work queue's drain (as `lf serve`)
-  --doors-only  (serve) only the doors, for compute billed by the request: nothing drains in this process, `/hooks/…` queues its events (answering 202 with the rows queued) and `/api/cb/…` its callback's body (answering 202) instead of running them in the request; workers (`lf drain`) run the work, started by the wake slot's module or a schedule. Also LF_DOORS_ONLY=1
+  serve     the inbound doors, the callback door and the work queue's drain (as `listen-fire serve`)
+  --doors-only  (serve) only the doors, for compute billed by the request: nothing drains in this process, `/hooks/…` queues its events (answering 202 with the rows queued) and `/api/cb/…` its callback's body (answering 202) instead of running them in the request; workers (`listen-fire drain`) run the work, started by the wake slot's module or a schedule. Also LF_DOORS_ONLY=1
   call      call a callback, as its url's POST does (the values: a JSON object)
-  cancel    cancel a run: settled failed now, or at its next statement if another lf is stepping it
-  --store   where run state is kept: a SQLite file or a Postgres database (set up by `lf connect @lf/postgres-store`), instead of lf.yaml's `core: { store: … }`
+  cancel    cancel a run: settled failed now, or at its next statement if another listen-fire is stepping it
+  --store   where run state is kept: a SQLite file or a Postgres database (set up by `listen-fire connect @lf/postgres-store`), instead of lf.yaml's `core: { store: … }`
   --team    the tenant (a uuid) of a Postgres store's rows
   --start-timeout  seconds a started external has to print `listening <port>` (default 30, or lf.yaml's `startTimeout`)
   --contract-store  serve the run host's backend as a store module, adapter protocol 2 over HTTP on --listen (unix:<path> or a port; default a fresh socket)
   --contract-store-slot  the same, over the store module the project's store slot names
-  --contract-limiter  serve lf's built-in limiter as a limiter module, on --listen
+  --contract-limiter  serve listen-fire's built-in limiter as a limiter module, on --listen
   --contract-limiter-slot  the same, over the limiter module the project's limiter slot names
-  --contract-guard  serve lf's built-in loop guard as a loop guard module, on --listen
+  --contract-guard  serve listen-fire's built-in loop guard as a loop guard module, on --listen
   --contract-guard-slot  the same, over the loop guard module the project's loopGuard slot names
-  --contract-wake-slot  serve the wake module the project's wake slot names, through lf's client of it, on --listen
-  --contract-models, --contract-judge, --contract-files  serve lf's built-in models, judge or files module, on --listen (the slot conformance suites' bridges)
+  --contract-wake-slot  serve the wake module the project's wake slot names, through listen-fire's client of it, on --listen
+  --contract-models, --contract-judge, --contract-files  serve listen-fire's built-in models, judge or files module, on --listen (the slot conformance suites' bridges)
   --contract-doors  serve the inbound doors over HTTP, their world arranged over stdin/stdout JSON-RPC (the inbound contract suite's bridge)
   --project-schema  project one adapter introspection (JSON on stdin) into its schema and notes (the projection's parity probe)
-  --contract-secrets-slot  serve the secrets module the project's secrets slot names, through lf's client of it, on --listen
-  --contract-movements-slot  serve the movements module the project's movements slot names, through lf's client of it, on --listen
+  --contract-secrets-slot  serve the secrets module the project's secrets slot names, through listen-fire's client of it, on --listen
+  --contract-movements-slot  serve the movements module the project's movements slot names, through listen-fire's client of it, on --listen
   --contract-secrets  serve one secrets store over stdin/stdout JSON-RPC (the secrets contract suite's bridge)
-  --version  this lf's version (a release tag lf-v<version> is built from the crate at that version)
+  --version  this listen-fire's version (a release tag lf-v<version> is built from the crate at that version)
 {CREDENTIAL_USAGE}";
 
 struct Args {
@@ -242,13 +242,13 @@ struct Args {
     check_only: bool,
     all: bool,
     body: Option<PathBuf>,
-    /// `lf run <movement> --text`: the manual Invocation's Text.
+    /// `listen-fire run <movement> --text`: the manual Invocation's Text.
     text: Option<String>,
     install: Option<String>,
     headers: Vec<String>,
     port: Option<String>,
     reason: Option<String>,
-    /// `lf runs rerun --force`: rerun a failed attempt that committed writes.
+    /// `listen-fire runs rerun --force`: rerun a failed attempt that committed writes.
     force: bool,
     subscription: Option<String>,
     since: Option<String>,
@@ -412,8 +412,8 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
     }
     let mut out = std::io::stdout().lock();
     if args.version {
-        // The first line stays `lf <version>`: Homebrew's test and the upgrade tests read it.
-        writeln!(out, "lf {}", env!("CARGO_PKG_VERSION")).map_err(|e| e.to_string())?;
+        // The first line stays `listen-fire <version>`: Homebrew's test and the upgrade tests read it.
+        writeln!(out, "listen-fire {}", env!("CARGO_PKG_VERSION")).map_err(|e| e.to_string())?;
         writeln!(out, "adapter protocol 2.0–2.{}", protocol::SPEAKS_MINOR).map_err(|e| e.to_string())?;
         if let Some((root, modules)) = externals::bundled_module_versions() {
             writeln!(out, "bundled modules ({}):", root.display()).map_err(|e| e.to_string())?;
@@ -463,7 +463,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
         "upgrade" => upgrade::run(&load_with(project::load_project_to_upgrade)?, upgrade::UpgradeOptions { check_only: args.check_only, all: args.all }, &mut out).await,
         "run" => {
             if args.text.is_some() && (args.event.is_some() || args.poll.is_some() || args.webhook.is_some()) {
-                eprintln!("lf run --text gives a manual run its text: lf run <movement> --text \"…\" (an event file carries its own payload)");
+                eprintln!("listen-fire run --text gives a manual run its text: listen-fire run <movement> --text \"…\" (an event file carries its own payload)");
                 return Ok(2);
             }
             if let (Some(external), Some(body)) = (&args.webhook, &args.body) {
@@ -481,7 +481,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
             }
             let Some(event_file) = &args.event else {
                 let Some(movement) = args.rest.first() else {
-                    eprintln!("lf run needs a movement (run on manual), --event <file>, or --webhook <external> --body <file>");
+                    eprintln!("listen-fire run needs a movement (run on manual), --event <file>, or --webhook <external> --body <file>");
                     return Ok(2);
                 };
                 let project = load()?;
@@ -492,7 +492,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
             let project = load()?;
             let store = store_of(&args, &project)?;
             if args.ephemeral && matches!(store, backend::StoreSpec::Postgres { .. }) {
-                eprintln!("lf: --ephemeral keeps its run state in a temporary file; it does not take a Postgres --store");
+                eprintln!("listen-fire: --ephemeral keeps its run state in a temporary file; it does not take a Postgres --store");
                 return Ok(2);
             }
             let session = runs::open_session(project, &runs::Opening { ephemeral: args.ephemeral, store: &store, role: runs::Role::Command }).await?;
@@ -512,7 +512,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
                 let waiting = session.parked_runs()?.len();
                 let line = match waiting {
                     0 => "no parked runs".to_string(),
-                    n => format!("nothing due: {n} parked run(s) wait on a timer not yet come or an await not yet answered (lf resume <run-id> runs one out now)"),
+                    n => format!("nothing due: {n} parked run(s) wait on a timer not yet come or an await not yet answered (listen-fire resume <run-id> runs one out now)"),
                 };
                 writeln!(out, "{line}").map_err(|e| e.to_string())?;
                 return Ok(0);
@@ -521,7 +521,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
         }
         "runs" if args.rest.first().map(String::as_str) == Some("rerun") => {
             let Some(run_id) = args.rest.get(1) else {
-                eprintln!("lf runs rerun needs a run id");
+                eprintln!("listen-fire runs rerun needs a run id");
                 return Ok(2);
             };
             let project = load()?;
@@ -534,7 +534,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
             let store = backend::open_store(&store_of(&args, &project)?)?;
             if let Some("show") = args.rest.first().map(String::as_str) {
                 let Some(run_id) = args.rest.get(1) else {
-                    eprintln!("lf runs show needs a run id");
+                    eprintln!("listen-fire runs show needs a run id");
                     return Ok(2);
                 };
                 let doc = lfjson::run_show_doc(&*store, run_id)?;
@@ -571,7 +571,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
             let pool = args.kinds.as_deref().map(drain::Pool::of).transpose()?.unwrap_or_default();
             if !args.until_idle {
                 let env: Vec<(String, String)> = std::env::vars().collect();
-                movements_slot::require_watch(&project, &env, "lf drain")?;
+                movements_slot::require_watch(&project, &env, "listen-fire drain")?;
             }
             let mut session = runs::open_session(project, &runs::Opening { ephemeral: false, store: &store, role: runs::Role::Drain }).await?;
             session.pool = pool;
@@ -620,7 +620,7 @@ fn report_rerun(run_id: &str, rerun: runs::Rerun, json: bool, out: &mut impl Wri
             if json {
                 return lfjson::emit(out, &lfjson::rerun_refused_doc(run_id, &refused), 1);
             }
-            eprintln!("lf: {}", refused.message(run_id));
+            eprintln!("listen-fire: {}", refused.message(run_id));
             Ok(1)
         }
     }
@@ -637,7 +637,7 @@ fn store_of(args: &Args, project: &project::Project) -> Result<backend::StoreSpe
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    // Hidden: the isolated PDF reader (src/pdf_text.rs) re-executes lf in this mode.
+    // Hidden: the isolated PDF reader (src/pdf_text.rs) re-executes listen-fire in this mode.
     #[cfg(feature = "pdf")]
     if argv.as_slice() == ["--pdf-text"] {
         std::process::exit(pdf_text::child_main());
@@ -658,7 +658,7 @@ fn main() {
             1
         }
         Err(message) => {
-            eprintln!("lf: {message}");
+            eprintln!("listen-fire: {message}");
             1
         }
     };
@@ -666,7 +666,7 @@ fn main() {
     std::process::exit(code);
 }
 
-/// `lf --contract-<slot>`: one of lf's built-in core modules served as a
+/// `listen-fire --contract-<slot>`: one of listen-fire's built-in core modules served as a
 /// module over adapter protocol 2's HTTP, for the slot's conformance suite.
 /// None when no such flag is given.
 #[cfg(feature = "serve")]
@@ -694,7 +694,7 @@ async fn serve_contract_bridge(args: &Args) -> Result<Option<i32>, String> {
         #[cfg(feature = "anthropic")]
         contract_slots::serve_models(listen()?).await?;
         #[cfg(not(feature = "anthropic"))]
-        return Err("this lf was built without the `anthropic` feature, so it has no built-in models module to serve".to_string());
+        return Err("this listen-fire was built without the `anthropic` feature, so it has no built-in models module to serve".to_string());
     } else if args.contract_wake_slot {
         let (project, env) = project_env()?;
         let Some(module) = &project.core.wake else { return Err("the project's wake slot is empty: name a wake module in lf.yaml's `core: { wake: … }`".to_string()) };
@@ -720,7 +720,7 @@ async fn serve_contract_bridge(args: &Args) -> Result<Option<i32>, String> {
     Ok(Some(0))
 }
 
-/// Without the `serve` feature lf has no server to put a built-in module behind.
+/// Without the `serve` feature listen-fire has no server to put a built-in module behind.
 #[cfg(not(feature = "serve"))]
 async fn serve_contract_bridge(args: &Args) -> Result<Option<i32>, String> {
     let asked = args.contract_store.is_some()

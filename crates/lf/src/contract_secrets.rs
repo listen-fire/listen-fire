@@ -1,4 +1,4 @@
-//! `lf --contract-secrets <secrets file | env>`: one of lf's secrets
+//! `listen-fire --contract-secrets <secrets file | env>`: one of listen-fire's secrets
 //! stores (@lf/file-secrets over one file, src/secrets_slot.rs; the
 //! environment, src/secret_stores.rs) served over stdin/stdout, one JSON-RPC 2.0
 //! message per line, so the TypeScript secrets contract suite (movement-engine

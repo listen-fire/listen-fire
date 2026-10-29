@@ -1,9 +1,9 @@
-//! lf's secrets stores: a secrets file (plain YAML, rewritten in place with its
+//! listen-fire's secrets stores: a secrets file (plain YAML, rewritten in place with its
 //! comments and order kept; or SOPS, read with `sops -d` and changed with
 //! `sops set` / `sops unset`, never decrypted onto disk), the environment
 //! (read-only: a write-back is kept for this process and reported once), and
 //! one loaded credential over both (its file's fields with the environment's
-//! over them). Whole entries — what `lf connect` and `lf credential` write —
+//! over them). Whole entries — what `listen-fire connect` and `listen-fire credential` write —
 //! are created, replaced and deleted under the same lock a refresh takes.
 
 use std::cell::RefCell;
@@ -252,7 +252,7 @@ pub fn secrets_of(credential: &Credential) -> Rc<SecretsFamily> {
                     env_fields: credential.origin.env_fields.clone(),
                     fields: RefCell::new(credential.fields.clone()),
                 };
-                Rc::new(SecretsFamily::new(Box::new(backend), Box::new(|message| eprintln!("lf: {message}"))))
+                Rc::new(SecretsFamily::new(Box::new(backend), Box::new(|message| eprintln!("listen-fire: {message}"))))
             })
             .clone()
     })
@@ -264,7 +264,7 @@ pub fn current_fields(credential: &Credential) -> Fields {
     secrets_of(credential).cached(&credential.name).map(|r| r.fields).unwrap_or_else(|| credential.fields.clone())
 }
 
-// ── Whole entries: what `lf connect` and `lf credential` write ──────────────
+// ── Whole entries: what `listen-fire connect` and `listen-fire credential` write ──────────────
 
 /// A whole entry, its keys in order: binding keys, then fields.
 pub type Entry = Vec<(String, String)>;
@@ -653,10 +653,10 @@ mod tests {
 
     #[test]
     fn whole_entries_are_replaced_and_deleted_in_place() {
-        let text = "# lf's app\nacme:\n  external: acme_crm\n  token: t\n# about b\nb:\n  module: m\n";
+        let text = "# listen-fire's app\nacme:\n  external: acme_crm\n  token: t\n# about b\nb:\n  module: m\n";
         let replaced = replace_entry(text, "acme", &[("module".into(), "acme_crm".into()), ("credential".into(), "acme".into()), ("token".into(), "t".into())]);
-        assert_eq!(replaced, "# lf's app\nacme:\n  module: acme_crm\n  credential: acme\n  token: t\n# about b\nb:\n  module: m\n");
-        assert_eq!(delete_entry(&replaced, "acme"), "# lf's app\n# about b\nb:\n  module: m\n");
+        assert_eq!(replaced, "# listen-fire's app\nacme:\n  module: acme_crm\n  credential: acme\n  token: t\n# about b\nb:\n  module: m\n");
+        assert_eq!(delete_entry(&replaced, "acme"), "# listen-fire's app\n# about b\nb:\n  module: m\n");
         assert_eq!(replace_entry("{}\n", "x", &[("a".into(), "b".into())]), "x:\n  a: b\n");
     }
 }

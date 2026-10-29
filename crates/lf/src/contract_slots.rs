@@ -1,4 +1,4 @@
-//! `lf --contract-models`, `--contract-judge`, `--contract-files`: lf's
+//! `listen-fire --contract-models`, `--contract-judge`, `--contract-files`: listen-fire's
 //! built-in models, judge and files modules served as modules
 //! (crate::slot_server), each slot's methods as adapter protocol 2 calls
 //! (docs/contracts/models-slot.md, judge-slot.md, files-slot.md), so the
@@ -63,7 +63,7 @@ pub async fn serve_judge(listen: Listen) -> Result<(), String> {
             }
             Ok(Js::from(obj! {
                 "index" => Js::Null,
-                "judgeUnavailable" => Js::str("lf's judge (@lf/judge) declines every question yet: an ambiguous match creates a new record"),
+                "judgeUnavailable" => Js::str("listen-fire's judge (@lf/judge) declines every question yet: an ambiguous match creates a new record"),
                 "cost" => Js::Arr(Vec::new()),
             }))
         }

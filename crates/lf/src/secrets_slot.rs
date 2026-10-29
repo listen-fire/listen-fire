@@ -1,26 +1,26 @@
-//! The secrets slot: where lf's credentials are kept, a module like the other
-//! slots' (crate::core). lf asks it for the credentials it holds, reads and
+//! The secrets slot: where listen-fire's credentials are kept, a module like the other
+//! slots' (crate::core). listen-fire asks it for the credentials it holds, reads and
 //! writes one back by compare-and-swap (the secrets family's rules,
 //! crate::secrets_family), holds one under a lease while a refresh spends its
-//! token, and changes whole entries for `lf connect`, `lf credential` and a
-//! webhook's registration. Token refresh stays in lf; a module only stores.
+//! token, and changes whole entries for `listen-fire connect`, `listen-fire credential` and a
+//! webhook's registration. Token refresh stays in listen-fire; a module only stores.
 //!
-//! The default, `@lf/file-secrets`, is lf's secrets file (plain or SOPS) and
-//! its lock file, in process (`FileSecretsModule`). A module lf does not build
+//! The default, `@lf/file-secrets`, is listen-fire's secrets file (plain or SOPS) and
+//! its lock file, in process (`FileSecretsModule`). A module listen-fire does not build
 //! in is spoken to over adapter protocol 2 (`ProcessSecrets`):
 //!
 //!   secrets.resolve { ref }                            → { fields, version } | null
 //!   secrets.writeBack { ref, fields, expectedVersion } → { kind: written | not_persisted | conflict | missing, … }
 //!   secrets.list {}                                    → [{ ref, external, binding: "install" | "legacy" | { credential }, version }]
-//!   secrets.lock { ref, ttlMs }                        → { token } | null (another holds it; lf asks again)
+//!   secrets.lock { ref, ttlMs }                        → { token } | null (another holds it; listen-fire asks again)
 //!   secrets.unlock { ref, token }
 //!   secrets.assertWritable { ref }                     → null | { kind: "read_only", reason }
 //!   secrets.create | secrets.replace { ref, external, binding, fields }
 //!   secrets.delete { ref }
 //!
 //! The three entry methods answer null, or `{ kind: "read_only", reason }` from
-//! a module that cannot persist; lf then refuses by name (`EntryError`).
-//! `assertWritable` answers the same, and `lf credential add` and `update` ask
+//! a module that cannot persist; listen-fire then refuses by name (`EntryError`).
+//! `assertWritable` answers the same, and `listen-fire credential add` and `update` ask
 //! it before the provider's sign-in, so a person is not sent through one for
 //! an entry that cannot be kept. A token refresh's write-back is not what it
 //! answers for: a read-only module still takes that.
@@ -79,13 +79,13 @@ pub struct Stored {
 /// Why a whole entry was not changed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EntryError {
-    /// The module keeps its credentials where lf cannot change them.
+    /// The module keeps its credentials where listen-fire cannot change them.
     ReadOnly { module: String, reason: String },
     Failed(String),
 }
 
 impl EntryError {
-    /// The refusal `lf connect`, `lf credential` and webhook registration give.
+    /// The refusal `listen-fire connect`, `listen-fire credential` and webhook registration give.
     pub const REGISTER_WHERE_IT_LIVES: &'static str = "Register the webhook where the credentials live.";
 
     pub fn refusal(&self) -> String {
@@ -117,7 +117,7 @@ impl From<EntryError> for String {
 }
 
 /// What fills the secrets slot: the family's store (resolve, write back by
-/// version, lease, writable) plus what lf reads the whole list by and
+/// version, lease, writable) plus what listen-fire reads the whole list by and
 /// changes whole entries with.
 pub trait SecretsStore: SecretsBackend {
     /// Where its credentials are kept, as messages name it (a file's path).
@@ -151,17 +151,17 @@ pub trait SecretsStore: SecretsBackend {
 
 // ── @lf/file-secrets ────────────────────────────────────────────────────────
 
-/// lf's secrets file as the slot's module: the first of `LF_SECRETS_FILE`,
+/// listen-fire's secrets file as the slot's module: the first of `LF_SECRETS_FILE`,
 /// `<project>/.lf/secrets.yaml`, `~/.config/lf/secrets.yaml` that exists
 /// (SOPS read with `sops -d`, changed with `sops set`), held under its lock
-/// file. The file is found again on each call, so one `lf connect` creates
+/// file. The file is found again on each call, so one `listen-fire connect` creates
 /// is read from then on.
 pub struct FileSecretsModule {
     at: Where,
 }
 
 enum Where {
-    /// One file (`lf --contract-secrets <file>`).
+    /// One file (`listen-fire --contract-secrets <file>`).
     File(PathBuf),
     Project { paths: Vec<PathBuf>, named: Option<String>, created: PathBuf },
 }
@@ -202,7 +202,7 @@ impl FileSecretsModule {
         if let Some(named) = named {
             return Err(format!("LF_SECRETS_FILE points at {named}, which does not exist"));
         }
-        write_staged(created, "secrets", "# Written by `lf connect` and `lf credential`; not edited by hand.\n")?;
+        write_staged(created, "secrets", "# Written by `listen-fire connect` and `listen-fire credential`; not edited by hand.\n")?;
         Ok(SecretsFile { path: created.clone(), encrypted: false })
     }
 }
@@ -305,7 +305,7 @@ impl SecretsStore for FileSecretsModule {
     }
 }
 
-// ── A secrets module lf does not build in ──────────────────────────────────
+// ── A secrets module listen-fire does not build in ──────────────────────────────────
 
 /// A secrets module spoken to over the slot's methods (crate::slot_client).
 pub struct ProcessSecrets {
@@ -328,7 +328,7 @@ impl ProcessSecrets {
 
     /// An entry method's (or `assertWritable`'s) answer: null when it is fine,
     /// `{ kind: "read_only", reason }` when the module keeps its credentials
-    /// where lf cannot change them.
+    /// where listen-fire cannot change them.
     fn interpreted(&self, method: &str, answer: Js) -> Result<(), EntryError> {
         match (&answer, answer.get("kind").and_then(Js::as_str)) {
             (Js::Null, _) => Ok(()),
@@ -381,7 +381,7 @@ impl SecretsBackend for ProcessSecrets {
                     return Err(self.unexpected("secrets.lock", &answer));
                 }
                 if started.elapsed() > LOCK_WAIT {
-                    return Err(format!("{} kept credential \"{reference}\" locked by another lf for {}s", self.client.label, LOCK_WAIT.as_secs()));
+                    return Err(format!("{} kept credential \"{reference}\" locked by another listen-fire for {}s", self.client.label, LOCK_WAIT.as_secs()));
                 }
                 tokio::time::sleep(POLL_EVERY).await;
             }
@@ -390,7 +390,7 @@ impl SecretsBackend for ProcessSecrets {
 
     fn unlock(&self, reference: &str, lease: Lease) {
         if let Err(message) = self.call("secrets.unlock", obj! { "ref" => Js::str(reference), "token" => Js::str(&lease.token) }) {
-            eprintln!("lf: credential \"{reference}\" was not unlocked ({message}); its lease lapses on its own");
+            eprintln!("listen-fire: credential \"{reference}\" was not unlocked ({message}); its lease lapses on its own");
         }
     }
 
@@ -541,7 +541,7 @@ thread_local! {
     /// The store the last opened secrets came from: what a loaded
     /// credential is refreshed and written back through.
     static SLOT: RefCell<Option<Rc<dyn SecretsStore>>> = const { RefCell::new(None) };
-    /// A module lf does not build in, reached once per project and module.
+    /// A module listen-fire does not build in, reached once per project and module.
     static STARTED: RefCell<HashMap<(PathBuf, String), Rc<ProcessSecrets>>> = RefCell::new(HashMap::new());
 }
 
@@ -582,7 +582,7 @@ pub fn refuse_unbootstrapped(project: &Project, env: &[(String, String)]) -> Res
     refuse_unbootstrapped_module(project, env, &project.core.secrets, "the module")
 }
 
-/// The bootstrap rule for a slot whose module lf needs before it can ask
+/// The bootstrap rule for a slot whose module listen-fire needs before it can ask
 /// the secrets slot (the secrets module itself, the movements module):
 /// settings it requires that neither the environment nor the secrets file
 /// holds refuse the project. `not_from` names where they cannot come from.
@@ -594,7 +594,7 @@ pub(crate) fn refuse_unbootstrapped_module(project: &Project, env: &[(String, St
     }
     let entry = crate::connect::core_entry_name(&module.name).to_uppercase();
     Err(format!(
-        "core.{slot}: {name}: the {slot} module's own settings come from {ENV_PREFIX}… or the secrets file, not from {not_from}; neither holds {name}'s install (run `lf connect {name}` before naming it in lf.yaml, or set {ENV_PREFIX}{entry}__EXTERNAL={name} and its settings as {ENV_PREFIX}{entry}__<SETTING>)",
+        "core.{slot}: {name}: the {slot} module's own settings come from {ENV_PREFIX}… or the secrets file, not from {not_from}; neither holds {name}'s install (run `listen-fire connect {name}` before naming it in lf.yaml, or set {ENV_PREFIX}{entry}__EXTERNAL={name} and its settings as {ENV_PREFIX}{entry}__<SETTING>)",
         slot = module.slot.name(),
         name = module.name
     ))

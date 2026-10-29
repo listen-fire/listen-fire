@@ -1,11 +1,11 @@
-//! `lf --pdf-text`, the hidden reader process the host parses PDFs in.
+//! `listen-fire --pdf-text`, the hidden reader process the host parses PDFs in.
 #![cfg(feature = "pdf")]
 
 use std::io::Write;
 use std::process::{Command, Stdio};
 
 fn run(input: &[u8], fault: Option<&str>) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_lf"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_listen-fire"));
     command.arg("--pdf-text").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
     if let Some(fault) = fault {
         command.env("LF_PDF_TEXT_FAULT", fault);

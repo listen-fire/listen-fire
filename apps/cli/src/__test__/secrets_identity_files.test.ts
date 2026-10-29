@@ -206,7 +206,7 @@ test('a credential the program imports but nothing configures is named, with the
   assert.match(check.out, /companies\.mvt:2:\d+ error MISSING_CREDENTIAL credential "acme"/);
 });
 
-test('lf init writes the user field commented, and the file still loads', () => {
+test('listen-fire init writes the user field commented, and the file still loads', () => {
   const dir = mkdtempSync(join(tmpdir(), 'lf-init-'));
   const init = spawnSync(...lfCommand(['init', dir]), { encoding: 'utf8' });
   assert.equal(init.status, 0, init.stderr);

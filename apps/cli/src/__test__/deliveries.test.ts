@@ -1,5 +1,5 @@
-// The delivery receipt through the real binary: `lf serve` keeps a signed
-// webhook once however often it is sent, `lf deliveries` lists, shows and
+// The delivery receipt through the real binary: `listen-fire serve` keeps a signed
+// webhook once however often it is sent, `listen-fire deliveries` lists, shows and
 // replays it, a replay no listen takes is said so, `--ephemeral` keeps
 // nothing, and the drain forgets a settled delivery after `retainDays`.
 
@@ -14,7 +14,7 @@ import { lf, lfCommand, served } from './example';
 import { wakeModuleProject } from './wake_module/project';
 import { COMPLETING, type DeliveryDoc, post, receiptProject, signedWebhook, UPDATES_ONLY } from './deliveries_fixture';
 
-/** The webhook, taken by `lf run --webhook` (a delivery of source cli). */
+/** The webhook, taken by `listen-fire run --webhook` (a delivery of source cli). */
 function runWebhook(dir: string, ...flags: string[]): { code: number; out: string } {
   const { signature } = signedWebhook(dir);
   return lf(dir, 'run', ...flags, '--webhook', 'acme_crm', '--body', 'events/webhook_body.json', '--header', `x-listen-fire-signature:${signature}`);
@@ -40,7 +40,7 @@ async function until<T>(what: string, look: () => T | undefined, ms = 20_000): P
   }
 }
 
-test('lf serve takes a signed webhook twice, runs it once, and replays it', async () => {
+test('listen-fire serve takes a signed webhook twice, runs it once, and replays it', async () => {
   const dir = receiptProject();
   const serving = await served(dir);
   let firstId: string;
@@ -64,7 +64,7 @@ test('lf serve takes a signed webhook twice, runs it once, and replays it', asyn
 
     const replayed = lf(dir, 'deliveries', 'replay', firstId);
     assert.equal(replayed.code, 0, replayed.out);
-    assert.match(replayed.out, new RegExp(`^delivery \\S+ replays ${firstId}: 1 event\\(s\\) queued; lf serve or lf drain runs them`));
+    assert.match(replayed.out, new RegExp(`^delivery \\S+ replays ${firstId}: 1 event\\(s\\) queued; listen-fire serve or listen-fire drain runs them`));
     // The serve's one-second drain tick takes the queued row.
     await until('the replay to run', () => (runsOf(dir).length === 2 ? true : undefined));
   } finally {
@@ -187,7 +187,7 @@ test("replaying a delivery wakes the project's wake module at once", async () =>
     writeFileSync(join(dir, 'lf.yaml'), `${config}core:\n  wake: acme_wake\n`);
     const env = { ...process.env, NODE_NO_WARNINGS: '1', LF_SECRET__ACME_WAKE__EXTERNAL: 'acme_wake', LF_SECRET__ACME_WAKE__TARGET: `http://127.0.0.1:${bound.port}/start` };
     // Asynchronous: the worker endpoint is this process, and the wake module
-    // delivers to it before it answers lf.
+    // delivers to it before it answers listen-fire.
     const lfWithWake = async (...args: string[]) => {
       const [binary, argv] = lfCommand(args);
       return promisify(execFile)(binary, argv, { cwd: dir, encoding: 'utf8', env }).then((done) => ({ status: 0, ...done }));

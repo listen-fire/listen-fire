@@ -1,7 +1,7 @@
 // The limiter slot's contract suite (movement-engine services/limiter/
-// contract.ts) against lf's built-in limiter, driven over the limiter wire
-// (`lf --contract-limiter`), and against a third-party limiter module filling
-// a project's limiter slot (`lf --contract-limiter-slot`): lf drives the
+// contract.ts) against listen-fire's built-in limiter, driven over the limiter wire
+// (`listen-fire --contract-limiter`), and against a third-party limiter module filling
+// a project's limiter slot (`listen-fire --contract-limiter-slot`): listen-fire drives the
 // module as a process over the same wire, so a limiter shared by many hosts
 // is just another module in the slot.
 
@@ -12,7 +12,7 @@ import { lfBinary } from './lf_bin';
 import { limiterModuleProject } from './limiter_module/project';
 
 const bridges = [
-  { over: "lf's built-in limiter", args: () => ['--contract-limiter'] },
+  { over: "listen-fire's built-in limiter", args: () => ['--contract-limiter'] },
   { over: 'a limiter module', args: () => ['--contract-limiter-slot', '--dir', limiterModuleProject()] },
 ];
 

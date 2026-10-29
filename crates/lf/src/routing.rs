@@ -132,7 +132,7 @@ pub fn subscription_key(scope: &Scope) -> String {
     scope.iter().map(|(_, value)| escaped(value)).collect::<Vec<_>>().join(".")
 }
 
-/// A listen's declared payload: the node, as lf checks a body against it
+/// A listen's declared payload: the node, as listen-fire checks a body against it
 /// before any run. The checker has typed the movement against the same node,
 /// so a payload that fits is what the movement reads.
 #[derive(Debug, Clone)]
@@ -163,7 +163,7 @@ enum ValueKind {
     Boolean,
     /// One of a declared `type`'s values.
     OneOf(Vec<String>),
-    /// `json`, a file, or a type lf does not read the JSON of: any value.
+    /// `json`, a file, or a type listen-fire does not read the JSON of: any value.
     Any,
 }
 
@@ -443,7 +443,7 @@ fn event_config_list(events: Option<&Js>) -> Vec<String> {
     }
 }
 
-/// How an event reached lf: pushed (a webhook, `emit`, a unit's tick), or
+/// How an event reached listen-fire: pushed (a webhook, `emit`, a unit's tick), or
 /// returned by a poll of one listen's source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Arrival {

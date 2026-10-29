@@ -1,10 +1,10 @@
 // The movements slot's conformance cases against a test movements module
-// (movements_module/serve.ts) spoken to directly, and through lf's own client
-// of it (`lf --contract-movements-slot`, the project's movements slot), so
-// lf's side of the wire is held to the meaning the module is. lf's default
+// (movements_module/serve.ts) spoken to directly, and through listen-fire's own client
+// of it (`listen-fire --contract-movements-slot`, the project's movements slot), so
+// listen-fire's side of the wire is held to the meaning the module is. listen-fire's default
 // module (`@lf/folder-movements`) is served and held the same way, so the
 // runner is held to what it serves. The read-only cases run against a module
-// that refuses every write, directly and through lf's client of it. A fourth
+// that refuses every write, directly and through listen-fire's client of it. A fourth
 // bridge is a module that answers every watch at once, so no case assumes a
 // held request.
 
@@ -71,7 +71,7 @@ const bridges: Array<{ over: string; readOnly: boolean; reach(options: { readOnl
     },
   },
   {
-    over: "lf's client of a movements module",
+    over: "listen-fire's client of a movements module",
     readOnly: true,
     reach: async ({ readOnly }) => {
       const module = await serveMovementsModule({ listen: 0, ...(readOnly !== undefined ? { readOnly } : {}) });
@@ -90,7 +90,7 @@ const bridges: Array<{ over: string; readOnly: boolean; reach(options: { readOnl
     },
   },
   {
-    over: "lf's folder movements module",
+    over: "listen-fire's folder movements module",
     readOnly: false,
     reach: async () => {
       const dir = project(null);

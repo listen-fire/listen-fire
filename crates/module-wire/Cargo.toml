@@ -1,6 +1,6 @@
 [package]
 # What a module and its host both speak: adapter protocol 2's envelope, JSON
-# in JavaScript's key order, and the check every protocol result passes. `lf`
+# in JavaScript's key order, and the check every protocol result passes. `listen-fire`
 # (the host) and the module kit (crates/module-kit, the module side) share it.
 # Not part of the core: it carries its own version and publishes on its own.
 name = "listen-fire-module-wire"

@@ -115,7 +115,7 @@ impl CatalogSnapshot {
         }
         let arg_name = credential_arg.map_or("credentials", |a| a.name.as_str());
         // A credential the adapter can do without, not given: the
-        // credential-free instance (lf's email, which receives with none).
+        // credential-free instance (listen-fire's email, which receives with none).
         let Some(raw) = args.get(arg_name).map(|raw| js::trim(raw)) else {
             return if credential_arg.is_some_and(|a| !a.required) { at(None) } else { None };
         };

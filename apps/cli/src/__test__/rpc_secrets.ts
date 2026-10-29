@@ -1,8 +1,8 @@
 // A secrets store another process serves: `SecretsBackend` (movement-engine
 // services/secrets/family.ts) forwarded over the process's stdin/stdout, one
 // JSON-RPC 2.0 message per line — how the secrets contract suite, written
-// once in TypeScript, holds the Rust lf's stores (`lf
-// --contract-secrets <file | env>`) to the same meaning as lf's own. The
+// once in TypeScript, holds the Rust listen-fire's stores (`listen-fire
+// --contract-secrets <file | env>`) to the same meaning as listen-fire's own. The
 // transport is `StdioRpcBridge`'s.
 
 import { z } from 'zod';

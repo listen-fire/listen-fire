@@ -16,7 +16,7 @@
 // The CRM also owns an inbound side of its own, the way a hosted system
 // would: `POST /dev/companies { Name }` and `POST /dev/comments { company,
 // text }` change its state and push the change to the host's doors (`emit`,
-// `wake` under LF_HOST_URL, which `lf serve` hands the externals it starts),
+// `wake` under LF_HOST_URL, which `listen-fire serve` hands the externals it starts),
 // presenting the credential the host calls it with.
 
 import { createServer } from 'node:http';
@@ -165,7 +165,7 @@ let hostCredential;
 
 /** Push to one of the host's doors. */
 async function push(door, body) {
-  if (!hostUrl) throw new Error('LF_HOST_URL is not set: start this external under `lf serve`');
+  if (!hostUrl) throw new Error('LF_HOST_URL is not set: start this external under `listen-fire serve`');
   if (!hostCredential) throw new Error('the host has not called yet, so there is no credential to present');
   const response = await fetch(new URL(`/api/public/adapter/acme_crm/${door}`, hostUrl), {
     method: 'POST',

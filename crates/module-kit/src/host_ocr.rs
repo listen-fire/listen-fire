@@ -1,4 +1,4 @@
-//! The host's OCR slot (docs/contracts/ocr-slot.md), asked by a module lf
+//! The host's OCR slot (docs/contracts/ocr-slot.md), asked by a module listen-fire
 //! started: a scanned PDF's or an image's text, through the host's OCR door
 //! (`LF_HOST_URL`, `LF_HOST_TOKEN`). The read's cost is charged to the call
 //! that asked ([`Ctx::spent`]), so it reaches the run on that call's answer.

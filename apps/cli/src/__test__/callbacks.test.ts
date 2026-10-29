@@ -1,6 +1,6 @@
-// Callbacks and cancel through the real `lf` entry point: a run mints a
-// callback and awaits its call; the call arrives at `lf serve`'s door or from
-// `lf call`, runs its body once, and resumes the run. `lf cancel` settles a
+// Callbacks and cancel through the real `listen-fire` entry point: a run mints a
+// callback and awaits its call; the call arrives at `listen-fire serve`'s door or from
+// `listen-fire call`, runs its body once, and resumes the run. `listen-fire cancel` settles a
 // parked run and closes its callbacks.
 
 import { test } from 'node:test';
@@ -30,12 +30,12 @@ function runIdOf(out: string): string {
   return id;
 }
 
-test('lf call: a mismatch is refused and consumes nothing; the call runs its body once and resumes the run; a second call is closed', () => {
+test('listen-fire call: a mismatch is refused and consumes nothing; the call runs its body once and resumes the run; a second call is closed', () => {
   const dir = project('callback');
   const fired = lf(dir, 'run', '--event', 'events/company_created.json');
   assert.equal(fired.code, 0, fired.out);
   const { id, url } = minted(dir);
-  assert.equal(url, `http://127.0.0.1:4400/api/cb/${id}`, 'without publicUrl, under where lf serve listens by default');
+  assert.equal(url, `http://127.0.0.1:4400/api/cb/${id}`, 'without publicUrl, under where listen-fire serve listens by default');
 
   const wrong = lf(dir, 'call', id, '--body', values(dir, 'wrong.json', { nope: 1 }));
   assert.equal(wrong.code, 1, wrong.out);
@@ -56,7 +56,7 @@ test('lf call: a mismatch is refused and consumes nothing; the call runs its bod
   assert.deepEqual(companies(dir).slice(1), ['Body ship it', 'Approved ship it'], 'the body ran once');
 });
 
-test('lf serve: the callback door at POST /api/cb/<id> answers as the hosted door does, under lf.yaml\'s publicUrl', async () => {
+test('listen-fire serve: the callback door at POST /api/cb/<id> answers as the hosted door does, under lf.yaml\'s publicUrl', async () => {
   const dir = project('callback');
   writeFileSync(join(dir, 'lf.yaml'), `${readFileSync(join(dir, 'lf.yaml'), 'utf8')}\npublicUrl: https://lf.example.test/\n`);
   const serving = await served(dir);
@@ -90,7 +90,7 @@ test('lf serve: the callback door at POST /api/cb/<id> answers as the hosted doo
   }
 });
 
-test('lf cancel: a parked run is settled failed with the reason, and its callback closes', () => {
+test('listen-fire cancel: a parked run is settled failed with the reason, and its callback closes', () => {
   const dir = project('callback');
   const runId = runIdOf(lf(dir, 'run', '--event', 'events/company_created.json').out);
   const { id } = minted(dir);
@@ -115,7 +115,7 @@ test('lf cancel: a parked run is settled failed with the reason, and its callbac
   assert.match(twice.out, /is failed; there is nothing to cancel/);
 });
 
-/** Another lf process stepping the run, as the state file records it: the
+/** Another listen-fire process stepping the run, as the state file records it: the
  *  run's lease, held until `release` is called. */
 function holdLease(dir: string, runId: string): { release(): void } {
   const db = new DatabaseSync(join(dir, '.lf', 'state.db'));
@@ -138,7 +138,7 @@ function runStatus(dir: string, runId: string): string | undefined {
   }
 }
 
-test('lf call while another lf process holds the run: the call is recorded, its body waits, and the next resume runs it', () => {
+test('listen-fire call while another listen-fire process holds the run: the call is recorded, its body waits, and the next resume runs it', () => {
   const dir = project('callback');
   const runId = runIdOf(lf(dir, 'run', '--event', 'events/company_created.json').out);
   const { id } = minted(dir);
@@ -146,7 +146,7 @@ test('lf call while another lf process holds the run: the call is recorded, its 
   try {
     const called = lf(dir, 'call', id, '--body', values(dir, 'note.json', { note: 'later' }));
     assert.equal(called.code, 0, called.out);
-    assert.match(called.out, /being stepped by another lf process/);
+    assert.match(called.out, /being stepped by another listen-fire process/);
     assert.equal(companies(dir).length, 1, 'no body yet');
   } finally {
     lease.release();
@@ -156,14 +156,14 @@ test('lf call while another lf process holds the run: the call is recorded, its 
   assert.deepEqual(companies(dir).slice(1), ['Body later', 'Approved later']);
 });
 
-test('lf cancel of a run another process is stepping: the request is recorded for its holder, and the next segment stops at its first statement', () => {
+test('listen-fire cancel of a run another process is stepping: the request is recorded for its holder, and the next segment stops at its first statement', () => {
   const dir = project('callback');
   const runId = runIdOf(lf(dir, 'run', '--event', 'events/company_created.json').out);
   const lease = holdLease(dir, runId);
   try {
     const requested = lf(dir, 'cancel', runId);
     assert.equal(requested.code, 0, requested.out);
-    assert.match(requested.out, /cancel requested; another lf process is stepping it/);
+    assert.match(requested.out, /cancel requested; another listen-fire process is stepping it/);
     assert.equal(runStatus(dir, runId), 'parked', 'the holder settles it, not the canceller');
   } finally {
     lease.release();
@@ -177,7 +177,7 @@ test('lf cancel of a run another process is stepping: the request is recorded fo
   assert.match(lf(dir, 'runs').out, new RegExp(`${runId} .* callback:approve failed`), called.out);
 });
 
-test('lf resume with no run steps only what is due: the timeout arm beside an approval stays parked until its day comes', () => {
+test('listen-fire resume with no run steps only what is due: the timeout arm beside an approval stays parked until its day comes', () => {
   const dir = project('race');
   const fired = lf(dir, 'run', '--event', 'events/company_created.json');
   assert.match(fired.out, /race:approve parked/);
@@ -192,7 +192,7 @@ test('lf resume with no run steps only what is due: the timeout arm beside an ap
   assert.deepEqual(companies(dir).slice(1), ['Approved']);
 });
 
-test('lf serve: GET on a callback url renders the confirm page and fires nothing; its form post fires it, answered with a page', async () => {
+test('listen-fire serve: GET on a callback url renders the confirm page and fires nothing; its form post fires it, answered with a page', async () => {
   const dir = project('callback');
   const serving = await served(dir);
   try {
@@ -232,7 +232,7 @@ test('lf serve: GET on a callback url renders the confirm page and fires nothing
   }
 });
 
-test('lf run --dry-run rehearses past a park: a refresh of a rehearsed record moves nothing, and the segment after the wait captures its writes too', () => {
+test('listen-fire run --dry-run rehearses past a park: a refresh of a rehearsed record moves nothing, and the segment after the wait captures its writes too', () => {
   const dir = project('rehearsal');
   // The external reads a record by its id, so a refresh asks it.
   const server = join(dir, 'externals/acme_crm/server.mjs');

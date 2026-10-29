@@ -83,7 +83,7 @@ test('a plugin the package does not have is refused at check, naming its members
   assert.match(check.out, /`shout` has no member `whisper` \(its members: `shoutOut`\)/);
 });
 
-/** `lf <args>` without blocking this process, which serves the fake the run
+/** `listen-fire <args>` without blocking this process, which serves the fake the run
  *  reaches. */
 function lfAsync(dir: string, ...args: string[]): Promise<{ code: number; out: string }> {
   return new Promise((done) => {

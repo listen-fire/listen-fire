@@ -1,5 +1,5 @@
-// The store slot through the real `lf` binary: a third-party store module
-// (store_module/forward.mjs, a process lf drives over the store wire) keeps a
+// The store slot through the real `listen-fire` binary: a third-party store module
+// (store_module/forward.mjs, a process listen-fire drives over the store wire) keeps a
 // run's state, and an event carrying an `idempotencyKey` runs each listen
 // once — over the default SQLite store and over the store module alike.
 
@@ -18,21 +18,21 @@ function moduleProject(): { dir: string; statePath: string } {
   return { dir, statePath };
 }
 
-test('a store module fills the store slot: lf run keeps its run there', () => {
+test('a store module fills the store slot: listen-fire run keeps its run there', () => {
   const { dir, statePath } = moduleProject();
   const run = lf(dir, 'run', '--event', 'events/company_created.json');
   assert.equal(run.code, 0, run.out);
   const runId = /^run (\S+) companies:\S+ (?:completed|parked)/m.exec(run.out)?.[1];
   assert.ok(runId !== undefined, run.out);
   assert.match(lf(dir, 'runs').out, new RegExp(`^${runId} .* (?:completed|parked)$`, 'm'));
-  // The module's own state file holds it; lf's default one was never made.
+  // The module's own state file holds it; listen-fire's default one was never made.
   assert.match(lf(dir, 'runs', '--store', statePath).out, new RegExp(`^${runId} `, 'm'));
   assert.throws(() => readFileSync(join(dir, '.lf/state.db')));
 });
 
-test('lf connect lists an installed store module beside the built-ins', () => {
+test('listen-fire connect lists an installed store module beside the built-ins', () => {
   const { dir } = moduleProject();
-  assert.match(lf(dir, 'connect').out, /^acme_store {2}installed store module; set up \(lf connect acme_store\)$/m);
+  assert.match(lf(dir, 'connect').out, /^acme_store {2}installed store module; set up \(listen-fire connect acme_store\)$/m);
 });
 
 function keyedEvent(dir: string, key: string): string {

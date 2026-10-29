@@ -1,10 +1,10 @@
 // The secrets family's contract suite (packages/movement-engine/services/
-// secrets/contract.ts) against the Rust lf's stores, driven over its
-// stdio JSON-RPC bridge (`lf --contract-secrets`) by `RpcSecretsBackend`:
-// the same cases lf's own stores pass (secrets_contract.test.ts) — a plain
+// secrets/contract.ts) against the Rust listen-fire's stores, driven over its
+// stdio JSON-RPC bridge (`listen-fire --contract-secrets`) by `RpcSecretsBackend`:
+// the same cases listen-fire's own stores pass (secrets_contract.test.ts) — a plain
 // secrets file, a SOPS file through a stand-in `sops` and through the real
 // sops + age when both are installed, and the environment. A sibling is a
-// second lf process on the same store, so the lock file is what keeps
+// second listen-fire process on the same store, so the lock file is what keeps
 // two refreshes from both spending the token.
 
 import { test } from 'node:test';
@@ -141,7 +141,7 @@ suite(
       },
     };
   },
-  realSops ? {} : { skip: "sops and age-keygen are not installed here; the stand-in sops suite covers lf's side of the calls" },
+  realSops ? {} : { skip: "sops and age-keygen are not installed here; the stand-in sops suite covers listen-fire's side of the calls" },
 );
 
 suite('Rust environment (read-only)', (opened) => {

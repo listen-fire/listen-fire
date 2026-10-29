@@ -1,5 +1,5 @@
 // The inbound doors' contract suite (movement-engine's inbound/contract.ts)
-// against the Rust lf's doors: `lf --contract-doors` serves them
+// against the Rust listen-fire's doors: `listen-fire --contract-doors` serves them
 // over HTTP, and the suite's world is arranged, and what the doors did read
 // back, over its stdio JSON-RPC bridge (`StdioRpcBridge`). The same
 // cases the doors are held to.
@@ -39,11 +39,11 @@ async function backendOnLfHost(): Promise<{ backend: DeliveryReceiptContractBack
   return { backend, stop: () => bridge.close() };
 }
 
-/** lf has no synthetic (test-harness) subscription: every delivery is verified. */
+/** listen-fire has no synthetic (test-harness) subscription: every delivery is verified. */
 const NOT_ON_LF = new Set(['a synthetic subscription skips the signature and drains before the ack']);
 
 for (const entry of INBOUND_CONTRACT_CASES) {
-  test(`inbound doors contract — lf: ${entry.name}`, { skip: NOT_ON_LF.has(entry.name) }, async () => {
+  test(`inbound doors contract — listen-fire: ${entry.name}`, { skip: NOT_ON_LF.has(entry.name) }, async () => {
     const { backend, stop } = await backendOnLfHost();
     try {
       await entry.run(backend);
@@ -54,7 +54,7 @@ for (const entry of INBOUND_CONTRACT_CASES) {
 }
 
 for (const entry of DELIVERY_RECEIPT_CONTRACT_CASES) {
-  test(`delivery receipt contract — lf: ${entry.name}`, async () => {
+  test(`delivery receipt contract — listen-fire: ${entry.name}`, async () => {
     const { backend, stop } = await backendOnLfHost();
     try {
       await entry.run(backend);

@@ -1,14 +1,14 @@
-//! The models, judge and files slots filled by a module lf does not build
+//! The models, judge and files slots filled by a module listen-fire does not build
 //! in: a network client for each (crate::slot_client), over the slot's
 //! methods (docs/contracts/models-slot.md, judge-slot.md, files-slot.md).
-//! lf's built-ins stay in process; a project naming another module for one of
+//! listen-fire's built-ins stay in process; a project naming another module for one of
 //! these slots has it reached here, once per process, before any run.
 //!
-//! The browser slot is lf's to fill only for the modules it starts: lf
+//! The browser slot is listen-fire's to fill only for the modules it starts: listen-fire
 //! itself opens no page, so a browser module's address is handed to them
 //! (`LF_BROWSER_URL`, `LF_BROWSER_TOKEN`) for their `ctx.browser`. They call
-//! it directly, so lf cannot start it on their first call: a browser module
-//! lf starts is started with the session and held from an idle stop.
+//! it directly, so listen-fire cannot start it on their first call: a browser module
+//! listen-fire starts is started with the session and held from an idle stop.
 
 use std::sync::{Arc, RwLock};
 
@@ -55,14 +55,14 @@ pub async fn install(project: &crate::project::Project, credentials: &crate::sec
     Ok(())
 }
 
-/// The files slot's module, when it is not lf's own folder.
+/// The files slot's module, when it is not listen-fire's own folder.
 pub fn files(project: &crate::project::Project, credentials: &crate::secrets::Credentials) -> Result<Option<SlotClient>, String> {
     let module = &project.core.files;
     let Some(process) = &module.process else { return Ok(None) };
     SlotClient::start("files", &module.name, process, &crate::core::settings_of(credentials, module)).map(Some)
 }
 
-/// The environment a module lf starts reads the browser slot from.
+/// The environment a module listen-fire starts reads the browser slot from.
 pub fn browser_env() -> Vec<(String, String)> {
     let held = BROWSER_HELD.lock().unwrap_or_else(|p| p.into_inner());
     let Some((lease, bearer)) = held.as_ref() else { return Vec::new() };

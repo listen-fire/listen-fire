@@ -9,7 +9,7 @@
 //!   verify-ca    TLS, the certificate's chain verified, not its host name
 //!   verify-full  TLS, the chain and the host name verified
 //!
-//! So lf verifies by default; only an explicit `require` encrypts without
+//! So listen-fire verifies by default; only an explicit `require` encrypts without
 //! checking whom it talks to, as every other Postgres client does.
 
 use std::future::Future;
@@ -33,7 +33,7 @@ enum Verify {
     Full,
 }
 
-/// A connection URL read for lf: the config tokio-postgres connects with,
+/// A connection URL read for listen-fire: the config tokio-postgres connects with,
 /// and the connector its `sslmode` asks for.
 pub fn config_of(url: &str) -> Result<(tokio_postgres::Config, RustlsConnect), String> {
     let mut parsed = url::Url::parse(url).map_err(|e| format!("not a Postgres URL: {e}"))?;

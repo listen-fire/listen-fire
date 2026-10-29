@@ -1,7 +1,7 @@
-// `@lf/webhook` in lf, end to end: a Stripe-signed connection and an unsigned
-// one in one project, each a URL `lf serve` prints. The movement declares what
-// a delivery carries (`node Payment`), `lf check` refuses a field it does not
-// declare, and `lf serve` runs a correctly signed delivery (its amount reaches
+// `@lf/webhook` in listen-fire, end to end: a Stripe-signed connection and an unsigned
+// one in one project, each a URL `listen-fire serve` prints. The movement declares what
+// a delivery carries (`node Payment`), `listen-fire check` refuses a field it does not
+// declare, and `listen-fire serve` runs a correctly signed delivery (its amount reaches
 // the fake CRM), refuses a mis-signed or stale one (401, no run), refuses a
 // body that does not fit the declared node (400, naming the field, no run),
 // and takes an unsigned delivery on the connection whose credential says none.
@@ -43,7 +43,7 @@ async function webhookProject(): Promise<string> {
   writeFileSync(join(dir, 'movements/payments.mvt'), PAYMENTS);
   const connected = await ok(lf(dir, ['connect', '@lf/webhook', '--yes'], { answers: [] }));
   assert.match(connected, /installed @lf\/webhook as externals\/webhook/);
-  assert.doesNotMatch(connected, /webhooks are signed with/, 'the sender issues the secret: lf connect generates none');
+  assert.doesNotMatch(connected, /webhooks are signed with/, 'the sender issues the secret: listen-fire connect generates none');
   // Asked as a person answers: scheme, secret, header, encoding, idField.
   assert.match(await ok(lf(dir, ['credential', 'add', '--module', 'webhook', 'StripeHook'], { answers: ['stripe', SECRET, '', '', ''] })), /added StripeHook/);
   assert.match(await ok(lf(dir, ['credential', 'add', '--module', 'webhook', 'FormsHook'], { answers: ['none', '', '', '', ''] })), /added FormsHook/);
@@ -56,7 +56,7 @@ function post(url: string, body: string, headers: Record<string, string> = {}): 
 
 const now = () => Math.floor(Date.now() / 1000);
 
-test('lf check types the event by the declared payload and refuses a field it does not declare', async () => {
+test('listen-fire check types the event by the declared payload and refuses a field it does not declare', async () => {
   const dir = await webhookProject();
   const check = await lf(dir, ['check']).done;
   assert.equal(check.code, 0, check.out);
@@ -73,7 +73,7 @@ test('lf check types the event by the declared payload and refuses a field it do
   console.log([refused.out.trim(), missing.out.trim()].join('\n'));
 });
 
-test('lf serve prints each connection’s URL, runs a signed delivery, and refuses a mis-signed, stale or misfitting one', async () => {
+test('listen-fire serve prints each connection’s URL, runs a signed delivery, and refuses a mis-signed, stale or misfitting one', async () => {
   const dir = await webhookProject();
   const serving = await served(dir);
   try {

@@ -1,9 +1,9 @@
 // The wake slot's conformance cases (module-runtime `module_wire/
 // conformance.ts`) against the Cloud Tasks module (modules/wake-cloud-tasks)
 // and its shipped fake Cloud Tasks, whose dispatched tasks are the workers
-// started: spoken to directly, and through lf's own client of it (`lf
+// started: spoken to directly, and through listen-fire's own client of it (`listen-fire
 // --contract-wake-slot`, the project's wake slot filled by the module's own
-// lf-external.yaml), so the module lf installs means what the slot says. A
+// lf-external.yaml), so the module listen-fire installs means what the slot says. A
 // generated service account key signs the module's calls; nothing reaches
 // Google.
 
@@ -52,7 +52,7 @@ const bridges: Array<{ over: string; start(api: FakeCloudTasks): Promise<{ modul
     },
   },
   {
-    over: "lf's client of the Cloud Tasks module",
+    over: "listen-fire's client of the Cloud Tasks module",
     start: async (api) => ({
       module: await startModule(lfBinary(), ['--contract-wake-slot', '--dir', wakeCloudTasksProject()], {
         env: {

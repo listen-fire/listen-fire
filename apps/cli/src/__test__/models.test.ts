@@ -1,4 +1,4 @@
-// A model call through the real `lf` binary: the provider key and endpoint
+// A model call through the real `listen-fire` binary: the provider key and endpoint
 // come from the secrets file's `@lf/anthropic` credential, the request reaches a
 // fake Anthropic Messages API, and the model's answer lands in the external's
 // write.
@@ -60,7 +60,7 @@ function lfAsync(dir: string, ...args: string[]): Promise<{ code: number; out: s
   });
 }
 
-test('lf run: AI() calls Anthropic on the secrets key and its answer is written', async () => {
+test('listen-fire run: AI() calls Anthropic on the secrets key and its answer is written', async () => {
   const fake = await fakeAnthropic();
   try {
     const dir = project();
@@ -98,7 +98,7 @@ test('lf run: AI() calls Anthropic on the secrets key and its answer is written'
   }
 });
 
-test('lf run: a model call with no provider key fails naming the secrets entry', async () => {
+test('listen-fire run: a model call with no provider key fails naming the secrets entry', async () => {
   const dir = project();
   writeFileSync(
     join(dir, 'movements/named.mvt'),
@@ -122,7 +122,7 @@ test('lf run: a model call with no provider key fails naming the secrets entry',
 
 // A call whose prompt alone, at the model's published input price, costs
 // more than the run has left is not made: the run pauses before it, as at its cap.
-test('lf run: a call the run cannot afford is refused before it is made, and the run pauses', async () => {
+test('listen-fire run: a call the run cannot afford is refused before it is made, and the run pauses', async () => {
   const fake = await fakeAnthropic();
   try {
     const dir = project();
@@ -140,7 +140,7 @@ test('lf run: a call the run cannot afford is refused before it is made, and the
 // As on the
 // platform, a run that meets its cap pauses before the priced call that would
 // go over it, and an explicit resume carries on with its usage reset.
-test('lf run: lf.yaml maxRunCostUsd pauses a run at its cap; lf resume carries on', async () => {
+test('listen-fire run: lf.yaml maxRunCostUsd pauses a run at its cap; listen-fire resume carries on', async () => {
   // 100,000 output tokens is $1 at sonnet's price: the first answer spends past a cent's cap.
   const fake = await fakeAnthropic(100_000);
   try {
@@ -197,7 +197,7 @@ const TWO_CALLS = [
 
 // A third-party models module: what it answers it spent is the run's spend,
 // so maxRunCostUsd counts its calls as it counts the built-in's.
-test('lf run: a models module fills the models slot; its cost is the run\'s spend and the cap counts it', async () => {
+test('listen-fire run: a models module fills the models slot; its cost is the run\'s spend and the cap counts it', async () => {
   const dir = project();
   withModelsModule(dir);
   writeFileSync(join(dir, 'movements/named.mvt'), TWO_CALLS);
@@ -222,7 +222,7 @@ test('lf run: a models module fills the models slot; its cost is the run\'s spen
   assert.ok(!companies(capped).includes(ACME_LLM_ANSWER), companies(capped).join(', '));
 });
 
-test('lf run: a models module answer without its token usage is refused', async () => {
+test('listen-fire run: a models module answer without its token usage is refused', async () => {
   const dir = project();
   withModelsModule(dir, { ACME_LLM_NO_USAGE: '1' });
   writeFileSync(join(dir, 'movements/named.mvt'), TWO_CALLS);
@@ -231,9 +231,9 @@ test('lf run: a models module answer without its token usage is refused', async 
 });
 
 // A process module that asks the host for a model call (`ctx.models`): under a
-// plain `lf run` too, not only `lf serve`, lf serves the models door and
+// plain `listen-fire run` too, not only `listen-fire serve`, listen-fire serves the models door and
 // tells the externals it starts where it is (LF_HOST_URL, LF_HOST_TOKEN).
-test('lf run: a plugin module asks the host for a model call through the models door', async () => {
+test('listen-fire run: a plugin module asks the host for a model call through the models door', async () => {
   const fake = await fakeAnthropic();
   try {
     const dir = project();
@@ -295,10 +295,10 @@ test('lf run: a plugin module asks the host for a model call through the models 
 });
 
 // @lf/models (modules/models) filling the models slot on Gemini, its settings
-// in the secrets file as `lf connect models` writes them: AI() reaches the
+// in the secrets file as `listen-fire connect models` writes them: AI() reaches the
 // fake Gemini API on the install's key, and what the module priced the call
 // at (from the shared price table) is the run's spend.
-test('lf run: @lf/models on Gemini answers AI() and its priced cost is the run\'s spend', async () => {
+test('listen-fire run: @lf/models on Gemini answers AI() and its priced cost is the run\'s spend', async () => {
   const gemini = await fakeGemini();
   try {
     const dir = project();

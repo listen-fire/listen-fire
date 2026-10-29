@@ -1,5 +1,5 @@
-// Henry's acceptance for provider credentials per connection, in lf: one
-// separately run HubSpot-like module (served by serve-module, a process lf
+// Henry's acceptance for provider credentials per connection, in listen-fire: one
+// separately run HubSpot-like module (served by serve-module, a process listen-fire
 // reaches over protocol 2), ONE install holding its server secret and the
 // OAuth app, and two user credentials. A movement reads as Alice and writes as
 // Bob. Alice's token has expired: the host refreshes it with the install's

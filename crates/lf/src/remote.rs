@@ -1,7 +1,7 @@
 //! The host's adapters for one segment: the instances `adapters.resolve`
 //! hands the engine an id for, and each `adapters.call` dispatched into one —
 //! a port of movement-engine's `engine/adapter_table.ts` over its remote
-//! adapter (`adapters/remote/index.ts`), since every external lf reaches
+//! adapter (`adapters/remote/index.ts`), since every external listen-fire reaches
 //! is a process speaking adapter protocol 2. The same rewriting the
 //! TypeScript remote adapter does: a position's files in the wire's spelling,
 //! a written file exposed at a URL the external fetches, a file read back
@@ -510,7 +510,7 @@ impl<'s> SegmentAdapters<'s> {
                 external_id: external_id.to_string(),
                 record,
             }),
-            Err(failure) => eprintln!("lf: {}: reading {record_type} {external_id} back after writing it: {} (its echo will fire)", running.external.manifest.name, failure.message()),
+            Err(failure) => eprintln!("listen-fire: {}: reading {record_type} {external_id} back after writing it: {} (its echo will fire)", running.external.manifest.name, failure.message()),
         }
     }
 

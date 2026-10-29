@@ -1,4 +1,4 @@
-// The real `lf` run as a person runs it: its questions answered on stdin as
+// The real `listen-fire` run as a person runs it: its questions answered on stdin as
 // they come, its output watched line by line.
 
 import assert from 'node:assert/strict';
@@ -36,7 +36,7 @@ export function lf(dir: string, args: string[], options: { answers?: string[]; e
       new Promise((resolve, reject) => {
         waiters.push({ pattern, resolve });
         scan();
-        void done.then(({ out: all }) => reject(new Error(`lf exited before printing ${pattern}:\n${all}`)));
+        void done.then(({ out: all }) => reject(new Error(`listen-fire exited before printing ${pattern}:\n${all}`)));
       }),
     answer,
     done,

@@ -1,4 +1,4 @@
-// A polled notes feed module for lf's tests: a module whose manifest
+// A polled notes feed module for listen-fire's tests: a module whose manifest
 // declares `poll`, installed into a copy of the example project.
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

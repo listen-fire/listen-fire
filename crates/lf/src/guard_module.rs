@@ -1,4 +1,4 @@
-//! A loop guard module lf does not build in: the loopGuard slot filled by a
+//! A loop guard module listen-fire does not build in: the loopGuard slot filled by a
 //! third-party module (crate::core), spoken to over the slot's methods
 //! (docs/contracts/loop-guard-slot.md) carried as adapter protocol 2 calls
 //! (crate::slot_client), opened by `guard.open` with the module's settings.

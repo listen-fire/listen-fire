@@ -1,8 +1,8 @@
-// A record's `List Entries` under lf: an organisation on two Affinity lists
+// A record's `List Entries` under listen-fire: an organisation on two Affinity lists
 // (the fake Affinity in modules/affinity/__test__/real_engine, serving a
 // Master Deals List and a Portfolio list), read through a hop whose WHERE
-// pins one list. `lf check` types the hop by that list's own columns, and
-// `lf run` returns the Deals entry's `Deal Created` without reading a column
+// pins one list. `listen-fire check` types the hop by that list's own columns, and
+// `listen-fire run` returns the Deals entry's `Deal Created` without reading a column
 // off the Portfolio entry.
 
 import assert from 'node:assert/strict';

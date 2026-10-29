@@ -1,8 +1,8 @@
-// Copying a Drive file with lf: `write (folder-[:Files]->, template-[:Copies]->)`
+// Copying a Drive file with listen-fire: `write (folder-[:Files]->, template-[:Copies]->)`
 // against the fake Drive in packages/fake-channels (its files.copy), every step
-// as a person types it: lf connect @lf/google-drive (pointed at the fake) →
-// lf credential add --headless → the picker's grants (the module's kv) →
-// lf check → lf run.
+// as a person types it: listen-fire connect @lf/google-drive (pointed at the fake) →
+// listen-fire credential add --headless → the picker's grants (the module's kv) →
+// listen-fire check → listen-fire run.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

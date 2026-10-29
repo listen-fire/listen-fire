@@ -27,7 +27,7 @@ use crate::protocol::{Package, Speaker, shape_error};
 use crate::secrets::{Credential, Credentials, credential_for, install_of, signer_of};
 
 /// The install fields that point a module somewhere other than its
-/// provider (a fake, a proxy), set by `lf connect --base-url` and
+/// provider (a fake, a proxy), set by `listen-fire connect --base-url` and
 /// `--oauth-authorize-url` / `--oauth-token-url`: the API root the module is
 /// served with (serve-module's MODULE_BASE_URL_OVERRIDE, the module's
 /// `ctx.config.baseUrlOverride`), and the OAuth endpoints its declared
@@ -81,7 +81,7 @@ pub struct ExternalManifest {
     pub env: BTreeMap<String, String>,
     /// A `core` module's slot (crate::core).
     pub slot: Option<String>,
-    /// A `core` module's settings, prompted by `lf connect` (an adapter's
+    /// A `core` module's settings, prompted by `listen-fire connect` (an adapter's
     /// come from its manifest answer).
     #[serde(default)]
     pub settings: Vec<crate::core::Setting>,
@@ -105,7 +105,7 @@ impl ExternalManifest {
         self.trusted || self.module.as_deref().is_some_and(|m| m.starts_with("@lf/"))
     }
 
-    /// The runtime lf checks before starting it: its declared one, else a
+    /// The runtime listen-fire checks before starting it: its declared one, else a
     /// served module's.
     pub fn runtime(&self) -> Option<&str> {
         self.runtime.as_deref().or_else(|| self.module.as_ref().filter(|_| std::env::var_os("LF_SERVE_MODULE").is_none()).map(|_| MODULE_RUNTIME))
@@ -184,7 +184,7 @@ fn scan_folders(externals_dir: &Path) -> Result<Vec<External>, String> {
         .map(|entry| entry.path())
         .collect();
     // `readdirSync` lists in the file system's order; sorting is that order
-    // on the file systems lf runs on (APFS, ext4 list by name).
+    // on the file systems listen-fire runs on (APFS, ext4 list by name).
     dirs.sort();
     let mut found = Vec::new();
     for dir in dirs {
@@ -240,7 +240,7 @@ fn validate(manifest: &ExternalManifest) -> Result<(), String> {
 /// An adapter external the host can call: where it answers, and its manifest answer.
 pub struct RunningExternal {
     pub external: External,
-    /// Where its calls go: a URL, or the process lf starts for it.
+    /// Where its calls go: a URL, or the process listen-fire starts for it.
     pub reach: Reach,
     pub supported_triggers: Vec<String>,
     /// What a listen on it may say (`WireListenDeclarations`), as JSON.
@@ -261,7 +261,7 @@ pub struct RunningExternal {
     /// The limits its manifest declares (`limits`, `hostLimits`), kept by the
     /// limiter slot (crate::limiter).
     pub limits: crate::limiter::ModuleLimits,
-    /// Its manifest answer as it came (what `lf connect` reads of it).
+    /// Its manifest answer as it came (what `listen-fire connect` reads of it).
     pub manifest_answer: Js,
     /// How its manifest says its webhooks are signed (crate::doors).
     pub inbound: Option<crate::inbound::Declaration>,
@@ -273,7 +273,7 @@ pub struct RunningExternal {
 /// How an external is reached.
 #[derive(Clone)]
 pub enum Reach {
-    /// A module that is only a manifest, or one already running: lf talks to its URL.
+    /// A module that is only a manifest, or one already running: listen-fire talks to its URL.
     Url(String),
     Process(ModuleProcess),
 }
@@ -654,7 +654,7 @@ fn listen_declarations(raw: &Js) -> Result<Obj, String> {
                 entry.insert("required".into(), Js::Bool(*required));
             }
             if let Some(format) = item.get("format") {
-                // Open: a format this lf does not know is a newer module's;
+                // Open: a format this listen-fire does not know is a newer module's;
                 // the checker reads its key's value as unchecked.
                 let format = format.as_str().filter(|f| !f.is_empty());
                 entry.insert("format".into(), Js::str(format.ok_or("listenConfig.format: expected a non-empty string")?));
@@ -680,14 +680,14 @@ fn listen_declarations(raw: &Js) -> Result<Obj, String> {
 }
 
 /// A module's own env, with `{lf}` standing for the module's own folder
-/// (`.lf/externals/<name>/`), never the project's `.lf`, which holds lf's
+/// (`.lf/externals/<name>/`), never the project's `.lf`, which holds listen-fire's
 /// state and the secrets.
 fn module_env(env: &BTreeMap<String, String>, module_dir: &Path) -> BTreeMap<String, String> {
     let dir = module_dir.display().to_string();
     env.iter().map(|(k, v)| (k.clone(), v.replace("{lf}", &dir))).collect()
 }
 
-/// How `external` is reached: its URL, or the process lf starts for it — a
+/// How `external` is reached: its URL, or the process listen-fire starts for it — a
 /// place in the shared host for a trusted module whose install sets only
 /// per-module settings, else a process of its own.
 fn reach(project: &Project, external: &External, base_url_override: Option<&str>) -> Result<Reach, String> {
@@ -729,7 +729,7 @@ fn reach(project: &Project, external: &External, base_url_override: Option<&str>
 }
 
 /// Where the release's built-in modules live: `LF_MODULES_DIR`, else
-/// `<prefix>/share/lf/modules` for a binary at `<prefix>/bin/lf` (what
+/// `<prefix>/share/lf/modules` for a binary at `<prefix>/bin/listen-fire` (what
 /// install.sh lays down), else `modules/` beside the binary.
 pub(crate) fn bundled_modules_root() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("LF_MODULES_DIR").filter(|d| !d.is_empty()) {
@@ -744,7 +744,7 @@ pub(crate) fn bundled_modules_root() -> Option<PathBuf> {
     })
 }
 
-/// The built-in modules' versions as `lf --version` lists them, with the bundle
+/// The built-in modules' versions as `listen-fire --version` lists them, with the bundle
 /// they come from: the bundle's `VERSIONS` file (one `name version` per line),
 /// else, for a workspace build that has none, each folder's `package.json`.
 pub(crate) fn bundled_module_versions() -> Option<(PathBuf, Vec<String>)> {
@@ -777,7 +777,7 @@ pub fn bundled_module(module: &str) -> Option<String> {
 /// module kit's `serve-module`, found as node's
 /// `require.resolve('module-kit/bin/serve-module.cjs')` finds it: the project's
 /// node_modules (its `.bin` shim, or the package's script under node), then
-/// the workspace lf was built in.
+/// the workspace listen-fire was built in.
 fn serve_module_command(project: &Project, external: &str) -> Result<Vec<String>, String> {
     if let Some(command) = std::env::var("LF_SERVE_MODULE").ok().filter(|c| !c.is_empty()) {
         return Ok(vec![command]);
@@ -806,7 +806,7 @@ fn serve_module_command(project: &Project, external: &str) -> Result<Vec<String>
         }
     }
     Err(format!(
-        "external \"{external}\" is a module, and lf found no serve-module to serve it: add module-kit to the project (its node_modules), or set LF_SERVE_MODULE to the command that serves a module"
+        "external \"{external}\" is a module, and listen-fire found no serve-module to serve it: add module-kit to the project (its node_modules), or set LF_SERVE_MODULE to the command that serves a module"
     ))
 }
 

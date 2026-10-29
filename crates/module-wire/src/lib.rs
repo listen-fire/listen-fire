@@ -1,5 +1,5 @@
 //! Adapter protocol 2 as both ends speak it (docs/contracts/adapter-protocol.md):
-//! the host (`lf`) and a module served by the module kit
+//! the host (`listen-fire`) and a module served by the module kit
 //! (`listen-fire-module-kit`).
 //!
 //! - [`json`]: JSON keeping JavaScript's key order, since a catalog built from

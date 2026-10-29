@@ -18,7 +18,7 @@
 //! rule: this change's author, never the record's identity forever); another
 //! movement's listens hear the write, since reacting to what a movement
 //! wrote is a legitimate chain. Its memory is a file of its own
-//! (`.lf/guard.db`), or a Postgres database every lf worker shares (its
+//! (`.lf/guard.db`), or a Postgres database every listen-fire worker shares (its
 //! `lf_guard` schema); nothing of it is in the store slot.
 
 use std::collections::BTreeMap;
@@ -144,7 +144,7 @@ const SCHEMA_LOCK: i64 = 0x6c66_2d67_7561_7264;
 impl FingerprintGuard {
     /// Open the guard's memory (creating it when missing): the `url`
     /// setting's Postgres database, else the `path` setting's file, else
-    /// `.lf/guard.db`. Idempotent, so setup (`lf connect`) and use share it.
+    /// `.lf/guard.db`. Idempotent, so setup (`listen-fire connect`) and use share it.
     pub fn open(settings: &BTreeMap<String, String>, root: &Path, lf_dir: &Path) -> Result<FingerprintGuard, String> {
         let memory = match settings.get("url").filter(|u| !u.is_empty()) {
             #[cfg(not(feature = "postgres"))]
@@ -169,7 +169,7 @@ impl FingerprintGuard {
                 }
                 let at = |e: rusqlite::Error| format!("{}: {e}", path.display());
                 let db = Connection::open(&path).map_err(at)?;
-                // Two lf processes may share the file.
+                // Two listen-fire processes may share the file.
                 db.execute_batch("pragma journal_mode = wal; pragma busy_timeout = 5000;").map_err(at)?;
                 db.execute_batch(FILE_SCHEMA).map_err(at)?;
                 Memory::File(db)

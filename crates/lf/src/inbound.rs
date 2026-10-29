@@ -2,7 +2,7 @@
 //! (verify.ts, deliver.ts, push.ts): how a delivery's signature is checked,
 //! the one pipeline every provider's webhook delivery goes through, and the
 //! two push doors an external calls. Framework-free and store-free: a host
-//! supplies its stores (crate::doors is lf's) and sends the answer.
+//! supplies its stores (crate::doors is listen-fire's) and sends the answer.
 //!
 //! The webhook door: intercepts → subscription → provider check → signature
 //! → preprocessInbound → capture an event's receipt → advance the pull cursor
@@ -465,7 +465,7 @@ pub struct Delivery<'a> {
     /// Percent-encoded, without its query.
     pub path: &'a str,
     pub query: &'a str,
-    /// Which door it came through: webhook-sync, `/hooks`, `lf run --webhook`.
+    /// Which door it came through: webhook-sync, `/hooks`, `listen-fire run --webhook`.
     pub source: DeliverySource,
 }
 
@@ -580,7 +580,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
         if delivery.method != "POST" {
             return refused(Refusal::MethodNotAllowed);
         }
-        // lf has no synthetic subscription: every delivery is verified.
+        // listen-fire has no synthetic subscription: every delivery is verified.
         if !verify_declared(&source.declaration, delivery.raw_body, delivery.headers, &source.secret) {
             eprintln!("Webhook signature verification failed for subscription {}", delivery.subscription_id);
             return refused(Refusal::SignatureInvalid);

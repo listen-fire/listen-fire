@@ -1,4 +1,4 @@
-//! `lf --contract-limiter`: lf's built-in limiter (`@lf/memory-limiter`)
+//! `listen-fire --contract-limiter`: listen-fire's built-in limiter (`@lf/memory-limiter`)
 //! served as a limiter module, the limiter slot's methods
 //! (docs/contracts/limiter-slot.md) as adapter protocol 2 calls over HTTP
 //! (crate::slot_server), so the TypeScript contract suite (movement-engine

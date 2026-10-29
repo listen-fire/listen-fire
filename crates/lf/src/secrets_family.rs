@@ -9,7 +9,7 @@
 //! - A refresh runs at most once at a time per credential: in this process by
 //!   sharing the one in flight, across processes by the store's lease (a
 //!   secrets file's is its lock file `<secrets file>.lock`; a secrets
-//!   module's is `secrets.lock`, so two lf processes never refresh at once).
+//!   module's is `secrets.lock`, so two listen-fire processes never refresh at once).
 //!   The refresher runs only if the stored credential is still the one the
 //!   caller found stale.
 //! - A store that could not keep a rotated token refuses before the token is
@@ -331,7 +331,7 @@ impl FileLock {
             }
             if started.elapsed() > LOCK_WAIT {
                 return Err(format!(
-                    "{} stayed locked by another lf for {}s ({})",
+                    "{} stayed locked by another listen-fire for {}s ({})",
                     path.display(),
                     LOCK_WAIT.as_secs(),
                     lock.display()
@@ -370,7 +370,7 @@ pub fn expires_within(fields: &Fields, window_ms: i64, now_ms: i64) -> bool {
     }
 }
 
-/// An ISO instant as `Date.parse` reads the forms lf writes and people write.
+/// An ISO instant as `Date.parse` reads the forms listen-fire writes and people write.
 pub fn parse_instant_ms(text: &str) -> Option<i64> {
     if let Ok(t) = text.parse::<jiff::Timestamp>() {
         return Some(t.as_millisecond());

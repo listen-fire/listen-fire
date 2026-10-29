@@ -72,12 +72,12 @@ pub async fn authorize_at_provider(
             redirect_of(&url.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect::<Vec<_>>(), None).await?
         }
         RedirectMode::Public { lf_dir, .. } => {
-            prompter.print(&format!("waiting for the provider to send you back to {redirect_uri} (lf serve must be running there)"));
+            prompter.print(&format!("waiting for the provider to send you back to {redirect_uri} (listen-fire serve must be running there)"));
             pick_up(lf_dir, &state, DEFAULT_TIMEOUT).await?
         }
     };
     if back.state != state {
-        back.answer(400, "This sign-in is not the one lf is waiting for.").await;
+        back.answer(400, "This sign-in is not the one listen-fire is waiting for.").await;
         return Err("the redirect carried another sign-in's state; start again".into());
     }
     match exchange_code(oauth2, client, &attempt, &back.code).await {
@@ -166,11 +166,11 @@ async fn respond(stream: &mut TcpStream, status: u16, text: &str) {
     let _ = stream.shutdown().await;
 }
 
-// ── The public redirect, through lf serve ──────────────────────────────────
-// The waiting command leaves a marker named by the state's hash; `lf serve`
+// ── The public redirect, through listen-fire serve ──────────────────────────────────
+// The waiting command leaves a marker named by the state's hash; `listen-fire serve`
 // writes a redirect only where a marker waits, so its route cannot be used to
-// write arbitrary files, and the state itself never names a file. One lf's
-// serve hands over to another lf process's command through them.
+// write arbitrary files, and the state itself never names a file. One listen-fire's
+// serve hands over to another listen-fire process's command through them.
 
 fn pickup_base(lf_dir: &Path, state: &str) -> PathBuf {
     lf_dir.join("oauth").join(hex(&Sha256::digest(state.as_bytes())))
@@ -223,18 +223,18 @@ async fn pick_up(lf_dir: &Path, state: &str, timeout: Duration) -> Result<Redire
     outcome
 }
 
-/// `lf serve`'s answer to GET /oauth/callback?<query>: hand the redirect to
+/// `listen-fire serve`'s answer to GET /oauth/callback?<query>: hand the redirect to
 /// the command waiting for its state. The status and the page's text.
 pub fn deliver_public_redirect(lf_dir: &Path, query: &str) -> (u16, String) {
     let state = url::form_urlencoded::parse(query.as_bytes()).find(|(k, _)| k == "state").map(|(_, v)| v.into_owned());
     let Some(state) = state.filter(|s| !s.is_empty()) else { return (400, "This redirect carries no state.".into()) };
     let base = pickup_base(lf_dir, &state);
     if !with_extension(&base, ".waiting").exists() {
-        return (404, "No `lf credential` command is waiting for this sign-in; start it again.".into());
+        return (404, "No `listen-fire credential` command is waiting for this sign-in; start it again.".into());
     }
     let written = serde_json::json!({ "query": query }).to_string();
     match write_private(&with_extension(&base, ".json"), &written) {
-        Ok(()) => (200, "lf has the sign-in. Return to the terminal where `lf credential` is waiting.".into()),
+        Ok(()) => (200, "listen-fire has the sign-in. Return to the terminal where `listen-fire credential` is waiting.".into()),
         Err(why) => (500, why),
     }
 }

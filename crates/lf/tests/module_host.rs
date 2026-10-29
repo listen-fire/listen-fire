@@ -1,6 +1,6 @@
 //! Crate modules served by a module host (crates/module-kit), driven by the
-//! real `lf` as externals reached by url: one host, an adapter at `/notes`
-//! and a plugin package at `/shout`. lf checks a movement against them and
+//! real `listen-fire` as externals reached by url: one host, an adapter at `/notes`
+//! and a plugin package at `/shout`. listen-fire checks a movement against them and
 //! runs it on an event: the plugin's answer is written through the adapter.
 
 use std::path::PathBuf;
@@ -28,7 +28,7 @@ impl Project {
     fn new(port: u16) -> Project {
         let root = std::env::temp_dir().join(format!("lf-module-host-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
-        assert!(Command::new(env!("CARGO_BIN_EXE_lf")).arg("init").arg(&root).output().unwrap().status.success());
+        assert!(Command::new(env!("CARGO_BIN_EXE_listen-fire")).arg("init").arg(&root).output().unwrap().status.success());
         std::fs::remove_file(root.join("movements/hello.mvt")).unwrap();
         for (name, kind) in [("notes", "adapter"), ("shout", "plugin")] {
             std::fs::create_dir_all(root.join("externals").join(name)).unwrap();
@@ -56,7 +56,7 @@ impl Project {
     }
 
     fn lf(&self, args: &[&str]) -> (i32, String) {
-        let out = Command::new(env!("CARGO_BIN_EXE_lf")).args(args).current_dir(&self.0).output().unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_listen-fire")).args(args).current_dir(&self.0).output().unwrap();
         (out.status.code().unwrap_or(-1), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
     }
 }
@@ -73,10 +73,10 @@ fn lf_checks_and_runs_a_movement_against_crate_modules_in_one_host() {
     let project = Project::new(serve(notes.clone()));
 
     let (code, out) = project.lf(&["check"]);
-    assert_eq!(code, 0, "lf check: {out}");
+    assert_eq!(code, 0, "listen-fire check: {out}");
 
     let (code, out) = project.lf(&["run", "--event", "events/note.json"]);
-    assert_eq!(code, 0, "lf run: {out}");
+    assert_eq!(code, 0, "listen-fire run: {out}");
     let written = notes.notes();
     assert_eq!(written.len(), 1, "one note written: {written:?}\n{out}");
     assert_eq!(written[0].1.get("Title").and_then(module_kit::Js::as_str), Some("HELLO"));

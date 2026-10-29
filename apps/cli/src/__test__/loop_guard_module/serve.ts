@@ -1,6 +1,6 @@
 // A third-party loop guard module for the tests: the loopGuard slot's
 // methods (docs/contracts/loop-guard-slot.md) served as adapter protocol 2
-// over HTTP, on the socket lf names (`MODULE_SOCKET`), over the TypeScript
+// over HTTP, on the socket listen-fire names (`MODULE_SOCKET`), over the TypeScript
 // built-in (`FingerprintGuard`). It stands for a guard whose memory is
 // elsewhere — Redis, a database — which is the same wire over other state. It
 // refuses to be used before `guard.open`, as a real one would.

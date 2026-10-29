@@ -1,4 +1,4 @@
-//! `lf check`: every diagnostic the project's files have, by the Rust
+//! `listen-fire check`: every diagnostic the project's files have, by the Rust
 //! checker natively (the same `check_source` the engine artifact's
 //! `check_program` export runs), against the catalog the externals answer.
 //! Its output: one line per diagnostic, then a count; exit 1 when any is an error.
@@ -330,7 +330,7 @@ pub fn missing_line(m: &MissingCredential) -> String {
     format!("{}:{}:{} error MISSING_CREDENTIAL {}", m.file.display(), m.line, m.column, m.message)
 }
 
-/// The command: prints each diagnostic and the count, as `lf check` does.
+/// The command: prints each diagnostic and the count, as `listen-fire check` does.
 pub async fn run(project: &Project, json: bool, out: &mut impl Write) -> Result<i32, String> {
     let checking = match open_checking(project).await? {
         Opened::MissingCredentials(missing) => {

@@ -9,7 +9,7 @@ import { RpcStoreBackend } from 'movement-engine/services/run_host/rpc_store';
 import { lfBinary } from '../lf_bin';
 import { freshTeam, POSTGRES_URL } from './pg';
 
-/** Each request's result, in order, from one `lf --contract-store` process. */
+/** Each request's result, in order, from one `listen-fire --contract-store` process. */
 async function claims(team: string, asks: Array<[listen: string, key: string]>): Promise<unknown[]> {
   const bridge = new RpcStoreBackend(lfBinary(), ['--contract-store', POSTGRES_URL, '--team', team]);
   try {

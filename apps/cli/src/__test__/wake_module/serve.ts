@@ -19,7 +19,7 @@ function deliver(target: string, kind: string): Promise<void> {
 }
 
 // A wake due now is delivered before the module answers, as a queue service
-// accepts a task before it acknowledges it: lf may stop the module the moment
+// accepts a task before it acknowledges it: listen-fire may stop the module the moment
 // it has its answer.
 async function deliverAfter(target: string, kind: string, delayMs: number): Promise<void> {
   if (delayMs <= 0) return deliver(target, kind);

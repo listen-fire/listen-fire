@@ -1,4 +1,4 @@
-// The `lf` binary (crates/lf) every test drives: `LF_BIN` when set, else
+// The `listen-fire` binary (crates/lf) every test drives: `LF_BIN` when set, else
 // built here with cargo (a no-op when it is already up to date). Built rather
 // than skipped: a test that quietly passes without the binary proves nothing.
 
@@ -14,8 +14,8 @@ export function lfBinary(): string {
   if (built !== undefined) return built;
   const cargo = spawnSync('cargo', ['build', '--quiet', '-p', 'listen-fire'], { cwd: REPO, encoding: 'utf8' });
   if (cargo.error !== undefined || cargo.status !== 0) {
-    throw new Error(`cargo build -p listen-fire failed (set LF_BIN to a built lf instead): ${cargo.error?.message ?? cargo.stderr}`);
+    throw new Error(`cargo build -p listen-fire failed (set LF_BIN to a built listen-fire instead): ${cargo.error?.message ?? cargo.stderr}`);
   }
-  built = resolve(REPO, 'target/debug/lf');
+  built = resolve(REPO, 'target/debug/listen-fire');
   return built;
 }

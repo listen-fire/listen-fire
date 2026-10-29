@@ -1,18 +1,18 @@
-// The "local Attio sync with lf" walkthrough (examples/lf-attio/README.md),
+// The "local Attio sync with listen-fire" walkthrough (examples/lf-attio/README.md),
 // every step as a person types it, against the fake Attio in
 // packages/fake-channels: its Attio API, its OAuth provider, and its control door
-// that delivers Attio's signed webhooks to whatever lf serve registered.
+// that delivers Attio's signed webhooks to whatever listen-fire serve registered.
 //
-//   lf init → lf connect @lf/attio (pointed at the fake) → lf credential add
-//   --headless → the example's movement → lf check → lf run --event --dry-run
-//   → publicUrl → lf serve (registers the webhook) → a signed delivery runs
+//   listen-fire init → listen-fire connect @lf/attio (pointed at the fake) → listen-fire credential add
+//   --headless → the example's movement → listen-fire check → listen-fire run --event --dry-run
+//   → publicUrl → listen-fire serve (registers the webhook) → a signed delivery runs
 //   the movement, a duplicate runs nothing, the movement's own write echoing
 //   back as record.updated runs it again, until the project opts in to the
 //   loop guard (core: loopGuard): then it runs nothing and a second user's
 //   update runs it →
-//   lf runs → restarts keep the webhook; under a running lf serve the
+//   listen-fire runs → restarts keep the webhook; under a running listen-fire serve the
 //   webhook follows each refresh (fewer events, the listen removed, back);
-//   a listen removed while lf is stopped is removed at the next start.
+//   a listen removed while listen-fire is stopped is removed at the next start.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -96,7 +96,7 @@ test('the Attio walkthrough, end to end against the fake Attio', async () => {
     assert.equal(lfSync(join(dir, '..'), 'init', 'attio-sync').code, 0);
 
     // 2. The module, pointed at the fake. Attio issues each webhook's secret
-    //    when lf serve registers it, so none is asked for here.
+    //    when listen-fire serve registers it, so none is asked for here.
     const connected = await ok(
       lf(dir, ['connect', '@lf/attio', '--yes', '--base-url', `${F}/attio`, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`], {
         answers: ['lf-attio-app', 'lf-attio-secret', '8976'],
@@ -139,14 +139,14 @@ test('the Attio walkthrough, end to end against the fake Attio', async () => {
     const named = async (name: string) => (await companies()).find((c) => c.values.name?.[0]?.value === name);
     assert.equal((await named('Vireo Robotics'))?.values.description, undefined);
 
-    // 7. Where the fake reaches lf serve.
+    // 7. Where the fake reaches listen-fire serve.
     const port = await freePort();
     const publicUrl = `http://127.0.0.1:${port}`;
     appendFileSync(join(dir, 'lf.yaml'), `publicUrl: ${publicUrl}\n`);
     const door = `${publicUrl}/api/public/webhook-sync/attio/henry_attio`;
     const webhooks = async () => (await fake.json('/admin/attio/webhook/state')) as Webhook[];
 
-    // 8. lf serve registers the webhook, and a signed delivery runs the movement.
+    // 8. listen-fire serve registers the webhook, and a signed delivery runs the movement.
     let serving = await served(dir, ['--port', String(port)]);
     try {
       await serving.waitFor(/^attio: registered webhook fake-webhook-\d+ for record\.created,record\.updated at /);
@@ -230,7 +230,7 @@ test('the Attio walkthrough, end to end against the fake Attio', async () => {
     assert.equal(runs.out.split('\n').filter((l) => /sync:stamp completed/.test(l)).length, 5, runs.out);
 
     // A restart keeps the webhook it registered. Then the listens move under
-    // the running lf serve, and its webhook follows each refresh.
+    // the running listen-fire serve, and its webhook follows each refresh.
     serving = await served(dir, ['--port', String(port)]);
     try {
       await serving.waitFor(/^attio: webhook fake-webhook-\d+ is registered for record\.created,record\.updated at /);
@@ -263,7 +263,7 @@ test('the Attio walkthrough, end to end against the fake Attio', async () => {
       await serving.stop();
     }
 
-    // The listen removed while lf is stopped: the next start removes its webhook.
+    // The listen removed while listen-fire is stopped: the next start removes its webhook.
     renameSync(join(dir, 'movements/sync.mvt'), join(dir, 'sync.mvt.off'));
     serving = await served(dir, ['--port', String(port)]);
     try {

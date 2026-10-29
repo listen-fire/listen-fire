@@ -1,7 +1,7 @@
-// `@lf/jev` in lf, end to end, against the fake Jev (modules/jev/__test__
-// /fake_jev.ts): `lf connect @lf/jev` installs the bundled module, a
-// credential names the key and the fake's address, `lf check` types both
-// plugins (and warns of a wrong argument), `lf run` writes what Jev answered,
+// `@lf/jev` in listen-fire, end to end, against the fake Jev (modules/jev/__test__
+// /fake_jev.ts): `listen-fire connect @lf/jev` installs the bundled module, a
+// credential names the key and the fake's address, `listen-fire check` types both
+// plugins (and warns of a wrong argument), `listen-fire run` writes what Jev answered,
 // and the run's record carries what each call cost.
 
 import { test } from 'node:test';
@@ -54,7 +54,7 @@ async function checkWith(dir: string, from: string, to: string): Promise<{ code:
   return lfAsync(dir, 'check');
 }
 
-test('lf check types jev.score and jev.classify: their answers, a missing argument and a record read from a system', async () => {
+test('listen-fire check types jev.score and jev.classify: their answers, a missing argument and a record read from a system', async () => {
   const fake = await startFakeJev({ key: 'jev-key' });
   try {
     const dir = await jevProject(fake);
@@ -84,7 +84,7 @@ test('lf check types jev.score and jev.classify: their answers, a missing argume
 
 // A 0.12 release warns rather than refuses: those releases admitted the
 // value, so a saved movement still runs as written.
-test('lf check warns of a plain argument of the wrong type: a number for the question, a text for the labels', async () => {
+test('listen-fire check warns of a plain argument of the wrong type: a number for the question, a text for the labels', async () => {
   const fake = await startFakeJev({ key: 'jev-key' });
   try {
     const dir = await jevProject(fake);
@@ -100,7 +100,7 @@ test('lf check warns of a plain argument of the wrong type: a number for the que
   }
 });
 
-test('lf run asks Jev both questions, writes the answers, and records what each call cost', async () => {
+test('listen-fire run asks Jev both questions, writes the answers, and records what each call cost', async () => {
   const fake = await startFakeJev({ key: 'jev-key' });
   try {
     const dir = await jevProject(fake);

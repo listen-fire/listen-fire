@@ -31,7 +31,7 @@ struct ProjectFile {
     /// Seconds a started external has to print `listening <port>`.
     #[serde(rename = "startTimeout")]
     start_timeout: Option<f64>,
-    /// Seconds a started module process may sit unused before lf stops it.
+    /// Seconds a started module process may sit unused before listen-fire stops it.
     #[serde(rename = "moduleIdleTimeout")]
     module_idle_timeout: Option<f64>,
     /// Seconds one call to a module may take.
@@ -92,13 +92,13 @@ pub struct Project {
     pub user: (Option<String>, Option<String>),
     /// The module filling each core slot: lf.yaml's `core:`, defaults beside.
     pub core: crate::core::CoreChoice,
-    /// Where lf is reached from outside (`publicUrl`), when lf.yaml names it.
+    /// Where listen-fire is reached from outside (`publicUrl`), when lf.yaml names it.
     pub public_url: Option<String>,
     /// How long a started external (a module's serve-module included) has to
     /// print `listening <port>`: lf.yaml's `startTimeout`, unless
     /// `--start-timeout` names another.
     pub start_timeout: Duration,
-    /// How long a module process may sit unused before lf stops it
+    /// How long a module process may sit unused before listen-fire stops it
     /// (`moduleIdleTimeout`); the next call starts it again.
     pub module_idle_timeout: Duration,
     /// How long one call to a module may take (`callTimeout`).
@@ -134,14 +134,14 @@ pub fn start_timeout_of(seconds: f64, from: &str) -> Result<Duration, String> {
     Ok(Duration::from_secs_f64(seconds))
 }
 
-/// The language an `engine:` pin asks for: the pin itself when this lf reads
+/// The language an `engine:` pin asks for: the pin itself when this listen-fire reads
 /// it, else the rule's refusal with the remedy for lf.yaml.
 pub fn language_version_of_engine(engine: &str) -> Result<String, String> {
     let own = LANGUAGE_VERSION;
     match standing(engine, own) {
         Standing::Compatible => Ok(engine.to_string()),
-        Standing::Newer => Err(format!("lf.yaml pins engine {engine}, newer than this lf ({own}); upgrade lf")),
-        Standing::OlderKey => Err(format!("lf.yaml pins engine {engine}, which this lf ({own}) does not read; run `lf upgrade`")),
+        Standing::Newer => Err(format!("lf.yaml pins engine {engine}, newer than this listen-fire ({own}); upgrade listen-fire")),
+        Standing::OlderKey => Err(format!("lf.yaml pins engine {engine}, which this listen-fire ({own}) does not read; run `listen-fire upgrade`")),
         Standing::Malformed => Err(refusal_message(engine, own, Standing::Malformed).unwrap_or_default()),
     }
 }
@@ -167,7 +167,7 @@ pub fn load_project_with(from: &Path, env: &[(String, String)]) -> Result<Projec
 
 /// The module `lf.yaml` at exactly `root` names for a core slot, read from the
 /// `core:` map alone: no pin check, no externals, so a command that runs before
-/// a project loads (`lf init`) can ask. None when there is no `lf.yaml`, it
+/// a project loads (`listen-fire init`) can ask. None when there is no `lf.yaml`, it
 /// does not parse, or it names nothing for the slot.
 pub fn named_core_module(root: &Path, slot: &str) -> Option<String> {
     #[derive(Deserialize)]
@@ -179,7 +179,7 @@ pub fn named_core_module(root: &Path, slot: &str) -> Option<String> {
     serde_yaml::from_str::<CoreOnly>(&text).ok()?.core.remove(slot)
 }
 
-/// The same, for `lf upgrade`: a pin of an older key loads (the upgrade is
+/// The same, for `listen-fire upgrade`: a pin of an older key loads (the upgrade is
 /// what moves it), checked in this release's language.
 pub fn load_project_to_upgrade(from: &Path) -> Result<Project, String> {
     load_pinned(from, true)
@@ -190,7 +190,7 @@ fn load_pinned(from: &Path, older_key_loads: bool) -> Result<Project, String> {
     while !dir.join(PROJECT_FILE).exists() {
         match dir.parent() {
             Some(parent) => dir = parent.to_path_buf(),
-            None => return Err(format!("no {PROJECT_FILE} here or in any folder above (run `lf init`)")),
+            None => return Err(format!("no {PROJECT_FILE} here or in any folder above (run `listen-fire init`)")),
         }
     }
     let path = dir.join(PROJECT_FILE);
@@ -218,12 +218,12 @@ fn load_pinned(from: &Path, older_key_loads: bool) -> Result<Project, String> {
     let delivery_retain_days = retain_days_of(file.deliveries.as_ref().and_then(|d| d.retain_days.as_ref()), "lf.yaml")?;
     if file.store.is_some() {
         return Err(format!(
-            "{}: store: run state is kept by the store module now: `core: {{ store: \"@lf/postgres-store\" }}` (or @lf/sqlite-store, the default), set up with `lf connect @lf/postgres-store`",
+            "{}: store: run state is kept by the store module now: `core: {{ store: \"@lf/postgres-store\" }}` (or @lf/sqlite-store, the default), set up with `listen-fire connect @lf/postgres-store`",
             path.display()
         ));
     }
     let externals_dir = dir.join(&file.externals);
-    // The externals folder is read only when `core:` names a module lf does not build in.
+    // The externals folder is read only when `core:` names a module listen-fire does not build in.
     let installed = match file.core.values().all(|name| crate::core::builtin(name).is_some()) {
         true => Vec::new(),
         false => crate::externals::core_modules_in(&externals_dir)?,
@@ -260,11 +260,11 @@ mod tests {
         let root = std::env::temp_dir().join(format!("lf-pin-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join(PROJECT_FILE), "engine: 0.11.0\n").unwrap();
-        assert!(load_project(&root).unwrap_err().contains("run `lf upgrade`"));
+        assert!(load_project(&root).unwrap_err().contains("run `listen-fire upgrade`"));
         let project = load_project_to_upgrade(&root).unwrap();
         assert_eq!((project.engine.as_str(), project.language_version.as_str()), ("0.11.0", LANGUAGE_VERSION));
         fs::write(root.join(PROJECT_FILE), "engine: 0.13.0\n").unwrap();
-        assert!(load_project_to_upgrade(&root).unwrap_err().contains("newer than this lf"));
+        assert!(load_project_to_upgrade(&root).unwrap_err().contains("newer than this listen-fire"));
         fs::remove_dir_all(&root).ok();
     }
 
@@ -289,11 +289,11 @@ mod tests {
         assert_eq!(language_version_of_engine(LANGUAGE_VERSION), Ok(LANGUAGE_VERSION.to_string()));
         assert_eq!(
             language_version_of_engine("0.13.0"),
-            Err(format!("lf.yaml pins engine 0.13.0, newer than this lf ({LANGUAGE_VERSION}); upgrade lf"))
+            Err(format!("lf.yaml pins engine 0.13.0, newer than this listen-fire ({LANGUAGE_VERSION}); upgrade listen-fire"))
         );
         assert_eq!(
             language_version_of_engine("0.11.0"),
-            Err(format!("lf.yaml pins engine 0.11.0, which this lf ({LANGUAGE_VERSION}) does not read; run `lf upgrade`"))
+            Err(format!("lf.yaml pins engine 0.11.0, which this listen-fire ({LANGUAGE_VERSION}) does not read; run `listen-fire upgrade`"))
         );
         let malformed = language_version_of_engine("5").unwrap_err();
         assert!(malformed.contains("pins language 5, which is not a version"), "{malformed}");
@@ -321,7 +321,7 @@ mod tests {
         assert!(cost_cap_of(-1.0, "lf.yaml").is_err());
     }
 
-    /// lf's slots are the protocol's: `CORE_SLOTS` names `Slot::ALL`, in order.
+    /// listen-fire's slots are the protocol's: `CORE_SLOTS` names `Slot::ALL`, in order.
     #[test]
     fn the_core_slots_are_the_protocols() {
         let protocol = include_str!("../../../packages/engine-contracts/protocol.ts");

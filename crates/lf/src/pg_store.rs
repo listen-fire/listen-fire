@@ -1,6 +1,6 @@
 //! The run host's backend over Postgres: the `@lf/postgres-store` core
 //! module. Its tables live in a schema of its own, `lf`, which its setup
-//! creates and migrates (`lf connect @lf/postgres-store`, src/core.rs);
+//! creates and migrates (`listen-fire connect @lf/postgres-store`, src/core.rs);
 //! nothing of the hosted product's schema is read or written. The tables and
 //! statements keep the hosted backend's shapes and meaning
 //! (lf-platform's apps/api/src/services/movement_engine/run_host_store.ts,
@@ -17,22 +17,22 @@
 //!   pull cursors  lf.inbound_checkpoint
 //!   receipts      lf.event_receipt
 //!   deliveries    lf.delivery
-//!   lf's runs     lf.trigger_run (below)
+//!   listen-fire's runs     lf.trigger_run (below)
 //!
 //! Held to the hosted backend's meaning by the run host's contract suite
-//! (`lf --contract-store postgres://…`). Leases and expiry are judged
+//! (`listen-fire --contract-store postgres://…`). Leases and expiry are judged
 //! by the database's clock, as the hosted backend judges them.
 //!
-//! One store is one tenant's: lf's runs, and the work rows it enqueues and
+//! One store is one tenant's: listen-fire's runs, and the work rows it enqueues and
 //! claims, are its tenant's only, so a `drain` worker never claims another
 //! tenant's work.
 //!
-//! lf's run record on a `trigger_run` row: `trigger_id` is the listen's
+//! listen-fire's run record on a `trigger_run` row: `trigger_id` is the listen's
 //! pipeline (`listen:<file>:<movement>`), `trigger_payload` holds the file,
 //! the movement and the run's facts (their JSON text verbatim, so a resume
 //! reads exactly what the firing wrote), `nodes_written` its writes and
 //! `failure_reason` its error. A completed run is `success`, as the hosted
-//! product names it; lf reads it back as `completed`. The trace is kept
+//! product names it; listen-fire reads it back as `completed`. The trace is kept
 //! where the hosted product keeps it: a movement step per segment on
 //! `steps`, its entries at `diagnostics.trace`.
 //!
@@ -72,7 +72,7 @@ const LEASED_TO: &str = "lease_token::text = ";
 const NEXT_VERSION_OF_WORK: &str = "greatest(date_trunc('milliseconds', clock_timestamp()), date_trunc('milliseconds', work.updated_at) + interval '1 millisecond')";
 const NEXT_VERSION_OF_W: &str = "greatest(date_trunc('milliseconds', clock_timestamp()), date_trunc('milliseconds', w.updated_at) + interval '1 millisecond')";
 
-/// `hosted completed` is `success`; every other status lf writes is the same word.
+/// `hosted completed` is `success`; every other status listen-fire writes is the same word.
 fn hosted_status(status: &str) -> &str {
     if status == "completed" { "success" } else { status }
 }
@@ -170,7 +170,7 @@ const RUN_COLUMNS: &str = concat!(
 fn run_of(row: &Row) -> Result<RunRow> {
     let id: String = row.get(0);
     let lf_field = |i: usize, name: &str| -> Result<String> {
-        row.get::<_, Option<String>>(i).ok_or_else(|| StoreError::Invalid(format!("run {id} is not one of lf's runs (its trigger_payload has no {name})")))
+        row.get::<_, Option<String>>(i).ok_or_else(|| StoreError::Invalid(format!("run {id} is not one of listen-fire's runs (its trigger_payload has no {name})")))
     };
     let status = lf_status(row.get(3));
     let failure: Option<String> = row.get(7);
@@ -206,12 +206,12 @@ fn run_of(row: &Row) -> Result<RunRow> {
 const DELIVERY_COLUMNS: &str = concat!("id::text, subscription_id, external_id, ", iso!("received_at"), ", source, inline, replay_of::text, event_count::int8");
 
 /// A connection to a Postgres database, served from its own thread until the
-/// client drops: the store's, and any module of lf keeping its own tables there.
+/// client drops: the store's, and any module of listen-fire keeping its own tables there.
 pub(crate) fn connect_client(url: &str) -> Result<Client> {
     let (sent, connected) = std::sync::mpsc::channel();
     let url = url.to_string();
     std::thread::Builder::new()
-        .name("lf postgres".into())
+        .name("listen-fire postgres".into())
         .spawn(move || {
             let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
                 Ok(runtime) => runtime,
@@ -264,7 +264,7 @@ impl PgStore {
     }
 
     /// The schema is the store's own, created by its setup: refused loudly
-    /// when it is missing or behind this lf.
+    /// when it is missing or behind this listen-fire.
     fn require_schema(&self) -> Result<()> {
         let latest = MIGRATIONS.last().map(|(v, _)| *v).unwrap_or(0);
         let present = self.query_opt("select 1 from information_schema.tables where table_schema = 'lf' and table_name = 'schema_migration'", &[])?.is_some();
@@ -273,8 +273,8 @@ impl PgStore {
             return Ok(());
         }
         Err(StoreError::Backend(format!(
-            "this database's lf schema is {}: set the store up with `lf connect @lf/postgres-store` (it creates and migrates the schema)",
-            if applied == 0 { "missing".to_string() } else { format!("at version {applied}, this lf needs {latest}") }
+            "this database's lf schema is {}: set the store up with `listen-fire connect @lf/postgres-store` (it creates and migrates the schema)",
+            if applied == 0 { "missing".to_string() } else { format!("at version {applied}, this listen-fire needs {latest}") }
         )))
     }
 
@@ -418,7 +418,7 @@ impl RunHostStore for PgStore {
         &self.tenant
     }
 
-    // ── lf's run records ────────────────────────────────────────────────────
+    // ── listen-fire's run records ────────────────────────────────────────────────────
 
     fn start_run(&self, run: &RunStart<'_>) -> Result<()> {
         self.start_run_row(run)
@@ -557,8 +557,8 @@ impl RunHostStore for PgStore {
     /// Where the hosted product keeps a run's trace: each segment's in its
     /// own movement step on `trigger_run.steps`, at `diagnostics.trace`
     /// (trigger_run.ts `movementStepDiagnostics`), so the hosted inspection
-    /// reads lf's runs as its own. A segment's later entries extend its step,
-    /// found by the `segmentId` lf keeps on it.
+    /// reads listen-fire's runs as its own. A segment's later entries extend its step,
+    /// found by the `segmentId` listen-fire keeps on it.
     fn append_trace(&self, run_id: &str, segment_id: &str, entries: &[Js]) -> Result<()> {
         let entries = Js::Arr(entries.to_vec()).to_json();
         self.execute(

@@ -1,4 +1,4 @@
-// `lf drain`, the scale-from-zero worker, over a Postgres store: runs
+// `listen-fire drain`, the scale-from-zero worker, over a Postgres store: runs
 // parked on the example's hour-long sleep, then two workers draining the
 // one queue at once, judged two hours on. Every run is resumed exactly
 // once: by one worker, its follow-up written once, its work row gone.

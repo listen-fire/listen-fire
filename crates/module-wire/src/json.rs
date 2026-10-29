@@ -27,7 +27,7 @@ pub type Obj = IndexMap<String, Js>;
 /// A JavaScript object's own-key order: array-index keys (the canonical
 /// decimal of an integer below 2^32 - 1) first, ascending, then the rest in
 /// insertion order. The parser has the same function; this crate does not
-/// depend on the parser (so it releases on its own), and a test in `lf`
+/// depend on the parser (so it releases on its own), and a test in `listen-fire`
 /// holds the two equal.
 pub fn object_key_order<V>(map: &mut IndexMap<String, V>) {
     fn array_index(key: &str) -> Option<u32> {

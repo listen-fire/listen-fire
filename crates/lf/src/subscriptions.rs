@@ -1,4 +1,4 @@
-//! A source's webhook, registered at the source by `lf serve` (the
+//! A source's webhook, registered at the source by `listen-fire serve` (the
 //! platform's listen reconciliation, for one machine): when it starts, each
 //! external that lists `ensureEventSubscription` and takes webhooks is asked
 //! to register a webhook for the events its live listens name, pointed at the
@@ -36,7 +36,7 @@
 //! last refresh) answers its `expiresAt`, kept with the registration, and
 //! lists `refreshEventSubscription` (adapter protocol 2.4). Each such webhook
 //! has a `refresh_subscription` work row, due a day before it expires, so
-//! `lf serve` refreshes it on its tick and `lf drain` does in a deployment
+//! `listen-fire serve` refreshes it on its tick and `listen-fire drain` does in a deployment
 //! that scales to zero (its wake slot told when the row is due). A refresh
 //! that fails is said once and tried again; a webhook found lapsed is
 //! registered anew, and its pull cursor starts again with the new webhook.
@@ -81,7 +81,7 @@ struct Registered {
 }
 
 /// Whether `external` has a webhook registered under any of its
-/// credentials: lf starts it then even when no movement imports it any
+/// credentials: listen-fire starts it then even when no movement imports it any
 /// more, so the webhook is removed.
 pub fn has_registered_webhook(credentials: &Credentials, external: &str) -> bool {
     credentials.iter().any(|c| c.external == external && c.binding != Binding::Install && !registered_channels(c).is_empty())
@@ -254,7 +254,7 @@ fn label_of(external: &str, credential: Option<&str>, scope: &Scope) -> String {
     label
 }
 
-/// The externals in `set` whose webhook lf registers.
+/// The externals in `set` whose webhook listen-fire registers.
 fn registering(set: &FileSet) -> impl Iterator<Item = &RunningExternal> {
     set.running.iter().map(|r| &**r).filter(|r| !r.is_plugin() && r.methods.iter().any(|m| m == "ensureEventSubscription") && inbound_of(r).is_some())
 }
@@ -282,7 +282,7 @@ impl Registrations {
     }
 }
 
-/// Register or remove each external's webhooks, as its listens need (`lf
+/// Register or remove each external's webhooks, as its listens need (`listen-fire
 /// serve` starting); a line per webhook it touched. One that fails is said
 /// and the rest go on: the doors still answer whatever is registered.
 pub async fn reconcile(session: &Session) -> Vec<String> {
@@ -363,7 +363,7 @@ async fn reconcile_one(session: &Session, webhook: &Webhook) -> Result<Option<(S
     let Some(credential) = webhook.credential.as_ref().and_then(|named| credentials.iter().find(|c| c.name == *named)) else {
         let missing = match &webhook.credential {
             Some(named) => format!("no credential \"{named}\" in the secrets to register its webhook under"),
-            None => format!("no credential to register its webhook under: lf credential add --module {name} <name>"),
+            None => format!("no credential to register its webhook under: listen-fire credential add --module {name} <name>"),
         };
         return Ok((!wanted.is_empty()).then_some((missing, false)));
     };
@@ -394,7 +394,7 @@ async fn reconcile_one(session: &Session, webhook: &Webhook) -> Result<Option<(S
         return Ok(Some((format!("no listen needs its webhook any more; removed webhook {id}"), true)));
     }
     let Some(public) = session.project.public_url.as_deref() else {
-        return Ok(Some((format!("set publicUrl in lf.yaml to where {name} reaches lf serve; its webhook is not registered"), false)));
+        return Ok(Some((format!("set publicUrl in lf.yaml to where {name} reaches listen-fire serve; its webhook is not registered"), false)));
     };
     // A scoped webhook's door names its subscription after the credential.
     let mut callback = format!("{}/api/public/webhook-sync/{provider}/{}", public.trim_end_matches('/'), credential.name);
@@ -542,7 +542,7 @@ pub async fn refresh_row(session: &Session, payload: &Js) -> Result<Option<Strin
     let (external, credential, key) = (text("external")?, text("credential")?, text("key")?);
     let (line, next) = refresh_one(session, &external, &Refreshing { credential: &credential, key: &key }, session.now_ms()).await;
     if let Some(line) = line {
-        eprintln!("lf: {line}");
+        eprintln!("listen-fire: {line}");
     }
     Ok(next.map(iso_of))
 }
@@ -713,12 +713,12 @@ fn with_scoped(stored: Vec<(String, String)>, key: &str, record: Option<Js>) -> 
     spread(others, vec![(WEBHOOK_SUBSCRIPTIONS_FIELD.to_string(), Js::Obj(scoped).to_json())])
 }
 
-/// The secrets module holding the credential's entry, as written by lf.
+/// The secrets module holding the credential's entry, as written by listen-fire.
 fn writable(credential: &Credential) -> Result<std::rc::Rc<dyn SecretsStore>, String> {
     let held = credential.origin.slot_ref.is_some() && credential.origin.env_fields.is_empty();
     match crate::secrets_slot::installed() {
         Some(store) if held => Ok(store),
-        _ => Err(format!("credential \"{}\" comes from the environment, which lf cannot write the registration to", credential.name)),
+        _ => Err(format!("credential \"{}\" comes from the environment, which listen-fire cannot write the registration to", credential.name)),
     }
 }
 

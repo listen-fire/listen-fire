@@ -1,4 +1,4 @@
-// `lf runs rerun <run-id>` through the real binary: a failed run runs again
+// `listen-fire runs rerun <run-id>` through the real binary: a failed run runs again
 // as its next attempt, with its own event and the movement as the project
 // holds it now; a run whose latest attempt did not fail is refused by name;
 // a failed attempt that already committed writes is refused unless --force;
@@ -19,7 +19,7 @@ function json<T>(dir: string, ...args: string[]): { code: number; doc: T } {
   return { code: run.code, doc: JSON.parse(line) as T };
 }
 
-/** The run `lf run --event` started, failed. */
+/** The run `listen-fire run --event` started, failed. */
 function failedRun(dir: string): string {
   const fired = json<{ runs: Array<{ runId: string; status: string }> }>(dir, 'run', '--event', 'events/company_created.json');
   assert.equal(fired.code, 1);
@@ -134,14 +134,14 @@ test('two reruns at once: one runs, the other is refused', async () => {
   const refused = both.filter((r) => r.code !== 0);
   assert.equal(ran.length, 1, both.map((r) => r.out).join('\n---\n'));
   assert.equal(refused.length, 1);
-  assert.match(refused[0]!.out, new RegExp(`run ${runId} (is held by another lf process|is running on attempt 2; only a failed run is rerun|succeeded on attempt 2; nothing to rerun)`));
+  assert.match(refused[0]!.out, new RegExp(`run ${runId} (is held by another listen-fire process|is running on attempt 2; only a failed run is rerun|succeeded on attempt 2; nothing to rerun)`));
   const { doc } = json<RerunShown>(dir, 'runs', 'show', runId);
   assert.deepEqual(doc.run.attempts.map((a) => [a.attempt, a.status]), [[1, 'failed'], [2, 'completed']]);
   assert.deepEqual(companies(dir), ['slow Vireo Robotics']);
 });
 
-test('lf deliveries replay points at lf runs rerun for a failed run', () => {
+test('listen-fire deliveries replay points at listen-fire runs rerun for a failed run', () => {
   const help = lf(rerunProject(FIXED), '--help');
-  assert.match(help.out, /lf runs rerun <run-id> \[--force\]/);
-  assert.match(help.out, /a failed run: lf runs rerun/);
+  assert.match(help.out, /listen-fire runs rerun <run-id> \[--force\]/);
+  assert.match(help.out, /a failed run: listen-fire runs rerun/);
 });

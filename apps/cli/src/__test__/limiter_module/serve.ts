@@ -1,6 +1,6 @@
 // A third-party limiter module for the tests: the limiter slot's methods
 // (docs/contracts/limiter-slot.md) served as adapter protocol 2 over HTTP, on
-// the socket lf names (`MODULE_SOCKET`), over the TypeScript built-in
+// the socket listen-fire names (`MODULE_SOCKET`), over the TypeScript built-in
 // (`MemoryLimiter`). It stands for a limiter shared by many hosts — Redis, a
 // database — which is the same wire over other state. It refuses to be used
 // before `limiter.open`, as a real one would.

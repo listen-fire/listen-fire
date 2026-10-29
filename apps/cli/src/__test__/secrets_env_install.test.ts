@@ -88,7 +88,7 @@ test('an install named by LF_SECRET__<ENTRY>__MODULE needs no `using`, and its k
     for (const call of adapter.received) assert.equal(call.authorization, 'Bearer k-env', call.method);
     // The manifest says which settings there are, so it is read before any.
     const configured = adapter.received.filter((call) => call.method !== 'manifest');
-    assert.ok(configured.length > 0, 'lf check read the adapter past its manifest');
+    assert.ok(configured.length > 0, 'listen-fire check read the adapter past its manifest');
     for (const call of configured) assert.deepEqual(call.settings, { key: 'k-env' }, call.method);
   } finally {
     adapter.server.close();

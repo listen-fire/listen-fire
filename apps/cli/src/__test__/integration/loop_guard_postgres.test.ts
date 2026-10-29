@@ -1,4 +1,4 @@
-// The built-in loop guard over Postgres (`url`: the memory every lf worker
+// The built-in loop guard over Postgres (`url`: the memory every listen-fire worker
 // shares, in its own `lf_guard` schema) held to the loop guard contract
 // suite, and shown shared: a second guard opened on the same database knows
 // what the first recorded.

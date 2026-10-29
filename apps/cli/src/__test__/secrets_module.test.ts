@@ -1,7 +1,7 @@
-// The secrets slot filled by a module lf does not build in: the test vault
+// The secrets slot filled by a module listen-fire does not build in: the test vault
 // (secrets_module/serve.ts) reached at its url, its own settings in the
-// project's secrets file (the bootstrap rule). The real `lf` reads its
-// credentials there, writes whole entries there, and two lf processes on one
+// project's secrets file (the bootstrap rule). The real `listen-fire` reads its
+// credentials there, writes whole entries there, and two listen-fire processes on one
 // vault refresh an expiring token once between them.
 
 import { test } from 'node:test';
@@ -82,7 +82,7 @@ test('the environment lies over what the secrets module holds, field by field', 
   }
 });
 
-test('lf connect, lf credential add and lf credential delete change whole entries in the secrets module, under its lease', async () => {
+test('listen-fire connect, listen-fire credential add and listen-fire credential delete change whole entries in the secrets module, under its lease', async () => {
   const vault = await serveSecretsModule({
     listen: 0,
     seed: { ...acme({ access_token: 'vault-token' }), bob: { external: 'acme_crm', binding: { credential: 'acme_key' }, fields: { api_key: 'bob-key' } } },
@@ -136,7 +136,7 @@ async function signedIn(provider: FakeOAuthServer): Promise<{ access_token: stri
   return (await answer.json()) as { access_token: string; refresh_token: string };
 }
 
-test('two lf processes on one secrets module refresh an expiring token once, and both call with the new one', async () => {
+test('two listen-fire processes on one secrets module refresh an expiring token once, and both call with the new one', async () => {
   const provider = await startFakeOAuthServer({ ...CLIENT, clientAuth: 'body' });
   const granted = await signedIn(provider);
   const vault = await serveSecretsModule({
@@ -162,7 +162,7 @@ test('two lf processes on one secrets module refresh an expiring token once, and
     for (const dir of dirs) assert.equal(authLog(dir).at(-1), 'Bearer access-2');
     assert.ok(vault.calls.includes('secrets.lock acme'), vault.calls.join('\n'));
     assert.deepEqual(vault.leased(), []);
-    for (const run of runs) assert.doesNotMatch(run.out, new RegExp(`${granted.refresh_token}|${CLIENT.clientSecret}`), 'no secret reaches lf’s output');
+    for (const run of runs) assert.doesNotMatch(run.out, new RegExp(`${granted.refresh_token}|${CLIENT.clientSecret}`), 'no secret reaches listen-fire’s output');
   } finally {
     await vault.close();
     await provider.close();
@@ -174,7 +174,7 @@ const oauth = (provider: FakeOAuthServer) => [
   { name: 'acme', kind: 'oauth2', fields: [], oauth2: { authorizeUrl: provider.authorizeUrl, tokenUrl: provider.tokenUrl, scopes: ['crm.read'], pkce: true } },
 ];
 
-test('lf connect writes the install and lf credential add signs in and writes the grant through the secrets module; a second lf process lists both', async () => {
+test('listen-fire connect writes the install and listen-fire credential add signs in and writes the grant through the secrets module; a second listen-fire process lists both', async () => {
   const provider = await startFakeOAuthServer(CLIENT);
   const vault = await serveSecretsModule({ listen: 0 });
   try {
@@ -199,7 +199,7 @@ test('lf connect writes the install and lf credential add signs in and writes th
     assert.deepEqual(vault.leased(), []);
     assert.equal(readFileSync(join(dir, '.lf/secrets.yaml'), 'utf8'), LOCAL, 'nothing is written beside the module');
 
-    // Another lf process finds both, by listing the module.
+    // Another listen-fire process finds both, by listing the module.
     const listed = await lf(dir, ['credential', 'list', '--json']).done;
     assert.equal(listed.code, 0, listed.out);
     const credentials = (JSON.parse(listed.out) as { credentials: Array<{ name: string; kept: string[]; binding: string }> }).credentials;
@@ -213,7 +213,7 @@ test('lf connect writes the install and lf credential add signs in and writes th
 
 const READ_ONLY = (reason: string) => `acme_vault holds its credentials read-only: ${reason}. Add it where it lives.`;
 
-test('a read-only secrets module makes lf connect, lf credential add, update and delete refuse by name, writing nothing and leaving no lease', async () => {
+test('a read-only secrets module makes listen-fire connect, listen-fire credential add, update and delete refuse by name, writing nothing and leaving no lease', async () => {
   const reason = 'it is filled from the platform';
   const vault = await serveSecretsModule({
     listen: 0,
@@ -232,7 +232,7 @@ test('a read-only secrets module makes lf connect, lf credential add, update and
     for (const run of refused) {
       assert.equal(run.code, 2, run.out);
       assert.ok(run.out.includes(READ_ONLY(reason)), run.out);
-      assert.doesNotMatch(run.out, /sk-test-key|ada-key|new-key|bob-key|vault-token/, 'no secret reaches lf’s output');
+      assert.doesNotMatch(run.out, /sk-test-key|ada-key|new-key|bob-key|vault-token/, 'no secret reaches listen-fire’s output');
     }
     assert.deepEqual(await vault.held(), before, 'the vault is unchanged');
     assert.deepEqual(vault.leased(), [], 'no lease is left held');
@@ -272,7 +272,7 @@ test('a token refresh is still written back to a read-only secrets module: read-
   }
 });
 
-test('a read-only secrets module refuses lf credential add and update before the sign-in: nothing reaches the provider', async () => {
+test('a read-only secrets module refuses listen-fire credential add and update before the sign-in: nothing reaches the provider', async () => {
   const reason = 'it is filled from the platform';
   const provider = await startFakeOAuthServer(CLIENT);
   const vault = await serveSecretsModule({

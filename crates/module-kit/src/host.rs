@@ -1,7 +1,7 @@
 //! The module host: one process serving one or several crate modules over
 //! adapter protocol 2, each under its own path (`/<name>`; `/` too when it
 //! serves only one). A shared host carries trusted modules together; an
-//! untrusted module gets a host of its own. The host never links into lf: lf
+//! untrusted module gets a host of its own. The host never links into listen-fire: listen-fire
 //! reaches it as any module server, by `url`, or by `command` when it starts
 //! the host itself.
 
@@ -279,8 +279,8 @@ fn json(body: Js) -> Response<Full<Bytes>> {
 }
 
 /// The process ends when whoever started it does (serve-module's
-/// `LF_EXIT_WITH_PARENT`): lf holds this process's stdin, so its end closing
-/// is lf gone, through any shim in between (`cargo run`); being re-parented
+/// `LF_EXIT_WITH_PARENT`): listen-fire holds this process's stdin, so its end closing
+/// is listen-fire gone, through any shim in between (`cargo run`); being re-parented
 /// to init is the same news from a parent that gave no stdin.
 fn exit_with_parent() {
     std::thread::spawn(|| {

@@ -1,9 +1,9 @@
-// The ocr slot through the real `lf`: its conformance cases held against
-// lf's own client of the slot's module (`lf --contract-ocr-slot`), over
+// The ocr slot through the real `listen-fire`: its conformance cases held against
+// listen-fire's own client of the slot's module (`listen-fire --contract-ocr-slot`), over
 // @listen-fire/document-ai before a fake Document AI and @listen-fire/models'
 // OCR install before a fake Gemini; and runs that read a deck of screenshots
 // compiled into a PDF (no text layer): `File.read` and `extractOne` in a
-// movement, a plugin's `ctx.ocr` through lf's OCR door, each read's cost on
+// movement, a plugin's `ctx.ocr` through listen-fire's OCR door, each read's cost on
 // the run; and the empty slot saying so.
 
 import { after, before, describe, test } from 'node:test';
@@ -57,11 +57,11 @@ function documentAiProject(): string {
   return dir;
 }
 
-// ── Conformance through lf's client ─────────────────────────────────────────
+// ── Conformance through listen-fire's client ─────────────────────────────────────────
 
 const bridges: Array<{ over: string; start(): Promise<{ lf: StartedModule; close(): Promise<void> }> }> = [
   {
-    over: "lf's client of @listen-fire/document-ai",
+    over: "listen-fire's client of @listen-fire/document-ai",
     async start() {
       const api = await fakeDocumentAi();
       const lf = await startModule(lfBinary(), ['--contract-ocr-slot', '--dir', documentAiProject()], { env: documentAiEnv(api) });
@@ -69,7 +69,7 @@ const bridges: Array<{ over: string; start(): Promise<{ lf: StartedModule; close
     },
   },
   {
-    over: "lf's client of @listen-fire/models' OCR install",
+    over: "listen-fire's client of @listen-fire/models' OCR install",
     async start() {
       const gemini: FakeVendor = await fakeGemini();
       const dir = project();
@@ -172,7 +172,7 @@ function spent(dir: string): number[] {
 
 const OCR_TEXT = `>>PAGE_START<<\n${pageText(1)}\n>>PAGE_START<<\n${pageText(2)}\n`;
 
-test('lf run: File.read of a deck of screenshots is read by the ocr slot, two pages at $0.0015 on the run', async () => {
+test('listen-fire run: File.read of a deck of screenshots is read by the ocr slot, two pages at $0.0015 on the run', async () => {
   const api = await fakeDocumentAi();
   try {
     const dir = documentAiProject();
@@ -214,7 +214,7 @@ async function fakeAnthropic(answer: string): Promise<{ url: string; received: A
   return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, received, close: () => new Promise((done) => server.close(() => done())) };
 }
 
-test('lf run: extractOne over a deck of screenshots reads the text the ocr slot gave it', async () => {
+test('listen-fire run: extractOne over a deck of screenshots reads the text the ocr slot gave it', async () => {
   const api = await fakeDocumentAi({ texts: ['ACME ROBOTICS', 'SERIES A: $4,000,000'] });
   const anthropic = await fakeAnthropic(JSON.stringify({ record: { name: { value: "Acme Robotics", evidence: "ACME ROBOTICS" } } }));
   try {
@@ -235,7 +235,7 @@ test('lf run: extractOne over a deck of screenshots reads the text the ocr slot 
   }
 });
 
-test("lf run: a plugin reads a scanned PDF through lf's OCR door (ctx.ocr), the read charged to the run", async () => {
+test("listen-fire run: a plugin reads a scanned PDF through listen-fire's OCR door (ctx.ocr), the read charged to the run", async () => {
   const api = await fakeDocumentAi();
   try {
     const dir = documentAiProject();
@@ -250,7 +250,7 @@ test("lf run: a plugin reads a scanned PDF through lf's OCR door (ctx.ocr), the 
   }
 });
 
-test('lf run: with the ocr slot empty, a scanned deck has no text and the run says why', async () => {
+test('listen-fire run: with the ocr slot empty, a scanned deck has no text and the run says why', async () => {
   const dir = project();
   withScanner(dir);
   movement(dir, '  deck = scanner.scan()\n  write crm-[:Company]-> { Name: coalesce(File.read(deck), "none") }');

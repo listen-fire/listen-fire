@@ -9,14 +9,14 @@
 //! ```
 //!
 //! This is the same engine the JSON boundary drives (crate::begin, the WASM
-//! artifact and the `lf` command): a run here is one segment, its requests
+//! artifact and the `listen-fire` command): a run here is one segment, its requests
 //! the ones crate::host builds, read into typed host calls (serve.rs). The
 //! families a host leaves unfilled refuse what they are asked.
 //!
 //! Every host call is asynchronous, in one shape (hosts.rs): the engine may
 //! have several requests out at once (the arms of an `all(...)`, the members
 //! of a concurrent `map`), and the run starts each as soon as it is made and
-//! hands each answer back as it lands, in whatever order that is, as `lf`
+//! hands each answer back as it lands, in whatever order that is, as `listen-fire`
 //! does over the JSON route. The run is a plain future: any executor drives
 //! it, and a host that answers from memory finishes it on its first poll.
 
@@ -295,7 +295,7 @@ impl Event {
         self
     }
 
-    /// The trigger event as the run reads it (lf's `trigger_event_of`).
+    /// The trigger event as the run reads it (listen-fire's `trigger_event_of`).
     fn to_wire(&self, pipeline_input_id: &str) -> Json {
         let mut out = vec![
             ("pipelineInputId".to_string(), Data::text(pipeline_input_id)),

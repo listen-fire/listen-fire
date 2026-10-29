@@ -2,7 +2,7 @@
 // makes crosses to an external as a URL the document store's local backend
 // serves; a dry run captures its writes instead of making them; a run that
 // calls an external too often is stopped at the segment's call ceiling; an
-// external stating a minor of the adapter protocol newer than lf speaks is
+// external stating a minor of the adapter protocol newer than listen-fire speaks is
 // refused by name.
 
 import { test } from 'node:test';
@@ -49,7 +49,7 @@ test('a FILE() written to an external crosses as a URL the local document store 
   );
 });
 
-test('lf run --dry-run captures the writes and makes none', () => {
+test('listen-fire run --dry-run captures the writes and makes none', () => {
   const dir = project();
   const run = lf(dir, 'run', '--dry-run', '--event', 'events/company_created.json');
   assert.equal(run.code, 0, run.out);
@@ -69,7 +69,7 @@ test('a run past the call ceiling is stopped, naming the knob', () => {
   assert.match(out, /call ceiling reached.*REMOTE_ADAPTER_MAX_CALLS_PER_RUN/);
 });
 
-test('lf check refuses an external stating a newer protocol minor, naming its package and the range lf speaks', () => {
+test('listen-fire check refuses an external stating a newer protocol minor, naming its package and the range listen-fire speaks', () => {
   const dir = project();
   const folder = join(dir, 'externals/acme_crm');
   copyFileSync(resolve(__dirname, 'manifest_module/serve.mjs'), join(folder, 'serve.mjs'));
@@ -80,6 +80,6 @@ test('lf check refuses an external stating a newer protocol minor, naming its pa
   assert.equal(check.code, 1, check.out);
   assert.match(
     check.out,
-    /external "acme_crm" \(@acme\/crm 9\.9\.9\) speaks adapter protocol 2\.99; this lf \(\d+\.\d+\.\d+[^)]*\) speaks 2\.0–2\.4\. Upgrade lf to a release that speaks 2\.99 \(the protocol's Changes list names it\), or use a @acme\/crm that speaks 2\.4 or lower\./,
+    /external "acme_crm" \(@acme\/crm 9\.9\.9\) speaks adapter protocol 2\.99; this listen-fire \(\d+\.\d+\.\d+[^)]*\) speaks 2\.0–2\.4\. Upgrade listen-fire to a release that speaks 2\.99 \(the protocol's Changes list names it\), or use a @acme\/crm that speaks 2\.4 or lower\./,
   );
 });

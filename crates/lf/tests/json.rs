@@ -12,7 +12,7 @@ impl Project {
     fn new(name: &str) -> Project {
         let root = std::env::temp_dir().join(format!("lf-json-{name}-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
-        let made = Command::new(env!("CARGO_BIN_EXE_lf")).arg("init").arg(&root).output().unwrap();
+        let made = Command::new(env!("CARGO_BIN_EXE_listen-fire")).arg("init").arg(&root).output().unwrap();
         assert!(made.status.success());
         std::fs::write(
             root.join("movements/nap.mvt"),
@@ -24,9 +24,9 @@ impl Project {
 
     /// The command's stdout as JSON, and its exit code.
     fn lf(&self, args: &[&str]) -> (Value, i32) {
-        let out = Command::new(env!("CARGO_BIN_EXE_lf")).args(args).arg("--json").arg(format!("--dir={}", self.0.display())).current_dir(&self.0).output().unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_listen-fire")).args(args).arg("--json").arg(format!("--dir={}", self.0.display())).current_dir(&self.0).output().unwrap();
         let text = String::from_utf8(out.stdout).unwrap();
-        let doc = serde_json::from_str(&text).unwrap_or_else(|e| panic!("lf {args:?}: not JSON ({e}): {text}"));
+        let doc = serde_json::from_str(&text).unwrap_or_else(|e| panic!("listen-fire {args:?}: not JSON ({e}): {text}"));
         (doc, out.status.code().unwrap())
     }
 }
@@ -160,11 +160,11 @@ fn connect_and_credential_list_name_things_and_never_values() {
     assert!(!listed.to_string().contains("s3cret"));
 }
 
-/// `lf run` shows a person what the movement returned, under its run's line.
+/// `listen-fire run` shows a person what the movement returned, under its run's line.
 #[test]
 fn a_manual_run_prints_what_it_returned() {
     let project = Project::new("printed");
-    let out = Command::new(env!("CARGO_BIN_EXE_lf")).args(["run", "hello"]).arg(format!("--dir={}", project.0.display())).current_dir(&project.0).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_listen-fire")).args(["run", "hello"]).arg(format!("--dir={}", project.0.display())).current_dir(&project.0).output().unwrap();
     let text = String::from_utf8(out.stdout).unwrap();
     let lines: Vec<&str> = text.lines().collect();
     assert!(lines[0].contains("completed"), "{text}");

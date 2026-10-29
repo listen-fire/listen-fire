@@ -1,18 +1,18 @@
-//! The shared half of `lf serve` (the listening half is src/listener.rs, behind
-//! the `serve` cargo feature): `lf serve`: the inbound doors and the work queue. A provider's delivery at
+//! The shared half of `listen-fire serve` (the listening half is src/listener.rs, behind
+//! the `serve` cargo feature): `listen-fire serve`: the inbound doors and the work queue. A provider's delivery at
 //! `/api/public/webhook-sync/<provider>/<install>` is verified and read by
 //! its external and its events queued, `/hooks/<external>/<install>` being
-//! lf's older name for the same door; an external's pushes arrive at
+//! listen-fire's older name for the same door; an external's pushes arrive at
 //! `/api/public/adapter/<external>/{emit,wake}` and are queued; a callback's
 //! call arrives at `/api/cb/<id>` (its url) and runs its body; a provider's
-//! OAuth redirect for `lf credential add --public` arrives at GET
+//! OAuth redirect for `listen-fire credential add --public` arrives at GET
 //! `/oauth/callback`; an exposed file is fetched at GET `/files/<id>`. Due
 //! work — an emitted event, a parked run's timer, a queued await wake, a
 //! call's body — is drained on a tick, and at once when a door queues some.
 //!
 //! The server listens before the session opens, so the externals the session
-//! starts are told where to push (LF_HOST_URL). Also here: `lf call`,
-//! `lf cancel` and `lf run --webhook`, the other ways in.
+//! starts are told where to push (LF_HOST_URL). Also here: `listen-fire call`,
+//! `listen-fire cancel` and `listen-fire run --webhook`, the other ways in.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -42,7 +42,7 @@ pub fn host_token() -> Option<&'static str> {
     HOST_TOKEN.get().map(String::as_str)
 }
 
-/// Outside `lf serve` (a plain `lf run`, `resume`, `drain`, …): a loopback
+/// Outside `listen-fire serve` (a plain `listen-fire run`, `resume`, `drain`, …): a loopback
 /// listener with the models door alone, so a module can still ask the
 /// host for a model call.
 pub(crate) static MODELS_DOOR_URL: OnceLock<String> = OnceLock::new();
@@ -52,21 +52,21 @@ pub fn externals_host_url() -> Option<&'static str> {
     host_url().or_else(|| MODELS_DOOR_URL.get().map(String::as_str))
 }
 
-// ── The other ways in: lf call, lf cancel, lf run --webhook ─────────────────
+// ── The other ways in: listen-fire call, listen-fire cancel, listen-fire run --webhook ─────────────────
 
-/// What `lf call` was given.
+/// What `listen-fire call` was given.
 pub struct CallArgs<'a> {
     pub id: Option<&'a str>,
     pub body: Option<&'a Path>,
     pub json: bool,
 }
 
-/// `lf call <callback-id> [--body <values.json>]`.
+/// `listen-fire call <callback-id> [--body <values.json>]`.
 pub async fn call_command(project: Project, store: &StoreSpec, args: CallArgs<'_>, out: &mut impl Write) -> Result<i32, String> {
     let io = |e: std::io::Error| e.to_string();
     let CallArgs { id, body, json } = args;
     let Some(id) = id else {
-        eprintln!("lf call needs a callback id");
+        eprintln!("listen-fire call needs a callback id");
         return Ok(2);
     };
     let supplied = match body {
@@ -74,7 +74,7 @@ pub async fn call_command(project: Project, store: &StoreSpec, args: CallArgs<'_
         Some(path) => Js::parse(&std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?)?,
     };
     let Js::Obj(values) = supplied else {
-        eprintln!("lf call --body: the file must hold a JSON object of values");
+        eprintln!("listen-fire call --body: the file must hold a JSON object of values");
         return Ok(2);
     };
     let session = open_session(project, &Opening { ephemeral: false, store, role: Role::Command }).await?;
@@ -93,7 +93,7 @@ pub async fn call_command(project: Project, store: &StoreSpec, args: CallArgs<'_
     match &called.call {
         CallOutcome::Recorded { .. } => {
             if called.queued {
-                writeln!(out, "callback {id}: recorded; its run is being stepped by another lf process, which runs the body next").map_err(io)?;
+                writeln!(out, "callback {id}: recorded; its run is being stepped by another listen-fire process, which runs the body next").map_err(io)?;
             } else {
                 writeln!(out, "callback {id}: recorded").map_err(io)?;
             }
@@ -118,11 +118,11 @@ pub async fn call_command(project: Project, store: &StoreSpec, args: CallArgs<'_
     }
 }
 
-/// `lf cancel <run-id> [--reason <text>]`. Settling a run starts no segment:
+/// `listen-fire cancel <run-id> [--reason <text>]`. Settling a run starts no segment:
 /// no externals, just the store.
 pub async fn cancel_command(store: &StoreSpec, run_id: Option<&str>, reason: Option<&str>, json: bool, out: &mut impl Write) -> Result<i32, String> {
     let Some(run_id) = run_id else {
-        eprintln!("lf cancel needs a run id");
+        eprintln!("listen-fire cancel needs a run id");
         return Ok(2);
     };
     let store = open_store(store)?;
@@ -136,13 +136,13 @@ pub async fn cancel_command(store: &StoreSpec, run_id: Option<&str>, reason: Opt
     }
     let line = match cancelled {
         Cancelled::Now => format!("run {run_id} cancelled"),
-        Cancelled::Requested => format!("run {run_id}: cancel requested; another lf process is stepping it, and it stops at its next statement"),
+        Cancelled::Requested => format!("run {run_id}: cancel requested; another listen-fire process is stepping it, and it stops at its next statement"),
     };
     writeln!(out, "{line}").map_err(|e| e.to_string())?;
     Ok(0)
 }
 
-/// `lf run --webhook <external> --body <file> [--install <credential>] [--header k:v]…`.
+/// `listen-fire run --webhook <external> --body <file> [--install <credential>] [--header k:v]…`.
 pub struct WebhookFile<'a> {
     pub external: &'a str,
     pub install: Option<&'a str>,

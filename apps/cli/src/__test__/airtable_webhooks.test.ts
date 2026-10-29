@@ -1,4 +1,4 @@
-// Airtable webhooks under lf serve, against the fake Airtable
+// Airtable webhooks under listen-fire serve, against the fake Airtable
 // (packages/fake-channels): a webhook watches one base and table, so two
 // listens on two tables of one connection register two webhooks, each with
 // its own scope, door and secret. A change reaches only its table's webhook
@@ -226,7 +226,7 @@ test('two tables of one connection each have a webhook of their own, and Stage b
       await until(() => seen(roles) === 1, serving.lines);
       assert.equal(seen(interviews), 1, 'Rejected ran nothing, and the role ran no interview');
 
-      // The roles' listen removed under the running lf serve: only its webhook goes.
+      // The roles' listen removed under the running listen-fire serve: only its webhook goes.
       writeFileSync(movement, HEAD);
       await serving.waitFor(/^airtable \(base appHIRE01, table tblROLE01\): no listen needs its webhook any more; removed webhook ach\d+$/);
       assert.deepEqual((await webhooks()).map((w) => w.recordChangeScope), ['tblCAND01']);
@@ -246,7 +246,7 @@ test('two tables of one connection each have a webhook of their own, and Stage b
 // The event is narrowed only by the address its movement's signature names
 // (the platform's rule): a listen's `field` and `becomes` are held to the table
 // the signature names, and refused where the signature names none.
-test('lf check holds a field-change listen to the table its movement\'s signature names', async () => {
+test('listen-fire check holds a field-change listen to the table its movement\'s signature names', async () => {
   const fake = await fakeChannels();
   try {
     const dir = await hiringProject(fake);
@@ -353,7 +353,7 @@ test('a quiet webhook is refreshed a day before it lapses, and one that lapsed i
     const publicUrl = `http://127.0.0.1:${port}`;
     appendFileSync(join(dir, 'lf.yaml'), `publicUrl: ${publicUrl}\n`);
     const webhooks = async () => (await fake.json('/admin/airtable/webhook/state')) as Webhook[];
-    // lf's clock and the fake's moved on together: `days` past the registration.
+    // listen-fire's clock and the fake's moved on together: `days` past the registration.
     const serveAt = (days: number) => served(dir, ['--port', String(port)], days === 0 ? {} : { LF_CLOCK_AHEAD_MS: String(days * DAY_MS) });
     const advance = (days: number) => fake.json('/airtable/control/advance-clock', { ms: days * DAY_MS });
 
@@ -377,7 +377,7 @@ test('a quiet webhook is refreshed a day before it lapses, and one that lapsed i
     assert.equal(kept?.id, registered.id, 'no webhook registered anew');
     assert.ok(Date.parse(kept.expirationTime) - Date.parse(registered.expirationTime) > 6 * DAY_MS, 'its expiry moved on');
 
-    // Eight days more with lf down: it lapsed, so it is registered anew, and the new one delivers.
+    // Eight days more with listen-fire down: it lapsed, so it is registered anew, and the new one delivers.
     await advance(8);
     serving = await serveAt(14.5);
     try {

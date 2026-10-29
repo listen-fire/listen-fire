@@ -1,10 +1,10 @@
-//! How lf proves itself to the platform in front of a remote module (a
+//! How listen-fire proves itself to the platform in front of a remote module (a
 //! module served on Cloud Run behind IAM, say), set per module install. This
 //! is separate from the module's own secret: that one stays in the request's
 //! `Authorization` header (or the manifest's header), and this one goes in
 //! another header when they would collide.
 //!
-//! The install entry's fields pick it (`lf connect`, or
+//! The install entry's fields pick it (`listen-fire connect`, or
 //! `LF_SECRET__<ENTRY>__<FIELD>`):
 //!
 //! - `outgoing_auth: google-identity`: a Google identity token for
@@ -51,7 +51,7 @@ impl OutgoingAuth {
                 let token = field(OUTGOING_TOKEN_FIELD).ok_or_else(|| format!("`{OUTGOING_AUTH_FIELD}: bearer` needs an `{OUTGOING_TOKEN_FIELD}`"))?;
                 Ok(Some(OutgoingAuth::Bearer { token: token.to_string(), header }))
             }
-            Some(other) => Err(format!("`{OUTGOING_AUTH_FIELD}: {other}` is not one lf knows (google-identity, bearer or none)")),
+            Some(other) => Err(format!("`{OUTGOING_AUTH_FIELD}: {other}` is not one listen-fire knows (google-identity, bearer or none)")),
         }
     }
 

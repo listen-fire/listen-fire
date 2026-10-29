@@ -1,11 +1,11 @@
 //! The movements slot: where the project's movement files live, a module like
-//! the other slots' (crate::core). lf asks it for every file by name when a
+//! the other slots' (crate::core). listen-fire asks it for every file by name when a
 //! command opens its project, and writes one back by compare-and-swap when
-//! `lf upgrade` rewrites it or `lf init` creates the starter. lf.yaml and the
+//! `listen-fire upgrade` rewrites it or `listen-fire init` creates the starter. lf.yaml and the
 //! externals folder stay local files.
 //!
 //! The default, `@lf/folder-movements`, is the movements folder lf.yaml names,
-//! walked in process as it always was (`FolderMovements`). A module lf does
+//! walked in process as it always was (`FolderMovements`). A module listen-fire does
 //! not build in is spoken to over adapter protocol 2 (`ProcessMovements`):
 //!
 //!   movements.list {}                               → [{ path, version? }]
@@ -14,18 +14,18 @@
 //!   movements.watch { cursor?, waitMs }             → { cursor, events: [{ kind, path, version? }] } | { resync: true }
 //!
 //! A watch is held by the module until something changes after the cursor,
-//! or `waitMs` (at most 30 s) passes: `lf serve` and `lf drain` learn of an
+//! or `waitMs` (at most 30 s) passes: `listen-fire serve` and `listen-fire drain` learn of an
 //! edit from it rather than by listing on a timer. The folder module watches
 //! the folder with the OS's own watcher (`FolderWatch`).
 //!
 //! A `path` is the file's name under the movements folder (`orders/sync.mvt`):
-//! the name every identity lf keeps already uses (run rows, listen pipelines,
+//! the name every identity listen-fire keeps already uses (run rows, listen pipelines,
 //! subscriptions, imports). A version is opaque and changes with the text;
-//! lf keeps each text by its version for the process, so a scan whose listed
+//! listen-fire keeps each text by its version for the process, so a scan whose listed
 //! version it already holds asks no `read`.
 //!
 //! The module's own settings (a platform's tenant) cannot come from the
-//! secrets slot, which may not open where files are still read (`lf lsp`):
+//! secrets slot, which may not open where files are still read (`listen-fire lsp`):
 //! they are read from the environment and the secrets file only, and a
 //! project naming a module whose settings are in neither is refused as it
 //! loads (`refuse_unbootstrapped`).
@@ -59,7 +59,7 @@ pub const MOVEMENTS_METHODS: &[&str] = &["movements.list", "movements.read", "mo
 /// `WATCH_WAIT_CAP_MS`).
 pub const WATCH_WAIT_CAP: Duration = Duration::from_secs(30);
 
-/// How much longer than the wait it asked for lf gives a module's watch
+/// How much longer than the wait it asked for listen-fire gives a module's watch
 /// before it gives up on the answer: the request has no timeout of its own.
 const WATCH_ANSWER_SLACK: Duration = Duration::from_secs(10);
 
@@ -67,7 +67,7 @@ const WATCH_ANSWER_SLACK: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone, PartialEq)]
 pub struct Listed {
     pub path: String,
-    /// None: the module does not say, and lf reads the file on every scan.
+    /// None: the module does not say, and listen-fire reads the file on every scan.
     pub version: Option<String>,
 }
 
@@ -89,13 +89,13 @@ pub enum Written {
 /// Why a file was not written.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WriteError {
-    /// The module keeps the project's movements where lf cannot change them.
+    /// The module keeps the project's movements where listen-fire cannot change them.
     ReadOnly { module: String, reason: String },
     Failed(String),
 }
 
 impl WriteError {
-    /// What `lf upgrade` and `lf init` refuse with.
+    /// What `listen-fire upgrade` and `listen-fire init` refuse with.
     pub fn refusal(&self) -> String {
         match self {
             WriteError::ReadOnly { module, reason } => format!("{module} holds the project's movements read-only: {reason}. Change them where they live."),
@@ -137,7 +137,7 @@ pub struct Change {
     pub kind: ChangeKind,
     pub path: String,
     /// The text's version after an add or a change (None: the module does
-    /// not say, and lf reads the file); always None for a removal.
+    /// not say, and listen-fire reads the file); always None for a removal.
     pub version: Option<String>,
 }
 
@@ -156,7 +156,7 @@ pub trait MovementsStore {
     /// What changed after `cursor` (None: the module's cursor now, with no
     /// events), waiting up to `wait` (at most `WATCH_WAIT_CAP`) for something to.
     fn watch<'a>(&'a self, cursor: Option<&'a str>, wait: Duration) -> LocalFuture<'a, Result<Watched, String>>;
-    /// Whether the module answers `watch`, which `lf serve` and `lf drain` need.
+    /// Whether the module answers `watch`, which `listen-fire serve` and `listen-fire drain` need.
     fn answers_watch(&self) -> Result<bool, String> {
         Ok(true)
     }
@@ -600,7 +600,7 @@ impl FolderWatch {
     }
 }
 
-// ── A movements module lf does not build in ────────────────────────────────
+// ── A movements module listen-fire does not build in ────────────────────────────────
 
 /// A movements module spoken to over the slot's methods (crate::slot_client),
 /// each text kept by its version for the process.
@@ -832,7 +832,7 @@ pub fn written_of(js: &Js, module: &str) -> Option<Result<Written, WriteError>> 
 
 // Per thread, as the secrets slot's are (crate::secrets_slot).
 thread_local! {
-    /// A module lf does not build in, reached once per project and module.
+    /// A module listen-fire does not build in, reached once per project and module.
     static STARTED: RefCell<HashMap<(PathBuf, String), Rc<ProcessMovements>>> = RefCell::new(HashMap::new());
 }
 
@@ -844,14 +844,14 @@ pub fn of_project(project: &Project, env: &[(String, String)]) -> Result<Rc<dyn 
     if let Some(started) = STARTED.with(|started| started.borrow().get(&key).cloned()) {
         return Ok(started);
     }
-    // `lf upgrade` loads its project without the check: it is made here too.
+    // `listen-fire upgrade` loads its project without the check: it is made here too.
     refuse_unbootstrapped(project, env).map_err(|why| format!("{}: {why}", project.root.join(PROJECT_FILE).display()))?;
     let started = Rc::new(ProcessMovements::start(&module.name, process, &crate::secrets_slot::module_settings(project, env, module)?)?);
     STARTED.with(|s| s.borrow_mut().insert(key, started.clone()));
     Ok(started)
 }
 
-/// `lf serve` and `lf drain` learn of a changed movement from the module's
+/// `listen-fire serve` and `listen-fire drain` learn of a changed movement from the module's
 /// watch: one that does not answer it is refused as they start.
 pub fn require_watch(project: &Project, env: &[(String, String)], command: &str) -> Result<(), String> {
     match of_project(project, env)?.answers_watch()? {
@@ -1236,7 +1236,7 @@ mod tests {
             let cursor = now(&module).await;
             let (again, events) = watched(&module, &cursor, WAIT).await;
             assert_eq!((again.as_str(), events), (cursor.as_str(), vec![]));
-            assert!(asked.elapsed() < Duration::from_secs(1), "answered at once, so lf pauses");
+            assert!(asked.elapsed() < Duration::from_secs(1), "answered at once, so listen-fire pauses");
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join("a.mvt"), "one").unwrap();
             assert_eq!(module.watch(Some(&cursor), WAIT).await.unwrap(), Watched::Resync, "the watcher started: list again");
@@ -1259,11 +1259,11 @@ mod tests {
         .unwrap();
         fs::write(dir.join("lf.yaml"), "engine: 0.12.0\ncore:\n  movements: acme_movements\n").unwrap();
         let refused = crate::project::load_project_with(&dir, &[]).unwrap_err();
-        let text = "core.movements: acme_movements: the movements module's own settings come from LF_SECRET__… or the secrets file, not from the secrets slot; neither holds acme_movements's install (run `lf connect acme_movements` before naming it in lf.yaml, or set LF_SECRET__ACME_MOVEMENTS__EXTERNAL=acme_movements and its settings as LF_SECRET__ACME_MOVEMENTS__<SETTING>)";
+        let text = "core.movements: acme_movements: the movements module's own settings come from LF_SECRET__… or the secrets file, not from the secrets slot; neither holds acme_movements's install (run `listen-fire connect acme_movements` before naming it in lf.yaml, or set LF_SECRET__ACME_MOVEMENTS__EXTERNAL=acme_movements and its settings as LF_SECRET__ACME_MOVEMENTS__<SETTING>)";
         assert!(refused.ends_with(text), "{refused}");
         let to_upgrade = crate::project::load_project_to_upgrade(&dir).unwrap();
-        let refused_by_upgrade = of_project(&to_upgrade, &[]).err().expect("lf upgrade's project is refused when it reaches its files");
-        assert_eq!(refused_by_upgrade, refused, "lf upgrade refuses with the same text");
+        let refused_by_upgrade = of_project(&to_upgrade, &[]).err().expect("listen-fire upgrade's project is refused when it reaches its files");
+        assert_eq!(refused_by_upgrade, refused, "listen-fire upgrade refuses with the same text");
         let env = [("LF_SECRET__ACME_MOVEMENTS__EXTERNAL".to_string(), "acme_movements".to_string()), ("LF_SECRET__ACME_MOVEMENTS__TENANT".to_string(), "t1".to_string())];
         let project = crate::project::load_project_with(&dir, &env).unwrap();
         assert_eq!(crate::secrets_slot::module_settings(&project, &env, &project.core.movements).unwrap().get("tenant").map(String::as_str), Some("t1"));
