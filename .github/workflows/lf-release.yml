@@ -131,7 +131,7 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" artifacts/lf-*.tar.gz artifacts/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --title "listen-fire ${GITHUB_REF_NAME#lf-v}" --generate-notes \
-            $(case "$GITHUB_REF_NAME" in *-*) echo --prerelease ;; esac)
+            $(case "${GITHUB_REF_NAME#lf-v}" in *-*) echo --prerelease ;; esac)
 
   homebrew:
     # Pre-releases bump the tap too: it serves whatever the newest release is.
