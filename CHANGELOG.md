@@ -20,6 +20,21 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.12.13] - 2026-10-29
+
+A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. The command is renamed to `listen-fire`, and two modules arrive: `@lf/github` and `@lf/stripe`.
+
+### Changed
+
+- **The command is now `listen-fire`, formerly `lf`.** `lf` is also a popular terminal file manager, which owns `lf` on Homebrew core, so the two collided on a PATH and in what people and models take `lf` to mean. `listen-fire` matches the crate (`cargo install listen-fire`), the domain and the Homebrew tap. Only the binary's name changed: every subcommand and flag is the same (`listen-fire check`, `listen-fire run`, `listen-fire runs show`). No `lf` alias ships.
+  - Unchanged, so every saved project and program runs as it is: module names in movement source (`@lf/stripe`), the project file `lf.yaml` and the `.lf/` state folder, the `LF_*` environment variables, the release tags (`lf-v<version>`), the bundled modules' folder (`share/lf/modules`), the Postgres store's `lf` schema, and the crate and package names.
+  - To move over: install again (the install script, Homebrew, or `cargo install listen-fire`), then delete the old `lf` where the earlier install put it: `~/.local/bin/lf` for the install script, `<prefix>/bin/lf` for `scripts/dist/install.sh`. Both scripts print a one-line note when they find an `lf` that an earlier install of theirs left; they never delete it.
+  - Rename `lf` in scripts, CI jobs, cron entries and container commands. In Zed, the language server's settings key is now `lsp.listen-fire`.
+  - A release archive carries `bin/listen-fire`. The install scripts refuse an archive from before the rename, which carries `bin/lf`.
+  - The Homebrew formula is now `listen-fire` (`brew install listen-fire/tap/listen-fire`), no longer `lf`.
+
+### Added
+
 - New module `@lf/github`: your GitHub notifications, repositories, pull requests and issues.
   - A listen on `Notification` fires once per notification thread that is new or has changed since the last poll (review requests, mentions, assignments). `events` selects GitHub's reasons, and `listen-fire check` refuses one GitHub never sends. The first poll delivers nothing.
   - Polls are conditional, so an unchanged feed is a 304 that costs no quota, and never sooner than GitHub's `X-Poll-Interval`.
@@ -33,15 +48,6 @@ named in [`RELEASING.md`](RELEASING.md).
   - Customers, invoices and subscriptions are joined by edges. `Email` on customers and `Status` on invoices and subscriptions reach Stripe.
   - The credential is an API key (a restricted read-only key is enough) and the webhook endpoint's signing secret.
 - `@lf/webhook`'s `stripe` scheme and `@lf/stripe` check Stripe's signature with one shared check in module-kit. Nothing changes for a webhook connection.
-
-### Changed
-
-- **The command is now `listen-fire`, formerly `lf`.** `lf` is also a popular terminal file manager, which owns `lf` on Homebrew core, so the two collided on a PATH and in what people and models take `lf` to mean. `listen-fire` matches the crate (`cargo install listen-fire`), the domain and the Homebrew tap. Only the binary's name changed: every subcommand and flag is the same (`listen-fire check`, `listen-fire run`, `listen-fire runs show`). No `lf` alias ships.
-  - Unchanged, so every saved project and program runs as it is: module names in movement source (`@lf/stripe`), the project file `lf.yaml` and the `.lf/` state folder, the `LF_*` environment variables, the release tags (`lf-v<version>`), the bundled modules' folder (`share/lf/modules`), the Postgres store's `lf` schema, and the crate and package names.
-  - To move over: install again (the install script, Homebrew, or `cargo install listen-fire`), then delete the old `lf` where the earlier install put it: `~/.local/bin/lf` for the install script, `<prefix>/bin/lf` for `scripts/dist/install.sh`. Both scripts print a one-line note when they find an `lf` that an earlier install of theirs left; they never delete it.
-  - Rename `lf` in scripts, CI jobs, cron entries and container commands. In Zed, the language server's settings key is now `lsp.listen-fire`.
-  - A release archive carries `bin/listen-fire`. The install scripts refuse an archive from before the rename, which carries `bin/lf`.
-  - The Homebrew formula is now `listen-fire` (`brew install listen-fire/tap/listen-fire`), no longer `lf`.
 
 ## [0.12.12] - 2026-10-27
 
@@ -2420,7 +2426,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.12...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.13...HEAD
+[0.12.13]: https://github.com/listen-fire/listen-fire/compare/v0.12.12...v0.12.13
 [0.12.12]: https://github.com/listen-fire/listen-fire/compare/v0.12.11...v0.12.12
 [0.12.11]: https://github.com/listen-fire/listen-fire/compare/v0.12.10...v0.12.11
 [0.12.10]: https://github.com/listen-fire/listen-fire/compare/v0.12.9...v0.12.10

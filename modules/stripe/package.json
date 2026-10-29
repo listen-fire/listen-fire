@@ -1,7 +1,7 @@
 {
   "name": "@listen-fire/stripe",
   "license": "Apache-2.0",
-  "version": "0.12.7",
+  "version": "0.12.8",
   "description": "Stripe (customers, invoices, subscriptions) as a module: its signed webhook deliveries as events typed by Stripe event type, and a read-only typed graph of customers, invoices and subscriptions, every amount in major units of its currency. Loaded in process by the platform, served by serve-module everywhere else.",
   "engines": {
     "node": ">=22.23.4 <23"

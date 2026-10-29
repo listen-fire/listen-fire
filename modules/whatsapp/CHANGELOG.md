@@ -1,5 +1,11 @@
 # @listen-fire/whatsapp
 
+## 0.12.8
+
+### Patch Changes
+
+- The command is now `listen-fire`, no longer `lf`: every message, hint, description and handbook page that tells someone what to run names `listen-fire` (for example `listen-fire connect s3_files`, `listen-fire credential add --module webhook <name>`). Module names (`@lf/…`), `lf.yaml`, `.lf/` and `LF_*` variables are unchanged.
+
 ## 0.12.7
 
 ### Patch Changes

@@ -1,0 +1,7 @@
+# @listen-fire/stripe
+
+## 0.12.8
+
+### Patch Changes
+
+- 8c9e723: A new module, `@lf/stripe`: Stripe's events and a read-only graph of customers, invoices and subscriptions. Deliveries come to `/hooks/stripe/<credential>` under `listen-fire serve`, checked against the endpoint's signing secret with module-kit's shared Stripe check (an unsigned, mis-signed or stale one is 401), and named by the event id so a retry runs once. Each is one `Event` labelled with its Stripe type, so `listen to pay { events: ["invoice.payment_failed"] }` narrows by it and `listen-fire check` refuses a type Stripe never sends; the invoice, subscription and customer events are typed, and any other is answered 200 and runs nothing. An event leads to its object along `Invoice`, `Subscription` or `Customer`. The account's `Customers`, `Invoices` and `Subscriptions` are joined by edges (an invoice's `Customer` and `Subscription`; a subscription's `Customer`, `Invoices` and `Latest Invoice`; a customer's `Invoices` and `Subscriptions`); `Email` on customers and `Status` and `Collection Method` on invoices and subscriptions reach Stripe. Every amount is in major units of its `Currency`, by Stripe's zero-decimal and three-decimal lists. Reads pin API version 2025-03-31.basil. The credential is an API key (a restricted read-only key is enough) and the webhook signing secret (`listen-fire credential add --module stripe <name>`). Nothing is written to Stripe. This is the package's first release: `changeset version` takes it from 0.12.7 to 0.12.8.

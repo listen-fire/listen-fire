@@ -1,5 +1,12 @@
 # @listen-fire/mcp
 
+## 0.12.11
+
+### Patch Changes
+
+- The command is now `listen-fire`, no longer `lf`: every message, hint, description and handbook page that tells someone what to run names `listen-fire` (for example `listen-fire connect s3_files`, `listen-fire credential add --module webhook <name>`). Module names (`@lf/…`), `lf.yaml`, `.lf/` and `LF_*` variables are unchanged.
+- 93e4f6f: `retryingFetch` no longer retries a request the host refused by policy: an error carrying the code `LF_POLICY_REFUSAL` (`POLICY_REFUSAL_CODE`, `isPolicyRefusal`) is thrown at once with its own message, not retried as a network error. `@lf/mcp` benefits through its wrapped fetch.
+
 ## 0.12.10
 
 ### Patch Changes
