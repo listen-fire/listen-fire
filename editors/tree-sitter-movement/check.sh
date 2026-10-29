@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Regenerates the parser and parses every .mvt in the repository (plus any
 # directories given as arguments). Fails when a file has an ERROR or MISSING
-# node: the grammar then needs widening (it is for highlighting; `lf check`
+# node: the grammar then needs widening (it is for highlighting; `listen-fire check`
 # decides what is valid). Needs the tree-sitter CLI.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"

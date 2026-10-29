@@ -5,7 +5,7 @@
  * This grammar exists for editors: highlighting, bracket matching,
  * indentation, outline. It is deliberately more permissive than the real
  * parser (crates/movement-parser) and never decides whether a program is
- * valid — the language server (`lf lsp`) does that. When the two disagree,
+ * valid — the language server (`listen-fire lsp`) does that. When the two disagree,
  * the real parser is right; widen this grammar rather than narrow it.
  */
 

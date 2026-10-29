@@ -1,11 +1,11 @@
 #!/bin/sh
-# Installs lf from a GitHub release:
+# Installs listen-fire from a GitHub release:
 #   curl -fsSL https://raw.githubusercontent.com/listen-fire/listen-fire/main/scripts/dist/install.sh | sh
 # The archive's checksum is verified against the release's SHA256SUMS before
-# anything is installed. Lays down <prefix>/bin/lf and <prefix>/share/lf/modules
-# (the built-in modules lf finds beside its binary).
+# anything is installed. Lays down <prefix>/bin/listen-fire and <prefix>/share/lf/modules
+# (the built-in modules listen-fire finds beside its binary).
 #
-#   LF_VERSION=0.1.0   install that release (default: the latest lf release)
+#   LF_VERSION=0.1.0   install that release (default: the latest listen-fire release)
 #   LF_BASE_URL=<url>  fetch the archive and SHA256SUMS from there (a mirror, or a test)
 #   GITHUB_TOKEN=<t>   authenticate the latest-release lookup (unauthenticated calls are rate limited)
 #   LF_API_URL=<url>   the releases API (default https://api.github.com; a test points it elsewhere)
@@ -37,7 +37,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 # The repo also tags image releases (v*), so GitHub's own "latest" release is
-# not necessarily an lf release: page through releases (newest first) until a
+# not necessarily a listen-fire release: page through releases (newest first) until a
 # tag named lf-v* turns up.
 latest_lf_tag() {
   page=1
@@ -83,6 +83,8 @@ else die "needs sha256sum or shasum to verify the download"; fi
 
 tar -C "$work" -xzf "$work/$archive"
 src="$work/$tag-$target"
+# A release from before the rename carries bin/lf, which this script does not install.
+[ -f "$src/bin/listen-fire" ] || die "$archive has no bin/listen-fire (the release predates the rename from lf); install a newer release"
 
 sudo=""
 mkdir -p "$prefix/bin" "$prefix/share/lf" 2>/dev/null || true
@@ -92,13 +94,18 @@ if [ ! -w "$prefix/bin" ] || [ ! -w "$prefix/share/lf" ]; then
 fi
 $sudo rm -rf "$prefix/share/lf/modules"
 $sudo cp -R "$src/share/lf/modules" "$prefix/share/lf/modules"
-$sudo cp "$src/bin/lf" "$prefix/bin/lf.new"
-$sudo chmod 755 "$prefix/bin/lf.new"
-$sudo mv "$prefix/bin/lf.new" "$prefix/bin/lf"
+$sudo cp "$src/bin/listen-fire" "$prefix/bin/listen-fire.new"
+$sudo chmod 755 "$prefix/bin/listen-fire.new"
+$sudo mv "$prefix/bin/listen-fire.new" "$prefix/bin/listen-fire"
 
-echo "installed lf ${tag#lf-v} to $prefix/bin/lf"
+echo "installed listen-fire ${tag#lf-v} to $prefix/bin/listen-fire"
 case ":$PATH:" in
   *":$prefix/bin:"*) ;;
   *) echo "add $prefix/bin to your PATH" ;;
 esac
-echo "next: lf init my-project && cd my-project && lf check"
+# An earlier install's binary carries its --contract-store flag; any other
+# `lf` (a file manager by that name, say) does not, and is left unmentioned.
+if [ -f "$prefix/bin/lf" ] && LC_ALL=C grep -a -q -e '--contract-store' "$prefix/bin/lf" 2>/dev/null; then
+  echo "an earlier install's lf is still at $prefix/bin/lf; the command is now listen-fire, so remove it: ${sudo:+sudo }rm \"$prefix/bin/lf\""
+fi
+echo "next: listen-fire init my-project && cd my-project && listen-fire check"

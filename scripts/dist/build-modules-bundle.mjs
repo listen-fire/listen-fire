@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Builds the built-in modules bundle a release ships beside the lf binary:
+// Builds the built-in modules bundle a release ships beside the listen-fire binary:
 //   modules/node_modules/   module-kit and the workspace packages it needs,
 //                           plus their third-party dependencies (tsx, zod, ...)
 //   modules/<name>/         one folder per module under repo modules/
@@ -94,7 +94,7 @@ for (const [name, source] of Object.entries(WORKSPACE)) {
 }
 for (const name of modules) cpSync(join('modules', name), join(bundle, name), { recursive: true, filter: skip });
 
-// What the bundle carries, one `name version` per line, for `lf --version`:
+// What the bundle carries, one `name version` per line, for `listen-fire --version`:
 // modules release on their own versions, so the binary's own says nothing of them.
 const shipped = [...Object.values(WORKSPACE), ...modules.map((m) => `modules/${m}`)].map((source) => {
   const { name, version } = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8'));

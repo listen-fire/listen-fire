@@ -3,7 +3,7 @@ name = "listen-fire"
 version = "0.1.0"
 schema_version = 1
 authors = ["listen-fire contributors"]
-description = "Movement files (.mvt): highlighting, and diagnostics, completion, hover, go-to-definition and fixes from `lf lsp`."
+description = "Movement files (.mvt): highlighting, and diagnostics, completion, hover, go-to-definition and fixes from `listen-fire lsp`."
 repository = "https://github.com/listen-fire/listen-fire"
 
 # The grammar lives in this repository. Zed fetches it at this commit, so
@@ -14,9 +14,9 @@ repository = "https://github.com/listen-fire/listen-fire"
 rev = "2b2b0728bee66565ee166dcb6ec0e8688256c760"
 path = "editors/tree-sitter-movement"
 
-[language_servers.lf]
-name = "lf"
+[language_servers.listen-fire]
+name = "listen-fire"
 languages = ["Movement"]
 
-[language_servers.lf.language_ids]
+[language_servers.listen-fire.language_ids]
 "Movement" = "movement"

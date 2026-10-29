@@ -23,11 +23,11 @@ services:
     <<: *lf
     depends_on:
       postgres: { condition: service_healthy }
-    command: ["lf", "connect", "@lf/postgres-store"]
+    command: ["listen-fire", "connect", "@lf/postgres-store"]
   serve:
     <<: *lf
     ports: ["8080:8080"]
   drain:
     <<: *lf
     # What a scheduler does on a platform: short drains, started again and again.
-    command: ["sh", "-c", "while true; do lf drain --until-idle --max-seconds 55; sleep 5; done"]
+    command: ["sh", "-c", "while true; do listen-fire drain --until-idle --max-seconds 55; sleep 5; done"]

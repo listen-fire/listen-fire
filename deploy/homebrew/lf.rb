@@ -34,11 +34,11 @@ class Lf < Formula
   end
 
   def install
-    # bin/ and share/ stay together: lf finds its modules at <prefix>/share/lf/modules.
+    # bin/ and share/ stay together: listen-fire finds its modules at <prefix>/share/lf/modules.
     prefix.install Dir["*"]
   end
 
   test do
-    assert_match version.to_s, shell_output("#{bin}/lf --version")
+    assert_match version.to_s, shell_output("#{bin}/listen-fire --version")
   end
 end

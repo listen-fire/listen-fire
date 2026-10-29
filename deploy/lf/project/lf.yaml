@@ -35,7 +35,7 @@ core:
 #   LF_SECRET__DOCUMENT_AI__BUCKET=…  (files past 15 pages or 20 MB)
 #   LF_SECRET__MODELS_OCR__EXTERNAL=models_ocr  (the models settings again, as __VENDOR=gemini, …)
 # A wake for workers started on demand (the wake slot, empty by default: nobody
-# is told, and work waits for a scheduled `lf drain`). On Cloud Run, with the drain as a job, each row's due
+# is told, and work waits for a scheduled `listen-fire drain`). On Cloud Run, with the drain as a job, each row's due
 # time becomes a Google Cloud Tasks task that starts the job; keep an hourly
 # scheduled drain as the safety net, and give every process the same settings:
 #   core:
@@ -66,5 +66,5 @@ core:
 #     movements: acme_movements    # externals/acme_movements/lf-external.yaml, kind: core, slot: movements, settings: [{ name: tenant }]
 #   LF_SECRET__ACME_MOVEMENTS__EXTERNAL=acme_movements
 #   LF_SECRET__ACME_MOVEMENTS__TENANT=…   (the team whose movements these are, set per process)
-# lf sends the settings on every request and never reads the tenant itself.
+# listen-fire sends the settings on every request and never reads the tenant itself.
 # This file and the externals folder stay here, whichever module holds the movements.

@@ -1,5 +1,5 @@
-# The Rust lf as one container image: `lf serve` (the webhook and callback
-# doors) and `lf drain` (workers) are the same image with a different command.
+# The Rust listen-fire as one container image: `listen-fire serve` (the webhook and callback
+# doors) and `listen-fire drain` (workers) are the same image with a different command.
 #
 # Build context is the repository root:
 #   docker build -f deploy/lf/Dockerfile -t lf .
@@ -16,7 +16,7 @@ COPY examples/rust-module examples/rust-module
 # The binary embeds the model price list at compile time, from @lf/anthropic.
 COPY modules/anthropic/prices.json modules/anthropic/prices.json
 RUN cargo build --release --locked -p listen-fire \
-  && cp target/release/lf /lf
+  && cp target/release/listen-fire /listen-fire
 
 # The built-in modules run under node (serve-module): install only the module
 # kit's, dealroom's, web's, pdf's, s3-files's, postgres-limiter's, models's, document-ai's and
@@ -36,7 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /srv/lf
 COPY --from=modules-build /srv/lf /srv/lf
-COPY --from=lf-build /lf /usr/local/bin/lf
+COPY --from=lf-build /listen-fire /usr/local/bin/listen-fire
 COPY deploy/lf/project /srv/lf/project
 
 ENV LF_BIND=0.0.0.0 PORT=8080
@@ -44,4 +44,4 @@ EXPOSE 8080
 WORKDIR /srv/lf/project
 # Run state is in Postgres (the @lf/postgres-store module), so the container keeps nothing: it
 # can be stopped and replaced at any time.
-CMD ["sh", "-c", "exec lf serve --port ${PORT}"]
+CMD ["sh", "-c", "exec listen-fire serve --port ${PORT}"]

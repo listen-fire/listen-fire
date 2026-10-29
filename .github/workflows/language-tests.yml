@@ -47,7 +47,7 @@ jobs:
       - run: rustup show active-toolchain || rustup toolchain install
       # The light build (no serve, no TLS) is a shipped configuration the default
       # build never compiles; a module gated in only one of them breaks it silently.
-      - name: Light lf build
+      - name: Light listen-fire build
         run: cargo build --locked -p listen-fire --no-default-features --features cli
       - name: Module boundary
         run: node scripts/check-module-boundary.cjs

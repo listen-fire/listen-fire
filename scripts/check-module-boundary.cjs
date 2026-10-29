@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The module boundary guard. A module (modules/*) and the kit it is built
-// with (packages/module-kit) are loaded by every host — the platform, lf, the
+// with (packages/module-kit) are loaded by every host — the platform, listen-fire, the
 // Rust host, an embedder — so neither may reach what only the hosted product
 // has: apps/*, a database client, or the recording layer (lib/recording). The
 // engine is reached only through its public entries (movement-engine/public/*).

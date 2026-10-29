@@ -1,8 +1,8 @@
 use zed_extension_api::{self as zed, LanguageServerId, Result};
 
-/// Starts `lf lsp`, the language server built into the `lf` binary.
+/// Starts `listen-fire lsp`, the language server built into the `listen-fire` binary.
 ///
-/// Zed calls this only when settings name no `lsp.lf.binary.path` (with a
+/// Zed calls this only when settings name no `lsp.listen-fire.binary.path` (with a
 /// path, Zed runs it itself, with the settings' `arguments`). Zed adds the
 /// login shell's environment and the settings' `env` and `arguments` on top.
 struct ListenFire;
@@ -17,9 +17,9 @@ impl zed::Extension for ListenFire {
         _language_server_id: &LanguageServerId,
         worktree: &zed::Worktree,
     ) -> Result<zed::Command> {
-        let command = worktree.which("lf").ok_or_else(|| {
-            "listen-fire: no `lf` on this project's PATH. Put it on PATH, or set \
-             \"lsp\": { \"lf\": { \"binary\": { \"path\": \"/path/to/lf\", \"arguments\": [\"lsp\"] } } } \
+        let command = worktree.which("listen-fire").ok_or_else(|| {
+            "listen-fire: no `listen-fire` on this project's PATH. Put it on PATH, or set \
+             \"lsp\": { \"listen-fire\": { \"binary\": { \"path\": \"/path/to/listen-fire\", \"arguments\": [\"lsp\"] } } } \
              in Zed's settings."
                 .to_string()
         })?;

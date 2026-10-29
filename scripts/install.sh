@@ -1,15 +1,16 @@
 #!/bin/sh
-# Installs the `lf` command from a GitHub release, keeping bin/ and share/
-# together because lf finds its built-in modules at <prefix>/share/lf/modules.
+# Installs the `listen-fire` command from a GitHub release, keeping bin/ and
+# share/ together because listen-fire finds its built-in modules at
+# <prefix>/share/lf/modules.
 #
 #   LF_VERSION      release to install, with or without the lf-v prefix (default: newest)
 #   LF_INSTALL_ROOT where releases unpack (default: $HOME/.lf)
-#   LF_BIN_DIR      where the `lf` symlink goes (default: $HOME/.local/bin)
+#   LF_BIN_DIR      where the `listen-fire` symlink goes (default: $HOME/.local/bin)
 set -eu
 
 REPO="listen-fire/listen-fire"
 
-die() { echo "lf install: $*" >&2; exit 1; }
+die() { echo "listen-fire install: $*" >&2; exit 1; }
 
 case "$(uname -s)" in
   Darwin) os=apple-darwin ;;
@@ -61,7 +62,7 @@ base="https://github.com/$REPO/releases/download/lf-v$version"
 root="${LF_INSTALL_ROOT:-$HOME/.lf}"
 bindir="${LF_BIN_DIR:-$HOME/.local/bin}"
 dest="$root/$version"
-link="$bindir/lf"
+link="$bindir/listen-fire"
 
 if [ -e "$link" ] && [ ! -L "$link" ]; then
   die "$link exists and is not a symlink; move it aside and re-run"
@@ -78,15 +79,26 @@ expected="$(awk -v f="$name.tar.gz" '$2 == f { print $1 }' "$tmp/SHA256SUMS")"
 [ -n "$expected" ] || die "SHA256SUMS has no entry for $name.tar.gz"
 actual="$(sha256 "$tmp/$name.tar.gz")"
 [ "$expected" = "$actual" ] || die "checksum mismatch for $name.tar.gz (expected $expected, got $actual); nothing installed"
+# A release from before the rename carries bin/lf, which this script does not link.
+tar -tzf "$tmp/$name.tar.gz" | grep -q '/bin/listen-fire$' \
+  || die "$name.tar.gz has no bin/listen-fire (the release predates the rename from lf); install a newer release; nothing installed"
 
 mkdir -p "$dest" "$bindir"
 tar -xzf "$tmp/$name.tar.gz" -C "$dest" --strip-components=1
-ln -sfn "$dest/bin/lf" "$link"
+ln -sfn "$dest/bin/listen-fire" "$link"
 
-echo "Installed lf $version to $dest"
-echo "Linked $link -> $dest/bin/lf"
+echo "Installed listen-fire $version to $dest"
+echo "Linked $link -> $dest/bin/listen-fire"
 case ":$PATH:" in
   *":$bindir:"*) ;;
   *) echo "Add it to your PATH:  export PATH=\"$bindir:\$PATH\"" ;;
 esac
+# Only a link into this script's own install root is ours; any other `lf` (a
+# file manager by that name, say) is left unmentioned.
+old="$bindir/lf"
+if [ -L "$old" ]; then
+  case "$(readlink "$old")" in
+    "$root"/*) echo "An earlier install's lf is still at $old; the command is now listen-fire, so remove it: rm \"$old\"" ;;
+  esac
+fi
 echo "Node 22 is needed only once a system is connected."
