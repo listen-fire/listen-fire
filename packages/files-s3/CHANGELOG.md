@@ -1,5 +1,11 @@
 # @listen-fire/files-s3
 
+## 0.12.8
+
+### Patch Changes
+
+- The same contents as 0.12.7, which npm left staged and never published: an upload aborts when its source stream dies, instead of hanging.
+
 ## 0.12.7
 
 ### Patch Changes
