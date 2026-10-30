@@ -136,9 +136,12 @@ pub const BORROW_UNKNOWN_GRAPH: &str = "MOV_BORROW_UNKNOWN_GRAPH";
 pub const BORROW_UNKNOWN_ROOT: &str = "MOV_BORROW_UNKNOWN_ROOT";
 pub const BORROW_UNKNOWN_FIELD: &str = "MOV_BORROW_UNKNOWN_FIELD";
 pub const AWAIT_NOT_AWAITABLE: &str = "MOV_AWAIT_NOT_AWAITABLE";
+/// Raised by nothing since 0.13 (no catalog can say an edge resolves but
+/// announces nothing); the name is never reused.
 pub const AWAIT_NEEDS_CADENCE: &str = "MOV_AWAIT_NEEDS_CADENCE";
 pub const UNTIL_EDGE_WATCHABLE: &str = "MOV_UNTIL_EDGE_WATCHABLE";
 pub const AWAIT_BARE_WALK: &str = "MOV_AWAIT_BARE_WALK";
+pub const AWAIT_UNORDERED: &str = "MOV_AWAIT_UNORDERED";
 pub const PARALLEL_RETIRED: &str = "MOV_PARALLEL_RETIRED";
 pub const EXTRACT_KEYWORD_RETIRED: &str = "MOV_EXTRACT_KEYWORD_RETIRED";
 pub const COMBINATOR_ARMS_ARE_ARGUMENTS: &str = "MOV_COMBINATOR_ARMS_ARE_ARGUMENTS";

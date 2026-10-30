@@ -21,7 +21,7 @@ function `First Approval Wins`(go: <runs-[:Invocation]->>) {
 
   r = race(
     () => {
-      tap = await first(approve-[:Called]->)
+      tap = await approve-[:Called]->
       return tap.At
     },
     () => { await sleep(1d) },

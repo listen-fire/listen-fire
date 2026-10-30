@@ -20,7 +20,7 @@ const CATALOG: &str = r#"{
     "positions": {
       "Monster": { "properties": { "Name": "text", "Slayer": "text", "Scroll": "file" }, "edges": { "Lair": { "target": "Note" } } },
       "Note": { "properties": { "Title": "text", "Attachment": "file" }, "edges": {} },
-      "Ticket": { "properties": { "Subject": "text" }, "edges": { "Reply": { "target": "Reply", "listenable": true } } },
+      "Ticket": { "properties": { "Subject": "text" }, "edges": { "Reply": { "target": "Reply", "listenable": true, "sequenced": "chronological" } } },
       "Reply": { "properties": { "Body": "text" }, "edges": {} }
     },
     "collections": { "notes": { "target": "Note" }, "tickets": { "target": "Ticket" } },
@@ -730,7 +730,7 @@ fn a_model_that_refuses_on_budget_fails_the_run_as_the_json_route_does() {
     assert!(matches!(&typed, Outcome::Failed(f) if f.message.contains("no budget left")), "{typed:?}");
 }
 
-const TICKET: &str = "  t = write game-[:tickets]-> { Subject: monster.Name }\n  r = await first(t-[:Reply]->)\n  write game-[:notes]-> { Title: coalesce(r.Body, \"\") }\n";
+const TICKET: &str = "  t = write game-[:tickets]-> { Subject: monster.Name }\n  r = await t-[:Reply]->\n  write game-[:notes]-> { Title: coalesce(r.Body, \"\") }\n";
 
 #[test]
 fn an_await_on_an_adapter_record_parks_and_resumes_when_the_reply_arrives() {
@@ -782,7 +782,7 @@ fn an_await_woken_early_parks_again_instead_of_stepping_past() {
     assert!(world.notes.is_empty());
 }
 
-const CALLBACK: &str = "  approve = callback((who: <text>) => { write game-[:notes]-> { Title: \"approved by ${who}\" } })\n  tap = await first(approve-[:Called]->)\n  write game-[:notes]-> { Title: \"tapped by ${tap.who} at ${tap.At}\" }\n";
+const CALLBACK: &str = "  approve = callback((who: <text>) => { write game-[:notes]-> { Title: \"approved by ${who}\" } })\n  tap = await approve-[:Called]->\n  write game-[:notes]-> { Title: \"tapped by ${tap.who} at ${tap.At}\" }\n";
 
 #[test]
 fn a_callback_is_minted_fired_and_its_awaiter_resumed() {
@@ -831,7 +831,7 @@ fn a_callback_is_minted_fired_and_its_awaiter_resumed() {
     assert_eq!(resumed, through_json);
 }
 
-const JOIN: &str = "  r = all(\n    () => {\n      t = write game-[:tickets]-> { Subject: monster.Name }\n      x = await first(t-[:Reply]->)\n      return coalesce(x.Body, \"\")\n    },\n    () => { return \"fast\" },\n  )\n  write game-[:notes]-> { Title: \"${r[0]}+${r[1]}\" }\n";
+const JOIN: &str = "  r = all(\n    () => {\n      t = write game-[:tickets]-> { Subject: monster.Name }\n      x = await t-[:Reply]->\n      return coalesce(x.Body, \"\")\n    },\n    () => { return \"fast\" },\n  )\n  write game-[:notes]-> { Title: \"${r[0]}+${r[1]}\" }\n";
 
 #[test]
 fn a_join_with_a_parked_arm_closes_when_the_arm_resumes() {

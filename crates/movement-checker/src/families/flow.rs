@@ -4,8 +4,9 @@
 //! - MOV_AWAIT_BAD_DURATION
 //! - MOV_AWAIT_BARE_WALK
 //! - MOV_AWAIT_IMPURE_CONDITION
-//! - MOV_AWAIT_NEEDS_CADENCE (raised by no catalog since 0.13: see `check_awaitable`)
+//! - MOV_AWAIT_NEEDS_CADENCE (raised by nothing since 0.13: see `check_awaitable`)
 //! - MOV_AWAIT_NOT_AWAITABLE
+//! - MOV_AWAIT_UNORDERED
 //! - MOV_HEAD_NEEDS_A_NAME
 //! - MOV_IF_WITHOUT_ELSE
 //! - MOV_UNTIL_CADENCE_TOO_SHORT
@@ -13,6 +14,7 @@
 //! - MOV_WAIT_NOT_RESUMABLE
 
 use movement_parser::ast::{DurationLiteral, PathHead, PathRoot, RValue, Span, Statement};
+use movement_parser::stmt::AWAIT_ARRIVALS_WORD;
 
 use crate::checker::Checker;
 use crate::scope::{ScopeId, SymbolId};
@@ -111,22 +113,14 @@ impl Checker<'_> {
         }
     }
 
-    /// The walk an `await` parks on: the bare-walk spelling is retired, and a
-    /// parked run finds its record again by name.
-    pub fn check_awaited_head(&mut self, head: &PathHead, bare: Option<Span>) {
-        if let Some(span) = bare {
-            let path = spell_path_head(head);
-            self.report(
-                codes::AWAIT_BARE_WALK,
-                format!("'await {path}' — a bare walk under 'await' is retired. The park is the FIRST read, parked: write 'await FIRST({path})'"),
-                span,
-            );
-        }
+    /// The walk an `await` parks on: a parked run finds its record again by
+    /// name.
+    pub fn check_awaited_head(&mut self, head: &PathHead) {
         if let Some(PathRoot::Expression { expr }) = &head.root {
             self.report(
                 codes::HEAD_NEEDS_A_NAME,
                 format!(
-                    "'await' parks on the record it waits at, and a parked run finds that record again by NAME — so this one is bound first: 'waiting = {}', then 'await FIRST(waiting{})'.",
+                    "'await' parks on the record it waits at, and a parked run finds that record again by NAME — so this one is bound first: 'waiting = {}', then 'await waiting{}'.",
                     expr.raw, head.hops_raw
                 ),
                 head.span,
@@ -148,27 +142,59 @@ impl Checker<'_> {
         let shown = crate::families::names::spell_name(name);
         self.report(
             codes::AWAIT_ON_LIST,
-            format!("'await' parks on one record, under one key, and '{shown}' holds a list of records — there is no one record to wait at. Await on one record a name holds: 'await first(rec{})'", head.hops_raw.trim()),
+            format!(
+                "'await' parks on one record, under one key, and '{shown}' holds a list of records, so there is no one record to wait at — waiting on many records is {}(…) over them",
+                movement_parser::ast::CombinatorKind::All.word()
+            ),
             head.span,
         );
     }
 
-    /// What an awaited walk lands on must resume the run: an edge whose
-    /// module announces arrivals (listenable). An undescribed edge claims
-    /// nothing. (MOV_AWAIT_NEEDS_CADENCE was an edge that resolved but
-    /// announced nothing; `listenable` is both facts at once, so no catalog
-    /// can say that any more.)
-    pub fn check_awaitable(&mut self, head: &PathHead, walk: Option<&crate::families::walks::HeadWalk>) {
-        let Some(edge) = walk.and_then(|w| w.last_edge_schema.as_ref()) else { return };
-        if head.root.is_none() || edge.listenable == Some(true) {
+    /// What an awaited walk waits on: one edge, off a record a name holds,
+    /// whose module announces arrivals on it (listenable). A plain `await`
+    /// takes the first match already on an edge that can be listed, so that
+    /// edge must declare its order; `await new` waits only for what arrives.
+    /// An undescribed edge claims nothing. (MOV_AWAIT_NEEDS_CADENCE was an
+    /// edge that resolved but announced nothing; `listenable` is both facts
+    /// at once, so no catalog can say that any more.)
+    pub fn check_awaitable(&mut self, head: &PathHead, walk: Option<&crate::families::walks::HeadWalk>, arrivals_only: bool) {
+        let path = spell_path_head(head);
+        if Self::head_steps(head).is_some_and(|steps| steps.len() > 1) {
+            self.report(
+                codes::AWAIT_BARE_WALK,
+                format!(
+                    "'await {path}' walks more than one edge, and 'await' waits on one edge of a record a name holds — bind the record the last edge leaves from to a name, then await that edge off it"
+                ),
+                head.span,
+            );
             return;
         }
-        let path = spell_path_head(head);
-        self.report(
-            codes::AWAIT_NOT_AWAITABLE,
-            format!("'FIRST({path})' can't be awaited — 'await' waits on an edge whose resolution resumes the run (an ask's Response). This is an ordinary edge; read it live, without 'await'."),
-            head.span,
-        );
+        let Some(walk) = walk else { return };
+        let (Some(edge), Some(name)) = (walk.last_edge_schema.as_ref(), walk.last_edge.as_deref()) else { return };
+        if head.root.is_none() {
+            return;
+        }
+        let owner = walk.last_source.as_ref().map_or_else(|| "its record".to_string(), crate::families::walks::describe_edge_owner);
+        if edge.listenable != Some(true) {
+            self.report(
+                codes::AWAIT_NOT_AWAITABLE,
+                format!(
+                    "'-[:{name}]->' on {owner} announces nothing, so 'await' has nothing to wait for — only an edge its module announces arrivals on can be awaited. Read it without 'await', or wait on a condition: `await until(() => {{ return exists({path}) }}, {{ every: 15m }})`"
+                ),
+                head.span,
+            );
+            return;
+        }
+        let listed = edge.readable != Some(false);
+        if listed && edge.sequenced.is_none() && !arrivals_only {
+            self.report(
+                codes::AWAIT_UNORDERED,
+                format!(
+                    "'await' takes the first match already on '-[:{name}]->', and {owner} declares no order for it, so 'first' would be a guess. Write `await {AWAIT_ARRIVALS_WORD} {path}` to wait only for what arrives"
+                ),
+                head.span,
+            );
+        }
     }
 
     /// `checkUntilPurity`: an `until` condition's body may only read. Whether
@@ -300,7 +326,7 @@ impl Checker<'_> {
         let edges = watchable.iter().map(|edge| format!("'-[:{edge}]->'")).collect::<Vec<_>>().join(", ");
         let mut warning = crate::diagnostic::Diagnostic::error(
             codes::UNTIL_EDGE_WATCHABLE,
-            format!("{edges} now arrives as it happens, so this doesn't have to be checked on a timer — 'await FIRST(…)' on it waits without polling."),
+            format!("{edges} now arrives as it happens, so this doesn't have to be checked on a timer — 'await' on it waits without polling."),
             condition_span,
         );
         warning.severity = Some(crate::diagnostic::Severity::Warning);

@@ -108,6 +108,9 @@ pub struct Typing<'a> {
     pub locals: IndexMap<String, Option<Position>>,
     /// The walk being typed is awaited (`await x-[:E]->`).
     pub awaited: bool,
+    /// The name a walk starts at, while its first edge is stepped (`msg` in
+    /// `msg-[:Interactions]->`): set by whoever knows it, before `walk_steps`.
+    pub step_root: Option<String>,
     pub last_edge_schema: Option<EdgeSchema>,
     pub last_landings: Vec<Option<Position>>,
     pub last_ordering: CollectionOrder,
@@ -149,6 +152,7 @@ impl<'a> Typing<'a> {
             span,
             locals: IndexMap::new(),
             awaited: false,
+            step_root: None,
             last_edge_schema: None,
             last_landings: Vec::new(),
             last_ordering: CollectionOrder::Unknown,
@@ -594,6 +598,7 @@ impl<'a> Typing<'a> {
     pub fn walk_steps(&mut self, start: Option<Position>, steps: &[TraversalStep], awaited: bool) -> Option<Position> {
         self.awaited = awaited;
         self.last_edge_schema = None;
+        let mut root = self.step_root.take();
         let mut landings = Vec::new();
         let mut current = start;
         let mut ordering = CollectionOrder::Unknown;
@@ -610,10 +615,12 @@ impl<'a> Typing<'a> {
                         },
                         _ => None,
                     };
+                    self.step_root = root.take();
                     let (next, schema) = match union {
                         Some(members) if !edge.edge_type_id.starts_with('#') => (self.step_every_member(members, edge), None),
                         _ => self.step_edge(from.as_ref(), edge),
                     };
+                    self.step_root = None;
                     self.last_edge_schema = schema.clone();
                     ordering =
                         self.hop_ordering(from.as_ref(), edge.cardinality.as_ref().is_some_and(|c| c.order_by.is_some()), &edge.edge_type_id, schema.as_ref());
@@ -643,6 +650,7 @@ impl<'a> Typing<'a> {
                 }
                 TraversalStep::LinkBack {} | TraversalStep::Resource(_) => current = None,
             }
+            root = None;
             landings.push(current.clone());
         }
         self.last_landings = landings;
@@ -863,6 +871,7 @@ impl<'a> Typing<'a> {
                 }
                 self.report_walk_off_maybe_absent(alias_root.as_deref(), steps, expression, start.as_ref());
                 let observed_start = self.observed.as_ref().map(|_| start.as_ref().and_then(crate::story::instance_of));
+                self.step_root = alias_root.as_deref().map(crate::families::names::spell_name);
                 let destination = self.walk_steps(start, steps, false);
                 if let (Some(start), false) = (observed_start, steps.is_empty()) {
                     let walked = crate::story::Walked {

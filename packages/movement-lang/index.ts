@@ -1,5 +1,6 @@
 export * from './never';
 export * from './parser/ast';
+export * from './parser/await_words';
 export * from './parser/scan';
 export * from './parser/parse';
 export {

@@ -35,6 +35,14 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
   - A module that still declares `awaitable` or `watchable` on a reference is refused when `listen-fire` describes it, naming `listenable`.
   - The catalog snapshot contract moves to version 2, since a member was removed. Version 1 is still read, and deprecated. A snapshot of either version that still carries `awaitable` or `watchable` is refused by both readers.
   - Why: an edge's two capabilities, being listed and announcing arrivals, are separate facts, and the two retired keys only ever said the second one twice.
+- `await x-[:E]->` waits for one record on an edge its module announces arrivals on (`listenable`), and `await new x-[:E]->` waits only for one that arrives after `x` entered the run.
+  - A plain `await` takes the first match already on the edge, in the edge's declared order, or else the first to arrive. On an edge that can be listed but declares no order, it is refused (`MOV_AWAIT_UNORDERED`): write `await new`.
+  - `await first(…)` is retired: `MOV_V5_SPELLING` respells it `await <traversal>`, a safe fix `listen-fire upgrade` applies. It waits for the same one record.
+  - Awaiting an edge that announces nothing (`MOV_AWAIT_NOT_AWAITABLE`) suggests a read, or an `await until(…)` on the condition.
+  - Awaiting a walk of more than one edge is refused (`MOV_AWAIT_BARE_WALK`): bind the record the last edge leaves from, then await that edge off it.
+  - Reading an edge that can only announce, outside a wait, is refused as before (`MOV_AWAIT_REQUIRED`); its message now shows the wait to write.
+  - A name called `new` is still a root: `await new-[:Notes]->` waits on the record `new` holds.
+  - Why: a wait is one record off a listenable edge, so the bare traversal says it; `first(…)` said it twice.
 
 ### Added
 

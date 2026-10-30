@@ -263,7 +263,7 @@ impl Walk {
     fn await_source(&self, source: &AwaitSource, steps: &[&str]) -> Option<CodeAt> {
         let (step, rest) = steps.split_first()?;
         match (source, *step) {
-            (AwaitSource::Traversal { head, .. } | AwaitSource::First { head, .. }, "head") => self.head(head, rest),
+            (AwaitSource::Traversal { head, .. }, "head") => self.head(head, rest),
             (AwaitSource::Combinator { combinator, .. }, "combinator") => self.combinator(combinator, rest),
             (AwaitSource::Until { condition, .. }, "condition") => match (condition, rest.split_first()?) {
                 (UntilCondition::Closure { closure }, (&"closure", rest)) => self.closure(closure, rest),

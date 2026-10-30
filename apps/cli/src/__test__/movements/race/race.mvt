@@ -10,7 +10,7 @@ function approve(company: <crm-[:Company]->>) {
   write crm-[:Company]-> { Name: "Asked ${go.id} at ${go.url}" }
   r = race(
     () => {
-      tap = await first(go-[:Called]->)
+      tap = await go-[:Called]->
       return tap.At
     },
     () => { await sleep(1d) },

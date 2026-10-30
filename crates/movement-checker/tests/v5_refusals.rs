@@ -116,13 +116,13 @@ fn a_knowledge_graph_query_text_is_retired() {
 
 #[test]
 fn an_await_parks_on_one_record() {
-    let body = "  xs = crm-[c:companies]-> {\n    return c\n  }\n  w = await first(xs-[d:deals]->)";
+    let body = "  xs = crm-[c:companies]-> {\n    return c\n  }\n  w = await xs-[d:deals]->";
     assert_eq!(
         found(body),
         [(
             "MOV_AWAIT_ON_LIST".to_string(),
             11,
-            "'await' parks on one record, under one key, and 'xs' holds a list of records — there is no one record to wait at. Await on one record a name holds: 'await first(rec-[d:deals]->)'".to_string()
+            "'await' parks on one record, under one key, and 'xs' holds a list of records, so there is no one record to wait at — waiting on many records is all(…) over them".to_string()
         )]
     );
 }

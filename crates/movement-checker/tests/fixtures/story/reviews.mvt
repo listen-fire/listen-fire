@@ -19,7 +19,7 @@ function `Triage Inbound`(msg: <inbox-[:Email]->>) {
 
   r = race(
     () => {
-      a = await first(q-[:Response]->)
+      a = await q-[:Response]->
       return a.Answer
     },
     () => { await sleep(2d) },

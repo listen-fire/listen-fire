@@ -316,7 +316,7 @@ impl Scan<'_> {
                 self.visit_combinator(combinator, scope);
                 None
             }
-            AwaitSource::Traversal { head, .. } | AwaitSource::First { head, .. } => self.visit_landing(head, scope),
+            AwaitSource::Traversal { head, .. } => self.visit_landing(head, scope),
         }
     }
 

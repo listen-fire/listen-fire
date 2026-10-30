@@ -2,6 +2,7 @@
 //! offered (docs/contracts/language-service.md, "What a position answers").
 
 use movement_checker::scope::SymbolKind;
+use movement_parser::stmt::AWAIT_ARRIVALS_WORD;
 use movement_parser::surface::table::plugin_name;
 use movement_parser::version::RUN_HOST_UNITS;
 
@@ -310,6 +311,11 @@ fn items_for(service: &Service, source: &str, pos: Pos, context: Context) -> Vec
             items.extend(builtins::grammar_words().map(|w| Item::new(w, ItemKind::Keyword, None)));
             items.extend(builtins::namespaces().iter().map(|n| Item::new(*n, ItemKind::Namespace, Some("standard namespace".into()))));
             items.extend(KEYWORDS.iter().map(|k| Item::new(*k, ItemKind::Keyword, None)));
+            items.push(Item::new(
+                format!("await {AWAIT_ARRIVALS_WORD}"),
+                ItemKind::Keyword,
+                Some("wait for the first record to arrive on an edge after its record entered the run".into()),
+            ));
             let mut seen = std::collections::HashSet::new();
             items.retain(|item| seen.insert(item.label.clone()));
             items

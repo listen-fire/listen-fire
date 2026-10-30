@@ -67,6 +67,11 @@ const PARALLEL_AS_ALL: &str = "the join is `all`, which takes its functions as a
 /// A race's arms are arguments, and no `await`.
 const RACE_BRANCHES_RETIRED: &str = "a race takes FUNCTIONS as its arguments, not brace branches: `r = race(q, () => { await sleep(4h) })`. The value is one slot per arm, in the order written — the winner's slot holds what its function returned and every other slot is null, so a timeout is `AT(r, 1) != null`.";
 
+/// `await new <head>-[:Edge]->`: the word that asks for only what arrives
+/// after the head record entered the run. Its one spelling; everything that
+/// writes or reads the form names it through this.
+pub const AWAIT_ARRIVALS_WORD: &str = "new";
+
 const UNTIL_CADENCE_IS_A_SETTING: &str = "'until' takes its cadence as a setting: `await until(<condition>, { every: 5m })`. There is no second positional argument — a value to wait FOR is an equality in the condition itself (`await until(a.state == \"done\", { every: 5m })`).";
 
 fn type_values_are_text(name: &str) -> String {
@@ -3002,9 +3007,10 @@ impl Parser {
 
     // ── await ──
 
-    /// `await <head>-[:Edge WHERE …]->`, `await FIRST(…)`, `await sleep(…)`,
-    /// `await until(…)`, `await race(…)` / `await parallel(…)`. `start` is the
-    /// keyword's position; `pos` is just past it.
+    /// `await <head>-[:Edge WHERE …]->`, `await new <head>-[:Edge]->`,
+    /// `await sleep(…)`, `await until(…)`, `await race(…)` / `await parallel(…)`;
+    /// the retired `await first(…)` reads as the traversal it waits on.
+    /// `start` is the keyword's position; `pos` is just past it.
     fn parse_await(&mut self, start: usize) -> SResult<AwaitExpression> {
         self.skip_inline_ws();
         let source_start = self.pos;
@@ -3105,50 +3111,81 @@ impl Parser {
                 self.pos = save;
             }
         }
-        // The core word is `first`, as everywhere else.
-        let first = "first";
-        if self.at_word("FIRST") || self.at_word(first) {
-            let save = self.pos;
-            let old = !self.at_word(first);
-            self.pos += "FIRST".len();
-            self.skip_inline_ws();
-            if self.is('(') {
-                if old {
-                    self.spelling("the retired spelling `FIRST` is written `first`", save, save + 5, vec![(save, save + 5, first.into())]);
-                }
-                self.pos += 1;
-                self.skip_inline_ws();
-                let Some(head) = self.try_parse_path_head()? else {
-                    return self.fail_at(
-                        format!(
-                            "Expected a traversal inside 'await FIRST(…)' (`await FIRST(a-[:Response]->)`), found {}",
-                            self.describe_here()
-                        ),
-                        source_start,
-                    );
-                };
-                self.skip_inline_ws();
-                self.expect(")", "to close 'await FIRST(<traversal>)'")?;
-                return Ok(AwaitExpression {
-                    source: AwaitSource::First { head, span: self.span_from(source_start) },
-                    span: self.span_from(start),
-                });
-            }
-            self.pos = save;
+        if let Some(head) = self.try_parse_retired_await_first(start)? {
+            return Ok(AwaitExpression {
+                source: AwaitSource::Traversal { head, span: self.span_from(source_start), arrivals_only: false },
+                span: self.span_from(start),
+            });
         }
+        let arrivals_only = self.try_consume_arrivals_word()?;
         let Some(head) = self.try_parse_path_head()? else {
             return self.fail_at(
                 format!(
-                    "Expected `await FIRST(a-[:Response]->)`, `await sleep(<duration>)`, or `await until(<condition>)` after 'await', found {}",
+                    "Expected `await a-[:Response]->`, `await sleep(<duration>)`, or `await until(<condition>)` after 'await', found {}",
                     self.describe_here()
                 ),
                 source_start,
             );
         };
         Ok(AwaitExpression {
-            source: AwaitSource::Traversal { head, span: self.span_from(source_start) },
+            source: AwaitSource::Traversal { head, span: self.span_from(source_start), arrivals_only },
             span: self.span_from(start),
         })
+    }
+
+    /// `await first(<traversal>)` (or `FIRST(…)`), retired in 0.13: the bare
+    /// traversal waits for the same one record. `start` is the `await`.
+    fn try_parse_retired_await_first(&mut self, start: usize) -> SResult<Option<PathHead>> {
+        if !self.at_word("first") && !self.at_word("FIRST") {
+            return Ok(None);
+        }
+        let save = self.pos;
+        self.pos += "first".len();
+        self.skip_inline_ws();
+        if !self.is('(') {
+            self.pos = save;
+            return Ok(None);
+        }
+        self.pos += 1;
+        self.skip_inline_ws();
+        let head_start = self.pos;
+        let Some(head) = self.try_parse_path_head()? else {
+            return self.fail_at(
+                format!("Expected a traversal inside 'await first(…)' (`await first(a-[:Response]->)`), found {}", self.describe_here()),
+                save,
+            );
+        };
+        let path = format!("await {}", self.text(head_start, self.pos));
+        self.skip_inline_ws();
+        self.expect(")", "to close 'await first(<traversal>)'")?;
+        self.spelling(
+            format!("`await first(…)` is retired in 0.13: write `{path}` — it waits for the same one record"),
+            start,
+            self.pos,
+            vec![(start, self.pos, path)],
+        );
+        Ok(Some(head))
+    }
+
+    /// `new` before a path head: the wait takes only what arrives. A name
+    /// called `new` stays a root (`await new-[:Notes]->`), so the word counts
+    /// only when whitespace and a whole path head follow it.
+    fn try_consume_arrivals_word(&mut self) -> SResult<bool> {
+        if !self.at_word(AWAIT_ARRIVALS_WORD) {
+            return Ok(false);
+        }
+        let save = self.pos;
+        if self.try_parse_path_head()?.is_some_and(|head| matches!(head.root, Some(PathRoot::Name { .. }))) {
+            self.pos = save;
+            return Ok(false);
+        }
+        self.pos = save + AWAIT_ARRIVALS_WORD.len();
+        let after_word = self.pos;
+        self.skip_inline_ws();
+        let head_start = self.pos;
+        let arrivals_only = head_start > after_word && self.try_parse_path_head()?.is_some();
+        self.pos = if arrivals_only { head_start } else { save };
+        Ok(arrivals_only)
     }
 
     /// The unbound statement form; `parse_await` leaves the terminator to the
@@ -4976,6 +5013,37 @@ mod tests {
         assert_ne!(error("link == 1\n").pointer("/message"), Some(&json!("'link' is reserved; pick another name")));
         for bound in ["match = 1\n", "`link` = 1\n", "links = 1\n"] {
             program(bound);
+        }
+    }
+
+    /// What `x = <source>` awaits.
+    fn parse_await(source: &str) -> Value {
+        let ast = program(&format!("x = {source}\n"));
+        ast.pointer("/statements/0/value/await/source").cloned().unwrap_or_else(|| panic!("{source:?} awaits nothing: {ast}"))
+    }
+
+    #[test]
+    fn a_name_called_new_is_still_a_root() {
+        for source in ["await new-[:Notes]->", "await new -[:Notes]->"] {
+            let awaited = parse_await(source);
+            assert_eq!(awaited.get("arrivalsOnly"), None, "{source}");
+            assert_eq!(awaited.pointer("/head/root/name"), Some(&json!("new")), "{source}");
+        }
+        let awaited = parse_await(&format!("await {AWAIT_ARRIVALS_WORD} d-[:Notes]->"));
+        assert_eq!(awaited.get("kind"), Some(&json!("traversal")));
+        assert_eq!(awaited.get("arrivalsOnly"), Some(&json!(true)));
+        assert_eq!(awaited.pointer("/head/root/name"), Some(&json!("d")));
+        assert_eq!(awaited.pointer("/head/hopsRaw"), Some(&json!("-[:Notes]->")));
+        assert_eq!(parse_await("await d-[:Notes]->").get("arrivalsOnly"), None);
+    }
+
+    #[test]
+    fn await_first_reads_as_the_traversal_it_waits_on() {
+        for source in ["await first(d-[:Notes]->)", "await FIRST(d-[:Notes]->)"] {
+            let awaited = parse_await(source);
+            assert_eq!(awaited.get("kind"), Some(&json!("traversal")), "{source}");
+            assert_eq!(awaited.get("arrivalsOnly"), None, "{source}");
+            assert_eq!(awaited.pointer("/head/hopsRaw"), Some(&json!("-[:Notes]->")), "{source}");
         }
     }
 

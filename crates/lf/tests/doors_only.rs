@@ -267,7 +267,7 @@ fn serve_doors_only_records_a_callbacks_call_and_queues_its_body_for_a_worker() 
     let project = Project::new("callback", serve(told.clone()));
     std::fs::write(
         project.0.join("movements/ask.mvt"),
-        "function ask(run: <manual-[:Invocation]->>) {\n  question = callback((note: <text>) => {})\n  c = await first(question-[:Called]->)\n  return c.note\n}\n\nlisten to manual fire ask\n",
+        "function ask(run: <manual-[:Invocation]->>) {\n  question = callback((note: <text>) => {})\n  c = await question-[:Called]->\n  return c.note\n}\n\nlisten to manual fire ask\n",
     )
     .unwrap();
     let (code, out) = project.lf(&["run", "ask", "--json"]);

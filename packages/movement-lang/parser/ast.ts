@@ -857,18 +857,10 @@ export interface DurationLiteral {
 }
 
 /**
- * `await a-[:Response]->` / `r = await a-[:Response]->` / `await sleep(2d)` —
- * durably wait on a named WAKE SOURCE, then resume the branch forward
- * (asks-as-adapter, plans/2026-07-23-asks-as-adapter/, P18). Two sources in
- * chunk B:
- *   - a `traversal` over an AWAITABLE edge (`untilNonEmpty`): the engine
- *     evaluates the (possibly WHERE-narrowed, PURE-predicate) traversal live;
- *     nonempty → continue inline, else park until a landing resolves it. A
- *     bound `await` binds the landed node(s); an empty resolution binds an
- *     empty match (downstream blocks run zero times).
- *   - `sleep(<duration>)`: the existing timer park re-skinned as a promise —
- *     the clock is the wake source. Binds nothing.
- * (`race`/`until` are later chunks; this AST models only the two chunk-B forms.)
+ * `await a-[:Response]->` / `r = await new a-[:Response]->` / `await sleep(2d)`
+ * — durably wait on a WAKE SOURCE, then resume the branch forward. A
+ * `traversal` waits for one record on a LISTENABLE edge (one its module
+ * announces arrivals on); `sleep`, `until` and the combinators are the others.
  */
 export interface AwaitExpression {
   source: AwaitSource;
@@ -876,19 +868,14 @@ export interface AwaitExpression {
 }
 
 export type AwaitSource =
-  /** `await <head>-[:Edge WHERE …]->` — wait until the traversal is nonempty.
-   *  RETIRED SPELLING (layer 13 C1): still parses so the checker can refuse it
-   *  with the rewrite; the living form is `first` below. */
-  | { kind: 'traversal'; head: PathHead; span: Span }
   /**
-   * `await FIRST(<head>)` — the parked FIRST: the same read `FIRST(<head>)`
-   * performs, parked until it has a landing, so the binding carries the
-   * landing WITHOUT the "not yet" arm (`T`, not `T | null`). Legal only where
-   * waiting can end — the final edge must be awaitable, exactly as the bare
-   * form required.
-   *
+   * `await <head>-[:Edge WHERE …]->` — one record off the final edge, which
+   * must be listenable: the first match already there in the edge's declared
+   * order, or else the first to arrive. `arrivalsOnly` (`await new …`, the
+   * word is `AWAIT_ARRIVALS_WORD`): only the first to arrive after the head
+   * record entered the run. The retired `await first(…)` reads as this.
    */
-  | { kind: 'first'; head: PathHead; span: Span }
+  | { kind: 'traversal'; head: PathHead; span: Span; arrivalsOnly?: boolean }
   /**
    * `await race([…])` / `await parallel([…])` — the combinator wake sources
    * (core calculus v2 R5). Both take one ordinary argument: the ARMS, a

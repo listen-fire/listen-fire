@@ -61,6 +61,15 @@ fn the_scope_at_the_cursor_holds_what_is_bound_above_it() {
 }
 
 #[test]
+fn a_wait_for_only_what_arrives_is_offered() {
+    let (text, pos) = typed(PROGRAM, "  greeting = Text.upper(run.`Text`)\n", "  x = aw");
+    let items = service().complete(&text, pos);
+    let offered = items.iter().find(|i| i.label == format!("await {}", movement_parser::stmt::AWAIT_ARRIVALS_WORD)).expect("await new offered");
+    assert_eq!(offered.kind, ItemKind::Keyword);
+    assert!(labels(&items).contains(&"await"), "{:?}", labels(&items));
+}
+
+#[test]
 fn a_binding_below_the_cursor_is_not_yet_in_scope() {
     let pos = after(PROGRAM, "function hello(run: <manual-[:Invocation]->>) {\n", 0);
     let names: Vec<String> = labels(&service().complete(PROGRAM, pos)).into_iter().map(String::from).collect();

@@ -83,7 +83,7 @@ impl Run<'_> {
                 Ok(())
             }
             AwaitSource::Combinator { combinator, .. } => self.combinator(combinator, binding_name, scope, at, &format!("{path}/combinator")).await,
-            AwaitSource::Traversal { head, .. } | AwaitSource::First { head, .. } => self.await_edge(head, binding_name, scope, at).await,
+            AwaitSource::Traversal { head, .. } => self.await_edge(head, binding_name, scope, at).await,
         }
     }
 

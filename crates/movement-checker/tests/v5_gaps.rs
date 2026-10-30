@@ -128,8 +128,9 @@ fn indexing_reads_in_every_slot() {
 }
 
 #[test]
-fn await_first_is_lower_case() {
-    same("  q = co\n  x = await first(q-[:companies]->)", "  q = co\n  x = await FIRST(q-[:companies]->)");
+fn await_first_is_the_traversal_it_waits_on() {
+    same("  q = co\n  x = await q-[:companies]->", "  q = co\n  x = await FIRST(q-[:companies]->)");
+    same("  q = co\n  x = await q-[:companies]->", "  q = co\n  x = await first(q-[:companies]->)");
 }
 
 #[test]

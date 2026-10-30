@@ -7,7 +7,7 @@
 // may choose, `company.created` and `company.updated`; a webhook delivers
 // created companies as `{ companies: [{ id, Name }] }`. Each
 // company has a comment thread (`Comments`, to `Comment { Id, Text }`) a movement
-// can await: `await FIRST(company-[:Comments]->)` parks until somebody
+// can await: `await company-[:Comments]->` parks until somebody
 // comments, on the correlation key `thread:<company id>`. A webhook delivery
 // may carry comments too (`comments: [{ thread, text }]`), each waking its
 // thread. Companies and comments are kept in the file named by

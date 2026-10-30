@@ -1798,30 +1798,30 @@
    "snapshot": "polls",
    "source": "import { polls } from adapters\nimport { probe } from credentials\n\np = connect polls using probe\n\nfunction m() {\n  a = write p-[:Poll]-> { Question: \"Round?\", Choices: [\"Seed\"] }\n  n = count(a-[:Result]->)\n}\n",
    "expected": [
-    "MOV_AWAIT_REQUIRED 8:7-8:27 '-[:Result]->' on a p write handle resolves only when it is answered — read it with 'await' (`await …-[:Result]->`). A bare traversal reads now and would yield nothing until then."
+    "MOV_AWAIT_REQUIRED 8:7-8:27 '-[:Result]->' on a p write handle can't be listed — its module only announces what arrives on it. Wait for one: `await a-[:Result]->`"
    ]
   },
   {
    "name": "checked against TS: AWAIT_IMPURE_WHERE an awaited WHERE using EXISTS",
    "snapshot": "polls",
-   "source": "import { polls } from adapters\nimport { probe } from credentials\n\np = connect polls using probe\n\nfunction m() {\n  a = write p-[:Poll]-> { Question: \"Round?\", Choices: [\"Seed\"] }\n  r = await first(a-[:Result WHERE EXISTS(a-[:Result]->)]->)\n}\n",
+   "source": "import { polls } from adapters\nimport { probe } from credentials\n\np = connect polls using probe\n\nfunction m() {\n  a = write p-[:Poll]-> { Question: \"Round?\", Choices: [\"Seed\"] }\n  r = await a-[:Result WHERE EXISTS(a-[:Result]->)]->\n}\n",
    "expected": [
-    "MOV_AWAIT_IMPURE_WHERE 8:19-8:60 The WHERE on '-[:Result]->' has to run in the app (it uses ai() or exists), which an 'await' can't do — its condition is evaluated against each candidate without re-running the movement. Narrow it with a pure predicate over the awaited record's own fields.",
-    "MOV_AWAIT_REQUIRED 8:19-8:60 '-[:Result]->' on a p write handle resolves only when it is answered — read it with 'await' (`await …-[:Result]->`). A bare traversal reads now and would yield nothing until then."
+    "MOV_AWAIT_IMPURE_WHERE 8:13-8:54 The WHERE on '-[:Result]->' has to run in the app (it uses ai() or exists), which an 'await' can't do — its condition is evaluated against each candidate without re-running the movement. Narrow it with a pure predicate over the awaited record's own fields.",
+    "MOV_AWAIT_REQUIRED 8:13-8:54 '-[:Result]->' on a p write handle can't be listed — its module only announces what arrives on it. Wait for one: `await …-[:Result]->`"
    ]
   },
   {
    "name": "checked against TS: AWAIT_IMPURE_WHERE an awaited WHERE using AI",
    "snapshot": "polls",
-   "source": "import { polls } from adapters\nimport { probe } from credentials\n\np = connect polls using probe\n\nfunction m() {\n  a = write p-[:Poll]-> { Question: \"Round?\", Choices: [\"Seed\"] }\n  r = await first(a-[:Result WHERE AI(\"is it good?\")]->)\n}\n",
+   "source": "import { polls } from adapters\nimport { probe } from credentials\n\np = connect polls using probe\n\nfunction m() {\n  a = write p-[:Poll]-> { Question: \"Round?\", Choices: [\"Seed\"] }\n  r = await a-[:Result WHERE AI(\"is it good?\")]->\n}\n",
    "expected": [
-    "MOV_AWAIT_IMPURE_WHERE 8:19-8:56 The WHERE on '-[:Result]->' has to run in the app (it uses ai() or exists), which an 'await' can't do — its condition is evaluated against each candidate without re-running the movement. Narrow it with a pure predicate over the awaited record's own fields."
+    "MOV_AWAIT_IMPURE_WHERE 8:13-8:50 The WHERE on '-[:Result]->' has to run in the app (it uses ai() or exists), which an 'await' can't do — its condition is evaluated against each candidate without re-running the movement. Narrow it with a pure predicate over the awaited record's own fields."
    ]
   },
   {
    "name": "checked against TS: an awaited pure WHERE is clean",
    "snapshot": "polls",
-   "source": "import { polls } from adapters\nimport { probe } from credentials\n\np = connect polls using probe\n\nfunction m() {\n  a = write p-[:Poll]-> { Question: \"Round?\", Choices: [\"Seed\"] }\n  r = await first(a-[r2:Result WHERE r2.Answer == \"Seed\"]->)\n}\n",
+   "source": "import { polls } from adapters\nimport { probe } from credentials\n\np = connect polls using probe\n\nfunction m() {\n  a = write p-[:Poll]-> { Question: \"Round?\", Choices: [\"Seed\"] }\n  r = await a-[r2:Result WHERE r2.Answer == \"Seed\"]->\n}\n",
    "expected": []
   },
   {

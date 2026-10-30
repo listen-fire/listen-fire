@@ -10,7 +10,7 @@ function approve(company: <crm-[:Company]->>) {
     write crm-[:Company]-> { Name: "Body ${note}" }
   })
   write crm-[:Company]-> { Name: "Asked ${ask.id} at ${ask.url}" }
-  c = await first(ask-[:Called]->)
+  c = await ask-[:Called]->
   write crm-[:Company]-> { Name: "Approved ${c.note}" }
 }
 

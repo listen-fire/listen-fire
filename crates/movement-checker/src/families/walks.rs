@@ -116,11 +116,12 @@ fn report_step(typing: &mut Typing, from: &Position, edge: &str, filter: Option<
                     return;
                 }
                 if !edge_is_readable(edge_schema) {
+                    let root = typing.step_root.clone().unwrap_or_else(|| "…".to_string());
                     typing.report(
                         codes::AWAIT_REQUIRED,
                         format!(
-                            "'-[:{edge}]->' on {} resolves only when it is answered — read it with 'await' (`await …-[:{edge}]->`). A bare traversal reads now and would yield nothing until then.",
-                            describe_position(from)
+                            "'-[:{edge}]->' on {} can't be listed — its module only announces what arrives on it. Wait for one: `await {root}-[:{edge}]->`",
+                            describe_edge_owner(from)
                         ),
                     );
                     return;
@@ -223,6 +224,17 @@ fn report_artificial_step(typing: &mut Typing, from: &Position, edge: &str) {
             describe_position(from)
         ),
     );
+}
+
+/// The record an edge is declared on, as a sentence about that edge names
+/// it: `chat's Message`.
+pub fn describe_edge_owner(from: &Position) -> String {
+    match from {
+        Position::Position(p) => format!("{}'s {}", p.instance.name, display_name_of(&p.instance, &p.position)),
+        Position::Handle(h) if let Some(position) = &h.position => format!("{}'s {}", h.instance.name, display_name_of(&h.instance, position)),
+        Position::MaybeEmpty(of) => describe_edge_owner(of),
+        _ => describe_position(from),
+    }
 }
 
 /// `edgeIsReadable`: an edge reads unless it says it does not.
@@ -956,6 +968,9 @@ pub struct HeadWalk {
     pub locals: indexmap::IndexMap<String, Option<Position>>,
     pub landed: Option<Position>,
     pub last_edge_schema: Option<EdgeSchema>,
+    /// The last edge walked, and the record it was walked off.
+    pub last_edge: Option<String>,
+    pub last_source: Option<Position>,
     pub ordering: CollectionOrder,
 }
 
@@ -1081,11 +1096,21 @@ impl crate::checker::Checker<'_> {
             let env = self.typing_env(scope);
             let mut typing = Typing::new(&env, head.span);
             typing.observed = self.observing();
-            let landed = typing.walk_steps(Some(start), &steps, awaited);
+            typing.step_root = match &head.root {
+                Some(PathRoot::Name { name }) => Some(crate::families::names::spell_name(name)),
+                _ => None,
+            };
+            let landed = typing.walk_steps(Some(start.clone()), &steps, awaited);
+            let last_source = match typing.last_landings.len() {
+                0 | 1 => Some(start),
+                n => typing.last_landings[n - 2].clone(),
+            };
             let walk = HeadWalk {
                 locals: typing.locals.clone(),
                 landed,
                 last_edge_schema: typing.last_edge_schema.clone(),
+                last_edge: typing.last_ordering_edge.clone(),
+                last_source,
                 ordering: typing.last_ordering,
             };
             let landings = recorded_start.is_some().then(|| typing.last_landings.clone());

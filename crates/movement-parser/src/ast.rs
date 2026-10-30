@@ -533,13 +533,15 @@ pub struct AwaitExpression {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum AwaitSource {
+    /// `await <head>-[:Edge]->`: one record off a listenable edge, the first
+    /// already there in the edge's order or else the first to arrive.
+    /// `arrivals_only` (`await new …`): only one that arrives after the head
+    /// record entered the run.
     Traversal {
         head: PathHead,
         span: Span,
-    },
-    First {
-        head: PathHead,
-        span: Span,
+        #[serde(rename = "arrivalsOnly", skip_serializing_if = "std::ops::Not::not")]
+        arrivals_only: bool,
     },
     Combinator {
         combinator: CombinatorExpression,

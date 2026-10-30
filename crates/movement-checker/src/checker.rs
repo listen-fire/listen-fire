@@ -1270,21 +1270,12 @@ impl<'c> Checker<'c> {
     fn check_await(&mut self, awaited: &AwaitExpression, scope: ScopeId, _name: Option<&str>) -> Bound {
         self.flag_suspend();
         match &awaited.source {
-            AwaitSource::Traversal { head, span } => {
-                self.check_awaited_head(head, Some(*span));
+            AwaitSource::Traversal { head, arrivals_only, .. } => {
+                self.check_awaited_head(head);
                 self.report_await_on_list(head, scope);
                 self.check_path_head(head, scope);
                 let walk = self.walk_head(head, scope, true);
-                self.check_awaitable(head, walk.as_ref());
-                self.record_awaited_walk(awaited.span, head, walk.as_ref(), scope);
-                awaited_walk(walk)
-            }
-            AwaitSource::First { head, .. } => {
-                self.check_awaited_head(head, None);
-                self.report_await_on_list(head, scope);
-                self.check_path_head(head, scope);
-                let walk = self.walk_head(head, scope, true);
-                self.check_awaitable(head, walk.as_ref());
+                self.check_awaitable(head, walk.as_ref(), *arrivals_only);
                 self.record_awaited_walk(awaited.span, head, walk.as_ref(), scope);
                 awaited_walk(walk)
             }

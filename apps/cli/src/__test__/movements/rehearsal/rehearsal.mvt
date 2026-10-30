@@ -10,7 +10,7 @@ function rehearse(company: <crm-[:Company]->>) {
   refresh co
   go = callback({ })
   write crm-[:Company]-> { Name: "Asked ${go.id}" }
-  await first(go-[:Called]->)
+  await go-[:Called]->
   refresh co
   write crm-[:Company]-> { Name: "After ${co.Name}" }
 }
