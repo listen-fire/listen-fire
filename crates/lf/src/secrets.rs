@@ -351,6 +351,9 @@ pub struct Imported {
     /// The event addresses the movements' signatures name
     /// (crate::listen_narrowing), which the connections' schemas graft.
     pub event_addresses: Vec<crate::listen_narrowing::SignatureAddress>,
+    /// The hop chains the files walk from each construction
+    /// (crate::refinements), whose WHEREs the connections' schemas narrow.
+    pub chains: Vec<crate::refinements::InstanceChain>,
 }
 
 impl Imported {
@@ -379,6 +382,7 @@ pub fn imported_credentials(files: &[Rc<Parsed>]) -> Imported {
         }
         collect_constructions(&program.statements, &originals, &mut imported.constructions);
         imported.event_addresses.extend(crate::listen_narrowing::signature_addresses(&program.statements, &originals));
+        imported.chains.extend(crate::refinements::instance_chains(&program.statements, &originals));
     }
     imported
 }

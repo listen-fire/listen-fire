@@ -111,12 +111,18 @@ test("a List Entries hop pinned to one list checks against that list's columns a
   }
 });
 
+// A WHERE is evaluated over the lists themselves: one that only the run can
+// answer (the invocation's text) pins none, and one the lists answer pins the
+// list it leaves, however it is spelled.
 test('a List Entries hop with no list pinned still reads only what every list has', async () => {
   const fake = await fakeAffinity(mkdtempSync(join(tmpdir(), 'lf-affinity-fake-')));
   try {
-    const checked = lf(project(fake, 'le.`listName` != "Portfolio"'), 'check');
+    const checked = lf(project(fake, 'le.`listName` != run.Text'), 'check');
     assert.equal(checked.code, 1, checked.out);
     assert.match(checked.out, /MOV_UNKNOWN_PROPERTY crm\.Organization List Entry has no field 'Deal Created'/);
+
+    const deals = lf(project(fake, 'le.`listName` != "Portfolio"'), 'check');
+    assert.equal(deals.code, 0, deals.out);
   } finally {
     await fake.stop();
   }

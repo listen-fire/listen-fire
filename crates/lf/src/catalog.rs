@@ -27,7 +27,8 @@ pub type ConnectionSchemas = IndexMap<String, Described>;
 
 /// One connection as its module described it, and as the catalog serves it:
 /// with an event position grafted for each address the signatures name
-/// against it (crate::listen_narrowing).
+/// against it (crate::listen_narrowing), and a refined position for each
+/// selection a hop's WHERE makes on it (crate::refinements).
 #[derive(Clone)]
 pub struct Described {
     /// Its `listEntryPoints` answer.
@@ -36,6 +37,8 @@ pub struct Described {
     pub described: Js,
     /// The addresses `schema` is narrowed by.
     pub addresses: Vec<movement_checker::types::event_address::EventAddress>,
+    /// The hop chains whose WHEREs `schema` is narrowed by.
+    pub chains: Vec<crate::refinements::InstanceChain>,
     /// What the checker reads.
     pub schema: Js,
     /// What each of the module's position args may be set to, by arg; empty

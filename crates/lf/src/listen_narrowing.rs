@@ -143,7 +143,7 @@ pub async fn resolve_listen_address<W: Walk>(
     config: &Obj,
     position_values: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, String> {
-    let walker = Walker { walk, adapter_type, hops: RefCell::new(BTreeMap::new()) };
+    let walker = Walker::new(walk, adapter_type);
     let mut address = BTreeMap::new();
     let mut steps: Vec<Step> = Vec::new();
     for hop in hops {
@@ -250,21 +250,82 @@ pub trait Walk {
 
 /// The walks of one connection (`walkHop`, `walkPath`, `membersAtPath`),
 /// each hop taken once however many walks pass through it.
-struct Walker<'a, W> {
+pub(crate) struct Walker<'a, W> {
     walk: &'a W,
     adapter_type: &'a str,
     hops: RefCell<BTreeMap<String, Option<Js>>>,
+    /// `positionsByName`: the path to each node a hop has handed over, by the
+    /// name it is known by, in the order the hops taught them.
+    paths: RefCell<IndexMap<String, Js>>,
 }
 
-impl<W: Walk> Walker<'_, W> {
+impl<'a, W: Walk> Walker<'a, W> {
+    pub(crate) fn new(walk: &'a W, adapter_type: &'a str) -> Self {
+        Walker { walk, adapter_type, hops: RefCell::new(BTreeMap::new()), paths: RefCell::new(IndexMap::new()) }
+    }
+
     async fn hop(&self, position: &Js) -> Result<Option<Js>, String> {
         let at = position.to_json();
         if let Some(hop) = self.hops.borrow().get(&at) {
             return Ok(hop.clone());
         }
         let hop = self.drain_hop(position).await?;
+        if let Some(hop) = &hop {
+            self.file_paths(hop);
+        }
         self.hops.borrow_mut().insert(at, hop.clone());
         Ok(hop)
+    }
+
+    /// `filePaths`: every hop teaches the paths on from it. A named edge's
+    /// node is known by its `targetTypeId`; a polymorphic edge's member by
+    /// the label the module minted onto it.
+    fn file_paths(&self, hop: &Js) {
+        let Some(Js::Obj(positions)) = hop.get("targetPositions") else { return };
+        let references = hop.get("descriptor").and_then(|d| d.get("references")).and_then(Js::as_array).unwrap_or_default();
+        let target_of = |field_id: &str| {
+            references.iter().find(|r| r.get("fieldId").and_then(Js::as_str) == Some(field_id)).and_then(|r| r.get("targetTypeId")).and_then(Js::as_str)
+        };
+        let mut paths = self.paths.borrow_mut();
+        for (field_id, position) in positions {
+            if let Some(name) = target_of(field_id).or_else(|| position_label(position)) {
+                paths.insert(name.to_string(), position.clone());
+            }
+        }
+    }
+
+    /// `membersOf`: the members of kind `record_type` the walk has been
+    /// handed so far, the root walked first, each with its name and data.
+    pub(crate) async fn members_of(&self, record_type: &str) -> Result<Vec<(String, Js)>, String> {
+        self.root().await?;
+        Ok(self
+            .paths
+            .borrow()
+            .iter()
+            .filter(|(_, position)| position.get("recordType").and_then(Js::as_str) == Some(record_type))
+            .map(|(name, position)| (name.clone(), position_data(position).cloned().unwrap_or(Js::Null)))
+            .collect())
+    }
+
+    /// `describeType` for a member the walk was handed: one hop along the
+    /// path it came with. None when no hop handed it over, or the module has
+    /// nothing there.
+    pub(crate) async fn describe_member(&self, name: &str) -> Result<Option<Js>, String> {
+        self.root().await?;
+        let Some(position) = self.paths.borrow().get(name).cloned() else { return Ok(None) };
+        Ok(self.hop(&position).await?.and_then(|hop| hop.get("descriptor").cloned()))
+    }
+
+    /// The node one of `member`'s edges lands on, the edge named by the type
+    /// it targets: one hop along the path the member's own hop handed over.
+    pub(crate) async fn describe_member_landing(&self, member: &str, target: &str) -> Result<Option<Js>, String> {
+        self.root().await?;
+        let Some(at) = self.paths.borrow().get(member).cloned() else { return Ok(None) };
+        let Some(hop) = self.hop(&at).await? else { return Ok(None) };
+        let references = hop.get("descriptor").and_then(|d| d.get("references")).and_then(Js::as_array).unwrap_or_default();
+        let field_id = references.iter().find(|r| r.get("targetTypeId").and_then(Js::as_str) == Some(target)).and_then(|r| r.get("fieldId")).and_then(Js::as_str);
+        let Some(position) = field_id.and_then(|id| hop.get("targetPositions").and_then(|p| p.get(id))).cloned() else { return Ok(None) };
+        Ok(self.hop(&position).await?.and_then(|hop| hop.get("descriptor").cloned()))
     }
 
     /// `drainHop`: one hop's every page, merged.
@@ -347,7 +408,7 @@ impl<W: Walk> Walker<'_, W> {
     }
 }
 
-fn position_data(position: &Js) -> Option<&Js> {
+pub(crate) fn position_data(position: &Js) -> Option<&Js> {
     position.get("identity").and_then(|i| i.get("data"))
 }
 
@@ -397,7 +458,7 @@ pub async fn narrow_event_positions<W: Walk>(schema: Js, input: &Narrowing<'_, W
         return Ok(schema);
     }
     let Js::Obj(mut schema) = schema else { return Ok(schema) };
-    let walker = Walker { walk: input.walk, adapter_type: input.adapter_type, hops: RefCell::new(BTreeMap::new()) };
+    let walker = Walker::new(input.walk, input.adapter_type);
     let hops = input.hops;
     let narrowed_from = hops.last().map(|h| h.collection.clone());
 
@@ -545,7 +606,7 @@ async fn narrowing_values<W: Walk>(hops: &[AddressHop], addresses: &[EventAddres
 /// unpositioned connection, as the platform publishes `constructionArgOptions`.
 /// An arg whose kind has no members there publishes nothing.
 pub async fn position_arg_options<W: Walk>(walk: &W, adapter_type: &str, args: &[crate::externals::PositionArg]) -> Result<BTreeMap<String, Vec<String>>, String> {
-    let walker = Walker { walk, adapter_type, hops: RefCell::new(BTreeMap::new()) };
+    let walker = Walker::new(walk, adapter_type);
     let mut options = BTreeMap::new();
     for arg in args {
         let members = walker.members_at(&[], &arg.options_from).await?;

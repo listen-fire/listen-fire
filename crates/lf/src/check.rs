@@ -20,10 +20,11 @@ use movement_parser::util::form::{external_text, form_of_text, read_json_text};
 use serde_json::json;
 
 use crate::catalog::{ConnectionSchemas, Described, catalog_of, connections_of};
-use crate::listen_narrowing::{Narrowing, Walk, address_hops, narrow_event_positions, position_arg_options, with_event_narrowing_keys};
+use crate::listen_narrowing::{Narrowing, Walk, Walker, address_hops, narrow_event_positions, position_arg_options, with_event_narrowing_keys};
 use crate::externals::{RunningExternal, needed_externals, rpc_in, scan_externals, start_externals};
 use crate::json::Js;
 use crate::project::Project;
+use crate::refinements::{InstanceChain, Refining, refine_instance_schema};
 use crate::protocol::shape_error;
 use crate::schema::describe_external_schema;
 use crate::secrets::{Construction, Credential, Credentials, Imported, MissingCredential, Secrets, imported_credentials, missing_credentials};
@@ -149,7 +150,8 @@ pub async fn open_checking(project: &Project) -> Result<Opened, String> {
 /// never imported is never asked, so a server it names that is down fails no
 /// check). `known` is kept: only a connection it lacks is described. Each is
 /// narrowed by the event addresses the files' signatures name against it
-/// (crate::listen_narrowing), again whenever those change.
+/// (crate::listen_narrowing) and by the WHEREs the files' hops select with
+/// (crate::refinements), again whenever those change.
 pub async fn describe_external(running: &RunningExternal, credentials: &Credentials, imported: &Imported, known: ConnectionSchemas) -> Result<ConnectionSchemas, String> {
     let connections = connections_of(running, credentials);
     let mut wanted: Vec<Wanted> = Vec::new();
@@ -179,6 +181,7 @@ pub async fn describe_external(running: &RunningExternal, credentials: &Credenti
     let position_args = running.position_args();
     for connection in wanted {
         let addresses = addresses_of(running, imported, &connection.key);
+        let chains = chains_of(running, imported, &connection.key);
         let walk = ConnectionWalk { running, credentials, credential: connection.credential, settings: connection.settings.clone() };
         let failed = |why: String| {
             let external = &running.external.manifest.name;
@@ -188,7 +191,7 @@ pub async fn describe_external(running: &RunningExternal, credentials: &Credenti
             }
         };
         let (entries, described, position_options) = match schemas.get(&connection.key) {
-            Some(held) if held.addresses == addresses => continue,
+            Some(held) if held.addresses == addresses && held.chains == chains => continue,
             Some(held) => (held.entries.clone(), held.described.clone(), held.position_options.clone()),
             None => {
                 let (entries, described) = describe_as(running, credentials, connection.credential, connection.settings.clone()).await.map_err(failed)?;
@@ -203,7 +206,10 @@ pub async fn describe_external(running: &RunningExternal, credentials: &Credenti
         let hops = address_hops(&running.listen, &connection.position_values);
         let narrowing = Narrowing { adapter: &running.external.manifest.name, adapter_type, hops: &hops, addresses: &addresses, entries: &entries, walk: &walk };
         let schema = narrow_event_positions(with_event_narrowing_keys(described.clone(), &hops), &narrowing).await.map_err(failed)?;
-        schemas.insert(connection.key, Described { entries, described, addresses, schema, position_options });
+        let walker = Walker::new(&walk, adapter_type);
+        let refining = Refining { adapter: &running.external.manifest.name, entries: &entries, walker: &walker };
+        let schema = refine_instance_schema(schema, &chains.iter().collect::<Vec<_>>(), &refining).await.map_err(failed)?;
+        schemas.insert(connection.key, Described { entries, described, addresses, chains, schema, position_options });
     }
     Ok(schemas)
 }
@@ -221,18 +227,25 @@ struct Wanted<'c> {
 /// The event addresses the files' signatures name against the connection
 /// filed under `key`, in the files' order.
 fn addresses_of(running: &RunningExternal, imported: &Imported, key: &str) -> Vec<EventAddress> {
+    let of_connection = connection_filter(running, key);
+    imported.event_addresses.iter().filter(|a| of_connection(&a.construction)).map(|a| a.address.clone()).collect()
+}
+
+/// The hop chains the files walk from the connection filed under `key`, in the files' order.
+fn chains_of(running: &RunningExternal, imported: &Imported, key: &str) -> Vec<InstanceChain> {
+    let of_connection = connection_filter(running, key);
+    imported.chains.iter().filter(|c| of_connection(&c.construction)).cloned().collect()
+}
+
+/// Whether a construction makes the connection of this module filed under `key`.
+fn connection_filter<'a>(running: &'a RunningExternal, key: &'a str) -> impl Fn(&Construction) -> bool + 'a {
     let manifest = &running.external.manifest;
     let construction_args = position_construction_args(running);
-    imported
-        .event_addresses
-        .iter()
-        .filter(|a| manifest.name == a.construction.adapter || manifest.module.as_deref() == Some(a.construction.adapter.as_str()))
-        .filter(|a| {
-            let args: Args = JsMap(a.construction.args.iter().cloned().collect());
-            instance_schema_key(a.construction.credential.as_deref(), Some(&position_key(&construction_args, Some(&args)))) == key
-        })
-        .map(|a| a.address.clone())
-        .collect()
+    move |construction: &Construction| {
+        let args: Args = JsMap(construction.args.iter().cloned().collect());
+        (manifest.name == construction.adapter || manifest.module.as_deref() == Some(construction.adapter.as_str()))
+            && instance_schema_key(construction.credential.as_deref(), Some(&position_key(&construction_args, Some(&args)))) == key
+    }
 }
 
 /// A walk of one connection: its module's `edgesFrom`, asked as that
