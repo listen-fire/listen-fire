@@ -403,65 +403,25 @@ pub fn join_check(root: File, answer: &Json) -> Result<Checked, String> {
 }
 
 /// The fact `stamp` settles on `node` (at `path`): exactly one, of a kind
-/// that lands on a node like it.
+/// that lands on a node like it, by the rules the check placed it by.
 fn stamp_of(path: &str, node: &Json, stamp: &Json) -> Result<Stamp, String> {
+    use movement_checker::answer::{is_awaited_traversal, is_linked_target, is_map_spread, is_record_entry, is_value_entry, is_write_spread};
     const FACTS: [&str; 6] = ["spreadFields", "copy", "reference", "writtenType", "opensWaits", "listsFirst"];
     let mut facts = FACTS.iter().filter_map(|fact| Some((*fact, stamp.get(*fact)?)));
     let stamped = match (facts.next(), facts.next()) {
-        (Some(("spreadFields", fields)), None) if is_write_spread(path, node) => {
+        (Some(("spreadFields", fields)), None) if is_write_spread(node, path) => {
             Some(Stamp::SpreadFields(serde_json::from_value(fields.clone()).map_err(|e| format!("the fields stamped at {path}: {e}"))?))
         }
         (Some(("copy", copy)), None) if is_map_spread(node) => Some(Stamp::Copy(copy.clone())),
         (Some(("reference", Json::Bool(true))), None) if is_value_entry(node) => Some(Stamp::Reference),
         (Some(("writtenType", Json::String(written))), None) if is_linked_target(node) => Some(Stamp::WrittenType(written.clone())),
-        (Some(("opensWaits", edges)), None) if is_record_entry(path, node) => {
+        (Some(("opensWaits", edges)), None) if is_record_entry(node, path) => {
             Some(Stamp::OpensWaits(serde_json::from_value(edges.clone()).map_err(|e| format!("the edges stamped at {path}: {e}"))?))
         }
-        (Some(("listsFirst", Json::Bool(true))), None) if is_awaited_traversal(path, node) => Some(Stamp::ListsFirst),
+        (Some(("listsFirst", Json::Bool(true))), None) if is_awaited_traversal(node, path) => Some(Stamp::ListsFirst),
         _ => None,
     };
     stamped.ok_or_else(|| format!("the stamp at {path} does not fit the node there: {stamp}"))
-}
-
-/// Where a record enters the run: a write's expression (`…/write`), an
-/// assignment, a traversal block's head, or a function's parameter.
-fn is_record_entry(path: &str, node: &Json) -> bool {
-    let mut tokens = path.rsplit('/');
-    let (last, parent) = (tokens.next(), tokens.next());
-    let write = last == Some("write") && node.get("target").is_some_and(Json::is_object) && node.get("uniqueBy").is_some();
-    let assign = node.get("kind").and_then(Json::as_str) == Some("assign") && node.get("value").is_some();
-    let block_head = last == Some("head") && parent == Some("block") && node.get("hopsRaw").is_some_and(Json::is_string);
-    let parameter = parent == Some("params") && node.get("kind").is_none() && node.get("name").is_some_and(Json::is_string);
-    write || assign || block_head || parameter
-}
-
-/// What an `await` waits on, when it is a walk to one edge.
-fn is_awaited_traversal(path: &str, node: &Json) -> bool {
-    path.ends_with("/source") && node.get("kind").and_then(Json::as_str) == Some("traversal") && node.get("head").is_some_and(Json::is_object)
-}
-
-/// An element of a `spreads` list naming its source: a write's spread.
-fn is_write_spread(path: &str, node: &Json) -> bool {
-    let mut tokens = path.rsplit('/');
-    tokens.next().is_some_and(|i| i.parse::<usize>().is_ok())
-        && tokens.next() == Some("spreads")
-        && node.get("source").is_some_and(Json::is_string)
-        && node.get("after").is_none()
-}
-
-/// A graph's spread: it says where among the entries it stands.
-fn is_map_spread(node: &Json) -> bool {
-    node.get("source").is_some_and(Json::is_string) && node.get("after").is_some_and(Json::is_u64)
-}
-
-/// A write target that walks one path from a record (`WriteTarget::Linked`).
-fn is_linked_target(node: &Json) -> bool {
-    node.get("kind").and_then(Json::as_str) == Some("linked") && node.get("path").is_some_and(Json::is_object)
-}
-
-/// A graph literal's `name: value` entry.
-fn is_value_entry(node: &Json) -> bool {
-    node.get("kind").and_then(Json::as_str) == Some("value") && node.get("name").is_some_and(Json::is_string)
 }
 
 fn imports_of(list: Option<&Json>) -> Result<Vec<Import>, String> {

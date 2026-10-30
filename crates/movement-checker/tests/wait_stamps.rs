@@ -22,18 +22,18 @@ const CATALOG: &str = r#"{"adapters":{
       "Replies":{"target":"Message","listenable":true,"sequenced":"chronological","identity":"Timestamp"},
       "Channel":{"target":"Channel"}}},
     "Interaction":{"properties":{"Id":"text"},"edges":{}}},
-    "collections":{"Channels":{"target":"Channel"}},
+    "collections":{"Channels":{"target":"Channel"}},"supportsInPlaceUpdate":true,
     "writableRoots":{"Message":{"fields":{"Message":"text"},"resultShape":{"externalId":"text"}}}}}},
   "crm":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
-    "Company":{"properties":{"Name":"text"},"edges":{"Deals":{"target":"Deal"}}},
+    "Company":{"properties":{"Name":"text"},"edges":{"Deals":{"target":"Deal","writable":true}}},
     "Deal":{"properties":{"Name":"text"},"edges":{
       "Notes":{"target":"Note","listenable":true,"sequenced":"document"},
       "Changes":{"target":"Change","readable":false,"listenable":true},
       "Company":{"target":"Company"}}},
     "Note":{"properties":{"Body":"text"},"edges":{}},
     "Change":{"properties":{"Field":"text"},"edges":{}}},
-    "collections":{"Deals":{"target":"Deal"},"Companies":{"target":"Company"}},
-    "writableRoots":{}}}}
+    "collections":{"Deals":{"target":"Deal"},"Companies":{"target":"Company"}},"supportsInPlaceUpdate":true,
+    "writableRoots":{"Deal":{"fields":{"Name":"text"},"resultShape":{"externalId":"text"}}}}}}
 },"credentials":{},"plugins":{},"files":FILES}"#;
 
 const HEAD: &str = "import { chat as chat_module, crm as crm_module } from adapters\nchat = connect chat_module\ncrm = connect crm_module\n";
@@ -133,13 +133,15 @@ fn a_record_read_back_whole_is_stamped_where_it_was_bound_not_where_it_is_rename
 
 #[test]
 fn a_library_that_awaits_stamps_the_callers_read() {
-    let library = "import { chat as chat_module } from adapters\nchat = connect chat_module\nexport function answer(msg: <chat-[:Message]->>) {\n  i = await msg-[:Interactions]->\n  return i\n}\n";
+    // The library imports and connects the adapter under names of its own:
+    // a record's type is the catalog's adapter, whatever a file calls it.
+    let library = "import { chat as talk } from adapters\nsystem = connect talk\nexport function answer(msg: <system-[:Message]->>) {\n  i = await msg-[:Interactions]->\n  return i\n}\n";
     let root = "import { answer } from \"lib/waits\"\nfunction f(ch: <chat-[:Channel]->>) {\n  m = only(ch-[:Messages]->)\n  if (m != null) {\n    i = answer(m)\n  }\n}\n";
     let (tree, library_tree, found) = stamps(root, Some(library));
     assert_eq!(opens(&tree, &found, None), pairs(&[("assign m", &["Interactions"])]));
     assert_eq!(opens(&library_tree.unwrap(), &found, Some("lib/waits")), pairs(&[("param msg", &["Interactions"])]));
 
-    let library = "import { crm as crm_module } from adapters\ncrm = connect crm_module\nexport function next_note(deal: <crm-[:Deal]->>) {\n  return await new deal-[:Notes]->\n}\n";
+    let library = "import { crm as deals_module } from adapters\npipeline = connect deals_module\nexport function next_note(deal: <pipeline-[:Deal]->>) {\n  return await new deal-[:Notes]->\n}\n";
     let root = "import { next_note } from \"lib/waits\"\nfunction g(c: <crm-[:Companies]->>) {\n  d = only(c-[:Deals]->)\n  if (d != null) {\n    n = next_note(d)\n  }\n}\n";
     let (tree, library_tree, found) = stamps(root, Some(library));
     assert_eq!(opens(&tree, &found, None), pairs(&[("assign d", &["Notes"])]));
@@ -155,4 +157,26 @@ fn plain_await_on_an_iterable_edge_lists_first_and_await_new_does_not() {
     let crm = "function g(d: <crm-[:Deal]->>) {\n  n = await d-[:Notes]->\n  later = await new d-[:Notes]->\n  c = await d-[:Changes]->\n}\n";
     let (tree, _, found) = stamps(crm, None);
     assert_eq!(lists_first(&tree, &found), ["await n"]);
+}
+
+#[test]
+fn a_closure_parameter_is_where_a_record_no_name_held_enters() {
+    let chat = "function f(ch: <chat-[:Channel]->>) {\n  answers = map(ch-[:Messages]->, (m) => {\n    return await m-[:Interactions]->\n  })\n}\n";
+    let (tree, _, found) = stamps(chat, None);
+    assert_eq!(opens(&tree, &found, None), pairs(&[("param m", &["Interactions"])]));
+
+    let crm = "function g(c: <crm-[:Company]->>) {\n  notes = map(c-[:Deals]->, (d) => {\n    n = await d-[:Notes]->\n    return n\n  })\n}\n";
+    let (tree, _, found) = stamps(crm, None);
+    assert_eq!(opens(&tree, &found, None), pairs(&[("param d", &["Notes"])]));
+}
+
+#[test]
+fn a_write_no_name_holds_and_a_write_in_place_open_nothing() {
+    let chat = "function f(ch: <chat-[:Channel]->>, m: <chat-[:Message]->>) {\n  write ch-[:Messages]-> { Message: \"Posted\" }\n  again = write m { Message: \"Edited\" }\n  i = await m-[:Interactions]->\n}\n";
+    let (tree, _, found) = stamps(chat, None);
+    assert_eq!(opens(&tree, &found, None), pairs(&[("param m", &["Interactions"])]));
+
+    let crm = "function g(c: <crm-[:Company]->>, d: <crm-[:Deal]->>) {\n  write c-[:Deals]-> { Name: \"Renewal\" }\n  again = write d { Name: \"Renamed\" }\n  n = await new d-[:Notes]->\n}\n";
+    let (tree, _, found) = stamps(crm, None);
+    assert_eq!(opens(&tree, &found, None), pairs(&[("param d", &["Notes"])]));
 }

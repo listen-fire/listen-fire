@@ -260,14 +260,20 @@ fn find<'j>(node: &'j Json, path: &str, fits: &dyn Fn(&Json, &str) -> bool) -> O
     }
 }
 
+// ── Where each stamp lands ──
+//
+// The check places a stamp on a node these accept, and the engine refuses a
+// stamp whose path names any other (movement-engine program.rs reads them
+// from here): one definition of each kind of node a fact may sit on.
+
 /// A write target that walks one path from a record (`WriteTarget::Linked`).
-fn is_linked_target(node: &Json) -> bool {
+pub fn is_linked_target(node: &Json) -> bool {
     node.get("kind").and_then(Json::as_str) == Some("linked") && node.get("path").is_some_and(Json::is_object)
 }
 
 /// Where a record enters the run: a write's expression (`…/write`), an
 /// assignment, a traversal block's head, or a function's parameter.
-fn is_record_entry(node: &Json, path: &str) -> bool {
+pub fn is_record_entry(node: &Json, path: &str) -> bool {
     let mut tokens = path.rsplit('/');
     let (last, parent) = (tokens.next(), tokens.next());
     let write = last == Some("write") && node.get("target").is_some_and(Json::is_object) && node.get("uniqueBy").is_some();
@@ -278,7 +284,7 @@ fn is_record_entry(node: &Json, path: &str) -> bool {
 }
 
 /// What an `await` waits on, when it is a walk to one edge.
-fn is_awaited_traversal(node: &Json, path: &str) -> bool {
+pub fn is_awaited_traversal(node: &Json, path: &str) -> bool {
     path.ends_with("/source") && node.get("kind").and_then(Json::as_str) == Some("traversal") && node.get("head").is_some_and(Json::is_object)
 }
 
@@ -288,7 +294,7 @@ fn is_slot(node: &Json) -> bool {
 }
 
 /// An element of a `spreads` list naming its source: a write's spread.
-fn is_write_spread(node: &Json, path: &str) -> bool {
+pub fn is_write_spread(node: &Json, path: &str) -> bool {
     let mut tokens = path.rsplit('/');
     tokens.next().is_some_and(|i| i.parse::<usize>().is_ok())
         && tokens.next() == Some("spreads")
@@ -297,12 +303,12 @@ fn is_write_spread(node: &Json, path: &str) -> bool {
 }
 
 /// A graph's spread: it says where among the entries it stands.
-fn is_map_spread(node: &Json) -> bool {
+pub fn is_map_spread(node: &Json) -> bool {
     node.get("source").is_some_and(Json::is_string) && node.get("after").is_some_and(Json::is_u64)
 }
 
 /// A graph literal's `name: value` entry.
-fn is_value_entry(node: &Json) -> bool {
+pub fn is_value_entry(node: &Json) -> bool {
     node.get("kind").and_then(Json::as_str) == Some("value") && node.get("name").is_some_and(Json::is_string)
 }
 

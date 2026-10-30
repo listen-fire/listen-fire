@@ -8,8 +8,10 @@
 //!
 //! A record enters at a bound write (just before the write), at a binding
 //! whose value reads records, at a traversal block's head, and as a
-//! function's parameter. A binding that renames a name (`same = msg`) holds
-//! a record that already entered, so nothing enters there.
+//! function's or a closure's parameter (`map(crm-[:Deals]->, (d) => …)`
+//! reads its records where no name holds them). A binding that renames a
+//! name (`same = msg`) holds a record that already entered, so nothing
+//! enters there.
 //!
 //! A record's type is its system's adapter with the position's name: one
 //! type in every file that connects that adapter, so an `await` in a library
@@ -73,16 +75,16 @@ impl Checker<'_> {
         self.note_entry(span, types);
     }
 
-    /// The binding `name = value` at `span`: what its value reads enters
-    /// there. A write is its own entry; a renamed name entered already.
-    pub(crate) fn note_bound_entry(&mut self, name: &str, value: &RValue, span: Span, scope: ScopeId) {
+    /// The binding of `value` at `span`, typed `types`: what its value reads
+    /// enters there. A write is its own entry; a renamed name entered
+    /// already.
+    pub(crate) fn note_bound_entry(&mut self, value: &RValue, span: Span, types: &SymbolTypes) {
         match value {
             RValue::Write { .. } => return,
             RValue::Expr { expr } if crate::slots::expression_of_slot(expr).is_ok_and(|e| crate::types::narrowing::bare_name(&e).is_some()) => return,
             _ => {}
         }
-        let types = self.held_record_types(name, scope);
-        self.note_entry(span, types);
+        self.note_entry(span, symbol_record_types(types));
     }
 
     /// A traversal block's head: every record its walk lands on enters.
@@ -95,7 +97,8 @@ impl Checker<'_> {
         self.note_entry(head.span, types);
     }
 
-    /// A function's parameter, declared at `span` as `name` in `scope`.
+    /// A function's or a closure's parameter, declared at `span` as `name`
+    /// in `scope`.
     pub(crate) fn note_parameter_entry(&mut self, name: &str, span: Span, scope: ScopeId) {
         let types = self.held_record_types(name, scope);
         self.note_entry(span, types);

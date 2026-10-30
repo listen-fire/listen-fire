@@ -420,9 +420,9 @@ impl<'c> Checker<'c> {
                 }
                 if let Some(mut types) = self.bound_types(Some(&assign.name), &assign.value, &bound, scope) {
                     self.within_type_limit(&assign.name, &mut types.field, &mut types.may_hold, Some(assign.span));
+                    self.note_bound_entry(&assign.value, assign.span, &types);
                     self.set_types(scope, &assign.name, types);
                 }
-                self.note_bound_entry(&assign.name, &assign.value, assign.span, scope);
                 if self.recording() {
                     self.record_assigned(&assign.name, &assign.value, scope);
                 }
@@ -976,6 +976,7 @@ impl<'c> Checker<'c> {
                 let types = crate::types::scope_env::SymbolTypes { pos: given.pos.as_deref().cloned(), field: given.field.clone(), ..Default::default() };
                 self.set_types(body, &param.name, types);
             }
+            self.note_parameter_entry(&param.name, param.span, body);
         }
         let own = self_name.and_then(|name| self.declare_closure_self(name, closure, body));
         self.open_effect_frame();

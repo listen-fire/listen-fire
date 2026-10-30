@@ -162,9 +162,18 @@ function callOptions(options: RustCheckOptions): { upgradingFrom?: string } {
   return options.upgradingFrom === undefined ? {} : { upgradingFrom: options.upgradingFrom };
 }
 
-function stampOf(value: unknown): Stamp {
+/** Every fact a stamp may carry; a stamp carries exactly one, as the
+ *  engine's `join_check` holds it to. */
+const STAMP_FACTS = ['spreadFields', 'copy', 'reference', 'writtenType', 'opensWaits', 'listsFirst'] as const;
+
+/** One stamp as the Rust checker answers it: a path, and exactly one fact. */
+export function stampOf(value: unknown): Stamp {
   if (!isRecord(value) || typeof value.path !== 'string' || (value.file !== undefined && typeof value.file !== 'string')) {
     throw new Error(`the Rust checker answered a stamp that is not one: ${JSON.stringify(value)}`);
+  }
+  const facts = STAMP_FACTS.filter((fact) => value[fact] !== undefined);
+  if (facts.length > 1) {
+    throw new Error(`the Rust checker answered a stamp of more than one fact (${facts.join(', ')}): ${JSON.stringify(value)}`);
   }
   const at = { path: value.path, ...(typeof value.file === 'string' ? { file: value.file } : {}) };
   if (Array.isArray(value.spreadFields) && value.spreadFields.every((f) => typeof f === 'string')) {
