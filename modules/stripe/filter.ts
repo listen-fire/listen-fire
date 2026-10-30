@@ -96,3 +96,82 @@ export function subscriptionQueryFromWhere(where: Expression | undefined, status
   const { query, exact } = queryFromWhere(where, [STATUS(statuses), COLLECTION_METHOD]);
   return { query: { status: 'all', ...query }, exact };
 }
+
+// ── Charges: a `Created` window ──────────────────────────────────────────────
+// Stripe's charge listing narrows by `created[gt|gte|lt|lte]` (whole unix
+// seconds) and by `customer`; it has no `status` filter, so a WHERE on
+// `Status` runs over what comes back. `Created >= since` and `Created WITHIN
+// 7d` are what a "last 7 days" program writes. A bound that is not a whole
+// second is rounded outward (down for a lower bound, up for an upper one): the
+// fetch is a superset and the engine trims the edge, but it is then not EXACT,
+// so a hop's LIMIT does not bound it. `WITHIN` reads the wall clock here and
+// the run's clock there, so it is never exact either.
+
+type Bound = 'gt' | 'gte' | 'lt' | 'lte';
+const BOUNDS: readonly string[] = ['gt', 'gte', 'lt', 'lte'];
+const MIRROR: Record<Bound, Bound> = { gt: 'lt', gte: 'lte', lt: 'gt', lte: 'gte' };
+const CREATED = ['created', 'Created'];
+const DURATION_UNIT_MS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
+
+function isBound(op: string): op is Bound {
+  return BOUNDS.includes(op);
+}
+
+/** A WHERE operand's instant in epoch milliseconds: an ISO text (a date or a
+ *  date and time) or a number already in milliseconds. */
+function instantOf(expr: Expression): number | undefined {
+  if (expr.type !== 'static') return undefined;
+  const ms = typeof expr.value === 'number' ? expr.value : typeof expr.value === 'string' ? Date.parse(expr.value) : NaN;
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+/** `"7d"`, `"12h"`, `"1w"` as milliseconds. */
+function durationOf(expr: Expression): number | undefined {
+  if (expr.type !== 'static' || typeof expr.value !== 'string') return undefined;
+  const match = /^(\d+(?:\.\d+)?)\s*([smhdw])$/i.exec(expr.value.trim());
+  return match?.[1] === undefined || match[2] === undefined ? undefined : parseFloat(match[1]) * (DURATION_UNIT_MS[match[2].toLowerCase()] ?? NaN);
+}
+
+/** `Charges`: `Created` bounds reach Stripe. `now` (epoch ms) anchors `WITHIN`. */
+export function chargeQueryFromWhere(where: Expression | undefined, now: number): { query: StripeListQuery; exact: boolean } {
+  const query: StripeListQuery = {};
+  let exact = true;
+  const put = (bound: Bound, seconds: number): void => {
+    const key = `created[${bound}]`;
+    const held = query[key] === undefined ? undefined : Number(query[key]);
+    const tighter = held === undefined || (bound === 'gt' || bound === 'gte' ? seconds > held : seconds < held);
+    if (tighter) query[key] = String(seconds);
+  };
+  const visit = (expr: Expression): void => {
+    if (expr.type === 'logical' && expr.op === 'and') {
+      expr.operands.forEach(visit);
+      return;
+    }
+    if (expr.type === 'compare') {
+      const leftField = propertyName(expr.left);
+      const field = leftField ?? propertyName(expr.right);
+      if (field !== undefined && CREATED.includes(field)) {
+        if (expr.op === 'within' && leftField !== undefined) {
+          const span = durationOf(expr.right);
+          if (span !== undefined) {
+            put('gte', Math.floor((now - span) / 1000));
+            exact = false;
+            return;
+          }
+        } else if (isBound(expr.op)) {
+          const at = instantOf(leftField !== undefined ? expr.right : expr.left);
+          if (at !== undefined) {
+            const bound = leftField !== undefined ? expr.op : MIRROR[expr.op];
+            const lower = bound === 'gt' || bound === 'gte';
+            put(bound, lower ? Math.floor(at / 1000) : Math.ceil(at / 1000));
+            if (at % 1000 !== 0) exact = false;
+            return;
+          }
+        }
+      }
+    }
+    exact = false;
+  };
+  if (where !== undefined) visit(where);
+  return { query, exact };
+}

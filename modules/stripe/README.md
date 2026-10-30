@@ -1,6 +1,6 @@
 # @listen-fire/stripe
 
-Stripe as a Listen-Fire module (`@lf/stripe`, bundled with `listen-fire`). A program listens to Stripe's events (a failed payment, a new or canceled subscription, a new customer) and walks from each one to the invoice, subscription or customer it is about. It reads customers, invoices and subscriptions as records joined by edges. Every amount is in major units of its currency. It writes nothing to Stripe.
+Stripe as a Listen-Fire module (`@lf/stripe`, bundled with `listen-fire`). A program listens to Stripe's events (a failed payment or charge, a new or canceled subscription, a new customer) and walks from each one to the invoice, subscription, customer or charge it is about. It reads customers, invoices, subscriptions and charges as records joined by edges. Every amount is in major units of its currency. It writes nothing to Stripe.
 
 ## Setting it up
 
@@ -12,7 +12,7 @@ listen-fire credential add --module stripe stripe_account
 The credential asks for:
 
 - `apiKey`: the key reads go out with. The program never holds it.
-  - Use a restricted key with Read on Customers, Invoices and Subscriptions (Stripe dashboard: Developers, API keys, Create restricted key). The module needs nothing more.
+  - Use a restricted key with Read on Customers, Invoices, Subscriptions and Charges (Stripe dashboard: Developers, API keys, Create restricted key). The module needs nothing more.
   - A test-mode key (`rk_test_…`) reads test-mode data.
 - `webhookSecret`: the webhook endpoint's signing secret (`whsec_…`). Leave it empty if the program only reads.
 
@@ -60,7 +60,7 @@ listen to pay { events: ["invoice.payment_failed"] } fire `Payment Failed`
 
 - A listen fires once per Stripe event delivered to the connection's URL.
 - `events` selects Stripe's event types. `listen-fire check` refuses a type Stripe does not send, naming the ones it does. Leave it out for every type below.
-- An event's `Type` says which it is. Its `Invoice`, `Subscription` or `Customer` edge is the object it is about, as it was when the event happened; the other two are empty.
+- An event's `Type` says which it is. Its `Invoice`, `Subscription`, `Customer` or `Charge` edge is the object it is about, as it was when the event happened; the others are empty.
 - The event carries its object, so walking to it reads nothing from Stripe. Walking on from it (an invoice's `Customer`) does.
 
 The event types:
@@ -68,10 +68,23 @@ The event types:
 - Invoices: `invoice.created`, `.deleted`, `.finalization_failed`, `.finalized`, `.marked_uncollectible`, `.overdue`, `.overpaid`, `.paid`, `.payment_action_required`, `.payment_attempt_required`, `.payment_failed`, `.payment_succeeded`, `.sent`, `.upcoming`, `.updated`, `.voided`, `.will_be_due`.
 - Subscriptions: `customer.subscription.created`, `.deleted`, `.paused`, `.pending_update_applied`, `.pending_update_expired`, `.resumed`, `.trial_will_end`, `.updated`.
 - Customers: `customer.created`, `customer.updated`, `customer.deleted`.
+- Charges: `charge.captured`, `.expired`, `.failed`, `.pending`, `.refunded`, `.succeeded`, `.updated`.
+
+## Why a payment failed
+
+```
+last = only(inv-[c:Charges WHERE c.Status == "failed" ORDER BY c.Created DESC LIMIT 1]->)
+reason = coalesce(last.`Failure Message`, last.`Outcome Seller Message`)
+```
+
+- An invoice names no charge in Stripe's API version `2025-03-31.basil` (and no charge an invoice), so `Charges` joins them through the invoice's payments: each payment intent that tried to pay it, and the charges of each. A charge made outside any payment intent is read too; a payment record is not.
+- Each attempt is its own charge. The failed ones carry `Failure Code` and `Failure Message` (Stripe's reason, written for the customer) and `Outcome Seller Message` (written for you), with `Outcome Network Decline Code` and `Outcome Advice Code` when the card network declined.
+- A walk costs a few requests: the invoice's payments, then one listing of charges per payment intent.
+- The payment intent's `last_payment_error` is not read: an event carries the invoice as it was, without the intent, so a field for it would be empty on exactly the invoices a failed-payment program starts from.
 
 ## Money
 
-- Every amount (`Amount Due`, `Amount Paid`, `Amount Remaining`, `Subtotal`, `Total`, a customer's `Balance`) is in major units of the record's `Currency`.
+- Every amount (`Amount Due`, `Amount Paid`, `Amount Remaining`, `Subtotal`, `Total`, a charge's `Amount`, `Amount Captured` and `Amount Refunded`, a customer's `Balance`) is in major units of the record's `Currency`.
 - An invoice of 1999 cents reads 19.99; one of ¥500 reads 500; one of 5.120 KWD reads 5.12. Never divide by 100.
 - The divisor is Stripe's: its zero-decimal currencies as they are, its three-decimal ones by 1000, every other by 100. ISK and UGX are divided by 100, because Stripe sends them as two-decimal values.
 - `Currency` is Stripe's lowercase ISO code (`usd`). ``Currency.formatFigure(inv.`Amount Due`, inv.Currency)`` writes the amount with its symbol.
@@ -83,17 +96,22 @@ The event types:
 | the account | `Customers` | Customer | newest first; `Email ==` reaches Stripe (its match is case-sensitive) |
 | the account | `Invoices` | Invoice | newest first; `Status ==` and `Collection Method ==` reach Stripe |
 | the account | `Subscriptions` | Subscription | every status, canceled included; `Status ==` and `Collection Method ==` reach Stripe |
-| Event | `Invoice`, `Subscription`, `Customer` | the object | the one the event is about; nothing along the other two |
+| the account | `Charges` | Charge | newest first, failed attempts included; `Created` bounds (`>=`, `<`, `WITHIN 7d`) reach Stripe; `Status` does not |
+| Event | `Invoice`, `Subscription`, `Customer`, `Charge` | the object | the one the event is about; nothing along the others |
 | Invoice | `Customer` | Customer | |
 | Invoice | `Subscription` | Subscription | nothing for a one-off invoice |
 | Subscription | `Customer` | Customer | |
 | Subscription | `Invoices`, `Latest Invoice` | Invoice | |
 | Customer | `Invoices` | Invoice | |
 | Customer | `Subscriptions` | Subscription | every status, canceled included |
+| Customer | `Charges` | Charge | newest first; the customer reaches Stripe |
+| Invoice | `Charges` | Charge | every attempt to pay it, newest first |
+| Charge | `Customer` | Customer | nothing for a charge made without one |
+| Charge | `Invoice` | Invoice | nothing for a charge that paid no invoice |
 
-- Field names are Stripe's: `Amount Due`, `Customer Email`, `Customer Name`, `Hosted Invoice URL`, `Invoice PDF`, `Status`, `Billing Reason`, `Attempt Count`, `Next Payment Attempt`, `Period End`, `Cancel At Period End`, `Trial End`, `Metadata`.
+- Field names are Stripe's: on a charge `Amount Refunded`, `Failure Code`, `Failure Message`, `Receipt URL`, `Billing Details Name` and the `outcome` object's `Outcome Type`, `Outcome Reason`, `Outcome Seller Message`; on the rest `Amount Due`, `Customer Email`, `Customer Name`, `Hosted Invoice URL`, `Invoice PDF`, `Status`, `Billing Reason`, `Attempt Count`, `Next Payment Attempt`, `Period End`, `Cancel At Period End`, `Trial End`, `Metadata`.
 - Timestamps are dates, not Stripe's unix seconds.
-- Other filters run over what Stripe answers, so pin `Status` on a busy account.
+- Other filters run over what Stripe answers, so pin `Status` on a busy account and bound a charge walk with `Created`.
 - Reads pin Stripe API version `2025-03-31.basil`. An event is shaped by its endpoint's version; an invoice's subscription is read where either puts it.
 
 ## What Stripe gets back
@@ -104,7 +122,7 @@ The event types:
 | the same event again (a retry) | 2xx `duplicate: true`, nothing runs |
 | unsigned, mis-signed, or older than five minutes | 401, nothing runs |
 | to a connection whose credential has no `webhookSecret` | 401, nothing runs; `listen-fire serve` says what to set |
-| of a type this module does not type (`charge.*`, `payout.*`, …) | 2xx, nothing runs |
+| of a type this module does not type (`charge.dispute.*`, `payout.*`, …) | 2xx, nothing runs |
 | not a Stripe event | 400 `not_a_stripe_event` |
 
 ## Not in v1
@@ -112,5 +130,5 @@ The event types:
 - Writes: refunds, voiding or finalizing an invoice, canceling a subscription, updating a customer.
 - Registering the webhook endpoint for you. Today it is added in Stripe's dashboard.
 - Stripe Connect: events and reads on connected accounts (the event's `account`, the `Stripe-Account` header).
-- More objects and events: charges, payment intents, refunds, disputes, prices and products, a subscription's items, and a customer's discount, source and tax id events.
+- More objects and events: payment intents, refunds, disputes (`charge.dispute.*`, `charge.refund.updated`), prices and products, a subscription's items, and a customer's discount, source and tax id events.
 - Stripe's thin events (API v2 event destinations), which carry no object.

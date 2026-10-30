@@ -93,7 +93,7 @@ describe('stripeModule', () => {
   it('is a webhook source whose events are Stripe’s event types, and writes nothing', () => {
     expect(stripeModule.manifest.supportedTriggers).toEqual(['webhook']);
     expect(stripeModule.manifest.subscribableEvents).toEqual([...STRIPE_EVENT_TYPES]);
-    expect(STRIPE_EVENT_TYPES).toEqual(expect.arrayContaining(['invoice.payment_failed', 'customer.subscription.deleted', 'customer.created']));
+    expect(STRIPE_EVENT_TYPES).toEqual(expect.arrayContaining(['invoice.payment_failed', 'customer.subscription.deleted', 'customer.created', 'charge.failed', 'charge.succeeded', 'charge.refunded']));
     expect(stripeModule.manifest.methods).toEqual(expect.arrayContaining(['checkInbound', 'listEventTypes', 'getRelated']));
     for (const write of ['createRecord', 'updateRecord', 'deleteRecord']) expect(stripeModule.manifest.methods).not.toContain(write);
   });

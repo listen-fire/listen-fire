@@ -7,7 +7,7 @@ import type { InboundCheckInput } from 'movement-engine/public/adapter';
 import { adapterInProcess, refusingFiles, refusingKv, stripeSignature } from 'module-kit';
 
 import { stripeModule } from '../index';
-import { stripeCustomer, stripeEvent, stripeInvoice, stripeSubscription } from './fixtures';
+import { stripeCustomer, stripeEvent, stripeFailedCharge, stripeInvoice, stripeSubscription } from './fixtures';
 
 const SECRET = 'whsec_test_secret';
 const silent = { debug: () => {}, info: () => {}, warn: jest.fn(), error: () => {} };
@@ -73,8 +73,8 @@ describe('a Stripe delivery', () => {
   });
 
   it('is answered 200 and runs nothing when its type is not one this module types', async () => {
-    const charge = JSON.stringify(stripeEvent('charge.failed', { id: 'ch_1', object: 'charge' }));
-    expect(await stripe.checkInbound!(signed(charge))).toMatchObject({ outcome: 'reply', status: 200, json: { received: true, ignored: expect.stringContaining('charge.failed is not an event @lf/stripe types') } });
+    const dispute = JSON.stringify(stripeEvent('charge.dispute.created', { id: 'dp_1', object: 'dispute' }));
+    expect(await stripe.checkInbound!(signed(dispute))).toMatchObject({ outcome: 'reply', status: 200, json: { received: true, ignored: expect.stringContaining('charge.dispute.created is not an event @lf/stripe types') } });
   });
 
   it('is answered 400 when the body is not a Stripe event, and 405 when it is not a POST', async () => {
@@ -88,6 +88,15 @@ describe('a Stripe delivery', () => {
     const updated = stripeEvent('customer.subscription.updated', stripeSubscription(), { data: { object: stripeSubscription(), previous_attributes: { status: 'active' } } });
     const answer = await stripe.checkInbound!(signed(JSON.stringify(updated)));
     expect(answer).toMatchObject({ outcome: 'accepted', events: [{ eventType: 'customer.subscription.updated', payload: { previous_attributes: { status: 'active' } } }] });
+  });
+
+  it('is one Event for a charge event too, carrying the charge', async () => {
+    const failed = JSON.stringify(stripeEvent('charge.failed', stripeFailedCharge(), { id: 'evt_charge_1' }));
+    expect(await stripe.checkInbound!(signed(failed))).toMatchObject({
+      outcome: 'accepted',
+      deliveryId: 'evt_charge_1',
+      events: [{ tag: 'stripe:event', eventType: 'charge.failed', payload: { type: 'charge.failed', object: { object: 'charge', failure_code: 'expired_card' } } }],
+    });
   });
 
   it('types every customer, subscription and invoice event', async () => {

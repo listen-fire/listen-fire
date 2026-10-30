@@ -17,7 +17,7 @@ import { StripeClient, STRIPE_API_VERSION } from '../api_client';
 import { eventOf } from '../inbound';
 import { STRIPE_EVENT_DISPLAY_NAME, STRIPE_EVENT_TYPES } from '../types';
 import { startFakeStripe, type FakeStripe } from './fake_stripe';
-import { stripeCustomer, stripeEvent, stripeInvoice, stripeSubscription, type Json } from './fixtures';
+import { stripeCharge, stripeCustomer, stripeEvent, stripeFailedCharge, stripeInvoice, stripeInvoicePayment, stripeSubscription, type Json } from './fixtures';
 
 const log = { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() };
 const KEY = 'rk_test_adapter';
@@ -43,7 +43,7 @@ afterEach(async () => {
 
 const meta = (): SourcePosition => makeMetaPosition('stripe');
 
-async function walk(from: SourcePosition, edge: string, extra: { where?: Expression; limit?: number } = {}): Promise<SourcePosition[]> {
+async function walk(from: SourcePosition, edge: string, extra: { where?: Expression; limit?: number; orderBy?: { fieldId: string; direction: 'asc' | 'desc' } } = {}): Promise<SourcePosition[]> {
   return (await adapter.getRelated({ position: from, fieldId: edge, direction: 'outgoing', ...extra })).map((r) => r.position);
 }
 
@@ -62,10 +62,11 @@ function delivered(body: Json): SourcePosition {
   return makeStablePosition({ adapterType: 'stripe', recordType: STRIPE_EVENT_DISPLAY_NAME, recordId: event.payload.id, data: event.payload });
 }
 
+const idOf = (position: SourcePosition): string | undefined => (position.identity.kind === 'stable' ? position.identity.recordId : undefined);
 const listings = () => fake.requests.map((r) => r.path);
 
 describe('StripeAdapter surface', () => {
-  it('projects to a checker schema with the three collections, the event and every type', async () => {
+  it('projects to a checker schema with the four collections, the event and every type', async () => {
     const entries = await adapter.listEntryPoints();
     const descriptors = new Map(
       (await Promise.all(entries.map(async (e) => [e.typeId, await adapter.describe(e.typeId)] as const))).flatMap(([id, d]) => (d ? [[id, d] as const] : [])),
@@ -78,24 +79,25 @@ describe('StripeAdapter surface', () => {
       ...(metaDescriptor !== null ? { metaDescriptor } : {}),
       supportsInPlaceUpdate: false,
     });
-    expect(Object.keys(schema.collections).sort()).toEqual(['Customers', 'Invoices', 'Subscriptions']);
-    expect(Object.keys(schema.positions).sort()).toEqual(expect.arrayContaining(['Customer', 'Event', 'Invoice', 'Subscription']));
+    expect(Object.keys(schema.collections).sort()).toEqual(['Charges', 'Customers', 'Invoices', 'Subscriptions']);
+    expect(Object.keys(schema.positions).sort()).toEqual(expect.arrayContaining(['Charge', 'Customer', 'Event', 'Invoice', 'Subscription']));
     expect(schema.positions['Customer']?.propertyCapabilities?.['Email']).toEqual({ filterOperators: ['eq'] });
     expect(notes.filter((n) => n.includes('root descriptor'))).toEqual([]);
   });
 
-  it('types an event’s Type as Stripe’s event types, and its object as three edges', async () => {
+  it('types an event’s Type as Stripe’s event types, and its object as four edges', async () => {
     const event = await adapter.describe(STRIPE_EVENT_DISPLAY_NAME);
     expect(event?.fields.find((f) => f.displayName === 'Type')).toMatchObject({ kind: 'enum', enumValues: [...STRIPE_EVENT_TYPES] });
     expect(event?.references.map((r) => [r.name, r.targetTypeId, r.cardinality])).toEqual([
       ['Invoice', 'stripe:invoice', 'one'],
       ['Subscription', 'stripe:subscription', 'one'],
       ['Customer', 'stripe:customer', 'one'],
+      ['Charge', 'stripe:charge', 'one'],
     ]);
   });
 
   it('writes nothing: no field or edge is writable', async () => {
-    for (const type of ['Customer', 'Invoice', 'Subscription', 'Event']) {
+    for (const type of ['Customer', 'Invoice', 'Subscription', 'Charge', 'Event']) {
       const descriptor = await adapter.describe(type);
       expect(descriptor?.fields.filter((f) => f.writable)).toEqual([]);
       expect(descriptor?.references.filter((r) => r.writable === true)).toEqual([]);
@@ -192,5 +194,135 @@ describe('StripeAdapter walks', () => {
     for (let i = 0; i < 150; i++) fake.customer(stripeCustomer({ id: `cus_${String(i).padStart(3, '0')}`, created: 1700000000 + i }));
     expect((await walk(meta(), 'Customers')).length).toBe(152);
     expect(listings()).toEqual(['/v1/customers?limit=100', '/v1/customers?limit=100&starting_after=cus_050']);
+  });
+});
+
+describe('charges', () => {
+  const PI = 'pi_3MtwBwLkdIwHu7ix28a3tqPa';
+  const failedAt = (id: string, created: number, overrides: Json = {}) => stripeFailedCharge({ id, created, payment_intent: PI, customer: 'cus_NffrFeUfNV2Hib', ...overrides });
+
+  beforeEach(() => {
+    fake.charge(stripeCharge({ id: 'ch_old', created: 1600000000, currency: 'usd', amount: 2500, customer: 'cus_ada' }));
+    fake.charge(stripeCharge({ id: 'ch_yen', created: 1700000000, currency: 'jpy', amount: 5000, customer: 'cus_ada' }));
+    fake.charge(failedAt('ch_try1', 1680644500));
+    fake.charge(failedAt('ch_try2', 1680730900));
+    fake.invoicePayment(stripeInvoicePayment({ payment: { type: 'payment_intent', payment_intent: PI } }));
+  });
+
+  it('lists the account’s charges newest first, amounts in major units, with Stripe’s own failure and outcome fields', async () => {
+    const charges = await walk(meta(), 'Charges');
+    expect(await Promise.all(charges.map((c) => read(c, 'Id')))).toEqual(['ch_yen', 'ch_try2', 'ch_try1', 'ch_old']);
+    const [yen, , , old] = charges;
+    expect([await read(yen, 'Amount'), await read(yen, 'Currency')]).toEqual([5000, 'jpy']);
+    expect(await read(old, 'Amount')).toBe(25);
+    expect(await read(old, 'Amount Refunded')).toBe(0);
+    expect(await read(old, 'Status')).toBe('succeeded');
+    expect(await read(old, 'Outcome Seller Message')).toBe('Payment complete.');
+    expect(await read(old, 'Failure Message')).toBeNull();
+    expect(await read(old, 'Created')).toBe('2020-09-13T12:26:40.000Z');
+    expect(listings()).toEqual(['/v1/charges?limit=100']);
+  });
+
+  it('reads a failed charge’s reason', async () => {
+    const [failed] = (await walk(meta(), 'Charges')).filter((c) => idOf(c) === 'ch_try2');
+    expect(await read(failed, 'Status')).toBe('failed');
+    expect(await read(failed, 'Paid')).toBe(false);
+    expect(await read(failed, 'Failure Code')).toBe('expired_card');
+    expect(await read(failed, 'Failure Message')).toBe('Your card has expired.');
+    expect(await read(failed, 'Outcome Type')).toBe('issuer_declined');
+    expect(await read(failed, 'Outcome Reason')).toBe('expired_card');
+    expect(await read(failed, 'Outcome Seller Message')).toBe('The bank returned the decline code `expired_card`.');
+    expect(await read(failed, 'Outcome Network Decline Code')).toBe('54');
+    expect(await read(failed, 'Outcome Advice Code')).toBe('confirm_card_data');
+  });
+
+  it('pushes Created bounds down as whole seconds, and leaves Status to the engine', async () => {
+    const created = (op: string, value: string | number): Expression => ({ type: 'compare', op, left: { type: 'edge_property', propertyTypeId: 'Created' }, right: { type: 'static', value } }) as Expression;
+    const and = (...operands: Expression[]): Expression => ({ type: 'logical', op: 'and', operands }) as Expression;
+    const since = await walk(meta(), 'Charges', { where: created('gte', '2023-04-05T00:00:00.000Z') });
+    expect(since.length).toBe(2);
+    expect(listings().at(-1)).toBe('/v1/charges?created%5Bgte%5D=1680652800&limit=100');
+    await walk(meta(), 'Charges', { where: and(created('gte', '2023-04-05'), created('lt', '2023-04-06'), created('gte', '2023-04-04'), eq('Status', 'failed')) });
+    expect(listings().at(-1)).toBe('/v1/charges?created%5Bgte%5D=1680652800&created%5Blt%5D=1680739200&limit=100');
+    await walk(meta(), 'Charges', { where: created('gt', 1680652800500) });
+    expect(listings().at(-1)).toBe('/v1/charges?created%5Bgt%5D=1680652800&limit=100');
+  });
+
+  it('pushes WITHIN down as a lower bound from now', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1700000000_000);
+    try {
+      const within: Expression = { type: 'compare', op: 'within', left: { type: 'edge_property', propertyTypeId: 'Created' }, right: { type: 'static', value: '7d' } } as Expression;
+      expect(await walk(meta(), 'Charges', { where: within, limit: 1 })).toHaveLength(1);
+      expect(listings().at(-1)).toBe(`/v1/charges?created%5Bgte%5D=${1700000000 - 7 * 86400}&limit=100`);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('bounds a LIMIT only when the whole WHERE reached Stripe', async () => {
+    await walk(meta(), 'Charges', { limit: 2 });
+    expect(listings().at(-1)).toBe('/v1/charges?limit=2');
+    await walk(meta(), 'Charges', { where: eq('Status', 'failed'), limit: 2 });
+    expect(listings().at(-1)).toBe('/v1/charges?limit=100');
+  });
+
+  it('pages a listing by cursor', async () => {
+    for (let i = 0; i < 120; i++) fake.charge(stripeCharge({ id: `ch_${String(i).padStart(3, '0')}`, created: 1710000000 + i }));
+    expect((await walk(meta(), 'Charges')).length).toBe(124);
+    expect(listings()).toEqual(['/v1/charges?limit=100', '/v1/charges?limit=100&starting_after=ch_020']);
+  });
+
+  it('is a customer’s Charges: the customer reaches Stripe', async () => {
+    const [ada] = await walk(meta(), 'Customers', { where: eq('Email', 'ada@example.com') });
+    expect((await walk(ada!, 'Charges')).length).toBe(2);
+    expect(listings().at(-1)).toBe('/v1/charges?customer=cus_ada&limit=100');
+  });
+
+  it('is an invoice’s Charges: every attempt of the payment intent that pays it, newest first, failure reasons readable', async () => {
+    const [invoice] = await walk(delivered(stripeEvent('invoice.payment_failed', stripeInvoice())), 'Invoice');
+    const attempts = await walk(invoice!, 'Charges');
+    expect(await Promise.all(attempts.map((c) => read(c, 'Id')))).toEqual(['ch_try2', 'ch_try1']);
+    expect(await read(attempts[0], 'Failure Message')).toBe('Your card has expired.');
+    expect(await read(attempts[0], 'Outcome Seller Message')).toBe('The bank returned the decline code `expired_card`.');
+    expect(listings()).toEqual([`/v1/invoice_payments?invoice=in_1MtHbELkdIwHu7ixl4OzzPMv&limit=100`, `/v1/charges?payment_intent=${PI}&limit=100`]);
+    expect(await walk(invoice!, 'Charges', { limit: 1, orderBy: { fieldId: 'Created', direction: 'desc' } })).toHaveLength(1);
+  });
+
+  it('is an invoice’s Charges through a charge made outside any payment intent, and none for a payment record', async () => {
+    fake.invoice(stripeInvoice({ id: 'in_legacy', customer: 'cus_ada' }));
+    fake.charge(stripeCharge({ id: 'ch_legacy', created: 1690000000 }));
+    fake.invoicePayment(stripeInvoicePayment({ id: 'inpay_1', invoice: 'in_legacy', payment: { type: 'charge', charge: 'ch_legacy' } }));
+    fake.invoicePayment(stripeInvoicePayment({ id: 'inpay_2', invoice: 'in_legacy', payment: { type: 'payment_record', payment_record: 'prec_1' } }));
+    const [invoice] = await walk(delivered(stripeEvent('invoice.paid', stripeInvoice({ id: 'in_legacy' }))), 'Invoice');
+    expect(await Promise.all((await walk(invoice!, 'Charges')).map((c) => read(c, 'Id')))).toEqual(['ch_legacy']);
+    fake.invoice(stripeInvoice({ id: 'in_unpaid' }));
+    const [unpaid] = await walk(delivered(stripeEvent('invoice.paid', stripeInvoice({ id: 'in_unpaid' }))), 'Invoice');
+    expect(await walk(unpaid!, 'Charges')).toEqual([]);
+  });
+
+  it('leads from a charge to its customer, and to the invoice its payment intent paid', async () => {
+    const [failed] = (await walk(meta(), 'Charges')).filter((c) => idOf(c) === 'ch_try1');
+    const [customer] = await walk(failed!, 'Customer');
+    expect(await read(customer, 'Name')).toBe('Jenny Rosen');
+    const [invoice] = await walk(failed!, 'Invoice');
+    expect(await read(invoice, 'Id')).toBe('in_1MtHbELkdIwHu7ixl4OzzPMv');
+    expect(listings().slice(-2)).toEqual([
+      `/v1/invoice_payments?payment%5Btype%5D=payment_intent&payment%5Bpayment_intent%5D=${PI}&limit=1`,
+      '/v1/invoices/in_1MtHbELkdIwHu7ixl4OzzPMv',
+    ]);
+    const [yen] = (await walk(meta(), 'Charges')).filter((c) => idOf(c) === 'ch_yen');
+    expect(await walk(yen!, 'Invoice')).toEqual([]);
+    expect(await walk(yen!, 'Customer')).toHaveLength(1);
+  });
+
+  it('is the charge a charge event carries, typed, with no call to Stripe', async () => {
+    const event = delivered(stripeEvent('charge.failed', failedAt('ch_evt', 1686089900)));
+    expect(await read(event, 'Type')).toBe('charge.failed');
+    const [charge] = await walk(event, 'Charge');
+    expect(await read(charge, 'Failure Code')).toBe('expired_card');
+    expect(await read(charge, 'Amount')).toBe(10.99);
+    expect(await walk(event, 'Invoice')).toEqual([]);
+    expect(fake.requests).toEqual([]);
+    expect(STRIPE_EVENT_TYPES).toEqual(expect.arrayContaining(['charge.succeeded', 'charge.failed', 'charge.refunded']));
   });
 });

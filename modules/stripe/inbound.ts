@@ -3,7 +3,7 @@
 // uses), becomes one Event. Stripe retries a delivery until it is answered
 // 2xx, so the event id names the delivery and a retry runs nothing.
 //
-// An event of a type this module does not type (a charge, a payout, …) is
+// An event of a type this module does not type (a payout, a dispute, …) is
 // answered 200 and runs nothing: the endpoint may be subscribed to more than
 // the program listens for, and a non-2xx answer would only make Stripe retry.
 
@@ -29,7 +29,7 @@ export function eventOf(body: unknown): { ok: true; payload: StripeEventPayload 
   }
   const type = body['type'];
   if (!isStripeEventType(type)) {
-    return { ok: false, ignored: true, message: `${type} is not an event @lf/stripe types (${STRIPE_EVENT_TYPES.length} invoice, subscription and customer events): it runs nothing` };
+    return { ok: false, ignored: true, message: `${type} is not an event @lf/stripe types (${STRIPE_EVENT_TYPES.length} invoice, subscription, customer and charge events): it runs nothing` };
   }
   const data = body['data'];
   const object = isObject(data) ? data['object'] : undefined;

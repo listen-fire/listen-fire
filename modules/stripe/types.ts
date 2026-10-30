@@ -23,16 +23,21 @@ export const STRIPE_INVOICE_DISPLAY_NAME = 'Invoice';
 export const STRIPE_SUBSCRIPTION_TYPE_ID = 'stripe:subscription';
 export const STRIPE_SUBSCRIPTION_DISPLAY_NAME = 'Subscription';
 
+export const STRIPE_CHARGE_TYPE_ID = 'stripe:charge';
+export const STRIPE_CHARGE_DISPLAY_NAME = 'Charge';
+
 // ── Root collections (Title Case, plural, distinct from the type each yields)
 
 export const STRIPE_CUSTOMERS_COLLECTION = 'Customers';
 export const STRIPE_INVOICES_COLLECTION = 'Invoices';
 export const STRIPE_SUBSCRIPTIONS_COLLECTION = 'Subscriptions';
+export const STRIPE_CHARGES_COLLECTION = 'Charges';
 
 // ── Edges below the root: read id (private) ↔ natural name (what authors write)
 
 /** One record: an event's object, an invoice's customer or subscription, a
- *  subscription's customer. The same name leaves several types. */
+ *  subscription's customer, a charge's customer or invoice. The same name
+ *  leaves several types. */
 export const STRIPE_CUSTOMER_EDGE = 'customer_edge';
 export const STRIPE_CUSTOMER_EDGE_NAME = 'Customer';
 export const STRIPE_INVOICE_EDGE = 'invoice_edge';
@@ -41,12 +46,17 @@ export const STRIPE_SUBSCRIPTION_EDGE = 'subscription_edge';
 export const STRIPE_SUBSCRIPTION_EDGE_NAME = 'Subscription';
 export const STRIPE_LATEST_INVOICE_EDGE = 'latest_invoice_edge';
 export const STRIPE_LATEST_INVOICE_EDGE_NAME = 'Latest Invoice';
+/** An event's charge (a `charge.*` event is about one). */
+export const STRIPE_CHARGE_EDGE = 'charge_edge';
+export const STRIPE_CHARGE_EDGE_NAME = 'Charge';
 /** Many records: a customer's or a subscription's invoices, a customer's
- *  subscriptions. */
+ *  subscriptions, a customer's or an invoice's charges. */
 export const STRIPE_INVOICES_EDGE = 'invoices_edge';
 export const STRIPE_INVOICES_EDGE_NAME = 'Invoices';
 export const STRIPE_SUBSCRIPTIONS_EDGE = 'subscriptions_edge';
 export const STRIPE_SUBSCRIPTIONS_EDGE_NAME = 'Subscriptions';
+export const STRIPE_CHARGES_EDGE = 'charges_edge';
+export const STRIPE_CHARGES_EDGE_NAME = 'Charges';
 
 // ── Vocabularies (Stripe's API reference, "Types of events" and each object) ─
 
@@ -87,9 +97,21 @@ export const STRIPE_SUBSCRIPTION_EVENTS = [
  *  source and tax id events are about other objects, not typed here.) */
 export const STRIPE_CUSTOMER_EVENTS = ['customer.created', 'customer.deleted', 'customer.updated'] as const;
 
+/** The charge events: `data.object` is a Charge. (`charge.dispute.*` carry a
+ *  dispute and `charge.refund.updated` a refund, so they are not typed here.) */
+export const STRIPE_CHARGE_EVENTS = [
+  'charge.captured',
+  'charge.expired',
+  'charge.failed',
+  'charge.pending',
+  'charge.refunded',
+  'charge.succeeded',
+  'charge.updated',
+] as const;
+
 /** Every event a listen can select (`events: [...]`), and the closed set an
  *  Event's `Type` is. */
-export const STRIPE_EVENT_TYPES = [...STRIPE_CUSTOMER_EVENTS, ...STRIPE_SUBSCRIPTION_EVENTS, ...STRIPE_INVOICE_EVENTS] as const;
+export const STRIPE_EVENT_TYPES = [...STRIPE_CUSTOMER_EVENTS, ...STRIPE_SUBSCRIPTION_EVENTS, ...STRIPE_INVOICE_EVENTS, ...STRIPE_CHARGE_EVENTS] as const;
 export type StripeEventType = (typeof STRIPE_EVENT_TYPES)[number];
 
 export function isStripeEventType(value: unknown): value is StripeEventType {
@@ -101,6 +123,9 @@ export const STRIPE_INVOICE_STATUSES = ['draft', 'open', 'paid', 'uncollectible'
 
 /** A subscription's `status`. */
 export const STRIPE_SUBSCRIPTION_STATUSES = ['incomplete', 'incomplete_expired', 'trialing', 'active', 'past_due', 'canceled', 'unpaid', 'paused'] as const;
+
+/** A charge's `status`. */
+export const STRIPE_CHARGE_STATUSES = ['succeeded', 'pending', 'failed'] as const;
 
 /** An invoice's or a subscription's `collection_method`. */
 export const STRIPE_COLLECTION_METHODS = ['charge_automatically', 'send_invoice'] as const;
@@ -196,6 +221,42 @@ export interface StripeSubscriptionPayload {
   customer: string | null;
   /** The latest invoice's id, followed by `Latest Invoice`. */
   latest_invoice: string | null;
+}
+
+export interface StripeChargePayload {
+  id: string;
+  /** Intended to be collected; for a failed charge, what was attempted. */
+  amount: number | null;
+  amount_captured: number | null;
+  amount_refunded: number | null;
+  currency: string;
+  status: string | null;
+  paid: boolean | null;
+  captured: boolean | null;
+  refunded: boolean | null;
+  disputed: boolean | null;
+  created: string | null;
+  description: string | null;
+  failure_code: string | null;
+  failure_message: string | null;
+  /** The `outcome` object's fields: Stripe's own account of whether the payment was accepted, and why. */
+  outcome_type: string | null;
+  outcome_reason: string | null;
+  outcome_seller_message: string | null;
+  outcome_network_status: string | null;
+  outcome_network_decline_code: string | null;
+  outcome_advice_code: string | null;
+  outcome_risk_level: string | null;
+  receipt_url: string | null;
+  receipt_email: string | null;
+  billing_details_name: string | null;
+  billing_details_email: string | null;
+  livemode: boolean;
+  metadata: Record<string, string>;
+  /** The customer's id, followed by `Customer`. */
+  customer: string | null;
+  /** The payment intent's id, followed to find the invoice it paid. */
+  payment_intent: string | null;
 }
 
 /** What a delivered event carries: its own fields, and the object it is

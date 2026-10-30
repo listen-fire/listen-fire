@@ -6,7 +6,7 @@ import type { AdapterManifest } from 'movement-engine/public/adapter';
 
 import { STRIPE_ADAPTER_TYPE, STRIPE_EVENT_TYPES } from './types';
 
-const STRIPE_HANDBOOK_CONTENT = `Stripe as a graph: its events, your customers, invoices and subscriptions. Read-only. The credential holds an API key (a restricted key with Read on Customers, Invoices and Subscriptions is enough) and the webhook endpoint's signing secret; a program never holds either.
+const STRIPE_HANDBOOK_CONTENT = `Stripe as a graph: its events, your customers, invoices, subscriptions and charges. Read-only. The credential holds an API key (a restricted key with Read on Customers, Invoices, Subscriptions and Charges is enough) and the webhook endpoint's signing secret; a program never holds either.
 
 ### listening — Stripe's events
 
@@ -23,22 +23,30 @@ listen to pay { events: ["invoice.payment_failed"] } fire \`Payment Failed\`
 
 \`listen-fire serve\` prints the connection's URL (\`/hooks/stripe/<credential>\`): add it as the endpoint in Stripe's dashboard, with the events you listen for. A delivery is checked against the endpoint's signing secret; an unsigned, mis-signed or stale one (older than five minutes) runs nothing. Stripe retries a delivery, and the same event runs once.
 
-\`events\` selects Stripe's event types: the invoice events (\`invoice.payment_failed\`, \`invoice.paid\`, \`invoice.upcoming\`, …), the subscription events (\`customer.subscription.created\`, \`.updated\`, \`.deleted\`, \`.trial_will_end\`, …) and \`customer.created\`, \`.updated\`, \`.deleted\`. \`listen-fire check\` refuses a type Stripe never sends. An event's \`Type\` says which it is. Walk \`Invoice\`, \`Subscription\` or \`Customer\` for the object it is about, as it was when the event happened (nothing along the other two).
+\`events\` selects Stripe's event types: the invoice events (\`invoice.payment_failed\`, \`invoice.paid\`, \`invoice.upcoming\`, …), the subscription events (\`customer.subscription.created\`, \`.updated\`, \`.deleted\`, \`.trial_will_end\`, …), \`customer.created\`, \`.updated\`, \`.deleted\`, and the charge events (\`charge.succeeded\`, \`charge.failed\`, \`charge.refunded\`, …). \`listen-fire check\` refuses a type Stripe never sends. An event's \`Type\` says which it is. Walk \`Invoice\`, \`Subscription\`, \`Customer\` or \`Charge\` for the object it is about, as it was when the event happened (nothing along the others).
 
-### reading — customers, invoices, subscriptions
+### reading — customers, invoices, subscriptions, charges
 
 \`\`\`
 c = only(pay-[x:Customers WHERE x.Email == "ada@example.com"]->)
 unpaid = c-[i:Invoices WHERE i.Status == "open"]->
+week = pay-[ch:Charges WHERE ch.Created WITHIN 7d AND ch.Status == "succeeded"]->
 \`\`\`
 
-\`Email ==\` on \`Customers\` and \`Status ==\` on \`Invoices\` and \`Subscriptions\` reach Stripe; other filters run over what comes back. \`Subscriptions\` holds canceled ones too: pin \`Status\`. An invoice leads to its \`Customer\` and \`Subscription\`, a subscription to its \`Customer\`, \`Invoices\` and \`Latest Invoice\`, a customer to its \`Invoices\` and \`Subscriptions\`.
+\`Email ==\` on \`Customers\` and \`Status ==\` on \`Invoices\` and \`Subscriptions\` reach Stripe; other filters run over what comes back. \`Subscriptions\` holds canceled ones too: pin \`Status\`. An invoice leads to its \`Customer\`, \`Subscription\` and \`Charges\`, a subscription to its \`Customer\`, \`Invoices\` and \`Latest Invoice\`, a customer to its \`Invoices\`, \`Subscriptions\` and \`Charges\`, a charge to its \`Customer\` and \`Invoice\`.
 
-Field names are Stripe's: \`Amount Due\`, \`Customer Email\`, \`Hosted Invoice URL\`, \`Status\`, \`Billing Reason\`, \`Next Payment Attempt\`, \`Metadata\`.
+A \`Charge\` is one attempt to take a payment, failed ones included (\`Status\` is \`succeeded\`, \`pending\` or \`failed\`). \`Created\` bounds (\`>=\`, \`<\`, \`WITHIN 7d\`) reach Stripe; \`Status\` and \`Currency\` do not, so bound \`Created\` on a busy account. Why a payment failed: an invoice's \`Charges\` come newest first, and the failed one carries \`Failure Message\` (for the customer), \`Failure Code\` and \`Outcome Seller Message\` (for you):
+
+\`\`\`
+last = only(inv-[ch:Charges WHERE ch.Status == "failed" ORDER BY ch.Created DESC LIMIT 1]->)
+reason = coalesce(last.\`Failure Message\`, last.\`Outcome Seller Message\`)
+\`\`\`
+
+Field names are Stripe's: \`Amount Due\`, \`Customer Email\`, \`Hosted Invoice URL\`, \`Status\`, \`Billing Reason\`, \`Next Payment Attempt\`, \`Metadata\`; on a charge \`Amount Refunded\`, \`Failure Code\`, \`Receipt URL\`, \`Billing Details Name\`, and the \`outcome\` object's \`Outcome Type\`, \`Outcome Reason\`, \`Outcome Seller Message\`.
 
 ### money
 
-Every amount (\`Amount Due\`, \`Total\`, a customer's \`Balance\`) is in major units of the record's \`Currency\`: 19.99 for a usd invoice of 1999 cents, 500 for ¥500. Never divide by 100. \`Currency\` is Stripe's lowercase ISO code, which \`Currency.formatFigure\` reads.`;
+Every amount (\`Amount Due\`, \`Total\`, a charge's \`Amount\`, a customer's \`Balance\`) is in major units of the record's \`Currency\`: 19.99 for a usd invoice of 1999 cents, 500 for ¥500. Never divide by 100. \`Currency\` is Stripe's lowercase ISO code, which \`Currency.formatFigure\` reads.`;
 
 /**
  * Static manifest. A webhook source (Stripe's deliveries, checked at the door
@@ -52,15 +60,17 @@ export const STRIPE_MANIFEST: AdapterManifest = {
   displayName: 'Stripe',
   website: 'https://stripe.com',
   description:
-    'Stripe customers, invoices and subscriptions. Run a movement on a failed payment, a new ' +
-    'subscription or a cancellation, and read customers, invoices and subscriptions. Read-only.',
+    'Stripe customers, invoices, subscriptions and charges. Run a movement on a failed payment, a new ' +
+    'subscription or a cancellation, and read customers, invoices, subscriptions and charges. Read-only.',
   authoringHints:
-    'Listen on Event with events naming Stripe event types (invoice.payment_failed, ' +
-    'customer.subscription.deleted, …). Walk the event’s Invoice, Subscription or Customer edge ' +
-    'for its object — no data.object to dig into. Amounts are already in major units of ' +
-    'Currency: never divide by 100. Nothing is writable.',
+    'Listen on Event with events naming Stripe event types (invoice.payment_failed, charge.failed, ' +
+    'customer.subscription.deleted, …). Walk the event’s Invoice, Subscription, Customer or Charge edge ' +
+    'for its object — no data.object to dig into. Why a payment failed: an invoice’s Charges (newest first) ' +
+    'carry Failure Message, Failure Code and Outcome Seller Message. Sales over a period: the account’s ' +
+    'Charges bounded by Created (WITHIN 7d), then Status == "succeeded". Amounts are already in major ' +
+    'units of Currency: never divide by 100. Nothing is writable.',
   handbookSection: {
-    title: 'Stripe — events, customers, invoices and subscriptions',
+    title: 'Stripe — events, customers, invoices, subscriptions and charges',
     content: STRIPE_HANDBOOK_CONTENT,
   },
   triggerExpectation:
@@ -83,6 +93,9 @@ export const STRIPE_MANIFEST: AdapterManifest = {
     eventPhrase: {
       'invoice.payment_failed': [{ template: 'When a Stripe payment fails' }],
       'invoice.paid': [{ template: 'When a Stripe invoice is paid' }],
+      'charge.failed': [{ template: 'When a Stripe charge fails' }],
+      'charge.succeeded': [{ template: 'When a Stripe charge succeeds' }],
+      'charge.refunded': [{ template: 'When a Stripe charge is refunded' }],
       'customer.subscription.created': [{ template: 'When a Stripe subscription starts' }],
       'customer.subscription.deleted': [{ template: 'When a Stripe subscription is canceled' }],
       default: [{ template: 'When a Stripe event arrives' }],

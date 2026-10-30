@@ -53,7 +53,7 @@ export const stripeModule = defineModule({
       name: 'stripe',
       kind: 'static',
       fields: [
-        { name: 'apiKey', label: 'API key (a restricted key with Read on Customers, Invoices and Subscriptions is enough: rk_live_… or rk_test_…)' },
+        { name: 'apiKey', label: 'API key (a restricted key with Read on Customers, Invoices, Subscriptions and Charges is enough: rk_live_… or rk_test_…)' },
         { name: 'webhookSecret', label: 'The webhook endpoint’s signing secret (whsec_…), for listens; empty if the program only reads', optional: true },
       ],
     },

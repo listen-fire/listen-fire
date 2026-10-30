@@ -197,9 +197,9 @@ test('listen-fire serve runs a signed failed payment once: the monthly customer 
     // An event no listen selects, and one the module does not type: each is
     // answered 2xx (so Stripe does not retry it) and runs nothing.
     const paid = await deliver(url, stripeEvent('invoice.paid', stripeInvoice({ status: 'paid' }), { id: 'evt_paid' }));
-    const charge = await deliver(url, stripeEvent('charge.failed', { id: 'ch_1', object: 'charge' }, { id: 'evt_charge' }));
-    for (const quiet of [paid, charge]) assert.deepEqual([quiet.status, JSON.parse(quiet.body)], [202, { runs: [] }]);
-    console.log([monthly, again, unsigned, paid, charge].map((a) => `${a.status} ${a.body}`).join('\n'));
+    const dispute = await deliver(url, stripeEvent('charge.dispute.created', { id: 'dp_1', object: 'dispute' }, { id: 'evt_dispute' }));
+    for (const quiet of [paid, dispute]) assert.deepEqual([quiet.status, JSON.parse(quiet.body)], [202, { runs: [] }]);
+    console.log([monthly, again, unsigned, paid, dispute].map((a) => `${a.status} ${a.body}`).join('\n'));
 
     const mails = await outbox(world.channels);
     assert.deepEqual(mails.map((m) => m.to).sort(), ['diego@alvareztiles.es', 'kenji@hoshinotea.jp'], JSON.stringify(mails));

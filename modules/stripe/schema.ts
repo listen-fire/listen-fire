@@ -1,11 +1,12 @@
 // The Stripe type graph: the entry surface and every type descriptor.
 //
 // The shape follows Stripe's own nouns. An account reaches its customers,
-// invoices and subscriptions; a customer holds its invoices and
-// subscriptions; an invoice and a subscription lead to their customer, and an
-// invoice to the subscription that made it. An event is ABOUT one object,
-// reached along `Invoice`, `Subscription` or `Customer` rather than through
-// an untyped `data.object`. Field names are Stripe's (`amount_due` reads as
+// invoices, subscriptions and charges; a customer holds its invoices,
+// subscriptions and charges; an invoice and a subscription lead to their
+// customer, and an invoice to the subscription that made it and the charges
+// that tried to pay it. A charge leads to its customer and invoice. An event
+// is ABOUT one object, reached along `Invoice`, `Subscription`, `Customer` or
+// `Charge` rather than through an untyped `data.object`. Field names are Stripe's (`amount_due` reads as
 // `Amount Due`, `hosted_invoice_url` as `Hosted Invoice URL`), so a program
 // written against Stripe's API reference reads as it expects and `listen-fire check`
 // refuses a field Stripe does not have.
@@ -23,6 +24,14 @@ import {
   STRIPE_ACCOUNT_DISPLAY_NAME,
   STRIPE_ACCOUNT_TYPE_ID,
   STRIPE_BILLING_REASONS,
+  STRIPE_CHARGES_COLLECTION,
+  STRIPE_CHARGES_EDGE,
+  STRIPE_CHARGES_EDGE_NAME,
+  STRIPE_CHARGE_DISPLAY_NAME,
+  STRIPE_CHARGE_EDGE,
+  STRIPE_CHARGE_EDGE_NAME,
+  STRIPE_CHARGE_STATUSES,
+  STRIPE_CHARGE_TYPE_ID,
   STRIPE_COLLECTION_METHODS,
   STRIPE_CUSTOMERS_COLLECTION,
   STRIPE_CUSTOMER_DISPLAY_NAME,
@@ -87,6 +96,10 @@ const CUSTOMERS_DESCRIPTION =
   'other filters run over what comes back.';
 const INVOICES_DESCRIPTION =
   'Invoices, newest first. `Status ==` and `Collection Method ==` reach Stripe; other filters run over what comes back.';
+const CHARGES_DESCRIPTION =
+  'Charges (every attempt to take a payment, failed ones included), newest first. `Created` bounds ' +
+  '(`>=`, `<`, `WITHIN 7d`) reach Stripe, as does the customer a `Customer` hop starts from; ' +
+  'other filters (`Status`, `Currency`) run over what comes back, so bound `Created` on a busy account.';
 const SUBSCRIPTIONS_DESCRIPTION =
   'Subscriptions of every status (canceled included), newest first. `Status ==` and ' +
   '`Collection Method ==` reach Stripe; other filters run over what comes back.';
@@ -96,6 +109,7 @@ export function stripeEntryPoints(): SchemaEntryPoint[] {
     { typeId: STRIPE_CUSTOMER_TYPE_ID, displayName: STRIPE_CUSTOMER_DISPLAY_NAME, writable: false, readable: true, collectionName: STRIPE_CUSTOMERS_COLLECTION, description: CUSTOMERS_DESCRIPTION },
     { typeId: STRIPE_INVOICE_TYPE_ID, displayName: STRIPE_INVOICE_DISPLAY_NAME, writable: false, readable: true, collectionName: STRIPE_INVOICES_COLLECTION, description: INVOICES_DESCRIPTION },
     { typeId: STRIPE_SUBSCRIPTION_TYPE_ID, displayName: STRIPE_SUBSCRIPTION_DISPLAY_NAME, writable: false, readable: true, collectionName: STRIPE_SUBSCRIPTIONS_COLLECTION, description: SUBSCRIPTIONS_DESCRIPTION },
+    { typeId: STRIPE_CHARGE_TYPE_ID, displayName: STRIPE_CHARGE_DISPLAY_NAME, writable: false, readable: true, collectionName: STRIPE_CHARGES_COLLECTION, description: CHARGES_DESCRIPTION },
     // The EVENT edge: what a delivery to the connection's URL is.
     {
       typeId: STRIPE_EVENT_TYPE_ID,
@@ -115,13 +129,14 @@ export const STRIPE_ROOT: SchemaTypeDescriptor = {
   typeId: META_RECORD_TYPE,
   displayName: STRIPE_ACCOUNT_DISPLAY_NAME,
   description:
-    'The Stripe account the API key belongs to. Walk `Customers`, `Invoices` or ' +
-    '`Subscriptions`; listen on `Event` to be told about Stripe’s events.',
+    'The Stripe account the API key belongs to. Walk `Customers`, `Invoices`, `Subscriptions` or ' +
+    '`Charges`; listen on `Event` to be told about Stripe’s events.',
   fields: [],
   references: [
     { fieldId: STRIPE_CUSTOMERS_COLLECTION, targetTypeId: STRIPE_CUSTOMER_TYPE_ID, cardinality: 'many', direction: 'outgoing', name: STRIPE_CUSTOMERS_COLLECTION, description: CUSTOMERS_DESCRIPTION, capability: NEWEST_FIRST },
     { fieldId: STRIPE_INVOICES_COLLECTION, targetTypeId: STRIPE_INVOICE_TYPE_ID, cardinality: 'many', direction: 'outgoing', name: STRIPE_INVOICES_COLLECTION, description: INVOICES_DESCRIPTION, capability: NEWEST_FIRST },
     { fieldId: STRIPE_SUBSCRIPTIONS_COLLECTION, targetTypeId: STRIPE_SUBSCRIPTION_TYPE_ID, cardinality: 'many', direction: 'outgoing', name: STRIPE_SUBSCRIPTIONS_COLLECTION, description: SUBSCRIPTIONS_DESCRIPTION, capability: NEWEST_FIRST },
+    { fieldId: STRIPE_CHARGES_COLLECTION, targetTypeId: STRIPE_CHARGE_TYPE_ID, cardinality: 'many', direction: 'outgoing', name: STRIPE_CHARGES_COLLECTION, description: CHARGES_DESCRIPTION, capability: NEWEST_FIRST },
     {
       fieldId: `fires:${STRIPE_EVENT_TYPE_ID}`,
       targetTypeId: STRIPE_EVENT_TYPE_ID,
@@ -156,12 +171,23 @@ const INVOICES_EDGE: SchemaReferenceDescriptor = {
   capability: NEWEST_FIRST,
 };
 
+const CHARGES_EDGE: SchemaReferenceDescriptor = {
+  fieldId: STRIPE_CHARGES_EDGE,
+  targetTypeId: STRIPE_CHARGE_TYPE_ID,
+  cardinality: 'many',
+  direction: 'outgoing',
+  name: STRIPE_CHARGES_EDGE_NAME,
+  description: CHARGES_DESCRIPTION,
+  sequenced: 'chronological',
+  capability: NEWEST_FIRST,
+};
+
 const EVENT_DESCRIPTOR: SchemaTypeDescriptor = {
   typeId: STRIPE_EVENT_TYPE_ID,
   displayName: STRIPE_EVENT_DISPLAY_NAME,
   description:
-    'A Stripe event: what happened (`Type`) and when. Walk `Invoice`, `Subscription` or ' +
-    '`Customer` for the object it is about, as it was when the event happened.',
+    'A Stripe event: what happened (`Type`) and when. Walk `Invoice`, `Subscription`, `Customer` or ' +
+    '`Charge` for the object it is about, as it was when the event happened.',
   fields: [
     field('id', 'Id', 'string', { required: true, description: 'The event id (`evt_…`), the same on every retry of the delivery.' }),
     field('type', 'Type', 'enum', { required: true, enumValues: [...STRIPE_EVENT_TYPES], description: 'What happened: `invoice.payment_failed`, `customer.subscription.deleted`, `customer.created`, …' }),
@@ -193,7 +219,15 @@ const EVENT_DESCRIPTOR: SchemaTypeDescriptor = {
       cardinality: 'one',
       direction: 'outgoing',
       name: STRIPE_CUSTOMER_EDGE_NAME,
-      description: 'The customer a `customer.created`, `.updated` or `.deleted` event is about; nothing for another event (walk its invoice’s or subscription’s `Customer`).',
+      description: 'The customer a `customer.created`, `.updated` or `.deleted` event is about; nothing for another event (walk its invoice’s, subscription’s or charge’s `Customer`).',
+    },
+    {
+      fieldId: STRIPE_CHARGE_EDGE,
+      targetTypeId: STRIPE_CHARGE_TYPE_ID,
+      cardinality: 'one',
+      direction: 'outgoing',
+      name: STRIPE_CHARGE_EDGE_NAME,
+      description: 'The charge a `charge.*` event (`charge.failed`, `charge.succeeded`, `charge.refunded`, …) is about; nothing for another event (an invoice’s `Charges` are the attempts to pay it).',
     },
   ],
 };
@@ -201,7 +235,7 @@ const EVENT_DESCRIPTOR: SchemaTypeDescriptor = {
 const CUSTOMER_DESCRIPTOR: SchemaTypeDescriptor = {
   typeId: STRIPE_CUSTOMER_TYPE_ID,
   displayName: STRIPE_CUSTOMER_DISPLAY_NAME,
-  description: 'A customer: its invoices and its subscriptions.',
+  description: 'A customer: its invoices, subscriptions and charges.',
   fields: [
     field('id', 'Id', 'string', { required: true, description: 'The customer id (`cus_…`).' }),
     field('email', 'Email', 'string', { capability: EQ, description: '`==` in a `Customers` WHERE reaches Stripe (case-sensitive there).' }),
@@ -228,13 +262,14 @@ const CUSTOMER_DESCRIPTOR: SchemaTypeDescriptor = {
       sequenced: 'chronological',
       capability: NEWEST_FIRST,
     },
+    { ...CHARGES_EDGE, description: `Its charges. ${CHARGES_DESCRIPTION}` },
   ],
 };
 
 const INVOICE_DESCRIPTOR: SchemaTypeDescriptor = {
   typeId: STRIPE_INVOICE_TYPE_ID,
   displayName: STRIPE_INVOICE_DISPLAY_NAME,
-  description: 'An invoice: what is owed and paid, and where the customer pays it. Walk `Customer` and `Subscription`.',
+  description: 'An invoice: what is owed and paid, and where the customer pays it. Walk `Customer`, `Subscription` and `Charges` (why a payment failed).',
   fields: [
     field('id', 'Id', 'string', { required: true, description: 'The invoice id (`in_…`).' }),
     field('number', 'Number', 'string', { description: 'The number on the invoice, once it is finalized.' }),
@@ -271,6 +306,15 @@ const INVOICE_DESCRIPTOR: SchemaTypeDescriptor = {
       direction: 'outgoing',
       name: STRIPE_SUBSCRIPTION_EDGE_NAME,
       description: 'The subscription that made it; nothing for a one-off invoice.',
+    },
+    {
+      ...CHARGES_EDGE,
+      description:
+        'The charges that tried to pay it, newest first, failed attempts included: a failed charge’s `Failure Message`, ' +
+        '`Failure Code` and `Outcome Seller Message` are why the payment failed. Read through the invoice’s payments ' +
+        '(payment intents and charges), so each walk costs a few requests.',
+      // Stripe lists these through the invoice's payments, not one filtered query: nothing is pushed.
+      capability: { filter: 'bounded', order: 'bounded', supportsLimit: true, naturalOrder: { field: 'Created', direction: 'desc' } },
     },
   ],
 };
@@ -311,11 +355,70 @@ const SUBSCRIPTION_DESCRIPTOR: SchemaTypeDescriptor = {
   ],
 };
 
+const CHARGE_DESCRIPTOR: SchemaTypeDescriptor = {
+  typeId: STRIPE_CHARGE_TYPE_ID,
+  displayName: STRIPE_CHARGE_DISPLAY_NAME,
+  description:
+    'A charge: one attempt to take a payment, successful or not. `Status` says which; a failed one says why in ' +
+    '`Failure Code`, `Failure Message` and `Outcome Seller Message`. Walk `Customer` and `Invoice`.',
+  fields: [
+    field('id', 'Id', 'string', { required: true, description: 'The charge id (`ch_…`).' }),
+    money('amount', 'Amount', 'What was to be collected (for a failed charge, what was attempted)', REQUIRED),
+    money('amount_captured', 'Amount Captured', 'What was captured (less than `Amount` after a partial capture)', REQUIRED),
+    money('amount_refunded', 'Amount Refunded', 'What has been refunded (less than `Amount` after a partial refund)', REQUIRED),
+    field('currency', 'Currency', 'string', { required: true, description: 'The three-letter ISO code, lowercase (`usd`). `Currency.formatFigure(amount, code)` writes an amount with it.' }),
+    field('status', 'Status', 'enum', { required: true, enumValues: [...STRIPE_CHARGE_STATUSES], description: '`succeeded`, `pending` or `failed`. Stripe cannot filter a listing by it: it runs over what comes back.' }),
+    field('paid', 'Paid', 'boolean', { required: true, description: 'True if it succeeded, or was authorized for later capture.' }),
+    field('captured', 'Captured', 'boolean', REQUIRED),
+    field('refunded', 'Refunded', 'boolean', { required: true, description: 'True only when fully refunded; a partial refund shows in `Amount Refunded`.' }),
+    field('disputed', 'Disputed', 'boolean', REQUIRED),
+    field('created', 'Created', 'date', {
+      required: true,
+      capability: { filterOperators: ['gt', 'gte', 'lt', 'lte', 'within'], orderable: true },
+      description: 'When it was made. Bounds (`>=`, `<`, `WITHIN 7d`) in a `Charges` WHERE reach Stripe, which counts whole seconds.',
+    }),
+    field('description', 'Description', 'string'),
+    field('failure_code', 'Failure Code', 'string', { description: 'Stripe’s code for why it failed (`card_declined`, `expired_card`, …); unset when it did not fail.' }),
+    field('failure_message', 'Failure Message', 'string', { description: 'Stripe’s message for why it failed, written for the customer; unset when it did not fail.' }),
+    field('outcome_type', 'Outcome Type', 'string', { description: 'Whether the payment was accepted: `authorized`, `manual_review`, `issuer_declined`, `blocked` or `invalid`.' }),
+    field('outcome_reason', 'Outcome Reason', 'string', { description: 'A more detailed explanation of the outcome type (`highest_risk_level`, `elevated_risk_level`, `low_probability_of_authorization`, `rule`, or the issuer’s reason); unset for an ordinary success.' }),
+    field('outcome_seller_message', 'Outcome Seller Message', 'string', { description: 'A description of the outcome written for you, not your customer (“Payment complete.”, “Stripe blocked this charge as too risky.”).' }),
+    field('outcome_network_status', 'Outcome Network Status', 'string', { description: '`approved_by_network`, `declined_by_network`, `not_sent_to_network` or `reversed_after_approval`.' }),
+    field('outcome_network_decline_code', 'Outcome Network Decline Code', 'string', { description: 'For a charge the card network declined, the network’s own code for why.' }),
+    field('outcome_advice_code', 'Outcome Advice Code', 'string', { description: 'How to proceed after a decline: `confirm_card_data`, `do_not_try_again` or `try_again_later`.' }),
+    field('outcome_risk_level', 'Outcome Risk Level', 'string', { description: 'Radar’s assessment: `normal`, `elevated`, `highest`, `not_assessed` or `unknown`.' }),
+    field('receipt_url', 'Receipt URL', 'string', { description: 'Where the customer sees the receipt, kept up to date with refunds.' }),
+    field('receipt_email', 'Receipt Email', 'string', { description: 'The address the receipt went to.' }),
+    field('billing_details_name', 'Billing Details Name', 'string', { description: 'The name on the payment method; unset when none was given.' }),
+    field('billing_details_email', 'Billing Details Email', 'string', { description: 'The email on the payment method; unset when none was given.' }),
+    field('livemode', 'Livemode', 'boolean', REQUIRED),
+    field('metadata', 'Metadata', 'json', { description: 'Your own key-value pairs.' }),
+  ],
+  references: [
+    {
+      ...CUSTOMER_EDGE,
+      required: false,
+      description: 'The customer it was for; nothing for a charge made without one.',
+    },
+    {
+      fieldId: STRIPE_INVOICE_EDGE,
+      targetTypeId: STRIPE_INVOICE_TYPE_ID,
+      cardinality: 'one',
+      direction: 'outgoing',
+      name: STRIPE_INVOICE_EDGE_NAME,
+      description:
+        'The invoice it tried to pay; nothing for a charge that paid no invoice. Found through the charge’s payment intent ' +
+        '(Stripe’s API version 2025-03-31.basil removed `invoice` from the charge), so one request.',
+    },
+  ],
+};
+
 const DESCRIPTORS: Record<string, SchemaTypeDescriptor> = {
   [STRIPE_EVENT_TYPE_ID]: EVENT_DESCRIPTOR,
   [STRIPE_CUSTOMER_TYPE_ID]: CUSTOMER_DESCRIPTOR,
   [STRIPE_INVOICE_TYPE_ID]: INVOICE_DESCRIPTOR,
   [STRIPE_SUBSCRIPTION_TYPE_ID]: SUBSCRIPTION_DESCRIPTOR,
+  [STRIPE_CHARGE_TYPE_ID]: CHARGE_DESCRIPTOR,
 };
 
 /** The account meta descriptor — the node `edgesFrom` roots at, addressed by

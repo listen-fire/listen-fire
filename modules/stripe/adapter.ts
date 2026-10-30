@@ -1,4 +1,4 @@
-// Stripe adapter — customers, invoices and subscriptions as a read-only
+// Stripe adapter — customers, invoices, subscriptions and charges as a read-only
 // graph, and the door Stripe's webhook deliveries come through.
 //
 // The type graph is `schema.ts`; the WHERE pushdown is `filter.ts`; the door
@@ -14,7 +14,10 @@ import { uniformWalk } from 'module-kit/adapter/hop';
 
 import {
   StripeApiError,
+  invoiceIdOfPayment,
+  invoicePaymentRef,
   isObject,
+  normalizeCharge,
   normalizeCustomer,
   normalizeInvoice,
   normalizeSubscription,
@@ -23,13 +26,17 @@ import {
   type StripeListQuery,
   type StripeObject,
 } from './api_client';
-import { customerQueryFromWhere, invoiceQueryFromWhere, subscriptionQueryFromWhere } from './filter';
+import { chargeQueryFromWhere, customerQueryFromWhere, invoiceQueryFromWhere, subscriptionQueryFromWhere } from './filter';
 import { checkStripeDelivery, type StripeDoorSources } from './inbound';
 import { STRIPE_MANIFEST } from './manifest';
 import { STRIPE_ACCOUNT_DESCRIPTOR, STRIPE_ROOT, describeStripeType, stripeEntryPoints } from './schema';
 import {
   STRIPE_ACCOUNT_TYPE_ID,
   STRIPE_ADAPTER_TYPE,
+  STRIPE_CHARGES_COLLECTION,
+  STRIPE_CHARGES_EDGE,
+  STRIPE_CHARGE_DISPLAY_NAME,
+  STRIPE_CHARGE_EDGE,
   STRIPE_CUSTOMERS_COLLECTION,
   STRIPE_CUSTOMER_DISPLAY_NAME,
   STRIPE_CUSTOMER_EDGE,
@@ -116,6 +123,7 @@ export class StripeAdapter extends BaseAdapter implements Adapter {
     if (input.position.recordType === STRIPE_EVENT_DISPLAY_NAME) return eventObject(data, edgeId);
 
     const id = typeof data['id'] === 'string' ? data['id'] : '';
+    if (input.position.recordType === STRIPE_CHARGE_DISPLAY_NAME && edgeId === STRIPE_INVOICE_EDGE) return this.chargeInvoice(data);
     const linked = (key: string) => (typeof data[key] === 'string' && data[key] !== '' ? data[key] : undefined);
     switch (edgeId) {
       case STRIPE_CUSTOMER_EDGE: {
@@ -136,6 +144,8 @@ export class StripeAdapter extends BaseAdapter implements Adapter {
       }
       case STRIPE_SUBSCRIPTIONS_EDGE:
         return this.subscriptions(input, { customer: id });
+      case STRIPE_CHARGES_EDGE:
+        return input.position.recordType === STRIPE_INVOICE_DISPLAY_NAME ? this.invoiceCharges(input, id) : this.charges(input, { customer: id });
       default:
         return [];
     }
@@ -153,6 +163,8 @@ export class StripeAdapter extends BaseAdapter implements Adapter {
         return this.invoices(input, {});
       case STRIPE_SUBSCRIPTIONS_COLLECTION:
         return this.subscriptions(input, {});
+      case STRIPE_CHARGES_COLLECTION:
+        return this.charges(input, {});
       default:
         return [];
     }
@@ -168,6 +180,53 @@ export class StripeAdapter extends BaseAdapter implements Adapter {
     const { query, exact } = subscriptionQueryFromWhere(input.where, STRIPE_SUBSCRIPTION_STATUSES);
     const client = await this.client();
     return (await client.listSubscriptions({ ...owner, ...query }, limitOf(input, exact).limit)).map(subscriptionPosition);
+  }
+
+  private async charges(input: GetRelatedInput, owner: StripeListQuery): Promise<RelatedResult[]> {
+    const { query, exact } = chargeQueryFromWhere(input.where, Date.now());
+    const client = await this.client();
+    return (await client.listCharges({ ...owner, ...query }, limitOf(input, exact).limit)).map(chargePosition);
+  }
+
+  /**
+   * An invoice's charges, newest first. Since API version 2025-03-31.basil an
+   * invoice names no charge and a charge no invoice: an invoice's payments
+   * (`GET /v1/invoice_payments?invoice=`) name the payment intents (or, for a
+   * payment made outside one, the charges) that paid it. A payment intent's
+   * charges are every attempt, failed ones included, and they are where the
+   * failure reason lives. A payment record (another object) is not read.
+   */
+  private async invoiceCharges(input: GetRelatedInput, invoiceId: string): Promise<RelatedResult[]> {
+    if (invoiceId === '') return [];
+    const client = await this.client();
+    const payments = (await client.listInvoicePayments({ invoice: invoiceId })).map(invoicePaymentRef);
+    const attempts = await Promise.all(
+      payments.map(async (ref) => {
+        if (ref === null) return [];
+        if (ref.type === 'payment_intent') return client.listCharges({ payment_intent: ref.id });
+        try {
+          return [await client.getCharge(ref.id)];
+        } catch (error) {
+          if (error instanceof StripeApiError && error.status === 404) return [];
+          throw error;
+        }
+      }),
+    );
+    const byId = new Map(attempts.flat().map((charge) => [typeof charge['id'] === 'string' ? charge['id'] : '', charge]));
+    const newestFirst = [...byId.values()].sort((a, b) => Number(b['created']) - Number(a['created']));
+    const ordered = input.orderBy === undefined || (input.orderBy.fieldId === 'Created' && input.orderBy.direction === 'desc');
+    return (ordered && input.limit !== undefined ? newestFirst.slice(0, input.limit) : newestFirst).map(chargePosition);
+  }
+
+  /** The invoice a charge tried to pay: the invoice payment of its payment
+   *  intent (a charge outside any payment intent has none to find). */
+  private async chargeInvoice(charge: StripeObject): Promise<RelatedResult[]> {
+    const intent = typeof charge['payment_intent'] === 'string' && charge['payment_intent'] !== '' ? charge['payment_intent'] : undefined;
+    if (intent === undefined) return [];
+    const client = await this.client();
+    const [payment] = await client.listInvoicePayments({ 'payment[type]': 'payment_intent', 'payment[payment_intent]': intent }, 1);
+    const invoice = payment === undefined ? null : invoiceIdOfPayment(payment);
+    return invoice === null ? [] : this.fetched(async (c) => invoicePosition(await c.getInvoice(invoice)));
   }
 
   /** One record fetched by id: none when Stripe has no such record. */
@@ -201,6 +260,11 @@ function customerPosition(o: StripeObject): RelatedResult {
   return { position: makeStablePosition({ adapterType: STRIPE_ADAPTER_TYPE, recordType: STRIPE_CUSTOMER_DISPLAY_NAME, recordId: data.id, data }) };
 }
 
+function chargePosition(o: StripeObject): RelatedResult {
+  const data = normalizeCharge(o);
+  return { position: makeStablePosition({ adapterType: STRIPE_ADAPTER_TYPE, recordType: STRIPE_CHARGE_DISPLAY_NAME, recordId: data.id, data }) };
+}
+
 function invoicePosition(o: StripeObject, fallbackId?: string): RelatedResult {
   const data = normalizeInvoice(o);
   const recordId = data.id !== '' ? data.id : fallbackId ?? '';
@@ -222,6 +286,7 @@ function eventObject(event: StripeObject, edgeId: string): RelatedResult[] {
   if (edgeId === STRIPE_INVOICE_EDGE && kind === 'invoice') return [invoicePosition(object, `${eventId}:invoice`)];
   if (edgeId === STRIPE_SUBSCRIPTION_EDGE && kind === 'subscription') return [subscriptionPosition(object)];
   if (edgeId === STRIPE_CUSTOMER_EDGE && kind === 'customer') return [customerPosition(object)];
+  if (edgeId === STRIPE_CHARGE_EDGE && kind === 'charge') return [chargePosition(object)];
   return [];
 }
 

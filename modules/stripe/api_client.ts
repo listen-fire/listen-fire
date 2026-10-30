@@ -17,7 +17,7 @@ import { z } from 'zod';
 import { retryingFetch, type ModuleLog, type RetryFetchOptions } from 'module-kit';
 
 import { majorUnits } from './money';
-import type { StripeCustomerPayload, StripeInvoicePayload, StripeSubscriptionPayload } from './types';
+import type { StripeChargePayload, StripeCustomerPayload, StripeInvoicePayload, StripeSubscriptionPayload } from './types';
 
 export const STRIPE_DEFAULT_BASE_URL = 'https://api.stripe.com';
 /** The API version every read pins, so a read's shape does not move with the
@@ -167,6 +167,62 @@ export function normalizeSubscription(o: StripeObject): StripeSubscriptionPayloa
   };
 }
 
+export function normalizeCharge(o: StripeObject): StripeChargePayload {
+  const currency = text(o, 'currency') ?? '';
+  const amount = (key: string) => majorUnits(count(o, key), currency);
+  const outcome = isObject(o['outcome']) ? o['outcome'] : {};
+  const billing = isObject(o['billing_details']) ? o['billing_details'] : {};
+  return {
+    id: text(o, 'id') ?? '',
+    amount: amount('amount'),
+    amount_captured: amount('amount_captured'),
+    amount_refunded: amount('amount_refunded'),
+    currency,
+    status: text(o, 'status'),
+    paid: flag(o, 'paid'),
+    captured: flag(o, 'captured'),
+    refunded: flag(o, 'refunded'),
+    disputed: flag(o, 'disputed'),
+    created: instant(o, 'created'),
+    description: text(o, 'description'),
+    failure_code: text(o, 'failure_code'),
+    failure_message: text(o, 'failure_message'),
+    outcome_type: text(outcome, 'type'),
+    outcome_reason: text(outcome, 'reason'),
+    outcome_seller_message: text(outcome, 'seller_message'),
+    outcome_network_status: text(outcome, 'network_status'),
+    outcome_network_decline_code: text(outcome, 'network_decline_code'),
+    outcome_advice_code: text(outcome, 'advice_code'),
+    outcome_risk_level: text(outcome, 'risk_level'),
+    receipt_url: text(o, 'receipt_url'),
+    receipt_email: text(o, 'receipt_email'),
+    billing_details_name: text(billing, 'name'),
+    billing_details_email: text(billing, 'email'),
+    livemode: flag(o, 'livemode') ?? false,
+    metadata: metadata(o['metadata']),
+    customer: idOf(o['customer']),
+    payment_intent: idOf(o['payment_intent']),
+  };
+}
+
+/** What pays an invoice, as `GET /v1/invoice_payments` lists it: a payment
+ *  intent, or (for a charge made outside one) a charge. A payment record is
+ *  another object this module does not read. */
+export type StripeInvoicePaymentRef = { type: 'payment_intent' | 'charge'; id: string };
+
+export function invoicePaymentRef(o: StripeObject): StripeInvoicePaymentRef | null {
+  const payment = isObject(o['payment']) ? o['payment'] : {};
+  const type = text(payment, 'type');
+  if (type !== 'payment_intent' && type !== 'charge') return null;
+  const id = idOf(payment[type]);
+  return id === null ? null : { type, id };
+}
+
+/** The invoice an invoice payment pays. */
+export function invoiceIdOfPayment(o: StripeObject): string | null {
+  return idOf(o['invoice']);
+}
+
 // ── Client ──────────────────────────────────────────────────────────────────
 
 export interface StripeClientOptions {
@@ -260,6 +316,23 @@ export class StripeClient {
     return this.list('/v1/subscriptions', query, limit);
   }
 
+  /** `GET /v1/charges`, newest first; `customer`, `payment_intent` and
+   *  `created[gt|gte|lt|lte]` narrow it (Stripe has no filter on `status`). */
+  listCharges(query: StripeListQuery, limit?: number): Promise<StripeObject[]> {
+    return this.list('/v1/charges', query, limit);
+  }
+
+  /** `GET /v1/invoice_payments`, newest first: `invoice` lists what paid it,
+   *  `payment[type]` with `payment[payment_intent]` lists what a payment
+   *  intent paid. */
+  listInvoicePayments(query: StripeListQuery, limit?: number): Promise<StripeObject[]> {
+    return this.list('/v1/invoice_payments', query, limit);
+  }
+
+  getCharge(id: string): Promise<StripeObject> {
+    return this.one(`/v1/charges/${encodeURIComponent(id)}`);
+  }
+
   getCustomer(id: string): Promise<StripeObject> {
     return this.one(`/v1/customers/${encodeURIComponent(id)}`);
   }
@@ -286,7 +359,7 @@ function refusal(status: number, body: string, path: string): string {
     }
   })();
   if (status === 401) return `Stripe refused the API key (401): check the apiKey of the @lf/stripe credential. ${said}`.trim();
-  if (status === 403) return `Stripe refused the read of ${path} (403): a restricted key needs Read on Customers, Invoices and Subscriptions. ${said}`.trim();
+  if (status === 403) return `Stripe refused the read of ${path} (403): a restricted key needs Read on Customers, Invoices, Subscriptions and Charges. ${said}`.trim();
   if (status === 404) return `Stripe has no ${path} (404). ${said}`.trim();
   if (status === 429) return `Stripe's rate limit for this key is spent (429). ${said}`.trim();
   return `Stripe API ${status}: ${said}`;
