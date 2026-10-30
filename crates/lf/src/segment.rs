@@ -26,7 +26,7 @@ use crate::obj;
 use crate::remote::{ADAPTER_METHODS, SegmentAdapters, WRITE_METHODS};
 use crate::run_host::{cancel_subtrees, is_ancestor_or_self, queue_await_wake, save_source, settle_if_cancel_requested};
 use crate::backend::{MintCallback, RunHostStore};
-use crate::store::{HeldJoin, HeldPark, ParkKind, SegmentCommit, StoreError};
+use crate::store::{HeldJoin, HeldPark, ParkKind, RunSettle, SegmentCommit, StoreError};
 use crate::store_wire::Wire as _;
 use crate::waits::{Noted, OpenWait};
 use crate::wire::{Hv, Wire, js_of_json, json_of_js};
@@ -264,6 +264,20 @@ impl<'s> SegmentHost<'s> {
         self.parked_waits.borrow_mut().retain(|_, address| !under(address));
     }
 
+    /// Whether the segment holds a park or a join: the run has somewhere
+    /// left to go from it.
+    pub fn holds_progress(&self) -> bool {
+        let held = self.held.borrow();
+        !held.parks.is_empty() || !held.joins.is_empty()
+    }
+
+    /// Let go of the parks and joins the segment holds: a segment that
+    /// fails its run keeps none of them.
+    pub fn discard_progress(&self) {
+        *self.held.borrow_mut() = Held::default();
+        self.parked_waits.borrow_mut().clear();
+    }
+
     /// Charge a priced call's cost lines to the segment's account.
     fn charge(&self, cost: Option<&Js>) {
         let mut spent = self.spent.borrow_mut();
@@ -375,7 +389,8 @@ fn input_text(host: &SegmentHost<'_>, input: &SegmentInput<'_>) -> Result<String
     Ok(format!("{},\"catalog\":{}}}", &head[..head.len() - 1], Js::Obj(catalog).to_json()))
 }
 
-/// Run one segment to its result.
+/// Run one segment to its result. What it holds is kept only by its
+/// `commit`, which its caller makes once it knows where the run stands.
 pub async fn run_segment(host: &SegmentHost<'_>, input: SegmentInput<'_>) -> Result<Ran, Ended> {
     let text = input_text(host, &input).map_err(Ended::Failed)?;
     let wall_clock = segment_wall_clock().map_err(Ended::Failed)?;
@@ -386,42 +401,55 @@ pub async fn run_segment(host: &SegmentHost<'_>, input: SegmentInput<'_>) -> Res
         host.store.add_run_spend(&host.run_id, spent).map_err(|e| Ended::Failed(e.to_string()))?;
     }
     match done {
-        Ok(done) => {
-            let ran = read_result(host, &done)?;
-            #[cfg(test)]
-            if DIES_BEFORE_COMMIT.with(|dies| dies.replace(false)) {
-                return Err(Ended::LeaseLost);
-            }
-            commit(host)?;
-            Ok(ran)
-        }
+        Ok(done) => read_result(host, &done),
         Err(Fault(message)) => Err(Ended::Failed(message)),
     }
 }
 
 #[cfg(test)]
 thread_local! {
-    /// The next segment to reach its end dies there, before its commit, as
-    /// a process killed then would: nothing it held is written, and its
+    /// The next segment to reach its commit dies there, before it, as a
+    /// process killed then would: nothing it held is written, and its
     /// drain leaves every row (a lost lease).
     pub(crate) static DIES_BEFORE_COMMIT: Cell<bool> = const { Cell::new(false) };
+    /// The next segment to make its commit dies right after it: what the
+    /// commit wrote stands, and nothing after it runs.
+    pub(crate) static DIES_AFTER_COMMIT: Cell<bool> = const { Cell::new(false) };
 }
 
-/// The segment's held writes, kept in one fenced write: its join counts,
-/// its parks and the end of the leaf it resumed. In that write the store
-/// queues a wake for each wait it parks whose arrivals are unread: what
-/// arrived after the engine's last read, or what it read without judging.
-fn commit(host: &SegmentHost<'_>) -> Result<(), Ended> {
+/// The segment's held writes and where they leave the run (`settle`), kept
+/// in one fenced write: its join counts, its parks, the end of the leaf it
+/// resumed and the run's settle. In that write the store queues a wake for
+/// each wait it parks whose arrivals are unread: what arrived after the
+/// engine's last read, or what it read without judging. A segment that
+/// holds nothing and resumed no leaf has only the settle to write.
+pub fn commit(host: &SegmentHost<'_>, settle: Option<RunSettle<'_>>) -> Result<(), Ended> {
+    #[cfg(test)]
+    if DIES_BEFORE_COMMIT.with(|dies| dies.replace(false)) {
+        return Err(Ended::LeaseLost);
+    }
+    write_commit(host, settle)?;
+    #[cfg(test)]
+    if DIES_AFTER_COMMIT.with(|dies| dies.replace(false)) {
+        return Err(Ended::LeaseLost);
+    }
+    Ok(())
+}
+
+fn write_commit(host: &SegmentHost<'_>, settle: Option<RunSettle<'_>>) -> Result<(), Ended> {
     let held = host.held.borrow();
     let resumed = host.resumed_leaf.as_deref();
-    if held.parks.is_empty() && held.joins.is_empty() && resumed.is_none() {
-        return Ok(());
-    }
     let store = host.store;
     let ended = |error: StoreError| match error {
         StoreError::LeaseLost { .. } => Ended::LeaseLost,
         other => Ended::Failed(other.to_string()),
     };
+    if held.parks.is_empty() && held.joins.is_empty() && resumed.is_none() {
+        return match settle {
+            Some(RunSettle { status, outcome, at }) => store.settle_run(&host.run_id, status, outcome, at).map_err(ended),
+            None => Ok(()),
+        };
+    }
     if let Some(leaf) = resumed
         && let Some(diverged) = replay_diverged(host, &held, leaf).map_err(ended)?
     {
@@ -435,6 +463,7 @@ fn commit(host: &SegmentHost<'_>) -> Result<(), Ended> {
         resumed,
         joins: held.joins.iter().map(|(frame_address, pending)| HeldJoin { frame_address, pending: *pending }).collect(),
         parks: held.parks.iter().map(|park| park.held(team_id)).collect(),
+        settle,
     };
     let wakes = store.commit_segment(&commit).map_err(ended)?;
     for park in &held.parks {
@@ -460,6 +489,9 @@ fn commit(host: &SegmentHost<'_>) -> Result<(), Ended> {
 /// answered differently). The branch's join already counted it finished,
 /// so the park could never close it: the run fails, naming where.
 fn replay_diverged(host: &SegmentHost<'_>, held: &Held, leaf: &str) -> Result<Option<String>, StoreError> {
+    if held.parks.is_empty() {
+        return Ok(None);
+    }
     let (store, run_id) = (host.store, host.run_id.as_str());
     let mut frames = store.frames(run_id)?;
     frames.extend(held.joins.iter().map(|(frame, _)| frame.clone()));

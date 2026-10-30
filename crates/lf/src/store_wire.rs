@@ -194,6 +194,11 @@ pub fn segment_commit_params(commit: &SegmentCommit<'_>) -> Obj {
         "resumed" => opt(commit.resumed),
         "joins" => Js::Arr(joins.collect()),
         "parks" => Js::Arr(parks.collect()),
+        "settle" => commit.settle.as_ref().map_or(Js::Null, |settle| Js::from(obj! {
+            "status" => Js::str(settle.status),
+            "outcome" => settle.outcome.clone(),
+            "at" => Js::str(settle.at),
+        })),
     }
 }
 

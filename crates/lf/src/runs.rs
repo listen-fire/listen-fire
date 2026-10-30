@@ -32,11 +32,11 @@ use crate::run_host::{
     settle_if_cancel_requested, with_run_lease, work_failed,
 };
 use crate::secrets::{Secrets, credential_for, imported_credentials, missing_credentials};
-use crate::segment::{Ended, Entry, Ran, SegmentHost, SegmentHostParts, SegmentInput, run_segment};
+use crate::segment::{Ended, Entry, Ran, SegmentHost, SegmentHostParts, SegmentInput, commit, run_segment};
 use crate::movements_slot::{Change, ChangeKind, Listed, MovementsStore, Watched, movement_file, ordered};
 use crate::sources::{MOVEMENT_EXTENSION, MovementFile, Parsed, scan_movements};
 use crate::backend::{RunHostStore, StoreSpec, open_store};
-use crate::store::{ClaimDue, POLL_WORK_KIND, Release, RunStart, iso};
+use crate::store::{ClaimDue, POLL_WORK_KIND, Release, RunSettle, RunStart, iso};
 use crate::waits::ARRIVAL_RETENTION_MS;
 use module_wire::results as wire_results;
 
@@ -522,6 +522,33 @@ fn with_writes(before: Option<&str>, writes: usize, records: Vec<Js>, returned: 
     Js::Obj(outcome)
 }
 
+/// The outcome of a run that failed with `message`: what it settled with
+/// before, the writes its failed segment made (`committed`) beside them.
+fn failed_outcome(before: Option<&str>, committed: &[Js], message: &str) -> Js {
+    let mut outcome = match before.and_then(|text| Js::parse(text.as_bytes()).ok()) {
+        Some(Js::Obj(outcome)) => outcome,
+        _ => Obj::new(),
+    };
+    if !committed.is_empty()
+        && let Js::Obj(writes) = with_writes(before, committed.len(), committed.to_vec(), None)
+    {
+        outcome.extend(writes);
+    }
+    outcome.insert("error".into(), Js::str(message));
+    Js::Obj(outcome)
+}
+
+/// Where a segment's end settles its run.
+#[derive(Clone, Copy)]
+enum Settles<'a> {
+    /// A callback's body: the run stands as it is.
+    Nothing,
+    /// The run is completed when nothing of it is left but `completing`,
+    /// the leaf (or the race's frame) the segment stepped; a fresh firing
+    /// steps none. Otherwise it is parked.
+    Run { completing: Option<&'a str> },
+}
+
 /// What a run entry has done so far: its writes, and how many segments ran.
 #[derive(Default, Clone, Copy)]
 struct Tally {
@@ -923,8 +950,8 @@ impl Session {
     }
 
     /// Run one segment and record what it came to on the run's row
-    /// (`recordSegment`). `completing` is the leaf whose own row goes after
-    /// its step (None for a fresh firing).
+    /// (`recordSegment`), in the segment's own commit. `completing` is the
+    /// leaf whose own row goes after its step (None for a fresh firing).
     #[allow(clippy::too_many_arguments)] // the TypeScript's input object, spelled out
     async fn record_segment(
         &self,
@@ -938,13 +965,12 @@ impl Session {
         completing: Option<&str>,
     ) -> Result<StepOutcome, String> {
         tally.borrow_mut().stepped += 1;
-        let (ran, committed) = self.segment(set, run_id, facts, fence, entry).await;
+        let (ran, committed) = self.segment(set, run_id, facts, fence, entry, Settles::Run { completing }).await?;
         let ran = match ran {
             Ok(ran) => ran,
             Err(Ended::LeaseLost) => return Ok(StepOutcome::LeaseLost),
             Err(Ended::Failed(message)) => {
                 tally.borrow_mut().writes += committed.len();
-                self.fail_keeping_writes(run_id, &message, committed)?;
                 return Ok(StepOutcome::Failed(message));
             }
         };
@@ -952,35 +978,26 @@ impl Session {
             captured.borrow_mut().extend(ran.captured.iter().cloned());
         }
         tally.borrow_mut().writes += ran.writes;
-        let at = iso(0);
         if ran.cancelled {
             let reason = self.store.cancel_request(run_id).map_err(|e| e.to_string())?.flatten();
             return Ok(StepOutcome::Cancelled(reason));
         }
-        let row = self.store.run(run_id).map_err(|e| e.to_string())?;
-        let outcome = with_writes(row.and_then(|row| row.outcome).as_deref(), ran.writes, ran.write_records, ran.returned);
-        if let Some(address) = ran.parked_address {
-            self.store.settle_run(run_id, "parked", &outcome, &at).map_err(|e| e.to_string())?;
-            return Ok(StepOutcome::Parked { address: Some(address), deferred_race_frames: ran.deferred_race_frames });
-        }
-        let complete = match completing {
-            None => run_quiescent(&*self.store, run_id)?,
-            Some(leaf) => run_complete_without(&*self.store, run_id, leaf)?,
-        };
-        self.store.settle_run(run_id, if complete { "completed" } else { "parked" }, &outcome, &at).map_err(|e| e.to_string())?;
-        Ok(StepOutcome::Completed { deferred_race_frames: ran.deferred_race_frames })
+        Ok(match ran.parked_address {
+            Some(address) => StepOutcome::Parked { address: Some(address), deferred_race_frames: ran.deferred_race_frames },
+            None => StepOutcome::Completed { deferred_race_frames: ran.deferred_race_frames },
+        })
     }
 
     /// The run fails with `message`, the writes its failed segment had
     /// already made (`committed`) kept beside the ones before it: a rerun
     /// reads them to say what the failed attempt already did. A run already
     /// settled stays, as `mark_failed` leaves it.
-    fn fail_keeping_writes(&self, run_id: &str, message: &str, committed: Vec<Js>) -> Result<(), String> {
+    fn fail_keeping_writes(&self, run_id: &str, message: &str, committed: &[Js]) -> Result<(), String> {
         if !committed.is_empty()
             && let Some(row) = self.store.run(run_id).map_err(|e| e.to_string())?
             && (row.status == "running" || row.status == "parked")
         {
-            let outcome = with_writes(row.outcome.as_deref(), committed.len(), committed, None);
+            let outcome = with_writes(row.outcome.as_deref(), committed.len(), committed.to_vec(), None);
             self.store.settle_run(run_id, &row.status, &outcome, &iso(0)).map_err(|e| e.to_string())?;
         }
         self.store.mark_failed(run_id, message).map_err(|e| e.to_string())
@@ -988,7 +1005,16 @@ impl Session {
 
     /// One engine segment of the run, entered as `entry`, under `fence`, and
     /// the record writes the systems took during it, whatever it came to.
-    async fn segment(&self, set: &FileSet, run_id: &str, facts: &RunFacts, fence: Option<&str>, entry: Entry) -> (Result<Ran, Ended>, Vec<Js>) {
+    /// Its end is kept in one write with where it leaves the run (`settles`).
+    async fn segment(
+        &self,
+        set: &FileSet,
+        run_id: &str,
+        facts: &RunFacts,
+        fence: Option<&str>,
+        entry: Entry,
+        settles: Settles<'_>,
+    ) -> Result<(Result<Ran, Ended>, Vec<Js>), String> {
         let secrets = self.secrets();
         let externals = self.externals_in(set, &secrets);
         let segment_id = uuid::Uuid::new_v4().to_string();
@@ -1021,7 +1047,79 @@ impl Session {
         };
         let ran = run_segment(&host, input).await;
         self.remember_writes(run_id, &host.adapters.wrote.borrow());
-        (ran, host.adapters.committed.take())
+        let committed = host.adapters.committed.take();
+        let ran = self.end_segment(&host, ran, &committed, settles)?;
+        Ok((ran, committed))
+    }
+
+    /// The segment's commit, carrying where it leaves the run: a resumed
+    /// leaf is finished in the same write that settles the run, so a crash
+    /// leaves either both or neither (the leaf resumed again). A segment
+    /// that fails its run keeps none of its parks.
+    fn end_segment(&self, host: &SegmentHost<'_>, ran: Result<Ran, Ended>, committed: &[Js], settles: Settles<'_>) -> Result<Result<Ran, Ended>, String> {
+        let run_id = host.run_id.as_str();
+        let ran = match ran {
+            Ok(ran) => ran,
+            Err(Ended::LeaseLost) => return Ok(Err(Ended::LeaseLost)),
+            Err(Ended::Failed(message)) => return self.end_failed_segment(host, message, committed, settles),
+        };
+        let before = || -> Result<Option<String>, String> { Ok(self.store.run(run_id).map_err(|e| e.to_string())?.and_then(|row| row.outcome)) };
+        let settle = match settles {
+            Settles::Nothing => None,
+            Settles::Run { .. } if ran.cancelled => {
+                let reason = self.store.cancel_request(run_id).map_err(|e| e.to_string())?.flatten();
+                host.discard_progress();
+                Some(("failed", failed_outcome(before()?.as_deref(), &[], reason.as_deref().unwrap_or(CANCELLED_BY_OPERATOR))))
+            }
+            Settles::Run { completing } => {
+                let outcome = with_writes(before()?.as_deref(), ran.writes, ran.write_records.clone(), ran.returned.clone());
+                let ends = ran.parked_address.is_none() && !host.holds_progress() && self.nothing_left(run_id, completing)?;
+                Some((if ends { "completed" } else { "parked" }, outcome))
+            }
+        };
+        let at = iso(0);
+        let settle = settle.as_ref().map(|(status, outcome)| RunSettle { status, outcome, at: &at });
+        match commit(host, settle) {
+            Ok(()) => Ok(Ok(ran)),
+            Err(Ended::LeaseLost) => Ok(Err(Ended::LeaseLost)),
+            // Refused, or a replay that diverged: nothing was written.
+            Err(Ended::Failed(message)) => {
+                if !matches!(settles, Settles::Nothing) {
+                    self.fail_keeping_writes(run_id, &message, committed)?;
+                }
+                Ok(Err(Ended::Failed(message)))
+            }
+        }
+    }
+
+    /// A segment that failed its run: the failure, with the writes it made,
+    /// kept in its commit beside the end of the leaf it resumed. A run
+    /// already settled stays, as `mark_failed` leaves it.
+    fn end_failed_segment(&self, host: &SegmentHost<'_>, message: String, committed: &[Js], settles: Settles<'_>) -> Result<Result<Ran, Ended>, String> {
+        let run_id = host.run_id.as_str();
+        if let Settles::Nothing = settles {
+            return Ok(Err(Ended::Failed(message)));
+        }
+        host.discard_progress();
+        let row = self.store.run(run_id).map_err(|e| e.to_string())?;
+        let Some(row) = row.filter(|row| row.status == "running" || row.status == "parked") else { return Ok(Err(Ended::Failed(message))) };
+        let outcome = failed_outcome(row.outcome.as_deref(), committed, &message);
+        let at = iso(0);
+        match commit(host, Some(RunSettle { status: "failed", outcome: &outcome, at: &at })) {
+            Ok(()) => {}
+            Err(Ended::LeaseLost) => return Ok(Err(Ended::LeaseLost)),
+            Err(Ended::Failed(_)) => self.fail_keeping_writes(run_id, &message, committed)?,
+        }
+        Ok(Err(Ended::Failed(message)))
+    }
+
+    /// Whether nothing of the run is left but `completing`: no join waits,
+    /// and no other leaf is parked.
+    fn nothing_left(&self, run_id: &str, completing: Option<&str>) -> Result<bool, String> {
+        match completing {
+            None => run_quiescent(&*self.store, run_id),
+            Some(leaf) => run_complete_without(&*self.store, run_id, leaf),
+        }
     }
 
     /// The record writes a segment made, told to the loop guard for its
@@ -2039,7 +2137,7 @@ impl Session {
         let facts = RunFacts::of_row(&row.id, &row.input)?;
         tally.stepped += 1;
         let entry = Entry::Fire { state: state.clone(), values: values.clone(), call_index };
-        Ok(match self.segment(set, &row.id, &facts, Some(&lease.token), entry).await.0 {
+        Ok(match self.segment(set, &row.id, &facts, Some(&lease.token), entry, Settles::Nothing).await?.0 {
             Err(Ended::LeaseLost) => BodyOutcome::LeaseLost,
             Err(Ended::Failed(message)) => BodyOutcome::Failed(message),
             Ok(ran) => {

@@ -52,7 +52,7 @@ use crate::json::Js;
 use crate::obj;
 use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind,
-    HeldPark, Release, Rerun, Result, RunRow, RunStart, SegmentCommit, StoreError, WORK_KINDS, timer_work_key, timer_work_payload,
+    HeldPark, Release, Rerun, Result, RunRow, RunSettle, RunStart, SegmentCommit, StoreError, WORK_KINDS, timer_work_key, timer_work_payload,
 };
 use crate::waits::{DeliveryArrivals, LoggedArrival, NewArrival, Noted, OpenWait, WaitArrivals, WaitWake, delivery_rows, landing_of};
 
@@ -418,6 +418,32 @@ impl PgStore {
         Ok(())
     }
 
+    /// `runs.settle`, in the caller's transaction.
+    fn settle_run_unwrapped(&self, id: &str, settle: &RunSettle<'_>) -> Result<()> {
+        let RunSettle { status, outcome, at } = *settle;
+        let status = hosted_status(status);
+        let writes = outcome.get("writes").and_then(|w| if let Js::Num(n) = w { n.as_i64() } else { None });
+        let error = outcome.get("error").and_then(Js::as_str);
+        let returned = outcome.get("returned").map(Js::to_json);
+        let records = outcome.get("writeRecords").map(Js::to_json);
+        self.execute(
+            "update lf.trigger_run set
+               status = $2::text,
+               nodes_written = coalesce($3::int8, nodes_written),
+               failure_reason = case when $2::text = 'failed' then $4::text else failure_reason end,
+               completed_at = case when $2::text = 'success' then $5::text::timestamptz else completed_at end,
+               failed_at = case when $2::text = 'failed' then $5::text::timestamptz else failed_at end,
+               returned = $6::text::json,
+               write_records = coalesce($7::text::json, write_records)
+             where id = $1::text::uuid",
+            &[&id, &status, &writes, &error, &at, &returned, &records],
+        )?;
+        if status == "success" || status == "failed" {
+            self.revoke_run_callbacks(id)?;
+        }
+        Ok(())
+    }
+
     /// One park's leaf and what wakes it, in the caller's transaction.
     fn park_unwrapped(&self, run_id: &str, park: &HeldPark<'_>) -> Result<()> {
         let HeldPark { address, state, ref kind } = *park;
@@ -561,30 +587,7 @@ impl RunHostStore for PgStore {
             .collect())
     }
     fn settle_run(&self, id: &str, status: &str, outcome: &Js, at: &str) -> Result<()> {
-        let status = hosted_status(status);
-        let writes = outcome.get("writes").and_then(|w| if let Js::Num(n) = w { n.as_i64() } else { None });
-        let error = outcome.get("error").and_then(Js::as_str);
-        let returned = outcome.get("returned").map(Js::to_json);
-        let records = outcome.get("writeRecords").map(Js::to_json);
-        let ended = status == "success" || status == "failed";
-        self.transaction(|| {
-            self.execute(
-                "update lf.trigger_run set
-                   status = $2::text,
-                   nodes_written = coalesce($3::int8, nodes_written),
-                   failure_reason = case when $2::text = 'failed' then $4::text else failure_reason end,
-                   completed_at = case when $2::text = 'success' then $5::text::timestamptz else completed_at end,
-                   failed_at = case when $2::text = 'failed' then $5::text::timestamptz else failed_at end,
-                   returned = $6::text::json,
-                   write_records = coalesce($7::text::json, write_records)
-                 where id = $1::text::uuid",
-                &[&id, &status, &writes, &error, &at, &returned, &records],
-            )?;
-            if ended {
-                self.revoke_run_callbacks(id)?;
-            }
-            Ok(())
-        })
+        self.transaction(|| self.settle_run_unwrapped(id, &RunSettle { status, outcome, at }))
     }
 
     fn mark_parked(&self, id: &str) -> Result<()> {
@@ -827,7 +830,7 @@ impl RunHostStore for PgStore {
 
     /// As `commit_park`, the segment's held writes in one transaction.
     fn commit_segment(&self, commit: &SegmentCommit<'_>) -> Result<Vec<WaitWake>> {
-        let SegmentCommit { run_id, team_id, fence, resumed, ref joins, ref parks } = *commit;
+        let SegmentCommit { run_id, team_id, fence, resumed, ref joins, ref parks, ref settle } = *commit;
         self.transaction(|| {
             self.hold_run(run_id, fence)?;
             // The waits' records' edges locked once, in one order, as a log
@@ -856,6 +859,9 @@ impl RunHostStore for PgStore {
             }
             if !parks.is_empty() {
                 self.mark_parked(run_id)?;
+            }
+            if let Some(settle) = settle {
+                self.settle_run_unwrapped(run_id, settle)?;
             }
             // Read in the write, so an arrival logged before it is read here
             // and one logged after it finds the wait parked.

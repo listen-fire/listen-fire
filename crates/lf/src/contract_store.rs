@@ -25,7 +25,7 @@ use crate::backend::{MintCallback, RunHostStore, StoreSpec, open_store};
 use crate::json::Js;
 use crate::obj;
 use crate::slot_server::{Listen, Refusal};
-use crate::store::{ClaimDue, DeliveryQuery, HeldJoin, HeldPark, NewWork, Park, Release, Rerun, RunStart, SegmentCommit, StoreError, iso};
+use crate::store::{ClaimDue, DeliveryQuery, HeldJoin, HeldPark, NewWork, Park, Release, Rerun, RunSettle, RunStart, SegmentCommit, StoreError, iso};
 use crate::store_wire::{Wire, new_delivery, num, opt, park_kind, rows, to_rows};
 use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait};
 
@@ -159,6 +159,11 @@ impl Params<'_> {
     }
 }
 
+/// `parks.commitSegment`'s `settle`, when it is one.
+fn run_settle(value: &Js) -> Option<RunSettle<'_>> {
+    Some(RunSettle { status: value.get("status")?.as_str()?, outcome: value.get("outcome")?, at: value.get("at")?.as_str()? })
+}
+
 fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Failure> {
     let none = Ok(Js::Null);
     match method {
@@ -273,7 +278,12 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
                     parks.iter().map(|park| Some(HeldPark { address: park.get("address")?.as_str()?, state: park.get("state")?, kind: park_kind(park.get("park")?)? })).collect::<Option<Vec<_>>>()
                 })
                 .ok_or_else(|| Failure::Params("parks: expected a list of { address, state, park: { kind: timer | await | wait | limit, … } }".into()))?;
-            let commit = SegmentCommit { run_id: p.str("runId")?, team_id: p.str("teamId")?, fence: p.opt_str("fence")?, resumed: p.opt_str("resumed")?, joins, parks };
+            let settle = p.value("settle");
+            let settle = match &settle {
+                Js::Null => None,
+                settle => Some(run_settle(settle).ok_or_else(|| Failure::Params("settle: expected null or { status, outcome, at }".into()))?),
+            };
+            let commit = SegmentCommit { run_id: p.str("runId")?, team_id: p.str("teamId")?, fence: p.opt_str("fence")?, resumed: p.opt_str("resumed")?, joins, parks, settle };
             Ok(to_rows(&store.commit_segment(&commit)?))
         }
         "parks.claimLeaf" => Ok(match store.claim_leaf(p.str("runId")?, p.str("address")?, p.opt_str("reason")?)? {

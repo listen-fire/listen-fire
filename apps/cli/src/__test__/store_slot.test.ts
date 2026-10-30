@@ -224,7 +224,8 @@ async function runWaitsCase(store: RpcStoreBackend, steps: Record<string, unknow
         const joins = (Array.isArray(step.joins) ? step.joins : []).map((join) => ({ frameAddress: text(join, 'frame'), pending: field(join, 'pending') }));
         const fence = typeof step.fence === 'string' ? (leases.get(step.fence) ?? assert.fail(`no lease named ${step.fence}`)) : null;
         const resumed = typeof step.resumed === 'string' ? step.resumed : null;
-        const params = { runId: id(text(step, 'run')), teamId, fence, resumed, joins, parks };
+        const settle = typeof step.settle === 'string' ? { status: step.settle, outcome: {}, at: new Date().toISOString() } : null;
+        const params = { runId: id(text(step, 'run')), teamId, fence, resumed, joins, parks, settle };
         if (step.leaseLost === true) await assert.rejects(store.call('parks.commitSegment', params, z.array(Wake)), RunLeaseLost, `${at}: the lease is lost`);
         else if (step.refused === true) await assert.rejects(store.call('parks.commitSegment', params, z.array(Wake)), `${at}: refused`);
         else {
@@ -232,6 +233,11 @@ async function runWaitsCase(store: RpcStoreBackend, steps: Record<string, unknow
           const expected = items(step, 'wakes').map((w) => ({ runId: id(text(w, 'run')), waitId: wait(text(w, 'wait')), address: text(w, 'address') }));
           assert.deepEqual(wakes.sort(byWait), expected.sort(byWait), `${at}: the wakes`);
         }
+        break;
+      }
+      case 'status': {
+        const row = await store.call('runs.get', { runId: id(text(step, 'run')) }, z.object({ status: z.string() }).passthrough());
+        assert.equal(row.status, text(step, 'status'), `${at}: the run's status`);
         break;
       }
       case 'pendingJoins':

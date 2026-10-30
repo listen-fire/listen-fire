@@ -403,6 +403,17 @@ pub struct SegmentCommit<'a> {
     pub resumed: Option<&'a str>,
     pub joins: Vec<HeldJoin<'a>>,
     pub parks: Vec<HeldPark<'a>>,
+    /// Where the run stands after the segment, kept in this write as
+    /// `runs.settle` keeps it, so a run never stays parked with nothing
+    /// left to wake it; None leaves the run's row as it is.
+    pub settle: Option<RunSettle<'a>>,
+}
+
+/// A run's settle (`runs.settle`'s): its status, its outcome and when.
+pub struct RunSettle<'a> {
+    pub status: &'a str,
+    pub outcome: &'a Js,
+    pub at: &'a str,
 }
 
 /// A join frame's pending count (`joins.recordJoin`), held by a segment.
@@ -716,17 +727,20 @@ impl Store {
     /// Record where the run stands. A run that ends, however it ends, revokes
     /// its live callbacks: a callback is something the run can still react to.
     pub fn settle_run(&self, id: &str, status: &str, outcome: &Js, at: &str) -> Result<()> {
+        self.transaction(|db| Self::settle_run_in(db, id, &RunSettle { status, outcome, at }))
+    }
+
+    fn settle_run_in(db: &Connection, id: &str, settle: &RunSettle<'_>) -> Result<()> {
+        let RunSettle { status, outcome, at } = *settle;
         let ended = status == "completed" || status == "failed";
-        self.transaction(|db| {
-            db.execute(
-                "update run set status = ?, outcome = ?, finished_at = ? where id = ?",
-                params![status, text_of(outcome), ended.then_some(at), id],
-            )?;
-            if ended {
-                Self::revoke_callbacks(db, id)?;
-            }
-            Ok(())
-        })
+        db.execute(
+            "update run set status = ?, outcome = ?, finished_at = ? where id = ?",
+            params![status, text_of(outcome), ended.then_some(at), id],
+        )?;
+        if ended {
+            Self::revoke_callbacks(db, id)?;
+        }
+        Ok(())
     }
 
     /// The run is observably parked (a park landed). A settled run stays.
@@ -870,7 +884,7 @@ impl Store {
 
     /// crate::backend::RunHostStore::commit_segment: one transaction, fenced.
     pub fn commit_segment(&self, commit: &SegmentCommit<'_>) -> Result<Vec<WaitWake>> {
-        let SegmentCommit { run_id, team_id, fence, resumed, ref joins, ref parks } = *commit;
+        let SegmentCommit { run_id, team_id, fence, resumed, ref joins, ref parks, ref settle } = *commit;
         self.fenced(run_id, fence, |db| {
             for join in joins {
                 Self::record_join_in(db, run_id, join.frame_address, join.pending)?;
@@ -883,6 +897,9 @@ impl Store {
             }
             if !parks.is_empty() {
                 Self::mark_parked_in(db, run_id)?;
+            }
+            if let Some(settle) = settle {
+                Self::settle_run_in(db, run_id, settle)?;
             }
             // Read in the write, so an arrival logged before it is read here
             // and one logged after it finds the wait parked.

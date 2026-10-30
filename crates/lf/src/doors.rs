@@ -1476,6 +1476,79 @@ pub(crate) mod tests {
         });
     }
 
+    /// The run parked on its comment wait at its one leaf, a comment logged
+    /// for it and its wake queued: the run's id and the leaf's address.
+    async fn parked_with_a_comment(session: &Session) -> (String, String) {
+        let (_, fired) = hook(session, NOTE, "d-1").await;
+        assert_eq!(fired.outcomes.iter().map(|o| o.status.as_str()).collect::<Vec<_>>(), ["parked"]);
+        let (run, leaves) = the_run(session);
+        assert_eq!(leaves.len(), 1, "{leaves:?}");
+        let leaf = leaves[0].0.clone();
+        let comment = NewArrival { edge: "Comments".into(), key: "thread:n-1".into(), identity: Some("k1".into()), version: None, landing: Some(Js::parse(br#"{"fields":{"Text":"hi"}}"#).unwrap()), gone: false };
+        assert_eq!(session.store.log_arrivals(LOCAL_TENANT, "inbox", &[comment], &iso(0)).unwrap().len(), 1);
+        wake_the_comment_wait(session, &run, &leaf);
+        (run, leaf)
+    }
+
+    /// The segment that resumes the run's one leaf completes the run, and
+    /// dies before its commit: the run is still parked on that leaf, which
+    /// the retried wake resumes again, and the run completes.
+    #[test]
+    fn a_resumed_segment_that_completes_the_run_and_dies_before_its_commit_leaves_its_leaf_to_be_resumed_again() {
+        let project = InboxProject::with(AWAITS_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        in_local(async {
+            let session = project.session().await;
+            let (run, leaf) = parked_with_a_comment(&session).await;
+            crate::segment::DIES_BEFORE_COMMIT.with(|dies| dies.set(true));
+            drained(&session).await;
+            assert_eq!(session.store.run(&run).unwrap().unwrap().status, "parked");
+            assert_eq!(the_run(&session).1, [(leaf.clone(), "await".to_string(), "resuming".to_string())]);
+
+            wake_the_comment_wait(&session, &run, &leaf);
+            drained(&session).await;
+            let row = session.store.run(&run).unwrap().unwrap();
+            assert_eq!(row.status, "completed", "{:?}", row.outcome);
+            assert!(row.outcome.as_deref().unwrap_or_default().contains(r#""hi""#), "{:?}", row.outcome);
+            assert_eq!(the_run(&session).1, []);
+        });
+    }
+
+    /// The segment that resumes the run's one leaf completes the run, and
+    /// dies right after its commit: the commit that finished the leaf also
+    /// settled the run, so it is never left parked with nothing to wake it.
+    #[test]
+    fn a_resumed_segment_that_completes_the_run_settles_it_in_the_write_that_finishes_its_leaf() {
+        let project = InboxProject::with(AWAITS_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        in_local(async {
+            let session = project.session().await;
+            let (run, _) = parked_with_a_comment(&session).await;
+            crate::segment::DIES_AFTER_COMMIT.with(|dies| dies.set(true));
+            drained(&session).await;
+            let row = session.store.run(&run).unwrap().unwrap();
+            assert_eq!(row.status, "completed", "{:?}", row.outcome);
+            assert!(row.outcome.as_deref().unwrap_or_default().contains(r#""hi""#), "{:?}", row.outcome);
+            assert_eq!(the_run(&session).1, []);
+        });
+    }
+
+    /// As above, for a resumed segment that fails the run: the failure is
+    /// kept in the write that finishes the leaf.
+    #[test]
+    fn a_resumed_segment_that_fails_the_run_settles_it_in_the_write_that_finishes_its_leaf() {
+        let movement = AWAITS_A_COMMENT.replace("return c.Text", "write note { Title: c.Text }\n  return c.Text");
+        let project = InboxProject::with(&movement, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        in_local(async {
+            let session = project.session().await;
+            let (run, _) = parked_with_a_comment(&session).await;
+            crate::segment::DIES_AFTER_COMMIT.with(|dies| dies.set(true));
+            drained(&session).await;
+            let row = session.store.run(&run).unwrap().unwrap();
+            assert_eq!(row.status, "failed", "{:?}", row.outcome);
+            assert!(row.outcome.as_deref().unwrap_or_default().contains("no longer exists"), "{:?}", row.outcome);
+            assert_eq!(the_run(&session).1, []);
+        });
+    }
+
     /// An attempt at the comment's arm finished it (its exports kept, its
     /// join decremented) and died before its commit; the retry parks in the
     /// arm instead (no comment counts this time). The run fails, naming where.

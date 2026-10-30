@@ -235,6 +235,16 @@ pub struct HeldPark {
     pub park: ParkKind,
 }
 
+/// Where a segment leaves its run (`parks.commitSegment`'s `settle`):
+/// `runs.settle`'s settle, kept in the segment's one write.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SegmentSettle {
+    pub status: String,
+    pub outcome: Js,
+    pub at: String,
+}
+
 /// One arrival a module reported (`waits.log`'s `arrivals`).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -487,7 +497,8 @@ slot! {
         /// `joins.recordJoin` records them, `parks` committed in order as
         /// `parks.commit` commits each, `resumed` finished as
         /// `parks.finishLeaf` finishes it unless one of `parks` is at its
-        /// address, and the run marked parked when `parks` is not empty.
+        /// address, the run marked parked when `parks` is not empty, and
+        /// then `settle`, when given, settled as `runs.settle` settles it.
         /// In the same write, each wait parked whose arrivals are unread
         /// (`waits.arrivals` lists some) or whose record is gone gets a
         /// `wake_await { waitId, runId, address }` row under `team_id`;
@@ -499,6 +510,8 @@ slot! {
             resumed: Option<String>,
             joins: Vec<HeldJoin>,
             parks: Vec<HeldPark>,
+            #[serde(default)]
+            settle: Option<SegmentSettle>,
         }) -> Vec<WaitWake>;
         "joins.recordJoin" => fn record_join(JoinsRecordJoin { run_id: String, frame_address: String, pending: i64, fence: Option<String> }) -> ();
         "joins.decrementJoin" => fn decrement_join(JoinsDecrementJoin { run_id: String, frame_address: String, branch_address: String, leaf_address: String }) -> JoinClosed;
