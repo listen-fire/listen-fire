@@ -1387,19 +1387,23 @@ fn pattern_matches(pattern: &str, text: &str) -> Option<bool> {
 
 impl crate::checker::Checker<'_> {
     /// `checkAddressPins` for the address `hops` off the instance `graph` names.
-    pub fn check_address_pins(&mut self, graph: &str, hops: &str, span: movement_parser::ast::Span, scope: crate::scope::ScopeId) {
-        let crate::scope::Resolution::Found(id) = self.scopes.resolve(scope, graph) else { return };
+    /// Whether it refused any.
+    pub fn check_address_pins(&mut self, graph: &str, hops: &str, span: movement_parser::ast::Span, scope: crate::scope::ScopeId) -> bool {
+        let crate::scope::Resolution::Found(id) = self.scopes.resolve(scope, graph) else { return false };
         let schema = match &self.scopes.symbol(id).types.pos {
             Some(Position::Meta { instance }) => instance.schema.clone(),
-            _ => return,
+            _ => return false,
         };
         let address = crate::types::event_address::event_address_of_hops(hops);
         let pinned = address.as_ref().map(|address| address_pin_diagnostics(&schema, address)).unwrap_or_default();
+        let mut refused = false;
         for found in pinned.into_iter().chain(type_where_enum_diagnostics(&schema, hops)) {
+            refused |= found.severity.is_none();
             let mut diagnostic = crate::diagnostic::Diagnostic::error(found.code, found.message, span);
             diagnostic.severity = found.severity;
             self.push(diagnostic);
         }
+        refused
     }
 }
 

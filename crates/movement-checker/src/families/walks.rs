@@ -1142,18 +1142,23 @@ impl crate::checker::Checker<'_> {
             }
             return;
         }
+        let mut refused = false;
         if let Some(hops) = &reference.hops_raw {
-            self.report_meta_hops_in_type_ref(hops, reference.span);
-            self.check_address_pins(&reference.graph, hops, reference.span, scope);
+            refused = self.report_meta_hops_in_type_ref(hops, reference.span);
+            refused |= self.check_address_pins(&reference.graph, hops, reference.span, scope);
         }
         let symbol = self.scopes.symbol(id);
         let Some(Position::Meta { instance }) = &symbol.types.pos else { return };
+        if let Some(hops) = &reference.hops_raw {
+            // A hop or a pin refused above already says why the address lands nowhere.
+            if crate::types::event_address::position_from_address(instance, hops).is_none() && !refused {
+                let message = crate::types::event_address::address_absence(instance, hops);
+                self.report(codes::UNKNOWN_POSITION, message, reference.span);
+            }
+            return;
+        }
         let Some(position) = &reference.position else { return };
-        let resolved = match &reference.hops_raw {
-            Some(hops) => crate::types::event_address::position_from_address(instance, hops),
-            None => crate::types::position::position_ref_in(instance, position),
-        };
-        if resolved.is_some() {
+        if crate::types::position::position_ref_in(instance, position).is_some() {
             return;
         }
         let mut available: Vec<&str> = instance.schema.unions.iter().flat_map(|u| u.keys()).map(String::as_str).collect();
@@ -1466,16 +1471,20 @@ impl crate::checker::Checker<'_> {
 
     /// `reportMetaHopsInTypeRef`: a type's address walks no `#` hop either,
     /// refused where the address is written.
-    pub fn report_meta_hops_in_type_ref(&mut self, hops_raw: &str, span: movement_parser::ast::Span) {
+    /// Whether it reported any.
+    pub fn report_meta_hops_in_type_ref(&mut self, hops_raw: &str, span: movement_parser::ast::Span) -> bool {
         // `hopsOfAddress`: the address read by the expression grammar; none
         // when it does not parse (the address's own check says so).
         let parsed = movement_parser::expr::parse_expression(&format!("__address_probe__{hops_raw}"));
-        let Ok(movement_parser::tree::MExpr::Path { hops, .. }) = &parsed else { return };
+        let Ok(movement_parser::tree::MExpr::Path { hops, .. }) = &parsed else { return false };
+        let mut reported = false;
         for hop in hops {
             if hop.label.text.starts_with('#') && hop.label.text != "#extract" {
                 self.report(codes::META_HOP_RETIRED, meta_hop_retired_message(&hop.label.text), span);
+                reported = true;
             }
         }
+        reported
     }
 
     /// `transformHopRetiredMessage`: the call to write instead, named from
