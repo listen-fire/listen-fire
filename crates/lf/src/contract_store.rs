@@ -25,7 +25,7 @@ use crate::backend::{MintCallback, RunHostStore, StoreSpec, open_store};
 use crate::json::Js;
 use crate::obj;
 use crate::slot_server::{Listen, Refusal};
-use crate::store::{ClaimDue, DeliveryQuery, HeldJoin, HeldPark, NewWork, Park, Release, Rerun, RunSettle, RunStart, SegmentCommit, StoreError, iso};
+use crate::store::{ClaimDue, DeliveryQuery, HeldJoin, HeldPark, HeldRace, NewWork, Park, Release, Rerun, RunSettle, RunStart, SegmentCommit, StoreError, iso};
 use crate::store_wire::{Wire, new_delivery, num, opt, park_kind, rows, to_rows};
 use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait};
 
@@ -34,7 +34,7 @@ pub const STORE_METHODS: &[&str] = &[
     "store.open", "runs.start", "runs.requestCancel", "runs.status", "runs.complete", "runs.settle", "runs.markParked", "runs.get",
     "runs.list", "runs.appendTrace", "runs.traceLength", "runs.spent", "runs.addSpend", "runs.resetSpendBaseline", "records.cancelRequest",
     "records.markFailed", "records.closeRun", "callbacks.mint", "callbacks.get", "callbacks.record", "callbacks.markBodyStarted",
-    "callbacks.landed", "callbacks.revokeRun", "parks.putLeaf", "parks.claimLeaf", "parks.finishLeaf", "parks.leaves", "parks.deleteLeaves", "parks.commitSegment",
+    "callbacks.landed", "callbacks.revokeRun", "parks.putLeaf", "parks.claimLeaf", "parks.finishLeaf", "parks.leaves", "parks.deleteLeaves", "parks.commitSegment", "parks.owedRaces",
     "joins.recordJoin", "joins.decrementJoin", "joins.persistBranchExport", "joins.collectBranchExports", "joins.hasPendingJoins",
     "joins.frames", "joins.deleteFrames", "correlations.correlate", "correlations.correlated", "correlations.ofRun", "correlations.drop",
     "correlations.dropRun", "leases.claim", "leases.renew", "leases.release", "leases.dropRunState", "work.enqueue", "work.claimDue",
@@ -283,9 +283,35 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
                 Js::Null => None,
                 settle => Some(run_settle(settle).ok_or_else(|| Failure::Params("settle: expected null or { status, outcome, at }".into()))?),
             };
-            let commit = SegmentCommit { run_id: p.str("runId")?, team_id: p.str("teamId")?, fence: p.opt_str("fence")?, resumed: p.opt_str("resumed")?, joins, parks, settle };
+            // Absent: a caller from before races were owed in it.
+            let owed_races = p.value("owedRaces");
+            let owed_races = match &owed_races {
+                Js::Null => Vec::new(),
+                owed => owed
+                    .as_array()
+                    .and_then(|owed| owed.iter().map(|race| Some(HeldRace { frame_address: race.get("frameAddress")?.as_str()?, state: race.get("state")? })).collect::<Option<Vec<_>>>())
+                    .ok_or_else(|| Failure::Params("owedRaces: expected a list of { frameAddress, state }".into()))?,
+            };
+            let commit = SegmentCommit {
+                run_id: p.str("runId")?,
+                team_id: p.str("teamId")?,
+                fence: p.opt_str("fence")?,
+                resumed: p.opt_str("resumed")?,
+                joins,
+                parks,
+                settle,
+                owed_races,
+                settled_race: p.opt_str("settledRace")?,
+            };
             Ok(to_rows(&store.commit_segment(&commit)?))
         }
+        "parks.owedRaces" => Ok(Js::Arr(
+            store
+                .owed_races(p.str("runId")?)?
+                .into_iter()
+                .map(|race| Js::Obj(obj! { "frameAddress" => Js::str(race.frame_address), "state" => race.state }))
+                .collect(),
+        )),
         "parks.claimLeaf" => Ok(match store.claim_leaf(p.str("runId")?, p.str("address")?, p.opt_str("reason")?)? {
             None => Js::Null,
             Some((reason, state)) => Js::from(obj! { "reason" => Js::str(reason), "state" => state }),
@@ -608,6 +634,7 @@ mod tests {
             "events.startRun",
             "runs.lapsed",
             "parks.commit",
+            "parks.owedRaces",
             "work.bury",
             "inbound.keepDelivery",
             "inbound.deliveries",

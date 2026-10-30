@@ -187,7 +187,11 @@ pub const CORE_PARK_REASONS: &[&str] = &["timer", "await", "limit"];
 /// A polled listen's row in the work queue: its next poll.
 pub const POLL_WORK_KIND: &str = "poll_listen";
 /// The work kinds listen-fire queues.
-pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", "fire_callback", "poll_listen", "refresh_subscription"];
+pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", "fire_callback", "poll_listen", "refresh_subscription", SETTLE_RACE_WORK_KIND];
+/// A race a resumed arm won and left to its run to settle (crate::run_host):
+/// the row is what the run owes until the commit of the step that settles
+/// the race deletes it.
+pub const SETTLE_RACE_WORK_KIND: &str = "settle_race";
 
 /// Columns a state file written by an earlier listen-fire lacks, added on open.
 const ADDED_RUN_COLUMNS: &[&str] = &["cancel_requested_at", "cancel_reason", "delivery_id"];
@@ -377,6 +381,32 @@ pub fn timer_work_payload(run_id: &str) -> Js {
     Js::Obj(crate::obj! { "runId" => Js::str(run_id) })
 }
 
+/// The `settle_race` row of the race at `frame_address`: one per race, so
+/// every arm that owes it writes the same row.
+pub fn settle_race_work_key(run_id: &str, frame_address: &str) -> String {
+    format!("{SETTLE_RACE_WORK_KIND}:{run_id}:{frame_address}")
+}
+
+pub fn settle_race_work_payload(run_id: &str, race: &HeldRace<'_>) -> Js {
+    Js::Obj(crate::obj! { "runId" => Js::str(run_id), "frameAddress" => Js::str(race.frame_address), "state" => race.state.clone() })
+}
+
+/// A race the run owes (`parks.owedRaces`): its frame, and the state of an
+/// arm that won it, which the step that settles it resumes from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwedRace {
+    pub frame_address: String,
+    pub state: Js,
+}
+
+impl OwedRace {
+    /// A `settle_race` row's payload, or `parks.owedRaces`'s answer, read
+    /// back; None when it is not one.
+    pub fn of_payload(payload: &Js) -> Option<OwedRace> {
+        Some(OwedRace { frame_address: payload.get("frameAddress")?.as_str()?.to_string(), state: payload.get("state")?.clone() })
+    }
+}
+
 /// One park, kept as one with what wakes it (`parks.commit`): the leaf, the
 /// kind's own row, and the run marked parked.
 pub struct Park<'a> {
@@ -390,8 +420,9 @@ pub struct Park<'a> {
 
 /// What a segment held back to keep in one write at its end
 /// (`parks.commitSegment`, crate::segment): the joins it recorded, the
-/// parks it made, and the end of the leaf it resumed. A segment that dies
-/// before it leaves none of them, so the leaf it resumed is resumed again.
+/// parks it made, the end of the leaf it resumed, and the races it owes or
+/// settled. A segment that dies before it leaves none of them, so the leaf
+/// it resumed is resumed again, and the race it settled is still owed.
 pub struct SegmentCommit<'a> {
     pub run_id: &'a str,
     /// The tenant the wakes it queues are queued under.
@@ -407,6 +438,19 @@ pub struct SegmentCommit<'a> {
     /// `runs.settle` keeps it, so a run never stays parked with nothing
     /// left to wake it; None leaves the run's row as it is.
     pub settle: Option<RunSettle<'a>>,
+    /// The races the resumed arm won and left to the run to settle: each a
+    /// `settle_race` row, queued in this write, so the obligation outlives
+    /// a crash before the step that settles it.
+    pub owed_races: Vec<HeldRace<'a>>,
+    /// The race this segment settled: its `settle_race` row is deleted in
+    /// this write.
+    pub settled_race: Option<&'a str>,
+}
+
+/// A race a segment owes (`parks.commitSegment`'s `owedRaces`).
+pub struct HeldRace<'a> {
+    pub frame_address: &'a str,
+    pub state: &'a Js,
 }
 
 /// A run's settle (`runs.settle`'s): its status, its outcome and when.
@@ -884,7 +928,7 @@ impl Store {
 
     /// crate::backend::RunHostStore::commit_segment: one transaction, fenced.
     pub fn commit_segment(&self, commit: &SegmentCommit<'_>) -> Result<Vec<WaitWake>> {
-        let SegmentCommit { run_id, team_id, fence, resumed, ref joins, ref parks, ref settle } = *commit;
+        let SegmentCommit { run_id, team_id, fence, resumed, ref joins, ref parks, ref settle, ref owed_races, settled_race } = *commit;
         self.fenced(run_id, fence, |db| {
             for join in joins {
                 Self::record_join_in(db, run_id, join.frame_address, join.pending)?;
@@ -900,6 +944,12 @@ impl Store {
             }
             if let Some(settle) = settle {
                 Self::settle_run_in(db, run_id, settle)?;
+            }
+            if let Some(frame) = settled_race {
+                db.execute("delete from work where key = ?", params![settle_race_work_key(run_id, frame)])?;
+            }
+            for race in owed_races {
+                Self::enqueue_in(db, SETTLE_RACE_WORK_KIND, &settle_race_work_key(run_id, race.frame_address), &settle_race_work_payload(run_id, race), None)?;
             }
             // Read in the write, so an arrival logged before it is read here
             // and one logged after it finds the wait parked.
@@ -1086,16 +1136,30 @@ impl Store {
         Ok(statement.query_map(params![run_id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// The frames, their exports, and the races owed at them: a withdrawn
+    /// race is settled by nobody.
     pub fn delete_frames(&self, run_id: &str, frame_addresses: &[String]) -> Result<()> {
         self.transaction(|db| {
             let mut drop_frame = db.prepare("delete from join_frame where run_id = ? and frame_address = ?")?;
             let mut drop_exports = db.prepare("delete from join_branch_export where run_id = ? and frame_address = ?")?;
+            let mut drop_owed = db.prepare("delete from work where key = ?")?;
             for frame in frame_addresses {
                 drop_frame.execute(params![run_id, frame])?;
                 drop_exports.execute(params![run_id, frame])?;
+                drop_owed.execute(params![settle_race_work_key(run_id, frame)])?;
             }
             Ok(())
         })
+    }
+
+    /// The races the run owes, in the order they were first owed.
+    pub fn owed_races(&self, run_id: &str) -> Result<Vec<OwedRace>> {
+        let mut statement = self.db.prepare("select payload from work where kind = ? and json_extract(payload, '$.runId') = ? order by id")?;
+        let payloads = statement.query_map(params![SETTLE_RACE_WORK_KIND, run_id], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        payloads
+            .iter()
+            .map(|payload| OwedRace::of_payload(&parse_text(payload)?).ok_or_else(|| StoreError::Invalid(format!("a {SETTLE_RACE_WORK_KIND} row of run {run_id} that is not one: {payload}"))))
+            .collect()
     }
 
     // ── Correlations ────────────────────────────────────────────────────────
@@ -1187,6 +1251,7 @@ impl Store {
             db.execute("delete from leaf where run_id = ?", params![run_id])?;
             db.execute("delete from join_frame where run_id = ?", params![run_id])?;
             db.execute("delete from join_branch_export where run_id = ?", params![run_id])?;
+            db.execute("delete from work where kind = ? and json_extract(payload, '$.runId') = ?", params![SETTLE_RACE_WORK_KIND, run_id])?;
             Self::drop_run_waits_in(db, run_id)?;
             Ok(true)
         })

@@ -199,6 +199,8 @@ pub fn segment_commit_params(commit: &SegmentCommit<'_>) -> Obj {
             "outcome" => settle.outcome.clone(),
             "at" => Js::str(settle.at),
         })),
+        "owedRaces" => Js::Arr(commit.owed_races.iter().map(|race| Js::Obj(obj! { "frameAddress" => Js::str(race.frame_address), "state" => race.state.clone() })).collect()),
+        "settledRace" => opt(commit.settled_race),
     }
 }
 

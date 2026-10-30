@@ -1522,7 +1522,7 @@ pub(crate) mod tests {
         in_local(async {
             let session = project.session().await;
             let (run, _) = parked_with_a_comment(&session).await;
-            crate::segment::DIES_AFTER_COMMIT.with(|dies| dies.set(true));
+            crate::segment::DIES_AFTER_COMMIT.with(|dies| dies.set(1));
             drained(&session).await;
             let row = session.store.run(&run).unwrap().unwrap();
             assert_eq!(row.status, "completed", "{:?}", row.outcome);
@@ -1540,7 +1540,7 @@ pub(crate) mod tests {
         in_local(async {
             let session = project.session().await;
             let (run, _) = parked_with_a_comment(&session).await;
-            crate::segment::DIES_AFTER_COMMIT.with(|dies| dies.set(true));
+            crate::segment::DIES_AFTER_COMMIT.with(|dies| dies.set(1));
             drained(&session).await;
             let row = session.store.run(&run).unwrap().unwrap();
             assert_eq!(row.status, "failed", "{:?}", row.outcome);
@@ -1594,6 +1594,117 @@ pub(crate) mod tests {
             let (run, leaves) = the_run(&session);
             assert_eq!(leaves, []);
             assert!(session.store.run(&run).unwrap().unwrap().outcome.unwrap_or_default().contains("-/now"));
+        });
+    }
+
+    /// Drain only the arrivals' wakes: a `settle_race` row its winning arm
+    /// owed is left queued.
+    async fn drained_wakes_only(session: &mut Session) {
+        session.pool = crate::drain::Pool::of("wake_await").unwrap();
+        drained(session).await;
+        session.pool = crate::drain::Pool::default();
+    }
+
+    /// The frames of the races the run owes.
+    fn owed(session: &Session, run: &str) -> Vec<String> {
+        session.store.owed_races(run).unwrap().into_iter().map(|race| race.frame_address).collect()
+    }
+
+    /// The comment's arm wins the race, and its segment dies right after its
+    /// commit, before the race is settled: the commit owed the race, so the
+    /// run is still parked, and the row it owed settles the race and runs
+    /// the code after it.
+    #[test]
+    fn a_race_whose_winning_arm_dies_after_its_commit_is_settled_by_the_row_it_owes() {
+        let project = InboxProject::with(RACES_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        in_local(async {
+            let mut session = project.session().await;
+            hook(&session, NOTE, "d-1").await;
+            let (run, leaves) = the_run(&session);
+            let (arm, timer) = (leaves[0].0.clone(), leaves[1].0.clone());
+            let comment = NewArrival { edge: "Comments".into(), key: "thread:n-1".into(), identity: Some("k1".into()), version: None, landing: Some(Js::parse(br#"{"fields":{"Text":"hi"}}"#).unwrap()), gone: false };
+            session.store.log_arrivals(LOCAL_TENANT, "inbox", &[comment], &iso(0)).unwrap();
+            wake_the_comment_wait(&session, &run, &arm);
+            crate::segment::DIES_AFTER_COMMIT.with(|dies| dies.set(1));
+            drained_wakes_only(&mut session).await;
+            assert_eq!(session.store.run(&run).unwrap().unwrap().status, "parked");
+            assert_eq!(the_run(&session).1, [(timer, "timer".to_string(), "parked".to_string())], "the arm's leaf is finished");
+            assert_eq!(owed(&session, &run), session.store.frames(&run).unwrap(), "the race is owed");
+
+            drained(&session).await;
+            let row = session.store.run(&run).unwrap().unwrap();
+            assert_eq!(row.status, "completed", "{:?}", row.outcome);
+            assert!(row.outcome.as_deref().unwrap_or_default().contains("hi/-"), "{:?}", row.outcome);
+            assert_eq!(the_run(&session).1, []);
+            assert_eq!(owed(&session, &run), Vec::<String>::new());
+        });
+    }
+
+    /// Both arms resume in one pass, and the pass dies right after the
+    /// second arm's commit: that commit owed the race, so it did not settle
+    /// the run completed. The race is settled, and the code after it runs,
+    /// before the run completes.
+    #[test]
+    fn a_race_whose_arms_all_resume_in_one_pass_completes_only_after_the_code_after_it_ran() {
+        let movement = RACES_A_COMMENT.replace("c = await new note-[:Comments]->\n      return c.Text", "await sleep(1h)\n      return \"a\"");
+        let project = InboxProject::with(&movement, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        in_local(async {
+            let session = project.session().await;
+            hook(&session, NOTE, "d-1").await;
+            let (run, leaves) = the_run(&session);
+            assert_eq!(leaves.iter().map(|(_, reason, _)| reason.as_str()).collect::<Vec<_>>(), ["timer", "timer"]);
+            crate::segment::DIES_AFTER_COMMIT.with(|dies| dies.set(2));
+            session.resume_run(&run).await.unwrap();
+            let row = session.store.run(&run).unwrap().unwrap();
+            assert_eq!(row.status, "parked", "{:?}", row.outcome);
+            assert_eq!(the_run(&session).1, [], "both arms' leaves are finished");
+            assert_eq!(owed(&session, &run).len(), 1, "the race is owed once");
+
+            drained(&session).await;
+            let row = session.store.run(&run).unwrap().unwrap();
+            assert_eq!(row.status, "completed", "{:?}", row.outcome);
+            assert!(row.outcome.as_deref().unwrap_or_default().contains("a/slept"), "{:?}", row.outcome);
+            assert_eq!(owed(&session, &run), Vec::<String>::new());
+        });
+    }
+
+    /// The race is settled by a drain of its run that is not the row it
+    /// owed (a retried wake): that settlement's commit deletes the row, so
+    /// the row never settles the race a second time, and a worker that had
+    /// already claimed it finds the race owed no more and steps nothing.
+    #[test]
+    fn a_race_settled_once_is_never_settled_again_by_the_row_it_owed() {
+        let movement = RACES_A_COMMENT.replace("  return \"${coalesce", "  await sleep(2h)\n  return \"${coalesce");
+        let project = InboxProject::with(&movement, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        in_local(async {
+            let mut session = project.session().await;
+            hook(&session, NOTE, "d-1").await;
+            let (run, leaves) = the_run(&session);
+            let arm = leaves[0].0.clone();
+            let comment = NewArrival { edge: "Comments".into(), key: "thread:n-1".into(), identity: Some("k1".into()), version: None, landing: Some(Js::parse(br#"{"fields":{"Text":"hi"}}"#).unwrap()), gone: false };
+            session.store.log_arrivals(LOCAL_TENANT, "inbox", &[comment], &iso(0)).unwrap();
+            wake_the_comment_wait(&session, &run, &arm);
+            crate::segment::DIES_AFTER_COMMIT.with(|dies| dies.set(1));
+            drained_wakes_only(&mut session).await;
+            let owed_race = session.store.owed_races(&run).unwrap().pop().expect("the race is owed");
+            let row = crate::store::HeldRace { frame_address: &owed_race.frame_address, state: &owed_race.state };
+            let payload = crate::store::settle_race_work_payload(&run, &row);
+
+            // The wake is retried; its arm's leaf is gone, so its drain
+            // only settles the race the run owes.
+            wake_the_comment_wait(&session, &run, &arm);
+            drained_wakes_only(&mut session).await;
+            let (_, leaves) = the_run(&session);
+            assert_eq!(leaves.iter().map(|(_, reason, status)| (reason.as_str(), status.as_str())).collect::<Vec<_>>(), [("timer", "parked")], "parked after the race");
+            assert!(!leaves[0].0.starts_with(&owed_race.frame_address), "{leaves:?}");
+            assert_eq!(owed(&session, &run), Vec::<String>::new());
+            let trace = session.store.trace_len(&run).unwrap();
+
+            drained(&session).await;
+            assert!(session.work_row(crate::store::SETTLE_RACE_WORK_KIND, &payload).await.unwrap().is_empty(), "nothing stepped");
+            assert_eq!(session.store.trace_len(&run).unwrap(), trace, "the code after the race did not run again");
+            assert_eq!(the_run(&session).1, leaves);
+            assert_eq!(session.store.run(&run).unwrap().unwrap().status, "parked");
         });
     }
 

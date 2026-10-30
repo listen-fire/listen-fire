@@ -16,7 +16,8 @@ use crate::obj;
 use crate::slot_client::SlotClient;
 use module_wire::envelope::METHOD_NOT_IMPLEMENTED_CODE;
 use crate::store::{
-    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit, StoreError,
+    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, OwedRace, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit,
+    StoreError,
 };
 use crate::store_wire::{Wire, delivery_params, event_run_params, int, num, open_wait_params, opt, park_params, rows, run_start_params, segment_commit_params, to_rows};
 use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait, WaitArrivals, WaitWake};
@@ -206,6 +207,23 @@ impl RunHostStore for ProcessStore {
             ))),
             Err(error) => Err(self.refused(METHOD, error)),
         }
+    }
+    fn owed_races(&self, run_id: &str) -> Result<Vec<OwedRace>> {
+        const METHOD: &str = "parks.owedRaces";
+        // A module written before it cannot say what a run still owes: a run
+        // whose owed race it lost would be settled completed.
+        let answer = match self.client.call(METHOD, obj! { "runId" => s(run_id) }) {
+            Ok(answer) => answer,
+            Err(error) if error.code == METHOD_NOT_IMPLEMENTED_CODE => {
+                return Err(StoreError::Backend(format!(
+                    "{} does not answer {}; listen-fire reads what a run still owes before it settles the run",
+                    self.client.label,
+                    crate::protocol::method_with_minor(METHOD)
+                )));
+            }
+            Err(error) => return Err(self.refused(METHOD, error)),
+        };
+        answer.as_array().and_then(|owed| owed.iter().map(OwedRace::of_payload).collect::<Option<Vec<_>>>()).ok_or_else(|| self.malformed(METHOD, &answer))
     }
 
     fn record_join(&self, run_id: &str, frame_address: &str, pending: i64, fence: Option<&str>) -> Result<()> {

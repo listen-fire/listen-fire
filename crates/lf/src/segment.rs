@@ -26,7 +26,7 @@ use crate::obj;
 use crate::remote::{ADAPTER_METHODS, SegmentAdapters, WRITE_METHODS};
 use crate::run_host::{cancel_subtrees, is_ancestor_or_self, queue_await_wake, save_source, settle_if_cancel_requested};
 use crate::backend::{MintCallback, RunHostStore};
-use crate::store::{HeldJoin, HeldPark, ParkKind, RunSettle, SegmentCommit, StoreError};
+use crate::store::{HeldJoin, HeldPark, HeldRace, ParkKind, RunSettle, SETTLE_RACE_WORK_KIND, SegmentCommit, StoreError};
 use crate::store_wire::Wire as _;
 use crate::waits::{Noted, OpenWait};
 use crate::wire::{Hv, Wire, js_of_json, json_of_js};
@@ -178,6 +178,11 @@ pub struct SegmentHost<'s> {
     /// The leaf this segment resumed, when it resumed one: its notes are
     /// kept with the leaf's end (crate::waits::Noted::leaf).
     resumed_leaf: Option<String>,
+    /// That leaf's state: a race its arm wins is owed from it.
+    resumed_state: Option<Js>,
+    /// The race this segment settles, when it settles one: no longer owed
+    /// once its commit is kept.
+    settling_race: Option<String>,
     /// The writes that move the run on, kept in one write at the end.
     held: RefCell<Held>,
 }
@@ -242,6 +247,8 @@ impl<'s> SegmentHost<'s> {
             spent: RefCell::new(BTreeMap::new()),
             parked_waits: RefCell::new(HashMap::new()),
             resumed_leaf: input.resumed_leaf,
+            resumed_state: input.resumed_state,
+            settling_race: input.settling_race,
             held: RefCell::new(Held::default()),
         }
     }
@@ -298,8 +305,11 @@ pub struct SegmentHostParts<'s> {
     pub documents: &'s Documents,
     pub user: Js,
     pub public_url: String,
-    /// The leaf the segment resumes, when it resumes one.
+    /// The leaf the segment resumes, when it resumes one, and its state.
     pub resumed_leaf: Option<String>,
+    pub resumed_state: Option<Js>,
+    /// The race the segment settles, when it settles one.
+    pub settling_race: Option<String>,
 }
 
 /// A number from the environment, positive and finite, else `default`.
@@ -412,39 +422,47 @@ thread_local! {
     /// process killed then would: nothing it held is written, and its
     /// drain leaves every row (a lost lease).
     pub(crate) static DIES_BEFORE_COMMIT: Cell<bool> = const { Cell::new(false) };
-    /// The next segment to make its commit dies right after it: what the
-    /// commit wrote stands, and nothing after it runs.
-    pub(crate) static DIES_AFTER_COMMIT: Cell<bool> = const { Cell::new(false) };
+    /// The n-th segment from now to make its commit dies right after it
+    /// (0: none): what the commit wrote stands, and nothing after it runs.
+    pub(crate) static DIES_AFTER_COMMIT: Cell<u32> = const { Cell::new(0) };
 }
 
 /// The segment's held writes and where they leave the run (`settle`), kept
 /// in one fenced write: its join counts, its parks, the end of the leaf it
-/// resumed and the run's settle. In that write the store queues a wake for
-/// each wait it parks whose arrivals are unread: what arrived after the
-/// engine's last read, or what it read without judging. A segment that
-/// holds nothing and resumed no leaf has only the settle to write.
-pub fn commit(host: &SegmentHost<'_>, settle: Option<RunSettle<'_>>) -> Result<(), Ended> {
+/// resumed, the races its arm won and left to the run to settle
+/// (`owed_races`, by frame), the race it settled, and the run's settle. In
+/// that write the store queues a wake for each wait it parks whose arrivals
+/// are unread: what arrived after the engine's last read, or what it read
+/// without judging. A segment that holds nothing, resumed no leaf and
+/// settled no race has only the settle to write.
+pub fn commit(host: &SegmentHost<'_>, settle: Option<RunSettle<'_>>, owed_races: &[String]) -> Result<(), Ended> {
     #[cfg(test)]
     if DIES_BEFORE_COMMIT.with(|dies| dies.replace(false)) {
         return Err(Ended::LeaseLost);
     }
-    write_commit(host, settle)?;
+    write_commit(host, settle, owed_races)?;
     #[cfg(test)]
-    if DIES_AFTER_COMMIT.with(|dies| dies.replace(false)) {
+    if DIES_AFTER_COMMIT.with(|dies| dies.get() > 0 && dies.replace(dies.get() - 1) == 1) {
         return Err(Ended::LeaseLost);
     }
     Ok(())
 }
 
-fn write_commit(host: &SegmentHost<'_>, settle: Option<RunSettle<'_>>) -> Result<(), Ended> {
+fn write_commit(host: &SegmentHost<'_>, settle: Option<RunSettle<'_>>, owed_races: &[String]) -> Result<(), Ended> {
     let held = host.held.borrow();
     let resumed = host.resumed_leaf.as_deref();
+    let settled_race = host.settling_race.as_deref();
     let store = host.store;
     let ended = |error: StoreError| match error {
         StoreError::LeaseLost { .. } => Ended::LeaseLost,
         other => Ended::Failed(other.to_string()),
     };
-    if held.parks.is_empty() && held.joins.is_empty() && resumed.is_none() {
+    let owed_races = match (&host.resumed_state, owed_races) {
+        (_, []) => Vec::new(),
+        (Some(state), owed) => owed.iter().map(|frame_address| HeldRace { frame_address, state }).collect(),
+        (None, [frame, ..]) => return Err(Ended::Failed(format!("the race at {frame} was left to the run to settle by a segment that resumed no leaf to settle it from"))),
+    };
+    if held.parks.is_empty() && held.joins.is_empty() && resumed.is_none() && settled_race.is_none() {
         return match settle {
             Some(RunSettle { status, outcome, at }) => store.settle_run(&host.run_id, status, outcome, at).map_err(ended),
             None => Ok(()),
@@ -464,6 +482,8 @@ fn write_commit(host: &SegmentHost<'_>, settle: Option<RunSettle<'_>>) -> Result
         joins: held.joins.iter().map(|(frame_address, pending)| HeldJoin { frame_address, pending: *pending }).collect(),
         parks: held.parks.iter().map(|park| park.held(team_id)).collect(),
         settle,
+        owed_races,
+        settled_race,
     };
     let wakes = store.commit_segment(&commit).map_err(ended)?;
     for park in &held.parks {
@@ -473,6 +493,9 @@ fn write_commit(host: &SegmentHost<'_>, settle: Option<RunSettle<'_>>) -> Result
     }
     for _ in &wakes {
         crate::wake::queued("wake_await", None);
+    }
+    if !commit.owed_races.is_empty() {
+        crate::wake::queued(SETTLE_RACE_WORK_KIND, None);
     }
     if !held.parks.is_empty() {
         // Never break the park path: a cancel that fails to settle here

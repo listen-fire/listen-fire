@@ -225,7 +225,9 @@ async function runWaitsCase(store: RpcStoreBackend, steps: Record<string, unknow
         const fence = typeof step.fence === 'string' ? (leases.get(step.fence) ?? assert.fail(`no lease named ${step.fence}`)) : null;
         const resumed = typeof step.resumed === 'string' ? step.resumed : null;
         const settle = typeof step.settle === 'string' ? { status: step.settle, outcome: {}, at: new Date().toISOString() } : null;
-        const params = { runId: id(text(step, 'run')), teamId, fence, resumed, joins, parks, settle };
+        const owedRaces = (Array.isArray(step.owes) ? step.owes : []).map((frameAddress) => ({ frameAddress, state: null }));
+        const settledRace = typeof step.settles === 'string' ? step.settles : null;
+        const params = { runId: id(text(step, 'run')), teamId, fence, resumed, joins, parks, settle, owedRaces, settledRace };
         if (step.leaseLost === true) await assert.rejects(store.call('parks.commitSegment', params, z.array(Wake)), RunLeaseLost, `${at}: the lease is lost`);
         else if (step.refused === true) await assert.rejects(store.call('parks.commitSegment', params, z.array(Wake)), `${at}: refused`);
         else {
@@ -240,6 +242,14 @@ async function runWaitsCase(store: RpcStoreBackend, steps: Record<string, unknow
         assert.equal(row.status, text(step, 'status'), `${at}: the run's status`);
         break;
       }
+      case 'owed': {
+        const owed = await store.call('parks.owedRaces', { runId: id(text(step, 'run')) }, z.array(z.object({ frameAddress: z.string(), state: z.unknown() })));
+        assert.deepEqual(owed.map((race) => race.frameAddress), items(step, 'races'), `${at}: the races owed`);
+        break;
+      }
+      case 'deleteFrames':
+        await store.call('joins.deleteFrames', { runId: id(text(step, 'run')), frameAddresses: items(step, 'frames') }, z.null());
+        break;
       case 'pendingJoins':
         assert.equal(await store.call('joins.hasPendingJoins', { runId: id(text(step, 'run')) }, z.boolean()), step.pending === true, `${at}: pending joins`);
         break;

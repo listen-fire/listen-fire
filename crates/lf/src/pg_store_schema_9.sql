@@ -49,3 +49,5 @@ CREATE INDEX wait_seen_identity_idx ON lf.wait_seen (wait_id, identity);
 -- run's re-read after parking sees the arrival).
 CREATE FUNCTION lf.lock_wait_key(team uuid, adapter_type text, edge text, key text) RETURNS void
   LANGUAGE sql AS $$ SELECT pg_advisory_xact_lock(hashtextextended(concat_ws(chr(31), team::text, adapter_type, edge, key), 0)) $$;
+-- The races a run owes (`settle_race` work rows), found by their run.
+CREATE INDEX work_settle_race_run_idx ON lf.work ((payload->>'runId')) WHERE kind = 'settle_race';

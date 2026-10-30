@@ -3,8 +3,8 @@
 //! in which order, when a run counts as complete, how a run that failed or
 //! was cancelled is torn down, how a race's losing subtrees are withdrawn,
 //! how a parked run's leaves are stepped (claimed, stepped, finished, with
-//! deferred races settled once at the end), and the per-run lease every
-//! entry into a run holds.
+//! the races the run owes settled once at the end), and the per-run lease
+//! every entry into a run holds.
 //!
 //! Callback-backed awaits are kept by crate::callbacks, not here.
 
@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use crate::json::Js;
 use crate::obj;
 use crate::backend::RunHostStore;
-use crate::store::{ClaimedWork, NewWork, POLL_WORK_KIND, Release, StoreError, iso, timer_work_key, timer_work_payload};
+use crate::store::{ClaimedWork, NewWork, POLL_WORK_KIND, Release, SETTLE_RACE_WORK_KIND, StoreError, iso, timer_work_key, timer_work_payload};
 
 /// A minute of silence is a dead process, not a slow one (`RUN_LEASE_TTL_MS`).
 pub const RUN_LEASE_TTL_MS: i64 = 60_000;
@@ -208,6 +208,7 @@ fn runs_of_work(store_: &dyn RunHostStore, kind: &str, payload: &Js) -> Result<V
             None => Vec::new(),
         },
         "wake_await" if payload.get("waitId").is_some() => text("runId").map(str::to_string).into_iter().collect(),
+        SETTLE_RACE_WORK_KIND => text("runId").map(str::to_string).into_iter().collect(),
         "wake_await" => match (text("adapterType"), text("correlationKey")) {
             (Some(adapter_type), Some(key)) => {
                 let team = text("teamId").unwrap_or(store_.tenant());
@@ -260,19 +261,25 @@ pub fn await_wake_work(adapter_type: &str, team_id: &str, correlation_key: &str)
 
 // ── Completion ──────────────────────────────────────────────────────────────
 
-/// `runCompleteWithout`: no join waits and no OTHER leaf is parked.
-pub fn run_complete_without(store_: &dyn RunHostStore, run_id: &str, leaf_address: &str) -> Result<bool> {
+/// `runCompleteWithout`: no join waits, no OTHER leaf is parked, and the
+/// run owes no OTHER race. `completing` is the leaf a step resumed, or the
+/// race it settles.
+pub fn run_complete_without(store_: &dyn RunHostStore, run_id: &str, completing: &str) -> Result<bool> {
     if store(store_.has_pending_joins(run_id))? {
         return Ok(false);
     }
-    Ok(store(store_.leaves(run_id, true, None, None))?.iter().all(|l| l.address == leaf_address))
+    if !store(store_.leaves(run_id, true, None, None))?.iter().all(|l| l.address == completing) {
+        return Ok(false);
+    }
+    Ok(store(store_.owed_races(run_id))?.iter().all(|race| race.frame_address == completing))
 }
 
+/// No join waits, no leaf is parked, and the run owes no race.
 pub fn run_quiescent(store_: &dyn RunHostStore, run_id: &str) -> Result<bool> {
-    if store(store_.has_pending_joins(run_id))? {
+    if store(store_.has_pending_joins(run_id))? || !store(store_.leaves(run_id, true, None, None))?.is_empty() {
         return Ok(false);
     }
-    Ok(store(store_.leaves(run_id, true, None, None))?.is_empty())
+    Ok(store(store_.owed_races(run_id))?.is_empty())
 }
 
 pub fn clear_if_quiescent(store_: &dyn RunHostStore, run_id: &str, fence: Option<&str>) -> Result<bool> {
@@ -347,7 +354,7 @@ pub fn cancel_subtrees(store_: &dyn RunHostStore, run_id: &str, subtrees: &[Stri
 pub enum StepRequest {
     /// Resume a claimed leaf: re-enter at it, or (a slept timer) step past it.
     Leaf { address: String, state: Js, reenter: bool },
-    /// Settle a race whose branches completed in this batch.
+    /// Settle a race the run owes, from the state of an arm that won it.
     Race { frame_address: String, state: Js },
 }
 
@@ -367,8 +374,8 @@ pub enum StepOutcome {
     LeaseLost,
     Failed(String),
     Cancelled(Option<String>),
-    Parked { address: Option<String>, deferred_race_frames: Vec<String> },
-    Completed { deferred_race_frames: Vec<String> },
+    Parked { address: Option<String> },
+    Completed,
 }
 
 /// What runs one segment for a drain.
@@ -383,30 +390,34 @@ pub enum Settled {
 }
 
 /// `afterStep`: a failure or a cancel tears the run down and ends the
-/// drain; a lost lease ends it leaving every row.
+/// drain; a lost lease ends it leaving every row. A failure the segment's
+/// own commit could not keep (a store that failed as the segment ended) is
+/// kept here: a run already settled stays as it is.
 pub fn after_step(store_: &dyn RunHostStore, run_id: &str, fence: Option<&str>, outcome: &StepOutcome) -> Result<Settled> {
     Ok(match outcome {
         StepOutcome::LeaseLost => Settled::LeaseLost,
-        StepOutcome::Failed(_) => {
-            abandon_run(store_, run_id, fence)?;
+        StepOutcome::Failed(message) => {
+            fail_run(store_, run_id, message, fence)?;
             Settled::Done
         }
         StepOutcome::Cancelled(reason) => {
             fail_run(store_, run_id, reason.as_deref().unwrap_or(CANCELLED_BY_OPERATOR), fence)?;
             Settled::Done
         }
-        StepOutcome::Parked { .. } | StepOutcome::Completed { .. } => Settled::Continue,
+        StepOutcome::Parked { .. } | StepOutcome::Completed => Settled::Continue,
     })
 }
 
-/// `drainRun`: step the chosen leaves of one run under the caller's lease.
-/// True when the lease went mid-drain (every row is left as it is).
+/// `drainRun`: step the chosen leaves of one run under the caller's lease,
+/// then settle each race the run owes. The races are the store's to say
+/// (each a `settle_race` row its winning arm's commit queued), so a race a
+/// drain that died left owed is settled by the next. True when the lease
+/// went mid-drain (every row is left as it is).
 pub async fn drain_run(store_: &dyn RunHostStore, run_id: &str, addresses: &[String], reason: Option<&str>, lease: &Lease, stepper: &impl Stepper) -> Result<bool> {
     let fence = Some(lease.token.as_str());
     if settle_if_cancel_requested(store_, run_id, fence)? {
         return Ok(false);
     }
-    let mut deferred: Vec<(String, Js)> = Vec::new();
     for address in addresses {
         if lease.is_lost() {
             return Ok(true);
@@ -420,29 +431,35 @@ pub async fn drain_run(store_: &dyn RunHostStore, run_id: &str, addresses: &[Str
         };
         let until = Js::is_true(state.get("until"));
         let reenter = claimed_reason != "timer" || until;
-        let outcome = stepper.step(StepRequest::Leaf { address: address.clone(), state: state.clone(), reenter }).await;
+        let outcome = stepper.step(StepRequest::Leaf { address: address.clone(), state, reenter }).await;
         match after_step(store_, run_id, fence, &outcome)? {
             Settled::Continue => {}
             Settled::Done => return Ok(false),
             Settled::LeaseLost => return Ok(true),
         }
-        let (parked_at, frames) = match &outcome {
-            StepOutcome::Parked { address, deferred_race_frames } => (address.as_deref(), deferred_race_frames),
-            StepOutcome::Completed { deferred_race_frames } => (None, deferred_race_frames),
+        let parked_at = match &outcome {
+            StepOutcome::Parked { address } => address.as_deref(),
+            StepOutcome::Completed => None,
             _ => continue,
         };
-        for frame in frames {
-            if !deferred.iter().any(|(f, _)| f == frame) {
-                deferred.push((frame.clone(), state.clone()));
-            }
-        }
         // The segment's own commit finished the leaf, unless it parked there again.
         if parked_at != Some(address.as_str()) {
             store(store_.drop_correlation(run_id, address))?;
         }
     }
-    for (frame_address, state) in deferred {
-        let outcome = stepper.step(StepRequest::Race { frame_address, state }).await;
+    // Read again before each: settling one race withdraws a race inside
+    // the arms it lost, which is then owed no more. Each is stepped once
+    // here: a step whose commit failed to discharge it leaves it to the
+    // run's next drain.
+    let mut settled: Vec<String> = Vec::new();
+    loop {
+        if lease.is_lost() {
+            return Ok(true);
+        }
+        let owed = store(store_.owed_races(run_id))?;
+        let Some(race) = owed.into_iter().find(|race| !settled.contains(&race.frame_address)) else { break };
+        settled.push(race.frame_address.clone());
+        let outcome = stepper.step(StepRequest::Race { frame_address: race.frame_address, state: race.state }).await;
         match after_step(store_, run_id, fence, &outcome)? {
             Settled::Continue => {}
             Settled::Done => return Ok(false),

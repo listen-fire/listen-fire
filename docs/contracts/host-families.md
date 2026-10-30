@@ -205,6 +205,7 @@ settleRaceFrame(input: RunInput & {
 ```
 
 - The settlement builds the race's answer from every completed branch's exports (`park.sink.collectBranchExports`), cancels the arms still parked, and runs the continuation after the race statement.
+- Between the arm's segment and the settlement, the race is owed. A host keeps that durably, in the arm's own write, until the settlement's write: a host that crashes in between must still settle it. listen-fire keeps each as a `settle_race` work row (store-slot.md, `parks.commitSegment`), and never completes a run that owes one.
 
 ### A callback body
 

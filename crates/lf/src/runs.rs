@@ -36,7 +36,7 @@ use crate::segment::{Ended, Entry, Ran, SegmentHost, SegmentHostParts, SegmentIn
 use crate::movements_slot::{Change, ChangeKind, Listed, MovementsStore, Watched, movement_file, ordered};
 use crate::sources::{MOVEMENT_EXTENSION, MovementFile, Parsed, scan_movements};
 use crate::backend::{RunHostStore, StoreSpec, open_store};
-use crate::store::{ClaimDue, POLL_WORK_KIND, Release, RunSettle, RunStart, iso};
+use crate::store::{ClaimDue, POLL_WORK_KIND, Release, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, iso};
 use crate::waits::ARRIVAL_RETENTION_MS;
 use module_wire::results as wire_results;
 
@@ -983,8 +983,8 @@ impl Session {
             return Ok(StepOutcome::Cancelled(reason));
         }
         Ok(match ran.parked_address {
-            Some(address) => StepOutcome::Parked { address: Some(address), deferred_race_frames: ran.deferred_race_frames },
-            None => StepOutcome::Completed { deferred_race_frames: ran.deferred_race_frames },
+            Some(address) => StepOutcome::Parked { address: Some(address) },
+            None => StepOutcome::Completed,
         })
     }
 
@@ -1018,8 +1018,12 @@ impl Session {
         let secrets = self.secrets();
         let externals = self.externals_in(set, &secrets);
         let segment_id = uuid::Uuid::new_v4().to_string();
-        let resumed_leaf = match &entry {
-            Entry::Resume { address, .. } => Some(address.clone()),
+        let (resumed_leaf, resumed_state) = match &entry {
+            Entry::Resume { address, state, .. } => (Some(address.clone()), Some(state.clone())),
+            _ => (None, None),
+        };
+        let settling_race = match &entry {
+            Entry::Settle { frame_address, .. } => Some(frame_address.clone()),
             _ => None,
         };
         let host = SegmentHost::new(SegmentHostParts {
@@ -1032,6 +1036,8 @@ impl Session {
             user: self.user.clone(),
             public_url: self.public_url.clone(),
             resumed_leaf,
+            resumed_state,
+            settling_race,
         });
         let input = SegmentInput {
             source: &facts.source,
@@ -1054,8 +1060,10 @@ impl Session {
 
     /// The segment's commit, carrying where it leaves the run: a resumed
     /// leaf is finished in the same write that settles the run, so a crash
-    /// leaves either both or neither (the leaf resumed again). A segment
-    /// that fails its run keeps none of its parks.
+    /// leaves either both or neither (the leaf resumed again). A race its
+    /// arm won and left to the run to settle is owed in that write, and the
+    /// run is not completed while it owes one. A segment that fails its run
+    /// keeps none of its parks, and owes nothing.
     fn end_segment(&self, host: &SegmentHost<'_>, ran: Result<Ran, Ended>, committed: &[Js], settles: Settles<'_>) -> Result<Result<Ran, Ended>, String> {
         let run_id = host.run_id.as_str();
         let ran = match ran {
@@ -1073,13 +1081,14 @@ impl Session {
             }
             Settles::Run { completing } => {
                 let outcome = with_writes(before()?.as_deref(), ran.writes, ran.write_records.clone(), ran.returned.clone());
-                let ends = ran.parked_address.is_none() && !host.holds_progress() && self.nothing_left(run_id, completing)?;
+                let ends = ran.parked_address.is_none() && !host.holds_progress() && ran.deferred_race_frames.is_empty() && self.nothing_left(run_id, completing)?;
                 Some((if ends { "completed" } else { "parked" }, outcome))
             }
         };
         let at = iso(0);
         let settle = settle.as_ref().map(|(status, outcome)| RunSettle { status, outcome, at: &at });
-        match commit(host, settle) {
+        let owed_races = if ran.cancelled { &[][..] } else { &ran.deferred_race_frames[..] };
+        match commit(host, settle, owed_races) {
             Ok(()) => Ok(Ok(ran)),
             Err(Ended::LeaseLost) => Ok(Err(Ended::LeaseLost)),
             // Refused, or a replay that diverged: nothing was written.
@@ -1105,7 +1114,7 @@ impl Session {
         let Some(row) = row.filter(|row| row.status == "running" || row.status == "parked") else { return Ok(Err(Ended::Failed(message))) };
         let outcome = failed_outcome(row.outcome.as_deref(), committed, &message);
         let at = iso(0);
-        match commit(host, Some(RunSettle { status: "failed", outcome: &outcome, at: &at })) {
+        match commit(host, Some(RunSettle { status: "failed", outcome: &outcome, at: &at }), &[]) {
             Ok(()) => {}
             Err(Ended::LeaseLost) => return Ok(Err(Ended::LeaseLost)),
             Err(Ended::Failed(_)) => self.fail_keeping_writes(run_id, &message, committed)?,
@@ -1114,7 +1123,7 @@ impl Session {
     }
 
     /// Whether nothing of the run is left but `completing`: no join waits,
-    /// and no other leaf is parked.
+    /// no other leaf is parked, and the run owes no other race.
     fn nothing_left(&self, run_id: &str, completing: Option<&str>) -> Result<bool, String> {
         match completing {
             None => run_quiescent(&*self.store, run_id),
@@ -1255,6 +1264,7 @@ impl Session {
                 }
                 Drain::DueTimers => drain_due_timers(&*self.store, run_id, &self.due_by(), lease, &stepper).await?,
                 Drain::Awaits(extra) => drain_awaits(&*self.store, run_id, extra, lease, &stepper).await?,
+                Drain::OwedRaces => drain_run(&*self.store, run_id, &[], None, lease, &stepper).await?,
             };
             Ok(Some((*stepper.tally.borrow(), lease_lost, stepper.rehearsed())))
         })
@@ -1463,6 +1473,13 @@ impl Session {
         Ok(())
     }
 
+    /// One work row's work, as a worker that claimed it runs it: the runs
+    /// it stepped.
+    #[cfg(test)]
+    pub(crate) async fn work_row(&self, kind: &str, payload: &Js) -> Result<Vec<RunOutcome>, String> {
+        Ok(self.do_work(&self.file_set(), kind, payload).await?.1)
+    }
+
     async fn do_work(&self, set: &FileSet, kind: &str, payload: &Js) -> Result<(Next, Vec<RunOutcome>), String> {
         let text = |k: &str| payload.get(k).and_then(Js::as_str).map(str::to_string).ok_or_else(|| format!("a {kind} row has no {k}"));
         match kind {
@@ -1505,6 +1522,21 @@ impl Session {
                     return Ok((Next::Done, Vec::new()));
                 }
                 Ok(match self.drive_parked_run(set, &run_id, Drain::Awaits(vec![text("address")?])).await? {
+                    Parked::Busy => (Next::Busy, Vec::new()),
+                    Parked::NotStepped => (Next::Done, Vec::new()),
+                    Parked::Stepped(outcome) => (Next::Done, vec![*outcome]),
+                })
+            }
+            // A race an arm won and left to its run to settle: the run is
+            // driven with nothing to resume, so its drain settles what the
+            // run owes. A row whose race was settled meanwhile finds it
+            // owed no more, and steps nothing.
+            SETTLE_RACE_WORK_KIND => {
+                let run_id = text("runId")?;
+                if self.store.run(&run_id).map_err(|e| e.to_string())?.is_none() {
+                    return Ok((Next::Done, Vec::new()));
+                }
+                Ok(match self.drive_parked_run(set, &run_id, Drain::OwedRaces).await? {
                     Parked::Busy => (Next::Busy, Vec::new()),
                     Parked::NotStepped => (Next::Done, Vec::new()),
                     Parked::Stepped(outcome) => (Next::Done, vec![*outcome]),
@@ -1569,6 +1601,8 @@ enum Drain {
     /// The awaits resolvable now: those a woken key names, and those whose
     /// callback has a landed call.
     Awaits(Vec<String>),
+    /// No leaf: only the races the run owes (as every drain ends).
+    OwedRaces,
 }
 
 /// `drainAwaits`: step every currently resolvable await leaf of one run under

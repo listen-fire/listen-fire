@@ -24,7 +24,8 @@ use crate::pg_store::PgStore;
 use crate::core;
 use crate::project::Project;
 use crate::store::{
-    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit, Store,
+    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, OwedRace, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit,
+    Store,
 };
 use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait, WaitArrivals, WaitWake};
 
@@ -221,10 +222,14 @@ pub trait RunHostStore {
     /// What a segment held back, as one fenced write at its end: its join
     /// counts recorded, its parks committed as `commit_park` commits each,
     /// the leaf it resumed finished (unless it parks there again) and the
-    /// run marked parked when it parked. In the same write, each wait it
-    /// parks whose arrivals are unread, or whose record is gone, gets a
-    /// `wake_await` row; those wakes are the answer.
+    /// run marked parked when it parked, the run settled, the race it
+    /// settled no longer owed and each race it owes queued as a
+    /// `settle_race` row. In the same write, each wait it parks whose
+    /// arrivals are unread, or whose record is gone, gets a `wake_await`
+    /// row; those wakes are the answer.
     fn commit_segment(&self, commit: &SegmentCommit<'_>) -> Result<Vec<WaitWake>>;
+    /// The races the run owes (`settle_race` rows), in the order first owed.
+    fn owed_races(&self, run_id: &str) -> Result<Vec<OwedRace>>;
 
     // ── Joins ───────────────────────────────────────────────────────────────
     fn record_join(&self, run_id: &str, frame_address: &str, pending: i64, fence: Option<&str>) -> Result<()>;
@@ -233,6 +238,7 @@ pub trait RunHostStore {
     fn collect_branch_exports(&self, run_id: &str, frame_address: &str) -> Result<Vec<BranchExport>>;
     fn has_pending_joins(&self, run_id: &str) -> Result<bool>;
     fn frames(&self, run_id: &str) -> Result<Vec<String>>;
+    /// The frames, their exports, and the races owed at them.
     fn delete_frames(&self, run_id: &str, frame_addresses: &[String]) -> Result<()>;
 
     // ── Await correlations ──────────────────────────────────────────────────
@@ -270,7 +276,7 @@ pub trait RunHostStore {
     fn claim_lease(&self, run_id: &str, ttl_ms: i64) -> Result<Option<String>>;
     fn renew_lease(&self, run_id: &str, token: &str, ttl_ms: i64) -> Result<bool>;
     fn release_lease(&self, run_id: &str, token: &str) -> Result<()>;
-    /// The run's leaves, joins and waits.
+    /// The run's leaves, joins, waits and the races it owes.
     fn drop_run_state(&self, run_id: &str, fence: Option<&str>) -> Result<bool>;
 
     // ── The work queue ──────────────────────────────────────────────────────
@@ -440,6 +446,9 @@ impl RunHostStore for Store {
     }
     fn commit_segment(&self, commit: &SegmentCommit<'_>) -> Result<Vec<WaitWake>> {
         Store::commit_segment(self, commit)
+    }
+    fn owed_races(&self, run_id: &str) -> Result<Vec<OwedRace>> {
+        Store::owed_races(self, run_id)
     }
 
     fn record_join(&self, run_id: &str, frame_address: &str, pending: i64, fence: Option<&str>) -> Result<()> {

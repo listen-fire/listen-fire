@@ -52,7 +52,8 @@ use crate::json::Js;
 use crate::obj;
 use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind,
-    HeldPark, Release, Rerun, Result, RunRow, RunSettle, RunStart, SegmentCommit, StoreError, WORK_KINDS, timer_work_key, timer_work_payload,
+    HeldPark, OwedRace, Release, Rerun, Result, RunRow, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, SegmentCommit, StoreError, WORK_KINDS, settle_race_work_key,
+    settle_race_work_payload, timer_work_key, timer_work_payload,
 };
 use crate::waits::{DeliveryArrivals, LoggedArrival, NewArrival, Noted, OpenWait, WaitArrivals, WaitWake, delivery_rows, landing_of};
 
@@ -830,7 +831,7 @@ impl RunHostStore for PgStore {
 
     /// As `commit_park`, the segment's held writes in one transaction.
     fn commit_segment(&self, commit: &SegmentCommit<'_>) -> Result<Vec<WaitWake>> {
-        let SegmentCommit { run_id, team_id, fence, resumed, ref joins, ref parks, ref settle } = *commit;
+        let SegmentCommit { run_id, team_id, fence, resumed, ref joins, ref parks, ref settle, ref owed_races, settled_race } = *commit;
         self.transaction(|| {
             self.hold_run(run_id, fence)?;
             // The waits' records' edges locked once, in one order, as a log
@@ -862,6 +863,12 @@ impl RunHostStore for PgStore {
             }
             if let Some(settle) = settle {
                 self.settle_run_unwrapped(run_id, settle)?;
+            }
+            if let Some(frame) = settled_race {
+                self.execute("delete from lf.work where key = $1::text", &[&settle_race_work_key(run_id, frame)])?;
+            }
+            for race in owed_races {
+                self.enqueue_row(SETTLE_RACE_WORK_KIND, &settle_race_work_key(run_id, race.frame_address), &settle_race_work_payload(run_id, race), None, team_id)?;
             }
             // Read in the write, so an arrival logged before it is read here
             // and one logged after it finds the wait parked.
@@ -962,6 +969,19 @@ impl RunHostStore for PgStore {
         .collect()
     }
 
+    fn owed_races(&self, run_id: &str) -> Result<Vec<OwedRace>> {
+        self.query(
+            "select payload::text from lf.work where kind = $1::text and payload->>'runId' = $2::text order by created_at, key",
+            &[&SETTLE_RACE_WORK_KIND, &run_id],
+        )?
+        .iter()
+        .map(|r| {
+            let payload: String = r.get(0);
+            OwedRace::of_payload(&parse_text(&payload)?).ok_or_else(|| StoreError::Invalid(format!("a {SETTLE_RACE_WORK_KIND} row of run {run_id} that is not one: {payload}")))
+        })
+        .collect()
+    }
+
     fn has_pending_joins(&self, run_id: &str) -> Result<bool> {
         Ok(self.query_opt("select 1 from lf.join_pending where run_id = $1::text::uuid and pending > 0 limit 1", &[&run_id])?.is_some())
     }
@@ -981,6 +1001,8 @@ impl RunHostStore for PgStore {
         self.transaction(|| {
             self.execute("delete from lf.join_pending where run_id = $1::text::uuid and frame_address = any($2::text[])", &[&run_id, &frame_addresses])?;
             self.execute("delete from lf.join_branch_export where run_id = $1::text::uuid and frame_address = any($2::text[])", &[&run_id, &frame_addresses])?;
+            let owed: Vec<String> = frame_addresses.iter().map(|frame| settle_race_work_key(run_id, frame)).collect();
+            self.execute("delete from lf.work where key = any($1::text[])", &[&owed])?;
             Ok(())
         })
     }
@@ -1202,6 +1224,7 @@ impl RunHostStore for PgStore {
             for table in ["parked_run", "join_pending", "join_branch_export", "wait_row"] {
                 self.execute(&format!("delete from lf.{table} where run_id = $1::text::uuid"), &[&run_id])?;
             }
+            self.execute("delete from lf.work where kind = $1::text and payload->>'runId' = $2::text", &[&SETTLE_RACE_WORK_KIND, &run_id])?;
             Ok(true)
         })
     }

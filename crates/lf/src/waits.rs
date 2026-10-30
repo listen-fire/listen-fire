@@ -371,7 +371,7 @@ mod tests {
 
     use super::*;
     use crate::backend::RunHostStore;
-    use crate::store::{HeldJoin, HeldPark, Park, ParkKind, RunSettle, RunStart, SegmentCommit, iso};
+    use crate::store::{HeldJoin, HeldPark, HeldRace, Park, ParkKind, RunSettle, RunStart, SegmentCommit, iso};
     use crate::json::Obj;
     use crate::store_wire::int;
 
@@ -568,7 +568,18 @@ mod tests {
                     let joins = step.get("joins").and_then(Js::as_array).unwrap_or_default().iter().map(|join| HeldJoin { frame_address: text(join, "frame"), pending: join.get("pending").and_then(int).unwrap() }).collect();
                     let (outcome, now) = (Js::Obj(Obj::new()), iso(0));
                     let settle = opt_text(step, "settle").map(|status| RunSettle { status, outcome: &outcome, at: &now });
-                    let commit = SegmentCommit { run_id: &run, team_id: &team, fence: fence.as_deref(), resumed: opt_text(step, "resumed"), joins, parks, settle };
+                    let owed_races = step.get("owes").and_then(Js::as_array).unwrap_or_default().iter().map(|frame| HeldRace { frame_address: frame.as_str().unwrap(), state: &Js::Null }).collect();
+                    let commit = SegmentCommit {
+                        run_id: &run,
+                        team_id: &team,
+                        fence: fence.as_deref(),
+                        resumed: opt_text(step, "resumed"),
+                        joins,
+                        parks,
+                        settle,
+                        owed_races,
+                        settled_race: opt_text(step, "settles"),
+                    };
                     match store.commit_segment(&commit) {
                         Err(StoreError::LeaseLost { .. }) if flag(step, "leaseLost") => {}
                         Err(_) if flag(step, "refused") => {}
@@ -587,6 +598,15 @@ mod tests {
                 "status" => {
                     let row = store.run(&names.id(text(step, "run"))).unwrap().unwrap_or_else(|| panic!("{at}: no run"));
                     assert_eq!(row.status, text(step, "status"), "{at}: the run's status");
+                }
+                "owed" => {
+                    let owed: Vec<String> = store.owed_races(&names.id(text(step, "run"))).unwrap().into_iter().map(|race| race.frame_address).collect();
+                    let expected: Vec<&str> = list(step, "races").iter().map(|frame| frame.as_str().unwrap()).collect();
+                    assert_eq!(owed, expected, "{at}: the races owed");
+                }
+                "deleteFrames" => {
+                    let frames: Vec<String> = list(step, "frames").iter().map(|f| f.as_str().unwrap().to_string()).collect();
+                    store.delete_frames(&names.id(text(step, "run")), &frames).unwrap();
                 }
                 "pendingJoins" => {
                     assert_eq!(store.has_pending_joins(&names.id(text(step, "run"))).unwrap(), flag(step, "pending"), "{at}: pending joins");
@@ -655,6 +675,7 @@ mod tests {
         a_segments_commit_keeps_its_joins_its_parks_and_the_end_of_the_leaf_it_resumed_in_one_write_or_none_of_them,
         a_segments_commit_settles_its_run_in_the_same_write_or_leaves_the_leaf_it_resumed_to_be_resumed_again,
         a_segments_commit_wakes_each_wait_it_parks_whose_arrivals_are_unread_or_whose_record_is_gone,
+        a_race_a_segment_owes_is_kept_in_its_commit_until_the_commit_that_settles_it_and_goes_with_its_frame,
     }
 
     #[test]

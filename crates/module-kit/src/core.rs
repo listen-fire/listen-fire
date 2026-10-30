@@ -156,6 +156,16 @@ pub struct JoinClosed {
     pub closed: bool,
 }
 
+/// A race the run owes (`parks.owedRaces`'s answer, and
+/// `parks.commitSegment`'s `owedRaces`): its frame, and the state of an arm
+/// that won it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwedRace {
+    pub frame_address: String,
+    pub state: Js,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BranchExport {
@@ -499,6 +509,10 @@ slot! {
         /// `parks.finishLeaf` finishes it unless one of `parks` is at its
         /// address, the run marked parked when `parks` is not empty, and
         /// then `settle`, when given, settled as `runs.settle` settles it.
+        /// Then `settled_race`'s `settle_race` row is deleted, and each of
+        /// `owed_races` is queued as one (`work.enqueue` of key
+        /// `settle_race:<runId>:<frameAddress>`, payload `{ runId,
+        /// frameAddress, state }`, under `team_id`, due now).
         /// In the same write, each wait parked whose arrivals are unread
         /// (`waits.arrivals` lists some) or whose record is gone gets a
         /// `wake_await { waitId, runId, address }` row under `team_id`;
@@ -512,13 +526,20 @@ slot! {
             parks: Vec<HeldPark>,
             #[serde(default)]
             settle: Option<SegmentSettle>,
+            #[serde(default)]
+            owed_races: Vec<OwedRace>,
+            #[serde(default)]
+            settled_race: Option<String>,
         }) -> Vec<WaitWake>;
+        /// The races the run owes: its `settle_race` rows' payloads, oldest first.
+        "parks.owedRaces" => fn owed_races(ParksOwedRaces { run_id: String }) -> Vec<OwedRace>;
         "joins.recordJoin" => fn record_join(JoinsRecordJoin { run_id: String, frame_address: String, pending: i64, fence: Option<String> }) -> ();
         "joins.decrementJoin" => fn decrement_join(JoinsDecrementJoin { run_id: String, frame_address: String, branch_address: String, leaf_address: String }) -> JoinClosed;
         "joins.persistBranchExport" => fn persist_branch_export(JoinsPersistBranchExport { run_id: String, frame_address: String, branch_address: String, branch_index: i64, exports: Js }) -> ();
         "joins.collectBranchExports" => fn collect_branch_exports(JoinsCollectBranchExports { run_id: String, frame_address: String }) -> Vec<BranchExport>;
         "joins.hasPendingJoins" => fn has_pending_joins(JoinsHasPendingJoins { run_id: String }) -> bool;
         "joins.frames" => fn frames(JoinsFrames { run_id: String }) -> Vec<String>;
+        /// The frames, their exports, and the `settle_race` rows owed at them.
         "joins.deleteFrames" => fn delete_frames(JoinsDeleteFrames { run_id: String, frame_addresses: Vec<String> }) -> ();
         "correlations.correlate" => fn correlate(CorrelationsCorrelate { run_id: String, team_id: String, address: String, adapter_type: String, correlation_key: String }) -> ();
         "correlations.correlated" => fn correlated(CorrelationsCorrelated { adapter_type: String, team_id: String, correlation_key: String }) -> Vec<Correlated>;
@@ -552,7 +573,7 @@ slot! {
         "leases.claim" => fn claim_lease(LeasesClaim { run_id: String, ttl_ms: i64 }) -> Option<Lease>;
         "leases.renew" => fn renew_lease(LeasesRenew { run_id: String, token: String, ttl_ms: i64 }) -> bool;
         "leases.release" => fn release_lease(LeasesRelease { run_id: String, token: String }) -> ();
-        /// Drops the run's leaves, joins and waits.
+        /// Drops the run's leaves, joins, waits and `settle_race` rows.
         "leases.dropRunState" => fn drop_run_state(LeasesDropRunState { run_id: String, fence: Option<String> }) -> bool;
         "work.enqueue" => fn enqueue(WorkEnqueue { kind: String, key: String, payload: Js, due_at: Option<String>, team_id: Option<String> }) -> ();
         /// Insert when no row has the key, in one write; a row there in any
