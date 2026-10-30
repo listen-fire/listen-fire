@@ -1128,6 +1128,18 @@ const referenceDescriptorFieldsSchema = z.object({
   genericOver: z
     .object({ field: z.string(), onNonLiteral: z.enum(['error', 'warn']).optional() })
     .optional(),
+  /**
+   * Fields of this edge's LANDING that take the literals the write it hangs
+   * off wrote at a path. `{ at: ['Actions', 'Value'], from: 'Buttons[].Value' }`
+   * types the `Value` of each action an interaction carries as an enum of the
+   * `Value`s of the buttons that message was written with.
+   *
+   * `at` walks from the landing by edge names and ends at the field. `from`
+   * names the WRITE-BODY field (its `displayName`), `[]` going into each entry
+   * of a list and `.` into a field of an entry. Like `genericOver`, nothing
+   * here names a field the checker knows: the module says both ends.
+   */
+  literalsFrom: z.array(z.object({ at: z.array(z.string()).min(1), from: z.string() })).optional(),
 }).superRefine((reference, ctx) => {
   if (reference.targetTypeIds === undefined) return;
   const members = [...new Set(reference.targetTypeIds)];

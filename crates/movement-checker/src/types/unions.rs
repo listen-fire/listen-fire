@@ -167,10 +167,11 @@ fn merge_one_type(a: &Position, b: &Position) -> Option<Merged> {
         }),
         (Position::Position(x), Position::Position(y)) if same_starting_point(a, b) => {
             let present = shared_present(&x.present, &y.present);
-            Some(if present.len() == x.present.len() {
+            let literals = super::position::join_field_literals(x.literals.as_ref(), y.literals.as_ref());
+            Some(if present.len() == x.present.len() && super::position::same_field_literals(x.literals.as_ref(), literals.as_ref()) {
                 Merged::Same
             } else {
-                Merged::New(Box::new(Position::Position(super::position::RecordPosition { present, ..x.clone() })))
+                Merged::New(Box::new(Position::Position(super::position::RecordPosition { present, literals, ..x.clone() })))
             })
         }
         _ => same_starting_point(a, b).then_some(Merged::Same),
@@ -212,7 +213,8 @@ fn join_handles(a: &HandlePosition, b: &HandlePosition) -> Option<Merged> {
         (Some(x), Some(y)) if written => Some(x.intersection(y).cloned().collect()),
         _ => None,
     };
-    Some(Merged::New(Box::new(Position::Handle(HandlePosition { written, set_fields, identity: HandleIdentity::default(), ..a.clone() }))))
+    let answer_literals = super::position::join_answer_literals(a.answer_literals.as_ref(), b.answer_literals.as_ref());
+    Some(Merged::New(Box::new(Position::Handle(HandlePosition { written, set_fields, answer_literals, identity: HandleIdentity::default(), ..a.clone() }))))
 }
 
 /// `joinFieldTypes`: what a field every member of a `OneOf` carries is —

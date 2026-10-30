@@ -308,7 +308,18 @@ pub struct RecordPosition {
     /// The record is a function's parameter: what its body needs of it is
     /// filed here (`FieldsNeed`).
     pub parameter: Option<NeedRef>,
+    /// Fields of this record, or of records past its edges, that take the
+    /// literals a write offered (`literalsFrom`): it is what landed on an
+    /// edge off that write's record, or is reached from such a landing.
+    pub literals: Option<FieldLiterals>,
 }
+
+/// Paths from a record to a field (edge names, then the field's), each with
+/// the enum of the literals the field takes.
+pub type FieldLiterals = Rc<Vec<(Vec<String>, Ty)>>;
+
+/// A write handle's `FieldLiterals`, per edge off it that declares some.
+pub type AnswerLiterals = Rc<IndexMap<String, Vec<(Vec<String>, Ty)>>>;
 
 #[derive(Debug, Clone)]
 pub struct UnionPosition {
@@ -329,6 +340,9 @@ pub struct HandlePosition {
     pub result_shape: IndexMap<String, Ty>,
     pub edges: Option<JsMap<EdgeSchema>>,
     pub generic_landings: Option<IndexMap<String, String>>,
+    /// What lands on an edge off the written record takes, field by field,
+    /// from the literals the write offered (`literalsFrom`): keyed by edge.
+    pub answer_literals: Option<AnswerLiterals>,
     pub written: bool,
     pub set_fields: Option<BTreeSet<String>>,
     /// The TypeScript's object identity: a handle is a fresh object where a
@@ -389,6 +403,7 @@ impl Position {
             present: BTreeSet::new(),
             run_built: false,
             parameter: None,
+            literals: None,
         })
     }
 
@@ -611,6 +626,11 @@ pub fn lookup_property_type(position: Option<&Position>, property: &str) -> Opti
     match position? {
         Position::Position(p) => {
             let declared = p.instance.schema.positions.get(&p.position)?.properties.get(property).map(Ty::from_schema)?;
+            let declared = match field_literals(p.literals.as_ref(), property) {
+                Some(literals) if is_maybe_absent(Some(&declared)) => maybe_absent(literals.clone()),
+                Some(literals) => literals.clone(),
+                None => declared,
+            };
             Some(if p.present.contains(property) { strip_absent(&declared).clone() } else { declared })
         }
         handle @ Position::Handle(h) => {
@@ -638,6 +658,86 @@ pub fn lookup_property_type(position: Option<&Position>, property: &str) -> Opti
         }
         Position::Local(local) => local.reads.get(property).cloned().flatten(),
         Position::Closure(_) | Position::Meta { .. } | Position::Extract { .. } => None,
+    }
+}
+
+/// The literals `property` itself takes, of those a record carries.
+fn field_literals<'l>(literals: Option<&'l FieldLiterals>, property: &str) -> Option<&'l Ty> {
+    literals?.iter().find(|(at, _)| matches!(at.as_slice(), [field] if field == property)).map(|(_, ty)| ty)
+}
+
+/// What a record landing on `edge` off `from` takes from a write's literals:
+/// off the write's handle, what the write offered for `edge`; off a record
+/// carrying some, the paths that go on through `edge`, that step taken.
+pub fn literals_past(from: &Position, edge: &str) -> Option<FieldLiterals> {
+    let entries: Vec<(Vec<String>, Ty)> = match from {
+        Position::MaybeEmpty(of) => return literals_past(of, edge),
+        Position::Handle(h) => h.answer_literals.as_ref()?.get(edge)?.clone(),
+        Position::Position(p) => p
+            .literals
+            .as_ref()?
+            .iter()
+            .filter_map(|(at, ty)| match at.split_first() {
+                Some((first, rest)) if first == edge && !rest.is_empty() => Some((rest.to_vec(), ty.clone())),
+                _ => None,
+            })
+            .collect(),
+        _ => return None,
+    };
+    (!entries.is_empty()).then(|| Rc::new(entries))
+}
+
+/// `landing` carrying `literals` (`literals_past`).
+pub fn with_literals(landing: Position, literals: Option<FieldLiterals>) -> Position {
+    let Some(literals) = literals else { return landing };
+    match landing {
+        Position::Position(p) => Position::Position(RecordPosition { literals: Some(literals), ..p }),
+        Position::MaybeEmpty(of) => Position::MaybeEmpty(Box::new(with_literals(*of, Some(literals)))),
+        other => other,
+    }
+}
+
+/// What one of two records takes from writes' literals: a field both
+/// narrow takes the values of either, as TypeScript's `"a" | "b"` joined
+/// with `"c"`; a field only one narrows is whatever it was declared.
+pub fn join_field_literals(a: Option<&FieldLiterals>, b: Option<&FieldLiterals>) -> Option<FieldLiterals> {
+    let joined = join_literal_entries(a?, b?);
+    (!joined.is_empty()).then(|| Rc::new(joined))
+}
+
+/// `join_field_literals`, edge by edge, for two write handles.
+pub fn join_answer_literals(a: Option<&AnswerLiterals>, b: Option<&AnswerLiterals>) -> Option<AnswerLiterals> {
+    let (a, b) = (a?, b?);
+    let joined: IndexMap<String, Vec<(Vec<String>, Ty)>> = a
+        .iter()
+        .filter_map(|(edge, entries)| {
+            let joined = join_literal_entries(entries, b.get(edge)?);
+            (!joined.is_empty()).then(|| (edge.clone(), joined))
+        })
+        .collect();
+    (!joined.is_empty()).then(|| Rc::new(joined))
+}
+
+fn join_literal_entries(a: &[(Vec<String>, Ty)], b: &[(Vec<String>, Ty)]) -> Vec<(Vec<String>, Ty)> {
+    a.iter()
+        .filter_map(|(at, x)| {
+            let (_, y) = b.iter().find(|(other, _)| other == at)?;
+            let (Ty::Enum { options: x, .. }, Ty::Enum { options: y, .. }) = (x, y) else { return None };
+            let mut options = x.clone();
+            options.extend(y.iter().filter(|o| !x.contains(o)).cloned());
+            Some((at.clone(), Ty::Enum { options, open: None }))
+        })
+        .collect()
+}
+
+/// Two records' write literals say the same.
+pub fn same_field_literals(a: Option<&FieldLiterals>, b: Option<&FieldLiterals>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            a.len() == b.len() && a.iter().zip(b.iter()).all(|((x, s), (y, t))| x == y && field_type_equals(s, t))
+        }
+        _ => false,
     }
 }
 

@@ -51,6 +51,14 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
   - A wait that should follow the live value tests it after the wait, against `refresh(founder)`.
   - Why: a wait keeps the values it was written with, as a closure keeps what it closed over; it does not fetch them again while it waits.
 
+#### Added
+
+- A module can declare that a field of what lands on an edge takes the text literals the write wrote at a path, with `literalsFrom` on the edge's reference: `[{ "at": ["Actions", "Value"], "from": "Buttons[].Value" }]`.
+  - After `msg = write ch-[:Messages]-> { …, Buttons: [{ Text: "Pursue", Value: "pursue" }, { Text: "Pass", Value: "pass" }] }` and `i = await msg-[:Interactions]->`, the `Value` of each action `i` carries is `"pursue" | "pass"`.
+  - Comparing it against a value no button offered is refused (`MOV_ENUM_UNKNOWN_VALUE`, with a did-you-mean).
+  - A value at that path that is not a text literal, such as a name, leaves the field its declared type, with a warning (`MOV_WRITE_GENERIC_UNTYPED`) naming the path.
+  - The catalog snapshot carries it on `EdgeSchema` as `literalsFrom?`, an optional member.
+
 ### Added
 
 - `listen-fire modules` lists every module this `listen-fire` can install, the bundled `@lf/*` ones, with a line on what each is and which the project has installed. A bare `listen-fire connect` prints the same list; it listed only the slot modules and what the project already held.

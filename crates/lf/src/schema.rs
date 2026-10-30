@@ -659,8 +659,10 @@ fn edge_schema(reference: &Js, target: Option<&str>, polymorphic: bool, field_id
             flag(passed, true, value.clone());
         }
     }
-    if let Some(generic_over) = reference.get("genericOver") {
-        flag("genericOver", true, generic_over.clone());
+    for passed in ["genericOver", "literalsFrom"] {
+        if let Some(value) = reference.get(passed) {
+            flag(passed, true, value.clone());
+        }
     }
     flag("resources", field_id == RESOURCES_REFERENCE_FIELD_ID, Js::Bool(true));
     if let Some(description) = described(reference) {
@@ -791,6 +793,20 @@ mod tests {
     fn a_listenable_reference_projects_its_capabilities() {
         let edge = edge_schema(&js(r#"{"name":"Replies","listenable":true,"cursor":false,"identity":"Timestamp","version":"Edited","sequenced":"chronological"}"#), Some("Message"), false, "replies");
         assert_eq!(Js::from(edge).to_json(), r#"{"target":"Message","sequenced":"chronological","listenable":true,"cursor":false,"identity":"Timestamp","version":"Edited"}"#);
+    }
+
+    #[test]
+    fn a_reference_typed_by_a_writes_literals_projects_where_they_are() {
+        let edge = edge_schema(
+            &js(r#"{"name":"Interactions","readable":false,"listenable":true,"literalsFrom":[{"at":["Actions","Value"],"from":"Buttons[].Value"}]}"#),
+            Some("Interaction"),
+            false,
+            "interactions",
+        );
+        assert_eq!(
+            Js::from(edge).to_json(),
+            r#"{"target":"Interaction","readable":false,"listenable":true,"literalsFrom":[{"at":["Actions","Value"],"from":"Buttons[].Value"}]}"#
+        );
     }
 
     #[test]

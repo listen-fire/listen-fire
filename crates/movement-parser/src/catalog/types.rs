@@ -279,6 +279,17 @@ pub struct GenericOver {
     pub on_non_literal: Option<OnNonLiteral>,
 }
 
+/// One field of an edge's landing typed by a write's literals: `at` is the
+/// field, reached from the landing by edge names and then the field's own
+/// name (`["Actions", "Value"]`); `from` is where the write holds the
+/// literals (`Buttons[].Value`: each `Buttons` entry's `Value`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LiteralsFrom {
+    pub at: Vec<String>,
+    pub from: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EdgeSchema {
@@ -322,6 +333,10 @@ pub struct EdgeSchema {
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generic_over: Option<GenericOver>,
+    /// Fields of what lands here that take the literals the write this edge
+    /// hangs off wrote at a path: each such field is an enum of exactly them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub literals_from: Option<Vec<LiteralsFrom>>,
     /// The system's resources edge (the describe's reserved `_resources`
     /// reference, the knowledge graph's `Resources`): walked by its name, sent
     /// to the adapter by the reserved field id (kg.ts `surfaceReadAdapter`).

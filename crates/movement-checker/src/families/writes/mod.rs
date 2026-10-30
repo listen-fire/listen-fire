@@ -16,6 +16,7 @@
 //! and never raised.
 
 mod identity;
+pub mod literals;
 mod link;
 
 pub use link::LinkVerb;
@@ -23,7 +24,7 @@ pub use link::LinkVerb;
 use movement_parser::ast::{
     FieldEntry, FieldWriteMode, MatchExpression, PathHead, PathRoot, Span, UniqueClause, WriteExpression, WriteSpread, WriteTarget,
 };
-use movement_parser::catalog::types::{PositionSchema, SchemaFieldType, WritableRootSchema};
+use movement_parser::catalog::types::{EdgeSchema, JsMap, PositionSchema, SchemaFieldType, WritableRootSchema};
 use movement_parser::lowering::expression::{Expression, StaticValue, TraversalStep};
 
 use crate::checker::Checker;
@@ -216,6 +217,7 @@ impl Checker<'_> {
             handle = self.handle_of_variant(handle, variant);
         }
         handle = self.apply_generic_landings(handle, &fields, root.as_ref(), &root_description);
+        handle = self.apply_answer_literals(handle, &fields, &root_description);
         if !position_write {
             handle = with_set_fields(handle, &fields);
         }
@@ -763,6 +765,7 @@ impl Checker<'_> {
             result_shape: result_shape.into_iter().collect(),
             edges: root.as_ref().and_then(|r| r.edges.clone()),
             generic_landings: None,
+            answer_literals: None,
             written: purpose == Purpose::Write,
             set_fields: None,
             identity: Default::default(),
@@ -1036,13 +1039,7 @@ impl Checker<'_> {
     /// `applyGenericLandings`: the body's literals fix what a generic edge lands on.
     fn apply_generic_landings(&mut self, handle: Option<Position>, fields: &[Field], root: Option<&WritableRootSchema>, description: &str) -> Option<Position> {
         let Some(Position::Handle(mut handle_position)) = handle else { return handle };
-        let edges = match handle_position.edges.clone() {
-            Some(edges) => edges,
-            None => match handle_position.position.as_ref().and_then(|p| handle_position.instance.schema.positions.get(p)) {
-                Some(schema) => schema.edges.clone(),
-                None => return Some(Position::Handle(handle_position)),
-            },
-        };
+        let Some(edges) = edges_off_handle(&handle_position) else { return Some(Position::Handle(handle_position)) };
         let mut landings = indexmap::IndexMap::new();
         for (edge_name, edge_schema) in edges.iter() {
             let Some(generic) = &edge_schema.generic_over else { continue };
@@ -1189,6 +1186,7 @@ impl Checker<'_> {
                     result_shape: shape,
                     edges: root.and_then(|r| r.edges.clone()),
                     generic_landings: None,
+                    answer_literals: None,
                     written: true,
                     set_fields: None,
                     identity: Default::default(),
@@ -1727,6 +1725,15 @@ fn known_fields_of(position: &Position) -> Option<Vec<String>> {
         // declared node's position is the nodes family's to type.)
         Position::Position(p) if p.instance.declared.is_some() => p.instance.schema.positions.get(&p.position).map(|s| s.properties.keys().cloned().collect()),
         Position::Position(_) | Position::Meta { .. } | Position::Union(_) | Position::Closure(_) => None,
+    }
+}
+
+/// The edges off the record a write handle stands for: its write shape's,
+/// else its type's.
+fn edges_off_handle(handle: &HandlePosition) -> Option<JsMap<EdgeSchema>> {
+    match &handle.edges {
+        Some(edges) => Some(edges.clone()),
+        None => handle.position.as_ref().and_then(|p| handle.instance.schema.positions.get(p)).map(|schema| schema.edges.clone()),
     }
 }
 

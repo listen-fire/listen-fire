@@ -600,6 +600,17 @@ export interface EdgeSchema {
    */
   genericOver?: { field: string; onNonLiteral?: 'error' | 'warn' };
   /**
+   * Fields of what lands on this edge that take the literals the write it
+   * hangs off wrote at a path: `{ at: ['Actions', 'Value'], from:
+   * 'Buttons[].Value' }` makes the `Value` of each action an answer carries an
+   * enum of exactly the `Value`s of the buttons written. `at` walks from the
+   * landing by edge names and ends at the field; `from` is the write's field,
+   * `[]` going into each entry of a list and `.` into a field of an entry. A
+   * value there that is not a text literal leaves the field its declared type,
+   * with a warning (MOV_WRITE_GENERIC_UNTYPED).
+   */
+  literalsFrom?: { at: string[]; from: string }[];
+  /**
    * The edge is the one the system declared as its records' resources (the
    * describe's reserved `_resources` reference — the knowledge graph's
    * `Resources`). An ordinary edge, walked by its name like any other; what

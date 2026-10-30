@@ -15,6 +15,12 @@ describe('a reference descriptor', () => {
     }
   });
 
+  it('carries literalsFrom: fields of the landing typed by the literals a write wrote at a path', () => {
+    const declared = { ...reference, listenable: true, literalsFrom: [{ at: ['Actions', 'Value'], from: 'Buttons[].Value' }] };
+    expect(schemaReferenceDescriptorSchema.parse(declared)).toEqual(declared);
+    expect(schemaReferenceDescriptorSchema.safeParse({ ...reference, literalsFrom: [{ at: [], from: 'Options[].Key' }] }).success).toBe(false);
+  });
+
   it('carries listenable, cursor, identity and version', () => {
     const declared = { ...reference, listenable: true, cursor: false, identity: 'Timestamp', version: 'Edited', sequenced: 'chronological' };
     expect(schemaReferenceDescriptorSchema.parse(declared)).toEqual(declared);

@@ -339,7 +339,14 @@ reads every declaration from it, the listen declarations included.
   - `writable` — only an explicit `true` allows creating along the edge;
     absent means read-only;
   - `listenable`, `cursor`, `identity`, `version`, `resolvesEmpty` (see
-    [awaits](#waiting-on-your-system-awaits)).
+    [awaits](#waiting-on-your-system-awaits));
+  - `literalsFrom` (optional) — fields of what lands on the edge that take
+    the text literals the write it hangs off wrote at a path. For example,
+    `[{ "at": ["Actions", "Value"], "from": "Buttons[].Value" }]` makes each
+    action's `Value` one of the `Value`s of the buttons that message was
+    written with. `at` walks from the landing by reference names and ends at
+    the field; `from` names the write's field by `displayName`, `[]` going
+    into each entry of a list and `.` into a field of an entry.
 - `description` (optional) on the type, a field or a reference: what it is,
   in a sentence. An author's editor shows it when they hover the record, the
   field or the walk along the reference. A write-only field's description is

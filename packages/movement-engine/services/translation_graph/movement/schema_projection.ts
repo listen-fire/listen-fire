@@ -699,6 +699,10 @@ export function instanceSchemaFromDescriptors(input: {
           // answer enum). Carried verbatim: the checker matches `field` against
           // the body's authored names, which are these same display names.
           ...(ref.genericOver !== undefined ? { genericOver: ref.genericOver } : {}),
+          // Fields of the landing that take the literals the write wrote at a
+          // path (a message's buttons' values typing what a press answers).
+          // Carried verbatim, as `genericOver` is.
+          ...(ref.literalsFrom !== undefined ? { literalsFrom: ref.literalsFrom } : {}),
           // The system's resources edge (the reserved `_resources` reference,
           // walked by its own name — the knowledge graph's `Resources`). The
           // read wrapper sends a walk of it by its reserved fieldId (its
