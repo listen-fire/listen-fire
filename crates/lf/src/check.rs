@@ -181,7 +181,13 @@ pub async fn describe_external(running: &RunningExternal, credentials: &Credenti
         let (entries, described) = match schemas.get(&connection.key) {
             Some(held) if held.addresses == addresses => continue,
             Some(held) => (held.entries.clone(), held.described.clone()),
-            None => describe_as(running, credentials, connection.credential, connection.settings.clone()).await?,
+            None => describe_as(running, credentials, connection.credential, connection.settings.clone()).await.map_err(|why| {
+                let external = &running.external.manifest.name;
+                match connection.credential {
+                    Some(credential) => format!("couldn't read external \"{external}\"'s schema with credential \"{}\": {why}", credential.name),
+                    None => format!("couldn't read external \"{external}\"'s schema: {why}"),
+                }
+            })?,
         };
         let hops = address_hops(&running.listen, &connection.position_values);
         let narrowing = Narrowing {

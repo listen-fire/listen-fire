@@ -30,6 +30,11 @@ named in [`RELEASING.md`](RELEASING.md).
 - A text in a list an enum is tested against (`n.Reason IN ["review_request", "mention"]`, or `List.includes([…], n.Reason)`), in a body or in a WHERE inside a parameter's type, is held to the enum as `==` holds one: `MOV_ENUM_UNKNOWN_VALUE`, with a did-you-mean. A warning for every 0.12 pin, since the list's other values still match and a saved movement runs as written; it waits for the next compatibility key (0.13) to refuse.
 - A statement word bound as a name (`link = …`, `write = …`, `delete = …`) is refused as "'link' is reserved; pick another name". It was refused before as a malformed statement, naming the arrow it expected.
 
+### Fixed
+
+- `listen-fire check` with a credential Airtable refuses (a placeholder token) fails at once, where it hung for over two minutes saying nothing: `@lf/airtable` retried the refusal as if it were transient (its own changelog has the rest).
+- A credential a module says the provider refused (`credential_refused`) whose refresh then fails is reported with both: what the module said and why the refresh failed (`credential "my_airtable" was refused — module "airtable" says: … — and refreshing it failed: the credential holds no refresh_token`), where only the refresh's failure was. A `check` that cannot read an external's schema names the external and the credential.
+
 ## [0.12.13] - 2026-10-29
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. The command is renamed to `listen-fire`, and two modules arrive: `@lf/github` and `@lf/stripe`.

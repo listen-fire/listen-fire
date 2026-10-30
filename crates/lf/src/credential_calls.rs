@@ -108,8 +108,13 @@ pub async fn send(
         bearer_of(target.external, signed_by).map_err(SendError::Before)
     };
     // `credential_refused`: the module says the provider refused the token.
-    let unauthorized =
-        |error: &SendError| matches!(error, SendError::Rpc(RpcError::Protocol { code, .. }) if code == "unauthorized" || code == CREDENTIAL_REFUSED_CODE);
+    let module = &target.external.manifest.name;
+    let unauthorized = |error: &SendError| match error {
+        SendError::Rpc(RpcError::Protocol { code, message, .. }) if code == "unauthorized" || code == CREDENTIAL_REFUSED_CODE => {
+            Some(format!("module \"{module}\" says: {message}"))
+        }
+        _ => None,
+    };
 
     // The protocol carries one credential per request, under the declared
     // alternative it fills (its binding; a hand written one fills the first).

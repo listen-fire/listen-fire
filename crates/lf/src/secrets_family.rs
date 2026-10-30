@@ -101,6 +101,9 @@ pub enum SecretError {
     Missing(String),
     Conflict(String),
     RefreshFailed { reference: String, detail: String },
+    /// A call was refused as the credential stood (`refusal`, as the module
+    /// said it), and the refresh that would have let it be retried failed.
+    RefusedUnrefreshed { reference: String, refusal: String, detail: String },
     /// The store itself failed (sops could not run, the lock stayed held).
     Store(String),
 }
@@ -111,6 +114,9 @@ impl SecretError {
             SecretError::Missing(reference) => format!("credential \"{reference}\" is not stored"),
             SecretError::Conflict(reference) => format!("credential \"{reference}\" changed since it was read; the write-back was refused"),
             SecretError::RefreshFailed { reference, detail } => format!("refreshing credential \"{reference}\" failed: {detail}"),
+            SecretError::RefusedUnrefreshed { reference, refusal, detail } => {
+                format!("credential \"{reference}\" was refused — {refusal} — and refreshing it failed: {detail}")
+            }
             SecretError::Store(message) => message.clone(),
         }
     }
@@ -120,7 +126,7 @@ impl SecretError {
         match self {
             SecretError::Missing(_) => "SecretMissing",
             SecretError::Conflict(_) => "SecretVersionConflict",
-            SecretError::RefreshFailed { .. } => "SecretRefreshFailed",
+            SecretError::RefreshFailed { .. } | SecretError::RefusedUnrefreshed { .. } => "SecretRefreshFailed",
             SecretError::Store(_) => "Error",
         }
     }
@@ -390,12 +396,14 @@ pub fn now_ms() -> i64 {
 
 /// Run one call with a credential: refreshed first when it expires within the
 /// window, and refreshed once more and retried when the call fails as
-/// `unauthorized` says. Without a refresher, the call runs as it stands.
+/// `refusal` says (answering what the refusal said). A refresh that then fails
+/// says the refusal too, so what the provider said is not lost to it. Without
+/// a refresher, the call runs as it stands.
 pub async fn with_secret<T, E, F, Fut>(
     family: &SecretsFamily,
     reference: &str,
     refresher: Option<&Refresher<'_>>,
-    unauthorized: impl Fn(&E) -> bool,
+    refusal: impl Fn(&E) -> Option<String>,
     mut call: F,
 ) -> Result<T, E>
 where
@@ -409,10 +417,17 @@ where
         record = family.refresh(reference, &record.version, refresher).await?;
     }
     match call(record).await {
-        Err(error) if unauthorized(&error) => {
+        Err(error) => {
+            let Some(refused) = refusal(&error) else { return Err(error) };
             // The record the call used: an update during it moved the cache on.
             let seen = family.resolve(reference)?.version;
-            let record = family.refresh(reference, &seen, refresher).await?;
+            let record = match family.refresh(reference, &seen, refresher).await {
+                Ok(record) => record,
+                Err(SecretError::RefreshFailed { reference, detail }) => {
+                    return Err(SecretError::RefusedUnrefreshed { reference, refusal: refused, detail }.into());
+                }
+                Err(other) => return Err(other.into()),
+            };
             call(record).await
         }
         answered => answered,
