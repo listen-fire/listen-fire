@@ -897,7 +897,13 @@ impl<'a> Typing<'a> {
                 if !steps.is_empty() && is_position_terminal(expression) {
                     return (Some(list_of(Ty::record(destination), self.last_ordering)), Vec::new());
                 }
-                (self.infer_at(expression, destination.as_ref()), Vec::new())
+                // `exists(a-[:E]->)`: the walk is the exists', off the name.
+                if steps.is_empty() && matches!(**expression, Expression::Exists { .. }) {
+                    self.step_root = alias_root.as_deref().map(crate::families::names::spell_name);
+                }
+                let typed = self.infer_at(expression, destination.as_ref());
+                self.step_root = None;
+                (typed, Vec::new())
             }
             Expression::ResourceTraverse { expression, .. } => {
                 self.infer_at(expression, None);

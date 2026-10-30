@@ -51,6 +51,29 @@ pub fn duration_ms(raw: &str) -> Option<u64> {
     (any && digits.is_empty()).then_some(total)
 }
 
+/// A hop chain as written, split before its last hop: everything before it
+/// (trimmed), and the last hop. A `-[` opens a hop only outside brackets and
+/// quotes, so a WHERE's own `[…]` or text stays inside its hop.
+fn split_last_hop(hops_raw: &str) -> (&str, &str) {
+    let (mut depth, mut quote, mut last) = (0usize, None::<char>, 0usize);
+    let mut chars = hops_raw.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        match (quote, c) {
+            (Some(q), _) if c == q => quote = None,
+            (Some(_), '\\') => {
+                chars.next();
+            }
+            (Some(_), _) => {}
+            (None, '"' | '\'' | '`') => quote = Some(c),
+            (None, '-') if depth == 0 && chars.peek().is_some_and(|(_, n)| *n == '[') => last = at,
+            (None, '[') => depth += 1,
+            (None, ']') => depth = depth.saturating_sub(1),
+            (None, _) => {}
+        }
+    }
+    (hops_raw[..last].trim_end(), &hops_raw[last..])
+}
+
 /// `spellPathHead`: a path head as the author wrote it.
 pub fn spell_path_head(head: &PathHead) -> String {
     let root = match &head.root {
@@ -158,12 +181,17 @@ impl Checker<'_> {
     /// edge that resolved but announced nothing; `listenable` is both facts
     /// at once, so no catalog can say that any more.)
     pub fn check_awaitable(&mut self, head: &PathHead, walk: Option<&crate::families::walks::HeadWalk>, arrivals_only: bool) {
+        // An expression root is MOV_HEAD_NEEDS_A_NAME's, and a rootless walk
+        // MOV_WALK_ROOTLESS's.
+        let Some(PathRoot::Name { name: root }) = &head.root else { return };
         let path = spell_path_head(head);
         if Self::head_steps(head).is_some_and(|steps| steps.len() > 1) {
+            let (before, last) = split_last_hop(&head.hops_raw);
+            let root = crate::families::names::spell_name(root);
             self.report(
                 codes::AWAIT_BARE_WALK,
                 format!(
-                    "'await {path}' walks more than one edge, and 'await' waits on one edge of a record a name holds — bind the record the last edge leaves from to a name, then await that edge off it"
+                    "'await {path}' walks more than one edge, and 'await' waits on one edge of a record a name holds — bind that record first: `one = only({root}{before})`, then `await one{last}`"
                 ),
                 head.span,
             );
@@ -171,9 +199,6 @@ impl Checker<'_> {
         }
         let Some(walk) = walk else { return };
         let (Some(edge), Some(name)) = (walk.last_edge_schema.as_ref(), walk.last_edge.as_deref()) else { return };
-        if head.root.is_none() {
-            return;
-        }
         let owner = walk.last_source.as_ref().map_or_else(|| "its record".to_string(), crate::families::walks::describe_edge_owner);
         if edge.listenable != Some(true) {
             self.report(
@@ -185,8 +210,7 @@ impl Checker<'_> {
             );
             return;
         }
-        let listed = edge.readable != Some(false);
-        if listed && edge.sequenced.is_none() && !arrivals_only {
+        if crate::families::walks::edge_is_readable(edge) && edge.sequenced.is_none() && !arrivals_only {
             self.report(
                 codes::AWAIT_UNORDERED,
                 format!(

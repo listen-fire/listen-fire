@@ -76,7 +76,7 @@ write releases-[:Messages]-> {
   ]
 }
 
-answer = await first(a-[:Response]->)
+answer = await a-[:Response]->
 \`\`\`
 
 A select works the same way, one callback per option: \`value: "\${seed.id}"\` on one option, \`"\${growth.id}"\` on the next. And keep \`Url\` in the message text — anyone on a client that cannot tap a block still has a way to respond.
@@ -155,7 +155,7 @@ function sign_off(msg: <team-[:Message]->>) {
     ]
   }
 
-  answer = await first(a-[:Response]->)
+  answer = await a-[:Response]->
   if (answer.Answer) {
     general = only(team-[ch:Channels WHERE ch.Name == "general"]->)
     if (general == null) { fail("no #general channel") }
@@ -189,7 +189,7 @@ function book_it(msg: <team-[:Message]->>) {
     ]
   }
 
-  call = await first(booked-[:Called]->)
+  call = await booked-[:Called]->
   write msg-[:Replies]-> { Message: "Picked \${call.day}." }
 }
 
@@ -225,7 +225,7 @@ function wait_for_go(msg: <team-[:Message]->>) {
     ]
   }
 
-  tap = await first(go-[:Called]->)
+  tap = await go-[:Called]->
   write msg-[:Replies]-> { Message: "Off we go (\${tap.At})." }
 }
 

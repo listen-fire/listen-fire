@@ -79,7 +79,7 @@ export const CONTROL_FORMS: readonly ControlForm[] = [
     signature: 'race(() => { … }, …) → receipt; r[i] is arm i\'s returned value, null unless it settled first',
     purpose: 'wait for whichever of several things happens first, such as an answer or a timeout',
     example: {
-      body: 'q = write asks-[:Check]-> { Prompt: "Log ${m.Subject}?" }\nr = race(\n  () => {\n    a = await first(q-[:Response]->)\n    return a.Answer\n  },\n  () => { await sleep(2d) },\n)\napproved = r[0] == true',
+      body: 'q = write asks-[:Check]-> { Prompt: "Log ${m.Subject}?" }\nr = race(\n  () => {\n    a = await q-[:Response]->\n    return a.Answer\n  },\n  () => { await sleep(2d) },\n)\napproved = r[0] == true',
     },
     anchor: 'front#runs',
   },

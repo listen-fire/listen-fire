@@ -113,7 +113,7 @@ export const TS_EXCEPT: readonly FrontEntry[] = [
   {
     anchor: 'await',
     title: 'Await',
-    text: '`await` starts a statement, never inside an expression: `a = await first(q-[:Response]->)`, then use `a`.',
+    text: '`await` starts a statement, never inside an expression: `a = await q-[:Response]->`, then use `a`.',
   },
 ];
 
@@ -153,7 +153,7 @@ export const CONCEPTS: readonly FrontEntry[] = [
     title: 'Runs: effects, waiting, cost',
     text: 'A run parks at an `await` (an approval, `sleep`) and resumes when it settles; `race` and `all` combine waits. It pauses at its cost cap.',
     example: {
-      body: 'q = write asks-[:Check]-> { Prompt: "Log ${m.Subject}?" }\nr = race(\n  () => {\n    a = await first(q-[:Response]->)\n    return a.Answer\n  },\n  () => { await sleep(2d) },\n)\napproved = r[0] == true',
+      body: 'q = write asks-[:Check]-> { Prompt: "Log ${m.Subject}?" }\nr = race(\n  () => {\n    a = await q-[:Response]->\n    return a.Answer\n  },\n  () => { await sleep(2d) },\n)\napproved = r[0] == true',
     },
   },
 ];

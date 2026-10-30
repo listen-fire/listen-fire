@@ -43,6 +43,7 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
   - Reading an edge that can only announce, outside a wait, is refused as before (`MOV_AWAIT_REQUIRED`); its message now shows the wait to write.
   - A name called `new` is still a root: `await new-[:Notes]->` waits on the record `new` holds.
   - Why: a wait is one record off a listenable edge, so the bare traversal says it; `first(…)` said it twice.
+- The handbook and the Slack, Telegram and WhatsApp module sections write their waits as `await x-[:E]->`, in place of `await first(x-[:E]->)`.
 
 ### Added
 

@@ -78,7 +78,7 @@ write msg-[:Replies]-> {
   }
 }
 
-answer = await first(q-[:Response]->)
+answer = await q-[:Response]->
 \`\`\`
 
 WhatsApp captures nothing at tap time — a button's id is fixed when the message is sent — so a button always fires a callback that takes no values. A picked date or a typed answer needs a plain reply instead, read off the next inbound message.
@@ -125,7 +125,7 @@ function confirm_send(msg: <wa-[:Message]->>) {
     }
   }
 
-  answer = await first(q-[:Response]->)
+  answer = await q-[:Response]->
   if (answer.Answer) {
     write msg-[:Replies]-> { Body: "Sending now." }
   }
@@ -153,7 +153,7 @@ function wait_for_go(msg: <wa-[:Message]->>) {
     }
   }
 
-  tap = await first(go-[:Called]->)
+  tap = await go-[:Called]->
   write msg-[:Replies]-> { Body: "Off we go (\${tap.At})." }
 }
 

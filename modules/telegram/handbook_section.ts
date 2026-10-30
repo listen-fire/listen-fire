@@ -74,7 +74,7 @@ write msg-[:Replies]-> {
   }
 }
 
-answer = await first(q-[:Response]->)
+answer = await q-[:Response]->
 \`\`\`
 
 Put the bare \`Url\` in the message text as well, so the question is still answerable wherever the buttons are not.
@@ -118,7 +118,7 @@ function confirm_send(msg: <tg-[:Message]->>) {
     }
   }
 
-  answer = await first(q-[:Response]->)
+  answer = await q-[:Response]->
   if (answer.Answer) {
     write msg-[:Replies]-> { Text: "Sending now." }
   }
@@ -146,7 +146,7 @@ function wait_for_go(msg: <tg-[:Message]->>) {
     }
   }
 
-  tap = await first(go-[:Called]->)
+  tap = await go-[:Called]->
   write msg-[:Replies]-> { Text: "Off we go (\${tap.At})." }
 }
 

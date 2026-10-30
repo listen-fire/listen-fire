@@ -30,7 +30,8 @@ const CATALOG: &str = r#"{"adapters":{
     "Note":{"properties":{"Body":"text"},"edges":{}},
     "Change":{"properties":{"Field":"text"},"edges":{}},
     "Email":{"properties":{"Subject":"text"},"edges":{}},
-    "Company":{"properties":{"Name":"text"},"edges":{}}},
+    "Company":{"properties":{"Name":"text"},"edges":{
+      "Updates":{"target":"Change","readable":false,"listenable":true}}}},
     "collections":{},"writableRoots":{}}}}
 },"credentials":{},"plugins":{}}"#;
 
@@ -73,6 +74,11 @@ fn a_non_iterable_edge_is_refused_outside_a_wait() {
         check("  xs = deal-[:Changes]->\n"),
         ["MOV_AWAIT_REQUIRED 2:8-2:25 '-[:Changes]->' on crm's Deal can't be listed — its module only announces what arrives on it. Wait for one: `await deal-[:Changes]->`"]
     );
+    // Past the first hop no one name holds the record, so no wait is offered.
+    assert_eq!(
+        check("  xs = deal-[:Company]->-[:Updates]->\n"),
+        ["MOV_AWAIT_REQUIRED 2:8-2:38 '-[:Updates]->' on crm's Company can't be listed — its module only announces what arrives on it."]
+    );
 }
 
 #[test]
@@ -91,8 +97,14 @@ fn an_edge_that_announces_nothing_cannot_be_awaited() {
 fn an_await_walks_one_edge_off_a_record_a_name_holds() {
     assert_eq!(
         check("  r = await msg-[:Thread]->-[:Interactions]->\n"),
-        ["MOV_AWAIT_BARE_WALK 2:13-2:46 'await msg-[:Thread]->-[:Interactions]->' walks more than one edge, and 'await' waits on one edge of a record a name holds — bind the record the last edge leaves from to a name, then await that edge off it"]
+        ["MOV_AWAIT_BARE_WALK 2:13-2:46 'await msg-[:Thread]->-[:Interactions]->' walks more than one edge, and 'await' waits on one edge of a record a name holds — bind that record first: `one = only(msg-[:Thread]->)`, then `await one-[:Interactions]->`"]
     );
+    assert_eq!(check("  one = only(msg-[:Thread]->)\n  r = await one-[:Interactions]->\n"), Vec::<String>::new());
+    assert_eq!(
+        check("  u = await deal-[:Company]->-[c:Updates WHERE c.Field == \"Name\"]->\n"),
+        ["MOV_AWAIT_BARE_WALK 2:13-2:68 'await deal-[:Company]->-[c:Updates WHERE c.Field == \"Name\"]->' walks more than one edge, and 'await' waits on one edge of a record a name holds — bind that record first: `one = only(deal-[:Company]->)`, then `await one-[c:Updates WHERE c.Field == \"Name\"]->`"]
+    );
+    assert_eq!(check("  one = only(deal-[:Company]->)\n  u = await one-[c:Updates WHERE c.Field == \"Name\"]->\n"), Vec::<String>::new());
 }
 
 #[test]
@@ -129,10 +141,11 @@ fn awaiting_a_list_points_at_all() {
     );
 }
 
+/// Only the missing name is said: the edge's own rules wait for the rewrite.
 #[test]
 fn an_await_off_an_expression_names_the_record_first() {
     assert_eq!(
-        check("  r = await only([msg])-[:Replies]->\n"),
-        ["MOV_HEAD_NEEDS_A_NAME 2:13-2:37 'await' parks on the record it waits at, and a parked run finds that record again by NAME — so this one is bound first: 'waiting = only([msg])', then 'await waiting-[:Replies]->'."]
+        check("  r = await only([msg])-[:Thread]->\n"),
+        ["MOV_HEAD_NEEDS_A_NAME 2:13-2:36 'await' parks on the record it waits at, and a parked run finds that record again by NAME — so this one is bound first: 'waiting = only([msg])', then 'await waiting-[:Thread]->'."]
     );
 }

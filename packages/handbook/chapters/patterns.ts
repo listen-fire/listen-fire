@@ -181,7 +181,7 @@ q = write asks-[:Check]-> {
   Detail: "Review the extracted records before they're written."
 }
 
-answer = await first(q-[:Response]->)
+answer = await q-[:Response]->
 if (answer.Answer) {
   map(found, (c) => { … })
 }
@@ -371,7 +371,7 @@ function \`Review And Import\`(go: <runs-[:Invocation]->>) {
     Detail: "Review the extracted records before they're written."
   }
 
-  answer = await first(q-[:Response]->)
+  answer = await q-[:Response]->
   if (answer.Answer) {
     map(found, (c) => {
       company = write crm-[:Companies]-> {

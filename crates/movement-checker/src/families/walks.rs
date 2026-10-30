@@ -116,13 +116,10 @@ fn report_step(typing: &mut Typing, from: &Position, edge: &str, filter: Option<
                     return;
                 }
                 if !edge_is_readable(edge_schema) {
-                    let root = typing.step_root.clone().unwrap_or_else(|| "…".to_string());
+                    let wait = typing.step_root.as_ref().map(|root| format!(" Wait for one: `await {root}-[:{edge}]->`")).unwrap_or_default();
                     typing.report(
                         codes::AWAIT_REQUIRED,
-                        format!(
-                            "'-[:{edge}]->' on {} can't be listed — its module only announces what arrives on it. Wait for one: `await {root}-[:{edge}]->`",
-                            describe_edge_owner(from)
-                        ),
+                        format!("'-[:{edge}]->' on {} can't be listed — its module only announces what arrives on it.{wait}", describe_edge_owner(from)),
                     );
                     return;
                 }
@@ -238,7 +235,7 @@ pub fn describe_edge_owner(from: &Position) -> String {
 }
 
 /// `edgeIsReadable`: an edge reads unless it says it does not.
-fn edge_is_readable(edge: &EdgeSchema) -> bool {
+pub(crate) fn edge_is_readable(edge: &EdgeSchema) -> bool {
     edge.readable != Some(false)
 }
 

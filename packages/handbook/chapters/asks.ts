@@ -19,7 +19,7 @@ q = write asks-[:Check]-> { Prompt: "Pursue this company?" }
 
 - The **family** edge (\`Check\` here) is the kind of question, and it fixes the type of the answer.
 - \`q.Url\` is the link a person opens — the only delivery affordance. Nothing is sent for you; you interpolate that \`Url\` into a message yourself.
-- \`await first(q-[:Response]->)\` is the only way to read the answer. \`first(…)\` is the ordinary read — nothing answered yet reads as nothing; \`await\` in front of it holds the run until there *is* something to read.
+- \`await q-[:Response]->\` is the only way to read the answer. A read without \`await\` finds nothing until someone answers; \`await\` holds the run until there *is* something to read.
 
 ### the-families
 
@@ -40,7 +40,7 @@ q = write asks-[:Form]-> {
   Fields: ["Company", "Contact", "Budget"]
 }
 
-a = await first(q-[:Response]->)
+a = await q-[:Response]->
 write company-[:Notes]-> {
   Title:   "Intake details"
   Payload: a.Budget
@@ -60,7 +60,7 @@ deals = only(chat-[ch:Channels WHERE ch.Name == "deals"]->)
 if (deals == null) { fail("no #deals channel") }
 write deals-[:Messages]-> { Message: "New company — pursue it? \${q.Url}" }
 
-answer = await first(q-[:Response]->)
+answer = await q-[:Response]->
 if (answer.Answer) {
   write crm-[:Companies]-> { unique by (FUZZY Name), Name: \`Company Name\` }
 }
@@ -84,7 +84,7 @@ q = write asks-[:Choose]-> {
   Options: found
 }
 
-a = await first(q-[:Response]->)
+a = await q-[:Response]->
 pick = only(crm-[co:Companies WHERE co.Name == a.Answer]->)
 if (pick == null) { fail("no company named \${a.Answer}") }
 write pick-[:Notes]-> { Title: "Chosen", Content: "Picked from \${count(found)} candidates." }
@@ -102,7 +102,7 @@ if (deals == null) { fail("no #deals channel") }
 
 r = race(
   () => {
-    a = await first(q-[:Response]->)
+    a = await q-[:Response]->
     return a.Answer
   },
   () => {
@@ -121,7 +121,7 @@ if (decision == true) {
 }
 \`\`\`
 
-- \`await\` marks where the run itself waits: on the answer (\`await first(q-[:Response]->)\`) and on the clock (\`await sleep(2d)\`), inside the arms. \`race\` says only how several waits **combine** — it settles on the first of them. It does not wait for anything on its own, so it is written without \`await\`.
+- \`await\` marks where the run itself waits: on the answer (\`await q-[:Response]->\`) and on the clock (\`await sleep(2d)\`), inside the arms. \`race\` says only how several waits **combine** — it settles on the first of them. It does not wait for anything on its own, so it is written without \`await\`.
 - Each arm is a **function**, passed as an argument: \`() => { … }\` written where it stands, or the name of one declared elsewhere. An arm takes no parameters — it already sees everything in scope where you wrote it — and it starts the moment the combinator does.
 - The value is a **receipt**: one slot per arm, in the order written, holding whatever that arm \`return\`ed. \`r[0]\` reads the first arm's slot, \`r[1]\` the second. An arm that hands nothing back has an always-null slot.
 - Under \`race\`, only the arm that settled first has its slot filled and every other slot is null — so **a null test on a slot is the branch**, as \`decision == null\` is here. Arms still parked when one settles are dropped where they stand: their waiting stops, and whatever they had already done stays done. Arms that settle in the same moment all land.
@@ -139,7 +139,7 @@ if (decision == true) {
 
   \`(…) => { … }\` is a **closure**: a body written where it stands and run later, holding everything in scope at the point you wrote it. The run resumes the moment the closure returns true. \`refresh\` re-reads a handle so each check sees the record as it is now; a condition that needs no refresh can be a plain boolean expression instead (\`await until(count(q-[:Response]->) >= 3, { every: 10m })\`). A condition takes no parameters and may only read — a write or an \`await\` inside one is refused, as is a cadence under a minute.
 
-- Which of the two you write is the relationship's to decide, and you are told when you save. Where the system announces what landed — a question's \`Response\`, a chat thread's \`Replies\`, a callback's \`Called\` — \`await first(…)\` is the form: the run sleeps and is woken the moment it arrives, so there is no cadence to name. Where nothing announces it, \`await first(…)\` is refused and \`until\` with an \`every:\` is the form, because someone has to say how often to look. Polling something that does announce still works, and is flagged: it just waits longer than it needs to.
+- Which of the two you write is the relationship's to decide, and you are told when you save. Where the system announces what landed — a question's \`Response\`, a chat thread's \`Replies\`, a callback's \`Called\` — \`await\` on the edge is the form: the run sleeps and is woken the moment it arrives, so there is no cadence to name. Where nothing announces it, \`await\` is refused and \`until\` with an \`every:\` is the form, because someone has to say how often to look. Polling something that does announce still works, and is flagged: it just waits longer than it needs to.
 
 ### several-at-once
 
@@ -157,7 +157,7 @@ chat-[ch:Channels WHERE ch.Topic == "approvals"]-> {
 
 r = race(
   () => {
-    tap = await first(approve-[:Called]->)
+    tap = await approve-[:Called]->
     return tap.At
   },
   () => { await sleep(1d) },
@@ -182,11 +182,11 @@ write \`Board Channel\`-[:Messages]-> { Message: "Approve this?", Blocks: [ … 
 
 r = race(
   () => {
-    tap = await first(deals-[:Called]->)
+    tap = await deals-[:Called]->
     return { channel: "deals", at: tap.At }
   },
   () => {
-    tap = await first(board-[:Called]->)
+    tap = await board-[:Called]->
     return { channel: "board", at: tap.At }
   },
 )
@@ -207,11 +207,11 @@ Wait on **different** things at once by giving each its own function, and take e
 \`\`\`
 r = all(
   () => {
-    b = await first(budget-[:Response]->)
+    b = await budget-[:Response]->
     return b.Answer
   },
   () => {
-    l = await first(legal-[:Response]->)
+    l = await legal-[:Response]->
     return l.Answer
   },
 )
@@ -281,7 +281,7 @@ Whatever the closure takes as a parameter is what the acting side fills in: \`ca
 
 ### when-a-question-and-when-a-callback
 
-A callback on its own is the lighter thing: \`go = callback({ })\` with \`await first(go-[:Called]->)\` holds the run until somebody presses a button — no page, no queue entry, nothing to open. Write a question when you need what a question gives you: a page rendering the right control for whoever opens the link, wherever they are, and an entry in that person's queue of things to decide — a task directed at somebody. For a decision already in front of the right people in a channel, a callback is enough.
+A callback on its own is the lighter thing: \`go = callback({ })\` with \`await go-[:Called]->\` holds the run until somebody presses a button — no page, no queue entry, nothing to open. Write a question when you need what a question gives you: a page rendering the right control for whoever opens the link, wherever they are, and an entry in that person's queue of things to decide — a task directed at somebody. For a decision already in front of the right people in a channel, a callback is enough.
 
 Either way, what a person can act on lives **only as long as the run waiting for it**. When the run ends the buttons stop working and the link stops accepting, and a late tap is told it is closed. Neither is a standing endpoint: something that must react at any time, forever, is an automation that LISTENS.`,
   engineClaims: [
@@ -310,7 +310,7 @@ function \`Triage Inbound\`(msg: <inbox-[:Email]->>) {
 
   r = race(
     () => {
-      a = await first(q-[:Response]->)
+      a = await q-[:Response]->
       return a.Answer
     },
     () => { await sleep(2d) },
@@ -358,7 +358,7 @@ function \`First Approval Wins\`(go: <runs-[:Invocation]->>) {
 
   r = race(
     () => {
-      tap = await first(approve-[:Called]->)
+      tap = await approve-[:Called]->
       return tap.At
     },
     () => { await sleep(1d) },
@@ -418,11 +418,11 @@ function \`Which Place Answered\`(go: <runs-[:Invocation]->>) {
 
   r = race(
     () => {
-      tap = await first(dealflow-[:Called]->)
+      tap = await dealflow-[:Called]->
       return { channel: "dealflow", at: tap.At }
     },
     () => {
-      tap = await first(portfolio-[:Called]->)
+      tap = await portfolio-[:Called]->
       return { channel: "portfolio", at: tap.At }
     },
   )
@@ -463,11 +463,11 @@ function \`Both Must Agree\`(go: <runs-[:Invocation]->>) {
 
   r = all(
     () => {
-      b = await first(budget-[:Response]->)
+      b = await budget-[:Response]->
       return b.Answer
     },
     () => {
-      l = await first(legal-[:Response]->)
+      l = await legal-[:Response]->
       return l.Answer
     },
   )
@@ -533,7 +533,7 @@ function \`Record Headcount\`(go: <runs-[:Invocation]->>) {
   if (ops == null) { fail("no #ops channel") }
   write ops-[:Messages]-> { Message: "How many people work there? \${q.Url}" }
 
-  a = await first(q-[:Response]->)
+  a = await q-[:Response]->
   write crm-[:Companies]-> {
     unique by (FUZZY Name)
     Name:           go.Text
@@ -565,7 +565,7 @@ function \`Decide Next Step\`(go: <runs-[:Invocation]->>) {
   if (ops == null) { fail("no #ops channel") }
   write ops-[:Messages]-> { Message: "What next? \${q.Url}" }
 
-  a = await first(q-[:Response]->)
+  a = await q-[:Response]->
   if (a.Answer == "pursue") {
     write crm-[:Companies]-> {
       unique by (FUZZY Name)
@@ -597,7 +597,7 @@ function \`Pick Channels\`(go: <runs-[:Invocation]->>) {
   if (ops == null) { fail("no #ops channel") }
   write ops-[:Messages]-> { Message: "Who should hear about this? \${q.Url}" }
 
-  a = await first(q-[:Response]->)
+  a = await q-[:Response]->
   write ops-[:Messages]-> { Message ?: "Telling: \${Text.join(a.Answer, ", ")}" }
 }
 
@@ -625,7 +625,7 @@ function \`Acknowledge First\`(go: <runs-[:Invocation]->>) {
   if (ops == null) { fail("no #ops channel") }
   write ops-[:Messages]-> { Message: "Please read: \${q.Url}" }
 
-  await first(q-[:Response]->)
+  await q-[:Response]->
   write crm-[:Companies]-> {
     unique by (FUZZY Name)
     Name: go.Text
@@ -655,7 +655,7 @@ function \`Draft The Reply\`(go: <runs-[:Invocation]->>) {
   if (ops == null) { fail("no #ops channel") }
   write ops-[:Messages]-> { Message: "Draft it here: \${q.Url}" }
 
-  await first(q-[:Response]->)
+  await q-[:Response]->
   write ops-[:Messages]-> { Message: "The draft is in." }
 }
 
@@ -685,7 +685,7 @@ function \`Fix The Rows\`(go: <runs-[:Invocation]->>) {
   if (ops == null) { fail("no #ops channel") }
   write ops-[:Messages]-> { Message: "Check these before they land: \${q.Url}" }
 
-  await first(q-[:Response]->)
+  await q-[:Response]->
   write ops-[:Messages]-> { Message: "Corrections in." }
 }
 
@@ -712,7 +712,7 @@ function \`Collect The Details\`(go: <runs-[:Invocation]->>) {
   if (ops == null) { fail("no #ops channel") }
   write ops-[:Messages]-> { Message: "A few details needed: \${q.Url}" }
 
-  a = await first(q-[:Response]->)
+  a = await q-[:Response]->
   write ops-[:Messages]-> { Message: "Details in — budget \${a.Budget}." }
 }
 
@@ -744,7 +744,7 @@ function \`Pick The Company\`(go: <runs-[:Invocation]->>) {
   if (ops == null) { fail("no #ops channel") }
   write ops-[:Messages]-> { Message: "Which one? \${q.Url}" }
 
-  a = await first(q-[:Response]->)
+  a = await q-[:Response]->
   pick = only(crm-[co:Companies WHERE co.Name == a.Answer]->)
   if (pick == null) { fail("no company named \${a.Answer}") }
   write pick-[:Notes]-> {
@@ -783,7 +783,7 @@ function \`Decide By Link\`(go: <runs-[:Invocation]->>) {
     Message: "Pursue it?\\nYes: \${yes.url}\\nNo: \${no.url}\\nNudge the channel: \${nudge.url}\\nOr decide on the page: \${q.Url}"
   }
 
-  answer = await first(q-[:Response]->)
+  answer = await q-[:Response]->
   if (answer.Answer) {
     write ops-[:Messages]-> { Message: "Pursuing." }
   }
@@ -830,7 +830,7 @@ function \`Book The Follow Up\`(go: <runs-[:Invocation]->>) {
     Message: "Pick a day: \${booked.url}\\nOr chase again: \${again.url}"
   }
 
-  call = await first(booked-[:Called]->)
+  call = await booked-[:Called]->
   write ops-[:Messages]-> { Message: "Booked for \${call.day} (\${call.At})." }
 }
 

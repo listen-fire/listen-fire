@@ -164,7 +164,7 @@ x = d != null ? "\${d}" : ""                # narrows d present in the true arm 
 Field ?: d                                 # '?:' takes a maybe-absent value, no guard needed
 \`\`\`
 
-\`first\`/\`List.last\`/\`List.min\`/\`List.max\`/\`xs[n]\` over anything that can come up empty, and a named \`match\` that found nothing, type \`T | absent\`, same as an \`await first(…)\` on a landing a cancel can settle empty. Using such a value where a present one is required — a write or traversal target, a dot-plane field read, an ordered comparison (\`<\` \`<=\` \`>\` \`>=\`) — is refused until narrowed, naming the fix. \`==\`/\`!=\` against \`null\` is the presence test (loose: \`null\` and absent mean the same thing); against any other value a maybe-absent side needs no guard (absent is never equal to a present value), and a condition (\`if\`, \`? :\`, \`&&\`/\`||\`/\`!\`) reads a missing boolean as false. Both sides must still match in kind. \`exists(…)\` is only for related records (\`exists(msg-[:Attachments]->)\`); for a value, \`x != null\` and \`x == null\` take a bound name or a field read off one (\`x.Field != null\`), and a proven field proves the record it came off.
+\`first\`/\`List.last\`/\`List.min\`/\`List.max\`/\`xs[n]\` over anything that can come up empty, and a named \`match\` that found nothing, type \`T | absent\`, same as an \`await\` on a landing a cancel can settle empty. Using such a value where a present one is required — a write or traversal target, a dot-plane field read, an ordered comparison (\`<\` \`<=\` \`>\` \`>=\`) — is refused until narrowed, naming the fix. \`==\`/\`!=\` against \`null\` is the presence test (loose: \`null\` and absent mean the same thing); against any other value a maybe-absent side needs no guard (absent is never equal to a present value), and a condition (\`if\`, \`? :\`, \`&&\`/\`||\`/\`!\`) reads a missing boolean as false. Both sides must still match in kind. \`exists(…)\` is only for related records (\`exists(msg-[:Attachments]->)\`); for a value, \`x != null\` and \`x == null\` take a bound name or a field read off one (\`x.Field != null\`), and a proven field proves the record it came off.
 
 ### listeners
 
@@ -188,12 +188,12 @@ q = write asks-[:Check]-> { Prompt: "Pursue this?" }
 ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
 if (ops == null) { fail("no #ops channel") }
 write ops-[:Messages]-> { Message: "Decide: \${q.Url}" }    # deliver the link
-answer = await first(q-[:Response]->)                       # park until answered
+answer = await q-[:Response]->                       # park until answered
 if (answer.Answer) { … }
 
 # Timeout / escalation are COMPOSED from race + sleep (no fallback clause):
 r = race(
-  () => { a = await first(q-[:Response]->)
+  () => { a = await q-[:Response]->
           return a.Answer },
   () => { await sleep(2d) },          # the default when nobody answers in time
 )
@@ -203,16 +203,16 @@ if (r[0] == true) { … }             # approved
 r2 = all(f, () => { … }) # all at once, every slot filled
 \`\`\`
 
-The answer is readable only **after** \`await first(q-[:Response]->)\`. Durations: \`30s\` \`90m\` \`4h\` \`1d\` \`1h30m\`. Interpolate \${q.Url} into the delivery message or nobody can answer. \`Response\` is an ordinary writable edge, so anything that can write can answer it — including an in-chat button: mint a \`callback\` per answer and carry its \`id\` on the control (which field on a control holds it is that system's own, and its chapter names it); see \`in-chat-answers\` in the reviews chapter for the full shape. An \`await\` on its own waits forever — race it against \`sleep\` for an unattended run.
+The answer is readable only **after** \`await q-[:Response]->\`. Durations: \`30s\` \`90m\` \`4h\` \`1d\` \`1h30m\`. Interpolate \${q.Url} into the delivery message or nobody can answer. \`Response\` is an ordinary writable edge, so anything that can write can answer it — including an in-chat button: mint a \`callback\` per answer and carry its \`id\` on the control (which field on a control holds it is that system's own, and its chapter names it); see \`in-chat-answers\` in the reviews chapter for the full shape. An \`await\` on its own waits forever — race it against \`sleep\` for an unattended run.
 
-\`await\` marks the wait itself — \`await first(q-[:Response]->)\`, \`await sleep(2d)\` — and \`race(…)\` only says how several waits combine (the first one), so it is written without \`await\`: its arms wait, and the run parks where they do. An arm is a **function**, passed as an argument — \`() => { … }\` in place, or the name of one declared elsewhere — taking no parameters and capturing everything in scope where it is written. The value is a receipt of one slot per arm in the order written, read as \`r[<index>]\` and holding what that arm \`return\`ed: only the arm that settled first has its slot filled, so a null test on a slot is the branch (arms settling in the same moment all land, and arms still parked are dropped where they stand — what they had already done stays done). To wait for **every** one, use \`all\`: \`r = all(f, g)\` runs them at once, needs no \`await\` (an arm that waits parks the run), and \`r[i]\` is what function \`i\` returned, every slot filled. \`all(f, g, { concurrency: 1, onError: "warn" })\` takes \`map\`'s settings: how many run at once, and whether a failing arm leaves its slot null instead of failing the run. A function that hands nothing back has an always-null slot either way.
+\`await\` marks the wait itself — \`await q-[:Response]->\`, \`await sleep(2d)\` — and \`race(…)\` only says how several waits combine (the first one), so it is written without \`await\`: its arms wait, and the run parks where they do. An arm is a **function**, passed as an argument — \`() => { … }\` in place, or the name of one declared elsewhere — taking no parameters and capturing everything in scope where it is written. The value is a receipt of one slot per arm in the order written, read as \`r[<index>]\` and holding what that arm \`return\`ed: only the arm that settled first has its slot filled, so a null test on a slot is the branch (arms settling in the same moment all land, and arms still parked are dropped where they stand — what they had already done stays done). To wait for **every** one, use \`all\`: \`r = all(f, g)\` runs them at once, needs no \`await\` (an arm that waits parks the run), and \`r[i]\` is what function \`i\` returned, every slot filled. \`all(f, g, { concurrency: 1, onError: "warn" })\` takes \`map\`'s settings: how many run at once, and whether a failing arm leaves its slot null instead of failing the run. A function that hands nothing back has an always-null slot either way.
 
 \`\`\`
 cb = callback({ … })                      # id + url; one use, dies with the run
 cb = callback({ … }, { once: false, ttl: 2d })          # repeatable / time-bounded
 cb = callback((day: <date>) => { … })     # a value supplied when someone acts
 cb = callback(() => \`Chase\`(company))         # defer a call
-await first(cb-[:Called]->)               # wait for it (landing: At + one field per parameter)
+await cb-[:Called]->               # wait for it (landing: At + one field per parameter)
 
 await until(() => { refresh co; return co.Stage == "Won" }, { every: 1h })   # re-check a condition on a cadence
 \`\`\`
@@ -249,8 +249,7 @@ Content is a list (shared content first, record-specific content last, so repeat
 - **Reaching for a loop.** Enumeration is a traversal-headed block, not a loop.
 - **Using an alias outside its block.** \`return\` what the rest of the automation needs from the block.
 - **Listening to an adapter type instead of an instance.** Connect first; listen to the instance.
-- **Reading a review's answer before it exists.** The answer binds only after \`await first(q-[:Response]->)\`, and once resolved.
-- **Writing \`await\` in front of a bare walk.** The wait is the \`first\` read, held until there is something to read: \`await first(q-[:Response]->)\`, never \`await q-[:Response]->\`.
+- **Reading a review's answer before it exists.** The answer binds only after \`await q-[:Response]->\`, and once resolved.
 - **Running several functions at once.** \`race(f, g)\` takes the first to finish and \`all(f, g)\` every one. The arms are the call's arguments, with no \`await\` in front: the wait is the \`await\` inside an arm. An arm is \`() => { … }\` or the name of a declaration; a plain value or a bare block is refused when you save.
 - **Leaving an unattended review with no timeout.** An \`await\` on its own waits forever; race it against \`() => { await sleep(2d) }\` so a default takes over when time runs out.
 - **Expecting one extraction per piece from a list.** \`extract(pieces, Shape)\` reads them all as a single job; \`map(pieces, (p) => extract([p], Shape))\` is the per-piece form.

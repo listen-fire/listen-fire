@@ -531,7 +531,7 @@ An automation can wait for something to happen in your system:
 
 ```
 c = write crm-[:Company]-> { Name: "Vireo Robotics" }
-r = await FIRST(c-[:Comments]->)
+r = await c-[:Comments]->
 ```
 
 The run stops at the `await` and resumes when a comment arrives. Listen-Fire
@@ -1510,7 +1510,7 @@ from `apps/cli`.
 
    function discuss(company: <crm-[:Company]->>) {
      thread = write crm-[:Company]-> { Name: "Discuss ${company.Name}" }
-     c = await first(thread-[:Comments]->)
+     c = await thread-[:Comments]->
      write crm-[:Company]-> { Name: "Answered ${c.Text}" }
    }
 
