@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `PROTOCOL_MINOR` is 5: adapter protocol 2.5, arrivals. `PROTOCOL_MINORS` gains its row (`awaitKeys`). The results check takes `awaitKeys`' answer (`[{ key }` or `{ gone: true }]`) and the `arrivals` a module reports beside `preprocessInbound`'s events and on `checkInbound`'s `accepted`; an arrival names its identity, a gone one does not.
 - `protocol_minor_of` is what a manifest declares (`protocolMinor`), else 0: the methods it lists no longer raise it. `minor_introducing(method)` names the minor that introduced a method, for a host that requires it.
 - `PROTOCOL_MINOR` is 4: adapter protocol 2.4, `refreshEventSubscription`. `PROTOCOL_MINORS` gains its row, and the results check takes its answer (`{ expiresAt? }` or `null`) and `ensureEventSubscription`'s `expiresAt`.
 

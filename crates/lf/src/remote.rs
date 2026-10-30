@@ -47,6 +47,7 @@ pub const ADAPTER_METHODS: &[&str] = &[
     "removeEventSubscription",
     "resolveAwait",
     "wakeKeys",
+    "awaitKeys",
     "readRecord",
     "translateFilter",
     "getDedupRules",
@@ -93,6 +94,7 @@ const OPTIONAL_REMOTE_METHODS: &[&str] = &[
     "ensureEventSubscription",
     "removeEventSubscription",
     "wakeKeys",
+    "awaitKeys",
 ];
 
 /// `RESOURCES_REFERENCE_FIELD_ID`.

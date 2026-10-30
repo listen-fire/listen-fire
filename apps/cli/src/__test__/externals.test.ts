@@ -3,14 +3,14 @@
 // serves; a dry run captures its writes instead of making them; a run that
 // calls an external too often is stopped at the segment's call ceiling; an
 // external stating a minor of the adapter protocol newer than listen-fire speaks is
-// refused by name.
+// refused by name; an external's comment reaches the host as an arrival.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { companies, lf, lfCommand, project } from './example';
+import { companies, externalPort, lf, lfCommand, project, served } from './example';
 
 const STATE = '.lf/externals/acme_crm/state.json';
 
@@ -80,6 +80,25 @@ test('listen-fire check refuses an external stating a newer protocol minor, nami
   assert.equal(check.code, 1, check.out);
   assert.match(
     check.out,
-    /external "acme_crm" \(@acme\/crm 9\.9\.9\) speaks adapter protocol 2\.99; this listen-fire \(\d+\.\d+\.\d+[^)]*\) speaks 2\.0–2\.4\. Upgrade listen-fire to a release that speaks 2\.99 \(the protocol's Changes list names it\), or use a @acme\/crm that speaks 2\.4 or lower\./,
+    /external "acme_crm" \(@acme\/crm 9\.9\.9\) speaks adapter protocol 2\.99; this listen-fire \(\d+\.\d+\.\d+[^)]*\) speaks 2\.0–2\.5\. Upgrade listen-fire to a release that speaks 2\.99 \(the protocol's Changes list names it\), or use a @acme\/crm that speaks 2\.5 or lower\./,
+  );
+});
+
+test("the external's comment reaches listen-fire serve as an arrival, logged in its state", async () => {
+  const dir = project();
+  const serving = await served(dir);
+  try {
+    const crm = `http://127.0.0.1:${externalPort(dir)}`;
+    const commented = await fetch(`${crm}/dev/comments`, { method: 'POST', body: JSON.stringify({ company: 'company-7', text: 'hello' }) });
+    const answer = (await commented.json()) as { id: string; arrived: { status: number; body: unknown } };
+    assert.deepEqual(answer.arrived, { status: 202, body: { accepted: 1 } });
+  } finally {
+    await serving.stop();
+  }
+  const logged = spawnSync('sqlite3', [join(dir, '.lf/state.db'), "select adapter_type, edge, key, identity, landing from arrival"], { encoding: 'utf8' });
+  assert.equal(logged.status, 0, logged.stderr);
+  assert.equal(
+    logged.stdout.trim(),
+    'acme_crm|Comments|thread:company-7|comment-1|{"recordId":"comment-1","recordType":"Comment","fields":{"Id":"comment-1","Text":"hello"}}',
   );
 });

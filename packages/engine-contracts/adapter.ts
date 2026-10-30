@@ -7,6 +7,7 @@ import type { ExternalRecordRef, FieldEvidence, Resource } from './records';
 import type { FileRef } from './file_ref';
 import type { TriggerEvent, TriggerType } from './event';
 import type { MutationContext } from './mutation_context';
+import type { Arrival, ArrivalsCapability } from './arrivals';
 import type { AwaitableCapability } from './awaitable';
 import type { Actor } from './mutation_context';
 import type { UniquenessConstraints } from './uniqueness';
@@ -602,6 +603,15 @@ export interface Adapter {
   readonly awaitable?: AwaitableCapability;
 
   /**
+   * Arrivals (adapter protocol 2.5) — present on adapters with listenable
+   * edges. It names the key each record's edge is waited on under; what
+   * lands there the adapter reports with the inbound delivery it read
+   * (`preprocessInbound`'s or `checkInbound`'s `arrivals`) or at the `wake`
+   * door. The host keeps the waits and the log of arrivals.
+   */
+  readonly arrivals?: ArrivalsCapability;
+
+  /**
    * Triggers this adapter declares it can fire (P11). Poll is universal
    * fallback, not framework default. Snapshot/changes-feed/webhook/mutation
    * are per-adapter opt-in.
@@ -855,6 +865,8 @@ export interface Adapter {
    */
   preprocessInbound?(input: { raw: unknown; checkpoint?: unknown }): Promise<{
     events: DiscriminableEvent[];
+    /** What the delivery says landed on listenable edges (2.5). */
+    arrivals?: Arrival[];
     checkpoint?: unknown;
   }>;
 
@@ -1874,6 +1886,8 @@ export type InboundCheck =
       outcome: 'accepted';
       events: DiscriminableEvent[];
       wakeKeys?: string[];
+      /** What the request says landed on listenable edges (2.5). */
+      arrivals?: Arrival[];
       checkpoint?: unknown;
       /** The provider's id for this delivery: a redelivery under an id the
        *  host kept before is acked and runs nothing. */

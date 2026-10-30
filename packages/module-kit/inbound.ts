@@ -2,8 +2,9 @@
 // scheme: 'module' }`) writes one function, `checkInbound`, on the methods
 // its `create` returns. The host hands it each request at the module's door
 // as it arrived — method, path, query, headers and the exact bytes — and
-// sends whatever it answers: the events (accepted), a refusal, or a reply (a
-// provider's handshake). Same function in process and over the wire.
+// sends whatever it answers: the events and arrivals (accepted), a refusal,
+// or a reply (a provider's handshake). Same function in process and over the
+// wire.
 //
 //   create: (ctx) => ({
 //     ...adapter,
@@ -17,6 +18,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import type { WireCheckInboundInputShape } from 'engine-contracts';
+import type { Arrival } from 'engine-contracts';
 import type { DiscriminableEvent, InboundCheck } from 'engine-contracts/adapter';
 
 /** One inbound request, read. */
@@ -75,7 +77,12 @@ export function inboundRequest(input: WireCheckInboundInputShape): InboundReques
   };
 }
 
-export function accepted(events: DiscriminableEvent[], more: { wakeKeys?: string[]; checkpoint?: unknown; deliveryId?: string } = {}): InboundCheck {
+/** From the provider: its events, and what it says landed on listenable
+ *  edges (`arrivals`, adapter protocol 2.5). */
+export function accepted(
+  events: DiscriminableEvent[],
+  more: { wakeKeys?: string[]; arrivals?: Arrival[]; checkpoint?: unknown; deliveryId?: string } = {},
+): InboundCheck {
   return { outcome: 'accepted', events, ...more };
 }
 

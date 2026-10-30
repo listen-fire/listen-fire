@@ -336,6 +336,10 @@ impl PushStore for Observed<'_> {
         self.queue_wakes(adapter_type, team_id, keys).await
     }
 
+    async fn log_pushed_arrivals(&self, adapter_type: &str, team_id: &str, arrivals: &[crate::waits::NewArrival]) -> Result<(), String> {
+        self.lf().log_pushed_arrivals(adapter_type, team_id, arrivals).await
+    }
+
     fn notify_pushed(&self) {
         self.note(|seen| seen.notified += 1);
     }
@@ -377,7 +381,7 @@ impl Reader for SuiteReader {
 
     async fn preprocess(&self, _external: &str, _install: &Credential, raw: &Js, _checkpoint: Option<&Js>) -> Result<Extraction, String> {
         let SuiteDelivery { events, checkpoint, .. } = delivery(raw)?;
-        Ok(Extraction { events: events.into_iter().map(|payload| Js::Obj(obj! { "payload" => payload })).collect(), checkpoint })
+        Ok(Extraction { events: events.into_iter().map(|payload| Js::Obj(obj! { "payload" => payload })).collect(), arrivals: Vec::new(), checkpoint })
     }
 
     async fn wake_keys(&self, _external: &str, _install: &Credential, raw: &Js) -> Result<Vec<String>, String> {

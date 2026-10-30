@@ -2,8 +2,10 @@
 //! (docs/contracts/adapter-protocol.md, "Methods"). The nine required
 //! methods are this trait's; a read-only source or a pure sink leaves the
 //! defaulted ones alone. An optional method (`poll`, `preprocessInbound`,
-//! `resolveAwait`, …) is declared in the manifest and answered by
-//! [`Adapter::optional`].
+//! `awaitKeys`, …) is declared in the manifest and answered by
+//! [`Adapter::optional`]. An adapter with listenable edges answers
+//! `awaitKeys` and reports what lands on them as `arrivals` beside the events
+//! of the delivery it reads (adapter protocol 2.5).
 
 use std::future::Future;
 

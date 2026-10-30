@@ -139,6 +139,8 @@ function adapterMember(
       return undefined;
     case 'resolveAwait':
       return adapter.awaitable ? { receiver: adapter.awaitable, name: 'resolveAwait' } : undefined;
+    case 'awaitKeys':
+      return adapter.arrivals ? { receiver: adapter.arrivals, name: 'awaitKeys' } : undefined;
     case 'iterateRelated':
     case 'iterateRelatedPage':
       return {

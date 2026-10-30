@@ -7,7 +7,7 @@
 // gates each module, and off in hosted production for the built-ins
 // (`inProcessValidationDefault`), where it would only cost time.
 
-import { METHODS, type MethodName, type WireManifestResultShape } from 'engine-contracts';
+import { METHODS, type ArrivalsCapability, type MethodName, type WireManifestResultShape } from 'engine-contracts';
 import type { Adapter } from 'module-runtime/adapter';
 import { emptyBrowserSlot, type BrowserSlot } from 'module-runtime/browser';
 
@@ -102,7 +102,8 @@ export class ModuleAnswerInvalid extends Error {
 
 /** Methods whose in-process answer is the wire's answer. The paged ones
  *  stream in process, `resolveFileRef` answers bytes rather than a URL, and
- *  `resolveAwait` lives on `awaitable`, so those cross differently. */
+ *  `resolveAwait` lives on `awaitable` and `awaitKeys` on `arrivals`, so
+ *  those cross differently (`awaitKeys` is validated on its capability). */
 const VALIDATED_METHODS: ReadonlySet<string> = new Set<MethodName>([
   'listEntryPoints',
   'describe',
@@ -154,10 +155,15 @@ function validatingAdapter(module: string, adapter: Adapter): Adapter {
   return new Proxy(adapter, {
     get(target, property, receiver) {
       const member: unknown = Reflect.get(target, property, receiver);
+      if (property === 'arrivals' && target.arrivals !== undefined) return validatingArrivals(module, target.arrivals);
       if (typeof property !== 'string' || typeof member !== 'function' || !isValidatedMethod(property)) return member;
       return async (...args: unknown[]) => validated(module, property, await Reflect.apply(member, target, args));
     },
   });
+}
+
+function validatingArrivals(module: string, arrivals: ArrivalsCapability): ArrivalsCapability {
+  return { awaitKeys: async (input) => validated(module, 'awaitKeys', await arrivals.awaitKeys(input)) };
 }
 
 export interface InProcessAdapterModule {

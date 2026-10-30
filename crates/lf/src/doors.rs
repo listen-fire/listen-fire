@@ -6,7 +6,7 @@
 //!        (`…/<install>/<key>`: one of the install's scoped webhooks, crate::subscriptions)
 //!        (`/hooks/<external>/<install>` is the same door under listen-fire's older name)
 //!   POST /api/public/adapter/<external>/emit  { events }  an external's new data
-//!   POST /api/public/adapter/<external>/wake  { keys }    resume what is parked
+//!   POST /api/public/adapter/<external>/wake  { arrivals } what landed; or { keys }, resume what is parked
 //!
 //! An install is a credential in the secrets file; its name is the
 //! "subscription" in the URL. A delivery to a connection's credential runs
@@ -19,7 +19,9 @@
 //! everywhere. Each delivery, and each emitted batch, is kept as a receipt
 //! holding the events it produced; one under a provider's delivery id kept
 //! before at its subscription is a duplicate, acked and kept out. Events are
-//! queued as `fire_event` work rows naming their delivery, and wakes as
+//! queued as `fire_event` work rows naming their delivery and the arrival
+//! log's mark when it was kept (where a run started by it reads arrivals
+//! from), arrivals are logged (crate::arrivals), and wakes are queued as
 //! `wake_await` rows in listen-fire's state, drained by `listen-fire serve`.
 
 use std::cell::RefCell;
@@ -33,6 +35,7 @@ use crate::inbound::{
     Answer, Declaration, Delivery, Extraction, InboundStore, Intercept, Kept, PushAuth, PushCaller, PushStore, RawRequest, Scheme, Source, Subscription, answer_delivery,
     same_secret,
 };
+use crate::arrivals::{arrivals_of, log_and_wake};
 use crate::json::Js;
 use crate::obj;
 use crate::run_host::{await_wake_work, queue_await_wake};
@@ -42,6 +45,7 @@ use crate::secrets::{Binding, Credential, Credentials, install_of, signer_of};
 use crate::subscriptions::{has_scoped, scoped_secret};
 use crate::backend::RunHostStore;
 use crate::store::{DeliverySource, NewDelivery, NewWork, Store, StoreError, iso};
+use crate::waits::NewArrival;
 
 /// The field of an install's credential that holds the webhook secret when
 /// the external declares `inbound` and `lf-external.yaml` names none.
@@ -230,6 +234,19 @@ impl<R: Reader> LfDoors<'_, R> {
         }
         Ok(())
     }
+
+    /// The arrival log's mark, on each `fire_event` row a delivery keeps: a
+    /// run it starts reads its waits' arrivals from there, so one that lands
+    /// while the run is starting still counts.
+    fn mark_fire_rows(&self, work: &mut [NewWork]) -> Result<(), String> {
+        let mark = self.store.arrival_mark().map_err(|e| e.to_string())?;
+        for row in work.iter_mut().filter(|row| row.kind == "fire_event") {
+            if let Js::Obj(payload) = &mut row.payload {
+                payload.insert("arrivalMark".into(), Js::Num(mark.into()));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<R: Reader> InboundStore for LfDoors<'_, R> {
@@ -314,6 +331,11 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
     /// the receipt is kept first and its events run after, so a cursor is
     /// never kept past events its receipt does not hold. A duplicate writes
     /// nothing and runs nothing.
+    ///
+    /// The mark its rows carry is taken first, then its arrivals are logged,
+    /// then the rest is kept: a failure to log keeps nothing, and the
+    /// sender's retry logs them again, which a wait reads once (by identity
+    /// and version).
     async fn keep(&self, kept: Kept<'_>) -> Result<bool, String> {
         let adapter_type = &kept.source.adapter_type;
         let came_for = Delivered { id: None, credential: self.delivering_credential(kept.source), subscription: subscription_of(kept.subscription_id).1 };
@@ -332,6 +354,8 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
             }
             EventSink::Inline { .. } => Vec::new(),
         };
+        self.mark_fire_rows(&mut work)?;
+        log_and_wake(self.store, kept.team_id, adapter_type, kept.arrivals)?;
         work.extend(kept.wake_keys.iter().map(|key| await_wake_work(adapter_type, kept.team_id, key)));
         if !self.store.keep_delivery(kept.subscription_id, kept.checkpoint, &receipt, &work).map_err(|e| e.to_string())? {
             if let EventSink::Inline { fired, .. } = &self.sink {
@@ -411,7 +435,7 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
             replay_of: None,
             events: captured,
         };
-        let work: Vec<NewWork> = receipt
+        let mut work: Vec<NewWork> = receipt
             .events
             .iter()
             .map(|pushed| {
@@ -419,6 +443,7 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
                 fire_event_work(external, pushed.get("event").cloned().unwrap_or(Js::Null), Delivered { id: Some(&receipt.id), ..Delivered::default() })
             })
             .collect();
+        self.mark_fire_rows(&mut work)?;
         if !self.store.keep_delivery(&caller.subscription_id, None, &receipt, &work).map_err(|e| e.to_string())? {
             return Ok(false);
         }
@@ -429,6 +454,10 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
 
     async fn enqueue_pushed_wakes(&self, adapter_type: &str, team_id: &str, keys: &[String]) -> Result<(), String> {
         self.queue_wakes(adapter_type, team_id, keys)
+    }
+
+    async fn log_pushed_arrivals(&self, adapter_type: &str, team_id: &str, arrivals: &[NewArrival]) -> Result<(), String> {
+        log_and_wake(self.store, team_id, adapter_type, arrivals).map(|_| ())
     }
 
     fn notify_pushed(&self) {
@@ -488,6 +517,7 @@ impl Reader for SessionReader<'_> {
         let read = self.call(external, install, "preprocessInbound", params).await?;
         Ok(Extraction {
             events: read.get("events").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default(),
+            arrivals: arrivals_of(&read).map_err(|e| format!("preprocessInbound for adapter {external}: {e}"))?,
             checkpoint: read.get("checkpoint").cloned(),
         })
     }
@@ -820,7 +850,22 @@ pub(crate) mod tests {
                                 })
                             })
                             .collect();
-                        Ok(Js::Obj(obj! { "events" => Js::Arr(events) }))
+                        // A comment on a note is an arrival on its `Comments`.
+                        let comments = params.get("raw").and_then(|raw| raw.get("comments")).and_then(Js::as_array).unwrap_or(&[]).to_vec();
+                        let arrivals = comments
+                            .iter()
+                            .map(|comment| {
+                                let text = |key: &str| comment.get(key).cloned().unwrap_or(Js::Null);
+                                let note = comment.get("note").and_then(Js::as_str).unwrap_or_default();
+                                Js::Obj(obj! {
+                                    "edge" => Js::str("Comments"),
+                                    "key" => Js::str(format!("thread:{note}")),
+                                    "identity" => text("id"),
+                                    "landing" => Js::Obj(obj! { "recordType" => Js::str("Comment"), "fields" => Js::Obj(obj! { "Text" => text("Text") }) }),
+                                })
+                            })
+                            .collect();
+                        Ok(Js::Obj(obj! { "events" => Js::Arr(events), "arrivals" => Js::Arr(arrivals) }))
                     }
                     other => Err(ModuleError::not_implemented(other)),
                 }
@@ -1076,6 +1121,148 @@ pub(crate) mod tests {
             }
             let polled: Vec<String> = project.registrations.lock().unwrap().iter().map(Js::to_json).collect();
             assert_eq!(polled, [r#"{"token":"b","polled":true}"#, r#"{"token":"a","polled":true}"#]);
+        });
+    }
+
+    /// The doors over `store` for one push external, `acme`, whose install
+    /// presents `Bearer t0k`, its deliveries queued.
+    fn push_doors(store: &Store) -> LfDoors<'_, NoReader> {
+        let fields = std::collections::BTreeMap::from([("token".to_string(), "t0k".to_string())]);
+        let install = Credential { name: "acme".into(), external: "acme".into(), binding: Binding::Install, fields, origin: Default::default() };
+        LfDoors {
+            store,
+            served: vec![Served { external: "acme".into(), inbound: None, push_field: Some("token".into()) }],
+            installs: std::borrow::Cow::Owned(vec![install]),
+            reader: NoReader,
+            sink: EventSink::Queue,
+            notify: &|| {},
+            listens: Vec::new(),
+        }
+    }
+
+    /// A push external reads no deliveries.
+    pub(crate) struct NoReader;
+
+    impl Reader for NoReader {
+        fn reads_deliveries(&self, _external: &str) -> bool {
+            false
+        }
+        async fn preprocess(&self, _: &str, _: &Credential, _: &Js, _: Option<&Js>) -> Result<Extraction, String> {
+            Err("no deliveries".into())
+        }
+        async fn wake_keys(&self, _: &str, _: &Credential, _: &Js) -> Result<Vec<String>, String> {
+            Ok(Vec::new())
+        }
+        async fn check_inbound(&self, _: &str, _: &Credential, _: &Js, _: Option<&str>, _: Option<&Js>) -> Result<Js, String> {
+            Err("no deliveries".into())
+        }
+    }
+
+    fn state_file() -> (std::path::PathBuf, Store) {
+        let dir = std::env::temp_dir().join(format!("lf-doors-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(&dir.join("state.db")).unwrap();
+        (dir, store)
+    }
+
+    /// A run `run-1` parked on its wait for `key`'s `Comments`: the wait's id.
+    fn parked_on(store: &Store, key: &str) -> String {
+        use crate::store::{Park, ParkKind, RunStart};
+        store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+        let since = store.arrival_mark().unwrap();
+        let open = crate::waits::OpenWait { run_id: "run-1", team_id: LOCAL_TENANT, adapter_type: "acme", edge: "Comments", key, since };
+        let wait = store.open_wait(&open).unwrap();
+        store.commit_park(&Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
+        wait
+    }
+
+    fn queued(store: &Store) -> Vec<(String, String)> {
+        let due = crate::store::ClaimDue { limit: 100, lease_ms: 60_000, due_by: None, kinds: None };
+        store.claim_due(&due).unwrap().into_iter().map(|row| (row.kind, row.payload.to_json())).collect()
+    }
+
+    async fn wake(doors: &LfDoors<'_, NoReader>, body: &str) -> Answer {
+        let headers = vec![("authorization".to_string(), "Bearer t0k".to_string())];
+        crate::inbound::answer_push(doors, crate::inbound::Push::Wake, "acme", &headers, body.as_bytes()).await
+    }
+
+    #[test]
+    fn the_wake_door_logs_arrivals_and_queues_a_wake_per_parked_wait() {
+        let (dir, store) = state_file();
+        let wait = parked_on(&store, "thread:c1");
+        in_local(async {
+            let doors = push_doors(&store);
+            let answer = wake(&doors, r#"{"arrivals":[{"edge":"Comments","key":"thread:c1","identity":"k1","landing":{"fields":{"Text":"hi"}}},{"edge":"Comments","key":"thread:c9","identity":"k2","landing":{"fields":{}}}]}"#).await;
+            assert_eq!((answer.status, answer.body.to_json()), (202, r#"{"accepted":2}"#.to_string()));
+        });
+        assert_eq!(queued(&store), [("wake_await".to_string(), format!(r#"{{"waitId":"{wait}"}}"#))]);
+        let landed = store.wait_arrivals(&wait).unwrap().arrivals;
+        assert_eq!(landed.iter().map(|a| (a.identity.as_str(), a.landing.to_json())).collect::<Vec<_>>(), [("k1", r#"{"fields":{"Text":"hi"}}"#.to_string())]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn an_arrival_without_identity_is_refused_by_name() {
+        let (dir, store) = state_file();
+        in_local(async {
+            let doors = push_doors(&store);
+            let answer = wake(&doors, r#"{"arrivals":[{"edge":"Comments","key":"thread:c1","landing":{"fields":{}}}]}"#).await;
+            assert_eq!(
+                (answer.status, answer.body.to_json()),
+                (400, r#"{"error":"bad_request","issues":[{"path":"arrivals","message":"arrival 0 on 'Comments' has no identity"}]}"#.to_string())
+            );
+            // The key form still wakes as it did.
+            let keys = wake(&doors, r#"{"keys":["thread:c1"]}"#).await;
+            assert_eq!((keys.status, keys.body.to_json()), (202, r#"{"accepted":1}"#.to_string()));
+            assert_eq!(wake(&doors, r#"{"arrivals":[]}"#).await.status, 400);
+        });
+        assert_eq!(store.arrival_mark().unwrap(), 0, "nothing was logged");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    const NOTE_AND_COMMENT: &[u8] = br#"{"notes":[{"id":"n-1","Title":"hello"}],"comments":[{"note":"n-0","id":"k1","Text":"hi"}]}"#;
+
+    /// One delivery of `body` to the inbox's door, its events queued.
+    async fn queue_delivery(session: &Session, body: &[u8], id: &str) -> Answer {
+        let headers = signed(body, id);
+        let delivery = Delivery { provider: "inbox", subscription_id: "inbox", raw_body: body, headers: &headers, method: "POST", path: "", query: "", source: DeliverySource::Webhook };
+        let doors = LfDoors::of_session(session, EventSink::Queue, &|| {});
+        answer_delivery(&doors, delivery).await
+    }
+
+    #[test]
+    fn a_delivery_asks_arrivals_and_logs_them() {
+        let project = InboxProject::new();
+        in_local(async {
+            let session = project.session().await;
+            use crate::store::RunStart;
+            session.store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+            let open = crate::waits::OpenWait { run_id: "run-1", team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key: "thread:n-0", since: 0 };
+            let wait = session.store.open_wait(&open).unwrap();
+            assert_eq!(queue_delivery(&session, br#"{"notes":[],"comments":[{"note":"n-0","id":"k1","Text":"hi"}]}"#, "d-1").await.status, 200);
+            let landed = session.store.wait_arrivals(&wait).unwrap().arrivals;
+            assert_eq!(
+                landed.iter().map(|a| (a.identity.as_str(), a.landing.to_json())).collect::<Vec<_>>(),
+                [("k1", r#"{"recordType":"Comment","fields":{"Text":"hi"}}"#.to_string())],
+                "a delivery with no events is kept for its arrivals"
+            );
+        });
+    }
+
+    #[test]
+    fn a_delivery_keeps_the_arrival_mark_on_its_fire_row() {
+        let project = InboxProject::new();
+        in_local(async {
+            let session = project.session().await;
+            let earlier = NewArrival { edge: "Comments".into(), key: "thread:n-9".into(), identity: Some("k0".into()), version: None, landing: None, gone: false };
+            session.store.log_arrivals(LOCAL_TENANT, "inbox", &[earlier], &iso(0)).unwrap();
+            let mark = session.store.arrival_mark().unwrap();
+            assert_eq!(queue_delivery(&session, NOTE_AND_COMMENT, "d-1").await.status, 200);
+            let due = crate::store::ClaimDue { limit: 10, lease_ms: 60_000, due_by: None, kinds: None };
+            let rows = session.store.claim_due(&due).unwrap();
+            let fired: Vec<Option<&Js>> = rows.iter().filter(|r| r.kind == "fire_event").map(|r| r.payload.get("arrivalMark")).collect();
+            assert_eq!(fired, [Some(&Js::Num(mark.into()))], "the mark is taken before the delivery's own arrivals are logged");
+            assert_eq!(session.store.arrival_mark().unwrap(), mark + 1);
         });
     }
 

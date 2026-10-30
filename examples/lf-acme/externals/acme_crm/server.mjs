@@ -8,16 +8,21 @@
 // created companies as `{ companies: [{ id, Name }] }`. Each
 // company has a comment thread (`Comments`, to `Comment { Id, Text }`) a movement
 // can await: `await company-[:Comments]->` parks until somebody
-// comments, on the correlation key `thread:<company id>`. A webhook delivery
-// may carry comments too (`comments: [{ thread, text }]`), each waking its
-// thread. Companies and comments are kept in the file named by
-// ACME_CRM_STATE, so a test (or a developer) can see a write land.
+// comments. The thread is waited on under the key `thread:<company id>`
+// (`awaitKeys`), and each comment is reported as an arrival on it, named by
+// its `Id` (adapter protocol 2.5). A webhook delivery may name threads too
+// (`comments: [{ thread, text }]`): the CRM reports each named thread's
+// comments as it holds them, and wakes the thread by its key, the older form,
+// which runs still parked on keys read. Companies and comments are kept in
+// the file named by ACME_CRM_STATE, so a test (or a developer) can see a
+// write land.
 //
 // The CRM also owns an inbound side of its own, the way a hosted system
 // would: `POST /dev/companies { Name }` and `POST /dev/comments { company,
 // text }` change its state and push the change to the host's doors (`emit`,
 // `wake` under LF_HOST_URL, which `listen-fire serve` hands the externals it starts),
-// presenting the credential the host calls it with.
+// presenting the credential the host calls it with. A comment is pushed as
+// its arrival (answered as `arrived`) and as its thread's key (`pushed`).
 
 import { createServer } from 'node:http';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -40,6 +45,22 @@ function readState() {
 }
 
 const threadKey = (company) => `thread:${company}`;
+
+/** A comment as an arrival on its thread's `Comments`. */
+function commentArrival(comment) {
+  return {
+    edge: COMMENTS_EDGE,
+    key: threadKey(comment.thread),
+    identity: comment.id,
+    landing: { recordId: comment.id, recordType: COMMENT, fields: { Id: comment.id, Text: comment.Text } },
+  };
+}
+
+/** The comments the CRM holds on the threads a delivery names, as arrivals. */
+function threadArrivals(raw) {
+  const threads = new Set((raw?.comments ?? []).map((comment) => comment.thread));
+  return readState().comments.filter((comment) => threads.has(comment.thread)).map(commentArrival);
+}
 
 function writeState(state) {
   if (statePath) writeFileSync(statePath, JSON.stringify(state, null, 2));
@@ -142,7 +163,7 @@ const METHODS = {
     writeState(state);
     return { adapterType: 'acme_crm', externalId, recordType, data: { ...existing.fields } };
   },
-  preprocessInbound: ({ raw }) => ({ events: (raw?.companies ?? []).map(companyCreatedEvent) }),
+  preprocessInbound: ({ raw }) => ({ events: (raw?.companies ?? []).map(companyCreatedEvent), arrivals: threadArrivals(raw) }),
   listEventTypes: () => [
     { tag: COMPANY_CREATED, positionType: COMPANY },
     { tag: COMPANY_UPDATED, positionType: COMPANY },
@@ -162,6 +183,11 @@ const METHODS = {
   },
   // The threads a webhook delivery's comments land on.
   wakeKeys: ({ raw }) => (raw?.comments ?? []).map((comment) => threadKey(comment.thread)),
+  // The key a company's thread is waited on under: read off the company alone.
+  awaitKeys: ({ edge, heads }) => {
+    if (edge !== COMMENTS_EDGE) throw new Error(`'${edge}' is not a listenable edge (only '${COMMENTS_EDGE}')`);
+    return heads.map(({ recordId }) => ({ key: threadKey(recordId) }));
+  },
 };
 
 // The credential the host calls with: the one this install holds, which a
@@ -197,8 +223,11 @@ const DEV_ROUTES = {
     const comment = { id: `comment-${state.comments.length + 1}`, thread: body.company, Text: body.text };
     state.comments.push(comment);
     writeState(state);
+    // The comment, as an arrival on its thread; then the thread's key, which
+    // wakes a run parked on it in the older form.
+    const arrived = await push('wake', { arrivals: [commentArrival(comment)] });
     const pushed = await push('wake', { keys: [threadKey(body.company)] });
-    return [200, { id: comment.id, pushed }];
+    return [200, { id: comment.id, pushed, arrived }];
   },
 };
 

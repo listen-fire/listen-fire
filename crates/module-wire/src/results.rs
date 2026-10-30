@@ -201,6 +201,18 @@ fn actor_identity() -> S {
     ])
 }
 
+fn await_landing() -> S {
+    obj(vec![opt("recordId", S::Str), opt("recordType", S::Str), req("fields", record(S::Unknown))])
+}
+
+/// `WireArrival`: an arrival names its identity; a gone one names none.
+fn arrival() -> S {
+    S::Union(vec![
+        obj(vec![req("edge", S::Str), req("key", S::Str), req("identity", S::Str), opt("version", S::Str), req("landing", await_landing())]),
+        obj(vec![req("edge", S::Str), req("key", S::Str), req("gone", S::LiteralTrue)]),
+    ])
+}
+
 /// The result schema of `method`; None for a method whose result this host
 /// does not yet hold to its schema (named in the module's callers).
 fn result_schema(method: &str) -> Option<S> {
@@ -217,7 +229,8 @@ fn result_schema(method: &str) -> Option<S> {
         "getFieldValue" | "invokeFieldFunction" => S::Unknown,
         "getRelated" => arr(related_result()),
         "iterateRelated" | "iterateRelatedPage" => related_page(),
-        "preprocessInbound" | "poll" => obj(vec![req("events", arr(discriminable_event())), opt("checkpoint", S::Unknown)]),
+        "preprocessInbound" => obj(vec![req("events", arr(discriminable_event())), opt("arrivals", arr(arrival())), opt("checkpoint", S::Unknown)]),
+        "poll" => obj(vec![req("events", arr(discriminable_event())), opt("checkpoint", S::Unknown)]),
         "listEventTypes" => arr(obj(vec![
             req("tag", S::Str),
             req("positionType", S::Str),
@@ -242,7 +255,7 @@ fn result_schema(method: &str) -> Option<S> {
                     "landed",
                     obj(vec![
                         req("status", S::Literal("landed")),
-                        req("landings", arr(obj(vec![opt("recordId", S::Str), opt("recordType", S::Str), req("fields", record(S::Unknown))]))),
+                        req("landings", arr(await_landing())),
                         req("correlationKey", S::Str),
                     ]),
                 ),
@@ -250,6 +263,7 @@ fn result_schema(method: &str) -> Option<S> {
             ],
         },
         "wakeKeys" => arr(S::Str),
+        "awaitKeys" => arr(S::Union(vec![obj(vec![req("key", S::Str)]), obj(vec![req("gone", S::LiteralTrue)])])),
         "checkInbound" => S::Tagged {
             key: "outcome",
             members: vec![
@@ -259,6 +273,7 @@ fn result_schema(method: &str) -> Option<S> {
                         req("outcome", S::Literal("accepted")),
                         req("events", arr(discriminable_event())),
                         opt("wakeKeys", arr(S::Str)),
+                        opt("arrivals", arr(arrival())),
                         opt("checkpoint", S::Unknown),
                         opt("deliveryId", S::Str),
                     ]),
@@ -453,6 +468,25 @@ mod tests {
         let checked = check("checkInbound", "mail", &js(r#"{"outcome":"accepted","events":[],"deliveryId":"d-1","extra":1}"#)).unwrap();
         assert_eq!(checked.to_json(), r#"{"outcome":"accepted","events":[],"deliveryId":"d-1"}"#);
         assert!(check("checkInbound", "mail", &js(r#"{"outcome":"accepted","events":[],"deliveryId":7}"#)).is_err());
+    }
+
+    #[test]
+    fn arrivals_ride_on_a_deliverys_reading_and_name_their_identity() {
+        let landed = r#"{"edge":"Comments","key":"thread:c1","identity":"k1","landing":{"fields":{"Text":"hi"}}}"#;
+        let gone = r#"{"edge":"Comments","key":"thread:c2","gone":true}"#;
+        let read = check("preprocessInbound", "acme", &js(&format!(r#"{{"events":[],"arrivals":[{landed},{gone}]}}"#))).unwrap();
+        assert_eq!(read.get("arrivals").map(Js::to_json), Some(format!("[{landed},{gone}]")));
+        let accepted = check("checkInbound", "mail", &js(&format!(r#"{{"outcome":"accepted","events":[],"arrivals":[{landed}]}}"#))).unwrap();
+        assert_eq!(accepted.get("arrivals").map(Js::to_json), Some(format!("[{landed}]")));
+        let unnamed = r#"{"events":[],"arrivals":[{"edge":"Comments","key":"thread:c1","landing":{"fields":{}}}]}"#;
+        assert!(check("preprocessInbound", "acme", &js(unnamed)).unwrap_err().contains("Invalid input at arrivals.0"));
+        assert!(check("poll", "acme", &js(r#"{"events":[],"arrivals":[]}"#)).unwrap().get("arrivals").is_none(), "a poll reports none");
+    }
+
+    #[test]
+    fn await_keys_answer_a_key_or_gone_per_head() {
+        assert_eq!(check("awaitKeys", "acme", &js(r#"[{"key":"thread:c1"},{"gone":true}]"#)).unwrap().to_json(), r#"[{"key":"thread:c1"},{"gone":true}]"#);
+        assert!(check("awaitKeys", "acme", &js(r#"[{"gone":false}]"#)).is_err());
     }
 
     #[test]

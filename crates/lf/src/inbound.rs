@@ -6,8 +6,9 @@
 //!
 //! The webhook door: intercepts → subscription → provider check → signature
 //! → preprocessInbound → capture an event's receipt → advance the pull cursor
-//! → queue a work row per receipt and per await wake → ack. Capture, queue,
-//! then ack: the sender's 200 means every receipt and wake has its work row.
+//! → log the arrivals the delivery reports → queue a work row per receipt and
+//! per await wake → ack. Capture, queue, then ack: the sender's 200 means
+//! every receipt, arrival and wake is kept.
 //! A delivery the provider names (a declared header, or the module's check)
 //! is kept once per subscription: its redelivery is acked as a duplicate.
 //! A module that checks its own inbound (`scheme: module`) is handed the raw
@@ -18,9 +19,11 @@
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
+use crate::arrivals::arrivals_of;
 use crate::http::header;
 use crate::json::Js;
 use crate::obj;
+use crate::waits::NewArrival;
 pub use crate::store::DeliverySource;
 
 /// The placeholder a subscription holds until its registration returns a
@@ -380,6 +383,8 @@ pub struct Source {
 /// What `preprocessInbound` read off a delivery.
 pub struct Extraction {
     pub events: Vec<Js>,
+    /// What the delivery says landed on listenable edges.
+    pub arrivals: Vec<NewArrival>,
     pub checkpoint: Option<Js>,
 }
 
@@ -447,6 +452,8 @@ pub struct Kept<'a> {
     pub source: &'a Source,
     pub team_id: &'a str,
     pub wake_keys: &'a [String],
+    /// Logged, each parked wait on their records woken.
+    pub arrivals: &'a [NewArrival],
     /// The provider's id for the delivery: a second one under it, at the
     /// same subscription, is a duplicate.
     pub external_id: Option<&'a str>,
@@ -573,7 +580,8 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
                 let events = answer.get("events").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default();
                 let keys = answer.get("wakeKeys").and_then(Js::as_array).unwrap_or(&[]).iter().filter_map(Js::as_str).map(str::to_string).collect::<Vec<_>>();
                 let external_id = answer.get("deliveryId").and_then(Js::as_str).filter(|id| !id.is_empty()).map(str::to_string);
-                (Extraction { events, checkpoint: answer.get("checkpoint").cloned() }, Wakes::Known(keys), external_id)
+                let arrivals = arrivals_of(&answer).map_err(|e| format!("checkInbound for adapter {}: {e}", source.adapter_type))?;
+                (Extraction { events, arrivals, checkpoint: answer.get("checkpoint").cloned() }, Wakes::Known(keys), external_id)
             }
         }
     } else {
@@ -618,7 +626,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
         Wakes::Known(keys) => Ok(keys),
         Wakes::Read(body) => store.wake_keys(&source, &body).await,
     };
-    if extraction.events.is_empty() && wakes.as_ref().is_ok_and(Vec::is_empty) {
+    if extraction.events.is_empty() && extraction.arrivals.is_empty() && wakes.as_ref().is_ok_and(Vec::is_empty) {
         return Ok(Ok(Received::Kept(0)));
     }
     // The pull cursor rides on "receipted", not "run", and is kept with the
@@ -631,6 +639,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
         source: &source,
         team_id: &subscription.team_id,
         wake_keys: wakes.as_deref().unwrap_or(&[]),
+        arrivals: &extraction.arrivals,
         // A delivery whose wakes failed is answered 500 and sent again: kept
         // without its id, so the retry is kept rather than a duplicate.
         external_id: external_id.as_deref().filter(|_| wakes.is_ok()),
@@ -693,6 +702,8 @@ pub trait PushStore {
     /// nothing queued, for a duplicate: its external id was kept before.
     async fn enqueue_pushed(&self, caller: &PushCaller, captured: Vec<Js>, external_id: Option<&str>) -> Result<bool, String>;
     async fn enqueue_pushed_wakes(&self, adapter_type: &str, team_id: &str, keys: &[String]) -> Result<(), String>;
+    /// The arrivals logged, and a wake queued per wait parked on their records.
+    async fn log_pushed_arrivals(&self, adapter_type: &str, team_id: &str, arrivals: &[NewArrival]) -> Result<(), String>;
     fn notify_pushed(&self);
 }
 
@@ -732,7 +743,7 @@ pub async fn answer_push<S: PushStore>(store: &S, push: Push, adapter_type: &str
         },
         Push::Wake => match wake_body(body.as_ref()) {
             Err(issue) => return bad_request(issue),
-            Ok(keys) => wake(store, &caller, &keys).await,
+            Ok(woken) => wake(store, &caller, &woken).await,
         },
     };
     answered.unwrap_or_else(|error| {
@@ -760,13 +771,35 @@ fn emit_body(body: Option<&Js>) -> Result<(Vec<Js>, Option<String>), (String, St
     Ok((read.get("events").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default(), delivery_id))
 }
 
-/// `{ keys }`: 1 to 1,000 non-empty texts.
-fn wake_body(body: Option<&Js>) -> Result<Vec<String>, (String, String)> {
-    let keys = body.and_then(|b| b.get("keys")).and_then(Js::as_array).ok_or(("keys".to_string(), "expected an array".to_string()))?;
+/// What one push to the wake door wakes.
+struct Woken {
+    keys: Vec<String>,
+    arrivals: Vec<NewArrival>,
+}
+
+/// `{ keys }` (1 to 1,000 non-empty texts), `{ arrivals }` (1 to 1,000, each
+/// naming its identity, or gone), or both.
+fn wake_body(body: Option<&Js>) -> Result<Woken, (String, String)> {
+    let listed = |name: &str| body.and_then(|b| b.get(name));
+    let arrivals = match listed("arrivals") {
+        None => Vec::new(),
+        Some(Js::Arr(items)) if items.is_empty() || items.len() > DOOR_MAX_BATCH => {
+            return Err(("arrivals".into(), format!("expected between 1 and {DOOR_MAX_BATCH} arrivals")));
+        }
+        Some(_) => arrivals_of(body.unwrap_or(&Js::Null)).map_err(|issue| ("arrivals".to_string(), issue))?,
+    };
+    if listed("keys").is_none() && !arrivals.is_empty() {
+        return Ok(Woken { keys: Vec::new(), arrivals });
+    }
+    let keys = listed("keys").and_then(Js::as_array).ok_or(("keys".to_string(), "expected an array".to_string()))?;
     if keys.is_empty() || keys.len() > DOOR_MAX_BATCH {
         return Err(("keys".into(), format!("expected between 1 and {DOOR_MAX_BATCH} keys")));
     }
-    keys.iter().map(|k| k.as_str().filter(|k| !k.is_empty()).map(str::to_string).ok_or(("keys".to_string(), "expected non-empty strings".to_string()))).collect()
+    let keys = keys
+        .iter()
+        .map(|k| k.as_str().filter(|k| !k.is_empty()).map(str::to_string).ok_or(("keys".to_string(), "expected non-empty strings".to_string())))
+        .collect::<Result<_, _>>()?;
+    Ok(Woken { keys, arrivals })
 }
 
 fn bad_request((path, message): (String, String)) -> Answer {
@@ -813,10 +846,17 @@ async fn emit<S: PushStore>(store: &S, caller: &PushCaller, events: Vec<Js>, del
 }
 
 /// `wakeKeys`: a wake per key; a key nothing is parked on drains as a no-op.
-async fn wake<S: PushStore>(store: &S, caller: &PushCaller, keys: &[String]) -> Result<Answer, String> {
-    store.enqueue_pushed_wakes(&caller.adapter_type, &caller.team_id, keys).await?;
+/// Arrivals are logged, each waking the waits parked on its record; one no
+/// wait reads is kept for a wait opened later. `accepted` counts both.
+async fn wake<S: PushStore>(store: &S, caller: &PushCaller, woken: &Woken) -> Result<Answer, String> {
+    if !woken.arrivals.is_empty() {
+        store.log_pushed_arrivals(&caller.adapter_type, &caller.team_id, &woken.arrivals).await?;
+    }
+    if !woken.keys.is_empty() {
+        store.enqueue_pushed_wakes(&caller.adapter_type, &caller.team_id, &woken.keys).await?;
+    }
     store.notify_pushed();
-    Ok(Answer::of(202, Js::Obj(obj! { "accepted" => Js::Num((keys.len() as u64).into()) })))
+    Ok(Answer::of(202, Js::Obj(obj! { "accepted" => Js::Num(((woken.keys.len() + woken.arrivals.len()) as u64).into()) })))
 }
 
 #[cfg(test)]
@@ -918,6 +958,8 @@ mod tests {
         seen: std::cell::RefCell<Vec<String>>,
         queued: std::cell::Cell<usize>,
         wakes: std::cell::RefCell<Vec<String>>,
+        /// The identities of the arrivals kept.
+        arrived: std::cell::RefCell<Vec<String>>,
         /// Each kept delivery's external id; one kept before is a duplicate.
         kept: std::cell::RefCell<Vec<Option<String>>>,
     }
@@ -929,6 +971,7 @@ mod tests {
                 seen: Default::default(),
                 queued: Default::default(),
                 wakes: Default::default(),
+                arrived: Default::default(),
                 kept: Default::default(),
             }
         }
@@ -972,6 +1015,7 @@ mod tests {
             self.kept.borrow_mut().push(external_id);
             self.queued.set(self.queued.get() + kept.receipts.len());
             self.wakes.borrow_mut().extend(kept.wake_keys.iter().cloned());
+            self.arrived.borrow_mut().extend(kept.arrivals.iter().map(|a| a.identity.clone().unwrap_or_else(|| format!("gone {}", a.key))));
             Ok(true)
         }
         fn notify(&self) {}
@@ -992,6 +1036,19 @@ mod tests {
             store.seen.borrow()[0],
             r#"{"method":"POST","path":"/api/public/webhook-sync/mail/inst","query":"a=1","headers":{"content-type":"application/x-www-form-urlencoded"},"body":"YT1i"} key POST"#
         );
+    }
+
+    #[tokio::test]
+    async fn a_modules_acceptance_keeps_its_arrivals_with_or_without_events() {
+        let store = ModuleChecked::answering(
+            r#"{"outcome":"accepted","events":[],"arrivals":[{"edge":"Replies","key":"C1:1","identity":"r1","landing":{"fields":{}}},{"edge":"Replies","key":"C1:2","gone":true}]}"#,
+        );
+        let answer = answer_delivery(&store, delivery("POST", b"a=b", &[])).await;
+        assert_eq!((answer.status, answer.body.to_json()), (200, r#"{"ok":true,"eventsProcessed":0}"#.to_string()));
+        assert_eq!(store.arrived.borrow().clone(), ["r1", "gone C1:2"]);
+        let unnamed = ModuleChecked::answering(r#"{"outcome":"accepted","events":[],"arrivals":[{"edge":"Replies","key":"C1:1","landing":{"fields":{}}}]}"#);
+        assert_eq!(answer_delivery(&unnamed, delivery("POST", b"a=b", &[])).await.status, 500, "a module's answer that names no identity is its failure");
+        assert!(unnamed.kept.borrow().is_empty());
     }
 
     #[tokio::test]
