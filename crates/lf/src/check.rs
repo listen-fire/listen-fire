@@ -26,7 +26,7 @@ use crate::json::Js;
 use crate::project::Project;
 use crate::refinements::{InstanceChain, Refining, refine_instance_schema};
 use crate::protocol::shape_error;
-use crate::schema::{describe_external_schema, retired_reference_key, undeclared_arrival_field};
+use crate::schema::{describe_external_schema, retired_reference_key, undeclared_arrival_field, unreadable_literals_from};
 use crate::secrets::{Construction, Credential, Credentials, Imported, MissingCredential, Secrets, imported_credentials, missing_credentials};
 use crate::sources::{MovementFile, Parsed, scan_movements};
 
@@ -328,7 +328,9 @@ pub(crate) async fn describe_as(running: &RunningExternal, credentials: &Credent
     }
     for (type_id, descriptor) in &descriptors {
         let mut references = descriptor.get("references").and_then(Js::as_array).into_iter().flatten();
-        if let Some(refusal) = references.find_map(|r| retired_reference_key(r).or_else(|| undeclared_arrival_field(r, &descriptors))) {
+        if let Some(refusal) = references.find_map(|r| {
+            retired_reference_key(r).or_else(|| undeclared_arrival_field(r, &descriptors)).or_else(|| unreadable_literals_from(r, &descriptors))
+        }) {
             return Err(format!("Remote adapter \"{name}\" describes '{type_id}': {refusal}"));
         }
     }

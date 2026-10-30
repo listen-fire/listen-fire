@@ -701,6 +701,77 @@ pub fn undeclared_arrival_field(reference: &Js, descriptors: &IndexMap<String, J
     None
 }
 
+/// The refusal of a reference whose `literalsFrom` cannot type what it says
+/// (engine-contracts `unreadableLiteralsFrom` says the same): a `from` path
+/// that does not parse, an `at` naming no field of the landing, a landing of
+/// more than one type on the way, or a field that is not a single text field
+/// (a write's literals are text). A landing nobody described is not judged.
+pub fn unreadable_literals_from(reference: &Js, descriptors: &IndexMap<String, Js>) -> Option<String> {
+    let declared = items(reference.get("literalsFrom"));
+    if declared.is_empty() {
+        return None;
+    }
+    let name = key(nullish_or(reference.get("name"), reference.get("fieldId")));
+    let one_landing = |edge: &str, reference: &Js| match reference_target_type_ids(reference).as_slice() {
+        [one] => Ok(one.clone()),
+        many => Err(format!(
+            "'{name}' declares literalsFrom, but '{edge}' lands on more than one type ({}): a field typed by a write's literals needs one landing",
+            many.iter().map(|id| descriptors.get(id).map_or_else(|| id.clone(), |d| key(d.get("displayName")))).collect::<Vec<_>>().join(", ")
+        )),
+    };
+    let first = match one_landing(&name, reference) {
+        Ok(first) => first,
+        Err(refusal) => return Some(refusal),
+    };
+    'entries: for entry in declared {
+        let from = key(entry.get("from"));
+        if let Err(problem) = movement_checker::families::writes::literals::parse_write_path(&from) {
+            return Some(format!("'{name}' declares a literalsFrom path that cannot be read: {problem}"));
+        }
+        let at: Vec<String> = items(entry.get("at")).iter().map(|step| key(Some(step))).collect();
+        let Some((field, hops)) = at.split_last() else {
+            return Some(format!("'{name}' declares a literalsFrom with an empty 'at': name the field of its landing that the literals type"));
+        };
+        let spelled = at.join(".");
+        let mut landing_id = first.clone();
+        for hop in hops {
+            let Some(landing) = descriptors.get(&landing_id) else { continue 'entries };
+            let references = items(landing.get("references"));
+            let Some(next) = references.iter().find(|r| key(nullish_or(r.get("name"), r.get("fieldId"))) == *hop) else {
+                let has: Vec<String> = references.iter().map(|r| key(nullish_or(r.get("name"), r.get("fieldId")))).collect();
+                return Some(format!(
+                    "'{name}' declares literalsFrom at '{spelled}', but its landing '{}' has no reference '{hop}' (it has: {})",
+                    key(landing.get("displayName")),
+                    if has.is_empty() { "nothing".to_string() } else { has.join(", ") }
+                ));
+            };
+            match one_landing(hop, next) {
+                Ok(next) => landing_id = next,
+                Err(refusal) => return Some(refusal),
+            }
+        }
+        let Some(landing) = descriptors.get(&landing_id) else { continue };
+        let landing_name = key(landing.get("displayName"));
+        let fields = items(landing.get("fields"));
+        match fields.iter().find(|f| f.get("displayName").and_then(Js::as_str) == Some(field.as_str())) {
+            None => {
+                let declared: Vec<&str> = fields.iter().filter_map(|f| f.get("displayName").and_then(Js::as_str)).collect();
+                return Some(format!(
+                    "'{name}' declares literalsFrom at '{spelled}', a field its landing '{landing_name}' does not declare (it declares: {})",
+                    if declared.is_empty() { "nothing".to_string() } else { declared.join(", ") }
+                ));
+            }
+            Some(found) if found.get("kind").and_then(Js::as_str) != Some("string") || found.get("cardinality").and_then(Js::as_str) == Some("many") => {
+                return Some(format!(
+                    "'{name}' declares literalsFrom at '{spelled}', but '{field}' on '{landing_name}' is not a single text field: a write's text literals type only text"
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+    None
+}
+
 /// A non-empty `description` the adapter wrote on a type, field or reference.
 fn described(declared: &Js) -> Option<String> {
     declared.get("description").and_then(Js::as_str).filter(|d| !d.is_empty()).map(str::to_string)
@@ -837,5 +908,52 @@ mod tests {
             "'Replies' names 'Edited' as its version, a field its landing 'Message' does not declare (it declares: Timestamp)"
         );
         assert_eq!(undeclared_arrival_field(&replies(r#", "identity": "Anything""#), &IndexMap::new()), None, "an undescribed landing is not judged");
+    }
+
+    #[test]
+    fn a_literals_from_must_type_one_text_field_of_its_landing() {
+        let descriptors: IndexMap<String, Js> = [
+            ("i", r#"{ "typeId": "i", "displayName": "Interaction", "fields": [{ "fieldId": "id", "displayName": "Id", "kind": "string" }],
+                "references": [{ "fieldId": "actions", "name": "Actions", "targetTypeId": "a" }, { "fieldId": "on", "name": "On", "targetTypeId": "a", "targetTypeIds": ["a", "i"] }] }"#),
+            ("a", r#"{ "typeId": "a", "displayName": "Action", "fields": [{ "fieldId": "v", "displayName": "Value", "kind": "string" },
+                { "fieldId": "n", "displayName": "Count", "kind": "number" }, { "fieldId": "t", "displayName": "Tags", "kind": "string", "cardinality": "many" }], "references": [] }"#),
+        ]
+        .into_iter()
+        .map(|(id, d)| (id.to_string(), js(d)))
+        .collect();
+        let interactions = |at: &str, from: &str| {
+            js(&format!(r#"{{ "fieldId": "interactions", "name": "Interactions", "targetTypeId": "i", "listenable": true, "literalsFrom": [{{ "at": {at}, "from": "{from}" }}] }}"#))
+        };
+        let refusal = |at: &str, from: &str| unreadable_literals_from(&interactions(at, from), &descriptors);
+        assert_eq!(refusal(r#"["Actions", "Value"]"#, "Buttons[].Value"), None);
+        assert_eq!(refusal(r#"["Id"]"#, "Buttons[].Value"), None);
+        assert_eq!(
+            refusal(r#"["Actions", "Value"]"#, "Buttons[.Value").unwrap(),
+            "'Interactions' declares a literalsFrom path that cannot be read: 'Buttons[.Value' has a stray bracket in 'Buttons[': only '[]' may follow a field, before the next '.'"
+        );
+        assert_eq!(
+            refusal(r#"["Actions", "Valu"]"#, "Buttons[].Value").unwrap(),
+            "'Interactions' declares literalsFrom at 'Actions.Valu', a field its landing 'Action' does not declare (it declares: Value, Count, Tags)"
+        );
+        assert_eq!(
+            refusal(r#"["Action", "Value"]"#, "Buttons[].Value").unwrap(),
+            "'Interactions' declares literalsFrom at 'Action.Value', but its landing 'Interaction' has no reference 'Action' (it has: Actions, On)"
+        );
+        assert_eq!(
+            refusal(r#"["On", "Value"]"#, "Buttons[].Value").unwrap(),
+            "'Interactions' declares literalsFrom, but 'On' lands on more than one type (Action, Interaction): a field typed by a write's literals needs one landing"
+        );
+        for field in ["Count", "Tags"] {
+            assert_eq!(
+                refusal(&format!(r#"["Actions", "{field}"]"#), "Buttons[].Value").unwrap(),
+                format!("'Interactions' declares literalsFrom at 'Actions.{field}', but '{field}' on 'Action' is not a single text field: a write's text literals type only text")
+            );
+        }
+        let polymorphic = js(r#"{ "fieldId": "x", "name": "Answers", "targetTypeId": "a", "targetTypeIds": ["a", "i"], "literalsFrom": [{ "at": ["Value"], "from": "Options[].Key" }] }"#);
+        assert_eq!(
+            unreadable_literals_from(&polymorphic, &descriptors).unwrap(),
+            "'Answers' declares literalsFrom, but 'Answers' lands on more than one type (Action, Interaction): a field typed by a write's literals needs one landing"
+        );
+        assert_eq!(unreadable_literals_from(&interactions(r#"["Anything"]"#, "Buttons[].Value"), &IndexMap::new()), None, "an undescribed landing is not judged");
     }
 }

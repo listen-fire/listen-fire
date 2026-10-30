@@ -140,19 +140,34 @@ fn one_of_two_answers_takes_the_values_of_either() {
     assert_eq!(check(POLL, poll), ["MOV_ENUM_UNKNOWN_VALUE 8:7-8:26 \"maybe\" isn't a value of enum (yes | no) — expected one of: yes | no."]);
 }
 
+/// The grammar's cases, shared with engine-contracts' reader of the same
+/// paths so the two cannot drift.
+const WRITE_PATHS: &str = include_str!("../../../packages/engine-contracts/__test__/write_paths.cases.json");
+
 #[test]
 fn the_path_grammar() {
-    assert!(parse_write_path("Buttons[].Value").is_ok());
-    assert!(parse_write_path("Options[].Key").is_ok());
-    assert!(parse_write_path("Answer Type").is_ok());
-    assert!(parse_write_path("Rows[].Cells[].Value").is_ok());
-    assert!(parse_write_path("Buttons[.Value").is_err());
-    assert!(parse_write_path("Buttons[]Value").is_err());
-    assert!(parse_write_path("Buttons..Value").is_err());
-    assert!(parse_write_path(".Value").is_err());
-    assert!(parse_write_path("Buttons.").is_err());
-    assert!(parse_write_path("").is_err());
-    let path = parse_write_path("Buttons[].Value").unwrap();
-    let steps: Vec<(&str, bool)> = path.0.iter().map(|s| (s.field.as_str(), s.each)).collect();
-    assert_eq!(steps, [("Buttons", true), ("Value", false)]);
+    let cases: serde_json::Value = serde_json::from_str(WRITE_PATHS).unwrap();
+    for case in cases["read"].as_array().unwrap() {
+        let path = parse_write_path(case["path"].as_str().unwrap()).unwrap_or_else(|e| panic!("{case}: {e}"));
+        let steps: Vec<serde_json::Value> = path.0.iter().map(|s| serde_json::json!([s.field, s.each])).collect();
+        assert_eq!(serde_json::Value::Array(steps), case["steps"], "{case}");
+    }
+    for case in cases["refused"].as_array().unwrap() {
+        assert_eq!(parse_write_path(case["path"].as_str().unwrap()), Err(case["message"].as_str().unwrap().to_string()), "{case}");
+    }
+}
+
+#[test]
+fn an_empty_list_at_the_path_is_told_and_keeps_the_declared_type() {
+    let chat = "  msg = write ch-[:Messages]-> { Message: \"Pursue?\", Buttons: [] }\n  i = await msg-[:Interactions]->\n  if (only(i-[:Actions]->).Value == \"anything\") { return 1 }\n";
+    assert_eq!(
+        check(CHAT, chat),
+        ["MOV_WRITE_LITERALS_EMPTY 2:63-2:65 this write sets no 'Buttons[].Value', so no answer on '-[:Interactions]->' from chat.Message can take its 'Actions.Value' from it; the field keeps its declared type. Add the entries the answer may choose from, or leave 'Buttons' out of the write"]
+    );
+    let poll = "  poll = write board-[:Polls]-> { Question: \"Lunch?\", Options: [{ Label: \"Yes\" }] }\n  v = await poll-[:Votes]->\n  if (v.Choice == \"anything\") { return 1 }\n";
+    assert_eq!(
+        check(POLL, poll),
+        ["MOV_WRITE_LITERALS_EMPTY 2:64-2:82 this write sets no 'Options[].Key', so no answer on '-[:Votes]->' from polls.Poll can take its 'Choice' from it; the field keeps its declared type. Add the entries the answer may choose from, or leave 'Options' out of the write"]
+    );
+    assert!(diagnostics(CHAT, chat).iter().chain(&diagnostics(POLL, poll)).all(|d| !d.is_error()));
 }

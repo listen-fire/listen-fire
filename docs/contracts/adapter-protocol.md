@@ -346,7 +346,10 @@ reads every declaration from it, the listen declarations included.
     action's `Value` one of the `Value`s of the buttons that message was
     written with. `at` walks from the landing by reference names and ends at
     the field; `from` names the write's field by `displayName`, `[]` going
-    into each entry of a list and `.` into a field of an entry.
+    into each entry of a list and `.` into a field of an entry. The field
+    must be a single text field, and every reference on the way must land on
+    one type. A `literalsFrom` that breaks either rule, or whose `from` does
+    not parse, is refused when `listen-fire` describes your adapter.
 - `description` (optional) on the type, a field or a reference: what it is,
   in a sentence. An author's editor shows it when they hover the record, the
   field or the walk along the reference. A write-only field's description is

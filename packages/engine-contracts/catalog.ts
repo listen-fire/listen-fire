@@ -1419,6 +1419,92 @@ export function undeclaredArrivalField(
   return undefined;
 }
 
+/** One step of a `literalsFrom` path: a write field, and whether the path goes
+ *  on into each entry of the list it holds (`[]`). */
+export interface WriteStep {
+  field: string;
+  each: boolean;
+}
+
+/**
+ * A `literalsFrom` path, `Field("[]")?("." Field("[]")?)*`, a field being any
+ * text without `.`, `[` or `]` that is not blank. The checker reads the same
+ * grammar (movement-checker `parse_write_path`) and refuses in the same words;
+ * a shared case file (`__test__/write_paths.cases.json`) holds the two equal.
+ */
+export function parseWritePath(text: string): { steps: WriteStep[] } | { refused: string } {
+  const steps: WriteStep[] = [];
+  for (const part of text.split('.')) {
+    const each = part.endsWith('[]');
+    const field = each ? part.slice(0, -2) : part;
+    if (field.trim() === '') {
+      return { refused: `'${text}' has an empty field name: a path is fields joined by '.', each optionally followed by '[]'` };
+    }
+    if (/[[\]]/.test(field)) {
+      return { refused: `'${text}' has a stray bracket in '${part}': only '[]' may follow a field, before the next '.'` };
+    }
+    steps.push({ field, each });
+  }
+  return { steps };
+}
+
+/**
+ * Why a reference's `literalsFrom` cannot type what it says, or `undefined`:
+ * a `from` path that does not parse, an `at` naming no field of the landing,
+ * a landing of more than one type on the way, or a field that is not a single
+ * text field (a write's literals are text). A landing nobody described is not
+ * judged. listen-fire's describe refuses in the same words
+ * (crates/lf `unreadable_literals_from`).
+ */
+export function unreadableLiteralsFrom(
+  reference: SchemaReferenceDescriptor,
+  descriptors: ReadonlyMap<string, SchemaTypeDescriptor>,
+): string | undefined {
+  const declared = reference.literalsFrom ?? [];
+  if (declared.length === 0) return undefined;
+  const name = reference.name ?? reference.fieldId;
+  const oneLanding = (edge: string, ref: Pick<SchemaReferenceDescriptor, 'targetTypeId' | 'targetTypeIds'>) => {
+    const landings = referenceTargetTypeIds(ref);
+    if (landings.length === 1) return { landing: landings[0] };
+    const named = landings.map((id) => descriptors.get(id)?.displayName ?? id).join(', ');
+    return {
+      refused: `'${name}' declares literalsFrom, but '${edge}' lands on more than one type (${named}): a field typed by a write's literals needs one landing`,
+    };
+  };
+  const first = oneLanding(name, reference);
+  if ('refused' in first) return first.refused;
+  entries: for (const entry of declared) {
+    const path = parseWritePath(entry.from);
+    if ('refused' in path) return `'${name}' declares a literalsFrom path that cannot be read: ${path.refused}`;
+    const field = entry.at[entry.at.length - 1];
+    const spelled = entry.at.join('.');
+    let landingId = first.landing;
+    for (const hop of entry.at.slice(0, -1)) {
+      const landing = descriptors.get(landingId);
+      if (landing === undefined) continue entries;
+      const next = landing.references.find((r) => (r.name ?? r.fieldId) === hop);
+      if (next === undefined) {
+        const has = landing.references.map((r) => r.name ?? r.fieldId);
+        return `'${name}' declares literalsFrom at '${spelled}', but its landing '${landing.displayName}' has no reference '${hop}' (it has: ${has.length === 0 ? 'nothing' : has.join(', ')})`;
+      }
+      const stepped = oneLanding(hop, next);
+      if ('refused' in stepped) return stepped.refused;
+      landingId = stepped.landing;
+    }
+    const landing = descriptors.get(landingId);
+    if (landing === undefined) continue;
+    const found = landing.fields.find((f) => f.displayName === field);
+    if (found === undefined) {
+      const fields = landing.fields.map((f) => f.displayName);
+      return `'${name}' declares literalsFrom at '${spelled}', a field its landing '${landing.displayName}' does not declare (it declares: ${fields.length === 0 ? 'nothing' : fields.join(', ')})`;
+    }
+    if (found.kind !== 'string' || found.cardinality === 'many') {
+      return `'${name}' declares literalsFrom at '${spelled}', but '${field}' on '${landing.displayName}' is not a single text field: a write's text literals type only text`;
+    }
+  }
+  return undefined;
+}
+
 const schemaDescriptorSchema = z.object({
   adapterType: z.string(),
   types: z.array(schemaTypeDescriptorSchema),

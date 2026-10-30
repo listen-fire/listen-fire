@@ -57,6 +57,8 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
   - After `msg = write ch-[:Messages]-> { …, Buttons: [{ Text: "Pursue", Value: "pursue" }, { Text: "Pass", Value: "pass" }] }` and `i = await msg-[:Interactions]->`, the `Value` of each action `i` carries is `"pursue" | "pass"`.
   - Comparing it against a value no button offered is refused (`MOV_ENUM_UNKNOWN_VALUE`, with a did-you-mean).
   - A value at that path that is not a text literal, such as a name, leaves the field its declared type, with a warning (`MOV_WRITE_GENERIC_UNTYPED`) naming the path.
+  - A write that sets the path with no values, such as `Buttons: []`, is told so with a warning (`MOV_WRITE_LITERALS_EMPTY`): no answer can carry a value from it, and the field keeps its declared type.
+  - A module's `literalsFrom` is refused when its schema is read if `from` does not parse, if `at` names no field of the landing, if the edge or a reference on the way lands on more than one type, or if the field is not a single text field.
   - The catalog snapshot carries it on `EdgeSchema` as `literalsFrom?`, an optional member.
 
 ### Added

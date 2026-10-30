@@ -26,11 +26,26 @@ impl Checker<'_> {
         for (edge_name, edge_schema) in edges.iter() {
             let mut entries = Vec::new();
             for declared in edge_schema.literals_from.iter().flatten() {
-                // A path the catalog cannot spell offers nothing to read.
+                // A module's describe refuses a path that does not parse; a
+                // snapshot that carries one anyway offers nothing to read.
                 let (Ok(path), false) = (parse_write_path(&declared.from), declared.at.is_empty()) else { continue };
                 match literals_at(fields, &path) {
                     LiteralsAt::Literals(options) if !options.is_empty() => entries.push((declared.at.clone(), Ty::Enum { options, open: None })),
-                    LiteralsAt::Literals(_) | LiteralsAt::Absent => {}
+                    // Only a field the write holds yields literals, so it has a span.
+                    LiteralsAt::Literals(_) => {
+                        let Some(span) = span_of(fields, &path) else { continue };
+                        self.report_with(
+                            codes::WRITE_LITERALS_EMPTY,
+                            format!(
+                                "this write sets no '{path}', so no answer on '-[:{edge_name}]->' from {description} can take its '{}' from it; the field keeps its declared type. Add the entries the answer may choose from, or leave '{}' out of the write",
+                                declared.at.join("."),
+                                path.0[0].field
+                            ),
+                            span,
+                            Severity::Warning,
+                        )
+                    }
+                    LiteralsAt::Absent => {}
                     LiteralsAt::NotLiteral(span) => self.report_with(
                         codes::WRITE_GENERIC_UNTYPED,
                         format!(
@@ -74,7 +89,7 @@ pub fn parse_write_path(text: &str) -> Result<WritePath, String> {
             Some(field) => (field, true),
             None => (part, false),
         };
-        if field.is_empty() {
+        if field.trim().is_empty() {
             return Err(format!("'{text}' has an empty field name: a path is fields joined by '.', each optionally followed by '[]'"));
         }
         if field.contains(['[', ']']) {
@@ -102,6 +117,12 @@ pub enum LiteralsAt {
     NotLiteral(Span),
     /// The write does not write the path at all.
     Absent,
+}
+
+/// Where the write field a path starts at is written.
+fn span_of(fields: &[Field], path: &WritePath) -> Option<Span> {
+    let first = &path.0.first()?.field;
+    fields.iter().find(|f| f.name == *first).map(|f| f.value.span)
 }
 
 /// What `fields` hold at `path`. An entry of a list that lacks the rest of

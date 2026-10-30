@@ -1,0 +1,19 @@
+{
+  "comment": "The grammar of a literalsFrom path, held by both readers: crates/movement-checker parse_write_path (tests/write_literals.rs) and engine-contracts parseWritePath (catalog_reference.unit.test.ts). Each case is read or refused in the same words on both sides.",
+  "read": [
+    { "path": "Buttons[].Value", "steps": [["Buttons", true], ["Value", false]] },
+    { "path": "Options[].Key", "steps": [["Options", true], ["Key", false]] },
+    { "path": "Answer Type", "steps": [["Answer Type", false]] },
+    { "path": "Rows[].Cells[].Value", "steps": [["Rows", true], ["Cells", true], ["Value", false]] }
+  ],
+  "refused": [
+    { "path": "Buttons[.Value", "message": "'Buttons[.Value' has a stray bracket in 'Buttons[': only '[]' may follow a field, before the next '.'" },
+    { "path": "Buttons[]Value", "message": "'Buttons[]Value' has a stray bracket in 'Buttons[]Value': only '[]' may follow a field, before the next '.'" },
+    { "path": "Buttons..Value", "message": "'Buttons..Value' has an empty field name: a path is fields joined by '.', each optionally followed by '[]'" },
+    { "path": ".Value", "message": "'.Value' has an empty field name: a path is fields joined by '.', each optionally followed by '[]'" },
+    { "path": "Buttons.", "message": "'Buttons.' has an empty field name: a path is fields joined by '.', each optionally followed by '[]'" },
+    { "path": "", "message": "'' has an empty field name: a path is fields joined by '.', each optionally followed by '[]'" },
+    { "path": "Buttons[].  ", "message": "'Buttons[].  ' has an empty field name: a path is fields joined by '.', each optionally followed by '[]'" },
+    { "path": " []", "message": "' []' has an empty field name: a path is fields joined by '.', each optionally followed by '[]'" }
+  ]
+}
