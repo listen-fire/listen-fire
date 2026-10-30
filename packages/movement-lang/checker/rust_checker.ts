@@ -79,12 +79,14 @@ export function checkSourceInRust(source: string, snapshot: CatalogSnapshot, opt
 
 /** A checker fact about one node, keyed by its AST path (a JSON Pointer from
  *  the Program, `file` naming a library's): a write spread's field list, a
- *  graph spread's copy plan (as plain data), or that a graph entry is a
- *  reference. */
+ *  graph spread's copy plan (as plain data), that a graph entry is a
+ *  reference, or the type a linked write off a record a hop's WHERE chose
+ *  creates. */
 export type Stamp = { file?: string; path: string } & (
   | { spreadFields: readonly string[] }
   | { copy: unknown }
   | { reference: true }
+  | { writtenType: string }
 );
 
 /** What an import binds: a movement or a node declaration. */
@@ -167,6 +169,7 @@ function stampOf(value: unknown): Stamp {
   }
   if (value.copy !== undefined) return { ...at, copy: value.copy };
   if (value.reference === true) return { ...at, reference: true };
+  if (typeof value.writtenType === 'string') return { ...at, writtenType: value.writtenType };
   throw new Error(`the Rust checker answered a stamp that stamps nothing: ${JSON.stringify(value)}`);
 }
 

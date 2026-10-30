@@ -420,7 +420,7 @@ impl Run<'_> {
             WriteTarget::Position { root: PathRoot::Expression { .. }, .. } => unreachable!("the parser refuses a write rooted in an expression"),
             WriteTarget::Linked { .. } | WriteTarget::Tuple { .. } => {}
         }
-        let resolved = self.write_target(&write.target, scope, Verb::Write).await?;
+        let resolved = self.write_target(&self.checked_write_target(&write.target, path), scope, Verb::Write).await?;
         let evaluated = self.write_fields(&lines, &resolved.adapter, &resolved.record_type, scope).await?;
         let handle_type = discriminated_handle_type(resolved.graph.as_ref().and_then(|g| g.schema.as_ref()), &resolved.record_type, &evaluated.fields);
         let target = Target { handle_type, ..resolved };
@@ -440,6 +440,19 @@ impl Run<'_> {
             .with_locks(lock_names, self.find_then_write(&target, &evaluated, &resolve_record, &constraints, &identity.narrowings, &parent_links, scope))
             .await?;
         Ok(Binding::Handle(self.record_write(written, Recorded { binding_name, scope, target: &target, provenance: &evaluated.provenance, into: None })))
+    }
+
+    /// The write's target, naming the type it creates when the check stamped
+    /// one (`writtenType`): off a record a hop's WHERE chose, the record
+    /// carries only its own type, and the check typed it as the member the
+    /// WHERE chose — the run creates what the check checked.
+    fn checked_write_target<'t>(&self, target: &'t WriteTarget, path: &str) -> std::borrow::Cow<'t, WriteTarget> {
+        match (target, self.checked.stamp(&format!("{path}/target"))) {
+            (WriteTarget::Linked { path, explicit_type: None, span }, Some(Stamp::WrittenType(written))) => {
+                std::borrow::Cow::Owned(WriteTarget::Linked { path: path.clone(), explicit_type: Some(written), span: *span })
+            }
+            _ => std::borrow::Cow::Borrowed(target),
+        }
     }
 
     /// The write's field lines, its spreads written out (`expandWriteSpreads`)

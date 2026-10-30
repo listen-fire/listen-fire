@@ -918,6 +918,30 @@ mod tests {
         assert_eq!(found.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>(), ["MOV_LINKED_UNKNOWN_EDGE"], "the other sheet's table: {found:?}");
     }
 
+    /// The stamps the check hands the run for `source` against the schema.
+    fn stamps(schema: &Js, source: &str) -> Vec<serde_json::Value> {
+        let catalog = format!(
+            r#"{{"adapters":{{"sheets":{{"canFire":false,"constructionArgs":[],"schemas":{{"":{}}}}}}},"credentials":{{}},"plugins":{{}}}}"#,
+            schema.to_json()
+        );
+        let catalog = movement_parser::catalog::types::CatalogSnapshot::load(&catalog).unwrap();
+        let options = movement_checker::CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+        let program = crate::check::parse(source).map_err(|e| e.message).unwrap();
+        movement_checker::answer::check_answer(&program, &catalog, options).stamps
+    }
+
+    #[test]
+    fn a_write_off_the_member_hands_the_run_the_type_the_check_resolved() {
+        // The record the WHERE chose carries only its type (`Spreadsheet`),
+        // which has no `Companies` edge: the run creates what the check
+        // resolved off the member.
+        let source = program(&format!("{SELECT}\n  write sheet-[:Companies]-> {{ Name: \"Acme\" }}"));
+        let (schema, _) = refined(&source);
+        assert_eq!(stamps(&schema, &source), [serde_json::json!({ "path": "/statements/2/body/2/write/target", "writtenType": "Companies" })]);
+        let named = program(&format!("{SELECT}\n  write sheet-[:Companies]-><Companies> {{ Name: \"Acme\" }}"));
+        assert_eq!(stamps(&refined(&named).0, &named), Vec::<serde_json::Value>::new(), "a type the write names is the run's already");
+    }
+
     #[test]
     fn a_conjunction_a_field_that_names_no_type_and_a_second_spelling_each_narrow() {
         for (where_, sheet) in [

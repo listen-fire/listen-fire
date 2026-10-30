@@ -83,6 +83,9 @@ pub enum Stamp {
     /// A graph entry whose value is a record: an edge holding it
     /// (`NodeEntry.reference`).
     Reference,
+    /// A linked write's target off a record a hop's WHERE chose: the type it
+    /// creates, which the record's own type cannot say.
+    WrittenType(String),
 }
 
 /// One parsed file: its typed AST, the same tree as JSON (what AST paths
@@ -385,12 +388,13 @@ pub fn join_check(root: File, answer: &Json) -> Result<Checked, String> {
         };
         let node = node_at(file, &path).ok_or_else(|| format!("no node at {path}"))?;
         let node = &node;
-        let stamped = match (stamp.get("spreadFields"), stamp.get("copy"), stamp.get("reference")) {
-            (Some(fields), None, None) if is_write_spread(&path, node) => Stamp::SpreadFields(
+        let stamped = match (stamp.get("spreadFields"), stamp.get("copy"), stamp.get("reference"), stamp.get("writtenType")) {
+            (Some(fields), None, None, None) if is_write_spread(&path, node) => Stamp::SpreadFields(
                 serde_json::from_value(fields.clone()).map_err(|e| format!("the fields stamped at {path}: {e}"))?,
             ),
-            (None, Some(copy), None) if is_map_spread(node) => Stamp::Copy(copy.clone()),
-            (None, None, Some(Json::Bool(true))) if is_value_entry(node) => Stamp::Reference,
+            (None, Some(copy), None, None) if is_map_spread(node) => Stamp::Copy(copy.clone()),
+            (None, None, Some(Json::Bool(true)), None) if is_value_entry(node) => Stamp::Reference,
+            (None, None, None, Some(Json::String(written))) if is_linked_target(node) => Stamp::WrittenType(written.clone()),
             _ => return Err(format!("the stamp at {path} does not fit the node there: {stamp}")),
         };
         file.stamps.insert(path, stamped);
@@ -411,6 +415,11 @@ fn is_write_spread(path: &str, node: &Json) -> bool {
 /// A graph's spread: it says where among the entries it stands.
 fn is_map_spread(node: &Json) -> bool {
     node.get("source").is_some_and(Json::is_string) && node.get("after").is_some_and(Json::is_u64)
+}
+
+/// A write target that walks one path from a record (`WriteTarget::Linked`).
+fn is_linked_target(node: &Json) -> bool {
+    node.get("kind").and_then(Json::as_str) == Some("linked") && node.get("path").is_some_and(Json::is_object)
 }
 
 /// A graph literal's `name: value` entry.
@@ -491,6 +500,16 @@ mod tests {
         assert_eq!(checked.root.stamps.get(path), Some(&Stamp::Reference));
         let spread = json!({ "diagnostics": [], "stamps": [{ "path": "/statements/2/body/0/arms/0/body/0/value/node", "reference": true }] });
         assert!(join_check(parse(source).unwrap(), &spread).unwrap_err().contains("does not fit"));
+    }
+
+    #[test]
+    fn a_written_type_stamp_lands_on_a_linked_write_target() {
+        let target = "/statements/2/body/0/write/target";
+        let answer = json!({ "diagnostics": [], "stamps": [{ "path": target, "writtenType": "Company" }] });
+        let checked = join_check(parse(SOURCE).unwrap(), &answer).unwrap();
+        assert_eq!(checked.root.stamps.get(target), Some(&Stamp::WrittenType("Company".into())));
+        let on_a_spread = json!({ "diagnostics": [], "stamps": [{ "path": "/statements/2/body/0/write/spreads/0", "writtenType": "Company" }] });
+        assert!(join_check(parse(SOURCE).unwrap(), &on_a_spread).unwrap_err().contains("does not fit"));
     }
 
     #[test]

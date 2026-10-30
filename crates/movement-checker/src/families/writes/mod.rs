@@ -71,6 +71,15 @@ pub struct Resolved {
     pub edge_name: String,
 }
 
+impl Resolved {
+    /// The parent is the member a hop's WHERE chose (a refinement), not the
+    /// type its record carries, so only the check knows what this creates.
+    fn parent_chosen_by_where(&self) -> bool {
+        let refinements = self.instance.schema.refinements.as_ref();
+        self.parent_type.as_ref().is_some_and(|parent| refinements.is_some_and(|r| r.values().any(|refined| refined == parent)))
+    }
+}
+
 /// Where a target lands (`checkLinkedPath`'s answer).
 #[derive(Default)]
 pub struct Landing {
@@ -175,6 +184,9 @@ impl Checker<'_> {
                     root_description = description;
                 }
                 if let Some(resolved) = linked.resolved {
+                    if explicit_type.is_none() && resolved.parent_chosen_by_where() {
+                        self.stamp(*span, crate::answer::StampKind::WrittenType(resolved.written.clone()));
+                    }
                     parents.push(Parent { type_: resolved.parent_type, edge: resolved.edge_name });
                 }
             }

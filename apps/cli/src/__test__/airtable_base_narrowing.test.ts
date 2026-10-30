@@ -52,13 +52,10 @@ interface Written {
   base: string;
   table: string;
   field: string;
-  /** Name the type the write creates (`-[:Companies]-><Companies>`). */
-  named?: boolean;
 }
 
 /** The program a builder wrote: a base narrowed by name, a row written to one of its tables. */
 function program(input: Written) {
-  const landing = input.named === true ? `<${input.table}>` : '';
   return `import { \`@lf/airtable\` as airtable } from adapters
 import { my_airtable } from credentials
 
@@ -67,7 +64,7 @@ pipeline = connect airtable using my_airtable
 function track(run: <manual-[:Invocation]->>) {
   base = only(pipeline-[b:Base WHERE b.Name == "${input.base}"]->)
   if (base == null) { fail("no base") }
-  write base-[:${input.table}]->${landing} { ${input.field}: "Acme Narrowed" }
+  write base-[:${input.table}]-> { ${input.field}: "Acme Narrowed" }
 }
 
 listen to manual fire track
@@ -99,11 +96,10 @@ test('a Base narrowed by name is typed by its own tables, and the write reaches 
     refused(nowhere, /pipeline\.mvt:7:\d+ error MOV_UNKNOWN_POSITION 'pipeline' has no Base whose Name is "Pipeline Trackr" — it has: "Pipeline Tracker", "Ops" — did you mean 'Pipeline Tracker'\?/);
     assert.doesNotMatch(nowhere.out, /pipeline\.mvt:9:/, 'the write off it is not refused again');
 
-    // The run names the type it creates: the engine types a handle by the
-    // record's own type (`Base`), not by the base the WHERE chose, so it
-    // cannot infer what `-[:Companies]->` creates off it.
-    const named = check(dir, { base: 'Pipeline Tracker', table: 'Companies', field: 'Name', named: true });
-    assert.equal(named.code, 0, named.out);
+    // The run lands the write where the check said it would: the record the
+    // WHERE chose carries only its type (`Base`), so the check hands the run
+    // the type `-[:Companies]->` creates off the base it chose.
+    assert.equal(check(dir, { base: 'Pipeline Tracker', table: 'Companies', field: 'Name' }).code, 0);
     const ran = lfSync(dir, 'run', 'track');
     assert.equal(ran.code, 0, ran.out);
     assert.match(JSON.stringify(await fetch(`${fake.url}/airtable/v0/appTEST001/tblCOMPANIES`).then((r) => r.json())), /Acme Narrowed/);

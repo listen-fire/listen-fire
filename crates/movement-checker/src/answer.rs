@@ -7,7 +7,10 @@
 //! - on a write's spread, the fields it writes (`spreadFields`);
 //! - on a graph's spread of a record, what it copies (`copy`, a copy plan);
 //! - on a graph entry whose value is a record, that the entry is an edge
-//!   holding it (`reference`).
+//!   holding it (`reference`);
+//! - on a linked write's target off a record a hop's WHERE chose, the type
+//!   the write creates (`writtenType`): the record carries only its own
+//!   type, so the run cannot learn which member the check typed it as.
 //!
 //! The engine re-parses the source, so these cross as STAMPS keyed by the
 //! node's place in the program's JSON (a JSON Pointer; through a nested
@@ -34,6 +37,8 @@ pub enum StampKind {
     /// A copy plan: `{fields, edges: {name: plan}}`.
     Copy(Json),
     Reference,
+    /// The type a linked write creates, as the check resolved it.
+    WrittenType(String),
 }
 
 impl StampKind {
@@ -180,6 +185,7 @@ fn stamp_json(recorded: &Recorded, path: String) -> Json {
         StampKind::SpreadFields(fields) => stamp["spreadFields"] = json!(fields),
         StampKind::Copy(plan) => stamp["copy"] = plan.clone(),
         StampKind::Reference => stamp["reference"] = json!(true),
+        StampKind::WrittenType(written) => stamp["writtenType"] = json!(written),
     }
     stamp
 }
@@ -203,6 +209,7 @@ fn place(tree: &Json, nested: &[(Span, At)], span: &Span, kind: &StampKind) -> O
                 StampKind::SpreadFields(_) => is_write_spread(node, path),
                 StampKind::Copy(_) => is_map_spread(node),
                 StampKind::Reference => is_value_entry(node),
+                StampKind::WrittenType(_) => is_linked_target(node),
             }
     };
     let (path, _) = find(&read, "", &fits)?;
@@ -219,6 +226,11 @@ fn find<'j>(node: &'j Json, path: &str, fits: &dyn Fn(&Json, &str) -> bool) -> O
         Json::Array(items) => items.iter().enumerate().find_map(|(index, child)| find(child, &format!("{path}/{index}"), fits)),
         _ => None,
     }
+}
+
+/// A write target that walks one path from a record (`WriteTarget::Linked`).
+fn is_linked_target(node: &Json) -> bool {
+    node.get("kind").and_then(Json::as_str) == Some("linked") && node.get("path").is_some_and(Json::is_object)
 }
 
 /// An expression slot as the parser writes one.
