@@ -27,6 +27,8 @@ use crate::remote::{ADAPTER_METHODS, SegmentAdapters, WRITE_METHODS};
 use crate::run_host::{cancel_subtrees, queue_await_wake, save_source, settle_if_cancel_requested};
 use crate::backend::{MintCallback, RunHostStore};
 use crate::store::{Park, ParkKind, StoreError};
+use crate::store_wire::Wire as _;
+use crate::waits::{OpenWait, WaitWake};
 use crate::wire::{Hv, Wire, js_of_json, json_of_js};
 
 /// The one tenant a local project's files are (`LOCAL_TENANT`); its run
@@ -54,6 +56,10 @@ const SERVES: &[&str] = &[
     "park.sink.cancelSubtrees",
     "park.sink.commitSuspension",
     "park.wake",
+    "park.waits.mark",
+    "park.waits.open",
+    "park.waits.arrivals",
+    "park.waits.note",
     "park.callbacks.mint",
     "park.callbacks.calls",
     "park.sources.save",
@@ -98,6 +104,9 @@ pub struct SegmentInput<'a> {
     pub fired_at: &'a str,
     pub catalog: &'a Js,
     pub dry_run: bool,
+    /// The arrival log's mark the delivery that started the run carried: a
+    /// fresh firing's trigger record entered there (crate::waits).
+    pub trigger_mark: Option<i64>,
     pub entry: Entry,
     /// The run's cost cap in microdollars (lf.yaml's `maxRunCostUsd`); None: no cap.
     pub cost_cap_microdollars: Option<f64>,
@@ -164,6 +173,9 @@ pub struct SegmentHost<'s> {
     /// What the segment's priced calls spent, by cost source: the engine
     /// reports the same lines from its own ledger, and they must agree.
     spent: RefCell<BTreeMap<String, f64>>,
+    /// The address each wait this segment parked on is parked at: a
+    /// `park.wake` names the wait, and its row the run's leaf.
+    parked_waits: RefCell<HashMap<String, String>>,
 }
 
 impl<'s> SegmentHost<'s> {
@@ -184,6 +196,7 @@ impl<'s> SegmentHost<'s> {
             lock_tokens: RefCell::new(HashMap::new()),
             next_lock: Cell::new(0),
             spent: RefCell::new(BTreeMap::new()),
+            parked_waits: RefCell::new(HashMap::new()),
         }
     }
 
@@ -243,6 +256,9 @@ fn input_text(host: &SegmentHost<'_>, input: &SegmentInput<'_>) -> Result<String
             resume.insert("deferRaceSettlement".into(), json!(true));
         }
         segment.insert("resume".into(), Json::Object(resume));
+    }
+    if let (Entry::Run, Some(mark)) = (&input.entry, input.trigger_mark) {
+        segment.insert("triggerMark".into(), json!(mark));
     }
     if let Some(frame_address) = settle {
         segment.insert("settle".into(), json!({ "frameAddress": frame_address }));
@@ -748,6 +764,17 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
             let wake_at = text(args, "wakeAt", "park.sink.commitTimerPark")?;
             park(host, Park { run_id, address, state: &state, fence, kind: ParkKind::Timer { wake_at } })
         }
+        "park.sink.commitAwaitPark" if args.get("waitId").is_some() => {
+            const LABEL: &str = "park.sink.commitAwaitPark";
+            let state = read_wire(host, args.get("state"))?.js();
+            let address = text(args, "address", LABEL)?;
+            let wait_id = text(args, "waitId", LABEL)?;
+            let parked = park(host, Park { run_id, address, state: &state, fence, kind: ParkKind::Wait { wait_id } });
+            if parked.is_ok() {
+                host.parked_waits.borrow_mut().insert(wait_id.to_string(), address.to_string());
+            }
+            parked
+        }
         "park.sink.commitAwaitPark" => {
             let state = read_wire(host, args.get("state"))?.js();
             let address = text(args, "address", "park.sink.commitAwaitPark")?;
@@ -810,6 +837,47 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
                 .ok_or_else(|| Fault("park.sink.cancelSubtrees subtreeAddresses are a list of texts".into()))?;
             let exclude = args.get("excludeLeaf").and_then(Json::as_str);
             cancel_subtrees(store, run_id, &subtrees, exclude).map(|()| None).map_err(rules_failure)
+        }
+        "park.wake" if args.get("waitId").is_some() => {
+            let wait_id = text(args, "waitId", "park.wake")?;
+            let Some(address) = host.parked_waits.borrow().get(wait_id).cloned() else {
+                return Err(Fault(format!("park.wake names the wait {wait_id}, which this segment parked nothing on")));
+            };
+            let row = crate::waits::wake_row(store.tenant(), &WaitWake { run_id: run_id.to_string(), wait_id: wait_id.to_string(), address });
+            match store.enqueue(&row.kind, &row.key, &row.payload, None, row.team_id.as_deref()) {
+                Ok(()) => {
+                    crate::wake::queued(&row.kind, None);
+                    Ok(None)
+                }
+                Err(error) => Err(store_failure(error)),
+            }
+        }
+        "park.waits.mark" => store.arrival_mark().map(|mark| Some(json!({ "mark": mark }))).map_err(store_failure),
+        "park.waits.open" => {
+            const LABEL: &str = "park.waits.open";
+            let since = args.get("since").and_then(Json::as_i64).ok_or_else(|| Fault(format!("{LABEL} since is an integer")))?;
+            let wait = OpenWait {
+                run_id,
+                team_id: store.tenant(),
+                adapter_type: text(args, "adapterType", LABEL)?,
+                edge: text(args, "edge", LABEL)?,
+                key: text(args, "key", LABEL)?,
+                since,
+            };
+            store.open_wait(&wait).map(|id| Some(json!({ "waitId": id }))).map_err(store_failure)
+        }
+        "park.waits.arrivals" => {
+            let wait_id = text(args, "waitId", "park.waits.arrivals")?;
+            match store.wait_arrivals(wait_id) {
+                Ok(read) => Ok(Some(host.wire.borrow().write(&Hv::of_js(&read.to_wire())))),
+                Err(error) => Err(store_failure(error)),
+            }
+        }
+        "park.waits.note" => {
+            const LABEL: &str = "park.waits.note";
+            let matched = args.get("matched").and_then(Json::as_bool).ok_or_else(|| Fault(format!("{LABEL} matched is a boolean")))?;
+            let counts = store.note_arrival(text(args, "waitId", LABEL)?, text(args, "identity", LABEL)?, args.get("version").and_then(Json::as_str), matched);
+            counts.map(|counts| Some(json!({ "counts": counts }))).map_err(store_failure)
         }
         "park.wake" => {
             let adapter_type = text(args, "adapterType", "park.wake")?;

@@ -393,6 +393,9 @@ pub struct Delivered<'a> {
     /// (crate::routing::subscription_key); None for a credential's own door,
     /// which the credential alone narrows.
     pub subscription: Option<&'a str>,
+    /// The arrival log's mark after the delivery's own arrivals were logged
+    /// (`arrivalMark`): a run it starts reads its trigger's waits from there.
+    pub arrival_mark: Option<i64>,
 }
 
 impl<'a> Delivered<'a> {
@@ -401,7 +404,11 @@ impl<'a> Delivered<'a> {
     /// subscription name none.
     pub fn of_row(row: &'a Js, id: Option<&'a str>) -> Delivered<'a> {
         let text = |key: &str| row.get(key).and_then(Js::as_str);
-        Delivered { id, credential: text("credential"), subscription: text("subscription") }
+        let arrival_mark = match row.get("arrivalMark") {
+            Some(Js::Num(mark)) => mark.as_i64(),
+            _ => None,
+        };
+        Delivered { id, credential: text("credential"), subscription: text("subscription"), arrival_mark }
     }
 
     /// Its connection and subscription, written into a kept event or a row.
@@ -518,6 +525,10 @@ struct RunFacts {
     /// A rehearsal (`--dry-run`): every segment of the run captures its
     /// writes, the ones after a park included.
     dry_run: bool,
+    /// The arrival log's mark the delivery that started the run carried
+    /// (`arrivalMark`): its first segment's trigger record entered there.
+    /// Never kept: only the first segment reads it.
+    trigger_mark: Option<i64>,
 }
 
 impl RunFacts {
@@ -566,6 +577,7 @@ impl RunFacts {
             movement_name: text("movementName")?,
             fired_at: text("firedAt")?,
             dry_run: facts.get("dryRun") == Some(&Js::Bool(true)),
+            trigger_mark: None,
         })
     }
 }
@@ -611,12 +623,22 @@ impl Session {
     pub async fn fire_event(&self, external: &str, event: &Js, dry_run: bool, delivered: Delivered<'_>) -> Result<Fired, String> {
         let set = self.file_set();
         let scope_keys = scope_keys_of(&set, external);
-        self.fire_to(&set, external, event, Arrival::Pushed, dry_run, delivered.id, |l| delivered.reaches(l, &scope_keys)).await
+        self.fire_to(&set, external, event, Arrival::Pushed, dry_run, delivered.id, delivered.arrival_mark, |l| delivered.reaches(l, &scope_keys)).await
     }
 
     /// `fire_event`, to the listens `to` keeps of those the event reaches.
     #[allow(clippy::too_many_arguments)] // the file set, the event and how it came, then the firing's own options
-    async fn fire_to(&self, set: &FileSet, external: &str, event: &Js, arrival: Arrival, dry_run: bool, delivery_id: Option<&str>, to: impl Fn(&Listen) -> bool) -> Result<Fired, String> {
+    async fn fire_to(
+        &self,
+        set: &FileSet,
+        external: &str,
+        event: &Js,
+        arrival: Arrival,
+        dry_run: bool,
+        delivery_id: Option<&str>,
+        trigger_mark: Option<i64>,
+        to: impl Fn(&Listen) -> bool,
+    ) -> Result<Fired, String> {
         let event_types = self.event_types_of(set, external).await?;
         let key = event.get("idempotencyKey").and_then(Js::as_str).filter(|k| !k.is_empty());
         let now_reads = RefCell::new(HashMap::new());
@@ -652,7 +674,7 @@ impl Session {
                 continue;
             }
             let trigger = trigger_event_of(&pipeline, external, event, &event_types, &iso(0));
-            match self.run_listen(set, &run_id, listen, trigger, dry_run, receipt.map(|key| (pipeline.as_str(), key)), delivery_id).await? {
+            match self.run_listen(set, &run_id, listen, trigger, dry_run, receipt.map(|key| (pipeline.as_str(), key)), delivery_id, trigger_mark).await? {
                 Some(mut outcome) => {
                     if let (Some(error), Some(untyped)) = (outcome.error.as_mut(), untyped_event_line(external, event, &event_types)) {
                         error.push_str(&format!("\n  {untyped}"));
@@ -674,7 +696,7 @@ impl Session {
             return Err(format!("no listen fires '{movement}' on manual: add `listen to manual fire {movement}` to run it with `listen-fire run {movement}`"));
         }
         let event = crate::units::manual_event(&iso(0), &self.user, text);
-        self.fire_to(&set, crate::units::MANUAL, &event, Arrival::Pushed, dry_run, None, |l| l.movement_name == movement).await
+        self.fire_to(&set, crate::units::MANUAL, &event, Arrival::Pushed, dry_run, None, None, |l| l.movement_name == movement).await
     }
 
     /// The cron unit's due ticks (scale from zero): for each cron listen, the
@@ -711,7 +733,7 @@ impl Session {
             let Some(due_ms) = parsed.latest_in(after_ms, now_ms) else { continue };
             let due = crate::units::iso_of(due_ms);
             let event = crate::units::tick_event(&due, schedule, timezone);
-            let fired = self.fire_to(set, crate::units::CRON, &event, Arrival::Pushed, false, None, |l| std::ptr::eq(l, &set.listens[index])).await?;
+            let fired = self.fire_to(set, crate::units::CRON, &event, Arrival::Pushed, false, None, None, |l| std::ptr::eq(l, &set.listens[index])).await?;
             self.store.save_inbound_checkpoint(&subscription, &Js::Obj(obj! { "after" => Js::str(&due) })).map_err(|e| e.to_string())?;
             outcomes.extend(fired.outcomes);
         }
@@ -768,7 +790,7 @@ impl Session {
             if event.get("eventType").and_then(Js::as_str).is_none() {
                 note_unlabelled_poll_event(&listen.adapter);
             }
-            let one = self.fire_to(set, &listen.adapter, event, Arrival::Polled, false, None, |l| std::ptr::eq(l, listen)).await?;
+            let one = self.fire_to(set, &listen.adapter, event, Arrival::Polled, false, None, None, |l| std::ptr::eq(l, listen)).await?;
             fired.outcomes.extend(one.outcomes);
             fired.redelivered.extend(one.redelivered);
         }
@@ -834,7 +856,18 @@ impl Session {
     /// None, and nothing run, for an event the listen has run before. The
     /// run names `delivery_id`, the delivery its event came in.
     #[allow(clippy::too_many_arguments)] // the file set it runs within, then the run's own inputs
-    async fn run_listen(&self, set: &FileSet, run_id: &str, listen: &Listen, event: Js, dry_run: bool, receipt: Option<(&str, &str)>, delivery_id: Option<&str>) -> Result<Option<RunOutcome>, String> {
+    #[allow(clippy::too_many_arguments)] // the run, its listen and event, then what the delivery it came in says
+    async fn run_listen(
+        &self,
+        set: &FileSet,
+        run_id: &str,
+        listen: &Listen,
+        event: Js,
+        dry_run: bool,
+        receipt: Option<(&str, &str)>,
+        delivery_id: Option<&str>,
+        trigger_mark: Option<i64>,
+    ) -> Result<Option<RunOutcome>, String> {
         let file = set.file(&listen.file);
         let fired_at = iso(0);
         let facts = RunFacts {
@@ -844,6 +877,7 @@ impl Session {
             movement_name: listen.movement_name.clone(),
             fired_at: fired_at.clone(),
             dry_run,
+            trigger_mark,
         };
         let input = facts.to_js().to_json();
         let start = RunStart { id: run_id, file: &file.name, movement: &facts.movement_name, started_at: &fired_at, input: &input, delivery_id };
@@ -965,6 +999,7 @@ impl Session {
             fired_at: &facts.fired_at,
             catalog: &set.catalog,
             dry_run: facts.dry_run,
+            trigger_mark: facts.trigger_mark,
             entry,
             cost_cap_microdollars: self.project.cost_cap_microdollars,
         };
@@ -1213,6 +1248,7 @@ impl Session {
             movement_name: row.movement.clone(),
             fired_at: iso(0),
             dry_run: first.get("dryRun") == Some(&Js::Bool(true)),
+            trigger_mark: None,
         })
     }
 
@@ -1324,7 +1360,7 @@ impl Session {
                 let delivery_id = payload.get("deliveryId").and_then(Js::as_str);
                 let delivered = Delivered::of_row(payload, delivery_id);
                 let scope_keys = scope_keys_of(set, &external);
-                let fired = self.fire_to(set, &external, &event, Arrival::Pushed, false, delivery_id, |l| delivered.reaches(l, &scope_keys)).await?;
+                let fired = self.fire_to(set, &external, &event, Arrival::Pushed, false, delivery_id, delivered.arrival_mark, |l| delivered.reaches(l, &scope_keys)).await?;
                 for line in &fired.redelivered {
                     eprintln!("listen-fire: {line}");
                 }
@@ -1347,6 +1383,20 @@ impl Session {
                     Parked::Stepped(outcome) => (Next::Done, vec![*outcome]),
                 })
             }
+            // A wait an arrival answered: its run re-enters the await parked
+            // at the wait's address, which reads the arrival.
+            "wake_await" if payload.get("waitId").is_some() => {
+                let run_id = text("runId")?;
+                if self.store.run(&run_id).map_err(|e| e.to_string())?.is_none() {
+                    return Ok((Next::Done, Vec::new()));
+                }
+                Ok(match self.drive_parked_run(set, &run_id, Drain::Awaits(vec![text("address")?])).await? {
+                    Parked::Busy => (Next::Busy, Vec::new()),
+                    Parked::NotStepped => (Next::Done, Vec::new()),
+                    Parked::Stepped(outcome) => (Next::Done, vec![*outcome]),
+                })
+            }
+            // A callback's awaiter, woken by its key (callbacks retire at 0.13).
             "wake_await" => {
                 let adapter_type = text("adapterType")?;
                 let team = payload.get("teamId").and_then(Js::as_str).unwrap_or(self.store.tenant()).to_string();

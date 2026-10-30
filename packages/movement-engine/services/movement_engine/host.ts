@@ -19,6 +19,8 @@ import type {
   AdapterCallError,
   AdapterMethod,
   AdapterResolution,
+  AwaitHead,
+  AwaitKey,
   AwaitWakeRequest,
   CostLine,
   ExternalRecordRef,
@@ -27,6 +29,7 @@ import type {
   HostFamilyMethodPath,
   HostIds,
   HostLocks,
+  HostWaits,
   Priced,
   PricedAnswer,
   RecordBindings,
@@ -124,6 +127,8 @@ export interface AdapterCallMap {
   /** The awaitable capability's live check. */
   resolveAwait: { args: AwaitPoint; result: AwaitResolution };
   wakeKeys: OneInput<'wakeKeys'>;
+  /** The key each record's listenable edge is waited on under (adapter protocol 2.5). */
+  awaitKeys: { args: { edge: string; heads: AwaitHead[] }; result: AwaitKey[] };
   readRecord: OneInput<'readRecord'>;
   translateFilter: OneInput<'translateFilter'>;
   getDedupRules: OneInput<'getDedupRules'>;
@@ -315,6 +320,10 @@ export interface EngineHost {
      * wake for a key with no parked run is a no-op. Plain data in, nothing out.
      */
     wake(request: Scoped<AwaitWakeRequest>): Promise<void>;
+    /** A run's waits on listenable edges (host families version 2). Absent ⇒
+     *  the run opens no waits, and an await on an adapter's edge fails as
+     *  unsupported. */
+    waits?: SegmentScoped<HostWaits>;
     /** Minting `callback(…)`, reading its call ledger, correlating an
      *  `await cb-[:Called]->`. Absent ⇒ a callback raises MOVENG_UNSUPPORTED. */
     callbacks?: SegmentScoped<CallbackSink>;

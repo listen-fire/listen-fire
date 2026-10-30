@@ -233,11 +233,14 @@ pub struct Landed {
     /// host once (a streamed landing is not restamped as it lands, and would
     /// otherwise be stamped afresh per read).
     surface: std::cell::RefCell<Option<Js>>,
+    /// The waits opened on the record's edges since it entered the run, by
+    /// edge (crate::waits).
+    pub(crate) waits: RefCell<crate::waits::Waits>,
 }
 
 impl Landed {
     pub fn new(position: Js, edge_properties: Option<Js>, read: Rc<crate::traverse::Read>) -> Landed {
-        Landed { position: std::cell::RefCell::new(position), edge_properties, read, surface: std::cell::RefCell::new(None) }
+        Landed { position: std::cell::RefCell::new(position), edge_properties, read, surface: std::cell::RefCell::new(None), waits: RefCell::default() }
     }
 
     /// The position as it stands now.
@@ -342,6 +345,9 @@ pub struct Handle {
     state: RefCell<HandleState>,
     pub target_type: String,
     pub graph: Rc<InstanceBinding>,
+    /// The waits opened on the written record's edges, by edge
+    /// (crate::waits): an in-place write moves the handle on, never its waits.
+    pub(crate) waits: RefCell<crate::waits::Waits>,
 }
 
 #[derive(Debug)]
@@ -366,7 +372,7 @@ pub enum Old {
 
 impl Handle {
     pub fn new(record: Rc<crate::write::WriteRecord>, old: Old, target_type: String, graph: Rc<InstanceBinding>) -> Handle {
-        Handle { state: RefCell::new(HandleState { record, old }), target_type, graph }
+        Handle { state: RefCell::new(HandleState { record, old }), target_type, graph, waits: RefCell::default() }
     }
 
     /// The write record the handle names now.

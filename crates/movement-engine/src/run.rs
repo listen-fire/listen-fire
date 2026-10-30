@@ -124,6 +124,12 @@ pub struct SegmentInput {
     /// Resume a parked run from its state (crate::park), rather than run it.
     #[serde(default)]
     pub resume: Option<crate::park::ResumeInput>,
+    /// The arrival log's mark where the delivery that started the run was
+    /// kept: the trigger's record entered there, so its waits read what
+    /// arrived after it (crate::waits). Absent: the record enters when the
+    /// run starts.
+    #[serde(default)]
+    pub trigger_mark: Option<i64>,
     /// With `resume`: run a fired callback's body against its captured
     /// state (`fireCallbackBody`) rather than resume a leaf.
     #[serde(default)]
@@ -481,6 +487,12 @@ pub(crate) struct Run<'a> {
     pub(crate) stored_sources: RefCell<Vec<(String, String)>>,
     /// What the segment has consumed against its limits.
     pub(crate) meter: crate::limits::Meter,
+    /// The trigger's record's waits, by edge (crate::waits): the run's own,
+    /// parked beside its state.
+    pub(crate) event_waits: RefCell<crate::waits::Waits>,
+    /// The await a resume re-enters, by its address, and the values its
+    /// WHERE captured when it was first reached (crate::awaits).
+    pub(crate) reentered_await: RefCell<Option<(String, Vec<Js>)>>,
 }
 
 async fn run(host: &Host, input: &SegmentInput, ledger: &crate::ledger::Ledger) -> Result<Json, Stop> {
@@ -495,6 +507,9 @@ async fn run(host: &Host, input: &SegmentInput, ledger: &crate::ledger::Ledger) 
     // A parked state is the host's record of this engine's own park: one
     // it cannot read is a corrupt or foreign record, and the resume fails
     // naming why rather than reading it partway.
+    if let Some(refusal) = input.resume.as_ref().and_then(|resume| crate::park::version_refusal(&resume.state)) {
+        return Err(Stop::Thrown(Failure::engine("MOVENG_UNSUPPORTED", refusal)));
+    }
     if let Some(reason) = input.resume.as_ref().and_then(|resume| crate::park::resume_refusal(&resume.state)) {
         return Err(Stop::Thrown(Failure::engine("MOVENG_UNSUPPORTED", format!("this run's parked state does not read ({reason})"))));
     }
@@ -591,6 +606,8 @@ async fn run(host: &Host, input: &SegmentInput, ledger: &crate::ledger::Ledger) 
         wire,
         stored_sources: RefCell::new(stored_sources),
         meter: Default::default(),
+        event_waits: RefCell::default(),
+        reentered_await: RefCell::default(),
     };
     let outcome = run.execute().await;
     // What the segment traced after its last statement's hand-over (a park,
@@ -811,7 +828,10 @@ impl Run<'_> {
         let (movement, index, scope) = self.prepare().await?;
         let path = format!("/statements/{index}/body");
         let ran = match &self.input.resume {
-            None => self.body(&movement.body, &scope, &Address::default(), &path, 0).await.map(|flow| matches!(flow, Flow::Returned)),
+            None => match self.enter_trigger(&format!("/statements/{index}"), &movement.params[0], &scope).await {
+                Ok(()) => self.body(&movement.body, &scope, &Address::default(), &path, 0).await.map(|flow| matches!(flow, Flow::Returned)),
+                Err(stop) => Err(stop),
+            },
             Some(resume) => {
                 // The state as it was stored, keys in their stored order (on
                 // the eval wire, as the event is).
@@ -1353,7 +1373,16 @@ impl Run<'_> {
     async fn statement(&self, statement: &Statement, scope: &Rc<Scope>, at: &Address, path: &str) -> Result<Flow, Stop> {
         match statement {
             Statement::Assign(assign) => {
+                // A write is its own entry (`assign`); a lazy binding's
+                // records enter where they are read (crate::waits).
+                let entry = match assign.value {
+                    RValue::Write { .. } | RValue::Lazy { .. } => None,
+                    _ => self.entry_at(path).await?,
+                };
                 self.assign(&assign.name, &assign.value, scope, at, path).await?;
+                if let Some(bound) = entry.as_ref().and(scope.resolve(&assign.name)) {
+                    self.enter(entry, &[bound]).await?;
+                }
                 Ok(Flow::FellThrough)
             }
             Statement::Write(statement) => {
@@ -1470,7 +1499,14 @@ impl Run<'_> {
     pub(crate) async fn assign(&self, name: &str, value: &RValue, scope: &Rc<Scope>, at: &Address, path: &str) -> Result<(), Stop> {
         match value {
             RValue::Write { write } => {
-                self.write(write, Some(name), scope, &format!("{path}/value/write")).await?;
+                // The record enters just before the write: an arrival the
+                // write causes is logged after the mark.
+                let write_path = format!("{path}/value/write");
+                let entry = self.entry_at(&write_path).await?;
+                self.write(write, Some(name), scope, &write_path).await?;
+                if let Some(bound) = entry.as_ref().and(scope.resolve(name)) {
+                    self.enter(entry, &[bound]).await?;
+                }
             }
             RValue::Match { r#match } => {
                 self.match_record(r#match, Some(name), scope, crate::verbs::OnMiss::Absent).await?;
@@ -3276,11 +3312,11 @@ mod tests {
         let source = "import { email } from adapters\ninbox = email()\nmovement m(msg: <inbox-[:message]->>) {\n  await sleep(1h)\n  s = 1\n}";
         let scope = |binding: Json| json!([{ "bindings": { "x": binding } }]);
         for (state, reason) in [
-            (json!({ "version": 2, "address": "s0", "suspended": false }), "resume_state_suspended"),
+            (json!({ "version": 3, "address": "s0", "suspended": false }), "resume_state_suspended"),
             // Version 1 names its code by its tree: the TypeScript engine's,
             // for the older language, which this engine never resumes.
             (json!({ "version": 1, "address": "s0" }), "resume_state_version"),
-            (json!({ "version": 2, "address": "s0", "scopeChain": scope(json!({ "kind": "blockMeta", "edges": [] })) }), "resume_state_kind:blockMeta"),
+            (json!({ "version": 3, "address": "s0", "scopeChain": scope(json!({ "kind": "blockMeta", "edges": [] })) }), "resume_state_kind:blockMeta"),
         ] {
             let input = json!({
                 "entry": "segment", "source": source, "languageVersion": movement_parser::version::LANGUAGE_VERSION, "segmentId": "g1", "serves": [],
@@ -3297,7 +3333,7 @@ mod tests {
             }
         }
         let resumable = json!({
-            "version": 2, "address": "s2.b0.s0", "bindingName": null,
+            "version": 3, "address": "s2.b0.s0", "bindingName": null,
             "scopeChain": [{ "bindings": {
                 "none": { "kind": "positions", "landings": [] },
                 "v": { "kind": "value", "value": { "a": 1 }, "provenance": { "origins": [{ "kind": "literal" }] } },
@@ -3321,7 +3357,7 @@ mod tests {
     #[test]
     fn a_parked_state_naming_code_the_program_lacks_is_refused_up_front() {
         let source = "import { email } from adapters\ninbox = connect email\nfunction m(msg: <inbox-[:message]->>) {\n  await sleep(1h)\n  s = 1\n}";
-        let state = |binding: Json| json!({ "version": 2, "address": "s0", "bindingName": null, "scopeChain": [{ "bindings": {} }, { "bindings": { "x": binding } }] });
+        let state = |binding: Json| json!({ "version": 3, "address": "s0", "bindingName": null, "scopeChain": [{ "bindings": {} }, { "bindings": { "x": binding } }] });
         for binding in [
             json!({ "kind": "closure", "closure": "/statements/40/value", "captured": {} }),
             // A place that holds a statement, but not a closure.
@@ -3353,7 +3389,7 @@ mod tests {
     #[test]
     fn a_shape_is_resumed_by_name_or_by_its_declaration() {
         let state = |file: Json, body: Json| {
-            json!({ "version": 2, "address": "s0", "bindingName": null, "scopeChain": [{ "bindings": file }, { "bindings": body }] })
+            json!({ "version": 3, "address": "s0", "bindingName": null, "scopeChain": [{ "bindings": file }, { "bindings": body }] })
         };
         let shape = json!({ "kind": "shape", "name": "Lead" });
         assert_eq!(crate::park::resume_refusal(&wire(state(json!({ "Lead": shape }), json!({})))), None);
@@ -3372,7 +3408,7 @@ mod tests {
         // handle carries no record, so rehydrating it fails the run rather
         // than resume it wrong.
         let source = "import { email } from adapters\ninbox = email()\nmovement m(msg: <inbox-[:message]->>) {\n  await sleep(1h)\n  s = 1\n}";
-        let state = json!({ "version": 2, "address": "s0", "bindingName": null, "scopeChain": [
+        let state = json!({ "version": 3, "address": "s0", "bindingName": null, "scopeChain": [
             { "bindings": {} },
             { "bindings": { "co": { "kind": "handle", "targetType": "company" } } },
         ] });

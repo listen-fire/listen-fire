@@ -1,7 +1,8 @@
 // The skeleton's end-to-end proof, through the real binary entry point: the
 // example project (examples/lf-acme) checks clean, an event runs and its write
 // lands in the sample external, the run parks on `await sleep` and `listen-fire resume
-// <run-id>` finishes it, and `listen-fire serve` takes one signed webhook.
+// <run-id>` finishes it, and `listen-fire serve` takes one signed webhook. The
+// waits on a company's edges are await_edges.test.ts's.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -195,7 +196,7 @@ test('a park inside an `all` arm: each arm resumes in its own process, and the j
   assert.deepEqual(companies(dir), ['early late Vireo Robotics']);
 });
 
-test('listen-fire serve: the external emits a company, the run awaits its first comment, and the external\'s wake resumes it', async () => {
+test('listen-fire serve: the external emits a company, the run awaits its first comment, and the comment\'s arrival resumes it', async () => {
   const dir = project('await');
   const serving = await served(dir);
   try {
@@ -225,9 +226,9 @@ test('listen-fire serve: the external emits a company, the run awaits its first 
     assert.equal(malformed.status, 400);
     assert.match(lf(dir, 'runs').out, /await:discuss parked/);
 
-    // The comment lands; the CRM pushes its wake; the drain resumes the run with the answer.
+    // The comment lands; the CRM reports its arrival; the drain resumes the run with the answer.
     const commented = await fetch(`${crm}/dev/comments`, { method: 'POST', body: JSON.stringify({ company: discussion.externalId, text: 'yes please' }) });
-    assert.deepEqual(((await commented.json()) as { pushed: unknown }).pushed, { status: 202, body: { accepted: 1 } });
+    assert.deepEqual(((await commented.json()) as { arrived: unknown }).arrived, { status: 202, body: { accepted: 1 } });
     await serving.waitFor(/resumed .* await:discuss completed/);
     assert.deepEqual(companies(dir), ['Osprey', 'Discuss Osprey', 'Answered yes please']);
   } finally {
@@ -248,7 +249,7 @@ test('listen-fire serve drains a due timer: the example\'s hour-long sleep, judg
   assert.deepEqual(companies(dir), ['Welcome Vireo Robotics', 'Follow up Vireo Robotics']);
 });
 
-test('a webhook delivery carrying comments wakes the awaits parked on their threads (wakeKeys)', async () => {
+test('a webhook delivery carrying comments wakes the awaits parked on their threads (arrivals)', async () => {
   const dir = project('await');
   const run = lf(dir, 'run', '--event', 'events/company_created.json');
   assert.equal(run.code, 0, run.out);

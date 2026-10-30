@@ -1,5 +1,5 @@
 //! A flow parked and resumed: the `ParkedScopeState` of
-//! docs/contracts/park-state.md, version 2. Every piece of run state is
+//! docs/contracts/park-state.md, version 3. Every piece of run state is
 //! written as the TypeScript engine's version 1 writes it; CODE is not: a
 //! closure, a kept walk, a body-local node declaration and a run-time arm
 //! are named by their place in the pinned program (crate::code), and the
@@ -49,9 +49,23 @@ use crate::flow::{Boundary, CallRecord};
 use crate::run::{Address, Failure, Run, Stop};
 
 /// The park state contract's version this engine writes and reads
-/// (docs/contracts/park-state.md): version 2 names code by its place in the
-/// pinned program.
-pub(crate) const PARK_STATE_VERSION: f64 = 2.0;
+/// (docs/contracts/park-state.md): version 2 named code by its place in the
+/// pinned program; version 3 parks a run's waits beside its records and an
+/// await's captured values (0.13).
+pub(crate) const PARK_STATE_VERSION: f64 = 3.0;
+
+/// The version 0.12's engine wrote: its awaits parked on keys, which no
+/// 0.13 host wakes.
+const PARK_STATE_VERSION_0_12: f64 = 2.0;
+
+/// Why a state this engine does not resume names the release that parked
+/// it, when it is 0.12's.
+pub fn version_refusal(state: &Json) -> Option<String> {
+    let state = crate::env::decode(state).ok()?;
+    matches!(at(&state, "version"), Some(Js::Number(n)) if *n == PARK_STATE_VERSION_0_12).then(|| {
+        format!("this run parked under listen-fire 0.12 (park state {PARK_STATE_VERSION_0_12}); a 0.13 engine resumes park state {PARK_STATE_VERSION}")
+    })
+}
 
 /// What a resumed segment is handed (`ResumeMovementInput`'s state and mode).
 #[derive(Debug, Clone, Deserialize)]
@@ -77,9 +91,11 @@ pub(crate) enum Leaf<'a> {
     Timer { presence: bool },
     /// An `await until(…)`'s timer: re-entered to test its condition again.
     Until,
-    /// An await on an edge (a callback's, an awaitable adapter's) or a
-    /// callback's captured continuation: nothing between.
+    /// A callback's await or its captured continuation: nothing between.
     Plain,
+    /// An await on a wait (crate::waits): the values its WHERE captured when
+    /// it was first reached, which a re-entry judges arrivals with.
+    Await { captured: &'a [Js] },
     /// An engine-initiated suspension, with the statement's finished calls.
     Suspended(&'a [(usize, CallRecord)]),
 }
@@ -108,7 +124,7 @@ fn park_state_in(run: &Run<'_>, address: &str, binding_name: Option<&str>, leaf:
     let mut state = vec![("version", Js::Number(PARK_STATE_VERSION)), ("address", Js::str(address)), ("bindingName", binding_name.map_or(Js::Null, Js::str))];
     match *leaf {
         Leaf::Timer { presence: true } => state.push(("presenceBind", Js::Bool(true))),
-        Leaf::Timer { presence: false } | Leaf::Plain => {}
+        Leaf::Timer { presence: false } | Leaf::Plain | Leaf::Await { .. } => {}
         Leaf::Until => state.push(("until", Js::Bool(true))),
         Leaf::Suspended(journal) => {
             state.push(("suspended", Js::Bool(true)));
@@ -119,6 +135,17 @@ fn park_state_in(run: &Run<'_>, address: &str, binding_name: Option<&str>, leaf:
     if !boundaries.is_empty() {
         let frames = boundaries.iter().map(|boundary| serialize_boundary(run, boundary, park)).collect::<Result<Vec<_>, _>>()?;
         state.push(("frames", Js::array(frames)));
+    }
+    if let Leaf::Await { captured } = leaf {
+        let captured = captured
+            .iter()
+            .map(|value| serialize_binding(run, "", &Binding::Value(crate::env::ValueBinding { value: value.clone(), trail: None, many: false }), park))
+            .collect::<Result<Vec<_>, _>>()?;
+        state.push(("captured", Js::array(captured)));
+    }
+    let event_waits = run.event_waits.borrow();
+    if !event_waits.is_empty() {
+        state.push(("eventWaits", Run::waits_js(&event_waits)));
     }
     let libraries = run.library_sources();
     if !libraries.is_empty() {
@@ -546,6 +573,10 @@ fn serialize_binding(run: &Run<'_>, name: &str, binding: &Binding, park: &mut Pa
             if let Some((_, id)) = park.known.iter().find(|(h, _)| Rc::ptr_eq(h, handle)) {
                 members.push(("id", Js::Number(*id as f64)));
             }
+            let waits = handle.waits.borrow();
+            if !waits.is_empty() {
+                members.push(("waits", Run::waits_js(&waits)));
+            }
             object_of(members)
         }
         // `holdsRecords` recurses through a value that holds itself until
@@ -591,6 +622,10 @@ fn serialize_binding(run: &Run<'_>, name: &str, binding: &Binding, park: &mut Pa
             if !from_source {
                 let graph = &landed.read.graph;
                 descriptor.push(("read", object_of(vec![("instanceName", Js::str(graph.name.clone())), ("instance", identity(graph))])));
+            }
+            let waits = landed.waits.borrow();
+            if !waits.is_empty() {
+                descriptor.push(("waits", Run::waits_js(&waits)));
             }
             object_of(descriptor)
         }
@@ -786,7 +821,14 @@ pub fn resume_refusal_in(state: &Json, cx: Cx) -> Option<String> {
     // descriptors' kinds are read, each by the structure its kind has
     // (park_state.ts), never by a key name — the names of bindings, captures
     // and edges are the author's.
-    scopes_refusal(cx, &scopes).or_else(|| frames_refusal(cx, &frames)).or_else(|| journal_refusal(cx, &journal))
+    let captured = at(&state, "captured").cloned().unwrap_or(Js::Undefined);
+    if !listed(&captured) || at(&state, "eventWaits").is_some_and(|waits| crate::waits::waits_of_js(waits).is_none()) {
+        return Some("resume_state_does_not_read".into());
+    }
+    scopes_refusal(cx, &scopes)
+        .or_else(|| frames_refusal(cx, &frames))
+        .or_else(|| journal_refusal(cx, &journal))
+        .or_else(|| items(Some(&captured)).iter().find_map(|value| descriptor_refusal(cx, value)))
 }
 
 const NOT_READ: &str = "resume_state_code_does_not_read";
@@ -866,7 +908,8 @@ fn descriptor_refusal(cx: Cx, descriptor: &Js) -> Option<String> {
         }
         "localShape" => (!names_code(cx, at(descriptor, "declaration"), |c| matches!(c, CodeAt::Shape(_)))).then(|| NOT_READ.to_string()),
         "lazyWalk" => walk_refusal(cx, at(descriptor, "walk")),
-        "handle" => at(descriptor, "old").and_then(|x| descriptor_refusal(cx, x)),
+        "handle" => waits_refusal(descriptor).or_else(|| at(descriptor, "old").and_then(|x| descriptor_refusal(cx, x))),
+        "sourcePosition" => waits_refusal(descriptor),
         "positions" => items(at(descriptor, "landings")).iter().find_map(|x| descriptor_refusal(cx, x)),
         "tuple" => items(at(descriptor, "slots")).iter().find_map(|x| descriptor_refusal(cx, x)),
         "recordValue" => at(descriptor, "value").and_then(|x| value_refusal(cx, x)),
@@ -882,10 +925,14 @@ fn descriptor_refusal(cx: Cx, descriptor: &Js) -> Option<String> {
             (Some(checked), Some(path)) if checked.file(&crate::program::DeclaringFile::Library(path.to_string())).is_none() => Some(NOT_READ.into()),
             _ => None,
         },
-        "event" | "instance" | "handleRef" | "nodeRef" | "extractRoot" | "extractPosition" | "sourcePosition" | "resource"
-        | "value" | "callback" | "shapePosition" | "opaque" => None,
+        "event" | "instance" | "handleRef" | "nodeRef" | "extractRoot" | "extractPosition" | "resource" | "value" | "callback" | "shapePosition" | "opaque" => None,
         _ => Some("resume_state_does_not_read".into()),
     }
+}
+
+/// A record's parked waits, where it has any, read as a park writes them.
+fn waits_refusal(descriptor: &Js) -> Option<String> {
+    at(descriptor, "waits").is_some_and(|waits| crate::waits::waits_of_js(waits).is_none()).then(|| "resume_state_does_not_read".into())
 }
 
 /// Whether a descriptor's code is named as a park names it (`code_ref`) and,
@@ -1439,6 +1486,8 @@ mod tests {
             wire: crate::env::Wire::default(),
             stored_sources: RefCell::default(),
             meter: Default::default(),
+            event_waits: RefCell::default(),
+            reentered_await: RefCell::default(),
         };
         let read = Rc::new(crate::traverse::Read {
             instance: crate::host::Instance { id: "i1".into(), methods: Rc::new(Vec::new()) },

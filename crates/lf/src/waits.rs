@@ -107,19 +107,21 @@ pub fn delivery_rows(work: &[NewWork], mark: i64, team_id: &str, wakes: &[WaitWa
     (marked, wake_rows(team_id, wakes))
 }
 
-/// A `wake_await` row per wait, due now: the drain reads its arrivals and
-/// resumes its run.
+/// A `wake_await` row per wait, due now: the drain re-enters the run's
+/// await parked at the wait's address, which reads its arrivals.
 pub fn wake_rows(team_id: &str, wakes: &[WaitWake]) -> Vec<NewWork> {
-    wakes
-        .iter()
-        .map(|wake| NewWork {
-            kind: "wake_await".into(),
-            key: format!("wake_await:{}", uuid::Uuid::new_v4()),
-            payload: Js::Obj(obj! { "waitId" => Js::str(&wake.wait_id) }),
-            due_at: None,
-            team_id: Some(team_id.to_string()),
-        })
-        .collect()
+    wakes.iter().map(|wake| wake_row(team_id, wake)).collect()
+}
+
+/// One wait's `wake_await` row: `{ waitId, runId, address }`.
+pub fn wake_row(team_id: &str, wake: &WaitWake) -> NewWork {
+    NewWork {
+        kind: "wake_await".into(),
+        key: format!("wake_await:{}", uuid::Uuid::new_v4()),
+        payload: Js::Obj(obj! { "waitId" => Js::str(&wake.wait_id), "runId" => Js::str(&wake.run_id), "address" => Js::str(&wake.address) }),
+        due_at: None,
+        team_id: Some(team_id.to_string()),
+    }
 }
 
 // ── The family over the state file (the trait's SQLite implementation) ─────
@@ -583,7 +585,7 @@ mod tests {
         let logged = DeliveryArrivals { team_id: &team, adapter_type: "acme", arrivals: std::slice::from_ref(&arrival), at: &iso(0) };
         let wakes = store.keep_delivery(&subscription, None, &receipt(), std::slice::from_ref(&fire), Some(&logged)).unwrap().expect("kept");
         let mark = store.arrival_mark().unwrap();
-        assert_eq!(wakes.iter().map(|w| (w.kind.as_str(), w.payload.to_json())).collect::<Vec<_>>(), [("wake_await", format!(r#"{{"waitId":"{wait}"}}"#))]);
+        assert_eq!(wakes.iter().map(|w| (w.kind.as_str(), w.payload.to_json())).collect::<Vec<_>>(), [("wake_await", format!(r#"{{"waitId":"{wait}","runId":"{run}","address":"s1"}}"#))]);
         assert_eq!(store.wait_arrivals(&wait).unwrap().arrivals.len(), 1);
         let due = crate::store::ClaimDue { limit: 1000, lease_ms: 60_000, due_by: None, kinds: None };
         let rows = store.claim_due(&due).unwrap();

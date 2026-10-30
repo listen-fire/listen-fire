@@ -417,7 +417,7 @@ describe('a park pins the libraries the run linked', () => {
 
   it('names its code by place and carries each library’s text when the host keeps no store', async () => {
     const state = parkedState(await onRust({ source, files: keep('L') }));
-    expect(state.version).toBe(2);
+    expect(state.version).toBe(PARK_STATE_VERSION);
     expect(state.libraries).toEqual([{ path: 'lib/keep', source: keep('L')['lib/keep'].source }]);
     const closure = state.scopeChain.flatMap((scope) => Object.values(scope.bindings)).find((b) => b.kind === 'closure');
     expect(closure).toMatchObject({ kind: 'closure', closure: '@lib~1keep/statements/4/body/0/value/closure' });

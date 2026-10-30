@@ -438,6 +438,7 @@ impl Run<'_> {
                 .unwrap_or_else(|| crate::record::bind_value(Js::Null, Some(Trail::default()), false));
             child.declare(param.name.clone(), binding);
         }
+        self.enter_parameters(&closure.code.path, &closure.code.ast.params, &child).await?;
         let path = format!("{}/body", closure.code.path);
         let flow = self.body(&closure.code.ast.body, &child, address, &path, 0).await?;
         Ok((flow, child))

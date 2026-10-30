@@ -323,6 +323,10 @@ impl Session {
                 let park = TimerPark { address: text(args, "address", label)?.into(), state: state(args, "state", label)?, wake_at: text(args, "wakeAt", label)?.into() };
                 then(store(hosts, label)?.commit_timer_park(park), |()| Ok(None))
             }
+            "park.sink.commitAwaitPark" if args.get("waitId").is_some() => {
+                let park = WaitPark { address: text(args, "address", label)?.into(), state: state(args, "state", label)?, wait_id: text(args, "waitId", label)?.into() };
+                then(store(hosts, label)?.commit_wait_park(park), |()| Ok(None))
+            }
             "park.sink.commitAwaitPark" => {
                 let park = AwaitPark {
                     address: text(args, "address", label)?.into(),
@@ -362,6 +366,33 @@ impl Session {
             "park.sink.cancelSubtrees" => {
                 let subtrees = texts(args.get("subtreeAddresses"), label)?;
                 then(store(hosts, label)?.cancel_subtrees(&subtrees, args.get("excludeLeaf").and_then(Json::as_str)), |()| Ok(None))
+            }
+            "park.wake" if args.get("waitId").is_some() => then(store(hosts, label)?.wake_wait(text(args, "waitId", label)?), |()| Ok(None)),
+            "park.waits.mark" => then(store(hosts, label)?.wait_mark(), |mark| Ok(Some(json!({ "mark": mark })))),
+            "park.waits.open" => {
+                let since = args.get("since").and_then(Json::as_i64).ok_or_else(|| HostFailure::new(format!("{label}: since is an integer")))?;
+                let wait = OpenWait { adapter_type: text(args, "adapterType", label)?.into(), edge: text(args, "edge", label)?.into(), key: text(args, "key", label)?.into(), since };
+                then(store(hosts, label)?.open_wait(wait), |id| Ok(Some(json!({ "waitId": id }))))
+            }
+            "park.waits.arrivals" => then(store(hosts, label)?.wait_arrivals(text(args, "waitId", label)?), |read| {
+                let arrivals = read
+                    .arrivals
+                    .into_iter()
+                    .map(|a| {
+                        let mut members = vec![json!(["seq", a.seq]), json!(["identity", a.identity])];
+                        if let Some(version) = a.version {
+                            members.push(json!(["version", version]));
+                        }
+                        members.push(json!(["landing", a.landing.to_wire()]));
+                        json!(["o", members])
+                    })
+                    .collect::<Vec<_>>();
+                Ok(Some(json!(["o", [["gone", read.gone], ["arrivals", ["l", arrivals]]]])))
+            }),
+            "park.waits.note" => {
+                let matched = args.get("matched").and_then(Json::as_bool).ok_or_else(|| HostFailure::new(format!("{label}: matched is a boolean")))?;
+                let counts = store(hosts, label)?.note_arrival(text(args, "waitId", label)?, text(args, "identity", label)?, args.get("version").and_then(Json::as_str), matched);
+                then(counts, |counts| Ok(Some(json!({ "counts": counts }))))
             }
             "park.wake" => {
                 let key = args.get("correlationKey").cloned().unwrap_or(Json::Null);

@@ -1,0 +1,25 @@
+import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+# A decision has a second to arrive; after that the run records the timeout
+# and a late decision changes nothing.
+function decide(company: <crm-[:Company]->>) {
+  ask = write crm-[:Company]-> { Name: "Decide ${company.Name}" }
+  r = race(
+    () => {
+      a = await ask-[:Approvals]->
+      return a.Decision
+    },
+    () => { await sleep(1s) },
+  )
+  if (r[0] == null) {
+    write crm-[:Company]-> { Name: "Timed out" }
+  }
+  if (r[0] != null) {
+    write crm-[:Company]-> { Name: "Decided ${r[0]}" }
+  }
+}
+
+listen to crm {} fire decide

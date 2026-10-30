@@ -26,19 +26,20 @@ export { CATALOG_SNAPSHOT_VERSION, DEPRECATED_CATALOG_SNAPSHOT_VERSIONS, SUPPORT
 export { STORY_ANALYSIS_VERSION, SUPPORTED_STORY_ANALYSIS_VERSIONS };
 
 /** A parked flow's state (docs/contracts/park-state.md). Engine to engine: a
- *  host stores it and hands it back. Version 2 is the Rust engine's; the earlier
- *  TypeScript engine wrote and read 1. */
-export const PARK_STATE_VERSION = 2;
+ *  host stores it and hands it back. Version 3 is the Rust engine's from 0.13
+ *  (2 was 0.12's, whose awaits parked on keys); the earlier TypeScript engine
+ *  wrote and read 1. */
+export const PARK_STATE_VERSION = 3;
 
 /** The park state versions this release reads: each engine its own. */
-export const SUPPORTED_PARK_STATE_VERSIONS: ReadonlySet<number> = new Set([1, 2]);
+export const SUPPORTED_PARK_STATE_VERSIONS: ReadonlySet<number> = new Set([1, 3]);
 
 /** The host families and the entry points (docs/contracts/host-families.md),
  *  carried on every `segment.open`. */
-export const HOST_FAMILIES_VERSION = 1;
+export const HOST_FAMILIES_VERSION = 2;
 
 /** The host families versions this release serves. */
-export const SUPPORTED_HOST_FAMILIES_VERSIONS: ReadonlySet<number> = new Set([1]);
+export const SUPPORTED_HOST_FAMILIES_VERSIONS: ReadonlySet<number> = new Set([2]);
 
 /** What a system caller verifier sees and answers (docs/contracts/system-caller.md):
  *  the in-process interface a host's system endpoints authenticate through. */

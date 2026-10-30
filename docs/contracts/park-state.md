@@ -1,27 +1,27 @@
 # The park state
 
-Version: 2
+Version: 3
 
 When a flow parks (on a timer, an await, a limit, or a callback's captured continuation), the engine writes everything a resume needs to rebuild the scopes the leaf was parked in as one JSON value, `ParkedScopeState`. A host stores it, through `park.sink` or `park.callbacks.mint` ([`host-families.md`](host-families.md)), and hands it back byte for byte on resume. **A host never reads inside it.** The contract an embedder serves is the persistence `park.sink` describes; this document is the value it persists, which engines read.
 
 - **The type:** `ParkedScopeState` and its descriptors (`packages/engine-contracts/park_state.ts`).
-- **Written and read by:** each engine its own version. The TypeScript engine (`movement_engine/serialize.ts` and the resume path in `run.ts`) runs the platform's earlier integer-pinned languages and writes and reads version 1. The Rust engine (`crates/movement-engine/src/park.rs`, `resume.rs`, `code.rs`) runs the language of this repository's releases and writes and reads version 2. Neither reads the other's: a run never changes engine, so its parks never do.
+- **Written and read by:** each engine its own version. The TypeScript engine (`movement_engine/serialize.ts` and the resume path in `run.ts`) runs the platform's earlier integer-pinned languages and writes and reads version 1. The Rust engine (`crates/movement-engine/src/park.rs`, `resume.rs`, `code.rs`) runs the language of this repository's releases and writes and reads version 3 (0.12's wrote 2). Neither reads the other's: a run never changes engine, so its parks never do.
 - **Tied to the pin:** a state is read against the exact source and language version its run is pinned to (`trigger_run.movement_version_id`; a version row is never changed, an edit mints a new one). Addresses are re-read against that program, and in version 2 so is every piece of code the state names. The libraries the run linked are pinned by the state itself (`libraries`): a resume reads them from there, never from what the team has saved since.
 
 ## Versions
 
-- **The version is an integer**, the state's own `version` member; `PARK_STATE_VERSION` is the current one, 2. This release reads and writes versions 1 and 2, each on its own engine ([the index](README.md)). A state of any other version, or one that names none, is refused before anything is rehydrated from it (`refuseUnsupportedParkStateVersion`): every writer has always stamped the version.
+- **The version is an integer**, the state's own `version` member; `PARK_STATE_VERSION` is the current one, 3. This release reads and writes versions 1 and 3, each on its own engine ([the index](README.md)). A version 2 state is 0.12's: its awaits parked on keys no 0.13 host wakes, and the engine refuses it by name (`this run parked under listen-fire 0.12 (park state 2); a 0.13 engine resumes park state 3`). A state of any other version, or one that names none, is refused before anything is rehydrated from it (`refuseUnsupportedParkStateVersion`): every writer has always stamped the version.
 - **What bumps it:** a change a current reader would misread. A descriptor removed or renamed, a member whose meaning changed, or a member a resume cannot do without. An optional member whose absence means exactly what a park written before it meant keeps the version: every park written before it still reads.
 - **How a break lands:** the engine writes the new version and reads both, branching on `version` at the point of difference, for as long as a parked run written under the old one may still be waiting. The old version's fixtures stay in the engine corpora and must resume.
 - **Why version 1 still holds.** Five members were added after version 1 was first written: `presenceBind`, `until`, `frames`, `suspended` and `journal`. Each is optional, and its absence means what a park written before it meant: no presence marker, a plain sleep, an address that never left the movement's own body, an ordinary park, nothing to replay. The readers treat each that way (`state.frames ?? []`, `state.journal !== undefined`, `state.until === true`, …). So every version 1 park written before them is read correctly by the current reader, and the version did not move.
 
 ## The shape
 
-The shapes are TypeScript-ish: `x?: T` may be absent. The two versions differ only in how they carry code (`ParkedCode` in `park_state.ts`: `CodeAsTree` for 1, `CodeByPlace` for 2) and in version 2's `libraries`; every other member is the same.
+The shapes are TypeScript-ish: `x?: T` may be absent. The versions differ in how they carry code (`ParkedCode` in `park_state.ts`: `CodeAsTree` for 1, `CodeByPlace` from 2), in `libraries` (from 2), and in a run's waits and an await's captured values (3); every other member is the same.
 
 ```ts
 interface ParkedScopeState {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   address: string;                   // the parked statement's lexical address (`s0.b1.s0`): the resume's entry
   bindingName: string | null;        // what a step-past resume binds the answer to; null for a value-less statement
   scopeChain: SerializedScope[];     // root first: the bindings feeding the parked statement (the innermost body's, when `frames` is present)
@@ -31,7 +31,11 @@ interface ParkedScopeState {
   suspended?: true;                  // added: an engine-initiated suspension, re-run on resume
   journal?: SerializedCallEvent[];   // added: the parked statement's finished calls, replayed on re-run
   libraries?: ParkedLibrary[];       // version 2: every library the run linked, pinned
+  captured?: BindingDescriptor[];    // version 3: an await on a wait, what its WHERE read of the run when first reached, in hole order (each a `value` or `recordValue`)
+  eventWaits?: ParkedWaits;          // version 3: the trigger's record's waits
 }
+
+type ParkedWaits = Record<string, string | { gone: true }>;   // version 3: by edge, the wait's id, or the record is gone
 
 type ParkedLibrary =                 // version 2
   | { path: string; source: string } // its text, where the host keeps no source store
@@ -75,6 +79,8 @@ type CodePlace = string;             // an AST path: `/statements/2/body/0/value
 - **Code is carried as a name, or as its place in the program (version 2; version 1 carries its syntax tree).** A shape or movement declared at file scope is its name, found again in the re-parsed program — in the library its `file` names, when it is a library's. A closure bound at a file's top level is its name (`fileClosure`), found again in that file: it holds its file's scope by reference, so neither its body nor that scope is written. A closure's body, a kept walk's head and mapping, a body-local declaration and a run-time arm are their AST path: a JSON Pointer through the parser's tree of the file that wrote it, a library's behind its escaped path (`@lib~1deals/statements/0/body/1/value/closure`), read again through a call nested in an expression from its slot's text (`…/nested/<start>-<end>/value/…`). A movement read as a value is its declaration's path. A collection op is its span, found among the calls its statement makes (its expressions' nested calls included). The pin keeps the root program's text, and `libraries` every library's, so each place holds the code that parked; a place that holds no such code fails the resume, naming it.
 - **Libraries are pinned by the park (version 2).** `libraries` lists every library the run linked, not only those its parked code names: a run reads one program, so a branch's export or a member's answer written in one segment means the same code in the segment that reads it. A resume sets these texts in place of the team's saved files before it checks the program. With a host that serves `park.sources` ([host-families.md](host-families.md)), each is named by the hash the store keeps its text by, one stored text shared by every park and run that names it; without one, the park carries the text.
 
+A `handle` and a `sourcePosition` descriptor carry `waits?: ParkedWaits` (version 3): the waits opened on the record's edges since it entered the run, which an `await` on it reads after the resume.
+
 Members added to a descriptor after it was first written are optional in the same way as the five above (`fieldOrder`, a node's `id`, a landed edge's `landing`, a node's `landedOn`: the edge of a run-built node it landed on, which lets `write e { … }` update it in place after the resume; `fileFields` on a node, a shape position and an extraction's emission; a `sourcePosition` read's `instance`: the identity of the system the record was read from, which a resume rebinds the read from, since a record a library returned names a connection the root program's scope does not hold — absent, the read is rebound by `instanceName` in the root program's scope, as before). Spellings a park written earlier still carries are read too (a file source's `ownerAdapterType`, a landing's `landingShape`, a resource's unbranded `fileRef`). A descriptor's `__brand: "FileRef"` is written as its spelling, and no reader branches on it.
 
 ## Park reasons
@@ -83,6 +89,7 @@ Beside the state, a host records why a leaf waits. The core owns three reasons: 
 
 ## Changes
 
+- **Version 3 (0.13, waits on listenable edges).** An await on an adapter's edge parks on a wait its record opened when it entered the run, not on a key: a record's descriptor carries its `waits`, the state its trigger's (`eventWaits`), and an await's state the values its WHERE captured (`captured`), which a re-entry judges arrivals with. A version 2 reader would drop all three, and a version 2 state's awaits wait on keys no 0.13 host wakes, so the version moved and a version 2 state is refused by name, naming 0.12. A 0.12 run parked on a `sleep` is refused the same way: its pin is 0.12's, which a 0.13 release does not run either.
 - **Version 2 (the Rust engine; shrink-park, 2026-10-16).** Code is named by its place in the pinned program rather than carried as its syntax tree (a member frame's op by its span), and the state pins the run's libraries (`libraries`, each its text or a `park.sources` hash). A version 1 reader would misread every closure, walk, body-local declaration and frame, so the version moved. The Rust engine writes and reads only version 2; the TypeScript engine, which runs the earlier integer-pinned languages, writes and reads only version 1, and refuses a version 2 state by name. No version 2 state predates it (this language was unreleased), so nothing waits to be read across the change.
 
 - **Version 1.** The first version, the TypeScript engine's. Since it was first written it has gained, each optional with its absence meaning the earlier behaviour: `presenceBind` (a presence marker bound at wake), `until` (a recurring-clock timer park), `frames` (parks inside a called body, a collection op's member, or a run-time arm), and `suspended` with `journal` (engine-initiated suspensions that replay finished calls). Descriptors have gained `recordValue`, `nodeRef`, a node's `id`, the kept field orders, the `file` value descriptor and `fileFields` (PLAN-07A Task 4d: a file is said to be one, never recognised by its keys), a node's `landedOn` (the edge of a run-built node it landed on), and a handle's `old` / `oldIsSelf` (the record before its write, `-[:@old]->`) with its record's `foundData` and `snapshot` on the same terms. Only a run of the current language writes the last four, and both engines write and read them alike (`crates/movement-engine/src/park.rs`, since PLAN-07A Task 4c). Then (main's B7, B11, B13, mirrored by the Rust engine): a handle's `id` and the `handleRef` descriptor (one handle two places hold is written once, and a completed branch's export is written by one park, `#return` first), `file` on a `shape` or `movement` descriptor (the library it is declared in; absent, the root program, as a park written before it reads), and the `fileClosure` descriptor (a closure bound at a file's top level, by name, with its library's `file`). Each is optional and new: a park written before them holds none and resumes as it did.

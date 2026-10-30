@@ -597,14 +597,17 @@ impl<'a> Typing<'a> {
 
     /// `walkSteps`: where a walk from `start` lands, its aliases bound.
     pub fn walk_steps(&mut self, start: Option<Position>, steps: &[TraversalStep], awaited: bool) -> Option<Position> {
-        self.awaited = awaited;
-        self.last_edge_schema = None;
         let mut root = self.step_root.take();
         let mut landings = Vec::new();
         let mut current = start;
         let mut ordering = CollectionOrder::Unknown;
         let mut ordering_edge = None;
+        // What this walk's last hop was: a walk a hop's WHERE reads (`r.Body
+        // == founder-[:Company]->.Name`, a field of a record the run holds)
+        // is typed with this same state, and its own last hop is not this one.
+        let mut last_edge_schema = None;
         for step in steps {
+            self.awaited = awaited;
             match step {
                 TraversalStep::Edge(edge) => {
                     let from = current.clone();
@@ -622,7 +625,7 @@ impl<'a> Typing<'a> {
                         _ => self.step_edge(from.as_ref(), edge),
                     };
                     self.step_root = None;
-                    self.last_edge_schema = schema.clone();
+                    last_edge_schema = schema.clone();
                     ordering =
                         self.hop_ordering(from.as_ref(), edge.cardinality.as_ref().is_some_and(|c| c.order_by.is_some()), &edge.edge_type_id, schema.as_ref());
                     ordering_edge = Some(edge.edge_type_id.clone());
@@ -654,6 +657,8 @@ impl<'a> Typing<'a> {
             root = None;
             landings.push(current.clone());
         }
+        self.awaited = awaited;
+        self.last_edge_schema = last_edge_schema;
         self.last_landings = landings;
         self.last_ordering = ordering;
         self.last_ordering_edge = ordering_edge;

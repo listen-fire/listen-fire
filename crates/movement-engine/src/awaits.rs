@@ -6,14 +6,21 @@
 //!   is bound and the run goes on; else a timer park the timer resume
 //!   re-enters to test it again (`until: true`).
 //! - **A combinator**: crate::combinator.
-//! - **An edge**: check now, else park. A callback's `Called` edge is read
-//!   off the callback's ledger (`park.callbacks.calls`); a written record's
-//!   edge is asked of its awaitable adapter (`resolveAwait`). Resolved, the
-//!   landing is bound and the run goes on; pending, the await park is
-//!   committed under the key a wake names it by (`commitAwaitPark`), the
-//!   question asked once more now that the park is durable, and the run woken
-//!   (`park.wake`) when it already resolved. The resume re-enters the await,
-//!   which checks again.
+//! - **An edge of a record**: read off the wait the record opened when it
+//!   entered the run (crate::waits), in this order:
+//!   1. the record's wait on the edge (a gone record settles empty);
+//!   2. the WHERE's parts that read only the run captured, once, when the
+//!      await is first reached (re-entered, the values it parked with);
+//!   3. a plain `await` on an edge that can be listed takes the first match
+//!      the listing holds (`listsFirst`), on its first reach only;
+//!   4. else the wait's arrivals, in log order, each judged and noted: the
+//!      first that counts is bound; a gone record settles empty;
+//!   5. else the run parks on the wait (`commitAwaitPark`), reads the
+//!      arrivals once more, and is woken (`park.wake`) when one landed while
+//!      it parked. The resume re-enters the await, which judges again.
+//! - **A callback's `Called` edge**: read off the callback's ledger
+//!   (`park.callbacks.calls`), parked under the callback's key; callbacks
+//!   retire at 0.13.
 //! - **`callback(…)`**: minted with the host (`park.callbacks.mint`), its
 //!   captured continuation the park's own state; its body is the callback
 //!   entry's (crate::resume).
@@ -21,7 +28,8 @@
 use std::rc::Rc;
 
 use movement_parser::ast::{self, AwaitSource, CallbackExpression, CallbackSubject, ParamTypeRef, PathHead, PathRoot, UntilCondition};
-use movement_parser::lowering::expression::Expression;
+use movement_parser::lowering::captures::{Scoped as Held, capture, captured_name};
+use movement_parser::lowering::expression::{Expression, TraversalStep};
 use serde_json::Value as Json;
 
 use crate::bindings::{Binding, Closure, Scope};
@@ -31,8 +39,10 @@ use crate::flow::Code;
 use crate::host;
 use crate::js::{Js, JsObject};
 use crate::park::Leaf;
+use crate::program::Stamp;
 use crate::run::{Address, Failure, Flow, Run, Stop};
 use crate::trace::TraceEntry;
+use crate::waits::{Unwaitable, WaitRef};
 
 /// `CALLBACK_CALLED_EDGE`: a callback's one edge.
 pub(crate) const CALLED: &str = "Called";
@@ -54,20 +64,11 @@ fn over_a_list(root: &str, edge: &str) -> Stop {
     ))
 }
 
-/// The record an edge is awaited on: the adapter asked, the record's id,
-/// the graph it reads through, and its inline data.
-struct Awaited {
-    adapter_type: String,
-    record_id: Js,
-    read: Rc<crate::traverse::Read>,
-    head_data: Js,
-}
-
-/// What an await's check found (`check()`).
-enum Checked {
-    Bind(Js),
-    Empty,
-    Wait(Json),
+/// What an await on a wait found among the arrivals.
+enum Judged {
+    Bound(Binding),
+    Gone,
+    Pending,
 }
 
 impl Run<'_> {
@@ -83,7 +84,7 @@ impl Run<'_> {
                 Ok(())
             }
             AwaitSource::Combinator { combinator, .. } => self.combinator(combinator, binding_name, scope, at, &format!("{path}/combinator")).await,
-            AwaitSource::Traversal { head, .. } => self.await_edge(head, binding_name, scope, at).await,
+            AwaitSource::Traversal { head, .. } => self.await_edge(head, binding_name, scope, at, path).await,
         }
     }
 
@@ -162,8 +163,8 @@ impl Run<'_> {
     // ── An edge awaited ──
 
     /// The await on an edge: a callback's, or a record's (written or read)
-    /// through its system's awaitable adapter.
-    async fn await_edge(&self, head: &PathHead, binding_name: Option<&str>, scope: &Rc<Scope>, at: &Address) -> Result<(), Stop> {
+    /// off the wait it opened. `path` is the await source's AST path.
+    async fn await_edge(&self, head: &PathHead, binding_name: Option<&str>, scope: &Rc<Scope>, at: &Address, path: &str) -> Result<(), Stop> {
         let edge = await_edge_name(&head.hops_raw);
         let step = crate::traverse::head_step(head).ok();
         let alias = step.as_ref().and_then(|step| step.alias.clone());
@@ -177,15 +178,13 @@ impl Run<'_> {
         let bound = scope.resolve(&root);
         match bound {
             Some(callback @ Binding::Callback(_)) => self.await_callback(&callback, &edge, filter.as_ref(), binding_name, scope, at).await,
-            Some(Binding::Handle(handle)) => self.await_landing(&handle, &edge, filter.as_ref(), binding_name, scope, at).await,
-            Some(record @ (Binding::Event | Binding::Landed(_))) => self.await_record(self.read_record_awaited(&root, &record, &edge).await?, &edge, filter.as_ref(), binding_name, scope, at).await,
+            Some(record @ (Binding::Handle(_) | Binding::Event | Binding::Landed(_))) => self.await_wait(head, &root, &record, &edge, binding_name, scope, at, path).await,
             // `c = only(e-[k:Checks]->)`: the one record a value holds is
             // awaited on as that record.
             Some(Binding::Value(value)) if let Some(record) = crate::record::binding_of(&value.value) => match record {
-                Binding::Handle(handle) => self.await_landing(&handle, &edge, filter.as_ref(), binding_name, scope, at).await,
                 Binding::Callback(_) => self.await_callback(&record, &edge, filter.as_ref(), binding_name, scope, at).await,
                 Binding::Positions(_) => Err(over_a_list(&root, &edge)),
-                record @ (Binding::Event | Binding::Landed(_)) => self.await_record(self.read_record_awaited(&root, &record, &edge).await?, &edge, filter.as_ref(), binding_name, scope, at).await,
+                record @ (Binding::Handle(_) | Binding::Event | Binding::Landed(_)) => self.await_wait(head, &root, &record, &edge, binding_name, scope, at, path).await,
                 other => Err(Stop::Thrown(Failure::unsupported(
                     &format!("await '{root}-[:{edge}]->'"),
                     &format!("'{root}' holds {}, which has no awaitable edges", crate::record::describe(&other)),
@@ -205,6 +204,194 @@ impl Run<'_> {
                 "await needs a written record handle as its head (e.g. an ask written with `write asks-[:Check]->`)",
             ))),
         }
+    }
+
+    /// The await on a record's edge, off the wait the record opened when it
+    /// entered the run (crate::waits); the order is the module doc's.
+    #[allow(clippy::too_many_arguments)] // the await's head, its record and edge, then where it binds and runs
+    async fn await_wait(&self, head: &PathHead, root: &str, record: &Binding, edge: &str, binding_name: Option<&str>, scope: &Rc<Scope>, at: &Address, path: &str) -> Result<(), Stop> {
+        let waited = match self.waited(record).await.map_err(Stop::Thrown)? {
+            Ok(waited) => waited,
+            // A rehearsed write: no real record to await; it settles empty.
+            Err(Unwaitable::Rehearsed) => {
+                if let Some(name) = binding_name {
+                    scope.declare(name, null_value());
+                }
+                return Ok(());
+            }
+            Err(Unwaitable::NoId { adapter_type }) => {
+                return Err(Stop::Thrown(Failure::engine(
+                    "MOVENG_RUNTIME",
+                    format!("await '{root}-[:{edge}]->': the '{adapter_type}' adapter answered '{root}' with no record id, so there is no record to await an edge of"),
+                )));
+            }
+        };
+        // An arrival's landing is read through the adapter itself.
+        let raw = Rc::new(crate::traverse::Read { raw: true, ..(*waited.read).clone() });
+        let settle_empty = || {
+            if let Some(name) = binding_name {
+                scope.declare(name, awaited_landing(&waited.adapter_type, &raw, &Js::object(JsObject::new()), None));
+            }
+            Ok(())
+        };
+        // A rehearsal opens no wait: its await settles empty at once.
+        if self.input.dry_run {
+            return settle_empty();
+        }
+        let address = at.encode();
+        let reentered = self.reentered_at(&address);
+        let wait_id = match self.waits_of(&waited.holder).get(edge).cloned() {
+            Some(WaitRef::Open(id)) => id,
+            Some(WaitRef::Gone) => return settle_empty(),
+            None if !self.serves("park.waits.open") => {
+                return Err(Stop::Thrown(Failure::unsupported("await (a wait)", "this run has no wait sink — an await needs the durable trigger-run substrate")));
+            }
+            None => {
+                return Err(Stop::Thrown(Failure::engine(
+                    "MOVENG_RUNTIME",
+                    format!("no wait was registered when '{root}' entered the run — the checker should have stamped it"),
+                )));
+            }
+        };
+        let step = crate::traverse::head_step(head).map_err(|why| Stop::Thrown(Failure::engine("MOVENG_RUNTIME", format!("await '{root}{}': {why}", head.hops_raw))))?;
+        let alias = step.alias.clone();
+        let written = if has_where(&head.hops_raw) { step.expression_filter.as_deref().cloned() } else { None };
+        // What the WHERE reads of the run, captured once: on re-entry, the
+        // values it parked with, whatever the records hold now.
+        let (filter, captured) = match written {
+            None => (None, reentered.clone().unwrap_or_default()),
+            Some(written) => {
+                let captured = capture(&written, alias.as_deref(), &|name| held_as(scope, name));
+                let values = match &reentered {
+                    Some(values) => values.clone(),
+                    None => {
+                        let mut values = Vec::with_capacity(captured.holes.len());
+                        for hole in &captured.holes {
+                            values.push(self.evaluate_scoped(&hole.expression, scope, None, None).await?.value);
+                        }
+                        values
+                    }
+                };
+                (Some(captured.filter), values)
+            }
+        };
+        let judging = scope.child();
+        for (index, value) in captured.iter().enumerate() {
+            judging.declare(captured_name(index), Binding::Value(ValueBinding { value: value.clone(), trail: Some(Trail::default()), many: false }));
+        }
+        let judge = Judge { wait_id: &wait_id, filter: filter.as_ref(), alias: alias.as_deref(), scope: &judging, adapter_type: &waited.adapter_type, read: &raw };
+        if reentered.is_none() && self.checked.stamp(path) == Some(Stamp::ListsFirst) {
+            let mut listing = step.clone();
+            listing.expression_filter = filter.clone().map(Box::new);
+            let span = crate::env::js_of_serialized(&head.span);
+            let listed = self.walk_adapter(&waited.position, &waited.read, &[TraversalStep::Edge(listing)], root, &judging, &span).await.map_err(Stop::Thrown)?;
+            if let Some(first) = listed.into_iter().next() {
+                if let Some((identity, version)) = listed_identity(&waited, &first, edge) {
+                    self.note_arrival(&wait_id, &identity, version.as_deref(), true).await.map_err(Stop::Thrown)?;
+                }
+                if let Some(name) = binding_name {
+                    scope.declare(name, Binding::Landed(first));
+                }
+                return Ok(());
+            }
+        }
+        match self.judge_arrivals(&judge).await? {
+            Judged::Bound(landing) => {
+                if let Some(name) = binding_name {
+                    scope.declare(name, landing);
+                }
+                return Ok(());
+            }
+            Judged::Gone => return settle_empty(),
+            Judged::Pending => {}
+        }
+        if !self.serves("park.sink.commitAwaitPark") {
+            return Err(Stop::Thrown(Failure::unsupported("await (a durable park)", "this run has no park sink — an await needs the durable trigger-run substrate")));
+        }
+        let state = crate::park::park_state(self, &address, None, Leaf::Await { captured: &captured }, scope).await.map_err(Stop::Thrown)?;
+        let request = host::park::commit_await_park(self.segment(), &address, self.encode(&state).map_err(Stop::Thrown)?, &wait_id);
+        self.ask(request).await.map_err(Stop::Thrown)?;
+        // What landed while the run parked: the park and the log never
+        // interleave, so either the log woke the park or this read sees it.
+        let again = self.arrived_while_parking(&judge).await;
+        self.wake_if_arrived(&wait_id, again).await?;
+        self.trace(TraceEntry::Gate { outcome: false });
+        Err(Stop::Parked(address))
+    }
+
+    /// The captured values of the await a resume re-enters at `address`,
+    /// taken once.
+    fn reentered_at(&self, address: &str) -> Option<Vec<Js>> {
+        let mut reentered = self.reentered_await.borrow_mut();
+        match reentered.as_ref() {
+            Some((at, _)) if at == address => reentered.take().map(|(_, values)| values),
+            _ => None,
+        }
+    }
+
+    /// The wait's arrivals in log order, each judged and noted: the first
+    /// that counts, or else whether the record is gone.
+    async fn judge_arrivals(&self, judge: &Judge<'_>) -> Result<Judged, Stop> {
+        let logged = self.wait_arrivals(judge.wait_id).await.map_err(Stop::Thrown)?;
+        for arrival in &logged.arrivals {
+            let landing = arrival_landing(judge, &arrival.landing);
+            let matched = self.arrival_matches(judge, &landing).await?;
+            if self.note_arrival(judge.wait_id, &arrival.identity, arrival.version.as_deref(), matched).await.map_err(Stop::Thrown)? {
+                return Ok(Judged::Bound(landing));
+            }
+        }
+        Ok(if logged.gone { Judged::Gone } else { Judged::Pending })
+    }
+
+    /// Whether anything that would end the wait arrived: the record went, or
+    /// an arrival the WHERE takes. Noted by the resume, not here.
+    async fn arrived_while_parking(&self, judge: &Judge<'_>) -> Result<bool, Stop> {
+        let logged = self.wait_arrivals(judge.wait_id).await.map_err(Stop::Thrown)?;
+        if logged.gone {
+            return Ok(true);
+        }
+        for arrival in &logged.arrivals {
+            if self.arrival_matches(judge, &arrival_landing(judge, &arrival.landing)).await? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// The WHERE, its captured parts read from their names, over one
+    /// arrival's landing.
+    async fn arrival_matches(&self, judge: &Judge<'_>, landing: &Binding) -> Result<bool, Stop> {
+        let (Some(filter), Binding::Landed(landed)) = (judge.filter, landing) else { return Ok(true) };
+        let at = judge.scope.child();
+        if let Some(alias) = judge.alias {
+            at.declare(alias, landing.clone());
+        }
+        let value = self.evaluate_scoped(filter, &at, None, Some(crate::run::Scoped::Landed(landed.clone()))).await?.value;
+        Ok(value.truthy())
+    }
+
+    /// A wait's run woken when something landed while it parked. A re-read
+    /// that cannot answer leaves the run parked, and a wake that cannot be
+    /// queued leaves the park as durable as before: both logged. A re-read
+    /// that met a limit ends the segment, as a limit anywhere does.
+    async fn wake_if_arrived(&self, wait_id: &str, arrived: Result<bool, Stop>) -> Result<(), Stop> {
+        let fields = |error: String| {
+            let mut fields = serde_json::Map::new();
+            fields.insert("waitId".into(), Json::String(wait_id.into()));
+            fields.insert("error".into(), Json::String(error));
+            fields
+        };
+        match arrived {
+            Err(stop @ Stop::Thrown(Failure::Limit(_))) => return Err(stop),
+            Err(stop) => self.log_with_team("error", "[MovementEngine] await re-read after parking failed; the run stays parked without a wake", fields(stop_message(&stop)), "waitId"),
+            Ok(false) => {}
+            Ok(true) => {
+                if let Err(failure) = self.ask(host::park::wake(self.segment(), wait_id)).await {
+                    self.log_with_team("error", "[MovementEngine] await wake after parking could not be queued", fields(failure_message(&failure)), "waitId");
+                }
+            }
+        }
+        Ok(())
     }
 
     /// `interpretCallbackAwait`: the ledger standing in for `resolveAwait`,
@@ -236,7 +423,7 @@ impl Run<'_> {
         }
         let key = env::json_of_js(&id);
         let state = crate::park::park_state(self, &address, None, Leaf::Plain, scope).await.map_err(Stop::Thrown)?;
-        let request = host::park::commit_await_park(self.segment(), &address, self.encode(&state).map_err(Stop::Thrown)?, CALLBACK_AWAIT_TYPE, &key);
+        let request = host::park::commit_callback_await_park(self.segment(), &address, self.encode(&state).map_err(Stop::Thrown)?, CALLBACK_AWAIT_TYPE, &key);
         self.ask(request).await.map_err(Stop::Thrown)?;
         let again = self.first_matching_call(&id, filter, scope).await.map(|call| call.is_some());
         self.wake_if_resolved(CALLBACK_AWAIT_TYPE, &key, again).await?;
@@ -310,162 +497,12 @@ impl Run<'_> {
             }
             Ok(false) => {}
             Ok(true) => {
-                if let Err(failure) = self.ask(host::park::wake(self.segment(), adapter_type, key)).await {
+                if let Err(failure) = self.ask(host::park::wake_callback(self.segment(), adapter_type, key)).await {
                     self.log_with_team("error", "[MovementEngine] await wake after parking could not be queued", fields(Some(failure_message(&failure))), "correlationKey");
                 }
             }
         }
         Ok(())
-    }
-
-    /// The await on a written record's edge (`interpretAwait`'s signal wake
-    /// source): its awaitable adapter asked, with the head's own credential
-    /// and construction arguments — the instance the write went through.
-    async fn await_landing(&self, handle: &crate::bindings::Handle, edge: &str, filter: Option<&(Expression, Option<String>)>, binding_name: Option<&str>, scope: &Rc<Scope>, at: &Address) -> Result<(), Stop> {
-        let record = handle.record();
-        let record_id = record.get("externalId");
-        let adapter_type = record.get("adapterType").to_js_string();
-        if matches!(record_id, Js::Undefined) {
-            // A rehearsed write: no real record to await; it settles empty.
-            if let Some(name) = binding_name {
-                scope.declare(name, null_value());
-            }
-            return Ok(());
-        }
-        let mut instance = (*handle.graph).clone();
-        instance.adapter_slug = adapter_type.clone();
-        let read = self.instance_read(&Rc::new(instance)).await.map_err(Stop::Thrown)?;
-        let awaited = Awaited { adapter_type, record_id, read, head_data: record.get("resultData") };
-        self.await_record(awaited, edge, filter, binding_name, scope, at).await
-    }
-
-    /// What an await on an edge of a record the run read (the event, a
-    /// walk's landing, or one a value holds) asks: the awaitable adapter of
-    /// the graph it was read in, by the record's own id, its inline data the
-    /// head's.
-    async fn read_record_awaited(&self, root: &str, record: &Binding, edge: &str) -> Result<Awaited, Stop> {
-        let (position, read, _) = self.walk_start(root, record).await.map_err(Stop::Thrown)?;
-        let record_id = crate::traverse::record_id(&position);
-        if matches!(record_id, Js::Undefined) {
-            return Err(Stop::Thrown(Failure::engine(
-                "MOVENG_RUNTIME",
-                format!("await '{root}-[:{edge}]->': the '{}' adapter answered '{root}' with no record id, so there is no record to await an edge of", read.adapter_type),
-            )));
-        }
-        Ok(Awaited { adapter_type: read.adapter_type.clone(), record_id, head_data: crate::traverse::position_data(&position), read })
-    }
-
-    /// `check()`, then bind, settle empty, or park, for a record with an id.
-    async fn await_record(&self, awaited: Awaited, edge: &str, filter: Option<&(Expression, Option<String>)>, binding_name: Option<&str>, scope: &Rc<Scope>, at: &Address) -> Result<(), Stop> {
-        let Awaited { adapter_type, record_id, read, head_data } = awaited;
-        if !read.instance.has("resolveAwait") {
-            // Whether an adapter can be awaited is what the host's adapter
-            // offers, which no save check sees: the run fails on the answer.
-            return Err(Stop::Thrown(Failure::engine(
-                "MOVENG_RUNTIME",
-                format!("await '-[:{edge}]->' on '{adapter_type}': the '{adapter_type}' adapter cannot be awaited (it does not offer resolveAwait)"),
-            )));
-        }
-        let raw = Rc::new(crate::traverse::Read { raw: true, ..(*read).clone() });
-        if self.input.dry_run {
-            if let Some(name) = binding_name {
-                scope.declare(name, awaited_landing(&adapter_type, &raw, &Js::object(JsObject::new()), None));
-            }
-            return Ok(());
-        }
-        let mut point = vec![("recordId", record_id), ("edge", Js::str(edge))];
-        if !head_data.is_nullish() {
-            point.push(("headData", head_data));
-        }
-        let point = env::object_of(point);
-        let outcome = self.check_landing(&raw, &adapter_type, &point, filter, scope).await?;
-        match outcome {
-            Checked::Bind(landing) => {
-                if let Some(name) = binding_name {
-                    let record_type = crate::record::get(&landing, "recordType").ok().filter(|t| !matches!(t, Js::Undefined));
-                    let fields = crate::record::get(&landing, "fields").unwrap_or(Js::Undefined);
-                    scope.declare(name, awaited_landing(&adapter_type, &raw, &fields, record_type));
-                }
-                Ok(())
-            }
-            Checked::Empty => {
-                if let Some(name) = binding_name {
-                    scope.declare(name, awaited_landing(&adapter_type, &raw, &Js::object(JsObject::new()), None));
-                }
-                Ok(())
-            }
-            Checked::Wait(key) => {
-                let address = at.encode();
-                if !self.serves("park.sink.commitAwaitPark") {
-                    return Err(Stop::Thrown(Failure::unsupported("await (a durable park)", "this run has no park sink — an await needs the durable trigger-run substrate")));
-                }
-                let state = crate::park::park_state(self, &address, None, Leaf::Plain, scope).await.map_err(Stop::Thrown)?;
-                let parked_type = raw.adapter_type.clone();
-                let request = host::park::commit_await_park(self.segment(), &address, self.encode(&state).map_err(Stop::Thrown)?, &parked_type, &key);
-                self.ask(request).await.map_err(Stop::Thrown)?;
-                let again = self.check_landing(&raw, &adapter_type, &point, filter, scope).await.map(|checked| !matches!(checked, Checked::Wait(_)));
-                self.wake_if_resolved(&parked_type, &key, again).await?;
-                self.trace(TraceEntry::Gate { outcome: false });
-                Err(Stop::Parked(address))
-            }
-        }
-    }
-
-    /// `check()`: `resolveAwait`, a landing taken only where the awaited
-    /// WHERE takes it (through the adapter's own `getFieldValue`).
-    async fn check_landing(&self, read: &Rc<crate::traverse::Read>, adapter_type: &str, point: &Js, filter: Option<&(Expression, Option<String>)>, scope: &Rc<Scope>) -> Result<Checked, Stop> {
-        let resolution = self.call_adapter(&read.instance, "resolveAwait", point.clone()).await.map_err(Stop::Thrown)?;
-        const CALL: &str = "adapters.call resolveAwait";
-        if !matches!(resolution, Js::Object(_)) {
-            return Err(Stop::Thrown(Failure::host_answer(CALL, "an object with a status of pending, empty or landed", &resolution)));
-        }
-        let get = |value: &Js, key: &str| crate::record::get(value, key).map_err(|e| Stop::Thrown(Failure::of_eval(e, "")));
-        let status = get(&resolution, "status")?;
-        match status {
-            Js::String(status) if status == "pending" => Ok(Checked::Wait(env::json_of_js(&get(&resolution, "correlationKey")?))),
-            Js::String(status) if status == "empty" => Ok(Checked::Empty),
-            Js::String(status) if status == "landed" => {
-                let landings = match get(&resolution, "landings")? {
-                    Js::Array(list) => list.items().clone(),
-                    other => return Err(Stop::Thrown(Failure::host_answer(CALL, "`landings` as a list", &other))),
-                };
-                for landing in landings {
-                    let taken = match filter {
-                        None => true,
-                        Some(filter) => self.landing_matches(read, adapter_type, &landing, filter, scope).await?,
-                    };
-                    if taken {
-                        return Ok(Checked::Bind(landing));
-                    }
-                }
-                // Landings, none of which the WHERE takes: still armed.
-                Ok(Checked::Wait(env::json_of_js(&get(&resolution, "correlationKey")?)))
-            }
-            other => Err(Stop::Thrown(Failure::host_answer(CALL, "a status of pending, empty or landed", &other))),
-        }
-    }
-
-    /// `awaitLandingMatches`: the WHERE read off the landing through the
-    /// adapter, an AND stopping at its first false conjunct.
-    async fn landing_matches(&self, read: &Rc<crate::traverse::Read>, adapter_type: &str, landing: &Js, filter: &(Expression, Option<String>), scope: &Rc<Scope>) -> Result<bool, Stop> {
-        let (filter, alias) = filter;
-        let record_type = match crate::record::get(landing, "recordType").map_err(|e| Stop::Thrown(Failure::of_eval(e, "")))? {
-            Js::Undefined | Js::Null => Js::str("Response"),
-            other => other,
-        };
-        let fields = crate::record::get(landing, "fields").map_err(|e| Stop::Thrown(Failure::of_eval(e, "")))?;
-        let position = env::object_of(vec![
-            ("adapterType", Js::str(adapter_type)),
-            ("recordType", record_type),
-            ("identity", env::object_of(vec![("kind", Js::str("unstable")), ("data", fields)])),
-        ]);
-        let landed = Rc::new(crate::bindings::Landed::new(position, None, read.clone()));
-        let at = scope.child();
-        if let Some(alias) = alias {
-            at.declare(alias.clone(), Binding::Landed(landed.clone()));
-        }
-        let value = self.evaluate_scoped(filter, &at, None, Some(crate::run::Scoped::Landed(landed))).await?.value;
-        Ok(value.truthy())
     }
 
     // ── callback(…) ──
@@ -602,6 +639,61 @@ fn awaited_landing(adapter_type: &str, read: &Rc<crate::traverse::Read>, fields:
         ("identity", env::object_of(vec![("kind", Js::str("unstable")), ("data", fields.clone())])),
     ]);
     Binding::Landed(Rc::new(crate::bindings::Landed::new(position, None, read.clone())))
+}
+
+/// What an await on a wait judges arrivals with.
+struct Judge<'j> {
+    wait_id: &'j str,
+    /// The WHERE, its captured parts read from their names in `scope`.
+    filter: Option<&'j Expression>,
+    alias: Option<&'j str>,
+    scope: &'j Rc<Scope>,
+    adapter_type: &'j str,
+    read: &'j Rc<crate::traverse::Read>,
+}
+
+/// A logged arrival's landing (`{recordId?, recordType?, fields}`) as the
+/// record an await binds.
+fn arrival_landing(judge: &Judge<'_>, landing: &Js) -> Binding {
+    let fields = match crate::unique::get(landing, "fields") {
+        fields @ Js::Object(_) => fields,
+        _ => Js::object(JsObject::new()),
+    };
+    let record_type = match crate::unique::get(landing, "recordType") {
+        record_type @ Js::String(_) => Some(record_type),
+        _ => None,
+    };
+    awaited_landing(judge.adapter_type, judge.read, &fields, record_type)
+}
+
+/// A listed member's identity and version, as the edge declares them (its
+/// record id where it declares no identity): what a later arrival of the same
+/// member is noted under.
+fn listed_identity(waited: &crate::waits::Waited, member: &crate::bindings::Landed, edge: &str) -> Option<(String, Option<String>)> {
+    let position = member.position();
+    let data = crate::traverse::position_data(&position);
+    let declared = match crate::waits::edge_schema(&waited.read, waited.record_type.as_deref(), edge) {
+        crate::waits::Lookup::Found(schema) => Some(schema),
+        _ => None,
+    };
+    let field = |name: Option<&String>| match name.map(|name| crate::unique::get(&data, name)) {
+        Some(Js::Undefined | Js::Null) | None => None,
+        Some(value) => Some(value.to_js_string()),
+    };
+    let identity = field(declared.and_then(|d| d.identity.as_ref())).or_else(|| match crate::traverse::record_id(&position) {
+        Js::Undefined => None,
+        id => Some(id.to_js_string()),
+    })?;
+    Some((identity, field(declared.and_then(|d| d.version.as_ref()))))
+}
+
+/// What a name read in a wait's WHERE is, where the wait is reached.
+fn held_as(scope: &Scope, name: &str) -> Held {
+    match scope.resolve(name) {
+        None => Held::Free,
+        Some(Binding::Instance(_)) => Held::Connection,
+        Some(_) => Held::Run,
+    }
 }
 
 fn null_value() -> Binding {

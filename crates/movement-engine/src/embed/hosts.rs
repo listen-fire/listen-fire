@@ -123,14 +123,50 @@ pub struct TimerPark {
     pub wake_at: String,
 }
 
+/// A flow parked on a callback's `Called` edge: woken by the callback's key.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AwaitPark {
     pub address: String,
     pub state: ParkedState,
-    /// Who wakes it: the awaitable adapter's type (or the callback
-    /// identity) and its correlation key.
+    /// Who wakes it: the reserved callback identity and the callback's id.
     pub adapter_type: String,
     pub correlation_key: serde_json::Value,
+}
+
+/// A flow parked on a wait ([`Store::open_wait`]): an arrival the wait
+/// reads wakes it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WaitPark {
+    pub address: String,
+    pub state: ParkedState,
+    pub wait_id: String,
+}
+
+/// A wait to open: this run waits on `edge` of the record its adapter keys
+/// `key`, reading what arrives after the mark `since`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenWait {
+    pub adapter_type: String,
+    pub edge: String,
+    pub key: String,
+    pub since: i64,
+}
+
+/// One arrival logged on a wait's record, not yet judged by the wait.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoggedArrival {
+    pub seq: i64,
+    pub identity: String,
+    pub version: Option<String>,
+    /// `{recordId?, recordType?, fields}`, or null.
+    pub landing: Data,
+}
+
+/// What a wait has yet to judge, in log order, and whether its record went.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct WaitArrivals {
+    pub gone: bool,
+    pub arrivals: Vec<LoggedArrival>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -206,8 +242,37 @@ pub trait Store {
     fn cancel_subtrees(&mut self, _subtree_addresses: &[String], _exclude_leaf: Option<&str>) -> HostFuture<()> {
         unserved("park.sink.cancelSubtrees")
     }
-    /// "Resume whatever is parked on this key."
+    /// "Resume whatever is parked on this key": a callback's awaiter.
     fn wake(&mut self, _adapter_type: &str, _correlation_key: &serde_json::Value) -> HostFuture<()> {
+        unserved("park.wake")
+    }
+    /// The arrival log's mark now: every arrival logged after this answer is
+    /// above it. The waits family (`park.waits`) is what an `await` on an
+    /// adapter's listenable edge reads; a store without it fails such a run
+    /// at the await.
+    fn wait_mark(&mut self) -> HostFuture<i64> {
+        unserved("park.waits.mark")
+    }
+    /// The wait's id; a run that already waits on this edge of this record
+    /// keeps that wait and its mark.
+    fn open_wait(&mut self, _wait: OpenWait) -> HostFuture<String> {
+        unserved("park.waits.open")
+    }
+    /// The arrivals after the wait's mark it has not noted, the first of each
+    /// identity and version only.
+    fn wait_arrivals(&mut self, _wait_id: &str) -> HostFuture<WaitArrivals> {
+        unserved("park.waits.arrivals")
+    }
+    /// The wait judged an arrival: whether it counts (it matched, and the
+    /// record did not match at its last noted arrival).
+    fn note_arrival(&mut self, _wait_id: &str, _identity: &str, _version: Option<&str>, _matched: bool) -> HostFuture<bool> {
+        unserved("park.waits.note")
+    }
+    fn commit_wait_park(&mut self, _park: WaitPark) -> HostFuture<()> {
+        unserved("park.sink.commitAwaitPark")
+    }
+    /// "Resume the run parked on this wait": something landed while it parked.
+    fn wake_wait(&mut self, _wait_id: &str) -> HostFuture<()> {
         unserved("park.wake")
     }
     fn mint_callback(&mut self, _mint: CallbackMint) -> HostFuture<MintedCallback> {

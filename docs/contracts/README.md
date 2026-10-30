@@ -5,8 +5,8 @@ The movement core speaks seven contracts. Six are written down here with an inte
 | contract | document | current | supported | deprecated | on the wire |
 |---|---|---|---|---|---|
 | catalog-snapshot | [catalog-snapshot.md](catalog-snapshot.md) | 2 | 1, 2 | 1 | `contractVersion` on the snapshot |
-| park-state | [park-state.md](park-state.md) | 2 | 1, 2 | none | `version` on the state |
-| host-families | [host-families.md](host-families.md) | 1 | 1 | none | `hostFamiliesVersion` on `segment.open` |
+| park-state | [park-state.md](park-state.md) | 3 | 1, 3 | none | `version` on the state |
+| host-families | [host-families.md](host-families.md) | 2 | 2 | none | `hostFamiliesVersion` on `segment.open` |
 | adapter-protocol | [adapter-protocol.md](adapter-protocol.md) | 2 | 2 (minors 0–5) | none | `protocolVersion` on every request and the manifest |
 | language-versions | [language-versions.md](language-versions.md) | the release | the release's compatibility key (0.13) | none | `languageVersion` beside every program |
 | system-caller | [system-caller.md](system-caller.md) | 1 | 1 | none | none: an in-process interface |

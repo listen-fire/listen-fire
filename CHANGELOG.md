@@ -50,6 +50,19 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
   - There is nothing to rewrite, so the warning does not hold the pin: the pin still moves to `0.13.0`.
   - A wait that should follow the live value tests it after the wait, against `refresh(founder)`.
   - Why: a wait keeps the values it was written with, as a closure keeps what it closed over; it does not fetch them again while it waits.
+- An `await` on a module's edge is answered by `listen-fire`'s own log of what arrived, not by asking the module.
+  - The run opens the wait when the awaited record enters it: just before the write that makes it, as it is read, at a block's head, or as a function's parameter. An answer that lands while the write is still running counts.
+  - A plain `await` on an edge that can be listed takes the first match the listing holds; else, and for `await new`, the first arrival since the record entered that its `WHERE` takes. Two arrivals in one wake resume the run once, binding the first.
+  - The record deleted settles the wait empty: its fields read as absent, and the run goes on.
+  - A run started by a delivery waits on its trigger record from the delivery's mark, so what arrived while the run was starting counts, and the delivery's own arrivals never answer it.
+  - An await that loses a `race` to a `sleep` wakes nothing when its answer comes later.
+  - `listen-fire run --dry-run` opens no wait, and its `await` binds an empty landing.
+  - A run parked under 0.12 is refused on resume: `this run parked under listen-fire 0.12 (park state 2); a 0.13 engine resumes park state 3`. The park state contract moves to version 3: a record parks with its waits, and an await with the values its `WHERE` captured.
+  - Embedders: the host families contract moves to version 2. A new optional family, `park.waits` (`mark`, `open`, `arrivals`, `note`), serves the waits; `park.sink.commitAwaitPark` and `park.wake` name the wait (`waitId`). A Rust embedding's `Store` gains the six wait methods, and `RunInput.trigger_mark`. See `docs/contracts/host-families.md` and `docs/embedding.md`.
+  - The `wake` door refuses `{ keys }` (400, naming adapter protocol 2.5 and `arrivals`): a module reports what arrived instead. `resolveAwait` and `wakeKeys` are no longer called for a wait.
+  - The acme example's CRM lists a company's comments oldest first, announces approvals on a company (`Approvals`, which only announces), and reports a deleted company's edges as gone.
+  - A wait whose `WHERE` reads a field of a record the run holds (`r.Body == founder.Email`) is now stamped like any other: before this, the check lost the awaited edge and the run failed at the wait.
+  - Why: the module only reports what happened; `listen-fire` keeps what each run has waited for since its record entered, so an answer is never lost between a write and the wait that reads it.
 
 #### Added
 
@@ -79,7 +92,7 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
   - It reports what lands there as arrivals, each naming its edge, its record's key, its identity and its landing: beside the events `preprocessInbound` answers for a delivery, on `checkInbound`'s `accepted` (`accepted(events, { arrivals })` in the module kit), or pushed to the `wake` door as `{ arrivals }`.
   - `listen-fire` logs each one and queues a wake for each run waiting on that record's edge. A delivery's arrivals are logged in the same write as its receipt, so a redelivery logs and wakes nothing again; its events carry the log's mark after them, so a run the delivery starts never waits for the delivery's own arrivals.
   - An arrival without an identity is refused, naming it: `arrival 0 on 'Comments' has no identity` (400 at the `wake` door; the delivery's failure otherwise).
-  - The `wake` door still takes `{ keys }`, and `resolveAwait` and `wakeKeys` are still called, while modules move to arrivals.
+  - The `wake` door took `{ keys }` beside arrivals for a while; it now refuses them (see "Changed").
   - The acme example's CRM answers `awaitKeys`, pushes each comment as an arrival, and reports the comments a webhook delivery carries, each by its id.
   - Why: a waiting run reads the arrivals logged since it began waiting, so one that lands during the write that caused it is never lost, and whether it matches is decided by `listen-fire`, not the module. See `docs/contracts/adapter-protocol.md` ("Waiting on your system").
 

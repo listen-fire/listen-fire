@@ -237,11 +237,11 @@ test('listen-fire run --dry-run rehearses past a park: a refresh of a rehearsed 
   // The external reads a record by its id, so a refresh asks it.
   const server = join(dir, 'externals/acme_crm/server.mjs');
   const source = readFileSync(server, 'utf8');
-  const anchor = '  getRelated: () => [],\n';
+  const anchor = '  createRecord: async ({ recordType, fields: written }) => {\n';
   assert.ok(source.includes(anchor), 'the example external changed; update this test patch');
   writeFileSync(
     server,
-    source.replace(anchor, `${anchor}  readRecord: ({ externalId }) => readState().companies.find((c) => c.externalId === externalId)?.fields ?? null,\n`),
+    source.replace(anchor, `  readRecord: ({ externalId }) => readState().companies.find((c) => c.externalId === externalId)?.fields ?? null,\n${anchor}`),
   );
 
   const fired = lf(dir, 'run', '--dry-run', '--event', 'events/company_created.json');

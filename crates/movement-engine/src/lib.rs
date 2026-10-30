@@ -63,6 +63,7 @@ pub mod trace;
 pub mod traverse;
 pub mod unique;
 pub mod verbs;
+mod waits;
 pub mod write;
 
 use serde_json::Value as Json;

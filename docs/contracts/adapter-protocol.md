@@ -643,8 +643,10 @@ What Listen-Fire does with them:
 
 ### The key form (before 2.5)
 
-Until every module reports arrivals, this release still serves the form
-before them: a run asks `resolveAwait` and is woken by key.
+From listen-fire 0.13.0 no run waits by key: a wait reads the arrivals you
+report, `resolveAwait` is never called for one, the keys a delivery's
+`wakeKeys` names wake nothing, and the `wake` door refuses `{ keys }`. The
+form is described here for a module moving off it.
 
 #### resolveAwait
 
@@ -733,7 +735,7 @@ before or after an event.
 
 ```
 POST {listen-fire}/api/public/adapter/{adapterType}/emit   { "events": [ … ] }
-POST {listen-fire}/api/public/adapter/{adapterType}/wake   { "arrivals": [ … ] }   (or { "keys": [ … ] })
+POST {listen-fire}/api/public/adapter/{adapterType}/wake   { "arrivals": [ … ] }
 ```
 
 Authentication:
@@ -761,7 +763,7 @@ Answers:
 - Authentication is checked before the body, so an unauthenticated caller
   learns nothing about the body's shape.
 - 401 is the only refusal for anything unauthenticated: never 404.
-- A body carries 1 to 1,000 events, arrivals or keys, in at most 1 MB of JSON
+- A body carries 1 to 1,000 events or arrivals, in at most 1 MB of JSON
   (`content-type: application/json`).
 - Delivery is at least once. Retry on 5xx or a network failure.
 - A `capture_failed` 500 on `emit` is partial: the events counted in
@@ -818,9 +820,10 @@ Answers:
   accepted and kept for a run that starts waiting soon after.
 - An arrival without an identity is answered 400 at path `arrivals`, naming
   it (`arrival 0 on 'Comments' has no identity`); nothing is logged.
-- The key form, `{ "keys": ["thread:company-1"] }`, still wakes runs waiting
-  by key ([the key form](#the-key-form-before-25)). A body may carry both.
-- `accepted` counts the arrivals and keys taken.
+- A body naming keys (`{ "keys": ["thread:company-1"] }`, [the key form](#the-key-form-before-25))
+  is answered 400 at path `keys`, naming adapter protocol 2.5 and `arrivals`;
+  nothing in it is logged.
+- `accepted` counts the arrivals taken.
 
 ### Inbound through the host door
 
@@ -1581,11 +1584,13 @@ from `apps/cli`.
    [the envelope](#the-envelope).
 
 5. **Make the thread awaitable.** `awaitKeys` answers `thread:<company id>`
-   for each company. (The CRM also answers `resolveAwait`, [the key form](#the-key-form-before-25).)
+   for each company, and `{ "gone": true }` for one the CRM deleted. Its
+   `getRelated` lists a company's comments oldest first, so a plain `await`
+   takes one already there.
 
 6. **Push.** When somebody comments, the CRM `POST`s the comment as an arrival,
    `{ "arrivals": [{ "edge": "Comments", "key": "thread:<company id>", "identity": "<comment id>", "landing": … }] }`,
-   to `/wake`, then the thread's key, `{ "keys": ["thread:<company id>"] }`.
+   to `/wake`.
    When somebody creates a company, it `POST`s the event to
    `/emit`. Both send `Authorization: Bearer <secret>`.
 
@@ -1619,12 +1624,12 @@ from `apps/cli`.
    # the CRM pushes emit: {"id":"company-1","pushed":{"status":202,"body":{"accepted":1}}}
    # listen-fire serve prints: run … discuss:discuss parked   (it wrote "Discuss Larch Bio", then awaits its first comment)
    curl -s -XPOST $CRM/dev/comments -d '{"company":"company-2","text":"approved"}'
-   # the CRM pushes the comment's arrival, then wake for thread:company-2; listen-fire serve prints: resumed … discuss:discuss completed
+   # the CRM pushes the comment's arrival to wake; listen-fire serve prints: resumed … discuss:discuss completed
    curl -s $CRM/dev/state      # every company the CRM holds, ending in "Answered approved"
    ```
 
    The doors refuse what they should. A wake presenting a credential no install
-   holds answers `401`, and one naming no keys answers `400`:
+   holds answers `401`, and one naming keys rather than arrivals answers `400`:
 
    ```bash
    curl -s -o /dev/null -w "%{http_code}\n" -XPOST -H 'authorization: Bearer nope' \
@@ -1637,7 +1642,7 @@ from `apps/cli`.
 
 ## Changes
 
-- **Adapter protocol 2.5: arrivals** (within version 2; listen-fire 0.13.0). A module with listenable edges names the key each record's edge is waited on under (`awaitKeys`, a new optional method), and reports what lands there as arrivals: `arrivals` beside the events `preprocessInbound` answers, on `checkInbound`'s `accepted`, or pushed to the `wake` door, which now takes `{ arrivals }` beside `{ keys }` ([Waiting on your system](#waiting-on-your-system-awaits)). Listen-Fire logs every arrival and keeps each run's wait itself (the store slot's `waits.*`, [store-slot.md](store-slot.md)). An arrival names its identity; one without is refused by name. Why: a run waiting on an edge reads what arrived since it began waiting, so an arrival during the write that caused it is never lost, and Listen-Fire, not the module, decides whether an arrival matches. Offering `awaitKeys` states no minor. The key form (`resolveAwait`, `wakeKeys`, `wake { keys }`) is still served while modules move to arrivals.
+- **Adapter protocol 2.5: arrivals** (within version 2; listen-fire 0.13.0). A module with listenable edges names the key each record's edge is waited on under (`awaitKeys`, a new optional method), and reports what lands there as arrivals: `arrivals` beside the events `preprocessInbound` answers, on `checkInbound`'s `accepted`, or pushed to the `wake` door as `{ arrivals }` ([Waiting on your system](#waiting-on-your-system-awaits)). Listen-Fire logs every arrival and keeps each run's wait itself (the store slot's `waits.*`, [store-slot.md](store-slot.md)). An arrival names its identity; one without is refused by name. Why: a run waiting on an edge reads what arrived since it began waiting, so an arrival during the write that caused it is never lost, and Listen-Fire, not the module, decides whether an arrival matches. Offering `awaitKeys` states no minor. From listen-fire 0.13.0 a wait reads arrivals only: `resolveAwait` is not called for it, `wakeKeys` wakes nothing, and the `wake` door refuses `{ keys }` (400, naming adapter protocol 2.5 and `arrivals`).
 - **Adapter protocol 2.4: subscriptions that expire** (within version 2; 2026-10-27; listen-fire 0.12.10). `ensureEventSubscription` may answer `expiresAt`, and a new optional method, `refreshEventSubscription`, extends a subscription before it lapses ([Event subscriptions that expire](#event-subscriptions-that-expire)). Offering the method states no minor: a `listen-fire` up to 0.12.9 reads a module that lists it and never calls it, so its webhooks lapse there as before. `@lf/airtable` lists it. With this change the kits stop raising a module's stated minor for the methods it offers (`.watch`, `work.enqueueIfAbsent`, `refreshEventSubscription`): it is what the author declares, else 0.
 - **`narrows` on a listen config key** (within version 2, no bump; 2026-10-27; additive). A `listenConfig` entry may say which hop of an event's address it is ([The manifest and installing](#the-manifest-and-installing)). `listen-fire` narrows a signature's event to the node the address walks to, as the hosted product does. An older host ignores the field; a module that declares none is unchanged.
 - **Adapter protocol 2.3: labelled poll events** (within version 2; 2026-10-26; listen-fire 0.12.8). A polled source labels each event it returns with its kind (`eventType`), as a pushed event is labelled, and the host narrows a listen's `events` by it either way ([Polled sources](#polled-sources-and-periodic-tasks)). It is a rule for sources and a host behaviour, not a feature a module states: an older host routes a labelled event correctly, so a module labelling its events states no higher minor for it. An unlabelled poll event still reaches the listen that polled it, with a notice. The bundled polled modules (Gmail, Evertrace, Dealroom, Granola) label theirs.

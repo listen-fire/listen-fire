@@ -225,15 +225,6 @@ impl Observed<'_> {
     fn note(&self, record: impl FnOnce(&mut Observations)) {
         record(&mut self.bridge.seen.borrow_mut());
     }
-
-    async fn queue_wakes(&self, adapter_type: &str, team_id: &str, keys: &[String]) -> Result<(), String> {
-        if self.faults.enqueue_wakes {
-            return Err("wake queue unavailable".into());
-        }
-        PushStore::enqueue_pushed_wakes(&self.lf(), adapter_type, team_id, keys).await?;
-        self.note(|seen| seen.wakes.extend(keys.iter().cloned()));
-        Ok(())
-    }
 }
 
 impl InboundStore for Observed<'_> {
@@ -334,10 +325,6 @@ impl PushStore for Observed<'_> {
         }
         self.note(|seen| seen.enqueued += count);
         Ok(true)
-    }
-
-    async fn enqueue_pushed_wakes(&self, adapter_type: &str, team_id: &str, keys: &[String]) -> Result<(), String> {
-        self.queue_wakes(adapter_type, team_id, keys).await
     }
 
     async fn log_pushed_arrivals(&self, adapter_type: &str, team_id: &str, arrivals: &[crate::waits::NewArrival]) -> Result<(), String> {

@@ -123,6 +123,10 @@ impl<'h> Hosts<'h> {
                 "park.sink.cancelSubtrees",
                 "park.sink.commitSuspension",
                 "park.wake",
+                "park.waits.mark",
+                "park.waits.open",
+                "park.waits.arrivals",
+                "park.waits.note",
                 "park.callbacks.mint",
                 "park.callbacks.calls",
                 "park.sources.save",
@@ -348,6 +352,10 @@ pub struct RunInput {
     pub dry_run: bool,
     /// The run's spending cap, in microdollars.
     pub cost_cap_microdollars: Option<f64>,
+    /// The arrival log's mark where the delivery that started the run was
+    /// kept ([`Store::wait_mark`]): the trigger's record entered there, so a
+    /// wait on it reads what arrived since. None: it enters when the run starts.
+    pub trigger_mark: Option<i64>,
 }
 
 impl RunInput {
@@ -361,6 +369,7 @@ impl RunInput {
             catalog: Catalog::default(),
             dry_run: false,
             cost_cap_microdollars: None,
+            trigger_mark: None,
         }
     }
     pub fn function(mut self, function: impl Into<String>) -> RunInput {
@@ -571,6 +580,9 @@ fn input_text(serves: &[&str], input: &RunInput, entry: &Entry<'_>, credential_i
     }
     if input.dry_run {
         head["dryRun"] = json!(true);
+    }
+    if let Some(mark) = input.trigger_mark {
+        head["triggerMark"] = json!(mark);
     }
     match entry {
         Entry::Run => {}

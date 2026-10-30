@@ -721,7 +721,6 @@ pub trait PushStore {
     /// The batch's receipts kept and queued as one delivery. False, and
     /// nothing queued, for a duplicate: its external id was kept before.
     async fn enqueue_pushed(&self, caller: &PushCaller, captured: Vec<Js>, external_id: Option<&str>) -> Result<bool, String>;
-    async fn enqueue_pushed_wakes(&self, adapter_type: &str, team_id: &str, keys: &[String]) -> Result<(), String>;
     /// The arrivals logged, and a wake queued per wait parked on their records.
     async fn log_pushed_arrivals(&self, adapter_type: &str, team_id: &str, arrivals: &[NewArrival]) -> Result<(), String>;
     fn notify_pushed(&self);
@@ -793,34 +792,25 @@ fn emit_body(body: Option<&Js>) -> Result<(Vec<Js>, Option<String>), (String, St
 
 /// What one push to the wake door wakes.
 struct Woken {
-    keys: Vec<String>,
     arrivals: Vec<NewArrival>,
 }
 
-/// `{ keys }` (1 to 1,000 non-empty texts), `{ arrivals }` (1 to 1,000, each
-/// naming its identity, or gone), or both.
+/// What the wake door says to a push naming keys: adapter protocol 2.5
+/// reports what arrived, and the host wakes the waits it answers.
+const KEYS_RETIRED: &str = "a wake names what arrived from adapter protocol 2.5: send `arrivals`, not `keys` (docs/contracts/adapter-protocol.md, Reporting arrivals)";
+
+/// `{ arrivals }` (1 to 1,000, each naming its identity, or gone). A push
+/// naming `keys` is refused: keys retired with adapter protocol 2.5.
 fn wake_body(body: Option<&Js>) -> Result<Woken, (String, String)> {
     let listed = |name: &str| body.and_then(|b| b.get(name));
-    let arrivals = match listed("arrivals") {
-        None => Vec::new(),
-        Some(Js::Arr(items)) if items.is_empty() || items.len() > DOOR_MAX_BATCH => {
-            return Err(("arrivals".into(), format!("expected between 1 and {DOOR_MAX_BATCH} arrivals")));
-        }
-        Some(_) => arrivals_of(body.unwrap_or(&Js::Null)).map_err(|issue| ("arrivals".to_string(), issue))?,
-    };
-    let keys = match listed("keys") {
-        None if arrivals.is_empty() => return Err(("arrivals".into(), "expected `arrivals` or `keys`, an array".into())),
-        None => return Ok(Woken { keys: Vec::new(), arrivals }),
-        Some(keys) => keys.as_array().ok_or(("keys".to_string(), "expected an array".to_string()))?,
-    };
-    if keys.is_empty() || keys.len() > DOOR_MAX_BATCH {
-        return Err(("keys".into(), format!("expected between 1 and {DOOR_MAX_BATCH} keys")));
+    if listed("keys").is_some() {
+        return Err(("keys".into(), KEYS_RETIRED.into()));
     }
-    let keys = keys
-        .iter()
-        .map(|k| k.as_str().filter(|k| !k.is_empty()).map(str::to_string).ok_or(("keys".to_string(), "expected non-empty strings".to_string())))
-        .collect::<Result<_, _>>()?;
-    Ok(Woken { keys, arrivals })
+    match listed("arrivals") {
+        None => Err(("arrivals".into(), "expected `arrivals`, an array".into())),
+        Some(Js::Arr(items)) if items.is_empty() || items.len() > DOOR_MAX_BATCH => Err(("arrivals".into(), format!("expected between 1 and {DOOR_MAX_BATCH} arrivals"))),
+        Some(_) => Ok(Woken { arrivals: arrivals_of(body.unwrap_or(&Js::Null)).map_err(|issue| ("arrivals".to_string(), issue))? }),
+    }
 }
 
 fn bad_request((path, message): (String, String)) -> Answer {
@@ -866,18 +856,12 @@ async fn emit<S: PushStore>(store: &S, caller: &PushCaller, events: Vec<Js>, del
     Ok(Answer::of(202, Js::Obj(obj! { "accepted" => Js::Num(accepted.into()) })))
 }
 
-/// `wakeKeys`: a wake per key; a key nothing is parked on drains as a no-op.
 /// Arrivals are logged, each waking the waits parked on its record; one no
-/// wait reads is kept for a wait opened later. `accepted` counts both.
+/// wait reads is kept for a wait opened later. `accepted` counts them.
 async fn wake<S: PushStore>(store: &S, caller: &PushCaller, woken: &Woken) -> Result<Answer, String> {
-    if !woken.arrivals.is_empty() {
-        store.log_pushed_arrivals(&caller.adapter_type, &caller.team_id, &woken.arrivals).await?;
-    }
-    if !woken.keys.is_empty() {
-        store.enqueue_pushed_wakes(&caller.adapter_type, &caller.team_id, &woken.keys).await?;
-    }
+    store.log_pushed_arrivals(&caller.adapter_type, &caller.team_id, &woken.arrivals).await?;
     store.notify_pushed();
-    Ok(Answer::of(202, Js::Obj(obj! { "accepted" => Js::Num(((woken.keys.len() + woken.arrivals.len()) as u64).into()) })))
+    Ok(Answer::of(202, Js::Obj(obj! { "accepted" => Js::Num((woken.arrivals.len() as u64).into()) })))
 }
 
 #[cfg(test)]

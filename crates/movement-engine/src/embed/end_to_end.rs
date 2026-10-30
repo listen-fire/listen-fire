@@ -73,8 +73,14 @@ fn finished(outcome: Result<Outcome, EmbedError>) -> RunResult {
 struct World {
     calls: Vec<(String, Data)>,
     notes: Vec<(String, String)>,
-    /// Replies per ticket id, once they have arrived.
+    /// Replies on each ticket (by id, or `*` on every one) the listing
+    /// holds, oldest first.
     replies: Vec<(String, String)>,
+    /// Records gone from the world: their waits settle empty.
+    gone: Vec<String>,
+    /// Fields that read otherwise now than the record held them (a record
+    /// changed since the run read it).
+    fields_now: Vec<(String, String)>,
     /// Existing notes `resolveEntity` offers as candidates.
     candidates: Vec<(String, String)>,
     updated: Vec<(String, String)>,
@@ -91,7 +97,7 @@ impl Adapters for World {
         assert_eq!(request.adapter_type, "world");
         ready(Ok(AdapterInstance {
             id: "w".into(),
-            methods: ["createRecord", "updateRecord", "resolveEntity", "getFieldValue", "getRelated", "resolveAwait", "describe"].map(String::from).to_vec(),
+            methods: ["createRecord", "updateRecord", "resolveEntity", "getFieldValue", "getRelated", "awaitKeys", "describe"].map(String::from).to_vec(),
         }))
     }
 
@@ -104,8 +110,47 @@ impl Adapters for World {
             ))),
             "getFieldValue" => {
                 let field = call.args.get("fieldId").and_then(Data::as_text).unwrap_or_default().to_string();
+                if let Some((_, value)) = self.fields_now.iter().find(|(f, _)| *f == field) {
+                    return ready(Ok(AdapterReply::ok(Data::text(value))));
+                }
                 let data = call.args.get("position").and_then(|p| p.get("identity")).and_then(|i| i.get("data")).cloned();
                 AdapterReply::ok(data.and_then(|d| d.get(&field).cloned()).unwrap_or(Data::Null))
+            }
+            // A ticket's replies so far, oldest first.
+            "getRelated" if call.args.get("fieldId").and_then(Data::as_text) == Some("Reply") => {
+                let ticket = call.args.get("position").and_then(|p| p.get("identity")).and_then(|i| i.get("recordId")).and_then(Data::as_text).unwrap_or_default().to_string();
+                AdapterReply::ok(Data::List(
+                    self.replies
+                        .iter()
+                        .filter(|(on, _)| *on == ticket || on == "*")
+                        .enumerate()
+                        .map(|(i, (_, body))| {
+                            Data::map([(
+                                "position",
+                                Data::map([
+                                    ("recordType", Data::text("Reply")),
+                                    ("identity", Data::map([("kind", Data::text("stable")), ("recordId", Data::text(format!("reply-{i}"))), ("data", Data::map([("Body", Data::text(body))]))])),
+                                ]),
+                            )])
+                        })
+                        .collect(),
+                ))
+            }
+            // A ticket's replies wait under its id.
+            "awaitKeys" => {
+                let heads = match call.args.get("heads") {
+                    Some(Data::List(heads)) => heads.clone(),
+                    _ => Vec::new(),
+                };
+                AdapterReply::ok(Data::List(
+                    heads
+                        .iter()
+                        .map(|head| {
+                            let id = head.get("recordId").and_then(Data::as_text).unwrap_or_default().to_string();
+                            if self.gone.iter().any(|gone| *gone == id || gone == "*") { Data::map([("gone", Data::Bool(true))]) } else { Data::map([("key", Data::text(format!("ticket:{id}")))]) }
+                        })
+                        .collect(),
+                ))
             }
             "describe" => AdapterReply::ok(Data::Null),
             // The monster's lair: one note, its fields on the landing.
@@ -135,17 +180,6 @@ impl Adapters for World {
                 "candidates",
                 Data::List(self.candidates.iter().map(|(id, title)| World::record(id, "Note", Data::map([("Title", Data::text(title))]))).collect()),
             )])),
-            "resolveAwait" => {
-                let id = call.args.get("recordId").and_then(Data::as_text).unwrap_or_default().to_string();
-                match self.replies.iter().find(|(ticket, _)| *ticket == id) {
-                    Some((_, body)) => AdapterReply::ok(Data::map([
-                        ("status", Data::text("landed")),
-                        ("correlationKey", Data::text(id)),
-                        ("landings", Data::List(vec![Data::map([("recordType", Data::text("Reply")), ("fields", Data::map([("Body", Data::text(body))]))])])),
-                    ])),
-                    None => AdapterReply::ok(Data::map([("status", Data::text("pending")), ("correlationKey", Data::text(id))])),
-                }
-            }
             other => AdapterReply::error("adapter_error", format!("the world does not answer {other}")),
         }))
     }
@@ -213,7 +247,6 @@ impl<'a> Wire<'a> {
 #[derive(Default)]
 struct WireWorld {
     candidates: Vec<(String, String)>,
-    replies: Vec<(String, String)>,
     calls: usize,
     ids: usize,
     /// The positions a call registered, which later calls name by handle.
@@ -227,7 +260,7 @@ impl WireWorld {
 
     fn answer(&mut self, label: &str, args: &Json) -> Option<Json> {
         match label {
-            "adapters.resolve" => Some(json!({ "instance": "w", "methods": ["createRecord", "updateRecord", "resolveEntity", "getFieldValue", "resolveAwait", "describe"] })),
+            "adapters.resolve" => Some(json!({ "instance": "w", "methods": ["createRecord", "updateRecord", "resolveEntity", "getFieldValue", "getRelated", "awaitKeys", "describe"] })),
             "adapters.call" => {
                 self.calls += 1;
                 let mut call = Data::from_wire(&args["args"]).unwrap();
@@ -267,16 +300,13 @@ impl WireWorld {
                         "candidates",
                         l(self.candidates.iter().map(|(id, title)| Self::record(id, "Note", o(vec![("Title", json!(title))]))).collect()),
                     )]),
-                    "resolveAwait" => {
-                        let id = call.get("recordId").and_then(Data::as_text).unwrap_or_default().to_string();
-                        match self.replies.iter().find(|(ticket, _)| *ticket == id) {
-                            Some((_, body)) => o(vec![
-                                ("status", json!("landed")),
-                                ("correlationKey", json!(id)),
-                                ("landings", l(vec![o(vec![("recordType", json!("Reply")), ("fields", o(vec![("Body", json!(body))]))])])),
-                            ]),
-                            None => o(vec![("status", json!("pending")), ("correlationKey", json!(id))]),
-                        }
+                    "getRelated" => l(vec![]),
+                    "awaitKeys" => {
+                        let heads = match call.get("heads") {
+                            Some(Data::List(heads)) => heads.clone(),
+                            _ => Vec::new(),
+                        };
+                        l(heads.iter().map(|head| o(vec![("key", json!(format!("ticket:{}", head.get("recordId").and_then(Data::as_text).unwrap_or_default())))])).collect())
                     }
                     other => return Some(json!({ "error": { "kind": "adapter_error", "message": format!("the world does not answer {other}") } })),
                 };
@@ -309,6 +339,44 @@ pub(super) struct Parks {
     wakes: Vec<(String, serde_json::Value)>,
     /// Library texts a park names by hash, the hash being the index.
     sources: Vec<String>,
+    /// The arrival log, its seq the index plus one.
+    log: Vec<Logged>,
+    waits: Vec<Wait>,
+    wait_parks: Vec<WaitPark>,
+    wait_wakes: Vec<String>,
+    /// Replies `(identity, body)` that land on the next record a wait opens
+    /// on, as the wait opens: after the mark, before anything reads them.
+    landing_as_it_opens: Vec<(String, String)>,
+}
+
+/// One arrival on a record's edge.
+struct Logged {
+    edge: String,
+    key: String,
+    identity: String,
+    landing: Data,
+    gone: bool,
+}
+
+/// A wait, and what it has noted: (identity, matched).
+struct Wait {
+    id: String,
+    edge: String,
+    key: String,
+    since: i64,
+    noted: Vec<(String, bool)>,
+}
+
+impl Parks {
+    /// An arrival on the record `key` names: a reply.
+    fn reply_arrives(&mut self, key: &str, identity: &str, body: &str) {
+        let landing = Data::map([("recordType", Data::text("Reply")), ("fields", Data::map([("Body", Data::text(body))]))]);
+        self.log.push(Logged { edge: "Reply".into(), key: key.into(), identity: identity.into(), landing, gone: false });
+    }
+
+    fn the_wait(&self, wait_id: &str) -> HostResult<&Wait> {
+        self.waits.iter().find(|w| w.id == wait_id).ok_or_else(|| HostFailure::new(format!("no wait {wait_id}")))
+    }
 }
 
 impl Store for Parks {
@@ -345,6 +413,7 @@ impl Store for Parks {
     }
     fn cancel_subtrees(&mut self, prefixes: &[String], exclude: Option<&str>) -> HostFuture<()> {
         self.awaits.retain(|a| Some(a.address.as_str()) == exclude || !prefixes.iter().any(|p| a.address.starts_with(p.as_str())));
+        self.wait_parks.retain(|a| Some(a.address.as_str()) == exclude || !prefixes.iter().any(|p| a.address.starts_with(p.as_str())));
         ready(Ok(()))
     }
     fn wake(&mut self, adapter_type: &str, key: &serde_json::Value) -> HostFuture<()> {
@@ -357,6 +426,51 @@ impl Store for Parks {
     }
     fn callback_calls(&mut self, _callback_id: &serde_json::Value) -> HostFuture<Data> {
         ready(Ok(Data::List(self.calls.clone())))
+    }
+    fn wait_mark(&mut self) -> HostFuture<i64> {
+        ready(Ok(self.log.len() as i64))
+    }
+    fn open_wait(&mut self, wait: OpenWait) -> HostFuture<String> {
+        assert_eq!(wait.adapter_type, "world");
+        if let Some(open) = self.waits.iter().find(|w| w.edge == wait.edge && w.key == wait.key) {
+            return ready(Ok(open.id.clone()));
+        }
+        let id = format!("w{}", self.waits.len() + 1);
+        for (identity, body) in std::mem::take(&mut self.landing_as_it_opens) {
+            self.reply_arrives(&wait.key, &identity, &body);
+        }
+        self.waits.push(Wait { id: id.clone(), edge: wait.edge, key: wait.key, since: wait.since, noted: Vec::new() });
+        ready(Ok(id))
+    }
+    fn wait_arrivals(&mut self, wait_id: &str) -> HostFuture<WaitArrivals> {
+        ready(self.the_wait(wait_id).map(|wait| {
+            let after = self.log.iter().enumerate().skip(wait.since as usize).filter(|(_, a)| a.edge == wait.edge && a.key == wait.key);
+            let mut read = WaitArrivals::default();
+            for (index, arrival) in after {
+                if arrival.gone {
+                    read.gone = true;
+                } else if !wait.noted.iter().any(|(identity, _)| *identity == arrival.identity) && !read.arrivals.iter().any(|a| a.identity == arrival.identity) {
+                    read.arrivals.push(LoggedArrival { seq: index as i64 + 1, identity: arrival.identity.clone(), version: None, landing: arrival.landing.clone() });
+                }
+            }
+            read
+        }))
+    }
+    fn note_arrival(&mut self, wait_id: &str, identity: &str, _version: Option<&str>, matched: bool) -> HostFuture<bool> {
+        let Some(wait) = self.waits.iter_mut().find(|w| w.id == wait_id) else { return ready(Err(HostFailure::new(format!("no wait {wait_id}")))) };
+        if wait.noted.iter().any(|(noted, _)| noted == identity) {
+            return ready(Ok(false));
+        }
+        wait.noted.push((identity.into(), matched));
+        ready(Ok(matched))
+    }
+    fn commit_wait_park(&mut self, park: WaitPark) -> HostFuture<()> {
+        self.wait_parks.push(park);
+        ready(Ok(()))
+    }
+    fn wake_wait(&mut self, wait_id: &str) -> HostFuture<()> {
+        self.wait_wakes.push(wait_id.into());
+        ready(Ok(()))
     }
     fn save_source(&mut self, source: &str) -> HostFuture<String> {
         self.sources.push(source.to_string());
@@ -732,6 +846,32 @@ fn a_model_that_refuses_on_budget_fails_the_run_as_the_json_route_does() {
 
 const TICKET: &str = "  t = write game-[:tickets]-> { Subject: monster.Name }\n  r = await t-[:Reply]->\n  write game-[:notes]-> { Title: coalesce(r.Body, \"\") }\n";
 
+/// The answers a JSON host gives the waits family for a run whose one wait
+/// (`w1`) has `arrivals` logged after its mark, each `(identity, body)`.
+fn wait_answers(arrivals: Vec<(&'static str, &'static str)>) -> impl FnMut(&str, &Json) -> Option<Json> {
+    move |label, _| match label {
+        "park.waits.mark" => Some(json!({ "mark": 0 })),
+        "park.waits.open" => Some(json!({ "waitId": "w1" })),
+        "park.waits.arrivals" => {
+            let listed = arrivals
+                .iter()
+                .enumerate()
+                .map(|(seq, (identity, body))| {
+                    o(vec![
+                        ("seq", json!(seq + 1)),
+                        ("identity", json!(identity)),
+                        ("landing", o(vec![("recordType", json!("Reply")), ("fields", o(vec![("Body", json!(body))]))])),
+                    ])
+                })
+                .collect();
+            Some(o(vec![("gone", json!(false)), ("arrivals", l(listed))]))
+        }
+        "park.waits.note" => Some(json!({ "counts": true })),
+        "park.sink.commitAwaitPark" => Some(Json::Null),
+        _ => None,
+    }
+}
+
 #[test]
 fn an_await_on_an_adapter_record_parks_and_resumes_when_the_reply_arrives() {
     let source = movement("", TICKET);
@@ -739,48 +879,187 @@ fn an_await_on_an_adapter_record_parks_and_resumes_when_the_reply_arrives() {
     let (mut world, mut parks) = (World::default(), Parks::default());
     let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
     assert!(matches!(&parked, Outcome::Parked(ran) if ran.parked_address.is_some()), "{parked:?}");
-    assert!(world.notes.is_empty() && parks.timers.is_empty());
-    let [park] = parks.awaits.as_slice() else { panic!("{:?}", parks.awaits) };
-    assert_eq!(park.adapter_type, "world");
-    let key = park.correlation_key.clone();
-    assert!(key.as_str().is_some_and(|k| k.starts_with("ticket-")), "{key}");
+    assert!(world.notes.is_empty() && parks.timers.is_empty() && parks.awaits.is_empty());
+    let [park] = parks.wait_parks.as_slice() else { panic!("{:?}", parks.wait_parks) };
+    let [wait] = parks.waits.as_slice() else { panic!("one wait") };
+    assert_eq!((park.wait_id.as_str(), wait.edge.as_str()), ("w1", "Reply"));
+    assert!(wait.key.starts_with("ticket:ticket-"), "{}", wait.key);
 
     // The reply arrives; the awaiting statement is entered again.
-    let ticket = key.as_str().unwrap().to_string();
-    world.replies.push((ticket.clone(), "Thanks".into()));
-    let park = parks.awaits.remove(0);
+    let key = wait.key.clone();
+    parks.reply_arrives(&key, "reply-1", "Thanks");
+    let park = parks.wait_parks.remove(0);
     let calls_before_resume = world.calls.len();
     let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &park.state, Wake::Arrival)).unwrap();
     assert_eq!(titles(&world), vec!["Thanks"]);
     assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
+    // Re-entered, the await reads the log: it never lists the edge again.
+    assert!(world.calls[calls_before_resume..].iter().all(|(method, _)| method != "getRelated"));
 
     // The JSON route: the same two segments, answered by hand.
-    let mut json = Wire::new(WireWorld::default(), |label, _| (label == "park.sink.commitAwaitPark").then_some(Json::Null));
+    let mut json = Wire::new(WireWorld::default(), wait_answers(vec![]));
     let (mut served, mut store) = (World::default(), Parks::default());
     let through_json = json.drive(&input(&source), Entry::Run, &mut Hosts::new().adapters(&mut served).store(&mut store));
     assert_eq!(parked, through_json);
     let committed = json.args_of("park.sink.commitAwaitPark");
     assert_eq!(committed.len(), 1);
     assert_eq!((committed[0]["state"].clone(), committed[0]["address"].clone()), (park.state.0.clone(), json!(park.address)));
-    assert_eq!((committed[0]["adapterType"].clone(), committed[0]["correlationKey"].clone()), (json!("world"), park.correlation_key));
-    let mut json = Wire::new(WireWorld { replies: vec![(ticket, "Thanks".into())], calls: calls_before_resume, ..WireWorld::default() }, |_, _| None);
+    assert_eq!(committed[0]["waitId"], json!("w1"));
+    let opened = json.args_of("park.waits.open");
+    assert_eq!((opened[0]["adapterType"].clone(), opened[0]["edge"].clone(), opened[0]["key"].clone(), opened[0]["since"].clone()), (json!("world"), json!("Reply"), json!(key), json!(0)));
+    let mut json = Wire::new(WireWorld { calls: calls_before_resume, ..WireWorld::default() }, wait_answers(vec![("reply-1", "Thanks")]));
     let through_json = json.drive(&input(&source), Entry::Resume { state: &park.state, reenter: true }, &mut Hosts::new().adapters(&mut served).store(&mut store));
     assert_eq!(resumed, through_json);
 }
 
 /// A reply that has not arrived keeps the flow parked: re-entering the
-/// await checks again rather than stepping past it.
+/// await reads the log again rather than stepping past it.
 #[test]
 fn an_await_woken_early_parks_again_instead_of_stepping_past() {
     let source = movement("", TICKET);
     let (mut world, mut parks) = (World::default(), Parks::default());
     block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
-    let park = parks.awaits.remove(0);
+    let park = parks.wait_parks.remove(0);
     let again = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &park.state, Wake::Arrival)).unwrap();
     assert!(matches!(again, Outcome::Parked(_)), "{again:?}");
-    assert_eq!(parks.awaits.len(), 1);
+    assert_eq!(parks.wait_parks.len(), 1);
+    assert_eq!(parks.waits.len(), 1, "the re-entered await keeps its wait");
     assert!(world.notes.is_empty());
 }
+
+/// The JSON route's requests, labelled `family.method` (an adapter call by
+/// its method), for `body` run against `answer`.
+fn labels(body: &str, answer: impl FnMut(&str, &Json) -> Option<Json>) -> Vec<String> {
+    let source = movement("", body);
+    assert_eq!(errors(&source), vec![]);
+    let mut json = Wire::new(WireWorld::default(), answer);
+    let (mut served, mut store) = (World::default(), Parks::default());
+    json.drive(&input(&source), Entry::Run, &mut Hosts::new().adapters(&mut served).store(&mut store));
+    json.seen
+        .iter()
+        .map(|(label, args)| match args.get("method").and_then(Json::as_str) {
+            Some(method) if label == "adapters.call" => format!("adapters.call {method}"),
+            _ => label.clone(),
+        })
+        .collect()
+}
+
+/// `wanted` appears in `labels` in this order (other requests between).
+fn order(labels: &[String], wanted: &[&str]) -> Result<(), String> {
+    let mut at = 0;
+    for want in wanted {
+        match labels[at..].iter().position(|label| label == want) {
+            Some(found) => at += found + 1,
+            None => return Err(format!("no '{want}' after {:?} in {labels:?}", &labels[..at])),
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn the_mark_is_taken_before_the_write_and_the_wait_opens_after_it() {
+    let labels = labels("  msg = write game-[:tickets]-> { Subject: monster.Name }
+  i = await msg-[:Reply]->
+", wait_answers(vec![]));
+    assert_eq!(order(&labels, &["park.waits.mark", "adapters.call createRecord", "adapters.call awaitKeys", "park.waits.open", "park.sink.commitAwaitPark"]), Ok(()));
+}
+
+#[test]
+fn an_iterable_await_binds_an_existing_member_without_parking() {
+    let source = movement("", TICKET);
+    let (mut world, mut parks) = (World::default(), Parks::default());
+    // The ticket the write makes is `ticket-1`: it already holds a reply.
+    world.replies.push(("*".into(), "Already".into()));
+    let ran = finished(block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))));
+    assert_eq!(ran.parked_address, None);
+    assert_eq!(titles(&world), vec!["Already"]);
+    assert!(parks.wait_parks.is_empty());
+    assert!(world.calls.iter().any(|(method, args)| method == "getRelated" && args.get("fieldId").and_then(Data::as_text) == Some("Reply")));
+    // The member it took is noted, so a later arrival of it counts no more.
+    assert_eq!(parks.waits[0].noted, vec![("reply-0".to_string(), true)]);
+}
+
+#[test]
+fn await_new_never_lists_and_binds_a_logged_arrival() {
+    let source = movement("", &TICKET.replace("await t-", "await new t-"));
+    assert_eq!(errors(&source), vec![]);
+    let (mut world, mut parks) = (World::default(), Parks::default());
+    // One reply already on the ticket, which `await new` never reads; one
+    // that lands after the mark the write took, which it binds.
+    world.replies.push(("*".into(), "Already".into()));
+    parks.landing_as_it_opens.push(("reply-9".into(), "Logged".into()));
+    let ran = finished(block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))));
+    assert_eq!(ran.parked_address, None);
+    assert_eq!(titles(&world), vec!["Logged"]);
+    assert!(world.calls.iter().all(|(method, _)| method != "getRelated"), "{:?}", world.calls.iter().map(|(m, _)| m).collect::<Vec<_>>());
+    assert!(parks.wait_parks.is_empty());
+}
+
+#[test]
+fn a_captured_value_is_parked_and_used_on_resume_though_the_record_changed() {
+    let body = "  t = write game-[:tickets]-> { Subject: monster.Name }
+  r = await t-[r:Reply WHERE r.Body == monster.Slayer]->
+  write game-[:notes]-> { Title: coalesce(r.Body, \"\") }
+";
+    let source = movement("", body);
+    assert_eq!(errors(&source), vec![]);
+    let (mut world, mut parks) = (World::default(), Parks::default());
+    let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
+    assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
+    let park = parks.wait_parks.remove(0);
+    // The slayer read when the wait was reached was Ada; the record says Bob now.
+    world.fields_now.push(("Slayer".into(), "Bob".into()));
+    let key = parks.waits[0].key.clone();
+    parks.reply_arrives(&key, "reply-1", "Bob");
+    parks.reply_arrives(&key, "reply-2", "Ada");
+    let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &park.state, Wake::Arrival)).unwrap();
+    assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
+    assert_eq!(titles(&world), vec!["Ada"]);
+    assert_eq!(parks.waits[0].noted, vec![("reply-1".to_string(), false), ("reply-2".to_string(), true)]);
+}
+
+#[test]
+fn a_gone_wait_settles_empty() {
+    let body = "  t = write game-[:tickets]-> { Subject: monster.Name }
+  r = await t-[:Reply]->
+  if (r.Body != null) {
+    write game-[:notes]-> { Title: r.Body }
+  }
+  write game-[:notes]-> { Title: \"after\" }
+";
+    let source = movement("", body);
+    assert_eq!(errors(&source), vec![]);
+    let (mut world, mut parks) = (World::default(), Parks::default());
+    world.gone.push("*".into());
+    let ran = finished(block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))));
+    assert_eq!(ran.parked_address, None);
+    // No wait row for a gone record, no park; what the landing guards runs zero times.
+    assert!(parks.waits.is_empty() && parks.wait_parks.is_empty());
+    assert_eq!(titles(&world), vec!["after"]);
+
+    // A record that goes while the run waits: its gone arrival settles the wait.
+    let (mut world, mut parks) = (World::default(), Parks::default());
+    let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
+    assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
+    let park = parks.wait_parks.remove(0);
+    let key = parks.waits[0].key.clone();
+    parks.log.push(Logged { edge: "Reply".into(), key, identity: String::new(), landing: Data::Null, gone: true });
+    let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &park.state, Wake::Arrival)).unwrap();
+    assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
+    assert!(parks.wait_parks.is_empty());
+    assert_eq!(titles(&world), vec!["after"]);
+}
+
+#[test]
+fn a_park_of_state_version_2_is_refused_naming_0_12() {
+    let source = movement("", TICKET);
+    let (mut world, mut parks) = (World::default(), Parks::default());
+    let state = ParkedState(json!(["o", [["version", 2], ["address", "s1"], ["bindingName", "r"], ["scopeChain", ["l", []]]]]));
+    let refused = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &state, Wake::Arrival)).unwrap();
+    let Outcome::Failed(failure) = refused else { panic!("{refused:?}") };
+    assert!(failure.message.contains("this run parked under listen-fire 0.12 (park state 2); a 0.13 engine resumes park state 3"), "{}", failure.message);
+}
+
 
 const CALLBACK: &str = "  approve = callback((who: <text>) => { write game-[:notes]-> { Title: \"approved by ${who}\" } })\n  tap = await approve-[:Called]->\n  write game-[:notes]-> { Title: \"tapped by ${tap.who} at ${tap.At}\" }\n";
 
@@ -844,10 +1123,10 @@ fn a_join_with_a_parked_arm_closes_when_the_arm_resumes() {
     assert_eq!(parks.joins.len(), 1, "the join recorded one parked arm: {:?}", parks.joins);
     assert_eq!(parks.joins[0].1, 1);
     assert_eq!(parks.exports.len(), 1, "the arm that finished left its export: {:?}", parks.exports.iter().map(|(f, e)| (f, e.branch_index)).collect::<Vec<_>>());
-    let [park] = parks.awaits.as_slice() else { panic!("{:?}", parks.awaits) };
-    let (ticket, state) = (park.correlation_key.as_str().unwrap().to_string(), park.state.clone());
-
-    world.replies.push((ticket, "Thanks".into()));
+    let [park] = parks.wait_parks.as_slice() else { panic!("{:?}", parks.wait_parks) };
+    let state = park.state.clone();
+    let key = parks.waits[0].key.clone();
+    parks.reply_arrives(&key, "reply-1", "Thanks");
     let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &state, Wake::Arrival)).unwrap();
     assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
     assert_eq!(titles(&world), vec!["Thanks+fast"]);
@@ -912,3 +1191,4 @@ fn the_arms_of_an_all_are_served_at_once() {
     assert_eq!(model.started_at, vec![0, 0], "both calls started before either answered");
     assert_eq!(time.now_ms(), 100);
 }
+

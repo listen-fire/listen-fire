@@ -180,3 +180,18 @@ fn a_write_no_name_holds_and_a_write_in_place_open_nothing() {
     let (tree, _, found) = stamps(crm, None);
     assert_eq!(opens(&tree, &found, None), pairs(&[("param d", &["Notes"])]));
 }
+
+#[test]
+fn a_where_reading_a_record_the_run_holds_still_stamps_its_wait() {
+    // A field of a run record read in the awaited hop's WHERE is typed by a
+    // walk of its own: the await still waits on its own hop's edge.
+    let chat = "function f(m: <chat-[:Message]->>, ch: <chat-[:Channel]->>) {\n  msg = write ch-[:Messages]-> { Message: \"Pursue?\" }\n  i = await msg-[i:Interactions WHERE i.Id == m.Message]->\n  r = await msg-[r:Replies WHERE r.Message == m.Message]->\n}\n";
+    let (tree, _, found) = stamps(chat, None);
+    assert_eq!(opens(&tree, &found, None), pairs(&[("param m", &["Interactions", "Replies"]), ("write msg", &["Interactions", "Replies"]), ("assign r", &["Interactions", "Replies"])]));
+    assert_eq!(lists_first(&tree, &found), ["await r"]);
+
+    let crm = "function g(c: <crm-[:Company]->>) {\n  d = only(c-[:Deals]->)\n  n = await d-[n:Notes WHERE n.Body == c.Name]->\n}\n";
+    let (tree, _, found) = stamps(crm, None);
+    assert_eq!(opens(&tree, &found, None), pairs(&[("assign d", &["Notes"])]));
+    assert_eq!(lists_first(&tree, &found), ["await n"]);
+}

@@ -136,6 +136,7 @@ export const ADAPTER_METHODS = [
   'removeEventSubscription',
   'resolveAwait',
   'wakeKeys',
+  'awaitKeys',
   'readRecord',
   'translateFilter',
   'getDedupRules',
@@ -219,6 +220,31 @@ export interface AwaitWakeRequest {
   correlationKey: string;
 }
 
+/** One arrival a wait has yet to judge (`park.waits.arrivals`). */
+export interface LoggedArrival {
+  seq: number;
+  identity: string;
+  version?: string | null;
+  /** `{ recordId?, recordType?, fields }`, or null when the module reported none. */
+  landing: { recordId?: string; recordType?: string; fields: Record<string, unknown> } | null;
+}
+
+/** A run's waits on listenable edges (docs/contracts/host-families.md,
+ *  `park.waits`): opened where a record enters the run, read at the `await`.
+ *  Absent ⇒ the run opens no waits, and an await on an adapter's edge fails
+ *  as unsupported. */
+export interface HostWaits {
+  /** The arrival log's mark now: every arrival logged after it is above it. */
+  mark(): Promise<{ mark: number }>;
+  /** The segment's run waits on `edge` of the record the module keys `key`,
+   *  reading what arrived after `since`; a wait already there is kept. */
+  open(input: { adapterType: string; edge: string; key: string; since: number }): Promise<{ waitId: string }>;
+  /** What the wait has yet to judge, in log order, and whether its record went. */
+  arrivals(input: { waitId: string }): Promise<{ gone: boolean; arrivals: LoggedArrival[] }>;
+  /** The wait judged an arrival: whether it counts. */
+  note(input: { waitId: string; identity: string; version?: string; matched: boolean }): Promise<{ counts: boolean }>;
+}
+
 /** Cross-run write locks, by segment. A token stands for one acquire. */
 export interface HostLocks {
   acquire(input: Scoped<{ names: readonly string[] }>): Promise<{ token: string }>;
@@ -283,6 +309,7 @@ export const HOST_FAMILIES = {
     ],
   },
   park: { methods: ['wake'] },
+  'park.waits': { optional: true, methods: ['mark', 'open', 'arrivals', 'note'] },
   'park.callbacks': { optional: true, methods: ['mint', 'calls'] },
   'park.sources': { optional: true, methods: ['save', 'load'] },
   'park.bindings': { methods: ['record', 'findBoundCounterpart', 'delete'] },

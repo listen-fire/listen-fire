@@ -39,8 +39,11 @@ async function backendOnLfHost(): Promise<{ backend: DeliveryReceiptContractBack
   return { backend, stop: () => bridge.close() };
 }
 
-/** listen-fire has no synthetic (test-harness) subscription: every delivery is verified. */
-const NOT_ON_LF = new Set(['a synthetic subscription skips the signature and drains before the ack']);
+/** listen-fire has no synthetic (test-harness) subscription: every delivery is
+ *  verified. Its wake door takes arrivals only: a push naming keys is refused,
+ *  naming adapter protocol 2.5 (await_edges.test.ts), where the TypeScript
+ *  doors still take keys. */
+const NOT_ON_LF = new Set(['a synthetic subscription skips the signature and drains before the ack', 'wake queues one wake per key: 202 accepted']);
 
 for (const entry of INBOUND_CONTRACT_CASES) {
   test(`inbound doors contract — listen-fire: ${entry.name}`, { skip: NOT_ON_LF.has(entry.name) }, async () => {

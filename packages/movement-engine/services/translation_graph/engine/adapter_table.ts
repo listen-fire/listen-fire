@@ -84,6 +84,11 @@ const DISPATCH: { [M in AdapterMethod]: (adapter: Adapter, args: AdapterCallMap[
     return awaitable.resolveAwait(point);
   },
   wakeKeys: (adapter, args) => implemented(adapter, 'wakeKeys', adapter.wakeKeys)(args),
+  awaitKeys: (adapter, args) => {
+    const arrivals = adapter.arrivals;
+    if (arrivals === undefined) throw notImplemented(adapter, 'awaitKeys');
+    return arrivals.awaitKeys(args);
+  },
   readRecord: (adapter, args) => implemented(adapter, 'readRecord', adapter.readRecord)(args),
   translateFilter: (adapter, args) => implemented(adapter, 'translateFilter', adapter.translateFilter)(args),
   getDedupRules: (adapter, args) => implemented(adapter, 'getDedupRules', adapter.getDedupRules)(args),
@@ -127,9 +132,11 @@ async function relatedPage(
 
 /** What an instance is, as data. */
 function describeInstance(instance: string, adapter: Adapter): ResolvedAdapter {
-  const methods: ResolvedAdapter['methods'] = ADAPTER_METHODS.filter((method) =>
-    method === 'resolveAwait' ? adapter.awaitable !== undefined : typeof adapter[method] === 'function',
-  );
+  const methods: ResolvedAdapter['methods'] = ADAPTER_METHODS.filter((method) => {
+    if (method === 'resolveAwait') return adapter.awaitable !== undefined;
+    if (method === 'awaitKeys') return adapter.arrivals !== undefined;
+    return typeof adapter[method] === 'function';
+  });
   if (typeof adapter.iterateRelated === 'function') methods.push('iterateRelated');
   return {
     instance,

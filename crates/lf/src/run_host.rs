@@ -197,8 +197,8 @@ pub async fn give_up_work(store_: &dyn RunHostStore, claimed: &ClaimedWork, why:
 }
 
 /// The runs a work row would have stepped: a timer's run, a callback body's
-/// run, and the runs still parked on a wake's key. An event's row names
-/// none (its run, if it started, is the lost-run sweep's).
+/// run, a wait's run, and the runs still parked on a wake's key. An event's
+/// row names none (its run, if it started, is the lost-run sweep's).
 fn runs_of_work(store_: &dyn RunHostStore, kind: &str, payload: &Js) -> Result<Vec<String>> {
     let text = |k: &str| payload.get(k).and_then(Js::as_str);
     Ok(match kind {
@@ -207,6 +207,7 @@ fn runs_of_work(store_: &dyn RunHostStore, kind: &str, payload: &Js) -> Result<V
             Some(id) => store(store_.callback(id))?.map(|c| c.run_id).into_iter().collect(),
             None => Vec::new(),
         },
+        "wake_await" if payload.get("waitId").is_some() => text("runId").map(str::to_string).into_iter().collect(),
         "wake_await" => match (text("adapterType"), text("correlationKey")) {
             (Some(adapter_type), Some(key)) => {
                 let team = text("teamId").unwrap_or(store_.tenant());
@@ -566,6 +567,18 @@ mod tests {
         assert_eq!(dead, Some(reason));
         assert!(claim_one(&store_).is_none(), "a dead row is never claimed");
         assert_eq!((failed_retry_ms(1), failed_retry_ms(2), failed_retry_ms(9)), (30_000, 60_000, FAILED_RETRY_CAP_MS));
+    }
+
+    #[tokio::test]
+    async fn a_wait_wake_given_up_fails_the_run_it_names() {
+        let store_ = state_file();
+        timer_parked(&store_, "run-1");
+        let wake = crate::waits::wake_row(store_.tenant(), &crate::waits::WaitWake { run_id: "run-1".into(), wait_id: "w-1".into(), address: "s1".into() });
+        store_.enqueue(&wake.kind, &wake.key, &wake.payload, None).unwrap();
+        let kinds = ["wake_await".to_string()];
+        let rows = store_.claim_due(&ClaimDue { limit: 10, lease_ms: 60_000, due_by: None, kinds: Some(&kinds) }).unwrap();
+        let [claimed] = rows.as_slice() else { panic!("one wake row, not {}", rows.len()) };
+        assert!(matches!(give_up_work(&store_, claimed, "never finished").await.unwrap(), FailedWork::GaveUp { runs, .. } if runs == ["run-1"]));
     }
 
     #[tokio::test]

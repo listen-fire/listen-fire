@@ -207,6 +207,9 @@ impl Run<'_> {
         }
         // The whole state was written as one park, so it is read as one.
         let park = ParkReader::over_state(state);
+        if let Some(waits) = at(state, "eventWaits").and_then(crate::waits::waits_of_js) {
+            *self.event_waits.borrow_mut() = waits;
+        }
         let mut segment = 0;
         let mut next_frame = 0;
         let mut take_frame = || -> Result<Js, Stop> {
@@ -373,6 +376,18 @@ impl Run<'_> {
             Some(journal) => Some(self.rehydrate_journal(&items(Some(journal)), &park).await?),
             None => None,
         };
+        // An await on a wait re-entered judges what arrived with the values
+        // its WHERE captured when it was first reached.
+        if let (Leaf::Continue { reenter: true, .. }, Some(captured)) = (&leaf, at(state, "captured")) {
+            let mut values = Vec::new();
+            for descriptor in items(Some(captured)) {
+                values.push(match self.rehydrate(&descriptor, &park).await? {
+                    Binding::Value(value) => value.value,
+                    record => crate::record::held(record),
+                });
+            }
+            *self.reentered_await.borrow_mut() = Some((state_address.clone(), values));
+        }
         park.assert_read().map_err(runtime)?;
         match leaf {
             Leaf::FireCallback { values, call_index } => {
@@ -1011,6 +1026,7 @@ impl Run<'_> {
                             }
                         }
                     }
+                    *handle.waits.borrow_mut() = parked_waits(descriptor);
                     Binding::Handle(handle)
                 }
                 Some(kind @ ("extractRoot" | "extractPosition")) => {
@@ -1028,7 +1044,9 @@ impl Run<'_> {
                         },
                         None => self.source.borrow().as_ref().map(|source| source.read.clone()).ok_or_else(|| malformed("a record read off a source this run has none of"))?,
                     };
-                    Binding::Landed(Rc::new(Landed::new(position, properties, read)))
+                    let landed = Landed::new(position, properties, read);
+                    *landed.waits.borrow_mut() = parked_waits(descriptor);
+                    Binding::Landed(Rc::new(landed))
                 }
                 // Named before its own descriptor was read: read it now,
                 // whole (its record before included), from wherever in the
@@ -1640,3 +1658,8 @@ fn origin_fn_path(origin: &OpOrigin) -> String {
     }
 }
 
+/// The waits a park wrote beside a record (crate::waits): none where it
+/// wrote none (resume_refusal refused any it could not read).
+fn parked_waits(descriptor: &Js) -> crate::waits::Waits {
+    at(descriptor, "waits").and_then(crate::waits::waits_of_js).unwrap_or_default()
+}

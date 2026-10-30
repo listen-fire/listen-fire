@@ -24,6 +24,7 @@ pub enum Family {
     LlmTransforms,
     ParkSink,
     Park,
+    ParkWaits,
     ParkCallbacks,
     ParkSources,
     ControlCancel,
@@ -47,6 +48,7 @@ const FAMILIES: &[Family] = &[
     Family::LlmTransforms,
     Family::ParkSink,
     Family::Park,
+    Family::ParkWaits,
     Family::ParkCallbacks,
     Family::ParkSources,
     Family::ControlCancel,
@@ -72,6 +74,7 @@ impl Family {
             Family::LlmTransforms => "llm.transforms",
             Family::ParkSink => "park.sink",
             Family::Park => "park",
+            Family::ParkWaits => "park.waits",
             Family::ParkCallbacks => "park.callbacks",
             Family::ParkSources => "park.sources",
             Family::ControlCancel => "control.cancel",
@@ -108,6 +111,7 @@ impl Request {
         match self.family {
             Family::Check | Family::Clock | Family::ControlCancel | Family::Lookup => true,
             Family::ParkCallbacks => self.method == "calls",
+            Family::ParkWaits => matches!(self.method.as_str(), "mark" | "arrivals"),
             Family::ParkSources => self.method == "load",
             Family::ParkSink => self.method == "collectBranchExports",
             Family::Adapters if self.method == "resolve" => true,
@@ -124,6 +128,7 @@ impl Request {
                         | "listEventTypes"
                         | "resolveAwait"
                         | "wakeKeys"
+                        | "awaitKeys"
                         | "readRecord"
                         | "translateFilter"
                         | "getDedupRules"
@@ -395,10 +400,20 @@ pub mod park {
         }
     }
 
-    /// An await park: the leaf's state (on the eval wire) and the key a wake
-    /// names it by — the awaitable adapter's type, or the reserved callback
-    /// identity, and its correlation key.
-    pub fn commit_await_park(segment: &str, address: &str, state: Json, adapter_type: &str, correlation_key: &Json) -> Request {
+    /// An await park on a wait (crate::waits): the leaf's state (on the
+    /// eval wire) and the wait whose arrivals wake it.
+    pub fn commit_await_park(segment: &str, address: &str, state: Json, wait_id: &str) -> Request {
+        Request {
+            family: Family::ParkSink,
+            method: "commitAwaitPark".into(),
+            args: in_segment(segment, json!({ "address": address, "state": state, "waitId": wait_id, "wire": true })),
+        }
+    }
+
+    /// A callback's await park: the leaf's state and the key a wake names it
+    /// by, the reserved callback identity and the callback's id. Callbacks
+    /// retire at 0.13 with the rest of their family.
+    pub fn commit_callback_await_park(segment: &str, address: &str, state: Json, adapter_type: &str, correlation_key: &Json) -> Request {
         Request {
             family: Family::ParkSink,
             method: "commitAwaitPark".into(),
@@ -457,9 +472,49 @@ pub mod park {
         Request { family: Family::ParkSink, method: "cancelSubtrees".into(), args: in_segment(segment, args) }
     }
 
-    /// "Resume whatever is parked on this key" (`park.wake`).
-    pub fn wake(segment: &str, adapter_type: &str, correlation_key: &Json) -> Request {
+    /// "Resume the run parked on this wait" (`park.wake`): asked when an
+    /// arrival that counts was logged while the run was parking.
+    pub fn wake(segment: &str, wait_id: &str) -> Request {
+        Request { family: Family::Park, method: "wake".into(), args: in_segment(segment, json!({ "waitId": wait_id })) }
+    }
+
+    /// "Resume whatever is parked on this key": a callback's awaiter.
+    pub fn wake_callback(segment: &str, adapter_type: &str, correlation_key: &Json) -> Request {
         Request { family: Family::Park, method: "wake".into(), args: in_segment(segment, json!({ "adapterType": adapter_type, "correlationKey": correlation_key })) }
+    }
+
+    /// The arrival log's mark now (`park.waits.mark`), answered `{mark}`:
+    /// every arrival logged after it is above it. Taken before a record
+    /// enters the run, so what arrives while it enters still counts.
+    pub fn wait_mark(segment: &str) -> Request {
+        Request { family: Family::ParkWaits, method: "mark".into(), args: in_segment(segment, json!({})) }
+    }
+
+    /// A wait opened on `edge` of the record the adapter keys `key`,
+    /// reading the arrivals logged after `since`; answered `{waitId}`. A run
+    /// that already waits there keeps that wait and its mark.
+    pub fn open_wait(segment: &str, adapter_type: &str, edge: &str, key: &str, since: i64) -> Request {
+        Request {
+            family: Family::ParkWaits,
+            method: "open".into(),
+            args: in_segment(segment, json!({ "adapterType": adapter_type, "edge": edge, "key": key, "since": since })),
+        }
+    }
+
+    /// What a wait has yet to judge, in log order, answered on the eval wire
+    /// `{gone, arrivals: [{seq, identity, version?, landing}]}`.
+    pub fn wait_arrivals(segment: &str, wait_id: &str) -> Request {
+        Request { family: Family::ParkWaits, method: "arrivals".into(), args: in_segment(segment, json!({ "waitId": wait_id, "wire": true })) }
+    }
+
+    /// The wait judged an arrival: answered `{counts}`, whether it counts
+    /// (it matched, and its record did not match last time).
+    pub fn note_arrival(segment: &str, wait_id: &str, identity: &str, version: Option<&str>, matched: bool) -> Request {
+        let mut args = json!({ "waitId": wait_id, "identity": identity, "matched": matched });
+        if let Some(version) = version {
+            args["version"] = json!(version);
+        }
+        Request { family: Family::ParkWaits, method: "note".into(), args: in_segment(segment, args) }
     }
 
     /// A callback minted: its address, fire-time parameters, captured state
@@ -714,7 +769,7 @@ mod tests {
 
     #[test]
     fn every_family_parses_back_from_its_name() {
-        for name in ["adapters", "llm", "llm.client", "llm.transforms", "park.sink", "control.cancel", "locks", "trace", "clock", "files", "ids", "check", "log", "echo"] {
+        for name in ["adapters", "llm", "llm.client", "llm.transforms", "park.sink", "park.waits", "control.cancel", "locks", "trace", "clock", "files", "ids", "check", "log", "echo"] {
             assert_eq!(Family::parse(name).map(Family::as_str), Some(name));
         }
         assert_eq!(Family::parse("nope"), None);

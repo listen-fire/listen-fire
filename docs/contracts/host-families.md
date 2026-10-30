@@ -1,6 +1,6 @@
 # The host families
 
-Version: 1
+Version: 2
 
 The movement engine runs a program. Everything outside the program goes through one interface the caller hands it, `EngineHost` (`packages/movement-engine/services/movement_engine/host.ts`): adapters, model calls, parking, cancellation, files, the acting principal, write locks, the trace, the clock and fresh ids. The engine imports none of these itself. This document is that interface and the four entry points into the engine. How lf-platform's hosts serve it, and the engine's own notes, are in lf-platform, `docs/engine-host.md`. The data shapes are in the `engine-contracts` package (`packages/engine-contracts/`).
 
@@ -15,10 +15,10 @@ Two tests hold the contract to this document (lf-platform's, `apps/api/src/servi
 
 ## Versions
 
-- **The version is an integer**, stated at the top of this document and held by `HOST_FAMILIES_VERSION`. This release serves version 1 only ([the index](README.md) lists what each release supports and deprecates).
-- **On the wire:** every `segment.open` request carries `hostFamiliesVersion`. A host refuses an open whose version it does not serve, or that names none, before it opens anything. The refusal is a thrown failure whose message names the contract, the version it was handed and the versions it serves: `segment.open carries host families version 2, which this host does not serve (supported: 1)`. The entry fails before any statement runs.
+- **The version is an integer**, stated at the top of this document and held by `HOST_FAMILIES_VERSION`. This release serves version 2 only ([the index](README.md) lists what each release supports and deprecates).
+- **On the wire:** every `segment.open` request carries `hostFamiliesVersion`. A host refuses an open whose version it does not serve, or that names none, before it opens anything. The refusal is a thrown failure whose message names the contract, the version it was handed and the versions it serves: `segment.open carries host families version 1, which this host does not serve (supported: 2)`. The entry fails before any statement runs.
 - **What bumps it:** a change in meaning. A method removed or renamed, a field whose meaning changed, a required field added to a request, or an answer reshaped. An optional request field a host may ignore, or a new optional family, keeps the version.
-- **A required family is part of the version.** Adding one bumps it, as any required addition does. A host that lacks a required method is refused by the engine before `segment.open`, with a message naming each missing method (`the host does not serve clock.now, ids.mint, which host families version 1 requires (the clock, ids families); no segment was opened`). The engine checks every method of every family the manifest does not mark optional.
+- **A required family is part of the version.** Adding one bumps it, as any required addition does. A host that lacks a required method is refused by the engine before `segment.open`, with a message naming each missing method (`the host does not serve clock.now, ids.mint, which host families version 2 requires (the clock, ids families); no segment was opened`). The engine checks every method of every family the manifest does not mark optional.
 - **How a break lands:** the engine sends the new version; a host that serves both branches on it at the point of difference. It is never a second host interface.
 
 ## Conventions
@@ -251,6 +251,7 @@ Every entry answers the segment's result (`MovementRunResult`, `movement_engine/
 | `llm` | `arbitrateEntities` | same as `llm.client` |
 | `park.sink` | `recordJoin`, `commitTimerPark`, `commitAwaitPark`, `decrementJoin`, `persistBranchExport`, `collectBranchExports`, `cancelSubtrees`, `commitSuspension`, `commitLimitPause` | yes: absent, a run that reaches a park fails (a dry run) |
 | `park` | `wake` | no (may throw, if `park.sink` is absent: only an await park asks for a wake) |
+| `park.waits` | `mark`, `open`, `arrivals`, `note` | yes: absent, a run opens no waits, and an `await` on an adapter's edge fails as unsupported |
 | `park.callbacks` | `mint`, `calls` | yes: absent, `callback(…)` fails as unsupported |
 | `park.sources` | `save`, `load` | yes: absent, a park carries each library's text itself |
 | `park.bindings` | `record`, `findBoundCounterpart`, `delete` | no (may throw, if no program binds) |
@@ -498,13 +499,14 @@ answer:  void
 #### `park.sink.commitAwaitPark`
 
 ```ts
-request: { segmentId: string; address: string; state: ParkedScopeState; adapterType: string; correlationKey: string }
+request: { segmentId: string; address: string; state: ParkedScopeState; waitId: string }
+       | { segmentId: string; address: string; state: ParkedScopeState; adapterType: string; correlationKey: string }   // a callback's await
 answer:  void
 ```
 
-- `adapterType` is the awaitable adapter's type, or the reserved callback identity.
-- **Persist:** an await park for (run, `address`), and the correlation from (`adapterType`, `correlationKey`) to it. A wake on the key resumes the run re-entering the await, which re-checks live.
-- After this answers, the engine re-checks the await once itself and calls `park.wake` when it already resolved.
+- **An await on an adapter's edge** names the wait it parks on (`waitId`, from `park.waits.open`). **Persist:** an await park for (run, `address`), and the wait parked there, as one write. An arrival logged on the wait's record afterwards wakes the run, which re-enters the await and reads the wait's arrivals. A park and a log on one record's edge never interleave: either the log sees the park and wakes it, or the engine's read after the park sees the arrival.
+- After this answers, the engine reads the wait's arrivals once more itself and calls `park.wake` when one landed while it parked.
+- **A callback's await** names the reserved callback identity and the callback's id: the correlation from (`adapterType`, `correlationKey`) to the park, woken by the callback's call. Callbacks retire at 0.13.
 - **Retry:** idempotent on (run, `address`).
 
 #### `park.sink.decrementJoin`
@@ -575,14 +577,59 @@ answer:  void
 #### `park.wake`
 
 ```ts
-request: { segmentId: string; adapterType: string; correlationKey: string }
+request: { segmentId: string; waitId: string }
+       | { segmentId: string; adapterType: string; correlationKey: string }   // a callback's awaiter
 answer:  void
 ```
 
-- "Resume whatever is parked on this key", in the segment's team. After an await park is durable, the engine asks the await's question once more itself, its WHERE included. A landing that arrived between the first check and the park woke nothing, because a wake for a key with no parked run does nothing. So when the second check finds the await resolved (or cannot tell), the engine asks for the wake.
-- When the second check cannot answer (the remote is down), the engine logs an error naming the key and leaves the run parked without a wake; the adapter's own at-least-once wake covers later landings. The known gap: a landing whose only wake arrived before the park, on a re-check that then failed.
+- "Resume the run parked on this wait", the segment's run. After an await park is durable, the engine reads the wait's arrivals once more itself, its WHERE included. An arrival logged between the first read and the park woke nothing, because the wait was not parked yet. So when the second read finds one the WHERE takes, or the record gone, the engine asks for the wake. The resume re-enters the await, which judges and notes the arrival.
+- When the second read cannot answer, the engine logs an error naming the wait and leaves the run parked without a wake; an arrival logged later wakes it.
+- A callback's awaiter is woken by its key: "resume whatever is parked on this key", in the segment's team. Callbacks retire at 0.13.
 - **Persist:** a queued wake that outlives the process (production: a `wake_await` work row).
 - **Retry:** idempotent; a duplicate wake resumes nothing twice. A wake that cannot be queued throws; the engine logs it and the park stands.
+
+### `park.waits`
+
+A run's waits on listenable edges (docs/contracts/adapter-protocol.md, "Waiting on your system"). Every arrival a module reports is logged under a store-wide increasing seq; a wait is one row, this run waits on this edge of this record, reading the arrivals logged after its mark. The engine opens a wait where the record enters the run (the checker's `opensWaits` stamps): it takes the mark before the record enters (before a write), asks the record's adapter for the key (`adapters.call awaitKeys`), and opens the wait after. An arrival logged during the write therefore counts. An embedder without the family leaves it out: such a run opens no wait, and an `await` on an adapter's edge fails as unsupported. A rehearsal opens none, and its `await` binds an empty landing.
+
+#### `park.waits.mark`
+
+```ts
+request: { segmentId: string }
+answer:  { mark: number }   // an integer
+```
+
+- The latest seq logged: every arrival logged after this answers is above it.
+
+#### `park.waits.open`
+
+```ts
+request: { segmentId: string; adapterType: string; edge: string; key: string; since: number }
+answer:  { waitId: string }
+```
+
+- **Persist:** the segment's run waits on `edge` of the record the module keys `key`, reading the arrivals logged after `since`.
+- **Retry:** a run that already waits on this edge of this record keeps that wait and its first mark: the same `waitId` answers.
+
+#### `park.waits.arrivals`
+
+```ts
+request: { segmentId: string; waitId: string; wire: true }
+answer:  { gone: boolean; arrivals: Array<{ seq: number; identity: string; version?: string | null; landing: { recordId?: string; recordType?: string; fields: object } | null }> }   // on the eval wire
+```
+
+- The arrivals after the wait's mark it has not noted, in log order, the first of each identity and version only. `gone`: the module reported the record gone after the mark.
+- An unknown wait throws.
+
+#### `park.waits.note`
+
+```ts
+request: { segmentId: string; waitId: string; identity: string; version?: string; matched: boolean }
+answer:  { counts: boolean }
+```
+
+- The wait judged an arrival, and whether its WHERE took it. It counts when it matched and the record did not match at its last noted arrival; an arrival noted before counts no more. The engine binds the first that counts.
+- **Persist:** the note, for the life of the wait (the run's waits drop with its state).
 
 ### `park.callbacks`
 
@@ -830,7 +877,7 @@ The engine keeps the run's ledger (`movement_engine/run_context.ts`). The budget
 
 ## The Rust engine's requests
 
-The Rust engine (`crates/movement-engine`; the engine for the language of this release, by the run's pin alone) is an engine, not a host: it runs a segment the run host opened (`inRunContext` in `movement_engine/run.ts`), and its shim (`movement_engine/rust_host.ts`) forwards each request it makes to the run's `EngineHost`. Every request that names an `EngineHost` method is that method's request, in the shape above, with the segment's id; the engine's slice reaches `segment` only through the run host, and `adapters.resolve`, `adapters.call`, `llm.client.call`, `llm.extractCall.call` (an extraction call, `extract(…)`, `extractOne(…)`), `llm.transforms.invoke`, `llm.arbitrateEntities`, `files.resolveFileText`, `files.render`, `lookup.resolveActingUser`, `park.sink.*` (a timer, a suspension, an await's park under its correlation key, a limit pause, and a combinator's join: `recordJoin`, `persistBranchExport`, `decrementJoin`, `collectBranchExports`, `cancelSubtrees`), `park.wake` (a callback fired from inside the run), `park.callbacks.mint` and `park.callbacks.calls`, `park.sources.save` and `park.sources.load` (a park's library texts), `control.cancel.*`, `locks.*`, `trace.append`, `clock.now` and `ids.mint` itself. It asks `ids.mint` for an extraction's resources (once per batch, in the tree's order); a callback's id is minted by `park.callbacks.mint`, as the TypeScript engine's is. An await of a landing asks the awaited adapter's `resolveAwait` through `adapters.call`. `parallel` and `race` arms run as concurrent flows: their requests are in flight together, interleaved as the TypeScript engine's arms interleave them, and effects take the run's in-run locks in the same order.
+The Rust engine (`crates/movement-engine`; the engine for the language of this release, by the run's pin alone) is an engine, not a host: it runs a segment the run host opened (`inRunContext` in `movement_engine/run.ts`), and its shim (`movement_engine/rust_host.ts`) forwards each request it makes to the run's `EngineHost`. Every request that names an `EngineHost` method is that method's request, in the shape above, with the segment's id; the engine's slice reaches `segment` only through the run host, and `adapters.resolve`, `adapters.call`, `llm.client.call`, `llm.extractCall.call` (an extraction call, `extract(…)`, `extractOne(…)`), `llm.transforms.invoke`, `llm.arbitrateEntities`, `files.resolveFileText`, `files.render`, `lookup.resolveActingUser`, `park.sink.*` (a timer, a suspension, an await's park on its wait or a callback's key, a limit pause, and a combinator's join: `recordJoin`, `persistBranchExport`, `decrementJoin`, `collectBranchExports`, `cancelSubtrees`), `park.wake` (an arrival that landed while an await parked, and a callback fired from inside the run), `park.waits.*` (a run's waits, opened where their records enter and read at the `await`), `park.callbacks.mint` and `park.callbacks.calls`, `park.sources.save` and `park.sources.load` (a park's library texts), `control.cancel.*`, `locks.*`, `trace.append`, `clock.now` and `ids.mint` itself. It asks `ids.mint` for an extraction's resources (once per batch, in the tree's order); a callback's id is minted by `park.callbacks.mint`, as the TypeScript engine's is. A wait asks the record's adapter for its key (`awaitKeys`) through `adapters.call`, once per adapter and edge as records enter; a plain `await` on an edge that can also be listed lists it first (`getRelated`). `parallel` and `race` arms run as concurrent flows: their requests are in flight together, interleaved as the TypeScript engine's arms interleave them, and effects take the run's in-run locks in the same order.
 
 - **What it refuses.** A program reaches the engine only past the checker, the one gate; a program pinned to a release of another compatibility key is refused before anything is asked (`MOVENG_LANGUAGE_VERSION`, naming the pin and the remedy), and a construct the engine has not ported, or a parked state it cannot read, fails the run with `MOVENG_UNSUPPORTED` and a stable reason (`crates/movement-engine/README.md`, "Refusals"). No engine runs it instead.
 - **The values on the eval wire.** `adapters.call`'s `args` and `result`, a park's `state`, a plugin's `config` and `extractedContext`, a file's descriptor, and the answers of `llm.client.call`, `llm.transforms.invoke` and `files.resolveFileText` cross between the engine and its shim on the eval wire (`wire: true`; `crates/movement-engine/src/env.rs`) and reach the host as plain objects. The eval wire carries plain JSON: a list is `["l", items]` and an object `["o", [[key, value]…]]` in its own key order; `undefined`, `NaN`, `±Infinity` and `-0` cross as `null` and a lone surrogate as U+FFFD; nothing crosses by identity (an object reached twice is written twice, a cycle or a function is refused). A value is data or one of the engine's records, and the two never share a form: every object the host sends is data, whatever keys it carries (a `kind` naming an engine binding's included); a record whose binding object is data (the event, a callback) reaches the host as `["x", id, descriptor]`, the host hands it back as `["x", id]`, and no other record crosses. A model reply's `parsedJson` reaches the engine in `JSON.parse`'s key order. A remote host serves the JSON shapes above.
@@ -859,6 +906,13 @@ Four requests are the Rust engine's own: they are not `EngineHost` methods, and 
 | `log.write { lines }` | `undefined`; each line `{ level: 'info' \| 'warn', message, fields }` written to the platform's log, the run's id added; sent as a statement's trace is handed over | the log lines the TypeScript engine writes (an extraction stage skipped, a plugin's empty argument, a continued answer, a source file truncated for the prompt, a refinement kept) |
 
 ## Changes
+
+- **Version 2 (0.13, waits on listenable edges).** A change in meaning, so the version moves:
+  - **`park.waits`:** new, optional: `mark`, `open`, `arrivals` and `note`. An await on an adapter's edge reads the wait its record opened when it entered the run, not the adapter's `resolveAwait`.
+  - **`park.sink.commitAwaitPark`** takes `waitId` in place of `adapterType` and `correlationKey` for an await on an adapter's edge, and **`park.wake`** takes `waitId`. A callback's await keeps the key form until callbacks retire.
+  - **`adapters.call`** may call `awaitKeys` (adapter protocol 2.5); the engine no longer calls `resolveAwait`.
+  - The run's input takes **`triggerMark`** (the Rust engine's): the arrival log's mark where the delivery that started the run was kept.
+  - A version 1 host is refused at `segment.open` (`segment.open carries host families version 1, which this host does not serve (supported: 2)`).
 
 - **Within version 1, the optional `park.sources` family (shrink-park, 2026-10-16).** Additive: an optional family, which a host without it leaves out, and the engine then writes each library's text into the park itself.
 

@@ -90,10 +90,15 @@ fn line_of(row: &DeliveryRow) -> String {
 fn replay(store: &dyn RunHostStore, original: &DeliveryRow) -> Result<(String, usize), String> {
     let events = original.events.clone().unwrap_or_default();
     let new_id = uuid::Uuid::new_v4().to_string();
+    // The original's arrivals were logged when it was kept: the replay's runs
+    // read their triggers' waits from now on.
+    let mark = store.arrival_mark().map_err(|e| e.to_string())?;
     let work: Vec<NewWork> = events
         .iter()
         .map(|kept| match (kept.get("external").and_then(Js::as_str), kept.get("event")) {
-            (Some(external), Some(event)) => Ok(fire_event_work(external, event.clone(), crate::runs::Delivered::of_row(kept, Some(&new_id)))),
+            (Some(external), Some(event)) => {
+                Ok(fire_event_work(external, event.clone(), crate::runs::Delivered { arrival_mark: Some(mark), ..crate::runs::Delivered::of_row(kept, Some(&new_id)) }))
+            }
             _ => Err(format!("delivery {} holds an event without an external or an event; it cannot be replayed", original.id)),
         })
         .collect::<Result<_, _>>()?;

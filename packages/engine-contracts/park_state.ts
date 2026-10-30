@@ -81,11 +81,13 @@ export interface CodeAsTree extends ParkedCode {
  */
 export type CodePlace = string;
 
-/** Version 2 (the Rust engine): code is its place in
- *  the pinned program (a collection op its span among its statement's
- *  calls), and the libraries ride beside it (`ParkedScopeState.libraries`). */
+/** The Rust engine's (version 2 from 0.12, 3 from 0.13): code is its place
+ *  in the pinned program (a collection op its span among its statement's
+ *  calls), and the libraries ride beside it (`ParkedScopeState.libraries`).
+ *  Version 3 adds a run's waits and an await's captured values; 0.13 reads
+ *  no version 2 state. */
 export interface CodeByPlace extends ParkedCode {
-  version: 2;
+  version: 3;
   closure: CodePlace;
   shape: CodePlace;
   head: CodePlace;
@@ -162,6 +164,8 @@ export type BindingDescriptor<C extends ParkedCode = CodeAsTree> =
        *  held by two names stays one. Absent = held once, as every park
        *  written before it was said reads. */
       id?: number;
+      /** Version 3: the waits opened on the written record's edges. */
+      waits?: ParkedWaits;
     }
   /**
    * A write handle this park has already written, reached again through a
@@ -178,6 +182,8 @@ export type BindingDescriptor<C extends ParkedCode = CodeAsTree> =
       position: SourcePosition;
       edgeProperties?: Record<string, unknown>;
       read?: SourceReadDescriptor;
+      /** Version 3: the waits opened on the record's edges since it was read. */
+      waits?: ParkedWaits;
     }
   | { kind: 'resource'; resource: ResourceDescriptor }
   | { kind: 'blockMeta'; edges: Record<string, BindingDescriptor<C>[]>; plural?: true }
@@ -412,7 +418,7 @@ export type ScopeLink<C extends ParkedCode = CodeAsTree> =
  */
 export interface ParkedScopeState<C extends ParkedCode = CodeAsTree> {
   /** The park state contract's version: 1 for the earlier TypeScript
-   *  engine's states, 2 for the Rust engine's. */
+   *  engine's states, 3 for the Rust engine's. */
   version: C['version'];
   /** The parked statement's canonical lexical address — the resume entry
    *  point. */
@@ -461,7 +467,15 @@ export interface ParkedScopeState<C extends ParkedCode = CodeAsTree> {
   /** Version 2: every library the run linked, so the code the state names is
    *  read in the text it parked with. Absent: the run linked none. */
   libraries?: C extends CodeByPlace ? ParkedLibrary[] : never;
+  /** Version 3: an await on a wait, what its WHERE read of the run when it
+   *  was first reached, in hole order, each a value descriptor. */
+  captured?: C extends CodeByPlace ? BindingDescriptor<C>[] : never;
+  /** Version 3: the trigger's record's waits, by edge. */
+  eventWaits?: C extends CodeByPlace ? ParkedWaits : never;
 }
+
+/** Version 3: a record's waits, by edge: the wait's id, or the record is gone. */
+export type ParkedWaits = Record<string, string | { gone: true }>;
 
 /** A state of either version, as a host holds it. */
 export type AnyParkedScopeState = ParkedScopeState<CodeAsTree> | ParkedScopeState<CodeByPlace>;

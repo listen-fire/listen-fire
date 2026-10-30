@@ -290,7 +290,7 @@ read fails before the host is asked anything, with MOVENG_UNSUPPORTED
 | reason | the state | what closes it |
 |---|---|---|
 | `resume_state_does_not_read` | it does not read off the wire; its scopes, frames or journals (a frame's own) are not lists; or a descriptor has no kind this engine rebuilds | nothing: a malformed or foreign record |
-| `resume_state_version` | a version other than 2 (docs/contracts/park-state.md: version 2 names code by its place in the pinned program, and pins each library by `park.sources` hash) | nothing: a version 1 state is the TypeScript engine's, and a run it parked fails its resume by `parkedOnEngine` before reaching here |
+| `resume_state_version` | a version other than 3 (docs/contracts/park-state.md: version 2 names code by its place in the pinned program, and pins each library by `park.sources` hash; version 3 parks a run's waits beside its records and an await's captured values) | nothing: a version 1 state is the TypeScript engine's, and a run it parked fails its resume by `parkedOnEngine` before reaching here. A version 2 state (0.12's) is refused by its own message: "this run parked under listen-fire 0.12 (park state 2); a 0.13 engine resumes park state 3" |
 | `resume_state_suspended` | a `suspended` other than `true` | nothing: the park-state contract refuses it |
 | `resume_state_code_does_not_read` | code the state names (a closure, a run-time arm's body, a body-local declaration, a kept walk's head or mapping) that is not text, or whose place holds no code of that kind in the pinned program (checked once the program and its pinned libraries are read, before anything runs); a code reference declared in a library the program does not link | nothing: this engine writes only places that resolve |
 | `resume_state_kind:blockMeta` | a block's meta edges bound as a name | nothing: no run makes one (the TypeScript's builders of it are called nowhere, and the language retires every `#` hop) |
@@ -319,8 +319,9 @@ kept, as for any failure.
 this engine reads a member of (`lookup.resolveActingUser`:
 `{principal: {id, display?}, email?}`; `llm.transforms.invoke`: `{text?,
 data?, records?, outcome?}` with every record an object;
-`park.callbacks.calls`: a list; an awaitable adapter's `resolveAwait`: an
-object with a status and, landed, a list of landings; a refetching adapter's
+`park.callbacks.calls`: a list; an adapter's `awaitKeys`: one `{key}` or
+`{gone: true}` per head; `park.waits.arrivals`: `{gone, arrivals}`, each
+arrival naming its identity; a refetching adapter's
 `readRecord`: an object or null; `files.resolveFileText`'s `unreadable`: one
 of its four reasons) is held to that shape where it is read. One of another
 shape ends the run with MOVENG_RUNTIME "the host's <call> answered something
@@ -864,10 +865,19 @@ Effects take the in-run locks run.ts takes (a shared lock per type and key
 set, exclusive per record and edge, FIFO in arrival order). An arm that
 parks writes its state and its join; the arms that finish persist their
 exports. A callback mints its row (`park.callbacks.mint`) and binds
-`{kind: 'callback', …}`; awaiting it, a landing (`resolveAwait`,
-`commitAwaitPark`) or an `until` parks as the TypeScript does.
+`{kind: 'callback', …}`; awaiting it or an `until` parks as the TypeScript
+does. An await on a record's edge reads the wait the record opened when it
+entered the run (`park.waits`, crate::waits): the mark is taken before the
+record enters (before a write), `awaitKeys` names each record's key, and
+`park.waits.open` opens the wait; at the `await`, a plain one on a listable
+edge takes the listing's first match, else the wait's arrivals are judged in
+log order (`park.waits.arrivals`, `park.waits.note`); none counting, it parks
+on the wait (`commitAwaitPark {waitId}`), reads the arrivals once more, and
+asks `park.wake {waitId}` when one landed meanwhile. The WHERE's parts that
+read only the run are captured once and parked (`captured`), so a re-entry
+judges with the values the run held when the await was first reached.
 
-A suspension (run.ts `suspendFlow`) writes `{version: 2, address,
+A suspension (run.ts `suspendFlow`) writes `{version: 3, address,
 bindingName: null, suspended: true, journal, scopeChain, frames?}` for the
 flow at a statement's boundary, the journal the calls its statement had
 finished. The flow suspends:
@@ -962,7 +972,7 @@ alone refuses it). What it writes is Unicode text, so it holds none.
 
 **The input** (`engine_start`): `{entry: "segment", source, languageVersion,
 movementName?, event, segmentId, credentialIds?, spend?, now,
-catalog, dryRun?, nativeCheck?, snapshotModels?, resume?, fire?, settle?, limitPaused?, suspendAt?, serves,
+catalog, dryRun?, nativeCheck?, snapshotModels?, resume?, triggerMark?, fire?, settle?, limitPaused?, suspendAt?, serves,
 extractionFileChars?, maxCallDepth?, extractionTiers?, limits?, recordsReturned?}`. `segmentId` is the segment the run host opened (`segment.open`),
 named on every host request; `credentialIds` maps an import's credential name
 to its id; `spend` is the run's account as the segment starts
@@ -973,7 +983,9 @@ engine answer `check.program` with the Rust checker instead of asking the host
 `snapshotModels` is, with `nativeCheck`, the run snapshot's own `models`
 (null: none) the check holds a written model to; `resume` is `{state,
 reenter?}`, a `ParkedScopeState` (on the eval wire) to resume rather than a
-run to start; `limitPaused` says the run's pause holds, and `suspendAt` lists
+run to start; `triggerMark` is the arrival log's mark where the delivery that
+started the run was kept, from which a fresh run's trigger record waits
+(absent: a mark taken as the run starts); `limitPaused` says the run's pause holds, and `suspendAt` lists
 the addresses to suspend at (both "Parks" above). `languageVersion` is the pin,
 a release's version written out: one of another compatibility key than this
 engine's fails the run with MOVENG_LANGUAGE_VERSION, naming the pin and the

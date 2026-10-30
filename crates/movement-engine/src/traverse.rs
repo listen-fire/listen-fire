@@ -430,7 +430,12 @@ impl Run<'_> {
     /// `interpretBlock` for a block whose head walks one hop; bound
     /// (`x = … { return … }`), the iterations' returned values are `x`.
     pub(crate) async fn block(&self, block: &TraversalBlock, binding_name: Option<&str>, scope: &Rc<Scope>, at: &Address, path: &str) -> Result<Flow, Stop> {
+        let entry = self.entry_at(&format!("{path}/block/head")).await?;
         let iterations = self.head_iterations(&block.head, scope).await?;
+        if entry.is_some() {
+            let landed: Vec<Binding> = iterations.iter().flat_map(|(aliases, landing)| aliases.iter().map(|(_, landed)| landed.clone()).chain([landing.clone()])).collect();
+            self.enter(entry, &landed).await?;
+        }
         self.trace(TraceEntry::Block { root: spell_path_head(&block.head), positions: iterations.len() });
         let body = format!("{path}/block/body");
         let mut returned: Vec<Binding> = Vec::new();

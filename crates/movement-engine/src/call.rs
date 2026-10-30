@@ -146,6 +146,8 @@ impl Run<'_> {
                 };
                 callee.declare(param.name.clone(), binding.clone());
             }
+            let declared_at = body_path.strip_suffix("/body").unwrap_or(&body_path);
+            self.enter_parameters(declared_at, &declaration.params, &callee).await?;
             self.call_stack.borrow_mut().push(declaration.name.clone());
             let address = self.call_address(event, at);
             let ran = self.within_call(event, &name, self.body(&declaration.body, &callee, &address, &body_path, 0)).await;

@@ -110,7 +110,7 @@ mod tests {
         assert_eq!(log_and_wake(&store, "t", "acme", &arrivals).unwrap(), 1);
         let rows = store.claim_due(&ClaimDue { limit: 10, lease_ms: 60_000, due_by: None, kinds: None }).unwrap();
         let rows: Vec<(String, String)> = rows.into_iter().map(|r| (r.kind, r.payload.to_json())).collect();
-        assert_eq!(rows, [("wake_await".to_string(), format!(r#"{{"waitId":"{wait}"}}"#))]);
+        assert_eq!(rows, [("wake_await".to_string(), format!(r#"{{"waitId":"{wait}","runId":"run-1","address":"s1"}}"#))]);
         assert_eq!(store.wait_arrivals(&wait).unwrap().arrivals.iter().map(|a| a.identity.as_str()).collect::<Vec<_>>(), ["k1"]);
         std::fs::remove_dir_all(dir).ok();
     }

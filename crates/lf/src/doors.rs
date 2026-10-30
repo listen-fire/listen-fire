@@ -38,7 +38,7 @@ use crate::inbound::{
 use crate::arrivals::{arrivals_of, log_and_wake};
 use crate::json::Js;
 use crate::obj;
-use crate::run_host::{await_wake_work, queue_await_wake};
+use crate::run_host::await_wake_work;
 use crate::routing::{Arrival, Listen, event_matches_trigger_scope};
 use crate::runs::{Delivered, Fired, Session};
 use crate::secrets::{Binding, Credential, Credentials, install_of, signer_of};
@@ -190,10 +190,13 @@ impl<R: Reader> LfDoors<'_, R> {
     /// the delivery's, answered 500 for its sender to send again.
     async fn run_inline(&self, receipt: &NewDelivery) -> Result<(), String> {
         let EventSink::Inline { session, fired } = &self.sink else { return Ok(()) };
+        // Taken once the receipt (and its arrivals) is kept: a run the
+        // delivery starts never waits for the delivery's own arrivals.
+        let mark = self.store.arrival_mark().map_err(|e| e.to_string())?;
         let mut failures = Vec::new();
         for kept in &receipt.events {
             let (external, event) = (kept.get("external").and_then(Js::as_str).unwrap_or_default(), kept.get("event").unwrap_or(&Js::Null));
-            let delivered = Delivered::of_row(kept, Some(&receipt.id));
+            let delivered = Delivered { arrival_mark: Some(mark), ..Delivered::of_row(kept, Some(&receipt.id)) };
             match session.fire_event(external, event, false, delivered).await {
                 Ok(one) => {
                     for line in &one.redelivered {
@@ -230,13 +233,6 @@ impl<R: Reader> LfDoors<'_, R> {
             }
             listed.borrow_mut().push(Js::Obj(listing));
         }
-    }
-
-    fn queue_wakes(&self, adapter_type: &str, team_id: &str, keys: &[String]) -> Result<(), String> {
-        for key in keys {
-            queue_await_wake(self.store, adapter_type, team_id, key)?;
-        }
-        Ok(())
     }
 
     /// The arrival log's mark, on each `fire_event` row a delivery keeps: a
@@ -345,7 +341,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
     /// delivery's own arrivals, so a run it starts never waits for them.
     async fn keep(&self, kept: Kept<'_>) -> Result<bool, String> {
         let adapter_type = &kept.source.adapter_type;
-        let came_for = Delivered { id: None, credential: self.delivering_credential(kept.source), subscription: subscription_of(kept.subscription_id).1 };
+        let came_for = Delivered { id: None, credential: self.delivering_credential(kept.source), subscription: subscription_of(kept.subscription_id).1, arrival_mark: None };
         let receipt = NewDelivery {
             id: uuid::Uuid::new_v4().to_string(),
             external_id: kept.external_id.map(str::to_string),
@@ -466,10 +462,6 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
         crate::wake::queued_rows(&work);
         self.list(&work);
         Ok(true)
-    }
-
-    async fn enqueue_pushed_wakes(&self, adapter_type: &str, team_id: &str, keys: &[String]) -> Result<(), String> {
-        self.queue_wakes(adapter_type, team_id, keys)
     }
 
     async fn log_pushed_arrivals(&self, adapter_type: &str, team_id: &str, arrivals: &[NewArrival]) -> Result<(), String> {
@@ -620,6 +612,9 @@ pub fn fire_event_work(external: &str, event: Js, delivered: Delivered<'_>) -> N
         payload.insert("deliveryId".into(), Js::str(id));
     }
     delivered.write_into(&mut payload);
+    if let Some(mark) = delivered.arrival_mark {
+        payload.insert("arrivalMark".into(), Js::Num(mark.into()));
+    }
     NewWork { kind: "fire_event".into(), key: format!("fire_event:{}", uuid::Uuid::new_v4()), payload: Js::Obj(payload), due_at: None, team_id: None }
 }
 
@@ -1226,7 +1221,7 @@ pub(crate) mod tests {
             let answer = wake(&doors, r#"{"arrivals":[{"edge":"Comments","key":"thread:c1","identity":"k1","landing":{"fields":{"Text":"hi"}}},{"edge":"Comments","key":"thread:c9","identity":"k2","landing":{"fields":{}}}]}"#).await;
             assert_eq!((answer.status, answer.body.to_json()), (202, r#"{"accepted":2}"#.to_string()));
         });
-        assert_eq!(queued(&store), [("wake_await".to_string(), format!(r#"{{"waitId":"{wait}"}}"#))]);
+        assert_eq!(queued(&store), [("wake_await".to_string(), format!(r#"{{"waitId":"{wait}","runId":"run-1","address":"s1"}}"#))]);
         let landed = store.wait_arrivals(&wait).unwrap().arrivals;
         assert_eq!(landed.iter().map(|a| (a.identity.as_str(), a.landing.to_json())).collect::<Vec<_>>(), [("k1", r#"{"fields":{"Text":"hi"}}"#.to_string())]);
         std::fs::remove_dir_all(dir).ok();
@@ -1242,12 +1237,29 @@ pub(crate) mod tests {
                 (answer.status, answer.body.to_json()),
                 (400, r#"{"error":"bad_request","issues":[{"path":"arrivals","message":"arrival 0 on 'Comments' has no identity"}]}"#.to_string())
             );
-            // The key form still wakes as it did.
-            let keys = wake(&doors, r#"{"keys":["thread:c1"]}"#).await;
-            assert_eq!((keys.status, keys.body.to_json()), (202, r#"{"accepted":1}"#.to_string()));
             assert_eq!(wake(&doors, r#"{"arrivals":[]}"#).await.status, 400);
         });
         assert_eq!(store.arrival_mark().unwrap(), 0, "nothing was logged");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn the_wake_door_refuses_keys_naming_adapter_protocol_2_5() {
+        let (dir, store) = state_file();
+        let wait = parked_on(&store, "thread:c1");
+        in_local(async {
+            let doors = push_doors(&store);
+            for body in [r#"{"keys":["thread:c1"]}"#, r#"{"keys":["thread:c1"],"arrivals":[{"edge":"Comments","key":"thread:c1","identity":"k1","landing":{"fields":{}}}]}"#] {
+                let answer = wake(&doors, body).await;
+                assert_eq!(answer.status, 400);
+                let issue = answer.body.get("issues").and_then(Js::as_array).and_then(|issues| issues.first()).cloned().unwrap_or(Js::Null);
+                assert_eq!(issue.get("path").and_then(Js::as_str), Some("keys"));
+                assert!(issue.get("message").and_then(Js::as_str).is_some_and(|m| m.contains("adapter protocol 2.5") && m.contains("`arrivals`")), "{issue:?}");
+            }
+        });
+        // Refused whole: nothing logged, nothing woken.
+        assert_eq!(store.wait_arrivals(&wait).unwrap().arrivals.len(), 0);
+        assert!(queued(&store).is_empty());
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -1327,7 +1339,7 @@ pub(crate) mod tests {
             assert_eq!(kinds, ["fire_event", "wake_await"]);
             let due = crate::store::ClaimDue { limit: 10, lease_ms: 60_000, due_by: None, kinds: None };
             let woken: Vec<String> = session.store.claim_due(&due).unwrap().into_iter().filter(|r| r.kind == "wake_await").map(|r| r.payload.to_json()).collect();
-            assert_eq!(woken, [format!(r#"{{"waitId":"{first}"}}"#)]);
+            assert_eq!(woken, [format!(r#"{{"waitId":"{first}","runId":"run-1","address":"s1"}}"#)]);
 
             // A wait opened after it, then the same delivery again: a duplicate.
             let mark = session.store.arrival_mark().unwrap();
