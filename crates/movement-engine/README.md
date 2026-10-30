@@ -876,6 +876,16 @@ on the wait (`commitAwaitPark {waitId}`), reads the arrivals once more, and
 asks `park.wake {waitId}` when one landed meanwhile. The WHERE's parts that
 read only the run are captured once and parked (`captured`), so a re-entry
 judges with the values the run held when the await was first reached.
+A record waits once on an edge: two plain `await`s on one record's listable
+edge share its wait, and each takes the listing's first match, so the
+second binds the same oldest member as the first ("the existing match, or
+else the first to arrive"). An arrival whose landing names its record
+(`recordId`) is bound as that record, as the listing would have landed it.
+A record that is gone (an `awaitKeys` answer of `{gone: true}`, or a gone
+arrival) settles the wait empty: the scope the `await` is in ends quietly,
+so what follows it runs zero times. A function's or a closure's parameter
+takes its mark before the call reads its arguments (a `map`'s, before the
+op reads its members).
 
 A suspension (run.ts `suspendFlow`) writes `{version: 3, address,
 bindingName: null, suspended: true, journal, scopeChain, frames?}` for the

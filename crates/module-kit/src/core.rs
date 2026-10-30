@@ -496,7 +496,7 @@ slot! {
         "waits.arrivals" => fn wait_arrivals(WaitsArrivals { wait_id: String }) -> WaitArrivals;
         /// Whether the arrival counts: it matched, and its identity did not
         /// at its last noted arrival. A noted arrival counts no more.
-        "waits.note" => fn note_arrival(WaitsNote { wait_id: String, identity: String, version: Option<String>, matched: bool }) -> bool;
+        "waits.note" => fn note_arrival(WaitsNote { wait_id: String, identity: String, version: Option<String>, matched: bool, leaf: Option<String> }) -> bool;
         /// Forget at most `limit` arrivals logged before `before` that no
         /// wait reads; how many went.
         "waits.sweep" => fn sweep_arrivals(WaitsSweep { before: String, limit: i64 }) -> i64;

@@ -26,7 +26,7 @@ use crate::project::Project;
 use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Rerun, Result, RunRow, RunStart, Store,
 };
-use crate::waits::{DeliveryArrivals, NewArrival, OpenWait, WaitArrivals, WaitWake};
+use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait, WaitArrivals, WaitWake};
 
 /// The tenant a SQLite state file's rows belong to (`LOCAL_TENANT`).
 pub const SQLITE_TENANT: &str = "local";
@@ -253,7 +253,8 @@ pub trait RunHostStore {
     fn wait_arrivals(&self, wait_id: &str) -> Result<WaitArrivals>;
     /// Note the arrival judged, and whether its record matched: whether it
     /// counts (it matched, and did not at the identity's last noted arrival).
-    fn note_arrival(&self, wait_id: &str, identity: &str, version: Option<&str>, matched: bool) -> Result<bool>;
+    /// A note naming a leaf is kept with that leaf's end (`Noted::leaf`).
+    fn note_arrival(&self, noted: &Noted<'_>) -> Result<bool>;
     /// Forget at most `limit` arrivals logged before `before` that no wait
     /// reads: how many went.
     fn sweep_arrivals(&self, before: &str, limit: i64) -> Result<i64>;
@@ -481,8 +482,8 @@ impl RunHostStore for Store {
     fn wait_arrivals(&self, wait_id: &str) -> Result<WaitArrivals> {
         Store::wait_arrivals(self, wait_id)
     }
-    fn note_arrival(&self, wait_id: &str, identity: &str, version: Option<&str>, matched: bool) -> Result<bool> {
-        Store::note_arrival(self, wait_id, identity, version, matched)
+    fn note_arrival(&self, noted: &Noted<'_>) -> Result<bool> {
+        Store::note_arrival(self, noted)
     }
     fn sweep_arrivals(&self, before: &str, limit: i64) -> Result<i64> {
         Store::sweep_arrivals(self, before, limit)

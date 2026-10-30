@@ -137,6 +137,30 @@ fn since_of(text: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    /// A replay's runs read their triggers' waits from the replay: its fire
+    /// rows carry the mark taken then, after everything logged before it
+    /// (the original's own arrivals among them).
+    #[test]
+    fn a_replay_marks_its_fire_rows_with_the_mark_at_the_replay() {
+        use crate::backend::RunHostStore;
+        use crate::store::{ClaimDue, Store};
+        let dir = std::env::temp_dir().join(format!("lf-replay-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(&dir.join("state.db")).unwrap();
+        let event = Js::Obj(crate::obj! { "external" => Js::str("inbox"), "event" => Js::Obj(crate::obj! { "type" => Js::str("note.created") }) });
+        let original = NewDelivery { id: "d-1".into(), external_id: None, received_at: iso(0), source: DeliverySource::Webhook, inline: true, replay_of: None, events: vec![event] };
+        assert!(store.keep_delivery("inbox", None, &original, &[], None).unwrap().is_some());
+        let arrival = crate::waits::NewArrival { edge: "Comments".into(), key: "thread:n-1".into(), identity: Some("k1".into()), version: None, landing: None, gone: false };
+        store.log_arrivals(crate::check::LOCAL_TENANT, "inbox", &[arrival], &iso(0)).unwrap();
+        let mark = store.arrival_mark().unwrap();
+        assert_eq!(mark, 1);
+        let kept = RunHostStore::delivery(&store, "d-1").unwrap().unwrap();
+        replay(&store, &kept).unwrap();
+        let rows = store.claim_due(&ClaimDue { limit: 10, lease_ms: 60_000, due_by: None, kinds: None }).unwrap();
+        let marks: Vec<Option<&Js>> = rows.iter().filter(|r| r.kind == "fire_event").map(|r| r.payload.get("arrivalMark")).collect();
+        assert_eq!(marks, [Some(&Js::Num(mark.into()))]);
+    }
+
     #[test]
     fn since_reads_an_instant_or_an_age() {
         assert_eq!(since_of("2026-10-20T00:00:00Z"), Ok("2026-10-20T00:00:00.000Z".to_string()));

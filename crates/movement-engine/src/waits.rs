@@ -56,6 +56,10 @@ pub(crate) struct Entry {
     since: i64,
 }
 
+/// Where each parameter of a call enters, by index (none where no wait opens).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ParamEntries(Vec<Option<Entry>>);
+
 /// One record the waits of an entry, or an `await`, are about.
 pub(crate) struct Waited {
     pub(crate) adapter_type: String,
@@ -150,11 +154,28 @@ impl Run<'_> {
         self.open_waits(entered, &edges, since).await.map_err(Stop::Thrown)
     }
 
-    /// A function's or a closure's parameters, bound in `scope`, entered:
+    /// Where a function's or a closure's parameters enter, by index: the
+    /// edges stamped on each, and one mark taken now, before the call reads
+    /// its arguments, so an arrival between that read and the bind counts.
     /// `declaration` is the path of the movement or the closure declaring them.
-    pub(crate) async fn enter_parameters(&self, declaration: &str, params: &[MovementParam], scope: &Rc<Scope>) -> Result<(), Stop> {
-        for (index, param) in params.iter().enumerate() {
-            let entry = self.entry_at(&format!("{declaration}/params/{index}")).await?;
+    pub(crate) async fn parameter_entries(&self, declaration: &str, count: usize) -> Result<ParamEntries, Stop> {
+        let stamped: Vec<Option<Vec<String>>> = (0..count)
+            .map(|index| match self.checked.stamp(&format!("{declaration}/params/{index}")) {
+                Some(Stamp::OpensWaits(edges)) => Some(edges),
+                _ => None,
+            })
+            .collect();
+        if stamped.iter().all(Option::is_none) || !self.opens_waits() {
+            return Ok(ParamEntries::default());
+        }
+        let since = self.mark().await.map_err(Stop::Thrown)?;
+        Ok(ParamEntries(stamped.into_iter().map(|edges| edges.map(|edges| Entry { edges, since })).collect()))
+    }
+
+    /// A function's or a closure's parameters, bound in `scope`, entered
+    /// where `parameter_entries` took their mark.
+    pub(crate) async fn enter_parameters(&self, entries: ParamEntries, params: &[MovementParam], scope: &Rc<Scope>) -> Result<(), Stop> {
+        for (param, entry) in params.iter().zip(entries.0) {
             if entry.is_some()
                 && let Some(bound) = scope.resolve_own(&param.name)
             {

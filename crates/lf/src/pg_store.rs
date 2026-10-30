@@ -54,7 +54,7 @@ use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind,
     Release, Rerun, Result, RunRow, RunStart, StoreError, WORK_KINDS, timer_work_key, timer_work_payload,
 };
-use crate::waits::{DeliveryArrivals, LoggedArrival, NewArrival, OpenWait, WaitArrivals, WaitWake, delivery_rows, landing_of};
+use crate::waits::{DeliveryArrivals, LoggedArrival, NewArrival, Noted, OpenWait, WaitArrivals, WaitWake, delivery_rows, landing_of};
 
 type Params<'a> = [&'a (dyn ToSql + Sync)];
 
@@ -710,22 +710,36 @@ impl RunHostStore for PgStore {
         Ok(())
     }
 
+    /// What a segment that resumed the leaf before noted and never kept (it
+    /// died) is dropped as the leaf is claimed, so its arrivals are read again.
     fn claim_leaf(&self, run_id: &str, address: &str, reason: Option<&str>) -> Result<Option<(String, Js)>> {
         let row = self.query_opt(
-            "update lf.parked_run set status = 'resuming', updated_at = now()
-             where run_id = $1::text::uuid and address = $2::text and status = 'parked' and ($3::text is null or park_reason = $3::text)
-             returning park_reason, coalesce(state, 'null'::jsonb)::text",
+            "with claimed as (
+               update lf.parked_run set status = 'resuming', updated_at = now()
+               where run_id = $1::text::uuid and address = $2::text and status = 'parked' and ($3::text is null or park_reason = $3::text)
+               returning park_reason, coalesce(state, 'null'::jsonb)::text as state
+             ), dropped as (
+               delete from lf.wait_seen s using lf.wait_row w
+               where s.wait_id = w.id and w.run_id = $1::text::uuid and s.leaf = $2::text and exists (select 1 from claimed)
+             )
+             select park_reason, state from claimed",
             &[&run_id, &address, &reason],
         )?;
         row.map(|r| Ok((r.get(0), parse_text(r.get(1))?))).transpose()
     }
 
+    /// The leaf's resume is over: the notes its segment made are kept.
     fn finish_leaf(&self, run_id: &str, address: &str, fence: Option<&str>) -> Result<()> {
         self.execute(
             &format!(
-                "delete from lf.parked_run p
-                 where p.run_id = $1::text::uuid and p.address = $2::text and p.status = 'resuming'
-                   and ($3::text is null or exists (select 1 from lf.trigger_run r where r.id = p.run_id and r.{LEASED_TO}$3::text))"
+                "with held as (
+                   select 1 from lf.trigger_run r where r.id = $1::text::uuid and ($3::text is null or r.{LEASED_TO}$3::text)
+                 ), finished as (
+                   delete from lf.parked_run p
+                   where p.run_id = $1::text::uuid and p.address = $2::text and p.status = 'resuming' and exists (select 1 from held)
+                 )
+                 update lf.wait_seen s set leaf = null from lf.wait_row w
+                 where s.wait_id = w.id and w.run_id = $1::text::uuid and s.leaf = $2::text and exists (select 1 from held)"
             ),
             &[&run_id, &address, &fence],
         )?;
@@ -773,6 +787,11 @@ impl RunHostStore for PgStore {
             self.put_leaf(run_id, address, kind.reason(), wake_at, state, fence)?;
             // Whatever parks here now, no wait parked here before is.
             self.execute("update lf.wait_row set address = null where run_id = $1::text::uuid and address = $2::text", &[&run_id, &address])?;
+            // A segment that resumed the leaf here and parks here again keeps its notes.
+            self.execute(
+                "update lf.wait_seen s set leaf = null from lf.wait_row w where s.wait_id = w.id and w.run_id = $1::text::uuid and s.leaf = $2::text",
+                &[&run_id, &address],
+            )?;
             match kind {
                 // The leaf is the truth; the work row only says when to look.
                 ParkKind::Timer { wake_at } => self.enqueue_row("resume_timer", &timer_work_key(run_id), &timer_work_payload(run_id), Some(wake_at), &self.tenant)?,
@@ -1004,7 +1023,8 @@ impl RunHostStore for PgStore {
         Ok(WaitArrivals { gone, arrivals })
     }
 
-    fn note_arrival(&self, wait_id: &str, identity: &str, version: Option<&str>, matched: bool) -> Result<bool> {
+    fn note_arrival(&self, noted: &Noted<'_>) -> Result<bool> {
+        let Noted { wait_id, identity, version, matched, leaf } = *noted;
         self.transaction(|| {
             // Held for the transaction: two notes on one wait take turns.
             if self.query_opt("select id from lf.wait_row where id = $1::text::uuid for update", &[&wait_id])?.is_none() {
@@ -1025,8 +1045,8 @@ impl RunHostStore for PgStore {
                 .map(|r| r.get(0))
                 .unwrap_or(false);
             self.execute(
-                "insert into lf.wait_seen (wait_id, identity, version, matched) values ($1::text::uuid, $2::text, $3::text, $4::bool)",
-                &[&wait_id, &identity, &version, &matched],
+                "insert into lf.wait_seen (wait_id, identity, version, matched, leaf) values ($1::text::uuid, $2::text, $3::text, $4::bool, $5::text)",
+                &[&wait_id, &identity, &version, &matched, &leaf],
             )?;
             Ok(matched && !matched_before)
         })

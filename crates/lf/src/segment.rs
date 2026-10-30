@@ -28,7 +28,7 @@ use crate::run_host::{cancel_subtrees, queue_await_wake, save_source, settle_if_
 use crate::backend::{MintCallback, RunHostStore};
 use crate::store::{Park, ParkKind, StoreError};
 use crate::store_wire::Wire as _;
-use crate::waits::{OpenWait, WaitWake};
+use crate::waits::{Noted, OpenWait, WaitWake};
 use crate::wire::{Hv, Wire, js_of_json, json_of_js};
 
 /// The one tenant a local project's files are (`LOCAL_TENANT`); its run
@@ -86,8 +86,8 @@ const TRACE_KINDS: &[&str] = &["gate", "warning", "block", "read", "ai", "extrac
 pub enum Entry {
     /// A fresh firing.
     Run,
-    /// A parked leaf resumed: re-entered, or stepped past.
-    Resume { state: Js, reenter: bool },
+    /// The parked leaf at `address` resumed: re-entered, or stepped past.
+    Resume { address: String, state: Js, reenter: bool },
     /// A race a batch resume deferred, settled.
     Settle { state: Js, frame_address: String },
     /// A recorded call's body, entered at its callback with the call's values.
@@ -176,6 +176,9 @@ pub struct SegmentHost<'s> {
     /// The address each wait this segment parked on is parked at: a
     /// `park.wake` names the wait, and its row the run's leaf.
     parked_waits: RefCell<HashMap<String, String>>,
+    /// The leaf this segment resumed, when it resumed one: its notes are
+    /// kept with the leaf's end (crate::waits::Noted::leaf).
+    resumed_leaf: Option<String>,
 }
 
 impl<'s> SegmentHost<'s> {
@@ -197,6 +200,7 @@ impl<'s> SegmentHost<'s> {
             next_lock: Cell::new(0),
             spent: RefCell::new(BTreeMap::new()),
             parked_waits: RefCell::new(HashMap::new()),
+            resumed_leaf: input.resumed_leaf,
         }
     }
 
@@ -220,6 +224,8 @@ pub struct SegmentHostParts<'s> {
     pub documents: &'s Documents,
     pub user: Js,
     pub public_url: String,
+    /// The leaf the segment resumes, when it resumes one.
+    pub resumed_leaf: Option<String>,
 }
 
 /// A number from the environment, positive and finite, else `default`.
@@ -238,7 +244,7 @@ fn input_text(host: &SegmentHost<'_>, input: &SegmentInput<'_>) -> Result<String
     }
     let (state, reenter, settle) = match &input.entry {
         Entry::Run => (None, false, None),
-        Entry::Resume { state, reenter } => (Some(state), *reenter, None),
+        Entry::Resume { state, reenter, .. } => (Some(state), *reenter, None),
         Entry::Settle { state, frame_address } => (Some(state), false, Some(frame_address)),
         Entry::Fire { state, .. } => (Some(state), false, None),
     };
@@ -876,7 +882,11 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
         "park.waits.note" => {
             const LABEL: &str = "park.waits.note";
             let matched = args.get("matched").and_then(Json::as_bool).ok_or_else(|| Fault(format!("{LABEL} matched is a boolean")))?;
-            let counts = store.note_arrival(text(args, "waitId", LABEL)?, text(args, "identity", LABEL)?, args.get("version").and_then(Json::as_str), matched);
+            // A resumed leaf's segment keeps its notes with its progress past
+            // the leaf: one that dies leaves the arrivals to be read again.
+            let leaf = host.resumed_leaf.as_deref();
+            let noted = Noted { wait_id: text(args, "waitId", LABEL)?, identity: text(args, "identity", LABEL)?, version: args.get("version").and_then(Json::as_str), matched, leaf };
+            let counts = store.note_arrival(&noted);
             counts.map(|counts| Some(json!({ "counts": counts }))).map_err(store_failure)
         }
         "park.wake" => {

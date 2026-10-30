@@ -113,6 +113,8 @@ impl Run<'_> {
                     ),
                 )));
             }
+            let declared_at = body_path.strip_suffix("/body").unwrap_or(&body_path);
+            let entries = self.parameter_entries(declared_at, declaration.params.len()).await?;
             let file = self.scope_of_file(&declared_file).ok_or_else(|| Stop::Thrown(Failure::engine("MOVENG_RUNTIME", "no file scope for a movement call".into())))?;
             let callee = file.child();
             // `argumentBindings`: a named argument the parameter it names, a
@@ -146,8 +148,7 @@ impl Run<'_> {
                 };
                 callee.declare(param.name.clone(), binding.clone());
             }
-            let declared_at = body_path.strip_suffix("/body").unwrap_or(&body_path);
-            self.enter_parameters(declared_at, &declaration.params, &callee).await?;
+            self.enter_parameters(entries, &declaration.params, &callee).await?;
             self.call_stack.borrow_mut().push(declaration.name.clone());
             let address = self.call_address(event, at);
             let ran = self.within_call(event, &name, self.body(&declaration.body, &callee, &address, &body_path, 0)).await;
@@ -191,6 +192,7 @@ impl Run<'_> {
                     format!("'{}' takes {} argument(s), got {} — the checker should have caught this", call.callee, params.len(), call.args.len()),
                 )));
             }
+            let entries = self.parameter_entries(&closure.code.path, params.len()).await?;
             let mut bound: Vec<(String, Binding)> = Vec::new();
             for (position, arg) in args.iter().enumerate() {
                 let param = arg.name().map(String::from).or_else(|| params.get(position).map(|p| p.name.clone()));
@@ -218,7 +220,7 @@ impl Run<'_> {
             }
             let name = call.callee.clone();
             let address = self.call_address(event, at);
-            let ran = self.within_call(event, &name, self.within_named_call(Some(&name), self.invoke_closure_bound(closure, bound, &address))).await;
+            let ran = self.within_call(event, &name, self.within_named_call(Some(&name), self.invoke_closure_bound(closure, bound, entries, &address))).await;
             match ran {
                 Ok((Flow::Returned, child)) => Ok(child.resolve_own(crate::run::RETURN_SLOT)),
                 // Find-on-missing inside the closure ends the closure's

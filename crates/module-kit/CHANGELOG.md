@@ -3,6 +3,7 @@
 ## Unreleased
 
 - `inbound.keepDelivery` may carry a delivery's `arrivals` (`DeliveryArrivals`), logged in the same write after the receipt: each `fire_event` row gains `arrivalMark`, a `wake_await { waitId }` row is queued per wait they answer, and `Kept` answers them as `wakes`. A store module built on the kit implements it, and lists `waits.log` in its manifest (listen-fire refuses a delivery that reports arrivals to a store that does not); `NewWork` is now `Serialize`. `waits.log` skips a repeat: an arrival whose identity and version its record's edge logged within the retention.
+- `WaitsNote` carries `leaf`: the address of the leaf the noting segment resumed, when it resumed one. A store module built on the kit keeps such a note when `parks.finishLeaf` finishes that leaf or `parks.commit` parks at its address, and drops it when `parks.claimLeaf` claims the leaf again (that segment died), so its arrival is read again (docs/contracts/store-slot.md).
 - The store slot's method table serves the waits family: `waits.mark`, `waits.log`, `waits.open`, `waits.arrivals`, `waits.note` and `waits.sweep`, and `parks.commit`'s park may be `{ kind: "wait", waitId }`. A store module built on the kit implements the six new `Store` methods (docs/contracts/store-slot.md).
 - `Reference`'s free members are documented as the 0.13 ones: `listenable`, `cursor`, `identity`, `version`, `resolvesEmpty`, `readable`. A module built on the kit declares `listenable` where it declared `awaitable` and `watchable`; a 0.13 `listen-fire` refuses the retired two.
 

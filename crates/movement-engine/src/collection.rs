@@ -60,6 +60,12 @@ pub(crate) struct Function {
 }
 
 impl Function {
+    /// The path of the closure or the movement declaring it: its
+    /// parameters' stamps are keyed under it.
+    pub(crate) fn declaration_path(&self) -> &str {
+        self.path.strip_suffix("/body").unwrap_or(&self.path)
+    }
+
     /// run.ts `closureScope(fn)`: the scope a member's scopes chain from —
     /// a named closure's own, or a fresh one built from a snapshot.
     pub(crate) fn call_root(&self) -> Rc<Scope> {
@@ -112,6 +118,7 @@ impl CollectionRun {
             init: self.init.clone(),
             concurrency: self.concurrency,
             initial: self.initial,
+            entries: self.entries.clone(),
         }
     }
 }
@@ -189,6 +196,10 @@ pub(crate) struct CollectionRun {
     /// How many members run at once, and how many the first batch runs.
     pub concurrency: usize,
     pub initial: usize,
+    /// Where each member enters as the function's parameters, marked before
+    /// the op read its members; None on a resume, where a member not yet
+    /// started is marked as it starts.
+    pub entries: Option<crate::waits::ParamEntries>,
 }
 
 /// `memberLeftOut`: the warning `onError: "warn"` leaves for a member it
@@ -402,6 +413,8 @@ impl Run<'_> {
 
     async fn run_collection(&self, expr: &CollectionOpExpression, scope: &Rc<Scope>, at: &Address, origin: &OpOrigin, event: &crate::call::CallEvent) -> Result<Binding, Stop> {
         let spelling = spelling(expr.op);
+        let function = self.collection_function(&expr.r#fn, spelling, scope, &origin.fn_path(expr))?;
+        let entries = self.parameter_entries(function.declaration_path(), function.params.len()).await?;
         let source = self.evaluate_slot(&expr.source, scope).await?;
         let source_trail = self.trail_or_none(&source.prov, scope);
         let Js::Array(list) = &source.value else {
@@ -424,7 +437,6 @@ impl Run<'_> {
         let (on_error, concurrency, initial) = read.map_err(|problem| {
             Stop::Thrown(Failure::engine("MOVENG_RUNTIME", format!("'{spelling}' was given settings it cannot run with — the checker should have caught this: {problem}")))
         })?;
-        let function = self.collection_function(&expr.r#fn, spelling, scope, &origin.fn_path(expr))?;
         let run = CollectionRun {
             op: Rc::new(expr.clone()),
             on_error,
@@ -437,6 +449,7 @@ impl Run<'_> {
             init,
             concurrency: width(concurrency),
             initial: width(initial),
+            entries: Some(entries),
         };
         let answers = vec![None; run.members.len()];
         let indices: Vec<usize> = (0..run.members.len()).collect();
@@ -584,6 +597,11 @@ impl Run<'_> {
             };
             at.declare(param.name.clone(), crate::record::bind_value(value, Some(Trail::default()), false));
         }
+        let entries = match &run.entries {
+            Some(entries) => entries.clone(),
+            None => self.parameter_entries(run.function.declaration_path(), run.function.params.len()).await?,
+        };
+        self.enter_parameters(entries, &run.function.params, &at).await?;
         let address = run.address.iter(index);
         let body = async {
             let named = run.function.named.as_deref();

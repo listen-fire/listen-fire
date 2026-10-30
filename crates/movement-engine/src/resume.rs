@@ -308,6 +308,7 @@ impl Run<'_> {
                     init: Js::Null,
                     concurrency: crate::collection::width(concurrency),
                     initial: crate::collection::width(initial),
+                    entries: None,
                 };
                 let boundary = Boundary::Member { site: site.clone(), index: descent_index, next, member, op: run.op.clone() };
                 spine.push(Spine::Member { caller, boundary, site, index: descent_index, next, member, run, scope: member_scope.clone() });

@@ -5,13 +5,11 @@ crm = connect acme_crm using acme
 
 # A company created in the CRM opens a decision record and waits for the
 # decision on it. A record deleted before anyone decides settles the wait
-# empty, and nothing is recorded.
+# empty: what follows the wait runs zero times, so nothing is recorded.
 function decide(company: <crm-[:Company]->>) {
   ask = write crm-[:Company]-> { Name: "Decide ${company.Name}" }
   a = await ask-[:Approvals]->
-  if (a.Decision != null) {
-    write crm-[:Company]-> { Name: "Decided ${a.Decision}" }
-  }
+  write crm-[:Company]-> { Name: "Decided ${a.Decision}" }
 }
 
 listen to crm {} fire decide

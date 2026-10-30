@@ -414,14 +414,15 @@ impl Run<'_> {
     /// `invokeClosure`: its captured scope, its parameters bound from
     /// `values` (a record as itself), its body at `address`.
     pub(crate) async fn invoke_closure(&self, closure: &Rc<Closure>, values: &[(String, Js)], address: &Address) -> Result<(Flow, Rc<Scope>), Stop> {
+        let entries = self.parameter_entries(&closure.code.path, closure.code.ast.params.len()).await?;
         let bound = values.iter().filter(|(_, v)| !v.is_nullish()).map(|(name, v)| (name.clone(), crate::record::bind_value(v.clone(), Some(Trail::default()), false))).collect();
-        self.invoke_closure_bound(closure, bound, address).await
+        self.invoke_closure_bound(closure, bound, entries, address).await
     }
 
     /// `invokeClosure` handed bindings (a named call's arguments, each
     /// already the binding `bindValue` makes of it); a parameter handed
-    /// none binds null.
-    pub(crate) async fn invoke_closure_bound(&self, closure: &Rc<Closure>, bound: Vec<(String, Binding)>, address: &Address) -> Result<(Flow, Rc<Scope>), Stop> {
+    /// none binds null. `entries` were taken before the arguments were read.
+    pub(crate) async fn invoke_closure_bound(&self, closure: &Rc<Closure>, bound: Vec<(String, Binding)>, entries: crate::waits::ParamEntries, address: &Address) -> Result<(Flow, Rc<Scope>), Stop> {
         // Its body's scope reads its code's file: a closure a park rebuilt
         // runs code of its own (crate::program `Parked`) over a scope the
         // park shares with the rest of the run.
@@ -438,7 +439,7 @@ impl Run<'_> {
                 .unwrap_or_else(|| crate::record::bind_value(Js::Null, Some(Trail::default()), false));
             child.declare(param.name.clone(), binding);
         }
-        self.enter_parameters(&closure.code.path, &closure.code.ast.params, &child).await?;
+        self.enter_parameters(entries, &closure.code.ast.params, &child).await?;
         let path = format!("{}/body", closure.code.path);
         let flow = self.body(&closure.code.ast.body, &child, address, &path, 0).await?;
         Ok((flow, child))

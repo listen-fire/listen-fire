@@ -381,6 +381,15 @@ fn cron_subscription(file: &str, listen: &Listen) -> Option<String> {
     Some(format!("cron:{file}:{}:{schedule}:{timezone}", listen.movement_name))
 }
 
+/// What a run names of the delivery its event came in: the delivery's
+/// receipt, and the arrival log's mark when it was kept (its trigger's waits
+/// read from there). None of either for an event that came in no delivery.
+#[derive(Clone, Copy, Default)]
+pub struct CameIn<'a> {
+    pub delivery_id: Option<&'a str>,
+    pub trigger_mark: Option<i64>,
+}
+
 /// The delivery an event came in, as its runs and its routing read it.
 #[derive(Clone, Copy, Default)]
 pub struct Delivered<'a> {
@@ -399,6 +408,11 @@ pub struct Delivered<'a> {
 }
 
 impl<'a> Delivered<'a> {
+    /// What a run it starts names of it.
+    pub fn came_in(&self) -> CameIn<'a> {
+        CameIn { delivery_id: self.id, trigger_mark: self.arrival_mark }
+    }
+
     /// What a kept event or a queued `fire_event` row says it came for,
     /// under delivery `id`. Rows from before rows named a connection or a
     /// subscription name none.
@@ -623,7 +637,7 @@ impl Session {
     pub async fn fire_event(&self, external: &str, event: &Js, dry_run: bool, delivered: Delivered<'_>) -> Result<Fired, String> {
         let set = self.file_set();
         let scope_keys = scope_keys_of(&set, external);
-        self.fire_to(&set, external, event, Arrival::Pushed, dry_run, delivered.id, delivered.arrival_mark, |l| delivered.reaches(l, &scope_keys)).await
+        self.fire_to(&set, external, event, Arrival::Pushed, dry_run, delivered.came_in(), |l| delivered.reaches(l, &scope_keys)).await
     }
 
     /// `fire_event`, to the listens `to` keeps of those the event reaches.
@@ -635,8 +649,7 @@ impl Session {
         event: &Js,
         arrival: Arrival,
         dry_run: bool,
-        delivery_id: Option<&str>,
-        trigger_mark: Option<i64>,
+        came_in: CameIn<'_>,
         to: impl Fn(&Listen) -> bool,
     ) -> Result<Fired, String> {
         let event_types = self.event_types_of(set, external).await?;
@@ -674,7 +687,7 @@ impl Session {
                 continue;
             }
             let trigger = trigger_event_of(&pipeline, external, event, &event_types, &iso(0));
-            match self.run_listen(set, &run_id, listen, trigger, dry_run, receipt.map(|key| (pipeline.as_str(), key)), delivery_id, trigger_mark).await? {
+            match self.run_listen(set, &run_id, listen, trigger, dry_run, receipt.map(|key| (pipeline.as_str(), key)), came_in).await? {
                 Some(mut outcome) => {
                     if let (Some(error), Some(untyped)) = (outcome.error.as_mut(), untyped_event_line(external, event, &event_types)) {
                         error.push_str(&format!("\n  {untyped}"));
@@ -696,7 +709,7 @@ impl Session {
             return Err(format!("no listen fires '{movement}' on manual: add `listen to manual fire {movement}` to run it with `listen-fire run {movement}`"));
         }
         let event = crate::units::manual_event(&iso(0), &self.user, text);
-        self.fire_to(&set, crate::units::MANUAL, &event, Arrival::Pushed, dry_run, None, None, |l| l.movement_name == movement).await
+        self.fire_to(&set, crate::units::MANUAL, &event, Arrival::Pushed, dry_run, CameIn::default(), |l| l.movement_name == movement).await
     }
 
     /// The cron unit's due ticks (scale from zero): for each cron listen, the
@@ -733,7 +746,7 @@ impl Session {
             let Some(due_ms) = parsed.latest_in(after_ms, now_ms) else { continue };
             let due = crate::units::iso_of(due_ms);
             let event = crate::units::tick_event(&due, schedule, timezone);
-            let fired = self.fire_to(set, crate::units::CRON, &event, Arrival::Pushed, false, None, None, |l| std::ptr::eq(l, &set.listens[index])).await?;
+            let fired = self.fire_to(set, crate::units::CRON, &event, Arrival::Pushed, false, CameIn::default(), |l| std::ptr::eq(l, &set.listens[index])).await?;
             self.store.save_inbound_checkpoint(&subscription, &Js::Obj(obj! { "after" => Js::str(&due) })).map_err(|e| e.to_string())?;
             outcomes.extend(fired.outcomes);
         }
@@ -790,7 +803,7 @@ impl Session {
             if event.get("eventType").and_then(Js::as_str).is_none() {
                 note_unlabelled_poll_event(&listen.adapter);
             }
-            let one = self.fire_to(set, &listen.adapter, event, Arrival::Polled, false, None, None, |l| std::ptr::eq(l, listen)).await?;
+            let one = self.fire_to(set, &listen.adapter, event, Arrival::Polled, false, CameIn::default(), |l| std::ptr::eq(l, listen)).await?;
             fired.outcomes.extend(one.outcomes);
             fired.redelivered.extend(one.redelivered);
         }
@@ -854,9 +867,8 @@ impl Session {
     /// Start the run and step its first segment. With a `receipt` (the
     /// listen and the event's key), the receipt and the run are one write:
     /// None, and nothing run, for an event the listen has run before. The
-    /// run names `delivery_id`, the delivery its event came in.
+    /// run names the delivery its event came in (`came_in`).
     #[allow(clippy::too_many_arguments)] // the file set it runs within, then the run's own inputs
-    #[allow(clippy::too_many_arguments)] // the run, its listen and event, then what the delivery it came in says
     async fn run_listen(
         &self,
         set: &FileSet,
@@ -865,8 +877,7 @@ impl Session {
         event: Js,
         dry_run: bool,
         receipt: Option<(&str, &str)>,
-        delivery_id: Option<&str>,
-        trigger_mark: Option<i64>,
+        came_in: CameIn<'_>,
     ) -> Result<Option<RunOutcome>, String> {
         let file = set.file(&listen.file);
         let fired_at = iso(0);
@@ -877,10 +888,10 @@ impl Session {
             movement_name: listen.movement_name.clone(),
             fired_at: fired_at.clone(),
             dry_run,
-            trigger_mark,
+            trigger_mark: came_in.trigger_mark,
         };
         let input = facts.to_js().to_json();
-        let start = RunStart { id: run_id, file: &file.name, movement: &facts.movement_name, started_at: &fired_at, input: &input, delivery_id };
+        let start = RunStart { id: run_id, file: &file.name, movement: &facts.movement_name, started_at: &fired_at, input: &input, delivery_id: came_in.delivery_id };
         match receipt {
             None => self.store.start_run(&start).map_err(|e| e.to_string())?,
             Some((listen, key)) => {
@@ -981,6 +992,10 @@ impl Session {
         let secrets = self.secrets();
         let externals = self.externals_in(set, &secrets);
         let segment_id = uuid::Uuid::new_v4().to_string();
+        let resumed_leaf = match &entry {
+            Entry::Resume { address, .. } => Some(address.clone()),
+            _ => None,
+        };
         let host = SegmentHost::new(SegmentHostParts {
             segment_id: segment_id.clone(),
             run_id: run_id.to_string(),
@@ -990,6 +1005,7 @@ impl Session {
             documents: &self.documents,
             user: self.user.clone(),
             public_url: self.public_url.clone(),
+            resumed_leaf,
         });
         let input = SegmentInput {
             source: &facts.source,
@@ -1360,7 +1376,7 @@ impl Session {
                 let delivery_id = payload.get("deliveryId").and_then(Js::as_str);
                 let delivered = Delivered::of_row(payload, delivery_id);
                 let scope_keys = scope_keys_of(set, &external);
-                let fired = self.fire_to(set, &external, &event, Arrival::Pushed, false, delivery_id, delivered.arrival_mark, |l| delivered.reaches(l, &scope_keys)).await?;
+                let fired = self.fire_to(set, &external, &event, Arrival::Pushed, false, delivered.came_in(), |l| delivered.reaches(l, &scope_keys)).await?;
                 for line in &fired.redelivered {
                     eprintln!("listen-fire: {line}");
                 }
@@ -1506,7 +1522,7 @@ impl Stepper for LeafStepper<'_> {
     async fn step(&self, request: StepRequest) -> StepOutcome {
         let completing = request.completing_address().to_string();
         let entry = match request {
-            StepRequest::Leaf { state, reenter, .. } => Entry::Resume { state, reenter },
+            StepRequest::Leaf { address, state, reenter } => Entry::Resume { address, state, reenter },
             StepRequest::Race { frame_address, state } => Entry::Settle { state, frame_address },
         };
         let recorded = self

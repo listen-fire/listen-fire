@@ -1,5 +1,5 @@
 {
-  "about": "The store's waits family: the arrival log, wait rows and their newly-matches bits (docs/contracts/store-slot.md, `waits.*`). Held by listen-fire's stores (crates/lf/src/waits.rs runs every case over the SQLite state file, and over Postgres when LF_TEST_PG names one) and by the engine's TypeScript stores. Each case runs on an empty store. A run or team name stands for a fresh id (a uuid) per case; every run named is started before the first step. `team` defaults to \"t\" and `adapter` to \"acme\". Marks and waits are named by `as` and referred to by that name. `at` and `before` are milliseconds from now. Steps: `mark` (waits.mark, kept as `as`); `log` (waits.log of `arrivals`, logged `at`; an arrival whose identity and version its record's edge already logged within the retention is not logged again, and one without an identity is never a repeat; `wakes` the parked waits it answers, in any order; an arrival's `identityIsSeqOf` names a listed arrival whose seq, as bare text, is its identity); `open` (waits.open since the mark `since`, kept as `as`; `same` names an earlier wait it must be); `arrivals` (waits.arrivals: `gone`, and `arrivals` in log order, each checked on the keys it gives, and kept by the name its `as` gives); `note` (waits.note, answering `counts`; `identityOf` names a listed arrival whose identity it notes, `identityIsSeqOf` one whose seq, as bare text, is the identity); `park` (parks.commit with `{ kind: \"wait\", waitId }` at `address`); `deleteLeaves` (parks.deleteLeaves); `drop` (leases.dropRunState); `sweep` (waits.sweep of what was logged before `before`, at most 1000).",
+  "about": "The store's waits family: the arrival log, wait rows and their newly-matches bits (docs/contracts/store-slot.md, `waits.*`). Held by listen-fire's stores (crates/lf/src/waits.rs runs every case over the SQLite state file, and over Postgres when LF_TEST_PG names one) and by the engine's TypeScript stores. Each case runs on an empty store. A run or team name stands for a fresh id (a uuid) per case; every run named is started before the first step. `team` defaults to \"t\" and `adapter` to \"acme\". Marks and waits are named by `as` and referred to by that name. `at` and `before` are milliseconds from now. Steps: `mark` (waits.mark, kept as `as`); `log` (waits.log of `arrivals`, logged `at`; an arrival whose identity and version its record's edge already logged within the retention is not logged again, and one without an identity is never a repeat; `wakes` the parked waits it answers, in any order; an arrival's `identityIsSeqOf` names a listed arrival whose seq, as bare text, is its identity); `open` (waits.open since the mark `since`, kept as `as`; `same` names an earlier wait it must be); `arrivals` (waits.arrivals: `gone`, and `arrivals` in log order, each checked on the keys it gives, and kept by the name its `as` gives); `note` (waits.note, answering `counts`; `identityOf` names a listed arrival whose identity it notes, `identityIsSeqOf` one whose seq, as bare text, is the identity); `note` may name the `leaf` its segment resumed; `park` (parks.commit with `{ kind: \"wait\", waitId }` at `address`); `claim` (parks.claimLeaf of the leaf at `address`, which must be parked); `finish` (parks.finishLeaf of the leaf at `address`, no fence); `lapse` (leases.claim of the run, as a process does after the one resuming its leaf died: a leaf left resuming is parked again); `deleteLeaves` (parks.deleteLeaves); `drop` (leases.dropRunState); `sweep` (waits.sweep of what was logged before `before`, at most 1000).",
   "cases": [
     {
       "case": "an arrival logged before its wait opens counts when the mark precedes it",
@@ -252,6 +252,40 @@
           ]
         },
         { "do": "arrivals", "wait": "later", "gone": false, "arrivals": [{ "identity": "k1", "version": "2" }, {}] }
+      ]
+    },
+    {
+      "case": "a note made by a segment resuming a leaf is kept when the leaf finishes, and dropped when the leaf is claimed again after that segment died",
+      "steps": [
+        { "do": "mark", "as": "m0" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m0" },
+        { "do": "park", "run": "run-1", "wait": "w", "address": "s1" },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1", "version": "1" }], "wakes": [{ "run": "run-1", "wait": "w", "address": "s1" }] },
+        { "do": "claim", "run": "run-1", "address": "s1" },
+        { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": true, "counts": true, "leaf": "s1" },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] },
+        { "do": "lapse", "run": "run-1" },
+        { "do": "claim", "run": "run-1", "address": "s1" },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "k1", "version": "1" }] },
+        { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": true, "counts": true, "leaf": "s1" },
+        { "do": "finish", "run": "run-1", "address": "s1" },
+        { "do": "park", "run": "run-1", "wait": "w", "address": "s1" },
+        { "do": "claim", "run": "run-1", "address": "s1" },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
+      ]
+    },
+    {
+      "case": "a note made by a segment that parks again at the leaf it resumed is kept with that park",
+      "steps": [
+        { "do": "mark", "as": "m0" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m0" },
+        { "do": "park", "run": "run-1", "wait": "w", "address": "s1" },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1", "version": "1" }], "wakes": [{ "run": "run-1", "wait": "w", "address": "s1" }] },
+        { "do": "claim", "run": "run-1", "address": "s1" },
+        { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": false, "counts": false, "leaf": "s1" },
+        { "do": "park", "run": "run-1", "wait": "w", "address": "s1" },
+        { "do": "claim", "run": "run-1", "address": "s1" },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
       ]
     }
   ]

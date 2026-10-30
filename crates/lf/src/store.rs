@@ -162,7 +162,8 @@ create table if not exists wait_seen (
   wait_id text not null,
   identity text not null,
   version text,
-  matched integer not null
+  matched integer not null,
+  leaf text
 );
 create index if not exists wait_seen_identity on wait_seen (wait_id, identity);
 create table if not exists work (
@@ -835,6 +836,7 @@ impl Store {
             };
             Self::put_leaf_in(db, run_id, address, kind.reason(), wake_at, state)?;
             Self::unpark_waits_in(db, run_id, address)?;
+            Self::keep_leaf_notes_in(db, run_id, address)?;
             match kind {
                 // The leaf is the truth; the work row only says when to look.
                 ParkKind::Timer { wake_at } => Self::enqueue_in(db, "resume_timer", &timer_work_key(run_id), &timer_work_payload(run_id), Some(wake_at))?,
@@ -846,6 +848,8 @@ impl Store {
         })
     }
 
+    /// The leaf, now resuming. What a segment that resumed it before noted
+    /// and never kept (it died) is dropped, so its arrivals are read again.
     pub fn claim_leaf(&self, run_id: &str, address: &str, reason: Option<&str>) -> Result<Option<(String, Js)>> {
         let sql = format!(
             "update leaf set status = 'resuming' where run_id = ? and address = ? and status = 'parked' {} returning reason, state",
@@ -853,7 +857,13 @@ impl Store {
         );
         let mut args: Vec<&str> = vec![run_id, address];
         args.extend(reason);
-        let row = self.db.query_row(&sql, params_from_iter(args), |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).optional()?;
+        let row = self.transaction(|db| {
+            let row = db.query_row(&sql, params_from_iter(args), |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).optional()?;
+            if row.is_some() {
+                Self::drop_leaf_notes_in(db, run_id, address)?;
+            }
+            Ok(row)
+        })?;
         row.map(|(reason, state)| Ok((reason_of(reason)?, parse_text(&state)?))).transpose()
     }
 
@@ -865,7 +875,7 @@ impl Store {
                 return Ok(());
             }
             db.execute("delete from leaf where run_id = ? and address = ? and status = 'resuming'", params![run_id, address])?;
-            Ok(())
+            Self::keep_leaf_notes_in(db, run_id, address)
         })
     }
 

@@ -19,7 +19,7 @@ use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Rerun, Result, RunRow, RunStart, StoreError,
 };
 use crate::store_wire::{Wire, delivery_params, event_run_params, int, num, open_wait_params, opt, park_params, rows, run_start_params, to_rows};
-use crate::waits::{DeliveryArrivals, NewArrival, OpenWait, WaitArrivals, WaitWake};
+use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait, WaitArrivals, WaitWake};
 
 /// The error code a fenced write answers when the run's lease is gone
 /// (`RunLeaseLost`), its `data` `{ runId }`.
@@ -264,8 +264,12 @@ impl RunHostStore for ProcessStore {
         let answer = self.call("waits.arrivals", obj! { "waitId" => s(wait_id) })?;
         WaitArrivals::from_wire(&answer).ok_or_else(|| self.malformed("waits.arrivals", &answer))
     }
-    fn note_arrival(&self, wait_id: &str, identity: &str, version: Option<&str>, matched: bool) -> Result<bool> {
-        self.flag("waits.note", obj! { "waitId" => s(wait_id), "identity" => s(identity), "version" => opt(version), "matched" => Js::Bool(matched) })
+    fn note_arrival(&self, noted: &Noted<'_>) -> Result<bool> {
+        let mut params = obj! { "waitId" => s(noted.wait_id), "identity" => s(noted.identity), "version" => opt(noted.version), "matched" => Js::Bool(noted.matched) };
+        if let Some(leaf) = noted.leaf {
+            params.insert("leaf".into(), s(leaf));
+        }
+        self.flag("waits.note", params)
     }
     fn sweep_arrivals(&self, before: &str, limit: i64) -> Result<i64> {
         const METHOD: &str = "waits.sweep";

@@ -45,6 +45,21 @@ pub struct NewArrival {
     pub gone: bool,
 }
 
+/// A wait's judgment of one arrival (`waits.note`).
+pub struct Noted<'a> {
+    pub wait_id: &'a str,
+    pub identity: &'a str,
+    pub version: Option<&'a str>,
+    /// Whether the arrival's record matched the wait's WHERE.
+    pub matched: bool,
+    /// The leaf the noting segment resumed, if it resumed one: the note is
+    /// kept only when that segment's progress is (`parks.finishLeaf`, or a
+    /// park at the leaf's address). Until then it is the segment's own; a
+    /// segment that dies leaves it unkept, and the leaf's next claim drops
+    /// it, so the arrival is read again rather than lost.
+    pub leaf: Option<&'a str>,
+}
+
 /// A wait to open: `since` is the mark it reads arrivals after.
 pub struct OpenWait<'a> {
     pub run_id: &'a str,
@@ -251,7 +266,8 @@ impl Store {
     /// Note that the wait judged this arrival, and whether its record
     /// matched. Whether it counts: it matched, and the record did not match
     /// at its last noted arrival. An arrival noted before counts no more.
-    pub fn note_arrival(&self, wait_id: &str, identity: &str, version: Option<&str>, matched: bool) -> Result<bool> {
+    pub fn note_arrival(&self, noted: &Noted<'_>) -> Result<bool> {
+        let Noted { wait_id, identity, version, matched, leaf } = *noted;
         self.transaction(|db| {
             Self::require_wait(db, wait_id)?;
             let noted = db
@@ -264,7 +280,7 @@ impl Store {
                 .query_row("select matched from wait_seen where wait_id = ? and identity = ? order by id desc limit 1", params![wait_id, identity], |r| r.get::<_, bool>(0))
                 .optional()?
                 .unwrap_or(false);
-            db.execute("insert into wait_seen (wait_id, identity, version, matched) values (?, ?, ?, ?)", params![wait_id, identity, version, matched])?;
+            db.execute("insert into wait_seen (wait_id, identity, version, matched, leaf) values (?, ?, ?, ?, ?)", params![wait_id, identity, version, matched, leaf])?;
             Ok(matched && !matched_before)
         })
     }
@@ -297,6 +313,20 @@ impl Store {
     /// no more, so it is never woken for a park it no longer holds.
     pub(crate) fn unpark_waits_in(db: &Connection, run_id: &str, address: &str) -> Result<()> {
         db.execute("update wait_row set address = null where run_id = ? and address = ?", params![run_id, address])?;
+        Ok(())
+    }
+
+    /// The notes a segment that resumed the run's leaf at `address` made,
+    /// kept: its progress past the leaf is.
+    pub(crate) fn keep_leaf_notes_in(db: &Connection, run_id: &str, address: &str) -> Result<()> {
+        db.execute("update wait_seen set leaf = null where leaf = ? and wait_id in (select id from wait_row where run_id = ?)", params![address, run_id])?;
+        Ok(())
+    }
+
+    /// The notes a segment that resumed the leaf at `address` made and never
+    /// kept, dropped as the leaf is claimed again: that segment died.
+    pub(crate) fn drop_leaf_notes_in(db: &Connection, run_id: &str, address: &str) -> Result<()> {
+        db.execute("delete from wait_seen where leaf = ? and wait_id in (select id from wait_row where run_id = ?)", params![address, run_id])?;
         Ok(())
     }
 
@@ -482,13 +512,23 @@ mod tests {
                 }
                 "note" => {
                     let identity = names.identity(step).unwrap_or_else(|| panic!("{at}: no identity"));
-                    let counts = store.note_arrival(&names.wait(text(step, "wait")), &identity, opt_text(step, "version"), flag(step, "matched")).unwrap();
+                    let wait_id = names.wait(text(step, "wait"));
+                    let noted = Noted { wait_id: &wait_id, identity: &identity, version: opt_text(step, "version"), matched: flag(step, "matched"), leaf: opt_text(step, "leaf") };
+                    let counts = store.note_arrival(&noted).unwrap();
                     assert_eq!(counts, flag(step, "counts"), "{at}: counts");
                 }
                 "park" => {
                     let (run, wait) = (names.id(text(step, "run")), names.wait(text(step, "wait")));
                     let park = Park { run_id: &run, address: text(step, "address"), state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } };
                     store.commit_park(&park).unwrap();
+                }
+                "claim" => {
+                    let claimed = store.claim_leaf(&names.id(text(step, "run")), text(step, "address"), None).unwrap();
+                    assert!(claimed.is_some(), "{at}: the leaf is parked");
+                }
+                "finish" => store.finish_leaf(&names.id(text(step, "run")), text(step, "address"), None).unwrap(),
+                "lapse" => {
+                    assert!(store.claim_lease(&names.id(text(step, "run")), 60_000).unwrap().is_some(), "{at}: the lease is free");
                 }
                 "deleteLeaves" => {
                     let addresses: Vec<String> = list(step, "addresses").iter().map(|a| a.as_str().unwrap().to_string()).collect();
@@ -533,6 +573,8 @@ mod tests {
         opening_a_wait_its_run_already_has_on_that_records_edge_is_the_same_wait_from_its_first_mark,
         rows_drop_with_their_run_and_the_sweep_spares_what_a_live_row_reads,
         an_arrival_logged_again_is_not_logged_twice_and_one_without_an_identity_is_never_a_repeat,
+        a_note_made_by_a_segment_resuming_a_leaf_is_kept_when_the_leaf_finishes_and_dropped_when_the_leaf_is_claimed_again_after_that_segment_died,
+        a_note_made_by_a_segment_that_parks_again_at_the_leaf_it_resumed_is_kept_with_that_park,
     }
 
     #[test]

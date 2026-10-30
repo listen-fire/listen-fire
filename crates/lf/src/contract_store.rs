@@ -27,7 +27,7 @@ use crate::obj;
 use crate::slot_server::{Listen, Refusal};
 use crate::store::{ClaimDue, DeliveryQuery, NewWork, Park, Release, Rerun, RunStart, StoreError, iso};
 use crate::store_wire::{Wire, new_delivery, num, opt, park_kind, rows, to_rows};
-use crate::waits::{DeliveryArrivals, NewArrival, OpenWait};
+use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait};
 
 /// The store slot's methods (docs/contracts/store-slot.md), as its manifest lists them.
 pub const STORE_METHODS: &[&str] = &[
@@ -326,7 +326,10 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
             Ok(Js::from(obj! { "waitId" => Js::str(store.open_wait(&wait)?) }))
         }
         "waits.arrivals" => Ok(store.wait_arrivals(p.str("waitId")?)?.to_wire()),
-        "waits.note" => Ok(Js::Bool(store.note_arrival(p.str("waitId")?, p.str("identity")?, p.opt_str("version")?, p.flag("matched"))?)),
+        "waits.note" => {
+            let noted = Noted { wait_id: p.str("waitId")?, identity: p.str("identity")?, version: p.opt_str("version")?, matched: p.flag("matched"), leaf: p.opt_str("leaf")? };
+            Ok(Js::Bool(store.note_arrival(&noted)?))
+        }
         "waits.sweep" => Ok(Js::Num(store.sweep_arrivals(p.str("before")?, p.int("limit")?)?.into())),
 
         "leases.claim" => Ok(match store.claim_lease(p.str("runId")?, p.int("ttlMs")?)? {

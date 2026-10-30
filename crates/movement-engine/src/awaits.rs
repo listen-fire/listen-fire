@@ -8,13 +8,18 @@
 //! - **A combinator**: crate::combinator.
 //! - **An edge of a record**: read off the wait the record opened when it
 //!   entered the run (crate::waits), in this order:
-//!   1. the record's wait on the edge (a gone record settles empty);
+//!   1. the record's wait on the edge. A gone record settles the wait
+//!      empty: the scope the `await` is in ends quietly, so the code after
+//!      it runs zero times (a block's iteration, a call's body, a
+//!      combinator's arm, which settles null; else the movement's body);
 //!   2. the WHERE's parts that read only the run captured, once, when the
 //!      await is first reached (re-entered, the values it parked with);
 //!   3. a plain `await` on an edge that can be listed takes the first match
-//!      the listing holds (`listsFirst`), on its first reach only;
+//!      the listing holds (`listsFirst`), on its first reach only. Two such
+//!      awaits on one record's edge share its wait and both take that first
+//!      match: "the existing match, or else the first to arrive";
 //!   4. else the wait's arrivals, in log order, each judged and noted: the
-//!      first that counts is bound; a gone record settles empty;
+//!      first that counts is bound; a gone record settles empty, as in 1;
 //!   5. else the run parks on the wait (`commitAwaitPark`), reads the
 //!      arrivals once more, and is woken (`park.wake`) when one landed while
 //!      it parked. The resume re-enters the await, which judges again.
@@ -228,21 +233,18 @@ impl Run<'_> {
         };
         // An arrival's landing is read through the adapter itself.
         let raw = Rc::new(crate::traverse::Read { raw: true, ..(*waited.read).clone() });
-        let settle_empty = || {
+        // A rehearsal opens no wait: its await binds the empty landing at once.
+        if self.input.dry_run {
             if let Some(name) = binding_name {
                 scope.declare(name, awaited_landing(&waited.adapter_type, &raw, &Js::object(JsObject::new()), None));
             }
-            Ok(())
-        };
-        // A rehearsal opens no wait: its await settles empty at once.
-        if self.input.dry_run {
-            return settle_empty();
+            return Ok(());
         }
         let address = at.encode();
         let reentered = self.reentered_at(&address);
         let wait_id = match self.waits_of(&waited.holder).get(edge).cloned() {
             Some(WaitRef::Open(id)) => id,
-            Some(WaitRef::Gone) => return settle_empty(),
+            Some(WaitRef::Gone) => return Err(Stop::EndedQuietly),
             None if !self.serves("park.waits.open") => {
                 return Err(Stop::Thrown(Failure::unsupported("await (a wait)", "this run has no wait sink — an await needs the durable trigger-run substrate")));
             }
@@ -279,7 +281,7 @@ impl Run<'_> {
         for (index, value) in captured.iter().enumerate() {
             judging.declare(captured_name(index), Binding::Value(ValueBinding { value: value.clone(), trail: Some(Trail::default()), many: false }));
         }
-        let judge = Judge { wait_id: &wait_id, filter: filter.as_ref(), alias: alias.as_deref(), scope: &judging, adapter_type: &waited.adapter_type, read: &raw };
+        let judge = Judge { wait_id: &wait_id, filter: filter.as_ref(), alias: alias.as_deref(), scope: &judging, adapter_type: &waited.adapter_type, read: &waited.read, raw: &raw };
         if reentered.is_none() && self.checked.stamp(path) == Some(Stamp::ListsFirst) {
             let mut listing = step.clone();
             listing.expression_filter = filter.clone().map(Box::new);
@@ -302,7 +304,7 @@ impl Run<'_> {
                 }
                 return Ok(());
             }
-            Judged::Gone => return settle_empty(),
+            Judged::Gone => return Err(Stop::EndedQuietly),
             Judged::Pending => {}
         }
         if !self.serves("park.sink.commitAwaitPark") {
@@ -649,11 +651,17 @@ struct Judge<'j> {
     alias: Option<&'j str>,
     scope: &'j Rc<Scope>,
     adapter_type: &'j str,
+    /// The graph the awaited record was written or read in: an arrival
+    /// naming its record is read through it, as a listed member is.
     read: &'j Rc<crate::traverse::Read>,
+    /// The adapter itself: an arrival naming no record is read through it.
+    raw: &'j Rc<crate::traverse::Read>,
 }
 
 /// A logged arrival's landing (`{recordId?, recordType?, fields}`) as the
-/// record an await binds.
+/// record an await binds. One naming its record is that record, as the
+/// listing would have landed it, so a walk, a write or an `await` off it
+/// reaches it whichever way it was bound.
 fn arrival_landing(judge: &Judge<'_>, landing: &Js) -> Binding {
     let fields = match crate::unique::get(landing, "fields") {
         fields @ Js::Object(_) => fields,
@@ -663,7 +671,13 @@ fn arrival_landing(judge: &Judge<'_>, landing: &Js) -> Binding {
         record_type @ Js::String(_) => Some(record_type),
         _ => None,
     };
-    awaited_landing(judge.adapter_type, judge.read, &fields, record_type)
+    match crate::unique::get(landing, "recordId") {
+        Js::String(record_id) if !record_id.is_empty() => {
+            let position = crate::traverse::stable_position(Js::str(judge.adapter_type), record_type.unwrap_or_else(|| Js::str("Response")), Js::String(record_id), fields);
+            Binding::Landed(Rc::new(crate::bindings::Landed::new(position, None, judge.read.clone())))
+        }
+        _ => awaited_landing(judge.adapter_type, judge.raw, &fields, record_type),
+    }
 }
 
 /// A listed member's identity and version, as the edge declares them (its

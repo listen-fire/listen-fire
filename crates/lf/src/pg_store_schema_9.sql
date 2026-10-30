@@ -37,7 +37,10 @@ CREATE TABLE lf.wait_seen (
   wait_id uuid NOT NULL REFERENCES lf.wait_row(id) ON DELETE CASCADE,
   identity text NOT NULL,
   version text,
-  matched boolean NOT NULL
+  matched boolean NOT NULL,
+  -- The leaf whose resuming segment noted it, until that segment's progress
+  -- is kept (its leaf finished, or parked again): null once kept.
+  leaf text
 );
 CREATE INDEX wait_seen_identity_idx ON lf.wait_seen (wait_id, identity);
 -- One transaction-scoped lock per record's edge: logging an arrival there and

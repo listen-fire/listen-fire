@@ -201,13 +201,27 @@ async function runWaitsCase(store: RpcStoreBackend, steps: Record<string, unknow
         break;
       }
       case 'note': {
-        const params = { waitId: wait(text(step, 'wait')), identity: identityIn(step), version: step.version ?? null, matched: step.matched === true };
+        const leaf = typeof step.leaf === 'string' ? { leaf: step.leaf } : {};
+        const params = { waitId: wait(text(step, 'wait')), identity: identityIn(step), version: step.version ?? null, matched: step.matched === true, ...leaf };
         assert.equal(await store.call('waits.note', params, z.boolean()), step.counts === true, `${at}: counts`);
         break;
       }
       case 'park': {
         const park = { kind: 'wait', waitId: wait(text(step, 'wait')) };
         await store.call('parks.commit', { runId: id(text(step, 'run')), address: text(step, 'address'), state: null, fence: null, park }, z.null());
+        break;
+      }
+      case 'claim': {
+        const claimed = await store.call('parks.claimLeaf', { runId: id(text(step, 'run')), address: text(step, 'address'), reason: null }, z.unknown());
+        assert.notEqual(claimed, null, `${at}: the leaf is parked`);
+        break;
+      }
+      case 'finish':
+        await store.call('parks.finishLeaf', { runId: id(text(step, 'run')), address: text(step, 'address'), fence: null }, z.null());
+        break;
+      case 'lapse': {
+        const lease = await store.call('leases.claim', { runId: id(text(step, 'run')), ttlMs: 60_000 }, z.unknown());
+        assert.notEqual(lease, null, `${at}: the lease is free`);
         break;
       }
       case 'deleteLeaves':

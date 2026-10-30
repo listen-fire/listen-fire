@@ -248,8 +248,10 @@ pub trait Store {
     }
     /// The arrival log's mark now: every arrival logged after this answer is
     /// above it. The waits family (`park.waits`) is what an `await` on an
-    /// adapter's listenable edge reads; a store without it fails such a run
-    /// at the await.
+    /// adapter's listenable edge reads. A store that keeps parks and leaves
+    /// it unserved fails such a run where the awaited record enters it (the
+    /// mark is asked for before the record's write or read), not at the
+    /// await.
     fn wait_mark(&mut self) -> HostFuture<i64> {
         unserved("park.waits.mark")
     }
