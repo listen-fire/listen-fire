@@ -123,6 +123,14 @@ interface Answer {
   body: unknown;
 }
 
+/** Headers signing a body as Slack does, at `timestamp` (seconds). */
+function slackSigned(timestamp: number): (body: Buffer) => Record<string, string> {
+  return (body) => {
+    const signature = createHmac('sha256', SECRET).update(`v0:${timestamp}:${body.toString('utf-8')}`).digest('hex');
+    return { 'x-slack-request-timestamp': String(timestamp), 'x-slack-signature': `v0=${signature}` };
+  };
+}
+
 async function post(
   backend: InboundContractBackend,
   path: string,
@@ -350,12 +358,16 @@ export const INBOUND_CONTRACT_CASES: InboundContractCase[] = [
     name: 'a slack_v0 delivery verifies over its timestamp and body',
     async run(backend) {
       await arrangeAnd(backend);
-      const answer = await post(backend, door('contract_slack', 'sub-slack'), json(TWO_EVENTS), (body) => {
-        const timestamp = '1700000000';
-        const signature = createHmac('sha256', SECRET).update(`v0:${timestamp}:${body.toString('utf-8')}`).digest('hex');
-        return { 'x-slack-request-timestamp': timestamp, 'x-slack-signature': `v0=${signature}` };
-      });
+      const answer = await post(backend, door('contract_slack', 'sub-slack'), json(TWO_EVENTS), slackSigned(Math.floor(Date.now() / 1000)));
       assert.deepEqual([answer.status, answer.body], [200, { ok: true, eventsProcessed: 2 }]);
+    },
+  },
+  {
+    name: 'a slack_v0 delivery signed more than five minutes ago is refused as a replay',
+    async run(backend) {
+      await arrangeAnd(backend);
+      const answer = await post(backend, door('contract_slack', 'sub-slack'), json(TWO_EVENTS), slackSigned(Math.floor(Date.now() / 1000) - 6 * 60));
+      assert.equal(answer.status, 401);
     },
   },
   {

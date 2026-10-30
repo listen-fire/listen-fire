@@ -252,6 +252,15 @@ export const SLACK_INTERACTION_EDGE_NAMES = { actions: 'Actions', by: 'By' } as 
 export const SLACK_ACTION_TYPE_ID = 'slack:action';
 export const SLACK_ACTION_FIELDS = { value: 'value', text: 'text' } as const;
 
+/** A message's listenable edge an `awaitKeys` request names, by its natural
+ *  name or its field id; `undefined` for any other edge. */
+function listenableEdgeOf(edge: string): typeof SLACK_INTERACTIONS_EDGE_NAME | typeof SLACK_REPLIES_EDGE_NAME | undefined {
+  const name = naturalName(edge);
+  if (name === SLACK_INTERACTIONS_EDGE_NAME || edge === SLACK_MESSAGE_THREAD_EDGES.interactions) return SLACK_INTERACTIONS_EDGE_NAME;
+  if (name === SLACK_REPLIES_EDGE_NAME || edge === SLACK_MESSAGE_THREAD_EDGES.replies) return SLACK_REPLIES_EDGE_NAME;
+  return undefined;
+}
+
 /**
  * The `Timestamp` field's value: Slack's `ts` (epoch seconds, microseconds
  * after the point) read as the instant it denotes. The raw `ts` keeps flowing
@@ -698,8 +707,9 @@ export class SlackAdapter extends BaseAdapter {
             writable: true,
             listenable: true,
             cursor: false,
-            // A reply's `ts` names it within its channel.
-            identity: SLACK_MESSAGE_TIMESTAMP_NAME,
+            // No identity field: a reply's record id, `channel:ts`, names it
+            // both listed and announced. Its `Timestamp` reads as an instant
+            // to the millisecond, which two replies can share.
             resolvesEmpty: true,
             // `conversations.replies` answers oldest-first and the hop only
             // drops the root message from that page — it never reorders.
@@ -720,6 +730,7 @@ export class SlackAdapter extends BaseAdapter {
             readable: false,
             listenable: true,
             cursor: false,
+            // The press's `trigger_id`, which Slack issues once per press.
             identity: 'Id',
             resolvesEmpty: true,
             literalsFrom: [{ at: [SLACK_INTERACTION_EDGE_NAMES.actions, 'Value'], from: 'Buttons[].Value' }],
@@ -1725,21 +1736,21 @@ export class SlackAdapter extends BaseAdapter {
   // (`preprocessInbound`'s `arrivals`, inbound.ts).
   readonly arrivals: ArrivalsCapability = {
     awaitKeys: async ({ edge, heads }: { edge: string; heads: AwaitHead[] }): Promise<AwaitKey[]> => {
-      const name = naturalName(edge);
-      const keyOf =
-        name === SLACK_INTERACTIONS_EDGE_NAME || edge === SLACK_MESSAGE_THREAD_EDGES.interactions
-          ? (head: AwaitHead) => reactionAnchorFromParent({ externalId: head.recordId, data: head.headData })
-          : name === SLACK_REPLIES_EDGE_NAME || edge === SLACK_MESSAGE_THREAD_EDGES.replies
-            ? (head: AwaitHead) => {
-                const { channelId, threadTs } = replyAnchorFromParent({ externalId: head.recordId, data: head.headData });
-                return { channelId, ts: threadTs };
-              }
-            : undefined;
-      if (keyOf === undefined) {
-        throw new Error(
-          `SlackAdapter.awaitKeys: '${edge}' is not a listenable edge (only '${SLACK_INTERACTIONS_EDGE_NAME}' and '${SLACK_REPLIES_EDGE_NAME}').`,
-        );
-      }
+      const keyOf = (head: AwaitHead): { channelId: string | undefined; ts: string } => {
+        const parent = { externalId: head.recordId, data: head.headData };
+        switch (listenableEdgeOf(edge)) {
+          case SLACK_INTERACTIONS_EDGE_NAME:
+            return reactionAnchorFromParent(parent);
+          case SLACK_REPLIES_EDGE_NAME: {
+            const { channelId, threadTs } = replyAnchorFromParent(parent);
+            return { channelId, ts: threadTs };
+          }
+          case undefined:
+            throw new Error(
+              `SlackAdapter.awaitKeys: '${edge}' is not a listenable edge (only '${SLACK_INTERACTIONS_EDGE_NAME}' and '${SLACK_REPLIES_EDGE_NAME}').`,
+            );
+        }
+      };
       return heads.map((head) => {
         const { channelId, ts } = keyOf(head);
         if (channelId === undefined) {

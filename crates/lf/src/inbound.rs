@@ -31,6 +31,9 @@ pub use crate::store::DeliverySource;
 const UNREGISTERED_SECRET: &str = "pending";
 /// Slack sends the signed timestamp beside the signature; the scheme fixes it.
 const SLACK_TIMESTAMP_HEADER: &str = "x-slack-request-timestamp";
+/// How far a Slack timestamp may be from now, either way, before the request
+/// is refused as a replay (Slack's own recommendation: five minutes).
+const SLACK_REPLAY_WINDOW_SECS: i64 = 5 * 60;
 /// The most items one push to either door may carry (`ADAPTER_DOOR_MAX_BATCH`).
 const DOOR_MAX_BATCH: usize = 1000;
 
@@ -51,7 +54,8 @@ pub enum Scheme {
     /// HMAC-SHA256 as hex or base64, an optional `sha256=` prefix in any
     /// case; with no key configured any delivery verifies.
     AffinityHexOrB64,
-    /// Slack's `v0:{timestamp}:{body}`, `v0=` prefix optional; no replay window.
+    /// Slack's `v0:{timestamp}:{body}`, `v0=` prefix optional; a timestamp
+    /// more than five minutes from now is refused as a replay.
     SlackV0,
     /// The token echoed in a header, compared in constant time; no secret
     /// never verifies.
@@ -235,6 +239,16 @@ pub fn same_secret(presented: &str, expected: &str) -> bool {
     same_bytes(&Sha256::digest(presented.as_bytes()), &Sha256::digest(expected.as_bytes()))
 }
 
+/// Whether Slack's request timestamp (whole seconds since the epoch) is
+/// within the replay window of `now`.
+fn slack_timestamp_is_fresh(timestamp: &str, now: i64) -> bool {
+    timestamp.trim().parse::<i64>().is_ok_and(|sent| (now - sent).abs() <= SLACK_REPLAY_WINDOW_SECS)
+}
+
+fn unix_now_secs() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
 /// Slack's packed `{timestamp}:{signature}`, split at the first colon.
 fn verify_slack_packed(raw_body: &[u8], packed: &str, secret: &str) -> bool {
     let Some(idx) = packed.find(':').filter(|i| *i > 0) else { return false };
@@ -271,7 +285,7 @@ fn check(scheme: Scheme, raw_body: &[u8], signature: &str, headers: &[(String, S
         }
         Scheme::SlackV0 => {
             let Some(timestamp) = header(headers, SLACK_TIMESTAMP_HEADER) else { return false };
-            !signature.is_empty() && verify_slack_packed(raw_body, &format!("{timestamp}:{signature}"), secret)
+            !signature.is_empty() && slack_timestamp_is_fresh(timestamp, unix_now_secs()) && verify_slack_packed(raw_body, &format!("{timestamp}:{signature}"), secret)
         }
         Scheme::TelegramSecretToken => !secret.is_empty() && !signature.is_empty() && same_bytes(secret.as_bytes(), signature.as_bytes()),
         Scheme::Remote => {
@@ -919,8 +933,27 @@ mod tests {
         assert!(ok(Scheme::TelegramSecretToken, &[("x-telegram-bot-api-secret-token", "tok")], "tok"));
         let airtable = to_hex(&hmac_sha256(&base64_lenient("c2VjcmV0"), BODY));
         assert!(ok(Scheme::AirtableMac, &[("x-airtable-content-mac", &format!("hmac-sha256={airtable}"))], "c2VjcmV0"));
-        let slack = to_hex(&hmac_sha256(b"s3cret", format!("v0:17:{}", std::str::from_utf8(BODY).unwrap()).as_bytes()));
-        assert!(ok(Scheme::SlackV0, &[("x-slack-request-timestamp", "17"), ("x-slack-signature", &format!("v0={slack}"))], "s3cret"));
+        let now = unix_now_secs().to_string();
+        let slack = to_hex(&hmac_sha256(b"s3cret", format!("v0:{now}:{}", std::str::from_utf8(BODY).unwrap()).as_bytes()));
+        assert!(ok(Scheme::SlackV0, &[("x-slack-request-timestamp", &now), ("x-slack-signature", &format!("v0={slack}"))], "s3cret"));
+    }
+
+    #[test]
+    fn a_slack_request_more_than_five_minutes_from_now_is_refused_as_a_replay() {
+        let no_headers: Vec<String> = Vec::new();
+        let signed_at = |timestamp: i64| {
+            let timestamp = timestamp.to_string();
+            let signature = to_hex(&hmac_sha256(b"s3cret", format!("v0:{timestamp}:{}", std::str::from_utf8(BODY).unwrap()).as_bytes()));
+            verify_with_scheme(Scheme::SlackV0, BODY, &headers(&[("x-slack-request-timestamp", &timestamp), ("x-slack-signature", &format!("v0={signature}"))]), "s3cret", &no_headers)
+        };
+        let now = unix_now_secs();
+        assert!(signed_at(now), "a fresh request");
+        assert!(signed_at(now - 4 * 60), "four minutes old");
+        assert!(!signed_at(now - 6 * 60), "six minutes old, though signed right");
+        assert!(!signed_at(now + 6 * 60), "six minutes ahead");
+        assert!(!signed_at(17), "the epoch's first minute");
+        assert!(slack_timestamp_is_fresh("1000", 1300) && !slack_timestamp_is_fresh("1000", 1301));
+        assert!(!slack_timestamp_is_fresh("soon", 1000));
     }
 
     #[test]

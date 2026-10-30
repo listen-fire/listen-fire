@@ -1345,12 +1345,12 @@ impl<'c> Checker<'c> {
     }
 }
 
-/// An awaited walk binds its landing on the node plane: maybe empty where its
-/// last edge can settle empty, a record nobody can type where it cannot be walked.
+/// An awaited walk binds its landing on the node plane, present: a wait that
+/// settles empty ends its scope rather than answering, so the name is never
+/// absent where it is read. A walk nobody can type binds a record nobody can type.
 fn awaited_walk(walk: Option<crate::families::walks::HeadWalk>) -> Bound {
-    let Some(landed) = walk.as_ref().and_then(|w| w.landed.clone()) else { return Bound { record: true, ..Bound::default() } };
-    let resolves_empty = walk.and_then(|w| w.last_edge_schema).is_some_and(|e| e.resolves_empty == Some(true));
-    Bound { pos: Some(if resolves_empty { Position::MaybeEmpty(Box::new(landed)) } else { landed }), ..Bound::default() }
+    let Some(landed) = walk.and_then(|w| w.landed) else { return Bound { record: true, ..Bound::default() } };
+    Bound { pos: Some(landed), ..Bound::default() }
 }
 
 /// An `until` binds what its condition returns; a condition nobody can type

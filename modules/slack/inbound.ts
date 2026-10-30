@@ -105,6 +105,10 @@ export const SLACK_INBOUND_OBJECT_ID = 'slack:message';
 /** The inner-event types that are a message (and so a `create`). */
 export const SLACK_MESSAGE_EVENT_TYPES = ['message', 'app_mention'] as const;
 
+function isSlackMessageEventType(type: string): type is (typeof SLACK_MESSAGE_EVENT_TYPES)[number] {
+  return SLACK_MESSAGE_EVENT_TYPES.some((messageType) => messageType === type);
+}
+
 /** One delivered event. */
 export interface SlackDelivery {
   /** The inner event's `type`, verbatim (`message`, `app_mention`, …). */
@@ -147,7 +151,7 @@ function changeTypeOf(eventType: string): 'create' | 'update' | 'delete' | undef
  */
 export function slackInboundEvents(body: unknown): DiscriminableEvent[] {
   return parseSlackDeliveries(body).map((delivery) => {
-    const changeType = (SLACK_MESSAGE_EVENT_TYPES as readonly string[]).includes(delivery.eventType)
+    const changeType = isSlackMessageEventType(delivery.eventType)
       ? ('create' as const)
       : changeTypeOf(delivery.eventType);
     return {
@@ -210,7 +214,7 @@ const slackBlockActionsSchema = z
   .object({
     type: z.literal('block_actions'),
     trigger_id: z.string().min(1),
-    user: z.object({ id: z.string() }).passthrough(),
+    user: z.object({ id: z.string(), username: z.string().optional(), name: z.string().optional(), team_id: z.string().optional() }).passthrough(),
     container: z.object({ channel_id: z.string().optional(), message_ts: z.string().optional() }).passthrough().optional(),
     channel: z.object({ id: z.string() }).passthrough().optional(),
     message: z.object({ ts: z.string() }).passthrough().optional(),
@@ -251,14 +255,16 @@ function slackAction(action: z.infer<typeof slackActionSchema>): SlackActionData
   };
 }
 
+/** A form-encoded interaction delivery: its JSON in the `payload` field. */
+const slackInteractionFormSchema = z.object({ payload: z.string() }).passthrough();
+
 /** The `block_actions` payload a form-encoded delivery carries, if it is one. */
 function blockActionsOf(raw: unknown): z.infer<typeof slackBlockActionsSchema> | undefined {
-  if (!raw || typeof raw !== 'object') return undefined;
-  const payload = (raw as { payload?: unknown }).payload;
-  if (typeof payload !== 'string') return undefined;
+  const form = slackInteractionFormSchema.safeParse(raw);
+  if (!form.success) return undefined;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(payload);
+    parsed = JSON.parse(form.data.payload);
   } catch {
     return undefined;
   }
@@ -271,16 +277,16 @@ function interactionArrival(press: z.infer<typeof slackBlockActionsSchema>): Arr
   const channel = press.container?.channel_id ?? press.channel?.id;
   const ts = press.container?.message_ts ?? press.message?.ts;
   if (channel === undefined || ts === undefined) return undefined;
-  const { id, username, name, team_id } = press.user as { id: string; username?: unknown; name?: unknown; team_id?: unknown };
+  const { id, username, name, team_id } = press.user;
   const fields: SlackInteractionData = {
     id: press.trigger_id,
     at: press.actions[0]?.action_ts ?? null,
     actions: press.actions.map(slackAction),
     user: {
       id,
-      ...(typeof username === 'string' ? { username } : {}),
-      ...(typeof name === 'string' ? { name } : {}),
-      ...(typeof team_id === 'string' ? { team_id } : {}),
+      ...(username !== undefined ? { username } : {}),
+      ...(name !== undefined ? { name } : {}),
+      ...(team_id !== undefined ? { team_id } : {}),
     },
   };
   return {
@@ -292,9 +298,11 @@ function interactionArrival(press: z.infer<typeof slackBlockActionsSchema>): Arr
 }
 
 /** What one Events API event says arrived: a thread reply on its root's
- *  `Replies`; a deleted message the end of both its edges. */
+ *  `Replies`; a deleted message the end of both its edges. A reply that
+ *  mentions the app comes twice, as a `message` and an `app_mention`, under
+ *  the one identity, so the second is a repeat. */
 function eventArrivals(event: z.infer<typeof slackInnerEventSchema>): Arrival[] {
-  if (event.type !== 'message' || event.channel === undefined) return [];
+  if (!isSlackMessageEventType(event.type) || event.channel === undefined) return [];
   const channel = event.channel;
   if (event.subtype === 'message_deleted') {
     const deleted = typeof event.deleted_ts === 'string' ? event.deleted_ts : undefined;

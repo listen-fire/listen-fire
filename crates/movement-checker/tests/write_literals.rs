@@ -5,7 +5,10 @@
 //! is not a literal gives the field its declared type, with a warning naming
 //! the path. Every rule is checked on two catalog shapes: a chat message with
 //! buttons whose answer's value is one hop away (`Actions`), and a poll with
-//! options whose vote's choice is on the vote itself.
+//! options whose vote's choice is on the vote itself. Both edges settle empty
+//! when their message or poll is deleted (`resolvesEmpty`), as Slack's do: an
+//! awaited answer is still present where it is read, since a wait that settles
+//! empty ends its scope.
 
 use movement_checker::families::writes::literals::parse_write_path;
 use movement_checker::{CheckOptions, Diagnostic, check_source};
@@ -15,10 +18,11 @@ const CHAT: &str = r#"{"adapters":{
   "chat":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
     "Channel":{"properties":{"Name":"text"},"edges":{"Messages":{"target":"Message","writable":true}}},
     "Message":{"properties":{"Message":"text","Timestamp":"text"},"edges":{
-      "Interactions":{"target":"Interaction","readable":false,"listenable":true,"identity":"Id",
+      "Interactions":{"target":"Interaction","readable":false,"listenable":true,"resolvesEmpty":true,"identity":"Id",
         "literalsFrom":[{"at":["Actions","Value"],"from":"Buttons[].Value"}]}}},
-    "Interaction":{"properties":{"Id":"text","User":"text"},"edges":{"Actions":{"target":"Action"}}},
-    "Action":{"properties":{"Text":"text","Value":"text"},"edges":{}}},
+    "Interaction":{"properties":{"Id":"text","User":"text"},"edges":{"Actions":{"target":"Action"},"By":{"target":"Member"}}},
+    "Action":{"properties":{"Text":"text","Value":"text"},"edges":{}},
+    "Member":{"properties":{"Name":"text"},"edges":{}}},
     "collections":{},
     "writableRoots":{"Message":{"fields":{"Message":"text",
       "Buttons":{"kind":"list","of":{"kind":"dict","of":"text"}}},
@@ -29,7 +33,7 @@ const POLL: &str = r#"{"adapters":{
   "polls":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
     "Board":{"properties":{"Title":"text"},"edges":{"Polls":{"target":"Poll","writable":true}}},
     "Poll":{"properties":{"Question":"text"},"edges":{
-      "Votes":{"target":"Vote","readable":false,"listenable":true,"identity":"Voter",
+      "Votes":{"target":"Vote","readable":false,"listenable":true,"resolvesEmpty":true,"identity":"Voter",
         "literalsFrom":[{"at":["Choice"],"from":"Options[].Key"}]}}},
     "Vote":{"properties":{"Voter":"text","Choice":"text"},"edges":{}}},
     "collections":{},
@@ -138,6 +142,15 @@ fn one_of_two_answers_takes_the_values_of_either() {
     assert_eq!(check(CHAT, chat), ["MOV_ENUM_UNKNOWN_VALUE 9:9-9:46 \"maybe\" isn't a value of enum (yes | no) — expected one of: yes | no."]);
     let poll = "  p = write board-[:Polls]-> { Question: \"P?\", Options: [{ Key: \"yes\" }] }\n  q = write board-[:Polls]-> { Question: \"Q?\", Options: [{ Key: \"no\" }] }\n  v = await p-[:Votes]->\n  w = await q-[:Votes]->\n  x = only([v, w])\n  if (x.Choice == \"no\") { return 1 }\n  if (x.Choice == \"maybe\") { return 2 }\n";
     assert_eq!(check(POLL, poll), ["MOV_ENUM_UNKNOWN_VALUE 8:7-8:26 \"maybe\" isn't a value of enum (yes | no) — expected one of: yes | no."]);
+}
+
+#[test]
+fn an_awaited_answer_is_present_where_it_is_read() {
+    // The expense approval's shape: the await in a race arm, walked off unguarded.
+    let chat = "  msg = write ch-[:Messages]-> { Message: \"Approve?\", Buttons: [{ Text: \"Approve\", Value: \"approve\" }, { Text: \"Reject\", Value: \"reject\" }] }\n  r = race(\n    () => {\n      press = await msg-[:Interactions]->\n      return { choice: only(press-[:Actions]->).Value, by: press-[:By]->.Name, who: press.User }\n    },\n    () => { await sleep(1d) },\n  )\n  if (r[0] == null) { return \"expired\" }\n  return r[0].choice\n";
+    assert_eq!(check(CHAT, chat), Vec::<String>::new());
+    let poll = "  poll = write board-[:Polls]-> { Question: \"Lunch?\", Options: [{ Key: \"yes\" }] }\n  v = await poll-[:Votes]->\n  return v.Choice == \"yes\" && v.Voter == name\n";
+    assert_eq!(check(POLL, poll), Vec::<String>::new());
 }
 
 /// The grammar's cases, shared with engine-contracts' reader of the same

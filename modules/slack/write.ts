@@ -433,6 +433,14 @@ export interface SlackButton {
   Value: string;
 }
 
+// Slack's own limits on what a message with buttons posts (Block Kit's
+// actions block, button element and section block). Checked here so a write
+// past one fails naming the field, not with Slack's `invalid_blocks`.
+const MAX_BUTTONS = 25;
+const MAX_BUTTON_TEXT = 75;
+const MAX_BUTTON_VALUE = 2000;
+const MAX_SECTION_TEXT = 3000;
+
 /**
  * The buttons a write gives, each `{ Text, Value }` with both text. Absent,
  * null and an empty list mean "no buttons", as for Blocks.
@@ -442,14 +450,37 @@ function asButtonsValue(raw: unknown): SlackButton[] | undefined {
   if (!Array.isArray(raw)) {
     throw new Error(`SlackAdapter.createRecord: Buttons must be a LIST of { Text, Value }, got ${describeBlocksValue(raw)}.`);
   }
-  const buttons = raw.map((entry, i): SlackButton => {
-    const button = entry as { Text?: unknown; Value?: unknown } | null;
-    if (!button || typeof button !== 'object' || typeof button.Text !== 'string' || typeof button.Value !== 'string' || button.Text === '' || button.Value === '') {
-      throw new Error(`SlackAdapter.createRecord: Buttons[${i}] must be { Text, Value }, both non-empty text.`);
-    }
-    return { Text: button.Text, Value: button.Value };
-  });
+  if (raw.length > MAX_BUTTONS) {
+    throw new Error(`SlackAdapter.createRecord: a Slack Message holds at most ${MAX_BUTTONS} Buttons; this write has ${raw.length}.`);
+  }
+  const buttons = raw.map(buttonOf);
   return buttons.length > 0 ? buttons : undefined;
+}
+
+function buttonOf(entry: unknown, i: number): SlackButton {
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+    throw new Error(`SlackAdapter.createRecord: Buttons[${i}] must be { Text, Value }, got ${describeBlocksValue(entry)}.`);
+  }
+  const text = buttonField(entry, i, 'Text', 'the label it shows');
+  const value = buttonField(entry, i, 'Value', 'the value a press answers with');
+  if (text.length > MAX_BUTTON_TEXT) {
+    throw new Error(`SlackAdapter.createRecord: Buttons[${i}].Text is ${text.length} characters; Slack shows at most ${MAX_BUTTON_TEXT} on a button.`);
+  }
+  if (value.length > MAX_BUTTON_VALUE) {
+    throw new Error(`SlackAdapter.createRecord: Buttons[${i}].Value is ${value.length} characters; Slack carries at most ${MAX_BUTTON_VALUE} in a button's value.`);
+  }
+  return { Text: text, Value: value };
+}
+
+function buttonField(button: object, i: number, field: 'Text' | 'Value', meaning: string): string {
+  const value: unknown = field in button ? Reflect.get(button, field) : undefined;
+  if (value === undefined || value === null || value === '') {
+    throw new Error(`SlackAdapter.createRecord: Buttons[${i}] has no ${field}: each button needs ${meaning}.`);
+  }
+  if (typeof value !== 'string') {
+    throw new Error(`SlackAdapter.createRecord: Buttons[${i}].${field} must be text, got ${describeBlocksValue(value)}.`);
+  }
+  return value;
 }
 
 /**
@@ -458,6 +489,11 @@ function asButtonsValue(raw: unknown): SlackButton[] | undefined {
  * since Slack needs one distinct per block; what a press means is its value.
  */
 export function buttonBlocks(text: string, buttons: readonly SlackButton[]): unknown[] {
+  if (text.length > MAX_SECTION_TEXT) {
+    throw new Error(
+      `SlackAdapter.createRecord: a Slack Message with Buttons has at most ${MAX_SECTION_TEXT} characters of Message text (Slack's limit for the text above the buttons); this one has ${text.length}.`,
+    );
+  }
   return [
     { type: 'section', text: { type: 'mrkdwn', text } },
     {

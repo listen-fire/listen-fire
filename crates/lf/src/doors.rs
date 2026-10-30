@@ -265,15 +265,12 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         // A scoped webhook's own secret (the source issued it), else the
         // credential's, as for its unscoped webhook.
         let own = key.and_then(|key| scoped_secret(credential, key)).or_else(|| credential.fields.get(&setup.secret_field).cloned());
-        // A module that checks its own inbound may be addressed by a user
-        // credential (it carries the provider keys the check reads) while the
-        // secret `listen-fire connect` set is the install's.
-        let secret = match own {
-            None if setup.declaration.scheme == Scheme::Module => {
-                install_of(&self.installs, &credential.external).and_then(|install| install.fields.get(&setup.secret_field)).cloned()
-            }
-            own => own,
-        };
+        // A connection's credential that holds no secret of its own is
+        // verified with the install's, the one `listen-fire connect` set:
+        // `credential add` asks for the keys a module reads (a module that
+        // checks its own inbound reads them off the credential its URL
+        // names), not the secret its deliveries are signed with.
+        let secret = own.or_else(|| install_of(&self.installs, &credential.external).and_then(|install| install.fields.get(&setup.secret_field)).cloned());
         Ok(Some(Subscription {
             id: id.to_string(),
             team_id: LOCAL_TENANT.into(),
@@ -1144,6 +1141,28 @@ pub(crate) mod tests {
             let of = |id: &str| receipts.iter().find(|r| r.external_id.as_deref() == Some(id)).map(|r| session.store.delivery(&r.id).unwrap().unwrap().events.unwrap()).unwrap();
             assert_eq!(of("d-2")[0].get("credential"), Some(&Js::str("inbox_b")), "a kept event names the connection it came for, for a replay");
             assert_eq!(of("d-3")[0].get("credential"), None);
+        });
+    }
+
+    #[test]
+    fn a_connection_s_door_without_a_secret_of_its_own_verifies_with_the_install_s() {
+        let secrets = "inbox:\n  module: inbox\n  webhook_secret: shared\ninbox_a:\n  external: inbox\n  token: a\ninbox_b:\n  external: inbox\n  webhook_secret: secret-b\n  token: b\n";
+        let project = InboxProject::with(TWO_CONNECTIONS, secrets, "");
+        in_local(async {
+            let session = project.session().await;
+            let status = |subscription: &'static str, secret: &'static str, id: &'static str| {
+                let session = &session;
+                async move {
+                    let headers = signed_with(secret, NOTE, id);
+                    let delivery = Delivery { provider: "inbox", subscription_id: subscription, raw_body: NOTE, headers: &headers, method: "POST", path: "", query: "", source: DeliverySource::Hook };
+                    deliver_inline(session, delivery, &|| {}).await.0.status
+                }
+            };
+            assert_eq!(status("inbox_a", "secret-a", "d-1").await, 401, "a secret the credential never held");
+            assert_eq!(movements_run_by(&session, "inbox_a", "shared", "d-2").await, ["noted_a"]);
+            // A credential's own secret is still the one its door verifies with.
+            assert_eq!(status("inbox_b", "shared", "d-3").await, 401);
+            assert_eq!(movements_run_by(&session, "inbox_b", "secret-b", "d-4").await, ["noted_b"]);
         });
     }
 

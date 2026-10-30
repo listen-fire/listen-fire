@@ -74,6 +74,17 @@ function sameText(expected: string, presented: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** How far a Slack timestamp may be from now, either way, in seconds. */
+const SLACK_REPLAY_WINDOW_SECONDS = 5 * 60;
+
+/** Whether Slack's request timestamp (whole seconds since the epoch) is
+ *  within the replay window of `now`. */
+export function slackTimestampIsFresh(timestamp: string, now: number): boolean {
+  const trimmed = timestamp.trim();
+  if (!/^-?\d+$/.test(trimmed)) return false;
+  return Math.abs(now - Number(trimmed)) <= SLACK_REPLAY_WINDOW_SECONDS;
+}
+
 /** Slack's `v0` scheme over the two headers packed as `{timestamp}:{signature}`
  *  (split at the first colon), the form Slack's doors have always passed. */
 function verifySlackPacked(rawBody: Buffer, packed: string, secret: string): boolean {
@@ -118,11 +129,12 @@ const SCHEMES: Record<InboundSignatureScheme, SchemeCheck> = {
     return [digest.toString('hex'), digest.toString('base64')].some((expected) => sameText(expected, token));
   },
 
-  /** Slack's `v0:{timestamp}:{body}`, `v0=` prefix optional. No replay window
-   *  (Slack recommends five minutes; no door has ever enforced one). */
+  /** Slack's `v0:{timestamp}:{body}`, `v0=` prefix optional. A timestamp more
+   *  than five minutes from now is refused as a replay, as Slack recommends. */
   slack_v0: ({ rawBody, signature, headers, secret }) => {
     const timestamp = headerValue(headers, SLACK_TIMESTAMP_HEADER);
     if (timestamp === undefined || signature === '') return false;
+    if (!slackTimestampIsFresh(timestamp, Math.floor(Date.now() / 1000))) return false;
     return verifySlackPacked(rawBody, `${timestamp}:${signature}`, secret);
   },
 

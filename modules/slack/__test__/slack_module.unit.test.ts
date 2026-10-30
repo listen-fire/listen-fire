@@ -183,7 +183,40 @@ describe('@lf/slack', () => {
     await expect(write({ text: 'x', buttons, blocks: [{ type: 'divider' }] })).rejects.toThrow("a Slack Message's Buttons can't be combined with Blocks or File");
     await expect(write({ text: 'x', buttons, file: { __brand: 'FileRef', name: 'a', content: 'b' } })).rejects.toThrow("a Slack Message's Buttons can't be combined with Blocks or File");
     await expect(write({ buttons })).rejects.toThrow(/Buttons needs its Message text/);
-    await expect(write({ text: 'x', buttons: [{ Text: 'Pursue' }] })).rejects.toThrow(/Buttons\[0\] must be \{ Text, Value \}/);
+    expect(posted).toHaveLength(1);
+  });
+
+  it('a Buttons entry missing its Text or Value, or past Slack\'s limits, is refused naming it before anything posts', async () => {
+    const { slackSourcesFrom } = await import('../index');
+    const { moduleContext } = await import('module-kit');
+    const { createUnifiedMessage } = await import('../write');
+    const ctx = moduleContext({ tenant: 't', credential: credential({}), log: silent, files: refusingFiles('x'), kv: refusingKv('x'), validateResults: false });
+    const posted: Array<Record<string, unknown>> = [];
+    const client = {
+      api: {
+        conversations: { info: async () => ({ ok: true, channel: { is_member: true } }), members: async () => ({ ok: true, members: [] }) },
+        users: { list: async () => ({ ok: true, members: [] }) },
+        chat: { postMessage: async (args: Record<string, unknown>) => (posted.push(args), { ok: true, ts: '1700.1' }) },
+      },
+    } as never;
+    const write = (fields: Record<string, unknown>) =>
+      createUnifiedMessage({ client, host: slackSourcesFrom(ctx), anchor: { kind: 'post', channelId: 'C1' }, fields });
+
+    await expect(write({ text: 'x', buttons: [{ Text: 'Pursue' }] })).rejects.toThrow('Buttons[0] has no Value: each button needs the value a press answers with.');
+    await expect(write({ text: 'x', buttons: [{ Text: 'Pursue', Value: 'pursue' }, { Value: 'pass' }] })).rejects.toThrow('Buttons[1] has no Text: each button needs the label it shows.');
+    await expect(write({ text: 'x', buttons: [{ Text: '', Value: 'pass' }] })).rejects.toThrow('Buttons[0] has no Text');
+    await expect(write({ text: 'x', buttons: [{ Text: 'Pass', Value: 3 }] })).rejects.toThrow('Buttons[0].Value must be text, got a number.');
+    await expect(write({ text: 'x', buttons: ['Pass'] })).rejects.toThrow('Buttons[0] must be { Text, Value }, got the string "Pass".');
+    await expect(write({ text: 'x', buttons: [{ Text: 'a'.repeat(76), Value: 'v' }] })).rejects.toThrow('Buttons[0].Text is 76 characters; Slack shows at most 75 on a button.');
+    await expect(write({ text: 'x', buttons: [{ Text: 't', Value: 'v'.repeat(2001) }] })).rejects.toThrow('Buttons[0].Value is 2001 characters');
+    const many = Array.from({ length: 26 }, (_, i) => ({ Text: `b${i}`, Value: `v${i}` }));
+    await expect(write({ text: 'x', buttons: many })).rejects.toThrow('a Slack Message holds at most 25 Buttons; this write has 26.');
+    await expect(write({ text: 'x'.repeat(3001), buttons: [{ Text: 't', Value: 'v' }] })).rejects.toThrow(
+      "a Slack Message with Buttons has at most 3000 characters of Message text (Slack's limit for the text above the buttons); this one has 3001.",
+    );
+    expect(posted).toHaveLength(0);
+    // At the limits, it posts.
+    await write({ text: 'x'.repeat(3000), buttons: Array.from({ length: 25 }, (_, i) => ({ Text: 'a'.repeat(75), Value: `v${i}` })) });
     expect(posted).toHaveLength(1);
   });
 
@@ -254,6 +287,21 @@ describe('@lf/slack', () => {
     expect((await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: root } }))?.arrivals).toBeUndefined();
   });
 
+  it('a thread reply that mentions the app arrives as its message would, under the same identity', async () => {
+    const { adapter } = load({ credential: credential({}) });
+    const reply = { type: 'app_mention', channel: 'C1', user: 'U2', text: '<@UBOT> yes', ts: '1700.5', thread_ts: '1700.1' };
+    const answer = await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event_id: 'Ev3', event: reply } });
+    expect(answer?.arrivals).toEqual([
+      { edge: 'Replies', key: 'C1:1700.1', identity: 'C1:1700.5', landing: { recordId: 'C1:1700.5', recordType: 'Message', fields: reply } },
+    ]);
+    // Slack sends the same reply again as a `message`: the one identity, so a repeat.
+    const asMessage = await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event_id: 'Ev4', event: { ...reply, type: 'message' } } });
+    expect(asMessage?.arrivals?.map((a) => ('identity' in a ? a.identity : undefined))).toEqual(['C1:1700.5']);
+    // A mention outside a thread is no reply.
+    const { thread_ts: _thread, ...mention } = reply;
+    expect((await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: mention } }))?.arrivals).toBeUndefined();
+  });
+
   it('a message_deleted event is a gone arrival on Interactions and Replies', async () => {
     const { adapter } = load({ credential: credential({}) });
     const deleted = { type: 'message', subtype: 'message_deleted', hidden: true, channel: 'C1', ts: '1700.8', deleted_ts: '1700.1' };
@@ -289,7 +337,10 @@ describe('@lf/slack', () => {
       resolvesEmpty: true,
       literalsFrom: [{ at: ['Actions', 'Value'], from: 'Buttons[].Value' }],
     });
-    expect(message?.references.find((r) => r.name === 'Replies')).toMatchObject({ listenable: true, cursor: false, identity: 'Timestamp', resolvesEmpty: true, sequenced: 'chronological' });
+    const replies = message?.references.find((r) => r.name === 'Replies');
+    expect(replies).toMatchObject({ listenable: true, cursor: false, resolvesEmpty: true, sequenced: 'chronological' });
+    // A reply is named by its record id, `channel:ts`, listed or announced.
+    expect(replies?.identity).toBeUndefined();
     const descriptors = new Map();
     for (const name of ['Interaction', 'Action']) {
       const described = await adapter.describe(name);

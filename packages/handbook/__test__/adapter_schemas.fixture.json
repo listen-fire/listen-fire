@@ -1219,8 +1219,7 @@
               "writable": true,
               "listenable": true,
               "resolvesEmpty": true,
-              "cursor": false,
-              "identity": "Timestamp"
+              "cursor": false
             },
             "Interactions": {
               "target": "Interaction",
@@ -1410,8 +1409,7 @@
               "writable": true,
               "listenable": true,
               "resolvesEmpty": true,
-              "cursor": false,
-              "identity": "Timestamp"
+              "cursor": false
             },
             "Interactions": {
               "target": "Interaction",

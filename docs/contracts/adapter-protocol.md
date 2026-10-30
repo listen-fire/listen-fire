@@ -1049,7 +1049,8 @@ host verifies each delivery before `preprocessInbound` sees it:
 
 - `signatureHeaders` lists the headers that may carry the signature, in lower
   case; the first one present is read. `slack_v0` also reads
-  `x-slack-request-timestamp`, which the scheme fixes.
+  `x-slack-request-timestamp`, which the scheme fixes, and refuses a request
+  whose timestamp is more than five minutes from now (a replay).
 - `deliveryId` (optional) names the header that carries the provider's id for
   a delivery, `{ "header": "x-github-delivery" }` (lower case, as
   `signatureHeaders`). The host reads it before `preprocessInbound` and keeps
@@ -1647,6 +1648,7 @@ from `apps/cli`.
 
 ## Changes
 
+- **`slack_v0` refuses a replay** (within version 2, no bump; 2026-10-30; listen-fire 0.13.0). A request whose `x-slack-request-timestamp` is more than five minutes from now is refused 401 though its signature is right, as Slack advises ([Declared inbound signatures](#declared-inbound-signatures)). Nothing changes for a module: Slack signs every request with the time it sends it.
 - **Form-encoded deliveries** (within version 2, no bump; 2026-10-30; listen-fire 0.13.0). The host webhook door reads a delivery sent as `application/x-www-form-urlencoded` as well as JSON: its signature is checked over the raw bytes, and `preprocessInbound`'s `raw` is the form's fields ([Limits and timeouts](#limits-and-timeouts)). Why: Slack posts a press on a message's control that way (`payload=<json>`), so `@lf/slack` reports presses as arrivals on the host's own door, verified with Slack's own signature. An older host refuses such a delivery as not JSON.
 - **Adapter protocol 2.5: arrivals** (within version 2; listen-fire 0.13.0). A module with listenable edges names the key each record's edge is waited on under (`awaitKeys`, a new optional method), and reports what lands there as arrivals: `arrivals` beside the events `preprocessInbound` answers, on `checkInbound`'s `accepted`, or pushed to the `wake` door as `{ arrivals }` ([Waiting on your system](#waiting-on-your-system-awaits)). Listen-Fire logs every arrival and keeps each run's wait itself (the store slot's `waits.*`, [store-slot.md](store-slot.md)). An arrival names its identity; one without is refused by name. Why: a run waiting on an edge reads what arrived since it began waiting, so an arrival during the write that caused it is never lost, and Listen-Fire, not the module, decides whether an arrival matches. Offering `awaitKeys` states no minor. From listen-fire 0.13.0 a wait reads arrivals only: `resolveAwait` is not called for it, `wakeKeys` wakes nothing, and the `wake` door refuses `{ keys }` (400, naming adapter protocol 2.5 and `arrivals`).
 - **Adapter protocol 2.4: subscriptions that expire** (within version 2; 2026-10-27; listen-fire 0.12.10). `ensureEventSubscription` may answer `expiresAt`, and a new optional method, `refreshEventSubscription`, extends a subscription before it lapses ([Event subscriptions that expire](#event-subscriptions-that-expire)). Offering the method states no minor: a `listen-fire` up to 0.12.9 reads a module that lists it and never calls it, so its webhooks lapse there as before. `@lf/airtable` lists it. With this change the kits stop raising a module's stated minor for the methods it offers (`.watch`, `work.enqueueIfAbsent`, `refreshEventSubscription`): it is what the author declares, else 0.

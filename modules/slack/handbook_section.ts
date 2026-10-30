@@ -48,7 +48,6 @@ msg = write finance-[:Messages]-> {
 r = race(
   () => {
     press = await msg-[:Interactions]->
-    if (press == null) { return null }
     return only(press-[:Actions]->).Value == "approve"
   },
   () => { await sleep(1d) },
@@ -61,7 +60,7 @@ if (r[0] == null) {
 }
 \`\`\`
 
-- The wait starts before the message is posted, so a press that comes the moment it appears is not missed.
+- A press made the moment the message appears still counts.
 - \`only(press-[:Actions]->).Value\` is \`"approve" | "reject"\` here: comparing it with a value the buttons never offered, such as \`"aprove"\`, is refused while you write it. Compare it where you read it, as here: the result of a \`race\` does not keep that type.
 - \`press-[:By]->\` is the member who pressed.
 - A message deleted while a run waits on it ends the wait: nothing after the \`await\` runs.
@@ -141,7 +140,6 @@ function sign_off(msg: <team-[:Message]->>) {
   r = race(
     () => {
       press = await ask-[:Interactions]->
-      if (press == null) { return null }
       return only(press-[:Actions]->).Value == "ship"
     },
     () => { await sleep(1d) },

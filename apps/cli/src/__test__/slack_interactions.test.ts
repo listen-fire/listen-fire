@@ -7,7 +7,9 @@
 // signing secret), and the run resumes with the button's value. A thread
 // reply, an Events API delivery, resumes `await msg-[:Replies]->`; a deleted
 // message settles a wait on it empty. `listen-fire check` types the press's
-// value by the Values the write offered.
+// value by the Values the write offered. Every delivery goes to the door
+// `listen-fire serve` prints for the project's Slack listen: the credential's,
+// verified with the signing secret `listen-fire connect` put on the install.
 
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
@@ -29,10 +31,18 @@ process.env.LF_SERVE_MODULE ??= join(REPO, 'apps/cli/node_modules/.bin/serve-mod
 
 const SIGNING_SECRET = 'slack-signing-secret';
 
+// The listen gives the project a Slack door, which \`listen-fire serve\` prints;
+// no delivery here is a mention, so it never fires.
 const HEADER = `import { \`@lf/slack\` as slack } from adapters
 import { team_slack } from credentials
 
 chat = connect slack using team_slack
+
+function mentioned(m: <chat-[:Message]->>) {
+  return "mentioned"
+}
+
+listen to chat { events: ["app_mention"] } fire mentioned
 `;
 
 const PRESS = `${HEADER}
@@ -44,7 +54,6 @@ function decide(run: <manual-[:Invocation]->>) {
     Buttons: [{ Text: "Pursue", Value: "pursue" }, { Text: "Pass", Value: "pass" }]
   }
   press = await msg-[:Interactions]->
-  if (press == null) { return "the message was deleted" }
   choice = only(press-[:Actions]->).Value
   if (choice == "pursue") {
     write general-[:Messages]-> { Message: "chose \${choice}" }
@@ -62,7 +71,6 @@ function ask(run: <manual-[:Invocation]->>) {
   if (general == null) { fail("no #general channel") }
   msg = write general-[:Messages]-> { Message: "Anyone?" }
   reply = await msg-[:Replies]->
-  if (reply == null) { return "the message was deleted" }
   write general-[:Messages]-> { Message: "heard \${reply.Message}" }
 }
 
@@ -105,13 +113,24 @@ async function botMessages(channels: Fake): Promise<FakeMessage[]> {
   return rows.filter((m) => m.user === 'bot');
 }
 
+/** The door `listen-fire serve` prints for the Slack listen's connection. */
+async function slackDoor(serving: Served): Promise<string> {
+  const line = await serving.waitFor(/^slack team_slack: http:\/\/\S+$/);
+  return line.slice('slack team_slack: '.length);
+}
+
+interface Signing {
+  secret?: string;
+  /** Seconds since the epoch the request says it was sent at; now by default. */
+  at?: number;
+}
+
 /** POST `body` to the Slack door, signed as Slack signs: HMAC-SHA256 of
- *  `v0:<timestamp>:<body>`, keyed by the signing secret. The door is the
- *  install's (`slack`), which holds the secret `listen-fire connect` was given. */
-async function deliver(serving: Served, body: string, contentType: string, secret = SIGNING_SECRET): Promise<{ status: number; body: string }> {
-  const timestamp = String(Math.floor(Date.now() / 1000));
-  const signature = `v0=${createHmac('sha256', secret).update(`v0:${timestamp}:${body}`).digest('hex')}`;
-  const response = await fetch(`http://127.0.0.1:${serving.port}/hooks/slack/slack`, {
+ *  `v0:<timestamp>:<body>`, keyed by the signing secret. */
+async function deliver(serving: Served, body: string, contentType: string, signing: Signing = {}): Promise<{ status: number; body: string }> {
+  const timestamp = String(signing.at ?? Math.floor(Date.now() / 1000));
+  const signature = `v0=${createHmac('sha256', signing.secret ?? SIGNING_SECRET).update(`v0:${timestamp}:${body}`).digest('hex')}`;
+  const response = await fetch(await slackDoor(serving), {
     method: 'POST',
     headers: { 'content-type': contentType, 'x-slack-request-timestamp': timestamp, 'x-slack-signature': signature },
     body,
@@ -121,10 +140,10 @@ async function deliver(serving: Served, body: string, contentType: string, secre
 
 /** Slack's `block_actions` payload for a press of the button valued `value`
  *  on the message `ts` in `channel`, form-encoded as Slack posts it. */
-function press(channel: string, ts: string, value: string): string {
+function press(channel: string, ts: string, value: string, trigger = `trigger-${value}-${ts}`): string {
   const payload = {
     type: 'block_actions',
-    trigger_id: `trigger-${value}-${ts}`,
+    trigger_id: trigger,
     user: { id: 'U001', username: 'ada', name: 'ada', team_id: 'T001' },
     api_app_id: 'A001',
     container: { type: 'message', message_ts: ts, channel_id: channel, is_ephemeral: false },
@@ -162,8 +181,10 @@ test('a press resumes the run with the button\'s literal value', async () => {
       ],
     });
 
-    const forged = await deliver(serving, press(posted.channel, posted.ts, 'pursue'), 'application/x-www-form-urlencoded', 'not-the-secret');
+    const forged = await deliver(serving, press(posted.channel, posted.ts, 'pursue'), 'application/x-www-form-urlencoded', { secret: 'not-the-secret' });
     assert.equal(forged.status, 401, forged.body);
+    const replayed = await deliver(serving, press(posted.channel, posted.ts, 'pursue'), 'application/x-www-form-urlencoded', { at: Math.floor(Date.now() / 1000) - 6 * 60 });
+    assert.equal(replayed.status, 401, replayed.body);
 
     const pressed = await deliver(serving, press(posted.channel, posted.ts, 'pursue'), 'application/x-www-form-urlencoded');
     assert.ok(pressed.status >= 200 && pressed.status < 300, pressed.body);
@@ -182,6 +203,44 @@ test('listen-fire check refuses a typo against the written Values', async () => 
     assert.equal(checked.code, 1, checked.out);
     assert.match(checked.out, /MOV_ENUM_UNKNOWN_VALUE/);
     assert.match(checked.out, /Did you mean "pursue"\?/);
+  } finally {
+    await world.close();
+  }
+});
+
+// The expense approval's shape: the press awaited in a race arm and walked
+// off where it is read, the receipt read after the race. An awaited record is
+// present where it is read, so nothing guards it.
+const APPROVAL = `${HEADER}
+function review(run: <manual-[:Invocation]->>) {
+  finance = only(chat-[ch:Channels WHERE ch.Name == "general"]->)
+  if (finance == null) { fail("no #general channel") }
+  msg = write finance-[:Messages]-> {
+    Message: "Ada spent £600 on a monitor"
+    Buttons: [{ Text: "Approve", Value: "approve" }, { Text: "Reject", Value: "reject" }]
+  }
+  r = race(
+    () => {
+      press = await msg-[:Interactions]->
+      return { choice: only(press-[:Actions]->).Value, by: press-[:By]->.Name }
+    },
+    () => { await sleep(1d) },
+  )
+  if (r[0] == null) {
+    write msg { Message: "\${msg.Message} (expired: nobody answered within a day)" }
+    return "expired"
+  }
+  write msg { Message: "\${msg.Message} (\${r[0].choice}d by \${r[0].by})" }
+}
+
+listen to manual fire review
+`;
+
+test('the expense approval checks clean: an awaited press is walked off unguarded', async () => {
+  const world = await slackWorld(APPROVAL);
+  try {
+    const checked = await lf(world.dir, ['check']).done;
+    assert.equal(checked.code, 0, checked.out);
   } finally {
     await world.close();
   }
@@ -222,6 +281,55 @@ test('a thread reply resumes await msg-[:Replies]->', async () => {
     assert.ok(delivered.status >= 200 && delivered.status < 300, delivered.body);
     await serving.waitFor(/resumed .* slack:ask completed/);
     assert.deepEqual((await botMessages(world.channels)).map((m) => m.text), ['Anyone?', 'heard me']);
+  } finally {
+    await serving.stop();
+    await world.close();
+  }
+});
+
+test('two presses at once resume the run once', async () => {
+  const world = await slackWorld(PRESS);
+  const serving = await served(world.dir);
+  try {
+    parkedRun(world.dir, 'decide');
+    const [posted] = await botMessages(world.channels);
+    assert.ok(posted);
+    const form = 'application/x-www-form-urlencoded';
+    const answers = await Promise.all([
+      deliver(serving, press(posted.channel, posted.ts, 'pursue', 'trigger-a'), form),
+      deliver(serving, press(posted.channel, posted.ts, 'pass', 'trigger-b'), form),
+    ]);
+    for (const answer of answers) assert.ok(answer.status >= 200 && answer.status < 300, answer.body);
+    await serving.waitFor(/resumed .* slack:decide completed/);
+    // Long enough for a second resume to have written, had there been one.
+    await new Promise((settle) => setTimeout(settle, 1500));
+    const after = (await botMessages(world.channels)).map((m) => m.text);
+    assert.equal(after.length, 2, after.join(' | '));
+    assert.ok(after[1] === 'chose pursue' || after[1] === 'passed', after[1]);
+    assert.equal(serving.lines.filter((line) => /slack:decide (completed|failed)/.test(line)).length, 1, serving.lines.join('\n'));
+  } finally {
+    await serving.stop();
+    await world.close();
+  }
+});
+
+test('a press on a message no run waits for is answered and resumes nothing', async () => {
+  const world = await slackWorld(PRESS);
+  const serving = await served(world.dir);
+  try {
+    parkedRun(world.dir, 'decide');
+    const [posted] = await botMessages(world.channels);
+    assert.ok(posted);
+    const form = 'application/x-www-form-urlencoded';
+    const elsewhere = await deliver(serving, press(posted.channel, '1600000000.000100', 'pursue'), form);
+    assert.ok(elsewhere.status >= 200 && elsewhere.status < 300, elsewhere.body);
+    await new Promise((settle) => setTimeout(settle, 1500));
+    assert.equal(serving.lines.filter((line) => /resumed/.test(line)).length, 0, serving.lines.join('\n'));
+    assert.deepEqual((await botMessages(world.channels)).map((m) => m.text), ['Pursue?']);
+    // The run still waits on its own message.
+    await deliver(serving, press(posted.channel, posted.ts, 'pursue'), form);
+    await serving.waitFor(/resumed .* slack:decide completed/);
+    assert.deepEqual((await botMessages(world.channels)).map((m) => m.text), ['Pursue?', 'chose pursue']);
   } finally {
     await serving.stop();
     await world.close();
