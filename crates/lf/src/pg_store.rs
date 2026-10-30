@@ -54,7 +54,7 @@ use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind,
     Release, Rerun, Result, RunRow, RunStart, StoreError, WORK_KINDS, timer_work_key, timer_work_payload,
 };
-use crate::waits::{LoggedArrival, NewArrival, OpenWait, WaitArrivals, WaitWake, landing_of};
+use crate::waits::{DeliveryArrivals, LoggedArrival, NewArrival, OpenWait, WaitArrivals, WaitWake, delivery_rows, landing_of};
 
 type Params<'a> = [&'a (dyn ToSql + Sync)];
 
@@ -334,6 +334,43 @@ impl PgStore {
                 Err(error)
             }
         }
+    }
+
+    /// `waits.log` inside a transaction the caller holds (`log_arrivals`'s,
+    /// or a delivery's keep).
+    fn log_arrivals_unwrapped(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {
+        // Each record's edge locked once, in one order, so two logs never
+        // wait on each other; a park there waits for this log to commit.
+        let mut keys: Vec<(&str, &str)> = arrivals.iter().map(|a| (a.edge.as_str(), a.key.as_str())).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        for (edge, key) in keys {
+            self.execute("select lf.lock_wait_key($1::text::uuid, $2::text, $3::text, $4::text)", &[&team_id, &adapter_type, &edge, &key])?;
+        }
+        let mut wakes: Vec<WaitWake> = Vec::new();
+        for arrival in arrivals {
+            let landing = arrival.landing.as_ref().map(Js::to_json);
+            self.execute(
+                "insert into lf.arrival (team_id, adapter_type, edge, key, identity, version, landing, gone, logged_at)
+                 values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text::json, $8::bool, $9::text::timestamptz)",
+                &[&team_id, &adapter_type, &arrival.edge, &arrival.key, &arrival.identity, &arrival.version, &landing, &arrival.gone, &at],
+            )?;
+            // A wait whose park has finished needs no wake: its leaf is gone.
+            let answered = self.query(
+                "select w.run_id::text, w.id::text, w.address from lf.wait_row w
+                 where w.team_id = $1::text::uuid and w.adapter_type = $2::text and w.edge = $3::text and w.key = $4::text and w.address is not null
+                   and exists (select 1 from lf.parked_run p where p.run_id = w.run_id and p.address = w.address)
+                 order by w.run_id, w.id",
+                &[&team_id, &adapter_type, &arrival.edge, &arrival.key],
+            )?;
+            for row in answered {
+                let wake = WaitWake { run_id: row.get(0), wait_id: row.get(1), address: row.get(2) };
+                if !wakes.iter().any(|w| w.wait_id == wake.wait_id) {
+                    wakes.push(wake);
+                }
+            }
+        }
+        Ok(wakes)
     }
 
     /// Why a fenced write wrote nothing (`notWritten`).
@@ -901,40 +938,7 @@ impl RunHostStore for PgStore {
     }
 
     fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {
-        self.transaction(|| {
-            // Each record's edge locked once, in one order, so two logs never
-            // wait on each other; a park there waits for this log to commit.
-            let mut keys: Vec<(&str, &str)> = arrivals.iter().map(|a| (a.edge.as_str(), a.key.as_str())).collect();
-            keys.sort_unstable();
-            keys.dedup();
-            for (edge, key) in keys {
-                self.execute("select lf.lock_wait_key($1::text::uuid, $2::text, $3::text, $4::text)", &[&team_id, &adapter_type, &edge, &key])?;
-            }
-            let mut wakes: Vec<WaitWake> = Vec::new();
-            for arrival in arrivals {
-                let landing = arrival.landing.as_ref().map(Js::to_json);
-                self.execute(
-                    "insert into lf.arrival (team_id, adapter_type, edge, key, identity, version, landing, gone, logged_at)
-                     values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text::json, $8::bool, $9::text::timestamptz)",
-                    &[&team_id, &adapter_type, &arrival.edge, &arrival.key, &arrival.identity, &arrival.version, &landing, &arrival.gone, &at],
-                )?;
-                // A wait whose park has finished needs no wake: its leaf is gone.
-                let answered = self.query(
-                    "select w.run_id::text, w.id::text, w.address from lf.wait_row w
-                     where w.team_id = $1::text::uuid and w.adapter_type = $2::text and w.edge = $3::text and w.key = $4::text and w.address is not null
-                       and exists (select 1 from lf.parked_run p where p.run_id = w.run_id and p.address = w.address)
-                     order by w.run_id, w.id",
-                    &[&team_id, &adapter_type, &arrival.edge, &arrival.key],
-                )?;
-                for row in answered {
-                    let wake = WaitWake { run_id: row.get(0), wait_id: row.get(1), address: row.get(2) };
-                    if !wakes.iter().any(|w| w.wait_id == wake.wait_id) {
-                        wakes.push(wake);
-                    }
-                }
-            }
-            Ok(wakes)
-        })
+        self.transaction(|| self.log_arrivals_unwrapped(team_id, adapter_type, arrivals, at))
     }
 
     fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {
@@ -1339,7 +1343,14 @@ impl RunHostStore for PgStore {
     /// The receipt first: a duplicate (its external id kept at its
     /// subscription before, even by a transaction still open, which the
     /// unique index waits on) writes nothing.
-    fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, delivery: &NewDelivery, work: &[NewWork]) -> Result<bool> {
+    fn keep_delivery(
+        &self,
+        subscription_id: &str,
+        checkpoint: Option<&Js>,
+        delivery: &NewDelivery,
+        work: &[NewWork],
+        arrivals: Option<&DeliveryArrivals<'_>>,
+    ) -> Result<Option<Vec<NewWork>>> {
         let events = Js::Arr(delivery.events.clone()).to_json();
         let event_count = i64::try_from(delivery.events.len()).unwrap_or(i64::MAX);
         self.transaction(|| {
@@ -1361,15 +1372,22 @@ impl RunHostStore for PgStore {
                 ],
             )?;
             if inserted.is_none() {
-                return Ok(false);
+                return Ok(None);
             }
             if let Some(checkpoint) = checkpoint {
                 self.save_inbound_checkpoint(subscription_id, checkpoint)?;
             }
-            for row in work {
+            let (work, wakes) = match arrivals {
+                None => (work.to_vec(), Vec::new()),
+                Some(a) => {
+                    let wakes = self.log_arrivals_unwrapped(a.team_id, a.adapter_type, a.arrivals, a.at)?;
+                    delivery_rows(work, self.arrival_mark()?, a.team_id, &wakes)
+                }
+            };
+            for row in work.iter().chain(&wakes) {
                 self.enqueue_row(&row.kind, &row.key, &row.payload, row.due_at.as_deref(), row.team_id.as_deref().unwrap_or(&self.tenant))?;
             }
-            Ok(true)
+            Ok(Some(wakes))
         })
     }
 

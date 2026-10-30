@@ -15,6 +15,8 @@ use crate::envelope::received;
 enum S {
     Unknown,
     Str,
+    /// `z.string().min(1)`.
+    NonEmptyStr,
     Num,
     Bool,
     Null,
@@ -208,8 +210,8 @@ fn await_landing() -> S {
 /// `WireArrival`: an arrival names its identity; a gone one names none.
 fn arrival() -> S {
     S::Union(vec![
-        obj(vec![req("edge", S::Str), req("key", S::Str), req("identity", S::Str), opt("version", S::Str), req("landing", await_landing())]),
-        obj(vec![req("edge", S::Str), req("key", S::Str), req("gone", S::LiteralTrue)]),
+        obj(vec![req("edge", S::NonEmptyStr), req("key", S::NonEmptyStr), req("identity", S::NonEmptyStr), opt("version", S::Str), req("landing", await_landing())]),
+        obj(vec![req("edge", S::NonEmptyStr), req("key", S::NonEmptyStr), req("gone", S::LiteralTrue)]),
     ])
 }
 
@@ -263,7 +265,7 @@ fn result_schema(method: &str) -> Option<S> {
             ],
         },
         "wakeKeys" => arr(S::Str),
-        "awaitKeys" => arr(S::Union(vec![obj(vec![req("key", S::Str)]), obj(vec![req("gone", S::LiteralTrue)])])),
+        "awaitKeys" => arr(S::Union(vec![obj(vec![req("key", S::NonEmptyStr)]), obj(vec![req("gone", S::LiteralTrue)])])),
         "checkInbound" => S::Tagged {
             key: "outcome",
             members: vec![
@@ -323,6 +325,11 @@ fn parse(schema: &S, value: Option<&Js>) -> Result<Option<Js>, Issue> {
     match schema {
         S::Unknown => Ok(value.cloned()),
         S::Str => match value {
+            Some(v @ Js::Str(_)) => Ok(Some(v.clone())),
+            _ => Err(expected("string", value)),
+        },
+        S::NonEmptyStr => match value {
+            Some(Js::Str(text)) if text.is_empty() => Err(Issue { message: "Too small: expected string to have >=1 characters".into(), path: Vec::new() }),
             Some(v @ Js::Str(_)) => Ok(Some(v.clone())),
             _ => Err(expected("string", value)),
         },
@@ -487,6 +494,19 @@ mod tests {
     fn await_keys_answer_a_key_or_gone_per_head() {
         assert_eq!(check("awaitKeys", "acme", &js(r#"[{"key":"thread:c1"},{"gone":true}]"#)).unwrap().to_json(), r#"[{"key":"thread:c1"},{"gone":true}]"#);
         assert!(check("awaitKeys", "acme", &js(r#"[{"gone":false}]"#)).is_err());
+    }
+
+    #[test]
+    fn an_empty_text_names_no_arrival_and_no_key() {
+        assert!(check("awaitKeys", "acme", &js(r#"[{"key":""}]"#)).is_err());
+        for empty in [
+            r#"{"edge":"","key":"k","identity":"i","landing":{"fields":{}}}"#,
+            r#"{"edge":"Comments","key":"","identity":"i","landing":{"fields":{}}}"#,
+            r#"{"edge":"Comments","key":"k","identity":"","landing":{"fields":{}}}"#,
+            r#"{"edge":"Comments","key":"","gone":true}"#,
+        ] {
+            assert!(check("preprocessInbound", "acme", &js(&format!(r#"{{"events":[],"arrivals":[{empty}]}}"#))).is_err(), "{empty}");
+        }
     }
 
     #[test]

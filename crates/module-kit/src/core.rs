@@ -281,7 +281,7 @@ pub enum ReleaseWhy {
 }
 
 /// A work row to queue, as `work.enqueue` takes it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewWork {
     pub kind: String,
@@ -318,10 +318,25 @@ pub struct NewDelivery {
     pub events: Vec<Js>,
 }
 
-/// `inbound.keepDelivery`'s answer: `false` for a duplicate, which wrote nothing.
+/// A delivery's arrivals (`inbound.keepDelivery`'s `arrivals`), logged in
+/// the write that keeps it, after the receipt: a duplicate logs none.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryArrivals {
+    pub team_id: String,
+    pub adapter_type: String,
+    pub arrivals: Vec<NewArrival>,
+    pub at: String,
+}
+
+/// `inbound.keepDelivery`'s answer: `false` for a duplicate, which wrote
+/// nothing. When the call carried `arrivals`, `wakes` is the `wake_await`
+/// rows it queued, one per wait they answer (an empty list for none).
 #[derive(Debug, Clone, Serialize)]
 pub struct Kept {
     pub kept: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wakes: Option<Vec<NewWork>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -511,14 +526,21 @@ slot! {
         "inbound.checkpoint" => fn inbound_checkpoint(InboundCheckpoint { subscription_id: String }) -> Option<Checkpoint>;
         "inbound.saveCheckpoint" => fn save_inbound_checkpoint(InboundSaveCheckpoint { subscription_id: String, checkpoint: Js }) -> ();
         /// One write: the receipt first, then the cursor (absent: left as it
-        /// is) and the work rows. A duplicate (`delivery.external_id` kept at
-        /// this subscription before) writes nothing and answers `kept: false`.
+        /// is), the arrivals and the work rows. A duplicate
+        /// (`delivery.external_id` kept at this subscription before) writes
+        /// nothing and answers `kept: false`. With `arrivals`: they are
+        /// logged as `waits.log` logs them; each `fire_event` row's payload
+        /// gains `arrivalMark`, `waits.mark` after them; and a row
+        /// `{ kind: "wake_await", key: "wake_await:<unique>", payload: { waitId }, teamId }`
+        /// is queued per wait they answer, and answered as `wakes`.
         "inbound.keepDelivery" => fn keep_delivery(InboundKeepDelivery {
             subscription_id: String,
             #[serde(default, deserialize_with = "present")]
             checkpoint: Option<Js>,
             delivery: NewDelivery,
             work: Vec<NewWork>,
+            #[serde(default)]
+            arrivals: Option<DeliveryArrivals>,
         }) -> Kept;
         /// Clear a kept delivery's `external_id`, its receipt kept: its
         /// events failed inside the request, so the sender's retry under

@@ -6,9 +6,8 @@
 
 use crate::backend::RunHostStore;
 use crate::json::Js;
-use crate::obj;
-use crate::store::{NewWork, iso};
-use crate::waits::NewArrival;
+use crate::store::iso;
+use crate::waits::{NewArrival, wake_rows};
 
 /// The `arrivals` an answer reports, in its order; none when it names none.
 /// An arrival names its edge, its record's key and its identity; a gone one
@@ -37,32 +36,20 @@ fn arrival_of(index: usize, item: &Js) -> Result<NewArrival, String> {
     Ok(NewArrival { edge, key, identity: Some(identity), version, landing: Some(landing.clone()), gone: false })
 }
 
-/// Log `arrivals` and queue a wake for each wait parked on a record they
-/// landed on: how many wakes were queued.
+/// Log `arrivals` pushed to the `wake` door and queue a wake for each wait
+/// parked on a record they landed on: how many wakes were queued. (A
+/// delivery's arrivals are logged in the write that keeps it.)
 pub fn log_and_wake(store: &dyn RunHostStore, team_id: &str, adapter_type: &str, arrivals: &[NewArrival]) -> Result<usize, String> {
     if arrivals.is_empty() {
         return Ok(0);
     }
     let wakes = store.log_arrivals(team_id, adapter_type, arrivals, &iso(0)).map_err(|e| e.to_string())?;
-    for wake in &wakes {
-        let row = wait_wake_work(team_id, &wake.wait_id);
+    let rows = wake_rows(team_id, &wakes);
+    for row in &rows {
         store.enqueue(&row.kind, &row.key, &row.payload, None, row.team_id.as_deref()).map_err(|e| e.to_string())?;
     }
-    if !wakes.is_empty() {
-        crate::wake::queued("wake_await", None);
-    }
-    Ok(wakes.len())
-}
-
-/// A wait's wake, due now: the drain reads its arrivals and resumes its run.
-fn wait_wake_work(team_id: &str, wait_id: &str) -> NewWork {
-    NewWork {
-        kind: "wake_await".into(),
-        key: format!("wake_await:{}", uuid::Uuid::new_v4()),
-        payload: Js::Obj(obj! { "waitId" => Js::str(wait_id) }),
-        due_at: None,
-        team_id: Some(team_id.to_string()),
-    }
+    crate::wake::queued_rows(&rows);
+    Ok(rows.len())
 }
 
 #[cfg(test)]

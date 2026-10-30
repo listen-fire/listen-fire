@@ -71,15 +71,16 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
   - Every arrival is kept an hour, and longer while a waiting run reads it; the drain forgets the rest, as it forgets old deliveries.
   - Store modules (a change to the store slot): six new methods, `waits.mark`, `waits.log`, `waits.open`, `waits.arrivals`, `waits.note` and `waits.sweep`; `parks.commit` takes `{ kind: "wait", waitId }`. A store module must serve them for a run that awaits a listenable edge; the drain still runs over one that does not, and sweeps no arrivals there. The cases every store is held to are `packages/engine-contracts/conformance/store-waits.json`. See `docs/contracts/store-slot.md`.
   - A Postgres store gains `lf.arrival`, `lf.wait_row` and `lf.wait_seen` (migration 9): run `listen-fire connect @lf/postgres-store` once to apply it.
+  - Why: a wait that registers only when it is reached misses an answer that comes back during the write that asked for it.
 - Adapter protocol 2.5: modules report arrivals, and `listen-fire` logs them. `listen-fire --version` reads `adapter protocol 2.0–2.5`.
+  - Store modules: `inbound.keepDelivery` may carry the delivery's `arrivals`, logged in its write after the receipt, and answers the wake rows it queued (`wakes`); a store module that answers none for them is refused by name. See `docs/contracts/store-slot.md`.
   - A module with listenable edges answers `awaitKeys`: the key each record's edge is waited on under, read off the records alone.
   - It reports what lands there as arrivals, each naming its edge, its record's key, its identity and its landing: beside the events `preprocessInbound` answers for a delivery, on `checkInbound`'s `accepted` (`accepted(events, { arrivals })` in the module kit), or pushed to the `wake` door as `{ arrivals }`.
-  - `listen-fire` logs each one and queues a wake for each run waiting on that record's edge. A delivery's events carry the log's mark when the delivery was kept, so a run they start reads the arrivals from there.
+  - `listen-fire` logs each one and queues a wake for each run waiting on that record's edge. A delivery's arrivals are logged in the same write as its receipt, so a redelivery logs and wakes nothing again; its events carry the log's mark after them, so a run the delivery starts never waits for the delivery's own arrivals.
   - An arrival without an identity is refused, naming it: `arrival 0 on 'Comments' has no identity` (400 at the `wake` door; the delivery's failure otherwise).
   - The `wake` door still takes `{ keys }`, and `resolveAwait` and `wakeKeys` are still called, while modules move to arrivals.
-  - The acme example's CRM answers `awaitKeys` and pushes each comment as an arrival.
+  - The acme example's CRM answers `awaitKeys`, pushes each comment as an arrival, and reports the comments a webhook delivery carries, each by its id.
   - Why: a waiting run reads the arrivals logged since it began waiting, so one that lands during the write that caused it is never lost, and whether it matches is decided by `listen-fire`, not the module. See `docs/contracts/adapter-protocol.md` ("Waiting on your system").
-  - Why: a wait that registers only when it is reached misses an answer that comes back during the write that asked for it.
 
 ### Added
 

@@ -625,7 +625,11 @@ Report them in one of three places:
 What Listen-Fire does with them:
 
 - Every arrival is logged, waited on or not, and kept an hour; longer while a
-  wait reads it.
+  wait reads it. A delivery's arrivals are logged with its receipt, so a
+  redelivery under the same delivery id logs nothing again.
+- A run a delivery starts never waits for that delivery's own arrivals: `await new`
+  takes only what arrives after. A plain `await` on an edge that can be
+  listed still finds them there.
 - Each run waiting on the record's edge is woken. It reads the arrivals
   logged since it began waiting, judges each once by identity and version,
   and resumes with the first that passes the automation's `WHERE`.

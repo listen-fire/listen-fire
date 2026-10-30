@@ -19,7 +19,7 @@ use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Rerun, Result, RunRow, RunStart, StoreError,
 };
 use crate::store_wire::{Wire, delivery_params, event_run_params, int, num, open_wait_params, opt, park_params, rows, run_start_params, to_rows};
-use crate::waits::{NewArrival, OpenWait, WaitArrivals, WaitWake};
+use crate::waits::{DeliveryArrivals, NewArrival, OpenWait, WaitArrivals, WaitWake};
 
 /// The error code a fenced write answers when the run's lease is gone
 /// (`RunLeaseLost`), its `data` `{ runId }`.
@@ -381,17 +381,39 @@ impl RunHostStore for ProcessStore {
     fn save_inbound_checkpoint(&self, subscription_id: &str, checkpoint: &Js) -> Result<()> {
         self.unit("inbound.saveCheckpoint", obj! { "subscriptionId" => s(subscription_id), "checkpoint" => checkpoint.clone() })
     }
-    fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, delivery: &NewDelivery, work: &[NewWork]) -> Result<bool> {
+    fn keep_delivery(
+        &self,
+        subscription_id: &str,
+        checkpoint: Option<&Js>,
+        delivery: &NewDelivery,
+        work: &[NewWork],
+        arrivals: Option<&DeliveryArrivals<'_>>,
+    ) -> Result<Option<Vec<NewWork>>> {
         let mut params = obj! { "subscriptionId" => s(subscription_id), "delivery" => Js::from(delivery_params(delivery)), "work" => to_rows(work) };
         // Absent, not null: a null cursor is one to keep.
         if let Some(checkpoint) = checkpoint {
             params.insert("checkpoint".into(), checkpoint.clone());
         }
+        if let Some(a) = arrivals {
+            params.insert(
+                "arrivals".into(),
+                Js::from(obj! { "teamId" => s(a.team_id), "adapterType" => s(a.adapter_type), "arrivals" => to_rows(a.arrivals), "at" => s(a.at) }),
+            );
+        }
         // A module answering `null`, as one written before the receipt did,
         // is not taken to have kept it.
         let answer = self.call("inbound.keepDelivery", params)?;
         match answer.get("kept") {
-            Some(Js::Bool(kept)) => Ok(*kept),
+            Some(Js::Bool(false)) => Ok(None),
+            Some(Js::Bool(true)) if arrivals.is_none() => Ok(Some(Vec::new())),
+            // A module written before arrivals answers no `wakes`: it did not log them.
+            Some(Js::Bool(true)) => match answer.get("wakes").and_then(rows::<NewWork>) {
+                Some(wakes) => Ok(Some(wakes)),
+                None => Err(StoreError::Backend(format!(
+                    "{}: kept a delivery without logging its arrivals: it answers inbound.keepDelivery with no `wakes` (adapter protocol 2.5)",
+                    self.client.label
+                ))),
+            },
             _ => Err(self.malformed("inbound.keepDelivery", &answer)),
         }
     }

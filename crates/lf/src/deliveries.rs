@@ -106,7 +106,7 @@ fn replay(store: &dyn RunHostStore, original: &DeliveryRow) -> Result<(String, u
         replay_of: Some(original.id.clone()),
         events,
     };
-    if !store.keep_delivery(&original.subscription_id, None, &replayed, &work).map_err(|e| e.to_string())? {
+    if store.keep_delivery(&original.subscription_id, None, &replayed, &work, None).map_err(|e| e.to_string())?.is_none() {
         return Err(format!("delivery {new_id} was not kept: the store took it for a duplicate"));
     }
     crate::wake::queued_rows(&work);

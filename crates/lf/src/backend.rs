@@ -26,7 +26,7 @@ use crate::project::Project;
 use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Rerun, Result, RunRow, RunStart, Store,
 };
-use crate::waits::{NewArrival, OpenWait, WaitArrivals, WaitWake};
+use crate::waits::{DeliveryArrivals, NewArrival, OpenWait, WaitArrivals, WaitWake};
 
 /// The tenant a SQLite state file's rows belong to (`LOCAL_TENANT`).
 pub const SQLITE_TENANT: &str = "local";
@@ -296,12 +296,27 @@ pub trait RunHostStore {
     fn inbound_checkpoint(&self, subscription_id: &str) -> Result<Option<Js>>;
     fn save_inbound_checkpoint(&self, subscription_id: &str, checkpoint: &Js) -> Result<()>;
     /// What one inbound delivery leaves, as one write: its receipt, its pull
-    /// cursor (when it moved) and its work rows (its events, its wakes). A
-    /// crash never leaves a cursor past events its receipt does not hold.
-    /// False, and nothing written, for a duplicate: a delivery whose external
+    /// cursor (when it moved), its arrivals and its work rows (its events,
+    /// its wakes). A crash never leaves a cursor past events its receipt does
+    /// not hold.
+    ///
+    /// With `arrivals`, they are logged after the receipt, each `fire_event`
+    /// row's payload carries `arrivalMark`, the mark after them (the delivery
+    /// started its runs: they do not wait for its own arrivals), and a
+    /// `wake_await { waitId }` row is queued per wait they answer
+    /// (crate::waits::delivery_rows); those wake rows are the answer.
+    ///
+    /// None, and nothing written, for a duplicate: a delivery whose external
     /// id was kept at its subscription before (a redelivery, even one whose
     /// first's work is still queued).
-    fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, delivery: &NewDelivery, work: &[NewWork]) -> Result<bool>;
+    fn keep_delivery(
+        &self,
+        subscription_id: &str,
+        checkpoint: Option<&Js>,
+        delivery: &NewDelivery,
+        work: &[NewWork],
+        arrivals: Option<&DeliveryArrivals<'_>>,
+    ) -> Result<Option<Vec<NewWork>>>;
     /// Clear a kept delivery's external id, its receipt kept: its events
     /// failed inside the request and its sender was answered 500, so the
     /// sender's retry under that id is kept as a delivery of its own.
@@ -531,8 +546,15 @@ impl RunHostStore for Store {
     fn save_inbound_checkpoint(&self, subscription_id: &str, checkpoint: &Js) -> Result<()> {
         Store::save_inbound_checkpoint(self, subscription_id, checkpoint)
     }
-    fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, delivery: &NewDelivery, work: &[NewWork]) -> Result<bool> {
-        Store::keep_delivery(self, subscription_id, checkpoint, delivery, work)
+    fn keep_delivery(
+        &self,
+        subscription_id: &str,
+        checkpoint: Option<&Js>,
+        delivery: &NewDelivery,
+        work: &[NewWork],
+        arrivals: Option<&DeliveryArrivals<'_>>,
+    ) -> Result<Option<Vec<NewWork>>> {
+        Store::keep_delivery(self, subscription_id, checkpoint, delivery, work, arrivals)
     }
     fn forget_delivery_id(&self, id: &str) -> Result<()> {
         Store::forget_delivery_id(self, id)

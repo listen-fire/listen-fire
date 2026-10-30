@@ -27,7 +27,7 @@ use crate::obj;
 use crate::slot_server::{Listen, Refusal};
 use crate::store::{ClaimDue, DeliveryQuery, NewWork, Park, Release, Rerun, RunStart, StoreError, iso};
 use crate::store_wire::{Wire, new_delivery, num, opt, park_kind, rows, to_rows};
-use crate::waits::{NewArrival, OpenWait};
+use crate::waits::{DeliveryArrivals, NewArrival, OpenWait};
 
 /// The store slot's methods (docs/contracts/store-slot.md), as its manifest lists them.
 pub const STORE_METHODS: &[&str] = &[
@@ -377,8 +377,22 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
             let delivery = new_delivery(&p.value("delivery"))
                 .ok_or_else(|| Failure::Params("delivery: expected { id, externalId?, receivedAt, source, inline, replayOf?, events }".into()))?;
             let work: Vec<NewWork> = rows(&p.value("work")).ok_or_else(|| Failure::Params("work: expected a list of { kind, key, payload, dueAt, teamId }".into()))?;
-            let kept = store.keep_delivery(p.str("subscriptionId")?, p.0.get("checkpoint"), &delivery, &work)?;
-            Ok(Js::from(obj! { "kept" => Js::Bool(kept) }))
+            let arrivals = match p.0.get("arrivals") {
+                None => None,
+                Some(given) => {
+                    let text = |key: &str| given.get(key).and_then(Js::as_str).ok_or_else(|| Failure::Params(format!("arrivals.{key}: expected a text")));
+                    let list: Vec<NewArrival> = rows(given.get("arrivals").unwrap_or(&Js::Null))
+                        .ok_or_else(|| Failure::Params("arrivals.arrivals: expected a list of { edge, key, identity, version, landing, gone }".into()))?;
+                    Some((text("teamId")?.to_string(), text("adapterType")?.to_string(), list, text("at")?.to_string()))
+                }
+            };
+            let logged = arrivals.as_ref().map(|(team_id, adapter_type, arrivals, at)| DeliveryArrivals { team_id, adapter_type, arrivals, at });
+            let kept = store.keep_delivery(p.str("subscriptionId")?, p.0.get("checkpoint"), &delivery, &work, logged.as_ref())?;
+            let mut answer = obj! { "kept" => Js::Bool(kept.is_some()) };
+            if let (Some(wakes), Some(_)) = (&kept, &logged) {
+                answer.insert("wakes".into(), to_rows(wakes));
+            }
+            Ok(Js::from(answer))
         }
         "inbound.deliveries" => {
             let query = DeliveryQuery { subscription_id: p.opt_str("subscriptionId")?, since: p.opt_str("since")?, limit: p.int("limit")? };
@@ -423,6 +437,26 @@ mod tests {
 
     fn call(store: &dyn RunHostStore, method: &str, params: crate::json::Obj) -> Js {
         answer(store, method, &Js::from(params)).unwrap_or_else(|refusal| panic!("{method}: {}", refusal.message))
+    }
+
+    /// A delivery's arrivals cross with it, and its wakes come back; a
+    /// delivery without them answers as it always has.
+    #[test]
+    fn a_deliverys_arrivals_cross_the_store_wire() {
+        let store = state_file();
+        let receipt = |id: &str| obj! { "id" => Js::str(id), "externalId" => Js::str("d-1"), "receivedAt" => Js::str(iso(0)), "source" => Js::str("webhook"), "inline" => Js::Bool(false), "events" => Js::Arr(vec![]) };
+        let arrivals = Js::from(obj! {
+            "teamId" => Js::str("t"),
+            "adapterType" => Js::str("acme"),
+            "arrivals" => Js::parse(br#"[{"edge":"Comments","key":"thread:c1","identity":"k1","version":null,"landing":null,"gone":false}]"#).unwrap(),
+            "at" => Js::str(iso(0)),
+        });
+        let params = |id: &str| obj! { "subscriptionId" => Js::str("sub"), "delivery" => Js::from(receipt(id)), "work" => Js::Arr(vec![]), "arrivals" => arrivals.clone() };
+        assert_eq!(call(&store, "inbound.keepDelivery", params("11111111-1111-4111-8111-111111111111")).to_json(), r#"{"kept":true,"wakes":[]}"#);
+        assert_eq!(call(&store, "inbound.keepDelivery", params("22222222-2222-4222-8222-222222222222")).to_json(), r#"{"kept":false}"#);
+        assert_eq!(call(&store, "waits.mark", obj! {}).to_json(), "1", "logged once");
+        let plain = obj! { "subscriptionId" => Js::str("sub"), "delivery" => Js::from(obj! { "id" => Js::str("33333333-3333-4333-8333-333333333333"), "receivedAt" => Js::str(iso(0)), "source" => Js::str("webhook"), "inline" => Js::Bool(false), "events" => Js::Arr(vec![]) }), "work" => Js::Arr(vec![]) };
+        assert_eq!(call(&store, "inbound.keepDelivery", plain).to_json(), r#"{"kept":true}"#);
     }
 
     /// The composite writes as a store module's client sends them

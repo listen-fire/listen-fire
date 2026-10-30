@@ -45,7 +45,7 @@ use crate::secrets::{Binding, Credential, Credentials, install_of, signer_of};
 use crate::subscriptions::{has_scoped, scoped_secret};
 use crate::backend::RunHostStore;
 use crate::store::{DeliverySource, NewDelivery, NewWork, Store, StoreError, iso};
-use crate::waits::NewArrival;
+use crate::waits::{DeliveryArrivals, NewArrival, delivery_rows};
 
 /// The field of an install's credential that holds the webhook secret when
 /// the external declares `inbound` and `lf-external.yaml` names none.
@@ -219,12 +219,16 @@ impl<R: Reader> LfDoors<'_, R> {
         Err(failed)
     }
 
-    /// Under `EventSink::Listed`, the queued events, for the answer.
+    /// Under `EventSink::Listed`, the queued rows, for the answer: each
+    /// event with its external, each wake.
     fn list(&self, rows: &[NewWork]) {
         let EventSink::Listed(listed) = &self.sink else { return };
-        for row in rows.iter().filter(|row| row.kind == "fire_event") {
-            let external = row.payload.get("external").cloned().unwrap_or(Js::Null);
-            listed.borrow_mut().push(Js::Obj(obj! { "kind" => Js::str(&row.kind), "key" => Js::str(&row.key), "external" => external }));
+        for row in rows {
+            let mut listing = obj! { "kind" => Js::str(&row.kind), "key" => Js::str(&row.key) };
+            if row.kind == "fire_event" {
+                listing.insert("external".into(), row.payload.get("external").cloned().unwrap_or(Js::Null));
+            }
+            listed.borrow_mut().push(Js::Obj(listing));
         }
     }
 
@@ -326,16 +330,15 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         Ok(event.clone())
     }
 
-    /// One store write: the delivery's receipt, the cursor, a `fire_event`
-    /// row per event and a `wake_await` row per key. Run inline instead,
-    /// the receipt is kept first and its events run after, so a cursor is
-    /// never kept past events its receipt does not hold. A duplicate writes
-    /// nothing and runs nothing.
+    /// One store write: the delivery's receipt, the cursor, its arrivals, a
+    /// `fire_event` row per event and a `wake_await` row per key and per
+    /// wait its arrivals answer. Run inline instead, the receipt is kept
+    /// first and its events run after, so a cursor is never kept past events
+    /// its receipt does not hold. A duplicate writes nothing and runs
+    /// nothing: its arrivals were logged with the first.
     ///
-    /// The mark its rows carry is taken first, then its arrivals are logged,
-    /// then the rest is kept: a failure to log keeps nothing, and the
-    /// sender's retry logs them again, which a wait reads once (by identity
-    /// and version).
+    /// A `fire_event` row carries the arrival log's mark after the
+    /// delivery's own arrivals, so a run it starts never waits for them.
     async fn keep(&self, kept: Kept<'_>) -> Result<bool, String> {
         let adapter_type = &kept.source.adapter_type;
         let came_for = Delivered { id: None, credential: self.delivering_credential(kept.source), subscription: subscription_of(kept.subscription_id).1 };
@@ -354,15 +357,24 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
             }
             EventSink::Inline { .. } => Vec::new(),
         };
-        self.mark_fire_rows(&mut work)?;
-        log_and_wake(self.store, kept.team_id, adapter_type, kept.arrivals)?;
         work.extend(kept.wake_keys.iter().map(|key| await_wake_work(adapter_type, kept.team_id, key)));
-        if !self.store.keep_delivery(kept.subscription_id, kept.checkpoint, &receipt, &work).map_err(|e| e.to_string())? {
+        let logged_at = iso(0);
+        // A delivery without arrivals asks nothing of a store module written
+        // before them; its rows carry the mark taken here.
+        let arrivals = match kept.arrivals {
+            [] => {
+                self.mark_fire_rows(&mut work)?;
+                None
+            }
+            arrivals => Some(DeliveryArrivals { team_id: kept.team_id, adapter_type, arrivals, at: &logged_at }),
+        };
+        let Some(wakes) = self.store.keep_delivery(kept.subscription_id, kept.checkpoint, &receipt, &work, arrivals.as_ref()).map_err(|e| e.to_string())? else {
             if let EventSink::Inline { fired, .. } = &self.sink {
                 fired.borrow_mut().redelivered.push(format!("delivery {} was kept before: it runs nothing", kept.external_id.unwrap_or_default()));
             }
             return Ok(false);
-        }
+        };
+        work.extend(wakes);
         crate::wake::queued_rows(&work);
         self.list(&work);
         self.run_inline(&receipt).await?;
@@ -444,7 +456,7 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
             })
             .collect();
         self.mark_fire_rows(&mut work)?;
-        if !self.store.keep_delivery(&caller.subscription_id, None, &receipt, &work).map_err(|e| e.to_string())? {
+        if self.store.keep_delivery(&caller.subscription_id, None, &receipt, &work, None).map_err(|e| e.to_string())?.is_none() {
             return Ok(false);
         }
         crate::wake::queued_rows(&work);
@@ -636,19 +648,34 @@ impl Store {
     }
 
     /// crate::backend::RunHostStore::keep_delivery: one transaction, the
-    /// receipt first. A duplicate writes nothing: no cursor, no rows.
-    pub fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, delivery: &NewDelivery, work: &[NewWork]) -> Result<bool, StoreError> {
+    /// receipt first. A duplicate writes nothing: no cursor, no arrivals, no
+    /// rows.
+    pub fn keep_delivery(
+        &self,
+        subscription_id: &str,
+        checkpoint: Option<&Js>,
+        delivery: &NewDelivery,
+        work: &[NewWork],
+        arrivals: Option<&DeliveryArrivals<'_>>,
+    ) -> Result<Option<Vec<NewWork>>, StoreError> {
         self.transaction(|db| {
             if !Store::insert_delivery_in(db, subscription_id, delivery)? {
-                return Ok(false);
+                return Ok(None);
             }
             if let Some(checkpoint) = checkpoint {
                 Self::save_checkpoint_in(db, subscription_id, checkpoint)?;
             }
-            for row in work {
+            let (work, wakes) = match arrivals {
+                None => (work.to_vec(), Vec::new()),
+                Some(a) => {
+                    let wakes = Store::log_arrivals_in(db, a.team_id, a.adapter_type, a.arrivals, a.at)?;
+                    delivery_rows(work, Store::arrival_mark_in(db)?, a.team_id, &wakes)
+                }
+            };
+            for row in work.iter().chain(&wakes) {
                 Store::enqueue_in(db, &row.kind, &row.key, &row.payload, row.due_at.as_deref())?;
             }
-            Ok(true)
+            Ok(Some(wakes))
         })
     }
 }
@@ -1256,13 +1283,56 @@ pub(crate) mod tests {
             let session = project.session().await;
             let earlier = NewArrival { edge: "Comments".into(), key: "thread:n-9".into(), identity: Some("k0".into()), version: None, landing: None, gone: false };
             session.store.log_arrivals(LOCAL_TENANT, "inbox", &[earlier], &iso(0)).unwrap();
-            let mark = session.store.arrival_mark().unwrap();
+            let before = session.store.arrival_mark().unwrap();
             assert_eq!(queue_delivery(&session, NOTE_AND_COMMENT, "d-1").await.status, 200);
+            let mark = session.store.arrival_mark().unwrap();
+            assert_eq!(mark, before + 1, "the delivery's comment was logged");
             let due = crate::store::ClaimDue { limit: 10, lease_ms: 60_000, due_by: None, kinds: None };
             let rows = session.store.claim_due(&due).unwrap();
             let fired: Vec<Option<&Js>> = rows.iter().filter(|r| r.kind == "fire_event").map(|r| r.payload.get("arrivalMark")).collect();
-            assert_eq!(fired, [Some(&Js::Num(mark.into()))], "the mark is taken before the delivery's own arrivals are logged");
-            assert_eq!(session.store.arrival_mark().unwrap(), mark + 1);
+            // The delivery started the run: it never waits for the delivery's own arrival.
+            assert_eq!(fired, [Some(&Js::Num(mark.into()))], "the mark is taken after the delivery's own arrivals are logged");
+        });
+    }
+
+    /// Run `run`'s wait on `key`'s `Comments` from `since`, parked at `s1`.
+    fn park_wait(store: &dyn RunHostStore, run: &str, key: &str, since: i64) -> String {
+        use crate::store::{Park, ParkKind, RunStart};
+        store.start_run(&RunStart { id: run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+        let wait = store.open_wait(&crate::waits::OpenWait { run_id: run, team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key, since }).unwrap();
+        store.commit_park(&Park { run_id: run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
+        wait
+    }
+
+    #[test]
+    fn a_redelivery_logs_nothing_again_and_wakes_nothing() {
+        let project = InboxProject::new();
+        in_local(async {
+            let session = project.session().await;
+            let first = park_wait(&*session.store, "run-1", "thread:n-0", 0);
+
+            // The first delivery logs its comment and wakes the parked wait;
+            // the wake is listed with the events.
+            let listed = RefCell::new(Vec::new());
+            let headers = signed(NOTE_AND_COMMENT, "d-1");
+            let delivery = Delivery { provider: "inbox", subscription_id: "inbox", raw_body: NOTE_AND_COMMENT, headers: &headers, method: "POST", path: "", query: "", source: DeliverySource::Webhook };
+            let doors = LfDoors::of_session(&session, EventSink::Listed(&listed), &|| {});
+            assert_eq!(answer_delivery(&doors, delivery).await.status, 200);
+            drop(doors);
+            let kinds: Vec<String> = listed.borrow().iter().map(|row| row.get("kind").and_then(Js::as_str).unwrap_or_default().to_string()).collect();
+            assert_eq!(kinds, ["fire_event", "wake_await"]);
+            let due = crate::store::ClaimDue { limit: 10, lease_ms: 60_000, due_by: None, kinds: None };
+            let woken: Vec<String> = session.store.claim_due(&due).unwrap().into_iter().filter(|r| r.kind == "wake_await").map(|r| r.payload.to_json()).collect();
+            assert_eq!(woken, [format!(r#"{{"waitId":"{first}"}}"#)]);
+
+            // A wait opened after it, then the same delivery again: a duplicate.
+            let mark = session.store.arrival_mark().unwrap();
+            let later = park_wait(&*session.store, "run-2", "thread:n-0", mark);
+            let again = queue_delivery(&session, NOTE_AND_COMMENT, "d-1").await;
+            assert_eq!((again.status, again.body.to_json()), (200, r#"{"ok":true,"duplicate":true,"eventsProcessed":0}"#.to_string()));
+            assert_eq!(session.store.arrival_mark().unwrap(), mark, "nothing logged again");
+            assert!(session.store.wait_arrivals(&later).unwrap().arrivals.is_empty(), "the re-sent comment is not the later wait's");
+            assert!(session.store.claim_due(&due).unwrap().is_empty(), "nothing woken, nothing queued");
         });
     }
 

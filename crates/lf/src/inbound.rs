@@ -639,7 +639,9 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
         source: &source,
         team_id: &subscription.team_id,
         wake_keys: wakes.as_deref().unwrap_or(&[]),
-        arrivals: &extraction.arrivals,
+        // Kept without its id, the delivery's retry is a delivery of its
+        // own: its arrivals are left for the retry to log, once.
+        arrivals: if wakes.is_ok() { &extraction.arrivals[..] } else { &[] },
         // A delivery whose wakes failed is answered 500 and sent again: kept
         // without its id, so the retry is kept rather than a duplicate.
         external_id: external_id.as_deref().filter(|_| wakes.is_ok()),
@@ -788,10 +790,11 @@ fn wake_body(body: Option<&Js>) -> Result<Woken, (String, String)> {
         }
         Some(_) => arrivals_of(body.unwrap_or(&Js::Null)).map_err(|issue| ("arrivals".to_string(), issue))?,
     };
-    if listed("keys").is_none() && !arrivals.is_empty() {
-        return Ok(Woken { keys: Vec::new(), arrivals });
-    }
-    let keys = listed("keys").and_then(Js::as_array).ok_or(("keys".to_string(), "expected an array".to_string()))?;
+    let keys = match listed("keys") {
+        None if arrivals.is_empty() => return Err(("arrivals".into(), "expected `arrivals` or `keys`, an array".into())),
+        None => return Ok(Woken { keys: Vec::new(), arrivals }),
+        Some(keys) => keys.as_array().ok_or(("keys".to_string(), "expected an array".to_string()))?,
+    };
     if keys.is_empty() || keys.len() > DOOR_MAX_BATCH {
         return Err(("keys".into(), format!("expected between 1 and {DOOR_MAX_BATCH} keys")));
     }
@@ -962,6 +965,10 @@ mod tests {
         arrived: std::cell::RefCell<Vec<String>>,
         /// Each kept delivery's external id; one kept before is a duplicate.
         kept: std::cell::RefCell<Vec<Option<String>>>,
+        /// Signed by the protocol's own scheme instead, read by
+        /// `preprocessInbound` (its body's `arrivals`), named by `x-id`,
+        /// its `wakeKeys` failing while this is set.
+        signed_wakes_failing: Option<std::cell::Cell<bool>>,
     }
 
     impl ModuleChecked {
@@ -973,7 +980,12 @@ mod tests {
                 wakes: Default::default(),
                 arrived: Default::default(),
                 kept: Default::default(),
+                signed_wakes_failing: None,
             }
+        }
+
+        fn signed(wakes_failing: bool) -> ModuleChecked {
+            ModuleChecked { signed_wakes_failing: Some(std::cell::Cell::new(wakes_failing)), ..ModuleChecked::answering("null") }
         }
     }
 
@@ -988,21 +1000,29 @@ mod tests {
             Vec::new()
         }
         async fn source_for(&self, _subscription: &Subscription) -> Result<Option<Source>, String> {
-            let declaration = Declaration::read(&Js::parse(br#"{"providerKey":"mail","scheme":"module"}"#).unwrap())?;
+            let declared: &[u8] = match self.signed_wakes_failing {
+                None => br#"{"providerKey":"mail","scheme":"module"}"#,
+                Some(_) => br#"{"providerKey":"mail","scheme":"remote","signatureHeaders":["x-listen-fire-signature"],"deliveryId":{"header":"x-id"}}"#,
+            };
+            let declaration = Declaration::read(&Js::parse(declared).unwrap())?;
             Ok(Some(Source { declaration, secret: "key".into(), adapter_type: "mail".into(), install: "inst".into() }))
         }
         fn reads_deliveries(&self, _source: &Source) -> bool {
-            false
+            self.signed_wakes_failing.is_some()
         }
-        async fn preprocess(&self, _source: &Source, _raw: &Js, _checkpoint: Option<&Js>) -> Result<Extraction, String> {
-            Err("never called for a module that checks its own inbound".into())
+        async fn preprocess(&self, _source: &Source, raw: &Js, _checkpoint: Option<&Js>) -> Result<Extraction, String> {
+            Ok(Extraction { events: Vec::new(), arrivals: arrivals_of(raw)?, checkpoint: None })
         }
         async fn check_inbound(&self, _source: &Source, request: &RawRequest<'_>, secret: Option<&str>, _checkpoint: Option<&Js>) -> Result<Js, String> {
             self.seen.borrow_mut().push(format!("{} {} {}", request.wire().to_json(), secret.unwrap_or("-"), request.method));
             Ok(self.answer.clone())
         }
         async fn wake_keys(&self, _source: &Source, _raw: &Js) -> Result<Vec<String>, String> {
-            Err("never called for a module that checks its own inbound".into())
+            match &self.signed_wakes_failing {
+                Some(failing) if failing.get() => Err("wake door down".into()),
+                Some(_) => Ok(Vec::new()),
+                None => Err("never called for a module that checks its own inbound".into()),
+            }
         }
         async fn capture(&self, event: &Js, _source: &Source) -> Result<Js, String> {
             Ok(event.clone())
@@ -1049,6 +1069,21 @@ mod tests {
         let unnamed = ModuleChecked::answering(r#"{"outcome":"accepted","events":[],"arrivals":[{"edge":"Replies","key":"C1:1","landing":{"fields":{}}}]}"#);
         assert_eq!(answer_delivery(&unnamed, delivery("POST", b"a=b", &[])).await.status, 500, "a module's answer that names no identity is its failure");
         assert!(unnamed.kept.borrow().is_empty());
+    }
+
+    /// A delivery whose wakes failed is kept without its id and answered
+    /// 500: its arrivals are left for the retry, so they are logged once.
+    #[tokio::test]
+    async fn a_delivery_whose_wakes_failed_leaves_its_arrivals_to_the_retry() {
+        let store = ModuleChecked::signed(true);
+        let body = br#"{"arrivals":[{"edge":"Comments","key":"thread:c1","identity":"k1","landing":{"fields":{}}}]}"#;
+        let headers = headers(&[("x-listen-fire-signature", &to_hex(&hmac_sha256(b"key", body))), ("x-id", "d-1")]);
+        assert_eq!(answer_delivery(&store, delivery("POST", body, &headers)).await.status, 500);
+        assert!(store.arrived.borrow().is_empty(), "nothing logged by the failed attempt");
+        store.signed_wakes_failing.as_ref().unwrap().set(false);
+        assert_eq!(answer_delivery(&store, delivery("POST", body, &headers)).await.status, 200);
+        assert_eq!(store.arrived.borrow().clone(), ["k1"], "the retry logs them once");
+        assert_eq!(store.kept.borrow().clone(), [None, Some("d-1".to_string())]);
     }
 
     #[tokio::test]

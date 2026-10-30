@@ -21,7 +21,8 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::json::Js;
-use crate::store::{Store, StoreError};
+use crate::obj;
+use crate::store::{NewWork, Store, StoreError};
 
 type Result<T> = std::result::Result<T, StoreError>;
 
@@ -79,16 +80,66 @@ pub struct WaitWake {
     pub address: String,
 }
 
+/// A delivery's arrivals, logged in the write that keeps it
+/// (`inbound.keepDelivery`'s `arrivals`), so a redelivery logs nothing again.
+pub struct DeliveryArrivals<'a> {
+    pub team_id: &'a str,
+    pub adapter_type: &'a str,
+    pub arrivals: &'a [NewArrival],
+    pub at: &'a str,
+}
+
+/// The work rows a kept delivery's arrivals change and add: each
+/// `fire_event` row carries `mark` as its `arrivalMark` (a run it starts reads
+/// its waits' arrivals after it), and each wait a logged arrival answers gets
+/// a `wake_await { waitId }` row.
+pub fn delivery_rows(work: &[NewWork], mark: i64, team_id: &str, wakes: &[WaitWake]) -> (Vec<NewWork>, Vec<NewWork>) {
+    let marked = work
+        .iter()
+        .map(|row| {
+            let mut row = row.clone();
+            if let (true, Js::Obj(payload)) = (row.kind == "fire_event", &mut row.payload) {
+                payload.insert("arrivalMark".into(), Js::Num(mark.into()));
+            }
+            row
+        })
+        .collect();
+    (marked, wake_rows(team_id, wakes))
+}
+
+/// A `wake_await` row per wait, due now: the drain reads its arrivals and
+/// resumes its run.
+pub fn wake_rows(team_id: &str, wakes: &[WaitWake]) -> Vec<NewWork> {
+    wakes
+        .iter()
+        .map(|wake| NewWork {
+            kind: "wake_await".into(),
+            key: format!("wake_await:{}", uuid::Uuid::new_v4()),
+            payload: Js::Obj(obj! { "waitId" => Js::str(&wake.wait_id) }),
+            due_at: None,
+            team_id: Some(team_id.to_string()),
+        })
+        .collect()
+}
+
 // ── The family over the state file (the trait's SQLite implementation) ─────
 
 impl Store {
     /// The latest seq logged; an arrival logged after this call is above it.
     pub fn arrival_mark(&self) -> Result<i64> {
-        Ok(self.db.query_row("select coalesce(max(seq), 0) from arrival", [], |r| r.get(0))?)
+        Self::arrival_mark_in(&self.db)
+    }
+
+    pub(crate) fn arrival_mark_in(db: &Connection) -> Result<i64> {
+        Ok(db.query_row("select coalesce(max(seq), 0) from arrival", [], |r| r.get(0))?)
     }
 
     pub fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {
-        self.transaction(|db| {
+        self.transaction(|db| Self::log_arrivals_in(db, team_id, adapter_type, arrivals, at))
+    }
+
+    pub(crate) fn log_arrivals_in(db: &Connection, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {
+        {
             let mut log = db.prepare(
                 "insert into arrival (team_id, adapter_type, edge, key, identity, version, landing, gone, logged_at)
                  values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -125,7 +176,7 @@ impl Store {
                 }
             }
             Ok(wakes)
-        })
+        }
     }
 
     /// The wait's id. A run that already waits on this edge of this record
@@ -492,6 +543,49 @@ mod tests {
         for case in cases() {
             run_case(&store, &case);
         }
+        a_kept_delivery_logs_its_arrivals_once(&store);
+    }
+
+    /// A delivery's arrivals are logged in the write that keeps it: its
+    /// `fire_event` rows carry the mark after them, a wait they answer gets
+    /// its wake row (the answer), and a duplicate logs and wakes nothing.
+    fn a_kept_delivery_logs_its_arrivals_once(store: &dyn RunHostStore) {
+        use crate::store::{DeliverySource, NewDelivery};
+        // The store's own team: its drain claims the rows.
+        let (run, team, subscription) = (uuid::Uuid::new_v4().to_string(), store.tenant().to_string(), uuid::Uuid::new_v4().to_string());
+        let key = format!("thread:{run}");
+        store.start_run(&RunStart { id: &run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+        let wait = store.open_wait(&OpenWait { run_id: &run, team_id: &team, adapter_type: "acme", edge: "Comments", key: &key, since: store.arrival_mark().unwrap() }).unwrap();
+        store.commit_park(&Park { run_id: &run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
+        let receipt = || NewDelivery {
+            id: uuid::Uuid::new_v4().to_string(),
+            external_id: Some(format!("d-{run}")),
+            received_at: iso(0),
+            source: DeliverySource::Webhook,
+            inline: false,
+            replay_of: None,
+            events: vec![],
+        };
+        let fire = NewWork { kind: "fire_event".into(), key: format!("fire_event:{run}"), payload: Js::Obj(obj! { "external" => Js::str("acme") }), due_at: None, team_id: Some(team.clone()) };
+        let arrival = NewArrival { edge: "Comments".into(), key: key.clone(), identity: Some("k1".into()), version: None, landing: Some(Js::Null), gone: false };
+        let logged = DeliveryArrivals { team_id: &team, adapter_type: "acme", arrivals: std::slice::from_ref(&arrival), at: &iso(0) };
+        let wakes = store.keep_delivery(&subscription, None, &receipt(), std::slice::from_ref(&fire), Some(&logged)).unwrap().expect("kept");
+        let mark = store.arrival_mark().unwrap();
+        assert_eq!(wakes.iter().map(|w| (w.kind.as_str(), w.payload.to_json())).collect::<Vec<_>>(), [("wake_await", format!(r#"{{"waitId":"{wait}"}}"#))]);
+        assert_eq!(store.wait_arrivals(&wait).unwrap().arrivals.len(), 1);
+        let due = crate::store::ClaimDue { limit: 1000, lease_ms: 60_000, due_by: None, kinds: None };
+        let rows = store.claim_due(&due).unwrap();
+        let fired = rows.iter().find(|r| r.key == fire.key).expect("the fire row");
+        assert_eq!(fired.payload.get("arrivalMark"), Some(&Js::Num(mark.into())), "the mark after the delivery's own arrival");
+        assert!(rows.iter().any(|r| r.kind == "wake_await" && r.payload.get("waitId") == Some(&Js::str(&wait))));
+
+        assert!(store.keep_delivery(&subscription, None, &receipt(), &[], Some(&logged)).unwrap().is_none(), "a duplicate");
+        assert_eq!(store.arrival_mark().unwrap(), mark, "a duplicate logs nothing");
+    }
+
+    #[test]
+    fn a_kept_delivery_logs_its_arrivals_once_in_the_state_file() {
+        a_kept_delivery_logs_its_arrivals_once(&state_file());
     }
 
     /// A log in flight on a record's edge holds its lock (lf.lock_wait_key)

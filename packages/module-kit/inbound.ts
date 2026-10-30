@@ -17,8 +17,7 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-import type { WireCheckInboundInputShape } from 'engine-contracts';
-import type { Arrival } from 'engine-contracts';
+import type { Arrival, WireCheckInboundInputShape } from 'engine-contracts';
 import type { DiscriminableEvent, InboundCheck } from 'engine-contracts/adapter';
 
 /** One inbound request, read. */

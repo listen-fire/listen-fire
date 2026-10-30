@@ -1597,15 +1597,15 @@ mod tests {
         let first = delivery(None);
         // Before: the cursor moved past events that were then never queued.
         failing(&store, "no_work", "before insert on work");
-        assert!(store.keep_delivery("sub", Some(&cursor), &first, &work).is_err());
+        assert!(store.keep_delivery("sub", Some(&cursor), &first, &work, None).is_err());
         assert_eq!(store.inbound_checkpoint("sub").unwrap(), None);
         assert!(store.delivery(&first.id).unwrap().is_none(), "its receipt went with the failed write");
         unfail(&store, "no_work");
-        assert!(store.keep_delivery("sub", Some(&cursor), &first, &work).unwrap());
+        assert!(store.keep_delivery("sub", Some(&cursor), &first, &work, None).unwrap().is_some());
         assert_eq!(store.inbound_checkpoint("sub").unwrap(), Some(cursor));
         assert_eq!(work_keys(&store), ["fire_event:1", "fire_event:2"]);
         // No cursor: the saved one stays.
-        assert!(store.keep_delivery("sub", None, &delivery(None), &[fire_row("fire_event:3")]).unwrap());
+        assert!(store.keep_delivery("sub", None, &delivery(None), &[fire_row("fire_event:3")], None).unwrap().is_some());
         assert_eq!(store.inbound_checkpoint("sub").unwrap(), Some(Js::str("c-2")));
     }
 
@@ -1613,17 +1613,17 @@ mod tests {
     fn a_duplicate_on_a_second_connection_is_kept_out() {
         let (store, path) = state_file();
         let other = Store::open(&path).unwrap();
-        assert!(store.keep_delivery("sub", Some(&Js::str("c-1")), &delivery(Some("d-1")), &[fire_row("fire_event:1")]).unwrap());
+        assert!(store.keep_delivery("sub", Some(&Js::str("c-1")), &delivery(Some("d-1")), &[fire_row("fire_event:1")], None).unwrap().is_some());
         // The first's work is still queued: the redelivery is kept out by the write, not the drain.
-        assert!(!other.keep_delivery("sub", Some(&Js::str("c-2")), &delivery(Some("d-1")), &[fire_row("fire_event:2")]).unwrap());
+        assert!(!other.keep_delivery("sub", Some(&Js::str("c-2")), &delivery(Some("d-1")), &[fire_row("fire_event:2")], None).unwrap().is_some());
         assert_eq!(store.inbound_checkpoint("sub").unwrap(), Some(Js::str("c-1")));
         assert_eq!(work_keys(&store), ["fire_event:1"]);
         let all = DeliveryQuery { subscription_id: None, since: None, limit: 10 };
         assert_eq!(store.deliveries(&all).unwrap().len(), 1);
         // Another subscription's, or none, is its own.
-        assert!(other.keep_delivery("other", None, &delivery(Some("d-1")), &[]).unwrap());
-        assert!(other.keep_delivery("sub", None, &delivery(None), &[]).unwrap());
-        assert!(other.keep_delivery("sub", None, &delivery(None), &[]).unwrap());
+        assert!(other.keep_delivery("other", None, &delivery(Some("d-1")), &[], None).unwrap().is_some());
+        assert!(other.keep_delivery("sub", None, &delivery(None), &[], None).unwrap().is_some());
+        assert!(other.keep_delivery("sub", None, &delivery(None), &[], None).unwrap().is_some());
         assert_eq!(store.deliveries(&all).unwrap().len(), 4);
     }
 
@@ -1631,12 +1631,12 @@ mod tests {
     fn a_forgotten_delivery_id_lets_the_retry_in() {
         let (store, _) = state_file();
         let first = delivery(Some("d-1"));
-        assert!(store.keep_delivery("sub", None, &first, &[]).unwrap());
+        assert!(store.keep_delivery("sub", None, &first, &[], None).unwrap().is_some());
         store.forget_delivery_id(&first.id).unwrap();
         let kept = store.delivery(&first.id).unwrap().unwrap();
         assert_eq!((kept.external_id, kept.event_count), (None, 1), "the receipt stays, without its id");
-        assert!(store.keep_delivery("sub", None, &delivery(Some("d-1")), &[]).unwrap(), "the retry is its own");
-        assert!(!store.keep_delivery("sub", None, &delivery(Some("d-1")), &[]).unwrap(), "and its id is kept");
+        assert!(store.keep_delivery("sub", None, &delivery(Some("d-1")), &[], None).unwrap().is_some(), "the retry is its own");
+        assert!(!store.keep_delivery("sub", None, &delivery(Some("d-1")), &[], None).unwrap().is_some(), "and its id is kept");
     }
 
     #[test]
@@ -1644,7 +1644,7 @@ mod tests {
         let (store, _) = state_file();
         let old = |store: &Store| {
             let kept = NewDelivery { received_at: iso(-30 * 86_400_000), ..delivery(None) };
-            store.keep_delivery("sub", None, &kept, &[]).unwrap();
+            store.keep_delivery("sub", None, &kept, &[], None).unwrap();
             kept.id
         };
         let start = |id: &str, delivery_id: &str| {
@@ -1657,7 +1657,7 @@ mod tests {
         let payload = Js::Obj(crate::obj! { "deliveryId" => Js::str(&queued) });
         store.enqueue("fire_event", "fire_event:q", &payload, None).unwrap();
         let fresh = delivery(None);
-        store.keep_delivery("sub", None, &fresh, &[]).unwrap();
+        store.keep_delivery("sub", None, &fresh, &[], None).unwrap();
         assert_eq!(store.sweep_deliveries(&iso(-14 * 86_400_000), 100).unwrap(), 1);
         assert!(store.delivery(&settled).unwrap().is_none());
         for kept in [&running, &queued, &fresh.id] {
@@ -1682,7 +1682,7 @@ mod tests {
         let store = Store::open(&path).unwrap();
         assert_eq!(store.run("old").unwrap().unwrap().delivery_id, None);
         let first = delivery(None);
-        store.keep_delivery("sub", None, &first, &[]).unwrap();
+        store.keep_delivery("sub", None, &first, &[], None).unwrap();
         store.start_run(&RunStart { id: "new", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: Some(&first.id) }).unwrap();
         assert_eq!(store.run("new").unwrap().unwrap().delivery_id.as_deref(), Some(first.id.as_str()));
         let runs: Vec<String> = store.delivery(&first.id).unwrap().unwrap().runs.into_iter().map(|r| r.id).collect();

@@ -10,12 +10,11 @@
 // can await: `await company-[:Comments]->` parks until somebody
 // comments. The thread is waited on under the key `thread:<company id>`
 // (`awaitKeys`), and each comment is reported as an arrival on it, named by
-// its `Id` (adapter protocol 2.5). A webhook delivery may name threads too
-// (`comments: [{ thread, text }]`): the CRM reports each named thread's
-// comments as it holds them, and wakes the thread by its key, the older form,
-// which runs still parked on keys read. Companies and comments are kept in
-// the file named by ACME_CRM_STATE, so a test (or a developer) can see a
-// write land.
+// its `Id` (adapter protocol 2.5). A webhook delivery may carry comments too
+// (`comments: [{ id, thread, text }]`): each is reported as an arrival, named
+// by its id, and wakes its thread by key, the older form, which runs still
+// parked on keys read. Companies and comments are kept in the file named by
+// ACME_CRM_STATE, so a test (or a developer) can see a write land.
 //
 // The CRM also owns an inbound side of its own, the way a hosted system
 // would: `POST /dev/companies { Name }` and `POST /dev/comments { company,
@@ -54,12 +53,6 @@ function commentArrival(comment) {
     identity: comment.id,
     landing: { recordId: comment.id, recordType: COMMENT, fields: { Id: comment.id, Text: comment.Text } },
   };
-}
-
-/** The comments the CRM holds on the threads a delivery names, as arrivals. */
-function threadArrivals(raw) {
-  const threads = new Set((raw?.comments ?? []).map((comment) => comment.thread));
-  return readState().comments.filter((comment) => threads.has(comment.thread)).map(commentArrival);
 }
 
 function writeState(state) {
@@ -163,7 +156,12 @@ const METHODS = {
     writeState(state);
     return { adapterType: 'acme_crm', externalId, recordType, data: { ...existing.fields } };
   },
-  preprocessInbound: ({ raw }) => ({ events: (raw?.companies ?? []).map(companyCreatedEvent), arrivals: threadArrivals(raw) }),
+  // A delivery's companies are its events; its comments, the arrivals it
+  // reports: only those it carries, each named by its own id.
+  preprocessInbound: ({ raw }) => ({
+    events: (raw?.companies ?? []).map(companyCreatedEvent),
+    arrivals: (raw?.comments ?? []).map(({ id, thread, text }) => commentArrival({ id, thread, Text: text })),
+  }),
   listEventTypes: () => [
     { tag: COMPANY_CREATED, positionType: COMPANY },
     { tag: COMPANY_UPDATED, positionType: COMPANY },

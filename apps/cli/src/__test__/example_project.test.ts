@@ -260,7 +260,7 @@ test('a webhook delivery carrying comments wakes the awaits parked on their thre
   const stateFile = join(dir, '.lf/externals/acme_crm/state.json');
   const crm = JSON.parse(readFileSync(stateFile, 'utf8')) as Record<string, unknown>;
   writeFileSync(stateFile, JSON.stringify({ ...crm, comments: [{ id: 'comment-1', thread: discussion.externalId, Text: 'on it' }] }));
-  const body = Buffer.from(JSON.stringify({ comments: [{ thread: discussion.externalId, text: 'on it' }] }));
+  const body = Buffer.from(JSON.stringify({ comments: [{ id: 'comment-1', thread: discussion.externalId, text: 'on it' }] }));
 
   const serving = await served(dir);
   try {
