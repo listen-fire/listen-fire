@@ -1173,8 +1173,8 @@ program_check.ts); a program that fails it never gets an answer, and the
 host ends the run with the check's error. The request carries no segment,
 so an embedder may answer it, or check, before its own `segment.open`.
 
-The checker mutates the AST the engine then reads, so its four facts cross
-as **stamps**: `{file?, path, spreadFields | copy | reference | writtenType}`.
+The checker settles facts on the AST the engine then reads, so they cross
+as **stamps**: `{file?, path, spreadFields | copy | reference | writtenType | opensWaits | listsFirst}`.
 
 | stamp | the node | what the checker wrote |
 |---|---|---|
@@ -1182,6 +1182,8 @@ as **stamps**: `{file?, path, spreadFields | copy | reference | writtenType}`.
 | `copy: CopyPlan` | a graph's spread (`graph { ...r }`) | `MapSpread.copy` (`{fields, edges: {name: CopyPlan}}`) |
 | `reference: true` | a graph entry whose value is a record (`graph { owner: r }`) | `NodeEntry.reference`: the entry is an edge holding it |
 | `writtenType: type` | a linked write's target off a record a hop's WHERE chose (`write base-[:Companies]-> { … }`) | the type the write creates: the record carries only its own type (`Base`), not the member the check typed it as |
+| `opensWaits: [edge…]` | where a record enters the run: a bound write's expression (`msg = write …`), a binding whose value reads records, a traversal block's head, a function's parameter | the edges the program (or a file it links) awaits off records of that type (adapter and position): the waits on them open here, so an arrival before the `await` is reached still counts |
+| `listsFirst: true` | an `await`'s walk (`…/await/source`) of an edge that can also be listed, not `await new` | the wait takes the first match already on the edge before any arrival |
 
 - `path` is an **AST path**: a JSON Pointer (RFC 6901) from the `Program`
   object through the program's JSON exactly as the parser emits it, e.g.

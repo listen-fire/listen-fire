@@ -80,13 +80,16 @@ export function checkSourceInRust(source: string, snapshot: CatalogSnapshot, opt
 /** A checker fact about one node, keyed by its AST path (a JSON Pointer from
  *  the Program, `file` naming a library's): a write spread's field list, a
  *  graph spread's copy plan (as plain data), that a graph entry is a
- *  reference, or the type a linked write off a record a hop's WHERE chose
- *  creates. */
+ *  reference, the type a linked write off a record a hop's WHERE chose
+ *  creates, the edges awaited off a record that enters the run there, or
+ *  that a plain `await` reads its edge's listing first. */
 export type Stamp = { file?: string; path: string } & (
   | { spreadFields: readonly string[] }
   | { copy: unknown }
   | { reference: true }
   | { writtenType: string }
+  | { opensWaits: readonly string[] }
+  | { listsFirst: true }
 );
 
 /** What an import binds: a movement or a node declaration. */
@@ -170,6 +173,10 @@ function stampOf(value: unknown): Stamp {
   if (value.copy !== undefined) return { ...at, copy: value.copy };
   if (value.reference === true) return { ...at, reference: true };
   if (typeof value.writtenType === 'string') return { ...at, writtenType: value.writtenType };
+  if (Array.isArray(value.opensWaits) && value.opensWaits.every((e) => typeof e === 'string')) {
+    return { ...at, opensWaits: value.opensWaits };
+  }
+  if (value.listsFirst === true) return { ...at, listsFirst: true };
   throw new Error(`the Rust checker answered a stamp that stamps nothing: ${JSON.stringify(value)}`);
 }
 

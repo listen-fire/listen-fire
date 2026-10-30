@@ -43,7 +43,7 @@ impl Checker<'_> {
             if let Some(found) = instantiated {
                 let schema = self.schemas.entry(found as *const _ as usize).or_insert_with(|| Rc::new(found.clone())).clone();
                 let address = self.address_of(unit, None, &construct, scope);
-                let instance = Rc::new(Instance { name: unit.to_string(), schema, declared: None, address });
+                let instance = Rc::new(Instance { name: unit.to_string(), schema, declared: None, adapter: Some(unit.to_string()), address });
                 symbol.types = SymbolTypes { pos: Some(Position::Meta { instance }), ..SymbolTypes::default() };
             }
             let id = self.scopes.add_symbol(symbol);
@@ -284,7 +284,7 @@ impl Checker<'_> {
         let Some(schema) = self.catalog.instantiate(&adapter, &args) else { return SymbolTypes::default() };
         let schema = self.schemas.entry(schema as *const _ as usize).or_insert_with(|| Rc::new(schema.clone())).clone();
         let address = self.address_of(&adapter, credential_arg.as_deref(), construct, scope);
-        let instance = Rc::new(Instance { name: name.to_string(), schema, declared: None, address });
+        let instance = Rc::new(Instance { name: name.to_string(), schema, declared: None, adapter: Some(adapter.clone()), address });
         SymbolTypes { pos: Some(Position::Meta { instance }), ..SymbolTypes::default() }
     }
 

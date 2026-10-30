@@ -82,6 +82,9 @@ pub struct Checker<'c> {
     pub nodes: crate::families::nodes::NodeState,
     /// What the check settles on nodes for the engine (crate::answer).
     pub stamps: crate::answer::Stamps,
+    /// Where records enter the run and which edges are awaited, for the
+    /// stamps settled after the walk (families::wait_entries).
+    pub wait_entries: crate::families::wait_entries::WaitEntries,
     /// The parser's MOV_V5_SPELLING findings whose fix depends on a type, by
     /// span: the message and fix the checker, which knows the type, gives
     /// them instead (families::typed_spelling).
@@ -264,6 +267,7 @@ impl<'c> Checker<'c> {
             inference: Default::default(),
             nodes: Default::default(),
             stamps: Default::default(),
+            wait_entries: Default::default(),
             respelled: Default::default(),
             named_orders: Default::default(),
             hoisted_texts: Default::default(),
@@ -418,6 +422,7 @@ impl<'c> Checker<'c> {
                     self.within_type_limit(&assign.name, &mut types.field, &mut types.may_hold, Some(assign.span));
                     self.set_types(scope, &assign.name, types);
                 }
+                self.note_bound_entry(&assign.name, &assign.value, assign.span, scope);
                 if self.recording() {
                     self.record_assigned(&assign.name, &assign.value, scope);
                 }
@@ -521,6 +526,9 @@ impl<'c> Checker<'c> {
             }
             RValue::Write { write } => {
                 let handle = self.check_write(write, scope, name.is_some());
+                if name.is_some() && !matches!(write.target, WriteTarget::Position { .. }) {
+                    self.note_written_entry(write.span, handle.as_ref());
+                }
                 return Bound::on_node_plane(handle);
             }
             RValue::Match { r#match } => {
@@ -887,6 +895,7 @@ impl<'c> Checker<'c> {
             self.declare_param(body, &param.name, param.span, is_closure_type(type_));
             let of = self.movement_param_of(&movement.name, scope);
             self.type_param(body, &param.name, type_, scope, &of);
+            self.note_parameter_entry(&param.name, param.span, body);
             self.note_undescribed_event(body, &param.name, type_, graph);
         }
         // A `return` straight in the body is a step on its spine, not a lane
@@ -1240,6 +1249,7 @@ impl<'c> Checker<'c> {
         let aliases = self.check_path_head(&block.head, scope);
         self.report_head_off_maybe_absent(&block.head, scope);
         let walk = self.walk_head(&block.head, scope, false);
+        self.note_block_entry(&block.head, walk.as_ref());
         let body = self.open_landing(scope, &aliases, block.head.span);
         self.note_extent(block.span, body);
         self.type_hop_aliases(body, &aliases, walk.as_ref());
@@ -1276,6 +1286,7 @@ impl<'c> Checker<'c> {
                 self.check_path_head(head, scope);
                 let walk = self.walk_head(head, scope, true);
                 self.check_awaitable(head, walk.as_ref(), *arrivals_only);
+                self.note_await(&awaited.source, walk.as_ref());
                 self.report_captured_values(head, scope);
                 self.record_awaited_walk(awaited.span, head, walk.as_ref(), scope);
                 awaited_walk(walk)

@@ -10,7 +10,11 @@
 //!   holding it (`reference`);
 //! - on a linked write's target off a record a hop's WHERE chose, the type
 //!   the write creates (`writtenType`): the record carries only its own
-//!   type, so the run cannot learn which member the check typed it as.
+//!   type, so the run cannot learn which member the check typed it as;
+//! - where a record enters the run, the edges the program awaits off
+//!   records of its type (`opensWaits`, crate::families::wait_entries);
+//! - on a plain `await` of an edge that can also be listed, that it reads
+//!   the listing first (`listsFirst`).
 //!
 //! The engine re-parses the source, so these cross as STAMPS keyed by the
 //! node's place in the program's JSON (a JSON Pointer; through a nested
@@ -39,6 +43,11 @@ pub enum StampKind {
     Reference,
     /// The type a linked write creates, as the check resolved it.
     WrittenType(String),
+    /// The edges awaited off the record that enters the run here.
+    OpensWaits(Vec<String>),
+    /// A plain `await` whose edge can be listed: the first match already
+    /// there is taken before any arrival.
+    ListsFirst,
 }
 
 impl StampKind {
@@ -47,14 +56,20 @@ impl StampKind {
     }
 }
 
-/// One stamp as recorded: the file (none for the program checked), the
+/// Where a stamp is recorded: the file (none for the program checked), the
 /// nested calls it was checked inside (each the slot's span and the call's
 /// extent in its text, outermost first), and the node's span.
-#[derive(Debug, Clone)]
-struct Recorded {
+#[derive(Debug, Clone, PartialEq)]
+pub struct StampSite {
     file: Option<String>,
     nested: Vec<(Span, At)>,
     span: Span,
+}
+
+/// One stamp as recorded.
+#[derive(Debug, Clone)]
+struct Recorded {
+    site: StampSite,
     kind: StampKind,
 }
 
@@ -81,17 +96,28 @@ impl Checker<'_> {
     /// Records `kind` on the node at `span`. A node stamped again keeps the
     /// later fact, as the TypeScript's mutation does.
     pub fn stamp(&mut self, span: Span, kind: StampKind) {
+        let site = self.stamp_site(span);
+        self.stamp_at(site, kind);
+    }
+
+    /// Where a stamp on the node at `span` would be recorded now, for a fact
+    /// settled only after the walk.
+    pub fn stamp_site(&self, span: Span) -> StampSite {
         let file = match &self.stamps.file {
             Some(file) => file.clone(),
             None => self.imports.current_path().map(str::to_string),
         };
-        let nested = self.stamps.nested.clone();
+        StampSite { file, nested: self.stamps.nested.clone(), span }
+    }
+
+    /// `stamp`, at a site recorded earlier.
+    pub fn stamp_at(&mut self, site: StampSite, kind: StampKind) {
         let recorded = &mut self.stamps.recorded;
-        if let Some(earlier) = recorded.iter_mut().find(|r| r.span == span && r.kind.same_kind(&kind) && r.file == file && r.nested == nested) {
+        if let Some(earlier) = recorded.iter_mut().find(|r| r.site == site && r.kind.same_kind(&kind)) {
             earlier.kind = kind;
             return;
         }
-        recorded.push(Recorded { file, nested, span, kind });
+        recorded.push(Recorded { site, kind });
     }
 
     /// Checking the call at `at` in the slot at `slot`: a stamp recorded
@@ -132,7 +158,8 @@ impl Checker<'_> {
 /// the walk recorded it is left out, and named in `unplaced` for a test to
 /// find (never sent).
 pub fn check_answer(program: &Program, catalog: &CatalogSnapshot, options: CheckOptions) -> Answer {
-    let (diagnostics, checker) = crate::run_check(program, catalog, options);
+    let (diagnostics, mut checker) = crate::run_check(program, catalog, options);
+    checker.stamp_wait_entries();
     let link = checker.imports.link();
     let root = serde_json::to_value(program).expect("an AST is always JSON");
     let mut library_trees: std::collections::HashMap<&str, Json> = std::collections::HashMap::new();
@@ -144,13 +171,14 @@ pub fn check_answer(program: &Program, catalog: &CatalogSnapshot, options: Check
     let mut stamps = Vec::new();
     let mut unplaced = Vec::new();
     for recorded in &checker.stamps.recorded {
-        let tree = match &recorded.file {
+        let site = &recorded.site;
+        let tree = match &site.file {
             None => Some(&root),
             Some(path) => library_trees.get(path.as_str()),
         };
-        match tree.and_then(|tree| place(tree, &recorded.nested, &recorded.span, &recorded.kind)) {
+        match tree.and_then(|tree| place(tree, &site.nested, &site.span, &recorded.kind)) {
             Some(path) => stamps.push(stamp_json(recorded, path)),
-            None => unplaced.push(format!("{:?} at {:?} in {:?} (nested {:?})", recorded.kind, recorded.span, recorded.file, recorded.nested)),
+            None => unplaced.push(format!("{:?} at {:?} in {:?} (nested {:?})", recorded.kind, site.span, site.file, site.nested)),
         }
     }
     let link = link.map(|link| link_json(link, catalog));
@@ -178,7 +206,7 @@ impl Answer {
 
 fn stamp_json(recorded: &Recorded, path: String) -> Json {
     let mut stamp = json!({ "path": path });
-    if let Some(file) = &recorded.file {
+    if let Some(file) = &recorded.site.file {
         stamp["file"] = json!(file);
     }
     match &recorded.kind {
@@ -186,6 +214,8 @@ fn stamp_json(recorded: &Recorded, path: String) -> Json {
         StampKind::Copy(plan) => stamp["copy"] = plan.clone(),
         StampKind::Reference => stamp["reference"] = json!(true),
         StampKind::WrittenType(written) => stamp["writtenType"] = json!(written),
+        StampKind::OpensWaits(edges) => stamp["opensWaits"] = json!(edges),
+        StampKind::ListsFirst => stamp["listsFirst"] = json!(true),
     }
     stamp
 }
@@ -210,6 +240,8 @@ fn place(tree: &Json, nested: &[(Span, At)], span: &Span, kind: &StampKind) -> O
                 StampKind::Copy(_) => is_map_spread(node),
                 StampKind::Reference => is_value_entry(node),
                 StampKind::WrittenType(_) => is_linked_target(node),
+                StampKind::OpensWaits(_) => is_record_entry(node, path),
+                StampKind::ListsFirst => is_awaited_traversal(node, path),
             }
     };
     let (path, _) = find(&read, "", &fits)?;
@@ -231,6 +263,23 @@ fn find<'j>(node: &'j Json, path: &str, fits: &dyn Fn(&Json, &str) -> bool) -> O
 /// A write target that walks one path from a record (`WriteTarget::Linked`).
 fn is_linked_target(node: &Json) -> bool {
     node.get("kind").and_then(Json::as_str) == Some("linked") && node.get("path").is_some_and(Json::is_object)
+}
+
+/// Where a record enters the run: a write's expression (`…/write`), an
+/// assignment, a traversal block's head, or a function's parameter.
+fn is_record_entry(node: &Json, path: &str) -> bool {
+    let mut tokens = path.rsplit('/');
+    let (last, parent) = (tokens.next(), tokens.next());
+    let write = last == Some("write") && node.get("target").is_some_and(Json::is_object) && node.get("uniqueBy").is_some();
+    let assign = node.get("kind").and_then(Json::as_str) == Some("assign") && node.get("value").is_some();
+    let block_head = last == Some("head") && parent == Some("block") && node.get("hopsRaw").is_some_and(Json::is_string);
+    let parameter = parent == Some("params") && node.get("kind").is_none() && node.get("name").is_some_and(Json::is_string);
+    write || assign || block_head || parameter
+}
+
+/// What an `await` waits on, when it is a walk to one edge.
+fn is_awaited_traversal(node: &Json, path: &str) -> bool {
+    path.ends_with("/source") && node.get("kind").and_then(Json::as_str) == Some("traversal") && node.get("head").is_some_and(Json::is_object)
 }
 
 /// An expression slot as the parser writes one.

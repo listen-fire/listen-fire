@@ -99,7 +99,7 @@ fn crm() -> InstanceRef {
         "writableRoots": {}
     }))
     .unwrap();
-    Rc::new(Instance { name: "crm".to_string(), schema: Rc::new(schema), declared: None, address: None })
+    Rc::new(Instance { name: "crm".to_string(), schema: Rc::new(schema), declared: None, adapter: Some("crm".to_string()), address: None })
 }
 
 #[test]

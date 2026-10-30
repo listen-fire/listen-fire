@@ -86,6 +86,14 @@ pub enum Stamp {
     /// A linked write's target off a record a hop's WHERE chose: the type it
     /// creates, which the record's own type cannot say.
     WrittenType(String),
+    /// Where a record enters the run (a bound write, a bound read, a
+    /// traversal block's head, a function's parameter) and the program
+    /// awaits these edges off records of its type: the waits on them open
+    /// from here, so an arrival before the `await` is reached still counts.
+    OpensWaits(Vec<String>),
+    /// A plain `await` on an edge that can also be listed: it takes the
+    /// first match already there, so it reads the listing first.
+    ListsFirst,
 }
 
 /// One parsed file: its typed AST, the same tree as JSON (what AST paths
@@ -387,20 +395,49 @@ pub fn join_check(root: File, answer: &Json) -> Result<Checked, String> {
             Some(other) => return Err(format!("a stamp's file is a path, not {other}")),
         };
         let node = node_at(file, &path).ok_or_else(|| format!("no node at {path}"))?;
-        let node = &node;
-        let stamped = match (stamp.get("spreadFields"), stamp.get("copy"), stamp.get("reference"), stamp.get("writtenType")) {
-            (Some(fields), None, None, None) if is_write_spread(&path, node) => Stamp::SpreadFields(
-                serde_json::from_value(fields.clone()).map_err(|e| format!("the fields stamped at {path}: {e}"))?,
-            ),
-            (None, Some(copy), None, None) if is_map_spread(node) => Stamp::Copy(copy.clone()),
-            (None, None, Some(Json::Bool(true)), None) if is_value_entry(node) => Stamp::Reference,
-            (None, None, None, Some(Json::String(written))) if is_linked_target(node) => Stamp::WrittenType(written.clone()),
-            _ => return Err(format!("the stamp at {path} does not fit the node there: {stamp}")),
-        };
+        let stamped = stamp_of(&path, &node, stamp)?;
         file.stamps.insert(path, stamped);
     }
     checked.declarations = Declarations::of(&checked.root.program, &checked.imports, &checked.files)?;
     Ok(checked)
+}
+
+/// The fact `stamp` settles on `node` (at `path`): exactly one, of a kind
+/// that lands on a node like it.
+fn stamp_of(path: &str, node: &Json, stamp: &Json) -> Result<Stamp, String> {
+    const FACTS: [&str; 6] = ["spreadFields", "copy", "reference", "writtenType", "opensWaits", "listsFirst"];
+    let mut facts = FACTS.iter().filter_map(|fact| Some((*fact, stamp.get(*fact)?)));
+    let stamped = match (facts.next(), facts.next()) {
+        (Some(("spreadFields", fields)), None) if is_write_spread(path, node) => {
+            Some(Stamp::SpreadFields(serde_json::from_value(fields.clone()).map_err(|e| format!("the fields stamped at {path}: {e}"))?))
+        }
+        (Some(("copy", copy)), None) if is_map_spread(node) => Some(Stamp::Copy(copy.clone())),
+        (Some(("reference", Json::Bool(true))), None) if is_value_entry(node) => Some(Stamp::Reference),
+        (Some(("writtenType", Json::String(written))), None) if is_linked_target(node) => Some(Stamp::WrittenType(written.clone())),
+        (Some(("opensWaits", edges)), None) if is_record_entry(path, node) => {
+            Some(Stamp::OpensWaits(serde_json::from_value(edges.clone()).map_err(|e| format!("the edges stamped at {path}: {e}"))?))
+        }
+        (Some(("listsFirst", Json::Bool(true))), None) if is_awaited_traversal(path, node) => Some(Stamp::ListsFirst),
+        _ => None,
+    };
+    stamped.ok_or_else(|| format!("the stamp at {path} does not fit the node there: {stamp}"))
+}
+
+/// Where a record enters the run: a write's expression (`…/write`), an
+/// assignment, a traversal block's head, or a function's parameter.
+fn is_record_entry(path: &str, node: &Json) -> bool {
+    let mut tokens = path.rsplit('/');
+    let (last, parent) = (tokens.next(), tokens.next());
+    let write = last == Some("write") && node.get("target").is_some_and(Json::is_object) && node.get("uniqueBy").is_some();
+    let assign = node.get("kind").and_then(Json::as_str) == Some("assign") && node.get("value").is_some();
+    let block_head = last == Some("head") && parent == Some("block") && node.get("hopsRaw").is_some_and(Json::is_string);
+    let parameter = parent == Some("params") && node.get("kind").is_none() && node.get("name").is_some_and(Json::is_string);
+    write || assign || block_head || parameter
+}
+
+/// What an `await` waits on, when it is a walk to one edge.
+fn is_awaited_traversal(path: &str, node: &Json) -> bool {
+    path.ends_with("/source") && node.get("kind").and_then(Json::as_str) == Some("traversal") && node.get("head").is_some_and(Json::is_object)
 }
 
 /// An element of a `spreads` list naming its source: a write's spread.
@@ -510,6 +547,27 @@ mod tests {
         assert_eq!(checked.root.stamps.get(target), Some(&Stamp::WrittenType("Company".into())));
         let on_a_spread = json!({ "diagnostics": [], "stamps": [{ "path": "/statements/2/body/0/write/spreads/0", "writtenType": "Company" }] });
         assert!(join_check(parse(SOURCE).unwrap(), &on_a_spread).unwrap_err().contains("does not fit"));
+    }
+
+    #[test]
+    fn opens_waits_and_lists_first_stamps_are_read() {
+        let source = "import { chat } from adapters\nc = connect chat\nfunction f(m: <c-[:Channel]->>) {\n  msg = write m-[:Messages]-> { Text: \"hi\" }\n  i = await msg-[:Interactions]->\n  d = only(m-[:Deals]->)\n  m-[each:Deals]-> {\n    x = 1\n  }\n}";
+        let entries = ["/statements/2/body/0/value/write", "/statements/2/body/2", "/statements/2/body/3/block/head", "/statements/2/params/0"];
+        let awaited = "/statements/2/body/1/value/await/source";
+        let mut stamps: Vec<Json> = entries.iter().map(|path| json!({ "path": path, "opensWaits": ["Interactions"] })).collect();
+        stamps.push(json!({ "path": awaited, "listsFirst": true }));
+        let checked = join_check(parse(source).unwrap(), &json!({ "diagnostics": [], "stamps": stamps })).unwrap();
+        for path in entries {
+            assert_eq!(checked.root.stamps.get(path), Some(&Stamp::OpensWaits(vec!["Interactions".into()])), "{path}");
+        }
+        assert_eq!(checked.root.stamps.get(awaited), Some(&Stamp::ListsFirst));
+        // Each lands only on a node of its kind.
+        let on_a_target = json!({ "diagnostics": [], "stamps": [{ "path": "/statements/2/body/0/value/write/target", "opensWaits": ["Interactions"] }] });
+        assert!(join_check(parse(source).unwrap(), &on_a_target).unwrap_err().contains("does not fit"));
+        let on_a_write = json!({ "diagnostics": [], "stamps": [{ "path": "/statements/2/body/0/value/write", "listsFirst": true }] });
+        assert!(join_check(parse(source).unwrap(), &on_a_write).unwrap_err().contains("does not fit"));
+        let two_facts = json!({ "diagnostics": [], "stamps": [{ "path": awaited, "listsFirst": true, "opensWaits": [] }] });
+        assert!(join_check(parse(source).unwrap(), &two_facts).unwrap_err().contains("does not fit"));
     }
 
     #[test]

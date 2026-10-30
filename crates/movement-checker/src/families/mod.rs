@@ -22,5 +22,6 @@ pub mod systems;
 pub mod typed_spelling;
 pub mod values;
 pub mod versions;
+pub mod wait_entries;
 pub mod walks;
 pub mod writes;

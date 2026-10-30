@@ -26,6 +26,10 @@ pub struct Instance {
     /// in place, so both builds are one declaration (an imported one carries
     /// the library's symbol).
     pub declared: Option<crate::scope::SymbolId>,
+    /// The adapter the system was constructed from (none for a node
+    /// declaration's own): with a position's name, the type of a record in
+    /// every file that connects one.
+    pub adapter: Option<String>,
     /// `None` when an argument is not a literal: the construction is then a
     /// system of its own.
     pub address: Option<SystemAddress>,

@@ -60,6 +60,10 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
   - A write that sets the path with no values, such as `Buttons: []`, is told so with a warning (`MOV_WRITE_LITERALS_EMPTY`): no answer can carry a value from it, and the field keeps its declared type.
   - A module's `literalsFrom` is refused when its schema is read if `from` does not parse, if `at` names no field of the landing, if the edge or a reference on the way lands on more than one type, or if the field is not a single text field.
   - The catalog snapshot carries it on `EdgeSchema` as `literalsFrom?`, an optional member.
+- The check's answer to the engine (`check.program`) carries two more stamps, which an embedder that answers it passes on as it passes the others:
+  - `opensWaits: [edge…]` where a record enters the run (a bound write, a binding that reads records, a traversal block's head, a function's parameter) and the program awaits those edges off records of its type, in any file it links;
+  - `listsFirst: true` on a plain `await` of an edge that can also be listed.
+  - The engine refuses either on a node it does not fit, as it refuses the others.
 
 ### Added
 

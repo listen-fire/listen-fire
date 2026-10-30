@@ -14,8 +14,10 @@ import {
   languageStanding,
   languageVersion,
   languageVersionDiagnostic,
+  mockCatalogSnapshot,
   openEngineSegment,
   RustCheckRefused,
+  type InstanceSchema,
 } from 'movement-lang';
 
 import { tenantIdOf } from 'engine-contracts';
@@ -137,6 +139,28 @@ describe('the Rust engine artifact', () => {
     const answer = checkAnswerInRust('x = 1\nmovement m() {\n  y = x\n}', EMPTY_CATALOG_SNAPSHOT, { languageVersion: LANGUAGE_VERSION });
     expect(answer).toEqual({ diagnostics: expect.any(Array), stamps: [] });
     expect(() => checkAnswerInRust('movement {', EMPTY_CATALOG_SNAPSHOT, { languageVersion: LANGUAGE_VERSION })).toThrow(RustCheckRefused);
+  });
+
+  it("answers the engine's check.program with where an awaited record enters and which await lists first", () => {
+    const chat: InstanceSchema = {
+      positions: {
+        Message: {
+          properties: { Text: 'text', Timestamp: 'text' },
+          edges: { Replies: { target: 'Message', listenable: true, sequenced: 'chronological', identity: 'Timestamp' } },
+        },
+      },
+      collections: { messages: { target: 'Message' } },
+      writableRoots: {},
+    };
+    const catalog = mockCatalogSnapshot({ adapters: { chat: { constructionArgs: [], schema: chat } } });
+    const source = 'import { chat } from adapters\nc = connect chat\nfunction m() {\n  msg = only(c-[:messages]->)\n  if (msg != null) {\n    r = await msg-[:Replies]->\n  }\n}';
+    const answer = checkAnswerInRust(source, catalog, { languageVersion: LANGUAGE_VERSION });
+    expect(answer.diagnostics.filter((d) => d.severity !== 'info')).toEqual([]);
+    expect(answer.stamps).toEqual([
+      { path: '/statements/2/body/1/arms/0/body/0/value/await/source', listsFirst: true },
+      { path: '/statements/2/body/0', opensWaits: ['Replies'] },
+      { path: '/statements/2/body/1/arms/0/body/0', opensWaits: ['Replies'] },
+    ]);
   });
 
   it("answers the engine's check.compatible by the checker's comparator, extends folded in", () => {
