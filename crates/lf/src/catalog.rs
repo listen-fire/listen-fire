@@ -38,6 +38,9 @@ pub struct Described {
     pub addresses: Vec<movement_checker::types::event_address::EventAddress>,
     /// What the checker reads.
     pub schema: Js,
+    /// What each of the module's position args may be set to, by arg; empty
+    /// for a connection described in a position.
+    pub position_options: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// What one adapter external's instances are made with.
@@ -108,12 +111,21 @@ pub fn catalog_of(running: &[Rc<RunningExternal>], schemas: &IndexMap<String, Co
         // holds them; a connection whose describe gave none is untyped, never
         // typed by another's.
         let mut adapter_schemas = Obj::new();
+        // `constructionArgOptions`: by credential import name (`''` for
+        // none), then arg. Only a connection in no position reads them, and
+        // its key is that name.
+        let mut construction_arg_options = Obj::new();
         if let Some(described) = schemas.get(name) {
             for (key, connection) in described {
                 adapter_schemas.insert(key.clone(), connection.schema.clone());
+                if !connection.position_options.is_empty() {
+                    let by_arg: Obj = connection.position_options.iter().map(|(arg, options)| (arg.clone(), Js::strings(options))).collect();
+                    construction_arg_options.insert(key.clone(), Js::from(by_arg));
+                }
             }
         }
         movement_parser::util::js::object_key_order(&mut adapter_schemas);
+        movement_parser::util::js::object_key_order(&mut construction_arg_options);
         let mut construction_args = if connections.credentialed {
             vec![Js::from(obj! { "name" => Js::str("credentials"), "kind" => Js::str("credential"), "required" => Js::Bool(connections.credential_required) })]
         } else {
@@ -136,6 +148,7 @@ pub fn catalog_of(running: &[Rc<RunningExternal>], schemas: &IndexMap<String, Co
                 declared_credentials: &declared_names(&r.credential_declarations),
                 description,
                 schemas: adapter_schemas,
+                construction_arg_options,
             }),
         );
     }
@@ -164,6 +177,7 @@ fn unit_snapshot(unit: &str) -> Js {
         declared_credentials: &[],
         description: None,
         schemas,
+        construction_arg_options: Obj::new(),
     })
 }
 
@@ -186,6 +200,7 @@ struct AdapterDeclarations<'a> {
     /// Its manifest's `description`.
     description: Option<String>,
     schemas: Obj,
+    construction_arg_options: Obj,
 }
 
 /// `adapterSnapshotOf` for a remote adapter's manifest: no construction
@@ -203,6 +218,9 @@ fn adapter_snapshot_of(adapter: AdapterDeclarations) -> Js {
     }
     snapshot.insert("schemaShape".into(), Js::str("introspected"));
     snapshot.insert("schemas".into(), Js::from(adapter.schemas));
+    if !adapter.construction_arg_options.is_empty() {
+        snapshot.insert("constructionArgOptions".into(), Js::from(adapter.construction_arg_options));
+    }
     Js::from(snapshot)
 }
 

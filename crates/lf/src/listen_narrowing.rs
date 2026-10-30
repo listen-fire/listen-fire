@@ -386,20 +386,23 @@ pub struct Narrowing<'a, W> {
 }
 
 /// `narrowEventPositions`: `schema` with one narrowed event position per
-/// address. No addresses or no event edges, and it comes back as it was.
-pub async fn narrow_event_positions<W: Walk>(schema: Js, input: &Narrowing<'_, W>) -> Js {
+/// address. No addresses or no event edges, and it comes back as it was. An
+/// address whose walk lands nowhere grafts nothing (the checker refuses it
+/// where it is written); a walk the module fails is this call's error, as a
+/// failed describe is: the check cannot say whether the address exists.
+pub async fn narrow_event_positions<W: Walk>(schema: Js, input: &Narrowing<'_, W>) -> Result<Js, String> {
     let event_names: Vec<String> =
         schema.get("eventPositions").and_then(Js::as_array).unwrap_or_default().iter().filter_map(|e| e.get("position").and_then(Js::as_str).map(str::to_string)).collect();
     if input.addresses.is_empty() || event_names.is_empty() {
-        return schema;
+        return Ok(schema);
     }
-    let Js::Obj(mut schema) = schema else { return schema };
+    let Js::Obj(mut schema) = schema else { return Ok(schema) };
     let walker = Walker { walk: input.walk, adapter_type: input.adapter_type, hops: RefCell::new(BTreeMap::new()) };
     let hops = input.hops;
     let narrowed_from = hops.last().map(|h| h.collection.clone());
 
     if !hops.is_empty() {
-        let values = narrowing_values(hops, input.addresses, &walker).await;
+        let values = narrowing_values(hops, input.addresses, &walker).await?;
         if !values.is_empty() {
             schema.insert("eventNarrowingValues".into(), Js::Obj(values));
         }
@@ -449,10 +452,10 @@ pub async fn narrow_event_positions<W: Walk>(schema: Js, input: &Narrowing<'_, W
             let Some(steps) = address_of(hops, &hop_pins) else { continue };
             let record_key = format!("{}::record::{}", input.adapter, Js::Arr(steps.iter().map(Step::js).collect()).to_json());
             if !walked.contains_key(&record_key) {
-                // A walk that fails narrows nothing (the platform notes it; listen-fire has nowhere to).
                 let landed = match walker.walk_to(&steps).await {
                     Ok(Some(descriptor)) => project_record_position(input, &descriptor, &record_key),
-                    Ok(None) | Err(_) => None,
+                    Ok(None) => None,
+                    Err(why) => return Err(format!("walking to `{}` failed: {why}", address_display(&address.event, &address.narrowing))),
                 };
                 walked.insert(record_key.clone(), landed.as_ref().map(|p| p.get("displayName").and_then(Js::as_str).unwrap_or_default().to_string()));
                 if let Some(position) = landed {
@@ -474,7 +477,7 @@ pub async fn narrow_event_positions<W: Walk>(schema: Js, input: &Narrowing<'_, W
             to: record_target.as_deref(),
         });
     }
-    Js::Obj(schema)
+    Ok(Js::Obj(schema))
 }
 
 fn position<'a>(schema: &'a Obj, key: &str) -> Option<&'a Js> {
@@ -502,9 +505,9 @@ fn address_of(hops: &[AddressHop], pins: &BTreeMap<&str, &str>) -> Option<Vec<St
 }
 
 /// `narrowingValues`: what may be pinned at each hop, by the prefix pinned
-/// before it, walked only as far as the addresses go. A hop whose members
-/// cannot be read publishes nothing, as one that has none.
-async fn narrowing_values<W: Walk>(hops: &[AddressHop], addresses: &[EventAddress], walker: &Walker<'_, W>) -> Obj {
+/// before it, walked only as far as the addresses go. A hop with no members
+/// publishes nothing; one whose members the module fails to read is the error.
+async fn narrowing_values<W: Walk>(hops: &[AddressHop], addresses: &[EventAddress], walker: &Walker<'_, W>) -> Result<Obj, String> {
     let mut values = Obj::new();
     let mut options_at: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for address in addresses {
@@ -516,7 +519,7 @@ async fn narrowing_values<W: Walk>(hops: &[AddressHop], addresses: &[EventAddres
             let options = match options_at.get(&memo) {
                 Some(options) => options.clone(),
                 None => {
-                    let members = walker.members_at(&steps, &hop.collection).await.unwrap_or_default();
+                    let members = walker.members_at(&steps, &hop.collection).await.map_err(|why| format!("reading the {} options its '{}' may be pinned to failed: {why}", hop.collection, hop.key))?;
                     let options: Vec<String> = members.iter().filter_map(|m| m.get(&hop.match_field).and_then(Js::as_str).map(str::to_string)).collect();
                     options_at.insert(memo, options.clone());
                     options
@@ -534,7 +537,24 @@ async fn narrowing_values<W: Walk>(hops: &[AddressHop], addresses: &[EventAddres
             steps.push(Step { collection: hop.collection.clone(), match_field: hop.match_field.clone(), value });
         }
     }
-    values
+    Ok(values)
+}
+
+/// What each of a module's position args (`base:`) may be set to: the labels
+/// of the members of its `optionsFrom` kind one hop from the root of an
+/// unpositioned connection, as the platform publishes `constructionArgOptions`.
+/// An arg whose kind has no members there publishes nothing.
+pub async fn position_arg_options<W: Walk>(walk: &W, adapter_type: &str, args: &[crate::externals::PositionArg]) -> Result<BTreeMap<String, Vec<String>>, String> {
+    let walker = Walker { walk, adapter_type, hops: RefCell::new(BTreeMap::new()) };
+    let mut options = BTreeMap::new();
+    for arg in args {
+        let members = walker.members_at(&[], &arg.options_from).await?;
+        let labels: Vec<String> = members.iter().filter_map(member_label).map(str::to_string).collect();
+        if !labels.is_empty() {
+            options.insert(arg.name.clone(), labels);
+        }
+    }
+    Ok(options)
 }
 
 /// `projectRecordPosition`: the walked node as a position under an opaque
@@ -723,7 +743,7 @@ mod tests {
 
     async fn narrowed(hops: &[AddressHop], addresses: &[EventAddress]) -> (Js, Vec<String>) {
         let walk = Workspace { asked: RefCell::new(Vec::new()) };
-        let schema = narrow_event_positions(schema(), &Narrowing { adapter: "at", adapter_type: "at", hops, addresses, entries: &[], walk: &walk }).await;
+        let schema = narrow_event_positions(schema(), &Narrowing { adapter: "at", adapter_type: "at", hops, addresses, entries: &[], walk: &walk }).await.expect("the walk answers");
         (schema, walk.asked.into_inner())
     }
 

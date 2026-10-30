@@ -20,7 +20,7 @@ use movement_parser::util::form::{external_text, form_of_text, read_json_text};
 use serde_json::json;
 
 use crate::catalog::{ConnectionSchemas, Described, catalog_of, connections_of};
-use crate::listen_narrowing::{Narrowing, Walk, address_hops, narrow_event_positions, with_event_narrowing_keys};
+use crate::listen_narrowing::{Narrowing, Walk, address_hops, narrow_event_positions, position_arg_options, with_event_narrowing_keys};
 use crate::externals::{RunningExternal, needed_externals, rpc_in, scan_externals, start_externals};
 use crate::json::Js;
 use crate::project::Project;
@@ -175,31 +175,35 @@ pub async fn describe_external(running: &RunningExternal, credentials: &Credenti
         wanted.push(Wanted { key, credential, settings: Some(position.settings), position_values });
     }
     let mut schemas = known;
+    let adapter_type = running.manifest_answer.get("adapterType").and_then(Js::as_str).unwrap_or(&running.external.manifest.name);
+    let position_args = running.position_args();
     for connection in wanted {
         let addresses = addresses_of(running, imported, &connection.key);
         let walk = ConnectionWalk { running, credentials, credential: connection.credential, settings: connection.settings.clone() };
-        let (entries, described) = match schemas.get(&connection.key) {
+        let failed = |why: String| {
+            let external = &running.external.manifest.name;
+            match connection.credential {
+                Some(credential) => format!("couldn't read external \"{external}\"'s schema with credential \"{}\": {why}", credential.name),
+                None => format!("couldn't read external \"{external}\"'s schema: {why}"),
+            }
+        };
+        let (entries, described, position_options) = match schemas.get(&connection.key) {
             Some(held) if held.addresses == addresses => continue,
-            Some(held) => (held.entries.clone(), held.described.clone()),
-            None => describe_as(running, credentials, connection.credential, connection.settings.clone()).await.map_err(|why| {
-                let external = &running.external.manifest.name;
-                match connection.credential {
-                    Some(credential) => format!("couldn't read external \"{external}\"'s schema with credential \"{}\": {why}", credential.name),
-                    None => format!("couldn't read external \"{external}\"'s schema: {why}"),
-                }
-            })?,
+            Some(held) => (held.entries.clone(), held.described.clone(), held.position_options.clone()),
+            None => {
+                let (entries, described) = describe_as(running, credentials, connection.credential, connection.settings.clone()).await.map_err(failed)?;
+                // What its position args may be set to, read where no position is set yet.
+                let position_options = match connection.settings.is_none() && !position_args.is_empty() {
+                    true => position_arg_options(&walk, adapter_type, &position_args).await.map_err(failed)?,
+                    false => BTreeMap::new(),
+                };
+                (entries, described, position_options)
+            }
         };
         let hops = address_hops(&running.listen, &connection.position_values);
-        let narrowing = Narrowing {
-            adapter: &running.external.manifest.name,
-            adapter_type: running.manifest_answer.get("adapterType").and_then(Js::as_str).unwrap_or(&running.external.manifest.name),
-            hops: &hops,
-            addresses: &addresses,
-            entries: &entries,
-            walk: &walk,
-        };
-        let schema = narrow_event_positions(with_event_narrowing_keys(described.clone(), &hops), &narrowing).await;
-        schemas.insert(connection.key, Described { entries, described, addresses, schema });
+        let narrowing = Narrowing { adapter: &running.external.manifest.name, adapter_type, hops: &hops, addresses: &addresses, entries: &entries, walk: &walk };
+        let schema = narrow_event_positions(with_event_narrowing_keys(described.clone(), &hops), &narrowing).await.map_err(failed)?;
+        schemas.insert(connection.key, Described { entries, described, addresses, schema, position_options });
     }
     Ok(schemas)
 }
