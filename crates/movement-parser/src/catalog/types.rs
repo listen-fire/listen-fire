@@ -467,6 +467,11 @@ pub struct InstanceSchema {
     pub selected_members: Option<JsMap<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub narrow_by: Option<JsMap<Vec<String>>>,
+    /// A hop's WHERE the host evaluated over a type's members and that
+    /// selected none of them, under the same key as `refinements`: the
+    /// members there are, by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unselected: Option<JsMap<Vec<String>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generic_landings: Option<JsMap<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

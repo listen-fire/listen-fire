@@ -1066,6 +1066,15 @@ export interface InstanceSchema {
    */
   narrowBy?: Record<string, string[]>;
   /**
+   * A hop's `WHERE` the host evaluated over a type's members and found to
+   * select none of them, under the same `refinementKey` as `refinements`: the
+   * members there are, by name. The checker refuses the hop where it is
+   * written (`MOV_UNKNOWN_POSITION`), naming them. Absent ⇒ either the WHERE
+   * selected a member (`refinements`) or the members could not decide it, and
+   * the hop stays on the unnarrowed type.
+   */
+  unselected?: Record<string, string[]>;
+  /**
    * Construction-site landings (2026-07-30): positions synthesized from ONE
    * write's own literals, keyed by `genericLandingKey`. The refinements
    * mechanism one door over — there the program's WHERE selects a position the

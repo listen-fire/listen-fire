@@ -779,6 +779,16 @@ pub fn refine_selected(target: &Position, filter: &movement_parser::lowering::ex
     refinements.get(&key).and_then(|refined| position_ref_in(&p.instance, refined))
 }
 
+/// The members a hop's WHERE selected none of, when the host evaluated it
+/// over them and found it selects nothing: the type and its members.
+pub fn unselected_members<'p>(target: &'p Position, filter: &movement_parser::lowering::expression::Expression) -> Option<(&'p str, &'p [String])> {
+    let Position::Position(p) = target else { return None };
+    let unselected = p.instance.schema.unselected.as_ref()?;
+    let filter = serde_json::to_value(filter).ok()?;
+    let key = movement_parser::catalog::helpers::refinement_key(&p.position, &filter);
+    unselected.get(&key).map(|members| (p.position.as_str(), members.as_slice()))
+}
+
 /// The `@`-prefixed edges a write handle carries (`-[:@old]->`).
 pub fn is_artificial_edge(edge: &str) -> bool {
     edge.starts_with('@')

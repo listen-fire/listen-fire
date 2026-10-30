@@ -27,7 +27,7 @@ use super::field::*;
 use super::narrowing::{PresenceProof, exists_subject, is_position_terminal, negative_presence_proofs, presence_proofs};
 use super::unions::{join_field_types, join_positions, joined_under, one_record_of};
 use super::pinned_member::pinned_member;
-use super::position::{EdgeLanding, Position, describe_position, edge_landing, position_ref_in, refine_selected, instance_of_ref, lookup_property_type, narrow_present, narrow_present_node};
+use super::position::{EdgeLanding, Position, describe_position, edge_landing, position_ref_in, refine_selected, unselected_members, instance_of_ref, lookup_property_type, narrow_present, narrow_present_node};
 use super::stdlib::{bare_coercer_returns, movement_meta_key_type, stdlib_function_by_id};
 
 /// What the typing asks of the scope it types in (the TypeScript's
@@ -209,6 +209,25 @@ impl<'a> Typing<'a> {
     /// `stepEdge`: one edge step off `from`, reported.
     fn step_edge(&mut self, from: Option<&Position>, edge: &EdgeStep) -> (Option<Position>, Option<EdgeSchema>) {
         let landing = from.map(|f| edge_landing(f, &edge.edge_type_id));
+        let unselected = match (&landing, edge.expression_filter.as_deref()) {
+            (Some(EdgeLanding::Landed { landing, .. }), Some(filter)) if refine_selected(landing, filter).is_none() => unselected_members(landing, filter),
+            _ => None,
+        };
+        if let Some((type_name, members)) = unselected {
+            let instance = match from {
+                Some(Position::Position(p)) => p.instance.name.clone(),
+                Some(Position::Meta { instance }) => instance.name.clone(),
+                _ => String::new(),
+            };
+            let message = unselected_message(&instance, type_name, members, edge);
+            self.report(codes::UNKNOWN_POSITION, message);
+            let schema = match &landing {
+                Some(EdgeLanding::Landed { edge, .. }) => edge.clone(),
+                _ => None,
+            };
+            crate::families::walks::observe_step(self, from, edge, landing.as_ref());
+            return (None, schema);
+        }
         let stepped = match &landing {
             // A record reached through a function's parameter is the
             // caller's record's child: what the body needs of it is the
@@ -1621,4 +1640,19 @@ fn closed_fields_of(position: Option<&Position>) -> Option<Vec<String>> {
         }
         _ => None,
     }
+}
+
+/// Why a hop's WHERE lands nowhere: it selects none of the members the host
+/// evaluated it over. A literal it pins is offered the nearest member.
+fn unselected_message(instance: &str, type_name: &str, members: &[String], edge: &EdgeStep) -> String {
+    let at = if instance.is_empty() { String::new() } else { format!("'{instance}' has ") };
+    let has = if members.is_empty() { String::new() } else { format!(" — it has: {}", members.iter().map(|m| format!("\"{m}\"")).collect::<Vec<_>>().join(", ")) };
+    let candidates: Vec<&str> = members.iter().map(String::as_str).collect();
+    let pinned = edge.expression_filter.as_deref().map(super::event_address::conjunct_pins).unwrap_or_default();
+    let hint = pinned.iter().map(|(_, literal)| crate::families::walks::did_you_mean(literal, &candidates)).find(|hint| !hint.is_empty()).unwrap_or_default();
+    let which = match pinned.as_slice() {
+        [] => format!("the WHERE on '-[:{}]->' selects", edge.edge_type_id),
+        pins => format!("whose {}", pins.iter().map(|(field, literal)| format!("{field} is \"{literal}\"")).collect::<Vec<_>>().join(" and ")),
+    };
+    format!("{at}no {type_name} {which}{has}{hint}")
 }

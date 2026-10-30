@@ -108,6 +108,7 @@ interface InstanceSchema {
   refinements?: Record<string, string>;
   selectedMembers?: Record<string, string>;
   narrowBy?: Record<string, string[]>;
+  unselected?: Record<string, string[]>;
   genericLandings?: Record<string, string>;
   eventPosition?: string;
   eventPositions?: Array<{ position: string; on?: string[] }>;
