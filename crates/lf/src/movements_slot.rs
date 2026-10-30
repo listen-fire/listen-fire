@@ -1257,7 +1257,7 @@ mod tests {
             "name: acme_movements\nkind: core\nslot: movements\nurl: http://127.0.0.1:9/\nsettings:\n  - { name: tenant }\n",
         )
         .unwrap();
-        fs::write(dir.join("lf.yaml"), "engine: 0.12.0\ncore:\n  movements: acme_movements\n").unwrap();
+        fs::write(dir.join("lf.yaml"), "engine: 0.13.0\ncore:\n  movements: acme_movements\n").unwrap();
         let refused = crate::project::load_project_with(&dir, &[]).unwrap_err();
         let text = "core.movements: acme_movements: the movements module's own settings come from LF_SECRET__… or the secrets file, not from the secrets slot; neither holds acme_movements's install (run `listen-fire connect acme_movements` before naming it in lf.yaml, or set LF_SECRET__ACME_MOVEMENTS__EXTERNAL=acme_movements and its settings as LF_SECRET__ACME_MOVEMENTS__<SETTING>)";
         assert!(refused.ends_with(text), "{refused}");

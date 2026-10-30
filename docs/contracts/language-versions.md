@@ -21,6 +21,8 @@ The language version is the toolchain release: the one semver every crate and pa
 | 2.0.0 | 1.9.0 | newer |
 | 0.11.0 | 0.12.0 | older key |
 | banana | 0.12.0 | malformed |
+| 0.12.13 | 0.13.0 | older key |
+| 0.13.0-rc.1 | 0.13.0 | compatible |
 
 ## The refusals
 

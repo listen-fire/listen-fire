@@ -38,7 +38,7 @@ async function hello(): Promise<string> {
 /** A project whose movements slot is filled by `module`, with no movements folder. */
 function project(module: MovementsModule): string {
   const dir = mkdtempSync(join(tmpdir(), 'lf-movements-module-'));
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.12.0\ncore:\n  movements: acme_movements\n');
+  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\ncore:\n  movements: acme_movements\n');
   mkdirSync(join(dir, 'externals/acme_movements'), { recursive: true });
   writeFileSync(
     join(dir, 'externals/acme_movements/lf-external.yaml'),
@@ -282,7 +282,7 @@ test('upgrade writes through the module, at the version it read, and the project
     assert.equal(upgraded.code, 0, upgraded.out);
     assert.equal(module.held()['companies.mvt'], UPGRADED);
     assert.deepEqual(module.writes, [{ path: 'companies.mvt', expectedVersion: 'v1' }], 'the version the list answered');
-    assert.match(read(dir, 'lf.yaml'), /^engine: 0\.12\.\d+(-[\w.]+)?$/m);
+    assert.match(read(dir, 'lf.yaml'), /^engine: 0\.13\.\d+(-[\w.]+)?$/m);
     assert.equal(existsSync(join(dir, 'movements')), false);
     const checked = await lf(dir, ['check'], { env: ENV }).done;
     assert.equal(checked.code, 0, checked.out);
@@ -320,7 +320,7 @@ test('a read-only module refuses upgrade and init by name, writing nothing', asy
     assert.equal(read(dir, 'lf.yaml'), pin);
 
     // init in a project that already names the module, with no .gitignore and no hello.mvt to be made.
-    const fresh = exampleOver(module, '0.12.0');
+    const fresh = exampleOver(module, '0.13.0');
     rmSync(join(fresh, '.gitignore'), { force: true });
     const before = read(fresh, 'lf.yaml');
     const init = await lf(fresh, ['init'], { env: ENV }).done;

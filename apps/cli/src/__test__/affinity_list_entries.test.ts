@@ -80,7 +80,7 @@ listen to manual fire \`Deal Date\`
 
 function project(fake: Fake, hopWhere: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'lf-affinity-lists-'));
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.12.0\nmovements: movements\nexternals: externals\n');
+  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\nmovements: movements\nexternals: externals\n');
   mkdirSync(join(dir, 'externals/affinity'), { recursive: true });
   writeFileSync(join(dir, 'externals/affinity/lf-external.yaml'), `name: affinity\nkind: adapter\nprotocol: 2\nmodule: ${AFFINITY}\n`);
   mkdirSync(join(dir, '.lf'));

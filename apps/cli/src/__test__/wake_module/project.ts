@@ -25,6 +25,6 @@ export function wakeModuleProject(): string {
       '',
     ].join('\n'),
   );
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.12.0\ncore:\n  wake: acme_wake\n');
+  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\ncore:\n  wake: acme_wake\n');
   return dir;
 }

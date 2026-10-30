@@ -41,7 +41,7 @@ function project(module: { url: string } | null): string {
   const dir = mkdtempSync(join(tmpdir(), 'lf-movements-slot-'));
   if (module === null) {
     mkdirSync(join(dir, 'movements'));
-    writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.12.0\n');
+    writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\n');
     return dir;
   }
   mkdirSync(join(dir, 'externals/acme_movements'), { recursive: true });
@@ -49,7 +49,7 @@ function project(module: { url: string } | null): string {
     join(dir, 'externals/acme_movements/lf-external.yaml'),
     `name: acme_movements\nkind: core\nslot: movements\nurl: ${module.url}\nsettings:\n  - { name: tenant, label: the tenant whose movements these are }\n`,
   );
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.12.0\ncore:\n  movements: acme_movements\n');
+  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\ncore:\n  movements: acme_movements\n');
   return dir;
 }
 

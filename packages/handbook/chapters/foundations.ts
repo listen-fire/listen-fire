@@ -23,13 +23,13 @@ something reads like a special case, look for the position and the edge.
 ### language-versions
 
 An automation is pinned to the language release its text was written against,
-a version such as \`0.12.0\`. The automation validates, saves and runs under that
+a version such as \`0.13.0\`. The automation validates, saves and runs under that
 pin, and an edit never changes it; a new automation is pinned to the current
 release. So check an edit to an existing automation under the release it is
 pinned to, not the current one.
 
 A release reads a pin that has its own compatibility key (the minor while the
-version starts with 0, so \`0.12.0\` and \`0.12.3\` read alike; the major from 1.0)
+version starts with 0, so \`0.13.0\` and \`0.13.3\` read alike; the major from 1.0)
 and refuses any other by name:
 
 - a pin newer than the engine is refused; upgrade the engine

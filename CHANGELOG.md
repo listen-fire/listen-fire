@@ -20,6 +20,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+### 0.13.0
+
+The next release opens a new compatibility key. It reads pins of `0.13.x` only: a project or an automation pinned to `0.12.x` is refused by name ("validate it under 0.13.0 and upgrade it"), and `listen-fire upgrade` moves its pin to `0.13.0`. A change in this release that alters what a construct means says so in its own entry and in a checker diagnostic under a `0.13` pin.
+
 ### Added
 
 - `listen-fire modules` lists every module this `listen-fire` can install, the bundled `@lf/*` ones, with a line on what each is and which the project has installed. A bare `listen-fire connect` prints the same list; it listed only the slot modules and what the project already held.

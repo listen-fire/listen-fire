@@ -344,10 +344,10 @@ mod tests {
 
     #[test]
     fn the_pin_is_set_on_the_engine_line_and_nothing_else_moves() {
-        let text = "# the project\nengine: 0.11.0\nmovements: movements\n";
-        assert_eq!(with_engine_pin(text, "0.12.0").unwrap().unwrap(), "# the project\nengine: 0.12.0\nmovements: movements\n");
-        assert_eq!(with_engine_pin("engine: 0.12.0\n", "0.12.0").unwrap(), None);
-        assert!(with_engine_pin("movements: m\n", "0.12.0").is_err());
+        let text = "# the project\nengine: 0.12.13\nmovements: movements\n";
+        assert_eq!(with_engine_pin(text, "0.13.0").unwrap().unwrap(), "# the project\nengine: 0.13.0\nmovements: movements\n");
+        assert_eq!(with_engine_pin("engine: 0.13.0\n", "0.13.0").unwrap(), None);
+        assert!(with_engine_pin("movements: m\n", "0.13.0").is_err());
     }
 
     #[test]

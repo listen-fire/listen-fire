@@ -497,7 +497,7 @@ mod tests {
         let (status, answer) = ask("function (", "{}");
         assert_eq!(status, ERROR);
         assert!(answer["error"]["message"].is_string(), "{answer}");
-        let (status, answer) = ask(source, r#"{"languageVersion":"0.12.0"}"#);
+        let (status, answer) = ask(source, r#"{"languageVersion":"0.13.0"}"#);
         assert_eq!(status, ERROR, "the options are the check's: {answer}");
     }
 

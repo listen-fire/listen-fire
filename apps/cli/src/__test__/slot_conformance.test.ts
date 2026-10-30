@@ -60,7 +60,7 @@ async function fakeAnthropic(): Promise<{ url: string; server: Server }> {
 
 function emptyProject(): string {
   const dir = mkdtempSync(join(tmpdir(), 'lf-slot-secrets-'));
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.12.0\n');
+  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\n');
   return dir;
 }
 

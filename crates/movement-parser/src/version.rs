@@ -109,6 +109,8 @@ mod tests {
             ("2.0.0", "1.9.0", Standing::Newer),
             ("0.12.0-rc.6", "0.12.0", Standing::Compatible),
             ("banana", "0.12.0", Standing::Malformed),
+            ("0.12.13", "0.13.0", Standing::OlderKey),
+            ("0.13.0-rc.1", "0.13.0", Standing::Compatible),
         ];
         for (pin, own, expected) in table {
             assert_eq!(standing(pin, own), expected, "{pin} against {own}");
@@ -140,6 +142,11 @@ mod tests {
             refusal("banana", "0.12.0").unwrap(),
             "this automation pins language banana, which is not a version; a pin is a release's version, such as 0.12.0"
         );
+    }
+
+    #[test]
+    fn this_release_is_the_0_13_line() {
+        assert_eq!(compatibility_key(LANGUAGE_VERSION).unwrap(), "0.13");
     }
 
     #[test]

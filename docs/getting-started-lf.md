@@ -171,6 +171,6 @@ Every delivery a door takes is kept as a receipt: the events it produced, not it
 
 ## 7. Upgrade a project
 
-> `engine:` in `lf.yaml` is the language version the project is pinned to: a release's version, such as `0.12.0`. This listen-fire reads every pin of its own compatibility key (under 0.x, the minor: `0.12`). A newer pin is refused with "upgrade listen-fire"; an older key is refused with "run `listen-fire upgrade`".
+> `engine:` in `lf.yaml` is the language version the project is pinned to: a release's version, such as `0.13.0`. This listen-fire reads every pin of its own compatibility key (under 0.x, the minor: `0.13`). A newer pin is refused with "upgrade listen-fire"; an older key is refused with "run `listen-fire upgrade`".
 
 `listen-fire upgrade --check` prints what would change; `listen-fire upgrade` rewrites the movement files into the current language version and sets `engine:` in `lf.yaml` to it.

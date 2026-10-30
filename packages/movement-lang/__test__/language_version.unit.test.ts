@@ -19,6 +19,8 @@ describe('a pin is read when its compatibility key is the release\'s', () => {
     ['2.0.0', '1.9.0', 'newer'],
     ['0.12.0-rc.6', '0.12.0', 'compatible'],
     ['banana', '0.12.0', 'malformed'],
+    ['0.12.13', '0.13.0', 'olderKey'],
+    ['0.13.0-rc.1', '0.13.0', 'compatible'],
   ];
   it.each(table)('%s against %s is %s', (pin, own, standing) => {
     expect(languageVersionStanding(pin, own)).toBe(standing);

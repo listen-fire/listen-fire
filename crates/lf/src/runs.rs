@@ -2164,7 +2164,7 @@ mod tests {
         let version = |pin: &str| RunFacts::of_row("r", &facts_with(pin)).map(|f| f.language_version);
         assert_eq!(version(&format!("\"{LANGUAGE_VERSION}\"")), Ok(LANGUAGE_VERSION.to_string()));
         assert_eq!(version("5"), Ok(LANGUAGE_VERSION.to_string()));
-        assert!(version("\"0.13.0\"").unwrap_err().contains("newer than this listen-fire"));
+        assert!(version("\"0.14.0\"").unwrap_err().contains("newer than this listen-fire"));
         assert!(version("\"0.11.0\"").unwrap_err().contains("upgrade its movement and fire it again"));
         assert!(version("4").unwrap_err().contains("upgrade its movement and fire it again"));
     }

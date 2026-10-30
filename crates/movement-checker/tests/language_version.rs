@@ -22,9 +22,9 @@ fn a_pin_of_an_older_key_is_refused_with_the_remedy() {
 
 #[test]
 fn a_newer_pin_is_refused_saying_to_upgrade_the_engine() {
-    let refused = language_version_diagnostic("0.13.0").expect("0.13.0 is newer than this release");
+    let refused = language_version_diagnostic("0.14.0").expect("0.14.0 is newer than this release");
     assert_eq!(refused.code, "MOV_LANGUAGE_VERSION_UNSUPPORTED");
-    assert_eq!(refused.message, format!("this automation pins language 0.13.0, newer than this release ({LANGUAGE_VERSION}); upgrade the engine"));
+    assert_eq!(refused.message, format!("this automation pins language 0.14.0, newer than this release ({LANGUAGE_VERSION}); upgrade the engine"));
 }
 
 #[test]

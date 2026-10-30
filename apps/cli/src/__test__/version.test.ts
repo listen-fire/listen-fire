@@ -4,11 +4,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { lfCommand } from './example';
+import { lf, lfCommand, project } from './example';
 
 function version(env: Record<string, string>): string[] {
   const run = spawnSync(...lfCommand(['--version']), { encoding: 'utf8', env: { ...process.env, ...env } });
@@ -33,4 +33,14 @@ test('without a VERSIONS file, listen-fire --version reads each bundled folder\'
   const lines = version({ LF_MODULES_DIR: bundle });
   assert.match(lines[0], /^listen-fire \d/);
   assert.ok(lines.includes('  @listen-fire/slack 0.12.9'), lines.join('\n'));
+});
+
+test('a project pinned to 0.12 is refused by name and upgrade moves its pin to 0.13.0', () => {
+  const dir = project();
+  writeFileSync(join(dir, 'lf.yaml'), readFileSync(join(dir, 'lf.yaml'), 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
+  const checked = lf(dir, 'check');
+  assert.equal(checked.code, 1, checked.out);
+  assert.match(checked.out, /lf\.yaml pins engine 0\.12\.13, which this listen-fire \(0\.13\.0\) does not read; run `listen-fire upgrade`/);
+  assert.equal(lf(dir, 'upgrade').code, 0);
+  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.13\.0$/m);
 });
