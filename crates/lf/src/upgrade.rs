@@ -66,15 +66,21 @@ fn edits_overlap(a: &Edit, b: &Edit) -> bool {
     a.start < b.end && b.start < a.end
 }
 
-/// The diagnostics that stand between a text and the target version.
-fn standing(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
-    diagnostics.into_iter().filter(|d| d.severity.is_none() || d.upgrade == Some(true)).collect()
+/// A diagnostic that stands between a text and the target version: an
+/// error, or an upgrade note with a rewrite to take. An upgrade note with no
+/// rewrite says what changed meaning and is only listed.
+fn stands(d: &Diagnostic) -> bool {
+    d.is_error() || (d.upgrade == Some(true) && d.fix.is_some())
+}
+
+fn is_note(d: &Diagnostic) -> bool {
+    d.upgrade == Some(true) && d.fix.is_none()
 }
 
 fn fixes_to_apply(diagnostics: &[Diagnostic], all: bool) -> Vec<Fix> {
     let mut offered: Vec<Fix> = diagnostics
         .iter()
-        .filter(|d| d.severity.is_none() || d.upgrade == Some(true))
+        .filter(|d| stands(d))
         .filter_map(Fix::of)
         .filter(|fix| !fix.edits.is_empty() && (all || fix.safe))
         .collect();
@@ -120,8 +126,9 @@ fn apply(source: &str, fixes: &[Fix]) -> String {
     String::from_utf16_lossy(&result)
 }
 
-/// Every diagnostic a check of `source` reports.
-fn check_text(source: &str, catalog: &CatalogSnapshot) -> Vec<Diagnostic> {
+/// Every diagnostic a check of `source` reports, as a move up from `from_pin`
+/// when given.
+fn check_text(source: &str, catalog: &CatalogSnapshot, from_pin: Option<&str>) -> Vec<Diagnostic> {
     let parse_refusal = |message: String, line: usize, col: usize| {
         let at = movement_parser::ast::Loc { line, col };
         vec![Diagnostic::error("MOV_PARSE", message, movement_parser::ast::Span { start: at, end: at })]
@@ -129,7 +136,7 @@ fn check_text(source: &str, catalog: &CatalogSnapshot) -> Vec<Diagnostic> {
     if let Err(refused) = parse(source) {
         return parse_refusal(refused.message, refused.line, refused.column);
     }
-    let options = CheckOptions { upgrading_from: None, zones: &NativeZones };
+    let options = CheckOptions { upgrading_from: from_pin, zones: &NativeZones };
     match movement_checker::check_source(source, catalog, options) {
         Ok(diagnostics) => diagnostics,
         Err(refusal) => parse_refusal(refusal.message, 1, 1),
@@ -138,24 +145,34 @@ fn check_text(source: &str, catalog: &CatalogSnapshot) -> Vec<Diagnostic> {
 
 struct Upgraded {
     source: String,
+    /// What stands between the text and this release (`stands`).
     remaining: Vec<Diagnostic>,
+    /// Upgrade notes with nothing to rewrite: listed, never holding the pin.
+    notes: Vec<Diagnostic>,
     settled: bool,
 }
 
-fn upgrade_source(source: &str, catalog: &CatalogSnapshot, all: bool) -> Upgraded {
+impl Upgraded {
+    fn of(source: String, diagnostics: Vec<Diagnostic>, settled: bool) -> Self {
+        let (remaining, rest): (Vec<_>, Vec<_>) = diagnostics.into_iter().partition(stands);
+        Upgraded { source, remaining, notes: rest.into_iter().filter(is_note).collect(), settled }
+    }
+}
+
+fn upgrade_source(source: &str, catalog: &CatalogSnapshot, all: bool, from_pin: &str) -> Upgraded {
     let mut text = source.to_string();
     for _ in 0..MAX_PASSES {
-        let diagnostics = check_text(&text, catalog);
+        let diagnostics = check_text(&text, catalog, Some(from_pin));
         let fixes = fixes_to_apply(&diagnostics, all);
         let rewritten = apply(&text, &fixes);
         // A fix that rewrites to the same text would loop forever.
         if fixes.is_empty() || rewritten == text {
-            return Upgraded { source: text, remaining: standing(diagnostics), settled: true };
+            return Upgraded::of(text, diagnostics, true);
         }
         text = rewritten;
     }
-    let remaining = standing(check_text(&text, catalog));
-    Upgraded { source: text, remaining, settled: false }
+    let diagnostics = check_text(&text, catalog, Some(from_pin));
+    Upgraded::of(text, diagnostics, false)
 }
 
 /// A unified diff of two texts, by line; empty when they are the same.
@@ -219,6 +236,11 @@ fn unified_diff(before: &str, after: &str, path: &str) -> String {
     out.join("\n")
 }
 
+/// `file:line:col severity CODE message`.
+fn listed(shown: &str, d: &Diagnostic) -> String {
+    format!("{shown}:{}:{} {} {} {}", d.span.start.line, d.span.start.col, severity_word(d), d.code, external_text(&d.message))
+}
+
 fn severity_word(d: &Diagnostic) -> &'static str {
     match d.severity {
         None => "error",
@@ -273,7 +295,7 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
     let store = movements_slot::of_project(project, &std::env::vars().collect::<Vec<_>>())?;
     let (mut changed, mut left) = (0usize, 0usize);
     for file in &checking.files {
-        let result = upgrade_source(&file.source, &catalog, options.all);
+        let result = upgrade_source(&file.source, &catalog, options.all, &project.engine);
         let shown = relative(&project.root, &file.path);
         if result.source != file.source {
             if options.check_only {
@@ -297,12 +319,15 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
         }
         for d in &result.remaining {
             left += 1;
-            writeln!(out, "{shown}:{}:{} {} {} {}", d.span.start.line, d.span.start.col, severity_word(d), d.code, external_text(&d.message)).map_err(io)?;
+            writeln!(out, "{}", listed(&shown, d)).map_err(io)?;
             // A fix not proved to keep the meaning: shown, applied only with --all.
             if let Some(fix) = Fix::of(d).filter(|f| !f.edits.is_empty()) {
                 let texts: Vec<String> = fix.edits.iter().map(|e| serde_json::to_string(&e.text).unwrap_or_default()).collect();
                 writeln!(out, "  fix (not applied, may change meaning; --all applies it): {}", texts.join(", ")).map_err(io)?;
             }
+        }
+        for d in &result.notes {
+            writeln!(out, "{}", listed(&shown, d)).map_err(io)?;
         }
         if !result.settled {
             left += 1;
@@ -357,6 +382,43 @@ mod tests {
         assert_eq!(text, format!("engine: {LANGUAGE_VERSION}\nmovements: m\n"));
         assert!(matches!(pin_step(old, 3).unwrap(), PinStep::Held { remaining: 3 }));
         assert!(matches!(pin_step(&text, 3).unwrap(), PinStep::Current));
+    }
+
+    const CATALOG: &str = r#"{"adapters":{
+      "crm":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
+        "Person":{"properties":{"Email":"text"},"edges":{}}},
+        "collections":{"People":{"target":"Person"}},"writableRoots":{}}}},
+      "mail":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
+        "Message":{"properties":{"To":"text","From":"text","Sent":"text"},"edges":{
+          "Replies":{"target":"Message","listenable":true,"sequenced":"chronological","identity":"Sent"}}}},
+        "collections":{"Messages":{"target":"Message"}},
+        "writableRoots":{"Message":{"fields":{"To":"text"},"resultShape":{"externalId":"text"}}}}}}
+    },"credentials":{},"plugins":{}}"#;
+
+    #[test]
+    fn a_fixless_upgrade_note_is_listed_and_the_pin_moves() {
+        let source = "import { crm as crm_module, mail as mail_module } from adapters\ncrm = connect crm_module\nmail = connect mail_module\nfunction go(t: <text>) {\n  founder = only(crm-[:People]->)\n  m = write mail-[:Messages]-> { To: t }\n  r = await m-[x:Replies WHERE x.From == founder.Email]->\n}\n";
+        let catalog = CatalogSnapshot::load(CATALOG).unwrap();
+        let upgraded = upgrade_source(source, &catalog, false, "0.12.13");
+        assert_eq!(upgraded.source, source);
+        assert!(upgraded.remaining.is_empty(), "{:?}", upgraded.remaining);
+        let notes: Vec<String> = upgraded.notes.iter().map(|d| listed("go.mvt", d)).collect();
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].starts_with("go.mvt:7:13 warning MOV_AWAIT_VALUE_CAPTURED 'founder.Email' in this wait's WHERE is read once"), "{}", notes[0]);
+        assert!(matches!(pin_step("engine: 0.12.13\n", upgraded.remaining.len()).unwrap(), PinStep::Set(_)));
+        // Under this release's own pin there is nothing to say.
+        assert!(upgrade_source(source, &catalog, false, LANGUAGE_VERSION).notes.is_empty());
+    }
+
+    #[test]
+    fn an_upgrade_note_with_a_rewrite_stands_and_one_without_is_only_listed() {
+        let at = movement_parser::ast::Loc { line: 1, col: 1 };
+        let span = movement_parser::ast::Span { start: at, end: at };
+        let note = Diagnostic { severity: Some(Severity::Warning), upgrade: Some(true), ..Diagnostic::error("MOV_X", "x", span) };
+        assert!(!stands(&note) && is_note(&note));
+        let fixable = Diagnostic { fix: Some(serde_json::json!({ "edits": [] })), ..note.clone() };
+        assert!(stands(&fixable) && !is_note(&fixable));
+        assert!(stands(&Diagnostic::error("MOV_X", "x", span)));
     }
 
     #[test]

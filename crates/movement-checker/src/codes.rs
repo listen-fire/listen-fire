@@ -142,6 +142,9 @@ pub const AWAIT_NEEDS_CADENCE: &str = "MOV_AWAIT_NEEDS_CADENCE";
 pub const UNTIL_EDGE_WATCHABLE: &str = "MOV_UNTIL_EDGE_WATCHABLE";
 pub const AWAIT_BARE_WALK: &str = "MOV_AWAIT_BARE_WALK";
 pub const AWAIT_UNORDERED: &str = "MOV_AWAIT_UNORDERED";
+/// A warning raised only by a check for an upgrade from before 0.13, with
+/// nothing to rewrite: a wait's WHERE reads a run record's field once.
+pub const AWAIT_VALUE_CAPTURED: &str = "MOV_AWAIT_VALUE_CAPTURED";
 pub const PARALLEL_RETIRED: &str = "MOV_PARALLEL_RETIRED";
 pub const EXTRACT_KEYWORD_RETIRED: &str = "MOV_EXTRACT_KEYWORD_RETIRED";
 pub const COMBINATOR_ARMS_ARE_ARGUMENTS: &str = "MOV_COMBINATOR_ARMS_ARE_ARGUMENTS";

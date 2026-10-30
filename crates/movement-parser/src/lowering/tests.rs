@@ -559,3 +559,79 @@ fn a_chain_handed_to_the_lowering_is_bounded_as_the_parser_bounds_it() {
     let quoted = format!(r#"{{"kind":"special","text":"{}","at":{{"start":0,"end":1}}}}"#, "[{\\\"".repeat(5_000));
     assert_eq!(lowered_on(256 << 20, quoted), Ok(()));
 }
+
+// ── Captures: what a wait's WHERE borrows from the run ──
+mod captures {
+    use super::*;
+    use crate::lowering::captures::{capture_holes, captured_name, with_captured};
+
+    fn lowered(text: &str) -> Expression {
+        lower_expression(&tree(text), text).unwrap_or_else(|r| panic!("{text}: {r:?}"))
+    }
+
+    /// A read as written: a name, or a member chain off a root.
+    fn spell(e: &Expression) -> String {
+        match e {
+            Expression::Property { property_type_id, .. } | Expression::EdgeProperty { property_type_id, .. } => property_type_id.clone(),
+            Expression::Traverse { alias_root: Some(root), steps, expression } if steps.is_empty() => format!("{root}.{}", spell(expression)),
+            other => panic!("not a read: {}", serde_json::to_string(other).unwrap()),
+        }
+    }
+
+    fn holes(text: &str, alias: Option<&str>, bound: &[&str]) -> Vec<String> {
+        capture_holes(&lowered(text), alias, &|n| bound.contains(&n)).iter().map(|h| spell(&h.expression)).collect()
+    }
+
+    #[test]
+    fn a_hole_is_what_the_arrival_does_not_read() {
+        assert_eq!(holes("r.From == founder.Email AND r.Title == \"x\"", Some("r"), &["founder"]), ["founder.Email"]);
+    }
+
+    #[test]
+    fn a_bare_name_in_scope_is_a_hole_and_one_out_of_scope_is_the_arrivals_field() {
+        assert_eq!(holes("Title == t", None, &["t"]), ["t"]);
+        assert_eq!(holes("Title == t", None, &[]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn an_alias_read_in_a_hops_where_is_the_arrivals_field_even_when_a_variable_shares_its_name() {
+        let walk = lowered("m-[x:Replies WHERE x.From == From AND x.To == founder.Email]->");
+        let Expression::Traverse { steps, .. } = walk else { panic!("a walk") };
+        let TraversalStep::Edge(step) = &steps[0] else { panic!("an edge step") };
+        let filter = step.expression_filter.as_deref().expect("a WHERE");
+        let found = capture_holes(filter, step.alias.as_deref(), &|n| n == "From" || n == "founder");
+        assert_eq!(found.iter().map(|h| spell(&h.expression)).collect::<Vec<_>>(), ["From", "founder.Email"]);
+    }
+
+    #[test]
+    fn a_hole_is_the_largest_part_that_reads_only_the_run_and_a_part_reading_nothing_is_none() {
+        let found = capture_holes(&lowered("r.Count > base + 1 AND r.Kind == \"a\" + \"b\""), Some("r"), &|n| n == "base");
+        assert_eq!(found.iter().map(|h| (h.index, h.expression.clone())).collect::<Vec<_>>(), [(0, lowered("base + 1"))]);
+    }
+
+    #[test]
+    fn a_hole_written_twice_is_one_hole() {
+        assert_eq!(holes("r.From == founder.Email OR r.To == founder.Email", Some("r"), &["founder"]), ["founder.Email"]);
+    }
+
+    #[test]
+    fn a_where_reading_only_the_arrival_or_nothing_has_no_hole() {
+        assert_eq!(holes("r.Title == \"x\" AND NOT r.Done", Some("r"), &[]), Vec::<String>::new());
+        assert_eq!(holes("true", Some("r"), &[]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_where_with_its_holes_captured_reads_each_from_its_reserved_name() {
+        let filter = lowered("r.From == founder.Email AND r.Size > limit OR r.To == founder.Email");
+        let found = capture_holes(&filter, Some("r"), &|n| n == "founder" || n == "limit");
+        let read = |i: usize| Expression::AliasRef { name: captured_name(i) };
+        let Expression::Logical { operands, .. } = with_captured(&filter, &found) else { panic!("an OR") };
+        let Expression::Logical { operands: both, .. } = &operands[0] else { panic!("an AND") };
+        let right = |e: &Expression| match e {
+            Expression::Compare { right, .. } => (**right).clone(),
+            other => panic!("a comparison: {other:?}"),
+        };
+        assert_eq!([right(&both[0]), right(&both[1]), right(&operands[1])], [read(0), read(1), read(0)]);
+        assert_eq!(captured_name(3), "\u{0}captured3");
+    }
+}

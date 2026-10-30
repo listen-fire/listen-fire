@@ -1276,6 +1276,7 @@ impl<'c> Checker<'c> {
                 self.check_path_head(head, scope);
                 let walk = self.walk_head(head, scope, true);
                 self.check_awaitable(head, walk.as_ref(), *arrivals_only);
+                self.report_captured_values(head, scope);
                 self.record_awaited_walk(awaited.span, head, walk.as_ref(), scope);
                 awaited_walk(walk)
             }

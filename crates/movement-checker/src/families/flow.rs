@@ -7,6 +7,7 @@
 //! - MOV_AWAIT_NEEDS_CADENCE (raised by nothing since 0.13: see `check_awaitable`)
 //! - MOV_AWAIT_NOT_AWAITABLE
 //! - MOV_AWAIT_UNORDERED
+//! - MOV_AWAIT_VALUE_CAPTURED (a warning, on a check for an upgrade only)
 //! - MOV_HEAD_NEEDS_A_NAME
 //! - MOV_IF_WITHOUT_ELSE
 //! - MOV_UNTIL_CADENCE_TOO_SHORT
@@ -14,15 +15,24 @@
 //! - MOV_WAIT_NOT_RESUMABLE
 
 use movement_parser::ast::{DurationLiteral, PathHead, PathRoot, RValue, Span, Statement};
+use movement_parser::lowering::captures::{capture_holes, rooted_reads};
+use movement_parser::lowering::expression::{Expression, TraversalStep};
 use movement_parser::stmt::AWAIT_ARRIVALS_WORD;
+use movement_parser::version::{Standing, standing};
 
 use crate::checker::Checker;
-use crate::scope::{ScopeId, SymbolId};
+use crate::families::names::spell_name;
+use crate::scope::{Resolution, ScopeId, SymbolId, SymbolKind};
 use crate::codes;
 
 /// An `until` condition is re-evaluated on a timer: it may not re-check
 /// faster than this.
 const UNTIL_CADENCE_FLOOR_MS: u64 = 60_000;
+
+/// The release from which a wait's WHERE reads a run record's field once,
+/// when the wait is reached; under an older pin it read it again at every
+/// check.
+const CAPTURED_SINCE: &str = "0.13.0";
 
 /// `durationToMs`, `None` for a text that is not a duration (`isValidDuration`:
 /// one or more `<digits><unit>` runs, units s/m/h/d/w).
@@ -221,6 +231,48 @@ impl Checker<'_> {
         }
     }
 
+    /// On a check for an upgrade from before 0.13: each part of the awaited
+    /// hop's WHERE that reads a run record's field, which the wait now reads
+    /// once, when it is reached (`capture_holes`), where the old pin read it
+    /// again at every check. A warning with nothing to rewrite.
+    pub fn report_captured_values(&mut self, head: &PathHead, scope: ScopeId) {
+        let Some(pin) = self.upgrading_from else { return };
+        if standing(pin, CAPTURED_SINCE) != Standing::OlderKey {
+            return;
+        }
+        let Some(steps) = Self::head_steps(head) else { return };
+        // A wait on more than one edge is MOV_AWAIT_BARE_WALK's.
+        let [TraversalStep::Edge(step)] = steps.as_slice() else { return };
+        let Some(filter) = step.expression_filter.as_deref() else { return };
+        let bound = |name: &str| matches!(self.scopes.resolve(scope, name), Resolution::Found(_));
+        let captured: Vec<(String, String)> = capture_holes(filter, step.alias.as_deref(), &bound)
+            .iter()
+            .filter_map(|hole| {
+                let (root, read) = rooted_reads(&hole.expression).into_iter().find(|(root, _)| self.holds_record(root, scope))?;
+                Some((spell_read(read).unwrap_or_else(|| spell_name(root)), spell_name(root)))
+            })
+            .collect();
+        for (read, root) in captured {
+            let mut note = crate::diagnostic::Diagnostic::error(
+                codes::AWAIT_VALUE_CAPTURED,
+                format!(
+                    "'{read}' in this wait's WHERE is read once, when the wait is reached (0.13); under {pin} it was read again at every check, so a change while the run waited changed what the wait accepted. Nothing to rewrite unless the wait should follow the live value: then test it after the wait against `refresh({root})`"
+                ),
+                head.span,
+            );
+            note.severity = Some(crate::diagnostic::Severity::Warning);
+            note.upgrade = Some(true);
+            self.push(note);
+        }
+    }
+
+    /// Whether `name` holds a record the run read or wrote (not a connection).
+    fn holds_record(&self, name: &str, scope: ScopeId) -> bool {
+        let Resolution::Found(id) = self.scopes.resolve(scope, name) else { return false };
+        let symbol = self.scopes.symbol(id);
+        symbol.kind != SymbolKind::Instance && (symbol.types.pos.is_some() || symbol.types.is_record)
+    }
+
     /// `checkUntilPurity`: an `until` condition's body may only read. Whether
     /// it flagged anything.
     pub fn check_until_purity(&mut self, body: &[Statement]) -> bool {
@@ -299,6 +351,18 @@ impl Checker<'_> {
             ),
             span,
         );
+    }
+}
+
+/// A member read off a root as written (`founder.Email`, `a.b.c`); none
+/// for a walk.
+fn spell_read(read: &Expression) -> Option<String> {
+    match read {
+        Expression::Property { property_type_id, .. } | Expression::EdgeProperty { property_type_id, .. } => Some(spell_name(property_type_id)),
+        Expression::Traverse { alias_root: Some(root), steps, expression } if steps.is_empty() => {
+            Some(format!("{}.{}", spell_name(root), spell_read(expression)?))
+        }
+        _ => None,
     }
 }
 

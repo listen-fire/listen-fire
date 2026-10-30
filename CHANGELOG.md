@@ -44,6 +44,11 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
   - A name called `new` is still a root: `await new-[:Notes]->` waits on the record `new` holds.
   - Why: a wait is one record off a listenable edge, so the bare traversal says it; `first(…)` said it twice.
 - The handbook and the Slack, Telegram and WhatsApp module sections write their waits as `await x-[:E]->`, in place of `await first(x-[:E]->)`.
+- A wait's `WHERE` reads a field of a record from the run (`founder.Email` in `await m-[x:Replies WHERE x.From == founder.Email]->`) once, when the wait is reached. Under a 0.12 pin it was read again at every check, so a change to that record while the run waited changed what the wait accepted.
+  - `listen-fire upgrade` from a 0.12 pin lists each such wait as a warning (`MOV_AWAIT_VALUE_CAPTURED`), naming the field read.
+  - There is nothing to rewrite, so the warning does not hold the pin: the pin still moves to `0.13.0`.
+  - A wait that should follow the live value tests it after the wait, against `refresh(founder)`.
+  - Why: a wait keeps the values it was written with, as a closure keeps what it closed over; it does not fetch them again while it waits.
 
 ### Added
 

@@ -16,6 +16,7 @@
 //! bare walk is the records it lands on wherever a value goes.
 
 mod call_shape;
+pub mod captures;
 pub mod condition;
 pub mod expression;
 mod read;
