@@ -604,7 +604,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
             eprintln!("Webhook signature verification failed for subscription {}", delivery.subscription_id);
             return refused(Refusal::SignatureInvalid);
         }
-        let body = Js::parse(delivery.raw_body).map_err(|e| format!("the delivery is not JSON: {e}"))?;
+        let body = delivery_body(delivery.raw_body, delivery.headers)?;
         // Read off the request, never the external: the id is the provider's.
         let external_id = source.declaration.delivery_id_header.as_deref().and_then(|name| header(delivery.headers, name)).filter(|id| !id.is_empty()).map(str::to_string);
         // `preprocessInbound` is the raw→events seam every inbound adapter
@@ -671,6 +671,29 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
     // The events are in; a failing wake door is still the sender's to retry.
     wakes.map_err(|error| format!("wakeKeys failed for adapter {}: {error}", source.adapter_type))?;
     Ok(Ok(Received::Kept(events_processed)))
+}
+
+/// A delivery's body as its module reads it: JSON, or a form's fields when it
+/// says it is form-encoded (Slack posts a press as `payload=<json>`). Each
+/// field is text; one sent more than once is the list of its values, in
+/// order. What a field holds is the module's to read.
+fn delivery_body(raw_body: &[u8], headers: &[(String, String)]) -> Result<Js, String> {
+    let form = header(headers, "content-type").and_then(|t| t.split(';').next()).is_some_and(|t| t.trim().eq_ignore_ascii_case("application/x-www-form-urlencoded"));
+    if !form {
+        return Js::parse(raw_body).map_err(|e| format!("the delivery is not JSON: {e}"));
+    }
+    let mut fields = crate::json::Obj::new();
+    for (name, value) in url::form_urlencoded::parse(raw_body) {
+        let value = Js::Str(value.into_owned());
+        match fields.get_mut(name.as_ref()) {
+            Some(Js::Arr(values)) => values.push(value),
+            Some(first) => *first = Js::Arr(vec![first.clone(), value]),
+            None => {
+                fields.insert(name.into_owned(), value);
+            }
+        }
+    }
+    Ok(Js::Obj(fields))
 }
 
 /// A delivery's wakes: named by the module's check, or read off the body.
@@ -1019,6 +1042,7 @@ mod tests {
             self.signed_wakes_failing.is_some()
         }
         async fn preprocess(&self, _source: &Source, raw: &Js, _checkpoint: Option<&Js>) -> Result<Extraction, String> {
+            self.seen.borrow_mut().push(raw.to_json());
             Ok(Extraction { events: Vec::new(), arrivals: arrivals_of(raw)?, checkpoint: None })
         }
         async fn check_inbound(&self, _source: &Source, request: &RawRequest<'_>, secret: Option<&str>, _checkpoint: Option<&Js>) -> Result<Js, String> {
@@ -1077,6 +1101,21 @@ mod tests {
         let unnamed = ModuleChecked::answering(r#"{"outcome":"accepted","events":[],"arrivals":[{"edge":"Replies","key":"C1:1","landing":{"fields":{}}}]}"#);
         assert_eq!(answer_delivery(&unnamed, delivery("POST", b"a=b", &[])).await.status, 500, "a module's answer that names no identity is its failure");
         assert!(unnamed.kept.borrow().is_empty());
+    }
+
+    /// A signed delivery its sender form-encodes (Slack posts a press as
+    /// `payload=<json>`) is verified over its raw bytes and read as its
+    /// fields; one without that content type is still JSON, refused when not.
+    #[tokio::test]
+    async fn a_form_encoded_delivery_is_read_as_its_fields() {
+        let store = ModuleChecked::signed(false);
+        let body = b"payload=%7B%22type%22%3A%22block_actions%22%7D&tag=a&tag=b+c";
+        let signature = to_hex(&hmac_sha256(b"key", body));
+        let form = headers(&[("x-listen-fire-signature", &signature), ("content-type", "application/x-www-form-urlencoded; charset=utf-8")]);
+        assert_eq!(answer_delivery(&store, delivery("POST", body, &form)).await.status, 200);
+        assert_eq!(store.seen.borrow().clone(), [r#"{"payload":"{\"type\":\"block_actions\"}","tag":["a","b c"]}"#]);
+        let unsaid = headers(&[("x-listen-fire-signature", &signature)]);
+        assert_eq!(answer_delivery(&store, delivery("POST", body, &unsaid)).await.status, 500, "a body that says nothing of its form is read as JSON");
     }
 
     /// A delivery whose wakes failed is kept without its id and answered

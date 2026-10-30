@@ -282,6 +282,26 @@ type DeliveryRead<Captured> =
       wakes(): Promise<WakeRead>;
     };
 
+/**
+ * A delivery's body as its module reads it: JSON, or a form's fields when it
+ * says it is form-encoded (Slack posts a press as `payload=<json>`). Each field
+ * is text; one sent more than once is the list of its values, in order. What a
+ * field holds is the module's to read.
+ */
+export function deliveryBody(rawBody: Buffer, headers: InboundHeaders): unknown {
+  const declared = Object.entries(headers).find(([name]) => name.toLowerCase() === 'content-type')?.[1];
+  const contentType = typeof declared === 'string' ? declared : declared?.[0];
+  if (contentType?.split(';')[0]?.trim().toLowerCase() !== 'application/x-www-form-urlencoded') {
+    return JSON.parse(rawBody.toString('utf-8'));
+  }
+  const fields: Record<string, string | string[]> = {};
+  for (const [name, value] of new URLSearchParams(rawBody.toString('utf-8'))) {
+    const held = fields[name];
+    fields[name] = held === undefined ? value : Array.isArray(held) ? [...held, value] : [held, value];
+  }
+  return fields;
+}
+
 /** A provider the host verifies: the scheme, then `preprocessInbound`. */
 async function readSigned<Captured>(
   store: InboundStore<Captured>,
@@ -298,7 +318,7 @@ async function readSigned<Captured>(
     return { result: refused('signature_invalid') };
   }
 
-  const body: unknown = JSON.parse(rawBody.toString('utf-8'));
+  const body = deliveryBody(rawBody, headers);
   const opened = await source.open();
   // `preprocessInbound` is THE raw→events seam every inbound adapter
   // implements; a delivery whose adapter lacks it is a wiring bug, refused

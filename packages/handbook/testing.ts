@@ -19,7 +19,8 @@
 // `@lf/github` module's own schema (`lf catalog` over `examples/github-triage`,
 // recorded in the fixture's `capturedFrom.supplements`), because the module is
 // built in this repository and the README's lead program is checked against
-// it. The next full platform capture replaces it.
+// it. Slack's message buttons, presses and replies come the same way (its
+// supplement says which). The next full platform capture replaces both.
 //
 // The capture is driven FROM the handbook's probes (`--handbook`), through the
 // very catalog build a save performs, so what gets described is what the

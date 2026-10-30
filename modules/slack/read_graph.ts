@@ -55,6 +55,7 @@ export const SLACK_MESSAGE_THREAD_EDGES = {
   replies: 'replies',
   author: 'author',
   reactions: 'reactions',
+  interactions: 'interactions',
 } as const;
 /** A message's up-hop to the Channel it was posted in — the reverse of
  *  `Channel -[Messages]-> Message`. Lets a movement post a fresh
@@ -71,6 +72,7 @@ export const SLACK_MESSAGE_THREAD_EDGE_NAMES = {
   replies: 'Replies',
   author: 'Author',
   reactions: 'Reactions',
+  interactions: 'Interactions',
 } as const;
 export const SLACK_MESSAGE_CHANNEL_EDGE_NAME = 'Channel';
 

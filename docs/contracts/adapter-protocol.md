@@ -1471,10 +1471,15 @@ A core slot may let listen-fire hear of a change instead of asking on a timer. T
 - **Push doors** (`emit`, `wake`): a JSON body of at most 1 MB, carrying 1 to
   1,000 events or keys. A larger body is answered 413 before anything is
   read.
-- **Host webhook door**: the raw body is read only for
-  `content-type: application/json`, up to 100 KB. A larger body is answered
-  413. A body of any other content type is not read, so its signature cannot
-  verify (401).
+- **Host webhook door**: the raw body is read for
+  `content-type: application/json` and
+  `application/x-www-form-urlencoded`, up to 100 KB. A larger body is
+  answered 413. A body of any other content type is not read, so its
+  signature cannot verify (401). The signature is checked over the raw bytes
+  either way; `preprocessInbound`'s `raw` is the parsed JSON, or for a form
+  its fields as an object of text (a field sent more than once is the list
+  of its values, in order). Slack posts a press on a message's control that
+  way, as `payload=<json>`; the module parses the field.
 - **Watch**: a `<slot>.watch` request is held up to 30 s ([Watching for changes](#watching-for-changes-slotwatch)); listen-fire gives up on it after 40 s.
 - **Calls to your server**: Listen-Fire sets no timeout of its own; Node's
   `fetch` defaults apply (about 5 minutes for the response headers, and 5
@@ -1642,6 +1647,7 @@ from `apps/cli`.
 
 ## Changes
 
+- **Form-encoded deliveries** (within version 2, no bump; 2026-10-30; listen-fire 0.13.0). The host webhook door reads a delivery sent as `application/x-www-form-urlencoded` as well as JSON: its signature is checked over the raw bytes, and `preprocessInbound`'s `raw` is the form's fields ([Limits and timeouts](#limits-and-timeouts)). Why: Slack posts a press on a message's control that way (`payload=<json>`), so `@lf/slack` reports presses as arrivals on the host's own door, verified with Slack's own signature. An older host refuses such a delivery as not JSON.
 - **Adapter protocol 2.5: arrivals** (within version 2; listen-fire 0.13.0). A module with listenable edges names the key each record's edge is waited on under (`awaitKeys`, a new optional method), and reports what lands there as arrivals: `arrivals` beside the events `preprocessInbound` answers, on `checkInbound`'s `accepted`, or pushed to the `wake` door as `{ arrivals }` ([Waiting on your system](#waiting-on-your-system-awaits)). Listen-Fire logs every arrival and keeps each run's wait itself (the store slot's `waits.*`, [store-slot.md](store-slot.md)). An arrival names its identity; one without is refused by name. Why: a run waiting on an edge reads what arrived since it began waiting, so an arrival during the write that caused it is never lost, and Listen-Fire, not the module, decides whether an arrival matches. Offering `awaitKeys` states no minor. From listen-fire 0.13.0 a wait reads arrivals only: `resolveAwait` is not called for it, `wakeKeys` wakes nothing, and the `wake` door refuses `{ keys }` (400, naming adapter protocol 2.5 and `arrivals`).
 - **Adapter protocol 2.4: subscriptions that expire** (within version 2; 2026-10-27; listen-fire 0.12.10). `ensureEventSubscription` may answer `expiresAt`, and a new optional method, `refreshEventSubscription`, extends a subscription before it lapses ([Event subscriptions that expire](#event-subscriptions-that-expire)). Offering the method states no minor: a `listen-fire` up to 0.12.9 reads a module that lists it and never calls it, so its webhooks lapse there as before. `@lf/airtable` lists it. With this change the kits stop raising a module's stated minor for the methods it offers (`.watch`, `work.enqueueIfAbsent`, `refreshEventSubscription`): it is what the author declares, else 0.
 - **`narrows` on a listen config key** (within version 2, no bump; 2026-10-27; additive). A `listenConfig` entry may say which hop of an event's address it is ([The manifest and installing](#the-manifest-and-installing)). `listen-fire` narrows a signature's event to the node the address walks to, as the hosted product does. An older host ignores the field; a module that declares none is unchanged.

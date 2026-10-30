@@ -31,7 +31,7 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
   - `readable` still says whether the edge can be listed, so an edge may be listenable, listable, or both.
   - Three optional keys describe arrivals: `identity` (the field of what lands that names an arrival), `version` (the field that changes when an arrival changes) and `cursor` (whether the module can list arrivals since a mark it hands out).
   - `identity` and `version` must name a field the landing's type declares, or `listen-fire` refuses the module, naming the field and what the landing declares.
-  - `@lf/slack`'s `Replies` declares `listenable` and `identity: 'Timestamp'`.
+  - `@lf/slack`'s `Replies` declares `listenable` and `identity: 'Timestamp'`; from this release it also says a deleted message settles its wait empty (`resolvesEmpty`), so a walk off what it binds is guarded (`if (reply == null) { … }`), as for any record that may be absent.
   - A module that still declares `awaitable` or `watchable` on a reference is refused when `listen-fire` describes it, naming `listenable`.
   - The catalog snapshot contract moves to version 2, since a member was removed. Version 1 is still read, and deprecated. A snapshot of either version that still carries `awaitable` or `watchable` is refused by both readers.
   - Why: an edge's two capabilities, being listed and announcing arrivals, are separate facts, and the two retired keys only ever said the second one twice.
@@ -104,6 +104,14 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
   - The `wake` door took `{ keys }` beside arrivals for a while; it now refuses them (see "Changed").
   - The acme example's CRM answers `awaitKeys`, pushes each comment as an arrival, and reports the comments a webhook delivery carries, each by its id.
   - Why: a waiting run reads the arrivals logged since it began waiting, so one that lands during the write that caused it is never lost, and whether it matches is decided by `listen-fire`, not the module. See `docs/contracts/adapter-protocol.md` ("Waiting on your system").
+- `@lf/slack`: a message can carry buttons, and a run waits on the message for a press.
+  - `Buttons: [{ Text: "Approve", Value: "approve" }, …]` on a message write posts the text with one button per entry. Buttons are never written with `Blocks` or `File`: the check refuses it, and so does the module (`a Slack Message's Buttons can't be combined with Blocks or File`). They need the `Message` text.
+  - `press = await msg-[:Interactions]->` waits for a press on the message. A press is an `Interaction { Id, At }`, its `Actions` the controls used (`Action { Value, Text }`) and its `By` the member who pressed. `only(press-[:Actions]->).Value` is one of the `Value`s the buttons were written with, so a comparison with one never offered is refused (`MOV_ENUM_UNKNOWN_VALUE`). A press on a control in `Blocks` arrives the same way, its value unchecked.
+  - `await msg-[:Replies]->` takes the first reply already in the thread, oldest first, or else the next to arrive; `await new` only the next.
+  - A deleted message ends both waits: what follows the `await` runs zero times.
+  - The module moves onto adapter protocol 2.5: `awaitKeys` names a message by its channel and `ts` (a thread by its root), and presses, thread replies and deletions arrive with the inbound delivery as arrivals. It no longer offers `resolveAwait` or `wakeKeys`, and states protocol minor 5.
+  - Why: the expense approval that needed two callbacks, their ids in Block Kit JSON and a result slot each is a write with buttons and one wait on the message.
+- The webhook door reads a delivery sent form-encoded (`application/x-www-form-urlencoded`) as well as JSON. Its signature is checked over the raw bytes, and the module reads the form's fields: each is text, and one sent more than once is the list of its values. Why: Slack posts a press on a message's control as `payload=<json>`, verified with Slack's own signing secret, at the same door as its events.
 
 ### Added
 

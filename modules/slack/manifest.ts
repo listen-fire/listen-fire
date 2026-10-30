@@ -59,7 +59,7 @@ export const SLACK_MANIFEST: AdapterManifest = {
   methods: [
     'listEntryPoints', 'describe', 'getFieldValue', 'getRelated', 'preprocessInbound',
     'getActorCandidates', 'extractActor', 'resolveFileRef',
-    'createRecord', 'invokeFieldFunction', 'listEventTypes',
+    'createRecord', 'invokeFieldFunction', 'listEventTypes', 'awaitKeys',
   ],
   requiredCredentialType: 'SLACK',
   triggerKinds: ['SLACK'],

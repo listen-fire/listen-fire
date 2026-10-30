@@ -111,6 +111,10 @@ async function ensureChannelMembership(client: SlackClient, channelId: string): 
 const WRITE_UNION_CLASH =
   "SlackAdapter.createRecord: a Slack Message is either a file post (Message, File) or an interactive post (Message, Blocks) — File and Blocks can't both be set.";
 
+/** Buttons are the interactive post written as fields: Slack's Block Kit
+ *  holds them, so a write cannot also set the blocks or the file. */
+const BUTTONS_CLASH = "SlackAdapter.createRecord: a Slack Message's Buttons can't be combined with Blocks or File";
+
 /**
  * The one create path: post or reply, decided by the anchor; text and/or
  * file and/or blocks, decided by the fields (internal currency: `text` /
@@ -142,9 +146,18 @@ export async function createUnifiedMessage(input: {
   const text = str(fields.text);
   const fileValue = asFileValue(fields.file);
   const blocks = asBlocksValue(fields.blocks);
-  if (!text && !fileValue && blocks === undefined) {
+  const buttons = asButtonsValue(fields.buttons);
+  if (!text && !fileValue && blocks === undefined && buttons === undefined) {
     throw new Error(
       'SlackAdapter.createRecord: a Slack Message needs at least one of Message / File / Blocks.',
+    );
+  }
+  if (buttons !== undefined && (fileValue || blocks !== undefined)) {
+    throw new Error(BUTTONS_CLASH);
+  }
+  if (buttons !== undefined && !text) {
+    throw new Error(
+      'SlackAdapter.createRecord: a Slack Message with Buttons needs its Message text: the buttons sit under it, and a notification shows it.',
     );
   }
   if (fileValue && blocks !== undefined) {
@@ -167,7 +180,8 @@ export async function createUnifiedMessage(input: {
   // Blocks ride verbatim; `text` is the notification fallback Slack shows in
   // previews/notifications, omitted entirely when absent (Slack accepts a
   // blocks-only post).
-  const response = await postMessage({ client, channelId, threadTs, text: finalText, blocks });
+  const posted = buttons !== undefined && finalText !== undefined ? buttonBlocks(finalText, buttons) : blocks;
+  const response = await postMessage({ client, channelId, threadTs, text: finalText, blocks: posted });
   if (!response.ts) {
     throw new Error('SlackAdapter.createRecord: Slack returned no message ts.');
   }
@@ -408,6 +422,54 @@ function asBlocksValue(raw: unknown): unknown[] | undefined {
     }
   }
   return raw.length > 0 ? raw : undefined;
+}
+
+// ── Buttons ─────────────────────────────────────────────────────────────────
+
+/** One button a message is written with: the label shown, and the value a
+ *  press answers with (an `Interaction`'s `Actions` `Value`). */
+export interface SlackButton {
+  Text: string;
+  Value: string;
+}
+
+/**
+ * The buttons a write gives, each `{ Text, Value }` with both text. Absent,
+ * null and an empty list mean "no buttons", as for Blocks.
+ */
+function asButtonsValue(raw: unknown): SlackButton[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new Error(`SlackAdapter.createRecord: Buttons must be a LIST of { Text, Value }, got ${describeBlocksValue(raw)}.`);
+  }
+  const buttons = raw.map((entry, i): SlackButton => {
+    const button = entry as { Text?: unknown; Value?: unknown } | null;
+    if (!button || typeof button !== 'object' || typeof button.Text !== 'string' || typeof button.Value !== 'string' || button.Text === '' || button.Value === '') {
+      throw new Error(`SlackAdapter.createRecord: Buttons[${i}] must be { Text, Value }, both non-empty text.`);
+    }
+    return { Text: button.Text, Value: button.Value };
+  });
+  return buttons.length > 0 ? buttons : undefined;
+}
+
+/**
+ * The blocks a message with buttons posts: its text as a section, then one
+ * actions block. Each button's `action_id` is its place (`lf_button_<i>`),
+ * since Slack needs one distinct per block; what a press means is its value.
+ */
+export function buttonBlocks(text: string, buttons: readonly SlackButton[]): unknown[] {
+  return [
+    { type: 'section', text: { type: 'mrkdwn', text } },
+    {
+      type: 'actions',
+      elements: buttons.map((button, i) => ({
+        type: 'button',
+        text: { type: 'plain_text', text: button.Text },
+        value: button.Value,
+        action_id: `lf_button_${i}`,
+      })),
+    },
+  ];
 }
 
 function describeBlocksValue(raw: unknown): string {

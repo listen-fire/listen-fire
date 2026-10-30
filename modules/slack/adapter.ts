@@ -27,16 +27,11 @@
 
 import { Readable } from 'node:stream';
 
-import { z } from 'zod';
-
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import type {
   ActorCandidate,
   ActorIdentity,
   Adapter,
-  AwaitableCapability,
-  AwaitPoint,
-  AwaitResolution,
   DeleteInput,
   DeleteResult,
   DiscriminableEvent,
@@ -54,6 +49,7 @@ import type {
   WriteInput,
   WriteResult,
 } from 'movement-engine/public/adapter';
+import type { Arrival, ArrivalsCapability, AwaitHead, AwaitKey } from 'engine-contracts';
 import type { SchemaEntryPoint, SchemaTypeDescriptor, SourcePosition } from 'movement-engine/public/catalog';
 import type { TriggerEvent } from 'movement-engine/public/inbound';
 import type { ModuleLog } from 'module-kit';
@@ -61,7 +57,7 @@ import type { SlackAPIClient } from './api_client';
 import type { SlackWriteHost } from './write';
 
 import { fileHandle, ownedFileSource, singleParentLink } from 'movement-engine/public/adapter';
-import { META_RECORD_TYPE, makeStablePosition, makeUnstablePosition, positionData } from 'movement-engine/public/catalog';
+import { META_RECORD_TYPE, makeStablePosition, makeUnstablePosition, positionData, positionRecordId } from 'movement-engine/public/catalog';
 import { BaseAdapter } from 'module-kit/adapter/base';
 import { naturalName } from 'module-kit/adapter/name_resolution';
 import { historyWindowFromWhere, type SlackHistoryWindow } from './history_window';
@@ -72,7 +68,17 @@ import {
   replyAnchorFromParent,
   type SlackWriteAnchor,
 } from './write';
-import { SLACK_MESSAGE_EVENT_TYPES, parseSlackDeliveries, slackInboundEvents } from './inbound';
+import {
+  SLACK_INTERACTIONS_EDGE_NAME,
+  SLACK_INTERACTION_TYPE_NAME,
+  SLACK_MESSAGE_EVENT_TYPES,
+  SLACK_REPLIES_EDGE_NAME,
+  slackArrivals,
+  slackInboundEvents,
+  slackMessageKey,
+  type SlackActionData,
+  type SlackInteractionData,
+} from './inbound';
 import { SLACK_MANIFEST } from './manifest';
 import { SLACK_MESSAGE_FUNCTION } from './compose';
 import {
@@ -228,7 +234,23 @@ export const SLACK_MESSAGE_FIELDS = {
   channel: 'channel',
   ts: 'ts',
   blocks: 'blocks',
+  buttons: 'buttons',
 } as const;
+
+/**
+ * A press on a message's control: what `await msg-[:Interactions]->` binds.
+ * Never listed — Slack keeps no record of presses — only announced, as an
+ * interaction payload. Its `Actions` are the controls used, its `By` the
+ * member who pressed.
+ */
+export const SLACK_INTERACTION_TYPE_ID = 'slack:interaction';
+export const SLACK_INTERACTION_FIELDS = { id: 'id', at: 'at' } as const;
+export const SLACK_INTERACTION_EDGES = { actions: 'actions', by: 'by' } as const;
+export const SLACK_INTERACTION_EDGE_NAMES = { actions: 'Actions', by: 'By' } as const;
+
+/** One control used in a press: the value it answered with, and its label. */
+export const SLACK_ACTION_TYPE_ID = 'slack:action';
+export const SLACK_ACTION_FIELDS = { value: 'value', text: 'text' } as const;
 
 /**
  * The `Timestamp` field's value: Slack's `ts` (epoch seconds, microseconds
@@ -323,17 +345,6 @@ interface SlackReactionData {
   item_user?: string;
 }
 
-/** The thread a `Replies` await parks on and an inbound reply wakes:
- *  `channel:thread_ts`. Both sides take the thread from `replyAnchorFromParent`,
- *  the same anchor a reply write uses, so all three agree on what "the thread"
- *  of a message is. */
-function replyCorrelationKey(anchor: { channelId: string; threadTs: string }): string {
-  return `${anchor.channelId}:${anchor.threadTs}`;
-}
-
-/** The fields of an inbound message event that make it a thread reply. */
-const SlackThreadReply = z.object({ channel: z.string(), thread_ts: z.string() });
-
 export class SlackAdapter extends BaseAdapter {
 
   /**
@@ -344,8 +355,9 @@ export class SlackAdapter extends BaseAdapter {
   async preprocessInbound(input: {
     raw: unknown;
     checkpoint?: unknown;
-  }): Promise<{ events: DiscriminableEvent[] }> {
-    return { events: slackInboundEvents(input.raw) };
+  }): Promise<{ events: DiscriminableEvent[]; arrivals?: Arrival[] }> {
+    const arrivals = slackArrivals(input.raw);
+    return { events: slackInboundEvents(input.raw), ...(arrivals.length > 0 ? { arrivals } : {}) };
   }
 
   /**
@@ -413,6 +425,21 @@ export class SlackAdapter extends BaseAdapter {
         displayName: 'File',
         // Reached by walking `slack:message -[:Files]-> slack:file` — no
         // root collection (nothing can list "all Slack files" here).
+        writable: false,
+        readable: false,
+      },
+      {
+        typeId: SLACK_INTERACTION_TYPE_ID,
+        displayName: SLACK_INTERACTION_TYPE_NAME,
+        // Reached only by awaiting a message's `Interactions`: Slack keeps
+        // no record of a press to list.
+        writable: false,
+        readable: false,
+      },
+      {
+        typeId: SLACK_ACTION_TYPE_ID,
+        displayName: 'Action',
+        // Reached along an interaction's `Actions`.
         writable: false,
         readable: false,
       },
@@ -554,7 +581,7 @@ export class SlackAdapter extends BaseAdapter {
               'Optional file to upload with the message — the Message text rides ' +
               'as the file caption, one visible Slack message. Send-side only: a ' +
               'received message\'s files are on its Files edge — read ' +
-              '`msg-[:Files]->.File`. A message is either a File or Blocks, never both.',
+              '`msg-[:Files]->.File`. A message is one of File, Blocks or Buttons.',
           },
           {
             fieldId: SLACK_MESSAGE_FIELDS.blocks,
@@ -574,30 +601,30 @@ export class SlackAdapter extends BaseAdapter {
             description:
               'Slack Block Kit blocks, exactly as in Slack\'s docs — assembled ' +
               'verbatim and passed through (no wrapping, no typed shape here; a ' +
-              'malformed block surfaces as a loud Slack error at run time). To make ' +
-              'a control DO something, mint a callback (`c = callback({ … })`) and ' +
-              'put `"${c.id}"` in a button\'s or select option\'s `value` — one ' +
-              'callback per control, since its body is what that control means. A ' +
-              '`datepicker`/`timepicker`/text input has no `value` field and no ' +
-              'value until the tap, so carry the id on the element\'s `action_id` ' +
-              'instead — e.g. `action_id: "${c.id}"` — and the picked value binds to ' +
-              'the callback\'s first parameter. ' +
-              'Build strings with "${…}" interpolation (never ' +
-              '`+`, which is numeric addition). Example, a section plus an actions ' +
-              'block with a button and a static_select:\n' +
-              '[\n' +
-              '  { type: "section", text: { type: "mrkdwn", text: "*${deal.Name}*" } },\n' +
-              '  { type: "actions", elements: [\n' +
-              '    { type: "button", text: { type: "plain_text", text: "Approve" },\n' +
-              '      value: "${approve.id}" },\n' +
-              '    { type: "static_select",\n' +
-              '      placeholder: { type: "plain_text", text: "Tier" },\n' +
-              '      options: [\n' +
-              '        { text: { type: "plain_text", text: "Seed" }, value: "${seed.id}" },\n' +
-              '      ] },\n' +
-              '  ] },\n' +
-              ']\n' +
-              'A message is either a File or Blocks, never both.',
+              'malformed block surfaces as a loud Slack error at run time). For ' +
+              'plain buttons write Buttons instead. A press on any control in the ' +
+              'blocks arrives on the message\'s Interactions, its value in the ' +
+              'Action\'s Value: a button\'s or option\'s `value`, a picker\'s pick. ' +
+              'Build strings with "${…}" interpolation (never `+`, which is ' +
+              'numeric addition). A message is one of File, Blocks or Buttons.',
+          },
+          {
+            fieldId: SLACK_MESSAGE_FIELDS.buttons,
+            displayName: 'Buttons',
+            kind: 'json',
+            // A list of `{ Text, Value }`: each a button under the Message
+            // text. A press arrives on the message's `Interactions`, and its
+            // Action's `Value` is typed by the Values written here
+            // (`literalsFrom` on `Interactions`).
+            cardinality: 'many',
+            writable: true,
+            readable: false,
+            required: false,
+            description:
+              'Buttons under the Message text, each `{ Text: "Approve", Value: "approve" }`: ' +
+              'Text is the label, Value what a press answers with. Wait for a press with ' +
+              '`await msg-[:Interactions]->`; `only(press-[:Actions]->).Value` is one of the ' +
+              'Values written. Needs Message text; never with File or Blocks.',
           },
           {
             fieldId: SLACK_MESSAGE_FIELDS.user,
@@ -657,14 +684,11 @@ export class SlackAdapter extends BaseAdapter {
           },
           // A thread is the `Replies` edge — a reply is CREATED along it (post a
           // thread reply), READABLE (a bare `m-[:Replies]->` reads the replies
-          // posted so far — zero before any exist, an ordinary empty traversal,
-          // not a special state), AND LISTENABLE: `await m-[:Replies]->` waits
-          // for the first NEW reply and binds it (S18, consent-by-silence).
-          // Same edge, two read modes — the `Called` callback edge is the
-          // precedent (movement-lang/checker/typing.ts `callbackType`).
-          // `resolvesEmpty: false` on the awaited form — a reply always has
-          // content (no empty settlement; unlike an ask `Response`, no cancel
-          // resolves this edge empty).
+          // posted so far, oldest first), AND LISTENABLE: Slack's Events API
+          // announces each reply, so `await m-[:Replies]->` takes the first
+          // reply already there or else the next to arrive. A deleted message
+          // ends its thread's waits empty. No cursor: an announcement missed
+          // is not listed back, though the listing still finds the reply.
           {
             fieldId: SLACK_MESSAGE_THREAD_EDGES.replies,
             targetTypeId: SLACK_MESSAGE_TYPE_ID,
@@ -672,15 +696,36 @@ export class SlackAdapter extends BaseAdapter {
             direction: 'outgoing',
             name: SLACK_MESSAGE_THREAD_EDGE_NAMES.replies,
             writable: true,
-            // An inbound Slack event carries the reply and wakes the run parked
-            // on the thread (`wakeKeys`) — real push, no poll behind it.
             listenable: true,
+            cursor: false,
             // A reply's `ts` names it within its channel.
             identity: SLACK_MESSAGE_TIMESTAMP_NAME,
-            resolvesEmpty: false,
+            resolvesEmpty: true,
             // `conversations.replies` answers oldest-first and the hop only
             // drops the root message from that page — it never reorders.
             sequenced: 'chronological',
+          },
+          // A press on one of the message's controls (its Buttons, or a
+          // control in its Blocks). Announced only: Slack posts each press as
+          // an interaction payload and keeps no list of them. The `Value` of
+          // its `Actions` takes the Values the message's Buttons were written
+          // with, so a comparison against a value never offered is refused.
+          {
+            fieldId: SLACK_MESSAGE_THREAD_EDGES.interactions,
+            targetTypeId: SLACK_INTERACTION_TYPE_ID,
+            cardinality: 'many',
+            direction: 'outgoing',
+            name: SLACK_MESSAGE_THREAD_EDGE_NAMES.interactions,
+            writable: false,
+            readable: false,
+            listenable: true,
+            cursor: false,
+            identity: 'Id',
+            resolvesEmpty: true,
+            literalsFrom: [{ at: [SLACK_INTERACTION_EDGE_NAMES.actions, 'Value'], from: 'Buttons[].Value' }],
+            description:
+              'A press on one of this message\'s Buttons (or a control in its Blocks): ' +
+              '`await msg-[:Interactions]->` waits for the next one.',
           },
           // React to the message you were handed: `write msg-[:Reactions]-> {
           // Emoji: "eyes" }`. Channel + ts come from the parent position, the
@@ -729,16 +774,95 @@ export class SlackAdapter extends BaseAdapter {
             name: SLACK_MESSAGE_CHANNEL_EDGE_NAME,
           },
         ],
-        // Files and Blocks are alternative write shapes, never both — Slack's
-        // upload surface has no blocks, and blocks-with-a-file has no single
-        // rendering. Untagged: nothing discriminates which shape a write means,
+        // Files, Blocks and Buttons are alternative write shapes, one at a
+        // time — Slack's upload surface has no blocks, blocks-with-a-file has
+        // no single rendering, and Buttons are themselves blocks. Untagged: nothing discriminates which shape a write means,
         // the fields it sets do.
         writeUnion: {
           variants: [
             { name: 'a file post', fields: [SLACK_MESSAGE_FIELDS.text, SLACK_MESSAGE_FIELDS.file] },
             { name: 'an interactive post', fields: [SLACK_MESSAGE_FIELDS.text, SLACK_MESSAGE_FIELDS.blocks] },
+            { name: 'a post with buttons', fields: [SLACK_MESSAGE_FIELDS.text, SLACK_MESSAGE_FIELDS.buttons] },
           ],
         },
+      };
+    }
+    if (typeId === SLACK_INTERACTION_TYPE_ID) {
+      return {
+        typeId: SLACK_INTERACTION_TYPE_ID,
+        displayName: SLACK_INTERACTION_TYPE_NAME,
+        description:
+          'Someone pressing a button (or using another control) on a message — what ' +
+          '`await msg-[:Interactions]->` binds. `Actions` are the controls used, `By` ' +
+          'the member who pressed.',
+        fields: [
+          {
+            fieldId: SLACK_INTERACTION_FIELDS.id,
+            displayName: 'Id',
+            kind: 'string',
+            writable: false,
+            required: true,
+            description: 'Names this press (Slack\'s trigger id).',
+          },
+          {
+            fieldId: SLACK_INTERACTION_FIELDS.at,
+            displayName: 'At',
+            kind: 'date',
+            writable: false,
+            required: false,
+            description: 'When the press was made.',
+          },
+        ],
+        references: [
+          {
+            fieldId: SLACK_INTERACTION_EDGES.actions,
+            targetTypeId: SLACK_ACTION_TYPE_ID,
+            cardinality: 'many',
+            direction: 'outgoing',
+            name: SLACK_INTERACTION_EDGE_NAMES.actions,
+            writable: false,
+            // In the order the payload lists them.
+            sequenced: 'document',
+            description: 'The controls used — one for a button press.',
+          },
+          {
+            fieldId: SLACK_INTERACTION_EDGES.by,
+            targetTypeId: SLACK_USER_TYPE_ID,
+            cardinality: 'one',
+            direction: 'outgoing',
+            name: SLACK_INTERACTION_EDGE_NAMES.by,
+            writable: false,
+            description: 'The member who pressed.',
+          },
+        ],
+      };
+    }
+    if (typeId === SLACK_ACTION_TYPE_ID) {
+      return {
+        typeId: SLACK_ACTION_TYPE_ID,
+        displayName: 'Action',
+        description: 'One control used in a press: the value it answered with, and its label.',
+        fields: [
+          {
+            fieldId: SLACK_ACTION_FIELDS.value,
+            displayName: 'Value',
+            kind: 'string',
+            writable: false,
+            required: false,
+            description:
+              'What the control answered: a button\'s Value (one of the Buttons written), ' +
+              'a select\'s chosen option value, a picker\'s date or time.',
+          },
+          {
+            fieldId: SLACK_ACTION_FIELDS.text,
+            displayName: 'Text',
+            kind: 'string',
+            writable: false,
+            required: false,
+            description: 'The label of the button, or of the option chosen.',
+          },
+        ],
+        references: [],
       };
     }
     if (typeId === SLACK_CHANNEL_TYPE_ID) {
@@ -958,6 +1082,40 @@ export class SlackAdapter extends BaseAdapter {
       }
     }
 
+    // A press (an `Interaction`, landed off a message's `Interactions`) and
+    // the controls it used (`Action`s): their data is what the interaction
+    // payload carried (inbound.ts `SlackInteractionData`).
+    if (this.isRecordOfType(input.position.recordType, SLACK_INTERACTION_TYPE_ID, resolver)) {
+      const fieldId = resolver.fieldId(
+        naturalName(resolver.naturalTypeName(SLACK_INTERACTION_TYPE_ID)),
+        naturalName(input.fieldId),
+      );
+      const press = (payload ?? {}) as Partial<SlackInteractionData>;
+      switch (fieldId) {
+        case SLACK_INTERACTION_FIELDS.id:
+          return press.id ?? null;
+        case SLACK_INTERACTION_FIELDS.at:
+          return isoInstantFromSlackTs(press.at ?? undefined);
+        default:
+          return null;
+      }
+    }
+    if (this.isRecordOfType(input.position.recordType, SLACK_ACTION_TYPE_ID, resolver)) {
+      const fieldId = resolver.fieldId(
+        naturalName(resolver.naturalTypeName(SLACK_ACTION_TYPE_ID)),
+        naturalName(input.fieldId),
+      );
+      const action = (payload ?? {}) as Partial<SlackActionData>;
+      switch (fieldId) {
+        case SLACK_ACTION_FIELDS.value:
+          return action.value ?? null;
+        case SLACK_ACTION_FIELDS.text:
+          return action.text ?? null;
+        default:
+          return null;
+      }
+    }
+
     // A slack:message position. Resolve the NATURAL field name to the internal
     // id the payload is keyed by, against the message type's natural name (the
     // read wrapper stamps `position.recordType` with it; a typeless seed uses
@@ -1062,12 +1220,30 @@ export class SlackAdapter extends BaseAdapter {
       return [];
     }
 
+    // A press: the controls it used, in the payload's order, and the member
+    // who pressed (users.info, as a message's author).
+    if (this.isRecordOfType(input.position.recordType, SLACK_INTERACTION_TYPE_ID, resolver)) {
+      const edgeId = await this.resolveEdgeReadId(input.position.recordType, input.fieldId);
+      const press = (payload ?? {}) as Partial<SlackInteractionData>;
+      if (edgeId === SLACK_INTERACTION_EDGES.actions) {
+        const naturalAction = resolver.naturalTypeName(SLACK_ACTION_TYPE_ID);
+        return (press.actions ?? []).map((action) => ({
+          position: makeUnstablePosition({ adapterType: this.adapterType, recordType: naturalAction, data: action }),
+        }));
+      }
+      if (edgeId === SLACK_INTERACTION_EDGES.by) return this.messageAuthor({ user: press.user?.id });
+      return [];
+    }
+    if (this.isRecordOfType(input.position.recordType, SLACK_ACTION_TYPE_ID, resolver)) {
+      return [];
+    }
+
     // A slack:message position. Resolve the NATURAL edge name to this adapter's
     // read currency (for slack the reference `name` IS the fieldId, so it's
     // identity, but resolve it uniformly so drift on a mistyped edge is loud).
     const edgeId = await this.resolveEdgeReadId(input.position.recordType, input.fieldId);
     if (edgeId === SLACK_MESSAGE_THREAD_EDGES.replies) {
-      return this.messageReplies((payload ?? {}) as SlackMessageData);
+      return this.messageReplies(input.position);
     }
     if (edgeId === SLACK_MESSAGE_THREAD_EDGES.author) {
       return this.messageAuthor((payload ?? {}) as SlackMessageData);
@@ -1421,13 +1597,18 @@ export class SlackAdapter extends BaseAdapter {
   }
 
   /** `msg-[r:replies]->` — the thread under this message (replies only, the
-   *  parent itself excluded). A message with no thread yields nothing. This
-   *  is now the BARE-READ side of `Replies` (the edge is readable AND
-   *  awaitable, per the `Called` callback precedent) — a busy thread pages
-   *  the same way `pageHistory` pages channel history. */
-  private async messageReplies(data: SlackMessageData): Promise<RelatedResult[]> {
-    const channelId = data.channel;
-    const rootTs = data.thread_ts ?? data.ts;
+   *  parent itself excluded). A message with no thread yields nothing. The
+   *  listing side of `Replies` (the edge is listable and listenable): a plain
+   *  `await` takes its first reply before waiting. A busy thread pages the
+   *  same way `pageHistory` pages channel history. */
+  private async messageReplies(position: SourcePosition): Promise<RelatedResult[]> {
+    // The thread as a reply write and `awaitKeys` see it: a message written
+    // here carries its channel as `channelId` and its bare ts as its id, one
+    // read or delivered carries `channel`.
+    const data = (positionData(position) ?? {}) as Record<string, unknown>;
+    const externalId = positionRecordId(position) ?? (typeof data.ts === 'string' ? data.ts : undefined);
+    if (externalId === undefined) return [];
+    const { channelId, threadTs: rootTs } = replyAnchorFromParent({ externalId, data });
     if (!channelId || !rootTs) return [];
     const client = await this.requireSlackApiClient('getRelated(replies)');
     const resolver = await this.resolver();
@@ -1533,94 +1714,43 @@ export class SlackAdapter extends BaseAdapter {
     }
   }
 
-  // ── 4d. The AWAITABLE capability — `await m-[:Replies]->` (§A) ────────────
+  // ── 4d. Arrivals — `await m-[:Interactions]->`, `await m-[:Replies]->` ────
   //
-  // The proof the awaitable capability isn't ask-shaped (S18, consent-by-
-  // silence). Slack advertises `Replies` awaitable because it can CORRELATE, not
-  // because a thread is stable: the write handle carries the message's channel +
-  // ts, and an inbound thread reply carries the same channel + thread_ts — so the
-  // correlation key is `channel:thread_ts`, mapping the thread to its parks.
-  //
-  // Resolution is EVENT-DRIVEN (no poll): `wakeKeys` names an inbound reply's
-  // thread, the engine wakes the parks correlated to it, and `resolveAwait` then
-  // re-checks the thread live and binds the reply. The
-  // reply's own fields ride the landing raw (the message schema keys them), so a
-  // resumed body reads `o.`Message`` / `o.User` through the ordinary message
-  // `getFieldValue` — no ask-style Response node.
-  //
-  // Cancellation is the engine's alone (F7): it drops its correlation row, and
-  // there is nothing to freeze about a thread. A reply after the race settles
-  // finds no correlation and is just a Slack message.
-  readonly awaitable: AwaitableCapability = {
-    resolveAwait: async (point: AwaitPoint): Promise<AwaitResolution> => {
-      if (
-        point.edge !== SLACK_MESSAGE_THREAD_EDGE_NAMES.replies &&
-        point.edge !== SLACK_MESSAGE_THREAD_EDGES.replies
-      ) {
+  // A message's two listenable edges are both keyed by a message: its own
+  // `channel:ts` for `Interactions` (a press names the message it was on),
+  // its thread root's for `Replies` (a reply names its thread). The key comes
+  // from the head alone, through the same anchors a reaction and a reply
+  // write use, so the three agree on which message, and which thread, a
+  // message is. What lands there arrives with the inbound delivery
+  // (`preprocessInbound`'s `arrivals`, inbound.ts).
+  readonly arrivals: ArrivalsCapability = {
+    awaitKeys: async ({ edge, heads }: { edge: string; heads: AwaitHead[] }): Promise<AwaitKey[]> => {
+      const name = naturalName(edge);
+      const keyOf =
+        name === SLACK_INTERACTIONS_EDGE_NAME || edge === SLACK_MESSAGE_THREAD_EDGES.interactions
+          ? (head: AwaitHead) => reactionAnchorFromParent({ externalId: head.recordId, data: head.headData })
+          : name === SLACK_REPLIES_EDGE_NAME || edge === SLACK_MESSAGE_THREAD_EDGES.replies
+            ? (head: AwaitHead) => {
+                const { channelId, threadTs } = replyAnchorFromParent({ externalId: head.recordId, data: head.headData });
+                return { channelId, ts: threadTs };
+              }
+            : undefined;
+      if (keyOf === undefined) {
         throw new Error(
-          `SlackAdapter.resolveAwait: '${point.edge}' is not an awaitable edge (only 'Replies').`,
+          `SlackAdapter.awaitKeys: '${edge}' is not a listenable edge (only '${SLACK_INTERACTIONS_EDGE_NAME}' and '${SLACK_REPLIES_EDGE_NAME}').`,
         );
       }
-      const anchor = replyAnchorFromParent({
-        externalId: point.recordId,
-        data: point.headData,
+      return heads.map((head) => {
+        const { channelId, ts } = keyOf(head);
+        if (channelId === undefined) {
+          throw new Error(
+            `SlackAdapter.awaitKeys: the message ${head.recordId} carries no channel (its data names neither \`channel\` nor \`channelId\`), so '${edge}' has no key to wait under.`,
+          );
+        }
+        return { key: slackMessageKey(channelId, ts) };
       });
-      if (anchor.channelId === undefined) {
-        throw new Error(
-          'SlackAdapter.resolveAwait: a Replies await needs the message channel to ' +
-            'correlate on (headData.channelId) — none was carried.',
-        );
-      }
-      const correlationKey = replyCorrelationKey({ channelId: anchor.channelId, threadTs: anchor.threadTs });
-      const client = await this.getSlackApiClient();
-      if (!client) {
-        this.sources.log.warn('[SlackAdapter.resolveAwait] no Slack client — parking (will retry)', {
-          teamId: this.sources.tenant,
-          channelId: anchor.channelId,
-        });
-        return { status: 'pending', correlationKey };
-      }
-      const resolver = await this.resolver();
-      const naturalMessage = resolver.naturalTypeName(SLACK_MESSAGE_TYPE_ID);
-      const thread = await client.api.conversations.replies({
-        channel: anchor.channelId,
-        ts: anchor.threadTs,
-        limit: 200,
-      });
-      // The thread root is the awaited message itself, not a reply — exclude it.
-      // A reply always carries content (resolvesEmpty: false), so a non-empty
-      // reply set is always a real landing; the engine binds the FIRST match
-      // (F9: first landing settles — replies come oldest-first).
-      const replies = (thread.messages ?? []).filter(
-        (raw) => (raw as { ts?: string }).ts !== anchor.threadTs,
-      );
-      if (replies.length === 0) return { status: 'pending', correlationKey };
-      return {
-        status: 'landed',
-        correlationKey,
-        landings: replies.map((raw) => ({
-          recordId: `${anchor.channelId}:${(raw as { ts?: string }).ts ?? ''}`,
-          recordType: naturalMessage,
-          // The reply message's raw payload — the same shape `getFieldValue` keys
-          // a message by (`text`, `user`, `ts`); inject the channel so `Channel`
-          // reads and any onward hop resolve off the bound node.
-          fields: { ...(raw as Record<string, unknown>), channel: anchor.channelId },
-        })),
-      };
     },
   };
-
-  /** An inbound thread reply wakes the `Replies` awaits parked on its thread. */
-  async wakeKeys(input: { raw: unknown }): Promise<string[]> {
-    const keys: string[] = [];
-    for (const delivery of parseSlackDeliveries(input.raw)) {
-      const reply = SlackThreadReply.safeParse(delivery.event);
-      if (!reply.success) continue;
-      const { threadTs } = replyAnchorFromParent({ externalId: delivery.recordId, data: reply.data });
-      keys.push(replyCorrelationKey({ channelId: reply.data.channel, threadTs }));
-    }
-    return keys;
-  }
 
   // ── 4c. Actor candidate parsing (acting-user split) ─────────────────────
   // Slack has no service-account concept the way email does (every Slack

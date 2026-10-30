@@ -4,27 +4,27 @@
 // contract as every hand-written chapter (consumer-neutral prose, no internal
 // vocabulary, every runnable example backed by a checked probe).
 //
-// Taught around `callback(…)` since the callback primitive: a tap carries one
-// opaque id, on every control, and the id's body says what the tap MEANS. The
-// `?answer=` idiom it replaces is no longer taught (the doors still recognise
-// it while live automations are re-authored).
+// Taught around waiting on the message itself: a press is an `Interaction`
+// on the posted message, a reply a `Replies` member, both awaited. Buttons are
+// a field of the write, and their Values type what a press answers with.
 
 import type { AdapterManifest } from 'movement-engine/public/adapter';
 
 type HandbookSection = NonNullable<AdapterManifest['handbookSection']>;
 
 export const SLACK_HANDBOOK_SECTION: HandbookSection = {
-  title: 'Slack — posts, Block Kit, and acting in the channel',
-  content: `## Slack — posts, Block Kit, and acting in the channel
+  title: 'Slack — posts, buttons, and waiting on the channel',
+  content: `## Slack — posts, buttons, and waiting on the channel
 
-Posting to Slack is an ordinary write: a message written along a channel's \`Messages\` edge, or along an inbound message's \`Replies\` edge. Slack's message field is \`Message\`. There is no cold open — a post always hangs off a channel you traversed to or a message that arrived, and the thread comes from that parent, never from a field. Two things about Slack are worth deciding before you build one — a post comes in exactly **two shapes**, and the interactive shape is how a person acts without leaving the channel.
+Posting to Slack is an ordinary write: a message written along a channel's \`Messages\` edge, or along a message's \`Replies\` edge. Slack's message field is \`Message\`. There is no cold open — a post always hangs off a channel you traversed to or a message that arrived, and the thread comes from that parent, never from a field. A posted message is also something to wait on: a press on one of its buttons arrives on its \`Interactions\`, and a reply in its thread on its \`Replies\`.
 
-### two-shapes-of-post
+### shapes-of-post
 
-A message you send is one of:
+Beside its \`Message\` text, a message you send carries at most one of:
 
-- **a file post** — \`Message\` text carrying a \`File\`. One visible message, the text captioning the file.
-- **an interactive post** — \`Message\` text plus \`Blocks\`, Slack's own Block Kit.
+- **a file** — \`File\`. One visible message, the text captioning the file.
+- **buttons** — \`Buttons\`, each \`{ Text, Value }\`: the label shown, and what a press answers with.
+- **Block Kit** — \`Blocks\`, Slack's own layout, for anything buttons cannot say.
 
 \`\`\`
 write ch-[:Messages]-> {
@@ -33,74 +33,74 @@ write ch-[:Messages]-> {
 }
 \`\`\`
 
-Never both shapes at once. An upload and Block Kit are different Slack endpoints, so a write that sets \`File\` and \`Blocks\` together is refused while you write it. Plain text on its own is the third, unremarkable case; what a message cannot be is empty of all three.
+A write that sets two of them is refused while you write it. Plain text on its own is the unremarkable case; what a message cannot be is empty of all of them.
+
+### buttons-and-a-press
+
+Write the buttons with the message, then wait on the message for a press. The press is an \`Interaction\`: its \`Actions\` are the controls used, and an action's \`Value\` is one of the \`Value\`s you wrote. Waiting on a person goes in a \`race\` with a \`sleep\`, so nobody answering is an outcome too:
+
+\`\`\`
+msg = write finance-[:Messages]-> {
+  Message: "\${expense.Description}: approve?"
+  Buttons: [{ Text: "Approve", Value: "approve" }, { Text: "Reject", Value: "reject" }]
+}
+
+r = race(
+  () => {
+    press = await msg-[:Interactions]->
+    if (press == null) { return null }
+    return only(press-[:Actions]->).Value == "approve"
+  },
+  () => { await sleep(1d) },
+)
+
+if (r[0] == null) {
+  write msg-[:Replies]-> { Message: "Nobody answered within a day." }
+} else if (r[0]) {
+  write msg-[:Replies]-> { Message: "Approved." }
+}
+\`\`\`
+
+- The wait starts before the message is posted, so a press that comes the moment it appears is not missed.
+- \`only(press-[:Actions]->).Value\` is \`"approve" | "reject"\` here: comparing it with a value the buttons never offered, such as \`"aprove"\`, is refused while you write it. Compare it where you read it, as here: the result of a \`race\` does not keep that type.
+- \`press-[:By]->\` is the member who pressed.
+- A message deleted while a run waits on it ends the wait: nothing after the \`await\` runs.
 
 ### blocks-are-verbatim
 
-\`Blocks\` is Block Kit exactly as Slack's documentation spells it: a list of block objects, assembled and handed to Slack unchanged. Nothing wraps them, renames their keys, or checks inside them — so a malformed block surfaces as a loud Slack error when the run posts it, not when you save. Write them as literal objects, nested as deeply as Block Kit nests:
+\`Blocks\` is Block Kit exactly as Slack's documentation spells it: a list of block objects, handed to Slack unchanged. Nothing checks inside them, so a malformed block fails loudly when the run posts it, not when you save. A press on a control inside them arrives on the message's \`Interactions\` like a button's: a select answers its chosen option's \`value\`, a date picker the date picked. Their values are not checked against anything, so reach for \`Buttons\` whenever buttons say it.
 
 \`\`\`
 write ch-[:Messages]-> {
-  Message: "Ready to go out?"
+  Message: "Pick a tier for \${deal.Name}."
   Blocks: [
-    { type: "section", text: { type: "mrkdwn", text: "*\${release.Name}* is ready." } },
     { type: "actions", elements: [
-      { type: "button", text: { type: "plain_text", text: "Ship" }, value: "\${ship.id}" }
+      { type: "static_select", placeholder: { type: "plain_text", text: "Tier" },
+        options: [
+          { text: { type: "plain_text", text: "Seed" }, value: "seed" },
+          { text: { type: "plain_text", text: "Growth" }, value: "growth" }
+        ] }
     ] }
   ]
 }
 \`\`\`
 
-Keep writing the \`Message\` text alongside them: it is what a notification shows, and what a client that cannot render blocks falls back to.
+Keep writing the \`Message\` text alongside them: it is what a notification shows.
 
-### a-tap-that-acts
+### waiting-for-a-reply
 
-This is usually the reason to reach for \`Blocks\`. A control carries a callback id in its \`value\`, and a tap runs that callback — one per control, since the body is what the control means:
-
-\`\`\`
-a = write questions-[:Check]-> { Prompt: "Ship the release?" }
-ship = callback({ write a-[:Response]-> { Answer: true } })
-hold = callback({ write a-[:Response]-> { Answer: false } })
-
-releases = only(team-[ch:Channels WHERE ch.Name == "releases"]->)
-if (releases == null) { fail("no #releases channel") }
-write releases-[:Messages]-> {
-  Message: "Ship the release? \${a.Url}"
-  Blocks: [
-    { type: "actions", elements: [
-      { type: "button", text: { type: "plain_text", text: "Ship" },
-        value: "\${ship.id}" },
-      { type: "button", text: { type: "plain_text", text: "Hold" },
-        value: "\${hold.id}" }
-    ] }
-  ]
-}
-
-answer = await a-[:Response]->
-\`\`\`
-
-A select works the same way, one callback per option: \`value: "\${seed.id}"\` on one option, \`"\${growth.id}"\` on the next. And keep \`Url\` in the message text — anyone on a client that cannot tap a block still has a way to respond.
-
-### a-value-picked-at-tap-time
-
-A \`datepicker\`, a \`timepicker\` or a text input has nothing to pre-wire: its value does not exist until the tap, and those elements have no \`value\` field to carry an id anyway. Put the id in \`action_id\` instead, and declare what the tap will supply as a parameter — Slack hands back one value, and it binds to the first parameter you left for it:
+A message's \`Replies\` are its thread, oldest first. \`await msg-[:Replies]->\` takes the first reply already there, or else waits for the next; \`await new msg-[:Replies]->\` waits only for one posted after the message entered the run. A \`WHERE\` says whose reply counts:
 
 \`\`\`
-booked = callback((day: <date>) => {
-  write msg-[:Replies]-> { Message: "Booked for \${day}." }
-})
-
-write msg-[:Replies]-> {
-  Message: "When shall we book it?"
-  Blocks: [
-    { type: "actions", elements: [
-      { type: "datepicker", action_id: "\${booked.id}" }
-    ] }
-  ]
+who = msg.User
+r = race(
+  () => { return await msg-[x:Replies WHERE x.User == who]-> },
+  () => { await sleep(2d) },
+)
+if (r[0] == null) {
+  write msg-[:Replies]-> { Message: "Bumping this in case it got buried." }
 }
 \`\`\`
-
-\`value\` is for controls whose meaning is fixed when you post them; \`action_id\` is for the ones whose value arrives with the tap. When a single-use callback is settled, Slack lets the message be edited, so its controls are replaced in place with a confirmation line.
 
 ### reacting-to-a-message
 
@@ -114,49 +114,40 @@ This is the natural "I've picked this up" before a slower step runs, and reactin
 
 ### what-fires-a-run
 
-Slack delivers only the events its app is subscribed to, so an automation reading Slack usually fires on the bot being mentioned rather than on every message in a channel; narrow further with \`events\` and \`channels\` on the listener. A run also needs the person who sent the message (or added the reaction) to be a known member of the team, matched on their Slack profile email — activity from guests, external members of a shared channel, other bots, and this platform's own posts is dropped before anything runs. Both facts are worth saying out loud when someone describes what they want, because both change what is possible.
+Slack delivers only the events its app is subscribed to, so an automation reading Slack usually fires on the bot being mentioned rather than on every message in a channel; narrow further with \`events\` and \`channels\` on the listener. A run also needs the person who sent the message (or added the reaction) to be a known member of the team, matched on their Slack profile email — activity from guests, external members of a shared channel, other bots, and this platform's own posts is dropped before anything runs. A press and a thread reply are different: they reach the run waiting on their message whoever made them, so say in a \`WHERE\` whose answer counts when it matters. Slack only sends presses and replies its app is set up to send — interactivity switched on, and message events subscribed.
 
 ### Common mistakes
 
-- **Setting \`File\` and \`Blocks\` on one message.** Two shapes, one choice. Send the file, then post the interactive message as a reply if you need both.
-- **A control with no \`id\` in it.** The post looks right and a tap does nothing. The id is the whole mechanism.
-- **Trying to pre-wire a picked value.** A date is not known when you post the picker. Carry the id on \`action_id\` and declare a parameter for what the tap will supply.
-- **Expecting a bad block to fail at save time.** The contents are passed through untouched; Slack is the one that validates them, at run time.
+- **Setting two of \`File\`, \`Buttons\` and \`Blocks\` on one message.** One shape per message. Send the file, then post the buttons as a reply if you need both.
+- **Waiting on a person without a \`sleep\` beside it.** A run waiting on a press nobody makes waits for ever; race it with the time it may take.
+- **Expecting a bad block to fail at save time.** Blocks are passed through untouched; Slack is the one that validates them, at run time.
 - **Promising every message in a channel.** What arrives depends on the workspace's subscription, and on the sender being a known member.`,
   engineClaims: [
     {
-      construct: 'a Slack interactive post whose buttons carry callback ids, one per answer',
+      construct: 'a Slack message with Buttons, a press on it awaited in a race with a sleep',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/ask\` as ask } from adapters
+import { \`@lf/slack\` as slack } from adapters
 import { team_workspace } from credentials
 
 team = connect slack using team_workspace
-questions = connect ask
 
 function sign_off(msg: <team-[:Message]->>) {
-  a = write questions-[:Check]-> {
-    Prompt: "Ship the release?"
-    Detail: "\${msg.Message}"
-  }
-  ship = callback({ write a-[:Response]-> { Answer: true } })
-  hold = callback({ write a-[:Response]-> { Answer: false } })
-
-  write msg-[:Replies]-> {
-    Message: "Ship the release? \${a.Url}"
-    Blocks: [
-      { type: "section", text: { type: "mrkdwn", text: "*Ship the release?*" } },
-      { type: "actions", elements: [
-        { type: "button", text: { type: "plain_text", text: "Ship" },
-          value: "\${ship.id}" },
-        { type: "button", text: { type: "plain_text", text: "Hold" },
-          value: "\${hold.id}" }
-      ] }
-    ]
+  ask = write msg-[:Replies]-> {
+    Message: "Ship the release?"
+    Buttons: [{ Text: "Ship", Value: "ship" }, { Text: "Hold", Value: "hold" }]
   }
 
-  answer = await a-[:Response]->
-  if (answer.Answer) {
+  r = race(
+    () => {
+      press = await ask-[:Interactions]->
+      if (press == null) { return null }
+      return only(press-[:Actions]->).Value == "ship"
+    },
+    () => { await sleep(1d) },
+  )
+
+  if (r[0] == true) {
     general = only(team-[ch:Channels WHERE ch.Name == "general"]->)
     if (general == null) { fail("no #general channel") }
     write general-[:Messages]-> { Message: "Shipping now." }
@@ -167,7 +158,7 @@ listen to team { events: ["app_mention"] } fire sign_off
 `,
     },
     {
-      construct: 'a Slack datepicker carrying a parameterized callback id on action_id',
+      construct: 'a reply in a Slack thread awaited on the message, with a nudge after two days',
       status: 'runs',
       probe: `
 import { \`@lf/slack\` as slack } from adapters
@@ -175,61 +166,18 @@ import { team_workspace } from credentials
 
 team = connect slack using team_workspace
 
-function book_it(msg: <team-[:Message]->>) {
-  booked = callback((day: <date>) => {
-    write msg-[:Replies]-> { Message: "Booked for \${day}." }
-  })
-
-  write msg-[:Replies]-> {
-    Message: "When shall we book it?"
-    Blocks: [
-      { type: "actions", elements: [
-        { type: "datepicker", action_id: "\${booked.id}" }
-      ] }
-    ]
+function follow_up(msg: <team-[:Message]->>) {
+  asked = write msg-[:Replies]-> { Message: "Who can take this?" }
+  r = race(
+    () => { return await new asked-[x:Replies WHERE x.User == msg.User]-> },
+    () => { await sleep(2d) },
+  )
+  if (r[0] == null) {
+    write asked-[:Replies]-> { Message: "Bumping this in case it got buried." }
   }
-
-  call = await booked-[:Called]->
-  write msg-[:Replies]-> { Message: "Picked \${call.day}." }
 }
 
-listen to team { events: ["app_mention"] } fire book_it
-`,
-    },
-    {
-      construct: 'a body-less callback awaited on Called — the minimal confirmation — plus a callback deferring a function by name',
-      status: 'runs',
-      probe: `
-import { \`@lf/slack\` as slack } from adapters
-import { team_workspace } from credentials
-
-team = connect slack using team_workspace
-
-function announce(m: <team-[:Message]->>) {
-  write m-[:Replies]-> { Message: "On it." }
-}
-
-function wait_for_go(msg: <team-[:Message]->>) {
-  go = callback()
-  again = callback(() => announce(msg), { once: false, ttl: 2d })
-
-  write msg-[:Replies]-> {
-    Message: "Ready when you are."
-    Blocks: [
-      { type: "actions", elements: [
-        { type: "button", text: { type: "plain_text", text: "Go" },
-          value: "\${go.id}" },
-        { type: "button", text: { type: "plain_text", text: "Remind the channel" },
-          value: "\${again.id}" }
-      ] }
-    ]
-  }
-
-  tap = await go-[:Called]->
-  write msg-[:Replies]-> { Message: "Off we go (\${tap.At})." }
-}
-
-listen to team { events: ["app_mention"] } fire wait_for_go
+listen to team { events: ["app_mention"] } fire follow_up
 `,
     },
   ],
