@@ -8,7 +8,7 @@ use crate::util::js;
 
 /// The snapshot versions this build reads (service/snapshot.ts
 /// `SUPPORTED_CATALOG_SNAPSHOT_VERSIONS`).
-pub const SUPPORTED_CATALOG_SNAPSHOT_VERSIONS: &[u32] = &[1];
+pub const SUPPORTED_CATALOG_SNAPSHOT_VERSIONS: &[u32] = &[1, 2];
 
 impl CatalogSnapshot {
     /// The snapshot in `json`, refused when it does not read as one — a

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `Reference`'s free members are documented as the 0.13 ones: `listenable`, `cursor`, `identity`, `version`, `resolvesEmpty`, `readable`. A module built on the kit declares `listenable` where it declared `awaitable` and `watchable`; a 0.13 `listen-fire` refuses the retired two.
+
 ## 0.12.8 - 2026-10-27
 
 - The store slot's method table serves `runs.rerun { runId, input, at, fence }`, which starts a failed run's next attempt as one fenced write (`null` when the run's status is not `failed`). A run row may answer `attempt` and `attempts` (the earlier attempts, oldest first). A store module built on the kit can now serve `lf runs rerun`.

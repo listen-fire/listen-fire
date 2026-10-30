@@ -239,7 +239,7 @@ The family is also the Rust module (`src/families/<family>.rs`).
 | MOV_AWAIT_BAD_DURATION | check.ts:checkAwait, check.ts:checkUntil | 3 |
 | MOV_AWAIT_BARE_WALK | check.ts:checkAwait | 9 |
 | MOV_AWAIT_IMPURE_CONDITION | check.ts:checkUntilCondition, check.ts:reportImpureCondition | 9 |
-| MOV_AWAIT_NEEDS_CADENCE | check.ts:checkAwait | 6 |
+| MOV_AWAIT_NEEDS_CADENCE | check.ts:checkAwait (unemitted since 0.13: no catalog can say an edge resolves but announces nothing; the name is never reused) | 6 |
 | MOV_AWAIT_NOT_AWAITABLE | check.ts:checkAwait | 9 |
 | MOV_HEAD_NEEDS_A_NAME | check.ts:checkAwait | 3 |
 | MOV_IF_WITHOUT_ELSE | check.ts:checkExpressionTree | 3 |

@@ -211,8 +211,15 @@ fn the_adapter_s_own_words_are_read_wherever_it_may_write_them() {
 fn a_snapshot_carries_its_contract_version_and_an_unsupported_one_is_refused() {
     let at = |version: Value| json!({ "contractVersion": version, "adapters": {}, "credentials": {}, "plugins": {} }).to_string();
     assert_eq!(CatalogSnapshot::load(&at(json!(1))).unwrap().contract_version, Some(1));
-    let refused = CatalogSnapshot::load(&at(json!(2))).unwrap_err();
-    assert!(refused.contains("catalog snapshot") && refused.contains("version 2") && refused.contains("supported: 1"), "{refused}");
+    assert_eq!(CatalogSnapshot::load(&at(json!(2))).unwrap().contract_version, Some(2));
+    let refused = CatalogSnapshot::load(&at(json!(3))).unwrap_err();
+    assert!(refused.contains("catalog snapshot") && refused.contains("version 3") && refused.contains("supported: 1, 2"), "{refused}");
+}
+
+#[test]
+fn a_snapshot_still_carrying_awaitable_is_refused() {
+    let schema = json!({ "positions": { "Ticket": { "properties": {}, "edges": { "Reply": { "target": "Ticket", "awaitable": true } } } }, "collections": {}, "writableRoots": {} });
+    assert!(sheets_result(json!({ "": schema })).unwrap_err().contains("awaitable"));
 }
 
 /// The supported list is the one the contracts index states, which the

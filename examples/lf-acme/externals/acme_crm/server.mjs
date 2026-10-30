@@ -6,7 +6,7 @@
 // One record type, `Company { Name, Description }`, and two events a listen
 // may choose, `company.created` and `company.updated`; a webhook delivers
 // created companies as `{ companies: [{ id, Name }] }`. Each
-// company has a comment thread (`Comments`, to `Comment { Text }`) a movement
+// company has a comment thread (`Comments`, to `Comment { Id, Text }`) a movement
 // can await: `await FIRST(company-[:Comments]->)` parks until somebody
 // comments, on the correlation key `thread:<company id>`. A webhook delivery
 // may carry comments too (`comments: [{ thread, text }]`), each waking its
@@ -64,9 +64,9 @@ const COMPANY_DESCRIPTOR = {
       // People comment in the CRM; nothing is created along the thread.
       writable: false,
       // Listenable: the CRM pushes a wake when a comment lands, so a park is
-      // woken, not polled. A comment's id names it; the thread runs oldest first.
+      // woken, not polled. A comment's `Id` names it; the thread runs oldest first.
       listenable: true,
-      identity: 'id',
+      identity: 'Id',
       sequenced: 'chronological',
       // A company the CRM does not have settles empty rather than parking forever.
       resolvesEmpty: true,
@@ -77,7 +77,11 @@ const COMPANY_DESCRIPTOR = {
 const COMMENT_DESCRIPTOR = {
   typeId: COMMENT,
   displayName: COMMENT,
-  fields: [{ fieldId: 'Text', displayName: 'Text', kind: 'string', writable: false, required: false }],
+  fields: [
+    // The CRM's id for the comment: what names one arrival on a thread.
+    { fieldId: 'Id', displayName: 'Id', kind: 'string', writable: false, required: false },
+    { fieldId: 'Text', displayName: 'Text', kind: 'string', writable: false, required: false },
+  ],
   references: [],
 };
 
@@ -153,7 +157,7 @@ const METHODS = {
     return {
       status: 'landed',
       correlationKey: threadKey(recordId),
-      landings: thread.map((c) => ({ recordId: c.id, recordType: COMMENT, fields: { Text: c.Text } })),
+      landings: thread.map((c) => ({ recordId: c.id, recordType: COMMENT, fields: { Id: c.id, Text: c.Text } })),
     };
   },
   // The threads a webhook delivery's comments land on.

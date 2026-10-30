@@ -13,7 +13,7 @@ const company: Record<string, SchemaFieldType> = {
 
 export const CATALOG: TenantCatalog = {
   snapshot: {
-    contractVersion: 1,
+    contractVersion: 2,
     adapters: {
       manual: {
         constructionArgs: [],

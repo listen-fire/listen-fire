@@ -58,7 +58,7 @@ A code is at parity when every diagnostic of it on the corpus is matched exactly
 | MOV_AWAIT_BAD_DURATION | flow | 6 | 6 | 0 | 0 | 0 | yes |
 | MOV_AWAIT_BARE_WALK | flow | 18 | 18 | 0 | 0 | 0 | yes |
 | MOV_AWAIT_IMPURE_CONDITION | flow | 18 | 18 | 0 | 0 | 0 | yes |
-| MOV_AWAIT_NEEDS_CADENCE | flow | 12 | 12 | 0 | 0 | 0 | yes |
+| MOV_AWAIT_NEEDS_CADENCE | flow (unemitted since 0.13: no catalog can say an edge resolves but announces nothing; the name is never reused) | 12 | 12 | 0 | 0 | 0 | yes |
 | MOV_AWAIT_NOT_AWAITABLE | flow | 19 | 19 | 0 | 0 | 0 | yes |
 | MOV_AWAIT_ON_LIST | ? | 8 | 8 | 0 | 0 | 0 | yes |
 | MOV_BLOCK_READ_BACK_RETIRED | closures | 18 | 18 | 0 | 0 | 0 | yes |

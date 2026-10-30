@@ -674,7 +674,29 @@ fn edge_schema(reference: &Js, target: Option<&str>, polymorphic: bool, field_id
 pub fn retired_reference_key(reference: &Js) -> Option<String> {
     let retired = ["awaitable", "watchable"].into_iter().find(|retired| reference.get(retired).is_some())?;
     let name = key(nullish_or(reference.get("name"), reference.get("fieldId")));
-    Some(format!("'{name}' declares '{retired}', retired in 0.13: declare 'listenable: true' (and 'identity', the landing's field that names it)"))
+    Some(format!("'{name}' declares '{retired}', retired in 0.13: declare 'listenable: true' (and, optionally, 'identity': the landing's field that names an arrival)"))
+}
+
+/// The refusal of a reference whose `identity` or `version` names a field its
+/// landing does not declare (engine-contracts `undeclaredArrivalField` says
+/// the same). A landing nobody described is not judged: it declares nothing
+/// either way.
+pub fn undeclared_arrival_field(reference: &Js, descriptors: &IndexMap<String, Js>) -> Option<String> {
+    let name = key(nullish_or(reference.get("name"), reference.get("fieldId")));
+    for role in ["identity", "version"] {
+        let Some(field) = reference.get(role).and_then(Js::as_str) else { continue };
+        for landing in reference_target_type_ids(reference).iter().filter_map(|t| descriptors.get(t)) {
+            let declared: Vec<&str> = items(landing.get("fields")).iter().filter_map(|f| f.get("displayName").and_then(Js::as_str)).collect();
+            if !declared.contains(&field) {
+                let landing_name = landing.get("displayName").and_then(Js::as_str).unwrap_or_default();
+                return Some(format!(
+                    "'{name}' names '{field}' as its {role}, a field its landing '{landing_name}' does not declare (it declares: {})",
+                    if declared.is_empty() { "nothing".to_string() } else { declared.join(", ") }
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// A non-empty `description` the adapter wrote on a type, field or reference.
@@ -775,12 +797,29 @@ mod tests {
     fn an_awaitable_reference_is_refused_naming_listenable() {
         assert_eq!(
             retired_reference_key(&js(r#"{"name":"Replies","awaitable":true}"#)).unwrap(),
-            "'Replies' declares 'awaitable', retired in 0.13: declare 'listenable: true' (and 'identity', the landing's field that names it)"
+            "'Replies' declares 'awaitable', retired in 0.13: declare 'listenable: true' (and, optionally, 'identity': the landing's field that names an arrival)"
         );
         assert_eq!(
             retired_reference_key(&js(r#"{"fieldId":"replies","watchable":true}"#)).unwrap(),
-            "'replies' declares 'watchable', retired in 0.13: declare 'listenable: true' (and 'identity', the landing's field that names it)"
+            "'replies' declares 'watchable', retired in 0.13: declare 'listenable: true' (and, optionally, 'identity': the landing's field that names an arrival)"
         );
         assert_eq!(retired_reference_key(&js(r#"{"name":"Replies","listenable":true}"#)), None);
+    }
+
+    #[test]
+    fn an_identity_or_version_must_name_a_field_the_landing_declares() {
+        let message = js(r#"{ "typeId": "m", "displayName": "Message", "fields": [{ "fieldId": "ts", "displayName": "Timestamp", "kind": "date" }], "references": [] }"#);
+        let descriptors: IndexMap<String, Js> = [("m".to_string(), message)].into_iter().collect();
+        let replies = |extra: &str| js(&format!(r#"{{ "fieldId": "replies", "name": "Replies", "targetTypeId": "m", "listenable": true{extra} }}"#));
+        assert_eq!(undeclared_arrival_field(&replies(r#", "identity": "Timestamp""#), &descriptors), None);
+        assert_eq!(
+            undeclared_arrival_field(&replies(r#", "identity": "ts""#), &descriptors).unwrap(),
+            "'Replies' names 'ts' as its identity, a field its landing 'Message' does not declare (it declares: Timestamp)"
+        );
+        assert_eq!(
+            undeclared_arrival_field(&replies(r#", "identity": "Timestamp", "version": "Edited""#), &descriptors).unwrap(),
+            "'Replies' names 'Edited' as its version, a field its landing 'Message' does not declare (it declares: Timestamp)"
+        );
+        assert_eq!(undeclared_arrival_field(&replies(r#", "identity": "Anything""#), &IndexMap::new()), None, "an undescribed landing is not judged");
     }
 }

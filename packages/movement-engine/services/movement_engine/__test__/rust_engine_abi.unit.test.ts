@@ -94,13 +94,13 @@ describe('the Rust engine artifact', () => {
 
   it('reads a snapshot carrying a contract version it reads, and declines one it does not before asking anything', () => {
     const read = openEngineSegment();
-    expect(read.start(segmentStart(SOURCE, 'g1', { ...EMPTY_CATALOG_SNAPSHOT, contractVersion: 1 })).json).toMatchObject({
+    expect(read.start(segmentStart(SOURCE, 'g1', { ...EMPTY_CATALOG_SNAPSHOT, contractVersion: 2 })).json).toMatchObject({
       pending: [{ family: 'check', method: 'program' }],
     });
     read.finish();
     // Declined before anything is asked: the run fails, naming why.
     const unread = openEngineSegment();
-    expect(unread.start(segmentStart(SOURCE, 'g1', { ...EMPTY_CATALOG_SNAPSHOT, contractVersion: 2 })).json).toEqual({
+    expect(unread.start(segmentStart(SOURCE, 'g1', { ...EMPTY_CATALOG_SNAPSHOT, contractVersion: 3 })).json).toEqual({
       done: { declined: 'catalog_does_not_load' },
     });
     unread.finish();

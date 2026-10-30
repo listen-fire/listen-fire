@@ -854,7 +854,7 @@ export type SchemaFieldDescriptor = z.infer<typeof schemaFieldDescriptorSchema>;
 /** Why a reference that declares a key 0.13 retired is refused (listen-fire's
  *  describe refuses it in the same words). */
 export function retiredReferenceKey(name: string, key: string): string {
-  return `'${name}' declares '${key}', retired in 0.13: declare 'listenable: true' (and 'identity', the landing's field that names it)`;
+  return `'${name}' declares '${key}', retired in 0.13: declare 'listenable: true' (and, optionally, 'identity': the landing's field that names an arrival)`;
 }
 
 const RETIRED_REFERENCE_KEYS = ['awaitable', 'watchable'] as const;
@@ -1381,6 +1381,31 @@ export const schemaTypeDescriptorSchema = z.object({
 });
 
 export type SchemaTypeDescriptor = z.infer<typeof schemaTypeDescriptorSchema>;
+
+/**
+ * The refusal of a reference whose `identity` or `version` names a field its
+ * landing does not declare (listen-fire's describe says the same). A landing
+ * nobody described is not judged: it declares nothing either way.
+ */
+export function undeclaredArrivalField(
+  reference: SchemaReferenceDescriptor,
+  descriptors: ReadonlyMap<string, SchemaTypeDescriptor>,
+): string | undefined {
+  const name = reference.name ?? reference.fieldId;
+  for (const role of ['identity', 'version'] as const) {
+    const field = reference[role];
+    if (field === undefined) continue;
+    for (const typeId of referenceTargetTypeIds(reference)) {
+      const landing = descriptors.get(typeId);
+      if (landing === undefined) continue;
+      const declared = landing.fields.map((f) => f.displayName);
+      if (!declared.includes(field)) {
+        return `'${name}' names '${field}' as its ${role}, a field its landing '${landing.displayName}' does not declare (it declares: ${declared.length === 0 ? 'nothing' : declared.join(', ')})`;
+      }
+    }
+  }
+  return undefined;
+}
 
 const schemaDescriptorSchema = z.object({
   adapterType: z.string(),

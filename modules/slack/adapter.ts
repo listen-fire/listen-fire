@@ -676,7 +676,7 @@ export class SlackAdapter extends BaseAdapter {
             // on the thread (`wakeKeys`) — real push, no poll behind it.
             listenable: true,
             // A reply's `ts` names it within its channel.
-            identity: 'Timestamp',
+            identity: SLACK_MESSAGE_TIMESTAMP_NAME,
             resolvesEmpty: false,
             // `conversations.replies` answers oldest-first and the hop only
             // drops the root message from that page — it never reorders.

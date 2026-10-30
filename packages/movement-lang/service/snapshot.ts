@@ -20,6 +20,7 @@ import type {
   AdapterSpec,
   Catalog,
   CredentialSpec,
+  EdgeSchema,
   InstanceSchema,
   PluginSpec,
 } from '../catalog/types';
@@ -73,13 +74,13 @@ export interface AdapterSnapshot extends AdapterSpec {
 
 /** The catalog snapshot contract's version (docs/contracts/catalog-snapshot.md).
  *  A change in meaning bumps it; an additive optional field does not. */
-export const CATALOG_SNAPSHOT_VERSION = 1;
+export const CATALOG_SNAPSHOT_VERSION = 2;
 
 /** The snapshot versions this release reads. */
-export const SUPPORTED_CATALOG_SNAPSHOT_VERSIONS: ReadonlySet<number> = new Set([1]);
+export const SUPPORTED_CATALOG_SNAPSHOT_VERSIONS: ReadonlySet<number> = new Set([1, 2]);
 
 /** Supported snapshot versions that will be removed. */
-export const DEPRECATED_CATALOG_SNAPSHOT_VERSIONS: ReadonlySet<number> = new Set<number>();
+export const DEPRECATED_CATALOG_SNAPSHOT_VERSIONS: ReadonlySet<number> = new Set<number>([1]);
 
 export interface CatalogSnapshot {
   /** The contract version the builder wrote it under. Absent on a snapshot
@@ -213,6 +214,7 @@ export function instanceSchemaNotes(
  */
 export function fromCatalogSnapshot(snapshot: CatalogSnapshot): Catalog {
   refuseUnsupportedSnapshotVersion(snapshot);
+  refuseRetiredEdgeMembers(snapshot);
   return {
     adapter(name): AdapterSpec | undefined {
       const adapter = snapshot.adapters[name];
@@ -313,6 +315,34 @@ function refuseUnsupportedSnapshotVersion(snapshot: CatalogSnapshot): void {
     `the catalog snapshot carries contract version ${JSON.stringify(seen)}, which this release does not read ` +
       `(supported: ${[...SUPPORTED_CATALOG_SNAPSHOT_VERSIONS].join(', ')})`,
   );
+}
+
+/** The edge members version 2 retired. A snapshot still carrying one is
+ *  refused rather than read without it, which would quietly make the edge
+ *  one nothing can listen to (the Rust reader refuses the unknown member too). */
+const RETIRED_EDGE_MEMBERS = ['awaitable', 'watchable'] as const;
+
+function refuseRetiredEdgeMembers(snapshot: CatalogSnapshot): void {
+  for (const [adapter, entry] of Object.entries(snapshot.adapters)) {
+    // Hand-written snapshots leave out members the type calls required.
+    for (const schema of Object.values(entry.schemas ?? {})) {
+      const shapes: Array<{ edges?: Record<string, EdgeSchema> }> = [
+        ...Object.values(schema.positions ?? {}),
+        ...Object.values(schema.writableRoots ?? {}),
+        ...Object.values(schema.createShapes ?? {}),
+      ];
+      for (const shape of shapes) {
+        for (const [edge, declared] of Object.entries(shape.edges ?? {})) {
+          const retired = RETIRED_EDGE_MEMBERS.find((member) => member in declared);
+          if (retired !== undefined) {
+            throw new Error(
+              `the catalog snapshot's '${adapter}' edge '${edge}' carries '${retired}', retired in catalog snapshot version 2: declare 'listenable'`,
+            );
+          }
+        }
+      }
+    }
+  }
 }
 
 /**

@@ -14,7 +14,7 @@ use crate::secrets::{Binding, Credential, Credentials};
 use crate::sources::MovementFile;
 
 /// `CATALOG_SNAPSHOT_VERSION`.
-const CATALOG_SNAPSHOT_VERSION: u64 = 1;
+const CATALOG_SNAPSHOT_VERSION: u64 = 2;
 
 /// `instanceSchemaKey({ credentialName })`: the credential's name, `''` for none.
 fn instance_schema_key(credential_name: Option<&str>) -> String {

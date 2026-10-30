@@ -13,7 +13,7 @@
 use movement_checker::{CheckOptions, check_source};
 use movement_parser::catalog::types::CatalogSnapshot;
 
-const CATALOG: &str = r#"{"contractVersion":1,"adapters":{"crm":{"canFire":true,"constructionArgs":[{"name":"credentials","kind":"credential","required":true}],"schemas":{"crm_cred":{"positions":{"company":{"properties":{"name":"text"},"edges":{}}},"collections":{"companies":{"target":"company"}}}}}},"credentials":{"crm_cred":{"adapters":["crm"]}},"plugins":{}}"#;
+const CATALOG: &str = r#"{"contractVersion":2,"adapters":{"crm":{"canFire":true,"constructionArgs":[{"name":"credentials","kind":"credential","required":true}],"schemas":{"crm_cred":{"positions":{"company":{"properties":{"name":"text"},"edges":{}}},"collections":{"companies":{"target":"company"}}}}}},"credentials":{"crm_cred":{"adapters":["crm"]}},"plugins":{}}"#;
 
 const SEE: &str = " (see handbook: front#maybe-absent)";
 const MAYBE: &str = "number (or absent)";

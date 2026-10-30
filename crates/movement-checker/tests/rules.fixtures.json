@@ -2,7 +2,7 @@
  "note": "Programs the parity corpus never exercises, each with the TypeScript checker's own answer (every diagnostic, in order, as CODE line:col-line:col message), read off it on 2026-10-16. Run by tests/rules.rs.",
  "snapshots": {
   "old_edge": {
-   "contractVersion": 1,
+   "contractVersion": 2,
    "adapters": {
     "email": {
      "canFire": true,
@@ -184,7 +184,7 @@
    "plugins": {}
   },
   "cap": {
-   "contractVersion": 1,
+   "contractVersion": 2,
    "adapters": {
     "cap": {
      "canFire": true,
@@ -303,7 +303,7 @@
    "plugins": {}
   },
   "delete": {
-   "contractVersion": 1,
+   "contractVersion": 2,
    "adapters": {
     "crm": {
      "canFire": true,
@@ -390,7 +390,7 @@
    "plugins": {}
   },
   "cred": {
-   "contractVersion": 1,
+   "contractVersion": 2,
    "adapters": {
     "attio": {
      "canFire": true,
@@ -458,7 +458,7 @@
    }
   },
   "meta": {
-   "contractVersion": 1,
+   "contractVersion": 2,
    "adapters": {
     "slack": {
      "canFire": true,
@@ -559,7 +559,7 @@
    }
   },
   "maybe": {
-   "contractVersion": 1,
+   "contractVersion": 2,
    "adapters": {
     "attio": {
      "canFire": true,
@@ -632,7 +632,7 @@
    }
   },
   "cands": {
-   "contractVersion": 1,
+   "contractVersion": 2,
    "adapters": {
     "attio": {
      "canFire": true,
@@ -700,7 +700,7 @@
    "plugins": {}
   },
   "plug": {
-   "contractVersion": 1,
+   "contractVersion": 2,
    "adapters": {
     "attio": {
      "canFire": true,
@@ -884,7 +884,7 @@
    }
   },
   "opaque": {
-   "contractVersion": 1,
+   "contractVersion": 2,
    "adapters": {
     "attio": {
      "canFire": true,
@@ -1028,7 +1028,7 @@
    }
   },
   "graphs": {
-   "contractVersion": 1,
+   "contractVersion": 2,
    "adapters": {
     "email": {
      "canFire": true,

@@ -26,7 +26,15 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
 
 #### Changed
 
-- A module declares what each edge offers for listening with `listenable: true` on the reference, in place of `awaitable` and `watchable`, which every module set together. `readable` still says whether the edge can be listed, so an edge may be listenable, listable, or both. Three more keys describe arrivals: `identity` (the field of what lands that names an arrival), `version` (the field that changes when an arrival changes) and `cursor` (whether the module can list arrivals since a mark it hands out). `@lf/slack`'s `Replies` declares `listenable` and `identity: 'Timestamp'`. A module that still declares `awaitable` or `watchable` on a reference is refused when `listen-fire` describes it, naming `listenable`; a catalog snapshot that still carries either is refused by the Rust reader. Why: an edge's two capabilities, being listed and announcing arrivals, are separate facts, and the two retired keys only ever said the second one twice.
+- A module declares what each edge offers for listening with `listenable: true` on the reference, in place of `awaitable` and `watchable`.
+  - Every module set the two retired keys together.
+  - `readable` still says whether the edge can be listed, so an edge may be listenable, listable, or both.
+  - Three optional keys describe arrivals: `identity` (the field of what lands that names an arrival), `version` (the field that changes when an arrival changes) and `cursor` (whether the module can list arrivals since a mark it hands out).
+  - `identity` and `version` must name a field the landing's type declares, or `listen-fire` refuses the module, naming the field and what the landing declares.
+  - `@lf/slack`'s `Replies` declares `listenable` and `identity: 'Timestamp'`.
+  - A module that still declares `awaitable` or `watchable` on a reference is refused when `listen-fire` describes it, naming `listenable`.
+  - The catalog snapshot contract moves to version 2, since a member was removed. Version 1 is still read, and deprecated. A snapshot of either version that still carries `awaitable` or `watchable` is refused by both readers.
+  - Why: an edge's two capabilities, being listed and announcing arrivals, are separate facts, and the two retired keys only ever said the second one twice.
 
 ### Added
 

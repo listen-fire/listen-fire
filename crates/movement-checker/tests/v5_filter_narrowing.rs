@@ -12,7 +12,7 @@
 use movement_checker::{CheckOptions, check_source};
 use movement_parser::catalog::types::CatalogSnapshot;
 
-const CATALOG: &str = r#"{"contractVersion":1,"adapters":{},"credentials":{},"plugins":{}}"#;
+const CATALOG: &str = r#"{"contractVersion":2,"adapters":{},"credentials":{},"plugins":{}}"#;
 
 /// Each error `body` draws under `version`, as (code, message).
 fn diagnostics(body: &str) -> Vec<(String, String)> {

@@ -321,7 +321,7 @@ reads every declaration from it, the listen declarations included.
   ],
   "references": [
     { "fieldId": "Comments", "name": "Comments", "targetTypeId": "Comment", "cardinality": "many",
-      "direction": "outgoing", "writable": false, "listenable": true, "identity": "id",
+      "direction": "outgoing", "writable": false, "listenable": true, "identity": "Id",
       "sequenced": "chronological", "resolvesEmpty": true,
       "description": "What people said about the company, oldest first." }
   ]
@@ -549,10 +549,13 @@ On the reference in `describe`:
   automation is saved.
 - `readable` says separately whether the edge can be listed. An edge can be
   listenable, listable, or both.
-- `identity` — the field of what lands that names an arrival, so a repeat is
-  dropped.
+- `identity` (optional) — the field of what lands that names an arrival, so a
+  repeat is dropped.
 - `version` (optional) — the field that changes when an arrival changes.
   Without it, only a new record counts as an arrival.
+- `identity` and `version` name a field by the `displayName` the landing's
+  type declares. A name the landing does not declare is refused when
+  `listen-fire` describes your adapter.
 - `cursor` (optional) — `true` if you can list the arrivals since a mark you
   hand out. Without it, an arrival announced while nobody listened is lost.
 - `sequenced` — the order you list the edge in (`chronological`, `document`
@@ -1465,7 +1468,8 @@ from `apps/cli`.
 
 2. **Describe your data.** `listEntryPoints` publishes `Company` (writable,
    fires) and `Comment`. `describe` gives `Company` its fields and its
-   `Comments` edge, declared `listenable` (with `identity` and `sequenced`)
+   `Comments` edge, declared `listenable` (with `identity: "Id"`, a field
+   `Comment` declares, and `sequenced`)
    and `resolvesEmpty`.
 
 3. **Implement the required methods.** `resolveEntity` always answers no
