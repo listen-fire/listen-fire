@@ -269,6 +269,9 @@ impl RunHostStore for ProcessStore {
         if let Some(leaf) = noted.leaf {
             params.insert("leaf".into(), s(leaf));
         }
+        if let Some(fence) = noted.fence {
+            params.insert("fence".into(), s(fence));
+        }
         self.flag("waits.note", params)
     }
     fn sweep_arrivals(&self, before: &str, limit: i64) -> Result<i64> {

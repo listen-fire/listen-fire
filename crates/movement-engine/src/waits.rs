@@ -60,6 +60,17 @@ pub(crate) struct Entry {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ParamEntries(Vec<Option<Entry>>);
 
+impl ParamEntries {
+    fn of(stamped: Vec<Option<Vec<String>>>, since: i64) -> ParamEntries {
+        ParamEntries(stamped.into_iter().map(|edges| edges.map(|edges| Entry { edges, since })).collect())
+    }
+
+    /// The mark its parameters entered at, where any opens a wait.
+    pub(crate) fn since(&self) -> Option<i64> {
+        self.0.iter().flatten().map(|entry| entry.since).next()
+    }
+}
+
 /// One record the waits of an entry, or an `await`, are about.
 pub(crate) struct Waited {
     pub(crate) adapter_type: String,
@@ -159,17 +170,31 @@ impl Run<'_> {
     /// its arguments, so an arrival between that read and the bind counts.
     /// `declaration` is the path of the movement or the closure declaring them.
     pub(crate) async fn parameter_entries(&self, declaration: &str, count: usize) -> Result<ParamEntries, Stop> {
-        let stamped: Vec<Option<Vec<String>>> = (0..count)
-            .map(|index| match self.checked.stamp(&format!("{declaration}/params/{index}")) {
-                Some(Stamp::OpensWaits(edges)) => Some(edges),
-                _ => None,
-            })
-            .collect();
+        let stamped = self.stamped_parameters(declaration, count);
         if stamped.iter().all(Option::is_none) || !self.opens_waits() {
             return Ok(ParamEntries::default());
         }
         let since = self.mark().await.map_err(Stop::Thrown)?;
-        Ok(ParamEntries(stamped.into_iter().map(|edges| edges.map(|edges| Entry { edges, since })).collect()))
+        Ok(ParamEntries::of(stamped, since))
+    }
+
+    /// `parameter_entries` under a mark taken before: a parked collection
+    /// op's, for the members its resume starts.
+    pub(crate) fn parameter_entries_since(&self, declaration: &str, count: usize, since: i64) -> ParamEntries {
+        if !self.opens_waits() {
+            return ParamEntries::default();
+        }
+        ParamEntries::of(self.stamped_parameters(declaration, count), since)
+    }
+
+    /// The edges stamped on each parameter as opening waits.
+    fn stamped_parameters(&self, declaration: &str, count: usize) -> Vec<Option<Vec<String>>> {
+        (0..count)
+            .map(|index| match self.checked.stamp(&format!("{declaration}/params/{index}")) {
+                Some(Stamp::OpensWaits(edges)) => Some(edges),
+                _ => None,
+            })
+            .collect()
     }
 
     /// A function's or a closure's parameters, bound in `scope`, entered

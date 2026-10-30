@@ -16,8 +16,10 @@
 //! the others' by the run's locks. Under
 //! `onError: "warn"` or `"ignore"` a member whose function fails is left
 //! out (`warn` traces why); a failure that is the run's (its cost cap, the
-//! call depth, the call ceiling, a quiet end) passes through whatever it
-//! says, and stops the op, as the first failure does under `"error"`.
+//! call depth, the call ceiling, a match that found nothing) passes through
+//! whatever it says, and stops the op, as the first failure does under
+//! `"error"`. A member whose awaited record is gone ends its own body: its
+//! answer is null and the op goes on.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -29,7 +31,7 @@ use crate::bindings::{Binding, Scope};
 use crate::env::{Trail, ValueBinding};
 use crate::js::{Js, JsObject};
 use crate::flow::Boundary;
-use crate::run::{Address, Failure, Flow, Run, Stop};
+use crate::run::{Address, Failure, Flow, Quiet, Run, Stop};
 use crate::trace::TraceEntry;
 
 /// `CollectionRunSettings`.
@@ -74,6 +76,10 @@ impl Function {
             None if self.by_reference => self.captured.clone(),
             None => self.captured.fresh_copy(),
         }
+    }
+
+    pub(crate) fn params(&self) -> &[MovementParam] {
+        &self.params
     }
 
     pub(crate) fn body_statements(&self) -> &[Statement] {
@@ -158,6 +164,15 @@ pub(crate) fn member_answer_in(op: CollectionOp, spelling: &str, flow: Flow, at:
     }
 }
 
+/// A member whose awaited record is gone ends its own body: it settles null
+/// and the op goes on (any other stop is the op's).
+pub(crate) fn gone_member_settles(stop: Stop) -> Result<Js, Stop> {
+    match stop {
+        Stop::EndedQuietly(Quiet::WaitGone) => Ok(Js::Null),
+        other => Err(other),
+    }
+}
+
 /// Where an op is written: as an op (its node's AST path), or as a call of
 /// one (version 3; the call and its AST path).
 pub(crate) enum OpOrigin {
@@ -196,10 +211,11 @@ pub(crate) struct CollectionRun {
     /// How many members run at once, and how many the first batch runs.
     pub concurrency: usize,
     pub initial: usize,
-    /// Where each member enters as the function's parameters, marked before
-    /// the op read its members; None on a resume, where a member not yet
-    /// started is marked as it starts.
-    pub entries: Option<crate::waits::ParamEntries>,
+    /// Where each member enters as the function's parameters, marked once
+    /// before the op read its members. A parked op keeps the mark at its
+    /// frame, so a member its resume starts reads the arrivals logged since
+    /// that first read too.
+    pub entries: crate::waits::ParamEntries,
 }
 
 /// `memberLeftOut`: the warning `onError: "warn"` leaves for a member it
@@ -449,7 +465,7 @@ impl Run<'_> {
             init,
             concurrency: width(concurrency),
             initial: width(initial),
-            entries: Some(entries),
+            entries,
         };
         let answers = vec![None; run.members.len()];
         let indices: Vec<usize> = (0..run.members.len()).collect();
@@ -597,16 +613,14 @@ impl Run<'_> {
             };
             at.declare(param.name.clone(), crate::record::bind_value(value, Some(Trail::default()), false));
         }
-        let entries = match &run.entries {
-            Some(entries) => entries.clone(),
-            None => self.parameter_entries(run.function.declaration_path(), run.function.params.len()).await?,
-        };
-        self.enter_parameters(entries, &run.function.params, &at).await?;
+        self.enter_parameters(run.entries.clone(), &run.function.params, &at).await?;
         let address = run.address.iter(index);
         let body = async {
             let named = run.function.named.as_deref();
-            let flow = self.within_named_call(named, self.body(&run.function.body, &at, &address, &run.function.path, 0)).await?;
-            self.member_answer(run.op.op, spelling(run.op.op), flow, &at)
+            match self.within_named_call(named, self.body(&run.function.body, &at, &address, &run.function.path, 0)).await {
+                Ok(flow) => self.member_answer(run.op.op, spelling(run.op.op), flow, &at),
+                Err(stop) => gone_member_settles(stop),
+            }
         };
         match &run.site {
             Some(site) => {
@@ -637,10 +651,14 @@ impl Run<'_> {
             if self.serves("park.sink.persistBranchExport") {
                 let source = Binding::Value(ValueBinding { value: Js::array(run.members.clone()), trail: Some(run.source_trail.clone()), many: false });
                 let init = Binding::Value(ValueBinding { value: run.init.clone(), trail: Some(Trail::default()), many: false });
-                let state = crate::env::object_of(vec![
+                let mut state = vec![
                     ("source", crate::park::serialize_alone_plain(self, &source).map_err(Stop::Thrown)?),
                     ("init", crate::park::serialize_alone_plain(self, &init).map_err(Stop::Thrown)?),
-                ]);
+                ];
+                if let Some(since) = run.entries.since() {
+                    state.push(("since", Js::Number(since as f64)));
+                }
+                let state = crate::env::object_of(state);
                 self.persist_branch_export(&frame, &frame, -1, &state).await?;
                 for (index, answer) in answers.iter().enumerate() {
                     let Some(answer) = answer else { continue };

@@ -740,6 +740,8 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
     let store = host.store;
     let run_id = host.run_id.as_str();
     let fence = host.fence.as_deref();
+    // A park by a segment that resumed a leaf finishes that leaf in its write.
+    let resumed = host.resumed_leaf.as_deref();
     Ok(match label {
         "adapters.resolve" => {
             let role = args.get("role").and_then(Json::as_str);
@@ -768,14 +770,14 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
             let state = read_wire(host, args.get("state"))?.js();
             let address = text(args, "address", "park.sink.commitTimerPark")?;
             let wake_at = text(args, "wakeAt", "park.sink.commitTimerPark")?;
-            park(host, Park { run_id, address, state: &state, fence, kind: ParkKind::Timer { wake_at } })
+            park(host, Park { run_id, address, state: &state, fence, kind: ParkKind::Timer { wake_at }, resumed })
         }
         "park.sink.commitAwaitPark" if args.get("waitId").is_some() => {
             const LABEL: &str = "park.sink.commitAwaitPark";
             let state = read_wire(host, args.get("state"))?.js();
             let address = text(args, "address", LABEL)?;
             let wait_id = text(args, "waitId", LABEL)?;
-            let parked = park(host, Park { run_id, address, state: &state, fence, kind: ParkKind::Wait { wait_id } });
+            let parked = park(host, Park { run_id, address, state: &state, fence, kind: ParkKind::Wait { wait_id }, resumed });
             if parked.is_ok() {
                 host.parked_waits.borrow_mut().insert(wait_id.to_string(), address.to_string());
             }
@@ -786,12 +788,12 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
             let address = text(args, "address", "park.sink.commitAwaitPark")?;
             let adapter_type = text(args, "adapterType", "park.sink.commitAwaitPark")?;
             let correlation_key = text(args, "correlationKey", "park.sink.commitAwaitPark")?;
-            park(host, Park { run_id, address, state: &state, fence, kind: ParkKind::Await { team_id: store.tenant(), adapter_type, correlation_key } })
+            park(host, Park { run_id, address, state: &state, fence, kind: ParkKind::Await { team_id: store.tenant(), adapter_type, correlation_key }, resumed })
         }
         "park.sink.commitSuspension" => {
             let state = read_wire(host, args.get("state"))?.js();
             let address = text(args, "address", "park.sink.commitSuspension")?;
-            park(host, Park { run_id, address, state: &state, fence, kind: ParkKind::Limit })
+            park(host, Park { run_id, address, state: &state, fence, kind: ParkKind::Limit, resumed })
         }
         "park.sink.recordJoin" => {
             let frame = text(args, "frameAddress", "park.sink.recordJoin")?;
@@ -884,8 +886,8 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
             let matched = args.get("matched").and_then(Json::as_bool).ok_or_else(|| Fault(format!("{LABEL} matched is a boolean")))?;
             // A resumed leaf's segment keeps its notes with its progress past
             // the leaf: one that dies leaves the arrivals to be read again.
-            let leaf = host.resumed_leaf.as_deref();
-            let noted = Noted { wait_id: text(args, "waitId", LABEL)?, identity: text(args, "identity", LABEL)?, version: args.get("version").and_then(Json::as_str), matched, leaf };
+            // Fenced: a segment that lost the run notes nothing.
+            let noted = Noted { wait_id: text(args, "waitId", LABEL)?, identity: text(args, "identity", LABEL)?, version: args.get("version").and_then(Json::as_str), matched, leaf: resumed, fence };
             let counts = store.note_arrival(&noted);
             counts.map(|counts| Some(json!({ "counts": counts }))).map_err(store_failure)
         }

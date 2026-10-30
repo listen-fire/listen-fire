@@ -58,6 +58,10 @@ pub struct Noted<'a> {
     /// segment that dies leaves it unkept, and the leaf's next claim drops
     /// it, so the arrival is read again rather than lost.
     pub leaf: Option<&'a str>,
+    /// The run lease the noting segment holds: a segment that lost it
+    /// notes nothing (`StoreError::LeaseLost`), so its note can never be
+    /// kept by the segment that took the run over.
+    pub fence: Option<&'a str>,
 }
 
 /// A wait to open: `since` is the mark it reads arrivals after.
@@ -267,9 +271,14 @@ impl Store {
     /// matched. Whether it counts: it matched, and the record did not match
     /// at its last noted arrival. An arrival noted before counts no more.
     pub fn note_arrival(&self, noted: &Noted<'_>) -> Result<bool> {
-        let Noted { wait_id, identity, version, matched, leaf } = *noted;
+        let Noted { wait_id, identity, version, matched, leaf, fence } = *noted;
         self.transaction(|db| {
-            Self::require_wait(db, wait_id)?;
+            let run_id = Self::require_wait(db, wait_id)?;
+            if let Some(fence) = fence
+                && !Self::holds(db, &run_id, fence)?
+            {
+                return Err(StoreError::LeaseLost { run_id });
+            }
             let noted = db
                 .query_row("select 1 from wait_seen where wait_id = ? and identity = ? and version is ?", params![wait_id, identity, version], |_| Ok(()))
                 .optional()?;
@@ -336,9 +345,10 @@ impl Store {
         Ok(())
     }
 
-    fn require_wait(db: &Connection, wait_id: &str) -> Result<()> {
-        match db.query_row("select 1 from wait_row where id = ?", params![wait_id], |_| Ok(())).optional()? {
-            Some(()) => Ok(()),
+    /// The run the wait is the run's.
+    fn require_wait(db: &Connection, wait_id: &str) -> Result<String> {
+        match db.query_row("select run_id from wait_row where id = ?", params![wait_id], |r| r.get::<_, String>(0)).optional()? {
+            Some(run_id) => Ok(run_id),
             None => Err(StoreError::Invalid(format!("no wait {wait_id}"))),
         }
     }
@@ -390,6 +400,8 @@ mod tests {
         marks: HashMap<String, i64>,
         waits: HashMap<String, String>,
         listed: HashMap<String, LoggedArrival>,
+        /// Run leases taken, by name.
+        leases: HashMap<String, String>,
     }
 
     impl Names {
@@ -513,18 +525,35 @@ mod tests {
                 "note" => {
                     let identity = names.identity(step).unwrap_or_else(|| panic!("{at}: no identity"));
                     let wait_id = names.wait(text(step, "wait"));
-                    let noted = Noted { wait_id: &wait_id, identity: &identity, version: opt_text(step, "version"), matched: flag(step, "matched"), leaf: opt_text(step, "leaf") };
-                    let counts = store.note_arrival(&noted).unwrap();
-                    assert_eq!(counts, flag(step, "counts"), "{at}: counts");
+                    let fence = opt_text(step, "fence").map(|name| names.leases.get(name).unwrap_or_else(|| panic!("{at}: no lease named {name}")).clone());
+                    let noted = Noted {
+                        wait_id: &wait_id,
+                        identity: &identity,
+                        version: opt_text(step, "version"),
+                        matched: flag(step, "matched"),
+                        leaf: opt_text(step, "leaf"),
+                        fence: fence.as_deref(),
+                    };
+                    match store.note_arrival(&noted) {
+                        Err(StoreError::LeaseLost { .. }) if flag(step, "leaseLost") => {}
+                        Ok(counts) if !flag(step, "leaseLost") => assert_eq!(counts, flag(step, "counts"), "{at}: counts"),
+                        other => panic!("{at}: {other:?}"),
+                    }
                 }
                 "park" => {
                     let (run, wait) = (names.id(text(step, "run")), names.wait(text(step, "wait")));
-                    let park = Park { run_id: &run, address: text(step, "address"), state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } };
+                    let park = Park { run_id: &run, address: text(step, "address"), state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait }, resumed: opt_text(step, "resumed") };
                     store.commit_park(&park).unwrap();
                 }
                 "claim" => {
                     let claimed = store.claim_leaf(&names.id(text(step, "run")), text(step, "address"), None).unwrap();
-                    assert!(claimed.is_some(), "{at}: the leaf is parked");
+                    let parked = step.get("parked").is_none_or(|parked| Js::is_true(Some(parked)));
+                    assert_eq!(claimed.is_some(), parked, "{at}: the leaf is parked");
+                }
+                "lease" => {
+                    let ttl = step.get("ttlMs").and_then(int).unwrap_or(60_000);
+                    let token = store.claim_lease(&names.id(text(step, "run")), ttl).unwrap().unwrap_or_else(|| panic!("{at}: the lease is free"));
+                    names.leases.insert(text(step, "as").into(), token);
                 }
                 "finish" => store.finish_leaf(&names.id(text(step, "run")), text(step, "address"), None).unwrap(),
                 "lapse" => {
@@ -575,6 +604,8 @@ mod tests {
         an_arrival_logged_again_is_not_logged_twice_and_one_without_an_identity_is_never_a_repeat,
         a_note_made_by_a_segment_resuming_a_leaf_is_kept_when_the_leaf_finishes_and_dropped_when_the_leaf_is_claimed_again_after_that_segment_died,
         a_note_made_by_a_segment_that_parks_again_at_the_leaf_it_resumed_is_kept_with_that_park,
+        a_park_elsewhere_by_a_segment_that_resumed_a_leaf_finishes_that_leaf_in_the_same_write_keeping_its_notes,
+        a_segment_that_lost_the_runs_lease_notes_nothing_and_the_segment_that_took_the_run_over_reads_the_arrival,
     }
 
     #[test]
@@ -612,7 +643,7 @@ mod tests {
         let key = format!("thread:{run}");
         store.start_run(&RunStart { id: &run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
         let wait = store.open_wait(&OpenWait { run_id: &run, team_id: &team, adapter_type: "acme", edge: "Comments", key: &key, since: store.arrival_mark().unwrap() }).unwrap();
-        store.commit_park(&Park { run_id: &run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
+        store.commit_park(&Park { run_id: &run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait }, resumed: None }).unwrap();
         let receipt = || NewDelivery {
             id: uuid::Uuid::new_v4().to_string(),
             external_id: Some(format!("d-{run}")),
@@ -679,7 +710,7 @@ mod tests {
         });
         held.recv().unwrap();
         let parking = Instant::now();
-        store.commit_park(&Park { run_id: &run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
+        store.commit_park(&Park { run_id: &run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait }, resumed: None }).unwrap();
         assert!(parking.elapsed() >= Duration::from_millis(400), "the park took its turn after the log");
         logging.join().unwrap();
         let read: Vec<String> = store.wait_arrivals(&wait).unwrap().arrivals.into_iter().map(|a| a.identity).collect();
@@ -694,7 +725,7 @@ mod tests {
         store.log_arrivals("t", "acme", &[arrival("a"), arrival("b"), arrival("c")], &iso(-2 * ARRIVAL_RETENTION_MS)).unwrap();
         assert_eq!(store.sweep_arrivals(&iso(-ARRIVAL_RETENTION_MS), 2).unwrap(), 2);
         assert_eq!(store.sweep_arrivals(&iso(-ARRIVAL_RETENTION_MS), 2).unwrap(), 1);
-        let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: "no-such-wait" } };
+        let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: "no-such-wait" }, resumed: None };
         assert!(matches!(store.commit_park(&park), Err(StoreError::Invalid(_))));
         assert!(store.leaves("run-1", false, None, None).unwrap().is_empty());
         assert!(matches!(store.wait_arrivals("no-such-wait"), Err(StoreError::Invalid(_))));

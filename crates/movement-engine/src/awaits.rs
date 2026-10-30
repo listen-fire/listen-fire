@@ -10,8 +10,10 @@
 //!   entered the run (crate::waits), in this order:
 //!   1. the record's wait on the edge. A gone record settles the wait
 //!      empty: the scope the `await` is in ends quietly, so the code after
-//!      it runs zero times (a block's iteration, a call's body, a
-//!      combinator's arm, which settles null; else the movement's body);
+//!      it runs zero times (`Quiet::WaitGone`: a block's iteration, a
+//!      call's body, an `all` arm or a collection member, which settles
+//!      null; a race arm, which never settles and drops out of its race;
+//!      else the movement's body);
 //!   2. the WHERE's parts that read only the run captured, once, when the
 //!      await is first reached (re-entered, the values it parked with);
 //!   3. a plain `await` on an edge that can be listed takes the first match
@@ -45,7 +47,7 @@ use crate::host;
 use crate::js::{Js, JsObject};
 use crate::park::Leaf;
 use crate::program::Stamp;
-use crate::run::{Address, Failure, Flow, Run, Stop};
+use crate::run::{Address, Failure, Flow, Quiet, Run, Stop};
 use crate::trace::TraceEntry;
 use crate::waits::{Unwaitable, WaitRef};
 
@@ -244,7 +246,7 @@ impl Run<'_> {
         let reentered = self.reentered_at(&address);
         let wait_id = match self.waits_of(&waited.holder).get(edge).cloned() {
             Some(WaitRef::Open(id)) => id,
-            Some(WaitRef::Gone) => return Err(Stop::EndedQuietly),
+            Some(WaitRef::Gone) => return Err(Stop::EndedQuietly(Quiet::WaitGone)),
             None if !self.serves("park.waits.open") => {
                 return Err(Stop::Thrown(Failure::unsupported("await (a wait)", "this run has no wait sink — an await needs the durable trigger-run substrate")));
             }
@@ -304,7 +306,7 @@ impl Run<'_> {
                 }
                 return Ok(());
             }
-            Judged::Gone => return Err(Stop::EndedQuietly),
+            Judged::Gone => return Err(Stop::EndedQuietly(Quiet::WaitGone)),
             Judged::Pending => {}
         }
         if !self.serves("park.sink.commitAwaitPark") {

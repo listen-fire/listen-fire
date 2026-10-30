@@ -69,6 +69,16 @@ macro_rules! iso {
 /// text, so a token that is not a uuid holds nothing rather than failing.
 const LEASED_TO: &str = "lease_token::text = ";
 
+/// The rest of a statement finishing the run's leaf `$2` (`$1` the run)
+/// where the `held` it follows has a row: the leaf deleted if resuming, the
+/// notes its segment made kept.
+const FINISHED: &str = "finished as (
+   delete from lf.parked_run p
+   where p.run_id = $1::text::uuid and p.address = $2::text and p.status = 'resuming' and exists (select 1 from held)
+ )
+ update lf.wait_seen s set leaf = null from lf.wait_row w
+ where s.wait_id = w.id and w.run_id = $1::text::uuid and s.leaf = $2::text and exists (select 1 from held)";
+
 /// The work row's version (`FIRST_VERSION` / `nextVersion`): millisecond-
 /// exact, strictly increasing however close two writes land.
 const NEXT_VERSION_OF_WORK: &str = "greatest(date_trunc('milliseconds', clock_timestamp()), date_trunc('milliseconds', work.updated_at) + interval '1 millisecond')";
@@ -730,19 +740,7 @@ impl RunHostStore for PgStore {
 
     /// The leaf's resume is over: the notes its segment made are kept.
     fn finish_leaf(&self, run_id: &str, address: &str, fence: Option<&str>) -> Result<()> {
-        self.execute(
-            &format!(
-                "with held as (
-                   select 1 from lf.trigger_run r where r.id = $1::text::uuid and ($3::text is null or r.{LEASED_TO}$3::text)
-                 ), finished as (
-                   delete from lf.parked_run p
-                   where p.run_id = $1::text::uuid and p.address = $2::text and p.status = 'resuming' and exists (select 1 from held)
-                 )
-                 update lf.wait_seen s set leaf = null from lf.wait_row w
-                 where s.wait_id = w.id and w.run_id = $1::text::uuid and s.leaf = $2::text and exists (select 1 from held)"
-            ),
-            &[&run_id, &address, &fence],
-        )?;
+        self.execute(&format!("with held as (select 1 from lf.trigger_run r where r.id = $1::text::uuid and ($3::text is null or r.{LEASED_TO}$3::text)), {FINISHED}"), &[&run_id, &address, &fence])?;
         Ok(())
     }
 
@@ -772,7 +770,7 @@ impl RunHostStore for PgStore {
     /// One transaction; a fenced one holds the run's row for it, so the lease
     /// cannot change hands between the check and the writes.
     fn commit_park(&self, park: &Park<'_>) -> Result<()> {
-        let Park { run_id, address, state, fence, ref kind } = *park;
+        let Park { run_id, address, state, fence, ref kind, resumed } = *park;
         self.transaction(|| {
             if let Some(fence) = fence {
                 let held = self.query_opt(&format!("select id from lf.trigger_run where id = $1::text::uuid and {LEASED_TO}$2::text for update"), &[&run_id, &fence])?;
@@ -792,6 +790,10 @@ impl RunHostStore for PgStore {
                 "update lf.wait_seen s set leaf = null from lf.wait_row w where s.wait_id = w.id and w.run_id = $1::text::uuid and s.leaf = $2::text",
                 &[&run_id, &address],
             )?;
+            // One that resumed a leaf elsewhere finishes it in this write.
+            if let Some(resumed) = resumed.filter(|resumed| *resumed != address) {
+                self.execute(&format!("with held as (select 1), {FINISHED}"), &[&run_id, &resumed])?;
+            }
             match kind {
                 // The leaf is the truth; the work row only says when to look.
                 ParkKind::Timer { wake_at } => self.enqueue_row("resume_timer", &timer_work_key(run_id), &timer_work_payload(run_id), Some(wake_at), &self.tenant)?,
@@ -1024,12 +1026,23 @@ impl RunHostStore for PgStore {
     }
 
     fn note_arrival(&self, noted: &Noted<'_>) -> Result<bool> {
-        let Noted { wait_id, identity, version, matched, leaf } = *noted;
+        let Noted { wait_id, identity, version, matched, leaf, fence } = *noted;
         self.transaction(|| {
-            // Held for the transaction: two notes on one wait take turns.
-            if self.query_opt("select id from lf.wait_row where id = $1::text::uuid for update", &[&wait_id])?.is_none() {
+            let Some(waiting) = self.query_opt("select run_id::text from lf.wait_row where id = $1::text::uuid", &[&wait_id])? else {
                 return Err(StoreError::Invalid(format!("no wait {wait_id}")));
+            };
+            let run_id: String = waiting.get(0);
+            // A segment that lost the run's lease notes nothing. The run's row
+            // is held (before the wait's, as a park holds them), so the lease
+            // cannot change hands before the note is in.
+            if let Some(fence) = fence {
+                let held = self.query_opt(&format!("select id from lf.trigger_run where id = $1::text::uuid and {LEASED_TO}$2::text for update"), &[&run_id, &fence])?;
+                if held.is_none() {
+                    return Err(StoreError::LeaseLost { run_id });
+                }
             }
+            // Held for the transaction: two notes on one wait take turns.
+            self.query_opt("select id from lf.wait_row where id = $1::text::uuid for update", &[&wait_id])?;
             let noted = self.query_opt(
                 "select 1 from lf.wait_seen where wait_id = $1::text::uuid and identity = $2::text and version is not distinct from $3::text",
                 &[&wait_id, &identity, &version],

@@ -30,7 +30,8 @@ const CATALOG: &str = r#"{
     "writableRoots": {
       "Note": { "fields": { "Title": "text", "Attachment": "file" }, "resultShape": { "externalId": "text", "Title": "text" }, "fuzzyResolution": true },
       "Ticket": { "fields": { "Subject": "text" }, "resultShape": { "externalId": "text" } },
-      "Monster": { "fields": { "Slayer": "text" }, "resultShape": { "externalId": "text" } }
+      "Monster": { "fields": { "Slayer": "text" }, "resultShape": { "externalId": "text" } },
+      "Reply": { "fields": { "Body": "text" }, "resultShape": { "externalId": "text" } }
     }
   } } } },
   "credentials": {},
@@ -85,6 +86,8 @@ struct World {
     /// Existing notes `resolveEntity` offers as candidates.
     candidates: Vec<(String, String)>,
     updated: Vec<(String, String)>,
+    /// The notes in the monster's lair, by id; none: `note-lair` alone.
+    lair: Vec<String>,
 }
 
 impl World {
@@ -154,14 +157,23 @@ impl Adapters for World {
                 ))
             }
             "describe" => AdapterReply::ok(Data::Null),
-            // The monster's lair: one note, its fields on the landing.
-            "getRelated" => AdapterReply::ok(Data::List(vec![Data::map([(
-                "position",
-                Data::map([
-                    ("recordType", Data::text("Note")),
-                    ("identity", Data::map([("kind", Data::text("stable")), ("recordId", Data::text("note-lair")), ("data", Data::map([("Title", Data::text("Cave"))]))])),
-                ]),
-            )])])),
+            // The monster's lair: its notes, their fields on the landing.
+            "getRelated" => {
+                let lair = if self.lair.is_empty() { vec!["note-lair".to_string()] } else { self.lair.clone() };
+                AdapterReply::ok(Data::List(
+                    lair.iter()
+                        .map(|id| {
+                            Data::map([(
+                                "position",
+                                Data::map([
+                                    ("recordType", Data::text("Note")),
+                                    ("identity", Data::map([("kind", Data::text("stable")), ("recordId", Data::text(id)), ("data", Data::map([("Title", Data::text("Cave"))]))])),
+                                ]),
+                            )])
+                        })
+                        .collect(),
+                ))
+            }
             "createRecord" => {
                 let record_type = call.args.get("recordType").and_then(Data::as_text).unwrap_or_default().to_string();
                 let fields = call.args.get("fields").cloned().unwrap_or(Data::Null);
@@ -173,9 +185,10 @@ impl Adapters for World {
             }
             "updateRecord" => {
                 let id = call.args.get("externalId").and_then(Data::as_text).unwrap_or_default().to_string();
+                let record_type = call.args.get("recordType").and_then(Data::as_text).unwrap_or("Note").to_string();
                 let fields = call.args.get("fields").cloned().unwrap_or(Data::Null);
                 self.updated.push((id.clone(), fields.get("Title").and_then(Data::as_text).unwrap_or_default().to_string()));
-                AdapterReply::ok(World::record(&id, "Note", fields))
+                AdapterReply::ok(World::record(&id, &record_type, fields))
             }
             "resolveEntity" => AdapterReply::ok(Data::map([(
                 "candidates",
@@ -405,7 +418,12 @@ impl Store for Parks {
         ready(Ok(()))
     }
     fn record_join(&mut self, frame: &str, parked_children: i64) -> HostFuture<()> {
-        self.joins.push((frame.into(), parked_children));
+        // A frame parked again (an op whose resume parks more members) is
+        // recorded afresh, as a store keeps one row per frame.
+        match self.joins.iter_mut().find(|(f, _)| f == frame) {
+            Some(join) => join.1 = parked_children,
+            None => self.joins.push((frame.into(), parked_children)),
+        }
         ready(Ok(()))
     }
     fn decrement_join(&mut self, frame: &str, _branch: &str, _leaf: &str) -> HostFuture<bool> {
@@ -1282,6 +1300,185 @@ fn a_join_with_a_parked_arm_closes_when_the_arm_resumes() {
     let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &state, Wake::Arrival)).unwrap();
     assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
     assert_eq!(titles(&world), vec!["Thanks+fast"]);
+}
+
+/// A world whose monster's lair holds three notes, `note-0` to `note-2`.
+fn lair_world() -> World {
+    World { lair: ["note-0", "note-1", "note-2"].map(String::from).to_vec(), ..World::default() }
+}
+
+/// The state of the park waiting on `note`'s comments, taken off the parks.
+fn parked_on_note(parks: &mut Parks, note: &str) -> ParkedState {
+    let key = format!("ticket:{note}");
+    let wait = parks.waits.iter().find(|w| w.key == key).unwrap_or_else(|| panic!("no wait on {key}")).id.clone();
+    let at = parks.wait_parks.iter().position(|p| p.wait_id == wait).unwrap_or_else(|| panic!("nothing parked on {key}"));
+    parks.wait_parks.remove(at).state
+}
+
+/// A member that a resumed `map` starts reads the arrivals logged since the
+/// op first read its members: a comment on the third note that lands while
+/// the first member is parked is the third member's, though it starts two
+/// resumes later.
+#[test]
+fn a_member_a_resumed_map_starts_waits_from_the_mark_the_op_took_before_its_first_read() {
+    let source = movement("", "  map(monster-[:Lair]->, (n) => {\n    c = await new n-[:Comments]->\n    write game-[:notes]-> { Title: \"comment ${c.Body}\" }\n  }, { concurrency: 1 })\n");
+    assert_eq!(errors(&source), vec![]);
+    let (mut world, mut parks) = (lair_world(), Parks::default());
+    let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
+    assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
+    // One member at a time: only the first has started.
+    assert_eq!(parks.waits.iter().map(|w| w.key.as_str()).collect::<Vec<_>>(), ["ticket:note-0"]);
+    let mark = parks.waits[0].since;
+    parks.arrives("Comments", "ticket:note-2", "comment-2", "two");
+    parks.arrives("Comments", "ticket:note-0", "comment-0", "zero");
+    let state = parked_on_note(&mut parks, "note-0");
+    let again = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &state, Wake::Arrival)).unwrap();
+    assert!(matches!(again, Outcome::Parked(_)), "the second member waits: {again:?}");
+    parks.arrives("Comments", "ticket:note-1", "comment-1", "one");
+    let state = parked_on_note(&mut parks, "note-1");
+    let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &state, Wake::Arrival)).unwrap();
+    assert!(matches!(resumed, Outcome::Finished(_)), "the third member took the comment logged before it started: {resumed:?}");
+    assert_eq!(titles(&world), vec!["comment zero", "comment one", "comment two"]);
+    let third = parks.waits.iter().find(|w| w.key == "ticket:note-2").unwrap();
+    assert_eq!(third.since, mark, "every member waits from the op's one mark");
+}
+
+/// A member whose record is gone ends its own body: its answer is null and
+/// the op goes on with the others, and so does the code after it. Gone as
+/// it enters (`note-1`) or while it is parked (`note-2`), the same.
+#[test]
+fn a_gone_record_in_a_map_member_settles_that_member_null_and_the_map_goes_on() {
+    let body = r#"  xs = map(monster-[:Lair]->, (n) => {
+    c = await new n-[:Comments]->
+    write game-[:notes]-> { Title: "comment ${c.Body}" }
+    return c.Body
+  }, { initialConcurrency: 3, concurrency: 3 })
+  write game-[:notes]-> { Title: "done" }
+"#;
+    let source = movement("", body);
+    assert_eq!(errors(&source), vec![]);
+    let (mut world, mut parks) = (lair_world(), Parks::default());
+    world.gone.push("note-1".into());
+    let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
+    assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
+    assert_eq!(parks.wait_parks.len(), 2, "the members on note-0 and note-2 wait; note-1's is gone");
+    parks.arrives("Comments", "ticket:note-0", "comment-0", "zero");
+    parks.log.push(Logged { edge: "Comments".into(), key: "ticket:note-2".into(), identity: String::new(), landing: Data::Null, gone: true });
+    let state = parked_on_note(&mut parks, "note-0");
+    let again = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &state, Wake::Arrival)).unwrap();
+    assert!(!matches!(again, Outcome::Failed(_)), "{again:?}");
+    assert_eq!(titles(&world), vec!["comment zero"], "the op waits for its last member");
+    let state = parked_on_note(&mut parks, "note-2");
+    let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &state, Wake::Arrival)).unwrap();
+    assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
+    assert_eq!(titles(&world), vec!["comment zero", "done"]);
+}
+
+/// A race whose first arm awaits a reply on the ticket, its second a sleep;
+/// what each slot held is written after it.
+const RACED: &str = r#"  t = write game-[:tickets]-> { Subject: monster.Name }
+  r = race(
+    () => {
+      a = await t-[:Reply]->
+      return a.Body
+    },
+    () => {
+      await sleep(1m)
+      return "slept"
+    },
+  )
+  write game-[:notes]-> { Title: "${coalesce(r[0], "-")}/${coalesce(r[1], "-")}" }
+"#;
+
+/// A wait that can never be answered loses a race, as a promise that never
+/// settles does: the arm drops out, and the sleep wins.
+#[test]
+fn a_race_arm_whose_record_is_gone_drops_out_and_the_other_arm_wins() {
+    let source = movement("", RACED);
+    assert_eq!(errors(&source), vec![]);
+    let (mut world, mut parks) = (World::default(), Parks::default());
+    world.gone.push("*".into());
+    let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
+    assert!(matches!(parked, Outcome::Parked(_)), "the race waits on its sleep: {parked:?}");
+    assert!(world.notes.is_empty() && parks.wait_parks.is_empty());
+    let gone: Vec<i64> = parks.exports.iter().filter(|(_, e)| e.exports.0.to_string().contains("#gone")).map(|(_, e)| e.branch_index).collect();
+    assert_eq!(gone, [0], "the gone arm is kept at the race's frame");
+    let timer = parks.timers.remove(0);
+    let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &timer.state, Wake::Timer)).unwrap();
+    assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
+    assert_eq!(titles(&world), vec!["-/slept"]);
+}
+
+/// A function racing two arms, each awaiting a reply on the ticket it is
+/// handed; the movement calls it, then writes.
+const BOTH_AWAIT: &str = r#"function settle(t: <game-[:Ticket]->>) {
+  r = race(
+    () => {
+      a = await t-[:Reply]->
+      return a.Body
+    },
+    () => {
+      b = await t-[:Reply]->
+      return b.Body
+    },
+  )
+  write game-[:notes]-> { Title: "after the race ${coalesce(r[0], "-")}" }
+}
+"#;
+
+/// A race every arm of which is gone can never settle: it ends the scope it
+/// is in quietly, so the code after it in the function runs zero times and
+/// the caller goes on. Gone as the arms first reach their waits, or one by
+/// one while they are parked, the same.
+#[test]
+fn a_race_every_arm_of_which_is_gone_ends_its_scope_quietly() {
+    let source = movement_with(BOTH_AWAIT, "  t = write game-[:tickets]-> { Subject: monster.Name }\n  settle(t)\n  write game-[:notes]-> { Title: \"after the call\" }\n");
+    assert_eq!(errors(&source), vec![]);
+    let (mut world, mut parks) = (World::default(), Parks::default());
+    world.gone.push("*".into());
+    let ran = finished(block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))));
+    assert_eq!(ran.parked_address, None);
+    assert!(parks.wait_parks.is_empty() && parks.joins.is_empty());
+    assert_eq!(titles(&world), vec!["after the call"]);
+
+    let (mut world, mut parks) = (World::default(), Parks::default());
+    let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
+    assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
+    assert_eq!(parks.wait_parks.len(), 2, "both arms wait on the ticket's one wait");
+    let key = parks.waits[0].key.clone();
+    parks.log.push(Logged { edge: "Reply".into(), key, identity: String::new(), landing: Data::Null, gone: true });
+    let first = parks.wait_parks.remove(0);
+    let again = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &first.state, Wake::Arrival)).unwrap();
+    assert!(!matches!(again, Outcome::Failed(_)), "{again:?}");
+    assert!(world.notes.is_empty(), "the other arm still waits: {:?}", world.notes);
+    let gone: Vec<i64> = parks.exports.iter().filter(|(_, e)| e.exports.0.to_string().contains("#gone")).map(|(_, e)| e.branch_index).collect();
+    assert_eq!(gone, [0]);
+    let second = parks.wait_parks.remove(0);
+    let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &second.state, Wake::Arrival)).unwrap();
+    assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
+    assert_eq!(titles(&world), vec!["after the call"], "the write after the race ran zero times; the caller went on");
+}
+
+/// A reply bound off the arrival log is the record its landing names: a
+/// write off it updates that record.
+#[test]
+fn a_write_off_a_record_that_arrived_updates_the_record_its_landing_names() {
+    let source = movement("", "  t = write game-[:tickets]-> { Subject: monster.Name }\n  r = await t-[:Reply]->\n  write r { Body: \"seen\" }\n");
+    assert_eq!(errors(&source), vec![]);
+    let (mut world, mut parks) = (World::default(), Parks::default());
+    let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
+    assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
+    let (_, key) = parks.wait_on("Reply");
+    let park = parks.wait_parks.remove(0);
+    parks.reply_arrives(&key, "reply-7", "Hi");
+    let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &park.state, Wake::Arrival)).unwrap();
+    assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
+    let updates: Vec<&Data> = world.calls.iter().filter(|(method, _)| method == "updateRecord").map(|(_, args)| args).collect();
+    assert_eq!(updates.len(), 1, "{:?}", world.calls.iter().map(|(m, _)| m).collect::<Vec<_>>());
+    assert_eq!(updates[0].get("externalId").and_then(Data::as_text), Some("reply-7"));
+    assert_eq!(updates[0].get("recordType").and_then(Data::as_text), Some("Reply"));
+    assert_eq!(updates[0].get("fields").and_then(|f| f.get("Body")).and_then(Data::as_text), Some("seen"));
+    assert!(world.calls.iter().all(|(method, args)| method != "createRecord" || args.get("recordType").and_then(Data::as_text) != Some("Reply")));
 }
 
 /// A timer wake steps past a `sleep` but re-tests an `until`'s condition:

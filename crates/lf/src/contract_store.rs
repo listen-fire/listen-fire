@@ -256,7 +256,7 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
         "parks.commit" => {
             let (state, kind) = (p.value("state"), p.value("park"));
             let kind = park_kind(&kind).ok_or_else(|| Failure::Params("park: expected { kind: timer | await | wait | limit, … }".into()))?;
-            store.commit_park(&Park { run_id: p.str("runId")?, address: p.str("address")?, state: &state, fence: p.opt_str("fence")?, kind })?;
+            store.commit_park(&Park { run_id: p.str("runId")?, address: p.str("address")?, state: &state, fence: p.opt_str("fence")?, kind, resumed: p.opt_str("resumed")? })?;
             none
         }
         "parks.claimLeaf" => Ok(match store.claim_leaf(p.str("runId")?, p.str("address")?, p.opt_str("reason")?)? {
@@ -327,7 +327,14 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
         }
         "waits.arrivals" => Ok(store.wait_arrivals(p.str("waitId")?)?.to_wire()),
         "waits.note" => {
-            let noted = Noted { wait_id: p.str("waitId")?, identity: p.str("identity")?, version: p.opt_str("version")?, matched: p.flag("matched"), leaf: p.opt_str("leaf")? };
+            let noted = Noted {
+                wait_id: p.str("waitId")?,
+                identity: p.str("identity")?,
+                version: p.opt_str("version")?,
+                matched: p.flag("matched"),
+                leaf: p.opt_str("leaf")?,
+                fence: p.opt_str("fence")?,
+            };
             Ok(Js::Bool(store.note_arrival(&noted)?))
         }
         "waits.sweep" => Ok(Js::Num(store.sweep_arrivals(p.str("before")?, p.int("limit")?)?.into())),
@@ -484,7 +491,7 @@ mod tests {
 
         let token = store.claim_lease("run-1", 60_000).unwrap().unwrap();
         let wake_at = iso(60_000);
-        let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: Some(&token), kind: ParkKind::Timer { wake_at: &wake_at } };
+        let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: Some(&token), kind: ParkKind::Timer { wake_at: &wake_at }, resumed: None };
         call(&store, "parks.commit", park_params(&park));
         assert_eq!(store.run("run-1").unwrap().unwrap().status, "parked");
         let lost = Park { fence: Some("gone"), ..park };
@@ -552,7 +559,7 @@ mod tests {
         let wait = OpenWait { run_id: "run-1", team_id: "t", adapter_type: "acme", edge: "Comments", key: "thread:c1", since: int(&mark).unwrap() };
         let opened = call(&store, "waits.open", open_wait_params(&wait));
         let wait_id = opened.get("waitId").and_then(Js::as_str).unwrap().to_string();
-        let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait_id } };
+        let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait_id }, resumed: None };
         call(&store, "parks.commit", park_params(&park));
         let wake = obj! { "runId" => Js::str("run-1"), "waitId" => Js::str(&wait_id), "address" => Js::str("s1") };
         assert_eq!(log("k2"), Js::Arr(vec![Js::from(wake)]));

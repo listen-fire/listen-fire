@@ -167,13 +167,17 @@ pub fn park_params(park: &Park<'_>) -> Obj {
         ParkKind::Wait { wait_id } => obj! { "kind" => Js::str("wait"), "waitId" => Js::str(*wait_id) },
         ParkKind::Limit => obj! { "kind" => Js::str("limit") },
     };
-    obj! {
+    let mut params = obj! {
         "runId" => Js::str(park.run_id),
         "address" => Js::str(park.address),
         "state" => park.state.clone(),
         "fence" => opt(park.fence),
         "park" => Js::from(kind),
+    };
+    if let Some(resumed) = park.resumed {
+        params.insert("resumed".into(), Js::str(resumed));
     }
+    params
 }
 
 /// `parks.commit`'s `park`, read back; None when it is not one.
@@ -526,7 +530,7 @@ mod tests {
         ];
         for kind in kinds {
             let reason = kind.reason();
-            let params = Js::from(park_params(&Park { run_id: "r", address: "s1", state: &Js::Null, fence: None, kind }));
+            let params = Js::from(park_params(&Park { run_id: "r", address: "s1", state: &Js::Null, fence: None, kind, resumed: None }));
             assert_eq!(params.get("park").and_then(park_kind).map(|k| k.reason()), Some(reason));
         }
         assert!(park_kind(&Js::from(obj! { "kind" => Js::str("timer") })).is_none(), "a timer park names its wake");

@@ -287,6 +287,41 @@
         { "do": "claim", "run": "run-1", "address": "s1" },
         { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
       ]
+    },
+    {
+      "case": "a park elsewhere by a segment that resumed a leaf finishes that leaf in the same write, keeping its notes",
+      "steps": [
+        { "do": "mark", "as": "m0" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m0" },
+        { "do": "park", "run": "run-1", "wait": "w", "address": "s1" },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1", "version": "1" }], "wakes": [{ "run": "run-1", "wait": "w", "address": "s1" }] },
+        { "do": "claim", "run": "run-1", "address": "s1" },
+        { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": true, "counts": true, "leaf": "s1" },
+        { "do": "open", "as": "next", "run": "run-1", "edge": "Approvals", "key": "approvals:c1", "since": "m0" },
+        { "do": "park", "run": "run-1", "wait": "next", "address": "s2", "resumed": "s1" },
+        { "do": "lapse", "run": "run-1" },
+        { "do": "claim", "run": "run-1", "address": "s1", "parked": false },
+        { "do": "claim", "run": "run-1", "address": "s2" },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
+      ]
+    },
+    {
+      "case": "a segment that lost the run's lease notes nothing, and the segment that took the run over reads the arrival",
+      "steps": [
+        { "do": "mark", "as": "m0" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m0" },
+        { "do": "park", "run": "run-1", "wait": "w", "address": "s1" },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1", "version": "1" }], "wakes": [{ "run": "run-1", "wait": "w", "address": "s1" }] },
+        { "do": "lease", "run": "run-1", "as": "old", "ttlMs": -1000 },
+        { "do": "claim", "run": "run-1", "address": "s1" },
+        { "do": "lease", "run": "run-1", "as": "new" },
+        { "do": "claim", "run": "run-1", "address": "s1" },
+        { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": true, "leaf": "s1", "fence": "old", "leaseLost": true },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "k1", "version": "1" }] },
+        { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": true, "counts": true, "leaf": "s1", "fence": "new" },
+        { "do": "finish", "run": "run-1", "address": "s1" },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
+      ]
     }
   ]
 }

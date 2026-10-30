@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { RpcStoreBackend } from 'movement-engine/services/run_host/rpc_store';
+import { RunLeaseLost } from 'movement-engine/services/movement_engine/errors';
 import { companies, lf, project, served } from './example';
 import { lfBinary } from './lf_bin';
 import { withStoreModule } from './store_module/project';
@@ -145,6 +146,7 @@ async function runWaitsCase(store: RpcStoreBackend, steps: Record<string, unknow
   const waits = new Map<string, string>();
   const wait = (name: string) => waits.get(name) ?? assert.fail(`no wait named ${name}`);
   const listed = new Map<string, { seq: number; identity: string }>();
+  const leases = new Map<string, string>();
   const listedArrival = (name: string) => listed.get(name) ?? assert.fail(`no arrival named ${name}`);
   // Given, or a listed arrival's (`identityOf`), or a listed arrival's seq as bare text (`identityIsSeqOf`).
   const identityIn = (value: unknown): unknown => {
@@ -202,18 +204,27 @@ async function runWaitsCase(store: RpcStoreBackend, steps: Record<string, unknow
       }
       case 'note': {
         const leaf = typeof step.leaf === 'string' ? { leaf: step.leaf } : {};
-        const params = { waitId: wait(text(step, 'wait')), identity: identityIn(step), version: step.version ?? null, matched: step.matched === true, ...leaf };
-        assert.equal(await store.call('waits.note', params, z.boolean()), step.counts === true, `${at}: counts`);
+        const fence = typeof step.fence === 'string' ? { fence: leases.get(step.fence) ?? assert.fail(`no lease named ${step.fence}`) } : {};
+        const params = { waitId: wait(text(step, 'wait')), identity: identityIn(step), version: step.version ?? null, matched: step.matched === true, ...leaf, ...fence };
+        if (step.leaseLost === true) await assert.rejects(store.call('waits.note', params, z.boolean()), RunLeaseLost, `${at}: the lease is lost`);
+        else assert.equal(await store.call('waits.note', params, z.boolean()), step.counts === true, `${at}: counts`);
         break;
       }
       case 'park': {
         const park = { kind: 'wait', waitId: wait(text(step, 'wait')) };
-        await store.call('parks.commit', { runId: id(text(step, 'run')), address: text(step, 'address'), state: null, fence: null, park }, z.null());
+        const resumed = typeof step.resumed === 'string' ? { resumed: step.resumed } : {};
+        await store.call('parks.commit', { runId: id(text(step, 'run')), address: text(step, 'address'), state: null, fence: null, park, ...resumed }, z.null());
         break;
       }
       case 'claim': {
         const claimed = await store.call('parks.claimLeaf', { runId: id(text(step, 'run')), address: text(step, 'address'), reason: null }, z.unknown());
-        assert.notEqual(claimed, null, `${at}: the leaf is parked`);
+        assert.equal(claimed !== null, step.parked !== false, `${at}: the leaf is parked`);
+        break;
+      }
+      case 'lease': {
+        const ttlMs = typeof step.ttlMs === 'number' ? step.ttlMs : 60_000;
+        const lease = await store.call('leases.claim', { runId: id(text(step, 'run')), ttlMs }, z.object({ token: z.string() }).nullable());
+        leases.set(text(step, 'as'), lease?.token ?? assert.fail(`${at}: the lease is free`));
         break;
       }
       case 'finish':

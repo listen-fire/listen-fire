@@ -385,6 +385,11 @@ pub struct Park<'a> {
     /// The lease the write is fenced on; a lost one writes nothing.
     pub fence: Option<&'a str>,
     pub kind: ParkKind<'a>,
+    /// The address of the leaf the parking segment resumed, if it resumed
+    /// one. A park elsewhere finishes that leaf in the same write, keeping
+    /// its notes: a crash after it never resumes the leaf again, so the
+    /// code after its `await` never runs twice.
+    pub resumed: Option<&'a str>,
 }
 
 pub enum ParkKind<'a> {
@@ -828,7 +833,7 @@ impl Store {
 
     /// crate::backend::RunHostStore::commit_park: one transaction, fenced.
     pub fn commit_park(&self, park: &Park<'_>) -> Result<()> {
-        let Park { run_id, address, state, fence, ref kind } = *park;
+        let Park { run_id, address, state, fence, ref kind, resumed } = *park;
         self.fenced(run_id, fence, |db| {
             let wake_at = match kind {
                 ParkKind::Timer { wake_at } => Some(*wake_at),
@@ -837,6 +842,9 @@ impl Store {
             Self::put_leaf_in(db, run_id, address, kind.reason(), wake_at, state)?;
             Self::unpark_waits_in(db, run_id, address)?;
             Self::keep_leaf_notes_in(db, run_id, address)?;
+            if let Some(resumed) = resumed.filter(|resumed| *resumed != address) {
+                Self::finish_leaf_in(db, run_id, resumed)?;
+            }
             match kind {
                 // The leaf is the truth; the work row only says when to look.
                 ParkKind::Timer { wake_at } => Self::enqueue_in(db, "resume_timer", &timer_work_key(run_id), &timer_work_payload(run_id), Some(wake_at))?,
@@ -874,9 +882,14 @@ impl Store {
             {
                 return Ok(());
             }
-            db.execute("delete from leaf where run_id = ? and address = ? and status = 'resuming'", params![run_id, address])?;
-            Self::keep_leaf_notes_in(db, run_id, address)
+            Self::finish_leaf_in(db, run_id, address)
         })
+    }
+
+    /// The leaf's resume is over: the notes its segment made are kept.
+    fn finish_leaf_in(db: &Connection, run_id: &str, address: &str) -> Result<()> {
+        db.execute("delete from leaf where run_id = ? and address = ? and status = 'resuming'", params![run_id, address])?;
+        Self::keep_leaf_notes_in(db, run_id, address)
     }
 
     pub fn leaves(&self, run_id: &str, parked_only: bool, reason: Option<&str>, due_by: Option<&str>) -> Result<Vec<LeafRow>> {
@@ -1521,7 +1534,7 @@ mod tests {
         let (store, _) = state_file();
         let fence = running(&store, "run-1");
         let wake_at = iso(60_000);
-        let park = Park { run_id: "run-1", address: "s1", state: &no_payload(), fence: Some(&fence), kind: ParkKind::Timer { wake_at: &wake_at } };
+        let park = Park { run_id: "run-1", address: "s1", state: &no_payload(), fence: Some(&fence), kind: ParkKind::Timer { wake_at: &wake_at }, resumed: None };
         // Before: the leaf was written, then the crash, and nothing ever woke it.
         failing(&store, "no_work", "before insert on work");
         assert!(store.commit_park(&park).is_err());
@@ -1539,7 +1552,7 @@ mod tests {
         let (store, _) = state_file();
         let fence = running(&store, "run-1");
         let kind = ParkKind::Await { team_id: "local", adapter_type: "mail", correlation_key: "thread-1" };
-        let park = Park { run_id: "run-1", address: "s1", state: &no_payload(), fence: Some(&fence), kind };
+        let park = Park { run_id: "run-1", address: "s1", state: &no_payload(), fence: Some(&fence), kind, resumed: None };
         failing(&store, "no_correlation", "before insert on await_correlation");
         assert!(store.commit_park(&park).is_err());
         assert!(store.leaves("run-1", false, None, None).unwrap().is_empty());
@@ -1547,7 +1560,7 @@ mod tests {
         store.commit_park(&park).unwrap();
         assert_eq!(store.correlated("mail", "local", "thread-1").unwrap()[0].address, "s1");
         // The run's status is the last write: failing it undoes the leaf and the drop.
-        let limit = Park { run_id: "run-1", address: "s1", state: &no_payload(), fence: Some(&fence), kind: ParkKind::Limit };
+        let limit = Park { run_id: "run-1", address: "s1", state: &no_payload(), fence: Some(&fence), kind: ParkKind::Limit, resumed: None };
         failing(&store, "no_status", "before update of status on run");
         assert!(store.commit_park(&limit).is_err());
         assert_eq!(store.leaves("run-1", false, None, None).unwrap()[0].reason, "await");
@@ -1562,7 +1575,7 @@ mod tests {
         let (store, _) = state_file();
         running(&store, "run-1");
         let wake_at = iso(1_000);
-        let park = Park { run_id: "run-1", address: "s1", state: &no_payload(), fence: Some("not-the-lease"), kind: ParkKind::Timer { wake_at: &wake_at } };
+        let park = Park { run_id: "run-1", address: "s1", state: &no_payload(), fence: Some("not-the-lease"), kind: ParkKind::Timer { wake_at: &wake_at }, resumed: None };
         assert!(matches!(store.commit_park(&park), Err(StoreError::LeaseLost { .. })));
         assert!(store.leaves("run-1", false, None, None).unwrap().is_empty());
         assert!(work_keys(&store).is_empty());

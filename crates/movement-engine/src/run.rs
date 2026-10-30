@@ -221,7 +221,7 @@ pub async fn segment(host: Host, input: SegmentInput) -> Json {
         Err(Stop::Declined(reason)) => return json!({ "declined": reason }),
         Err(Stop::Thrown(failure)) => json!({ "thrown": failure.to_json() }),
         Err(Stop::Failed(failure, result)) => json!({ "failed": { "error": failure.to_json(), "result": result } }),
-        Err(Stop::Cancelled | Stop::Parked(_) | Stop::EndedQuietly) => {
+        Err(Stop::Cancelled | Stop::Parked(_) | Stop::EndedQuietly(_)) => {
             unreachable!("a cancel, a park or a quiet end ends the body, and the run returns its result")
         }
     };
@@ -261,10 +261,24 @@ pub(crate) enum Stop {
     Cancelled,
     /// The flow parked at this address (`RunParked`): its state is durable.
     Parked(String),
-    /// A match found nothing (`ScopeEndedQuietly`): the enclosing scope ends
-    /// with nothing thrown — a block's iteration skips, the movement's body
-    /// stops, and the run completes.
-    EndedQuietly,
+    /// The enclosing scope ends with nothing thrown (`ScopeEndedQuietly`): a
+    /// block's iteration skips, a call's body returns nothing, a
+    /// combinator's arm settles null, the movement's body stops and the run
+    /// completes. Why it ended decides two scopes: a collection member and
+    /// a race arm (`Quiet`).
+    EndedQuietly(Quiet),
+}
+
+/// Why a scope ended quietly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Quiet {
+    /// A match found nothing. A collection member that ends so stops its op.
+    NothingFound,
+    /// An `await`'s record is gone, so its wait can never be answered. A
+    /// collection member that ends so settles null and the op goes on; a
+    /// race arm that ends so never settles, as a promise that never
+    /// resolves loses a race: the race goes on with its other arms.
+    WaitGone,
 }
 
 #[derive(Debug, Clone)]
@@ -862,7 +876,7 @@ impl Run<'_> {
             Ok(returned) => (false, None, returned),
             // Find-on-missing at the top scope: the body simply stops, its
             // earlier writes stand, and the run completes.
-            Err(Stop::EndedQuietly) => (false, None, false),
+            Err(Stop::EndedQuietly(_)) => (false, None, false),
             Err(Stop::Cancelled) => (true, None, false),
             Err(Stop::Parked(address)) => (false, Some(address), false),
             Err(Stop::Thrown(failure)) => return Err(Stop::Failed(failure, self.result(false, None))),

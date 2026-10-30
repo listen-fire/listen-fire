@@ -464,7 +464,7 @@ slot! {
         "parks.leaves" => fn leaves(ParksLeaves { run_id: String, parked_only: bool, reason: Option<String>, due_by: Option<String> }) -> Vec<LeafRow>;
         "parks.deleteLeaves" => fn delete_leaves(ParksDeleteLeaves { run_id: String, addresses: Vec<String> }) -> ();
         /// One fenced write: the leaf, its kind's row, the run marked parked.
-        "parks.commit" => fn commit_park(ParksCommit { run_id: String, address: String, state: Js, fence: Option<String>, park: ParkKind }) -> ();
+        "parks.commit" => fn commit_park(ParksCommit { run_id: String, address: String, state: Js, fence: Option<String>, park: ParkKind, resumed: Option<String> }) -> ();
         "joins.recordJoin" => fn record_join(JoinsRecordJoin { run_id: String, frame_address: String, pending: i64, fence: Option<String> }) -> ();
         "joins.decrementJoin" => fn decrement_join(JoinsDecrementJoin { run_id: String, frame_address: String, branch_address: String, leaf_address: String }) -> JoinClosed;
         "joins.persistBranchExport" => fn persist_branch_export(JoinsPersistBranchExport { run_id: String, frame_address: String, branch_address: String, branch_index: i64, exports: Js }) -> ();
@@ -496,7 +496,7 @@ slot! {
         "waits.arrivals" => fn wait_arrivals(WaitsArrivals { wait_id: String }) -> WaitArrivals;
         /// Whether the arrival counts: it matched, and its identity did not
         /// at its last noted arrival. A noted arrival counts no more.
-        "waits.note" => fn note_arrival(WaitsNote { wait_id: String, identity: String, version: Option<String>, matched: bool, leaf: Option<String> }) -> bool;
+        "waits.note" => fn note_arrival(WaitsNote { wait_id: String, identity: String, version: Option<String>, matched: bool, leaf: Option<String>, fence: Option<String> }) -> bool;
         /// Forget at most `limit` arrivals logged before `before` that no
         /// wait reads; how many went.
         "waits.sweep" => fn sweep_arrivals(WaitsSweep { before: String, limit: i64 }) -> i64;

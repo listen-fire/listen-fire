@@ -31,15 +31,27 @@ function crmOf(dir: string, serving: Served) {
  *  company first, or a run that writes twice before its wait, moves it. */
 const RUNS_RECORD = 'company-2';
 
-/** The `wake_await` rows the project's state file holds (queued or dead). */
-function wakeRows(dir: string): number {
+/** One count off the project's state file. */
+function counted(dir: string, sql: string, ...params: string[]): number {
   const db = new DatabaseSync(join(dir, '.lf', 'state.db'));
   try {
-    return (db.prepare("select count(*) as n from work where kind = 'wake_await'").get() as { n: number }).n;
+    return (db.prepare(sql).get(...params) as { n: number }).n;
   } finally {
     db.close();
   }
 }
+
+/** The `wake_await` rows the project's state file holds (queued or dead). */
+const wakeRows = (dir: string) => counted(dir, "select count(*) as n from work where kind = 'wake_await'");
+
+/** The waits on `key` that are parked: at an address whose leaf is kept.
+ *  A logged arrival wakes exactly these (docs/contracts/store-slot.md,
+ *  `waits.log`). */
+const parkedWaits = (dir: string, key: string) =>
+  counted(dir, 'select count(*) as n from wait_row w join leaf l on l.run_id = w.run_id and l.address = w.address where w.key = ?', key);
+
+/** The arrivals logged on `key`. */
+const arrivalsOn = (dir: string, key: string) => counted(dir, 'select count(*) as n from arrival where key = ?', key);
 
 /** Lines matching `pattern` so far. */
 const count = (serving: Served, pattern: RegExp) => serving.lines.filter((line) => pattern.test(line)).length;
@@ -136,15 +148,19 @@ test('an approval after the sleep won wakes nothing', async () => {
     const { post } = crmOf(dir, serving);
     await post('/dev/companies', { Name: 'Osprey' });
     await serving.waitFor(/run .* approvals_race:decide parked/);
+    const approvals = `approvals:${RUNS_RECORD}`;
+    assert.equal(parkedWaits(dir, approvals), 1, 'the approval arm waits');
     // The second's timer comes due and the drain settles the race on it.
     await sleep(1500);
     await serving.waitFor(/resumed .* approvals_race:decide completed/);
     assert.deepEqual(companies(dir), ['Osprey', 'Decide Osprey', 'Timed out']);
+    // The race withdrew the arm that lost: no wait on the record is parked,
+    // so a log on it answers no wait and queues no wake.
+    assert.equal(parkedWaits(dir, approvals), 0);
     const before = serving.lines.length;
     const pushed = await post('/dev/approvals', { company: RUNS_RECORD, decision: 'yes' });
     assert.deepEqual(pushed.arrived, { status: 202, body: { accepted: 1 } });
-    // The delivery that logged the approval queued no wake: the race
-    // unparked the wait when the sleep won.
+    assert.equal(arrivalsOn(dir, approvals), 1, 'the delivery logged the approval');
     assert.equal(wakeRows(dir), 0);
     await sleep(1500);
     assert.equal(wakeRows(dir), 0);

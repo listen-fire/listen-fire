@@ -751,12 +751,17 @@ pub(crate) mod tests {
     /// event, served by a module host on a thread of the test. While `down`
     /// is set its event types fail, and so does every event fired to it.
     /// It registers webhooks, each call noted in `registrations` with the
-    /// token of the credential it was made as.
+    /// token of the credential it was made as. A note's comments are a
+    /// listenable edge (`Comments`, keyed `thread:<note>`): a delivery's
+    /// `comments` are its arrivals.
     pub(crate) mod inbox {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::{Arc, Mutex};
 
         use module_kit::*;
+
+        /// What lands as the inbox is next asked `awaitKeys`, run once.
+        pub type OnAwaitKeys = Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>;
 
         pub struct Inbox {
             pub down: Arc<AtomicBool>,
@@ -770,12 +775,15 @@ pub(crate) mod tests {
             /// refreshed (`expiresAt`, `refreshEventSubscription`); each
             /// refresh noted in `registrations`, and refused while `down`.
             pub expiring: Option<i64>,
+            /// Run once, as the next `awaitKeys` is asked: what lands while a
+            /// run's wait opens.
+            pub on_await_keys: OnAwaitKeys,
         }
 
         impl Adapter for Inbox {
             fn manifest(&self) -> AdapterManifest {
                 let credential = Js::parse(br#"[{"name":"inbox","kind":"static","fields":[{"name":"token","optional":true}]}]"#).unwrap();
-                let mut methods = vec!["listEventTypes", "preprocessInbound", "ensureEventSubscription", "removeEventSubscription"];
+                let mut methods = vec!["listEventTypes", "preprocessInbound", "ensureEventSubscription", "removeEventSubscription", "awaitKeys"];
                 methods.extend(self.polled.then_some("poll"));
                 methods.extend(self.expiring.is_some().then_some("refreshEventSubscription"));
                 let manifest = AdapterManifest::new("inbox")
@@ -796,18 +804,28 @@ pub(crate) mod tests {
             }
 
             async fn list_entry_points(&self, _: &Ctx) -> Answer<Vec<EntryPoint>> {
-                Ok(vec![EntryPoint { type_id: "Note".into(), display_name: "Note".into(), writable: false, readable: false, fires: Some(true), description: None, rest: Obj::new() }])
+                Ok(vec![
+                    EntryPoint { type_id: "Note".into(), display_name: "Note".into(), writable: false, readable: false, fires: Some(true), description: None, rest: Obj::new() },
+                    EntryPoint { type_id: "Comment".into(), display_name: "Comment".into(), writable: false, readable: false, fires: None, description: None, rest: Obj::new() },
+                ])
             }
 
             async fn describe(&self, _: &Ctx, request: Describe) -> Answer<Option<TypeDescriptor>> {
-                Ok((request.type_id == "Note").then(|| TypeDescriptor {
-                    type_id: "Note".into(),
-                    display_name: "Note".into(),
-                    fields: vec![Field::new("Title", "string", true, true)],
-                    references: vec![],
-                    deletable: None,
-                    rest: Obj::new(),
-                }))
+                let comments = Reference {
+                    field_id: "Comments".into(),
+                    name: "Comments".into(),
+                    target_type_id: "Comment".into(),
+                    cardinality: "many".into(),
+                    direction: "outgoing".into(),
+                    writable: false,
+                    rest: obj! { "listenable" => Js::Bool(true), "readable" => Js::Bool(false), "identity" => Js::str("Id") },
+                };
+                let (fields, references) = match request.type_id.as_str() {
+                    "Note" => (vec![Field::new("Title", "string", true, true)], vec![comments]),
+                    "Comment" => (vec![Field::new("Id", "string", false, false), Field::new("Text", "string", false, false)], vec![]),
+                    _ => return Ok(None),
+                };
+                Ok(Some(TypeDescriptor { type_id: request.type_id.clone(), display_name: request.type_id.clone(), fields, references, deletable: None, rest: Obj::new() }))
             }
 
             async fn create_record(&self, _: &Ctx, _: CreateRecord) -> Answer<Written> {
@@ -859,6 +877,14 @@ pub(crate) mod tests {
                         self.registrations.lock().unwrap().push(Js::Obj(removed));
                         Ok(Js::Null)
                     }
+                    "awaitKeys" => {
+                        if let Some(landing) = self.on_await_keys.lock().unwrap().take() {
+                            landing();
+                        }
+                        let heads = params.get("heads").and_then(Js::as_array).unwrap_or(&[]).to_vec();
+                        let keys = heads.iter().map(|head| Js::Obj(obj! { "key" => Js::str(format!("thread:{}", head.get("recordId").and_then(Js::as_str).unwrap_or_default())) }));
+                        Ok(Js::Arr(keys.collect()))
+                    }
                     "listEventTypes" if self.down.load(Ordering::SeqCst) => Err(ModuleError::bad_request("the inbox is down")),
                     "listEventTypes" => Ok(Js::Arr(vec![Js::Obj(obj! { "tag" => Js::str("note.created"), "positionType" => Js::str("Note") })])),
                     "preprocessInbound" => {
@@ -870,6 +896,7 @@ pub(crate) mod tests {
                                 Js::Obj(obj! {
                                     "payload" => note.clone(),
                                     "externalId" => Js::str(id),
+                                    "tag" => Js::str("note.created"),
                                     "eventType" => Js::str("note.created"),
                                     "changeType" => Js::str("create"),
                                     "recordType" => Js::str("Note"),
@@ -920,6 +947,8 @@ pub(crate) mod tests {
         pub root: std::path::PathBuf,
         pub down: Arc<AtomicBool>,
         pub registrations: Arc<std::sync::Mutex<Vec<Js>>>,
+        /// Run once, as the inbox is next asked `awaitKeys`.
+        pub on_await_keys: inbox::OnAwaitKeys,
     }
 
     /// Two connections of the inbox, each under a credential of its own, and
@@ -971,7 +1000,15 @@ pub(crate) mod tests {
         fn made(movement: &str, secrets: &str, lf_yaml: &str, flavour: Flavour) -> InboxProject {
             let down = Arc::new(AtomicBool::new(false));
             let registrations = Arc::new(std::sync::Mutex::new(Vec::new()));
-            let port = inbox::serve(inbox::Inbox { down: down.clone(), registrations: registrations.clone(), polled: flavour.polled, scoped: flavour.scoped, expiring: flavour.expiring });
+            let on_await_keys = Arc::new(std::sync::Mutex::new(None));
+            let port = inbox::serve(inbox::Inbox {
+                down: down.clone(),
+                registrations: registrations.clone(),
+                polled: flavour.polled,
+                scoped: flavour.scoped,
+                expiring: flavour.expiring,
+                on_await_keys: on_await_keys.clone(),
+            });
             let root = std::env::temp_dir().join(format!("lf-doors-inline-{}", uuid::Uuid::new_v4()));
             crate::init::run(&root, &mut Vec::new()).unwrap();
             std::fs::create_dir_all(root.join("externals/inbox")).unwrap();
@@ -988,7 +1025,7 @@ pub(crate) mod tests {
             let secrets_file = root.join(".lf/secrets.yaml");
             std::fs::write(&secrets_file, secrets).unwrap();
             std::fs::set_permissions(&secrets_file, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
-            InboxProject { root, down, registrations }
+            InboxProject { root, down, registrations, on_await_keys }
         }
 
         pub(crate) async fn session(&self) -> Session {
@@ -1198,7 +1235,7 @@ pub(crate) mod tests {
         let since = store.arrival_mark().unwrap();
         let open = crate::waits::OpenWait { run_id: "run-1", team_id: LOCAL_TENANT, adapter_type: "acme", edge: "Comments", key, since };
         let wait = store.open_wait(&open).unwrap();
-        store.commit_park(&Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
+        store.commit_park(&Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait }, resumed: None }).unwrap();
         wait
     }
 
@@ -1311,12 +1348,37 @@ pub(crate) mod tests {
         });
     }
 
+    /// A note's movement that waits for the next comment on it.
+    const AWAITS_A_COMMENT: &str = "import { inbox } from adapters\n\ni = connect inbox\n\nfunction noted(note: <i-[:Note]->>) {\n  c = await new note-[:Comments]->\n  return c.Text\n}\n\nlisten to i { events: [\"note.created\"] } fire noted\n";
+
+    /// An inline delivery's runs read their trigger's waits from the mark
+    /// taken once its arrivals are kept: the delivery's own comment on n-1 is
+    /// no answer to n-1's run, and a comment on n-2 that lands while n-1's run
+    /// is going is one to n-2's, though n-2's run starts after it.
+    #[test]
+    fn an_inline_delivery_s_runs_wait_from_the_mark_taken_after_its_own_arrivals() {
+        let project = InboxProject::with(AWAITS_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        let state = project.root.join(".lf/state.db");
+        *project.on_await_keys.lock().unwrap() = Some(Box::new(move || {
+            let landed = NewArrival { edge: "Comments".into(), key: "thread:n-2".into(), identity: Some("k2".into()), version: None, landing: Some(Js::parse(br#"{"fields":{"Text":"meanwhile"}}"#).unwrap()), gone: false };
+            Store::open(&state).unwrap().log_arrivals(LOCAL_TENANT, "inbox", &[landed], &iso(0)).unwrap();
+        }));
+        in_local(async {
+            let session = project.session().await;
+            let body = br#"{"notes":[{"id":"n-1","Title":"one"},{"id":"n-2","Title":"two"}],"comments":[{"note":"n-1","id":"k1","Text":"own"}]}"#;
+            let (answer, fired) = hook(&session, body, "d-1").await;
+            assert_eq!(answer.status, 200, "{}", answer.body.to_json());
+            let statuses: Vec<&str> = fired.outcomes.iter().map(|o| o.status.as_str()).collect();
+            assert_eq!(statuses, ["parked", "completed"], "{:?}", fired.outcomes.iter().map(|o| &o.error).collect::<Vec<_>>());
+        });
+    }
+
     /// Run `run`'s wait on `key`'s `Comments` from `since`, parked at `s1`.
     fn park_wait(store: &dyn RunHostStore, run: &str, key: &str, since: i64) -> String {
         use crate::store::{Park, ParkKind, RunStart};
         store.start_run(&RunStart { id: run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
         let wait = store.open_wait(&crate::waits::OpenWait { run_id: run, team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key, since }).unwrap();
-        store.commit_park(&Park { run_id: run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
+        store.commit_park(&Park { run_id: run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait }, resumed: None }).unwrap();
         wait
     }
 
