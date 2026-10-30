@@ -506,6 +506,7 @@ answer:  void
 
 - **An await on an adapter's edge** names the wait it parks on (`waitId`, from `park.waits.open`). **Persist:** an await park for (run, `address`), and the wait parked there, as one write. An arrival logged on the wait's record afterwards wakes the run, which re-enters the await and reads the wait's arrivals. A park and a log on one record's edge never interleave: either the log sees the park and wakes it, or the engine's read after the park sees the arrival.
 - After this answers, the engine reads the wait's arrivals once more itself and calls `park.wake` when one landed while it parked.
+- **A host may hold its parks to the segment's end**, with its `recordJoin`s and the finish of the leaf it resumed, and write them as one, so a segment that dies leaves the leaf it resumed to be resumed again. Such a host withdraws a held park that `cancelSubtrees` names, reads each held wait's arrivals in that one write and queues the wake itself when any are unread, so a `park.wake` it was asked in the segment is already covered (listen-fire holds them; docs/contracts/store-slot.md, `parks.commitSegment`).
 - **A callback's await** names the reserved callback identity and the callback's id: the correlation from (`adapterType`, `correlationKey`) to the park, woken by the callback's call. Callbacks retire at 0.13.
 - **Retry:** idempotent on (run, `address`).
 

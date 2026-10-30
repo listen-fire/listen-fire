@@ -1235,7 +1235,7 @@ pub(crate) mod tests {
         let since = store.arrival_mark().unwrap();
         let open = crate::waits::OpenWait { run_id: "run-1", team_id: LOCAL_TENANT, adapter_type: "acme", edge: "Comments", key, since };
         let wait = store.open_wait(&open).unwrap();
-        store.commit_park(&Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait }, resumed: None }).unwrap();
+        store.commit_park(&Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
         wait
     }
 
@@ -1378,7 +1378,7 @@ pub(crate) mod tests {
         use crate::store::{Park, ParkKind, RunStart};
         store.start_run(&RunStart { id: run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
         let wait = store.open_wait(&crate::waits::OpenWait { run_id: run, team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key, since }).unwrap();
-        store.commit_park(&Park { run_id: run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait }, resumed: None }).unwrap();
+        store.commit_park(&Park { run_id: run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
         wait
     }
 
@@ -1411,6 +1411,116 @@ pub(crate) mod tests {
             assert_eq!(session.store.arrival_mark().unwrap(), mark, "nothing logged again");
             assert!(session.store.wait_arrivals(&later).unwrap().arrivals.is_empty(), "the re-sent comment is not the later wait's");
             assert!(session.store.claim_due(&due).unwrap().is_empty(), "nothing woken, nothing queued");
+        });
+    }
+
+    /// A note's run races a comment on the note against an hour's sleep,
+    /// and returns what each arm settled with.
+    const RACES_A_COMMENT: &str = "import { inbox } from adapters\n\ni = connect inbox\n\nfunction noted(note: <i-[:Note]->>) {\n  r = race(\n    () => {\n      c = await new note-[:Comments]->\n      return c.Text\n    },\n    () => {\n      await sleep(1h)\n      return \"slept\"\n    },\n  )\n  return \"${coalesce(r[0], \"-\")}/${coalesce(r[1], \"-\")}\"\n}\n\nlisten to i { events: [\"note.created\"] } fire noted\n";
+
+    /// The one run's id, and its leaves as `(address, reason, status)`.
+    fn the_run(session: &Session) -> (String, Vec<(String, String, String)>) {
+        let runs = session.store.runs(10).unwrap();
+        assert_eq!(runs.len(), 1);
+        let leaves = session.store.leaves(&runs[0].id, false, None, None).unwrap().into_iter().map(|l| (l.address, l.reason, l.status)).collect();
+        (runs[0].id.clone(), leaves)
+    }
+
+    /// A `wake_await` row for the run's wait on n-1's comments, as a
+    /// delivery that logs one queues it, or a retry of a wake whose worker died.
+    fn wake_the_comment_wait(session: &Session, run: &str, address: &str) {
+        let wait = session
+            .store
+            .open_wait(&crate::waits::OpenWait { run_id: run, team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key: "thread:n-1", since: 0 })
+            .unwrap();
+        let row = crate::waits::wake_row(LOCAL_TENANT, &crate::waits::WaitWake { run_id: run.into(), wait_id: wait, address: address.into() });
+        session.store.enqueue(&row.kind, &row.key, &row.payload, None, row.team_id.as_deref()).unwrap();
+    }
+
+    async fn drained(session: &Session) {
+        crate::drain::drain(session, &crate::drain::DrainOptions { until_idle: true, max_seconds: None }, &mut Vec::new()).await.unwrap();
+    }
+
+    /// The segment that resumes the comment's arm settles the race, then
+    /// dies before its commit: the run stays parked on that arm, resumed
+    /// again by the retried wake, and finishes as though it never died.
+    #[test]
+    fn a_resumed_race_whose_segment_dies_before_its_commit_is_resumed_again_and_finishes() {
+        let project = InboxProject::with(RACES_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        in_local(async {
+            let session = project.session().await;
+            let (_, fired) = hook(&session, NOTE, "d-1").await;
+            assert_eq!(fired.outcomes.iter().map(|o| o.status.as_str()).collect::<Vec<_>>(), ["parked"]);
+            let (run, leaves) = the_run(&session);
+            let reasons: Vec<&str> = leaves.iter().map(|(_, reason, _)| reason.as_str()).collect();
+            assert_eq!(reasons, ["await", "timer"], "{leaves:?}");
+            let arm = leaves[0].0.clone();
+
+            let comment = NewArrival { edge: "Comments".into(), key: "thread:n-1".into(), identity: Some("k1".into()), version: None, landing: Some(Js::parse(br#"{"fields":{"Text":"hi"}}"#).unwrap()), gone: false };
+            let wakes = session.store.log_arrivals(LOCAL_TENANT, "inbox", &[comment], &iso(0)).unwrap();
+            assert_eq!(wakes.len(), 1);
+            wake_the_comment_wait(&session, &run, &arm);
+            crate::segment::DIES_BEFORE_COMMIT.with(|dies| dies.set(true));
+            drained(&session).await;
+            let (_, leaves) = the_run(&session);
+            assert_eq!(session.store.run(&run).unwrap().unwrap().status, "parked");
+            assert!(leaves.iter().any(|(address, _, status)| *address == arm && status == "resuming"), "the arm is still the run's to resume: {leaves:?}");
+
+            // The worker that died held the wake: it is tried again once its lease lapses.
+            wake_the_comment_wait(&session, &run, &arm);
+            drained(&session).await;
+            let row = session.store.run(&run).unwrap().unwrap();
+            assert_eq!(row.status, "completed", "{:?}", row.outcome);
+            assert!(row.outcome.as_deref().unwrap_or_default().contains("hi/-"), "{:?}", row.outcome);
+            assert_eq!(the_run(&session).1, []);
+        });
+    }
+
+    /// An attempt at the comment's arm finished it (its exports kept, its
+    /// join decremented) and died before its commit; the retry parks in the
+    /// arm instead (no comment counts this time). The run fails, naming where.
+    #[test]
+    fn a_retry_that_parks_inside_a_branch_its_dead_attempt_finished_fails_the_run_naming_where() {
+        let project = InboxProject::with(RACES_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        in_local(async {
+            let session = project.session().await;
+            hook(&session, NOTE, "d-1").await;
+            let (run, leaves) = the_run(&session);
+            let arm = leaves[0].0.clone();
+            let frames = session.store.frames(&run).unwrap();
+            assert_eq!(frames.len(), 1, "the race's frame");
+            let frame = &frames[0];
+            let depth = frame.split('.').count();
+            let branch = arm.split('.').take(depth + 1).collect::<Vec<_>>().join(".");
+            let index: i64 = branch.rsplit('.').next().and_then(|step| step.strip_prefix('b')).and_then(|n| n.parse().ok()).unwrap_or_else(|| panic!("{branch}"));
+            let exports = Js::parse(br##"{"#return":null}"##).unwrap();
+            session.store.persist_branch_export(&run, frame, &branch, index, &exports).unwrap();
+            assert!(session.store.decrement_join(&run, frame, &branch, &arm).unwrap());
+
+            wake_the_comment_wait(&session, &run, &arm);
+            drained(&session).await;
+            let row = session.store.run(&run).unwrap().unwrap();
+            assert_eq!(row.status, "failed", "{:?}", row.outcome);
+            let outcome = row.outcome.unwrap_or_default();
+            assert!(outcome.contains(&format!("the run's replay diverged from its first attempt at {arm}")), "{outcome}");
+            assert!(outcome.contains(&branch), "{outcome}");
+        });
+    }
+
+    /// A race whose other arm settles at once withdraws the arm that parked
+    /// in the same segment: its held park is never written, so the run
+    /// completes with nothing left to wake.
+    #[test]
+    fn a_park_a_race_withdraws_in_the_segment_that_made_it_is_never_written() {
+        let movement = RACES_A_COMMENT.replace("await sleep(1h)\n      return \"slept\"", "return \"now\"");
+        let project = InboxProject::with(&movement, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        in_local(async {
+            let session = project.session().await;
+            let (_, fired) = hook(&session, NOTE, "d-1").await;
+            assert_eq!(fired.outcomes.iter().map(|o| o.status.as_str()).collect::<Vec<_>>(), ["completed"], "{:?}", fired.outcomes.iter().map(|o| &o.error).collect::<Vec<_>>());
+            let (run, leaves) = the_run(&session);
+            assert_eq!(leaves, []);
+            assert!(session.store.run(&run).unwrap().unwrap().outcome.unwrap_or_default().contains("-/now"));
         });
     }
 

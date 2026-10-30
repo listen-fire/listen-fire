@@ -16,9 +16,9 @@ use crate::obj;
 use crate::slot_client::SlotClient;
 use module_wire::envelope::METHOD_NOT_IMPLEMENTED_CODE;
 use crate::store::{
-    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Rerun, Result, RunRow, RunStart, StoreError,
+    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit, StoreError,
 };
-use crate::store_wire::{Wire, delivery_params, event_run_params, int, num, open_wait_params, opt, park_params, rows, run_start_params, to_rows};
+use crate::store_wire::{Wire, delivery_params, event_run_params, int, num, open_wait_params, opt, park_params, rows, run_start_params, segment_commit_params, to_rows};
 use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait, WaitArrivals, WaitWake};
 
 /// The error code a fenced write answers when the run's lease is gone
@@ -192,6 +192,20 @@ impl RunHostStore for ProcessStore {
     }
     fn commit_park(&self, park: &Park<'_>) -> Result<()> {
         self.unit("parks.commit", park_params(park))
+    }
+    fn commit_segment(&self, commit: &SegmentCommit<'_>) -> Result<Vec<WaitWake>> {
+        const METHOD: &str = "parks.commitSegment";
+        // A module written before it has no one write for a segment's parks:
+        // a crash between two of them would strand the run.
+        match self.client.call(METHOD, segment_commit_params(commit)) {
+            Ok(answer) => rows(&answer).ok_or_else(|| self.malformed(METHOD, &answer)),
+            Err(error) if error.code == METHOD_NOT_IMPLEMENTED_CODE => Err(StoreError::Backend(format!(
+                "{} does not answer {}; listen-fire keeps a segment's parks in that one write",
+                self.client.label,
+                crate::protocol::method_with_minor(METHOD)
+            ))),
+            Err(error) => Err(self.refused(METHOD, error)),
+        }
     }
 
     fn record_join(&self, run_id: &str, frame_address: &str, pending: i64, fence: Option<&str>) -> Result<()> {

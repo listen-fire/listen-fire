@@ -309,7 +309,7 @@ pub fn settle_if_cancel_requested(store_: &dyn RunHostStore, run_id: &str, fence
 
 /// Whether `prefix` is `address` or one of its ancestors, step by step
 /// (`s1.b1` is not an ancestor of `s1.b10`).
-fn is_ancestor_or_self(prefix: &str, address: &str) -> bool {
+pub(crate) fn is_ancestor_or_self(prefix: &str, address: &str) -> bool {
     let prefix: Vec<&str> = if prefix.is_empty() { Vec::new() } else { prefix.split('.').collect() };
     let address: Vec<&str> = if address.is_empty() { Vec::new() } else { address.split('.').collect() };
     prefix.len() <= address.len() && prefix.iter().zip(&address).all(|(a, b)| a == b)
@@ -436,9 +436,9 @@ pub async fn drain_run(store_: &dyn RunHostStore, run_id: &str, addresses: &[Str
                 deferred.push((frame.clone(), state.clone()));
             }
         }
+        // The segment's own commit finished the leaf, unless it parked there again.
         if parked_at != Some(address.as_str()) {
             store(store_.drop_correlation(run_id, address))?;
-            store(store_.finish_leaf(run_id, address, fence))?;
         }
     }
     for (frame_address, state) in deferred {

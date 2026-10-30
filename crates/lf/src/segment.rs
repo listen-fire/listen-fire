@@ -24,11 +24,11 @@ use crate::file_ref::{descriptor_of, field_type_of, files_at_type, owner_of, Own
 use crate::json::{Js, Obj};
 use crate::obj;
 use crate::remote::{ADAPTER_METHODS, SegmentAdapters, WRITE_METHODS};
-use crate::run_host::{cancel_subtrees, queue_await_wake, save_source, settle_if_cancel_requested};
+use crate::run_host::{cancel_subtrees, is_ancestor_or_self, queue_await_wake, save_source, settle_if_cancel_requested};
 use crate::backend::{MintCallback, RunHostStore};
-use crate::store::{Park, ParkKind, StoreError};
+use crate::store::{HeldJoin, HeldPark, ParkKind, SegmentCommit, StoreError};
 use crate::store_wire::Wire as _;
-use crate::waits::{Noted, OpenWait, WaitWake};
+use crate::waits::{Noted, OpenWait};
 use crate::wire::{Hv, Wire, js_of_json, json_of_js};
 
 /// The one tenant a local project's files are (`LOCAL_TENANT`); its run
@@ -173,12 +173,53 @@ pub struct SegmentHost<'s> {
     /// What the segment's priced calls spent, by cost source: the engine
     /// reports the same lines from its own ledger, and they must agree.
     spent: RefCell<BTreeMap<String, f64>>,
-    /// The address each wait this segment parked on is parked at: a
-    /// `park.wake` names the wait, and its row the run's leaf.
+    /// The address each wait this segment parked on is parked at.
     parked_waits: RefCell<HashMap<String, String>>,
     /// The leaf this segment resumed, when it resumed one: its notes are
     /// kept with the leaf's end (crate::waits::Noted::leaf).
     resumed_leaf: Option<String>,
+    /// The writes that move the run on, kept in one write at the end.
+    held: RefCell<Held>,
+}
+
+/// What a segment holds back until its end (`commit`): its parks, its
+/// join counts, and (by its leaf) the end of the leaf it resumed. A segment
+/// that dies before then has moved the run nowhere, so the leaf it resumed
+/// is resumed again. A branch's exports, a join's decrement and a race's
+/// withdrawn arms are written at once: the engine reads them back within
+/// the segment, and a resume that runs the same way again writes them alike.
+#[derive(Default)]
+struct Held {
+    /// Each frame's pending count, by frame address; the last recorded stands.
+    joins: Vec<(String, i64)>,
+    parks: Vec<Parked>,
+}
+
+/// A park held by the segment.
+struct Parked {
+    address: String,
+    state: Js,
+    kind: HeldKind,
+}
+
+/// What wakes a held park: crate::store::ParkKind, owned.
+enum HeldKind {
+    Timer { wake_at: String },
+    Await { adapter_type: String, correlation_key: String },
+    Wait { wait_id: String },
+    Limit,
+}
+
+impl Parked {
+    fn held<'p>(&'p self, team_id: &'p str) -> HeldPark<'p> {
+        let kind = match &self.kind {
+            HeldKind::Timer { wake_at } => ParkKind::Timer { wake_at },
+            HeldKind::Await { adapter_type, correlation_key } => ParkKind::Await { team_id, adapter_type, correlation_key },
+            HeldKind::Wait { wait_id } => ParkKind::Wait { wait_id },
+            HeldKind::Limit => ParkKind::Limit,
+        };
+        HeldPark { address: &self.address, state: &self.state, kind }
+    }
 }
 
 impl<'s> SegmentHost<'s> {
@@ -201,7 +242,26 @@ impl<'s> SegmentHost<'s> {
             spent: RefCell::new(BTreeMap::new()),
             parked_waits: RefCell::new(HashMap::new()),
             resumed_leaf: input.resumed_leaf,
+            held: RefCell::new(Held::default()),
         }
+    }
+
+    /// Hold a park until the segment's end.
+    fn hold(&self, address: &str, state: Js, kind: HeldKind) {
+        if let HeldKind::Wait { wait_id } = &kind {
+            self.parked_waits.borrow_mut().insert(wait_id.clone(), address.to_string());
+        }
+        self.held.borrow_mut().parks.push(Parked { address: address.to_string(), state, kind });
+    }
+
+    /// Withdraw what the segment holds at or below each of `subtrees`, as
+    /// `cancel_subtrees` withdraws what is kept, `exclude` spared.
+    fn withdraw_held(&self, subtrees: &[String], exclude: Option<&str>) {
+        let under = |address: &str| Some(address) != exclude && subtrees.iter().any(|prefix| is_ancestor_or_self(prefix, address));
+        let mut held = self.held.borrow_mut();
+        held.parks.retain(|park| !under(&park.address));
+        held.joins.retain(|(frame, _)| !under(frame));
+        self.parked_waits.borrow_mut().retain(|_, address| !under(address));
     }
 
     /// Charge a priced call's cost lines to the segment's account.
@@ -326,9 +386,98 @@ pub async fn run_segment(host: &SegmentHost<'_>, input: SegmentInput<'_>) -> Res
         host.store.add_run_spend(&host.run_id, spent).map_err(|e| Ended::Failed(e.to_string()))?;
     }
     match done {
-        Ok(done) => read_result(host, &done),
+        Ok(done) => {
+            let ran = read_result(host, &done)?;
+            #[cfg(test)]
+            if DIES_BEFORE_COMMIT.with(|dies| dies.replace(false)) {
+                return Err(Ended::LeaseLost);
+            }
+            commit(host)?;
+            Ok(ran)
+        }
         Err(Fault(message)) => Err(Ended::Failed(message)),
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The next segment to reach its end dies there, before its commit, as
+    /// a process killed then would: nothing it held is written, and its
+    /// drain leaves every row (a lost lease).
+    pub(crate) static DIES_BEFORE_COMMIT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The segment's held writes, kept in one fenced write: its join counts,
+/// its parks and the end of the leaf it resumed. In that write the store
+/// queues a wake for each wait it parks whose arrivals are unread: what
+/// arrived after the engine's last read, or what it read without judging.
+fn commit(host: &SegmentHost<'_>) -> Result<(), Ended> {
+    let held = host.held.borrow();
+    let resumed = host.resumed_leaf.as_deref();
+    if held.parks.is_empty() && held.joins.is_empty() && resumed.is_none() {
+        return Ok(());
+    }
+    let store = host.store;
+    let ended = |error: StoreError| match error {
+        StoreError::LeaseLost { .. } => Ended::LeaseLost,
+        other => Ended::Failed(other.to_string()),
+    };
+    if let Some(leaf) = resumed
+        && let Some(diverged) = replay_diverged(host, &held, leaf).map_err(ended)?
+    {
+        return Err(Ended::Failed(diverged));
+    }
+    let team_id = store.tenant();
+    let commit = SegmentCommit {
+        run_id: &host.run_id,
+        team_id,
+        fence: host.fence.as_deref(),
+        resumed,
+        joins: held.joins.iter().map(|(frame_address, pending)| HeldJoin { frame_address, pending: *pending }).collect(),
+        parks: held.parks.iter().map(|park| park.held(team_id)).collect(),
+    };
+    let wakes = store.commit_segment(&commit).map_err(ended)?;
+    for park in &held.parks {
+        if let HeldKind::Timer { wake_at } = &park.kind {
+            crate::wake::queued("resume_timer", Some(wake_at));
+        }
+    }
+    for _ in &wakes {
+        crate::wake::queued("wake_await", None);
+    }
+    if !held.parks.is_empty() {
+        // Never break the park path: a cancel that fails to settle here
+        // settles at the run's next entry.
+        let _ = settle_if_cancel_requested(store, &host.run_id, None);
+    }
+    Ok(())
+}
+
+/// A segment that resumed `leaf` and parks inside a branch whose exports
+/// are already kept: an earlier attempt at this leaf finished that branch
+/// (its exports written, its join decremented) and died before its
+/// commit, and this attempt went another way (an adapter read or a clock
+/// answered differently). The branch's join already counted it finished,
+/// so the park could never close it: the run fails, naming where.
+fn replay_diverged(host: &SegmentHost<'_>, held: &Held, leaf: &str) -> Result<Option<String>, StoreError> {
+    let (store, run_id) = (host.store, host.run_id.as_str());
+    let mut frames = store.frames(run_id)?;
+    frames.extend(held.joins.iter().map(|(frame, _)| frame.clone()));
+    frames.sort_unstable();
+    frames.dedup();
+    for park in &held.parks {
+        for frame in frames.iter().filter(|frame| **frame != park.address && is_ancestor_or_self(frame, &park.address)) {
+            for row in store.collect_branch_exports(run_id, frame)? {
+                if row.branch_index >= 0 && row.branch_address != *frame && is_ancestor_or_self(&row.branch_address, &park.address) {
+                    return Ok(Some(format!(
+                        "the run's replay diverged from its first attempt at {}: resuming the leaf at {leaf}, an earlier attempt finished the branch {} and stopped before keeping its progress, and this attempt parks inside that branch instead",
+                        park.address, row.branch_address
+                    )));
+                }
+            }
+        }
+    }
+    Ok(None)
 }
 
 type Served<'a> = Pin<Box<dyn Future<Output = (u32, Result<Json, Fault>)> + 'a>>;
@@ -740,7 +889,7 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
     let store = host.store;
     let run_id = host.run_id.as_str();
     let fence = host.fence.as_deref();
-    // A park by a segment that resumed a leaf finishes that leaf in its write.
+    // A segment that resumed a leaf keeps its notes with that leaf's end.
     let resumed = host.resumed_leaf.as_deref();
     Ok(match label {
         "adapters.resolve" => {
@@ -770,35 +919,38 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
             let state = read_wire(host, args.get("state"))?.js();
             let address = text(args, "address", "park.sink.commitTimerPark")?;
             let wake_at = text(args, "wakeAt", "park.sink.commitTimerPark")?;
-            park(host, Park { run_id, address, state: &state, fence, kind: ParkKind::Timer { wake_at }, resumed })
+            host.hold(address, state, HeldKind::Timer { wake_at: wake_at.to_string() });
+            Ok(None)
         }
         "park.sink.commitAwaitPark" if args.get("waitId").is_some() => {
             const LABEL: &str = "park.sink.commitAwaitPark";
             let state = read_wire(host, args.get("state"))?.js();
             let address = text(args, "address", LABEL)?;
             let wait_id = text(args, "waitId", LABEL)?;
-            let parked = park(host, Park { run_id, address, state: &state, fence, kind: ParkKind::Wait { wait_id }, resumed });
-            if parked.is_ok() {
-                host.parked_waits.borrow_mut().insert(wait_id.to_string(), address.to_string());
-            }
-            parked
+            host.hold(address, state, HeldKind::Wait { wait_id: wait_id.to_string() });
+            Ok(None)
         }
         "park.sink.commitAwaitPark" => {
             let state = read_wire(host, args.get("state"))?.js();
             let address = text(args, "address", "park.sink.commitAwaitPark")?;
             let adapter_type = text(args, "adapterType", "park.sink.commitAwaitPark")?;
             let correlation_key = text(args, "correlationKey", "park.sink.commitAwaitPark")?;
-            park(host, Park { run_id, address, state: &state, fence, kind: ParkKind::Await { team_id: store.tenant(), adapter_type, correlation_key }, resumed })
+            host.hold(address, state, HeldKind::Await { adapter_type: adapter_type.to_string(), correlation_key: correlation_key.to_string() });
+            Ok(None)
         }
         "park.sink.commitSuspension" => {
             let state = read_wire(host, args.get("state"))?.js();
             let address = text(args, "address", "park.sink.commitSuspension")?;
-            park(host, Park { run_id, address, state: &state, fence, kind: ParkKind::Limit, resumed })
+            host.hold(address, state, HeldKind::Limit);
+            Ok(None)
         }
         "park.sink.recordJoin" => {
             let frame = text(args, "frameAddress", "park.sink.recordJoin")?;
             let pending = args.get("parkedChildren").and_then(Json::as_i64).ok_or_else(|| Fault("park.sink.recordJoin parkedChildren is a count".into()))?;
-            store.record_join(run_id, frame, pending, fence).map(|()| None).map_err(store_failure)
+            let joins = &mut host.held.borrow_mut().joins;
+            joins.retain(|(held, _)| held != frame);
+            joins.push((frame.to_string(), pending));
+            Ok(None)
         }
         "park.sink.decrementJoin" => {
             let frame = text(args, "frameAddress", "park.sink.decrementJoin")?;
@@ -844,21 +996,17 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
                 .and_then(|list| list.iter().map(|a| a.as_str().map(str::to_string)).collect())
                 .ok_or_else(|| Fault("park.sink.cancelSubtrees subtreeAddresses are a list of texts".into()))?;
             let exclude = args.get("excludeLeaf").and_then(Json::as_str);
+            host.withdraw_held(&subtrees, exclude);
             cancel_subtrees(store, run_id, &subtrees, exclude).map(|()| None).map_err(rules_failure)
         }
         "park.wake" if args.get("waitId").is_some() => {
+            // The segment's commit queues the wake: it reads, in its write,
+            // what the engine saw arrive here, and what arrived since.
             let wait_id = text(args, "waitId", "park.wake")?;
-            let Some(address) = host.parked_waits.borrow().get(wait_id).cloned() else {
+            if !host.parked_waits.borrow().contains_key(wait_id) {
                 return Err(Fault(format!("park.wake names the wait {wait_id}, which this segment parked nothing on")));
-            };
-            let row = crate::waits::wake_row(store.tenant(), &WaitWake { run_id: run_id.to_string(), wait_id: wait_id.to_string(), address });
-            match store.enqueue(&row.kind, &row.key, &row.payload, None, row.team_id.as_deref()) {
-                Ok(()) => {
-                    crate::wake::queued(&row.kind, None);
-                    Ok(None)
-                }
-                Err(error) => Err(store_failure(error)),
             }
+            Ok(None)
         }
         "park.waits.mark" => store.arrival_mark().map(|mark| Some(json!({ "mark": mark }))).map_err(store_failure),
         "park.waits.open" => {
@@ -1149,20 +1297,6 @@ fn stored_plugin_files(host: &SegmentHost<'_>, files: Option<&Js>) -> Result<Vec
         made.push((field.clone(), host.documents.put(TEAM, &bytes, name, content_type)?));
     }
     Ok(made)
-}
-
-/// A park, kept as one write with what wakes it and the run marked parked
-/// (a crash never leaves a leaf nothing wakes); then a cancel stamped
-/// meanwhile settles the run at once.
-fn park(host: &SegmentHost<'_>, park: Park<'_>) -> Answer {
-    host.store.commit_park(&park).map_err(store_failure)?;
-    if let ParkKind::Timer { wake_at } = park.kind {
-        crate::wake::queued("resume_timer", Some(wake_at));
-    }
-    // Never break the park path: a cancel that fails to settle here
-    // settles at the run's next entry.
-    let _ = settle_if_cancel_requested(host.store, &host.run_id, None);
-    Ok(None)
 }
 
 fn read_wire(host: &SegmentHost<'_>, value: Option<&Json>) -> Result<Hv, Fault> {

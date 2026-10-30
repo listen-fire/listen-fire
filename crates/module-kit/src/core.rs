@@ -217,6 +217,24 @@ pub enum ParkKind {
     Limit,
 }
 
+/// A join frame's pending count a segment recorded (`parks.commitSegment`'s `joins`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldJoin {
+    pub frame_address: String,
+    pub pending: i64,
+}
+
+/// A park a segment made (`parks.commitSegment`'s `parks`): `parks.commit`'s
+/// park without its run and fence.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldPark {
+    pub address: String,
+    pub state: Js,
+    pub park: ParkKind,
+}
+
 /// One arrival a module reported (`waits.log`'s `arrivals`).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -464,7 +482,24 @@ slot! {
         "parks.leaves" => fn leaves(ParksLeaves { run_id: String, parked_only: bool, reason: Option<String>, due_by: Option<String> }) -> Vec<LeafRow>;
         "parks.deleteLeaves" => fn delete_leaves(ParksDeleteLeaves { run_id: String, addresses: Vec<String> }) -> ();
         /// One fenced write: the leaf, its kind's row, the run marked parked.
-        "parks.commit" => fn commit_park(ParksCommit { run_id: String, address: String, state: Js, fence: Option<String>, park: ParkKind, resumed: Option<String> }) -> ();
+        "parks.commit" => fn commit_park(ParksCommit { run_id: String, address: String, state: Js, fence: Option<String>, park: ParkKind }) -> ();
+        /// A segment's held writes as one fenced write: `joins` recorded as
+        /// `joins.recordJoin` records them, `parks` committed in order as
+        /// `parks.commit` commits each, `resumed` finished as
+        /// `parks.finishLeaf` finishes it unless one of `parks` is at its
+        /// address, and the run marked parked when `parks` is not empty.
+        /// In the same write, each wait parked whose arrivals are unread
+        /// (`waits.arrivals` lists some) or whose record is gone gets a
+        /// `wake_await { waitId, runId, address }` row under `team_id`;
+        /// those wakes are the answer.
+        "parks.commitSegment" => fn commit_segment(ParksCommitSegment {
+            run_id: String,
+            team_id: String,
+            fence: Option<String>,
+            resumed: Option<String>,
+            joins: Vec<HeldJoin>,
+            parks: Vec<HeldPark>,
+        }) -> Vec<WaitWake>;
         "joins.recordJoin" => fn record_join(JoinsRecordJoin { run_id: String, frame_address: String, pending: i64, fence: Option<String> }) -> ();
         "joins.decrementJoin" => fn decrement_join(JoinsDecrementJoin { run_id: String, frame_address: String, branch_address: String, leaf_address: String }) -> JoinClosed;
         "joins.persistBranchExport" => fn persist_branch_export(JoinsPersistBranchExport { run_id: String, frame_address: String, branch_address: String, branch_index: i64, exports: Js }) -> ();

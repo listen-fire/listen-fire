@@ -53,8 +53,8 @@ pub struct Noted<'a> {
     /// Whether the arrival's record matched the wait's WHERE.
     pub matched: bool,
     /// The leaf the noting segment resumed, if it resumed one: the note is
-    /// kept only when that segment's progress is (`parks.finishLeaf`, or a
-    /// park at the leaf's address). Until then it is the segment's own; a
+    /// kept only when that segment's progress is (its `parks.commitSegment`,
+    /// `parks.finishLeaf`, or a park at the leaf's address). Until then it is the segment's own; a
     /// segment that dies leaves it unkept, and the leaf's next claim drops
     /// it, so the arrival is read again rather than lost.
     pub leaf: Option<&'a str>,
@@ -236,7 +236,7 @@ impl Store {
         self.transaction(|db| Self::wait_arrivals_in(db, wait_id))
     }
 
-    fn wait_arrivals_in(db: &Connection, wait_id: &str) -> Result<WaitArrivals> {
+    pub(crate) fn wait_arrivals_in(db: &Connection, wait_id: &str) -> Result<WaitArrivals> {
         Self::require_wait(db, wait_id)?;
         let gone = db.query_row(
             "select exists (select 1 from wait_row w join arrival a
@@ -371,7 +371,7 @@ mod tests {
 
     use super::*;
     use crate::backend::RunHostStore;
-    use crate::store::{Park, ParkKind, RunStart, iso};
+    use crate::store::{HeldJoin, HeldPark, Park, ParkKind, RunStart, SegmentCommit, iso};
     use crate::store_wire::int;
 
     const CASES: &str = include_str!("../../../packages/engine-contracts/conformance/store-waits.json");
@@ -542,8 +542,47 @@ mod tests {
                 }
                 "park" => {
                     let (run, wait) = (names.id(text(step, "run")), names.wait(text(step, "wait")));
-                    let park = Park { run_id: &run, address: text(step, "address"), state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait }, resumed: opt_text(step, "resumed") };
+                    let park = Park { run_id: &run, address: text(step, "address"), state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } };
                     store.commit_park(&park).unwrap();
+                }
+                "commitSegment" => {
+                    let run = names.id(text(step, "run"));
+                    let fence = opt_text(step, "fence").map(|name| names.leases.get(name).unwrap_or_else(|| panic!("{at}: no lease named {name}")).clone());
+                    let parked: Vec<(String, Option<String>, Option<String>)> = list(step, "parks")
+                        .iter()
+                        .map(|park| (text(park, "address").to_string(), opt_text(park, "wait").map(|w| names.wait(w)), park.get("wakeAt").and_then(int).map(iso)))
+                        .collect();
+                    let parks = parked
+                        .iter()
+                        .map(|(address, wait, wake_at)| HeldPark {
+                            address,
+                            state: &Js::Null,
+                            kind: match (wait, wake_at) {
+                                (Some(wait_id), _) => ParkKind::Wait { wait_id },
+                                (None, Some(wake_at)) => ParkKind::Timer { wake_at },
+                                (None, None) => panic!("{at}: a park names its wait or its wakeAt"),
+                            },
+                        })
+                        .collect();
+                    let joins = step.get("joins").and_then(Js::as_array).unwrap_or_default().iter().map(|join| HeldJoin { frame_address: text(join, "frame"), pending: join.get("pending").and_then(int).unwrap() }).collect();
+                    let commit = SegmentCommit { run_id: &run, team_id: &team, fence: fence.as_deref(), resumed: opt_text(step, "resumed"), joins, parks };
+                    match store.commit_segment(&commit) {
+                        Err(StoreError::LeaseLost { .. }) if flag(step, "leaseLost") => {}
+                        Err(_) if flag(step, "refused") => {}
+                        Ok(mut wakes) if !flag(step, "leaseLost") && !flag(step, "refused") => {
+                            let mut expected: Vec<WaitWake> = list(step, "wakes")
+                                .iter()
+                                .map(|w| WaitWake { run_id: names.id(text(w, "run")), wait_id: names.wait(text(w, "wait")), address: text(w, "address").into() })
+                                .collect();
+                            wakes.sort();
+                            expected.sort();
+                            assert_eq!(wakes, expected, "{at}: the wakes");
+                        }
+                        other => panic!("{at}: {other:?}"),
+                    }
+                }
+                "pendingJoins" => {
+                    assert_eq!(store.has_pending_joins(&names.id(text(step, "run"))).unwrap(), flag(step, "pending"), "{at}: pending joins");
                 }
                 "claim" => {
                     let claimed = store.claim_leaf(&names.id(text(step, "run")), text(step, "address"), None).unwrap();
@@ -604,8 +643,10 @@ mod tests {
         an_arrival_logged_again_is_not_logged_twice_and_one_without_an_identity_is_never_a_repeat,
         a_note_made_by_a_segment_resuming_a_leaf_is_kept_when_the_leaf_finishes_and_dropped_when_the_leaf_is_claimed_again_after_that_segment_died,
         a_note_made_by_a_segment_that_parks_again_at_the_leaf_it_resumed_is_kept_with_that_park,
-        a_park_elsewhere_by_a_segment_that_resumed_a_leaf_finishes_that_leaf_in_the_same_write_keeping_its_notes,
+        a_segments_commit_that_parks_elsewhere_finishes_the_leaf_it_resumed_in_the_same_write_keeping_its_notes,
         a_segment_that_lost_the_runs_lease_notes_nothing_and_the_segment_that_took_the_run_over_reads_the_arrival,
+        a_segments_commit_keeps_its_joins_its_parks_and_the_end_of_the_leaf_it_resumed_in_one_write_or_none_of_them,
+        a_segments_commit_wakes_each_wait_it_parks_whose_arrivals_are_unread_or_whose_record_is_gone,
     }
 
     #[test]
@@ -643,7 +684,7 @@ mod tests {
         let key = format!("thread:{run}");
         store.start_run(&RunStart { id: &run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
         let wait = store.open_wait(&OpenWait { run_id: &run, team_id: &team, adapter_type: "acme", edge: "Comments", key: &key, since: store.arrival_mark().unwrap() }).unwrap();
-        store.commit_park(&Park { run_id: &run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait }, resumed: None }).unwrap();
+        store.commit_park(&Park { run_id: &run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
         let receipt = || NewDelivery {
             id: uuid::Uuid::new_v4().to_string(),
             external_id: Some(format!("d-{run}")),
@@ -710,7 +751,7 @@ mod tests {
         });
         held.recv().unwrap();
         let parking = Instant::now();
-        store.commit_park(&Park { run_id: &run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait }, resumed: None }).unwrap();
+        store.commit_park(&Park { run_id: &run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
         assert!(parking.elapsed() >= Duration::from_millis(400), "the park took its turn after the log");
         logging.join().unwrap();
         let read: Vec<String> = store.wait_arrivals(&wait).unwrap().arrivals.into_iter().map(|a| a.identity).collect();
@@ -725,7 +766,7 @@ mod tests {
         store.log_arrivals("t", "acme", &[arrival("a"), arrival("b"), arrival("c")], &iso(-2 * ARRIVAL_RETENTION_MS)).unwrap();
         assert_eq!(store.sweep_arrivals(&iso(-ARRIVAL_RETENTION_MS), 2).unwrap(), 2);
         assert_eq!(store.sweep_arrivals(&iso(-ARRIVAL_RETENTION_MS), 2).unwrap(), 1);
-        let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: "no-such-wait" }, resumed: None };
+        let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: "no-such-wait" } };
         assert!(matches!(store.commit_park(&park), Err(StoreError::Invalid(_))));
         assert!(store.leaves("run-1", false, None, None).unwrap().is_empty());
         assert!(matches!(store.wait_arrivals("no-such-wait"), Err(StoreError::Invalid(_))));

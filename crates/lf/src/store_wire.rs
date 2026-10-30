@@ -8,7 +8,7 @@ use crate::backend::{CallbackClaim, CallbackRecord};
 use crate::json::{Js, Obj};
 use crate::obj;
 use crate::store::{
-    BranchExport, ClaimedWork, CorrelatedAwait, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind, RunRow, RunStart,
+    BranchExport, ClaimedWork, CorrelatedAwait, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind, RunRow, RunStart, SegmentCommit,
 };
 use crate::waits::{LoggedArrival, NewArrival, OpenWait, WaitArrivals, WaitWake};
 
@@ -156,7 +156,18 @@ impl Wire for NewWork {
 
 /// `parks.commit`'s params.
 pub fn park_params(park: &Park<'_>) -> Obj {
-    let kind = match &park.kind {
+    obj! {
+        "runId" => Js::str(park.run_id),
+        "address" => Js::str(park.address),
+        "state" => park.state.clone(),
+        "fence" => opt(park.fence),
+        "park" => Js::from(park_kind_params(&park.kind)),
+    }
+}
+
+/// `parks.commit`'s `park`.
+fn park_kind_params(kind: &ParkKind<'_>) -> Obj {
+    match kind {
         ParkKind::Timer { wake_at } => obj! { "kind" => Js::str("timer"), "wakeAt" => Js::str(*wake_at) },
         ParkKind::Await { team_id, adapter_type, correlation_key } => obj! {
             "kind" => Js::str("await"),
@@ -166,18 +177,24 @@ pub fn park_params(park: &Park<'_>) -> Obj {
         },
         ParkKind::Wait { wait_id } => obj! { "kind" => Js::str("wait"), "waitId" => Js::str(*wait_id) },
         ParkKind::Limit => obj! { "kind" => Js::str("limit") },
-    };
-    let mut params = obj! {
-        "runId" => Js::str(park.run_id),
-        "address" => Js::str(park.address),
-        "state" => park.state.clone(),
-        "fence" => opt(park.fence),
-        "park" => Js::from(kind),
-    };
-    if let Some(resumed) = park.resumed {
-        params.insert("resumed".into(), Js::str(resumed));
     }
-    params
+}
+
+/// `parks.commitSegment`'s params.
+pub fn segment_commit_params(commit: &SegmentCommit<'_>) -> Obj {
+    let joins = commit.joins.iter().map(|join| Js::Obj(obj! { "frameAddress" => Js::str(join.frame_address), "pending" => Js::Num(join.pending.into()) }));
+    let parks = commit
+        .parks
+        .iter()
+        .map(|park| Js::Obj(obj! { "address" => Js::str(park.address), "state" => park.state.clone(), "park" => Js::from(park_kind_params(&park.kind)) }));
+    obj! {
+        "runId" => Js::str(commit.run_id),
+        "teamId" => Js::str(commit.team_id),
+        "fence" => opt(commit.fence),
+        "resumed" => opt(commit.resumed),
+        "joins" => Js::Arr(joins.collect()),
+        "parks" => Js::Arr(parks.collect()),
+    }
 }
 
 /// `parks.commit`'s `park`, read back; None when it is not one.
@@ -530,7 +547,7 @@ mod tests {
         ];
         for kind in kinds {
             let reason = kind.reason();
-            let params = Js::from(park_params(&Park { run_id: "r", address: "s1", state: &Js::Null, fence: None, kind, resumed: None }));
+            let params = Js::from(park_params(&Park { run_id: "r", address: "s1", state: &Js::Null, fence: None, kind }));
             assert_eq!(params.get("park").and_then(park_kind).map(|k| k.reason()), Some(reason));
         }
         assert!(park_kind(&Js::from(obj! { "kind" => Js::str("timer") })).is_none(), "a timer park names its wake");

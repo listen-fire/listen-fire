@@ -212,10 +212,31 @@ async function runWaitsCase(store: RpcStoreBackend, steps: Record<string, unknow
       }
       case 'park': {
         const park = { kind: 'wait', waitId: wait(text(step, 'wait')) };
-        const resumed = typeof step.resumed === 'string' ? { resumed: step.resumed } : {};
-        await store.call('parks.commit', { runId: id(text(step, 'run')), address: text(step, 'address'), state: null, fence: null, park, ...resumed }, z.null());
+        await store.call('parks.commit', { runId: id(text(step, 'run')), address: text(step, 'address'), state: null, fence: null, park }, z.null());
         break;
       }
+      case 'commitSegment': {
+        const parks = items(step, 'parks').map((held) => {
+          const named = field(held, 'wait');
+          const park = typeof named === 'string' ? { kind: 'wait', waitId: wait(named) } : { kind: 'timer', wakeAt: new Date(Date.now() + Number(field(held, 'wakeAt'))).toISOString() };
+          return { address: text(held, 'address'), state: null, park };
+        });
+        const joins = (Array.isArray(step.joins) ? step.joins : []).map((join) => ({ frameAddress: text(join, 'frame'), pending: field(join, 'pending') }));
+        const fence = typeof step.fence === 'string' ? (leases.get(step.fence) ?? assert.fail(`no lease named ${step.fence}`)) : null;
+        const resumed = typeof step.resumed === 'string' ? step.resumed : null;
+        const params = { runId: id(text(step, 'run')), teamId, fence, resumed, joins, parks };
+        if (step.leaseLost === true) await assert.rejects(store.call('parks.commitSegment', params, z.array(Wake)), RunLeaseLost, `${at}: the lease is lost`);
+        else if (step.refused === true) await assert.rejects(store.call('parks.commitSegment', params, z.array(Wake)), `${at}: refused`);
+        else {
+          const wakes = await store.call('parks.commitSegment', params, z.array(Wake));
+          const expected = items(step, 'wakes').map((w) => ({ runId: id(text(w, 'run')), waitId: wait(text(w, 'wait')), address: text(w, 'address') }));
+          assert.deepEqual(wakes.sort(byWait), expected.sort(byWait), `${at}: the wakes`);
+        }
+        break;
+      }
+      case 'pendingJoins':
+        assert.equal(await store.call('joins.hasPendingJoins', { runId: id(text(step, 'run')) }, z.boolean()), step.pending === true, `${at}: pending joins`);
+        break;
       case 'claim': {
         const claimed = await store.call('parks.claimLeaf', { runId: id(text(step, 'run')), address: text(step, 'address'), reason: null }, z.unknown());
         assert.equal(claimed !== null, step.parked !== false, `${at}: the leaf is parked`);

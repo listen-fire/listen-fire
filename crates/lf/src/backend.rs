@@ -24,7 +24,7 @@ use crate::pg_store::PgStore;
 use crate::core;
 use crate::project::Project;
 use crate::store::{
-    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Rerun, Result, RunRow, RunStart, Store,
+    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit, Store,
 };
 use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait, WaitArrivals, WaitWake};
 
@@ -218,6 +218,13 @@ pub trait RunHostStore {
     /// address, a limit's correlation dropped), and the run marked parked.
     /// A wait parked at the address before is parked there no more.
     fn commit_park(&self, park: &Park<'_>) -> Result<()>;
+    /// What a segment held back, as one fenced write at its end: its join
+    /// counts recorded, its parks committed as `commit_park` commits each,
+    /// the leaf it resumed finished (unless it parks there again) and the
+    /// run marked parked when it parked. In the same write, each wait it
+    /// parks whose arrivals are unread, or whose record is gone, gets a
+    /// `wake_await` row; those wakes are the answer.
+    fn commit_segment(&self, commit: &SegmentCommit<'_>) -> Result<Vec<WaitWake>>;
 
     // ── Joins ───────────────────────────────────────────────────────────────
     fn record_join(&self, run_id: &str, frame_address: &str, pending: i64, fence: Option<&str>) -> Result<()>;
@@ -430,6 +437,9 @@ impl RunHostStore for Store {
     }
     fn commit_park(&self, park: &Park<'_>) -> Result<()> {
         Store::commit_park(self, park)
+    }
+    fn commit_segment(&self, commit: &SegmentCommit<'_>) -> Result<Vec<WaitWake>> {
+        Store::commit_segment(self, commit)
     }
 
     fn record_join(&self, run_id: &str, frame_address: &str, pending: i64, fence: Option<&str>) -> Result<()> {

@@ -52,7 +52,7 @@ use crate::json::Js;
 use crate::obj;
 use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind,
-    Release, Rerun, Result, RunRow, RunStart, StoreError, WORK_KINDS, timer_work_key, timer_work_payload,
+    HeldPark, Release, Rerun, Result, RunRow, RunStart, SegmentCommit, StoreError, WORK_KINDS, timer_work_key, timer_work_payload,
 };
 use crate::waits::{DeliveryArrivals, LoggedArrival, NewArrival, Noted, OpenWait, WaitArrivals, WaitWake, delivery_rows, landing_of};
 
@@ -403,6 +403,53 @@ impl PgStore {
         match fence {
             Some(_) => StoreError::LeaseLost { run_id: run_id.to_string() },
             None => StoreError::Invalid(format!("run {run_id} has no trigger_run row to park on")),
+        }
+    }
+
+    /// The run's row held for the transaction under `fence`: a lost lease
+    /// writes nothing.
+    fn hold_run(&self, run_id: &str, fence: Option<&str>) -> Result<()> {
+        if let Some(fence) = fence {
+            let held = self.query_opt(&format!("select id from lf.trigger_run where id = $1::text::uuid and {LEASED_TO}$2::text for update"), &[&run_id, &fence])?;
+            if held.is_none() {
+                return Err(Self::not_written(run_id, Some(fence)));
+            }
+        }
+        Ok(())
+    }
+
+    /// One park's leaf and what wakes it, in the caller's transaction.
+    fn park_unwrapped(&self, run_id: &str, park: &HeldPark<'_>) -> Result<()> {
+        let HeldPark { address, state, ref kind } = *park;
+        let wake_at = match kind {
+            ParkKind::Timer { wake_at } => Some(*wake_at),
+            ParkKind::Await { .. } | ParkKind::Wait { .. } | ParkKind::Limit => None,
+        };
+        self.put_leaf(run_id, address, kind.reason(), wake_at, state, None)?;
+        // Whatever parks here now, no wait parked here before is.
+        self.execute("update lf.wait_row set address = null where run_id = $1::text::uuid and address = $2::text", &[&run_id, &address])?;
+        // A segment that resumed the leaf here and parks here again keeps its notes.
+        self.execute(
+            "update lf.wait_seen s set leaf = null from lf.wait_row w where s.wait_id = w.id and w.run_id = $1::text::uuid and s.leaf = $2::text",
+            &[&run_id, &address],
+        )?;
+        match kind {
+            // The leaf is the truth; the work row only says when to look.
+            ParkKind::Timer { wake_at } => self.enqueue_row("resume_timer", &timer_work_key(run_id), &timer_work_payload(run_id), Some(wake_at), &self.tenant),
+            ParkKind::Await { team_id, adapter_type, correlation_key } => self.correlate(run_id, team_id, address, adapter_type, correlation_key),
+            ParkKind::Wait { wait_id } => {
+                // Takes turns with a log on the wait's record (lf.lock_wait_key).
+                let locked = self.query_opt(
+                    "select lf.lock_wait_key(team_id, adapter_type, edge, key) from lf.wait_row where id = $1::text::uuid and run_id = $2::text::uuid",
+                    &[wait_id, &run_id],
+                )?;
+                if locked.is_none() {
+                    return Err(StoreError::Invalid(format!("run {run_id} has no wait {wait_id}")));
+                }
+                self.execute("update lf.wait_row set address = $2::text where id = $1::text::uuid", &[wait_id, &address])?;
+                Ok(())
+            }
+            ParkKind::Limit => self.drop_correlation(run_id, address),
         }
     }
 
@@ -770,48 +817,60 @@ impl RunHostStore for PgStore {
     /// One transaction; a fenced one holds the run's row for it, so the lease
     /// cannot change hands between the check and the writes.
     fn commit_park(&self, park: &Park<'_>) -> Result<()> {
-        let Park { run_id, address, state, fence, ref kind, resumed } = *park;
+        let Park { run_id, address, state, fence, kind } = *park;
         self.transaction(|| {
-            if let Some(fence) = fence {
-                let held = self.query_opt(&format!("select id from lf.trigger_run where id = $1::text::uuid and {LEASED_TO}$2::text for update"), &[&run_id, &fence])?;
-                if held.is_none() {
-                    return Err(Self::not_written(run_id, Some(fence)));
-                }
+            self.hold_run(run_id, fence)?;
+            self.park_unwrapped(run_id, &HeldPark { address, state, kind })?;
+            self.mark_parked(run_id)
+        })
+    }
+
+    /// As `commit_park`, the segment's held writes in one transaction.
+    fn commit_segment(&self, commit: &SegmentCommit<'_>) -> Result<Vec<WaitWake>> {
+        let SegmentCommit { run_id, team_id, fence, resumed, ref joins, ref parks } = *commit;
+        self.transaction(|| {
+            self.hold_run(run_id, fence)?;
+            // The waits' records' edges locked once, in one order, as a log
+            // locks them, so a commit and a log never wait on each other.
+            let wait_ids: Vec<&str> = parks.iter().filter_map(|park| if let ParkKind::Wait { wait_id } = park.kind { Some(wait_id) } else { None }).collect();
+            let mut edges: Vec<(String, String, String, String)> = self
+                .query(
+                    "select team_id::text, adapter_type, edge, key from lf.wait_row where id::text = any($1::text[]) and run_id = $2::text::uuid",
+                    &[&wait_ids, &run_id],
+                )?
+                .iter()
+                .map(|r| (r.get(0), r.get(1), r.get(2), r.get(3)))
+                .collect();
+            edges.sort_unstable();
+            for (team, adapter_type, edge, key) in &edges {
+                self.execute("select lf.lock_wait_key($1::text::uuid, $2::text, $3::text, $4::text)", &[team, adapter_type, edge, key])?;
             }
-            let wake_at = match kind {
-                ParkKind::Timer { wake_at } => Some(*wake_at),
-                ParkKind::Await { .. } | ParkKind::Wait { .. } | ParkKind::Limit => None,
-            };
-            self.put_leaf(run_id, address, kind.reason(), wake_at, state, fence)?;
-            // Whatever parks here now, no wait parked here before is.
-            self.execute("update lf.wait_row set address = null where run_id = $1::text::uuid and address = $2::text", &[&run_id, &address])?;
-            // A segment that resumed the leaf here and parks here again keeps its notes.
-            self.execute(
-                "update lf.wait_seen s set leaf = null from lf.wait_row w where s.wait_id = w.id and w.run_id = $1::text::uuid and s.leaf = $2::text",
-                &[&run_id, &address],
-            )?;
-            // One that resumed a leaf elsewhere finishes it in this write.
-            if let Some(resumed) = resumed.filter(|resumed| *resumed != address) {
+            for join in joins {
+                self.record_join(run_id, join.frame_address, join.pending, None)?;
+            }
+            for park in parks {
+                self.park_unwrapped(run_id, park)?;
+            }
+            if let Some(resumed) = resumed.filter(|resumed| !parks.iter().any(|park| park.address == *resumed)) {
                 self.execute(&format!("with held as (select 1), {FINISHED}"), &[&run_id, &resumed])?;
             }
-            match kind {
-                // The leaf is the truth; the work row only says when to look.
-                ParkKind::Timer { wake_at } => self.enqueue_row("resume_timer", &timer_work_key(run_id), &timer_work_payload(run_id), Some(wake_at), &self.tenant)?,
-                ParkKind::Await { team_id, adapter_type, correlation_key } => self.correlate(run_id, team_id, address, adapter_type, correlation_key)?,
-                ParkKind::Wait { wait_id } => {
-                    // Takes turns with a log on the wait's record (lf.lock_wait_key).
-                    let locked = self.query_opt(
-                        "select lf.lock_wait_key(team_id, adapter_type, edge, key) from lf.wait_row where id = $1::text::uuid and run_id = $2::text::uuid",
-                        &[wait_id, &run_id],
-                    )?;
-                    if locked.is_none() {
-                        return Err(StoreError::Invalid(format!("run {run_id} has no wait {wait_id}")));
-                    }
-                    self.execute("update lf.wait_row set address = $2::text where id = $1::text::uuid", &[wait_id, &address])?;
-                }
-                ParkKind::Limit => self.drop_correlation(run_id, address)?,
+            if !parks.is_empty() {
+                self.mark_parked(run_id)?;
             }
-            self.mark_parked(run_id)
+            // Read in the write, so an arrival logged before it is read here
+            // and one logged after it finds the wait parked.
+            let mut wakes = Vec::new();
+            for park in parks {
+                let ParkKind::Wait { wait_id } = park.kind else { continue };
+                let unread = self.wait_arrivals(wait_id)?;
+                if unread.gone || !unread.arrivals.is_empty() {
+                    let wake = WaitWake { run_id: run_id.to_string(), wait_id: wait_id.to_string(), address: park.address.to_string() };
+                    let row = crate::waits::wake_row(team_id, &wake);
+                    self.enqueue_row(&row.kind, &row.key, &row.payload, row.due_at.as_deref(), team_id)?;
+                    wakes.push(wake);
+                }
+            }
+            Ok(wakes)
         })
     }
 

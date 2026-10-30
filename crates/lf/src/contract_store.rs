@@ -25,7 +25,7 @@ use crate::backend::{MintCallback, RunHostStore, StoreSpec, open_store};
 use crate::json::Js;
 use crate::obj;
 use crate::slot_server::{Listen, Refusal};
-use crate::store::{ClaimDue, DeliveryQuery, NewWork, Park, Release, Rerun, RunStart, StoreError, iso};
+use crate::store::{ClaimDue, DeliveryQuery, HeldJoin, HeldPark, NewWork, Park, Release, Rerun, RunStart, SegmentCommit, StoreError, iso};
 use crate::store_wire::{Wire, new_delivery, num, opt, park_kind, rows, to_rows};
 use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait};
 
@@ -34,7 +34,7 @@ pub const STORE_METHODS: &[&str] = &[
     "store.open", "runs.start", "runs.requestCancel", "runs.status", "runs.complete", "runs.settle", "runs.markParked", "runs.get",
     "runs.list", "runs.appendTrace", "runs.traceLength", "runs.spent", "runs.addSpend", "runs.resetSpendBaseline", "records.cancelRequest",
     "records.markFailed", "records.closeRun", "callbacks.mint", "callbacks.get", "callbacks.record", "callbacks.markBodyStarted",
-    "callbacks.landed", "callbacks.revokeRun", "parks.putLeaf", "parks.claimLeaf", "parks.finishLeaf", "parks.leaves", "parks.deleteLeaves",
+    "callbacks.landed", "callbacks.revokeRun", "parks.putLeaf", "parks.claimLeaf", "parks.finishLeaf", "parks.leaves", "parks.deleteLeaves", "parks.commitSegment",
     "joins.recordJoin", "joins.decrementJoin", "joins.persistBranchExport", "joins.collectBranchExports", "joins.hasPendingJoins",
     "joins.frames", "joins.deleteFrames", "correlations.correlate", "correlations.correlated", "correlations.ofRun", "correlations.drop",
     "correlations.dropRun", "leases.claim", "leases.renew", "leases.release", "leases.dropRunState", "work.enqueue", "work.claimDue",
@@ -256,8 +256,25 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
         "parks.commit" => {
             let (state, kind) = (p.value("state"), p.value("park"));
             let kind = park_kind(&kind).ok_or_else(|| Failure::Params("park: expected { kind: timer | await | wait | limit, … }".into()))?;
-            store.commit_park(&Park { run_id: p.str("runId")?, address: p.str("address")?, state: &state, fence: p.opt_str("fence")?, kind, resumed: p.opt_str("resumed")? })?;
+            store.commit_park(&Park { run_id: p.str("runId")?, address: p.str("address")?, state: &state, fence: p.opt_str("fence")?, kind })?;
             none
+        }
+        "parks.commitSegment" => {
+            let (joins, parks) = (p.value("joins"), p.value("parks"));
+            let joins = joins
+                .as_array()
+                .and_then(|joins| {
+                    joins.iter().map(|join| Some(HeldJoin { frame_address: join.get("frameAddress")?.as_str()?, pending: join.get("pending").and_then(crate::store_wire::int)? })).collect::<Option<Vec<_>>>()
+                })
+                .ok_or_else(|| Failure::Params("joins: expected a list of { frameAddress, pending }".into()))?;
+            let parks = parks
+                .as_array()
+                .and_then(|parks| {
+                    parks.iter().map(|park| Some(HeldPark { address: park.get("address")?.as_str()?, state: park.get("state")?, kind: park_kind(park.get("park")?)? })).collect::<Option<Vec<_>>>()
+                })
+                .ok_or_else(|| Failure::Params("parks: expected a list of { address, state, park: { kind: timer | await | wait | limit, … } }".into()))?;
+            let commit = SegmentCommit { run_id: p.str("runId")?, team_id: p.str("teamId")?, fence: p.opt_str("fence")?, resumed: p.opt_str("resumed")?, joins, parks };
+            Ok(to_rows(&store.commit_segment(&commit)?))
         }
         "parks.claimLeaf" => Ok(match store.claim_leaf(p.str("runId")?, p.str("address")?, p.opt_str("reason")?)? {
             None => Js::Null,
@@ -491,7 +508,7 @@ mod tests {
 
         let token = store.claim_lease("run-1", 60_000).unwrap().unwrap();
         let wake_at = iso(60_000);
-        let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: Some(&token), kind: ParkKind::Timer { wake_at: &wake_at }, resumed: None };
+        let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: Some(&token), kind: ParkKind::Timer { wake_at: &wake_at } };
         call(&store, "parks.commit", park_params(&park));
         assert_eq!(store.run("run-1").unwrap().unwrap().status, "parked");
         let lost = Park { fence: Some("gone"), ..park };
@@ -559,7 +576,7 @@ mod tests {
         let wait = OpenWait { run_id: "run-1", team_id: "t", adapter_type: "acme", edge: "Comments", key: "thread:c1", since: int(&mark).unwrap() };
         let opened = call(&store, "waits.open", open_wait_params(&wait));
         let wait_id = opened.get("waitId").and_then(Js::as_str).unwrap().to_string();
-        let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait_id }, resumed: None };
+        let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait_id } };
         call(&store, "parks.commit", park_params(&park));
         let wake = obj! { "runId" => Js::str("run-1"), "waitId" => Js::str(&wait_id), "address" => Js::str("s1") };
         assert_eq!(log("k2"), Js::Arr(vec![Js::from(wake)]));

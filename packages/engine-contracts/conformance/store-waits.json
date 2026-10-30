@@ -1,5 +1,5 @@
 {
-  "about": "The store's waits family: the arrival log, wait rows and their newly-matches bits (docs/contracts/store-slot.md, `waits.*`). Held by listen-fire's stores (crates/lf/src/waits.rs runs every case over the SQLite state file, and over Postgres when LF_TEST_PG names one) and by the engine's TypeScript stores. Each case runs on an empty store. A run or team name stands for a fresh id (a uuid) per case; every run named is started before the first step. `team` defaults to \"t\" and `adapter` to \"acme\". Marks and waits are named by `as` and referred to by that name. `at` and `before` are milliseconds from now. Steps: `mark` (waits.mark, kept as `as`); `log` (waits.log of `arrivals`, logged `at`; an arrival whose identity and version its record's edge already logged within the retention is not logged again, and one without an identity is never a repeat; `wakes` the parked waits it answers, in any order; an arrival's `identityIsSeqOf` names a listed arrival whose seq, as bare text, is its identity); `open` (waits.open since the mark `since`, kept as `as`; `same` names an earlier wait it must be); `arrivals` (waits.arrivals: `gone`, and `arrivals` in log order, each checked on the keys it gives, and kept by the name its `as` gives); `note` (waits.note, answering `counts`; `identityOf` names a listed arrival whose identity it notes, `identityIsSeqOf` one whose seq, as bare text, is the identity); `note` may name the `leaf` its segment resumed; `park` (parks.commit with `{ kind: \"wait\", waitId }` at `address`); `claim` (parks.claimLeaf of the leaf at `address`, which must be parked); `finish` (parks.finishLeaf of the leaf at `address`, no fence); `lapse` (leases.claim of the run, as a process does after the one resuming its leaf died: a leaf left resuming is parked again); `deleteLeaves` (parks.deleteLeaves); `drop` (leases.dropRunState); `sweep` (waits.sweep of what was logged before `before`, at most 1000).",
+  "about": "The store's waits family: the arrival log, wait rows and their newly-matches bits (docs/contracts/store-slot.md, `waits.*`). Held by listen-fire's stores (crates/lf/src/waits.rs runs every case over the SQLite state file, and over Postgres when LF_TEST_PG names one) and by the engine's TypeScript stores. Each case runs on an empty store. A run or team name stands for a fresh id (a uuid) per case; every run named is started before the first step. `team` defaults to \"t\" and `adapter` to \"acme\". Marks and waits are named by `as` and referred to by that name. `at` and `before` are milliseconds from now. Steps: `mark` (waits.mark, kept as `as`); `log` (waits.log of `arrivals`, logged `at`; an arrival whose identity and version its record's edge already logged within the retention is not logged again, and one without an identity is never a repeat; `wakes` the parked waits it answers, in any order; an arrival's `identityIsSeqOf` names a listed arrival whose seq, as bare text, is its identity); `open` (waits.open since the mark `since`, kept as `as`; `same` names an earlier wait it must be); `arrivals` (waits.arrivals: `gone`, and `arrivals` in log order, each checked on the keys it gives, and kept by the name its `as` gives); `note` (waits.note, answering `counts`; `identityOf` names a listed arrival whose identity it notes, `identityIsSeqOf` one whose seq, as bare text, is the identity); `note` may name the `leaf` its segment resumed; `park` (parks.commit with `{ kind: \"wait\", waitId }` at `address`); `commitSegment` (parks.commitSegment of the run: `resumed`, `joins` (none when absent) as `{ frame, pending }`, and `parks`, each at its `address` on the wait its `wait` names or, with `wakeAt` (milliseconds from now), a timer; `fence` names a lease; `wakes` the wakes it answers, in any order; `refused`: the store fails it, `leaseLost`: the lease is lost, and either way nothing is written); `pendingJoins` (joins.hasPendingJoins of the run, answering `pending`); `claim` (parks.claimLeaf of the leaf at `address`, which must be parked); `finish` (parks.finishLeaf of the leaf at `address`, no fence); `lapse` (leases.claim of the run, as a process does after the one resuming its leaf died: a leaf left resuming is parked again); `deleteLeaves` (parks.deleteLeaves); `drop` (leases.dropRunState); `sweep` (waits.sweep of what was logged before `before`, at most 1000).",
   "cases": [
     {
       "case": "an arrival logged before its wait opens counts when the mark precedes it",
@@ -289,7 +289,7 @@
       ]
     },
     {
-      "case": "a park elsewhere by a segment that resumed a leaf finishes that leaf in the same write, keeping its notes",
+      "case": "a segment's commit that parks elsewhere finishes the leaf it resumed in the same write, keeping its notes",
       "steps": [
         { "do": "mark", "as": "m0" },
         { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m0" },
@@ -298,7 +298,7 @@
         { "do": "claim", "run": "run-1", "address": "s1" },
         { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": true, "counts": true, "leaf": "s1" },
         { "do": "open", "as": "next", "run": "run-1", "edge": "Approvals", "key": "approvals:c1", "since": "m0" },
-        { "do": "park", "run": "run-1", "wait": "next", "address": "s2", "resumed": "s1" },
+        { "do": "commitSegment", "run": "run-1", "resumed": "s1", "parks": [{ "address": "s2", "wait": "next" }], "wakes": [] },
         { "do": "lapse", "run": "run-1" },
         { "do": "claim", "run": "run-1", "address": "s1", "parked": false },
         { "do": "claim", "run": "run-1", "address": "s2" },
@@ -321,6 +321,90 @@
         { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": true, "counts": true, "leaf": "s1", "fence": "new" },
         { "do": "finish", "run": "run-1", "address": "s1" },
         { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
+      ]
+    },
+    {
+      "case": "a segment's commit keeps its joins, its parks and the end of the leaf it resumed in one write, or none of them",
+      "steps": [
+        { "do": "mark", "as": "m0" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m0" },
+        { "do": "park", "run": "run-1", "wait": "w", "address": "s1" },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1", "version": "1" }], "wakes": [{ "run": "run-1", "wait": "w", "address": "s1" }] },
+        { "do": "claim", "run": "run-1", "address": "s1" },
+        { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": true, "counts": true, "leaf": "s1" },
+        { "do": "open", "as": "next", "run": "run-1", "edge": "Approvals", "key": "approvals:c1", "since": "m0" },
+        { "do": "open", "as": "theirs", "run": "run-2", "edge": "Approvals", "key": "approvals:c2", "since": "m0" },
+        {
+          "do": "commitSegment",
+          "run": "run-1",
+          "resumed": "s1",
+          "joins": [{ "frame": "s3", "pending": 2 }],
+          "parks": [{ "address": "s3.b0.s0", "wait": "next" }, { "address": "s3.b1.s0", "wait": "theirs" }],
+          "refused": true
+        },
+        { "do": "pendingJoins", "run": "run-1", "pending": false },
+        { "do": "lease", "run": "run-1", "as": "dead", "ttlMs": -1000 },
+        { "do": "claim", "run": "run-1", "address": "s3.b0.s0", "parked": false },
+        { "do": "claim", "run": "run-1", "address": "s1" },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "k1", "version": "1" }] },
+        { "do": "lease", "run": "run-1", "as": "live" },
+        { "do": "claim", "run": "run-1", "address": "s1" },
+        { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": true, "counts": true, "leaf": "s1" },
+        {
+          "do": "commitSegment",
+          "run": "run-1",
+          "fence": "dead",
+          "resumed": "s1",
+          "joins": [{ "frame": "s3", "pending": 2 }],
+          "parks": [{ "address": "s3.b0.s0", "wait": "next" }, { "address": "s3.b1.s0", "wakeAt": 3600000 }],
+          "leaseLost": true
+        },
+        { "do": "pendingJoins", "run": "run-1", "pending": false },
+        {
+          "do": "commitSegment",
+          "run": "run-1",
+          "fence": "live",
+          "resumed": "s1",
+          "joins": [{ "frame": "s3", "pending": 2 }],
+          "parks": [{ "address": "s3.b0.s0", "wait": "next" }, { "address": "s3.b1.s0", "wakeAt": 3600000 }],
+          "wakes": []
+        },
+        { "do": "pendingJoins", "run": "run-1", "pending": true },
+        { "do": "claim", "run": "run-1", "address": "s1", "parked": false },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] },
+        { "do": "log", "arrivals": [{ "edge": "Approvals", "key": "approvals:c1", "identity": "a1" }], "wakes": [{ "run": "run-1", "wait": "next", "address": "s3.b0.s0" }] },
+        { "do": "claim", "run": "run-1", "address": "s3.b0.s0" },
+        { "do": "claim", "run": "run-1", "address": "s3.b1.s0" }
+      ]
+    },
+    {
+      "case": "a segment's commit wakes each wait it parks whose arrivals are unread or whose record is gone",
+      "steps": [
+        { "do": "mark", "as": "m0" },
+        { "do": "open", "as": "unread", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m0" },
+        { "do": "open", "as": "judged", "run": "run-1", "edge": "Comments", "key": "thread:c2", "since": "m0" },
+        { "do": "open", "as": "gone", "run": "run-1", "edge": "Comments", "key": "thread:c3", "since": "m0" },
+        { "do": "open", "as": "quiet", "run": "run-1", "edge": "Comments", "key": "thread:c4", "since": "m0" },
+        {
+          "do": "log",
+          "arrivals": [
+            { "edge": "Comments", "key": "thread:c1", "identity": "k1" },
+            { "edge": "Comments", "key": "thread:c2", "identity": "k2" },
+            { "edge": "Comments", "key": "thread:c3", "gone": true }
+          ],
+          "wakes": []
+        },
+        { "do": "note", "wait": "judged", "identity": "k2", "matched": false, "counts": false },
+        {
+          "do": "commitSegment",
+          "run": "run-1",
+          "parks": [{ "address": "s1", "wait": "unread" }, { "address": "s2", "wait": "judged" }, { "address": "s3", "wait": "gone" }, { "address": "s4", "wait": "quiet" }],
+          "wakes": [
+            { "run": "run-1", "wait": "unread", "address": "s1" },
+            { "run": "run-1", "wait": "gone", "address": "s3" }
+          ]
+        },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c4", "identity": "k4" }], "wakes": [{ "run": "run-1", "wait": "quiet", "address": "s4" }] }
       ]
     }
   ]
