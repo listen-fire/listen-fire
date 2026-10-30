@@ -89,3 +89,40 @@ test('listen-fire upgrade leaves the pin where it was while fixes remain for the
   assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.11\.0$/m);
   assert.match(readFileSync(file, 'utf8'), /^crm = connect acme_crm using acme$/m);
 });
+
+// A wait whose WHERE reads a field of a record the run holds: under 0.12 the
+// field was read again at every check; from 0.13 it is read once, when the
+// wait is reached. Nothing to rewrite, so the upgrade lists it and the pin moves.
+const CAPTURING = `import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+function welcome(company: <crm-[:Company]->>) {
+  named = await company-[c:Comments WHERE c.Text == company.Name]->
+}
+
+listen to crm { events: ["company.created"] } fire welcome
+`;
+
+test('listen-fire upgrade lists a wait whose run value is now captured, and still moves the pin', () => {
+  const dir = project();
+  pinned(dir, '0.12.13');
+  const file = join(dir, 'movements', 'companies.mvt');
+  writeFileSync(file, CAPTURING);
+
+  const { code, out } = lf(dir, 'upgrade');
+  assert.equal(code, 0, out);
+  assert.match(
+    out,
+    /^movements\/companies\.mvt:7:17 warning MOV_AWAIT_VALUE_CAPTURED 'company\.Name' in this wait's WHERE is read once, when the wait is reached \(0\.13\); under 0\.12\.13 it was read again at every check, .* against `refresh\(company\)`$/m,
+  );
+  assert.match(out, /lf\.yaml: engine: 0\.13\.\d+(-[\w.]+)? \(was 0\.12\.13\)/);
+  assert.match(out, /1 file\(s\), 0 rewritten, 0 left to change by hand/);
+  assert.equal(readFileSync(file, 'utf8'), CAPTURING);
+  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.13\.\d+(-[\w.]+)?$/m);
+
+  const checked = lf(dir, 'check');
+  assert.equal(checked.code, 0, checked.out);
+  assert.doesNotMatch(checked.out, /MOV_AWAIT_VALUE_CAPTURED/);
+});

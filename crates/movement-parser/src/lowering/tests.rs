@@ -563,7 +563,7 @@ fn a_chain_handed_to_the_lowering_is_bounded_as_the_parser_bounds_it() {
 // ── Captures: what a wait's WHERE borrows from the run ──
 mod captures {
     use super::*;
-    use crate::lowering::captures::{capture_holes, captured_name, with_captured};
+    use crate::lowering::captures::{Scoped, capture, capture_holes, captured_name};
 
     fn lowered(text: &str) -> Expression {
         lower_expression(&tree(text), text).unwrap_or_else(|r| panic!("{text}: {r:?}"))
@@ -578,8 +578,21 @@ mod captures {
         }
     }
 
-    fn holes(text: &str, alias: Option<&str>, bound: &[&str]) -> Vec<String> {
-        capture_holes(&lowered(text), alias, &|n| bound.contains(&n)).iter().map(|h| spell(&h.expression)).collect()
+    /// `run` names what the run holds; `connections`, the connections.
+    fn scope<'a>(run: &'a [&'a str], connections: &'a [&'a str]) -> impl Fn(&str) -> Scoped + 'a {
+        move |n| {
+            if run.contains(&n) {
+                Scoped::Run
+            } else if connections.contains(&n) {
+                Scoped::Connection
+            } else {
+                Scoped::Free
+            }
+        }
+    }
+
+    fn holes(text: &str, alias: Option<&str>, run: &[&str]) -> Vec<String> {
+        capture_holes(&lowered(text), alias, &scope(run, &["crm"])).iter().map(|h| spell(&h.expression)).collect()
     }
 
     #[test]
@@ -599,13 +612,13 @@ mod captures {
         let Expression::Traverse { steps, .. } = walk else { panic!("a walk") };
         let TraversalStep::Edge(step) = &steps[0] else { panic!("an edge step") };
         let filter = step.expression_filter.as_deref().expect("a WHERE");
-        let found = capture_holes(filter, step.alias.as_deref(), &|n| n == "From" || n == "founder");
+        let found = capture_holes(filter, step.alias.as_deref(), &scope(&["From", "founder"], &[]));
         assert_eq!(found.iter().map(|h| spell(&h.expression)).collect::<Vec<_>>(), ["From", "founder.Email"]);
     }
 
     #[test]
     fn a_hole_is_the_largest_part_that_reads_only_the_run_and_a_part_reading_nothing_is_none() {
-        let found = capture_holes(&lowered("r.Count > base + 1 AND r.Kind == \"a\" + \"b\""), Some("r"), &|n| n == "base");
+        let found = capture_holes(&lowered("r.Count > base + 1 AND r.Kind == \"a\" + \"b\""), Some("r"), &scope(&["base"], &[]));
         assert_eq!(found.iter().map(|h| (h.index, h.expression.clone())).collect::<Vec<_>>(), [(0, lowered("base + 1"))]);
     }
 
@@ -621,17 +634,64 @@ mod captures {
     }
 
     #[test]
+    fn a_walk_off_a_connection_or_a_knowledge_graph_query_is_read_at_every_check() {
+        assert_eq!(holes("r.Seen < COUNT(crm-[:People]->)", Some("r"), &["founder"]), Vec::<String>::new());
+        assert_eq!(holes("KG_EXISTS(\"q\", founder.Email)", Some("r"), &["founder"]), ["founder.Email"]);
+        assert_eq!(holes("r.Seen < COUNT(crm-[p:People WHERE p.Email == founder.Email]->)", Some("r"), &["founder"]), ["founder.Email"]);
+    }
+
+    #[test]
+    fn a_run_read_inside_a_nested_walks_where_is_a_hole_and_the_walk_stays_live() {
+        assert_eq!(holes("EXISTS(r-[:Labels WHERE Name == founder.Team]->)", Some("r"), &["founder"]), ["founder.Team"]);
+        assert_eq!(holes("EXISTS(-[l:Labels WHERE l.Name == founder.Team]->)", Some("r"), &["founder"]), ["founder.Team"]);
+    }
+
+    #[test]
+    fn a_walk_off_a_run_record_is_a_hole_unless_its_where_reads_the_arrival() {
+        let captured = capture_holes(&lowered("r.Title == founder-[n:Notes WHERE n.Kind == \"a\"]->.Text"), Some("r"), &scope(&["founder"], &[]));
+        assert_eq!(captured.iter().map(|h| h.expression.clone()).collect::<Vec<_>>(), [lowered("founder-[n:Notes WHERE n.Kind == \"a\"]->.Text")]);
+        assert_eq!(holes("r.Title == founder-[n:Notes WHERE n.Kind == r.Kind]->.Text", Some("r"), &["founder"]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_member_read_off_a_record_is_the_records_field_never_a_variable_of_its_name() {
+        let captured = capture(&lowered("r.Size > founder.limit"), Some("r"), &scope(&["founder", "limit"], &[]));
+        assert_eq!(captured.holes.iter().map(|h| spell(&h.expression)).collect::<Vec<_>>(), ["founder.limit"]);
+        let Expression::Compare { right, .. } = captured.filter else { panic!("a comparison") };
+        assert_eq!(*right, Expression::AliasRef { name: captured_name(0) });
+    }
+
+    #[test]
     fn a_where_with_its_holes_captured_reads_each_from_its_reserved_name() {
-        let filter = lowered("r.From == founder.Email AND r.Size > limit OR r.To == founder.Email");
-        let found = capture_holes(&filter, Some("r"), &|n| n == "founder" || n == "limit");
+        let filter = lowered("r.From == founder.Email AND r.Size > limit OR EXISTS(r-[:Labels WHERE Name == founder.Email]->)");
+        let captured = capture(&filter, Some("r"), &scope(&["founder", "limit"], &[]));
         let read = |i: usize| Expression::AliasRef { name: captured_name(i) };
-        let Expression::Logical { operands, .. } = with_captured(&filter, &found) else { panic!("an OR") };
-        let Expression::Logical { operands: both, .. } = &operands[0] else { panic!("an AND") };
-        let right = |e: &Expression| match e {
-            Expression::Compare { right, .. } => (**right).clone(),
-            other => panic!("a comparison: {other:?}"),
-        };
-        assert_eq!([right(&both[0]), right(&both[1]), right(&operands[1])], [read(0), read(1), read(0)]);
+        assert_eq!(captured.filter, {
+            let mut expected = lowered("r.From == x0 AND r.Size > x1 OR EXISTS(r-[:Labels WHERE Name == x0]->)");
+            rename(&mut expected, &[("x0", read(0)), ("x1", read(1))]);
+            expected
+        });
         assert_eq!(captured_name(3), "\u{0}captured3");
+    }
+
+    /// `e` with each named leaf replaced, wherever it is written.
+    fn rename(e: &mut Expression, names: &[(&str, Expression)]) {
+        let mut json = serde_json::to_value(&*e).unwrap();
+        fn walk(v: &mut Value, names: &[(&str, Value)]) {
+            if let Some(name) = v.get("propertyTypeId").and_then(Value::as_str)
+                && let Some((_, to)) = names.iter().find(|(n, _)| *n == name)
+            {
+                *v = to.clone();
+                return;
+            }
+            match v {
+                Value::Object(map) => map.values_mut().for_each(|v| walk(v, names)),
+                Value::Array(items) => items.iter_mut().for_each(|v| walk(v, names)),
+                _ => {}
+            }
+        }
+        let names: Vec<(&str, Value)> = names.iter().map(|(n, e)| (*n, serde_json::to_value(e).unwrap())).collect();
+        walk(&mut json, &names);
+        *e = serde_json::from_value(json).unwrap();
     }
 }

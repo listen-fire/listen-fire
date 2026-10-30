@@ -15,7 +15,7 @@
 //! - MOV_WAIT_NOT_RESUMABLE
 
 use movement_parser::ast::{DurationLiteral, PathHead, PathRoot, RValue, Span, Statement};
-use movement_parser::lowering::captures::{capture_holes, rooted_reads};
+use movement_parser::lowering::captures::{Scoped, capture_holes, rooted_reads};
 use movement_parser::lowering::expression::{Expression, TraversalStep};
 use movement_parser::stmt::AWAIT_ARRIVALS_WORD;
 use movement_parser::version::{Standing, standing};
@@ -232,9 +232,10 @@ impl Checker<'_> {
     }
 
     /// On a check for an upgrade from before 0.13: each part of the awaited
-    /// hop's WHERE that reads a run record's field, which the wait now reads
-    /// once, when it is reached (`capture_holes`), where the old pin read it
-    /// again at every check. A warning with nothing to rewrite.
+    /// hop's WHERE that reads fields of records the run holds, which the wait
+    /// now reads once, when it is reached (`capture_holes`), where the old pin
+    /// read them again at every check. A warning with nothing to rewrite,
+    /// naming every such field the part reads.
     pub fn report_captured_values(&mut self, head: &PathHead, scope: ScopeId) {
         let Some(pin) = self.upgrading_from else { return };
         if standing(pin, CAPTURED_SINCE) != Standing::OlderKey {
@@ -244,19 +245,36 @@ impl Checker<'_> {
         // A wait on more than one edge is MOV_AWAIT_BARE_WALK's.
         let [TraversalStep::Edge(step)] = steps.as_slice() else { return };
         let Some(filter) = step.expression_filter.as_deref() else { return };
-        let bound = |name: &str| matches!(self.scopes.resolve(scope, name), Resolution::Found(_));
-        let captured: Vec<(String, String)> = capture_holes(filter, step.alias.as_deref(), &bound)
+        let scoped = |name: &str| match self.scopes.resolve(scope, name) {
+            Resolution::Found(id) if self.scopes.symbol(id).kind == SymbolKind::Instance => Scoped::Connection,
+            Resolution::Found(_) => Scoped::Run,
+            _ => Scoped::Free,
+        };
+        let told: Vec<(Vec<String>, Vec<String>)> = capture_holes(filter, step.alias.as_deref(), &scoped)
             .iter()
-            .filter_map(|hole| {
-                let (root, read) = rooted_reads(&hole.expression).into_iter().find(|(root, _)| self.holds_record(root, scope))?;
-                Some((spell_read(read).unwrap_or_else(|| spell_name(root)), spell_name(root)))
+            .map(|hole| {
+                let (mut reads, mut roots) = (Vec::new(), Vec::new());
+                for (root, read) in rooted_reads(&hole.expression).into_iter().filter(|(root, _)| self.holds_record(root, scope)) {
+                    let (read, root) = (spell_read(read).unwrap_or_else(|| spell_name(root)), spell_name(root));
+                    if !reads.contains(&read) {
+                        reads.push(read);
+                    }
+                    if !roots.contains(&root) {
+                        roots.push(root);
+                    }
+                }
+                (reads, roots)
             })
+            .filter(|(reads, _)| !reads.is_empty())
             .collect();
-        for (read, root) in captured {
+        for (reads, roots) in told {
+            let (is, was) = if reads.len() == 1 { ("is", "it was") } else { ("are", "they were") };
+            let reads = joined(reads.iter().map(|r| format!("'{r}'")));
+            let refreshes = joined(roots.iter().map(|r| format!("`refresh({r})`")));
             let mut note = crate::diagnostic::Diagnostic::error(
                 codes::AWAIT_VALUE_CAPTURED,
                 format!(
-                    "'{read}' in this wait's WHERE is read once, when the wait is reached (0.13); under {pin} it was read again at every check, so a change while the run waited changed what the wait accepted. Nothing to rewrite unless the wait should follow the live value: then test it after the wait against `refresh({root})`"
+                    "{reads} in this wait's WHERE {is} read once, when the wait is reached (0.13); under {pin} {was} read again at every check, so a change while the run waited changed what the wait accepted. Nothing to rewrite unless the wait should follow the live value: then test it after the wait against {refreshes}"
                 ),
                 head.span,
             );
@@ -351,6 +369,15 @@ impl Checker<'_> {
             ),
             span,
         );
+    }
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn joined(items: impl Iterator<Item = String>) -> String {
+    let items: Vec<String> = items.collect();
+    match items.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => items.concat(),
     }
 }
 
