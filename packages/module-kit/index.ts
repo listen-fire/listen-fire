@@ -19,6 +19,7 @@ export * from './inbound';
 export * from './stripe_signature';
 export {
   AdapterBadRequestError,
+  CredentialRefusedError,
   DRAINED_PAGE_LIMIT,
   createAdapterProtocolHandler,
   type ProtocolAnswer,

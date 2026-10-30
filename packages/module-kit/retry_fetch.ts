@@ -33,6 +33,10 @@ export interface RetryFetchOptions {
   baseDelayMs?: number;
   /** The ceiling of any one wait the server did not ask for. Default: 8000. */
   maxDelayMs?: number;
+  /** The wait before retrying a 429 that names no Retry-After, for a vendor
+   *  that documents a fixed penalty instead (Airtable: 30 s). Default: the
+   *  exponential wait any other transient failure gets. */
+  rateLimitWaitMs?: number;
   /** The most all waiting may add up to; a Retry-After past what is left
    *  fails at once rather than waiting. Default: 20000. */
   budgetMs?: number;
@@ -134,7 +138,8 @@ export function retryingFetch(fetchImpl: typeof fetch, options: RetryFetchOption
       if (attempt >= attempts) return exhausted(`after ${attempt} attempts (waited ${seconds(waited)})`);
 
       const asked = failure.kind === 'status' ? failure.retryAfterMs : undefined;
-      const wait = asked ?? Math.round(random() * Math.min(cap, base * 2 ** (attempt - 1)));
+      const penalty = failure.kind === 'status' && failure.status === 429 ? options.rateLimitWaitMs : undefined;
+      const wait = asked ?? penalty ?? Math.round(random() * Math.min(cap, base * 2 ** (attempt - 1)));
       if (waited + wait > budget) {
         return exhausted(asked === undefined ? `after ${attempt} attempts (waited ${seconds(waited)})` : `(the server asked to wait ${asked / 1000}s, over the retry budget of ${budget / 1000}s)`);
       }

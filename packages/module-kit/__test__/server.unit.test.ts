@@ -13,7 +13,7 @@ import type { Adapter } from 'module-runtime/adapter';
 
 import { BASE_RUNTIME_CAPABILITIES, isFileValue } from 'engine-contracts';
 import { makeMetaPosition, makeStablePosition } from 'engine-contracts';
-import { AdapterBadRequestError, createAdapterProtocolHandler, DRAINED_PAGE_LIMIT } from '../server';
+import { AdapterBadRequestError, createAdapterProtocolHandler, CredentialRefusedError, DRAINED_PAGE_LIMIT } from '../server';
 
 function baseAdapter(overrides: Partial<Adapter> = {}): Adapter {
   return {
@@ -278,6 +278,23 @@ describe('what an adapter throw answers', () => {
     expect(body.error).toEqual({
       code: 'bad_request',
       message: 'iterateRelatedPage: unrecognised page cursor "x"',
+      retryable: false,
+    });
+  });
+
+  it('a credential the provider refused is credential_refused, not retryable', async () => {
+    const handler = createAdapterProtocolHandler({
+      adapter: baseAdapter({
+        listEntryPoints: async () => {
+          throw new CredentialRefusedError('Airtable refused the access token (HTTP 401): Authentication required');
+        },
+      }),
+    });
+    const { status, body } = await rpc(handler, 'listEntryPoints', {});
+    expect(status).toBe(200);
+    expect(body.error).toEqual({
+      code: 'credential_refused',
+      message: 'Airtable refused the access token (HTTP 401): Authentication required',
       retryable: false,
     });
   });

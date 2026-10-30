@@ -58,6 +58,13 @@ test('503 with Retry-After as an HTTP date is waited until then', async () => {
   expect(c.waits).toEqual([4000]);
 });
 
+test('a 429 naming no Retry-After waits the vendor\'s documented penalty, and its own Retry-After still wins', async () => {
+  const { impl } = script([{ status: 429 }, { status: 429, retryAfter: '2' }, { status: 503 }, { status: 200 }]);
+  const c = clock();
+  await retryingFetch(impl, { ...c, baseDelayMs: 100, rateLimitWaitMs: 30_000, budgetMs: 60_000 })(URL_);
+  expect(c.waits).toEqual([30_000, 2000, 400]);
+});
+
 test('Retry-After on a 500 is not honoured: it is not a rate limit', async () => {
   const { impl } = script([{ status: 500, retryAfter: '9' }, { status: 200 }]);
   const c = clock();

@@ -922,8 +922,9 @@ export async function updateRecord(input: {
   });
 
   // NOT-FOUND contract (3b): a PATCH to a record id Airtable no longer has
-  // returns 404. The client surfaces it as `Error("Airtable Error: 404 ...")`,
-  // so the shared message-token detector maps it to the typed signal — letting
+  // returns 404. The client surfaces it as an `AirtableRequestError` whose
+  // message names the 404, so the shared message-token detector maps it to the
+  // typed signal — letting
   // the engine's bind self-heal re-mint instead of failing opaquely.
   //
   // An empty payload means there is nothing to change: a matched record whose

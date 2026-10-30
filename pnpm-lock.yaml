@@ -188,9 +188,6 @@ importers:
       '@listen-fire/module-kit':
         specifier: workspace:^
         version: link:../../packages/module-kit
-      exponential-backoff:
-        specifier: 3.1.1
-        version: 3.1.1
       lru-cache:
         specifier: 10.4.3
         version: 10.4.3

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { backOff } from 'exponential-backoff';
+import { CredentialRefusedError, RetriesExhaustedError, retryingFetch, type RetryFetchOptions } from 'module-kit';
 
 import { logger } from 'movement-engine/public/log';
 import { Queue } from 'movement-engine/public/adapter-support';
@@ -17,12 +17,33 @@ async function parseJsonResponse(response: Response, serviceName: string): Promi
   }
 }
 
-const RETRY_LIMIT = 5;
-const INITIAL_DELAY = 1 * SECOND;
-const TIME_MULTIPLE = 5;
-const RATE_LIMIT_DELAY = 30 * SECOND;
+// Only a transient failure (429, 5xx, a network error) is sent again, and
+// within a total waiting budget, so a call ends in a named failure rather than
+// an open-ended wait. Airtable documents a 30 s penalty after a 429; the
+// budget holds one of those.
+const RETRY = {
+  attempts: 5,
+  baseDelayMs: 1 * SECOND,
+  maxDelayMs: 8 * SECOND,
+  rateLimitWaitMs: 30 * SECOND,
+  budgetMs: 45 * SECOND,
+} as const;
 
-const TOKEN_REFRESHED = 'TOKEN_REFRESHED';
+/** Airtable answered with a status sending the request again cannot change
+ *  (a 403, a 404, a 422, …). */
+export class AirtableRequestError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'AirtableRequestError';
+  }
+}
+
+async function bodyText(response: Response): Promise<string> {
+  return (await response.text().catch(() => '')).slice(0, 300);
+}
 
 const airtableCredsParser = z.object({
   accessToken: z.string(),
@@ -231,10 +252,14 @@ class AirtableAPIClient {
   private refreshPromise: Promise<void> | null = null;
   private refreshedAt: Date | null = null;
 
-  constructor(input: { tokens: AirtableTokens; baseUrl?: string; fetch?: typeof fetch }) {
+  constructor(input: { tokens: AirtableTokens; baseUrl?: string; fetch?: typeof fetch; retry?: Pick<RetryFetchOptions, 'sleep' | 'random'> }) {
     this.tokens = input.tokens;
     this.baseUrl = input.baseUrl ?? 'https://api.airtable.com';
-    this.fetchImpl = input.fetch ?? fetch;
+    this.fetchImpl = retryingFetch(input.fetch ?? fetch, {
+      ...RETRY,
+      ...input.retry,
+      onRetry: ({ attempt, of, waitMs, because }) => logger.info(`Retrying Airtable request in ${waitMs / SECOND}s (attempt ${attempt} of ${of}): ${because}`),
+    });
   }
 
   private async handleTokenRefresh() {
@@ -255,6 +280,19 @@ class AirtableAPIClient {
 
     await this.refreshPromise;
     logger.info('[AIRTABLE] REFRESH COMPLETED', this.refreshedAt);
+  }
+
+  /** Airtable refused `refused`: the token a second try would send, when a
+   *  refresh (this call's, or one already under way) produced a different
+   *  one. A refresh runs at most once per five minutes across this client. */
+  private async tokenAfterRefusal(refused: string): Promise<string | undefined> {
+    if (this.refreshPromise) {
+      await this.refreshPromise;
+    } else if (!this.refreshedAt || Date.now() > this.refreshedAt.getTime() + 5 * MINUTE) {
+      await this.handleTokenRefresh();
+    }
+    const token = await this.tokens.accessToken();
+    return token === refused ? undefined : token;
   }
 
   private async fetch<T = unknown, U = unknown>({
@@ -280,95 +318,60 @@ class AirtableAPIClient {
 
     logger.info(url.toString());
 
+    const serializedBody = body ? JSON.stringify(body) : formData;
+    if (body && (method === 'POST' || method === 'PATCH')) {
+      logger.info(`[Airtable] ${method} ${url.pathname} body: ${serializedBody}`);
+    }
+    const send = async (token: string): Promise<Response> => {
+      const headers: Record<string, string> = { Authorization: 'Bearer ' + token };
+      if (body) {
+        headers['Content-Type'] = 'application/json';
+      }
+      try {
+        return await this.fetchImpl(url, { method, headers, body: serializedBody });
+      } catch (e) {
+        if (e instanceof RetriesExhaustedError) {
+          throw new Error(`Airtable ${method} ${url.pathname} failed: ${e.message}`, { cause: e });
+        }
+        throw e;
+      }
+    };
+
     return this.rateLimitQueue.enqueue(async () => {
-      return backOff(
-        async (): Promise<T> => {
-          const headers: Record<string, string> = {
-            Authorization: 'Bearer ' + (await this.tokens.accessToken()),
-          };
-          if (body) {
-            headers['Content-Type'] = 'application/json';
-          }
+      let token = await this.tokens.accessToken();
+      let response = await send(token);
+      if (response.status === 401) {
+        const refreshed = await this.tokenAfterRefusal(token);
+        if (refreshed !== undefined) {
+          token = refreshed;
+          response = await send(token);
+        }
+      }
 
-          const serializedBody = body ? JSON.stringify(body) : formData;
-          if (body && (method === 'POST' || method === 'PATCH')) {
-            logger.info(`[Airtable] ${method} ${url.pathname} body: ${serializedBody}`);
-          }
-          const response = await this.fetchImpl(url, {
-            method,
-            headers,
-            body: serializedBody,
-          });
+      if (response.status === 401) {
+        throw new CredentialRefusedError(
+          `Airtable refused the access token (HTTP 401) to ${method} ${url.pathname}: ${await bodyText(response)}. Reconnect the Airtable credential, or replace its access_token.`,
+        );
+      }
+      if (response.status >= 400) {
+        logger.info({ status: response.status, refreshedAt: this.refreshedAt });
+        throw new AirtableRequestError(
+          response.status,
+          `Airtable answered HTTP ${response.status} (${response.statusText}) to ${method} ${url.pathname}: ${await bodyText(response)}`,
+        );
+      }
 
-          if (response.status === 401) {
-            if (
-              !this.refreshedAt ||
-              Date.now() > this.refreshedAt.getTime() + 5 * MINUTE // Don't spam refresh
-            ) {
-              await this.handleTokenRefresh();
-              throw new Error(TOKEN_REFRESHED);
-            }
-            if (this.refreshPromise) {
-              await this.refreshPromise;
-            }
-          }
+      if (responseValidator) {
+        const json = await parseJsonResponse(response, 'Airtable');
+        try {
+          return responseValidator.parse(json);
+        } catch (e) {
+          logger.error(json);
+          throw e;
+        }
+      }
 
-          if (response.status >= 400) {
-            logger.info({ status: response.status, refreshedAt: this.refreshedAt });
-            let text;
-            try {
-              text = await response.text();
-            } catch {
-              // ignore
-            }
-            throw new Error(`Airtable Error: ${response.status} (${response.statusText}): ${text}`);
-          }
-
-          if (responseValidator) {
-            const json = await parseJsonResponse(response, 'Airtable');
-            try {
-              return responseValidator.parse(json);
-            } catch (e) {
-              logger.error(json);
-              throw e;
-            }
-          }
-
-          return null as T;
-        },
-        {
-          jitter: 'none',
-          numOfAttempts: RETRY_LIMIT,
-          startingDelay: INITIAL_DELAY,
-          timeMultiple: TIME_MULTIPLE, // 0s, 1s, 4s, 16s, 64s
-          retry: async (e, attempt) => {
-            if (e instanceof Error && e.message === TOKEN_REFRESHED && attempt < RETRY_LIMIT) {
-              return true;
-            }
-
-            if (e instanceof Error && e.message.includes('429')) {
-              // rate limit
-              // extra delay to lower the odds of hitting the rate limit again
-              logger.info(
-                `Hit rate limit, waiting an additional ${RATE_LIMIT_DELAY / SECOND} seconds`,
-              );
-              await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_DELAY));
-            }
-
-            if (attempt < RETRY_LIMIT) {
-              logger.info(
-                `Retrying Airtable query in ${
-                  (INITIAL_DELAY / SECOND) * TIME_MULTIPLE ** (attempt - 1)
-                } seconds`,
-                {
-                  error: e,
-                },
-              );
-            }
-            return true;
-          },
-        },
-      );
+      return null as T;
     }) as Promise<T>;
   }
 

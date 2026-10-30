@@ -34,7 +34,7 @@
 //
 // Dependency-light by design: Node `http` types only, no express.
 
-import { fileDescriptorOf, fileValueOf, MANIFEST_PROTOCOL_VERSION, METHODS, PROTOCOL_VERSION, protocolMinorOf, RpcRequest } from 'engine-contracts';
+import { CREDENTIAL_REFUSED_CODE, fileDescriptorOf, fileValueOf, MANIFEST_PROTOCOL_VERSION, METHODS, PROTOCOL_VERSION, protocolMinorOf, RpcRequest } from 'engine-contracts';
 
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 import type { z } from 'zod';
@@ -75,6 +75,20 @@ export class AdapterBadRequestError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'AdapterBadRequestError';
+  }
+}
+
+/**
+ * Thrown by an adapter served through this kit when the provider refused the
+ * request's credential (an expired, revoked or wrong token). Answers
+ * `credential_refused` (not retryable), on which the calling host refreshes
+ * the credential and retries the call once, as the protocol says; asking again
+ * with the same token cannot succeed.
+ */
+export class CredentialRefusedError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'CredentialRefusedError';
   }
 }
 
@@ -395,6 +409,7 @@ function wireFiles(value: unknown): unknown {
  *  as a structured envelope, not a 500). */
 export function errorAnswer(method: string, err: unknown): RpcResponseShape {
   if (err instanceof AdapterBadRequestError) return errorEnvelope('bad_request', `${method}: ${err.message}`, false);
+  if (err instanceof CredentialRefusedError) return errorEnvelope(CREDENTIAL_REFUSED_CODE, err.message, false);
   return errorEnvelope('adapter_error', err instanceof Error ? err.message : String(err), true);
 }
 
