@@ -74,6 +74,8 @@ pub struct KnownModule {
 pub fn known_modules(project: &Project) -> Result<Vec<KnownModule>, String> {
     let credentials = Secrets::open(project, &process_env())?.into_credentials();
     let installed = scan_externals(project)?;
+    let bundled = bundled_packages();
+    let described = |module: &str| bundled.iter().find(|b| b.reference == module).map(|b| b.description.as_str());
     let mut modules = Vec::new();
     for external in &installed {
         let name = &external.manifest.name;
@@ -89,18 +91,20 @@ pub fn known_modules(project: &Project) -> Result<Vec<KnownModule>, String> {
         };
         let users: Vec<&str> = credentials.iter().filter(|c| c.external == *name && c.binding != Binding::Install).map(|c| c.name.as_str()).collect();
         let users_text = if users.is_empty() { "none".to_string() } else { users.join(", ") };
-        modules.push(KnownModule {
-            line: format!("{name}  installed ({how}); {install_text}; credentials: {users_text}"),
-            facts: obj! {
-                "name" => Js::str(name),
-                "kind" => Js::str("external"),
-                "state" => Js::str("installed"),
-                "how" => Js::str(&how),
-                "installSetUp" => Js::Bool(install.is_some()),
-                "install" => install.map_or(Js::Null, |i| Js::str(&i.name)),
-                "credentials" => Js::strings(users),
-            },
-        });
+        let description = external.manifest.module.as_deref().and_then(described);
+        let mut facts = obj! {
+            "name" => Js::str(name),
+            "kind" => Js::str("external"),
+            "state" => Js::str("installed"),
+            "how" => Js::str(&how),
+            "installSetUp" => Js::Bool(install.is_some()),
+            "install" => install.map_or(Js::Null, |i| Js::str(&i.name)),
+            "credentials" => Js::strings(users),
+        };
+        if let Some(description) = description {
+            facts.insert("description".into(), Js::str(description));
+        }
+        modules.push(KnownModule { line: format!("{name}  installed ({how}); {install_text}; credentials: {users_text}{}", with_description(description)), facts });
     }
     let core_processes = crate::externals::core_modules_in(&project.externals_dir)?;
     for module in crate::core::BUILTIN.iter().chain(&core_processes) {
@@ -127,24 +131,68 @@ pub fn known_modules(project: &Project) -> Result<Vec<KnownModule>, String> {
     let installed_modules: BTreeSet<&str> = installed.iter().filter_map(|e| e.manifest.module.as_deref()).collect();
     for name in module_packages(&project.root) {
         if !installed_modules.contains(name.as_str()) {
-            modules.push(KnownModule {
-                line: format!("{name}  not installed (listen-fire connect {name})"),
-                facts: obj! { "name" => Js::str(&name), "kind" => Js::str("package"), "state" => Js::str("not installed") },
-            });
+            let description = described(&name);
+            let mut facts = obj! { "name" => Js::str(&name), "kind" => Js::str("package"), "state" => Js::str("not installed"), "bundled" => Js::Bool(description.is_some()) };
+            if let Some(description) = description {
+                facts.insert("description".into(), Js::str(description));
+            }
+            let line = match description {
+                Some(description) => format!("{name}  not installed - {description}"),
+                None => format!("{name}  not installed (listen-fire connect {name})"),
+            };
+            modules.push(KnownModule { line, facts });
         }
     }
     Ok(modules)
 }
 
-/// The `@lf/*` packages in the project's node_modules.
-pub fn module_packages(root: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(root.join("node_modules").join("@lf")) else { return Vec::new() };
-    let mut names: Vec<String> = entries
+fn with_description(description: Option<&str>) -> String {
+    description.map_or_else(String::new, |d| format!(" - {d}"))
+}
+
+/// A module this release bundles, which `listen-fire connect <reference>` installs.
+pub struct BundledModule {
+    pub reference: String,
+    /// The first sentence of its package's description.
+    pub description: String,
+}
+
+/// The adapter and plugin modules in the release's bundle (`@lf/<folder>`). The
+/// bundle's slot modules (a folder with an `lf-external.yaml`) are installed by
+/// copying that file, and the built-in core modules need no install, so
+/// neither is one `connect @lf/<folder>` installs.
+pub fn bundled_packages() -> Vec<BundledModule> {
+    let Some(root) = crate::externals::bundled_modules_root() else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(&root) else { return Vec::new() };
+    let mut modules: Vec<BundledModule> = entries
         .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir() || t.is_symlink()))
-        .map(|e| format!("@lf/{}", e.file_name().to_string_lossy()))
+        .filter(|e| !e.path().join(EXTERNAL_MANIFEST).exists())
+        .filter_map(|e| {
+            let reference = format!("@lf/{}", e.file_name().to_string_lossy());
+            let package = Js::parse(&std::fs::read(e.path().join("package.json")).ok()?).ok()?;
+            let description = package.get("description")?.as_str()?;
+            let first = description.split_once(". ").map_or(description, |(first, _)| first).trim_end_matches('.');
+            (crate::core::builtin(&reference).is_none()).then(|| BundledModule { reference, description: first.to_string() })
+        })
         .collect();
+    modules.sort_by(|a, b| a.reference.cmp(&b.reference));
+    modules
+}
+
+/// The `@lf/*` modules `connect` can install here: the release's bundled ones
+/// and the packages in the project's node_modules.
+pub fn module_packages(root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = bundled_packages().into_iter().map(|b| b.reference).collect();
+    if let Ok(entries) = std::fs::read_dir(root.join("node_modules").join("@lf")) {
+        names.extend(
+            entries
+                .filter_map(Result::ok)
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir() || t.is_symlink()))
+                .map(|e| format!("@lf/{}", e.file_name().to_string_lossy())),
+        );
+    }
     names.sort();
+    names.dedup();
     names
 }
 
@@ -223,22 +271,111 @@ pub struct ConnectOptions<'a> {
     /// How the first sign-in goes back from the provider; None (`--yes`) asks
     /// nothing more than the setup does.
     pub sign_in: Option<&'a crate::credential_cmd::RedirectChoice>,
+    /// `--yes`: nothing is asked. An answer comes from a flag, else from its
+    /// default, else the command fails naming the flag that gives it.
+    pub yes: bool,
+    pub given: Given<'a>,
+}
+
+/// The answers the command line gives, which a question is then not asked.
+#[derive(Default)]
+pub struct Given<'a> {
+    /// `--server-secret`: the secret a separately-run module's server checks.
+    pub server_secret: Option<&'a str>,
+    /// `--webhook-secret`: the secret its webhooks are signed with.
+    pub webhook_secret: Option<&'a str>,
+    /// `--client-id`, `--client-secret`, `--redirect-port`: the OAuth app at the provider.
+    pub client_id: Option<&'a str>,
+    pub client_secret: Option<&'a str>,
+    pub redirect_port: Option<&'a str>,
+    /// `--setting <name>=<value>`: a setting the module declares.
+    pub settings: &'a [(String, String)],
+}
+
+impl Given<'_> {
+    fn setting(&self, name: &str) -> Option<&str> {
+        self.settings.iter().rev().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+    }
+
+    /// The given settings the module does not declare, as a refusal.
+    fn unknown_settings<'n>(&self, module: &str, declared: impl Iterator<Item = &'n str>) -> Result<(), String> {
+        let declared: Vec<&str> = declared.collect();
+        match self.settings.iter().find(|(k, _)| !declared.contains(&k.as_str())) {
+            None => Ok(()),
+            Some((name, _)) if declared.is_empty() => Err(format!("--setting {name}: {module} declares no settings")),
+            Some((name, _)) => Err(format!("--setting {name}: {module} has no such setting (it has: {})", declared.join(", "))),
+        }
+    }
+}
+
+/// One question the setup has: what is asked, and the flag that answers it.
+struct Question<'a> {
+    text: String,
+    /// The flag with its placeholder, as a refusal names it (`--client-id <id>`).
+    flag: String,
+    given: Option<&'a str>,
+    ask: Ask<'a>,
+}
+
+/// Where each answer of a setup comes from: its flag, else (`--yes`) its
+/// default, else the person at the terminal. Under `--yes` an answer with none
+/// of these is collected, so one refusal names every flag still needed.
+pub struct Interview<'p> {
+    pub prompter: &'p mut Prompter,
+    yes: bool,
+    missing: Vec<String>,
+}
+
+impl<'p> Interview<'p> {
+    pub fn new(prompter: &'p mut Prompter, yes: bool) -> Interview<'p> {
+        Interview { prompter, yes, missing: Vec::new() }
+    }
+
+    async fn answer(&mut self, question: Question<'_>) -> Result<String, String> {
+        if let Some(given) = question.given {
+            return Ok(given.to_string());
+        }
+        if !self.yes {
+            return self.prompter.ask(&question.text, Ask { flag: Some(&question.flag), ..question.ask }).await;
+        }
+        match (question.ask.default, question.ask.optional) {
+            (Some(default), _) => Ok(default.to_string()),
+            (None, true) => Ok(String::new()),
+            (None, false) => {
+                self.missing.push(question.flag);
+                Ok(String::new())
+            }
+        }
+    }
+
+    /// Refuse, writing nothing, if a question went without an answer.
+    fn finish(&mut self, module: &str) -> Result<(), String> {
+        if self.missing.is_empty() {
+            return Ok(());
+        }
+        Err(format!(
+            "connect {module} --yes asks nothing, so it needs {} (nothing was written)",
+            self.missing.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(" and ")
+        ))
+    }
 }
 
 pub async fn connect_module(project: &Project, reference: &str, prompter: &mut Prompter, options: &ConnectOptions<'_>) -> Result<(), EntryError> {
-    let url = options.url;
+    let mut interview = Interview::new(prompter, options.yes);
     if let Some(module) = crate::core::builtin(reference) {
-        return connect_core(project, module, prompter).await;
+        return connect_core(project, module, &mut interview, options).await;
     }
     if let Some(module) = crate::externals::core_modules_in(&project.externals_dir)?.into_iter().find(|m| m.name == reference) {
-        return connect_core(project, &module, prompter).await;
+        return connect_core(project, &module, &mut interview, options).await;
     }
     let secrets = Secrets::open(project, &process_env())?;
     let (external, created) = match find_external(project, reference)? {
         Some(found) => (found, false),
-        None => (install_external(project, reference, prompter, url).await?, true),
+        None => (install_external(project, reference, &mut interview, options.url).await?, true),
     };
-    let outcome = set_up(project, &external, &secrets, prompter, options).await;
+    // "installed" is said once the setup has written, never before: a setup
+    // that is refused removes the folder it made.
+    let outcome = set_up(project, &external, &secrets, &mut interview, options, created.then_some(reference)).await;
     match outcome {
         Err(message) => {
             if created {
@@ -250,7 +387,7 @@ pub async fn connect_module(project: &Project, reference: &str, prompter: &mut P
         // read: one that answers with plugins is a plugin external.
         Ok(facts) if created && facts.answer.get("plugins").is_some() => Ok(mark_plugin(&external)?),
         Ok(facts) => match options.sign_in {
-            Some(redirect) if expects_one_sign_in(&facts) => offer_sign_in(project, &external.manifest.name, redirect, prompter).await,
+            Some(redirect) if expects_one_sign_in(&facts) => offer_sign_in(project, &external.manifest.name, redirect, interview.prompter).await,
             _ => Ok(()),
         },
     }
@@ -270,7 +407,7 @@ fn oauth_app_wanted(declarations: &[Declaration], fields: &[(String, String)], o
     let given = |flag: Option<&str>| flag.is_some_and(|url| !url.is_empty());
     let has_app = fields.iter().any(|(k, v)| k == CLIENT_ID_FIELD && !v.is_empty());
     let only_oauth = declarations.iter().all(|d| d.oauth2().is_some());
-    if only_oauth || has_app || given(options.oauth_authorize_url) || given(options.oauth_token_url) {
+    if only_oauth || has_app || given(options.oauth_authorize_url) || given(options.oauth_token_url) || given(options.given.client_id) {
         return Some(true);
     }
     match options.sign_in {
@@ -297,9 +434,12 @@ fn mark_plugin(external: &External) -> Result<(), String> {
     std::fs::write(&path, marked).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-async fn set_up(project: &Project, external: &External, secrets: &Secrets, prompter: &mut Prompter, options: &ConnectOptions<'_>) -> Result<ManifestFacts, EntryError> {
+/// `installing`: the reference an install of this external was made from, to say so once the entry is written.
+async fn set_up(project: &Project, external: &External, secrets: &Secrets, interview: &mut Interview<'_>, options: &ConnectOptions<'_>, installing: Option<&str>) -> Result<ManifestFacts, EntryError> {
     let credentials = secrets.credentials();
     let name = &external.manifest.name;
+    // What the person typed, for a refusal to name.
+    let label = installing.unwrap_or(name);
     let existing = install_of(credentials, name).filter(|c| !matches!(c.binding, Binding::Credential(_)));
     if let Some(existing) = existing
         && (existing.origin.slot_ref.is_none() || !existing.origin.env_fields.is_empty())
@@ -317,9 +457,16 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
     // The server secret is needed to read the manifest of a module that checks it.
     if let Some(auth) = &external.manifest.auth {
         let now = current(&fields, &auth.field);
-        let question = format!("the secret {name}'s server checks (field \"{}\")", auth.field);
-        let answer = prompter.ask(&question, Ask { secret: true, default: now.as_deref(), ..Ask::default() }).await?;
+        let question = Question {
+            text: format!("the secret {name}'s server checks (field \"{}\")", auth.field),
+            flag: "--server-secret <secret>".into(),
+            given: options.given.server_secret,
+            ask: Ask { secret: true, default: now.as_deref(), ..Ask::default() },
+        };
+        let answer = interview.answer(question).await?;
         put(&mut fields, &auth.field, answer);
+        // The manifest below is read with it.
+        interview.finish(label)?;
     }
     // Before the manifest is read: the module is started with its base URL.
     let overrides = [
@@ -339,7 +486,7 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
         }
     }
     if let Some(url) = current(&fields, BASE_URL_OVERRIDE_FIELD) {
-        prompter.print(&format!("{name} reaches its provider at {url} (listen-fire connect {name} --base-url '' goes back to the provider's own)"));
+        interview.prompter.print(&format!("{name} reaches its provider at {url} (listen-fire connect {name} --base-url '' goes back to the provider's own)"));
     }
     let install_name = match existing {
         Some(existing) => existing.name.clone(),
@@ -356,16 +503,25 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
     let facts = read_manifest(project, external, Some(&provisional)).await?;
 
     // The module's declared settings (its construction arguments), sent on each call.
-    for setting in facts.answer.get("settings").and_then(Js::as_array).into_iter().flatten() {
+    let declared_settings = facts.answer.get("settings").and_then(Js::as_array).unwrap_or_default();
+    options.given.unknown_settings(name, declared_settings.iter().filter_map(|s| s.get("name").and_then(Js::as_str)))?;
+    for setting in declared_settings {
         let Some(field) = setting.get("name").and_then(Js::as_str) else { continue };
         let label = setting.get("label").and_then(Js::as_str).unwrap_or(field);
         let ask = Ask {
             secret: setting.get("secret") == Some(&Js::Bool(true)),
             optional: setting.get("optional") == Some(&Js::Bool(true)),
             default: None,
+            flag: None,
         };
         let now = current(&fields, field);
-        let answer = prompter.ask(&format!("{label} (setting \"{field}\")"), Ask { default: now.as_deref(), ..ask }).await?;
+        let question = Question {
+            text: format!("{label} (setting \"{field}\")"),
+            flag: format!("--setting {field}=<value>"),
+            given: options.given.setting(field),
+            ask: Ask { default: now.as_deref(), ..ask },
+        };
+        let answer = interview.answer(question).await?;
         if answer.is_empty() {
             fields.retain(|(k, _)| k != field);
         } else {
@@ -374,10 +530,19 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
     }
 
     if let Some(field) = inbound_secret_field(external, &facts.answer) {
+        let held = current(&fields, &field);
         let generated = hex(&random_bytes(24)?);
-        let default = current(&fields, &field).unwrap_or(generated);
-        let question = format!("the secret {name}'s webhooks are signed with (field \"{field}\"; enter generates one)");
-        let answer = prompter.ask(&question, Ask { secret: true, default: Some(&default), ..Ask::default() }).await?;
+        let default = held.clone().unwrap_or(generated);
+        let question = Question {
+            text: format!("the secret {name}'s webhooks are signed with (field \"{field}\"; enter generates one)"),
+            flag: "--webhook-secret <secret>".into(),
+            given: options.given.webhook_secret,
+            ask: Ask { secret: true, default: Some(&default), ..Ask::default() },
+        };
+        let answer = interview.answer(question).await?;
+        if options.yes && held.is_none() && options.given.webhook_secret.is_none() {
+            interview.prompter.print(&format!("{name}: generated the secret its webhooks are signed with (field \"{field}\"); --webhook-secret <secret> gives the one the sender uses"));
+        }
         put(&mut fields, &field, answer);
     }
 
@@ -388,21 +553,33 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
         Some(wanted) => wanted,
         None => {
             let question = format!("{name}'s users may also sign in with OAuth 2 ({}); set up your OAuth app at the provider now?", names.join(", "));
-            prompter.confirm_no(&question).await?
+            interview.prompter.confirm_no(&question).await?
         }
     };
     if !oauth2.is_empty() && !wanted {
-        prompter.print(&format!(
+        interview.prompter.print(&format!(
             "{name}: no OAuth app, so its OAuth sign-in ({}) is off; listen-fire connect {name} again sets one up",
             names.join(", ")
         ));
     } else if !oauth2.is_empty() {
-        prompter.print(&format!("{name} signs users in with OAuth 2 ({}): your app at the provider, once for every credential", names.join(", ")));
-        let client_id = prompter.ask("your app's client id", Ask { default: current(&fields, CLIENT_ID_FIELD).as_deref(), ..Ask::default() }).await?;
+        interview.prompter.print(&format!("{name} signs users in with OAuth 2 ({}): your app at the provider, once for every credential", names.join(", ")));
+        let client_id = interview
+            .answer(Question {
+                text: "your app's client id".into(),
+                flag: "--client-id <your OAuth app's client id>".into(),
+                given: options.given.client_id,
+                ask: Ask { default: current(&fields, CLIENT_ID_FIELD).as_deref(), ..Ask::default() },
+            })
+            .await?;
         put(&mut fields, CLIENT_ID_FIELD, client_id);
         let now_secret = current(&fields, CLIENT_SECRET_FIELD);
-        let secret = prompter
-            .ask("your app's client secret (empty for a public client)", Ask { secret: true, optional: true, default: now_secret.as_deref() })
+        let secret = interview
+            .answer(Question {
+                text: "your app's client secret (empty for a public client)".into(),
+                flag: "--client-secret <secret>".into(),
+                given: options.given.client_secret,
+                ask: Ask { secret: true, optional: true, default: now_secret.as_deref(), ..Ask::default() },
+            })
             .await?;
         if secret.is_empty() {
             fields.retain(|(k, _)| k != CLIENT_SECRET_FIELD);
@@ -411,26 +588,35 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
             put(&mut fields, CLIENT_SECRET_FIELD, secret);
         }
         let registered = fields.iter().find(|(k, _)| k == REDIRECT_PORT_FIELD).map(|(_, v)| v.clone()).unwrap_or_else(|| "0".into());
-        let port = prompter.ask("the loopback port your app registered for its redirect (0: any port)", Ask { default: Some(&registered), ..Ask::default() }).await?;
+        let port = interview
+            .answer(Question {
+                text: "the loopback port your app registered for its redirect (0: any port)".into(),
+                flag: "--redirect-port <port>".into(),
+                given: options.given.redirect_port,
+                ask: Ask { default: Some(&registered), ..Ask::default() },
+            })
+            .await?;
+        interview.finish(label)?;
         let number = port.parse::<u32>().ok().filter(|p| *p <= 65535 && port.chars().all(|c| c.is_ascii_digit()));
         let Some(number) = number else { return Err(format!("the redirect port must be a number from 0 to 65535, not \"{port}\"").into()) };
         put(&mut fields, REDIRECT_PORT_FIELD, port.clone());
-        prompter.print("register these redirect URIs with the provider:");
+        interview.prompter.print("register these redirect URIs with the provider:");
         if number == 0 {
-            prompter.print(&format!(
+            interview.prompter.print(&format!(
                 "  {}   (listen-fire credential add; a provider that matches the port exactly needs a fixed one: listen-fire connect {name} again)",
                 loopback_redirect_uri(0).replace(":0", ":<any port>")
             ));
         } else {
-            prompter.print(&format!("  {}   (listen-fire credential add, and --headless)", loopback_redirect_uri(number as u16)));
+            interview.prompter.print(&format!("  {}   (listen-fire credential add, and --headless)", loopback_redirect_uri(number as u16)));
         }
         if let Some(relay) = oauth_redirect_uri(project)? {
-            prompter.print(&format!("  {relay}   (listen-fire credential add --public, forwarded on to listen-fire serve's {PUBLIC_CALLBACK_PATH})"));
+            interview.prompter.print(&format!("  {relay}   (listen-fire credential add --public, forwarded on to listen-fire serve's {PUBLIC_CALLBACK_PATH})"));
         } else if let Some(public) = public_url(project) {
-            prompter.print(&format!("  {}   (listen-fire credential add --public, through listen-fire serve)", public_redirect_uri(&public)));
+            interview.prompter.print(&format!("  {}   (listen-fire credential add --public, through listen-fire serve)", public_redirect_uri(&public)));
         }
     }
 
+    interview.finish(label)?;
     let binding = existing.map(|e| e.binding.clone()).unwrap_or(Binding::Install);
     let content = entry_content(name, &binding, &fields);
     // A refresh beside this keeps its tokens: they are not an install's.
@@ -439,21 +625,24 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
         Ok(spread(kept, content.clone()))
     };
     secrets.store().replace(&install_name, &next).await?;
-    prompter.print(&format!("connected {name}: its install is \"{install_name}\" in {}", secrets.store().label()));
+    if let Some(reference) = installing {
+        interview.prompter.print(&format!("installed {reference} as externals/{name}"));
+    }
+    interview.prompter.print(&format!("connected {name}: its install is \"{install_name}\" in {}", secrets.store().label()));
     if facts.declarations.iter().all(crate::catalog::optional_credential) {
         if !facts.declarations.is_empty() {
-            prompter.print(&format!("{name} works without a user credential; what needs one asks for it by name: listen-fire credential add --module {name} <name>"));
+            interview.prompter.print(&format!("{name} works without a user credential; what needs one asks for it by name: listen-fire credential add --module {name} <name>"));
         }
     } else if !(options.sign_in.is_some() && expects_one_sign_in(&facts)) {
         // The offer to sign in now follows, and says it if declined.
-        prompter.print(&format!("next, a user credential: listen-fire credential add --module {name} <name>"));
+        interview.prompter.print(&format!("next, a user credential: listen-fire credential add --module {name} <name>"));
     }
     Ok(facts)
 }
 
 /// A built-in core module (crate::core): its settings asked for and written
 /// to its install entry, then its setup run (a store's schema created).
-async fn connect_core(project: &Project, module: &crate::core::CoreModule, prompter: &mut Prompter) -> Result<(), EntryError> {
+async fn connect_core(project: &Project, module: &crate::core::CoreModule, interview: &mut Interview<'_>, options: &ConnectOptions<'_>) -> Result<(), EntryError> {
     let env = process_env();
     // A secrets or movements module's own settings are kept where it is not
     // (crate::secrets_slot, crate::movements_slot).
@@ -470,30 +659,36 @@ async fn connect_core(project: &Project, module: &crate::core::CoreModule, promp
     {
         let settings = crate::core::settings_of(credentials, module);
         for line in crate::core::set_up(project, module, &settings)? {
-            prompter.print(&line);
+            interview.prompter.print(&line);
         }
-        prompter.print(&format!("{} is set up; its settings (\"{}\") come from the environment", module.name, existing.name));
+        interview.prompter.print(&format!("{} is set up; its settings (\"{}\") come from the environment", module.name, existing.name));
         return Ok(());
     }
+    options.given.unknown_settings(&module.name, module.settings.iter().map(|s| s.name.as_ref()))?;
     let mut fields: Vec<(String, String)> = Vec::new();
     for setting in module.settings.iter() {
         let label = if setting.label.is_empty() { &setting.name } else { &setting.label };
         let now = existing.and_then(|e| e.fields.get(setting.name.as_ref())).filter(|v| !v.is_empty()).cloned();
-        let answer = prompter
-            .ask(&format!("{label} (setting \"{}\")", setting.name), Ask { secret: setting.secret, optional: setting.optional, default: now.as_deref() })
-            .await?;
+        let question = Question {
+            text: format!("{label} (setting \"{}\")", setting.name),
+            flag: format!("--setting {}=<value>", setting.name),
+            given: options.given.setting(&setting.name),
+            ask: Ask { secret: setting.secret, optional: setting.optional, default: now.as_deref(), flag: None },
+        };
+        let answer = interview.answer(question).await?;
         if !answer.is_empty() {
             fields.push((setting.name.to_string(), answer));
         }
     }
+    interview.finish(&module.name)?;
     let settings = fields.iter().cloned().collect();
     for line in crate::core::set_up(project, module, &settings)? {
-        prompter.print(&line);
+        interview.prompter.print(&line);
     }
     // Nothing to keep (a module with no settings, or every one left at its
     // default) and no entry to change: the secrets file is not touched.
     if fields.is_empty() && existing.is_none() {
-        prompter.print(&format!("connected {}: it has no settings to keep", module.name));
+        interview.prompter.print(&format!("connected {}: it has no settings to keep", module.name));
         return Ok(());
     }
     let install_name = match existing {
@@ -502,7 +697,7 @@ async fn connect_core(project: &Project, module: &crate::core::CoreModule, promp
     };
     let content = entry_content(&module.name, &Binding::Install, &fields);
     secrets.store().replace(&install_name, &|_| Ok(content.clone())).await?;
-    prompter.print(&format!("connected {}: its settings are \"{install_name}\" in {}", module.name, secrets.store().label()));
+    interview.prompter.print(&format!("connected {}: its settings are \"{install_name}\" in {}", module.name, secrets.store().label()));
     let filling = match module.slot {
         crate::core::Slot::Store => Some(&project.core.store),
         crate::core::Slot::Models => Some(&project.core.models),
@@ -517,7 +712,7 @@ async fn connect_core(project: &Project, module: &crate::core::CoreModule, promp
         crate::core::Slot::Movements => Some(&project.core.movements),
     };
     if filling.is_none_or(|filling| filling.name != module.name) {
-        prompter.print(&format!("to use it, name it in lf.yaml: core: {{ {}: \"{}\" }}", module.slot.name(), module.name));
+        interview.prompter.print(&format!("to use it, name it in lf.yaml: core: {{ {}: \"{}\" }}", module.slot.name(), module.name));
     }
     Ok(())
 }
@@ -531,16 +726,22 @@ pub fn core_entry_name(module: &str) -> String {
 
 /// Install `reference`: a module package the project has, else a module run
 /// separately at a server URL.
-async fn install_external(project: &Project, reference: &str, prompter: &mut Prompter, url: Option<&str>) -> Result<External, String> {
+async fn install_external(project: &Project, reference: &str, interview: &mut Interview<'_>, url: Option<&str>) -> Result<External, String> {
     let as_package = url.is_none() && (resolves_from(&project.root, reference) || crate::externals::bundled_module(reference).is_some());
     let url = match (as_package, url) {
         (true, _) => None,
         (false, Some(url)) => Some(url.to_string()),
-        (false, None) => Some(
-            prompter
-                .ask(&format!("\"{reference}\" is not installed or a package here; the server URL of the separately-run module"), Ask::default())
-                .await?,
-        ),
+        (false, None) => {
+            let question = Question {
+                text: format!("\"{reference}\" is not installed or a package here; the server URL of the separately-run module"),
+                flag: "--url <server url>".into(),
+                given: None,
+                ask: Ask::default(),
+            };
+            let answer = interview.answer(question).await?;
+            interview.finish(reference)?;
+            Some(answer)
+        }
     };
     if let Some(url) = &url
         && !(url.starts_with("http://") || url.starts_with("https://"))
@@ -563,7 +764,6 @@ async fn install_external(project: &Project, reference: &str, prompter: &mut Pro
     let path = dir.join(EXTERNAL_MANIFEST);
     std::fs::write(&path, &text).map_err(|e| format!("{}: {e}", path.display()))?;
     let manifest: ExternalManifest = serde_yaml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    prompter.print(&format!("installed {reference} as externals/{name}"));
     Ok(External { dir, manifest })
 }
 

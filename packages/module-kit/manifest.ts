@@ -53,6 +53,7 @@ function adapterManifest(definition: AdapterModuleDefinition, instance: AdapterM
       : {}),
     ...(manifest.positionArgs !== undefined && manifest.positionArgs.length > 0 ? { positionArgs: manifest.positionArgs.map((arg) => ({ ...arg })) } : {}),
     ...(manifest.subscriptionScopeKeys !== undefined && manifest.subscriptionScopeKeys.length > 0 ? { subscriptionScopeKeys: [...manifest.subscriptionScopeKeys] } : {}),
+    ...(manifest.introspectedSchema === true ? { introspectedSchema: true } : {}),
     ...(definition.credentials.length > 0 ? { credentials: [...definition.credentials] } : {}),
     ...(definition.inbound !== undefined ? { inbound: definition.inbound } : {}),
     ...(definition.poll !== undefined ? { poll: definition.poll } : {}),

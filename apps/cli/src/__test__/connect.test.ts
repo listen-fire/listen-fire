@@ -73,7 +73,7 @@ const AUTHORIZE = /^\s+http:\/\/127\.0\.0\.1:\d+\/authorize\?/;
 /** `listen-fire connect acme_crm` on a fresh project: server secret, webhook secret
  *  (generated), the OAuth app, and the registered redirect port. */
 async function connectAcme(dir: string, port = '0'): Promise<string> {
-  return ok(lf(dir, ['connect', 'acme_crm', '--yes'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, port] }));
+  return ok(lf(dir, ['connect', 'acme_crm', '--yes', '--server-secret', 'dev-acme-token', '--client-id', CLIENT.clientId, '--client-secret', CLIENT.clientSecret, '--redirect-port', port]));
 }
 
 // ── listen-fire connect <module> ─────────────────────────────────────────────────────
@@ -112,8 +112,8 @@ test('listen-fire connect <module> writes its install — server secret, webhook
     assert.equal(install.access_token, undefined);
     assert.equal(provider.calls.length, 0);
 
-    // Again: every answer kept by enter.
-    await ok(lf(dir, ['connect', 'acme_crm', '--yes'], { answers: ['', '', '', '', ''] }));
+    // Again: every answer kept as it is.
+    await ok(lf(dir, ['connect', 'acme_crm', '--yes']));
     assert.deepEqual(secretsFile(dir).acme_crm, install);
   } finally {
     await provider.close();
@@ -154,7 +154,7 @@ test('listen-fire connect: "n" to the sign-in offer, and --yes, leave the next-s
     assert.deepEqual(Object.keys(secretsFile(declined)), ['acme_crm']);
 
     const unasked = freshProject(oauthDeclaration(provider));
-    const yes = await ok(lf(unasked, ['connect', 'acme_crm', '--yes'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, '0'] }));
+    const yes = await ok(lf(unasked, ['connect', 'acme_crm', '--yes', '--server-secret', 'dev-acme-token', '--client-id', CLIENT.clientId, '--client-secret', CLIENT.clientSecret, '--redirect-port', '0']));
     assert.doesNotMatch(yes, /Sign in now/);
     assert.match(yes, /next, a user credential: listen-fire credential add --module acme_crm <name>/);
     assert.deepEqual(Object.keys(secretsFile(unasked)), ['acme_crm']);
@@ -286,7 +286,7 @@ test('listen-fire credential add --public sends the relay URI lf.yaml names; the
     const dir = freshProject(oauthDeclaration(provider));
     const relay = 'https://relay.example.com/lf/oauth/callback';
     writeFileSync(join(dir, 'lf.yaml'), `${readFileSync(join(dir, 'lf.yaml'), 'utf8')}oauth:\n  redirectUri: ${relay}\n`);
-    const connected = await ok(lf(dir, ['connect', 'acme_crm', '--yes'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, '0'] }));
+    const connected = await ok(lf(dir, ['connect', 'acme_crm', '--yes', '--server-secret', 'dev-acme-token', '--client-id', CLIENT.clientId, '--client-secret', CLIENT.clientSecret, '--redirect-port', '0']));
     assert.ok(connected.includes(`  ${relay}   (listen-fire credential add --public, forwarded on to listen-fire serve's /oauth/callback)`), connected);
     const serving = await served(dir);
     try {

@@ -20,6 +20,12 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+### Added
+
+- `listen-fire modules` lists every module this `listen-fire` can install, the bundled `@lf/*` ones, with a line on what each is and which the project has installed. A bare `listen-fire connect` prints the same list; it listed only the slot modules and what the project already held.
+- `listen-fire modules show <module>` summarises one module in a screenful, read from the module itself: the record types it reads with their fields and edges, whether it writes (`@lf/stripe` is read-only) and what, the events a `listen` can name, its credential and settings, and the `connect` flags it needs. It needs no credential. A module whose schema comes from the connected account says so instead of describing: its manifest now says `introspectedSchema` (an optional field of the adapter protocol's manifest, set by Airtable, Attio, Affinity and Google Sheets). `--json` gives the same facts.
+- `listen-fire connect <module> --yes` asks nothing. Each answer comes from a flag (`--setting <name>=<value>`, `--server-secret`, `--webhook-secret`, `--client-id`, `--client-secret`, `--redirect-port`) or from its default, and a webhook secret is generated and said to be. When an answer has neither, the command names every flag it needs and writes nothing. Before, `--yes` still asked: with no terminal it hung for input or failed with "the input ended before every question was answered", and left no external behind. Without `--yes`, questions are still asked, and input that ends names the flag that would have answered.
+
 ### Checks
 
 - A dot read off a record reads one field, whole; anything past it is refused, where it checked clean and then failed the run with `MOVENG_UNSUPPORTED` ("this read shape … is not supported"). Refused for every 0.12 pin, since no such read could ever run:
@@ -32,6 +38,7 @@ named in [`RELEASING.md`](RELEASING.md).
 
 ### Fixed
 
+- `listen-fire connect` printed "installed <module> as externals/<name>" before the setup had written anything, so a setup that then failed (a missing answer) had said "installed" and removed the folder. It says so once the entry is written.
 - `listen-fire check` with a credential Airtable refuses (a placeholder token) fails at once, where it hung for over two minutes saying nothing: `@lf/airtable` retried the refusal as if it were transient (its own changelog has the rest).
 - A credential a module says the provider refused (`credential_refused`) whose refresh then fails is reported with both: what the module said and why the refresh failed (`credential "my_airtable" was refused — module "airtable" says: … — and refreshing it failed: the credential holds no refresh_token`), where only the refresh's failure was. A `check` that cannot read an external's schema names the external and the credential.
 

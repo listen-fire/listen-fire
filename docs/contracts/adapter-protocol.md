@@ -208,6 +208,11 @@ The manifest file registers your server with a team:
   table). The host keeps one subscription per credential and scope, and sends a
   listen's values of those keys as `scope` on `ensureEventSubscription` and
   `removeEventSubscription` (`{ "base": "app…", "table": "tbl…" }`).
+- `introspectedSchema` (optional): `true` when your schema comes from the
+  connected account (Airtable's tables and fields, a spreadsheet's tabs), so
+  describing it needs a credential and costs calls to your system. Leave it out
+  when the schema is yours alone. `listen-fire modules show` tells an author
+  which, and a module with a live schema is summarised without describing it.
 - Optional fields: `handbookSection` (`{ title, content }`, prose the authoring
   handbook shows about your system), `vocabulary` (an icon and event phrasing),
   `webhookEventTypeId`.

@@ -179,7 +179,7 @@ test('listen-fire connect writes the install and listen-fire credential add sign
   const vault = await serveSecretsModule({ listen: 0 });
   try {
     const dir = project(vault, { credentials: oauth(provider) });
-    const connected = await lf(dir, ['connect', 'acme_crm', '--yes'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, '0'] }).done;
+    const connected = await lf(dir, ['connect', 'acme_crm', '--yes', '--server-secret', 'dev-acme-token', '--client-id', CLIENT.clientId, '--client-secret', CLIENT.clientSecret, '--redirect-port', '0']).done;
     assert.equal(connected.code, 0, connected.out);
     const adding = lf(dir, ['credential', 'add', '--module', 'acme_crm', 'alice_acme', '--no-browser']);
     const url = (await adding.line(/^\s+http:\/\/127\.0\.0\.1:\d+\/authorize\?/)).trim();

@@ -18,6 +18,7 @@
 //!   listen-fire cancel <run-id> [--reason <text>]
 //!   listen-fire catalog [--dir <project>]        the catalog snapshot `check` reads, as JSON
 //!   listen-fire lsp [--dir <project>]            the language server, over stdio (src/lsp.rs)
+//!   listen-fire modules [show <module>]          the modules this listen-fire can install; one module's summary (src/modules.rs)
 //!   listen-fire connect [<module>]               set a module up (src/connect.rs)
 //!   listen-fire credential add|update|delete|list   user credentials (src/credential_cmd.rs)
 //!   listen-fire completion <bash|zsh|fish>       the shell's tab completion
@@ -114,6 +115,7 @@ mod listener {
 }
 mod listen_narrowing;
 mod lsp;
+mod modules;
 mod models;
 mod module_hosts;
 mod module_transport;
@@ -167,7 +169,7 @@ use std::io::Write;
 pub(crate) use module_wire::{json, obj};
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|deliveries|drain|serve|call|cancel|upgrade|connect|credential|completion> [--dir <project folder>] [--ephemeral] [--store <state.db|postgres://…>] [--team <uuid>]
+const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|deliveries|drain|serve|call|cancel|upgrade|modules|connect|credential|completion> [--dir <project folder>] [--ephemeral] [--store <state.db|postgres://…>] [--team <uuid>]
        listen-fire run <movement> [--text <text>] [--dry-run]
        listen-fire run --event <file.json> [--dry-run]
        listen-fire run --poll <movement>
@@ -204,7 +206,7 @@ const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|
   upgrade   rewrite the movement files by the fixes that keep their meaning (--all: every fix offered; --check: print the diff, write nothing)
   runs      the runs in the state file, most recent first (as `listen-fire runs`); `runs show <run-id>`: one run, its event, trace, park and attempts; `runs rerun <run-id>`: run a failed run again as its next attempt, with its own event and the movement as the project holds it now (so a fix to the movement takes effect), from the start; refused unless the run's latest attempt failed, while another listen-fire holds the run, and when the failed attempt already committed writes (they are listed; --force reruns it anyway, making them again)
   deliveries  the deliveries the doors kept (events, not bytes), most recent first, at most 50 (--subscription: one subscription's; --since: received at or after an instant, or <n>h or <n>d ago); `deliveries show <id>`: one, its events and runs; `deliveries replay <id>`: queue its events again as a delivery of its own, for listen-fire serve or listen-fire drain to run against the project as it is now (new runs, whatever its runs came to; a failed run: listen-fire runs rerun <run-id>)
-  --json    check, catalog, run, resume, runs, deliveries, call, cancel, connect, credential list: one JSON document (docs/lf-json.md); a failure is {\"error\": …}
+  --json    check, catalog, run, resume, runs, deliveries, call, cancel, modules, connect, credential list: one JSON document (docs/lf-json.md); a failure is {\"error\": …}
   drain     fire each cron listen's due tick (once, however many workers drain), then claim due work rows one at a time and run them (a polled listen's row is its next poll, due every interval its source declares); with --until-idle exit once none is due, with --max-seconds stop claiming after n seconds, with --kinds only rows of those kinds (resume_timer, wake_await, fire_event, fire_callback, poll_listen, refresh_subscription) and the cron ticks only when it names cron
   serve     the inbound doors, the callback door and the work queue's drain (as `listen-fire serve`)
   --doors-only  (serve) only the doors, for compute billed by the request: nothing drains in this process, `/hooks/…` queues its events (answering 202 with the rows queued) and `/api/cb/…` its callback's body (answering 202) instead of running them in the request; workers (`listen-fire drain`) run the work, started by the wake slot's module or a schedule. Also LF_DOORS_ONLY=1

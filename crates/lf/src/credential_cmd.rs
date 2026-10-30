@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::completion;
-use crate::connect::{CLIENT_ID_FIELD, CLIENT_SECRET_FIELD, ConnectOptions, REDIRECT_PORT_FIELD, connect_module, entry_content, find_external, known_modules, oauth_redirect_uri, process_env, public_url, read_manifest};
+use crate::connect::{CLIENT_ID_FIELD, CLIENT_SECRET_FIELD, ConnectOptions, Given, REDIRECT_PORT_FIELD, connect_module, entry_content, find_external, oauth_redirect_uri, process_env, public_url, read_manifest};
 use crate::json::{Js, Obj};
 use crate::obj;
 use crate::oauth2::{ClientApp, Declaration, DeclarationKind};
@@ -296,7 +296,7 @@ async fn ask_fields(declaration: &Declaration, current: &BTreeMap<String, String
             Some(label) => format!("{label} ({})", field.name),
             None => field.name.clone(),
         };
-        let ask = Ask { secret: field.secret != Some(false), default: now.map(String::as_str), optional: field.optional == Some(true) };
+        let ask = Ask { secret: field.secret != Some(false), default: now.map(String::as_str), optional: field.optional == Some(true), flag: None };
         let answer = prompter.ask(&question, ask).await?;
         if current.get(&field.name) != Some(&answer) {
             answers.insert(field.name.clone(), answer);
@@ -349,9 +349,13 @@ fn user_name() -> String {
 
 // ── The command lines ───────────────────────────────────────────────────────
 
-pub const COMMANDS: &[&str] = &["connect", "credential", "completion"];
+pub const COMMANDS: &[&str] = &["connect", "credential", "completion", "modules"];
 
-pub const USAGE: &str = "  listen-fire connect [<module>] [--url <server url>] [--yes]     set a module up (a module that signs users in with OAuth ends by offering the first sign-in; --yes skips the offer): install it, its server and webhook secrets, its OAuth app (no module: list the ones known; --json: as JSON)
+pub const USAGE: &str = "  listen-fire modules [--json]                  the modules this listen-fire can install (the bundled @lf/* ones, each with a line on what it is) and the ones this project has
+  listen-fire modules show <module> [--json]    what one module reads, writes and listens to, read from the module itself (no credential needed; a module whose schema comes from a live account says so)
+  listen-fire connect [<module>] [--url <server url>] [--yes]     set a module up (a module that signs users in with OAuth ends by offering the first sign-in): install it, its server and webhook secrets, its OAuth app (no module: the same list as `modules`)
+    --yes asks nothing: each answer comes from a flag or its default, else the command names the flag it needs and writes nothing
+    the answers as flags: --setting <name>=<value> (repeat)  --server-secret <secret>  --webhook-secret <secret>  --client-id <id>  --client-secret <secret>  --redirect-port <port>  (a secret on a command line shows in the process list)
     pointing it elsewhere (a fake, a proxy): --base-url <its API root>  --oauth-authorize-url <url>  --oauth-token-url <url>  ('' goes back to the provider's own)
   listen-fire credential add --module <module> [<name>] [--credential <declared>]   a user credential for the module: sign in at the provider, or its fields
   listen-fire credential update <name> [--no-reauthorize]   sign in again and edit its fields
@@ -371,6 +375,11 @@ struct Line {
     oauth_authorize_url: Option<String>,
     oauth_token_url: Option<String>,
     redirect_port: Option<String>,
+    server_secret: Option<String>,
+    webhook_secret: Option<String>,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    settings: Vec<(String, String)>,
     list: Option<String>,
     no_browser: bool,
     headless: bool,
@@ -398,6 +407,15 @@ fn parse(argv: &[String]) -> Result<Line, String> {
             "--oauth-authorize-url" => line.oauth_authorize_url = Some(value("--oauth-authorize-url")?),
             "--oauth-token-url" => line.oauth_token_url = Some(value("--oauth-token-url")?),
             "--redirect-port" => line.redirect_port = Some(value("--redirect-port")?),
+            "--server-secret" => line.server_secret = Some(value("--server-secret")?),
+            "--webhook-secret" => line.webhook_secret = Some(value("--webhook-secret")?),
+            "--client-id" => line.client_id = Some(value("--client-id")?),
+            "--client-secret" => line.client_secret = Some(value("--client-secret")?),
+            "--setting" => {
+                let given = value("--setting")?;
+                let (name, setting) = given.split_once('=').filter(|(name, _)| !name.is_empty()).ok_or_else(|| format!("--setting takes <name>=<value>, not \"{given}\""))?;
+                line.settings.push((name.to_string(), setting.to_string()));
+            }
             "--list" => line.list = Some(value("--list")?),
             "--no-browser" => line.no_browser = true,
             "--headless" => line.headless = true,
@@ -436,20 +454,10 @@ async fn run(argv: &[String]) -> Result<i32, String> {
     let (command, rest) = line.positionals.split_first().ok_or("no command")?;
     match command.as_str() {
         "completion" => completion::run(rest.first().map(String::as_str), line.list.as_deref(), line.dir.as_deref()),
+        "modules" => crate::modules::run(&project_at(&line)?, rest, line.json).await,
         "connect" => {
             let project = project_at(&line)?;
-            let Some(reference) = rest.first() else {
-                let known = known_modules(&project)?;
-                if line.json {
-                    let doc = Js::Obj(obj! { "modules" => Js::Arr(known.into_iter().map(|m| Js::Obj(m.facts)).collect()) });
-                    println!("{}", doc.to_json());
-                } else if known.is_empty() {
-                    println!("no modules known here; install one: listen-fire connect <package or name>");
-                } else {
-                    println!("{}", known.iter().map(|m| m.line.as_str()).collect::<Vec<_>>().join("\n"));
-                }
-                return Ok(0);
-            };
+            let Some(reference) = rest.first() else { return crate::modules::list(&project, line.json) };
             let redirect = match redirect_of(&line) {
                 Ok(redirect) => redirect,
                 Err(message) => {
@@ -463,6 +471,15 @@ async fn run(argv: &[String]) -> Result<i32, String> {
                 base_url: line.base_url.as_deref(),
                 oauth_authorize_url: line.oauth_authorize_url.as_deref(),
                 oauth_token_url: line.oauth_token_url.as_deref(),
+                yes: line.yes,
+                given: Given {
+                    server_secret: line.server_secret.as_deref(),
+                    webhook_secret: line.webhook_secret.as_deref(),
+                    client_id: line.client_id.as_deref(),
+                    client_secret: line.client_secret.as_deref(),
+                    redirect_port: line.redirect_port.as_deref(),
+                    settings: &line.settings,
+                },
             };
             refused(connect_module(&project, reference, &mut Prompter::terminal(), &options).await)
         }

@@ -60,9 +60,14 @@ A module with no webhooks (Granola, Evertrace, Dealroom, GitHub's notifications)
 A system is reached through an external: a folder in `externals/` holding an `lf-external.yaml` that says how the host starts or reaches it.
 
 ```
-listen-fire connect              # lists the modules listen-fire knows, and which are set up
-listen-fire connect <module>     # installs it and asks for its server secret, webhook secret and OAuth app
+listen-fire modules                  # every module this listen-fire can install (the bundled @lf/* ones), one line each, and which this project has
+listen-fire modules show <module>    # what one reads, writes and listens to, read from the module itself; no credential needed
+listen-fire connect <module>         # installs it and asks for its server secret, webhook secret and OAuth app
 ```
+
+Read `modules show` before writing a program against a module. It lists the record types a program can read with their fields and edges, whether the module writes anything (`@lf/stripe` is read-only), the events a `listen` can name, and the credential it needs. A module whose schema comes from your own account (Airtable's tables, a spreadsheet's tabs) says so instead: its records show only once a credential is added and a movement imports it (`listen-fire catalog`). A bare `listen-fire connect` prints the same list as `listen-fire modules`.
+
+`listen-fire connect <module> --yes` asks nothing, so it works without a terminal. Each answer comes from a flag (`--setting <name>=<value>`, `--client-id`, `--client-secret`, `--redirect-port`, `--server-secret`, `--webhook-secret`) or from its default (a webhook secret is generated). When an answer has neither, the command names the flag it needs and writes nothing; `modules show` lists them under `set up`.
 
 `ai(…)` and `extract(…)` call models: `listen-fire connect @lf/anthropic` stores your API key.
 

@@ -53,9 +53,7 @@ async function connected(): Promise<{ dir: string; fake: Fake }> {
   const dir = join(mkdtempSync(join(tmpdir(), 'lf-airtable-')), 'airtable-enums');
   assert.equal(lfSync(join(dir, '..'), 'init', 'airtable-enums').code, 0);
   await ok(
-    lf(dir, ['connect', '@lf/airtable', '--yes', '--base-url', `${fake.url}/airtable`, '--oauth-authorize-url', `${fake.url}/oauth/authorize`, '--oauth-token-url', `${fake.url}/oauth/token`], {
-      answers: ['lf-airtable-app', 'lf-airtable-secret', '8977'],
-    }),
+    lf(dir, ['connect', '@lf/airtable', '--yes', '--base-url', `${fake.url}/airtable`, '--oauth-authorize-url', `${fake.url}/oauth/authorize`, '--oauth-token-url', `${fake.url}/oauth/token`, '--client-id', 'lf-airtable-app', '--client-secret', 'lf-airtable-secret', '--redirect-port', '8977']),
   );
   const adding = lf(dir, ['credential', 'add', '--module', '@lf/airtable', 'henry_airtable', '--credential', 'airtable', '--headless'], { answers: ['', ''] });
   const authorize = (await adding.line(/^\s+http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/)).trim();

@@ -99,7 +99,7 @@ async function paymentsWorld(): Promise<World> {
     assert.match(await ok(lf(dir, ['credential', 'add', '--module', 'stripe', 'stripe_account'], { answers: [API_KEY, SECRET] })), /added stripe_account/);
     await ok(lf(dir, ['connect', '@lf/mcp', '--yes'], { answers: [] }));
     await ok(lf(dir, ['credential', 'add', '--module', '@lf/mcp', 'crm', '--credential', 'mcp_token'], { answers: [crm.url, CRM_TOKEN, ''] }));
-    await ok(lf(dir, ['connect', '@lf/slack', '--yes'], { answers: [''] }));
+    await ok(lf(dir, ['connect', '@lf/slack', '--yes']));
     await ok(lf(dir, ['credential', 'add', '--module', '@lf/slack', 'team_slack'], { answers: ['xoxb-test', '', '', `${channels.url}/slack/`] }));
     const seeded = await fetch(`${channels.url}/admin/slack/seed`, {
       method: 'POST',

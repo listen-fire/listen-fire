@@ -14,9 +14,9 @@ use crate::externals::scan_externals;
 use crate::project::load_project;
 use crate::secrets::Secrets;
 
-const SUBCOMMANDS: &str = "init check lsp upgrade run resume serve runs call cancel connect credential completion catalog";
+const SUBCOMMANDS: &str = "init check lsp upgrade run resume serve runs call cancel modules connect credential completion catalog";
 const CREDENTIAL_ACTIONS: &str = "add update delete list";
-const FLAGS: &str = "--dir --ephemeral --dry-run --text --event --poll --webhook --body --install --header --port --reason --module --credential --url --redirect-port --no-browser --headless --public --no-reauthorize --yes --help --version";
+const FLAGS: &str = "--dir --ephemeral --dry-run --text --event --poll --webhook --body --install --header --port --reason --module --credential --url --redirect-port --no-browser --headless --public --no-reauthorize --yes --setting --server-secret --webhook-secret --client-id --client-secret --help --version";
 const SHELLS: &str = "bash zsh fish";
 
 pub fn run(shell: Option<&str>, list: Option<&str>, dir: Option<&Path>) -> Result<i32, String> {

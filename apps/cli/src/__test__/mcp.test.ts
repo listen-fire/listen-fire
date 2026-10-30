@@ -304,9 +304,7 @@ test('OAuth: listen-fire connect with the provider’s endpoints, a headless sig
     );
     const F = provider.url;
     const connected = await ok(
-      lf(dir, ['connect', '@lf/mcp', '--yes', '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`], {
-        answers: ['lf-mcp-app', 'lf-mcp-secret', '8977'],
-      }),
+      lf(dir, ['connect', '@lf/mcp', '--yes', '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`, '--client-id', 'lf-mcp-app', '--client-secret', 'lf-mcp-secret', '--redirect-port', '8977']),
     );
     assert.match(connected, /installed @lf\/mcp as externals\/mcp/);
 

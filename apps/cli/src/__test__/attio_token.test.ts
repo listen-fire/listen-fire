@@ -17,7 +17,7 @@ test('listen-fire credential add for Attio names both credentials, and attio_tok
   assert.equal(lfSync(join(dir, '..'), 'init', 'attio-token').code, 0);
 
   // Two declarations, so no sign-in offer follows: the next step is named.
-  const connected = await ok(lf(dir, ['connect', '@lf/attio', '--yes'], { answers: ['app-id', 'app-secret', '8976'] }));
+  const connected = await ok(lf(dir, ['connect', '@lf/attio', '--yes']));
   assert.match(connected, /next, a user credential: listen-fire credential add --module attio <name>/);
   assert.doesNotMatch(connected, /Sign in now\?/);
 
@@ -41,7 +41,7 @@ test('listen-fire credential add for Attio names both credentials, and attio_tok
 test('listen-fire connect @lf/attio for tokens asks for no OAuth app; the OAuth credential is then refused naming the remedy', async () => {
   const dir = join(mkdtempSync(join(tmpdir(), 'lf-attio-token-only-')), 'attio-token-only');
   assert.equal(lfSync(join(dir, '..'), 'init', 'attio-token-only').code, 0);
-  const connected = await ok(lf(dir, ['connect', '@lf/attio', '--yes'], { answers: [] }));
+  const connected = await ok(lf(dir, ['connect', '@lf/attio', '--yes']));
   assert.doesNotMatch(connected, /client id/);
   assert.match(connected, /attio: no OAuth app, so its OAuth sign-in \(attio\) is off/);
 

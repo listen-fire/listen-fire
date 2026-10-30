@@ -56,9 +56,7 @@ async function driveProject(fake: Awaited<ReturnType<typeof fakeChannels>>): Pro
   const dir = join(mkdtempSync(join(tmpdir(), 'lf-drive-')), 'drive-copy');
   assert.equal(lfSync(join(dir, '..'), 'init', 'drive-copy').code, 0);
   const connected = await ok(
-    lf(dir, ['connect', '@lf/google-drive', '--yes', '--base-url', F, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`], {
-      answers: ['lf-drive-app', 'lf-drive-secret', '8977'],
-    }),
+    lf(dir, ['connect', '@lf/google-drive', '--yes', '--base-url', F, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`, '--client-id', 'lf-drive-app', '--client-secret', 'lf-drive-secret', '--redirect-port', '8977']),
   );
   assert.match(connected, /installed @lf\/google-drive as externals\/google_drive/);
   const adding = lf(dir, ['credential', 'add', '--module', '@lf/google-drive', 'henry_drive', '--credential', 'google', '--headless'], { answers: ['', ''] });

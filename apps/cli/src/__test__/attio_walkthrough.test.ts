@@ -98,9 +98,7 @@ test('the Attio walkthrough, end to end against the fake Attio', async () => {
     // 2. The module, pointed at the fake. Attio issues each webhook's secret
     //    when listen-fire serve registers it, so none is asked for here.
     const connected = await ok(
-      lf(dir, ['connect', '@lf/attio', '--yes', '--base-url', `${F}/attio`, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`], {
-        answers: ['lf-attio-app', 'lf-attio-secret', '8976'],
-      }),
+      lf(dir, ['connect', '@lf/attio', '--yes', '--base-url', `${F}/attio`, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`, '--client-id', 'lf-attio-app', '--client-secret', 'lf-attio-secret', '--redirect-port', '8976']),
     );
     assert.match(connected, /installed @lf\/attio as externals\/attio/);
     assert.match(connected, /http:\/\/127\.0\.0\.1:8976\/callback/);

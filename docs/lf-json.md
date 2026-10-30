@@ -103,9 +103,13 @@ An unknown run, or a movement that no listen fires now or that does not check, i
 
 `{ "ok": true, "deliveryId": "<new id>", "replayOf": "<id>", "queued": 1 }`. Without `--json` it prints `delivery <new> replays <id>: <n> event(s) queued; listen-fire serve or listen-fire drain runs them`.
 
-## `listen-fire connect --json`
+## `listen-fire modules --json` and `listen-fire connect --json`
 
-`{ "modules": [{ "name", "kind", … }] }`. `kind` is `external` (`state`, `how`, `installSetUp`, `install`, `credentials`: names), `core` (`slot`, `state`, `setUp`, `setupNote`) or `package` (`state`: `not installed`). Names only; no secrets.
+`{ "modules": [{ "name", "kind", … }] }`. `kind` is `external` (`state`, `how`, `installSetUp`, `install`, `credentials`: names), `core` (`slot`, `state`, `setUp`, `setupNote`) or `package` (`state`: `not installed`, `bundled`). A module the release bundles also has `description`, the first sentence of its package's. Names only; no secrets. A bare `connect` prints the same document.
+
+## `listen-fire modules show <module> --json`
+
+`{ "module", "kind", "description", "installedAs", "readOnly", "schema": { "source", "why"? }, "collections", "records", "writes", "listens", "credentials", "settings", "plugins", "connectNeeds" }`. `kind` is `adapter`, `plugin` or `<slot> slot`. `schema.source` is `module` (read from the module, no account needed), `account` (it comes from the connected account, so `collections`, `records` and `writes` are empty) or `unread` (with `why`). `records` are `{ name, description, fields: [{ name, type }], edges: [{ name, target }] }`; `writes` are `{ along, target, fields: [{ name, required }] }`; `listens` is `{ triggers, events, defaultEvents, keys: [{ name, required }], pollSeconds }`. `connectNeeds` are the flags `connect --yes` cannot choose a default for.
 
 ## `listen-fire credential list --json`
 

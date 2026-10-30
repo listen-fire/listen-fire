@@ -15,6 +15,8 @@ pub struct Ask<'a> {
     pub secret: bool,
     /// An empty answer is accepted (as the default, else '').
     pub optional: bool,
+    /// The command-line flag that gives this answer, named when the input ends before it is given.
+    pub flag: Option<&'a str>,
 }
 
 pub struct Prompter {
@@ -22,7 +24,6 @@ pub struct Prompter {
     terminal: bool,
 }
 
-const INPUT_ENDED: &str = "the input ended before every question was answered";
 
 impl Prompter {
     pub fn terminal() -> Prompter {
@@ -44,7 +45,7 @@ impl Prompter {
                 echo(true);
                 write_out("\n");
             }
-            let answer = line.map_err(|e| e.to_string())?.ok_or(INPUT_ENDED)?.trim().to_string();
+            let answer = line.map_err(|e| e.to_string())?.ok_or_else(|| input_ended(question, ask.flag))?.trim().to_string();
             if !self.terminal {
                 write_out("\n");
             }
@@ -85,6 +86,13 @@ impl Prompter {
     /// A line of progress, between questions.
     pub fn print(&self, line: &str) {
         write_out(&format!("{line}\n"));
+    }
+}
+
+fn input_ended(question: &str, flag: Option<&str>) -> String {
+    match flag {
+        Some(flag) => format!("the input ended before \"{question}\" was answered; pass {flag} (or run listen-fire in a terminal to be asked)"),
+        None => format!("the input ended before \"{question}\" was answered"),
     }
 }
 

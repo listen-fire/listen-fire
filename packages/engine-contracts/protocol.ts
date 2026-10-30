@@ -1131,6 +1131,11 @@ export const WireManifestResult = z.object({
    *  subscription per credential and scope, and sends the scope as
    *  `ensureEventSubscription`'s and `removeEventSubscription`'s `scope`. */
   subscriptionScopeKeys: z.array(z.string().min(1)).optional(),
+  /** The schema comes from the connected account (Airtable's tables, a
+   *  spreadsheet's tabs), so describing it needs a credential and costs
+   *  upstream calls. Absent: the schema is the module's own and describing is
+   *  free. `listen-fire modules show` says which. */
+  introspectedSchema: z.boolean().optional(),
 }).superRefine(refuseUnpairedDeclarations);
 export type WireManifestResultShape = z.infer<typeof WireManifestResult>;
 

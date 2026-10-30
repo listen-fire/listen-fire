@@ -288,7 +288,7 @@ fn positions_of<'a>(running: &RunningExternal, imported: &'a Imported) -> Vec<(&
 
 /// `describeExternal`: its entry points and one `describe` per entry point,
 /// asked as one connection, projected as the hosted product projects them.
-async fn describe_as(running: &RunningExternal, credentials: &Credentials, credential: Option<&Credential>, settings: Option<serde_json::Value>) -> Result<(Vec<Js>, Js), String> {
+pub(crate) async fn describe_as(running: &RunningExternal, credentials: &Credentials, credential: Option<&Credential>, settings: Option<serde_json::Value>) -> Result<(Vec<Js>, Js), String> {
     let name = &running.external.manifest.name;
     let rpc = |method: &'static str, params: serde_json::Value| rpc_in(running, credentials, credential, LOCAL_TENANT, method, params, settings.clone());
     let entries = rpc("listEntryPoints", json!({})).await?;

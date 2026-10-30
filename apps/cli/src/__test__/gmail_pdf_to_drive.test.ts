@@ -88,8 +88,8 @@ test('a PDF attached to a Gmail message is filed in Drive as application/pdf, by
     const dir = join(mkdtempSync(join(tmpdir(), 'lf-pdf-')), 'invoices');
     assert.equal(lfSync(join(dir, '..'), 'init', 'invoices').code, 0);
     const oauth = ['--yes', '--base-url', F, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`];
-    await ok(lf(dir, ['connect', '@lf/gmail', ...oauth], { answers: ['lf-gmail-app', 'lf-gmail-secret', '8979'] }));
-    await ok(lf(dir, ['connect', '@lf/google-drive', ...oauth], { answers: ['lf-drive-app', 'lf-drive-secret', '8977'] }));
+    await ok(lf(dir, ['connect', '@lf/gmail', ...oauth, '--client-id', 'lf-gmail-app', '--client-secret', 'lf-gmail-secret', '--redirect-port', '8979']));
+    await ok(lf(dir, ['connect', '@lf/google-drive', ...oauth, '--client-id', 'lf-drive-app', '--client-secret', 'lf-drive-secret', '--redirect-port', '8977']));
     await signIn(dir, 'gmail', 'henry_mail', 'gmail', ['dev-loop@listen-fire.local', '', '', '', '']);
     await signIn(dir, '@lf/google-drive', 'henry_drive', 'google', ['', '']);
     // The Drive picker's grant of the Invoices folder (the module's kv).

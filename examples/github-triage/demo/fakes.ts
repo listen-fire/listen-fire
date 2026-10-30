@@ -111,6 +111,6 @@ export async function pointAtFakes(dir: string, fakes: Fakes, options: { lf: str
   }
   await lf(['connect', '@lf/github', '--yes']);
   await lf(['credential', 'add', '--module', '@lf/github', 'my_github'], [GITHUB_TOKEN, fakes.githubUrl]);
-  await lf(['connect', '@lf/slack', '--yes'], ['']);
+  await lf(['connect', '@lf/slack', '--yes']);
   await lf(['credential', 'add', '--module', '@lf/slack', 'my_slack'], ['xoxb-demo', '', '', fakes.slackUrl]);
 }

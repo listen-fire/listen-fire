@@ -64,9 +64,7 @@ export async function gmailProject(fake: Fake, credential: 'gmail' | 'gmail_draf
   const dir = join(mkdtempSync(join(tmpdir(), 'lf-gmail-')), 'gmail-project');
   assert.equal(lfSync(join(dir, '..'), 'init', 'gmail-project').code, 0);
   const connected = await ok(
-    lf(dir, ['connect', '@lf/gmail', '--yes', '--base-url', F, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`], {
-      answers: ['lf-gmail-app', 'lf-gmail-secret', '8979'],
-    }),
+    lf(dir, ['connect', '@lf/gmail', '--yes', '--base-url', F, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`, '--client-id', 'lf-gmail-app', '--client-secret', 'lf-gmail-secret', '--redirect-port', '8979']),
   );
   assert.match(connected, /connected gmail/);
   // The mailbox, then the optional fields a host fills for a delegated mailbox.
