@@ -17,6 +17,7 @@
 //!   pull cursors  lf.inbound_checkpoint
 //!   receipts      lf.event_receipt
 //!   deliveries    lf.delivery
+//!   waits         lf.arrival + wait_row + wait_seen
 //!   listen-fire's runs     lf.trigger_run (below)
 //!
 //! Held to the hosted backend's meaning by the run host's contract suite
@@ -53,6 +54,7 @@ use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind,
     Release, Rerun, Result, RunRow, RunStart, StoreError, WORK_KINDS, timer_work_key, timer_work_payload,
 };
+use crate::waits::{LoggedArrival, NewArrival, OpenWait, WaitArrivals, WaitWake, landing_of};
 
 type Params<'a> = [&'a (dyn ToSql + Sync)];
 
@@ -133,6 +135,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (6, include_str!("pg_store_schema_6.sql")),
     (7, include_str!("pg_store_schema_7.sql")),
     (8, include_str!("pg_store_schema_8.sql")),
+    (9, include_str!("pg_store_schema_9.sql")),
 ];
 
 /// The advisory lock the migrations run under: "lf-store" as a number.
@@ -713,14 +716,26 @@ impl RunHostStore for PgStore {
             }
             let wake_at = match kind {
                 ParkKind::Timer { wake_at } => Some(*wake_at),
-                ParkKind::Await { .. } | ParkKind::Limit => None,
+                ParkKind::Await { .. } | ParkKind::Wait { .. } | ParkKind::Limit => None,
             };
             self.put_leaf(run_id, address, kind.reason(), wake_at, state, fence)?;
             match kind {
                 // The leaf is the truth; the work row only says when to look.
                 ParkKind::Timer { wake_at } => self.enqueue_row("resume_timer", &timer_work_key(run_id), &timer_work_payload(run_id), Some(wake_at), &self.tenant)?,
                 ParkKind::Await { team_id, adapter_type, correlation_key } => self.correlate(run_id, team_id, address, adapter_type, correlation_key)?,
-                ParkKind::Limit => self.drop_correlation(run_id, address)?,
+                ParkKind::Wait { wait_id } => {
+                    let parked = self.execute(
+                        "update lf.wait_row set address = $3::text where id = $1::text::uuid and run_id = $2::text::uuid",
+                        &[wait_id, &run_id, &address],
+                    )?;
+                    if parked == 0 {
+                        return Err(StoreError::Invalid(format!("run {run_id} has no wait {wait_id}")));
+                    }
+                }
+                ParkKind::Limit => {
+                    self.drop_correlation(run_id, address)?;
+                    self.execute("update lf.wait_row set address = null where run_id = $1::text::uuid and address = $2::text", &[&run_id, &address])?;
+                }
             }
             self.mark_parked(run_id)
         })
@@ -878,6 +893,130 @@ impl RunHostStore for PgStore {
         Ok(())
     }
 
+    // ── Waits on listenable edges ───────────────────────────────────────────
+
+    fn arrival_mark(&self) -> Result<i64> {
+        Ok(self.query_opt("select coalesce(max(seq), 0) from lf.arrival", &[])?.map(|r| r.get(0)).unwrap_or(0))
+    }
+
+    fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {
+        self.transaction(|| {
+            let mut wakes: Vec<WaitWake> = Vec::new();
+            for arrival in arrivals {
+                let landing = arrival.landing.as_ref().map(Js::to_json);
+                self.execute(
+                    "insert into lf.arrival (team_id, adapter_type, edge, key, identity, version, landing, gone, logged_at)
+                     values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text::json, $8::bool, $9::text::timestamptz)",
+                    &[&team_id, &adapter_type, &arrival.edge, &arrival.key, &arrival.identity, &arrival.version, &landing, &arrival.gone, &at],
+                )?;
+                // A wait whose park has finished needs no wake: its leaf is gone.
+                let answered = self.query(
+                    "select w.run_id::text, w.id::text, w.address from lf.wait_row w
+                     where w.team_id = $1::text::uuid and w.adapter_type = $2::text and w.edge = $3::text and w.key = $4::text and w.address is not null
+                       and exists (select 1 from lf.parked_run p where p.run_id = w.run_id and p.address = w.address)
+                     order by w.run_id, w.id",
+                    &[&team_id, &adapter_type, &arrival.edge, &arrival.key],
+                )?;
+                for row in answered {
+                    let wake = WaitWake { run_id: row.get(0), wait_id: row.get(1), address: row.get(2) };
+                    if !wakes.iter().any(|w| w.wait_id == wake.wait_id) {
+                        wakes.push(wake);
+                    }
+                }
+            }
+            Ok(wakes)
+        })
+    }
+
+    fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {
+        let OpenWait { run_id, team_id, adapter_type, edge, key, since } = *wait;
+        self.transaction(|| {
+            self.execute(
+                "insert into lf.wait_row (run_id, team_id, adapter_type, edge, key, since)
+                 values ($1::text::uuid, $2::text::uuid, $3::text, $4::text, $5::text, $6::int8)
+                 on conflict (run_id, team_id, adapter_type, edge, key) do nothing",
+                &[&run_id, &team_id, &adapter_type, &edge, &key, &since],
+            )?;
+            let row = self.query_opt(
+                "select id::text from lf.wait_row
+                 where run_id = $1::text::uuid and team_id = $2::text::uuid and adapter_type = $3::text and edge = $4::text and key = $5::text",
+                &[&run_id, &team_id, &adapter_type, &edge, &key],
+            )?;
+            row.map(|r| r.get(0)).ok_or_else(|| StoreError::Invalid(format!("run {run_id}'s wait on {edge} of {key} was not kept")))
+        })
+    }
+
+    fn wait_arrivals(&self, wait_id: &str) -> Result<WaitArrivals> {
+        let gone: bool = self
+            .query_opt(
+                "select exists (select 1 from lf.arrival a
+                   where a.team_id = w.team_id and a.adapter_type = w.adapter_type and a.edge = w.edge and a.key = w.key and a.seq > w.since and a.gone)
+                 from lf.wait_row w where w.id = $1::text::uuid",
+                &[&wait_id],
+            )?
+            .map(|r| r.get(0))
+            .ok_or_else(|| StoreError::Invalid(format!("no wait {wait_id}")))?;
+        let rows = self.query(
+            "select a.seq, coalesce(a.identity, a.seq::text), a.version, a.landing::text
+             from lf.wait_row w join lf.arrival a
+               on a.team_id = w.team_id and a.adapter_type = w.adapter_type and a.edge = w.edge and a.key = w.key and a.seq > w.since
+             where w.id = $1::text::uuid and not a.gone
+               and not exists (select 1 from lf.wait_seen s
+                 where s.wait_id = w.id and s.identity = coalesce(a.identity, a.seq::text) and s.version is not distinct from a.version)
+               and not exists (select 1 from lf.arrival b
+                 where b.team_id = a.team_id and b.adapter_type = a.adapter_type and b.edge = a.edge and b.key = a.key
+                   and b.seq > w.since and b.seq < a.seq and not b.gone and b.identity = a.identity and b.version is not distinct from a.version)
+             order by a.seq",
+            &[&wait_id],
+        )?;
+        let arrivals = rows
+            .iter()
+            .map(|r| Ok(LoggedArrival { seq: r.get(0), identity: r.get(1), version: r.get(2), landing: landing_of(r.get::<_, Option<&str>>(3))? }))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(WaitArrivals { gone, arrivals })
+    }
+
+    fn note_arrival(&self, wait_id: &str, identity: &str, version: Option<&str>, matched: bool) -> Result<bool> {
+        self.transaction(|| {
+            // Held for the transaction: two notes on one wait take turns.
+            if self.query_opt("select id from lf.wait_row where id = $1::text::uuid for update", &[&wait_id])?.is_none() {
+                return Err(StoreError::Invalid(format!("no wait {wait_id}")));
+            }
+            let noted = self.query_opt(
+                "select 1 from lf.wait_seen where wait_id = $1::text::uuid and identity = $2::text and version is not distinct from $3::text",
+                &[&wait_id, &identity, &version],
+            )?;
+            if noted.is_some() {
+                return Ok(false);
+            }
+            let matched_before: bool = self
+                .query_opt(
+                    "select matched from lf.wait_seen where wait_id = $1::text::uuid and identity = $2::text order by id desc limit 1",
+                    &[&wait_id, &identity],
+                )?
+                .map(|r| r.get(0))
+                .unwrap_or(false);
+            self.execute(
+                "insert into lf.wait_seen (wait_id, identity, version, matched) values ($1::text::uuid, $2::text, $3::text, $4::bool)",
+                &[&wait_id, &identity, &version, &matched],
+            )?;
+            Ok(matched && !matched_before)
+        })
+    }
+
+    fn sweep_arrivals(&self, before: &str, limit: i64) -> Result<i64> {
+        let swept = self.execute(
+            "delete from lf.arrival where seq in (
+               select a.seq from lf.arrival a
+               where a.logged_at < $1::text::timestamptz
+                 and not exists (select 1 from lf.wait_row w
+                   where w.team_id = a.team_id and w.adapter_type = a.adapter_type and w.edge = a.edge and w.key = a.key and w.since < a.seq)
+               order by a.seq limit $2::int8)",
+            &[&before, &limit],
+        )?;
+        Ok(i64::try_from(swept).unwrap_or(i64::MAX))
+    }
+
     // ── The run lease ───────────────────────────────────────────────────────
 
     /// One statement: taken only while free or lapsed, and in the same
@@ -933,7 +1072,8 @@ impl RunHostStore for PgStore {
                     return Ok(false);
                 }
             }
-            for table in ["parked_run", "join_pending", "join_branch_export"] {
+            // A wait's notes go with its row.
+            for table in ["parked_run", "join_pending", "join_branch_export", "wait_row"] {
                 self.execute(&format!("delete from lf.{table} where run_id = $1::text::uuid"), &[&run_id])?;
             }
             Ok(true)

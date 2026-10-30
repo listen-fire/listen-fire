@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The store slot's method table serves the waits family: `waits.mark`, `waits.log`, `waits.open`, `waits.arrivals`, `waits.note` and `waits.sweep`, and `parks.commit`'s park may be `{ kind: "wait", waitId }`. A store module built on the kit implements the six new `Store` methods (docs/contracts/store-slot.md).
 - `Reference`'s free members are documented as the 0.13 ones: `listenable`, `cursor`, `identity`, `version`, `resolvesEmpty`, `readable`. A module built on the kit declares `listenable` where it declared `awaitable` and `watchable`; a 0.13 `listen-fire` refuses the retired two.
 
 ## 0.12.8 - 2026-10-27

@@ -1,0 +1,199 @@
+{
+  "about": "The store's waits family: the arrival log, wait rows and their newly-matches bits (docs/contracts/store-slot.md, `waits.*`). Held by listen-fire's stores (crates/lf/src/waits.rs runs every case over the SQLite state file, and over Postgres when LF_TEST_PG names one) and by the engine's TypeScript stores. Each case runs on an empty store. A run or team name stands for a fresh id (a uuid) per case; every run named is started before the first step. `team` defaults to \"t\" and `adapter` to \"acme\". Marks and waits are named by `as` and referred to by that name. `at` and `before` are milliseconds from now. Steps: `mark` (waits.mark, kept as `as`); `log` (waits.log of `arrivals`, logged `at`; `wakes` the parked waits it answers, in any order); `open` (waits.open since the mark `since`, kept as `as`; `same` names an earlier wait it must be); `arrivals` (waits.arrivals: `gone`, and `arrivals` in log order, each checked on the keys it gives); `note` (waits.note, answering `counts`); `park` (parks.commit with `{ kind: \"wait\", waitId }` at `address`); `deleteLeaves` (parks.deleteLeaves); `drop` (leases.dropRunState); `sweep` (waits.sweep of what was logged before `before`, at most 1000).",
+  "cases": [
+    {
+      "case": "an arrival logged before its wait opens counts when the mark precedes it",
+      "steps": [
+        { "do": "mark", "as": "m" },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1", "landing": { "Body": "lunch?" } }], "wakes": [] },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "k1", "version": null, "landing": { "Body": "lunch?" } }] }
+      ]
+    },
+    {
+      "case": "an arrival before the mark is not the waits",
+      "steps": [
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1" }], "wakes": [] },
+        { "do": "mark", "as": "m" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
+      ]
+    },
+    {
+      "case": "an arrival is the waits only on its own record, edge, adapter and team",
+      "steps": [
+        { "do": "mark", "as": "m" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        {
+          "do": "log",
+          "arrivals": [
+            { "edge": "Comments", "key": "thread:c2", "identity": "other-record" },
+            { "edge": "Reactions", "key": "thread:c1", "identity": "other-edge" }
+          ],
+          "wakes": []
+        },
+        { "do": "log", "adapter": "other", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "other-adapter" }], "wakes": [] },
+        { "do": "log", "team": "u", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "other-team" }], "wakes": [] },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
+      ]
+    },
+    {
+      "case": "without a version an identity is one arrival and with one each version is another",
+      "steps": [
+        { "do": "mark", "as": "m" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        {
+          "do": "log",
+          "arrivals": [
+            { "edge": "Comments", "key": "thread:c1", "identity": "k1", "landing": { "n": 1 } },
+            { "edge": "Comments", "key": "thread:c1", "identity": "k1", "landing": { "n": 2 } }
+          ],
+          "wakes": []
+        },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "k1", "version": null, "landing": { "n": 1 } }] },
+        { "do": "note", "wait": "w", "identity": "k1", "version": null, "matched": true, "counts": true },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1" }], "wakes": [] },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1", "version": "2" }], "wakes": [] },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "k1", "version": "2" }] }
+      ]
+    },
+    {
+      "case": "an arrival without an identity is its own",
+      "steps": [
+        { "do": "mark", "as": "m" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        {
+          "do": "log",
+          "arrivals": [
+            { "edge": "Comments", "key": "thread:c1", "landing": { "n": 1 } },
+            { "edge": "Comments", "key": "thread:c1", "landing": { "n": 1 } }
+          ],
+          "wakes": []
+        },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "version": null, "landing": { "n": 1 } }, { "version": null, "landing": { "n": 1 } }] }
+      ]
+    },
+    {
+      "case": "newly matches counts once until it stops matching",
+      "steps": [
+        { "do": "mark", "as": "m" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Notes", "key": "deal:d1", "since": "m" },
+        { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": false, "counts": false },
+        { "do": "note", "wait": "w", "identity": "k1", "version": "2", "matched": true, "counts": true },
+        { "do": "note", "wait": "w", "identity": "k1", "version": "3", "matched": true, "counts": false },
+        { "do": "note", "wait": "w", "identity": "k1", "version": "4", "matched": false, "counts": false },
+        { "do": "note", "wait": "w", "identity": "k1", "version": "5", "matched": true, "counts": true },
+        { "do": "note", "wait": "w", "identity": "k1", "version": "5", "matched": true, "counts": false },
+        { "do": "note", "wait": "w", "identity": "k2", "version": "1", "matched": true, "counts": true }
+      ]
+    },
+    {
+      "case": "a noted arrival is no longer listed",
+      "steps": [
+        { "do": "mark", "as": "m" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Notes", "key": "deal:d1", "since": "m" },
+        {
+          "do": "log",
+          "arrivals": [
+            { "edge": "Notes", "key": "deal:d1", "identity": "k1", "version": "1" },
+            { "edge": "Notes", "key": "deal:d1", "identity": "k1", "version": "2" }
+          ],
+          "wakes": []
+        },
+        { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": false, "counts": false },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "k1", "version": "2" }] }
+      ]
+    },
+    {
+      "case": "two arrivals on one wait count in log order",
+      "steps": [
+        { "do": "mark", "as": "m" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        {
+          "do": "log",
+          "arrivals": [
+            { "edge": "Comments", "key": "thread:c1", "identity": "zeta" },
+            { "edge": "Comments", "key": "thread:c1", "identity": "alpha" }
+          ],
+          "wakes": []
+        },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "zeta" }, { "identity": "alpha" }] }
+      ]
+    },
+    {
+      "case": "a gone arrival marks the wait gone",
+      "steps": [
+        { "do": "mark", "as": "m" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c2", "gone": true }], "wakes": [] },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "gone": true }], "wakes": [] },
+        { "do": "arrivals", "wait": "w", "gone": true, "arrivals": [] }
+      ]
+    },
+    {
+      "case": "logging answers only the parked waits on its key",
+      "steps": [
+        { "do": "mark", "as": "m" },
+        { "do": "open", "as": "parked", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        { "do": "open", "as": "unparked", "run": "run-2", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        { "do": "open", "as": "elsewhere", "run": "run-3", "edge": "Comments", "key": "thread:c2", "since": "m" },
+        { "do": "park", "run": "run-1", "wait": "parked", "address": "s1" },
+        { "do": "park", "run": "run-3", "wait": "elsewhere", "address": "s1" },
+        {
+          "do": "log",
+          "arrivals": [
+            { "edge": "Comments", "key": "thread:c1", "identity": "k1" },
+            { "edge": "Comments", "key": "thread:c1", "identity": "k2" }
+          ],
+          "wakes": [{ "run": "run-1", "wait": "parked", "address": "s1" }]
+        },
+        { "do": "log", "adapter": "other", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k3" }], "wakes": [] },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "gone": true }], "wakes": [{ "run": "run-1", "wait": "parked", "address": "s1" }] },
+        { "do": "deleteLeaves", "run": "run-1", "addresses": ["s1"] },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k4" }], "wakes": [] }
+      ]
+    },
+    {
+      "case": "opening a wait its run already has on that record's edge is the same wait from its first mark",
+      "steps": [
+        { "do": "mark", "as": "m1" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m1" },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1" }], "wakes": [] },
+        { "do": "mark", "as": "m2" },
+        { "do": "open", "as": "again", "same": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m2" },
+        { "do": "arrivals", "wait": "again", "gone": false, "arrivals": [{ "identity": "k1" }] },
+        { "do": "open", "as": "other-run", "run": "run-2", "edge": "Comments", "key": "thread:c1", "since": "m2" },
+        { "do": "arrivals", "wait": "other-run", "gone": false, "arrivals": [] }
+      ]
+    },
+    {
+      "case": "rows drop with their run and the sweep spares what a live row reads",
+      "steps": [
+        { "do": "mark", "as": "m" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        { "do": "park", "run": "run-1", "wait": "w", "address": "s1" },
+        {
+          "do": "log",
+          "at": -7200000,
+          "arrivals": [
+            { "edge": "Comments", "key": "thread:c1", "identity": "read" },
+            { "edge": "Comments", "key": "thread:c2", "identity": "unread" }
+          ],
+          "wakes": [{ "run": "run-1", "wait": "w", "address": "s1" }]
+        },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c2", "identity": "recent" }], "wakes": [] },
+        { "do": "sweep", "before": -3600000 },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "read" }] },
+        { "do": "open", "as": "c2", "run": "run-2", "edge": "Comments", "key": "thread:c2", "since": "m" },
+        { "do": "arrivals", "wait": "c2", "gone": false, "arrivals": [{ "identity": "recent" }] },
+        { "do": "drop", "run": "run-1" },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "after" }], "wakes": [] },
+        { "do": "sweep", "before": -3600000 },
+        { "do": "open", "as": "c1", "run": "run-2", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        { "do": "arrivals", "wait": "c1", "gone": false, "arrivals": [{ "identity": "after" }] }
+      ]
+    }
+  ]
+}

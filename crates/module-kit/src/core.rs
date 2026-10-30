@@ -208,8 +208,62 @@ pub enum ParkKind {
     /// Kept with its correlation.
     #[serde(rename_all = "camelCase")]
     Await { team_id: String, adapter_type: String, correlation_key: String },
-    /// Drops the address's correlation.
+    /// Parks the wait at the address (its leaf's reason is `await`); a run
+    /// with no such wait writes nothing.
+    #[serde(rename_all = "camelCase")]
+    Wait { wait_id: String },
+    /// Drops the address's correlation, and parks no wait there any more.
     Limit,
+}
+
+/// One arrival a module reported (`waits.log`'s `arrivals`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewArrival {
+    pub edge: String,
+    /// The record whose edge it arrived on.
+    pub key: String,
+    /// `None`: this report is an arrival of its own (its seq is its identity).
+    #[serde(default)]
+    pub identity: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub landing: Option<Js>,
+    /// The record is gone: nothing more arrives on its edges.
+    #[serde(default)]
+    pub gone: bool,
+}
+
+/// A wait parked at `address` that a logged arrival answers.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitWake {
+    pub run_id: String,
+    pub wait_id: String,
+    pub address: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenedWait {
+    pub wait_id: String,
+}
+
+/// An arrival a wait has yet to judge (`identity`: the reported one, else its seq).
+#[derive(Debug, Clone, Serialize)]
+pub struct LoggedArrival {
+    pub seq: i64,
+    pub identity: String,
+    pub version: Option<String>,
+    pub landing: Js,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WaitArrivals {
+    /// A gone arrival was logged on the wait's record after its mark.
+    pub gone: bool,
+    pub arrivals: Vec<LoggedArrival>,
 }
 
 /// What a `work.release` says of the claim.
@@ -345,8 +399,8 @@ pub struct ModuleProcesses {
 
 slot! {
     /// The store slot: a host's run state (runs, parks, joins, await
-    /// correlations, leases, the work queue, library sources, callbacks,
-    /// pull cursors and event receipts). The meaning of each method is the
+    /// correlations, waits and the arrivals they read, leases, the work
+    /// queue, library sources, callbacks, pull cursors and event receipts). The meaning of each method is the
     /// run host's contract suite's.
     pub trait Store served as StoreModule in slot "store" {
         /// Always the first request.
@@ -407,10 +461,29 @@ slot! {
         "correlations.ofRun" => fn correlations_of_run(CorrelationsOfRun { run_id: String, adapter_type: String }) -> Vec<RunCorrelation>;
         "correlations.drop" => fn drop_correlation(CorrelationsDrop { run_id: String, address: String }) -> ();
         "correlations.dropRun" => fn drop_run_correlations(CorrelationsDropRun { run_id: String }) -> ();
+        /// The latest seq logged (store-wide; 0 for none).
+        "waits.mark" => fn arrival_mark(WaitsMark {}) -> i64;
+        /// Log the arrivals in order, as one write: the parked waits on their
+        /// records, one wake each (a wait is parked while its leaf is kept).
+        "waits.log" => fn log_arrivals(WaitsLog { team_id: String, adapter_type: String, arrivals: Vec<NewArrival>, at: String }) -> Vec<WaitWake>;
+        /// A run that already waits on this edge of this record keeps that
+        /// wait, and its `since`.
+        "waits.open" => fn open_wait(WaitsOpen { run_id: String, team_id: String, adapter_type: String, edge: String, key: String, since: i64 }) -> OpenedWait;
+        /// The arrivals logged after the wait's `since` on its record's edge
+        /// that it has not noted, the first of each identity and version
+        /// only, in log order.
+        "waits.arrivals" => fn wait_arrivals(WaitsArrivals { wait_id: String }) -> WaitArrivals;
+        /// Whether the arrival counts: it matched, and its identity did not
+        /// at its last noted arrival. A noted arrival counts no more.
+        "waits.note" => fn note_arrival(WaitsNote { wait_id: String, identity: String, version: Option<String>, matched: bool }) -> bool;
+        /// Forget at most `limit` arrivals logged before `before` that no
+        /// wait reads; how many went.
+        "waits.sweep" => fn sweep_arrivals(WaitsSweep { before: String, limit: i64 }) -> i64;
         /// `None` while another holds it.
         "leases.claim" => fn claim_lease(LeasesClaim { run_id: String, ttl_ms: i64 }) -> Option<Lease>;
         "leases.renew" => fn renew_lease(LeasesRenew { run_id: String, token: String, ttl_ms: i64 }) -> bool;
         "leases.release" => fn release_lease(LeasesRelease { run_id: String, token: String }) -> ();
+        /// Drops the run's leaves, joins and waits.
         "leases.dropRunState" => fn drop_run_state(LeasesDropRunState { run_id: String, fence: Option<String> }) -> bool;
         "work.enqueue" => fn enqueue(WorkEnqueue { kind: String, key: String, payload: Js, due_at: Option<String>, team_id: Option<String> }) -> ();
         /// Insert when no row has the key, in one write; a row there in any

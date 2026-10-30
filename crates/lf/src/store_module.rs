@@ -18,7 +18,8 @@ use module_wire::envelope::METHOD_NOT_IMPLEMENTED_CODE;
 use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Rerun, Result, RunRow, RunStart, StoreError,
 };
-use crate::store_wire::{Wire, delivery_params, event_run_params, int, num, opt, park_params, rows, run_start_params, to_rows};
+use crate::store_wire::{Wire, delivery_params, event_run_params, int, num, open_wait_params, opt, park_params, rows, run_start_params, to_rows};
+use crate::waits::{NewArrival, OpenWait, WaitArrivals, WaitWake};
 
 /// The error code a fenced write answers when the run's lease is gone
 /// (`RunLeaseLost`), its `data` `{ runId }`.
@@ -246,6 +247,29 @@ impl RunHostStore for ProcessStore {
     }
     fn drop_run_correlations(&self, run_id: &str) -> Result<()> {
         self.unit("correlations.dropRun", obj! { "runId" => s(run_id) })
+    }
+
+    fn arrival_mark(&self) -> Result<i64> {
+        let answer = self.call("waits.mark", obj! {})?;
+        int(&answer).ok_or_else(|| self.malformed("waits.mark", &answer))
+    }
+    fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {
+        self.rows("waits.log", obj! { "teamId" => s(team_id), "adapterType" => s(adapter_type), "arrivals" => to_rows(arrivals), "at" => s(at) })
+    }
+    fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {
+        let answer = self.call("waits.open", open_wait_params(wait))?;
+        answer.get("waitId").and_then(Js::as_str).map(str::to_string).ok_or_else(|| self.malformed("waits.open", &answer))
+    }
+    fn wait_arrivals(&self, wait_id: &str) -> Result<WaitArrivals> {
+        let answer = self.call("waits.arrivals", obj! { "waitId" => s(wait_id) })?;
+        WaitArrivals::from_wire(&answer).ok_or_else(|| self.malformed("waits.arrivals", &answer))
+    }
+    fn note_arrival(&self, wait_id: &str, identity: &str, version: Option<&str>, matched: bool) -> Result<bool> {
+        self.flag("waits.note", obj! { "waitId" => s(wait_id), "identity" => s(identity), "version" => opt(version), "matched" => Js::Bool(matched) })
+    }
+    fn sweep_arrivals(&self, before: &str, limit: i64) -> Result<i64> {
+        let answer = self.call("waits.sweep", obj! { "before" => s(before), "limit" => Js::Num(limit.into()) })?;
+        int(&answer).ok_or_else(|| self.malformed("waits.sweep", &answer))
     }
 
     fn claim_lease(&self, run_id: &str, ttl_ms: i64) -> Result<Option<String>> {

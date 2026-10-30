@@ -27,6 +27,7 @@ use crate::obj;
 use crate::slot_server::{Listen, Refusal};
 use crate::store::{ClaimDue, DeliveryQuery, NewWork, Park, Release, Rerun, RunStart, StoreError, iso};
 use crate::store_wire::{Wire, new_delivery, num, opt, park_kind, rows, to_rows};
+use crate::waits::{NewArrival, OpenWait};
 
 /// The store slot's methods (docs/contracts/store-slot.md), as its manifest lists them.
 pub const STORE_METHODS: &[&str] = &[
@@ -40,7 +41,7 @@ pub const STORE_METHODS: &[&str] = &[
     "work.complete", "work.release", "sources.put", "sources.get", "inbound.checkpoint", "inbound.saveCheckpoint", "processes.list",
     "processes.swap", "events.claim", "events.startRun", "runs.lapsed", "parks.commit", "work.bury", "inbound.keepDelivery",
     "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries", "inbound.forgetDeliveryId", "work.enqueueIfAbsent",
-    "runs.rerun",
+    "runs.rerun", "waits.mark", "waits.log", "waits.open", "waits.arrivals", "waits.note", "waits.sweep",
 ];
 
 pub async fn serve(spec: &StoreSpec, listen: Listen) -> Result<(), String> {
@@ -254,7 +255,7 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
         }
         "parks.commit" => {
             let (state, kind) = (p.value("state"), p.value("park"));
-            let kind = park_kind(&kind).ok_or_else(|| Failure::Params("park: expected { kind: timer | await | limit, … }".into()))?;
+            let kind = park_kind(&kind).ok_or_else(|| Failure::Params("park: expected { kind: timer | await | wait | limit, … }".into()))?;
             store.commit_park(&Park { run_id: p.str("runId")?, address: p.str("address")?, state: &state, fence: p.opt_str("fence")?, kind })?;
             none
         }
@@ -306,6 +307,27 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
             store.drop_run_correlations(p.str("runId")?)?;
             none
         }
+
+        "waits.mark" => Ok(Js::Num(store.arrival_mark()?.into())),
+        "waits.log" => {
+            let arrivals: Vec<NewArrival> =
+                rows(&p.value("arrivals")).ok_or_else(|| Failure::Params("arrivals: expected a list of { edge, key, identity, version, landing, gone }".into()))?;
+            Ok(to_rows(&store.log_arrivals(p.str("teamId")?, p.str("adapterType")?, &arrivals, p.str("at")?)?))
+        }
+        "waits.open" => {
+            let wait = OpenWait {
+                run_id: p.str("runId")?,
+                team_id: p.str("teamId")?,
+                adapter_type: p.str("adapterType")?,
+                edge: p.str("edge")?,
+                key: p.str("key")?,
+                since: p.int("since")?,
+            };
+            Ok(Js::from(obj! { "waitId" => Js::str(store.open_wait(&wait)?) }))
+        }
+        "waits.arrivals" => Ok(store.wait_arrivals(p.str("waitId")?)?.to_wire()),
+        "waits.note" => Ok(Js::Bool(store.note_arrival(p.str("waitId")?, p.str("identity")?, p.opt_str("version")?, p.flag("matched"))?)),
+        "waits.sweep" => Ok(Js::Num(store.sweep_arrivals(p.str("before")?, p.int("limit")?)?.into())),
 
         "leases.claim" => Ok(match store.claim_lease(p.str("runId")?, p.int("ttlMs")?)? {
             None => Js::Null,
@@ -390,7 +412,8 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
 mod tests {
     use super::*;
     use crate::store::{DeliverySource, NewDelivery, NewWork, Park, ParkKind, RunStart, Store};
-    use crate::store_wire::{delivery_params, event_run_params, park_params};
+    use crate::store_wire::{delivery_params, event_run_params, int, open_wait_params, park_params};
+    use crate::waits::WaitArrivals;
 
     fn state_file() -> Store {
         let dir = std::env::temp_dir().join(format!("lf-contract-{}", uuid::Uuid::new_v4()));
@@ -468,6 +491,46 @@ mod tests {
         assert_eq!(call(&store, "work.claimDue", obj! { "limit" => Js::Num(10.into()), "leaseMs" => Js::Num(60_000.into()) }), Js::Arr(vec![]));
     }
 
+    /// A wait's round trip as a store module's client sends it: the mark,
+    /// an arrival logged, the wait opened and parked, its arrivals read and
+    /// noted.
+    #[test]
+    fn a_wait_crosses_the_store_wire() {
+        let store = state_file();
+        store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+        let mark = call(&store, "waits.mark", obj! {});
+        let arrival = |identity: &str| NewArrival {
+            edge: "Comments".into(),
+            key: "thread:c1".into(),
+            identity: Some(identity.into()),
+            version: Some("1".into()),
+            landing: Some(Js::from(obj! { "Body" => Js::str("lunch?") })),
+            gone: false,
+        };
+        let log = |identity: &str| {
+            let params = obj! { "teamId" => Js::str("t"), "adapterType" => Js::str("acme"), "arrivals" => to_rows(&[arrival(identity)]), "at" => Js::str(iso(0)) };
+            call(&store, "waits.log", params)
+        };
+        assert_eq!(log("k1"), Js::Arr(vec![]));
+        let wait = OpenWait { run_id: "run-1", team_id: "t", adapter_type: "acme", edge: "Comments", key: "thread:c1", since: int(&mark).unwrap() };
+        let opened = call(&store, "waits.open", open_wait_params(&wait));
+        let wait_id = opened.get("waitId").and_then(Js::as_str).unwrap().to_string();
+        let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait_id } };
+        call(&store, "parks.commit", park_params(&park));
+        let wake = obj! { "runId" => Js::str("run-1"), "waitId" => Js::str(&wait_id), "address" => Js::str("s1") };
+        assert_eq!(log("k2"), Js::Arr(vec![Js::from(wake)]));
+        let read = call(&store, "waits.arrivals", obj! { "waitId" => Js::str(&wait_id) });
+        let arrivals = WaitArrivals::from_wire(&read).unwrap();
+        assert_eq!((arrivals.gone, arrivals.arrivals.iter().map(|a| a.identity.as_str()).collect::<Vec<_>>()), (false, vec!["k1", "k2"]));
+        assert_eq!(arrivals.arrivals[0].landing, Js::from(obj! { "Body" => Js::str("lunch?") }));
+        let note = |identity: &str| obj! { "waitId" => Js::str(&wait_id), "identity" => Js::str(identity), "version" => Js::str("1"), "matched" => Js::Bool(true) };
+        assert_eq!(call(&store, "waits.note", note("k1")), Js::Bool(true));
+        assert_eq!(call(&store, "waits.note", note("k1")), Js::Bool(false));
+        let read = WaitArrivals::from_wire(&call(&store, "waits.arrivals", obj! { "waitId" => Js::str(&wait_id) })).unwrap();
+        assert_eq!(read.arrivals.iter().map(|a| a.identity.as_str()).collect::<Vec<_>>(), ["k2"]);
+        assert_eq!(call(&store, "waits.sweep", obj! { "before" => Js::str(iso(0)), "limit" => Js::Num(10.into()) }), Js::Num(0.into()), "the wait reads both");
+    }
+
     #[test]
     fn every_method_served_is_listed() {
         for method in [
@@ -480,6 +543,12 @@ mod tests {
             "inbound.delivery",
             "inbound.sweepDeliveries",
             "inbound.forgetDeliveryId",
+            "waits.mark",
+            "waits.log",
+            "waits.open",
+            "waits.arrivals",
+            "waits.note",
+            "waits.sweep",
         ] {
             assert!(STORE_METHODS.contains(&method), "{method}");
         }

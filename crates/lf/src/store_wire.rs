@@ -10,6 +10,7 @@ use crate::obj;
 use crate::store::{
     BranchExport, ClaimedWork, CorrelatedAwait, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind, RunRow, RunStart,
 };
+use crate::waits::{LoggedArrival, NewArrival, OpenWait, WaitArrivals, WaitWake};
 
 /// A row as the store wire carries it.
 pub trait Wire: Sized {
@@ -163,6 +164,7 @@ pub fn park_params(park: &Park<'_>) -> Obj {
             "adapterType" => Js::str(*adapter_type),
             "correlationKey" => Js::str(*correlation_key),
         },
+        ParkKind::Wait { wait_id } => obj! { "kind" => Js::str("wait"), "waitId" => Js::str(*wait_id) },
         ParkKind::Limit => obj! { "kind" => Js::str("limit") },
     };
     obj! {
@@ -180,6 +182,7 @@ pub fn park_kind(value: &Js) -> Option<ParkKind<'_>> {
     Some(match field("kind")? {
         "timer" => ParkKind::Timer { wake_at: field("wakeAt")? },
         "await" => ParkKind::Await { team_id: field("teamId")?, adapter_type: field("adapterType")?, correlation_key: field("correlationKey")? },
+        "wait" => ParkKind::Wait { wait_id: field("waitId")? },
         "limit" => ParkKind::Limit,
         _ => return None,
     })
@@ -282,6 +285,94 @@ impl Wire for DeliveryRow {
                 Some(events) => Some(events.as_array()?.to_vec()),
             },
         })
+    }
+}
+
+/// `waits.log`'s arrivals: an absent `landing` and `null` alike are none,
+/// as a stored one reads back.
+impl Wire for NewArrival {
+    fn to_wire(&self) -> Js {
+        Js::from(obj! {
+            "edge" => Js::str(&self.edge),
+            "key" => Js::str(&self.key),
+            "identity" => opt(self.identity.as_deref()),
+            "version" => opt(self.version.as_deref()),
+            "landing" => self.landing.clone().unwrap_or(Js::Null),
+            "gone" => Js::Bool(self.gone),
+        })
+    }
+
+    fn from_wire(v: &Js) -> Option<Self> {
+        Some(NewArrival {
+            edge: text(v, "edge")?,
+            key: text(v, "key")?,
+            identity: opt_text(v, "identity")?,
+            version: opt_text(v, "version")?,
+            landing: v.get("landing").filter(|l| **l != Js::Null).cloned(),
+            gone: match v.get("gone") {
+                None => false,
+                Some(Js::Bool(gone)) => *gone,
+                Some(_) => return None,
+            },
+        })
+    }
+}
+
+/// `waits.open`'s params.
+pub fn open_wait_params(wait: &OpenWait<'_>) -> Obj {
+    obj! {
+        "runId" => Js::str(wait.run_id),
+        "teamId" => Js::str(wait.team_id),
+        "adapterType" => Js::str(wait.adapter_type),
+        "edge" => Js::str(wait.edge),
+        "key" => Js::str(wait.key),
+        "since" => Js::Num(wait.since.into()),
+    }
+}
+
+impl Wire for LoggedArrival {
+    fn to_wire(&self) -> Js {
+        Js::from(obj! {
+            "seq" => Js::Num(self.seq.into()),
+            "identity" => Js::str(&self.identity),
+            "version" => opt(self.version.as_deref()),
+            "landing" => self.landing.clone(),
+        })
+    }
+
+    fn from_wire(v: &Js) -> Option<Self> {
+        Some(LoggedArrival {
+            seq: int(v.get("seq")?)?,
+            identity: text(v, "identity")?,
+            version: opt_text(v, "version")?,
+            landing: v.get("landing").cloned().unwrap_or(Js::Null),
+        })
+    }
+}
+
+impl Wire for WaitArrivals {
+    fn to_wire(&self) -> Js {
+        Js::from(obj! { "gone" => Js::Bool(self.gone), "arrivals" => to_rows(&self.arrivals) })
+    }
+
+    fn from_wire(v: &Js) -> Option<Self> {
+        Some(WaitArrivals {
+            gone: match v.get("gone")? {
+                Js::Bool(gone) => *gone,
+                _ => return None,
+            },
+            arrivals: rows(v.get("arrivals")?)?,
+        })
+    }
+}
+
+impl Wire for WaitWake {
+    fn to_wire(&self) -> Js {
+        Js::from(obj! { "runId" => Js::str(&self.run_id), "waitId" => Js::str(&self.wait_id), "address" => Js::str(&self.address) })
+    }
+
+    fn from_wire(v: &Js) -> Option<Self> {
+        Some(WaitWake { run_id: text(v, "runId")?, wait_id: text(v, "waitId")?, address: text(v, "address")? })
     }
 }
 
@@ -430,6 +521,7 @@ mod tests {
         let kinds = [
             ParkKind::Timer { wake_at: "2026-10-20T00:00:00.000Z" },
             ParkKind::Await { team_id: "t", adapter_type: "mail", correlation_key: "k" },
+            ParkKind::Wait { wait_id: "w" },
             ParkKind::Limit,
         ];
         for kind in kinds {
@@ -449,5 +541,18 @@ mod tests {
         };
         let params = Js::from(delivery_params(&delivery));
         assert_eq!(new_delivery(&params).map(|d| Js::from(delivery_params(&d))), Some(params));
+    }
+
+    #[test]
+    fn a_wait_row_reads_back_as_written() {
+        let landed = NewArrival { edge: "Comments".into(), key: "thread:c1".into(), identity: Some("k1".into()), version: None, landing: Some(Js::str("x")), gone: false };
+        assert_eq!(NewArrival::from_wire(&landed.to_wire()), Some(landed.clone()));
+        let gone = NewArrival { identity: None, landing: None, gone: true, ..landed };
+        assert_eq!(NewArrival::from_wire(&gone.to_wire()), Some(gone));
+        let arrivals = WaitArrivals { gone: false, arrivals: vec![LoggedArrival { seq: 7, identity: "k1".into(), version: Some("2".into()), landing: Js::str("x") }] };
+        assert_eq!(WaitArrivals::from_wire(&arrivals.to_wire()), Some(arrivals));
+        let wake = WaitWake { run_id: "r".into(), wait_id: "w".into(), address: "s1".into() };
+        assert_eq!(WaitWake::from_wire(&wake.to_wire()), Some(wake));
+        assert_eq!(park_kind(&Js::from(obj! { "kind" => Js::str("wait"), "waitId" => Js::str("w") })).map(|k| k.reason()), Some("await"));
     }
 }

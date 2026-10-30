@@ -1,14 +1,21 @@
 // The store slot through the real `listen-fire` binary: a third-party store module
 // (store_module/forward.mjs, a process listen-fire drives over the store wire) keeps a
 // run's state, and an event carrying an `idempotencyKey` runs each listen
-// once — over the default SQLite store and over the store module alike.
+// once — over the default SQLite store and over the store module alike. A
+// run's waits cross the wire too: the shared waits cases
+// (packages/engine-contracts/conformance/store-waits.json), each sent to
+// `listen-fire --contract-store-slot`, which drives the module.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { z } from 'zod';
+import { RpcStoreBackend } from 'movement-engine/services/run_host/rpc_store';
 import { companies, lf, project } from './example';
+import { lfBinary } from './lf_bin';
 import { withStoreModule } from './store_module/project';
 
 function moduleProject(): { dir: string; statePath: string } {
@@ -61,5 +68,128 @@ for (const [over, make] of [
     assert.equal(companies(dir).length, 1, companies(dir).join(', '));
     // Another key is another occurrence.
     assert.match(lf(dir, 'run', '--event', keyedEvent(dir, 'delivery-2')).out, /^run \S+ companies:\S+ (?:completed|parked)/m);
+  });
+}
+
+const WaitsCases = z.object({ cases: z.array(z.object({ case: z.string(), steps: z.array(z.record(z.string(), z.unknown())) })) });
+const waitsCases = WaitsCases.parse(
+  JSON.parse(readFileSync(join(__dirname, '../../../../packages/engine-contracts/conformance/store-waits.json'), 'utf8')),
+).cases;
+const Wake = z.object({ runId: z.string(), waitId: z.string(), address: z.string() });
+const Arrivals = z.object({
+  gone: z.boolean(),
+  arrivals: z.array(z.object({ seq: z.number(), identity: z.string(), version: z.string().nullable(), landing: z.unknown() })),
+});
+
+function field(value: unknown, key: string): unknown {
+  return typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined;
+}
+
+function text(value: unknown, key: string): string {
+  const found = field(value, key);
+  if (typeof found !== 'string') throw new Error(`${key}: expected a string in ${JSON.stringify(value)}`);
+  return found;
+}
+
+function items(value: unknown, key: string): unknown[] {
+  const found = field(value, key);
+  if (!Array.isArray(found)) throw new Error(`${key}: expected a list in ${JSON.stringify(value)}`);
+  return found;
+}
+
+const byWait = (a: z.infer<typeof Wake>, b: z.infer<typeof Wake>) => a.waitId.localeCompare(b.waitId);
+
+/** One case, step by step, over the wire (the Rust runner in crates/lf/src/waits.rs reads it alike). */
+async function runWaitsCase(store: RpcStoreBackend, steps: Record<string, unknown>[]): Promise<void> {
+  const ids = new Map<string, string>();
+  const id = (name: string) => {
+    const known = ids.get(name);
+    if (known !== undefined) return known;
+    const made = randomUUID();
+    ids.set(name, made);
+    return made;
+  };
+  const marks = new Map<string, number>();
+  const waits = new Map<string, string>();
+  const wait = (name: string) => waits.get(name) ?? assert.fail(`no wait named ${name}`);
+  for (const run of new Set(steps.flatMap((step) => (typeof step.run === 'string' ? [step.run] : [])))) {
+    await store.startRun({ id: id(run), file: 'f', movement: 'm', startedAt: new Date().toISOString(), input: '{}' });
+  }
+  for (const [index, step] of steps.entries()) {
+    const at = `step ${index + 1}`;
+    const teamId = id(typeof step.team === 'string' ? step.team : 't');
+    const adapterType = typeof step.adapter === 'string' ? step.adapter : 'acme';
+    const offset = (key: string) => {
+      const ms = step[key];
+      return new Date(Date.now() + (typeof ms === 'number' ? ms : 0)).toISOString();
+    };
+    switch (text(step, 'do')) {
+      case 'mark':
+        marks.set(text(step, 'as'), await store.call('waits.mark', {}, z.number()));
+        break;
+      case 'log': {
+        const wakes = await store.call('waits.log', { teamId, adapterType, arrivals: items(step, 'arrivals'), at: offset('at') }, z.array(Wake));
+        const expected = items(step, 'wakes').map((w) => ({ runId: id(text(w, 'run')), waitId: wait(text(w, 'wait')), address: text(w, 'address') }));
+        assert.deepEqual(wakes.sort(byWait), expected.sort(byWait), `${at}: the wakes`);
+        break;
+      }
+      case 'open': {
+        const since = marks.get(text(step, 'since')) ?? assert.fail(`no mark named ${text(step, 'since')}`);
+        const params = { runId: id(text(step, 'run')), teamId, adapterType, edge: text(step, 'edge'), key: text(step, 'key'), since };
+        const { waitId } = await store.call('waits.open', params, z.object({ waitId: z.string() }));
+        if (typeof step.same === 'string') assert.equal(waitId, wait(step.same), `${at}: the same wait`);
+        else assert.ok(![...waits.values()].includes(waitId), `${at}: a new wait`);
+        waits.set(text(step, 'as'), waitId);
+        break;
+      }
+      case 'arrivals': {
+        const got = await store.call('waits.arrivals', { waitId: wait(text(step, 'wait')) }, Arrivals);
+        assert.equal(got.gone, step.gone === true, `${at}: gone`);
+        const expected = items(step, 'arrivals');
+        assert.equal(got.arrivals.length, expected.length, `${at}: ${JSON.stringify(got.arrivals)}`);
+        got.arrivals.forEach((arrival, i) => {
+          if (i > 0) assert.ok(got.arrivals[i - 1].seq < arrival.seq, `${at}: in log order`);
+          for (const key of ['identity', 'version', 'landing'] as const) {
+            if (Object.hasOwn(Object(expected[i]), key)) assert.deepEqual(arrival[key], field(expected[i], key), `${at}: ${key}`);
+          }
+        });
+        break;
+      }
+      case 'note': {
+        const params = { waitId: wait(text(step, 'wait')), identity: text(step, 'identity'), version: step.version ?? null, matched: step.matched === true };
+        assert.equal(await store.call('waits.note', params, z.boolean()), step.counts === true, `${at}: counts`);
+        break;
+      }
+      case 'park': {
+        const park = { kind: 'wait', waitId: wait(text(step, 'wait')) };
+        await store.call('parks.commit', { runId: id(text(step, 'run')), address: text(step, 'address'), state: null, fence: null, park }, z.null());
+        break;
+      }
+      case 'deleteLeaves':
+        await store.call('parks.deleteLeaves', { runId: id(text(step, 'run')), addresses: items(step, 'addresses') }, z.null());
+        break;
+      case 'drop':
+        assert.equal(await store.call('leases.dropRunState', { runId: id(text(step, 'run')), fence: null }, z.boolean()), true, `${at}: dropped`);
+        break;
+      case 'sweep':
+        await store.call('waits.sweep', { before: offset('before'), limit: 1000 }, z.number());
+        break;
+      default:
+        assert.fail(`${at}: no step ${text(step, 'do')}`);
+    }
+  }
+}
+
+for (const { case: name, steps } of waitsCases) {
+  test(`a store module keeps a run's waits: ${name}`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lf-waits-slot-'));
+    writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\n');
+    withStoreModule(dir, join(mkdtempSync(join(tmpdir(), 'lf-waits-state-')), 'kept.db'));
+    const store = new RpcStoreBackend(lfBinary(), ['--contract-store-slot', '--dir', dir]);
+    try {
+      await runWaitsCase(store, steps);
+    } finally {
+      await store.close();
+    }
   });
 }

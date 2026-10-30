@@ -26,6 +26,7 @@ use crate::project::Project;
 use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Rerun, Result, RunRow, RunStart, Store,
 };
+use crate::waits::{NewArrival, OpenWait, WaitArrivals, WaitWake};
 
 /// The tenant a SQLite state file's rows belong to (`LOCAL_TENANT`).
 pub const SQLITE_TENANT: &str = "local";
@@ -213,8 +214,9 @@ pub trait RunHostStore {
     fn leaves(&self, run_id: &str, parked_only: bool, reason: Option<&str>, due_by: Option<&str>) -> Result<Vec<LeafRow>>;
     fn delete_leaves(&self, run_id: &str, addresses: &[String]) -> Result<()>;
     /// A park and what wakes it, as one fenced write: the leaf, its kind's
-    /// row (a timer's `resume_timer` row, an await's correlation, a limit's
-    /// correlation dropped), and the run marked parked.
+    /// row (a timer's `resume_timer` row, an await's correlation, a wait's
+    /// address, a limit's correlation and wait dropped), and the run marked
+    /// parked.
     fn commit_park(&self, park: &Park<'_>) -> Result<()>;
 
     // ── Joins ───────────────────────────────────────────────────────────────
@@ -233,10 +235,32 @@ pub trait RunHostStore {
     fn drop_correlation(&self, run_id: &str, address: &str) -> Result<()>;
     fn drop_run_correlations(&self, run_id: &str) -> Result<()>;
 
+    // ── Waits on listenable edges (crate::waits) ────────────────────────────
+    /// The latest seq logged: a wait opened since it reads every arrival
+    /// logged after this call.
+    fn arrival_mark(&self) -> Result<i64>;
+    /// Log the arrivals, in order, as one write: the parked waits on their
+    /// records (one wake each).
+    fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>>;
+    /// The wait's id; a run that already waits on this edge of this record
+    /// keeps that wait and its mark.
+    fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String>;
+    /// The arrivals logged after the wait's mark on its record's edge that it
+    /// has not noted, the first of each identity and version only, in log
+    /// order; and whether the record is gone.
+    fn wait_arrivals(&self, wait_id: &str) -> Result<WaitArrivals>;
+    /// Note the arrival judged, and whether its record matched: whether it
+    /// counts (it matched, and did not at the identity's last noted arrival).
+    fn note_arrival(&self, wait_id: &str, identity: &str, version: Option<&str>, matched: bool) -> Result<bool>;
+    /// Forget at most `limit` arrivals logged before `before` that no wait
+    /// reads: how many went.
+    fn sweep_arrivals(&self, before: &str, limit: i64) -> Result<i64>;
+
     // ── The run lease ───────────────────────────────────────────────────────
     fn claim_lease(&self, run_id: &str, ttl_ms: i64) -> Result<Option<String>>;
     fn renew_lease(&self, run_id: &str, token: &str, ttl_ms: i64) -> Result<bool>;
     fn release_lease(&self, run_id: &str, token: &str) -> Result<()>;
+    /// The run's leaves, joins and waits.
     fn drop_run_state(&self, run_id: &str, fence: Option<&str>) -> Result<bool>;
 
     // ── The work queue ──────────────────────────────────────────────────────
@@ -419,6 +443,25 @@ impl RunHostStore for Store {
     }
     fn drop_run_correlations(&self, run_id: &str) -> Result<()> {
         Store::drop_run_correlations(self, run_id)
+    }
+
+    fn arrival_mark(&self) -> Result<i64> {
+        Store::arrival_mark(self)
+    }
+    fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {
+        Store::log_arrivals(self, team_id, adapter_type, arrivals, at)
+    }
+    fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {
+        Store::open_wait(self, wait)
+    }
+    fn wait_arrivals(&self, wait_id: &str) -> Result<WaitArrivals> {
+        Store::wait_arrivals(self, wait_id)
+    }
+    fn note_arrival(&self, wait_id: &str, identity: &str, version: Option<&str>, matched: bool) -> Result<bool> {
+        Store::note_arrival(self, wait_id, identity, version, matched)
+    }
+    fn sweep_arrivals(&self, before: &str, limit: i64) -> Result<i64> {
+        Store::sweep_arrivals(self, before, limit)
     }
 
     fn claim_lease(&self, run_id: &str, ttl_ms: i64) -> Result<Option<String>> {

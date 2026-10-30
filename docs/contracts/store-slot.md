@@ -2,7 +2,7 @@
 
 Part of [the adapter protocol](adapter-protocol.md), version 2 (an addition within it; no version of its own).
 
-A store module keeps a host's run state: runs, parks, joins, await correlations, leases, the work queue, library sources, callbacks, pull cursors and event receipts. listen-fire ships two (`@lf/sqlite-store`, the default, and `@lf/postgres-store`). A third-party one is a module listen-fire starts, or reaches at its URL, and calls over adapter protocol 2's HTTP, as it calls any module.
+A store module keeps a host's run state: runs, parks, joins, await correlations, waits and the arrivals they read, leases, the work queue, library sources, callbacks, pull cursors and event receipts. listen-fire ships two (`@lf/sqlite-store`, the default, and `@lf/postgres-store`). A third-party one is a module listen-fire starts, or reaches at its URL, and calls over adapter protocol 2's HTTP, as it calls any module.
 
 ## Installing one
 
@@ -31,7 +31,7 @@ The adapter protocol's ([the envelope](adapter-protocol.md#the-envelope), [the t
 - Instants are `Date.toISOString` strings; ids and tokens are strings the module mints.
 - A failure is `ok: false` with an `error`. The code `run_lease_lost`, with `data: { runId }`, means a fenced write found the run's lease gone: listen-fire treats it as losing the run. Any other code is a store failure.
 - listen-fire calls a store one method at a time and waits for each answer.
-- A write that must not be torn by a crash is one method, which the store keeps as one transaction: all of it or none (`parks.commit`, `events.startRun`, `inbound.keepDelivery`, and `callbacks.record` with its body's row). A remote store cannot hold a transaction open across requests, so there is no method that opens one.
+- A write that must not be torn by a crash is one method, which the store keeps as one transaction: all of it or none (`parks.commit`, `events.startRun`, `inbound.keepDelivery`, `waits.log`, and `callbacks.record` with its body's row). A remote store cannot hold a transaction open across requests, so there is no method that opens one.
 - `inbound.keepDelivery` is also where a redelivery is kept out: its receipt is written first, unique on the subscription and the provider's delivery id, so a second delivery under that id, even one arriving while the first's work is still queued, writes nothing and answers `kept: false`.
 
 ## Methods
@@ -64,7 +64,7 @@ The first request is always `store.open`. The others are the run host's store fa
 | `parks.finishLeaf` | `{ runId, address, fence }` | `null` |
 | `parks.leaves` | `{ runId, parkedOnly, reason, dueBy }` | `[{ address, reason, status, wakeAt }]` |
 | `parks.deleteLeaves` | `{ runId, addresses }` | `null` |
-| `parks.commit` | `{ runId, address, state, fence, park }`; `park` is `{ kind: "timer", wakeAt }`, `{ kind: "await", teamId, adapterType, correlationKey }` or `{ kind: "limit" }` | `null`. One fenced write: the leaf (`parks.putLeaf` with the kind as its reason); for a timer, the run's `resume_timer` row (key `resume_timer:<runId>`, payload `{ runId }`) armed at `wakeAt` as `work.enqueue` arms it; for an await, its correlation (`correlations.correlate`); for a limit, the address's correlation dropped; and the run marked parked (`runs.markParked`). A lost fence writes nothing (`run_lease_lost`) |
+| `parks.commit` | `{ runId, address, state, fence, park }`; `park` is `{ kind: "timer", wakeAt }`, `{ kind: "await", teamId, adapterType, correlationKey }`, `{ kind: "wait", waitId }` or `{ kind: "limit" }` | `null`. One fenced write: the leaf (`parks.putLeaf` with the kind as its reason; a wait's reason is `await`); for a timer, the run's `resume_timer` row (key `resume_timer:<runId>`, payload `{ runId }`) armed at `wakeAt` as `work.enqueue` arms it; for an await, its correlation (`correlations.correlate`); for a wait, the run's wait `waitId` parked at `address` (a run with no such wait writes nothing, and the store fails); for a limit, the address's correlation dropped and no wait parked there any more; and the run marked parked (`runs.markParked`). A lost fence writes nothing (`run_lease_lost`) |
 | `joins.recordJoin` | `{ runId, frameAddress, pending, fence }` | `null` |
 | `joins.decrementJoin` | `{ runId, frameAddress, branchAddress, leafAddress }` | `{ closed }` |
 | `joins.persistBranchExport` | `{ runId, frameAddress, branchAddress, branchIndex, exports }` | `null` |
@@ -80,7 +80,13 @@ The first request is always `store.open`. The others are the run host's store fa
 | `leases.claim` | `{ runId, ttlMs }` | `{ token }`, or `null` while another holds it |
 | `leases.renew` | `{ runId, token, ttlMs }` | boolean |
 | `leases.release` | `{ runId, token }` | `null` |
-| `leases.dropRunState` | `{ runId, fence }` | boolean |
+| `waits.mark` | `{}` | integer: the latest seq logged (0 for none). Every arrival `waits.log` logs after this answer has a greater seq: a wait opened `since` it reads them all |
+| `waits.log` | `{ teamId, adapterType, arrivals: [{ edge, key, identity, version, landing, gone }], at }`; `key` is the record whose edge it arrived on; `identity` and `version` as the edge declares them, `null` for none; `landing` the arrived record, `null` for none; `gone`: the record is gone | `[{ runId, waitId, address }]`: the waits parked on the arrivals' records, one each. One write: each arrival logged at `at` in order, under a seq greater than every seq before it (store-wide). A wait is parked while `parks.commit` parked it at an address whose leaf is still kept. Every arrival is logged, whether or not a wait reads it |
+| `waits.open` | `{ runId, teamId, adapterType, edge, key, since }`; `since` a `waits.mark` answer | `{ waitId }`. The run waits on this edge of this record, reading what is logged after `since`. A run that already waits on it keeps that wait, and its `since` |
+| `waits.arrivals` | `{ waitId }` | `{ gone, arrivals: [{ seq, identity, version, landing }] }`: the arrivals logged after the wait's `since` on its record's edge (same team and adapter) that the wait has not noted, in seq order; of several with one identity and version, the first only; `identity` the reported one, or the arrival's seq (as text) when it reported none, so each such report is its own. `gone`: a gone arrival was logged there after `since`; gone arrivals are not listed. An unknown wait fails |
+| `waits.note` | `{ waitId, identity, version, matched }` | boolean: whether the arrival counts. The wait notes the arrival (no longer listed) and whether its record matched; it counts when it matched and its identity did not match at its last noted arrival (none: it did not). An arrival noted before answers `false` and changes nothing |
+| `waits.sweep` | `{ before, limit }` | how many went. Forgets at most `limit` arrivals logged before `before` that no wait reads (one on the same team, adapter, edge and record whose `since` is below its seq). listen-fire sweeps what was logged more than an hour ago |
+| `leases.dropRunState` | `{ runId, fence }` | boolean. The run's leaves, joins and waits (with their notes) are dropped |
 | `work.enqueue` | `{ kind, key, payload, dueAt, teamId }` | `null` |
 | `work.enqueueIfAbsent` | `{ kind, key, payload, dueAt, teamId }` | boolean: whether it was queued. One write: the row is inserted only when no row has the key; a row there in any state (due, leased, dead) is left as it is, its due time and payload untouched. listen-fire arms a polled listen's standing row with it, so several workers arming it at once queue it once and never move the due time of a row another holds |
 | `work.claimDue` | `{ limit, leaseMs, dueBy, kinds? }`; `kinds` (a drain pool's) leases only rows of those kinds, absent every kind; a dead row is never claimed | `[{ id, kind, key, payload, claim, attempts }]`; `attempts` counts the row's claims, this one included, less those released `busy`, since it was queued or released `rescheduled` |
@@ -134,6 +140,8 @@ A run's `outcome` is the JSON object listen-fire settled it with: `{ writes, wri
 `listen-fire --contract-store <state.db|postgres://…>` serves these methods over listen-fire's own stores, as a store module on a Unix socket. A module may forward to it, as the test module does (`apps/cli/src/__test__/store_module/forward.mjs`). `runs.status` and `runs.complete` are the contract suite's helpers and are not called by listen-fire.
 
 ## Changes
+
+- **2026-10-30** (within adapter protocol 2; listen-fire 0.13.0 calls them for the arrivals modules report and for `await` on a listenable edge): waits on listenable edges. `waits.mark`, `waits.log`, `waits.open`, `waits.arrivals`, `waits.note` and `waits.sweep` keep the arrivals modules report and the waits runs keep open on them; `parks.commit` takes `{ kind: "wait", waitId }`, and a limit park there unparks the wait; `leases.dropRunState` drops a run's waits. The cases every store is held to are [`store-waits.json`](../../packages/engine-contracts/conformance/store-waits.json). `@lf/postgres-store` keeps them from its migration 9.
 
 - **2026-10-27, later** (within adapter protocol 2): `runs.rerun` starts a failed run's next attempt (`listen-fire runs rerun`), and a run row may answer `attempt` and `attempts`. A failed run's outcome keeps the writes it made (`records.markFailed` and `runs.settle` with `failed` alike). A store that answers no `attempt` or `attempts` still works, its runs each one attempt; one without `runs.rerun` works for everything but `listen-fire runs rerun`. `@lf/postgres-store` keeps them from its migration 8, and now keeps `writeRecords` as well.
 

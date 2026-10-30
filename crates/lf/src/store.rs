@@ -131,6 +131,40 @@ create table if not exists delivery (
 );
 create unique index if not exists delivery_external on delivery (subscription_id, external_id) where external_id is not null;
 create index if not exists delivery_received on delivery (received_at);
+create table if not exists arrival (
+  seq integer primary key autoincrement,
+  team_id text not null,
+  adapter_type text not null,
+  edge text not null,
+  key text not null,
+  identity text,
+  version text,
+  landing text,
+  gone integer not null,
+  logged_at text not null
+);
+create index if not exists arrival_key on arrival (team_id, adapter_type, edge, key, seq);
+create index if not exists arrival_logged on arrival (logged_at);
+create table if not exists wait_row (
+  id text primary key,
+  run_id text not null,
+  team_id text not null,
+  adapter_type text not null,
+  edge text not null,
+  key text not null,
+  since integer not null,
+  address text
+);
+create unique index if not exists wait_row_edge on wait_row (run_id, team_id, adapter_type, edge, key);
+create index if not exists wait_row_key on wait_row (team_id, adapter_type, edge, key);
+create table if not exists wait_seen (
+  id integer primary key autoincrement,
+  wait_id text not null,
+  identity text not null,
+  version text,
+  matched integer not null
+);
+create index if not exists wait_seen_identity on wait_seen (wait_id, identity);
 create table if not exists work (
   id integer primary key autoincrement,
   kind text not null,
@@ -358,7 +392,10 @@ pub enum ParkKind<'a> {
     Timer { wake_at: &'a str },
     /// Woken by a wake of its correlation, kept with it.
     Await { team_id: &'a str, adapter_type: &'a str, correlation_key: &'a str },
-    /// Paused at a run limit: a correlation the address had is dropped.
+    /// Woken when an arrival is logged on its wait's record (crate::waits),
+    /// which it parks at its address.
+    Wait { wait_id: &'a str },
+    /// Paused at a run limit: a correlation or wait the address had is dropped.
     Limit,
 }
 
@@ -366,7 +403,7 @@ impl ParkKind<'_> {
     pub fn reason(&self) -> &'static str {
         match self {
             ParkKind::Timer { .. } => "timer",
-            ParkKind::Await { .. } => "await",
+            ParkKind::Await { .. } | ParkKind::Wait { .. } => "await",
             ParkKind::Limit => "limit",
         }
     }
@@ -794,14 +831,18 @@ impl Store {
         self.fenced(run_id, fence, |db| {
             let wake_at = match kind {
                 ParkKind::Timer { wake_at } => Some(*wake_at),
-                ParkKind::Await { .. } | ParkKind::Limit => None,
+                ParkKind::Await { .. } | ParkKind::Wait { .. } | ParkKind::Limit => None,
             };
             Self::put_leaf_in(db, run_id, address, kind.reason(), wake_at, state)?;
             match kind {
                 // The leaf is the truth; the work row only says when to look.
                 ParkKind::Timer { wake_at } => Self::enqueue_in(db, "resume_timer", &timer_work_key(run_id), &timer_work_payload(run_id), Some(wake_at))?,
                 ParkKind::Await { team_id, adapter_type, correlation_key } => Self::correlate_in(db, run_id, team_id, address, adapter_type, correlation_key)?,
-                ParkKind::Limit => Self::drop_correlation_in(db, run_id, address)?,
+                ParkKind::Wait { wait_id } => Self::park_wait_in(db, run_id, address, wait_id)?,
+                ParkKind::Limit => {
+                    Self::drop_correlation_in(db, run_id, address)?;
+                    Self::unpark_waits_in(db, run_id, address)?;
+                }
             }
             Self::mark_parked_in(db, run_id)
         })
@@ -1042,6 +1083,7 @@ impl Store {
             db.execute("delete from leaf where run_id = ?", params![run_id])?;
             db.execute("delete from join_frame where run_id = ?", params![run_id])?;
             db.execute("delete from join_branch_export where run_id = ?", params![run_id])?;
+            Self::drop_run_waits_in(db, run_id)?;
             Ok(true)
         })
     }

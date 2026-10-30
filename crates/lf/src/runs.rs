@@ -37,6 +37,7 @@ use crate::movements_slot::{Change, ChangeKind, Listed, MovementsStore, Watched,
 use crate::sources::{MOVEMENT_EXTENSION, MovementFile, Parsed, scan_movements};
 use crate::backend::{RunHostStore, StoreSpec, open_store};
 use crate::store::{ClaimDue, POLL_WORK_KIND, Release, RunStart, iso};
+use crate::waits::ARRIVAL_RETENTION_MS;
 use module_wire::results as wire_results;
 
 /// How many files' parses a session's runs keep (movement_engine::program::keep_parses):
@@ -1297,7 +1298,7 @@ impl Session {
     }
 
     /// The lost-run sweep (crate::run_host::fail_lost_runs) and the delivery
-    /// retention sweep, at most once per LOST_RUN_SWEEP_EVERY.
+    /// and arrival retention sweeps, at most once per LOST_RUN_SWEEP_EVERY.
     async fn sweep_lost_runs(&self, log: &mut impl Write) -> Result<(), String> {
         if self.swept_at.get().is_some_and(|at| at.elapsed() < LOST_RUN_SWEEP_EVERY) {
             return Ok(());
@@ -1308,6 +1309,7 @@ impl Session {
         }
         let retain_ms = i64::from(self.project.delivery_retain_days) * 86_400_000;
         self.store.sweep_deliveries(&iso(-retain_ms), WORK_ROWS_PER_DRAIN).map_err(|e| e.to_string())?;
+        self.store.sweep_arrivals(&iso(-ARRIVAL_RETENTION_MS), WORK_ROWS_PER_DRAIN).map_err(|e| e.to_string())?;
         Ok(())
     }
 

@@ -162,6 +162,7 @@ mod store_wire;
 mod subscriptions;
 mod units;
 mod upgrade;
+mod waits;
 mod wake;
 mod wire;
 
