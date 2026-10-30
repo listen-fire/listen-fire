@@ -45,7 +45,7 @@ test('listen-fire modules lists every bundled module with what it is, and marks 
   const before = lfSync(dir, 'modules');
   assert.equal(before.code, 0, before.out);
   for (const name of BUNDLED) assert.match(before.out, new RegExp(`^@lf/${name} {2}not installed - \\S`, 'm'), `${name} is listed with a description`);
-  assert.match(before.out, /^@lf\/stripe {2}not installed - Stripe \(customers, invoices, subscriptions\)/m);
+  assert.match(before.out, /^@lf\/stripe {2}not installed - Stripe \(customers, invoices, subscriptions\b/m);
   assert.doesNotMatch(before.out, /^@lf\/(s3-files|document-ai|wake-cloud-tasks)/m, 'slot modules installed by copying a file are not what connect @lf/<name> installs');
 
   const bare = lfSync(dir, 'connect');
@@ -77,15 +77,16 @@ test('listen-fire modules show @lf/stripe says what it reads, that it is read-on
   assert.match(shown.out, /^ {2}Invoices -> Invoice$/m);
   assert.match(shown.out, /^ {2}Subscriptions -> Subscription$/m);
   assert.match(shown.out, /^ {2}Invoice: .*\n {4}fields: .*\bStatus enum\(draft\|open\|paid\|uncollectible\|void\).*\bAmount Due number\b/m);
-  assert.match(shown.out, /^ {4}edges: Customer -> Customer, Subscription -> Subscription$/m);
+  assert.match(shown.out, /^ {2}Charges -> Charge$/m);
+  assert.match(shown.out, /^ {4}edges: Customer -> Customer, Subscription -> Subscription\b/m);
   assert.match(shown.out, /^listens: webhook$/m);
   assert.match(shown.out, /^ {2}events: .*\binvoice\.payment_failed\b/m);
   assert.doesNotMatch(shown.out, /^writes/m);
   assert.match(shown.out, /^credential: stripe \(fields\): apiKey, webhookSecret\?$/m);
   assert.match(shown.out, /^set up: listen-fire connect @lf\/stripe --yes$/m);
-  // A charge and a failure reason are what Stripe's graph lacks: the summary shows no such record or field.
-  assert.doesNotMatch(shown.out, /\bCharge\b/);
-  assert.doesNotMatch(shown.out, /Failure (Code|Message|Reason)/i);
+  // A charge is where Stripe says why a payment failed: its record carries the failure fields.
+  assert.match(shown.out, /^ {2}Charge: .*\n {4}fields: .*\bStatus enum\(succeeded\|pending\|failed\).*\bFailure Code text\b.*\bFailure Message text\b/m);
+  assert.match(shown.out, /^ {2}events: .*\bcharge\.failed\b/m);
 
   assert.deepEqual(installed(dir), [], 'showing a module installs nothing');
   assert.deepEqual(existsSync(join(dir, '.lf/externals/stripe')), false, 'and leaves no state behind');
@@ -99,6 +100,7 @@ test('listen-fire modules show @lf/stripe says what it reads, that it is read-on
   assert.equal(json.readOnly, true);
   assert.equal(json.schema.source, 'module');
   assert.deepEqual(json.records.map((r) => r.name).slice(0, 3), ['Customer', 'Invoice', 'Subscription']);
+  assert.ok(json.records.find((r) => r.name === 'Charge')?.fields.some((f) => f.name === 'Failure Code'));
   assert.ok(json.listens.events.includes('invoice.payment_failed'));
 });
 
