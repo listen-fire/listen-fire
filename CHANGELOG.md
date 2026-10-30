@@ -24,6 +24,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 The next release opens a new compatibility key. It reads pins of `0.13.x` only: a project or an automation pinned to `0.12.x` is refused by name ("validate it under 0.13.0 and upgrade it"), and `listen-fire upgrade` moves its pin to `0.13.0`. A change in this release that alters what a construct means says so in its own entry and in a checker diagnostic under a `0.13` pin.
 
+#### Changed
+
+- A module declares what each edge offers for listening with `listenable: true` on the reference, in place of `awaitable` and `watchable`, which every module set together. `readable` still says whether the edge can be listed, so an edge may be listenable, listable, or both. Three more keys describe arrivals: `identity` (the field of what lands that names an arrival), `version` (the field that changes when an arrival changes) and `cursor` (whether the module can list arrivals since a mark it hands out). `@lf/slack`'s `Replies` declares `listenable` and `identity: 'Timestamp'`. A module that still declares `awaitable` or `watchable` on a reference is refused when `listen-fire` describes it, naming `listenable`; a catalog snapshot that still carries either is refused by the Rust reader. Why: an edge's two capabilities, being listed and announcing arrivals, are separate facts, and the two retired keys only ever said the second one twice.
+
 ### Added
 
 - `listen-fire modules` lists every module this `listen-fire` can install, the bundled `@lf/*` ones, with a line on what each is and which the project has installed. A bare `listen-fire connect` prints the same list; it listed only the slot modules and what the project already held.

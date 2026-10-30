@@ -658,7 +658,7 @@ export class SlackAdapter extends BaseAdapter {
           // A thread is the `Replies` edge — a reply is CREATED along it (post a
           // thread reply), READABLE (a bare `m-[:Replies]->` reads the replies
           // posted so far — zero before any exist, an ordinary empty traversal,
-          // not a special state), AND AWAITABLE: `await m-[:Replies]->` waits
+          // not a special state), AND LISTENABLE: `await m-[:Replies]->` waits
           // for the first NEW reply and binds it (S18, consent-by-silence).
           // Same edge, two read modes — the `Called` callback edge is the
           // precedent (movement-lang/checker/typing.ts `callbackType`).
@@ -672,10 +672,11 @@ export class SlackAdapter extends BaseAdapter {
             direction: 'outgoing',
             name: SLACK_MESSAGE_THREAD_EDGE_NAMES.replies,
             writable: true,
-            awaitable: true,
             // An inbound Slack event carries the reply and wakes the run parked
             // on the thread (`wakeKeys`) — real push, no poll behind it.
-            watchable: true,
+            listenable: true,
+            // A reply's `ts` names it within its channel.
+            identity: 'Timestamp',
             resolvesEmpty: false,
             // `conversations.replies` answers oldest-first and the hop only
             // drops the root message from that page — it never reorders.

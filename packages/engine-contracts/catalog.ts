@@ -851,7 +851,26 @@ const schemaFieldDescriptorSchema = z.object({
 
 export type SchemaFieldDescriptor = z.infer<typeof schemaFieldDescriptorSchema>;
 
-const schemaReferenceDescriptorSchema = z.object({
+/** Why a reference that declares a key 0.13 retired is refused (listen-fire's
+ *  describe refuses it in the same words). */
+export function retiredReferenceKey(name: string, key: string): string {
+  return `'${name}' declares '${key}', retired in 0.13: declare 'listenable: true' (and 'identity', the landing's field that names it)`;
+}
+
+const RETIRED_REFERENCE_KEYS = ['awaitable', 'watchable'] as const;
+
+/** A retired key is refused rather than stripped: a module still declaring it
+ *  would otherwise lose the capability without a word. */
+function refuseRetiredReferenceKeys(input: unknown, ctx: z.RefinementCtx): unknown {
+  if (typeof input !== 'object' || input === null) return input;
+  const named = 'name' in input && typeof input.name === 'string' ? input.name : 'fieldId' in input ? String(input.fieldId) : 'a reference';
+  for (const key of RETIRED_REFERENCE_KEYS) {
+    if (key in input) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: retiredReferenceKey(named, key) });
+  }
+  return input;
+}
+
+const referenceDescriptorFieldsSchema = z.object({
   fieldId: z.string(),
   targetTypeId: z.string(),
   /**
@@ -1053,43 +1072,36 @@ const schemaReferenceDescriptorSchema = z.object({
    *  and excluded from the `delete` variant. Default false. */
   requiresLiveRecord: z.boolean().optional(),
   /**
-   * The AWAITABLE capability (asks-as-adapter, layer 3A). An awaitable edge
-   * supports `await x-[:E]->` (`untilNonEmpty`): a resolution lands along it
-   * and resumes a parked run. Bare traversal of an awaitable edge is a type
-   * error (F2) — you await it, you don't read it.
+   * The module ANNOUNCES ARRIVALS on this edge: it can be listened to and
+   * awaited, and the module wakes what waits on it. Separate from whether the
+   * edge can be LISTED, which is `readable`: an edge may be one, the other, or
+   * both. An email's `Replies` is both; a table's `Changes` only announces.
    *
-   * DECLARATION ONLY in chunk A: the flag rides the descriptor so the graph is
-   * promise-honest and a later chunk (the awaitable ENGINE support) has the
-   * fact to key off. Nothing consumes it yet. The ask `Response` edge is the
-   * first declarant.
-   *
+   * It takes the place of the retired `awaitable` and `watchable`, which every
+   * declarant set together; a reference that still carries either is refused,
+   * naming this one.
    */
-  awaitable: z.boolean().optional(),
+  listenable: z.boolean().optional(),
   /**
-   * Whether a resolution along this awaitable edge may carry NO landing (F20) —
+   * Whether a resolution along this listenable edge may carry NO landing (F20) —
    * so `T | absent` appears downstream. True for ask `Response` (an explicit
    * cancel resolves current awaiters EMPTY); false/absent for an edge whose
    * resolution always carries content (Slack `Replies`). Meaningful only with
-   * `awaitable: true`. Declaration-only in chunk A (see `awaitable`).
+   * `listenable: true`.
    */
   resolvesEmpty: z.boolean().optional(),
   /**
-   * Whether the platform DELIVERS an event when this edge resolves, so a run
-   * parked on it is woken rather than looked at on a timer. Declare it only
-   * where that delivery exists today: Slack `Replies` (an inbound webhook
-   * resumes the park), ask `Response` (answering resumes the run).
-   *
-   * **Absent ⇒ no push.** An `await FIRST(…)` on such an edge is refused and
-   * the author is pointed at the cadence form (`await until(…, every: …)`) —
-   * a park nothing wakes is a run that never finishes, so silence here has to
-   * mean the safe thing rather than the convenient one.
-   *
-   * Sibling of `awaitable`, and separate from it on purpose: WHETHER an edge
-   * resolves and WHETHER anyone is told are two facts, and an adapter can gain
-   * the second long after it declared the first.
-   *
+   * Whether the module can list the arrivals since a mark it hands out. Without
+   * one, an arrival announced while nobody was listening is lost.
    */
-  watchable: z.boolean().optional(),
+  cursor: z.boolean().optional(),
+  /** The landing's field that names an arrival, so a repeat is dropped. */
+  identity: z.string().optional(),
+  /**
+   * The landing's field that changes when an arrival changes. Without one,
+   * only a new member counts as an arrival.
+   */
+  version: z.string().optional(),
   /**
    * This edge's LANDING TYPE is generic over the CONSTRUCTION SITE: the literal
    * value(s) a write body gives `field` fix what the landing looks like. The
@@ -1135,6 +1147,8 @@ const schemaReferenceDescriptorSchema = z.object({
     });
   }
 });
+
+export const schemaReferenceDescriptorSchema = z.preprocess(refuseRetiredReferenceKeys, referenceDescriptorFieldsSchema);
 
 export type SchemaReferenceDescriptor = z.infer<typeof schemaReferenceDescriptorSchema>;
 

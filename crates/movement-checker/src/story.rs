@@ -405,7 +405,7 @@ impl Checker<'_> {
         let source = AwaitedSource::Traversal {
             root,
             edge,
-            awaitable: schema.map(|s| s.awaitable == Some(true)),
+            awaitable: schema.map(|s| s.listenable == Some(true)),
             resolves_empty: schema.map(|s| s.resolves_empty == Some(true)),
         };
         self.record_node(span, scope, What::Await { binding: None, source });

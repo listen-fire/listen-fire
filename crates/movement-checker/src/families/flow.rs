@@ -4,7 +4,7 @@
 //! - MOV_AWAIT_BAD_DURATION
 //! - MOV_AWAIT_BARE_WALK
 //! - MOV_AWAIT_IMPURE_CONDITION
-//! - MOV_AWAIT_NEEDS_CADENCE
+//! - MOV_AWAIT_NEEDS_CADENCE (raised by no catalog since 0.13: see `check_awaitable`)
 //! - MOV_AWAIT_NOT_AWAITABLE
 //! - MOV_HEAD_NEEDS_A_NAME
 //! - MOV_IF_WITHOUT_ELSE
@@ -13,8 +13,6 @@
 //! - MOV_WAIT_NOT_RESUMABLE
 
 use movement_parser::ast::{DurationLiteral, PathHead, PathRoot, RValue, Span, Statement};
-
-use movement_parser::lowering::expression::{Expression, TraversalStep};
 
 use crate::checker::Checker;
 use crate::scope::{ScopeId, SymbolId};
@@ -156,38 +154,21 @@ impl Checker<'_> {
     }
 
     /// What an awaited walk lands on must resume the run: an edge whose
-    /// resolution does (awaitable), and one that says when (watchable). An
-    /// undescribed edge claims nothing.
+    /// module announces arrivals (listenable). An undescribed edge claims
+    /// nothing. (MOV_AWAIT_NEEDS_CADENCE was an edge that resolved but
+    /// announced nothing; `listenable` is both facts at once, so no catalog
+    /// can say that any more.)
     pub fn check_awaitable(&mut self, head: &PathHead, walk: Option<&crate::families::walks::HeadWalk>) {
-        let Some(edge) = walk.and_then(|w| w.last_edge_schema.clone()) else { return };
-        let root = match &head.root {
-            Some(PathRoot::Name { name }) => crate::families::names::spell_name(name),
-            Some(PathRoot::Expression { .. }) => crate::checker::EXPRESSION_ROOT_PROBE.to_string(),
-            None => return,
-        };
-        let probe = format!("{root}{}.`__movement_head_probe__`", head.hops_raw);
-        let Ok(Expression::Traverse { steps, .. }) = crate::slots::expression_of_text(&probe) else { return };
-        let path = spell_path_head(head);
-        if edge.awaitable != Some(true) {
-            self.report(
-                codes::AWAIT_NOT_AWAITABLE,
-                format!("'FIRST({path})' can't be awaited — 'await' waits on an edge whose resolution resumes the run (an ask's Response). This is an ordinary edge; read it live, without 'await'."),
-                head.span,
-            );
-        } else if edge.watchable != Some(true) {
-            let named = match steps.last() {
-                Some(TraversalStep::Edge(step)) => format!("'-[:{}]->'", step.edge_type_id),
-                _ => "This edge".to_string(),
-            };
-            self.report(
-                codes::AWAIT_NEEDS_CADENCE,
-                format!(
-                    "{named} resolves, but nothing tells the run when — this source sends no event, so a bare 'await' would wait forever. Say how often to look: `{}`.",
-                    self.code(&format!("await until(() => {{ return EXISTS({path}) }}, every: 15m)"))
-                ),
-                head.span,
-            );
+        let Some(edge) = walk.and_then(|w| w.last_edge_schema.as_ref()) else { return };
+        if head.root.is_none() || edge.listenable == Some(true) {
+            return;
         }
+        let path = spell_path_head(head);
+        self.report(
+            codes::AWAIT_NOT_AWAITABLE,
+            format!("'FIRST({path})' can't be awaited — 'await' waits on an edge whose resolution resumes the run (an ask's Response). This is an ordinary edge; read it live, without 'await'."),
+            head.span,
+        );
     }
 
     /// `checkUntilPurity`: an `until` condition's body may only read. Whether

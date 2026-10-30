@@ -843,9 +843,9 @@ fn landing_of(from: &Position, edge: &str) -> EdgeLanding {
                 }
                 return EdgeLanding::Unknown { available: edges.keys().cloned().collect() };
             };
-            // A write-only edge reads nothing; an awaitable one still lands (the
+            // A write-only edge reads nothing; a listenable one still lands (the
             // walks family says whether it must be awaited).
-            if edge_schema.readable == Some(false) && edge_schema.awaitable != Some(true) {
+            if edge_schema.readable == Some(false) && edge_schema.listenable != Some(true) {
                 return EdgeLanding::Untyped { edge: Some(edge_schema.clone()) };
             }
             let target = generic.unwrap_or_else(|| edge_schema.target.clone());

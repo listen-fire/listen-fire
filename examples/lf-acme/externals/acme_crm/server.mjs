@@ -63,10 +63,11 @@ const COMPANY_DESCRIPTOR = {
       direction: 'outgoing',
       // People comment in the CRM; nothing is created along the thread.
       writable: false,
-      // Awaitable (the first comment), and watched: the CRM pushes a wake
-      // when a comment lands, so a park is woken, not polled.
-      awaitable: true,
-      watchable: true,
+      // Listenable: the CRM pushes a wake when a comment lands, so a park is
+      // woken, not polled. A comment's id names it; the thread runs oldest first.
+      listenable: true,
+      identity: 'id',
+      sequenced: 'chronological',
       // A company the CRM does not have settles empty rather than parking forever.
       resolvesEmpty: true,
     },

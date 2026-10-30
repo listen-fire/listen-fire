@@ -1158,8 +1158,7 @@
          "edges": {
           "Result": {
            "target": "Poll Result",
-           "awaitable": true,
-           "watchable": true,
+           "listenable": true,
            "resolvesEmpty": true,
            "readable": false,
            "genericOver": {
@@ -1189,8 +1188,7 @@
          "edges": {
           "Result": {
            "target": "Rating Result",
-           "awaitable": true,
-           "watchable": true,
+           "listenable": true,
            "resolvesEmpty": true,
            "readable": false,
            "genericOver": {
@@ -1289,8 +1287,7 @@
          "edges": {
           "Result": {
            "target": "Poll Result",
-           "awaitable": true,
-           "watchable": true,
+           "listenable": true,
            "resolvesEmpty": true,
            "readable": false,
            "genericOver": {
@@ -1321,8 +1318,7 @@
          "edges": {
           "Result": {
            "target": "Rating Result",
-           "awaitable": true,
-           "watchable": true,
+           "listenable": true,
            "resolvesEmpty": true,
            "readable": false,
            "genericOver": {

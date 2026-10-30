@@ -321,7 +321,8 @@ reads every declaration from it, the listen declarations included.
   ],
   "references": [
     { "fieldId": "Comments", "name": "Comments", "targetTypeId": "Comment", "cardinality": "many",
-      "direction": "outgoing", "writable": false, "awaitable": true, "watchable": true, "resolvesEmpty": true,
+      "direction": "outgoing", "writable": false, "listenable": true, "identity": "id",
+      "sequenced": "chronological", "resolvesEmpty": true,
       "description": "What people said about the company, oldest first." }
   ]
 }
@@ -337,7 +338,7 @@ reads every declaration from it, the listen declarations included.
   - `readable` — defaults to true; `false` marks a write-only edge;
   - `writable` — only an explicit `true` allows creating along the edge;
     absent means read-only;
-  - `awaitable`, `watchable`, `resolvesEmpty` (see
+  - `listenable`, `cursor`, `identity`, `version`, `resolvesEmpty` (see
     [awaits](#waiting-on-your-system-awaits)).
 - `description` (optional) on the type, a field or a reference: what it is,
   in a sentence. An author's editor shows it when they hover the record, the
@@ -538,16 +539,29 @@ owns all the waiting state. Your server answers two questions: "has it
 happened yet, and if not, what key will you wake it with?" (`resolveAwait`)
 and "which keys does this event wake?" (`wakeKeys` or the `wake` door).
 
-### Declaring an awaitable edge
+### Declaring a listenable edge
 
 On the reference in `describe`:
 
-- `awaitable: true` — automations may `await` it.
-- `watchable: true` — you will wake waiting runs (through `wake` or a delivery
-  to the host door). Without it, `await FIRST(…)` is refused when the
-  automation is saved, and the author is told to poll instead.
+- `listenable: true` — you announce arrivals on the edge: automations may
+  `await` it, and you will wake waiting runs (through `wake` or a delivery to
+  the host door). Without it, `await` on the edge is refused when the
+  automation is saved.
+- `readable` says separately whether the edge can be listed. An edge can be
+  listenable, listable, or both.
+- `identity` — the field of what lands that names an arrival, so a repeat is
+  dropped.
+- `version` (optional) — the field that changes when an arrival changes.
+  Without it, only a new record counts as an arrival.
+- `cursor` (optional) — `true` if you can list the arrivals since a mark you
+  hand out. Without it, an arrival announced while nobody listened is lost.
+- `sequenced` — the order you list the edge in (`chronological`, `document`
+  or `arrival`).
 - `resolvesEmpty: true` — the wait can end with nothing (for example, the
   record was deleted). Then what follows the `await` runs zero times.
+
+A reference that still declares `awaitable` or `watchable` (retired in 0.13)
+is refused when `listen-fire` describes your adapter, naming `listenable`.
 
 ### resolveAwait
 
@@ -1422,7 +1436,7 @@ from `apps/cli`.
    cp -R examples/lf-acme my-adapter && cd my-adapter
    mkdir .lf && cp secrets.example.yaml .lf/secrets.yaml && chmod 600 .lf/secrets.yaml
    listen-fire check                 # 1 file(s), 0 error(s)
-   listen-fire catalog               # the catalog, with acme_crm's types, fields and the awaitable Comments edge
+   listen-fire catalog               # the catalog, with acme_crm's types, fields and the listenable Comments edge
    ```
 
    To build your own, replace `externals/acme_crm/` with a folder of the same
@@ -1430,7 +1444,7 @@ from `apps/cli`.
    serving) and put your credential in `.lf/secrets.yaml`. `listen-fire` refuses a
    secrets file other users can read. `listen-fire catalog` shows what `describe`
    published: a field you meant to be writable, a file field, a missing
-   `awaitable` edge, are all visible there before any movement uses them.
+   `listenable` edge, are all visible there before any movement uses them.
 
    Then deliver a webhook. The example verifies HMAC-SHA256 of the raw body in
    `x-listen-fire-signature`, keyed by the credential's `webhook_secret`:
@@ -1451,7 +1465,8 @@ from `apps/cli`.
 
 2. **Describe your data.** `listEntryPoints` publishes `Company` (writable,
    fires) and `Comment`. `describe` gives `Company` its fields and its
-   `Comments` edge, declared `awaitable`, `watchable` and `resolvesEmpty`.
+   `Comments` edge, declared `listenable` (with `identity` and `sequenced`)
+   and `resolvesEmpty`.
 
 3. **Implement the required methods.** `resolveEntity` always answers no
    match, so every write creates. `createRecord` stores the company and

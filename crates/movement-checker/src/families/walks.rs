@@ -108,7 +108,7 @@ fn report_step(typing: &mut Typing, from: &Position, edge: &str, filter: Option<
                 typing.report(codes::TRAVERSE_UNKNOWN_EDGE, format!("{} has no edge '{edge}'{}", describe_position(from), it_has(&available)));
                 return;
             };
-            if edge_schema.awaitable == Some(true) {
+            if edge_schema.listenable == Some(true) {
                 if typing.awaited {
                     if filter.is_some_and(|f| !is_pure_predicate(f)) {
                         report_await_impure_where(typing, edge);
@@ -125,9 +125,7 @@ fn report_step(typing: &mut Typing, from: &Position, edge: &str, filter: Option<
                     );
                     return;
                 }
-                if edge_schema.watchable == Some(true) {
-                    typing.watchable_reads.push(edge.to_string());
-                }
+                typing.watchable_reads.push(edge.to_string());
             }
             // A write-only edge is the writes family's (MOV_WRITE_ONLY_EDGE).
         }
@@ -188,7 +186,7 @@ fn report_step(typing: &mut Typing, from: &Position, edge: &str, filter: Option<
                 typing.report(codes::TRAVERSE_UNKNOWN_EDGE, message);
             }
             Some(local_edge) => {
-                if local_edge.schema.awaitable == Some(true) && typing.awaited && filter.is_some_and(|f| !is_pure_predicate(f)) {
+                if local_edge.schema.listenable == Some(true) && typing.awaited && filter.is_some_and(|f| !is_pure_predicate(f)) {
                     report_await_impure_where(typing, edge);
                 }
             }

@@ -1896,7 +1896,7 @@ pub fn report_write_only_edge(typing: &mut Typing, from: Option<&Position>, step
         Position::MaybeEmpty(of) => &**of,
         other => other,
     };
-    let unreadable = schema.readable == Some(false) && (matches!(from, Position::Union(_)) || schema.awaitable != Some(true));
+    let unreadable = schema.readable == Some(false) && (matches!(from, Position::Union(_)) || schema.listenable != Some(true));
     if !unreadable || !matches!(from, Position::Position(_) | Position::Handle(_) | Position::Union(_)) {
         return;
     }

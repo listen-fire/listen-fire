@@ -26,7 +26,7 @@ use crate::json::Js;
 use crate::project::Project;
 use crate::refinements::{InstanceChain, Refining, refine_instance_schema};
 use crate::protocol::shape_error;
-use crate::schema::describe_external_schema;
+use crate::schema::{describe_external_schema, retired_reference_key};
 use crate::secrets::{Construction, Credential, Credentials, Imported, MissingCredential, Secrets, imported_credentials, missing_credentials};
 use crate::sources::{MovementFile, Parsed, scan_movements};
 
@@ -321,6 +321,9 @@ pub(crate) async fn describe_as(running: &RunningExternal, credentials: &Credent
         match &descriptor {
             Js::Null => {}
             d if is_type_descriptor(d) => {
+                if let Some(refusal) = d.get("references").and_then(Js::as_array).into_iter().flatten().find_map(retired_reference_key) {
+                    return Err(format!("Remote adapter \"{name}\" describes '{type_id}': {refusal}"));
+                }
                 descriptors.insert(type_id, descriptor);
             }
             _ => return Err(shape_error("describe", name, &descriptor, "expected null or { typeId, displayName, fields, references }")),

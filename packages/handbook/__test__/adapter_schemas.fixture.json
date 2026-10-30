@@ -1213,8 +1213,8 @@
               "target": "Message",
               "sequenced": "chronological",
               "writable": true,
-              "awaitable": true,
-              "watchable": true
+              "listenable": true,
+              "identity": "Timestamp"
             },
             "Author": {
               "target": "User"
@@ -1341,8 +1341,8 @@
               "target": "Message",
               "sequenced": "chronological",
               "writable": true,
-              "awaitable": true,
-              "watchable": true
+              "listenable": true,
+              "identity": "Timestamp"
             },
             "Author": {
               "target": "User"
@@ -1580,9 +1580,8 @@
               "target": "Check Response",
               "sequenced": "arrival",
               "writable": true,
-              "awaitable": true,
-              "resolvesEmpty": true,
-              "watchable": true
+              "listenable": true,
+              "resolvesEmpty": true
             }
           },
           "requiredFields": [
@@ -1639,9 +1638,8 @@
               "target": "Provide Response",
               "sequenced": "arrival",
               "writable": true,
-              "awaitable": true,
+              "listenable": true,
               "resolvesEmpty": true,
-              "watchable": true,
               "genericOver": {
                 "field": "Answer Type",
                 "onNonLiteral": "error"
@@ -1694,9 +1692,8 @@
               "target": "Choose Response",
               "sequenced": "arrival",
               "writable": true,
-              "awaitable": true,
+              "listenable": true,
               "resolvesEmpty": true,
-              "watchable": true,
               "genericOver": {
                 "field": "Options"
               }
@@ -1748,9 +1745,8 @@
               "target": "Select Response",
               "sequenced": "arrival",
               "writable": true,
-              "awaitable": true,
+              "listenable": true,
               "resolvesEmpty": true,
-              "watchable": true,
               "genericOver": {
                 "field": "Options"
               }
@@ -1794,9 +1790,8 @@
               "target": "Review Response",
               "sequenced": "arrival",
               "writable": true,
-              "awaitable": true,
-              "resolvesEmpty": true,
-              "watchable": true
+              "listenable": true,
+              "resolvesEmpty": true
             }
           },
           "requiredFields": [
@@ -1835,9 +1830,8 @@
               "target": "Draft Response",
               "sequenced": "arrival",
               "writable": true,
-              "awaitable": true,
-              "resolvesEmpty": true,
-              "watchable": true
+              "listenable": true,
+              "resolvesEmpty": true
             }
           },
           "requiredFields": [
@@ -1884,9 +1878,8 @@
               "target": "Correct Response",
               "sequenced": "arrival",
               "writable": true,
-              "awaitable": true,
-              "resolvesEmpty": true,
-              "watchable": true
+              "listenable": true,
+              "resolvesEmpty": true
             }
           },
           "requiredFields": [
@@ -1935,9 +1928,8 @@
               "target": "Form Response",
               "sequenced": "arrival",
               "writable": true,
-              "awaitable": true,
+              "listenable": true,
               "resolvesEmpty": true,
-              "watchable": true,
               "genericOver": {
                 "field": "Fields",
                 "onNonLiteral": "warn"

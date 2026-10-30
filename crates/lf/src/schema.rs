@@ -651,8 +651,13 @@ fn edge_schema(reference: &Js, target: Option<&str>, polymorphic: bool, field_id
     flag("readable", Js::is_false(reference.get("readable")), Js::Bool(false));
     flag("writable", Js::is_true(reference.get("writable")), Js::Bool(true));
     flag("linkable", Js::is_false(reference.get("linkable")), Js::Bool(false));
-    for name in ["requiresLiveRecord", "subject", "awaitable", "resolvesEmpty", "watchable"] {
+    for name in ["requiresLiveRecord", "subject", "listenable", "resolvesEmpty"] {
         flag(name, Js::is_true(reference.get(name)), Js::Bool(true));
+    }
+    for passed in ["cursor", "identity", "version"] {
+        if let Some(value) = reference.get(passed) {
+            flag(passed, true, value.clone());
+        }
     }
     if let Some(generic_over) = reference.get("genericOver") {
         flag("genericOver", true, generic_over.clone());
@@ -662,6 +667,14 @@ fn edge_schema(reference: &Js, target: Option<&str>, polymorphic: bool, field_id
         edge.insert("description".into(), Js::str(description));
     }
     edge
+}
+
+/// The refusal of a reference that declares a key 0.13 retired, naming what
+/// replaces it (engine-contracts `retiredReferenceKey` says the same).
+pub fn retired_reference_key(reference: &Js) -> Option<String> {
+    let retired = ["awaitable", "watchable"].into_iter().find(|retired| reference.get(retired).is_some())?;
+    let name = key(nullish_or(reference.get("name"), reference.get("fieldId")));
+    Some(format!("'{name}' declares '{retired}', retired in 0.13: declare 'listenable: true' (and 'identity', the landing's field that names it)"))
 }
 
 /// A non-empty `description` the adapter wrote on a type, field or reference.
@@ -750,5 +763,24 @@ mod tests {
         assert_eq!(docs.get("Secret").and_then(Js::as_str), Some("Read it on the Notes edge."));
         assert!(docs.get("Tag").is_none(), "an empty description says nothing");
         assert_eq!(company.get("edges").and_then(|e| e.get("Notes")).and_then(|e| e.get("description")).and_then(Js::as_str), Some("What people wrote."));
+    }
+
+    #[test]
+    fn a_listenable_reference_projects_its_capabilities() {
+        let edge = edge_schema(&js(r#"{"name":"Replies","listenable":true,"cursor":false,"identity":"Timestamp","version":"Edited","sequenced":"chronological"}"#), Some("Message"), false, "replies");
+        assert_eq!(Js::from(edge).to_json(), r#"{"target":"Message","sequenced":"chronological","listenable":true,"cursor":false,"identity":"Timestamp","version":"Edited"}"#);
+    }
+
+    #[test]
+    fn an_awaitable_reference_is_refused_naming_listenable() {
+        assert_eq!(
+            retired_reference_key(&js(r#"{"name":"Replies","awaitable":true}"#)).unwrap(),
+            "'Replies' declares 'awaitable', retired in 0.13: declare 'listenable: true' (and 'identity', the landing's field that names it)"
+        );
+        assert_eq!(
+            retired_reference_key(&js(r#"{"fieldId":"replies","watchable":true}"#)).unwrap(),
+            "'replies' declares 'watchable', retired in 0.13: declare 'listenable: true' (and 'identity', the landing's field that names it)"
+        );
+        assert_eq!(retired_reference_key(&js(r#"{"name":"Replies","listenable":true}"#)), None);
     }
 }

@@ -14,13 +14,13 @@ use crate::executor::{Answer, PendingRequest, Step};
 
 /// One adapter, `world`, with everything the families below need: a monster
 /// the event is about, notes that are written under a fuzzy identity, a
-/// document holding a file, and tickets whose `Reply` edge is awaitable.
+/// document holding a file, and tickets whose `Reply` edge is listenable.
 const CATALOG: &str = r#"{
   "adapters": { "world": { "constructionArgs": [], "canFire": true, "triggerConfig": ["events"], "schemas": { "": {
     "positions": {
       "Monster": { "properties": { "Name": "text", "Slayer": "text", "Scroll": "file" }, "edges": { "Lair": { "target": "Note" } } },
       "Note": { "properties": { "Title": "text", "Attachment": "file" }, "edges": {} },
-      "Ticket": { "properties": { "Subject": "text" }, "edges": { "Reply": { "target": "Reply", "awaitable": true, "watchable": true } } },
+      "Ticket": { "properties": { "Subject": "text" }, "edges": { "Reply": { "target": "Reply", "listenable": true } } },
       "Reply": { "properties": { "Body": "text" }, "edges": {} }
     },
     "collections": { "notes": { "target": "Note" }, "tickets": { "target": "Ticket" } },

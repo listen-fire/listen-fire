@@ -685,15 +685,16 @@ export function instanceSchemaFromDescriptors(input: {
           // listen's `fields:` names properties of. Declared by the adapter,
           // never inferred from the edge's name.
           ...(ref.subject === true ? { subject: true } : {}),
-          // The AWAITABLE promise (asks-as-adapter §A) — `await x-[:edge]->`
-          // untilNonEmpty. Only `true` projects; its absence is the ordinary
-          // (non-awaitable) fact. `resolvesEmpty` rides it (F20).
-          ...(ref.awaitable === true ? { awaitable: true } : {}),
+          // The module announces arrivals on the edge: it can be listened to
+          // and awaited. Only `true` projects; its absence is the ordinary
+          // fact. `resolvesEmpty` rides it (F20).
+          ...(ref.listenable === true ? { listenable: true } : {}),
           ...(ref.resolvesEmpty === true ? { resolvesEmpty: true } : {}),
-          // The PUSH promise beside the resolution promise: whether anything
-          // tells the run this edge resolved. Only `true` projects — an
-          // adapter that hasn't said gets the polled form.
-          ...(ref.watchable === true ? { watchable: true } : {}),
+          // How arrivals are told apart: whether the module lists them since a
+          // mark, the field that names one, and the field that changes with it.
+          ...(ref.cursor !== undefined ? { cursor: ref.cursor } : {}),
+          ...(ref.identity !== undefined ? { identity: ref.identity } : {}),
+          ...(ref.version !== undefined ? { version: ref.version } : {}),
           // The landing is decided by the WRITE (`Options` fixing an ask's
           // answer enum). Carried verbatim: the checker matches `field` against
           // the body's authored names, which are these same display names.

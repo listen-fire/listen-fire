@@ -1296,8 +1296,8 @@ fn callback_call_arity_message(movement: &str, arity: usize, given: usize) -> St
 }
 
 
-/// `callbackType`: a callback is a local node with `.id` / `.url` reads and an
-/// awaitable `Called` edge, landing on the call — `At` plus one field per
+/// `callbackType`: a callback is a local node with `.id` / `.url` reads and a
+/// listenable `Called` edge, landing on the call — `At` plus one field per
 /// typed fire-time parameter.
 pub fn callback_type(params: Vec<(String, Option<Ty>)>) -> Position {
     let mut fields = IndexMap::new();
@@ -1310,8 +1310,7 @@ pub fn callback_type(params: Vec<(String, Option<Ty>)>) -> Position {
     let call = Position::Local(LocalNode { label: "a callback's call".to_string(), reads: fields, edges: None, run_built: None, extracted: None });
     let schema = EdgeSchema {
         target: "Called".to_string(),
-        awaitable: Some(true),
-        watchable: Some(true),
+        listenable: Some(true),
         resolves_empty: Some(true),
         sequenced: Some(movement_parser::catalog::types::EdgeSequencing::Arrival),
         ..crate::types::position::edge_schema_to("Called")

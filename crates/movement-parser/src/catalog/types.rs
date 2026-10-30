@@ -303,12 +303,23 @@ pub struct EdgeSchema {
     pub requires_live_record: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<bool>,
+    /// The module announces arrivals on the edge: it can be listened to and
+    /// awaited. Whether it can also be listed is `readable`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub awaitable: Option<bool>,
+    pub listenable: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolves_empty: Option<bool>,
+    /// Whether the module can list the arrivals since a mark it hands out;
+    /// without one, an arrival announced while nobody listened is lost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub watchable: Option<bool>,
+    pub cursor: Option<bool>,
+    /// The landing's field that names an arrival, so a repeat is dropped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<String>,
+    /// The landing's field that changes when an arrival changes; without
+    /// one, only a new member counts as an arrival.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generic_over: Option<GenericOver>,
     /// The system's resources edge (the describe's reserved `_resources`

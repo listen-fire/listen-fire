@@ -546,40 +546,32 @@ export interface EdgeSchema {
    */
   subject?: boolean;
   /**
-   * The AWAITABLE promise for this edge (asks-as-adapter §A). `true` ⇒ the edge
-   * is a promise in type-space: a BARE traversal is a type error
-   * (MOV_AWAIT_REQUIRED, did-you-mean `await`), and `await …-[:edge]->`
-   * untilNonEmpty waits for its resolution and binds the landed node(s). Such an
-   * edge is honestly neither `readable` nor `writable` — you await it, you do
-   * not read or write it. Absent ⇒ an ordinary edge, and `await`-ing it is a
-   * type error (MOV_NOT_AWAITABLE).
+   * The module ANNOUNCES ARRIVALS on this edge, so it can be listened to and
+   * awaited (`await …-[:edge]->` parks until an arrival wakes it). Separate
+   * from whether the edge can be LISTED, which is `readable`: an edge may be
+   * one, the other, or both. An email's `Replies` is both; a table's `Changes`
+   * only announces. Absent ⇒ nothing is announced, and `await`-ing the edge is
+   * refused.
    */
-  awaitable?: boolean;
+  listenable?: boolean;
   /**
-   * Only meaningful with `awaitable` (F20): whether a resolution along this edge
-   * may carry NO landing (an explicit cancel resolves awaiters empty). Chunk B
-   * carries the flag; the `T | absent` typing it drives is chunk C.
+   * Only meaningful with `listenable` (F20): whether a resolution along this
+   * edge may carry NO landing (an explicit cancel resolves awaiters empty).
    */
   resolvesEmpty?: boolean;
   /**
-   * THE PUSH promise, and like `writable` it is EXPLICIT: the platform DELIVERS
-   * an event when this edge resolves, so a run parked on it is woken rather than
-   * polled. Slack's `Replies` (an inbound webhook resolves the park), an ask's
-   * `Response` (answering it resumes the run), a callback's `Called` (the tap
-   * arrives as an event) are the three that can say this today.
-   *
-   * **Absent ⇒ NO push**, and `await FIRST(…)` on the edge is refused with the
-   * cadence form the author owns instead (`await until(…, every: …)`). Absent
-   * cannot mean "maybe": a park with nobody to wake it is a run that never
-   * finishes, which is exactly the silent degradation this model refuses — an
-   * adapter that has not said stays honest by being polled.
-   *
-   * Adapter-declared, live-schema data like the filter surface. When an adapter
-   * GAINS it, existing polls don't silently improve: the checker nudges (a
-   * warning), the author rewrites.
-   *
+   * Whether the module can list the arrivals since a mark it hands out. Without
+   * one, an arrival announced while nobody was listening is lost.
    */
-  watchable?: boolean;
+  cursor?: boolean;
+  /** The landing's field that names an arrival, so a repeat is dropped. */
+  identity?: string;
+  /**
+   * The landing's field that changes when an arrival changes. Without one,
+   * only a new member counts as an arrival; a change that makes an existing
+   * member match is not seen.
+   */
+  version?: string;
   /**
    * This edge's LANDING TYPE is generic over the CONSTRUCTION SITE: the literal
    * value(s) the write body gives `field` fix the landing's shape. An ask's
