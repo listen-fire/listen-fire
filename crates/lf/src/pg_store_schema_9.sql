@@ -40,3 +40,9 @@ CREATE TABLE lf.wait_seen (
   matched boolean NOT NULL
 );
 CREATE INDEX wait_seen_identity_idx ON lf.wait_seen (wait_id, identity);
+-- One transaction-scoped lock per record's edge: logging an arrival there and
+-- parking a wait there take turns, so either the log sees the park (and
+-- wakes it) or the park's transaction commits after the log's (and the
+-- run's re-read after parking sees the arrival).
+CREATE FUNCTION lf.lock_wait_key(team uuid, adapter_type text, edge text, key text) RETURNS void
+  LANGUAGE sql AS $$ SELECT pg_advisory_xact_lock(hashtextextended(concat_ws(chr(31), team::text, adapter_type, edge, key), 0)) $$;

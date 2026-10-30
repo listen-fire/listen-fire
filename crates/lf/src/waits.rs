@@ -12,7 +12,11 @@
 //!   counts once. Per identity it keeps whether the record matched last time:
 //!   an arrival counts when the record newly matches.
 //! - Logging answers the waits parked on the arrival's record, so the host
-//!   can wake their runs.
+//!   can wake their runs. A log and a park on one record's edge never
+//!   interleave (the state file has one writer at a time; Postgres takes a
+//!   lock on the record's edge), so a run that reads its wait's arrivals
+//!   after parking misses none: either the log saw the park and answers it,
+//!   or the read sees the arrival.
 
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -31,7 +35,8 @@ pub struct NewArrival {
     /// The record whose edge it arrived on.
     pub key: String,
     /// What the edge declares identifies an arrival. None: this report is an
-    /// arrival of its own (its seq is its identity).
+    /// arrival of its own; its identity is `#` and its seq, never the same
+    /// as a bare seq a module reports.
     pub identity: Option<String>,
     pub version: Option<String>,
     pub landing: Option<Js>,
@@ -144,21 +149,26 @@ impl Store {
     /// The arrivals after the wait's mark on its record's edge that it has
     /// not noted, the first of each identity and version only.
     pub fn wait_arrivals(&self, wait_id: &str) -> Result<WaitArrivals> {
-        Self::require_wait(&self.db, wait_id)?;
-        let gone = self.db.query_row(
+        // One transaction, so `gone` and the arrivals are read at one instant.
+        self.transaction(|db| Self::wait_arrivals_in(db, wait_id))
+    }
+
+    fn wait_arrivals_in(db: &Connection, wait_id: &str) -> Result<WaitArrivals> {
+        Self::require_wait(db, wait_id)?;
+        let gone = db.query_row(
             "select exists (select 1 from wait_row w join arrival a
                on a.team_id = w.team_id and a.adapter_type = w.adapter_type and a.edge = w.edge and a.key = w.key and a.seq > w.since
                where w.id = ? and a.gone = 1)",
             params![wait_id],
             |r| r.get::<_, bool>(0),
         )?;
-        let mut statement = self.db.prepare(
-            "select a.seq, coalesce(a.identity, cast(a.seq as text)), a.version, a.landing
+        let mut statement = db.prepare(
+            "select a.seq, coalesce(a.identity, '#' || a.seq), a.version, a.landing
              from wait_row w join arrival a
                on a.team_id = w.team_id and a.adapter_type = w.adapter_type and a.edge = w.edge and a.key = w.key and a.seq > w.since
              where w.id = ?1 and a.gone = 0
                and not exists (select 1 from wait_seen s
-                 where s.wait_id = w.id and s.identity = coalesce(a.identity, cast(a.seq as text)) and s.version is a.version)
+                 where s.wait_id = w.id and s.identity = coalesce(a.identity, '#' || a.seq) and s.version is a.version)
                and not exists (select 1 from arrival b
                  where b.team_id = a.team_id and b.adapter_type = a.adapter_type and b.edge = a.edge and b.key = a.key
                    and b.seq > w.since and b.seq < a.seq and b.gone = 0 and b.identity = a.identity and b.version is a.version)
@@ -219,7 +229,8 @@ impl Store {
         Ok(())
     }
 
-    /// A limit park at `address`: a wait parked there is parked no more.
+    /// Anything parked at `address`: a wait parked there before is parked
+    /// no more, so it is never woken for a park it no longer holds.
     pub(crate) fn unpark_waits_in(db: &Connection, run_id: &str, address: &str) -> Result<()> {
         db.execute("update wait_row set address = null where run_id = ? and address = ?", params![run_id, address])?;
         Ok(())
@@ -284,6 +295,7 @@ mod tests {
         ids: HashMap<String, String>,
         marks: HashMap<String, i64>,
         waits: HashMap<String, String>,
+        listed: HashMap<String, LoggedArrival>,
     }
 
     impl Names {
@@ -293,6 +305,22 @@ mod tests {
 
         fn wait(&self, name: &str) -> String {
             self.waits.get(name).unwrap_or_else(|| panic!("no wait named {name}")).clone()
+        }
+
+        fn listed(&self, name: &str) -> &LoggedArrival {
+            self.listed.get(name).unwrap_or_else(|| panic!("no arrival named {name}"))
+        }
+
+        /// An arrival's or a note's identity: given, or a listed arrival's
+        /// (`identityOf`), or a listed arrival's seq as bare text (`identityIsSeqOf`).
+        fn identity(&self, step: &Js) -> Option<String> {
+            if let Some(name) = opt_text(step, "identityOf") {
+                return Some(self.listed(name).identity.clone());
+            }
+            if let Some(name) = opt_text(step, "identityIsSeqOf") {
+                return Some(self.listed(name).seq.to_string());
+            }
+            opt_text(step, "identity").map(str::to_string)
         }
     }
 
@@ -339,7 +367,7 @@ mod tests {
                         .map(|a| NewArrival {
                             edge: text(a, "edge").into(),
                             key: text(a, "key").into(),
-                            identity: opt_text(a, "identity").map(str::to_string),
+                            identity: names.identity(a),
                             version: opt_text(a, "version").map(str::to_string),
                             landing: a.get("landing").cloned(),
                             gone: flag(a, "gone"),
@@ -383,10 +411,14 @@ mod tests {
                         if let Some(landing) = want.get("landing") {
                             assert_eq!(&arrival.landing, landing, "{at}: landing");
                         }
+                        if let Some(name) = opt_text(want, "as") {
+                            names.listed.insert(name.into(), arrival.clone());
+                        }
                     }
                 }
                 "note" => {
-                    let counts = store.note_arrival(&names.wait(text(step, "wait")), text(step, "identity"), opt_text(step, "version"), flag(step, "matched")).unwrap();
+                    let identity = names.identity(step).unwrap_or_else(|| panic!("{at}: no identity"));
+                    let counts = store.note_arrival(&names.wait(text(step, "wait")), &identity, opt_text(step, "version"), flag(step, "matched")).unwrap();
                     assert_eq!(counts, flag(step, "counts"), "{at}: counts");
                 }
                 "park" => {
@@ -427,11 +459,13 @@ mod tests {
         an_arrival_is_the_waits_only_on_its_own_record_edge_adapter_and_team,
         without_a_version_an_identity_is_one_arrival_and_with_one_each_version_is_another,
         an_arrival_without_an_identity_is_its_own,
+        an_arrival_without_an_identity_never_shares_one_a_module_reports,
         newly_matches_counts_once_until_it_stops_matching,
         a_noted_arrival_is_no_longer_listed,
         two_arrivals_on_one_wait_count_in_log_order,
         a_gone_arrival_marks_the_wait_gone,
         logging_answers_only_the_parked_waits_on_its_key,
+        a_park_at_an_address_leaves_no_other_wait_of_its_run_parked_there,
         opening_a_wait_its_run_already_has_on_that_records_edge_is_the_same_wait_from_its_first_mark,
         rows_drop_with_their_run_and_the_sweep_spares_what_a_live_row_reads,
     }
@@ -458,6 +492,48 @@ mod tests {
         for case in cases() {
             run_case(&store, &case);
         }
+    }
+
+    /// A log in flight on a record's edge holds its lock (lf.lock_wait_key)
+    /// until it commits: a wait's park there waits for it, so the run's read
+    /// after parking sees the arrival. Driven by a second connection that
+    /// takes the lock and writes the arrival as a log does, then commits late.
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn over_postgres_a_park_waits_for_a_log_on_its_record_to_commit() {
+        use crate::pg_store::{PgStore, block_on, connect_client};
+        use std::time::{Duration, Instant};
+        let Some(url) = std::env::var("LF_TEST_PG").ok().filter(|u| !u.is_empty()) else { return };
+        PgStore::migrate(&url).unwrap();
+        let store = PgStore::connect(&url, crate::backend::POSTGRES_TENANT).unwrap();
+        let (run, team) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
+        store.start_run(&RunStart { id: &run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+        let since = store.arrival_mark().unwrap();
+        let wait = store.open_wait(&OpenWait { run_id: &run, team_id: &team, adapter_type: "acme", edge: "Comments", key: "thread:c1", since }).unwrap();
+        let (locked, held) = std::sync::mpsc::channel();
+        let logging = std::thread::spawn({
+            let (url, team) = (url.clone(), team.clone());
+            move || {
+                let client = connect_client(&url).unwrap();
+                block_on(client.batch_execute("begin")).unwrap();
+                block_on(client.execute("select lf.lock_wait_key($1::text::uuid, 'acme', 'Comments', 'thread:c1')", &[&team])).unwrap();
+                block_on(client.execute(
+                    "insert into lf.arrival (team_id, adapter_type, edge, key, identity, gone, logged_at) values ($1::text::uuid, 'acme', 'Comments', 'thread:c1', 'k1', false, now())",
+                    &[&team],
+                ))
+                .unwrap();
+                locked.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(500));
+                block_on(client.batch_execute("commit")).unwrap();
+            }
+        });
+        held.recv().unwrap();
+        let parking = Instant::now();
+        store.commit_park(&Park { run_id: &run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
+        assert!(parking.elapsed() >= Duration::from_millis(400), "the park took its turn after the log");
+        logging.join().unwrap();
+        let read: Vec<String> = store.wait_arrivals(&wait).unwrap().arrivals.into_iter().map(|a| a.identity).collect();
+        assert_eq!(read, ["k1"]);
     }
 
     #[test]

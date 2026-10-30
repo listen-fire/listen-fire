@@ -69,7 +69,7 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
   - Each arrival counts once per wait, by its identity and version. Without a version, a record counts only when it is created.
   - A wait keeps, per record, whether the record matched its `WHERE` last time, so an arrival counts when the record newly matches.
   - Every arrival is kept an hour, and longer while a waiting run reads it; the drain forgets the rest, as it forgets old deliveries.
-  - Store modules (a change to the store slot): six new methods, `waits.mark`, `waits.log`, `waits.open`, `waits.arrivals`, `waits.note` and `waits.sweep`; `parks.commit` takes `{ kind: "wait", waitId }`. A store module must serve them for a run that awaits a listenable edge. The cases every store is held to are `packages/engine-contracts/conformance/store-waits.json`. See `docs/contracts/store-slot.md`.
+  - Store modules (a change to the store slot): six new methods, `waits.mark`, `waits.log`, `waits.open`, `waits.arrivals`, `waits.note` and `waits.sweep`; `parks.commit` takes `{ kind: "wait", waitId }`. A store module must serve them for a run that awaits a listenable edge; the drain still runs over one that does not, and sweeps no arrivals there. The cases every store is held to are `packages/engine-contracts/conformance/store-waits.json`. See `docs/contracts/store-slot.md`.
   - A Postgres store gains `lf.arrival`, `lf.wait_row` and `lf.wait_seen` (migration 9): run `listen-fire connect @lf/postgres-store` once to apply it.
   - Why: a wait that registers only when it is reached misses an answer that comes back during the write that asked for it.
 

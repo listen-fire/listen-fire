@@ -209,10 +209,11 @@ pub enum ParkKind {
     #[serde(rename_all = "camelCase")]
     Await { team_id: String, adapter_type: String, correlation_key: String },
     /// Parks the wait at the address (its leaf's reason is `await`); a run
-    /// with no such wait writes nothing.
+    /// with no such wait writes nothing. Any park at an address unparks the
+    /// run's wait parked there before.
     #[serde(rename_all = "camelCase")]
     Wait { wait_id: String },
-    /// Drops the address's correlation, and parks no wait there any more.
+    /// Drops the address's correlation.
     Limit,
 }
 
@@ -223,7 +224,7 @@ pub struct NewArrival {
     pub edge: String,
     /// The record whose edge it arrived on.
     pub key: String,
-    /// `None`: this report is an arrival of its own (its seq is its identity).
+    /// `None`: this report is an arrival of its own (`#` and its seq is its identity).
     #[serde(default)]
     pub identity: Option<String>,
     #[serde(default)]
@@ -250,7 +251,7 @@ pub struct OpenedWait {
     pub wait_id: String,
 }
 
-/// An arrival a wait has yet to judge (`identity`: the reported one, else its seq).
+/// An arrival a wait has yet to judge (`identity`: the reported one, else `#` and its seq).
 #[derive(Debug, Clone, Serialize)]
 pub struct LoggedArrival {
     pub seq: i64,
@@ -461,10 +462,12 @@ slot! {
         "correlations.ofRun" => fn correlations_of_run(CorrelationsOfRun { run_id: String, adapter_type: String }) -> Vec<RunCorrelation>;
         "correlations.drop" => fn drop_correlation(CorrelationsDrop { run_id: String, address: String }) -> ();
         "correlations.dropRun" => fn drop_run_correlations(CorrelationsDropRun { run_id: String }) -> ();
-        /// The latest seq logged (store-wide; 0 for none).
+        /// The latest seq logged (store-wide; 0 for none): every `waits.log`
+        /// call made after it logs under a greater seq.
         "waits.mark" => fn arrival_mark(WaitsMark {}) -> i64;
         /// Log the arrivals in order, as one write: the parked waits on their
         /// records, one wake each (a wait is parked while its leaf is kept).
+        /// Never interleaved with a `Wait` park on the same record's edge.
         "waits.log" => fn log_arrivals(WaitsLog { team_id: String, adapter_type: String, arrivals: Vec<NewArrival>, at: String }) -> Vec<WaitWake>;
         /// A run that already waits on this edge of this record keeps that
         /// wait, and its `since`.

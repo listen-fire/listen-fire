@@ -719,23 +719,24 @@ impl RunHostStore for PgStore {
                 ParkKind::Await { .. } | ParkKind::Wait { .. } | ParkKind::Limit => None,
             };
             self.put_leaf(run_id, address, kind.reason(), wake_at, state, fence)?;
+            // Whatever parks here now, no wait parked here before is.
+            self.execute("update lf.wait_row set address = null where run_id = $1::text::uuid and address = $2::text", &[&run_id, &address])?;
             match kind {
                 // The leaf is the truth; the work row only says when to look.
                 ParkKind::Timer { wake_at } => self.enqueue_row("resume_timer", &timer_work_key(run_id), &timer_work_payload(run_id), Some(wake_at), &self.tenant)?,
                 ParkKind::Await { team_id, adapter_type, correlation_key } => self.correlate(run_id, team_id, address, adapter_type, correlation_key)?,
                 ParkKind::Wait { wait_id } => {
-                    let parked = self.execute(
-                        "update lf.wait_row set address = $3::text where id = $1::text::uuid and run_id = $2::text::uuid",
-                        &[wait_id, &run_id, &address],
+                    // Takes turns with a log on the wait's record (lf.lock_wait_key).
+                    let locked = self.query_opt(
+                        "select lf.lock_wait_key(team_id, adapter_type, edge, key) from lf.wait_row where id = $1::text::uuid and run_id = $2::text::uuid",
+                        &[wait_id, &run_id],
                     )?;
-                    if parked == 0 {
+                    if locked.is_none() {
                         return Err(StoreError::Invalid(format!("run {run_id} has no wait {wait_id}")));
                     }
+                    self.execute("update lf.wait_row set address = $2::text where id = $1::text::uuid", &[wait_id, &address])?;
                 }
-                ParkKind::Limit => {
-                    self.drop_correlation(run_id, address)?;
-                    self.execute("update lf.wait_row set address = null where run_id = $1::text::uuid and address = $2::text", &[&run_id, &address])?;
-                }
+                ParkKind::Limit => self.drop_correlation(run_id, address)?,
             }
             self.mark_parked(run_id)
         })
@@ -901,6 +902,14 @@ impl RunHostStore for PgStore {
 
     fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {
         self.transaction(|| {
+            // Each record's edge locked once, in one order, so two logs never
+            // wait on each other; a park there waits for this log to commit.
+            let mut keys: Vec<(&str, &str)> = arrivals.iter().map(|a| (a.edge.as_str(), a.key.as_str())).collect();
+            keys.sort_unstable();
+            keys.dedup();
+            for (edge, key) in keys {
+                self.execute("select lf.lock_wait_key($1::text::uuid, $2::text, $3::text, $4::text)", &[&team_id, &adapter_type, &edge, &key])?;
+            }
             let mut wakes: Vec<WaitWake> = Vec::new();
             for arrival in arrivals {
                 let landing = arrival.landing.as_ref().map(Js::to_json);
@@ -946,32 +955,32 @@ impl RunHostStore for PgStore {
         })
     }
 
+    /// One statement, so `gone` and the arrivals are read at one instant.
     fn wait_arrivals(&self, wait_id: &str) -> Result<WaitArrivals> {
-        let gone: bool = self
-            .query_opt(
-                "select exists (select 1 from lf.arrival a
-                   where a.team_id = w.team_id and a.adapter_type = w.adapter_type and a.edge = w.edge and a.key = w.key and a.seq > w.since and a.gone)
-                 from lf.wait_row w where w.id = $1::text::uuid",
-                &[&wait_id],
-            )?
-            .map(|r| r.get(0))
-            .ok_or_else(|| StoreError::Invalid(format!("no wait {wait_id}")))?;
         let rows = self.query(
-            "select a.seq, coalesce(a.identity, a.seq::text), a.version, a.landing::text
-             from lf.wait_row w join lf.arrival a
-               on a.team_id = w.team_id and a.adapter_type = w.adapter_type and a.edge = w.edge and a.key = w.key and a.seq > w.since
-             where w.id = $1::text::uuid and not a.gone
-               and not exists (select 1 from lf.wait_seen s
-                 where s.wait_id = w.id and s.identity = coalesce(a.identity, a.seq::text) and s.version is not distinct from a.version)
-               and not exists (select 1 from lf.arrival b
-                 where b.team_id = a.team_id and b.adapter_type = a.adapter_type and b.edge = a.edge and b.key = a.key
-                   and b.seq > w.since and b.seq < a.seq and not b.gone and b.identity = a.identity and b.version is not distinct from a.version)
+            "select g.gone, a.seq, a.identity, a.version, a.landing
+             from lf.wait_row w
+             cross join lateral (select exists (select 1 from lf.arrival a
+               where a.team_id = w.team_id and a.adapter_type = w.adapter_type and a.edge = w.edge and a.key = w.key and a.seq > w.since and a.gone) as gone) g
+             left join lateral (
+               select a.seq, coalesce(a.identity, '#' || a.seq::text) as identity, a.version, a.landing::text as landing
+               from lf.arrival a
+               where a.team_id = w.team_id and a.adapter_type = w.adapter_type and a.edge = w.edge and a.key = w.key and a.seq > w.since and not a.gone
+                 and not exists (select 1 from lf.wait_seen s
+                   where s.wait_id = w.id and s.identity = coalesce(a.identity, '#' || a.seq::text) and s.version is not distinct from a.version)
+                 and not exists (select 1 from lf.arrival b
+                   where b.team_id = a.team_id and b.adapter_type = a.adapter_type and b.edge = a.edge and b.key = a.key
+                     and b.seq > w.since and b.seq < a.seq and not b.gone and b.identity = a.identity and b.version is not distinct from a.version)
+             ) a on true
+             where w.id = $1::text::uuid
              order by a.seq",
             &[&wait_id],
         )?;
+        let gone: bool = rows.first().map(|r| r.get(0)).ok_or_else(|| StoreError::Invalid(format!("no wait {wait_id}")))?;
         let arrivals = rows
             .iter()
-            .map(|r| Ok(LoggedArrival { seq: r.get(0), identity: r.get(1), version: r.get(2), landing: landing_of(r.get::<_, Option<&str>>(3))? }))
+            .filter_map(|r| r.get::<_, Option<i64>>(1).map(|seq| (seq, r)))
+            .map(|(seq, r)| Ok(LoggedArrival { seq, identity: r.get(2), version: r.get(3), landing: landing_of(r.get::<_, Option<&str>>(4))? }))
             .collect::<Result<Vec<_>>>()?;
         Ok(WaitArrivals { gone, arrivals })
     }

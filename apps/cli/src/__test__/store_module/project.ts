@@ -8,8 +8,9 @@ import { lfBinary } from '../lf_bin';
 const FORWARD = resolve(__dirname, 'forward.mjs');
 
 /** Put the module into `dir`'s externals, name it in lf.yaml's `core:` and
- *  give it its `path` setting in the secrets file. */
-export function withStoreModule(dir: string, statePath: string): void {
+ *  give it its `path` setting in the secrets file. `without`: methods the
+ *  module answers as not implemented, as one written before them does. */
+export function withStoreModule(dir: string, statePath: string, options: { without?: readonly string[] } = {}): void {
   mkdirSync(join(dir, 'externals/acme_store'), { recursive: true });
   writeFileSync(
     join(dir, 'externals/acme_store/lf-external.yaml'),
@@ -17,7 +18,7 @@ export function withStoreModule(dir: string, statePath: string): void {
       'name: acme_store',
       'kind: core',
       'slot: store',
-      `command: [node, ${JSON.stringify(FORWARD)}, ${JSON.stringify(lfBinary())}]`,
+      `command: [${['node', FORWARD, lfBinary(), ...(options.without ?? [])].map((part) => JSON.stringify(part)).join(', ')}]`,
       'settings:',
       '  - { name: path, label: the state file the module keeps }',
       '',

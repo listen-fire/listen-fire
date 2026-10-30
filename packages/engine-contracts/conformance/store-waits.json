@@ -1,5 +1,5 @@
 {
-  "about": "The store's waits family: the arrival log, wait rows and their newly-matches bits (docs/contracts/store-slot.md, `waits.*`). Held by listen-fire's stores (crates/lf/src/waits.rs runs every case over the SQLite state file, and over Postgres when LF_TEST_PG names one) and by the engine's TypeScript stores. Each case runs on an empty store. A run or team name stands for a fresh id (a uuid) per case; every run named is started before the first step. `team` defaults to \"t\" and `adapter` to \"acme\". Marks and waits are named by `as` and referred to by that name. `at` and `before` are milliseconds from now. Steps: `mark` (waits.mark, kept as `as`); `log` (waits.log of `arrivals`, logged `at`; `wakes` the parked waits it answers, in any order); `open` (waits.open since the mark `since`, kept as `as`; `same` names an earlier wait it must be); `arrivals` (waits.arrivals: `gone`, and `arrivals` in log order, each checked on the keys it gives); `note` (waits.note, answering `counts`); `park` (parks.commit with `{ kind: \"wait\", waitId }` at `address`); `deleteLeaves` (parks.deleteLeaves); `drop` (leases.dropRunState); `sweep` (waits.sweep of what was logged before `before`, at most 1000).",
+  "about": "The store's waits family: the arrival log, wait rows and their newly-matches bits (docs/contracts/store-slot.md, `waits.*`). Held by listen-fire's stores (crates/lf/src/waits.rs runs every case over the SQLite state file, and over Postgres when LF_TEST_PG names one) and by the engine's TypeScript stores. Each case runs on an empty store. A run or team name stands for a fresh id (a uuid) per case; every run named is started before the first step. `team` defaults to \"t\" and `adapter` to \"acme\". Marks and waits are named by `as` and referred to by that name. `at` and `before` are milliseconds from now. Steps: `mark` (waits.mark, kept as `as`); `log` (waits.log of `arrivals`, logged `at`; `wakes` the parked waits it answers, in any order; an arrival's `identityIsSeqOf` names a listed arrival whose seq, as bare text, is its identity); `open` (waits.open since the mark `since`, kept as `as`; `same` names an earlier wait it must be); `arrivals` (waits.arrivals: `gone`, and `arrivals` in log order, each checked on the keys it gives, and kept by the name its `as` gives); `note` (waits.note, answering `counts`; `identityOf` names a listed arrival whose identity it notes, `identityIsSeqOf` one whose seq, as bare text, is the identity); `park` (parks.commit with `{ kind: \"wait\", waitId }` at `address`); `deleteLeaves` (parks.deleteLeaves); `drop` (leases.dropRunState); `sweep` (waits.sweep of what was logged before `before`, at most 1000).",
   "cases": [
     {
       "case": "an arrival logged before its wait opens counts when the mark precedes it",
@@ -72,6 +72,20 @@
           "wakes": []
         },
         { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "version": null, "landing": { "n": 1 } }, { "version": null, "landing": { "n": 1 } }] }
+      ]
+    },
+    {
+      "case": "an arrival without an identity never shares one a module reports",
+      "steps": [
+        { "do": "mark", "as": "m" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "landing": { "n": 1 } }], "wakes": [] },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "as": "bare", "version": null }] },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identityIsSeqOf": "bare", "landing": { "n": 2 } }], "wakes": [] },
+        { "do": "note", "wait": "w", "identityIsSeqOf": "bare", "version": null, "matched": true, "counts": true },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "landing": { "n": 1 } }] },
+        { "do": "note", "wait": "w", "identityOf": "bare", "version": null, "matched": true, "counts": true },
+        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
       ]
     },
     {
@@ -153,6 +167,18 @@
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "gone": true }], "wakes": [{ "run": "run-1", "wait": "parked", "address": "s1" }] },
         { "do": "deleteLeaves", "run": "run-1", "addresses": ["s1"] },
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k4" }], "wakes": [] }
+      ]
+    },
+    {
+      "case": "a park at an address leaves no other wait of its run parked there",
+      "steps": [
+        { "do": "mark", "as": "m" },
+        { "do": "open", "as": "first", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        { "do": "open", "as": "second", "run": "run-1", "edge": "Comments", "key": "thread:c2", "since": "m" },
+        { "do": "park", "run": "run-1", "wait": "first", "address": "s1" },
+        { "do": "park", "run": "run-1", "wait": "second", "address": "s1" },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1" }], "wakes": [] },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c2", "identity": "k2" }], "wakes": [{ "run": "run-1", "wait": "second", "address": "s1" }] }
       ]
     },
     {

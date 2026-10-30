@@ -395,7 +395,7 @@ pub enum ParkKind<'a> {
     /// Woken when an arrival is logged on its wait's record (crate::waits),
     /// which it parks at its address.
     Wait { wait_id: &'a str },
-    /// Paused at a run limit: a correlation or wait the address had is dropped.
+    /// Paused at a run limit: a correlation the address had is dropped.
     Limit,
 }
 
@@ -834,15 +834,13 @@ impl Store {
                 ParkKind::Await { .. } | ParkKind::Wait { .. } | ParkKind::Limit => None,
             };
             Self::put_leaf_in(db, run_id, address, kind.reason(), wake_at, state)?;
+            Self::unpark_waits_in(db, run_id, address)?;
             match kind {
                 // The leaf is the truth; the work row only says when to look.
                 ParkKind::Timer { wake_at } => Self::enqueue_in(db, "resume_timer", &timer_work_key(run_id), &timer_work_payload(run_id), Some(wake_at))?,
                 ParkKind::Await { team_id, adapter_type, correlation_key } => Self::correlate_in(db, run_id, team_id, address, adapter_type, correlation_key)?,
                 ParkKind::Wait { wait_id } => Self::park_wait_in(db, run_id, address, wait_id)?,
-                ParkKind::Limit => {
-                    Self::drop_correlation_in(db, run_id, address)?;
-                    Self::unpark_waits_in(db, run_id, address)?;
-                }
+                ParkKind::Limit => Self::drop_correlation_in(db, run_id, address)?,
             }
             Self::mark_parked_in(db, run_id)
         })

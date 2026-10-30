@@ -268,8 +268,14 @@ impl RunHostStore for ProcessStore {
         self.flag("waits.note", obj! { "waitId" => s(wait_id), "identity" => s(identity), "version" => opt(version), "matched" => Js::Bool(matched) })
     }
     fn sweep_arrivals(&self, before: &str, limit: i64) -> Result<i64> {
-        let answer = self.call("waits.sweep", obj! { "before" => s(before), "limit" => Js::Num(limit.into()) })?;
-        int(&answer).ok_or_else(|| self.malformed("waits.sweep", &answer))
+        const METHOD: &str = "waits.sweep";
+        // A module written before waits logs no arrivals, so it has none to
+        // forget: every drain sweeps, and such a module still drains.
+        match self.client.call(METHOD, obj! { "before" => s(before), "limit" => Js::Num(limit.into()) }) {
+            Ok(answer) => int(&answer).ok_or_else(|| self.malformed(METHOD, &answer)),
+            Err(error) if error.code == METHOD_NOT_IMPLEMENTED_CODE => Ok(0),
+            Err(error) => Err(self.refused(METHOD, error)),
+        }
     }
 
     fn claim_lease(&self, run_id: &str, ttl_ms: i64) -> Result<Option<String>> {

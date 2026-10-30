@@ -215,8 +215,8 @@ pub trait RunHostStore {
     fn delete_leaves(&self, run_id: &str, addresses: &[String]) -> Result<()>;
     /// A park and what wakes it, as one fenced write: the leaf, its kind's
     /// row (a timer's `resume_timer` row, an await's correlation, a wait's
-    /// address, a limit's correlation and wait dropped), and the run marked
-    /// parked.
+    /// address, a limit's correlation dropped), and the run marked parked.
+    /// A wait parked at the address before is parked there no more.
     fn commit_park(&self, park: &Park<'_>) -> Result<()>;
 
     // ── Joins ───────────────────────────────────────────────────────────────
@@ -240,7 +240,9 @@ pub trait RunHostStore {
     /// logged after this call.
     fn arrival_mark(&self) -> Result<i64>;
     /// Log the arrivals, in order, as one write: the parked waits on their
-    /// records (one wake each).
+    /// records (one wake each). It never interleaves with a wait's park on
+    /// the same record's edge, so a run that reads its wait's arrivals after
+    /// parking misses none.
     fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>>;
     /// The wait's id; a run that already waits on this edge of this record
     /// keeps that wait and its mark.

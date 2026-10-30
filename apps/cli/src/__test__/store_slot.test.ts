@@ -37,6 +37,13 @@ test('a store module fills the store slot: listen-fire run keeps its run there',
   assert.throws(() => readFileSync(join(dir, '.lf/state.db')));
 });
 
+test('a drain over a store module written before waits sweeps no arrivals and carries on', () => {
+  const dir = project();
+  withStoreModule(dir, join(mkdtempSync(join(tmpdir(), 'lf-store-module-')), 'kept.db'), { without: ['waits.sweep'] });
+  const drained = lf(dir, 'drain', '--until-idle');
+  assert.equal(drained.code, 0, drained.out);
+});
+
 test('listen-fire connect lists an installed store module beside the built-ins', () => {
   const { dir } = moduleProject();
   assert.match(lf(dir, 'connect').out, /^acme_store {2}installed store module; set up \(listen-fire connect acme_store\)$/m);
@@ -112,6 +119,16 @@ async function runWaitsCase(store: RpcStoreBackend, steps: Record<string, unknow
   const marks = new Map<string, number>();
   const waits = new Map<string, string>();
   const wait = (name: string) => waits.get(name) ?? assert.fail(`no wait named ${name}`);
+  const listed = new Map<string, { seq: number; identity: string }>();
+  const listedArrival = (name: string) => listed.get(name) ?? assert.fail(`no arrival named ${name}`);
+  // Given, or a listed arrival's (`identityOf`), or a listed arrival's seq as bare text (`identityIsSeqOf`).
+  const identityIn = (value: unknown): unknown => {
+    const of = field(value, 'identityOf');
+    if (typeof of === 'string') return listedArrival(of).identity;
+    const seqOf = field(value, 'identityIsSeqOf');
+    if (typeof seqOf === 'string') return String(listedArrival(seqOf).seq);
+    return field(value, 'identity') ?? null;
+  };
   for (const run of new Set(steps.flatMap((step) => (typeof step.run === 'string' ? [step.run] : [])))) {
     await store.startRun({ id: id(run), file: 'f', movement: 'm', startedAt: new Date().toISOString(), input: '{}' });
   }
@@ -128,7 +145,8 @@ async function runWaitsCase(store: RpcStoreBackend, steps: Record<string, unknow
         marks.set(text(step, 'as'), await store.call('waits.mark', {}, z.number()));
         break;
       case 'log': {
-        const wakes = await store.call('waits.log', { teamId, adapterType, arrivals: items(step, 'arrivals'), at: offset('at') }, z.array(Wake));
+        const arrivals = items(step, 'arrivals').map((a) => ({ ...Object(a), identity: identityIn(a) }));
+        const wakes = await store.call('waits.log', { teamId, adapterType, arrivals, at: offset('at') }, z.array(Wake));
         const expected = items(step, 'wakes').map((w) => ({ runId: id(text(w, 'run')), waitId: wait(text(w, 'wait')), address: text(w, 'address') }));
         assert.deepEqual(wakes.sort(byWait), expected.sort(byWait), `${at}: the wakes`);
         break;
@@ -152,11 +170,13 @@ async function runWaitsCase(store: RpcStoreBackend, steps: Record<string, unknow
           for (const key of ['identity', 'version', 'landing'] as const) {
             if (Object.hasOwn(Object(expected[i]), key)) assert.deepEqual(arrival[key], field(expected[i], key), `${at}: ${key}`);
           }
+          const name = field(expected[i], 'as');
+          if (typeof name === 'string') listed.set(name, arrival);
         });
         break;
       }
       case 'note': {
-        const params = { waitId: wait(text(step, 'wait')), identity: text(step, 'identity'), version: step.version ?? null, matched: step.matched === true };
+        const params = { waitId: wait(text(step, 'wait')), identity: identityIn(step), version: step.version ?? null, matched: step.matched === true };
         assert.equal(await store.call('waits.note', params, z.boolean()), step.counts === true, `${at}: counts`);
         break;
       }

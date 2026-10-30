@@ -3,14 +3,16 @@
 // `path` setting from the store slot's opening request (`store.open`), starts
 // `listen-fire --contract-store <path>`, which serves the same methods over a SQLite
 // state file, and forwards every request, that one included, to it.
-// Usage: node forward.mjs <listen-fire binary>.
+// Usage: node forward.mjs <listen-fire binary> [<method>…]: each method named
+// after the binary is answered `method_not_implemented`, as a module written
+// before it answers.
 
 import { spawn } from 'node:child_process';
 import { createServer, request } from 'node:http';
 import { createInterface } from 'node:readline';
 import { unlinkSync } from 'node:fs';
 
-const [lf] = process.argv.slice(2);
+const [lf, ...without] = process.argv.slice(2);
 const token = process.env.MODULE_TOKEN || undefined;
 let store; // Promise of the forwarded store's base URL
 
@@ -62,6 +64,9 @@ const server = createServer(async (req, res) => {
   // Asked before anything else, so answered before the store is open.
   if (store === undefined && envelope.method === 'manifest') {
     return reply(200, { ok: true, result: { protocolVersion: 2, name: 'acme_store', kind: 'core', slot: 'store', methods: ['store.open'] } });
+  }
+  if (without.includes(envelope.method)) {
+    return reply(200, { ok: false, error: { code: 'method_not_implemented', message: `${envelope.method} is not implemented`, retryable: false } });
   }
   if (store === undefined) {
     const path = envelope.params?.settings?.path;
