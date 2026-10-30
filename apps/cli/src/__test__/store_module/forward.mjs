@@ -5,7 +5,7 @@
 // state file, and forwards every request, that one included, to it.
 // Usage: node forward.mjs <listen-fire binary> [<method>…]: each method named
 // after the binary is answered `method_not_implemented`, as a module written
-// before it answers.
+// before it answers, and is left out of the methods its manifest lists.
 
 import { spawn } from 'node:child_process';
 import { createServer, request } from 'node:http';
@@ -63,7 +63,9 @@ const server = createServer(async (req, res) => {
   }
   // Asked before anything else, so answered before the store is open.
   if (store === undefined && envelope.method === 'manifest') {
-    return reply(200, { ok: true, result: { protocolVersion: 2, name: 'acme_store', kind: 'core', slot: 'store', methods: ['store.open'] } });
+    // The methods listen-fire reads a store's manifest for, of those it serves.
+    const methods = ['store.open', 'waits.mark', 'waits.log', 'waits.open', 'waits.arrivals', 'waits.note', 'waits.sweep'].filter((m) => !without.includes(m));
+    return reply(200, { ok: true, result: { protocolVersion: 2, name: 'acme_store', kind: 'core', slot: 'store', methods } });
   }
   if (without.includes(envelope.method)) {
     return reply(200, { ok: false, error: { code: 'method_not_implemented', message: `${envelope.method} is not implemented`, retryable: false } });

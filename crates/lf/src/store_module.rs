@@ -417,6 +417,14 @@ impl RunHostStore for ProcessStore {
             _ => Err(self.malformed("inbound.keepDelivery", &answer)),
         }
     }
+    fn arrivals_unkept(&self) -> Result<Option<String>> {
+        const METHOD: &str = "waits.log";
+        let manifest = self.call("manifest", obj! {})?;
+        let methods = manifest.get("methods").and_then(Js::as_array).ok_or_else(|| self.malformed("manifest", &manifest))?;
+        Ok((!methods.iter().any(|m| m.as_str() == Some(METHOD))).then(|| {
+            format!("{} does not answer {}; a delivery that reports arrivals needs it", self.client.label, crate::protocol::method_with_minor(METHOD))
+        }))
+    }
     fn forget_delivery_id(&self, id: &str) -> Result<()> {
         self.unit("inbound.forgetDeliveryId", obj! { "id" => s(id) })
     }

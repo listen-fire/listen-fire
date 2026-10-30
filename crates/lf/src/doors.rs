@@ -291,6 +291,10 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         self.serving(provider_key).is_some()
     }
 
+    async fn arrivals_unkept(&self) -> Result<Option<String>, String> {
+        self.store.arrivals_unkept().map_err(|e| e.to_string())
+    }
+
     fn intercepts(&self, provider_key: &str) -> Vec<Intercept> {
         self.serving(provider_key).map(|setup| setup.declaration.intercepts.clone()).unwrap_or_default()
     }

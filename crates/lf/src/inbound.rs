@@ -436,6 +436,11 @@ pub trait InboundStore {
     async fn keep(&self, kept: Kept<'_>) -> Result<bool, String>;
     /// Poke whatever drains the work rows.
     fn notify(&self);
+    /// Why a delivery's arrivals cannot be kept (the store would drop them):
+    /// asked before anything of a delivery that reports arrivals is kept.
+    async fn arrivals_unkept(&self) -> Result<Option<String>, String> {
+        Ok(None)
+    }
     /// Why the delivery's events are refused before anything is kept: none
     /// fits what the listens they would reach declare. None to keep them.
     fn refuse_events(&self, _source: &Source, _events: &[Js]) -> Option<String> {
@@ -488,6 +493,9 @@ enum Refusal {
     CannotPreprocess,
     /// No listen takes what the delivery carries: the line naming the fields.
     PayloadMismatch(String),
+    /// The store cannot keep the arrivals the delivery reports: why. The
+    /// sender sends it again once the store can.
+    ArrivalsUnkept(String),
 }
 
 /// What a delivery that got in came to.
@@ -517,6 +525,9 @@ impl Refusal {
             Refusal::CannotPreprocess => (500, "adapter cannot preprocess inbound"),
             Refusal::PayloadMismatch(message) => {
                 return Answer::of(400, Js::Obj(obj! { "error" => Js::str("payload_mismatch"), "message" => Js::Str(message) }));
+            }
+            Refusal::ArrivalsUnkept(message) => {
+                return Answer::of(503, Js::Obj(obj! { "error" => Js::str("arrivals_not_kept"), "message" => Js::Str(message) }));
             }
         };
         Answer::error(status, code)
@@ -608,6 +619,13 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
     if let Some(message) = store.refuse_events(&source, &extraction.events) {
         eprintln!("Webhook delivery refused for subscription {}: {message}", delivery.subscription_id);
         return refused(Refusal::PayloadMismatch(message));
+    }
+
+    if !extraction.arrivals.is_empty()
+        && let Some(why) = store.arrivals_unkept().await?
+    {
+        eprintln!("Webhook delivery for subscription {} not kept: {why}", delivery.subscription_id);
+        return refused(Refusal::ArrivalsUnkept(why));
     }
 
     // Capture: one receipt per event. A receipt that cannot be stored drops
@@ -969,6 +987,8 @@ mod tests {
         /// `preprocessInbound` (its body's `arrivals`), named by `x-id`,
         /// its `wakeKeys` failing while this is set.
         signed_wakes_failing: Option<std::cell::Cell<bool>>,
+        /// Why its store would drop a delivery's arrivals, when it would.
+        unkept: Option<String>,
     }
 
     impl ModuleChecked {
@@ -981,6 +1001,7 @@ mod tests {
                 arrived: Default::default(),
                 kept: Default::default(),
                 signed_wakes_failing: None,
+                unkept: None,
             }
         }
 
@@ -995,6 +1016,9 @@ mod tests {
         }
         fn knows_provider(&self, provider_key: &str) -> bool {
             provider_key == "MAIL"
+        }
+        async fn arrivals_unkept(&self) -> Result<Option<String>, String> {
+            Ok(self.unkept.clone())
         }
         fn intercepts(&self, _provider_key: &str) -> Vec<Intercept> {
             Vec::new()
@@ -1084,6 +1108,23 @@ mod tests {
         assert_eq!(answer_delivery(&store, delivery("POST", body, &headers)).await.status, 200);
         assert_eq!(store.arrived.borrow().clone(), ["k1"], "the retry logs them once");
         assert_eq!(store.kept.borrow().clone(), [None, Some("d-1".to_string())]);
+    }
+
+    /// A store that would drop a delivery's arrivals refuses the delivery
+    /// before keeping anything, so its sender sends it again; one with no
+    /// arrivals is kept as ever.
+    #[tokio::test]
+    async fn a_store_that_cannot_keep_arrivals_refuses_their_delivery_whole() {
+        let unkept = |answer: &str| ModuleChecked { unkept: Some("the store module acme_store does not answer waits.log".into()), ..ModuleChecked::answering(answer) };
+        let store = unkept(r#"{"outcome":"accepted","events":[{"payload":{"n":1}}],"deliveryId":"m-1","arrivals":[{"edge":"Replies","key":"C1:1","identity":"r1","landing":{"fields":{}}}]}"#);
+        let answer = answer_delivery(&store, delivery("POST", b"a=b", &[])).await;
+        assert_eq!(
+            (answer.status, answer.body.to_json()),
+            (503, r#"{"error":"arrivals_not_kept","message":"the store module acme_store does not answer waits.log"}"#.to_string())
+        );
+        assert!(store.kept.borrow().is_empty(), "nothing kept: not its receipt, not its id");
+        let plain = unkept(r#"{"outcome":"accepted","events":[{"payload":{"n":1}}]}"#);
+        assert_eq!(answer_delivery(&plain, delivery("POST", b"a=b", &[])).await.status, 200);
     }
 
     #[tokio::test]

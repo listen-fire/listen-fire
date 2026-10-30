@@ -129,7 +129,7 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
 | 2.2 | `work.enqueueIfAbsent` ([the store slot](store-slot.md)) | listen-fire 0.12.5 |
 | 2.3 | a host behaviour: a polled source labels each poll event with its kind, `eventType`, and a host delivers an unlabelled one to the listen that polled it, with a notice ([Polled sources](#polled-sources-and-periodic-tasks)). An older host routes a labelled event correctly, so no module needs to state 2.3 | listen-fire 0.12.8 |
 | 2.4 | `refreshEventSubscription` ([Event subscriptions that expire](#event-subscriptions-that-expire)) | listen-fire 0.12.10 |
-| 2.5 | `awaitKeys`, arrivals on a delivery's reading, the `wake` door's arrivals, the store slot's `waits.*` ([Waiting on your system](#waiting-on-your-system-awaits)) | listen-fire 0.13.0 |
+| 2.5 | `awaitKeys`, arrivals on a delivery's reading, the `wake` door's arrivals, the store slot's `waits.*` (`waits.log` names it) ([Waiting on your system](#waiting-on-your-system-awaits)) | listen-fire 0.13.0 |
 
 A module offering one of these methods states no minor for it. Until 0.12.9 the kits stamped a module with the minor of the methods it offered; from 0.12.10 they stamp only what its author declares.
 
@@ -626,7 +626,9 @@ What Listen-Fire does with them:
 
 - Every arrival is logged, waited on or not, and kept an hour; longer while a
   wait reads it. A delivery's arrivals are logged with its receipt, so a
-  redelivery under the same delivery id logs nothing again.
+  redelivery under the same delivery id logs nothing again, and an arrival
+  reported again with the same identity and version within the hour is
+  logged once, wherever it comes from.
 - A run a delivery starts never waits for that delivery's own arrivals: `await new`
   takes only what arrives after. A plain `await` on an edge that can be
   listed still finds them there.
@@ -864,6 +866,7 @@ If your system sends webhooks, let Listen-Fire subscribe:
    | 400 `{ "error": "provider_mismatch" }` | the URL's adapter segment does not match the subscription |
    | 401 `{ "error": "signature_invalid" }` | bad or missing signature |
    | 404 `{ "error": "subscription_not_found" }` | unknown or deleted subscription |
+   | 503 `{ "error": "arrivals_not_kept", "message" }` | the delivery reports arrivals and Listen-Fire's store cannot keep them yet; nothing was kept: send it again |
    | 500 | your adapter does not implement `preprocessInbound`; an arrival it reports names no identity; `wakeKeys` failed or its wakes could not be queued (the events are already receipted: send the delivery again); or an internal failure |
 
 3. While your delivery is open, Listen-Fire calls you back:

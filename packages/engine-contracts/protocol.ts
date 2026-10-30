@@ -54,6 +54,7 @@ export const PROTOCOL_MINORS: readonly { minor: number; feature: string; uses: P
   { minor: 2, feature: 'work.enqueueIfAbsent', uses: { method: 'work.enqueueIfAbsent' } },
   { minor: 4, feature: 'refreshEventSubscription', uses: { method: 'refreshEventSubscription' } },
   { minor: 5, feature: 'awaitKeys', uses: { method: 'awaitKeys' } },
+  { minor: 5, feature: 'waits.log', uses: { method: 'waits.log' } },
 ];
 
 /** The minor a manifest states: what it needs its host to speak. That is 0

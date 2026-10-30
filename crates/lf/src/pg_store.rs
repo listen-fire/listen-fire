@@ -347,8 +347,23 @@ impl PgStore {
         for (edge, key) in keys {
             self.execute("select lf.lock_wait_key($1::text::uuid, $2::text, $3::text, $4::text)", &[&team_id, &adapter_type, &edge, &key])?;
         }
+        // A repeat: its identity and version already logged on its record's
+        // edge within the retention (a sender's retry).
+        let since = crate::store::iso(-crate::waits::ARRIVAL_RETENTION_MS);
         let mut wakes: Vec<WaitWake> = Vec::new();
         for arrival in arrivals {
+            if arrival.identity.is_some()
+                && self
+                    .query_opt(
+                        "select 1 from lf.arrival
+                         where team_id = $1::text::uuid and adapter_type = $2::text and edge = $3::text and key = $4::text
+                           and identity = $5::text and version is not distinct from $6::text and logged_at > $7::text::timestamptz",
+                        &[&team_id, &adapter_type, &arrival.edge, &arrival.key, &arrival.identity, &arrival.version, &since],
+                    )?
+                    .is_some()
+            {
+                continue;
+            }
             let landing = arrival.landing.as_ref().map(Js::to_json);
             self.execute(
                 "insert into lf.arrival (team_id, adapter_type, edge, key, identity, version, landing, gone, logged_at)

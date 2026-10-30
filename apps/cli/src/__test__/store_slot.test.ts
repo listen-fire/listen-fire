@@ -8,13 +8,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { RpcStoreBackend } from 'movement-engine/services/run_host/rpc_store';
-import { companies, lf, project } from './example';
+import { companies, lf, project, served } from './example';
 import { lfBinary } from './lf_bin';
 import { withStoreModule } from './store_module/project';
 
@@ -42,6 +42,31 @@ test('a drain over a store module written before waits sweeps no arrivals and ca
   withStoreModule(dir, join(mkdtempSync(join(tmpdir(), 'lf-store-module-')), 'kept.db'), { without: ['waits.sweep'] });
   const drained = lf(dir, 'drain', '--until-idle');
   assert.equal(drained.code, 0, drained.out);
+});
+
+test('a store module written before arrivals refuses a delivery that reports some, keeping nothing, so its sender sends it again', async () => {
+  const dir = project();
+  withStoreModule(dir, join(mkdtempSync(join(tmpdir(), 'lf-store-module-')), 'kept.db'), { without: ['waits.log'] });
+  const serving = await served(dir);
+  try {
+    const body = Buffer.from(JSON.stringify({ comments: [{ id: 'comment-1', thread: 'company-1', text: 'hi' }] }));
+    const delivered = await fetch(`http://127.0.0.1:${serving.port}/hooks/acme_crm/acme`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-listen-fire-signature': createHmac('sha256', 'dev-acme-webhook-secret').update(body).digest('hex') },
+      body,
+    });
+    assert.equal(delivered.status, 503);
+    assert.deepEqual(await delivered.json(), {
+      error: 'arrivals_not_kept',
+      message: 'the store module acme_store does not answer waits.log (adapter protocol 2.5); a delivery that reports arrivals needs it',
+    });
+    await serving.waitFor(/not kept: the store module acme_store does not answer waits\.log/);
+  } finally {
+    await serving.stop();
+  }
+  // Nothing was kept: no receipt holds the delivery's id, so the resend is not a duplicate.
+  const kept = lf(dir, 'deliveries', '--json');
+  assert.deepEqual(JSON.parse(kept.out), { deliveries: [] }, kept.out);
 });
 
 test('listen-fire connect lists an installed store module beside the built-ins', () => {

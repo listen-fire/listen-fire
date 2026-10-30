@@ -22,7 +22,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::json::Js;
 use crate::obj;
-use crate::store::{NewWork, Store, StoreError};
+use crate::store::{NewWork, Store, StoreError, iso};
 
 type Result<T> = std::result::Result<T, StoreError>;
 
@@ -151,8 +151,19 @@ impl Store {
                    and exists (select 1 from leaf l where l.run_id = w.run_id and l.address = w.address)
                  order by w.run_id, w.id",
             )?;
+            // A repeat: its identity and version already logged on its
+            // record's edge within the retention (a sender's retry).
+            let mut logged = db.prepare(
+                "select 1 from arrival where team_id = ? and adapter_type = ? and edge = ? and key = ? and identity = ? and version is ? and logged_at > ?",
+            )?;
+            let since = iso(-ARRIVAL_RETENTION_MS);
             let mut wakes: Vec<WaitWake> = Vec::new();
             for arrival in arrivals {
+                if let Some(identity) = &arrival.identity
+                    && logged.exists(params![team_id, adapter_type, arrival.edge, arrival.key, identity, arrival.version, since])?
+                {
+                    continue;
+                }
                 let landing = arrival.landing.as_ref().map(Js::to_json);
                 log.execute(params![
                     team_id,
@@ -519,6 +530,7 @@ mod tests {
         a_park_at_an_address_leaves_no_other_wait_of_its_run_parked_there,
         opening_a_wait_its_run_already_has_on_that_records_edge_is_the_same_wait_from_its_first_mark,
         rows_drop_with_their_run_and_the_sweep_spares_what_a_live_row_reads,
+        an_arrival_logged_again_is_not_logged_twice_and_one_without_an_identity_is_never_a_repeat,
     }
 
     #[test]

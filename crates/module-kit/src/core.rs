@@ -482,7 +482,10 @@ slot! {
         "waits.mark" => fn arrival_mark(WaitsMark {}) -> i64;
         /// Log the arrivals in order, as one write: the parked waits on their
         /// records, one wake each (a wait is parked while its leaf is kept).
-        /// Never interleaved with a `Wait` park on the same record's edge.
+        /// Never interleaved with a `Wait` park on the same record's edge. A
+        /// repeat (an identity and version its record's edge logged within
+        /// the retention) is skipped and wakes nothing; an arrival without an
+        /// identity is never one.
         "waits.log" => fn log_arrivals(WaitsLog { team_id: String, adapter_type: String, arrivals: Vec<NewArrival>, at: String }) -> Vec<WaitWake>;
         /// A run that already waits on this edge of this record keeps that
         /// wait, and its `since`.

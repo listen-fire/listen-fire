@@ -1,5 +1,5 @@
 {
-  "about": "The store's waits family: the arrival log, wait rows and their newly-matches bits (docs/contracts/store-slot.md, `waits.*`). Held by listen-fire's stores (crates/lf/src/waits.rs runs every case over the SQLite state file, and over Postgres when LF_TEST_PG names one) and by the engine's TypeScript stores. Each case runs on an empty store. A run or team name stands for a fresh id (a uuid) per case; every run named is started before the first step. `team` defaults to \"t\" and `adapter` to \"acme\". Marks and waits are named by `as` and referred to by that name. `at` and `before` are milliseconds from now. Steps: `mark` (waits.mark, kept as `as`); `log` (waits.log of `arrivals`, logged `at`; `wakes` the parked waits it answers, in any order; an arrival's `identityIsSeqOf` names a listed arrival whose seq, as bare text, is its identity); `open` (waits.open since the mark `since`, kept as `as`; `same` names an earlier wait it must be); `arrivals` (waits.arrivals: `gone`, and `arrivals` in log order, each checked on the keys it gives, and kept by the name its `as` gives); `note` (waits.note, answering `counts`; `identityOf` names a listed arrival whose identity it notes, `identityIsSeqOf` one whose seq, as bare text, is the identity); `park` (parks.commit with `{ kind: \"wait\", waitId }` at `address`); `deleteLeaves` (parks.deleteLeaves); `drop` (leases.dropRunState); `sweep` (waits.sweep of what was logged before `before`, at most 1000).",
+  "about": "The store's waits family: the arrival log, wait rows and their newly-matches bits (docs/contracts/store-slot.md, `waits.*`). Held by listen-fire's stores (crates/lf/src/waits.rs runs every case over the SQLite state file, and over Postgres when LF_TEST_PG names one) and by the engine's TypeScript stores. Each case runs on an empty store. A run or team name stands for a fresh id (a uuid) per case; every run named is started before the first step. `team` defaults to \"t\" and `adapter` to \"acme\". Marks and waits are named by `as` and referred to by that name. `at` and `before` are milliseconds from now. Steps: `mark` (waits.mark, kept as `as`); `log` (waits.log of `arrivals`, logged `at`; an arrival whose identity and version its record's edge already logged within the retention is not logged again, and one without an identity is never a repeat; `wakes` the parked waits it answers, in any order; an arrival's `identityIsSeqOf` names a listed arrival whose seq, as bare text, is its identity); `open` (waits.open since the mark `since`, kept as `as`; `same` names an earlier wait it must be); `arrivals` (waits.arrivals: `gone`, and `arrivals` in log order, each checked on the keys it gives, and kept by the name its `as` gives); `note` (waits.note, answering `counts`; `identityOf` names a listed arrival whose identity it notes, `identityIsSeqOf` one whose seq, as bare text, is the identity); `park` (parks.commit with `{ kind: \"wait\", waitId }` at `address`); `deleteLeaves` (parks.deleteLeaves); `drop` (leases.dropRunState); `sweep` (waits.sweep of what was logged before `before`, at most 1000).",
   "cases": [
     {
       "case": "an arrival logged before its wait opens counts when the mark precedes it",
@@ -219,6 +219,39 @@
         { "do": "sweep", "before": -3600000 },
         { "do": "open", "as": "c1", "run": "run-2", "edge": "Comments", "key": "thread:c1", "since": "m" },
         { "do": "arrivals", "wait": "c1", "gone": false, "arrivals": [{ "identity": "after" }] }
+      ]
+    },
+    {
+      "case": "an arrival logged again is not logged twice, and one without an identity is never a repeat",
+      "steps": [
+        { "do": "mark", "as": "m0" },
+        { "do": "open", "as": "first", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m0" },
+        { "do": "park", "run": "run-1", "wait": "first", "address": "s1" },
+        {
+          "do": "log",
+          "arrivals": [
+            { "edge": "Comments", "key": "thread:c1", "identity": "k1", "version": "1" },
+            { "edge": "Comments", "key": "thread:c1" }
+          ],
+          "wakes": [{ "run": "run-1", "wait": "first", "address": "s1" }]
+        },
+        { "do": "mark", "as": "m1" },
+        { "do": "open", "as": "later", "run": "run-2", "edge": "Comments", "key": "thread:c1", "since": "m1" },
+        { "do": "park", "run": "run-2", "wait": "later", "address": "s1" },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1", "version": "1" }], "wakes": [] },
+        { "do": "arrivals", "wait": "later", "gone": false, "arrivals": [] },
+        {
+          "do": "log",
+          "arrivals": [
+            { "edge": "Comments", "key": "thread:c1", "identity": "k1", "version": "2" },
+            { "edge": "Comments", "key": "thread:c1" }
+          ],
+          "wakes": [
+            { "run": "run-1", "wait": "first", "address": "s1" },
+            { "run": "run-2", "wait": "later", "address": "s1" }
+          ]
+        },
+        { "do": "arrivals", "wait": "later", "gone": false, "arrivals": [{ "identity": "k1", "version": "2" }, {}] }
       ]
     }
   ]

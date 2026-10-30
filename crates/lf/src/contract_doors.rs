@@ -245,6 +245,10 @@ impl InboundStore for Observed<'_> {
         self.lf().knows_provider(provider_key)
     }
 
+    async fn arrivals_unkept(&self) -> Result<Option<String>, String> {
+        self.lf().arrivals_unkept().await
+    }
+
     fn intercepts(&self, provider_key: &str) -> Vec<crate::inbound::Intercept> {
         self.lf().intercepts(provider_key)
     }

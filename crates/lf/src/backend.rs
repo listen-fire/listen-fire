@@ -317,6 +317,13 @@ pub trait RunHostStore {
         work: &[NewWork],
         arrivals: Option<&DeliveryArrivals<'_>>,
     ) -> Result<Option<Vec<NewWork>>>;
+    /// Why a delivery's arrivals cannot be kept with it in this store (its
+    /// module serves no `waits.log`); None when they can. Asked before a
+    /// delivery that reports arrivals writes anything, so a store that would
+    /// drop them refuses it whole and its sender sends it again.
+    fn arrivals_unkept(&self) -> Result<Option<String>> {
+        Ok(None)
+    }
     /// Clear a kept delivery's external id, its receipt kept: its events
     /// failed inside the request and its sender was answered 500, so the
     /// sender's retry under that id is kept as a delivery of its own.

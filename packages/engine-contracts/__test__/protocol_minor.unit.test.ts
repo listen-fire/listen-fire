@@ -26,6 +26,7 @@ describe('the minor a manifest states', () => {
     expect(minorIntroducing('work.enqueueIfAbsent')).toBe(2);
     expect(minorIntroducing('refreshEventSubscription')).toBe(4);
     expect(minorIntroducing('awaitKeys')).toBe(5);
+    expect(minorIntroducing('waits.log')).toBe(5);
     expect(minorIntroducing('describe')).toBeUndefined();
   });
 
