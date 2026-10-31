@@ -155,8 +155,16 @@ impl Store {
         Ok(db.query_row("select coalesce(max(seq), 0) from arrival", [], |r| r.get(0))?)
     }
 
+    /// The arrivals logged and a `wake_await` row queued for each wait they
+    /// answer, in one transaction: a crash leaves both or neither.
     pub fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {
-        self.transaction(|db| Self::log_arrivals_in(db, team_id, adapter_type, arrivals, at))
+        self.transaction(|db| {
+            let wakes = Self::log_arrivals_in(db, team_id, adapter_type, arrivals, at)?;
+            for row in wake_rows(team_id, &wakes) {
+                Self::enqueue_in(db, &row.kind, &row.key, &row.payload, row.due_at.as_deref())?;
+            }
+            Ok(wakes)
+        })
     }
 
     pub(crate) fn log_arrivals_in(db: &Connection, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {

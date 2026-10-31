@@ -17,18 +17,24 @@ import { randomUUID } from 'node:crypto';
 import type { ParkReason } from 'engine-contracts';
 
 import { RunLeaseLost } from '../movement_engine/errors';
-import type { ClaimedWork, LeafRow, ListedArrival, OwedRace, ParkKind, RunHostStore, SegmentCommitStore, WaitWake } from './store';
+import {
+  RESUME_TIMER_WORK_KIND,
+  SETTLE_RACE_WORK_KIND,
+  WAKE_AWAIT_WORK_KIND,
+  settleRaceWorkKey,
+  type ClaimedWork,
+  type LeafRow,
+  type ListedArrival,
+  type OwedRace,
+  type ParkKind,
+  type RunHostStore,
+  type RunRowStore,
+  type WaitWake,
+} from './store';
 
 /** How long an arrival no live wait reads is kept: a repeat within it is a
  *  sender's retry. */
 export const ARRIVAL_RETENTION_MS = 3_600_000;
-
-/** The work kind of a race an arm won and left its run to settle. */
-export const SETTLE_RACE_WORK_KIND = 'settle_race';
-
-export function settleRaceWorkKey(runId: string, frameAddress: string): string {
-  return `${SETTLE_RACE_WORK_KIND}:${runId}:${frameAddress}`;
-}
 
 interface Leaf {
   reason: ParkReason;
@@ -109,10 +115,11 @@ function byRun<T>(map: Map<string, Map<string, T>>, runId: string): Map<string, 
   return inner;
 }
 
-/** A `RunHostStore` in this process's memory, with the segment commit a
- *  listen-fire store keeps beside it. `now` is its clock (due times, leases,
- *  the arrivals' retention); default the wall clock. */
-export function memoryRunHostStore(options: { now?: () => number } = {}): RunHostStore & SegmentCommitStore {
+/** A `RunHostStore` in this process's memory, with the run rows a
+ *  listen-fire store keeps beside it (for the shared waits cases). `now` is
+ *  its clock (due times, leases, the arrivals' retention); default the wall
+ *  clock. */
+export function memoryRunHostStore(options: { now?: () => number } = {}): RunHostStore & RunRowStore {
   const now = options.now ?? Date.now;
   const leaves = new Map<string, Map<string, Leaf>>();
   const joins = new Map<string, Map<string, Join>>();
@@ -184,14 +191,14 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
     if (park.kind !== 'wait' || waits.get(park.waitId)?.runId === runId) return undefined;
     return new Error(`run ${runId} has no wait ${park.waitId}`);
   };
-  const commitPark = (runId: string, address: string, state: unknown, park: ParkKind): void => {
+  const commitPark = (runId: string, teamId: string, address: string, state: unknown, park: ParkKind): void => {
     putLeaf(runId, address, park.kind === 'wait' ? 'await' : park.kind, park.kind === 'timer' ? park.wakeAt : null, state);
     unparkWaits(runId, address);
     keepLeafNotes(runId, address);
     switch (park.kind) {
       case 'timer':
         // The leaf is the truth; the work row only says when to look.
-        enqueue({ kind: 'resume_timer', key: `resume_timer:${runId}`, payload: { runId }, dueAt: park.wakeAt });
+        enqueue({ kind: RESUME_TIMER_WORK_KIND, key: `${RESUME_TIMER_WORK_KIND}:${runId}`, payload: { runId }, dueAt: park.wakeAt, teamId });
         return;
       case 'wait': {
         const wait = waits.get(park.waitId);
@@ -231,15 +238,21 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
   const dropOwedRace = (runId: string, frameAddress: string): void => {
     work.delete(settleRaceWorkKey(runId, frameAddress));
   };
+  /** Oldest first: a row keeps its place when a second arm owes it again. */
   const owedOf = (runId: string): OwedRace[] => {
     const owed: OwedRace[] = [];
     for (const row of work.values()) {
       if (row.kind !== SETTLE_RACE_WORK_KIND) continue;
       const payload = read(row.payload);
       if (typeof payload !== 'object' || payload === null || Reflect.get(payload, 'runId') !== runId) continue;
-      owed.push({ frameAddress: String(Reflect.get(payload, 'frameAddress')), state: Reflect.get(payload, 'state') ?? null });
+      const frameAddress: unknown = Reflect.get(payload, 'frameAddress');
+      if (typeof frameAddress !== 'string') throw new Error(`a ${SETTLE_RACE_WORK_KIND} row of run ${runId} that is not one: ${row.payload}`);
+      owed.push({ frameAddress, state: Reflect.get(payload, 'state') ?? null });
     }
     return owed;
+  };
+  const queueWake = (teamId: string, wake: WaitWake): void => {
+    enqueue({ kind: WAKE_AWAIT_WORK_KIND, key: `${WAKE_AWAIT_WORK_KIND}:${randomUUID()}`, payload: wake, teamId });
   };
 
   return {
@@ -248,12 +261,43 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
         refuseUnlessLeased(runId, fence);
         putLeaf(runId, address, reason, wakeAt, state);
       },
-      async commit({ runId, address, state, fence, park }) {
+      async commit({ runId, teamId, address, state, fence, park }) {
         refuseUnlessLeased(runId, fence);
         const refused = refusedPark(runId, park);
         if (refused !== undefined) throw refused;
-        commitPark(runId, address, state, park);
+        commitPark(runId, teamId, address, state, park);
         markParked(runId);
+      },
+      async commitSegment({ runId, teamId, fence, resumed, joins: held, parks, settle, owedRaces = [], settledRace }) {
+        refuseUnlessLeased(runId, fence);
+        for (const { park } of parks) {
+          const refused = refusedPark(runId, park);
+          if (refused !== undefined) throw refused;
+        }
+        for (const join of held) recordJoin(runId, join.frameAddress, join.pending);
+        for (const park of parks) commitPark(runId, teamId, park.address, park.state, park.park);
+        if (resumed !== null && !parks.some((park) => park.address === resumed)) finishLeaf(runId, resumed);
+        if (parks.length > 0) markParked(runId);
+        if (settle !== null && runs.has(runId)) runs.set(runId, settle.status);
+        if (settledRace !== undefined && settledRace !== null) dropOwedRace(runId, settledRace);
+        for (const race of owedRaces) {
+          enqueue({ kind: SETTLE_RACE_WORK_KIND, key: settleRaceWorkKey(runId, race.frameAddress), payload: { runId, frameAddress: race.frameAddress, state: race.state }, teamId });
+        }
+        // Read in the write: an arrival logged before it is read here, and one
+        // logged after it finds the wait parked.
+        const wakes: WaitWake[] = [];
+        for (const { address, park } of parks) {
+          if (park.kind !== 'wait') continue;
+          const unread = waitArrivals(park.waitId);
+          if (!unread.gone && unread.arrivals.length === 0) continue;
+          const wake = { runId, waitId: park.waitId, address };
+          queueWake(teamId, wake);
+          wakes.push(wake);
+        }
+        return wakes;
+      },
+      async owedRaces({ runId }) {
+        return owedOf(runId);
       },
       async claimLeaf({ runId, address, reason }) {
         const leaf = leaves.get(runId)?.get(address);
@@ -346,6 +390,7 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
             if (!wakes.some((w) => w.waitId === wait.id)) wakes.push({ runId: wait.runId, waitId: wait.id, address: wait.address });
           }
         }
+        for (const wake of wakes) queueWake(teamId, wake);
         return wakes;
       },
       async open({ runId, teamId, adapterType, edge, key, since }) {
@@ -461,37 +506,6 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
       },
     },
 
-    async commitSegment({ runId, teamId, fence, resumed, joins: held, parks, settle, owedRaces = [], settledRace }) {
-      refuseUnlessLeased(runId, fence);
-      for (const { park } of parks) {
-        const refused = refusedPark(runId, park);
-        if (refused !== undefined) throw refused;
-      }
-      for (const join of held) recordJoin(runId, join.frameAddress, join.pending);
-      for (const park of parks) commitPark(runId, park.address, park.state, park.park);
-      if (resumed !== null && !parks.some((park) => park.address === resumed)) finishLeaf(runId, resumed);
-      if (parks.length > 0) markParked(runId);
-      if (settle !== null && runs.has(runId)) runs.set(runId, settle.status);
-      if (settledRace !== undefined && settledRace !== null) dropOwedRace(runId, settledRace);
-      for (const race of owedRaces) {
-        enqueue({ kind: SETTLE_RACE_WORK_KIND, key: settleRaceWorkKey(runId, race.frameAddress), payload: { runId, frameAddress: race.frameAddress, state: race.state }, teamId });
-      }
-      // Read in the write: an arrival logged before it is read here, and one
-      // logged after it finds the wait parked.
-      const wakes: WaitWake[] = [];
-      for (const { address, park } of parks) {
-        if (park.kind !== 'wait') continue;
-        const unread = waitArrivals(park.waitId);
-        if (!unread.gone && unread.arrivals.length === 0) continue;
-        const wake = { runId, waitId: park.waitId, address };
-        enqueue({ kind: 'wake_await', key: `wake_await:${randomUUID()}`, payload: wake, teamId });
-        wakes.push(wake);
-      }
-      return wakes;
-    },
-    async owedRaces({ runId }) {
-      return owedOf(runId);
-    },
     async startRun({ runId }) {
       if (!runs.has(runId)) runs.set(runId, 'running');
     },

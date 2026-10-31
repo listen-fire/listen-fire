@@ -994,7 +994,13 @@ impl RunHostStore for PgStore {
     }
 
     fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {
-        self.transaction(|| self.log_arrivals_unwrapped(team_id, adapter_type, arrivals, at))
+        self.transaction(|| {
+            let wakes = self.log_arrivals_unwrapped(team_id, adapter_type, arrivals, at)?;
+            for row in crate::waits::wake_rows(team_id, &wakes) {
+                self.enqueue_row(&row.kind, &row.key, &row.payload, row.due_at.as_deref(), team_id)?;
+            }
+            Ok(wakes)
+        })
     }
 
     fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {

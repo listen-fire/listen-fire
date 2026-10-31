@@ -1427,8 +1427,8 @@ pub(crate) mod tests {
         (runs[0].id.clone(), leaves)
     }
 
-    /// A `wake_await` row for the run's wait on n-1's comments, as a
-    /// delivery that logs one queues it, or a retry of a wake whose worker died.
+    /// A `wake_await` row for the run's wait on n-1's comments: a retry of
+    /// a wake whose worker died (logging the comment queued the first).
     fn wake_the_comment_wait(session: &Session, run: &str, address: &str) {
         let wait = session
             .store
@@ -1460,7 +1460,6 @@ pub(crate) mod tests {
             let comment = NewArrival { edge: "Comments".into(), key: "thread:n-1".into(), identity: Some("k1".into()), version: None, landing: Some(Js::parse(br#"{"fields":{"Text":"hi"}}"#).unwrap()), gone: false };
             let wakes = session.store.log_arrivals(LOCAL_TENANT, "inbox", &[comment], &iso(0)).unwrap();
             assert_eq!(wakes.len(), 1);
-            wake_the_comment_wait(&session, &run, &arm);
             crate::segment::DIES_BEFORE_COMMIT.with(|dies| dies.set(true));
             drained(&session).await;
             let (_, leaves) = the_run(&session);
@@ -1487,7 +1486,6 @@ pub(crate) mod tests {
         let leaf = leaves[0].0.clone();
         let comment = NewArrival { edge: "Comments".into(), key: "thread:n-1".into(), identity: Some("k1".into()), version: None, landing: Some(Js::parse(br#"{"fields":{"Text":"hi"}}"#).unwrap()), gone: false };
         assert_eq!(session.store.log_arrivals(LOCAL_TENANT, "inbox", &[comment], &iso(0)).unwrap().len(), 1);
-        wake_the_comment_wait(session, &run, &leaf);
         (run, leaf)
     }
 
@@ -1625,7 +1623,6 @@ pub(crate) mod tests {
             let (arm, timer) = (leaves[0].0.clone(), leaves[1].0.clone());
             let comment = NewArrival { edge: "Comments".into(), key: "thread:n-1".into(), identity: Some("k1".into()), version: None, landing: Some(Js::parse(br#"{"fields":{"Text":"hi"}}"#).unwrap()), gone: false };
             session.store.log_arrivals(LOCAL_TENANT, "inbox", &[comment], &iso(0)).unwrap();
-            wake_the_comment_wait(&session, &run, &arm);
             crate::segment::DIES_AFTER_COMMIT.with(|dies| dies.set(1));
             drained_wakes_only(&mut session).await;
             assert_eq!(session.store.run(&run).unwrap().unwrap().status, "parked");
@@ -1684,7 +1681,6 @@ pub(crate) mod tests {
             let arm = leaves[0].0.clone();
             let comment = NewArrival { edge: "Comments".into(), key: "thread:n-1".into(), identity: Some("k1".into()), version: None, landing: Some(Js::parse(br#"{"fields":{"Text":"hi"}}"#).unwrap()), gone: false };
             session.store.log_arrivals(LOCAL_TENANT, "inbox", &[comment], &iso(0)).unwrap();
-            wake_the_comment_wait(&session, &run, &arm);
             crate::segment::DIES_AFTER_COMMIT.with(|dies| dies.set(1));
             drained_wakes_only(&mut session).await;
             let owed_race = session.store.owed_races(&run).unwrap().pop().expect("the race is owed");

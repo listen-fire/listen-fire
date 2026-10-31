@@ -9,7 +9,7 @@ import type { Arrival, AwaitWakeRequest, HostWaits, LoggedArrival } from 'engine
 import { isAncestorOrSelf, parseAddress } from '../movement_engine/address';
 import type { ParkSink, RunLimitPause } from '../movement_engine/run_types';
 import type { ParkSources } from '../movement_engine/host';
-import type { ListedArrival, NewArrival, RunHostStore, SourceStore, WaitWake } from './store';
+import { RESUME_TIMER_WORK_KIND, WAKE_AWAIT_WORK_KIND, type ListedArrival, type NewArrival, type RunHostStore, type SourceStore, type WaitWake } from './store';
 
 /** What the product keeps about a run beyond its live state: its status, and
  *  the records only it knows of (the ops feed). */
@@ -59,21 +59,18 @@ export function parkSources(sources: SourceStore, teamId: string): ParkSources {
 /** One row per run, shared by every timer leaf the run parks: due at its
  *  earliest. */
 export function timerWorkKey(runId: string): string {
-  return `resume_timer:${runId}`;
+  return `${RESUME_TIMER_WORK_KIND}:${runId}`;
 }
 
 export async function armTimerWake(store: RunHostStore, input: { runId: string; teamId: string; wakeAt: string }): Promise<void> {
   await store.work.enqueue({
-    kind: 'resume_timer',
+    kind: RESUME_TIMER_WORK_KIND,
     key: timerWorkKey(input.runId),
     teamId: input.teamId,
     payload: { runId: input.runId },
     dueAt: input.wakeAt,
   });
 }
-
-/** The work kind that wakes a wait's park. */
-export const WAKE_AWAIT_WORK_KIND = 'wake_await';
 
 /** Queue the wake of one wait parked at `address`: its run re-enters the
  *  await there, which reads the wait's arrivals. Never coalesced: a second
@@ -101,39 +98,41 @@ export function newArrivalsOf(arrivals: readonly Arrival[]): NewArrival[] {
 
 /**
  * Log what arrived on an adapter's listenable edges for a team, and queue a
- * wake for each wait parked on their records. Two writes, the log then the
- * wakes: a store that keeps them in one (listen-fire's `inbound.keepDelivery`)
- * loses no wake to a crash between them; over the in-memory store there is no
- * crash that leaves the log behind.
+ * wake for each wait parked on their records: one write (`waits.log`), so a
+ * crash leaves both or neither, and a sender's retry of arrivals that were
+ * not kept logs them again. Answers the wakes queued.
  */
 export async function logArrivals(
   store: RunHostStore,
   input: { teamId: string; adapterType: string; arrivals: readonly Arrival[]; at?: string },
 ): Promise<WaitWake[]> {
   const at = input.at ?? new Date().toISOString();
-  const wakes = await store.waits.log({ teamId: input.teamId, adapterType: input.adapterType, arrivals: newArrivalsOf(input.arrivals), at });
-  for (const wake of wakes) await queueWaitWake(store, { ...wake, teamId: input.teamId });
-  return wakes;
+  return store.waits.log({ teamId: input.teamId, adapterType: input.adapterType, arrivals: newArrivalsOf(input.arrivals), at });
 }
 
 // ── Completion ──────────────────────────────────────────────────────────────
 
 /**
  * A branch just completed: is the run complete? Only when no join still waits
- * on a branch and no OTHER leaf is parked (a sibling not yet due, a sibling
- * under another join). The leaf just stepped is excluded: its own row goes
- * after its step.
+ * on a branch, no OTHER leaf is parked (a sibling not yet due, a sibling
+ * under another join), and the run owes no OTHER race. `leafAddress` is what
+ * the step completes: the leaf it resumed, whose own row goes after its step,
+ * or the race it settles, whose row goes with it.
  */
 export async function runCompleteWithout(store: RunHostStore, input: { runId: string; leafAddress: string }): Promise<boolean> {
   if (await store.joins.hasPendingJoins({ runId: input.runId })) return false;
   const parked = await store.parks.leaves({ runId: input.runId, parkedOnly: true });
-  return parked.every((leaf) => leaf.address === input.leafAddress);
+  if (!parked.every((leaf) => leaf.address === input.leafAddress)) return false;
+  const owed = await store.parks.owedRaces({ runId: input.runId });
+  return owed.every((race) => race.frameAddress === input.leafAddress);
 }
 
-/** Whether nothing waits on the run: no join pending, no leaf parked. */
+/** Whether nothing waits on the run: no join pending, no leaf parked, no race
+ *  owed. */
 export async function runQuiescent(store: RunHostStore, input: { runId: string }): Promise<boolean> {
   if (await store.joins.hasPendingJoins(input)) return false;
-  return (await store.parks.leaves({ runId: input.runId, parkedOnly: true })).length === 0;
+  if ((await store.parks.leaves({ runId: input.runId, parkedOnly: true })).length > 0) return false;
+  return (await store.parks.owedRaces(input)).length === 0;
 }
 
 /** A quiescent run's residual live state (closed joins and their exports)
@@ -218,23 +217,30 @@ export interface RunParkHost {
   wake(request: AwaitWakeRequest): Promise<void>;
 }
 
-/** A landing as the log kept it, in the shape the engine reads: a module
- *  reports `{ recordId?, recordType?, fields }`; anything else is none. */
-function loggedLanding(landing: unknown): LoggedArrival['landing'] {
-  if (typeof landing !== 'object' || landing === null) return null;
+/** A landing as the log kept it, in the shape the engine reads: none, or
+ *  what a module reports, `{ recordId?, recordType?, fields }`. Anything else
+ *  is refused, naming the arrival: read as none, the await would bind a
+ *  landing that is not what arrived. */
+function loggedLanding(arrival: ListedArrival): LoggedArrival['landing'] {
+  const { landing } = arrival;
+  if (landing === null || landing === undefined) return null;
+  const refused = (why: string): Error => new Error(`the arrival logged at seq ${arrival.seq} (identity ${arrival.identity}) has a landing ${why}: ${JSON.stringify(landing)}`);
+  if (typeof landing !== 'object' || Array.isArray(landing)) throw refused('that is not an object');
   const fields: unknown = Reflect.get(landing, 'fields');
-  if (typeof fields !== 'object' || fields === null) return null;
+  if (typeof fields !== 'object' || fields === null || Array.isArray(fields)) throw refused('without an object of fields');
   const recordId: unknown = Reflect.get(landing, 'recordId');
   const recordType: unknown = Reflect.get(landing, 'recordType');
+  if (recordId !== undefined && typeof recordId !== 'string') throw refused('whose recordId is not a text');
+  if (recordType !== undefined && typeof recordType !== 'string') throw refused('whose recordType is not a text');
   return {
     fields: Object.fromEntries(Object.entries(fields)),
-    ...(typeof recordId === 'string' ? { recordId } : {}),
-    ...(typeof recordType === 'string' ? { recordType } : {}),
+    ...(recordId !== undefined ? { recordId } : {}),
+    ...(recordType !== undefined ? { recordType } : {}),
   };
 }
 
 function loggedArrival(arrival: ListedArrival): LoggedArrival {
-  return { seq: arrival.seq, identity: arrival.identity, version: arrival.version, landing: loggedLanding(arrival.landing) };
+  return { seq: arrival.seq, identity: arrival.identity, version: arrival.version, landing: loggedLanding(arrival) };
 }
 
 /**
@@ -275,7 +281,7 @@ export function runParkHost(
     async commitTimerPark({ address, state, wakeAt }) {
       await records.ensureRun();
       // The leaf and its run's timer row, in one write.
-      await store.parks.commit({ runId, address, state, park: { kind: 'timer', wakeAt }, ...fence });
+      await store.parks.commit({ runId, teamId, address, state, park: { kind: 'timer', wakeAt }, ...fence });
       await afterPark();
     },
     async commitAwaitPark({ address, state, waitId }) {
@@ -283,7 +289,7 @@ export function runParkHost(
       // record either sees the park and answers it, or lands before it and is
       // read by the engine's second reading after this returns.
       await records.ensureRun();
-      await store.parks.commit({ runId, address, state, park: { kind: 'wait', waitId }, ...fence });
+      await store.parks.commit({ runId, teamId, address, state, park: { kind: 'wait', waitId }, ...fence });
       parkedWaits.set(waitId, address);
       await afterPark();
     },
@@ -301,7 +307,7 @@ export function runParkHost(
       // parks it on its wait again if it still waits. Left parked, every
       // arrival would wake it into the pause again.
       await records.ensureRun();
-      await store.parks.commit({ runId, address, state, park: { kind: 'limit' }, rewritten: true, ...fence });
+      await store.parks.commit({ runId, teamId, address, state, park: { kind: 'limit' }, rewritten: true, ...fence });
       await afterPark();
     },
     async recordJoin({ frameAddress, parkedChildren }) {

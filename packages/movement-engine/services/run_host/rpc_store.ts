@@ -6,10 +6,9 @@
 // `listen-fire --contract-store <state.db>` (crates/lf) first.
 //
 // A method is `<family>.<method>` as `RunHostStore` names it, its params the
-// method's one input object, its result the method's answer; the callback
-// records are `records.<method>` as `RunRecords` names them, and the segment
-// commit `parks.commitSegment`, `parks.owedRaces`, `runs.start` and `runs.get`
-// (`SegmentCommitStore`). The error code
+// method's one input object, its result the method's answer; the run records
+// are `records.<method>` as `RunRecords` names them, and the run rows
+// `runs.start` and `runs.get` (`RunRowStore`). The error code
 // `run_lease_lost` (`data: { runId }`) is rethrown as the core's
 // `RunLeaseLost`, so the rules over the store see the one refusal they handle.
 
@@ -18,7 +17,7 @@ import { RUN_LEASE_LOST_CODE } from 'engine-contracts/slots';
 import { RunLeaseLost } from '../movement_engine/errors';
 import { SlotClient, SlotRefused, startModule, type SlotAddress } from 'module-runtime/module_wire/wire';
 import type { RunRecords } from './rules';
-import type { ClaimedWork, NewArrival, ParkKind, RunHostStore, SegmentCommitStore } from './store';
+import type { ClaimedWork, NewArrival, ParkKind, RunHostStore, RunRowStore } from './store';
 
 const Nothing = z.null();
 const Leaf = z.object({
@@ -153,8 +152,8 @@ function claimOf(work: ClaimedWork & { dueAt?: string }): Record<string, unknown
 
 export class RpcStoreBackend {
   readonly store: RunHostStore;
-  /** The segment commit listen-fire's stores keep beside the families. */
-  readonly segments: SegmentCommitStore;
+  /** The run rows listen-fire's stores keep beside the families. */
+  readonly runRows: RunRowStore;
   /** The run records the server keeps beside its families. */
   readonly runs: RunRecords;
   private readonly started: Promise<{ client: SlotClient; close(): Promise<void> }>;
@@ -170,7 +169,7 @@ export class RpcStoreBackend {
     // A failed start is met by the first call; never an unhandled rejection.
     this.started.catch(() => undefined);
     this.store = this.families();
-    this.segments = this.segmentFamily();
+    this.runRows = this.runRowFamily();
     this.runs = this.runRecords();
   }
 
@@ -266,22 +265,8 @@ export class RpcStoreBackend {
     await started?.close();
   }
 
-  private segmentFamily(): SegmentCommitStore {
-    const call = this.call.bind(this);
+  private runRowFamily(): RunRowStore {
     return {
-      commitSegment: (input) =>
-        call(
-          'parks.commitSegment',
-          {
-            ...input,
-            fence: input.fence ?? null,
-            parks: input.parks.map((held) => ({ address: held.address, state: held.state ?? null, park: parkOf(held.park) })),
-            owedRaces: input.owedRaces ?? [],
-            settledRace: input.settledRace ?? null,
-          },
-          z.array(Wake),
-        ),
-      owedRaces: (input) => call('parks.owedRaces', input, z.array(z.object({ frameAddress: z.string(), state: z.unknown() }))),
       startRun: (input) => this.startRun({ id: input.runId, file: 'f', movement: 'm', startedAt: new Date().toISOString(), input: '{}' }),
       runStatus: async (input) => (await this.runGet(input))?.status ?? null,
     };
@@ -304,10 +289,24 @@ export class RpcStoreBackend {
         putLeaf: async (input) => {
           await call('parks.putLeaf', input, Nothing);
         },
-        // listen-fire keeps no `rewritten` stamp: it has no limit resume to read it.
+        // listen-fire keeps no `rewritten` stamp: it has no limit resume to
+        // read it. A store module serves one tenant: a timer's row is its.
         commit: async ({ runId, address, state, fence, park }) => {
           await call('parks.commit', { runId, address, state: state ?? null, fence: fence ?? null, park: parkOf(park) }, Nothing);
         },
+        commitSegment: (input) =>
+          call(
+            'parks.commitSegment',
+            {
+              ...input,
+              fence: input.fence ?? null,
+              parks: input.parks.map((held) => ({ address: held.address, state: held.state ?? null, park: parkOf(held.park) })),
+              owedRaces: input.owedRaces ?? [],
+              settledRace: input.settledRace ?? null,
+            },
+            z.array(Wake),
+          ),
+        owedRaces: (input) => call('parks.owedRaces', input, z.array(z.object({ frameAddress: z.string(), state: z.unknown() }))),
         claimLeaf: (input) => call('parks.claimLeaf', input, Claimed),
         finishLeaf: async (input) => {
           await call('parks.finishLeaf', input, Nothing);

@@ -52,8 +52,41 @@ export interface ParkStore {
    * the park and answers it, or the park lands after the log, so a run that
    * reads its wait's arrivals after parking misses none. Throws
    * `RunLeaseLost`, writing nothing, when `fence` is not the run's lease.
+   * `teamId` is the run's tenant: a timer's row is queued under it (a store
+   * module serves one tenant, and takes none over the wire).
    */
-  commit(input: { runId: string; address: string; state?: unknown; fence?: string; park: ParkKind; rewritten?: boolean }): Promise<void>;
+  commit(input: { runId: string; teamId: string; address: string; state?: unknown; fence?: string; park: ParkKind; rewritten?: boolean }): Promise<void>;
+  /**
+   * One fenced write of what a step left its run to do (docs/contracts/store-slot.md,
+   * `parks.commitSegment`): each join recorded, each park committed in order,
+   * `resumed` finished (as `finishLeaf`) unless a park is at its address, the
+   * run marked parked when anything parked, then the run settled by `settle`;
+   * the `settle_race` row of `settledRace` deleted and each of `owedRaces`
+   * queued (key `settle_race:<runId>:<frameAddress>`, team `teamId`); and a
+   * `wake_await` row queued, and answered, for each wait a park parks whose
+   * arrivals are unread or whose record is gone. Throws `RunLeaseLost`,
+   * writing nothing, when `fence` is not the run's lease; a park the store
+   * refuses writes nothing either.
+   *
+   * listen-fire holds a segment's parks and joins back for this write. The
+   * run host in this package writes each park as the engine makes it, and
+   * ends each step with this write alone: the leaf it resumed finished, with
+   * the races its arm won owed in the same write; or the race it settled
+   * discharged. So a race is never owed only in a drain's memory.
+   */
+  commitSegment(input: {
+    runId: string;
+    teamId: string;
+    fence?: string;
+    resumed: string | null;
+    joins: ReadonlyArray<{ frameAddress: string; pending: number }>;
+    parks: ReadonlyArray<{ address: string; state?: unknown; park: ParkKind }>;
+    settle: { status: string; outcome: unknown; at: string } | null;
+    owedRaces?: readonly OwedRace[];
+    settledRace?: string | null;
+  }): Promise<WaitWake[]>;
+  /** The races the run owes (its `settle_race` rows), oldest first. */
+  owedRaces(input: { runId: string }): Promise<OwedRace[]>;
   /** Claim a parked leaf for its resume (`parked` → `resuming`). Null when it
    *  is not parked: another resume took it, or a race cancelled it. Claiming
    *  drops the wait notes that name the leaf as their `leaf`: the segment
@@ -135,10 +168,12 @@ export interface WaitStore {
   mark(): Promise<number>;
   /**
    * Log each arrival at `at`, in order, under a seq above every seq before
-   * it, in one write; answer the waits parked on their records (one each). A
-   * repeat (an identity and version its team, adapter, edge and record
-   * already logged within the hour) is skipped and answers nothing; an
-   * arrival without an identity is never a repeat.
+   * it, and queue a `wake_await` row (payload a `WaitWake`, team `teamId`)
+   * for each wait parked on their records, in one write: a crash leaves
+   * both or neither. Answers those waits (one each). A repeat (an identity
+   * and version its team, adapter, edge and record already logged within
+   * the hour) is skipped and answers nothing; an arrival without an
+   * identity is never a repeat.
    */
   log(input: { teamId: string; adapterType: string; arrivals: readonly NewArrival[]; at: string }): Promise<WaitWake[]>;
   /** The run waits on this edge of this record, reading what is logged after
@@ -165,16 +200,18 @@ export interface WaitStore {
 }
 
 export interface RunLeaseStore {
-  /** Take the run's lease if it is free or lapsed, returning every leaf a
-   *  lapsed holder left claimed to `parked`. Null while someone else holds it. */
+  /** Take the run's lease if it is free or lapsed, returning every leaf left
+   *  claimed (`resuming`) to `parked`, whether its holder lapsed or released
+   *  the lease: no live holder is resuming it. Null while someone else holds
+   *  it. */
   claim(input: { runId: string; ttlMs: number }): Promise<{ token: string } | null>;
   /** Extend a held lease. False once it is not this token's, or has lapsed. */
   renew(input: { runId: string; token: string; ttlMs: number }): Promise<boolean>;
   /** Give it back. A no-op when it is no longer this token's. */
   release(input: { runId: string; token: string }): Promise<void>;
   /**
-   * Drop the run's live state: every leaf, every join with its exports, and
-   * every wait with its notes.
+   * Drop the run's live state: every leaf, every join with its exports,
+   * every wait with its notes, and every race it owes.
    * Given `fence`, only while the run is still leased under it: false when it
    * is not, and nothing was dropped.
    */
@@ -192,6 +229,26 @@ export interface SourceStore {
   put(input: { teamId: string; hash: string; source: string }): Promise<void>;
   /** The text kept under `hash`, or null. */
   get(input: { teamId: string; hash: string }): Promise<string | null>;
+}
+
+/** The work the run host queues: a run's timer row (one per run, due at its
+ *  earliest timer), the wake of one wait an arrival answered, and a race an
+ *  arm won and left its run to settle. */
+export const RESUME_TIMER_WORK_KIND = 'resume_timer';
+export const WAKE_AWAIT_WORK_KIND = 'wake_await';
+export const SETTLE_RACE_WORK_KIND = 'settle_race';
+export type RunHostWorkKind = typeof RESUME_TIMER_WORK_KIND | typeof WAKE_AWAIT_WORK_KIND | typeof SETTLE_RACE_WORK_KIND;
+export const RUN_HOST_WORK_KINDS: readonly RunHostWorkKind[] = [RESUME_TIMER_WORK_KIND, WAKE_AWAIT_WORK_KIND, SETTLE_RACE_WORK_KIND];
+
+/** The run host's kind a work row is of, or null for another's. */
+export function runHostWorkKindOf(kind: string): RunHostWorkKind | null {
+  return RUN_HOST_WORK_KINDS.find((known) => known === kind) ?? null;
+}
+
+/** The `settle_race` row of the race at `frameAddress`: one per race, so two
+ *  arms that owe it keep one row. */
+export function settleRaceWorkKey(runId: string, frameAddress: string): string {
+  return `${SETTLE_RACE_WORK_KIND}:${runId}:${frameAddress}`;
 }
 
 /** A claimed work row: what to do, and the claim to finish it under. */
@@ -233,7 +290,7 @@ export interface RunHostStore {
   sources: SourceStore;
 }
 
-/** A race a segment's resumed arm won and left its run to settle, from the
+/** A race a step's resumed arm won and left its run to settle, from the
  *  arm's `state` (`parks.owedRaces`). */
 export interface OwedRace {
   frameAddress: string;
@@ -241,38 +298,12 @@ export interface OwedRace {
 }
 
 /**
- * What a store keeps for a host that writes a segment's progress as one
- * (listen-fire does; docs/contracts/store-slot.md, `parks.commitSegment`),
- * beside the families above. The run host in this package writes each park
- * as the engine makes it (`ParkStore.commit`), so it calls none of these; a
- * store is held to them by the shared cases (conformance/store-waits.json),
- * which listen-fire's stores run too.
+ * The run rows listen-fire's stores keep beside the families (`runs.start`,
+ * `runs.get`): the shared waits cases (conformance/store-waits.json) park
+ * against a started run and read its status after a commit. The run host in
+ * this package keeps no run rows (its product does), so it calls neither.
  */
-export interface SegmentCommitStore {
-  /**
-   * One fenced write of what a segment held back until its end: each join
-   * recorded, each park committed in order, `resumed` finished unless a park
-   * is at its address, the run marked parked when anything parked, then the
-   * run settled by `settle`; the `settle_race` row of `settledRace` deleted
-   * and each of `owedRaces` queued (key `settle_race:<runId>:<frameAddress>`);
-   * and a `wake_await` row queued, and answered, for each wait a park parks
-   * whose arrivals are unread or whose record is gone. Throws `RunLeaseLost`
-   * when `fence` is not the run's lease; a park the store refuses writes
-   * nothing either.
-   */
-  commitSegment(input: {
-    runId: string;
-    teamId: string;
-    fence?: string;
-    resumed: string | null;
-    joins: ReadonlyArray<{ frameAddress: string; pending: number }>;
-    parks: ReadonlyArray<{ address: string; state?: unknown; park: ParkKind }>;
-    settle: { status: string; outcome: unknown; at: string } | null;
-    owedRaces?: readonly OwedRace[];
-    settledRace?: string | null;
-  }): Promise<WaitWake[]>;
-  /** The run's owed races, oldest first. */
-  owedRaces(input: { runId: string }): Promise<OwedRace[]>;
+export interface RunRowStore {
   /** A run row to park against (`runs.start`). */
   startRun(input: { runId: string }): Promise<void>;
   /** The run's status (`runs.get`), or null for none. */

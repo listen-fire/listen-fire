@@ -42,14 +42,19 @@ import {
   type MovementWriteRecord,
 } from 'movement-engine/public/movement-engine';
 import {
+  RESUME_TIMER_WORK_KIND,
+  RUN_HOST_WORK_KINDS,
   RUN_LEASE_TTL_MS,
+  SETTLE_RACE_WORK_KIND,
   WAKE_AWAIT_WORK_KIND,
   armTimerWake,
   drainDueTimers,
+  drainOwedRaces,
   logArrivals,
   memoryRunHostStore,
   nextTimerWake,
   parkSources,
+  runHostWorkKindOf,
   runParkHost,
   waitWakeOf,
   wakeWait,
@@ -57,7 +62,9 @@ import {
   type ClaimedWork,
   type RunHost,
   type RunHostStore,
+  type RunHostWorkKind,
   type StepLeaf,
+  type WaitWake,
 } from 'movement-engine/public/run-host';
 import { createMemoryVault, createSecretsFamily, type SecretFields, type SecretsBackend } from 'movement-engine/public/secrets';
 
@@ -189,12 +196,13 @@ export interface EmbeddedHost {
    *  None, when the program is not saved or declares no such listen. */
   run(tenant: string, request: { program: string; text?: string }): Promise<EmbeddedRunOutcome[]>;
   /** What a module of `adapterType` says arrived on its listenable edges for
-   *  `tenant` (a module reads them off the deliveries it accepts): each run
-   *  awaiting one steps on, one outcome per segment. An arrival no run awaits
+   *  `tenant` (a module reads them off the deliveries it accepts): each of
+   *  the tenant's runs awaiting one steps on, one outcome per segment. An arrival no run awaits
    *  yet is kept for an hour, for a run that starts waiting on it. */
   arrive(tenant: string, input: { adapterType: string; arrivals: readonly Arrival[] }): Promise<EmbeddedRunOutcome[]>;
-  /** Step on every run whose timer is due by `now`, and every run woken by
-   *  an arrival: one outcome per segment. */
+  /** Step on every run whose timer is due by `now`, every run woken by an
+   *  arrival, and every run that owes a race an earlier step left unsettled:
+   *  one outcome per segment. */
   tick(now?: Date): Promise<EmbeddedRunOutcome[]>;
 }
 
@@ -420,7 +428,8 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
             : await settleRaceFrame({ ...input, frameAddress: request.frameAddress });
         stepped.push(outcomeOf(run, result));
         const deferredRaceFrames = result.deferredRaceFrames ?? [];
-        if (result.parked !== true && (await settle.runComplete())) run.status = 'completed';
+        // A race the segment left its run to settle is owed: the run goes on.
+        if (result.parked !== true && deferredRaceFrames.length === 0 && (await settle.runComplete())) run.status = 'completed';
         await store.runs.put(run);
         return result.parked === true ? { kind: 'parked', parkedAddress: result.parkedAddress, deferredRaceFrames } : { kind: 'completed', deferredRaceFrames };
       } catch (error) {
@@ -432,36 +441,73 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
     };
   };
 
-  /** One claimed row's run, stepped under its lease: a timer's due leaves,
-   *  or the await a wake names. Busy when another process holds the run. */
-  const stepRow = async (claimed: ClaimedWork, dueBy: string, stepped: EmbeddedRunOutcome[]): Promise<'done' | 'busy'> => {
-    const wake = claimed.kind === WAKE_AWAIT_WORK_KIND ? waitWakeOf(claimed.payload) : null;
-    const runId: unknown = wake?.runId ?? (claimed.kind === 'resume_timer' ? Reflect.get(Object(claimed.payload), 'runId') : undefined);
-    const run = typeof runId === 'string' ? await store.runs.get(runId) : null;
-    if (run === null) return 'done';
-    if (wake !== null) {
-      const { busy } = await wakeWait(runHost, { wake, stepper: async ({ lease }) => stepFor(run, lease.token, stepped) });
-      return busy ? 'busy' : 'done';
+  /** The run a claimed row steps, by its kind: a wake names its wait, a
+   *  timer's or a race's row names only its run. Null for a run the host no
+   *  longer keeps. */
+  const rowRun = async (claimed: ClaimedWork): Promise<DueRow | null> => {
+    const kind = runHostWorkKindOf(claimed.kind) ?? fail(`claimed a work row of kind ${claimed.kind}, which this host never queues`);
+    if (kind === WAKE_AWAIT_WORK_KIND) {
+      const wake = waitWakeOf(claimed.payload) ?? fail(`a ${kind} row whose payload names no wait: ${JSON.stringify(claimed.payload)}`);
+      const run = await store.runs.get(wake.runId);
+      return run === null ? null : { kind, run, wake };
     }
-    const held = await withRunLease(store.runHost.leases, run.runId, (lease) =>
-      drainDueTimers(runHost, { runId: run.runId, dueBy, lease, step: stepFor(run, lease.token, stepped) }),
-    );
-    if (held.kind === 'busy') return 'busy';
-    // The run's one timer row, re-armed while it is claimed, outlives the
-    // completion that follows, due at the run's next timer.
-    const next = await nextTimerWake(runHost, { runId: run.runId });
-    if (next !== null) await armTimerWake(store.runHost, { runId: run.runId, teamId: run.tenant, wakeAt: next });
-    return 'done';
+    const runId: unknown = Reflect.get(Object(claimed.payload), 'runId');
+    if (typeof runId !== 'string') fail(`a ${kind} row whose payload names no run: ${JSON.stringify(claimed.payload)}`);
+    const run = await store.runs.get(runId);
+    return run === null ? null : { kind, run };
   };
 
-  /** Every due row of `kinds` (absent: every kind) stepped once. */
-  const stepWork = async (input: { dueBy: string; kinds?: readonly string[] }): Promise<EmbeddedRunOutcome[]> => {
+  /** One claimed row's run, stepped under its lease: a timer's due leaves,
+   *  the await a wake names, or the races the run owes. Busy when another
+   *  process holds the run. */
+  const stepRow = async (row: DueRow, dueBy: string, stepped: EmbeddedRunOutcome[]): Promise<'done' | 'busy'> => {
+    const { run } = row;
+    const teamId = run.tenant;
+    switch (row.kind) {
+      case WAKE_AWAIT_WORK_KIND: {
+        const { busy } = await wakeWait(runHost, { wake: row.wake, teamId, stepper: async ({ lease }) => stepFor(run, lease.token, stepped) });
+        return busy ? 'busy' : 'done';
+      }
+      case RESUME_TIMER_WORK_KIND: {
+        const held = await withRunLease(store.runHost.leases, run.runId, (lease) =>
+          drainDueTimers(runHost, { runId: run.runId, teamId, dueBy, lease, step: stepFor(run, lease.token, stepped) }),
+        );
+        if (held.kind === 'busy') return 'busy';
+        // The run's one timer row, re-armed while it is claimed, outlives the
+        // completion that follows, due at the run's next timer.
+        const next = await nextTimerWake(runHost, { runId: run.runId });
+        if (next !== null) await armTimerWake(store.runHost, { runId: run.runId, teamId, wakeAt: next });
+        return 'done';
+      }
+      case SETTLE_RACE_WORK_KIND: {
+        // A race an arm won and left its run to settle, its drain died
+        // before it did: the run's races are settled, and nothing else.
+        const held = await withRunLease(store.runHost.leases, run.runId, (lease) =>
+          drainOwedRaces(runHost, { runId: run.runId, teamId, lease, step: stepFor(run, lease.token, stepped) }),
+        );
+        return held.kind === 'busy' ? 'busy' : 'done';
+      }
+      default: {
+        const unreachable: never = row;
+        throw new Error(`unhandled work row ${JSON.stringify(unreachable)}`);
+      }
+    }
+  };
+
+  /** Every due row of the run host's `kinds` (absent: all of them) stepped
+   *  once; given `tenant`, only that tenant's runs' rows, the others left
+   *  due for a later step. */
+  const stepWork = async (input: { dueBy: string; kinds?: readonly RunHostWorkKind[]; tenant?: string }): Promise<EmbeddedRunOutcome[]> => {
     const work = store.runHost.work;
     const stepped: EmbeddedRunOutcome[] = [];
-    const claims = await work.claimDue({ limit: 100, leaseMs: RUN_LEASE_TTL_MS, dueBy: input.dueBy, ...(input.kinds !== undefined ? { kinds: input.kinds } : {}) });
+    const claims = await work.claimDue({ limit: 100, leaseMs: RUN_LEASE_TTL_MS, dueBy: input.dueBy, kinds: input.kinds ?? RUN_HOST_WORK_KINDS });
     for (const claimed of claims) {
+      const row = await rowRun(claimed);
+      // A run the host no longer keeps has nothing to step.
+      if (row === null) await work.complete(claimed);
+      else if (input.tenant !== undefined && row.run.tenant !== input.tenant) await work.release(claimed);
       // Another process holds the run: its row goes back for later.
-      if ((await stepRow(claimed, input.dueBy, stepped)) === 'busy') await work.release(claimed);
+      else if ((await stepRow(row, input.dueBy, stepped)) === 'busy') await work.release(claimed);
       else await work.complete(claimed);
     }
     return stepped;
@@ -533,11 +579,20 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
 
     async arrive(tenant, { adapterType, arrivals }) {
       await logArrivals(store.runHost, { teamId: tenant, adapterType, arrivals, at: now().toISOString() });
-      return stepWork({ dueBy: now().toISOString(), kinds: [WAKE_AWAIT_WORK_KIND] });
+      return stepWork({ dueBy: now().toISOString(), kinds: [WAKE_AWAIT_WORK_KIND], tenant });
     },
 
     tick: (at = now()) => stepWork({ dueBy: at.toISOString() }),
   };
+}
+
+/** A due run host row, and the run it steps. */
+type DueRow =
+  | { kind: typeof WAKE_AWAIT_WORK_KIND; run: EmbeddedRun; wake: WaitWake }
+  | { kind: typeof RESUME_TIMER_WORK_KIND | typeof SETTLE_RACE_WORK_KIND; run: EmbeddedRun };
+
+function fail(message: string): never {
+  throw new Error(message);
 }
 
 function messageOf(error: unknown): string {

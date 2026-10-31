@@ -207,10 +207,11 @@ pub trait RunHostStore {
     /// The latest seq logged: a wait opened since it reads every arrival
     /// logged after this call.
     fn arrival_mark(&self) -> Result<i64>;
-    /// Log the arrivals, in order, as one write: the parked waits on their
-    /// records (one wake each). It never interleaves with a wait's park on
-    /// the same record's edge, so a run that reads its wait's arrivals after
-    /// parking misses none.
+    /// Log the arrivals, in order, and queue a `wake_await` row for each
+    /// wait parked on their records, as one write: the waits it woke (one
+    /// each). It never interleaves with a wait's park on the same record's
+    /// edge, so a run that reads its wait's arrivals after parking misses
+    /// none.
     fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>>;
     /// The wait's id; a run that already waits on this edge of this record
     /// keeps that wait and its mark.

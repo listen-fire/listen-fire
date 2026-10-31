@@ -13,7 +13,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { RunLeaseLost } from '../movement_engine/errors';
-import { drainRun, wakeWait, type StepLeaf, type StepOutcome, type StepRequest } from './drain';
+import { drainOwedRaces, drainRun, wakeWait, type StepLeaf, type StepOutcome, type StepRequest } from './drain';
 import {
   cancelSubtrees,
   clearIfQuiescent,
@@ -21,13 +21,13 @@ import {
   parkSources,
   runCompleteWithout,
   runParkHost,
+  runQuiescent,
   settleIfCancelRequested,
   waitWakeOf,
-  WAKE_AWAIT_WORK_KIND,
   type RunHost,
   type RunRecords,
 } from './rules';
-import type { ClaimedWork, RunHostStore, WaitWake } from './store';
+import { SETTLE_RACE_WORK_KIND, WAKE_AWAIT_WORK_KIND, settleRaceWorkKey, type ClaimedWork, type RunHostStore, type WaitWake } from './store';
 import type { HeldRunLease } from './lease';
 import type { DeliveryRow, NewDelivery, NewWorkRow, RunRow } from './rpc_store';
 
@@ -104,7 +104,7 @@ async function openWait(backend: ContractBackend, runId: string, key: string): P
 /** An await at `address` parked on a wait of the run on `key`. */
 async function parkOnWait(backend: ContractBackend, runId: string, address: string, key: string): Promise<string> {
   const waitId = await openWait(backend, runId, key);
-  await backend.store.parks.commit({ runId, address, state: { address }, park: { kind: 'wait', waitId } });
+  await backend.store.parks.commit({ runId, teamId: backend.teamId, address, state: { address }, park: { kind: 'wait', waitId } });
   return waitId;
 }
 
@@ -417,6 +417,19 @@ export const runHostContractCases: ContractCase[] = [
     },
   },
   {
+    name: 'lease: taking the lease after a clean release returns a leaf its holder left claimed to parked',
+    async run({ store, newRun }) {
+      const runId = await newRun();
+      await park(store, runId, 's0');
+      const first = await store.leases.claim({ runId, ttlMs: 60_000 });
+      assert.ok(first);
+      await store.parks.claimLeaf({ runId, address: 's0' });
+      await store.leases.release({ runId, token: first.token });
+      assert.ok(await store.leases.claim({ runId, ttlMs: 60_000 }));
+      assert.deepEqual(await parkedAddresses(store, runId), ['s0'], 'no live holder is resuming it');
+    },
+  },
+  {
     name: 'fence: park and join writes under a lapsed holder\'s token are refused with RunLeaseLost',
     async run({ store, newRun }) {
       const runId = await newRun();
@@ -520,6 +533,7 @@ export const runHostContractCases: ContractCase[] = [
       assert.ok(lease);
       const outcome = await drainRun(host, {
         runId,
+        teamId: backend.teamId,
         leaves: { addresses: ['s1.b0.s0', 's1.b1.s0'] },
         lease: { runId, token: lease.token, isLost: () => false, release: async () => {} },
         step,
@@ -528,6 +542,62 @@ export const runHostContractCases: ContractCase[] = [
       assert.deepEqual(requests.map((r) => (r.kind === 'leaf' ? `${r.address}:${r.reenter}` : `race:${r.frameAddress}`)), ['s1.b0.s0:true', 's1.b1.s0:true', 'race:s1']);
       assert.equal(settledComplete, true);
       assert.deepEqual(await store.parks.leaves({ runId }), []);
+      assert.deepEqual(await store.parks.owedRaces({ runId }), [], 'the race is discharged by the step that settled it');
+    },
+  },
+  {
+    name: 'drain: a race an arm won is owed in the write that finishes its leaf; a drain that died before settling it leaves it to the run\'s next, and the run is not complete while it is owed',
+    async run(backend) {
+      const { store, newRun, teamId } = backend;
+      const { host } = hostOf(backend);
+      const runId = await newRun();
+      for (const address of ['s1.b0.s0', 's1.b1.s0']) await parkOnWait(backend, runId, address, uniqueKey('thread'));
+      const first = await store.leases.claim({ runId, ttlMs: 60_000 });
+      assert.ok(first);
+      let died = false;
+      const arm = scriptedStep({
+        's1.b0.s0': async () => {
+          // The drain's process dies once the arm's step has ended.
+          died = true;
+          return { kind: 'completed', deferredRaceFrames: ['s1'] };
+        },
+      });
+      const lease = { runId, token: first.token, isLost: () => died, release: async () => {} };
+      assert.equal(await drainRun(host, { runId, teamId, leaves: { addresses: ['s1.b0.s0'] }, lease, step: arm.step }), 'leaseLost');
+      assert.deepEqual(arm.requests.map((r) => r.kind), ['leaf'], 'the race was never stepped');
+      assert.deepEqual(await store.parks.owedRaces({ runId }), [{ frameAddress: 's1', state: { address: 's1.b0.s0' } }], 'owed from the arm\'s state');
+      assert.deepEqual(await parkedAddresses(store, runId), ['s1.b1.s0'], 'the arm\'s leaf is finished');
+      const row = await claimKey(store, settleRaceWorkKey(runId, 's1'));
+      assert.equal(row?.kind, SETTLE_RACE_WORK_KIND);
+      assert.deepEqual(row?.payload, { runId, frameAddress: 's1', state: { address: 's1.b0.s0' } });
+      assert.equal(await runCompleteWithout(store, { runId, leafAddress: 's1.b1.s0' }), false, 'the run owes the race');
+      await store.parks.deleteLeaves({ runId, addresses: ['s1.b1.s0'] });
+      assert.equal(await runQuiescent(store, { runId }), false, 'a run that owes a race is not quiescent');
+      assert.equal(await clearIfQuiescent(store, { runId }), false);
+      await store.leases.release({ runId, token: first.token });
+
+      let settledComplete: boolean | undefined;
+      const settle = scriptedStep({
+        'race:s1': async (_req, settled) => {
+          settledComplete = await settled.runComplete();
+          return { kind: 'completed', deferredRaceFrames: [] };
+        },
+      });
+      const next = await store.leases.claim({ runId, ttlMs: 60_000 });
+      assert.ok(next);
+      assert.equal(
+        await drainOwedRaces(host, { runId, teamId, lease: { runId, token: next.token, isLost: () => false, release: async () => {} }, step: settle.step }),
+        'done',
+      );
+      assert.deepEqual(settle.requests, [{ kind: 'race', frameAddress: 's1', state: { address: 's1.b0.s0' } }]);
+      assert.equal(settledComplete, true, 'the race it settles is the only one owed');
+      assert.deepEqual(await store.parks.owedRaces({ runId }), []);
+      assert.equal(await claimKey(store, settleRaceWorkKey(runId, 's1')), undefined, 'its row went with it');
+      assert.equal(
+        await drainOwedRaces(host, { runId, teamId, lease: { runId, token: next.token, isLost: () => false, release: async () => {} }, step: settle.step }),
+        'done',
+      );
+      assert.equal(settle.requests.length, 1, 'a race settled is owed no more, and steps nothing');
     },
   },
   {
@@ -541,7 +611,7 @@ export const runHostContractCases: ContractCase[] = [
       await park(store, runId, 's1', { reason: 'timer' });
       const { step, requests } = scriptedStep({
         s0: async () => {
-          await store.parks.commit({ runId, address: 's0', state: { address: 's0' }, park: { kind: 'wait', waitId } });
+          await store.parks.commit({ runId, teamId: backend.teamId, address: 's0', state: { address: 's0' }, park: { kind: 'wait', waitId } });
           return { kind: 'parked', parkedAddress: 's0', deferredRaceFrames: [] };
         },
         s1: async () => {
@@ -549,7 +619,7 @@ export const runHostContractCases: ContractCase[] = [
           return { kind: 'parked', parkedAddress: 's2', deferredRaceFrames: [] };
         },
       });
-      assert.equal(await drainRun(host, { runId, leaves: { addresses: ['s0', 's1'] }, step }), 'done');
+      assert.equal(await drainRun(host, { runId, teamId: backend.teamId, leaves: { addresses: ['s0', 's1'] }, step }), 'done');
       assert.deepEqual(requests.map((r) => (r.kind === 'leaf' ? r.reenter : null)), [true, false]);
       assert.deepEqual(await parkedAddresses(store, runId), ['s0', 's2']);
       assert.deepEqual((await comment(backend, key)).map((wake) => wake.address), ['s0']);
@@ -566,7 +636,7 @@ export const runHostContractCases: ContractCase[] = [
       const waitId = await parkOnWait(backend, runId, 's1', key);
       await store.joins.recordJoin({ runId, frameAddress: 's9', pending: 1 });
       const { step } = scriptedStep({ s0: async () => ({ kind: 'failed', error: 'boom' }) });
-      assert.equal(await drainRun(host, { runId, leaves: { addresses: ['s0', 's1'] }, step }), 'done');
+      assert.equal(await drainRun(host, { runId, teamId: backend.teamId, leaves: { addresses: ['s0', 's1'] }, step }), 'done');
       assert.deepEqual(await store.parks.leaves({ runId }), []);
       assert.deepEqual(await store.joins.frames({ runId }), []);
       assert.deepEqual(await comment(backend, key), []);
@@ -581,7 +651,7 @@ export const runHostContractCases: ContractCase[] = [
       const runId = await newRun();
       await park(store, runId, 's0', { reason: 'await' });
       const { step, requests } = scriptedStep({});
-      assert.equal(await drainRun(host, { runId, leaves: { addresses: ['s0'] }, step }), 'done');
+      assert.equal(await drainRun(host, { runId, teamId: backend.teamId, leaves: { addresses: ['s0'] }, step }), 'done');
       assert.deepEqual(requests, []);
       assert.deepEqual(failed, [{ runId, message: 'wrong customer' }]);
       assert.deepEqual(await store.parks.leaves({ runId }), []);
@@ -603,13 +673,13 @@ export const runHostContractCases: ContractCase[] = [
         },
       });
       const lease = { runId, token: 'gone', isLost: () => lost, release: async () => {} };
-      assert.equal(await drainRun(host, { runId, leaves: { addresses: ['s0', 's1'] }, lease, step }), 'leaseLost');
+      assert.equal(await drainRun(host, { runId, teamId: backend.teamId, leaves: { addresses: ['s0', 's1'] }, lease, step }), 'leaseLost');
       assert.equal(requests.length, 1);
       assert.deepEqual(await parkedAddresses(store, runId), ['s1']);
     },
   },
   {
-    name: 'wake: an arrival wakes each run parked on its record, each under its lease; a run held elsewhere is busy',
+    name: 'wake: an arrival logged queues a wake for each run parked on its record, in the log\'s write; each wakes under its lease; a run held elsewhere is busy',
     async run(backend) {
       const { store, newRun, teamId } = backend;
       const { host } = hostOf(backend);
@@ -635,7 +705,7 @@ export const runHostContractCases: ContractCase[] = [
         return { kind: 'completed' as const, deferredRaceFrames: [] };
       };
       const busy: string[] = [];
-      for (const wake of queued) if ((await wakeWait(host, { wake, stepper })).busy) busy.push(wake.runId);
+      for (const wake of queued) if ((await wakeWait(host, { wake, teamId, stepper })).busy) busy.push(wake.runId);
       assert.deepEqual(stepped, [free]);
       assert.deepEqual(busy, [held]);
       assert.deepEqual(await store.parks.leaves({ runId: free }), []);
@@ -726,6 +796,24 @@ export const runHostContractCases: ContractCase[] = [
       assert.deepEqual(await second.waits.note({ waitId, identity: second.arrival.identity, matched: true }), { counts: true });
       await store.parks.finishLeaf({ runId, address: 's1', fence: live.token });
       assert.deepEqual((await store.waits.arrivals({ waitId })).arrivals, [], 'kept with the leaf it finished');
+    },
+  },
+  {
+    name: 'park host: an arrival whose landing is not a record with fields is refused by name, never read as none',
+    async run(backend) {
+      const { store, newRun, teamId } = backend;
+      const { host } = hostOf(backend);
+      const runId = await newRun();
+      const key = uniqueKey('thread');
+      const { waits } = runParkHost(host, { runId, teamId, records: { ensureRun: async () => {}, markParked: async () => {} } });
+      const { waitId } = await waits.open({ adapterType: 'acme', edge: 'Comments', key, since: (await waits.mark()).mark });
+      await store.waits.log({
+        teamId,
+        adapterType: 'acme',
+        arrivals: [{ edge: 'Comments', key, identity: 'c1', version: null, landing: { Body: 'no fields' }, gone: false }],
+        at: new Date().toISOString(),
+      });
+      await assert.rejects(waits.arrivals({ waitId }), /the arrival logged at seq \d+ \(identity c1\) has a landing without an object of fields/);
     },
   },
   {

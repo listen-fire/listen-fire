@@ -111,7 +111,7 @@ for (const waitsCase of storeWaitsCases()) {
     withStoreModule(dir, join(mkdtempSync(join(tmpdir(), 'lf-waits-state-')), 'kept.db'));
     const store = new RpcStoreBackend(lfBinary(), ['--contract-store-slot', '--dir', dir]);
     try {
-      await waitsCase.run({ store: store.store, segments: store.segments });
+      await waitsCase.run({ store: store.store, runRows: store.runRows });
     } finally {
       await store.close();
     }

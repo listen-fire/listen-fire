@@ -14,11 +14,11 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { RunLeaseLost } from '../movement_engine/errors';
-import type { ListedArrival, NewArrival, ParkKind, RunHostStore, SegmentCommitStore, WaitWake } from './store';
+import type { ListedArrival, NewArrival, ParkKind, RunHostStore, RunRowStore, WaitWake } from './store';
 
 export interface StoreWaitsBackend {
   store: RunHostStore;
-  segments: SegmentCommitStore;
+  runRows: RunRowStore;
 }
 
 export interface StoreWaitsCase {
@@ -29,7 +29,9 @@ export interface StoreWaitsCase {
 type Step = Record<string, unknown>;
 
 /** Beside engine-contracts' conformance entry, in its source and its build. */
-const CASES_FILE = join(dirname(require.resolve('engine-contracts/conformance')), 'store-waits.json');
+function casesFile(): string {
+  return join(dirname(require.resolve('engine-contracts/conformance')), 'store-waits.json');
+}
 
 function field(value: unknown, key: string): unknown {
   return typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined;
@@ -103,10 +105,10 @@ class Names {
 
 const fromNow = (ms: unknown): string => new Date(Date.now() + (typeof ms === 'number' ? ms : 0)).toISOString();
 
-async function runCase({ store, segments }: StoreWaitsBackend, steps: readonly Step[]): Promise<void> {
+async function runCase({ store, runRows }: StoreWaitsBackend, steps: readonly Step[]): Promise<void> {
   const names = new Names();
   for (const run of new Set(steps.flatMap((step) => (typeof step.run === 'string' ? [step.run] : [])))) {
-    await segments.startRun({ runId: names.id(run) });
+    await runRows.startRun({ runId: names.id(run) });
   }
   for (const [index, step] of steps.entries()) {
     const at = `step ${index + 1}`;
@@ -175,7 +177,7 @@ async function runCase({ store, segments }: StoreWaitsBackend, steps: readonly S
         break;
       }
       case 'park':
-        await store.parks.commit({ runId: runId(), address: text(step, 'address'), state: null, park: { kind: 'wait', waitId: names.wait(text(step, 'wait')) } });
+        await store.parks.commit({ runId: runId(), teamId, address: text(step, 'address'), state: null, park: { kind: 'wait', waitId: names.wait(text(step, 'wait')) } });
         break;
       case 'commitSegment': {
         const parks = items(step, 'parks').map((held) => {
@@ -185,7 +187,7 @@ async function runCase({ store, segments }: StoreWaitsBackend, steps: readonly S
         });
         const joins = (Array.isArray(step.joins) ? step.joins : []).map((join) => ({ frameAddress: text(join, 'frame'), pending: Number(field(join, 'pending')) }));
         const settle = optionalText(step, 'settle');
-        const committed = segments.commitSegment({
+        const committed = store.parks.commitSegment({
           runId: runId(),
           teamId,
           ...fence(),
@@ -202,10 +204,10 @@ async function runCase({ store, segments }: StoreWaitsBackend, steps: readonly S
         break;
       }
       case 'status':
-        assert.equal(await segments.runStatus({ runId: runId() }), text(step, 'status'), `${at}: the run's status`);
+        assert.equal(await runRows.runStatus({ runId: runId() }), text(step, 'status'), `${at}: the run's status`);
         break;
       case 'owed':
-        assert.deepEqual((await segments.owedRaces({ runId: runId() })).map((race) => race.frameAddress), texts(step, 'races'), `${at}: the races owed`);
+        assert.deepEqual((await store.parks.owedRaces({ runId: runId() })).map((race) => race.frameAddress), texts(step, 'races'), `${at}: the races owed`);
         break;
       case 'deleteFrames':
         await store.joins.deleteFrames({ runId: runId(), frameAddresses: texts(step, 'frames') });
@@ -244,10 +246,19 @@ async function runCase({ store, segments }: StoreWaitsBackend, steps: readonly S
   }
 }
 
+function fileCases(): unknown[] {
+  const parsed: unknown = JSON.parse(readFileSync(casesFile(), 'utf8'));
+  return items(parsed, 'cases');
+}
+
+/** The name of every case in the file, in its order. */
+export function storeWaitsCaseNames(): string[] {
+  return fileCases().map((entry) => text(entry, 'case'));
+}
+
 /** Every case in the file, in its order. */
 export function storeWaitsCases(): StoreWaitsCase[] {
-  const parsed: unknown = JSON.parse(readFileSync(CASES_FILE, 'utf8'));
-  return items(parsed, 'cases').map((entry) => {
+  return fileCases().map((entry) => {
     const steps = items(entry, 'steps').map((step) => (typeof step === 'object' && step !== null ? Object.fromEntries(Object.entries(step)) : assert.fail('a step is an object')));
     return { name: text(entry, 'case'), run: (backend) => runCase(backend, steps) };
   });
