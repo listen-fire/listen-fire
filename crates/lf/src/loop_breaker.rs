@@ -172,12 +172,18 @@ pub fn kept_ms(project: &Project, set: &FileSet) -> i64 {
 
 impl Store {
     /// Keep a run's record write, and forget every write made before
-    /// `forget_before`, as one write.
+    /// `forget_before`, as one write. A run's earlier write of the same
+    /// record goes: a run's writes of a record are all at its one place in
+    /// its chain, so the latest answers every question they would.
     pub fn ledger_write(&self, write: &LedgerWrite, forget_before: &str) -> Result<()> {
         let at = crate::store::canonical_iso(&write.at)?;
         let forget_before = crate::store::canonical_iso(forget_before)?;
         self.transaction(|db| {
             db.execute("delete from write_ledger where at < ?", rusqlite::params![forget_before])?;
+            db.execute(
+                "delete from write_ledger where adapter = ? and record_type = ? and external_id = ? and run_id = ?",
+                rusqlite::params![write.adapter, write.record_type, write.external_id, write.run_id],
+            )?;
             db.execute(
                 "insert into write_ledger (adapter, record_type, external_id, run_id, depth, at) values (?, ?, ?, ?, ?, ?)",
                 rusqlite::params![write.adapter, write.record_type, write.external_id, write.run_id, write.depth, at],

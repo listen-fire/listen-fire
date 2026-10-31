@@ -719,19 +719,24 @@ mod tests {
             let write = LedgerWrite { adapter: "acme_crm".into(), record_type: "Company".into(), external_id: company.clone(), run_id: run.into(), depth, at: at.into() };
             store.ledger_write(&write, forget_before).unwrap();
         };
-        let long_ago = "2026-10-31T09:00:00.000Z";
-        assert_eq!(store.deepest_write(&record, long_ago).unwrap(), None);
-        keep("a1", 0, "2026-10-31T10:00:00.000Z", long_ago);
-        keep("b1", 1, "2026-10-31T10:00:01.000Z", long_ago);
-        keep("b0", 1, "2026-10-31T10:00:00.500Z", long_ago);
-        keep("c0", 0, "2026-10-31T10:00:02.000Z", long_ago);
-        assert_eq!(store.deepest_write(&record, long_ago).unwrap(), Some(Deepest { run_id: "b1".into(), depth: 1 }), "the deepest, the latest of those");
-        assert_eq!(store.deepest_write(&record, "2026-10-31T10:00:01.500Z").unwrap(), Some(Deepest { run_id: "c0".into(), depth: 0 }), "only since");
-        assert_eq!(store.deepest_write(&record, "2026-10-31T11:00:00+01:00").unwrap(), Some(Deepest { run_id: "b1".into(), depth: 1 }), "an instant in another form");
+        // Instants near now: a store shared with other cases (Postgres) has them
+        // sweep what is older than their own horizon, which is near now too.
+        let base = crate::limiter::now_ms();
+        let at = |offset_ms: i64| crate::store::iso_at(base + offset_ms);
+        let long_ago = at(-3_600_000);
+        assert_eq!(store.deepest_write(&record, &long_ago).unwrap(), None);
+        keep("a1", 0, &at(0), &long_ago);
+        keep("b1", 1, &at(1000), &long_ago);
+        keep("b0", 1, &at(500), &long_ago);
+        keep("c0", 0, &at(2000), &long_ago);
+        assert_eq!(store.deepest_write(&record, &long_ago).unwrap(), Some(Deepest { run_id: "b1".into(), depth: 1 }), "the deepest, the latest of those");
+        assert_eq!(store.deepest_write(&record, &at(1500)).unwrap(), Some(Deepest { run_id: "c0".into(), depth: 0 }), "only since");
+        let base_one_hour_east = at(3_600_000).replace('Z', "+01:00");
+        assert_eq!(store.deepest_write(&record, &base_one_hour_east).unwrap(), Some(Deepest { run_id: "b1".into(), depth: 1 }), "an instant in another form");
         let other = LedgerRecord { external_id: "another", ..record };
-        assert_eq!(store.deepest_write(&other, long_ago).unwrap(), None, "per record");
-        keep("d0", 0, "2026-10-31T10:05:00.000Z", "2026-10-31T10:00:01.500Z");
-        assert_eq!(store.deepest_write(&record, long_ago).unwrap(), Some(Deepest { run_id: "d0".into(), depth: 0 }), "the earlier writes forgotten but the last kept before");
+        assert_eq!(store.deepest_write(&other, &long_ago).unwrap(), None, "per record");
+        keep("d0", 0, &at(300_000), &at(1500));
+        assert_eq!(store.deepest_write(&record, &long_ago).unwrap(), Some(Deepest { run_id: "d0".into(), depth: 0 }), "the earlier writes forgotten but the last kept before");
     }
 
     #[test]

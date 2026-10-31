@@ -61,9 +61,11 @@ A handler that fails on another listen's failures, which fails in turn, is a cha
 
 - `Events` is polled (`delivery: polled`), every 60 seconds by default (`pollEverySeconds`). An operator tunes it per connection with lf.yaml's `pollEvery`.
 - A fact is read only once it is older than the settle lag (10 seconds by default), so a row committed late is never passed over. At most a page of rows (100 by default) is read per kind per poll; the rest waits for the next.
-- An operator sets both in the install's env: `SYSTEM_SETTLE_SECONDS` and `SYSTEM_PAGE_SIZE`.
+- An operator sets both in the install's env (`env:` in the module's lf-external.yaml, as any module takes its settings): `SYSTEM_SETTLE_SECONDS` (default 10) and `SYSTEM_PAGE_SIZE` (default 100). The host does not need the settle lag: the write ledger keeps a fact for as long as it keeps any write, counted from when the door hands it out (below).
 - So an event arrives at least a settle lag, and usually a minute or so, after it happened.
-- The first poll only sets the marks and emits nothing: going live never replays what happened before.
+- The first poll only sets the marks, at now less the settle lag, and emits nothing: going live never replays what happened before.
+- So a fact within the settle lag before the first poll is reported by the next one. A fresh project's first `serve` or `drain` notes its release as it opens the store, usually seconds before that first poll, so its `Release Applied` is reported once; an older release is not.
+- A kind a listen asks for that its cursor has no mark for (the module learned it after the cursor was made) is armed at now less the settle lag on that poll, and reports nothing from before.
 - Marks are kept per kind as `(at, id)`, so two facts at one instant are neither skipped nor reported twice.
 
 ## The records door
@@ -80,7 +82,8 @@ listen-fire hands `@lf/system` its facts at `POST {host}/api/public/adapter/{mod
 
 - `listen` is the pipeline of the listen whose arrival started the run; `null` for one no listen started.
 - `recordId` is the record the wait waits on, as the engine named it at `park.waits.open`; `null` for a wait opened before waits named their record.
-- The door keeps every fact about a run it hands out in the write ledger, as above.
+- The door keeps every fact about a run it hands out in the write ledger, as above, stamped with when it hands the fact out, not when the fact happened. So the ledger keeps it for as long as it keeps any write (`loopWindow` and the slowest poll), however old the fact is and whatever settle lag the module has.
+- One row stays per run: a fact read again (another listen's poll, a retry) replaces the run's earlier one, and the door forgets what the ledger no longer keeps, so a project whose runs write no records does not grow it for good.
 - The store methods it reads are in [store-slot.md](store-slot.md): `runs.failed`, `releases.note`, `releases.list` and `waits.stranded`.
 
 ## Adopting it elsewhere

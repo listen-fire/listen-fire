@@ -1089,7 +1089,8 @@ impl RunHostStore for PgStore {
 
     /// A keyed wait is one per run and record's edge, a keyless one (its
     /// record already gone) one per run and edge: an open of either again
-    /// is the first.
+    /// is the first, except that it fills in the record id a delivery's open
+    /// left out (one the wait has is kept).
     fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {
         let OpenWait { run_id, team_id, adapter_type, edge, key, record_id, since } = *wait;
         self.transaction(|| {
@@ -1098,6 +1099,11 @@ impl RunHostStore for PgStore {
                  values ($1::text::uuid, $2::text::uuid, $3::text, $4::text, $5::text, $6::int8, $7::text)
                  on conflict do nothing",
                 &[&run_id, &team_id, &adapter_type, &edge, &key, &since, &record_id],
+            )?;
+            self.execute(
+                "update lf.wait_row set record_id = $6::text
+                 where run_id = $1::text::uuid and team_id = $2::text::uuid and adapter_type = $3::text and edge = $4::text and key is not distinct from $5::text and record_id is null",
+                &[&run_id, &team_id, &adapter_type, &edge, &key, &record_id],
             )?;
             let row = self.query_opt(
                 "select id::text from lf.wait_row
@@ -1520,6 +1526,10 @@ impl RunHostStore for PgStore {
         let depth = i32::try_from(write.depth).map_err(|_| StoreError::Invalid(format!("a chain depth past {}", i32::MAX)))?;
         self.transaction(|| {
             self.execute("delete from lf.write_ledger where team_id = $1::text::uuid and at < $2::text::timestamptz", &[&self.tenant, &forget_before])?;
+            self.execute(
+                "delete from lf.write_ledger where team_id = $1::text::uuid and adapter = $2::text and record_type = $3::text and external_id = $4::text and run_id = $5::text",
+                &[&self.tenant, &write.adapter, &write.record_type, &write.external_id, &write.run_id],
+            )?;
             self.execute(
                 "insert into lf.write_ledger (team_id, adapter, record_type, external_id, run_id, depth, at)
                  values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::int4, $7::text::timestamptz)",

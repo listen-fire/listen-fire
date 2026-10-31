@@ -99,7 +99,8 @@ function event(input: { kind: SystemEventKind; id: string; at: string; fields: P
 }
 
 function runEvent(kind: SystemEventKind, run: SettledRun, webBaseUrl: string | null, taken: boolean): Arrival {
-  const url = run.url ?? (webBaseUrl !== null && run.automation !== null ? `${webBaseUrl.replace(/\/$/, '')}/movements/${encodeURIComponent(run.automation.id)}?view=activity` : '');
+  const activity = kind === RUN_FAILED ? 'view=activity&status=failed' : 'view=activity';
+  const url = run.url ?? (webBaseUrl !== null && run.automation !== null ? `${webBaseUrl.replace(/\/$/, '')}/movements/${encodeURIComponent(run.automation.id)}?${activity}` : '');
   return event({
     kind,
     id: `${kind.id}:${run.runId}:${run.at}`,
@@ -135,7 +136,8 @@ function waitEvent(wait: StrandedWait, taken: boolean): Arrival {
  * One poll of `Events` over the host's facts. The first poll (no cursor)
  * sets the marks and emits nothing: going live never replays what happened
  * before anyone listened. Each later one emits each new fact of the kinds
- * the listen asked for once, oldest first per kind.
+ * the listen asked for once, oldest first per kind, and sets the mark of a
+ * kind the cursor has none for, emitting nothing of it.
  */
 export async function pollSystemEvents(records: SystemRecords, input: PollEdgeInput, settings: SystemPollSettings = DEFAULT_POLL_SETTINGS, now: number = Date.now()): Promise<PollEdgeAnswer> {
   if (input.edge !== EVENTS_EDGE) throw new Error(`@lf/system: no edge ${input.edge} to poll (its one edge is ${EVENTS_EDGE})`);
@@ -146,18 +148,17 @@ export async function pollSystemEvents(records: SystemRecords, input: PollEdgeIn
   const limit = settings.pageSize;
   const takenApplied = taken !== undefined;
 
-  if (previous === undefined) {
-    const armed: SystemCursor = {
-      ...(asked(RUN_FAILED) ? { failed: { at: until, runId: NIL_ID } } : {}),
-      ...(asked(RUN_PAUSED) ? { paused: { at: until, runId: NIL_ID } } : {}),
-      ...(asked(WAIT_LOST_ITS_RECORD) ? { stranded: { at: until, waitId: NIL_ID } } : {}),
-      ...(asked(RELEASE_APPLIED) ? { releases: { at: until, version: '' } } : {}),
-    };
-    return { arrivals: [], cursor: armed };
-  }
+  // A source arms where it is first asked for, whenever that is: the first
+  // poll arms each of them, and a later one arms one a cursor lacks (a kind
+  // this module learned after the cursor was made).
+  const next: SystemCursor = { ...previous };
+  if (asked(RUN_FAILED)) next.failed ??= { at: until, runId: NIL_ID };
+  if (asked(RUN_PAUSED)) next.paused ??= { at: until, runId: NIL_ID };
+  if (asked(WAIT_LOST_ITS_RECORD)) next.stranded ??= { at: until, waitId: NIL_ID };
+  if (asked(RELEASE_APPLIED)) next.releases ??= { at: until, version: '' };
+  if (previous === undefined) return { arrivals: [], cursor: next };
 
   const arrivals: Arrival[] = [];
-  const next: SystemCursor = { ...previous };
   const webBaseUrl = asked(RUN_FAILED) || asked(RUN_PAUSED) ? await records.webBaseUrl() : null;
   const settledKinds = [
     [RUN_FAILED, 'failed', records.failedRuns.bind(records)],

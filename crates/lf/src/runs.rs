@@ -358,9 +358,8 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     // Before any module starts: what an earlier listen-fire left running is
     // stopped, and what this one starts is listed in the store.
     crate::module_hosts::track_in(store.clone());
-    // What the records door reads; a worker or a server keeps the release it
-    // opens the store under, once per release (`records.releases`).
-    crate::records_door::install(store.clone());
+    // A worker or a server keeps the release it opens the store under, once
+    // per release (`records.releases`).
     if !matches!(role, Role::Command) {
         crate::records_door::note_release(&*store, &iso(0))?;
     }
@@ -404,6 +403,9 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     let _holds = hold_all(&running, role.keep());
     let file_set = Rc::new(FileSet { files, parsed, catalog, listens, heads: Default::default(), running, schemas, _holds });
     let set = file_set.clone();
+    // What the records door reads, and keeps its facts in the write ledger for
+    // as long as a writer's own are kept.
+    crate::records_door::install(store.clone(), crate::loop_breaker::kept_ms(&project, &set));
     let file_set = RefCell::new(file_set);
     let session = Session {
         project,
@@ -2565,6 +2567,7 @@ impl Session {
             let _ = writeln!(log, "listen-fire: {line}");
         }
         self.file_set.replace(taken.clone());
+        crate::records_door::install(self.store.clone(), crate::loop_breaker::kept_ms(&self.project, &taken));
         self.refused.replace(None);
         drop(starting);
         for line in changed.into_iter().chain(dropped).chain(started) {

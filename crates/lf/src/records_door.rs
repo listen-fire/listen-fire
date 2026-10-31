@@ -13,6 +13,14 @@
 //! caps. Kept as the door reads it, not as each writer marks a run, because
 //! a run is failed and a wait stranded by many writers, and the door is the
 //! one place every such fact passes.
+//!
+//! The row is stamped with when the door hands the fact out, not with when
+//! the fact happened: the module reports the event within the loop window
+//! and the slowest poll of that moment, the bound every module's writes are
+//! kept for, whatever its settle lag or however old the fact was. (A row
+//! stamped with the fact's time could be swept before its event is judged.)
+//! The door sweeps with the same bound as it keeps, so a project whose runs
+//! write no records does not grow the ledger for good.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -57,14 +65,24 @@ pub struct ReleaseAfter<'a> {
     pub version: &'a str,
 }
 
-thread_local! {
-    /// The store the door reads: the session's, once it is open.
-    static STORE: RefCell<Option<Rc<dyn RunHostStore>>> = const { RefCell::new(None) };
+/// What the door reads and keeps its facts in the ledger by.
+#[derive(Clone)]
+struct Open {
+    store: Rc<dyn RunHostStore>,
+    /// How long the ledger keeps a write (crate::loop_breaker::kept_ms).
+    kept_ms: i64,
 }
 
-/// The door reads `store` from now on.
-pub fn install(store: Rc<dyn RunHostStore>) {
-    STORE.with(|kept| *kept.borrow_mut() = Some(store));
+thread_local! {
+    /// The door, once the session is open.
+    static OPEN: RefCell<Option<Open>> = const { RefCell::new(None) };
+}
+
+/// The door reads `store` from now on, and keeps its facts in the write
+/// ledger for `kept_ms`. Called again when the session's files change what
+/// `kept_ms` is.
+pub fn install(store: Rc<dyn RunHostStore>, kept_ms: i64) {
+    OPEN.with(|open| *open.borrow_mut() = Some(Open { store, kept_ms }));
 }
 
 /// Keep that the store was opened under this release (`releases.note`),
@@ -76,14 +94,14 @@ pub fn note_release(store: &dyn RunHostStore, at: &str) -> std::result::Result<(
 /// The door's answer to `body` (`{ method, params }`): its status and JSON.
 /// The caller has checked the host token.
 pub fn answer(body: &Js) -> (u16, Js) {
-    let Some(store) = STORE.with(|kept| kept.borrow().clone()) else {
+    let Some(Open { store, kept_ms }) = OPEN.with(|open| open.borrow().clone()) else {
         return refuse(503, "unavailable", "the records door opens with listen-fire's session; ask again".into());
     };
     let params = body.get("params").cloned().unwrap_or(Js::Obj(Default::default()));
     let answered = match body.get("method").and_then(Js::as_str) {
-        Some("records.failedRuns") => failed_runs(&*store, &params),
+        Some("records.failedRuns") => failed_runs(&*store, kept_ms, &params),
         Some("records.pausedRuns") => Ok(Js::Arr(Vec::new())),
-        Some("records.strandedWaits") => stranded_waits(&*store, &params),
+        Some("records.strandedWaits") => stranded_waits(&*store, kept_ms, &params),
         Some("records.releases") => releases(&*store, &params),
         Some("records.webBaseUrl") => Ok(Js::Null),
         Some(other) => return refuse(400, "bad_request", format!("the records door has no method {other} ({METHODS})")),
@@ -136,8 +154,11 @@ fn listen_of(facts: &Js) -> Js {
     facts.get("event").and_then(|event| event.get("pipelineInputId")).and_then(Js::as_str).map_or(Js::Null, Js::str)
 }
 
-/// Keep a fact about `run_id`, true `at`, as the run's write of its own record.
-fn keep_in_ledger(store: &dyn RunHostStore, run_id: &str, facts: &Js, at: &str) -> std::result::Result<(), Failure> {
+/// Keep a fact about `run_id`, handed out now, as the run's write of its own
+/// record, and forget what the ledger keeps no longer (`kept_ms`). A run's
+/// later fact replaces its earlier one: the same record, the same run, the
+/// same place in its chain, only later.
+fn keep_in_ledger(store: &dyn RunHostStore, run_id: &str, facts: &Js, kept_ms: i64) -> std::result::Result<(), Failure> {
     let depth = u32::try_from(crate::loop_breaker::chain_in(facts).len()).unwrap_or(u32::MAX);
     let write = LedgerWrite {
         adapter: crate::loop_breaker::HOST.into(),
@@ -145,13 +166,12 @@ fn keep_in_ledger(store: &dyn RunHostStore, run_id: &str, facts: &Js, at: &str) 
         external_id: run_id.into(),
         run_id: run_id.into(),
         depth,
-        at: at.into(),
+        at: crate::store::iso(0),
     };
-    // Forgets nothing: the writers' own sweeps keep the ledger's window.
-    store.ledger_write(&write, crate::store::EPOCH).map_err(|e| Failure::Store(format!("keeping run {run_id}'s fact in the write ledger: {e}")))
+    store.ledger_write(&write, &crate::store::iso(-kept_ms)).map_err(|e| Failure::Store(format!("keeping run {run_id}'s fact in the write ledger: {e}")))
 }
 
-fn failed_runs(store: &dyn RunHostStore, params: &Js) -> std::result::Result<Js, Failure> {
+fn failed_runs(store: &dyn RunHostStore, kept_ms: i64, params: &Js) -> std::result::Result<Js, Failure> {
     let after = match params.get("after") {
         None | Some(Js::Null) => None,
         Some(after) => Some(RunAfter { at: text(after, "at")?, run_id: text(after, "runId")? }),
@@ -162,7 +182,7 @@ fn failed_runs(store: &dyn RunHostStore, params: &Js) -> std::result::Result<Js,
         let facts = Js::parse(run.input.as_bytes()).unwrap_or(Js::Null);
         let at = run.finished_at.clone().unwrap_or_else(|| run.started_at.clone());
         let reason = run.outcome.as_deref().and_then(|o| Js::parse(o.as_bytes()).ok()).and_then(|o| o.get("error").and_then(Js::as_str).map(str::to_string)).unwrap_or_default();
-        keep_in_ledger(store, &run.id, &facts, &at)?;
+        keep_in_ledger(store, &run.id, &facts, kept_ms)?;
         rows.push(Js::Obj(obj! {
             "runId" => Js::str(&run.id),
             "file" => Js::str(&run.file),
@@ -176,7 +196,7 @@ fn failed_runs(store: &dyn RunHostStore, params: &Js) -> std::result::Result<Js,
     Ok(Js::Arr(rows))
 }
 
-fn stranded_waits(store: &dyn RunHostStore, params: &Js) -> std::result::Result<Js, Failure> {
+fn stranded_waits(store: &dyn RunHostStore, kept_ms: i64, params: &Js) -> std::result::Result<Js, Failure> {
     let after = match params.get("after") {
         None | Some(Js::Null) => None,
         Some(after) => Some(StrandedAfter { at: text(after, "at")?, wait_id: text(after, "waitId")? }),
@@ -185,7 +205,7 @@ fn stranded_waits(store: &dyn RunHostStore, params: &Js) -> std::result::Result<
     for wait in store.stranded_waits(&StrandedOf::Page { after, limit: limit_of(params)? })? {
         let ran = facts_of(store, &wait.run_id)?;
         if let Some((_, facts)) = &ran {
-            keep_in_ledger(store, &wait.run_id, facts, &wait.at)?;
+            keep_in_ledger(store, &wait.run_id, facts, kept_ms)?;
         }
         rows.push(Js::Obj(obj! {
             "waitId" => Js::str(&wait.wait_id),
@@ -259,7 +279,10 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{RunStart, iso_at};
+    use crate::store::{RunStart, iso, iso_at};
+
+    /// The loop window and the slowest poll lf.yaml would leave: 20s and 60s.
+    const KEPT_MS: i64 = 80_000;
 
     fn state_file() -> Rc<dyn RunHostStore> {
         let dir = std::env::temp_dir().join(format!("lf-records-{}", uuid::Uuid::new_v4()));
@@ -296,7 +319,7 @@ mod tests {
     }
 
     fn failed_runs_are_read_oldest_first_after_a_mark_with_their_listen_and_kept_in_the_ledger(store: Rc<dyn RunHostStore>) {
-        install(store.clone());
+        install(store.clone(), KEPT_MS);
         let t0 = t0();
         let mark = || Js::Obj(obj! { "at" => Js::Str(iso_at(t0)), "runId" => Js::str("00000000-0000-0000-0000-000000000000") });
         let facts = r#"{"event":{"pipelineInputId":"listen:ops:sync:0a1b2c3d"},"chain":["run-0"]}"#;
@@ -321,22 +344,92 @@ mod tests {
         assert_eq!(ids(&next), [b.clone(), c]);
 
         let about = crate::loop_breaker::LedgerRecord { adapter: crate::loop_breaker::HOST, record_type: crate::loop_breaker::HOST_RUN, external_id: &b };
-        let deepest = store.deepest_write(&about, &iso_at(t0)).unwrap().unwrap();
-        assert_eq!((deepest.run_id.as_str(), deepest.depth), (b.as_str(), 1), "the failure is the run's own write, at its place in its chain");
+        let deepest = store.deepest_write(&about, &iso(-60_000)).unwrap().unwrap();
+        assert_eq!((deepest.run_id.as_str(), deepest.depth), (b.as_str(), 1), "the failure is the run's own write, at its place in its chain, as of its being handed out");
     }
 
     fn a_release_is_kept_once_and_read_after_a_mark(store: Rc<dyn RunHostStore>) {
-        install(store.clone());
+        install(store.clone(), KEPT_MS);
         let t0 = t0();
         let (one, two) = (format!("0.13.{t0}"), format!("0.14.{t0}"));
         assert!(store.note_release(&one, &iso_at(t0)).unwrap());
         assert!(!store.note_release(&one, &iso_at(t0 + 5)).unwrap(), "once per release");
         assert!(store.note_release(&two, &iso_at(t0 + 10)).unwrap());
-        let versions = |read: &Js| -> Vec<String> { read.get("result").and_then(Js::as_array).unwrap().iter().filter_map(|r| r.get("version").and_then(Js::as_str)).map(str::to_string).collect() };
+        // Only this case's: a database a case ran over before holds later releases of its own.
+        let versions = |read: &Js| -> Vec<String> {
+            read.get("result").and_then(Js::as_array).unwrap().iter().filter_map(|r| r.get("version").and_then(Js::as_str)).filter(|v| v.ends_with(&t0.to_string())).map(str::to_string).collect()
+        };
         let (_, read) = ask("records.releases", Js::Obj(obj! { "after" => Js::Obj(obj! { "at" => Js::Str(iso_at(t0 - 1)), "version" => Js::str("") }), "limit" => Js::Num(10.into()) }));
         assert_eq!(versions(&read), [one.clone(), two.clone()]);
         let (_, next) = ask("records.releases", Js::Obj(obj! { "after" => Js::Obj(obj! { "at" => Js::Str(iso_at(t0)), "version" => Js::Str(one) }), "limit" => Js::Num(10.into()) }));
         assert_eq!(versions(&next), [two]);
+    }
+
+    fn an_arrival_about_a_fact_handed_out_continues_its_chain_however_old_the_fact_and_after_the_writers_sweep(store: Rc<dyn RunHostStore>) {
+        install(store.clone(), KEPT_MS);
+        let failed_at = crate::limiter::now_ms() - 600_000;
+        let id = uuid::Uuid::new_v4().to_string();
+        store.start_run(&RunStart { id: &id, file: "ops", movement: "sync", started_at: &iso_at(failed_at - 1000), input: r#"{"chain":["run-0"]}"#, delivery_id: None }).unwrap();
+        store.settle_run(&id, "failed", &Js::Obj(obj! { "error" => Js::str("boom") }), &iso_at(failed_at)).unwrap();
+
+        let page = Js::Obj(obj! { "after" => Js::Obj(obj! { "at" => Js::Str(iso_at(failed_at - 1)), "runId" => Js::str("00000000-0000-0000-0000-000000000000") }), "until" => Js::Str(iso_at(failed_at)), "limit" => Js::Num(10.into()) });
+        assert_eq!(ids(&ask("records.failedRuns", page).1), [id.clone()]);
+
+        // Another run writes a record: its sweep forgets what is older than the ledger keeps.
+        let other = LedgerWrite { adapter: "acme".into(), record_type: "Company".into(), external_id: "c1".into(), run_id: "other".into(), depth: 0, at: iso(0) };
+        store.ledger_write(&other, &iso(-KEPT_MS)).unwrap();
+
+        let arrival = crate::arrivals::ArrivalIn {
+            edge: "Events".into(),
+            key: None,
+            identity: Some("event-1".into()),
+            version: None,
+            landing: None,
+            gone: false,
+            parents: Vec::new(),
+            about: Some(Js::parse(format!(r#"{{"recordType":"Run","externalId":"{id}"}}"#).as_bytes()).unwrap()),
+            not_for: None,
+            taken_applied: false,
+            occurred_at: Some(iso_at(failed_at)),
+        };
+        let since = iso_at(crate::loop_breaker::since_of(&arrival, 20_000, crate::limiter::now_ms()));
+        let chain = crate::loop_breaker::chain_of(&*store, &crate::loop_breaker::records_of("system", &arrival, "Event"), &since).unwrap();
+        assert_eq!(chain, ["run-0".to_string(), id], "a failure ten minutes old, read now, is attributed: the chain continues and the cap applies");
+    }
+
+    #[test]
+    fn an_old_fact_handed_out_is_attributed_in_the_state_file() {
+        an_arrival_about_a_fact_handed_out_continues_its_chain_however_old_the_fact_and_after_the_writers_sweep(state_file());
+    }
+
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn an_old_fact_handed_out_is_attributed_over_postgres() {
+        let Some(store) = postgres() else { return };
+        an_arrival_about_a_fact_handed_out_continues_its_chain_however_old_the_fact_and_after_the_writers_sweep(store);
+    }
+
+    #[test]
+    fn the_door_keeps_one_row_per_run_and_sweeps_what_the_ledger_no_longer_keeps() {
+        let dir = std::env::temp_dir().join(format!("lf-records-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Rc::new(Store::open(&dir.join("state.db")).unwrap());
+        install(store.clone(), KEPT_MS);
+        let old = LedgerWrite { adapter: "acme".into(), record_type: "Company".into(), external_id: "c1".into(), run_id: "writer".into(), depth: 0, at: iso(-KEPT_MS - 5_000) };
+        store.ledger_write(&old, &iso(-3_600_000)).unwrap();
+        let record = crate::loop_breaker::LedgerRecord { adapter: "acme", record_type: "Company", external_id: "c1" };
+        assert!(store.deepest_write(&record, &iso(-3_600_000)).unwrap().is_some());
+
+        let failed_at = crate::limiter::now_ms() - 30_000;
+        let id = fail(&*store, "{}", failed_at);
+        let page = || Js::Obj(obj! { "after" => Js::Obj(obj! { "at" => Js::Str(iso_at(failed_at - 1)), "runId" => Js::str("00000000-0000-0000-0000-000000000000") }), "until" => Js::Str(iso_at(failed_at)), "limit" => Js::Num(10.into()) });
+        for _ in 0..3 {
+            assert_eq!(ids(&ask("records.failedRuns", page()).1), [id.clone()], "each poll that reads the fact, and each retry of one, reads it again");
+        }
+        assert!(store.deepest_write(&record, &iso(-3_600_000)).unwrap().is_none(), "the door sweeps by the bound the writers' sweeps use");
+        let rows: i64 = store.db.query_row("select count(*) from write_ledger where run_id = ?", rusqlite::params![id], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 1, "one row for the fact however often it is read");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -360,7 +453,7 @@ mod tests {
 
     #[test]
     fn the_door_names_its_methods_and_refuses_what_it_cannot_read() {
-        install(state_file());
+        install(state_file(), KEPT_MS);
         assert_eq!(ask("records.everything", Js::Null).0, 400);
         assert_eq!(ask("records.failedRuns", Js::Obj(obj! { "limit" => Js::Num(1.into()) })).0, 400, "no `until`");
         assert_eq!(ask("records.pausedRuns", Js::Obj(obj! { "limit" => Js::Num(1.into()) })).1.get("result"), Some(&Js::Arr(vec![])), "listen-fire fails a run at its cost cap: it pauses none");

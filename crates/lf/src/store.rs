@@ -639,9 +639,6 @@ pub fn iso(offset_ms: i64) -> String {
 }
 
 /// The instant `at` (epoch milliseconds), as `iso` writes it.
-/// The earliest instant, in `iso`'s form: a horizon that forgets nothing.
-pub const EPOCH: &str = "1970-01-01T00:00:00.000Z";
-
 pub fn iso_at(at: i64) -> String {
     let ts = jiff::Timestamp::from_millisecond(at).expect("an instant within range");
     format!("{}.{:03}Z", ts.strftime("%Y-%m-%dT%H:%M:%S"), at.rem_euclid(1000))

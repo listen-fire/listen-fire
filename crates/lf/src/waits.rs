@@ -362,13 +362,20 @@ impl Store {
 
     /// The wait's id. A run that already waits on this edge of this record
     /// keeps that wait, and its mark; likewise one that already waits on
-    /// this edge of a record already gone (no key).
+    /// this edge of a record already gone (no key). A wait with no record id
+    /// (a delivery opened it) takes the one given; one with an id keeps it.
     pub fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {
         let OpenWait { run_id, team_id, adapter_type, edge, key, record_id, since } = *wait;
         self.transaction(|db| {
             db.execute(
                 "insert into wait_row (id, run_id, team_id, adapter_type, edge, key, record_id, since) values (?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
                 params![uuid::Uuid::new_v4().to_string(), run_id, team_id, adapter_type, edge, key, record_id, since],
+            )?;
+            // A delivery opens the wait before the run reaches its `await`, with
+            // no record id; the run's own open then fills it in.
+            db.execute(
+                "update wait_row set record_id = ? where run_id = ? and team_id = ? and adapter_type = ? and edge = ? and key is ? and record_id is null",
+                params![record_id, run_id, team_id, adapter_type, edge, key],
             )?;
             Ok(db.query_row(
                 "select id from wait_row where run_id = ? and team_id = ? and adapter_type = ? and edge = ? and key is ?",
@@ -1031,6 +1038,7 @@ mod tests {
         a_noted_arrival_is_no_longer_listed,
         two_arrivals_on_one_wait_count_in_log_order,
         a_gone_arrival_strands_the_parked_waits_on_its_record_once_and_wakes_none_each_names_the_record_it_waited_on,
+        a_wait_opened_without_a_record_id_takes_the_one_a_later_open_names_and_keeps_it,
         a_wait_parked_after_its_record_went_is_stranded_as_it_parks,
         a_wait_opened_on_a_record_already_gone_has_no_key_is_one_per_run_and_edge_nothing_wakes_it_and_it_is_stranded_as_it_parks,
         a_later_arrival_on_a_stranded_waits_record_wakes_the_parked_waits_on_it_and_strands_none_of_its_waits_any_more,

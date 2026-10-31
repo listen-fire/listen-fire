@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-import { lf, lfCommand, served } from './example';
+import { externalPort, lf, lfCommand, project, served } from './example';
 import { lf as lfAsked, ok } from './interactive';
 import { HEADER, botMessages, deliver, eventCallback, parkedRun, slackWorld } from './slack_world';
 
@@ -141,6 +141,35 @@ test('a wait whose message is deleted is reported to a Wait Lost Its Record list
   } finally {
     await serving.stop();
     await world.close();
+  }
+});
+
+test("a listen-started run's wait on its own trigger's record names that record when the record is deleted", async () => {
+  // The wait is opened by the delivery that starts the run, before the run
+  // reaches its `await`; the run's own open then names the record.
+  const dir = project('await_delivered');
+  await withSystem(dir);
+  writeFileSync(
+    join(dir, 'movements/lost.mvt'),
+    `${SYSTEM}\nfunction lost(e: <sys-[:Events]->>) {\n  fail("lost saw \${e.Kind} on \${e.Adapter} \${e.Edge} \${e.\`Record Id\`} in \${e.\`Run Id\`}")\n}\nlisten to sys-[e:Events WHERE e.Kind == "Wait Lost Its Record"]-> fire lost\n`,
+  );
+  const serving = await served(dir);
+  try {
+    await serving.waitFor(/armed; it fires on changes from now/, 20_000);
+    const crm = `http://127.0.0.1:${externalPort(dir)}`;
+    const post = async (route: string, body: unknown) => {
+      const response = await fetch(`${crm}${route}`, { method: 'POST', body: JSON.stringify(body) });
+      assert.equal(response.status, 200, `${route}: ${await response.clone().text()}`);
+    };
+    await post('/dev/companies', { Name: 'Osprey' });
+    await serving.waitFor(/run .* companies:discuss parked/, 20_000);
+    await post('/dev/companies/delete', { company: 'company-1' });
+    const line = await serving.waitFor(/lost saw Wait Lost Its Record/, 30_000);
+    const [wait] = query<{ run_id: string; record_id: string }>(dir, 'select run_id, record_id from wait_row where stranded_at is not null');
+    assert.equal(wait?.record_id, 'company-1', 'the wait the delivery opened names the record once its run awaits');
+    assert.ok(line.includes(`lost saw Wait Lost Its Record on acme_crm Comments company-1 in ${wait.run_id}`), line);
+  } finally {
+    await serving.stop();
   }
 });
 

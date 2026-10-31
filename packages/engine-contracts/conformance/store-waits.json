@@ -153,6 +153,18 @@
       ]
     },
     {
+      "case": "a wait opened without a record id takes the one a later open names, and keeps it",
+      "steps": [
+        { "do": "mark", "as": "m" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "recordId": "msg-1", "since": "m", "same": "w" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "recordId": "msg-2", "since": "m", "same": "w" },
+        { "do": "park", "run": "run-1", "wait": "w", "address": "s1" },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "gone": true }], "wakes": [], "stranded": ["w"], "queued": [] },
+        { "do": "stranded", "run": "run-1", "waits": [{ "wait": "w", "edge": "Comments", "key": "thread:c1", "recordId": "msg-1", "parked": true }] }
+      ]
+    },
+    {
       "case": "a wait parked after its record went is stranded as it parks",
       "steps": [
         { "do": "mark", "as": "m" },

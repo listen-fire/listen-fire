@@ -347,11 +347,15 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
     for (const wake of wakes) queueWake(teamId, wake);
     return { wakes, stranded };
   };
-  /** The run's wait on this edge of this record: the one it has, or a new one. */
+  /** The run's wait on this edge of this record: the one it has (taking the record id it lacked), or a new one. */
   const openWait = (input: { runId: string; teamId: string; adapterType: string; edge: string; key: string | null; recordId?: string; since: number; fireKey: string | null }): string => {
     const { runId, teamId, adapterType, edge, key, since, fireKey } = input;
     for (const wait of waits.values()) {
-      if (wait.runId === runId && wait.teamId === teamId && wait.adapterType === adapterType && wait.edge === edge && wait.key === key) return wait.id;
+      if (wait.runId === runId && wait.teamId === teamId && wait.adapterType === adapterType && wait.edge === edge && wait.key === key) {
+        // A delivery opens the wait with no record id; the run's own open names it.
+        wait.recordId ??= input.recordId ?? null;
+        return wait.id;
+      }
     }
     const id = randomUUID();
     waits.set(id, { id, runId, teamId, adapterType, edge, key, recordId: input.recordId ?? null, since, address: null, strandedAt: null, fireKey });

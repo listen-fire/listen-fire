@@ -41,7 +41,7 @@ A wait opened without a key has no record to report again: it stays stranded.
 
 ## Reading them
 
-`waits.stranded` ([store-slot](store-slot.md)) answers `[{ waitId, runId, adapterType, edge, key, at, parked }]`, oldest stranded first:
+`waits.stranded` ([store-slot](store-slot.md)) answers `[{ waitId, runId, adapterType, edge, key, recordId, at, parked }]`, oldest stranded first:
 
 - `{ runId }`: the run's stranded waits. `runs` and `runs show` read this.
 - `{ after?, limit }`: every run's, a page at a time, each page after the last wait of the page before (`after: { at, waitId }`). This is the feed for the records door.

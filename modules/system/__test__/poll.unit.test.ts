@@ -1,7 +1,7 @@
 // The system poll over a host's facts, held in memory: what a first poll
 // arms, what each later poll emits, and what it leaves for the next.
 
-import { pollSystemEvents, type SystemCursor } from '../poll';
+import { DEFAULT_POLL_SETTINGS, pollSystemEvents, type SystemCursor } from '../poll';
 import type { Release, SettledRun, StrandedWait, SystemRecords } from '../records';
 
 const T0 = Date.parse('2026-10-31T10:00:00.000Z');
@@ -26,7 +26,7 @@ function records(facts: { failed?: SettledRun[]; stranded?: StrandedWait[]; rele
 }
 
 const RUN_FAILED_ONLY = { type: 'compare', op: 'eq', left: { type: 'property', propertyTypeId: 'Kind' }, right: { type: 'static', value: 'Run Failed' } };
-const field = (arrival: { landing?: unknown }, name: string): unknown => Reflect.get(Object(Reflect.get(Object(arrival.landing), 'fields')), name);
+const field = (arrival: object, name: string): unknown => Reflect.get(Object(Reflect.get(Object(Reflect.get(arrival, 'landing')), 'fields')), name);
 
 describe('pollSystemEvents', () => {
   it('a first poll arms and emits nothing; the next emits each failed run once, oldest first, marked not for its own listen', async () => {
@@ -90,5 +90,38 @@ describe('pollSystemEvents', () => {
     const next = await pollSystemEvents(host, { edge: 'Events', filter: RUN_FAILED_ONLY, cursor: first.cursor }, SETTINGS, T0 + 60_000);
     expect(next.arrivals).toEqual([]);
     expect((next.cursor as SystemCursor).failed).toEqual({ at: at(2), runId: 'orphan' });
+  });
+
+  it('a kind the cursor has no mark for is armed where it is first asked for, and reports nothing from before', async () => {
+    const facts = { failed: [failed('run-a', 3)], releases: [{ version: '0.13.0', at: at(-40) }] as Release[] };
+    const host = records(facts);
+    const onlyFailed = await pollSystemEvents(host, { edge: 'Events', filter: RUN_FAILED_ONLY }, SETTINGS, T0);
+    expect(onlyFailed.cursor).not.toHaveProperty('releases');
+    // The same poll key now asks every kind: the module learned one after the cursor was made.
+    const widened = await pollSystemEvents(host, { edge: 'Events', cursor: onlyFailed.cursor }, SETTINGS, T0 + 60_000);
+    expect(widened.arrivals.map((a) => field(a, 'Kind'))).toEqual(['Run Failed']);
+    expect((widened.cursor as SystemCursor).releases).toEqual({ at: at(50), version: '' });
+    expect((widened.cursor as SystemCursor).stranded).toEqual({ at: at(50), waitId: '00000000-0000-0000-0000-000000000000' });
+    facts.releases.push({ version: '0.14.0', at: at(70) });
+    const next = await pollSystemEvents(host, { edge: 'Events', cursor: widened.cursor }, SETTINGS, T0 + 120_000);
+    expect(next.arrivals.map((a) => [field(a, 'Kind'), field(a, 'Version')])).toEqual([['Release Applied', '0.14.0']]);
+  });
+
+  it('with the default settle lag, a release noted just before the first poll is reported by the next, and an older one never is', async () => {
+    const releases: Release[] = [{ version: '0.12.0', at: at(-3600) }, { version: '0.13.0', at: at(-2) }];
+    const host = records({ releases });
+    const first = await pollSystemEvents(host, { edge: 'Events' }, DEFAULT_POLL_SETTINGS, T0);
+    expect(first.arrivals).toEqual([]);
+    const next = await pollSystemEvents(host, { edge: 'Events', cursor: first.cursor }, DEFAULT_POLL_SETTINGS, T0 + 60_000);
+    expect(next.arrivals.map((a) => [field(a, 'Kind'), field(a, 'Version')])).toEqual([['Release Applied', '0.13.0']]);
+  });
+
+  it('a Run Failed event links to the failed runs of its program; a run the host links itself keeps its link', async () => {
+    const facts = { failed: [] as SettledRun[] };
+    const base = { ...records(facts), webBaseUrl: async () => 'https://app.example/' };
+    const first = await pollSystemEvents(base, { edge: 'Events', filter: RUN_FAILED_ONLY }, SETTINGS, T0);
+    facts.failed.push(failed('run-a', 3), { ...failed('run-b', 4), url: 'https://elsewhere/run-b' });
+    const next = await pollSystemEvents(base, { edge: 'Events', filter: RUN_FAILED_ONLY, cursor: first.cursor }, SETTINGS, T0 + 60_000);
+    expect(next.arrivals.map((a) => field(a, 'Url'))).toEqual(['https://app.example/movements/ops%3Arun-a?view=activity&status=failed', 'https://elsewhere/run-b']);
   });
 });
