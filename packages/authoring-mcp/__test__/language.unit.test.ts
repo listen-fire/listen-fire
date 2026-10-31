@@ -61,8 +61,8 @@ describe('the digest of connected systems', () => {
     expect(digest).toContain('### crm — `crm(credentials: workspace)`');
     expect(digest).toContain('- listen { events: company.created }');
     expect(digest).toContain('- Company [rw fires]: Name text!, Stage enum(Lead|Customer)');
-    expect(digest).toContain('### manual — `listen to manual` (in scope with no import or connect)');
-    expect(digest).toContain('- Invocation [fires]: `Fired at` date, Text text');
+    expect(digest).toContain('### manual — `listen to manual-[:…]->` (in scope with no import or connect)');
+    expect(digest).toContain('- Invocations [fires]: `Fired at` date, Text text');
     expect(digest).toContain('Not connected yet: mail.');
   });
 

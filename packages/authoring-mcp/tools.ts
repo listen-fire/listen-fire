@@ -7,10 +7,11 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { LANGUAGE_SEARCH_KINDS } from '@listen-fire/handbook';
-import type { FileListener } from 'movement-engine/public/inbound';
+import type { ListenPlan } from 'engine-contracts';
+import type { CatalogSnapshot } from 'movement-lang';
 import { z } from 'zod';
 
-import { checkProgram, listenersOf, unsavedRefusal, validationOf, type AuthoringDiagnostic } from './check';
+import { checkProgram, listensOf, unsavedRefusal, validationOf, type AuthoringDiagnostic } from './check';
 import { connectionsView, describeFromSnapshot, describeFull, renderConnectionsDigest } from './digest';
 import { readHandbook, searchHandbook, type HostChapters } from './handbook';
 import type { JsonValue, StoredProgram, TenantHost, ToolAnswer } from './host';
@@ -82,24 +83,26 @@ async function resolveProgram(tenant: TenantHost, idOrName: string): Promise<Sto
 
 const notFound = (idOrName: string) => refuse(`No automation '${idOrName}'.`);
 
-function listensOf(listeners: readonly FileListener[]) {
-  return listeners.map((l) => ({
-    system: l.adapter,
-    movement: l.movementName,
-    ...(l.credentialName !== undefined ? { connection: l.credentialName } : {}),
-    ...(l.alias !== undefined ? { lane: l.alias } : {}),
-    ...(Object.keys(l.config).length > 0 ? { config: l.config } : {}),
+/** Each listen as an agent reads it: the system and connection it is on,
+ *  the edge it listens on, and the function it fires. */
+function listenersView(plans: readonly ListenPlan[]) {
+  return plans.map((plan) => ({
+    system: plan.adapter,
+    connection: plan.connection,
+    on: plan.hops.map((hop) => hop.edge).join(' -> '),
+    movement: plan.movement,
+    ...(plan.alias !== undefined ? { lane: plan.alias } : {}),
   }));
 }
 
-function programView(program: StoredProgram) {
+function programView(program: StoredProgram, catalog: CatalogSnapshot) {
   return {
     id: program.id,
     name: program.name,
     ...(program.description !== undefined ? { description: program.description } : {}),
     updatedAt: program.updatedAt,
     revision: revisionOf(program.source),
-    listeners: listensOf(listenersOf(program.source) ?? []),
+    listeners: listenersView(listensOf(program.source, catalog)?.plans ?? []),
   };
 }
 
@@ -122,8 +125,8 @@ async function saveChecked(
   const name = input.name ?? input.existing?.name;
   if (name === undefined || name.trim() === '') return refuse('Pass a name for a new automation.');
   let remaining: AuthoringDiagnostic[] = [];
+  const { snapshot } = await tenant.catalog({ fresh: false });
   if (input.acknowledgeErrors !== true) {
-    const { snapshot } = await tenant.catalog({ fresh: false });
     const check = tenant.check ?? checkProgram;
     const result = await check({ source: input.source, catalog: snapshot, ...(input.existing !== undefined ? { program: input.existing } : {}) });
     const validation = validationOf(input.source, result);
@@ -131,9 +134,14 @@ async function saveChecked(
     if (refusal !== null) return json(refusal);
     remaining = validation.diagnostics;
   }
-  const listeners = listenersOf(input.source);
+  const listens = listensOf(input.source, snapshot);
+  const unplanned = listens === null ? 0 : listens.written - listens.plans.length;
   const warnings: string[] =
-    listeners === null ? ['The text does not parse, so it declares no listens: it will not fire until a readable text is saved.'] : [];
+    listens === null
+      ? ['The text does not parse, so it declares no listens: it will not fire until a readable text is saved.']
+      : unplanned > 0
+        ? [`${unplanned} of its listens do not check, so nothing will fire them until a text whose listens check is saved.`]
+        : [];
   const description = input.description ?? input.existing?.description;
   const saved = await tenant.programs.save({
     ...(input.existing !== undefined ? { id: input.existing.id } : {}),
@@ -141,7 +149,7 @@ async function saveChecked(
     ...(description !== undefined ? { description } : {}),
     source: input.source,
     ...(input.expectedRevision !== undefined ? { expectedRevision: input.expectedRevision } : {}),
-    listeners: listeners ?? [],
+    listens: listens?.plans ?? [],
   });
   if (!saved.ok) {
     if ('error' in saved) return json({ ok: false, saved: false, error: saved.error });
@@ -157,8 +165,8 @@ async function saveChecked(
   return json({
     ok: true,
     saved: true,
-    ...programView(saved.program),
-    runnable: (listeners ?? []).some((l) => l.adapter === 'manual'),
+    ...programView(saved.program, snapshot),
+    runnable: (listens?.plans ?? []).some((plan) => plan.adapter === 'manual'),
     ...(saved.link !== undefined ? { link: saved.link } : {}),
     warnings: [...(saved.warnings ?? []), ...warnings],
     ...(remaining.length > 0 ? { diagnostics: remaining } : {}),
@@ -371,7 +379,10 @@ export function registerAuthoringTools(server: McpServer, ctx: ToolContext): voi
       annotations: { readOnlyHint: true },
       inputSchema: {},
     },
-    async () => json({ automations: (await tenant.programs.list()).map(programView) }),
+    async () => {
+      const { snapshot } = await tenant.catalog({ fresh: false });
+      return json({ automations: (await tenant.programs.list()).map((program) => programView(program, snapshot)) });
+    },
   );
 
   server.registerTool(
@@ -386,7 +397,7 @@ export function registerAuthoringTools(server: McpServer, ctx: ToolContext): voi
     async (input) => {
       const program = await resolveProgram(tenant, input.idOrName);
       if (program === null) return notFound(input.idOrName);
-      return json({ ...programView(program), source: program.source });
+      return json({ ...programView(program, (await tenant.catalog({ fresh: false })).snapshot), source: program.source });
     },
   );
 
@@ -475,7 +486,7 @@ export function registerAuthoringTools(server: McpServer, ctx: ToolContext): voi
     {
       title: 'Run an automation',
       description:
-        'Dispatch a saved automation and return with { runId, status } — the run may execute asynchronously and take a while (extraction + writes), so this does NOT wait for completion. The automation must declare a manual channel (`listen to manual`; saveAutomation says whether it is `runnable`). Pass the automation id (from listAutomations / getAutomation), optionally text and/or files as its input, and a requestId of your own so a retry returns the first run instead of starting a second. Then POLL checkRun with the runId until status leaves "running".',
+        'Dispatch a saved automation and return with { runId, status } — the run may execute asynchronously and take a while (extraction + writes), so this does NOT wait for completion. The automation must listen to the manual unit (`listen to manual-[:Invocations]-> fire f`; saveAutomation says whether it is `runnable`). Pass the automation id (from listAutomations / getAutomation), optionally text and/or files as its input, and a requestId of your own so a retry returns the first run instead of starting a second. Then POLL checkRun with the runId until status leaves "running".',
       annotations: { destructiveHint: true },
       inputSchema: {
         automation: z.string().describe('The automation id to run (from listAutomations / getAutomation).'),

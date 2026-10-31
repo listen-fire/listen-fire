@@ -1,16 +1,14 @@
-// The embedded host end to end over a module loaded in process: an event runs
-// only the listens that hear it (its tenant's, on the connection it came
+// The embedded host end to end over a module loaded in process: an arrival
+// runs only the listens it fires (its tenant's, on the connection it came
 // for), a run that sleeps is stepped on by the tick past its wake, a run that
 // awaits a comment is woken by its arrival, and a tenant's catalog is rebuilt
 // when its connection or its schema changes.
 
-import type { Adapter, DiscriminableEvent } from 'movement-engine/public/adapter';
-import { BASE_RUNTIME_CAPABILITIES } from 'engine-contracts';
+import type { Adapter } from 'movement-engine/public/adapter';
+import { BASE_RUNTIME_CAPABILITIES, type Arrival } from 'engine-contracts';
 import { defineModule, type AdapterModuleMethods, type ModuleContext } from 'module-kit';
 
 import { createEmbeddedHost, memoryEmbeddedHostStore } from '..';
-
-const NOTE_CREATED = 'note.created';
 
 interface Written {
   tenant: string;
@@ -35,7 +33,8 @@ function notesModule(
       supportedTriggers: ['webhook'],
       runtimeCapabilities: () => BASE_RUNTIME_CAPABILITIES,
       listEntryPoints: async () => [
-        { typeId: 'Note', displayName: 'Note', readable: true, writable: true },
+        // Each new note is announced as it is made.
+        { typeId: 'Note', displayName: 'Note', readable: true, writable: true, listenable: true, delivery: 'connection' },
         { typeId: 'Comment', displayName: 'Comment', readable: false, writable: false },
       ],
       describe: async (typeId) => {
@@ -70,7 +69,6 @@ function notesModule(
       deleteRecord: async () => {
         throw new Error('not used');
       },
-      listEventTypes: async () => [{ tag: NOTE_CREATED, positionType: 'Note' }],
       arrivals: {
         awaitKeys: async ({ heads }) => {
           await options.keying?.();
@@ -88,8 +86,7 @@ function notesModule(
       displayName: 'Notes',
       description: 'A notes service.',
       supportedTriggers: ['webhook'],
-      methods: ['listEntryPoints', 'describe', 'resolveEntity', 'getFieldValue', 'getRelated', 'createRecord', 'updateRecord', 'listEventTypes', 'awaitKeys'],
-      subscribableEvents: [NOTE_CREATED],
+      methods: ['listEntryPoints', 'describe', 'resolveEntity', 'getFieldValue', 'getRelated', 'createRecord', 'updateRecord', 'awaitKeys'],
       declaredCredentials: ['notes'],
       introspectedSchema: true,
     },
@@ -109,12 +106,13 @@ function copy(note: <book-[:Note]->>) {
   ${body}write book-[:Note]-> { Title: "${prefix} \${note.Title}" }
 }
 
-listen to book { events: ["${NOTE_CREATED}"] } fire copy
+listen to book-[:Note]-> fire copy
 `;
 }
 
-function noteCreated(title: string): DiscriminableEvent {
-  return { payload: { id: 'n1', Title: title }, externalId: 'n1', tag: NOTE_CREATED, eventType: NOTE_CREATED, changeType: 'create', recordType: 'Note' };
+/** The note n1, new, announced on the notes' root edge. */
+function noteArrived(title: string): Arrival {
+  return { edge: 'Note', identity: 'n1', landing: { recordId: 'n1', recordType: 'Note', fields: { Title: title } } };
 }
 
 function setup(options: { now?: () => Date } = {}) {
@@ -127,7 +125,7 @@ function setup(options: { now?: () => Date } = {}) {
 }
 
 describe('the embedded host', () => {
-  it("runs only the listens that hear an event: its tenant's, on the connection it came for", async () => {
+  it("runs only the listens an arrival fires: its tenant's, on the connection it came for", async () => {
     const { host, notes, written } = setup();
     await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
     await host.connect('acme', { name: 'south', module: notes, credential: { book: 'acme-south' } });
@@ -137,24 +135,24 @@ describe('the embedded host', () => {
     expect(await host.save('globex', { name: 'n', source: copier('north', 'G') })).toEqual({ saved: true, listens: 1 });
 
     // For one connection: only its listen, writing through its own credential.
-    const north = await host.dispatch('acme', { adapterType: 'notes', connection: 'north', event: noteCreated('one') });
+    const north = await host.dispatch('acme', { adapterType: 'notes', connection: 'north', arrivals: [noteArrived('one')] });
     expect(north.map(({ program, outcome }) => ({ program, ok: outcome.ok }))).toEqual([{ program: 'n', ok: true }]);
     expect(written).toEqual([{ tenant: 'acme', book: 'acme-north', Title: 'N one' }]);
 
     // For the module's install: every connection's listens, the tenant's only.
     written.length = 0;
-    await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('two') });
+    await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('two')] });
     expect(written).toEqual([
       { tenant: 'acme', book: 'acme-north', Title: 'N two' },
       { tenant: 'acme', book: 'acme-south', Title: 'S two' },
     ]);
 
-    // An event outside a listen's scope, or from another module, runs nothing.
-    expect(await host.dispatch('acme', { adapterType: 'notes', event: { ...noteCreated('x'), eventType: 'note.deleted' } })).toEqual([]);
-    expect(await host.dispatch('acme', { adapterType: 'crm', event: noteCreated('x') })).toEqual([]);
+    // An arrival on an edge no listen is on, or from another module, runs nothing.
+    expect(await host.dispatch('acme', { adapterType: 'notes', arrivals: [{ ...noteArrived('x'), edge: 'Comments', key: 'note:n1' }] })).toEqual([]);
+    expect(await host.dispatch('acme', { adapterType: 'crm', arrivals: [noteArrived('x')] })).toEqual([]);
   });
 
-  it('a write to the event parameter updates the record the event fired on, through updateRecord', async () => {
+  it('a write to the fired parameter updates the record that arrived, through updateRecord', async () => {
     const { host, notes, written, updated } = setup();
     await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
     const source = `import { notes } from adapters
@@ -166,10 +164,10 @@ function seen(note: <book-[:Note]->>) {
   write note { Title: "Seen \${note.Title}" }
 }
 
-listen to book { events: ["${NOTE_CREATED}"] } fire seen
+listen to book-[:Note]-> fire seen
 `;
     expect(await host.save('acme', { name: 'seen', source })).toEqual({ saved: true, listens: 1 });
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
     expect(fired?.outcome).toMatchObject({ ok: true });
     expect(updated).toEqual([{ externalId: 'n1', Title: 'Seen one' }]);
     expect(written).toEqual([]);
@@ -181,7 +179,7 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
     await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
     await host.save('acme', { name: 'later', source: copier('north', 'Later', 'await sleep(1h)\n  ') });
 
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
     expect(fired.outcome).toEqual({ ok: true, writes: [], spentMicrodollars: 0, parked: true });
 
     now = new Date('2026-10-27T09:30:00.000Z');
@@ -203,7 +201,7 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
       listens: 1,
     });
 
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
     expect(fired.outcome).toEqual({ ok: true, writes: [], spentMicrodollars: 0, parked: true });
     // Nothing arrived on another note, or for another tenant.
     const comment = { edge: 'Comments', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
@@ -255,7 +253,7 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
     await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
     await host.save('acme', { name: 'reply', source: copier('north', 'Re', 'said = await new note-[:Comments]->\n  ').replace('${note.Title}', '${said.Body}') });
 
-    const firing = host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    const firing = host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
     await asked;
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
     expect(await host.arrive('acme', { adapterType: 'notes', arrivals: [comment] })).toEqual([]);
@@ -277,7 +275,7 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
       await host.connect(tenant, { name: 'north', module: notes, credential: { book: `${tenant}-north` } });
       await host.save(tenant, { name: 'reply', source: reply });
     }
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
 
     // Another process holds acme's run: its wake goes back, due.
@@ -320,7 +318,7 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
   `;
     const source = copier('north', 'Re', raced).replace('${note.Title}', '${coalesce(r[0], "-")}/${coalesce(r[1], "-")}');
     expect(await host.save('acme', { name: 'raced', source })).toEqual({ saved: true, listens: 1 });
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
     expect(fired.outcome).toMatchObject({ ok: true, parked: true });
 
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
@@ -360,7 +358,7 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
     const host = createEmbeddedHost({ modules: [notes], store, moduleHost: () => ({ validateResults: true }) });
     await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
     await host.save('acme', { name: 'reply', source: copier('north', 'Re', 'said = await note-[:Comments]->\n  ').replace('${note.Title}', '${said.Body}') });
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
 
     takeOver = true;
@@ -392,7 +390,7 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
     const host = createEmbeddedHost({ modules: [notes], store, moduleHost: () => ({ validateResults: true }) });
     await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
     await host.save('acme', { name: 'reply', source: copier('north', 'Re', 'said = await note-[:Comments]->\n  ').replace('${note.Title}', '${said.Body}') });
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
     // The run failed meanwhile, before its leaves were torn down.
     await store.runHost.parks.commitSegment({ runId: fired.runId, teamId: 'acme', resumed: null, joins: [], parks: [], settle: { status: 'failed', outcome: null, at: new Date().toISOString() } });
 
@@ -422,7 +420,7 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
     const host = createEmbeddedHost({ modules: [notes], store, moduleHost: () => ({ validateResults: true }) });
     await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
     await host.save('acme', { name: 'reply', source: copier('north', 'Re', 'said = await note-[:Comments]->\n  ').replace('${note.Title}', '${said.Body}') });
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
     expect(await store.runHost.runStatus({ runId: fired.runId })).toBe('parked');
 
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
@@ -441,7 +439,7 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
     const host = createEmbeddedHost({ modules: [notes], store, now: () => now, moduleHost: () => ({ validateResults: true }) });
     await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
     await host.save('acme', { name: 'later', source: copier('north', 'Later', 'await sleep(1h)\n  ') });
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
     // The run failed meanwhile, before its timer leaf was torn down.
     await store.runHost.parks.commitSegment({ runId: fired.runId, teamId: 'acme', resumed: null, joins: [], parks: [], settle: { status: 'failed', outcome: null, at: now.toISOString() } });
 
@@ -465,7 +463,7 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
     const host = createEmbeddedHost({ modules: [notes], store, now: () => now, moduleHost: () => ({ validateResults: true }) });
     await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
     await host.save('acme', { name: 'later', source: copier('north', 'Later', 'await sleep(1h)\n  ') });
-    await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
     await store.runHost.work.enqueue({ kind: 'wake_await', key: 'wake_await:malformed', payload: {}, dueAt: '2026-10-27T09:30:00.000Z' });
 
     now = new Date('2026-10-27T10:00:01.000Z');
@@ -481,7 +479,7 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
     const host = createEmbeddedHost({ modules: [notes], store, now: () => now, moduleHost: () => ({ validateResults: true }) });
     await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
     await host.save('acme', { name: 'later', source: copier('north', 'Later', 'await sleep(1h)\n  ') });
-    await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
     // A wake whose payload names no wait, due before the run's timer.
     await store.runHost.work.enqueue({ kind: 'wake_await', key: 'wake_await:malformed', payload: {}, dueAt: '2026-10-27T09:30:00.000Z' });
 
@@ -526,11 +524,11 @@ import { north } from credentials
 
 book = connect notes using north
 
-function file(run: <manual-[:Invocation]->>) {
+function file(run: <manual-[:Invocations]->>) {
   write book-[:Note]-> { Title: "Filed \${run.Text}" }
 }
 
-listen to manual fire file
+listen to manual-[:Invocations]-> fire file
 `;
     expect(await host.save('acme', { name: 'file', source })).toEqual({ saved: true, listens: 1 });
     expect(await host.save('acme', { name: 'copy', source: copier('north', 'C') })).toEqual({ saved: true, listens: 1 });

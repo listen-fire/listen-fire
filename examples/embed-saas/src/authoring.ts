@@ -66,7 +66,7 @@ export class Programs {
       source: write.source,
       updatedAt: this.now().toISOString(),
     };
-    this.of(tenant).set(program.id, { program, saved: { name: write.name, source: write.source, languageVersion: ENGINE_VERSION, listeners: write.listeners } });
+    this.of(tenant).set(program.id, { program, saved: { name: write.name, source: write.source, languageVersion: ENGINE_VERSION, listens: write.listens } });
     return { ok: true, program };
   }
 
@@ -202,7 +202,7 @@ export function authoringTenant(input: {
       if (known !== null) return { ok: true, runId: known.runId, status: (await view(known)).status };
       if (files !== undefined && files.length > 0) return { ok: false, error: 'this product keeps no files: run it on text' };
       const [first] = runs.record(await host.run(tenant, { program: program.name, ...(text !== undefined ? { text } : {}) }));
-      if (first === undefined) return { ok: false, error: `'${program.name}' declares no \`listen to manual\`, so it cannot be run on demand` };
+      if (first === undefined) return { ok: false, error: `'${program.name}' does not listen to \`manual-[:Invocations]->\`, so it cannot be run on demand` };
       if (requestId !== undefined) runs.byRequest.set(requestKey(requestId), first.runId);
       const run = runs.get(first.runId);
       return { ok: true, runId: first.runId, status: run === null ? 'running' : (await view(run)).status };

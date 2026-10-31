@@ -178,7 +178,8 @@ type SpecLike = Pick<AdapterSnapshot, 'constructionArgs' | 'triggerConfig' | 'tr
 /** `attio(credentials: acme)`; a second connection is named after it. A
  *  run host unit is in every program's scope, never constructed. */
 function constructionSpelling(system: string, spec: SpecLike, connections: string[]): string {
-  if (RUN_HOST_UNITS.includes(system)) return `\`listen to ${system}\` (in scope with no import or connect)`;
+  // Its edges are listed below it: a listen names one (`manual-[:Invocations]->`).
+  if (RUN_HOST_UNITS.includes(system)) return `\`listen to ${system}-[:…]->\` (in scope with no import or connect)`;
   const args = spec.constructionArgs.flatMap((arg) => {
     if (arg.kind === 'credential') return [`${arg.name}: ${connections[0] ?? '…'}`];
     return arg.required ? [`${arg.name}: …`] : [];

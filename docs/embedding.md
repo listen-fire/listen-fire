@@ -2,7 +2,7 @@
 
 Your product can let its customers write movements and run them inside it. The engine runs in your own Node process, as WebAssembly: no server of ours, no network of its own. You give it what it needs: your product as a module, a place for each customer's secrets, the models it may call, and the limits it must keep.
 
-A working example is in [`examples/embed-saas`](../examples/embed-saas): a small HTTP app where a customer saves a movement, the app checks it, and the app's own event runs it. Its tests run it end to end, with customers whose schemas differ and a ready-made module loaded for each.
+A working example is in [`examples/embed-saas`](../examples/embed-saas): a small HTTP app where a customer saves a movement, the app checks it, and a company created in the app runs it. Its tests run it end to end, with customers whose schemas differ and a ready-made module loaded for each.
 
 ## The packages
 
@@ -34,7 +34,7 @@ The public entries of `@listen-fire/engine` you will use:
 | `public/embed` | `inProcessHost`, `introspectAdapter`, `collectFileListeners`, `pricedModels`, `MovementEngineError` |
 | `public/catalog` | `buildCatalogSnapshot`: what a customer's movements are checked and run against |
 | `public/movement-engine` | `runMovement`, `resumeMovement`, `checkPinnedInRust`, `parsePinned` |
-| `public/inbound` | `listenerHearsDelivery`, `triggerEventOf`: from your event to a run |
+| `public/inbound` | `listenPlansOf`, `plannedListensOf`, `listenFires`, `listenPipeline`, `arrivalTriggerOf`: from what arrived to a run |
 | `public/secrets` | the secrets family, and an in-memory vault to start from |
 | `public/adapter` | what an adapter is |
 | `public/models` | the model registry and map, the run's spend and cost cap |
@@ -50,7 +50,7 @@ The public entries of `@listen-fire/engine` you will use:
 - **A movement says what it listens for.** When something happens in your product, the movements that listen for it run.
 - **A run that waits parks.** `await sleep(1h)` stores the run; a tick past its wake steps it on. `await note-[:Comments]->` stores it until a comment arrives (`arrive`).
 
-`createEmbeddedHost` (`@listen-fire/embed`) does all of this. You write your module (its `describe`, its reads and writes), hand the host your events, and call its tick from a scheduler.
+`createEmbeddedHost` (`@listen-fire/embed`) does all of this. You write your module (its `describe`, its reads and writes), hand the host what arrives on its listenable edges, and call its tick from a scheduler.
 
 ## 1. Your product as a module
 
@@ -62,13 +62,13 @@ import { defineModule } from '@listen-fire/module-kit';
 export const crm = defineModule({
   kind: 'adapter',
   name: '@acme/crm',                     // answers to adapter type `crm`
-  manifest: { adapterType: 'crm', displayName: 'CRM', supportedTriggers: ['webhook'], methods: [...], subscribableEvents: ['company.created'], declaredCredentials: ['crm'], introspectedSchema: true },
+  manifest: { adapterType: 'crm', displayName: 'CRM', supportedTriggers: ['webhook'], methods: [...], declaredCredentials: ['crm'], introspectedSchema: true },
   credentials: [{ name: 'crm', kind: 'static', fields: [{ name: 'api_key' }] }],
   create: (ctx) => crmAdapter(ctx),      // the adapter methods, over ctx.config.tenant
 });
 ```
 
-`describe` answers for the tenant the module was loaded for (`ctx.config.tenant`), so each customer's schema can differ: one customer's `Stage` a select of `Lead | Customer`, another's `Prospect | Partner`. A value outside the customer's options is refused when its movement is saved (`MOV_ENUM_UNKNOWN_VALUE`). See `examples/embed-saas/src/crm.ts`.
+An entry point a listen may end on declares `listenable: true` and how its arrivals come (`delivery: 'connection'`: your product reports them, section 2). `describe` answers for the tenant the module was loaded for (`ctx.config.tenant`), so each customer's schema can differ: one customer's `Stage` a select of `Lead | Customer`, another's `Prospect | Partner`. A value outside the customer's options is refused when its movement is saved (`MOV_ENUM_UNKNOWN_VALUE`). See `examples/embed-saas/src/crm.ts`.
 
 ## 2. The embedded host
 
@@ -87,13 +87,14 @@ await host.connect('acme', { name: 'workspace', module: crm, credential: { api_k
 await host.connect('acme', { name: 'slack_workspace', module: slackModule, credential: { accessToken } });
 
 await host.save('acme', { name: 'welcome', source });    // { saved: true, listens: 1 } or { saved: false, problems }
-await host.dispatch('acme', { adapterType: 'crm', event }); // one outcome per run it started
+await host.dispatch('acme', { adapterType: 'crm', arrivals }); // one outcome per run it started
 await host.tick();                                          // one outcome per parked run it stepped on
 ```
 
 - **`connect(tenant, { name, module, credential })`.** `name` is what the customer's movement imports (`import { workspace } from credentials`). The credential is kept in the host's secrets, under an id only that tenant's runs may name; the module is loaded once per connection, its context built for you.
-- **`save(tenant, { name, source })`.** Checks the movement against the tenant's catalog and keeps it, pinned to this release (`ENGINE_VERSION`), with its listens read off the source.
-- **`dispatch(tenant, { adapterType, connection?, event })`.** Runs every listen of the tenant's saved movements that hears the event: a listen on that module, whose `events` (and Airtable's `table`) admit it. With `connection`, only the listens on that connection hear it, as listen-fire and the hosted product route; without, it is the module's own event and every connection's listens hear it. `event` is your product's event (`{ payload, externalId, eventType, recordType, … }`).
+- **`save(tenant, { name, source })`.** Checks the movement against the tenant's catalog and keeps it, pinned to this release (`ENGINE_VERSION`), with the check's plan of each listen (`listen to workspace-[c:Companies WHERE c.Stage == "Lead"]-> fire welcome`). It refuses, by name, a listen this host would not fire as written: one in the retired settings form (`listen to workspace { events: [...] }`); one whose earlier hop has a WHERE the module's arrivals do not carry the record for, which only listen-fire lists members to judge; one that states the node its landing is (`-[:Requests]-><Payment>`), which only listen-fire checks an arrival against.
+- **`dispatch(tenant, { adapterType, connection?, arrivals })`.** What one of the tenant's modules says arrived (adapter protocol 2.6: `{ edge, identity, landing: { recordId?, recordType?, fields }, key?, parents?, notFor?, takenApplied? }`). Each arrival runs every listen of the tenant's saved movements on that module whose last edge it landed on and whose WHERE the engine's judge says it meets, with the landing as the fired function's parameter, as listen-fire runs it. With `connection`, only the listens on that connection are judged; without, it is the module's own install's and every connection's are. An arrival whose `notFor` names a listen's pipeline (`listenPipeline`, the same name listen-fire gives it) skips that listen. One the judge cannot decide (a field only the module can evaluate, a record the arrival does not carry) runs nothing, and the host says why once per delivery (the `log` option). It does not wake the runs awaiting what arrived: hand the same arrivals to `arrive`. There is no loop breaker here: a listen whose run writes what it listens to fires again on what it wrote.
+- **`run(tenant, { program, text? })`.** Runs one movement now: an Invocation lands on the run host's manual unit (`listen to manual-[:Invocations]-> fire f`), `text` its `Text`.
 - **`arrive(tenant, { adapterType, arrivals })`.** What one of the tenant's modules says arrived on its listenable edges (each `{ edge, key, identity, version?, landing }`, or `{ edge, key, gone: true }`; adapter protocol 2.5's arrivals, which a module reads off the deliveries it accepts). Each run awaiting one steps on, one outcome per segment. An arrival no run awaits yet is kept for an hour, for a run that starts waiting on its record.
 - **`tick(now?)`.** Steps on every parked run whose timer is due, and every run an arrival woke. It first forgets the arrivals logged more than an hour ago that no run awaits, so the log does not grow without end. Call it from a scheduler.
 - **The catalog** is built per tenant from its connections, by asking each module its entry points and describing each one, and kept until the tenant's connections change. When a tenant's schema changes another way (a field added in your product), call `schemaChanged(tenant)`.
@@ -109,6 +110,7 @@ Options beyond `modules`:
 | `limits` | the engine's | Each run's limits and cost cap (section 5). |
 | `now` | the wall clock | The clock runs read and timers are due by. |
 | `moduleHost` | quiet log, no files, state in memory | What a loaded module's context holds besides its tenant and credential. |
+| `log` | the console's warnings | Where the host says what it did not run: an arrival a listen's judge could not decide. |
 
 The example, `examples/embed-saas/src/embedding.ts`, is this and nothing else: a customer connects its CRM and, optionally, Slack, and its HTTP routes call `save`, `dispatch` and `tick`.
 
@@ -118,8 +120,8 @@ The embedded host is built from the engine's public parts, for a host that needs
 
 - **Load a module:** `adapterInProcess(module, context)` (module kit), with `secretsCredential` for its credential and `memoryKv` for its state.
 - **Build a catalog:** `introspectAdapter(adapter, manifest)` per connection, then `buildCatalogSnapshot` (`public/catalog`), each schema keyed by its connection's name.
-- **Check and save:** `checkPinnedInRust({ source, catalog, languageVersion: ENGINE_VERSION })` throws `MovementEngineError` (`MOVENG_CHECK`, `MOVENG_PARSE`, `MOVENG_LANGUAGE_VERSION`) when the movement does not check; `collectFileListeners(parsePinned(…))` reads its listens.
-- **Route an event:** `listenerHearsDelivery(listener, { adapterType, credentialName, event })` (`public/inbound`) is the whole routing rule; `triggerEventOf` turns your event into the run's event.
+- **Check and save:** `checkAnswerInRust({ source, catalog, languageVersion: ENGINE_VERSION })` throws `MovementEngineError` (`MOVENG_CHECK`, `MOVENG_PARSE`, `MOVENG_LANGUAGE_VERSION`) when the movement does not check; `listenPlansOf(answer)` reads the plan of each listen.
+- **Route an arrival:** `plannedListensOf({ file, program, plans })` names each listen (`listenPipeline`) and reads its connection's credential; `listenFires(listen, arrival, { adapterType, credentialName }, nowMs)` (`public/inbound`) is the whole routing rule: null when the arrival is not the listen's to judge, else the judge's verdict (`{ fires: true }`, `{ skips }`, `{ undecided }`); `arrivalTriggerOf` turns the arrival into the run's event.
 - **Run:** `runMovement({ source, languageVersion, movementName, event, teamId, catalog, credentialIds, limits, costCapMicrodollars, host })`, over `inProcessHost` (`public/embed`).
 - **Park and resume:** `runParkHost` for each segment's parks, waits and wakes (its `sink`, `waits` and `wake` are the engine's `park` group); `drainDueTimers` under the run's lease (`withRunLease`) and `armTimerWake` for its next timer; `logArrivals` for what a module says arrived (the log and its `wake_await` rows in one write), `sweepArrivals` on your schedule to forget what was logged more than an hour ago that no run awaits (without it the log only grows), `wakeWait` for each of those rows, and `drainOwedRaces` for each `settle_race` row (`public/run-host`). A row whose drain lost the run's lease (`wakeWait`'s `busy`, a drain's `leaseLost`) goes back due rather than done: the leaf it claimed is parked again for the run's next holder, and only that row's retry steps it on. Step only a run that is still parked, read again under its lease (one that ended steps nothing, and its timer row is not armed again; one not yet marked parked retries). A step that ends its run answers the run's settle (`StepOutcome`'s `settle`), and the drain writes it in that step's end, so a crash never leaves a run parked with nothing left to wake it. A row released because its run was held elsewhere, or never stepped, is released `busy` (`WorkQueue.release`'s `why`), which a store that counts attempts does not count. Each park is its own write as the engine makes it: unlike listen-fire's run host, this one does not hold a segment's parks to its end. Each step ends in one write (`parks.commitSegment`) that finishes the leaf it resumed and owes the races its arm won, so a drain that dies before settling a race leaves it to the run's next.
 
@@ -186,8 +188,8 @@ http.createServer((req, res) => void authoring(req, res));
 - **The handler.** Streamable HTTP, no sessions: each request is answered on its own. Mount it at any path, for POST, GET and DELETE.
 - **The tenant.** `tenant(request)` runs first, every time. It returns that customer's functions, or a refusal with a status; a refused request sees no tools. The package is handed one customer's functions per request, so it has no way to ask about another.
 - **The catalog.** What `host.catalog(tenant)` returns, and the customer's connections with the system each serves. `fresh: true` asks for the schema as it is now (describeConnection asks, so a field the customer just added shows).
-- **The programs.** List, get by id or by name, save and delete. A save carries the revision the agent read (`revisionOf`, the sha256 of the text): refuse it, in the same atomic step as the write, when the stored text's revision differs, and return the stored program. A save also carries the listens the text declares, so you can route events without parsing it.
-- **The runs (optional).** Start a run of one program on text or files (with a request id, so a retry returns the first run), read its status, list a program's runs, and read its trace. On the embedded host, `run(tenant, { program, text })` fires a program's `listen to manual`.
+- **The programs.** List, get by id or by name, save and delete. A save carries the revision the agent read (`revisionOf`, the sha256 of the text): refuse it, in the same atomic step as the write, when the stored text's revision differs, and return the stored program. A save also carries the plan of each listen the text declares (`listens`), so you can route arrivals without checking it again.
+- **The runs (optional).** Start a run of one program on text or files (with a request id, so a retry returns the first run), read its status, list a program's runs, and read its trace. On the embedded host, `run(tenant, { program, text })` fires a program's `listen to manual-[:Invocations]->`.
 - **Also optional:** a checker of your own (the default is this release's), a deeper describe from live adapter calls (the default answers from the catalog snapshot), handbook chapters for your own systems, tools of your own, and one paragraph of instructions.
 
 The package does the rest: the handbook and its search, the digest of the customer's systems, the check (a save is refused while it has errors, unless the agent passes the user's consent), and diagnostics that name the handbook section showing the fix. The tool names and descriptions are the hosted product's, so an agent or skill written against one works against the other.

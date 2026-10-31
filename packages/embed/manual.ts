@@ -1,16 +1,22 @@
 // The run host's `manual` unit, as `listen-fire` builds it in (crates/lf/src/units.rs):
 // a source every host has, which a movement listens to with no import and no
-// `connect` (`listen to manual fire backfill`). It fires when the embedder
-// asks (`run`), with the text given as the Invocation's `Text`. A module the
-// embedder registers under the adapter type `manual` replaces it, as a
-// project external of that name replaces the unit in `listen-fire`.
+// `connect` (`listen to manual-[:Invocations]-> fire backfill`). Each run the
+// embedder asks for (`run`) is an arrival on `Invocations`, with the text
+// given as the Invocation's `Text`. A module the embedder registers under the
+// adapter type `manual` replaces it, as a project external of that name
+// replaces the unit in `listen-fire`.
 
-import { BASE_RUNTIME_CAPABILITIES } from 'engine-contracts';
-import type { Adapter, AdapterManifest, DiscriminableEvent } from 'movement-engine/public/adapter';
+import { randomUUID } from 'node:crypto';
+
+import { BASE_RUNTIME_CAPABILITIES, type Arrival } from 'engine-contracts';
+import type { Adapter, AdapterManifest } from 'movement-engine/public/adapter';
 
 export const MANUAL = 'manual';
 
 const INVOCATION = 'invocation';
+
+/** The unit's one edge: what a manual run lands on. */
+export const INVOCATIONS = 'Invocations';
 
 export const MANUAL_MANIFEST: AdapterManifest = {
   adapterType: MANUAL,
@@ -18,6 +24,8 @@ export const MANUAL_MANIFEST: AdapterManifest = {
   supportedTriggers: ['webhook'],
   methods: ['listEntryPoints', 'describe', 'getFieldValue', 'getRelated'],
   introspectedSchema: true,
+  // A 0.12 `listen to manual fire f` is written as a traversal so.
+  listenSettingsBecome: { path: [INVOCATIONS], aliases: ['i'], paramFrom: 'Invocation', keys: {} },
 };
 
 const field = (fieldId: string, displayName: string, kind: 'string' | 'date' | 'number', required: boolean) => ({
@@ -58,19 +66,25 @@ export function manualAdapter(): Adapter {
     supportedTriggers: ['webhook'],
     runtimeCapabilities: () => BASE_RUNTIME_CAPABILITIES,
     listEntryPoints: async () => [
-      { typeId: INVOCATION, displayName: 'Invocation', writable: false, readable: false, fires: true },
+      { typeId: INVOCATION, displayName: 'Invocation', collectionName: INVOCATIONS, writable: false, readable: false, listenable: true, delivery: 'connection' },
       { typeId: 'file', displayName: 'File', writable: false, readable: false },
     ],
     describe: async (typeId) => descriptorOf(typeId),
     resolveEntity: async () => ({ candidates: [] }),
+    // An Invocation's fields are its landing's, by display name
+    // (`invocationOf`); read by id or by name.
     getFieldValue: async ({ position, fieldId }) => {
       const descriptor = descriptorOf(position.recordType ?? INVOCATION);
-      const id = descriptor?.fields.find((f) => f.fieldId === fieldId || f.displayName === fieldId)?.fieldId ?? fieldId;
+      const declared = descriptor?.fields.find((f) => f.fieldId === fieldId || f.displayName === fieldId);
       const data: unknown = position.identity.data;
-      const value = data !== null && typeof data === 'object' ? Reflect.get(data, id === 'content' ? 'text' : id) : undefined;
+      const held = (key: string): unknown => (data !== null && typeof data === 'object' ? (Reflect.get(data, key) ?? undefined) : undefined);
+      const id = declared?.fieldId ?? fieldId;
       // A run started with no text reads `""`, never absent: both are text.
-      if (id === 'text' || id === 'content') return typeof value === 'string' ? value : '';
-      return value ?? null;
+      if (id === 'text' || id === 'content') {
+        const text = held('Text') ?? held('text');
+        return typeof text === 'string' ? text : '';
+      }
+      return held(id) ?? (declared !== undefined ? held(declared.displayName) : undefined) ?? null;
     },
     getRelated: async () => [],
     createRecord: async () => {
@@ -83,12 +97,12 @@ export function manualAdapter(): Adapter {
   };
 }
 
-/** The event a manual run is: when it was asked for, and the text given. */
-export function manualEvent(input: { firedAt: Date; text?: string }): DiscriminableEvent {
+/** The arrival a manual run is, on `Invocations`: when it was asked for,
+ *  and the text given. Each is its own invocation. */
+export function invocationOf(input: { firedAt: Date; text?: string }): Exclude<Arrival, { gone: true }> {
   return {
-    payload: { firedAt: input.firedAt.toISOString(), ...(input.text !== undefined ? { text: input.text } : {}) },
-    tag: INVOCATION,
-    eventType: INVOCATION,
-    recordType: INVOCATION,
+    edge: INVOCATIONS,
+    identity: `invocation:${randomUUID()}`,
+    landing: { recordType: 'Invocation', fields: { 'Fired at': input.firedAt.toISOString(), ...(input.text !== undefined ? { Text: input.text } : {}) } },
   };
 }

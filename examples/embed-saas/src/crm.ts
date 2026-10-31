@@ -1,19 +1,19 @@
 // The SaaS's own product, as the module its customers' movements reach: a
-// tiny CRM with one record type, `Company`, and one event a listen may
-// choose, `company.created`. Each customer defines its own fields on
+// tiny CRM with one record type, `Company`, each new company announced as an
+// arrival on its root edge, which a listen may end on. Each customer defines its own fields on
 // `Company` (a text field, or a select with its own options), so the schema
 // the module describes is that customer's. The records and the field
 // definitions live in the SaaS's own store (`CompanyStore`), one tenant's
 // apart from another's; the module only answers the adapter protocol over
 // them.
 
-import type { Adapter, AdapterManifest, DiscriminableEvent, GetRelatedInput, ResolveEntityInput } from '@listen-fire/engine/public/adapter';
+import type { Arrival } from '@listen-fire/embed';
+import type { Adapter, AdapterManifest, GetRelatedInput, ResolveEntityInput } from '@listen-fire/engine/public/adapter';
 import { BASE_RUNTIME_CAPABILITIES, containerAssociation } from '@listen-fire/engine/public/adapter';
 import { makeStablePosition } from '@listen-fire/engine/public/catalog';
 import { defineModule, type AdapterModuleMethods, type ModuleContext } from '@listen-fire/module-kit';
 
 export const COMPANY = 'Company';
-export const COMPANY_CREATED = 'company.created';
 
 /** A company: its id, and the values of the fields its customer defined. */
 export type Company = { id: string } & Record<string, string>;
@@ -59,9 +59,10 @@ export class CompanyStore {
   }
 }
 
-/** The event the SaaS raises when a company is created, as a listen reads it. */
-export function companyCreated(company: Company): DiscriminableEvent {
-  return { payload: company, externalId: company.id, tag: COMPANY_CREATED, eventType: COMPANY_CREATED, changeType: 'create', recordType: COMPANY };
+/** What the SaaS reports when a company is created: it arrived on the
+ *  CRM's `Company` edge, where a listen reads it. */
+export function companyArrived(company: Company): Arrival {
+  return { edge: COMPANY, identity: company.id, landing: { recordId: company.id, recordType: COMPANY, fields: { ...company } } };
 }
 
 const MANIFEST: AdapterManifest = {
@@ -69,8 +70,7 @@ const MANIFEST: AdapterManifest = {
   displayName: 'CRM',
   description: "The product's own CRM.",
   supportedTriggers: ['webhook'],
-  methods: ['listEntryPoints', 'describe', 'resolveEntity', 'getFieldValue', 'getRelated', 'createRecord', 'updateRecord', 'listEventTypes'],
-  subscribableEvents: [COMPANY_CREATED],
+  methods: ['listEntryPoints', 'describe', 'resolveEntity', 'getFieldValue', 'getRelated', 'createRecord', 'updateRecord'],
   declaredCredentials: ['crm'],
   introspectedSchema: true,
 };
@@ -123,7 +123,7 @@ function crmAdapter(ctx: ModuleContext, store: CompanyStore): AdapterModuleMetho
     adapterType: 'crm',
     supportedTriggers: ['webhook'],
     runtimeCapabilities: () => BASE_RUNTIME_CAPABILITIES,
-    listEntryPoints: async () => [{ typeId: COMPANY, displayName: COMPANY, writable: true, readable: true }],
+    listEntryPoints: async () => [{ typeId: COMPANY, displayName: COMPANY, writable: true, readable: true, listenable: true, delivery: 'connection' }],
     describe: async (typeId) =>
       typeId === COMPANY
         ? {
@@ -177,7 +177,6 @@ function crmAdapter(ctx: ModuleContext, store: CompanyStore): AdapterModuleMetho
     deleteRecord: async () => {
       throw new Error('crm: a movement may not delete a company');
     },
-    listEventTypes: async () => [{ tag: COMPANY_CREATED, positionType: COMPANY }],
   };
   return adapter;
 }

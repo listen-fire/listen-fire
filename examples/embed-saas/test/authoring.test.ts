@@ -21,11 +21,11 @@ import { workspace } from credentials
 
 app = connect crm using workspace
 
-function file_lead(run: <manual-[:Invocation]->>) {
+function file_lead(run: <manual-[:Invocations]->>) {
   write app-[:Company]-> { Name: "\${run.Text}", Stage: "Prospect" }
 }
 
-listen to manual fire file_lead
+listen to manual-[:Invocations]-> fire file_lead
 `;
 
 let server: Server;
@@ -85,7 +85,7 @@ test('an agent builds, fixes and runs a movement over MCP', async () => {
   // The customer's own fields, its select with its own options.
   const started = await call(agent, 'getStarted');
   assert.match(started, /- Company \[rw fires\]: Name text!, Stage enum\(Lead\|Customer\)/);
-  assert.match(started, /### manual — `listen to manual`/);
+  assert.match(started, /### manual — `listen to manual-\[:…\]->`/);
 
   // The save is the check: a value the select does not have saves nothing.
   const refused = await call(agent, 'saveAutomation', { name: 'File leads', source: LEADS });

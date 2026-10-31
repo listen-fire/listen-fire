@@ -22,7 +22,7 @@ export const CATALOG: TenantCatalog = {
         schemas: {
           '': {
             positions: { Invocation: { properties: { 'Fired at': 'date', Text: 'text' }, edges: {} } },
-            collections: {},
+            collections: { Invocations: { target: 'Invocation', readable: false, listenable: true, delivery: 'connection' } },
             writableRoots: {},
             eventPosition: 'Invocation',
             eventPositions: [{ position: 'Invocation' }],
@@ -69,9 +69,9 @@ app = connect crm using workspace
 
 /** A program that files the text it is run on as a company at `stage`. */
 export const fileAs = (stage: string) => `${PRELUDE}
-function file_lead(run: <manual-[:Invocation]->>) {
+function file_lead(run: <manual-[:Invocations]->>) {
   write app-[:Company]-> { Name: "\${run.Text}", Stage: "${stage}" }
 }
 
-listen to manual fire file_lead
+listen to manual-[:Invocations]-> fire file_lead
 `;

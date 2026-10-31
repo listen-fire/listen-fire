@@ -3,17 +3,21 @@
 // handbook anchor that shows the fix (`readHandbook` serves every one).
 
 import { MovementEngineError } from 'movement-engine/public/embed';
-import { collectFileListeners, type FileListener } from 'movement-engine/public/inbound';
+import { listenPlansOf } from 'movement-engine/public/inbound';
 import { ENGINE_VERSION, parsePinned, throwIfBlocking } from 'movement-engine/public/movement-engine';
 import {
   HANDBOOK_POINTER_BY_CODE,
   LANGUAGE_VERSION,
   MovementParseError,
+  checkAnswerInRust,
   checkSourceInRust,
   diagnosticSeverity,
   parseProgram,
+  type CatalogSnapshot,
   type Diagnostic,
 } from 'movement-lang';
+
+import type { ListenPlan } from 'engine-contracts';
 
 import type { CheckRequest, CheckResult } from './host';
 
@@ -134,12 +138,17 @@ export function unsavedRefusal(result: CheckResult, validation: Validation) {
   return null;
 }
 
-/** The listens a text declares; none when it does not parse. */
-export function listenersOf(source: string): FileListener[] | null {
+/** What a text's listens come to against `catalog`: the plan the engine's
+ *  check answers for each that checks, and how many it writes on a
+ *  traversal (`listen to app-[:Companies]-> fire f`), so the ones without
+ *  a plan can be named. Null when the text does not parse. */
+export function listensOf(source: string, catalog: CatalogSnapshot): { plans: ListenPlan[]; written: number } | null {
+  let written: number;
   try {
-    return collectFileListeners(parsePinned({ source, languageVersion: ENGINE_VERSION }));
+    written = parsePinned({ source, languageVersion: ENGINE_VERSION }).statements.filter((s) => s.kind === 'listen' && s.path !== undefined).length;
   } catch (error) {
     if (error instanceof MovementEngineError) return null;
     throw error;
   }
+  return { plans: listenPlansOf(checkAnswerInRust(source, catalog, { languageVersion: ENGINE_VERSION })), written };
 }

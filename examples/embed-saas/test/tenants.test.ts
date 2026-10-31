@@ -14,7 +14,7 @@ import { createInterface } from 'node:readline';
 import { adapterInProcess, memoryKv, noCredential, refusingFiles } from '@listen-fire/module-kit';
 
 import { Embedding } from '../src/embedding';
-import { COMPANY, CompanyStore, companyCreated, crmModule } from '../src/crm';
+import { COMPANY, CompanyStore, companyArrived, crmModule } from '../src/crm';
 import { fakeModels } from '../src/models';
 
 const PRELUDE = `import { crm } from adapters
@@ -29,7 +29,7 @@ function file_under(company: <app-[:Company]->>) {
   write app-[:Company]-> { Name: "\${company.Name}", Stage: "${stage}" }
 }
 
-listen to app { events: ["company.created"] } fire file_under
+listen to app-[:Company]-> fire file_under
 `;
 
 const ACME_FIELDS = [{ name: 'Stage', options: ['Lead', 'Customer'] }, { name: 'Note' }];
@@ -126,7 +126,7 @@ function announce(company: <app-[:Company]->>) {
   write general-[:Messages]-> { Message: "New company: \${company.Name}" }
 }
 
-listen to app { events: ["company.created"] } fire announce
+listen to app-[:Company]-> fire announce
 `;
 
 let acmeSlack: FakeChannels;
@@ -149,7 +149,7 @@ test("a post through the ready-made Slack module lands in that tenant's workspac
 
   const before = await messagesIn(globexSlack);
   const company = saas.companies.add('acme', { Name: 'Vireo' });
-  assert.deepEqual(await saas.fire('acme', companyCreated(company)), [{ movement: 'announce', outcome: { ok: true, writes: 1, spentMicrodollars: 0 } }]);
+  assert.deepEqual(await saas.fire('acme', companyArrived(company)), [{ movement: 'announce', outcome: { ok: true, writes: 1, spentMicrodollars: 0 } }]);
 
   assert.ok((await messagesIn(acmeSlack)).includes('New company: Vireo'));
   assert.deepEqual(await messagesIn(globexSlack), before);

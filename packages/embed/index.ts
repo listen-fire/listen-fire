@@ -1,19 +1,19 @@
 // The embedder's host in one piece. A tenant connects modules (each loaded in
 // process over the tenant's own credential) and saves programs, checked
 // against a catalog built from its connections and cached until they or its
-// schema change. An event from the embedder's product runs every listen of the
-// tenant's programs that hears it, what a module says arrived wakes the runs
-// awaiting it, and `tick` steps on the runs that parked on a timer once it is
-// due. Every rule is the engine's own: the checker, the listen table read off
-// the source, the routing rule (`listenerHearsDelivery`), the park sink, the
+// schema change. What a module says arrived runs every listen of the tenant's
+// programs that it fires (`dispatch`) and wakes the runs awaiting it
+// (`arrive`), and `tick` steps on the runs that parked on a timer once it is
+// due. Every rule is the engine's own: the checker, the plan it answers for
+// each listen, the judge of an arrival (`listenFires`), the park sink, the
 // waits and the drains. The embedder supplies its modules, a
-// store, and its events; the engine's public parts this is built from serve a
+// store, and what arrives; the engine's public parts this is built from serve a
 // host that needs another shape (docs/embedding.md). Its own package, outside
 // the core, because it loads modules through the module kit.
 
 import { randomUUID } from 'node:crypto';
 
-import { tenantIdOf, type Arrival, type RunInput, type SegmentLimits } from 'engine-contracts';
+import { tenantIdOf, type Arrival, type ListenPlan, type RunInput, type SegmentLimits } from 'engine-contracts';
 import {
   adapterInProcess,
   inProcessValidationDefault,
@@ -26,14 +26,13 @@ import {
   type ModuleHost,
   type ModuleLog,
 } from 'module-kit';
-import type { DiscriminableEvent } from 'movement-engine/public/adapter';
 import { buildCatalogSnapshot, type CatalogAdapterInput } from 'movement-engine/public/catalog';
 import { MovementEngineError, inProcessHost, introspectAdapter, type InProcessHostOptions } from 'movement-engine/public/embed';
 import type { EngineHost } from 'movement-engine/public/host';
-import { collectFileListeners, listenerHearsDelivery, triggerEventOf, type FileListener } from 'movement-engine/public/inbound';
+import { arrivalTriggerOf, listenFires, listenPlansOf, plannedListensOf, type PlannedListen } from 'movement-engine/public/inbound';
 import {
   ENGINE_VERSION,
-  checkPinnedInRust,
+  checkAnswerInRust,
   parsePinned,
   resumeMovement,
   runMovement,
@@ -73,17 +72,20 @@ import {
 } from 'movement-engine/public/run-host';
 import { createMemoryVault, createSecretsFamily, type SecretFields, type SecretsBackend } from 'movement-engine/public/secrets';
 
-import { MANUAL, MANUAL_MANIFEST, manualAdapter, manualEvent } from './manual';
+import { MANUAL, MANUAL_MANIFEST, invocationOf, manualAdapter } from './manual';
 
 type CatalogSnapshot = RunInput['catalog'];
 
+/** What a module reports arrived on a listenable edge (adapter protocol 2.6). */
+export type { Arrival } from 'engine-contracts';
+
 /** A program a tenant saved: its source, the release it was checked under,
- *  and its listens, read once on save. */
+ *  and the check's plan of each of its listens, read once on save. */
 export interface SavedProgram {
   name: string;
   source: string;
   languageVersion: NonNullable<RunInput['languageVersion']>;
-  listeners: FileListener[];
+  listens: ListenPlan[];
 }
 
 /** A tenant's connection as stored: the name a movement imports it by, the
@@ -164,6 +166,9 @@ export interface EmbeddedHostOptions {
    *  Default: a log that keeps only warnings and errors, no files, state in
    *  memory per connection, answers validated outside production. */
   moduleHost?: (input: { tenant: string; connection: string }) => Partial<Omit<ModuleHost, 'tenant' | 'credential'>>;
+  /** Where the host says what it did not run: an arrival a listen's judge
+   *  could not decide. Default: the console's warnings. */
+  log?: Pick<ModuleLog, 'warn'>;
 }
 
 /** What a save answers: saved, or the checker's reasons why not. */
@@ -179,13 +184,13 @@ export interface EmbeddedRunOutcome {
   outcome: { ok: true; writes: MovementWriteRecord[]; spentMicrodollars: number; parked: boolean } | { ok: false; error: string };
 }
 
-/** An event the embedder's product raised for a tenant. `connection` names the
- *  connection it came for; absent, it is the module's own and reaches every
- *  connection's listens. */
+/** What a module of `adapterType` says arrived for a tenant on its
+ *  listenable edges. `connection` names the connection it came for; absent,
+ *  it is the module's own install's and reaches every connection's listens. */
 export interface Delivery {
   adapterType: string;
   connection?: string;
-  event: DiscriminableEvent;
+  arrivals: readonly Arrival[];
 }
 
 export interface EmbeddedHost {
@@ -198,18 +203,27 @@ export interface EmbeddedHost {
   schemaChanged(tenant: string): void;
   /** What the tenant's programs are checked and run against. */
   catalog(tenant: string): Promise<CatalogSnapshot>;
-  /** Check a program against the tenant's catalog; save it if clean. */
+  /** Check a program against the tenant's catalog; save it if clean. A
+   *  listen this host would not fire as written is refused by name: one in
+   *  the retired settings form, one whose earlier hop only listen-fire
+   *  lists, one that states the node its landing is. */
   save(tenant: string, program: { name: string; source: string }): Promise<SaveAnswer>;
-  /** Run every listen of the tenant's programs that hears `delivery`. */
+  /** Run every listen of the tenant's programs on whose last edge an
+   *  arrival of `delivery` landed, on the connection it came for, that the
+   *  listen's judge fires, one outcome each. One the judge cannot decide
+   *  runs nothing, said once per delivery (`log`). Runs awaiting what
+   *  arrived are woken by `arrive`, not here. */
   dispatch(tenant: string, delivery: Delivery): Promise<EmbeddedRunOutcome[]>;
-  /** Run one program now: every `listen to manual` it declares fires, with
-   *  `text` as the Invocation's `Text` (listen-fire's `listen-fire run <movement> --text`).
-   *  None, when the program is not saved or declares no such listen. */
+  /** Run one program now: an Invocation lands on the manual unit's
+   *  `Invocations`, `text` its `Text` (listen-fire's `listen-fire run <movement> --text`),
+   *  and every listen of the program on it that fires runs. None, when the
+   *  program is not saved or declares no such listen. */
   run(tenant: string, request: { program: string; text?: string }): Promise<EmbeddedRunOutcome[]>;
   /** What a module of `adapterType` says arrived on its listenable edges for
    *  `tenant` (a module reads them off the deliveries it accepts): each of
    *  the tenant's runs awaiting one steps on, one outcome per segment. An arrival no run awaits
-   *  yet is kept for an hour, for a run that starts waiting on it. */
+   *  yet is kept for an hour, for a run that starts waiting on it. The
+   *  listens it fires run by `dispatch`. */
   arrive(tenant: string, input: { adapterType: string; arrivals: readonly Arrival[] }): Promise<EmbeddedRunOutcome[]>;
   /** Step on every run whose timer is due by `now`, every run woken by an
    *  arrival, and every run that owes a race an earlier step left unsettled:
@@ -228,6 +242,7 @@ const WARNINGS_ONLY: ModuleLog = {
 /** The host over `options` (see the file's head). */
 export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
   const now = options.now ?? (() => new Date());
+  const log = options.log ?? WARNINGS_ONLY;
   const store = options.store ?? memoryEmbeddedHostStore({ now: () => now().getTime() });
   const vault = options.secrets ?? createMemoryVault();
   const secrets = createSecretsFamily({ backend: vault });
@@ -390,30 +405,20 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
 
   const failureOf = (run: EmbeddedRun, error: string): EmbeddedRunOutcome => ({ ...namesOf(run), outcome: { ok: false, error } });
 
-  const fire = async (tenant: string, program: SavedProgram, listener: FileListener, delivery: Delivery): Promise<EmbeddedRunOutcome> => {
+  const fire = async (tenant: string, program: SavedProgram, listen: PlannedListen, arrival: Exclude<Arrival, { gone: true }>): Promise<EmbeddedRunOutcome> => {
     const connections = await store.connections.list(tenant);
     const firedAt = now();
-    const named = listener.credentialName ?? delivery.connection;
-    const source = connections.find((c) => c.adapterType === delivery.adapterType && (named === undefined || c.name === named));
-    const eventTypes = source !== undefined ? ((await load(tenant, source).instance.adapter.listEventTypes?.()) ?? []) : [];
-    const { triggerEvent } = triggerEventOf({
-      pipelineInputId: `listen:${program.name}:${listener.movementName}`,
-      adapterType: delivery.adapterType,
-      triggerType: 'webhook',
-      event: delivery.event,
-      eventTypes,
-      now: firedAt,
-    });
+    const triggerEvent = arrivalTriggerOf({ pipelineInputId: listen.pipeline, adapterType: listen.plan.adapter, arrival, now: firedAt });
     const { costCapMicrodollars, maxSegmentSeconds, ...segmentLimits } = limits;
     const run: EmbeddedRun = {
       runId: randomUUID(),
       tenant,
       program: program.name,
-      movement: listener.movementName,
+      movement: listen.plan.movement,
       input: {
         source: program.source,
         languageVersion: program.languageVersion,
-        movementName: listener.movementName,
+        movementName: listen.plan.movement,
         event: triggerEvent,
         firedAt: firedAt.toISOString(),
         teamId: tenantIdOf(tenant),
@@ -440,6 +445,38 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
     // A run that parked was marked so by its park's write.
     if (!parked) await settleRun(run, settled(outcome.outcome.ok ? 'completed' : 'failed', outcome.outcome));
     return outcome;
+  };
+
+  /** Each arrival of `delivery` judged against every listen of `programs`
+   *  on its edge (`listenFires`), and each listen it fires run, in the order
+   *  the arrivals came. An Undecided verdict runs nothing, its reason said
+   *  once per delivery. */
+  const fireArrivals = async (tenant: string, programs: readonly SavedProgram[], delivery: Delivery): Promise<EmbeddedRunOutcome[]> => {
+    const listening = programs.map((program) => ({
+      program,
+      listens: plannedListensOf({ file: program.name, program: parsePinned({ source: program.source, languageVersion: program.languageVersion }), plans: program.listens }),
+    }));
+    const delivered = { adapterType: delivery.adapterType, ...(delivery.connection !== undefined ? { credentialName: delivery.connection } : {}) };
+    const nowMs = now().getTime();
+    const said = new Set<string>();
+    const outcomes: EmbeddedRunOutcome[] = [];
+    for (const arrival of delivery.arrivals) {
+      if ('gone' in arrival) continue;
+      for (const { program, listens } of listening) {
+        for (const listen of listens) {
+          const verdict = listenFires(listen, arrival, delivered, nowMs);
+          if (verdict === null || 'skips' in verdict) continue;
+          if ('undecided' in verdict) {
+            const line = `${program.name}:${listen.plan.movement}: an arrival on ${arrival.edge} cannot be judged (${verdict.undecided}): it runs nothing`;
+            if (!said.has(line)) log.warn(line);
+            said.add(line);
+            continue;
+          }
+          outcomes.push(await fire(tenant, program, listen, arrival));
+        }
+      }
+    }
+    return outcomes;
   };
 
   /** One parked run's step: a segment re-entered from its leaf (or a race
@@ -646,41 +683,31 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
 
     async save(tenant, { name, source }) {
       const snapshot = await catalog(tenant);
+      let answer: ReturnType<typeof checkAnswerInRust>;
       try {
-        checkPinnedInRust({ source, catalog: snapshot, languageVersion: ENGINE_VERSION });
+        answer = checkAnswerInRust({ source, catalog: snapshot, languageVersion: ENGINE_VERSION });
       } catch (error) {
         if (error instanceof MovementEngineError) return { saved: false, problems: [error.message] };
         throw error;
       }
-      const listeners = collectFileListeners(parsePinned({ source, languageVersion: ENGINE_VERSION }));
-      await store.programs.put(tenant, { name, source, languageVersion: ENGINE_VERSION, listeners });
-      return { saved: true, listens: listeners.length };
+      const listens = listenPlansOf(answer);
+      const problems = [
+        ...answer.diagnostics.filter((d) => d.code === SETTINGS_RETIRED).map((d) => `line ${d.span.start.line}: ${d.message}: this host fires only a listen on a traversal`),
+        ...listens.flatMap(unfiredHere),
+      ];
+      if (problems.length > 0) return { saved: false, problems };
+      await store.programs.put(tenant, { name, source, languageVersion: ENGINE_VERSION, listens });
+      return { saved: true, listens: listens.length };
     },
 
     async dispatch(tenant, delivery) {
-      const outcomes: EmbeddedRunOutcome[] = [];
-      for (const program of await store.programs.list(tenant)) {
-        for (const listener of program.listeners) {
-          const heard = listenerHearsDelivery(listener, {
-            adapterType: delivery.adapterType,
-            ...(delivery.connection !== undefined ? { credentialName: delivery.connection } : {}),
-            event: delivery.event,
-          });
-          if (heard) outcomes.push(await fire(tenant, program, listener, delivery));
-        }
-      }
-      return outcomes;
+      return fireArrivals(tenant, await store.programs.list(tenant), delivery);
     },
 
     async run(tenant, { program: name, text }) {
       const program = (await store.programs.list(tenant)).find((p) => p.name === name);
       if (program === undefined) return [];
-      const delivery: Delivery = { adapterType: MANUAL, event: manualEvent({ firedAt: now(), ...(text !== undefined ? { text } : {}) }) };
-      const outcomes: EmbeddedRunOutcome[] = [];
-      for (const listener of program.listeners) {
-        if (listener.adapter === MANUAL) outcomes.push(await fire(tenant, program, listener, delivery));
-      }
-      return outcomes;
+      return fireArrivals(tenant, [program], { adapterType: MANUAL, arrivals: [invocationOf({ firedAt: now(), ...(text !== undefined ? { text } : {}) })] });
     },
 
     async arrive(tenant, { adapterType, arrivals }) {
@@ -694,6 +721,30 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
       return stepWork({ dueBy: at.toISOString() });
     },
   };
+}
+
+/** The diagnostic a listen in the 0.12 settings form draws under 0.13: a
+ *  warning until the form is gone, but this host never fires one. */
+const SETTINGS_RETIRED = 'MOV_LISTEN_SETTINGS_RETIRED';
+
+/** Why this host would not fire `plan` as it is written, if it would not.
+ *  listen-fire alone lists the members of an earlier hop whose WHERE an
+ *  arrival cannot be judged by (a `resolved` hop): judged here with that hop
+ *  unjudged, it would fire under every member. And listen-fire alone checks
+ *  an arrival against the node a listen states its landing is. */
+function unfiredHere(plan: ListenPlan): string[] {
+  const named = `the listen that fires ${plan.movement}`;
+  const resolved = plan.hops.filter((hop) => hop.judged === 'resolved').map((hop) => hop.edge);
+  return [
+    ...(resolved.length > 0
+      ? [
+          `${named} filters ${resolved.map((edge) => `\`${edge}\``).join(', ')} by a WHERE its module's arrivals do not carry the record for: only listen-fire lists those members to judge it, and this host would fire under every one. Filter that hop on the landing's fields instead, or run the listen on listen-fire`,
+        ]
+      : []),
+    ...(plan.landing !== undefined
+      ? [`${named} states its landing is a ${plan.landing}: this host does not check an arrival against the node a listen states, so it would run one that does not fit`]
+      : []),
+  ];
 }
 
 /** A due run host row, and the run it steps. */

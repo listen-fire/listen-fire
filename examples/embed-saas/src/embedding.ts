@@ -2,16 +2,15 @@
 // own CRM records and fields, its own API key and, when it connects one, its
 // own Slack workspace (a ready-made module loaded the same way as the SaaS's
 // own). The engine's embedded host does the rest: it checks a customer's
-// movement when it is saved, runs each one that listens when the CRM raises
-// an event, and parks a run that waits (`await sleep(1h)`) until the `tick()`
+// movement when it is saved, runs each one whose listen fires when a company
+// arrives in the CRM, and parks a run that waits (`await sleep(1h)`) until the `tick()`
 // past its wake (`@listen-fire/embed`, over the engine's public entries).
 
 import type { IncomingMessage } from 'node:http';
 
 import { createAuthoringHandler, type AuthoringHandler } from '@listen-fire/authoring-mcp';
-import { createEmbeddedHost, type EmbeddedHost, type EmbeddedRunLimits, type EmbeddedRunOutcome, type SaveAnswer } from '@listen-fire/embed';
+import { createEmbeddedHost, type Arrival, type EmbeddedHost, type EmbeddedRunLimits, type EmbeddedRunOutcome, type SaveAnswer } from '@listen-fire/embed';
 import { pricedModels, type ModelClient } from '@listen-fire/engine/public/embed';
-import type { DiscriminableEvent } from '@listen-fire/engine/public/adapter';
 import { slackModule } from '@listen-fire/slack';
 
 import { authoringStore, authoringTenant } from './authoring';
@@ -84,10 +83,10 @@ export class Embedding {
     return this.host.save(tenant, { name, source });
   }
 
-  /** Something happened in a customer's CRM: run each of its movements that
-   *  listens for it. */
-  async fire(tenant: string, event: DiscriminableEvent): Promise<FiredRun[]> {
-    return this.kept.runs.record(await this.host.dispatch(tenant, { adapterType: 'crm', event })).map(firedRun);
+  /** Something arrived in a customer's CRM: run each of its movements whose
+   *  listen it fires. */
+  async fire(tenant: string, arrival: Arrival): Promise<FiredRun[]> {
+    return this.kept.runs.record(await this.host.dispatch(tenant, { adapterType: 'crm', arrivals: [arrival] })).map(firedRun);
   }
 
   /** Step on every parked run whose timer is due. The SaaS calls this from a

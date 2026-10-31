@@ -11,7 +11,7 @@
 import type { IncomingMessage } from 'node:http';
 
 import type { Chapter, PluginChapterId, SystemChapterId } from '@listen-fire/handbook';
-import type { FileListener } from 'movement-engine/public/inbound';
+import type { ListenPlan } from 'engine-contracts';
 import type { CatalogSnapshot, Diagnostic } from 'movement-lang';
 import type { ZodRawShape } from 'zod';
 
@@ -48,10 +48,13 @@ export interface ProgramWrite {
    * they differ. Absent: the write goes ahead whatever is stored.
    */
   expectedRevision?: string;
-  /** The listens the text declares, read by the package, so the host can
-   *  route events without parsing the text. Empty when the text does not
-   *  parse (saved only with the agent's consent). */
-  listeners: FileListener[];
+  /** The plan of each listen the text declares, as the engine's check
+   *  answers them against the tenant's catalog, so the host can route
+   *  arrivals without checking the text again (movement-engine
+   *  `plannedListensOf`, `listenFires`). A listen that does not check has
+   *  none; none when the text does not parse (each saved only with the
+   *  agent's consent). */
+  listens: ListenPlan[];
 }
 
 export type ProgramSaved =

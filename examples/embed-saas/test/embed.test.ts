@@ -10,7 +10,7 @@ import type { Server } from 'node:http';
 import { Embedding, DEFAULT_LIMITS } from '../src/embedding';
 import { FAKE_CALL_MICRODOLLARS, fakeModels } from '../src/models';
 import { saasServer } from '../src/server';
-import { companyCreated } from '../src/crm';
+import { companyArrived } from '../src/crm';
 
 const PRELUDE = `import { crm } from adapters
 import { workspace } from credentials
@@ -23,7 +23,7 @@ function welcome(company: <app-[:Company]->>) {
   write app-[:Company]-> { Name: "Welcome \${company.Name}", Note: ai("One welcome line for \${company.Name}") }
 }
 
-listen to app { events: ["company.created"] } fire welcome
+listen to app-[:Company]-> fire welcome
 `;
 
 const NOTE = [{ name: 'Note' }];
@@ -80,7 +80,7 @@ test('a run past its step limit is stopped', async () => {
   const embedding = new Embedding({ models: fakeModels(), limits: { ...DEFAULT_LIMITS, maxSteps: 2 } });
   await embedding.addCustomer('acme', 'acme-key', NOTE);
   assert.equal((await embedding.save('acme', 'welcome', WELCOME)).saved, true);
-  const [run] = await embedding.fire('acme', { payload: { id: 'company-1', Name: 'Vireo' }, externalId: 'company-1', eventType: 'company.created', tag: 'company.created', recordType: 'Company' });
+  const [run] = await embedding.fire('acme', companyArrived({ id: 'company-1', Name: 'Vireo' }));
   assert.equal(run.outcome.ok, false);
   assert.match(run.outcome.ok ? '' : run.outcome.error, /MOVENG_LIMIT_STEPS/);
 });
@@ -93,12 +93,12 @@ function twice(company: <app-[:Company]->>) {
   write app-[:Company]-> { Name: "\${one} \${two}" }
 }
 
-listen to app { events: ["company.created"] } fire twice
+listen to app-[:Company]-> fire twice
 `;
   const embedding = new Embedding({ models: fakeModels(), limits: { ...DEFAULT_LIMITS, costCapMicrodollars: FAKE_CALL_MICRODOLLARS / 2 } });
   await embedding.addCustomer('acme', 'acme-key', NOTE);
   assert.equal((await embedding.save('acme', 'twice', spend)).saved, true);
-  const [run] = await embedding.fire('acme', { payload: { id: 'company-1', Name: 'Vireo' }, externalId: 'company-1', eventType: 'company.created', tag: 'company.created', recordType: 'Company' });
+  const [run] = await embedding.fire('acme', companyArrived({ id: 'company-1', Name: 'Vireo' }));
   // One call spent past the cap: the second is never made. On a host that can
   // park, the flow suspends there (a limit park, which no timer steps on)
   // rather than failing.
@@ -117,11 +117,11 @@ function follow_up(company: <app-[:Company]->>) {
   write app-[:Company]-> { Name: "Follow up \${company.Name}" }
 }
 
-listen to app { events: ["company.created"] } fire follow_up
+listen to app-[:Company]-> fire follow_up
 `;
   assert.equal((await embedding.save('acme', 'follow_up', followUp)).saved, true);
   const company = embedding.companies.add('acme', { Name: 'Vireo' });
-  const [run] = await embedding.fire('acme', companyCreated(company));
+  const [run] = await embedding.fire('acme', companyArrived(company));
   assert.deepEqual(run.outcome, { ok: true, writes: 0, spentMicrodollars: 0, parked: true });
 
   // Not yet: the hour has not passed.
@@ -144,7 +144,7 @@ function onboard(company: <app-[:Company]->>) {
   write app-[:Company]-> { unique by (Name), Name: "Vireo", Stage: "Customer" }
 }
 
-listen to app { events: ["company.created"] } fire onboard
+listen to app-[:Company]-> fire onboard
 `;
 
 test("an automation updates one customer's existing company, and a unique-by write updates it rather than adding another", async () => {
