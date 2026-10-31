@@ -97,7 +97,8 @@ fn loop_window_of(value: Option<&serde_yaml::Value>, at: &str) -> Result<i64, St
     let Some(value) = value else { return Ok(DEFAULT_LOOP_WINDOW_MS) };
     let ms = value.as_str().and_then(movement_engine::park::duration_ms).filter(|ms| ms.is_finite() && *ms >= 1.0);
     ms.map(|ms| ms as i64).ok_or_else(|| {
-        format!("{at}: loopWindow: a duration, such as 20s: how soon after a run's write an arrival on the record it wrote counts as caused by it (default 20s)")
+        let default = DEFAULT_LOOP_WINDOW_MS / 1000;
+        format!("{at}: loopWindow: a duration, such as {default}s: how soon after a run's write an arrival on the record it wrote counts as caused by it (default {default}s)")
     })
 }
 

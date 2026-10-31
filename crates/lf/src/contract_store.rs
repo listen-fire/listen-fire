@@ -33,7 +33,7 @@ pub const STORE_METHODS: &[&str] = &[
     "records.markFailed", "parks.putLeaf", "parks.claimLeaf", "parks.finishLeaf", "parks.leaves", "parks.deleteLeaves", "parks.commitSegment", "parks.owedRaces",
     "joins.recordJoin", "joins.decrementJoin", "joins.persistBranchExport", "joins.collectBranchExports", "joins.hasPendingJoins",
     "joins.frames", "joins.deleteFrames", "leases.claim", "leases.renew", "leases.release", "leases.dropRunState", "work.enqueue", "work.claimDue",
-    "work.complete", "work.release", "sources.put", "sources.get", "inbound.checkpoint", "inbound.saveCheckpoint", "listens.states", "listens.claimResolve", "listens.saveResolution", "listens.setPaused", "writes.record", "writes.depth", "processes.list",
+    "work.complete", "work.release", "sources.put", "sources.get", "inbound.checkpoint", "inbound.saveCheckpoint", "listens.states", "listens.claimResolve", "listens.saveResolution", "listens.setPaused", "listens.hold", "writes.record", "writes.depth", "processes.list",
     "processes.swap", "events.claim", "events.startRun", "runs.lapsed", "parks.commit", "work.bury", "inbound.keepDelivery",
     "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries", "inbound.forgetDeliveryId", "work.enqueueIfAbsent", "work.completeKey",
     "runs.rerun", "waits.mark", "waits.log", "waits.open", "waits.arrivals", "waits.note", "waits.sweep", "waits.stranded",
@@ -476,6 +476,10 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
         }
         "listens.setPaused" => {
             store.set_listen_paused(p.str("pipeline")?, p.opt_str("paused")?)?;
+            none
+        }
+        "listens.hold" => {
+            store.hold_listen_arrival(p.str("pipeline")?)?;
             none
         }
 

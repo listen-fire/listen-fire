@@ -90,12 +90,14 @@ pub struct Resolution {
 
 /// What the store keeps of a listen with a hop the host resolves
 /// (`listens.states`): what its resolves came to, which resolving writes,
-/// and why it is paused (None: it is not), which only a pause or a resume
-/// writes.
+/// why it is paused (None: it is not) and how many arrivals it held and did
+/// not run while paused, which only a pause, a held arrival or a resume
+/// writes. A resume clears the count.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ListenState {
     pub resolution: Resolution,
     pub paused: Option<String>,
+    pub held: u64,
 }
 
 fn opt(value: &Option<String>) -> Js {
@@ -128,12 +130,19 @@ impl ListenState {
     pub fn to_js(&self) -> Js {
         let mut members = self.resolution.members();
         members.insert("paused".into(), opt(&self.paused));
+        members.insert("held".into(), Js::Num(self.held.into()));
         Js::Obj(members)
     }
 
     /// None: the value is not a listen's state.
     pub fn from_js(value: &Js) -> Option<ListenState> {
-        Some(ListenState { resolution: Resolution::from_js(value)?, paused: text(value, "paused")? })
+        // A store that predates the count answers none: no arrival held.
+        let held = match value.get("held") {
+            None | Some(Js::Null) => 0,
+            Some(Js::Num(n)) => n.as_u64()?,
+            Some(_) => return None,
+        };
+        Some(ListenState { resolution: Resolution::from_js(value)?, paused: text(value, "paused")?, held })
     }
 }
 
@@ -418,12 +427,14 @@ mod tests {
         let resolution = Resolution { heads: vec!["b1".into(), "b2".into()], resolved_at: Some("2026-10-31T09:00:00.000Z".into()), failure: Some("LISTEN_SCOPE_LIMIT: …".into()) };
         assert_eq!(resolution.to_js().to_json(), r#"{"heads":["b1","b2"],"resolvedAt":"2026-10-31T09:00:00.000Z","failure":"LISTEN_SCOPE_LIMIT: …"}"#);
         assert_eq!(Resolution::from_js(&resolution.to_js()), Some(resolution.clone()));
-        let state = ListenState { resolution, paused: Some("LISTEN_LOOP: …".into()) };
-        assert_eq!(state.to_js().to_json(), r#"{"heads":["b1","b2"],"resolvedAt":"2026-10-31T09:00:00.000Z","failure":"LISTEN_SCOPE_LIMIT: …","paused":"LISTEN_LOOP: …"}"#);
+        let state = ListenState { resolution, paused: Some("LISTEN_LOOP: …".into()), held: 3 };
+        assert_eq!(state.to_js().to_json(), r#"{"heads":["b1","b2"],"resolvedAt":"2026-10-31T09:00:00.000Z","failure":"LISTEN_SCOPE_LIMIT: …","paused":"LISTEN_LOOP: …","held":3}"#);
         assert_eq!(ListenState::from_js(&state.to_js()), Some(state));
         let never = ListenState::default();
-        assert_eq!(never.to_js().to_json(), r#"{"heads":[],"resolvedAt":null,"failure":null,"paused":null}"#, "never resolved");
-        assert_eq!(ListenState::from_js(&never.to_js()), Some(never));
+        assert_eq!(never.to_js().to_json(), r#"{"heads":[],"resolvedAt":null,"failure":null,"paused":null,"held":0}"#, "never resolved");
+        assert_eq!(ListenState::from_js(&never.to_js()), Some(never.clone()));
+        assert_eq!(ListenState::from_js(&Js::parse(br#"{"heads":[],"resolvedAt":null,"failure":null,"paused":null}"#).unwrap()), Some(never), "a store that keeps no count holds none");
+        assert_eq!(ListenState::from_js(&Js::parse(br#"{"heads":[],"held":-1}"#).unwrap()), None, "a count is a whole number");
         assert_eq!(ListenState::from_js(&Js::parse(br#"{"heads":[1],"resolvedAt":"x"}"#).unwrap()), None, "a head is an id");
         assert_eq!(ListenState::from_js(&Js::parse(br#"{"resolvedAt":"x"}"#).unwrap()), None, "its heads are said, if none");
     }

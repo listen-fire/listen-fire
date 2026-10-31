@@ -2236,8 +2236,9 @@ mod tests {
 
     /// A run an arrival on `crm`'s root `Company` fired, its landing named
     /// `Name: "Osprey Ltd"`, writing `body`; the crm reads a record back as
-    /// `current` answers. Its `done`, and every adapter method it called.
-    fn landed_write(body: &str, current: Json) -> (Json, Vec<String>) {
+    /// `current` answers, when it lists `readRecord`. Its `done`, and every
+    /// adapter method it called.
+    fn landed_write(body: &str, current: Json, lists_read_record: bool) -> (Json, Vec<String>) {
         let source = format!("import {{ crm }} from adapters\n\ncrm0 = connect crm\n\nfunction sync(c: <crm0-[:Company]->>) {{\n{body}}}\n\nlisten to crm0-[:Company]-> fire sync\n");
         let catalog = json!({ "adapters": { "crm": { "constructionArgs": [], "schemas": { "": {
             "positions": { "Company": { "properties": { "id": "text", "Name": "text" }, "edges": {} } },
@@ -2255,10 +2256,11 @@ mod tests {
             "entry": "segment", "source": source, "languageVersion": movement_parser::version::LANGUAGE_VERSION, "segmentId": "g1", "serves": [],
             "now": "2026-10-31T12:00:00.000Z", "movementName": "sync", "event": crate::env::encode_plain(&event), "catalog": catalog,
         });
+        let methods = if lists_read_record { json!(["describe", "readRecord", "updateRecord", "getFieldValue"]) } else { json!(["describe", "updateRecord", "getFieldValue"]) };
         let called = std::cell::RefCell::new(Vec::new());
         let serve = |request: &crate::executor::PendingRequest| match (request.family, request.method.as_str()) {
             ("check", "program") => json!({ "value": { "diagnostics": [], "stamps": [] } }),
-            ("adapters", "resolve") => json!({ "value": { "instance": "i1", "adapterType": "crm", "methods": ["describe", "readRecord", "updateRecord", "getFieldValue"] } }),
+            ("adapters", "resolve") => json!({ "value": { "instance": "i1", "adapterType": "crm", "methods": methods } }),
             ("control.cancel", _) => json!({ "value": false }),
             ("locks", "acquire") => json!({ "value": { "token": "k1" } }),
             ("locks", "release") | ("trace", "append") => json!({}),
@@ -2301,13 +2303,24 @@ mod tests {
     /// and the write is settled `noop`.
     #[test]
     fn an_update_whose_fields_match_is_not_sent() {
-        let (done, called) = landed_write("  write c { Name: \"Osprey Ltd\" }\n", json!({ "id": "company-1", "Name": "Osprey Ltd" }));
+        let (done, called) = landed_write("  write c { Name: \"Osprey Ltd\" }\n", json!({ "id": "company-1", "Name": "Osprey Ltd" }), true);
         assert_eq!(called, ["describe", "readRecord"], "{done}");
         let Ok(Js::Array(writes)) = crate::env::decode(&done["result"]["writes"]) else { panic!("its writes: {done}") };
         let outcomes: Vec<String> = writes.items().iter().map(|w| unique::get(w, "outcome").to_js_string()).collect();
         assert_eq!(outcomes, ["noop"], "{done}");
-        let (done, called) = landed_write("  write c { Name: \"Osprey Ltd\" }\n", json!({ "id": "company-1", "Name": "Osprey" }));
+        let (done, called) = landed_write("  write c { Name: \"Osprey Ltd\" }\n", json!({ "id": "company-1", "Name": "Osprey" }), true);
         assert_eq!(called, ["describe", "readRecord", "updateRecord"], "a field that differs is sent: {done}");
+    }
+
+    /// Without `readRecord` the engine cannot tell a write changes nothing,
+    /// so every write is sent, however the record stands.
+    #[test]
+    fn an_update_to_a_module_that_cannot_read_a_record_back_is_always_sent() {
+        let (done, called) = landed_write("  write c { Name: \"Osprey Ltd\" }\n", json!({ "id": "company-1", "Name": "Osprey Ltd" }), false);
+        assert_eq!(called, ["describe", "updateRecord"], "{done}");
+        let Ok(Js::Array(writes)) = crate::env::decode(&done["result"]["writes"]) else { panic!("its writes: {done}") };
+        let outcomes: Vec<String> = writes.items().iter().map(|w| unique::get(w, "outcome").to_js_string()).collect();
+        assert_ne!(outcomes, ["noop"], "{done}");
     }
 
     #[test]

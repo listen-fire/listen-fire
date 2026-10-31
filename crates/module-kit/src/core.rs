@@ -465,13 +465,15 @@ pub struct ListenResolution {
     pub failure: Option<String>,
 }
 
-/// A listen's kept state (`listens.states`): its resolution, and why it is
-/// paused (`None`: it is not).
+/// A listen's kept state (`listens.states`): its resolution, why it is
+/// paused (`None`: it is not) and how many arrivals it held and did not run
+/// while paused (`listens.hold`; a resume clears it).
 #[derive(Debug, Clone, Serialize)]
 pub struct ListenState {
     #[serde(flatten)]
     pub resolution: ListenResolution,
     pub paused: Option<String>,
+    pub held: u64,
 }
 
 /// The deepest write of a record within the loop window (`writes.depth`):
@@ -689,6 +691,10 @@ slot! {
         "listens.saveResolution" => fn save_listen_resolution(ListensSaveResolution { pipeline: String, token: String, resolution: ListenResolution }) -> bool;
         /// Why the listen is paused (`None`: it is not), its resolution as it is.
         "listens.setPaused" => fn set_listen_paused(ListensSetPaused { pipeline: String, #[serde(default)] paused: Option<String> }) -> ();
+        /// Count one arrival the paused listen held and did not run, adding
+        /// to whatever other processes add; a listen that is not paused
+        /// counts none.
+        "listens.hold" => fn hold_listen_arrival(ListensHold { pipeline: String }) -> ();
         /// Keep a run's record write in the write ledger, with the run's
         /// place in its chain of writes and arrivals (`depth`, 0 for a run
         /// nothing in the ledger caused) and when it was sent (`at`), and

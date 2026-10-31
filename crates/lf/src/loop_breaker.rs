@@ -52,9 +52,10 @@ pub struct Ledger<'a> {
 
 impl Ledger<'_> {
     /// Keep the write of `record`, sent `at` (before its provider can have
-    /// stamped its echo). Failing to keep it only means its echo starts a
-    /// chain of its own, which is said.
-    pub fn keep(&self, record: LedgerRecord<'_>, at: &str) {
+    /// stamped its echo). A store that cannot keep it fails the call: a
+    /// write the ledger does not know would let its echo start a chain of
+    /// its own, and a loop go unbroken.
+    pub fn keep(&self, record: LedgerRecord<'_>, at: &str) -> std::result::Result<(), String> {
         let write = LedgerWrite {
             adapter: record.adapter.to_string(),
             record_type: record.record_type.to_string(),
@@ -63,12 +64,9 @@ impl Ledger<'_> {
             depth: self.depth,
             at: at.to_string(),
         };
-        if let Err(message) = self.store.ledger_write(&write, &self.forget_before) {
-            eprintln!(
-                "listen-fire: keeping run {}'s write of {} {} in the write ledger: {message} (an arrival it causes starts a chain of its own)",
-                self.run_id, record.record_type, record.external_id
-            );
-        }
+        self.store
+            .ledger_write(&write, &self.forget_before)
+            .map_err(|e| format!("keeping run {}'s write of {} {} in the write ledger failed after the write was sent: {e}", self.run_id, record.record_type, record.external_id))
     }
 }
 

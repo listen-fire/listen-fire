@@ -43,7 +43,11 @@ pub fn command(session: &Session, rest: &[String], out: &mut impl Write) -> Resu
                 match state {
                     Some(state) if state.paused.is_some() => {
                         session.store.set_listen_paused(&pipeline, None).map_err(|e| e.to_string())?;
-                        writeln!(out, "{named}: resumed; it fires again").map_err(|e| e.to_string())?;
+                        let skipped = match state.held {
+                            0 => String::new(),
+                            held => format!(" ({} held while it was paused ran nothing and are not run now)", counted(usize::try_from(held).unwrap_or(usize::MAX), "arrival")),
+                        };
+                        writeln!(out, "{named}: resumed; it fires again{skipped}").map_err(|e| e.to_string())?;
                     }
                     _ => writeln!(out, "{named}: not paused").map_err(|e| e.to_string())?,
                 }
@@ -93,7 +97,14 @@ fn line(set: &FileSet, listen: &Listen, state: Option<&ListenState>, cadence: Ca
             }
         }
     };
-    let standing: Vec<String> = state.into_iter().flat_map(|s| [s.resolution.failure.clone(), s.paused.as_ref().map(|p| format!("paused: {p}"))]).flatten().collect();
+    let standing: Vec<String> = state
+        .into_iter()
+        .flat_map(|s| {
+            let held = (s.paused.is_some() && s.held > 0).then(|| format!("{} held and not run", counted(usize::try_from(s.held).unwrap_or(usize::MAX), "arrival")));
+            [s.resolution.failure.clone(), s.paused.as_ref().map(|p| format!("paused: {p}")), held]
+        })
+        .flatten()
+        .collect();
     let standing = if standing.is_empty() { "ok".to_string() } else { standing.join("; ") };
     let unprotected = match attributable(set, listen) {
         true => String::new(),

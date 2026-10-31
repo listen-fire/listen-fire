@@ -775,7 +775,7 @@ What Listen-Fire does with them:
   chain, and the listen whose arrival would make a chain longer than
   `loopDepth` (default 10) runs is paused, `LISTEN_LOOP`, naming the chain,
   until `listen-fire listens resume`. While it is paused, its arrivals are
-  kept and run nothing. An edge whose arrivals name no record they are
+  counted and run nothing; they are not run when it resumes. An edge whose arrivals name no record they are
   about, landing on records no write to your module makes, cannot be
   protected: `listen-fire listens` says so.
 - **Writes that change nothing are not sent** where you list `readRecord`:

@@ -1482,12 +1482,12 @@ impl RunHostStore for PgStore {
         )?;
         Ok(claimed.map(|_| token))
     }
-    /// The resolution replaces the state but for `paused`, read in the same
-    /// statement.
+    /// The resolution replaces the state but for `paused` and `held`, read in
+    /// the same statement.
     fn save_listen_resolution(&self, pipeline: &str, token: &str, resolution: &Resolution) -> Result<bool> {
         let text = resolution.to_js().to_json();
         let saved = self.execute(
-            "update lf.listen_state set state = $3::text::jsonb || jsonb_build_object('paused', state->'paused'), lease_token = null, lease_until = null, updated_at = now()
+            "update lf.listen_state set state = $3::text::jsonb || jsonb_build_object('paused', state->'paused', 'held', coalesce(state->'held', '0'::jsonb)), lease_token = null, lease_until = null, updated_at = now()
              where team_id = $1::text::uuid and pipeline = $2::text and lease_token = $4::text::uuid",
             &[&self.tenant, &pipeline, &text, &token],
         )?;
@@ -1497,8 +1497,18 @@ impl RunHostStore for PgStore {
         let fresh = ListenState { paused: paused.map(str::to_string), ..Default::default() }.to_js().to_json();
         self.execute(
             "insert into lf.listen_state (team_id, pipeline, state) values ($1::text::uuid, $2::text, $3::text::jsonb)
-             on conflict (team_id, pipeline) do update set state = lf.listen_state.state || jsonb_build_object('paused', $4::text), updated_at = now()",
+             on conflict (team_id, pipeline) do update set state = lf.listen_state.state
+               || jsonb_build_object('paused', $4::text, 'held', case when $4::text is null then 0 else coalesce((lf.listen_state.state->>'held')::int, 0) end),
+               updated_at = now()",
             &[&self.tenant, &pipeline, &fresh, &paused],
+        )?;
+        Ok(())
+    }
+    fn hold_listen_arrival(&self, pipeline: &str) -> Result<()> {
+        self.execute(
+            "update lf.listen_state set state = state || jsonb_build_object('held', coalesce((state->>'held')::int, 0) + 1), updated_at = now()
+             where team_id = $1::text::uuid and pipeline = $2::text and state->>'paused' is not null",
+            &[&self.tenant, &pipeline],
         )?;
         Ok(())
     }

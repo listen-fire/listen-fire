@@ -883,11 +883,22 @@ impl Store {
         self.transaction(|db| {
             let text: Option<String> = db.query_row("select state from listen_state where pipeline = ?", params![pipeline], |r| r.get(0)).optional()?;
             let kept = text.as_deref().map(Self::listen_state_of).transpose()?.unwrap_or_default();
-            let state = crate::resolve::ListenState { paused: paused.map(str::to_string), ..kept };
+            let held = if paused.is_some() { kept.held } else { 0 };
+            let state = crate::resolve::ListenState { paused: paused.map(str::to_string), held, ..kept };
             db.execute(
                 "insert into listen_state (pipeline, state) values (?, ?) on conflict (pipeline) do update set state = excluded.state",
                 params![pipeline, state.to_js().to_json()],
             )?;
+            Ok(())
+        })
+    }
+
+    pub fn hold_listen_arrival(&self, pipeline: &str) -> Result<(), StoreError> {
+        self.transaction(|db| {
+            let text: Option<String> = db.query_row("select state from listen_state where pipeline = ?", params![pipeline], |r| r.get(0)).optional()?;
+            let Some(kept) = text.as_deref().map(Self::listen_state_of).transpose()?.filter(|state| state.paused.is_some()) else { return Ok(()) };
+            let state = crate::resolve::ListenState { held: kept.held + 1, ..kept };
+            db.execute("update listen_state set state = ? where pipeline = ?", params![state.to_js().to_json(), pipeline])?;
             Ok(())
         })
     }

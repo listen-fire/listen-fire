@@ -466,8 +466,11 @@ impl<'s> SegmentAdapters<'s> {
             }
             _ => self.rpc(&instance, method, plain.clone()).await?,
         };
+        // Kept before anything yields; a store that cannot keep it fails the
+        // call below, once the write is recorded as committed (it was sent).
+        let mut kept = Ok(());
         if matches!(method, "createRecord" | "updateRecord" | "deleteRecord") {
-            self.note_sent(&adapter_type, &plain, &answer, &sent_at);
+            kept = self.note_sent(&adapter_type, &plain, &answer, &sent_at);
             self.note_write(&instance, &plain, &answer).await;
         }
         if let Some(action) = committed_action(method)
@@ -482,22 +485,24 @@ impl<'s> SegmentAdapters<'s> {
                 "committed" => Js::Bool(true),
             }));
         }
+        kept.map_err(CallFailure::adapter)?;
         Ok(Some(answer))
     }
 
     /// A record write the system took, kept in the write ledger
     /// (crate::loop_breaker) with when it was sent, before this segment
     /// yields to anything an echo of it could reach.
-    fn note_sent(&self, adapter: &str, plain: &Js, answer: &Js, at: &str) {
-        let Some(ledger) = &self.ledger else { return };
+    fn note_sent(&self, adapter: &str, plain: &Js, answer: &Js, at: &str) -> Result<(), String> {
+        let Some(ledger) = &self.ledger else { return Ok(()) };
         if answer.get("notFound").is_some() {
-            return;
+            return Ok(());
         }
         let record_type = plain.get("recordType").and_then(Js::as_str);
         let external_id = answer.get("externalId").or_else(|| plain.get("externalId")).and_then(Js::as_str);
         if let (Some(record_type), Some(external_id)) = (record_type, external_id) {
-            ledger.keep(crate::loop_breaker::LedgerRecord { adapter, record_type, external_id }, at);
+            return ledger.keep(crate::loop_breaker::LedgerRecord { adapter, record_type, external_id }, at);
         }
+        Ok(())
     }
 
     /// A record write to a source that can echo it back (it sends webhooks

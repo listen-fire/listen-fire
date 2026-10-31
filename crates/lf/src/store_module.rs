@@ -405,6 +405,9 @@ impl RunHostStore for ProcessStore {
     fn set_listen_paused(&self, pipeline: &str, paused: Option<&str>) -> Result<()> {
         self.unit("listens.setPaused", obj! { "pipeline" => s(pipeline), "paused" => paused.map(Js::str).unwrap_or(Js::Null) })
     }
+    fn hold_listen_arrival(&self, pipeline: &str) -> Result<()> {
+        self.unit("listens.hold", obj! { "pipeline" => s(pipeline) })
+    }
     fn ledger_write(&self, write: &crate::loop_breaker::LedgerWrite, forget_before: &str) -> Result<()> {
         self.unit(
             "writes.record",

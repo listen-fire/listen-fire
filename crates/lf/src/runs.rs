@@ -878,19 +878,32 @@ impl Session {
                         known
                     }
                 };
+                let receipt = arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), identity, arrival.version.as_deref());
+                // An arrival a listen does not run (paused, or at the depth
+                // limit) takes its receipt as a run would, so a redelivery
+                // of it is not counted twice, or taken for a new chain.
                 if is_paused {
-                    fired.redelivered.push(format!("{named}: the arrival {identity} on {} runs nothing, {}", arrival.edge, crate::loop_breaker::HELD));
+                    if self.store.claim_event(&pipeline, &receipt).map_err(|e| e.to_string())? {
+                        self.store.hold_listen_arrival(&pipeline).map_err(|e| e.to_string())?;
+                        fired.redelivered.push(format!("{named}: the arrival {identity} on {} runs nothing, {}", arrival.edge, crate::loop_breaker::HELD));
+                    } else {
+                        fired.redelivered.push(format!("{named} has taken the arrival {identity} on {} before: this delivery runs nothing", arrival.edge));
+                    }
                     continue;
                 }
-                let chain = self.chain_before(adapter, listen, arrival);
+                let chain = self.chain_before(adapter, listen, arrival)?;
                 if chain.len() >= self.project.loop_depth {
+                    if !self.store.claim_event(&pipeline, &receipt).map_err(|e| e.to_string())? {
+                        fired.redelivered.push(format!("{named} has taken the arrival {identity} on {} before: this delivery runs nothing", arrival.edge));
+                        continue;
+                    }
                     let line = crate::loop_breaker::loop_line(&named, &chain);
                     self.store.set_listen_paused(&pipeline, Some(&line)).map_err(|e| e.to_string())?;
+                    self.store.hold_listen_arrival(&pipeline).map_err(|e| e.to_string())?;
                     paused.insert(pipeline, true);
                     fired.redelivered.push(line);
                     continue;
                 }
-                let receipt = arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), identity, arrival.version.as_deref());
                 let trigger = arrival_trigger_of(&pipeline, adapter, arrival, &iso(0));
                 let run_id = delivered.minted_run(&pipeline, &receipt).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 let came_in = CameIn { chain: &chain, ..delivered.came_in() };
@@ -935,19 +948,18 @@ impl Session {
 
     /// The runs whose writes caused `arrival`, oldest first, as the write
     /// ledger has them (crate::loop_breaker): the chain the run it fires
-    /// continues. One the ledger cannot answer starts a chain of its own,
-    /// which is said.
-    fn chain_before(&self, adapter: &str, listen: &Listen, arrival: &ArrivalIn) -> Vec<String> {
+    /// continues. A store that cannot answer fails the delivery, as every
+    /// other store read does: a loop breaker that is silently off is worse
+    /// than a delivery that is tried again.
+    fn chain_before(&self, adapter: &str, listen: &Listen, arrival: &ArrivalIn) -> Result<Vec<String>, String> {
         let landing_type = listen.plan.as_ref().and_then(|plan| plan.hops.last()).map(|hop| hop.to.as_str()).unwrap_or_default();
         let records = crate::loop_breaker::records_of(adapter, arrival, landing_type);
         if records.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let since = iso_at(crate::loop_breaker::since_of(arrival, self.project.loop_window_ms, crate::limiter::now_ms()));
-        crate::loop_breaker::chain_of(&*self.store, &records, &since).unwrap_or_else(|message| {
-            eprintln!("listen-fire: what caused the arrival on {} for {}:{}: {message} (its run starts a chain of its own)", arrival.edge, listen.file, listen.movement_name);
-            Vec::new()
-        })
+        crate::loop_breaker::chain_of(&*self.store, &records, &since)
+            .map_err(|message| format!("what caused the arrival on {} for {}:{}: {message}", arrival.edge, listen.file, listen.movement_name))
     }
 
     /// Watch each listen on the heads the store keeps for it now

@@ -308,7 +308,12 @@ pub trait RunHostStore {
     /// kept, when the hold lapsed and another took it since.
     fn save_listen_resolution(&self, pipeline: &str, token: &str, resolution: &Resolution) -> Result<bool>;
     /// Why the listen is paused (None: it is not), its resolution as it is.
+    /// Pausing keeps the count of arrivals it held; resuming (None) clears it.
     fn set_listen_paused(&self, pipeline: &str, paused: Option<&str>) -> Result<()>;
+    /// Count one arrival a paused listen held and did not run, as one write
+    /// that adds to the count whatever other processes add (`listens.hold`).
+    /// A listen that is not paused counts none: it was resumed meanwhile.
+    fn hold_listen_arrival(&self, pipeline: &str) -> Result<()>;
 
     // ── The write ledger (crate::loop_breaker) ──────────────────────────────
     /// Keep a run's record write (`writes.record`), and forget every write
@@ -567,6 +572,9 @@ impl RunHostStore for Store {
     fn set_listen_paused(&self, pipeline: &str, paused: Option<&str>) -> Result<()> {
         Store::set_listen_paused(self, pipeline, paused)
     }
+    fn hold_listen_arrival(&self, pipeline: &str) -> Result<()> {
+        Store::hold_listen_arrival(self, pipeline)
+    }
     fn ledger_write(&self, write: &LedgerWrite, forget_before: &str) -> Result<()> {
         Store::ledger_write(self, write, forget_before)
     }
@@ -647,14 +655,21 @@ mod tests {
         // A pause lands while the resolve reads: the resolve keeps it.
         store.set_listen_paused(&pipeline, Some("LISTEN_LOOP: …")).unwrap();
         assert!(store.save_listen_resolution(&pipeline, &token, &resolved).unwrap());
-        let paused = ListenState { resolution: resolved.clone(), paused: Some("LISTEN_LOOP: …".into()) };
+        // Two arrivals held meanwhile are counted, and a resolve keeps the count.
+        store.hold_listen_arrival(&pipeline).unwrap();
+        store.hold_listen_arrival(&pipeline).unwrap();
+        let paused = ListenState { resolution: resolved.clone(), paused: Some("LISTEN_LOOP: …".into()), held: 2 };
         assert_eq!(store.listen_state(&pipeline).unwrap(), Some(paused));
         assert!(!store.save_listen_resolution(&pipeline, &token, &resolved).unwrap(), "a hold is let go as its resolution is kept");
         let token = store.claim_listen_resolve(&pipeline, 60_000).unwrap().expect("let go: held again");
+        // A pause that is set again keeps the count; a resume clears it.
+        store.set_listen_paused(&pipeline, Some("LISTEN_LOOP: again")).unwrap();
+        assert_eq!(store.listen_state(&pipeline).unwrap().map(|s| s.held), Some(2));
         store.set_listen_paused(&pipeline, None).unwrap();
+        store.hold_listen_arrival(&pipeline).unwrap();
         let suspended = Resolution { heads: Vec::new(), failure: Some("LISTEN_SCOPE_LIMIT: …".into()), ..resolved };
         assert!(store.save_listen_resolution(&pipeline, &token, &suspended).unwrap());
-        assert_eq!(store.listen_state(&pipeline).unwrap(), Some(ListenState { resolution: suspended.clone(), paused: None }));
+        assert_eq!(store.listen_state(&pipeline).unwrap(), Some(ListenState { resolution: suspended.clone(), paused: None, held: 0 }), "a listen resumed counts no arrival");
         // A lapsed hold is taken over, and the first holder keeps nothing.
         let lapsed = store.claim_listen_resolve(&pipeline, -1).unwrap().expect("let go: held again");
         let taken = store.claim_listen_resolve(&pipeline, 60_000).unwrap().expect("lapsed: taken over");
@@ -662,7 +677,11 @@ mod tests {
         assert!(store.save_listen_resolution(&pipeline, &taken, &suspended).unwrap());
         let never = format!("listen:notes:b:{}", uuid::Uuid::new_v4());
         store.set_listen_paused(&never, Some("LISTEN_LOOP: …")).unwrap();
-        assert_eq!(store.listen_state(&never).unwrap(), Some(ListenState { resolution: Resolution::default(), paused: Some("LISTEN_LOOP: …".into()) }), "paused before it was ever resolved");
+        assert_eq!(store.listen_state(&never).unwrap(), Some(ListenState { resolution: Resolution::default(), paused: Some("LISTEN_LOOP: …".into()), held: 0 }), "paused before it was ever resolved");
+        store.hold_listen_arrival(&never).unwrap();
+        assert_eq!(store.listen_state(&never).unwrap().map(|s| s.held), Some(1));
+        store.hold_listen_arrival("listen:notes:unknown").unwrap();
+        assert_eq!(store.listen_state("listen:notes:unknown").unwrap(), None, "a listen with no state counts none, and gains none");
         let both = store.listen_states(&[pipeline.clone(), never.clone(), "listen:notes:other".into()]).unwrap();
         assert_eq!(both.keys().collect::<Vec<_>>(), {
             let mut keys = vec![&pipeline, &never];

@@ -13,7 +13,10 @@ import { spawnSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { externalPort, lf, lfCommand, project, served } from './example';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { externalPort, lf, lfCommand, project, served, type Served } from './example';
+import { withStoreModule } from './store_module/project';
 
 // A workspace-built listen-fire finds its bundled modules beside its own
 // (canonical) path; a worktree's listen-fire may be the main checkout's, so the
@@ -32,6 +35,16 @@ function crmOf(dir: string): (route: string, body: unknown) => Promise<Record<st
     assert.equal(response.status, 200, `${route}: ${await response.clone().text()}`);
     return (await response.json()) as Record<string, unknown>;
   };
+}
+
+/** A push to the host's wake door, as the acme CRM makes one. */
+async function wake(serving: Served, arrival: unknown): Promise<void> {
+  const response = await fetch(`http://127.0.0.1:${serving.port}/api/public/adapter/acme_crm/wake`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer dev-acme-token' },
+    body: JSON.stringify({ arrivals: [arrival] }),
+  });
+  assert.equal(response.status, 202, await response.clone().text());
 }
 
 interface Run {
@@ -136,19 +149,39 @@ test('a loop across two programs pauses the listen at the depth limit and names 
       paused,
     );
     assert.match(listensLine(dir, 'companies:note_it'), / — paused: LISTEN_LOOP: companies:note_it is paused: this arrival would start run 11 /);
+    assert.match(listensLine(dir, 'companies:note_it'), /; 1 arrival held and not run$/, 'the arrival that paused it is counted');
     assert.match(listensLine(dir, 'companies:bump'), / — ok$/);
 
-    // While it is paused, an arrival is kept and said, and runs nothing.
+    // While it is paused, an arrival is counted and said, and runs nothing.
     await crm('/dev/echo-writes', { on: false });
     const held = (await crm('/dev/companies', { Name: 'Heron' })).id as string;
     await serving.waitFor(new RegExp(`companies:note_it: the arrival ${held} on Company runs nothing, held: the listen is paused \\(LISTEN_LOOP\\)`));
     await sleep(500);
     assert.equal(runsOf(dir).length, 10);
+    assert.match(listensLine(dir, 'companies:note_it'), /; 2 arrivals held and not run$/);
+    // The provider sends the held arrival again: it is not counted twice.
+    await wake(serving, { edge: 'Company', identity: held, landing: { recordId: held, recordType: 'Company', fields: { id: held, Name: 'Heron' } } });
+    await serving.waitFor(new RegExp(`companies:note_it has taken the arrival ${held} on Company before: this delivery runs nothing`));
+    assert.match(listensLine(dir, 'companies:note_it'), /; 2 arrivals held and not run$/);
 
     const resumed = lf(dir, 'listens', 'resume', 'companies:note_it');
     assert.equal(resumed.code, 0, resumed.out);
-    assert.match(resumed.out, /companies:note_it: resumed; it fires again/);
-    assert.match(listensLine(dir, 'companies:note_it'), / — ok$/);
+    assert.match(resumed.out, /companies:note_it: resumed; it fires again \(2 arrivals held while it was paused ran nothing and are not run now\)/);
+    assert.match(listensLine(dir, 'companies:note_it'), / — ok$/, 'resuming clears the count');
+    // The provider sends the arrival that paused it again, within the window
+    // of the write that caused it: it was taken, so it pauses nothing.
+    const lastWrite = crmWrites(dir).filter((w) => w.recordType === 'Company' && w.method === 'createRecord').at(-1)!;
+    const pausing = lastWrite.externalId;
+    await wake(serving, {
+      edge: 'Company',
+      identity: pausing,
+      version: '0',
+      landing: { recordId: pausing, recordType: 'Company', fields: { id: pausing, Name: 'Again', Version: '0' } },
+      occurredAt: runs[9]!.startedAt,
+    });
+    await serving.waitFor(new RegExp(`companies:note_it has taken the arrival ${pausing} on Company before: this delivery runs nothing`));
+    assert.match(listensLine(dir, 'companies:note_it'), / — ok$/, 'a redelivery does not pause the listen again');
+    assert.equal(runsOf(dir).length, 10);
     await crm('/dev/companies', { Name: 'Kestrel' });
     await until(() => runsOf(dir).length === 11 && settled(runsOf(dir)), 'the resumed listen ran');
     const last = runsOf(dir)[10]!;
@@ -175,6 +208,37 @@ test('a chain may be as many runs as lf.yaml’s loopDepth says', async () => {
     assert.match(paused, new RegExp(`would start run 4 of a chain of writes and arrivals \\(${runs.map((run) => run.runId).join(', ')}\\)`));
     assert.match(listensLine(dir, 'companies:bump'), / — paused: LISTEN_LOOP/);
     assert.match(listensLine(dir, 'companies:note_it'), / — ok$/);
+  } finally {
+    await serving.stop();
+  }
+});
+
+test('a store that keeps no write ledger fails the delivery that asks it, so the loop breaker is never silently off', async () => {
+  const dir = project('loop_breaker_loop');
+  withStoreModule(dir, join(mkdtempSync(join(tmpdir(), 'lf-store-module-')), 'kept.db'), { without: ['writes.depth'] });
+  const serving = await served(dir);
+  const crm = crmOf(dir);
+  try {
+    await crm('/dev/companies', { Name: 'Acme' });
+    await serving.waitFor(/what caused the arrival on Company for companies:note_it: .*writes\.depth is not implemented/, 30_000);
+    assert.deepEqual(runsOf(dir), [], 'the arrival ran nothing and is tried again, not run as the start of a new chain');
+  } finally {
+    await serving.stop();
+  }
+});
+
+test('a store that cannot keep a write fails the run that made it', async () => {
+  const dir = project('loop_breaker_loop');
+  withStoreModule(dir, join(mkdtempSync(join(tmpdir(), 'lf-store-module-')), 'kept.db'), { without: ['writes.record'] });
+  const serving = await served(dir);
+  const crm = crmOf(dir);
+  try {
+    await crm('/dev/companies', { Name: 'Acme' });
+    await until(() => runsOf(dir).length === 1 && settled(runsOf(dir)), 'the run settled');
+    const [run] = runsOf(dir);
+    assert.equal(run!.status, 'failed', serving.lines.join('\n'));
+    const failed = lf(dir, 'runs', 'show', run!.runId);
+    assert.match(failed.out, /in the write ledger failed after the write was sent: .*writes\.record is not implemented/);
   } finally {
     await serving.stop();
   }
