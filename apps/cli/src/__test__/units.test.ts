@@ -6,7 +6,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -33,6 +33,13 @@ const TICK = ticking('tock', 't.Schedule == "* * * * *"');
 
 function ticks(dir: string, fired = 'tick:tock'): number {
   return lf(dir, 'runs').out.split('\n').filter((l) => l.includes(fired)).length;
+}
+
+/** How far ahead to set the clock so it reads hh:mm:20 next, mm ≡ 3 (mod 5):
+ *  a window measured from there in whole minutes holds a known count of
+ *  minute starts, none of them a multiple of five at its end. */
+function atMinuteThreeOfFive(): number {
+  return (200_000 - (Date.now() % 300_000) + 300_000) % 300_000;
 }
 
 test('listen-fire init → check → run works with nothing installed', () => {
@@ -68,6 +75,20 @@ test('listen-fire run <movement> --text gives the manual Invocation its Text; an
   assert.match(refused.out, /--text gives a manual run its text/);
 });
 
+test('listen-fire run <movement> says when the invocation does not match its listen\'s WHERE, and --dry-run rehearses only what a run would run', () => {
+  const dir = initialised();
+  writeFileSync(join(dir, 'movements/echo.mvt'), 'function echo(run: <manual-[:Invocations]->>) {\n  return "Text: ${run.Text}"\n}\nlisten to manual-[i:Invocations WHERE i.Text == "go"]-> fire echo\n');
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  for (const dry of [[], ['--dry-run']]) {
+    const skipped = lf(dir, 'run', 'echo', '--text', 'stop', ...dry);
+    assert.equal(skipped.code, 0, skipped.out);
+    assert.match(skipped.out, /echo:echo: the invocation does not match the WHERE of hop 1: it runs nothing/, dry.join());
+    assert.doesNotMatch(skipped.out, /returned/, dry.join());
+    assert.match(lf(dir, 'run', 'echo', '--text', 'go', ...dry).out, /returned "Text: go"/, dry.join());
+  }
+});
+
 test('listen-fire run <movement> with no --text: the manual Invocation\'s Text is the empty string, never absent', () => {
   const dir = initialised();
   writeFileSync(
@@ -82,31 +103,50 @@ test('listen-fire run <movement> with no --text: the manual Invocation\'s Text i
   assert.match(lf(dir, 'run', 'echo', '--text', 'hi').out, /returned "given: \[hi\]"/);
 });
 
-test('a cron tick missed while no worker ran fires once on the next drain, never twice', () => {
+test('a cron backlog missed while no worker ran fires once on the next drain, with its poll interval\'s own tick, never twice', () => {
   const dir = initialised();
   writeFileSync(join(dir, 'movements/tick.mvt'), TICK);
+  const at = atMinuteThreeOfFive();
   // A listen's first drain owes nothing from before it.
-  assert.equal(lf(dir, 'drain', '--until-idle').code, 0);
+  assert.equal(spawnLf(dir, ['drain', '--until-idle'], at).includes('armed'), true);
   assert.equal(ticks(dir), 0);
-  // Ten minutes on, ten occurrences were missed: the latest one fires, once.
-  const drained = spawnLf(dir, ['drain', '--until-idle'], 600_000);
+  // Ten minutes on, nine occurrences older than the minute's poll interval were
+  // missed: the latest of them fires once, then the interval's own occurrence.
+  const drained = spawnLf(dir, ['drain', '--until-idle'], at + 600_000);
   assert.match(drained, /tick:tock failed/);
   assert.match(drained, /MOVENG_ERROR: tick \S+:00\.000Z on \* \* \* \* \* in UTC/);
-  assert.equal(ticks(dir), 1);
-  spawnLf(dir, ['drain', '--until-idle'], 600_000);
-  spawnLf(dir, ['resume'], 600_000);
-  assert.equal(ticks(dir), 1);
-  // The next occurrence is the next tick.
-  spawnLf(dir, ['drain', '--until-idle'], 660_000);
   assert.equal(ticks(dir), 2);
+  spawnLf(dir, ['drain', '--until-idle'], at + 600_000);
+  spawnLf(dir, ['resume'], at + 600_000);
+  assert.equal(ticks(dir), 2);
+  // The next occurrence is the next tick.
+  spawnLf(dir, ['drain', '--until-idle'], at + 660_000);
+  assert.equal(ticks(dir), 3);
+});
+
+test('a cron listen polled every five minutes fires each of a minutely schedule\'s five ticks; after downtime, one catch-up tick', () => {
+  const dir = initialised();
+  appendFileSync(join(dir, 'lf.yaml'), '\npollEvery:\n  cron: 5m\n');
+  writeFileSync(join(dir, 'movements/tick.mvt'), TICK);
+  const at = atMinuteThreeOfFive();
+  assert.match(spawnLf(dir, ['drain', '--until-idle'], at), /armed/);
+  const five = spawnLf(dir, ['drain', '--until-idle'], at + 300_000);
+  assert.equal(five.match(/tick:tock failed/g)?.length, 5, five);
+  assert.equal(ticks(dir), 5);
+  // An hour with nothing polling: of what is older than five minutes, the
+  // latest fires once; the last five minutes fire as a poll's would.
+  const caughtUp = spawnLf(dir, ['drain', '--until-idle'], at + 300_000 + 3_600_000);
+  assert.equal(caughtUp.match(/tick:tock failed/g)?.length, 6, caughtUp);
+  assert.equal(ticks(dir), 11);
 });
 
 test('listen-fire serve fires a cron listen when its schedule comes due', async () => {
   const dir = initialised();
   writeFileSync(join(dir, 'movements/tick.mvt'), TICK);
-  assert.equal(lf(dir, 'drain', '--until-idle').code, 0);
+  const at = atMinuteThreeOfFive();
+  assert.match(spawnLf(dir, ['drain', '--until-idle'], at), /armed/);
   // A minute on, the schedule has come due once.
-  const server = await served(dir, [], { LF_CLOCK_AHEAD_MS: '60000' });
+  const server = await served(dir, [], { LF_CLOCK_AHEAD_MS: String(at + 60_000) });
   try {
     await server.waitFor(/^run \S+ tick:tock failed — MOVENG_ERROR: tick /);
   } finally {
@@ -124,30 +164,49 @@ test('a cron listen on one schedule ticks once per occurrence; two listens on on
   writeFileSync(join(dir, 'movements/tuck.mvt'), ticking('tuck', 't.Schedule == "*/5 * * * *" AND t.Zone == "Asia/Tokyo"'));
   const check = lf(dir, 'check');
   assert.equal(check.code, 0, check.out);
-  const armed = spawnLf(dir, ['drain', '--until-idle']);
+  const at = atMinuteThreeOfFive();
+  const armed = spawnLf(dir, ['drain', '--until-idle'], at);
   // One poll arms both listens sharing a clock; the other zone's arms on its own.
   assert.equal(armed.match(/armed; it fires on changes from now/g)?.length, 2, armed);
   assert.match(armed, /cron: (tack:tack, tick:tock|tick:tock, tack:tack) armed/);
-  // An hour on, twelve occurrences were missed: the latest fires once on each listen.
-  const drained = spawnLf(dir, ['drain', '--until-idle'], 3_600_000);
+  // An hour on, twelve occurrences were missed, none in the last minute's
+  // poll interval: the latest fires once on each listen.
+  const drained = spawnLf(dir, ['drain', '--until-idle'], at + 3_600_000);
   assert.match(drained, /MOVENG_ERROR: tick \S+:\d[05]:00\.000Z on \*\/5 \* \* \* \* in Europe\/London/);
   assert.match(drained, /MOVENG_ERROR: tick \S+ on \*\/5 \* \* \* \* in Asia\/Tokyo/);
   assert.deepEqual([ticks(dir, 'tick:tock'), ticks(dir, 'tack:tack'), ticks(dir, 'tuck:tuck')], [1, 1, 1]);
   // The same instant, polled again, owes nothing.
-  spawnLf(dir, ['drain', '--until-idle'], 3_600_000);
+  spawnLf(dir, ['drain', '--until-idle'], at + 3_600_000);
   assert.deepEqual([ticks(dir, 'tick:tock'), ticks(dir, 'tack:tack')], [1, 1]);
 });
 
 test('a cron listen on schedules IN two values fires on either', () => {
   const dir = initialised();
-  writeFileSync(join(dir, 'movements/tick.mvt'), ticking('tock', 't.Schedule IN ["*/5 * * * *", "*/7 * * * *"]'));
+  // The two never fall on one instant, which would fire once.
+  writeFileSync(join(dir, 'movements/tick.mvt'), ticking('tock', 't.Schedule IN ["*/5 * * * *", "2-59/5 * * * *"]'));
   const check = lf(dir, 'check');
   assert.equal(check.code, 0, check.out);
-  assert.equal(lf(dir, 'drain', '--until-idle').code, 0);
-  const drained = spawnLf(dir, ['drain', '--until-idle'], 3_600_000);
+  const at = atMinuteThreeOfFive();
+  assert.match(spawnLf(dir, ['drain', '--until-idle'], at), /armed/);
+  const drained = spawnLf(dir, ['drain', '--until-idle'], at + 3_600_000);
   assert.match(drained, /on \*\/5 \* \* \* \* in UTC/);
-  assert.match(drained, /on \*\/7 \* \* \* \* in UTC/);
+  assert.match(drained, /on 2-59\/5 \* \* \* \* in UTC/);
   assert.equal(ticks(dir), 2);
+});
+
+test('a cron listen naming one instant in two spellings fires once; a zone written as an offset ticks', () => {
+  const dir = initialised();
+  writeFileSync(
+    join(dir, 'movements/tick.mvt'),
+    ticking('tock', 't.Schedule IN ["*/5 * * * *", "0-59/5 * * * *"] AND t.Zone IN ["UTC", "Etc/UTC", "+00:00"]'),
+  );
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  const at = atMinuteThreeOfFive();
+  assert.match(spawnLf(dir, ['drain', '--until-idle'], at), /armed/);
+  const drained = spawnLf(dir, ['drain', '--until-idle'], at + 3_600_000);
+  assert.doesNotMatch(drained, /fires nothing/);
+  assert.equal(ticks(dir), 1, drained);
 });
 
 test('a schedule cron cannot parse is refused at check time by its owner', () => {

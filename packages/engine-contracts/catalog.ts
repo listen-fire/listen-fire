@@ -4,7 +4,7 @@
 // via read-only adapters (P12).
 
 import { z } from 'zod';
-import type { DeclaredEffectRow, LanguageVersion, SettingsBecome } from 'movement-lang';
+import type { DeclaredEffectRow, KeyBecomes, LanguageVersion, SettingsBecome } from 'movement-lang';
 
 import type { UniquenessConstraints } from './uniqueness';
 import type { EphemeralOriginRef, Position, PositionIdentity, SourcePosition } from './position';
@@ -1858,11 +1858,24 @@ function unreadableCarries(
   return undefined;
 }
 
+/** Why a key's `absent` cannot be compared as its key compares a value:
+ *  on a `type` key, a list on an `eq` key that is not one value, or a value
+ *  its `values` do not spell. */
+function absentRefusal(name: string, key: KeyBecomes): string | undefined {
+  if (key.absent === undefined) return undefined;
+  const texts = typeof key.absent === 'string' ? [key.absent] : key.absent;
+  if (key.op === 'type') return `'listenSettingsBecome' gives '${name}' an absent value, but a 'type' key compares no field`;
+  if (key.op === 'eq' && texts.length !== 1) return `'listenSettingsBecome' gives '${name}' ${texts.length} absent values, but an 'eq' key compares one`;
+  const unspelled = key.values === undefined ? undefined : texts.find((t) => !Object.hasOwn(key.values!, t));
+  if (unspelled !== undefined) return `'listenSettingsBecome' gives '${name}' the absent value "${unspelled}", which its values do not spell`;
+  return undefined;
+}
+
 /**
  * The refusal of a module's `listenSettingsBecome` that cannot be the
  * traversal it says (crates/lf schema.rs `unreadable_settings_become` says the
  * same): an alias count that is not one per edge, a key mapped past the path
- * or compared on no field, a path that starts at no root collection, or an
+ * or compared on no field, an `absent` its key cannot compare, a path that starts at no root collection, or an
  * edge its type before it does not have. A connection positioned at a member
  * stands on the path's first hops, so the path is read from its first edge
  * that is a root collection here. A type nobody described is not judged.
@@ -1879,6 +1892,8 @@ export function unreadableSettingsBecome(
   for (const [name, key] of Object.entries(become.keys)) {
     if (key.hop >= path.length) return `'listenSettingsBecome' maps '${name}' to hop ${key.hop}, past the last of its ${path.length} edges`;
     if (key.op !== 'type' && key.field === undefined) return `'listenSettingsBecome' maps '${name}' by '${key.op}' but names no field to compare`;
+    const absent = absentRefusal(name, key);
+    if (absent !== undefined) return absent;
   }
   const roots = entries.filter((e) => e.readable || e.writable || e.listenable === true);
   const start = path.findIndex((edge) => roots.some((e) => collectionNameOf(e) === edge));

@@ -762,9 +762,16 @@ pub fn settings_become(value: &Js) -> Result<movement_parser::catalog::types::Se
     if let Some(keys) = object.get_mut("keys").and_then(serde_json::Value::as_object_mut) {
         for key in keys.values_mut() {
             let Some(key) = key.as_object_mut() else { continue };
-            key.retain(|k, _| ["hop", "field", "op", "values"].contains(&k.as_str()));
+            key.retain(|k, _| ["hop", "field", "op", "values", "absent", "lowercase"].contains(&k.as_str()));
             if key.get("field").and_then(serde_json::Value::as_str).is_some_and(str::is_empty) {
                 return Err("listenSettingsBecome.keys.field: expected a non-empty string".into());
+            }
+            let texts = |v: &serde_json::Value| v.is_string() || v.as_array().is_some_and(|items| items.iter().all(serde_json::Value::is_string));
+            if key.get("absent").is_some_and(|v| !texts(v)) {
+                return Err("listenSettingsBecome.keys.absent: expected a text or a list of texts".into());
+            }
+            if key.get("lowercase").is_some_and(|v| !v.is_boolean()) {
+                return Err("listenSettingsBecome.keys.lowercase: expected true or false".into());
             }
         }
     }

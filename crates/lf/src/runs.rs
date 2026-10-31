@@ -568,6 +568,18 @@ pub struct Fired {
     pub redelivered: Vec<String>,
 }
 
+/// The line an arrival every listen on its edge skips by its WHERE is told
+/// with (mail sent to a key no listen names): with its values of the owned
+/// fields those WHEREs compare, the ones only its module reads.
+fn unmatched_line(adapter: &str, arrival: &ArrivalIn, skipped: &[&Listen]) -> String {
+    let compared: BTreeSet<&str> = skipped.iter().filter_map(|l| l.plan.as_ref()?.hops.last()).flat_map(|hop| hop.owned.iter().map(String::as_str)).collect();
+    let fields = arrival.landing.as_ref().and_then(|landing| landing.get("fields"));
+    let held: Vec<String> = compared.iter().filter_map(|field| fields?.get(field).map(|value| format!("its {field} is {}", value.to_json()))).collect();
+    let about = if held.is_empty() { String::new() } else { format!(" ({})", held.join(", ")) };
+    let identity = arrival.identity.as_deref().unwrap_or_default();
+    format!("{adapter}: the arrival {identity} on {}{about} matches the WHERE of no listen on it: it runs nothing", arrival.edge)
+}
+
 impl Fired {
     /// The redeliveries' lines, then the runs as `report` writes them.
     pub fn report(&self, out: &mut impl Write) -> Result<i32, String> {
@@ -831,6 +843,9 @@ impl Session {
         let mut paused: HashMap<String, bool> = HashMap::new();
         for arrival in arrivals.iter().filter(|a| !a.gone) {
             let identity = arrival.identity.as_deref().unwrap_or_default();
+            // Whether a listen on the edge takes it, and what was said of
+            // the listens it does not fit: said only when none takes it.
+            let (mut taken, mut skipped, mut misfit_lines) = (false, Vec::new(), Vec::new());
             for listen in set.listens.iter().filter(|l| l.is_on(adapter, &arrival.edge) && fires(l)) {
                 let file = set.file(&listen.file);
                 let named = format!("{}:{}", file.name, listen.movement_name);
@@ -841,12 +856,6 @@ impl Session {
                     continue;
                 }
                 let Some(verdict) = listen.fires(arrival, delivered.credential, now_ms) else { continue };
-                let misfits = listen.misfits(arrival);
-                if !misfits.is_empty() {
-                    let declared = listen.payload.as_ref().map(|p| p.name.as_str()).unwrap_or_default();
-                    fired.redelivered.push(format!("{named}: the arrival {identity} on {} is not a {declared} ({}): it runs nothing", arrival.edge, misfits.join("; ")));
-                    continue;
-                }
                 match verdict {
                     Verdict::Fires => {}
                     // Said only under LF_LOG=debug: one line per arrival and
@@ -854,9 +863,11 @@ impl Session {
                     // say nothing went wrong.
                     Verdict::Skips { hop } => {
                         crate::log::debug(|| format!("{named}: the arrival {identity} on {} does not match the WHERE of hop {}: nothing is owed, and it runs nothing", arrival.edge, hop + 1));
+                        skipped.push(listen);
                         continue;
                     }
                     Verdict::Undecided { reason } => {
+                        taken = true;
                         let line = format!("{named}: an arrival on {} cannot be judged ({reason}): it runs nothing", arrival.edge);
                         if !fired.redelivered.contains(&line) {
                             fired.redelivered.push(line);
@@ -864,6 +875,13 @@ impl Session {
                         continue;
                     }
                 }
+                let misfits = listen.misfits(arrival);
+                if !misfits.is_empty() {
+                    let declared = listen.payload.as_ref().map(|p| p.name.as_str()).unwrap_or_default();
+                    misfit_lines.push(format!("{named}: the arrival {identity} on {} is not a {declared} ({}): it runs nothing", arrival.edge, misfits.join("; ")));
+                    continue;
+                }
+                taken = true;
                 let pipeline = listen.pipeline();
                 // Read once per listen and delivery: a pause this delivery
                 // makes is noted below.
@@ -911,6 +929,17 @@ impl Session {
                     }
                     None => fired.redelivered.push(format!("{named} has run the arrival {identity} on {} before: this delivery runs nothing", arrival.edge)),
                 }
+            }
+            // A poll's row was judged when the poll minted its runs.
+            if !taken && misfit_lines.is_empty() && !skipped.is_empty() && !matches!(judged_by, JudgedBy::Minted(_)) {
+                fired.redelivered.push(unmatched_line(adapter, arrival, &skipped));
+            }
+            if taken {
+                for line in misfit_lines {
+                    crate::log::debug(|| line);
+                }
+            } else {
+                fired.redelivered.extend(misfit_lines);
             }
         }
         // A run the delivery minted that was never started (its listen no
@@ -1049,13 +1078,30 @@ impl Session {
         }
         let arrival = crate::units::invocation(&iso(0), &self.user, text);
         let arrivals = crate::arrivals::arrivals_of(&Js::Obj(obj! { "arrivals" => Js::Arr(vec![arrival]) }))?;
+        // Asked for by name, so a listen whose WHERE the invocation does not
+        // match says so, and a rehearsal runs only what a run would.
+        let mut fired = Fired::default();
+        let now_ms = self.now_ms() as f64;
+        let mut matched = Vec::new();
+        for i in firing {
+            let listen = &set.listens[i];
+            let named = format!("{}:{}", set.file(&listen.file).name, listen.movement_name);
+            match listen.fires(&arrivals[0], None, now_ms) {
+                Some(Verdict::Fires) => matched.push(i),
+                Some(Verdict::Skips { hop }) => fired.redelivered.push(format!("{named}: the invocation does not match the WHERE of hop {}: it runs nothing", hop + 1)),
+                Some(Verdict::Undecided { reason }) => fired.redelivered.push(format!("{named}: the invocation cannot be judged ({reason}): it runs nothing")),
+                None => {}
+            }
+        }
         if !dry_run {
-            let only = crate::edge_polls::Shared { fires: firing, ..Default::default() };
-            return self.fire_arrivals_to(&set, crate::units::MANUAL, &arrivals, Delivered::default(), JudgedBy::Sharing(&only)).await;
+            let only = crate::edge_polls::Shared { fires: matched, ..Default::default() };
+            let ran = self.fire_arrivals_to(&set, crate::units::MANUAL, &arrivals, Delivered::default(), JudgedBy::Sharing(&only)).await?;
+            fired.redelivered.extend(ran.redelivered);
+            fired.outcomes = ran.outcomes;
+            return Ok(fired);
         }
         // A rehearsal keeps no receipt: an invocation is never delivered twice.
-        let mut fired = Fired::default();
-        for listen in firing.iter().map(|i| &set.listens[*i]) {
+        for listen in matched.iter().map(|i| &set.listens[*i]) {
             let trigger = arrival_trigger_of(&listen.pipeline(), crate::units::MANUAL, &arrivals[0], &iso(0));
             if let Some(outcome) = self.run_listen(&set, &uuid::Uuid::new_v4().to_string(), listen, trigger, true, None, CameIn::default()).await? {
                 fired.outcomes.push(outcome);
@@ -1192,7 +1238,14 @@ impl Session {
         let running = set.running.iter().find(|r| !r.is_plugin() && r.external.manifest.name == key.adapter);
         // The cron unit's clock, answered in process.
         let (answer, credential, resend_manifest) = match running {
-            None if key.adapter == crate::units::CRON && key.edge == crate::units::TICKS => (crate::units::poll_ticks(key.filter().as_ref(), cursor, self.now_ms())?, None, Js::Null),
+            None if key.adapter == crate::units::CRON && key.edge == crate::units::TICKS => {
+                let every_ms = crate::edge_polls::interval_ms(&self.project.poll_every, key, None, shared.declared.as_ref())?;
+                let ticked = crate::units::poll_ticks(key.filter().as_ref(), cursor, crate::units::PollClock { now_ms: self.now_ms(), every_ms })?;
+                for line in &ticked.unread {
+                    eprintln!("listen-fire: {line}");
+                }
+                (ticked.answer, None, Js::Null)
+            }
             None => return Err(format!("{}: not running, so its polled edge '{}' is not polled", key.adapter, key.edge)),
             Some(running) => {
                 if !running.methods.iter().any(|m| m == "poll") {

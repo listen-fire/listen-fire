@@ -102,9 +102,14 @@ export const EMAIL_MANIFEST: AdapterManifest = {
   },
   // A 0.12 `listen to inbox { key: "deals" }` is
   // `listen to inbox-[e:Emails WHERE e.Key == "deals"]->` (`listen-fire upgrade`).
-  // One with no key heard mail sent to the box itself, which no 0.13 listen
-  // names: it has no rewrite.
-  listenSettingsBecome: { path: [EMAILS_EDGE], aliases: ['e'], paramFrom: 'Email', keys: { key: { hop: 0, field: EMAIL_KEY_FIELD, op: 'eq' } } },
+  // One with no key heard the mail sent to the box itself (the empty key);
+  // 0.12 compared keys lowercased.
+  listenSettingsBecome: {
+    path: [EMAILS_EDGE],
+    aliases: ['e'],
+    paramFrom: 'Email',
+    keys: { key: { hop: 0, field: EMAIL_KEY_FIELD, op: 'eq', absent: '', lowercase: true } },
+  },
   // Without an address there is no door for mail to arrive at, so an author
   // who imports email on such a deployment is writing something that can
   // never fire. That is a gap they are shown, not a boot failure: a

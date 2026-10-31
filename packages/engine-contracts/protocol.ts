@@ -808,6 +808,8 @@ export const WireListenDeclarations = z.object({
           field: z.string().min(1, 'listenSettingsBecome.keys.field: expected a non-empty string').optional(),
           op: z.enum(['eq', 'in', 'type']),
           values: z.record(z.string(), z.string()).optional(),
+          absent: z.union([z.string(), z.array(z.string())], { error: 'listenSettingsBecome.keys.absent: expected a text or a list of texts' }).optional(),
+          lowercase: z.boolean({ error: 'listenSettingsBecome.keys.lowercase: expected true or false' }).optional(),
         }),
       ),
     })

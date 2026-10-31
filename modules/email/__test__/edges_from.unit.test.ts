@@ -32,7 +32,7 @@ describe('email edgesFrom — the walk', () => {
     expect(email).toMatchObject({ collectionName: 'Emails', listenable: true, readable: false, bounded: false, boundedBy: ['Key'], delivery: 'connection' });
     expect(email).not.toHaveProperty('fires');
     const described = await adapter().describe(EMAIL_RECORD_TYPE_ID);
-    expect(described?.fields.find((f) => f.displayName === 'Key')).toMatchObject({ kind: 'owned', owned: { name: 'InboxKey', allowPattern: '^[a-z0-9]+(-[a-z0-9]+)*$' } });
+    expect(described?.fields.find((f) => f.displayName === 'Key')).toMatchObject({ kind: 'owned', owned: { name: 'InboxKey', allowPattern: "^[a-z0-9.!#$%&'*+/=?^_`{|}~-]*$" } });
   });
 
   it('a root with no readable edge is a real answer, not an empty one', async () => {

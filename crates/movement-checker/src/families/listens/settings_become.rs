@@ -9,7 +9,7 @@
 //! rewritten.
 
 use movement_parser::ast::{ListenDeclaration, ParamTypeRef, Span};
-use movement_parser::catalog::types::{ArgKind, InstanceSchema, KeyBecomes, KeyOp, SettingsBecome};
+use movement_parser::catalog::types::{ArgKind, InstanceSchema, KeyBecomes, KeyOp, SettingsBecome, SettingsValue};
 use movement_parser::lowering::expression::{Expression, FilterOperator, ListElement, LogicalOp, StaticValue};
 use movement_parser::version::{Standing, standing};
 use serde_json::json;
@@ -19,6 +19,8 @@ use crate::codes;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::families::filter_split::spell;
 use crate::families::names::spell_name;
+use crate::families::values::owned_value_error;
+use crate::types::field::{OwnedScalar, Ty, strip_absent};
 use crate::scope::{Resolution, ScopeId, SymbolKind};
 use crate::slots::expression_of_slot;
 
@@ -28,7 +30,8 @@ use super::{EVERY_KEY, POLL_INTERVAL_KEY, SUPPRESS_SELF_KEY};
 const RETIRED_SINCE: &str = "0.13.0";
 
 /// The settings key an omitted value of which meant the module's default
-/// events (`AdapterSpec.default_events`).
+/// events (`AdapterSpec.default_events`), unless its mapping says what
+/// omitting it meant (`absent`).
 const EVENTS_KEY: &str = "events";
 
 const SUPPRESS_SELF_NOTE: &str = " (`suppress_self` is gone: a two-way sync's own echo now runs once more and finds nothing to change)";
@@ -69,16 +72,27 @@ impl Checker<'_> {
                 && built.as_ref().is_some_and(|i| i.construction_args.contains_key(key))
         };
         let schema = built.as_ref().and_then(|i| i.schema.as_ref());
-        let rewrite = become_.zip(schema).and_then(|(become_, schema)| rewrite_of(statement, become_, schema, spec.and_then(|s| s.default_events.as_deref()), &positioned));
+        let zones = self.zones;
+        let refusal = |owned: &OwnedScalar, literal: &str| owned_value_error(literal, owned, &|zone| Some(zones.is_zone(zone)));
+        let rewrite = become_.zip(schema).map(|(become_, schema)| {
+            let from = Narrowing { schema, default_events: spec.and_then(|s| s.default_events.as_deref()), positioned: &positioned, refusal: &refusal };
+            rewrite_of(statement, become_, &from)
+        });
         let instance_name = spell_name(&statement.instance);
         let movement = spell_name(&statement.movement);
         let path = match (&rewrite, become_) {
-            (Some(rewrite), _) => rewrite.path.clone(),
-            (None, Some(become_)) => bare_path(&instance_name, become_, &positioned),
-            (None, None) => format!("{instance_name}-[:…]->"),
+            (Some(Ok(rewrite)), _) => rewrite.path.clone(),
+            (_, Some(become_)) => bare_path(&instance_name, become_, &positioned, schema),
+            (_, None) => format!("{instance_name}-[:…]->"),
         };
+        let why_no_fix = match &rewrite {
+            Some(Err(NoRewrite::Unbounded)) => " (its settings name no value that bounds the edge, so there is no rewrite: name the one it listens for)".to_string(),
+            Some(Err(NoRewrite::Refused(reason))) => format!(" (there is no rewrite: {reason})"),
+            _ => String::new(),
+        };
+        let rewrite = rewrite.and_then(Result::ok);
         let message = format!(
-            "`listen to {instance_name} {{ … }}` is retired in 0.13: a listen is a traversal ending on the edge its events arrive on. Write `listen to {path} fire {movement}`{notes}"
+            "`listen to {instance_name} {{ … }}` is retired in 0.13: a listen is a traversal ending on the edge its events arrive on. Write `listen to {path} fire {movement}`{notes}{why_no_fix}"
         );
         let mut diagnostic = Diagnostic::error(codes::LISTEN_SETTINGS_RETIRED, message, statement.span);
         let moving_up = self.upgrading_from.is_some_and(|pin| standing(pin, RETIRED_SINCE) == Standing::OlderKey);
@@ -113,35 +127,52 @@ impl Checker<'_> {
     }
 }
 
-/// The settings listen as the traversal its module maps it to: none when a
-/// key has no mapping, a value is not a literal, a hop has no alias, or the
-/// path is all taken by the connection's position, or a kept hop would range
-/// over an unbounded edge. A `type` key (`payload: <T>`) becomes the type
-/// stated after the traversal (`-[:Requests]-><T>`). A listen that
-/// writes no `events` received the module's defaults, so they are written
-/// as the events' comparison, or the rewrite would widen the listen.
-fn rewrite_of(
-    statement: &ListenDeclaration,
-    become_: &SettingsBecome,
-    schema: &InstanceSchema,
-    default_events: Option<&[String]>,
-    positioned: &dyn Fn(&str) -> bool,
-) -> Option<Rewrite> {
-    let consumed = consumed_hops(become_, positioned);
+/// What a rewrite reads besides the listen and its module's mapping.
+struct Narrowing<'a> {
+    schema: &'a InstanceSchema,
+    /// The module's default events (`AdapterSpec.default_events`).
+    default_events: Option<&'a [String]>,
+    /// Whether the connection's construction is positioned by a key.
+    positioned: &'a dyn Fn(&str) -> bool,
+    /// Why an owned field's type refuses a literal, as the checker says it.
+    refusal: &'a dyn Fn(&OwnedScalar, &str) -> Option<String>,
+}
+
+/// Why a settings listen has no rewrite.
+enum NoRewrite {
+    /// A key has no mapping, a value is not a literal or has no spelling, a
+    /// hop has no alias, or the path is all taken by the connection's
+    /// position.
+    Unmapped,
+    /// A kept hop would range over an unbounded edge.
+    Unbounded,
+    /// A value written as its field holds it is one the field's owned type
+    /// refuses: the checker's reason.
+    Refused(String),
+}
+
+/// The settings listen as the traversal its module maps it to. A `type` key
+/// (`payload: <T>`) becomes the type stated after the traversal
+/// (`-[:Requests]-><T>`). A key the listen leaves out is compared with what
+/// leaving it out meant (`absent`; for `events`, else the module's default
+/// events), or the rewrite would widen the listen.
+fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Narrowing) -> Result<Rewrite, NoRewrite> {
+    let schema = from.schema;
+    let consumed = consumed_hops(become_, from.positioned);
     let mut conjuncts: Vec<Vec<Expression>> = vec![Vec::new(); become_.path.len()];
     let mut landing = None;
     for arg in &statement.config {
         if [SUPPRESS_SELF_KEY, EVERY_KEY, POLL_INTERVAL_KEY].contains(&arg.name.as_str()) {
             continue;
         }
-        let key = become_.keys.get(&arg.name)?;
+        let key = become_.keys.get(&arg.name).ok_or(NoRewrite::Unmapped)?;
         if key.hop < consumed {
             continue;
         }
         if key.hop >= become_.path.len() {
-            return None;
+            return Err(NoRewrite::Unmapped);
         }
-        let value = |raw: &StaticValue| mapped(key, raw);
+        let value = |raw: &StaticValue| mapped(key, raw).ok_or(NoRewrite::Unmapped);
         let compare = |op, right| compare_on(key, op, right);
         match key.op {
             // The landing's type is stated after the traversal, which ends on the hop it types.
@@ -149,57 +180,57 @@ fn rewrite_of(
                 let raw = arg.value.raw.trim();
                 landing = Some(format!("<{}>", raw.strip_prefix('<').and_then(|r| r.strip_suffix('>')).unwrap_or(raw)));
             }
-            KeyOp::Type => return None,
-            KeyOp::Eq | KeyOp::In if key.field.is_none() || arg.is_type == Some(true) => return None,
+            KeyOp::Type => return Err(NoRewrite::Unmapped),
+            KeyOp::Eq | KeyOp::In if key.field.is_none() || arg.is_type == Some(true) => return Err(NoRewrite::Unmapped),
             KeyOp::Eq => {
-                let Ok(Expression::Static { value: raw }) = expression_of_slot(&arg.value) else { return None };
+                let Ok(Expression::Static { value: raw }) = expression_of_slot(&arg.value) else { return Err(NoRewrite::Unmapped) };
                 conjuncts[key.hop].push(compare(FilterOperator::Eq, Expression::Static { value: value(&raw)? }));
             }
-            KeyOp::In => match expression_of_slot(&arg.value).ok()? {
+            KeyOp::In => match expression_of_slot(&arg.value).map_err(|_| NoRewrite::Unmapped)? {
                 Expression::List { elements } => {
                     let items = elements
                         .iter()
                         .map(|e| match e {
-                            ListElement::Expression(Expression::Static { value: raw }) => {
-                                value(raw).map(|v| ListElement::Expression(Expression::Static { value: v }))
-                            }
-                            _ => None,
+                            ListElement::Expression(Expression::Static { value: raw }) => value(raw).map(|v| ListElement::Expression(Expression::Static { value: v })),
+                            _ => Err(NoRewrite::Unmapped),
                         })
-                        .collect::<Option<Vec<_>>>()?;
+                        .collect::<Result<Vec<_>, _>>()?;
                     conjuncts[key.hop].push(compare(FilterOperator::In, Expression::List { elements: items }));
                 }
                 Expression::Static { value: raw } => conjuncts[key.hop].push(compare(FilterOperator::Eq, Expression::Static { value: value(&raw)? })),
-                _ => return None,
+                _ => return Err(NoRewrite::Unmapped),
             },
         }
     }
-    let defaults = default_events.filter(|d| !d.is_empty());
-    if let Some(defaults) = defaults.filter(|_| !statement.config.iter().any(|a| a.name == EVENTS_KEY)) {
-        let key = become_.keys.get(EVENTS_KEY)?;
-        if key.hop >= consumed {
-            let field_less = key.field.is_none();
-            let items = defaults.iter().map(|d| mapped(key, &StaticValue::String(d.clone()))).collect::<Option<Vec<_>>>()?;
-            let comparison = match (key.op, items.as_slice()) {
-                _ if field_less => return None,
-                (KeyOp::In, _) => {
-                    let elements = items.into_iter().map(|v| ListElement::Expression(Expression::Static { value: v })).collect();
-                    compare_on(key, FilterOperator::In, Expression::List { elements })
-                }
-                (KeyOp::Eq, [only]) => compare_on(key, FilterOperator::Eq, Expression::Static { value: only.clone() }),
-                (KeyOp::Eq | KeyOp::Type, _) => return None,
-            };
-            conjuncts.get_mut(key.hop)?.push(comparison);
+    let written = |name: &str| statement.config.iter().any(|a| a.name == name);
+    let defaults = from.default_events.filter(|d| !d.is_empty()).map(|d| SettingsValue::Many(d.to_vec()));
+    if defaults.is_some() && !written(EVENTS_KEY) && !become_.keys.contains_key(EVENTS_KEY) {
+        return Err(NoRewrite::Unmapped);
+    }
+    for (name, key) in become_.keys.iter().filter(|(name, _)| !written(name)) {
+        let meant = key.absent.clone().or_else(|| defaults.clone().filter(|_| name == EVENTS_KEY));
+        let Some(meant) = meant else { continue };
+        if key.hop < consumed {
+            continue;
         }
+        let comparison = absent_comparison(key, &meant).ok_or(NoRewrite::Unmapped)?;
+        conjuncts.get_mut(key.hop).ok_or(NoRewrite::Unmapped)?.push(comparison);
     }
     let kept = &become_.path[consumed.min(become_.path.len())..];
-    if kept.is_empty() || ranges_unbounded(schema, &become_.path, consumed, &conjuncts) {
-        return None;
+    if kept.is_empty() {
+        return Err(NoRewrite::Unmapped);
+    }
+    if !unbounded_hops(schema, &become_.path, consumed, &conjuncts).is_empty() {
+        return Err(NoRewrite::Unbounded);
+    }
+    if let Some(reason) = refused_literal(schema, &become_.path, &conjuncts, from.refusal) {
+        return Err(NoRewrite::Refused(reason));
     }
     let mut path = spell_name(&statement.instance);
     for (offset, edge) in kept.iter().enumerate() {
         let hop = consumed + offset;
         let mut where_ = std::mem::take(&mut conjuncts[hop]);
-        let alias = become_.aliases.get(hop)?;
+        let alias = become_.aliases.get(hop).ok_or(NoRewrite::Unmapped)?;
         let hop_text = match where_.len() {
             0 => format!("-[:{}]->", spell_name(edge)),
             1 => format!("-[{}:{} WHERE {}]->", spell_name(alias), spell_name(edge), spell(&where_.remove(0), Some(alias))),
@@ -212,40 +243,107 @@ fn rewrite_of(
     // is typed by the record it lands on (a path is not a type's address).
     let param_type = match kept {
         [edge] => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(edge)),
-        _ => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(landing_of(schema, kept)?)),
+        _ => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(landing_of(schema, kept).ok_or(NoRewrite::Unmapped)?)),
     };
-    Some(Rewrite { path, param_type })
+    Ok(Rewrite { path, param_type })
 }
 
-/// Whether a kept hop would range over an edge its module declares
-/// unbounded (`bounded: false`) with nothing written on a field that bounds
-/// it: the settings left out what the 0.13 listen must say (a cron listen
-/// with no schedule), so there is no rewrite to offer.
-fn ranges_unbounded(schema: &InstanceSchema, path: &[String], consumed: usize, conjuncts: &[Vec<Expression>]) -> bool {
+/// The comparison what omitting `key` meant is: one value by `==`, a list
+/// by `IN` (or by `==` on an `eq` key, when it holds one).
+fn absent_comparison(key: &KeyBecomes, meant: &SettingsValue) -> Option<Expression> {
+    key.field.as_ref()?;
+    let items = meant.texts().iter().map(|t| mapped(key, &StaticValue::String(t.clone()))).collect::<Option<Vec<_>>>()?;
+    match (key.op, meant, items.as_slice()) {
+        (KeyOp::Eq | KeyOp::In, SettingsValue::One(_), [only]) | (KeyOp::Eq, SettingsValue::Many(_), [only]) => {
+            Some(compare_on(key, FilterOperator::Eq, Expression::Static { value: only.clone() }))
+        }
+        (KeyOp::In, SettingsValue::Many(_), _) => {
+            let elements = items.into_iter().map(|v| ListElement::Expression(Expression::Static { value: v })).collect();
+            Some(compare_on(key, FilterOperator::In, Expression::List { elements }))
+        }
+        _ => None,
+    }
+}
+
+/// The record type each hop of `path` lands on, walked from the
+/// connection's root; `None` from the first hop the schema lacks.
+fn hop_targets<'s>(schema: &'s InstanceSchema, path: &[String]) -> Vec<Option<&'s str>> {
     let mut from: Option<&str> = None;
+    path.iter()
+        .map(|edge| {
+            let target = match from {
+                None => schema.collections.get(edge).map(|c| c.target.as_str()),
+                Some(position) => schema.positions.get(position).and_then(|p| p.edges.get(edge)).map(|e| e.target.as_str()),
+            };
+            from = target;
+            target
+        })
+        .collect()
+}
+
+/// The checker's refusal of the first text literal a rewritten comparison
+/// gives a field whose owned type would refuse it (`"Deals"` for an
+/// `InboxKey`): a rewrite never writes what then fails to check.
+fn refused_literal(schema: &InstanceSchema, path: &[String], conjuncts: &[Vec<Expression>], refusal: &dyn Fn(&OwnedScalar, &str) -> Option<String>) -> Option<String> {
+    let targets = hop_targets(schema, path);
+    conjuncts.iter().zip(targets).find_map(|(hop, target)| {
+        let position = schema.positions.get(target?)?;
+        hop.iter().find_map(|comparison| {
+            let Expression::Compare { left, right, .. } = comparison else { return None };
+            let Expression::Property { property_type_id: field, .. } = &**left else { return None };
+            let ty = Ty::from_schema(position.properties.get(field)?);
+            let Ty::Owned(owned) = strip_absent(&ty) else { return None };
+            let literals: Vec<&String> = match &**right {
+                Expression::Static { value: StaticValue::String(literal) } => vec![literal],
+                Expression::List { elements } => elements
+                    .iter()
+                    .filter_map(|e| match e {
+                        ListElement::Expression(Expression::Static { value: StaticValue::String(literal) }) => Some(literal),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            literals.into_iter().find_map(|literal| refusal(owned, literal))
+        })
+    })
+}
+
+/// The kept hops that would range over an edge their module declares
+/// unbounded (`bounded: false`) with nothing written on a field that bounds
+/// it, each with the field that would: the settings left out what the 0.13
+/// listen must say (a cron listen with no schedule), so there is no rewrite
+/// to offer.
+fn unbounded_hops(schema: &InstanceSchema, path: &[String], consumed: usize, conjuncts: &[Vec<Expression>]) -> Vec<(usize, String)> {
+    let mut from: Option<&str> = None;
+    let mut unbounded = Vec::new();
     for (hop, edge) in path.iter().enumerate() {
         let declared = match from {
             None => schema.collections.get(edge).map(|c| (c.bounded, c.bounded_by.as_deref(), c.target.as_str())),
             Some(position) => schema.positions.get(position).and_then(|p| p.edges.get(edge)).map(|e| (e.bounded, e.bounded_by.as_deref(), e.target.as_str())),
         };
-        let Some((bounded, bounded_by, target)) = declared else { return false };
+        let Some((bounded, bounded_by, target)) = declared else { return unbounded };
         let reads_bound = |c: &Expression| matches!(c, Expression::Compare { left, .. } if matches!(&**left, Expression::Property { property_type_id, .. } if bounded_by.unwrap_or_default().contains(property_type_id)));
         if hop >= consumed && bounded == Some(false) && !conjuncts[hop].iter().any(reads_bound) {
-            return true;
+            unbounded.push((hop, bounded_by.and_then(<[String]>::first).cloned().unwrap_or_default()));
         }
         from = Some(target);
     }
-    false
+    unbounded
 }
 
 /// A settings value as the field holds it: through the key's `values` map
 /// when it has one (a value the map lacks has no spelling).
 fn mapped(key: &KeyBecomes, raw: &StaticValue) -> Option<StaticValue> {
-    match (raw, &key.values) {
+    let spelled = match (raw, &key.values) {
         (StaticValue::String(s), Some(values)) => values.get(s).map(|v| StaticValue::String(v.clone())),
         (StaticValue::Null, _) => None,
         (raw, _) => Some(raw.clone()),
-    }
+    }?;
+    Some(match spelled {
+        StaticValue::String(s) if key.lowercase == Some(true) => StaticValue::String(s.to_lowercase()),
+        other => other,
+    })
 }
 
 fn compare_on(key: &KeyBecomes, op: FilterOperator, right: Expression) -> Expression {
@@ -271,10 +369,23 @@ fn landing_of<'s>(schema: &'s InstanceSchema, kept: &[String]) -> Option<&'s str
     Some(at)
 }
 
-/// The mapping's path with no WHEREs: what the author narrows by hand when
-/// the settings cannot be rewritten.
-fn bare_path(instance: &str, become_: &SettingsBecome, positioned: &dyn Fn(&str) -> bool) -> String {
+/// The mapping's path with no WHEREs but the bound an unbounded hop must
+/// name (`inbox-[e:Emails WHERE e.Key == "…"]->`): what the author narrows
+/// by hand when the settings cannot be rewritten.
+fn bare_path(instance: &str, become_: &SettingsBecome, positioned: &dyn Fn(&str) -> bool, schema: Option<&InstanceSchema>) -> String {
     let consumed = consumed_hops(become_, positioned);
-    let hops: String = become_.path.iter().skip(consumed).map(|edge| format!("-[:{}]->", spell_name(edge))).collect();
+    let unbounded = schema.map(|schema| unbounded_hops(schema, &become_.path, consumed, &vec![Vec::new(); become_.path.len()])).unwrap_or_default();
+    let hops: String = become_
+        .path
+        .iter()
+        .enumerate()
+        .skip(consumed)
+        .map(|(hop, edge)| match (unbounded.iter().find(|(h, _)| *h == hop), become_.aliases.get(hop)) {
+            (Some((_, field)), Some(alias)) if !field.is_empty() => {
+                format!("-[{}:{} WHERE {}.{} == \"…\"]->", spell_name(alias), spell_name(edge), spell_name(alias), spell_name(field))
+            }
+            _ => format!("-[:{}]->", spell_name(edge)),
+        })
+        .collect();
     if hops.is_empty() { format!("{instance}-[:…]->") } else { format!("{instance}{hops}") }
 }

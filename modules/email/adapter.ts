@@ -201,7 +201,7 @@ export class EmailAdapter extends BaseAdapter implements Adapter {
             writable: false,
             required: true,
             capability: { filterOperators: ['eq', 'in'] },
-            description: 'The plus-suffix of the address the message was sent to (`inbox+deals@…` is `deals`), lowercased: a listen takes the keys it names (`e.Key == "deals"`). Mail sent to the box itself has the empty key, which no listen names.',
+            description: 'The plus-suffix of the address the message was sent to (`inbox+deals@…` is `deals`), lowercased: a listen takes the keys it names (`e.Key == "deals"`). Mail sent to the box itself has the empty key (`e.Key == ""`).',
           },
           { fieldId: 'subject', displayName: 'Subject', kind: 'string', writable: false, required: false, description: 'The subject line.' },
           { fieldId: 'sender', displayName: 'From', kind: 'string', writable: false, required: false, description: 'The "From" header value.' },

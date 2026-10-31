@@ -38,7 +38,9 @@
           "key": {
             "hop": 0,
             "field": "Key",
-            "op": "eq"
+            "op": "eq",
+            "absent": "",
+            "lowercase": true
           }
         }
       }
@@ -229,7 +231,7 @@
               "kind": "owned",
               "name": "InboxKey",
               "owner": "email",
-              "allowPattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+              "allowPattern": "^[a-z0-9.!#$%&'*+/=?^_`{|}~-]*$"
             }
           },
           "edges": {

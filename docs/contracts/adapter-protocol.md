@@ -238,10 +238,18 @@ The manifest file registers your server with a team:
   (`{ "events": { "hop": 0, "field": "Reason", "op": "in" } }`, with `values`
   where a settings value is spelled otherwise on the field). The upgrade turns
   that listen into `listen to gh-[n:Notifications WHERE n.Reason IN ["mention"]]->`.
-  A connection positioned at a member (an Airtable `base`) stands on the hops
-  its position keys map to. A path naming an edge you do not describe, a key
-  mapped past the path, or an `eq`/`in` key with no `field` is refused when the
-  module is described. A listen with a key you do not map is left for its author.
+  A key may also say `absent`, what a listen that left it out meant, as a
+  settings value (`"absent": ""` for an inbox's own mail, a list for the
+  events a listen with none heard): the rewrite of such a listen compares it,
+  so the traversal hears what the listen heard. `"lowercase": true` says your
+  module compared the key's values lowercased, so the rewrite writes them so.
+  A rewrite is offered only when every literal it writes is one the field's
+  owned scalar takes. A connection positioned at a member (an Airtable `base`)
+  stands on the hops its position keys map to. A path naming an edge you do
+  not describe, a key mapped past the path, an `eq`/`in` key with no `field`,
+  or an `absent` the key cannot compare (on a `type` key, several values on an
+  `eq` key, a value its `values` do not spell) is refused when the module is
+  described. A listen with a key you do not map is left for its author.
 - Optional fields: `handbookSection` (`{ title, content }`, prose the authoring
   handbook shows about your system), `vocabulary` (an icon and event phrasing),
   `webhookEventTypeId`.
@@ -728,7 +736,14 @@ From adapter protocol 2.6 an arrival may say more, for the listens on its edge
   told apart. Nothing is said of the listen an arrival is not for.
 - **`takenApplied`**: `true` when your module applied the listen's filter
   before reporting it (a filtered poll or subscription). Absent, the host
-  judges the whole filter itself.
+  judges the whole filter itself. A field of kind `owned` is one only you can
+  evaluate, so the host judges a comparison on it only when the arrival
+  carries the field: it then compares the text the arrival carries with the
+  listen's literal, exactly. Carry the canonical spelling, the one a listen's
+  literal is checked against (your `allowPattern`): an inbox carries its key
+  lowercased, as its pattern admits only lowercase, and a cron tick carries
+  the schedule and zone it was polled for. Leave the field out, or set
+  `takenApplied`, when text equality would not mean what your scalar means.
 - **`occurredAt`**: when the change happened in your system, as your system
   stamped it (an ISO 8601 instant). Listen-Fire measures from it whether a
   run's write caused the arrival (the loop breaker, below), however late a

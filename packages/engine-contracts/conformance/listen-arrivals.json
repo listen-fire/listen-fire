@@ -176,6 +176,56 @@
           }
         }
       },
+      "inbox": {
+        "canFire": false,
+        "constructionArgs": [],
+        "schemas": {
+          "": {
+            "positions": {
+              "Email": {
+                "properties": {
+                  "Id": "text",
+                  "Key": {
+                    "kind": "owned",
+                    "name": "InboxKey",
+                    "owner": "inbox",
+                    "allowPattern": "^[a-z0-9.!#$%&'*+/=?^_`{|}~-]*$"
+                  },
+                  "Subject": "text"
+                },
+                "edges": {},
+                "propertyCapabilities": {
+                  "Key": {
+                    "filterOperators": [
+                      "eq",
+                      "in"
+                    ]
+                  },
+                  "Subject": {}
+                }
+              }
+            },
+            "collections": {
+              "Emails": {
+                "target": "Email",
+                "listenable": true,
+                "readable": false,
+                "bounded": false,
+                "boundedBy": [
+                  "Key"
+                ],
+                "identity": "Id",
+                "delivery": "connection",
+                "capability": {
+                  "filter": "native",
+                  "supportsLimit": false
+                }
+              }
+            },
+            "writableRoots": {}
+          }
+        }
+      },
       "gmail": {
         "canFire": false,
         "constructionArgs": [],
@@ -530,6 +580,39 @@
         "movement": "filed"
       }
     },
+    "keyed": {
+      "source": "import { inbox as inbox_module } from adapters; box = connect inbox_module\nfunction filed(e: <box-[:Email]->>) { return e.Subject }\nlisten to box-[e:Emails WHERE e.Key == \"deals\"]-> fire filed\n",
+      "plan": {
+        "adapter": "inbox",
+        "connection": "box",
+        "hops": [
+          {
+            "alias": "e",
+            "edge": "Emails",
+            "from": "",
+            "judged": "arrival",
+            "owned": [
+              "Key"
+            ],
+            "taken": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Key",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "deals"
+              },
+              "type": "compare"
+            },
+            "to": "Email"
+          }
+        ],
+        "movement": "filed"
+      }
+    },
     "negated": {
       "source": "import { chat as chat_module } from adapters; chat = connect chat_module\nfunction tally(i: <chat-[:Interaction]->>) { return i.Id }\nlisten to chat-[:Channels]->-[:Messages]->-[i:Interactions WHERE -i.Score < 1]-> fire tally\n",
       "plan": {
@@ -732,8 +815,9 @@
     {"case": "a press whose value is not its message's topic skips at Interactions", "plan": "echo", "arrival": {"edge": "Interactions", "landing": {"Id": "t1", "Value": "standup"}, "parents": [{"Name": "office"}, {"Topic": "lunch-poll"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 2}},
     {"case": "a press whose filter reads a message it does not carry is undecided", "plan": "echo", "arrival": {"edge": "Interactions", "landing": {"Id": "t1", "Value": "lunch-poll"}, "parents": [{"Name": "office"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival carries no Messages record, which this listen's filter on it reads"}},
     {"case": "an unfiltered mail whose taken part reads an owned field is undecided", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"Id": "m1", "Subject": "invoice 42"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "gmail did not apply this listen's filter on Messages to the arrival, and only gmail can evaluate Query"}},
-    {"case": "an unfiltered mail that carries the owned field is judged by the value it carries, and fires", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"Id": "m3", "Subject": "invoice 42", "Query": "from:acme"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
-    {"case": "an unfiltered mail that carries another value of the owned field skips", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"Id": "m4", "Subject": "invoice 42", "Query": "from:other"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "an unfiltered arrival that carries the owned field is judged by the value it carries as text, and fires", "plan": "keyed", "arrival": {"edge": "Emails", "landing": {"Id": "m3", "Subject": "q3 pipeline", "Key": "deals"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "an unfiltered arrival that carries another value of the owned field skips", "plan": "keyed", "arrival": {"edge": "Emails", "landing": {"Id": "m4", "Subject": "q3 pipeline", "Key": "intros"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "an unfiltered arrival that carries the empty value of the owned field carries it, and skips a listen naming another", "plan": "keyed", "arrival": {"edge": "Emails", "landing": {"Id": "m5", "Subject": "to the box", "Key": ""}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
     {"case": "a mail its module filtered on the owned field fires on the checked part", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"Id": "m1", "Subject": "invoice 42"}, "takenApplied": true}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
     {"case": "an unfiltered mail that fails the checked part skips, though the owned part is undecided", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"Id": "m2", "Subject": "lunch"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
     {"case": "a press scoring 5 fires: its negation is below 1", "plan": "negated", "arrival": {"edge": "Interactions", "landing": {"Id": "t1", "Score": 5}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},

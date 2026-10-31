@@ -345,31 +345,30 @@ test('upgrade rewrites `listen to cron { schedule, timezone }` and `listen to ma
   );
 });
 
-test('upgrade rewrites an email listen keyed by its plus-suffix, and holds the pin on one with no key', async () => {
-  const intake = [
-    'import { email } from adapters',
-    '',
-    'inbox = connect email',
-    '',
-    'function deal(m: <inbox-[:Email]->>) {',
-    '  return m.Subject',
-    '}',
-    'listen to inbox { key: "deals" } fire deal',
-    '',
-  ].join('\n');
-  const { dir, file } = only012('intake', intake);
+test('upgrade rewrites an email listen by its plus-suffix lowercased, one with no key to the box itself, and holds the pin on a key no address carries', async () => {
+  const intake = (listen: string) =>
+    ['import { email } from adapters', '', 'inbox = connect email', '', 'function deal(m: <inbox-[:Email]->>) {', '  return m.Subject', '}', listen, ''].join('\n');
+  const { dir, file } = only012('intake', intake('listen to inbox { key: "deals" } fire deal'));
   await ok(lfAsked(dir, ['connect', '@lf/email', '--webhook-secret', 'mailgun-signing-key'], { answers: [''] }));
-  upgradesTo(
-    dir,
-    file,
-    intake.replace('<inbox-[:Email]->>', '<inbox-[:Emails]->>').replace('listen to inbox { key: "deals" } fire deal', 'listen to inbox-[e:Emails WHERE e.Key == "deals"]-> fire deal'),
-  );
-  // Mail to the box itself has no 0.13 listen: the pin holds, naming the edge.
+  const becomes = (where: string) => intake(`listen to inbox-[e:Emails WHERE ${where}]-> fire deal`).replace('<inbox-[:Email]->>', '<inbox-[:Emails]->>');
+  upgradesTo(dir, file, becomes('e.Key == "deals"'));
+  // 0.12 compared a key without case, and a key holds what a plus-suffix can.
+  for (const [written, compared] of [
+    ['Deals', 'deals'],
+    ['deals_q3', 'deals_q3'],
+  ]) {
+    writeFileSync(file, intake(`listen to inbox { key: "${written}" } fire deal`));
+    upgradesTo(dir, file, becomes(`e.Key == "${compared}"`));
+  }
+  // A listen with no key heard mail sent to the box itself: its key is "".
+  writeFileSync(file, intake('listen to inbox {} fire deal'));
+  upgradesTo(dir, file, becomes('e.Key == ""'));
+  // A key no address carries has no rewrite: the pin holds, naming the field to bound.
   pinned(dir, '0.12.13');
-  writeFileSync(file, intake.replace('listen to inbox { key: "deals" } fire deal', 'listen to inbox {} fire deal'));
+  writeFileSync(file, intake('listen to inbox { key: "deals desk" } fire deal'));
   const held = lf(dir, 'upgrade');
   assert.equal(held.code, 1, held.out);
-  assert.match(held.out, /MOV_LISTEN_SETTINGS_RETIRED .*Write `listen to inbox-\[:Emails\]-> fire deal`/);
+  assert.match(held.out, /MOV_LISTEN_SETTINGS_RETIRED .*Write `listen to inbox-\[e:Emails WHERE e\.Key == "…"\]-> fire deal` \(there is no rewrite: "deals desk" is not an InboxKey: it does not match /);
   assert.match(held.out, /engine: left at 0\.12\.13/);
 });
 

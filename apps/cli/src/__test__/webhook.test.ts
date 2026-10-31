@@ -128,6 +128,8 @@ test('a webhook delivery fires a listen whose function types its parameter by th
     assert.equal((await post(url, '{"id":"pay_7","amount":3}')).status, 202);
     assert.equal((await post(url, '{"refund":"re_1"}')).status, 202);
     assert.deepEqual(companies(dir), ['pay_7 failed: 3', 'refund re_1'], 'each ran only the listen whose node it fits');
+    // A delivery another listen took says nothing of the listen it does not fit.
+    assert.equal(serving.lines.filter((l) => / is not a (Payment|Refund) /.test(l)).length, 0, serving.lines.join('\n'));
     // A body that fits neither node is refused, naming what each listen states.
     const misfit = await post(url, '{"id":"pay_8"}');
     assert.equal(misfit.status, 400, misfit.body);

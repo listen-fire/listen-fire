@@ -77,12 +77,27 @@ const CATALOG: &str = r#"{"adapters":{
       "collections":{"Requests":{"target":"Request","readable":false,"listenable":true,"delivery":"connection"}},
       "writableRoots":{},"eventPosition":"Request","eventPositions":[{"position":"Request"}]}}},
   "inbox":{"canFire":true,"constructionArgs":[],"triggerConfig":["key"],
-    "listenSettingsBecome":{"path":["Emails"],"aliases":["e"],"paramFrom":"Email","keys":{"key":{"hop":0,"field":"Key","op":"eq"}}},
-    "schemas":{"":{"positions":{"Email":{"properties":{"Key":{"kind":"owned","name":"InboxKey","owner":"inbox"},"Subject":"text"},"edges":{},
+    "listenSettingsBecome":{"path":["Emails"],"aliases":["e"],"paramFrom":"Email","keys":{"key":{"hop":0,"field":"Key","op":"eq","absent":"","lowercase":true}}},
+    "schemas":{"":{"positions":{"Email":{"properties":{"Key":{"kind":"owned","name":"InboxKey","owner":"inbox","allowPattern":"^[a-z0-9.!#$%&'*+/=?^_`{|}~-]*$"},"Subject":"text"},"edges":{},
         "propertyCapabilities":{"Key":{"filterOperators":["eq","in"]}}}},
       "collections":{"Emails":{"target":"Email","readable":false,"listenable":true,"bounded":false,"boundedBy":["Key"],"delivery":"connection",
         "capability":{"filter":"native","supportsLimit":false}}},
       "writableRoots":{},"eventPosition":"Email","eventPositions":[{"position":"Email"}]}}},
+  "mbox":{"canFire":true,"constructionArgs":[],"triggerConfig":["key"],
+    "listenSettingsBecome":{"path":["Emails"],"aliases":["e"],"paramFrom":"Email","keys":{"key":{"hop":0,"field":"Key","op":"eq"}}},
+    "schemas":{"":{"positions":{"Email":{"properties":{"Key":{"kind":"owned","name":"InboxKey","owner":"mbox","allowPattern":"^[a-z0-9]+$"},"Subject":"text"},"edges":{},
+        "propertyCapabilities":{"Key":{"filterOperators":["eq","in"]}}}},
+      "collections":{"Emails":{"target":"Email","readable":false,"listenable":true,"bounded":false,"boundedBy":["Key"],"delivery":"connection",
+        "capability":{"filter":"native","supportsLimit":false}}},
+      "writableRoots":{},"eventPosition":"Email","eventPositions":[{"position":"Email"}]}}},
+  "ghx":{"canFire":true,"constructionArgs":[],"triggerConfig":["events"],
+    "triggerConfigOptions":{"events":["mention","assign","review_requested"]},"defaultEvents":["mention","assign"],
+    "listenSettingsBecome":{"path":["Notifications"],"aliases":["n"],"paramFrom":"Notification",
+      "keys":{"events":{"hop":0,"field":"Reason","op":"in","absent":["review_requested"]}}},
+    "schemas":{"":{"positions":{
+      "Notification":{"properties":{"Reason":"text","Title":"text"},"edges":{}}},
+      "collections":{"Notifications":{"target":"Notification","listenable":true,"identity":"Id","delivery":"polled","pollEverySeconds":60}},
+      "writableRoots":{},"eventPosition":"Notification","eventPositions":[{"position":"Notification"}]}}},
   "bell":{"canFire":true,"constructionArgs":[],
     "listenSettingsBecome":{"path":["Rings"],"aliases":["r"],"paramFrom":"Ring","keys":{}},
     "schemas":{"":{"positions":{"Ring":{"properties":{"At":"datetime"},"edges":{}}},
@@ -103,6 +118,8 @@ const AT: &str = "import { at as at_module } from adapters\nat = connect at_modu
 const HOOK: &str = "import { hook as hook_module } from adapters\nhook = connect hook_module\nnode Payment { amount: <number> }\n";
 const FEED: &str = "import { feed as feed_module } from adapters\nfeed = connect feed_module\n";
 const INBOX: &str = "import { inbox as inbox_module } from adapters\ninbox = connect inbox_module\n";
+const MBOX: &str = "import { mbox as mbox_module } from adapters\nmbox = connect mbox_module\n";
+const GHX: &str = "import { ghx as ghx_module } from adapters\nghx = connect ghx_module\n";
 const BELL: &str = "import { bell as bell_module } from adapters\nbell = connect bell_module\n";
 
 fn checked(source: &str, pin: Option<&str>) -> Vec<Diagnostic> {
@@ -311,20 +328,73 @@ fn a_bare_listen_becomes_the_whole_edge_its_module_maps_it_to() {
 }
 
 #[test]
-fn a_listen_that_leaves_an_unbounded_edge_unbounded_has_no_fix() {
-    let keyed = format!("{INBOX}function deal(m: <inbox-[:Email]->>) {{ return m.Subject }}\nlisten to inbox {{ key: \"deals\" }} fire deal\n");
-    let d = diagnostics(&keyed);
-    let text = fixed(&keyed, &d);
-    assert_eq!(text, format!("{INBOX}function deal(m: <inbox-[:Emails]->>) {{ return m.Subject }}\nlisten to inbox-[e:Emails WHERE e.Key == \"deals\"]-> fire deal\n"));
-    assert_rechecks_clean(&text);
-    // Mail to the box itself had no key: no 0.13 listen says that.
+fn a_keyed_inbox_listen_is_rewritten_lowercased_as_0_12_compared_it() {
+    let keyed = |key: &str| format!("{INBOX}function deal(m: <inbox-[:Email]->>) {{ return m.Subject }}\nlisten to inbox {{ key: \"{key}\" }} fire deal\n");
+    for (written, compared) in [("deals", "deals"), ("Deals", "deals"), ("deals_q3", "deals_q3")] {
+        let source = keyed(written);
+        let d = diagnostics(&source);
+        assert_eq!(retired(&d).fix.as_ref().unwrap()["safe"], true, "{written}");
+        let text = fixed(&source, &d);
+        assert_eq!(
+            text,
+            format!("{INBOX}function deal(m: <inbox-[:Emails]->>) {{ return m.Subject }}\nlisten to inbox-[e:Emails WHERE e.Key == \"{compared}\"]-> fire deal\n"),
+            "{written}"
+        );
+        assert_rechecks_clean(&text);
+    }
+}
+
+#[test]
+fn a_listen_that_leaves_out_a_key_is_compared_with_what_leaving_it_out_meant() {
+    // A 0.12 inbox listen with no key heard mail sent to the box itself: its key is "".
     for listen in ["listen to inbox {} fire deal", "listen to inbox fire deal"] {
         let source = format!("{INBOX}function deal(m: <inbox-[:Email]->>) {{ return m.Subject }}\n{listen}\n");
         let d = diagnostics(&source);
+        assert_eq!(retired(&d).fix.as_ref().unwrap()["safe"], true, "{listen}");
+        let text = fixed(&source, &d);
+        assert_eq!(text, format!("{INBOX}function deal(m: <inbox-[:Emails]->>) {{ return m.Subject }}\nlisten to inbox-[e:Emails WHERE e.Key == \"\"]-> fire deal\n"));
+        assert_rechecks_clean(&text);
+    }
+    // A mapping's `absent` takes the place of the module's default events.
+    let source = format!("{GHX}function f(n: <ghx-[:Notification]->>) {{ return 1 }}\nlisten to ghx {{}} fire f\n");
+    let text = fixed(&source, &diagnostics(&source));
+    assert!(text.ends_with("listen to ghx-[n:Notifications WHERE n.Reason IN [\"review_requested\"]]-> fire f\n"), "{text}");
+    assert_rechecks_clean(&text);
+}
+
+#[test]
+fn a_listen_that_leaves_an_unbounded_edge_unbounded_has_no_fix_and_is_told_the_field_that_bounds_it() {
+    let keyed = format!("{MBOX}function deal(m: <mbox-[:Email]->>) {{ return m.Subject }}\nlisten to mbox {{ key: \"deals\" }} fire deal\n");
+    let text = fixed(&keyed, &diagnostics(&keyed));
+    assert_eq!(text, format!("{MBOX}function deal(m: <mbox-[:Emails]->>) {{ return m.Subject }}\nlisten to mbox-[e:Emails WHERE e.Key == \"deals\"]-> fire deal\n"));
+    assert_rechecks_clean(&text);
+    for listen in ["listen to mbox {} fire deal", "listen to mbox fire deal"] {
+        let source = format!("{MBOX}function deal(m: <mbox-[:Email]->>) {{ return m.Subject }}\n{listen}\n");
+        let d = diagnostics(&source);
         let told = retired(&d);
         assert_eq!(told.fix, None, "{listen}");
-        assert!(told.message.ends_with("Write `listen to inbox-[:Emails]-> fire deal`"), "{}", told.message);
+        assert!(
+            told.message.ends_with(
+                "Write `listen to mbox-[e:Emails WHERE e.Key == \"…\"]-> fire deal` (its settings name no value that bounds the edge, so there is no rewrite: name the one it listens for)"
+            ),
+            "{}",
+            told.message
+        );
     }
+}
+
+#[test]
+fn a_rewrite_never_writes_a_literal_its_field_refuses() {
+    // mbox's keys are lowercase letters and digits; 0.12 did not lowercase them for it.
+    let source = format!("{MBOX}function deal(m: <mbox-[:Email]->>) {{ return m.Subject }}\nlisten to mbox {{ key: \"Deals\" }} fire deal\n");
+    let d = diagnostics(&source);
+    let told = retired(&d);
+    assert_eq!(told.fix, None);
+    assert!(
+        told.message.ends_with("Write `listen to mbox-[e:Emails WHERE e.Key == \"…\"]-> fire deal` (there is no rewrite: \"Deals\" is not an InboxKey: it does not match ^[a-z0-9]+$)"),
+        "{}",
+        told.message
+    );
 }
 
 #[test]

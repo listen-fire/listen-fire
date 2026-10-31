@@ -2,7 +2,8 @@
 // credential (receiving needs none), a listen per key on the connection's
 // `Emails` (`inbox-[e:Emails WHERE e.Key == "deals"]->`), and each message,
 // posted signed to the module's door as Mailgun posts it, firing the listens
-// whose key its address carries: none when no listen names it.
+// whose key its address carries (the empty key for the box itself): none, and
+// a line saying so, when no listen names it.
 
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
@@ -30,9 +31,12 @@ const INTAKE = [
   '',
   'function deal(m: <inbox-[:Emails]->>) { return "deal: ${m.Subject}" }',
   'function intro(m: <inbox-[:Emails]->>) { return "intro: ${m.Subject}" }',
+  'function boxed(m: <inbox-[:Emails]->>) { return "box: ${m.Subject}" }',
   '',
   'listen as "Deal intake" to inbox-[e:Emails WHERE e.Key == "deals"]-> fire deal',
+  'listen as "Q3 deal intake" to inbox-[e:Emails WHERE e.Key == "deals_q3"]-> fire deal',
   'listen as "Intro intake" to inbox-[e:Emails WHERE e.Key IN ["intros", "customer-support"]]-> fire intro',
+  'listen as "Box intake" to inbox-[e:Emails WHERE e.Key == ""]-> fire boxed',
   '',
 ].join('\n');
 
@@ -57,7 +61,7 @@ async function intake(): Promise<string> {
   return dir;
 }
 
-test('mail is routed by the Emails key the listen names; a key outside the slug pattern is refused', async () => {
+test('mail is routed by the Emails key the listen names, the box itself by the empty key; a key no plus-suffix carries is refused', async () => {
   const dir = await intake();
   const check = lf(dir, 'check');
   assert.equal(check.code, 0, check.out);
@@ -69,17 +73,21 @@ test('mail is routed by the Emails key the listen names; a key outside the slug 
   // The key is the plus-suffix in any case; IN takes either of its keys.
   assert.match(sentTo(dir, 'Inbox <inbox+INTROS@acme.test>').out, /returned "intro: Hello"/);
   assert.match(sentTo(dir, 'inbox+customer-support@acme.test').out, /returned "intro: Hello"/);
-  // A key no listen names, and mail to the box itself, run nothing.
-  for (const stray of ['inbox+hiring@acme.test', 'inbox@acme.test']) {
-    const ran = sentTo(dir, stray);
-    assert.equal(ran.code, 0, ran.out);
-    assert.doesNotMatch(ran.out, /completed|returned/, stray);
-  }
+  // A key holds what a plus-suffix can, and mail to the box itself has the empty key.
+  assert.match(sentTo(dir, 'inbox+Deals_Q3@acme.test').out, /returned "deal: Hello"/);
+  const boxed = sentTo(dir, 'inbox@acme.test');
+  assert.match(boxed.out, /returned "box: Hello"/);
+  assert.doesNotMatch(boxed.out, /deal:|intro:/);
+  // A key no listen names runs nothing, and says so with its key.
+  const stray = sentTo(dir, 'inbox+hiring@acme.test');
+  assert.equal(stray.code, 0, stray.out);
+  assert.doesNotMatch(stray.out, /completed|returned/);
+  assert.match(stray.out, /email: the arrival \S+ on Emails \(its Key is "hiring"\) matches the WHERE of no listen on it: it runs nothing/);
   // The same message posted again runs nothing more.
   const again = sentTo(dir, 'inbox+deals@acme.test');
   assert.doesNotMatch(again.out, /returned "deal: Hello"/);
 
-  // A key is a slug: the module refuses one it could never route.
+  // A key is lowercase, as the module carries it: it refuses one it could never route.
   writeFileSync(join(dir, 'movements/intake.mvt'), INTAKE.replace('e.Key == "deals"', 'e.Key == "Deals Desk"'));
   const refused = lf(dir, 'check');
   assert.equal(refused.code, 1, refused.out);

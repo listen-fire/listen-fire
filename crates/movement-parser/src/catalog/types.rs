@@ -773,6 +773,34 @@ pub struct KeyBecomes {
     /// `"created"`); absent, a value is the field's as written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values: Option<JsMap<String>>,
+    /// What a 0.12 listen meant by leaving the key out, as a settings value
+    /// (`""`: mail sent to the box itself; a list: the events it heard). The
+    /// rewrite of a listen that omits the key compares it, so the traversal
+    /// hears what the listen heard. Absent, omitting the key narrowed nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub absent: Option<SettingsValue>,
+    /// 0.12 compared this key's values lowercased: the rewrite writes them
+    /// lowercased, so `{ key: "Deals" }` still hears what it heard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lowercase: Option<bool>,
+}
+
+/// A settings value as a 0.12 listen wrote it: one text, or a list of them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SettingsValue {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl SettingsValue {
+    /// Its texts, one or many.
+    pub fn texts(&self) -> &[String] {
+        match self {
+            SettingsValue::One(text) => std::slice::from_ref(text),
+            SettingsValue::Many(texts) => texts,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -30,27 +30,33 @@ pub mod native {
     use super::ZoneLookup;
 
     /// The `jiff` zone database, pinned to the zone data Node's ICU carries
-    /// (the engine's `native-env` pin). Reads a zone as the engine's native
-    /// environment services do (`zone_of` there): an IANA name in any case,
-    /// or an offset `±HH`, `±HHMM`, `±HH:MM`.
+    /// (the engine's `native-env` pin), read by `zone_of`.
     pub struct NativeZones;
 
     impl ZoneLookup for NativeZones {
         fn is_zone(&self, zone: &str) -> bool {
-            if offset_zone(zone).is_some() {
-                return true;
-            }
-            // `Intl` takes the IANA names and nothing looser: no surrounding
-            // space, no path tricks.
-            if zone.is_empty() || !zone.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'_' | b'-' | b'+')) {
-                return false;
-            }
-            // `Factory` is in the IANA files but not among ICU's zones.
-            if zone.eq_ignore_ascii_case("Factory") {
-                return false;
-            }
-            TimeZone::get(zone).is_ok()
+            zone_of(zone).is_some()
         }
+    }
+
+    /// The zone `Intl` reads `zone` as, when it reads one: an IANA name in
+    /// any case, or an offset `±HH`, `±HHMM`, `±HH:MM`. Every native reader
+    /// of a zone reads it here (the engine's environment services, the run
+    /// host's cron clock), so a zone the checker accepts is one they read.
+    pub fn zone_of(zone: &str) -> Option<TimeZone> {
+        if let Some(offset) = offset_zone(zone) {
+            return Some(TimeZone::fixed(offset));
+        }
+        // `Intl` takes the IANA names and nothing looser: no surrounding
+        // space, no path tricks.
+        if zone.is_empty() || !zone.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'_' | b'-' | b'+')) {
+            return None;
+        }
+        // `Factory` is in the IANA files but not among ICU's zones.
+        if zone.eq_ignore_ascii_case("Factory") {
+            return None;
+        }
+        TimeZone::get(zone).ok()
     }
 
     fn offset_zone(zone: &str) -> Option<Offset> {

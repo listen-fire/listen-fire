@@ -205,55 +205,23 @@ impl EnvServices for HostImports {
 pub mod native {
     use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed};
     use jiff::Timestamp;
-    use jiff::tz::{Offset, TimeZone};
+    use jiff::tz::TimeZone;
 
     use super::{EnvServices, NormalForm, UrlParts, ZonedFields};
     use crate::js_date;
 
     pub struct Native;
 
-    /// The zone `Intl` reads `zone` as: an IANA name in any case, or an
-    /// offset `±HH`, `±HHMM`, `±HH:MM`.
+    /// The zone `Intl` reads `zone` as (the checker's reader, so a zone
+    /// the checker accepts is one a run reads).
     fn zone_of(zone: &str) -> Option<TimeZone> {
-        if let Some(offset) = offset_zone(zone) {
-            return Some(TimeZone::fixed(offset));
-        }
-        // `Intl` takes the IANA names and nothing looser: no surrounding
-        // space, no path tricks.
-        if zone.is_empty() || !zone.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'_' | b'-' | b'+')) {
-            return None;
-        }
-        // `Factory` is in the IANA files but not among ICU's zones.
-        if zone.eq_ignore_ascii_case("Factory") {
-            return None;
-        }
-        TimeZone::get(zone).ok()
+        movement_checker::host::native::zone_of(zone)
     }
 
     /// The zone data this implementation reads, as `process.versions.tz`
     /// names it.
     pub fn tz_version() -> Option<&'static str> {
         jiff_tzdb::VERSION
-    }
-
-    fn offset_zone(zone: &str) -> Option<Offset> {
-        let b = zone.as_bytes();
-        let sign = match b.first()? {
-            b'+' => 1,
-            b'-' => -1,
-            _ => return None,
-        };
-        let digits = |s: &[u8]| s.iter().all(u8::is_ascii_digit).then(|| std::str::from_utf8(s).ok()?.parse::<i32>().ok()).flatten();
-        let (hours, minutes) = match &b[1..] {
-            [h1, h2] => (digits(&[*h1, *h2])?, 0),
-            [h1, h2, m1, m2] => (digits(&[*h1, *h2])?, digits(&[*m1, *m2])?),
-            [h1, h2, b':', m1, m2] => (digits(&[*h1, *h2])?, digits(&[*m1, *m2])?),
-            _ => return None,
-        };
-        if hours > 23 || minutes > 59 {
-            return None;
-        }
-        Offset::from_seconds(sign * (hours * 3600 + minutes * 60)).ok()
     }
 
     /// WHATWG fails a non-special URL whose authority holds a `\\` (a

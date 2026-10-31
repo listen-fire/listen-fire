@@ -55,7 +55,7 @@ describe('@lf/email', () => {
   it('declares how a 0.12 keyed listen becomes its Emails edge, and a credential a host may leave out', () => {
     const { manifest } = load({ credential: noCredential('email') });
     expect(manifest).not.toHaveProperty('listenConfig');
-    expect(manifest.listenSettingsBecome).toEqual({ path: ['Emails'], aliases: ['e'], paramFrom: 'Email', keys: { key: { hop: 0, field: 'Key', op: 'eq' } } });
+    expect(manifest.listenSettingsBecome).toEqual({ path: ['Emails'], aliases: ['e'], paramFrom: 'Email', keys: { key: { hop: 0, field: 'Key', op: 'eq', absent: '', lowercase: true } } });
     expect(manifest.protocolMinor).toBe(6);
     expect(manifest.credentials?.every((c) => c.fields?.every((f) => f.optional === true))).toBe(true);
   });

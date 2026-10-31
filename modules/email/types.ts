@@ -33,11 +33,13 @@ export const EMAILS_EDGE = 'Emails';
 
 /** The field an email is routed by: the plus-suffix of the address it was
  *  sent to (`inbox+deals@…` is `deals`), lowercased. Mail sent to the box
- *  itself has the empty key, which no listen names. */
+ *  itself has the empty key, `e.Key == ""`. */
 export const EMAIL_KEY_FIELD = 'Key';
 
-/** What a key a listen names may be: a slug. */
-export const EMAIL_KEY_PATTERN = '^[a-z0-9]+(-[a-z0-9]+)*$';
+/** What a key a listen names may be: what a plus-suffix can carry once
+ *  lowercased (an address's local-part characters, as 0.12 routed them), or
+ *  nothing at all for the box itself. */
+export const EMAIL_KEY_PATTERN = "^[a-z0-9.!#$%&'*+/=?^_`{|}~-]*$";
 
 /** Edge id on `email:message` that fans out one position per attachment. */
 export const EMAIL_ATTACHMENTS_FIELD = 'attachments';

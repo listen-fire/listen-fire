@@ -190,18 +190,36 @@ pub fn invocation(fired_at: &str, user: &Js, text: Option<&str>) -> Js {
     })
 }
 
+/// When a poll of `Ticks` happens, and how often its key is polled.
+#[derive(Clone, Copy)]
+pub struct PollClock {
+    pub now_ms: i64,
+    pub every_ms: i64,
+}
+
+/// What a poll of `Ticks` answered, and a line for each schedule and zone
+/// the filter names that the unit could not read (that pair fires nothing;
+/// the rest of the poll still does).
+pub struct Ticked {
+    pub answer: Js,
+    pub unread: Vec<String>,
+}
+
 /// The cron unit's answer to a poll of `Ticks` (adapter protocol 2.6's
-/// `poll({ edge, filter, cursor })`), `now_ms` its clock: for each schedule
-/// and zone the filter names, the latest occurrence since the cursor, as one
-/// arrival. Its identity is the occurrence, so however many workers find it
-/// due, a listen runs it once. The first poll (no cursor) only sets the
-/// cursor: nothing before a listen is owed. The cursor is the instant it
+/// `poll({ edge, filter, cursor })`): every occurrence since the cursor of
+/// each schedule and zone the filter names, as one arrival each. An
+/// occurrence older than one poll interval before now was missed while
+/// nothing polled (a backlog): of those only the latest fires, once. One
+/// instant fires once however many spellings of a schedule or zone the
+/// filter names. Its identity is the occurrence, so however many workers
+/// find it due, a listen runs it once. The first poll (no cursor) only sets
+/// the cursor: nothing before a listen is owed. The cursor is the instant it
 /// polled to. The unit applies the filter itself (`takenApplied`).
-pub fn poll_ticks(filter: Option<&serde_json::Value>, cursor: Option<&Js>, now_ms: i64) -> Result<Js, String> {
+pub fn poll_ticks(filter: Option<&serde_json::Value>, cursor: Option<&Js>, clock: PollClock) -> Result<Ticked, String> {
+    let PollClock { now_ms, every_ms } = clock;
     let now = iso_of(now_ms);
-    let next = obj! { "cursor" => Js::str(&now) };
     let Some(after_ms) = cursor.and_then(Js::as_str).and_then(ms_of) else {
-        return Ok(Js::Obj(obj! { "arrivals" => Js::Arr(Vec::new()), "cursor" => Js::str(&now) }));
+        return Ok(Ticked { answer: Js::Obj(obj! { "arrivals" => Js::Arr(Vec::new()), "cursor" => Js::str(&now) }), unread: Vec::new() });
     };
     let filter: Expression = match filter {
         Some(filter) => serde_json::from_value(filter.clone()).map_err(|e| format!("cron: the filter on {TICKS} is not one it reads: {e}"))?,
@@ -209,25 +227,40 @@ pub fn poll_ticks(filter: Option<&serde_json::Value>, cursor: Option<&Js>, now_m
     };
     let schedules = values_of(&filter, "Schedule").ok_or_else(|| format!("cron: a poll of {TICKS} names no schedule it can read"))?;
     let zones = values_of(&filter, "Zone").unwrap_or_else(|| vec![DEFAULT_ZONE.to_string()]);
-    let mut arrivals = Vec::new();
+    let backlog_until = now_ms - every_ms;
+    // Each instant once, by the first schedule and zone the filter names that is due then.
+    let mut due: std::collections::BTreeMap<i64, (&str, &str)> = std::collections::BTreeMap::new();
+    let mut unread = Vec::new();
     for schedule in &schedules {
         for zone in &zones {
-            let parsed = parse_schedule(schedule, Some(zone)).map_err(|e| format!("cron: schedule \"{schedule}\" in {zone}: {e}"))?;
-            let Some(due_ms) = parsed.latest_in(after_ms, now_ms) else { continue };
-            let due = iso_of(due_ms);
-            let fields = obj! { "Fired at" => Js::str(&due), "Schedule" => Js::str(schedule), "Zone" => Js::str(zone) };
-            arrivals.push(Js::Obj(obj! {
-                "edge" => Js::str(TICKS),
-                "identity" => Js::Str(format!("tick:{schedule}:{zone}:{due}")),
-                "landing" => Js::Obj(obj! { "recordType" => Js::str("Tick"), "fields" => Js::Obj(fields) }),
-                "occurredAt" => Js::str(&due),
-                "takenApplied" => Js::Bool(true),
-            }));
+            let parsed = match parse_schedule(schedule, Some(zone)) {
+                Ok(parsed) => parsed,
+                Err(e) => {
+                    unread.push(format!("cron: schedule \"{schedule}\" in {zone} fires nothing: {e}"));
+                    continue;
+                }
+            };
+            let caught_up = (after_ms < backlog_until).then(|| parsed.latest_in(after_ms, backlog_until)).flatten();
+            for at in caught_up.into_iter().chain(parsed.occurrences_in(after_ms.max(backlog_until), now_ms)) {
+                due.entry(at).or_insert((schedule, zone));
+            }
         }
     }
-    let mut answer = next;
-    answer.insert("arrivals".into(), Js::Arr(arrivals));
-    Ok(Js::Obj(answer))
+    let arrivals = due
+        .into_iter()
+        .map(|(at, (schedule, zone))| {
+            let at = iso_of(at);
+            let fields = obj! { "Fired at" => Js::str(&at), "Schedule" => Js::str(schedule), "Zone" => Js::str(zone) };
+            Js::Obj(obj! {
+                "edge" => Js::str(TICKS),
+                "identity" => Js::Str(format!("tick:{schedule}:{zone}:{at}")),
+                "landing" => Js::Obj(obj! { "recordType" => Js::str("Tick"), "fields" => Js::Obj(fields) }),
+                "occurredAt" => Js::str(&at),
+                "takenApplied" => Js::Bool(true),
+            })
+        })
+        .collect();
+    Ok(Ticked { answer: Js::Obj(obj! { "arrivals" => Js::Arr(arrivals), "cursor" => Js::str(&now) }), unread })
 }
 
 /// The literals `filter` compares `field` with, by `==` or `IN`, or an `OR`
@@ -326,7 +359,7 @@ pub fn parse_schedule(expression: &str, timezone: Option<&str>) -> Result<Schedu
     }
     let (days_of_month, any_day_of_month) = field(dom, 1, 31, &[], 0)?;
     let zone = match timezone {
-        Some(name) => jiff::tz::TimeZone::get(name).map_err(|e| format!("'{name}' is not a time zone: {e}"))?,
+        Some(name) => movement_checker::host::native::zone_of(name).ok_or_else(|| format!("'{name}' is not a time zone"))?,
         None => jiff::tz::TimeZone::UTC,
     };
     Ok(Schedule {
@@ -362,15 +395,23 @@ impl Schedule {
     /// The latest occurrence after `after_ms` and no later than `until_ms`
     /// (each a minute's start), when there is one.
     pub fn latest_in(&self, after_ms: i64, until_ms: i64) -> Option<i64> {
-        let mut at = until_ms - until_ms.rem_euclid(60_000);
+        self.minutes_back(after_ms, until_ms).find(|at| self.matches(*at))
+    }
+
+    /// Every occurrence after `after_ms` and no later than `until_ms`,
+    /// earliest first.
+    pub fn occurrences_in(&self, after_ms: i64, until_ms: i64) -> Vec<i64> {
+        let mut all: Vec<i64> = self.minutes_back(after_ms, until_ms).filter(|at| self.matches(*at)).collect();
+        all.reverse();
+        all
+    }
+
+    /// The minutes' starts in (`after_ms`, `until_ms`], latest first, no
+    /// further back than a worker looks.
+    fn minutes_back(&self, after_ms: i64, until_ms: i64) -> impl Iterator<Item = i64> {
+        let latest = until_ms - until_ms.rem_euclid(60_000);
         let floor = after_ms.max(until_ms - LOOKBACK_MINUTES * 60_000);
-        while at > floor {
-            if self.matches(at) {
-                return Some(at);
-            }
-            at -= 60_000;
-        }
-        None
+        (0..).map(move |n| latest - n * 60_000).take_while(move |at| *at > floor)
     }
 }
 
@@ -420,35 +461,91 @@ mod tests {
         serde_json::to_value(step.expression_filter.as_deref().unwrap()).unwrap()
     }
 
-    fn ticked(answer: &Js) -> Vec<(String, String)> {
+    fn ticked_of(answer: &Js) -> Vec<(String, String)> {
         answer.get("arrivals").and_then(Js::as_array).unwrap().iter().map(|a| (a.get("identity").and_then(Js::as_str).unwrap().to_string(), a.get("landing").unwrap().to_json())).collect()
     }
 
+    /// A poll at `now` of a key polled every `every_minutes`.
+    fn poll(written: &str, cursor: Option<&Js>, now: i64, every_minutes: i64) -> Ticked {
+        poll_ticks(Some(&filter(written)), cursor, PollClock { now_ms: now, every_ms: every_minutes * 60_000 }).unwrap()
+    }
+
+    fn identities(ticked: &Ticked) -> Vec<String> {
+        ticked_of(&ticked.answer).into_iter().map(|(i, _)| i).collect()
+    }
+
     #[test]
-    fn a_poll_of_ticks_answers_the_latest_occurrence_of_each_schedule_and_zone_it_names() {
+    fn a_poll_of_ticks_answers_each_schedule_and_zone_it_names() {
         let (armed, now) = (at("2026-10-19T08:30:00Z"), at("2026-10-19T09:30:00Z"));
         // The first poll only sets the cursor.
-        let first = poll_ticks(Some(&filter(r#"t.Schedule == "0 9 * * 1""#)), None, armed).unwrap();
-        assert_eq!(first.to_json(), r#"{"arrivals":[],"cursor":"2026-10-19T08:30:00.000Z"}"#);
-        let cursor = first.get("cursor").cloned().unwrap();
+        let first = poll(r#"t.Schedule == "0 9 * * 1""#, None, armed, 60);
+        assert_eq!(first.answer.to_json(), r#"{"arrivals":[],"cursor":"2026-10-19T08:30:00.000Z"}"#);
+        let cursor = first.answer.get("cursor").cloned().unwrap();
         // 2026-10-19 is a Monday; with no zone, a schedule is read in UTC.
-        let one = poll_ticks(Some(&filter(r#"t.Schedule == "0 9 * * 1""#)), Some(&cursor), now).unwrap();
+        let one = poll(r#"t.Schedule == "0 9 * * 1""#, Some(&cursor), now, 60);
         assert_eq!(
-            ticked(&one),
+            ticked_of(&one.answer),
             [("tick:0 9 * * 1:UTC:2026-10-19T09:00:00.000Z".to_string(), r#"{"recordType":"Tick","fields":{"Fired at":"2026-10-19T09:00:00.000Z","Schedule":"0 9 * * 1","Zone":"UTC"}}"#.to_string())]
         );
-        assert_eq!(one.get("cursor").and_then(Js::as_str), Some("2026-10-19T09:30:00.000Z"));
+        assert_eq!(one.answer.get("cursor").and_then(Js::as_str), Some("2026-10-19T09:30:00.000Z"));
         // Two schedules, by IN or by OR, each fire; in London 09:00 is 08:00 UTC, before the cursor's 08:30.
         for written in [r#"t.Schedule IN ["0 9 * * 1", "15 9 * * *"]"#, r#"t.Schedule == "0 9 * * 1" OR t.Schedule == "15 9 * * *""#] {
-            let two = poll_ticks(Some(&filter(written)), Some(&cursor), now).unwrap();
-            let identities: Vec<String> = ticked(&two).into_iter().map(|(i, _)| i).collect();
-            assert_eq!(identities, ["tick:0 9 * * 1:UTC:2026-10-19T09:00:00.000Z", "tick:15 9 * * *:UTC:2026-10-19T09:15:00.000Z"], "{written}");
+            assert_eq!(identities(&poll(written, Some(&cursor), now, 60)), ["tick:0 9 * * 1:UTC:2026-10-19T09:00:00.000Z", "tick:15 9 * * *:UTC:2026-10-19T09:15:00.000Z"], "{written}");
         }
-        let zoned = poll_ticks(Some(&filter(r#"t.Schedule == "0 9 * * 1" AND t.Zone == "Europe/London""#)), Some(&cursor), now).unwrap();
-        assert_eq!(ticked(&zoned), Vec::<(String, String)>::new());
-        let zoned = poll_ticks(Some(&filter(r#"t.Schedule == "0 10 * * 1" AND t.Zone == "Europe/London""#)), Some(&cursor), now).unwrap();
-        assert_eq!(ticked(&zoned)[0].0, "tick:0 10 * * 1:Europe/London:2026-10-19T09:00:00.000Z");
-        assert!(poll_ticks(None, Some(&cursor), now).unwrap_err().contains("names no schedule"));
+        assert_eq!(identities(&poll(r#"t.Schedule == "0 9 * * 1" AND t.Zone == "Europe/London""#, Some(&cursor), now, 60)), Vec::<String>::new());
+        assert_eq!(identities(&poll(r#"t.Schedule == "0 10 * * 1" AND t.Zone == "Europe/London""#, Some(&cursor), now, 60)), ["tick:0 10 * * 1:Europe/London:2026-10-19T09:00:00.000Z"]);
+        assert!(poll_ticks(None, Some(&cursor), PollClock { now_ms: now, every_ms: 60_000 }).err().unwrap().contains("names no schedule"));
+    }
+
+    #[test]
+    fn a_poll_fires_every_occurrence_in_its_window_and_one_catch_up_for_a_backlog() {
+        let cursor = Js::str("2026-10-19T10:00:00.000Z");
+        // Polled every five minutes, a minutely schedule fires five ticks a poll.
+        let five = poll(r#"t.Schedule == "* * * * *""#, Some(&cursor), at("2026-10-19T10:05:00Z"), 5);
+        assert_eq!(
+            identities(&five),
+            ["10:01", "10:02", "10:03", "10:04", "10:05"].map(|m| format!("tick:* * * * *:UTC:2026-10-19T{m}:00.000Z"))
+        );
+        // A poll that drifts past its interval still fires the occurrence between.
+        let drifted = poll(r#"t.Schedule == "* * * * *""#, Some(&Js::str("2026-10-19T09:00:59.800Z")), at("2026-10-19T09:02:00.300Z"), 1);
+        assert_eq!(identities(&drifted), ["09:01", "09:02"].map(|m| format!("tick:* * * * *:UTC:2026-10-19T{m}:00.000Z")));
+        // After an hour with nothing polling, the backlog is one catch-up tick
+        // (its latest occurrence), then the poll interval's own ticks.
+        let after_downtime = poll(r#"t.Schedule == "* * * * *""#, Some(&Js::str("2026-10-19T09:00:00.000Z")), at("2026-10-19T10:05:00Z"), 5);
+        assert_eq!(
+            identities(&after_downtime),
+            ["10:00", "10:01", "10:02", "10:03", "10:04", "10:05"].map(|m| format!("tick:* * * * *:UTC:2026-10-19T{m}:00.000Z"))
+        );
+        // A daily schedule missed for three days fires once.
+        let daily = poll(r#"t.Schedule == "0 9 * * *""#, Some(&Js::str("2026-10-16T12:00:00.000Z")), at("2026-10-19T12:00:00Z"), 1);
+        assert_eq!(identities(&daily), ["tick:0 9 * * *:UTC:2026-10-19T09:00:00.000Z"]);
+    }
+
+    #[test]
+    fn one_instant_fires_once_whatever_spellings_the_filter_names() {
+        let cursor = Js::str("2026-10-19T08:30:00.000Z");
+        // 2026-10-19 is a Monday; in winter London is UTC.
+        let spelled = poll(
+            r#"t.Schedule IN ["0 9 * * 1-5", "0 9 * * MON-FRI"] AND t.Zone IN ["UTC", "Etc/UTC"]"#,
+            Some(&cursor),
+            at("2026-10-19T09:30:00Z"),
+            60,
+        );
+        assert_eq!(identities(&spelled), ["tick:0 9 * * 1-5:UTC:2026-10-19T09:00:00.000Z"]);
+    }
+
+    #[test]
+    fn a_zone_the_unit_cannot_read_fires_nothing_and_the_rest_of_the_poll_still_fires() {
+        let cursor = Js::str("2026-10-19T08:30:00.000Z");
+        let ticked = poll(r#"t.Schedule == "0 9 * * *" AND t.Zone IN ["Mars/Olympus", "UTC", "+01:00"]"#, Some(&cursor), at("2026-10-19T09:30:00Z"), 60);
+        // An offset is read as the checker reads it: 09:00 at +01:00 is 08:00 UTC, before the cursor.
+        assert_eq!(identities(&ticked), ["tick:0 9 * * *:UTC:2026-10-19T09:00:00.000Z"]);
+        assert_eq!(ticked.unread, [r#"cron: schedule "0 9 * * *" in Mars/Olympus fires nothing: 'Mars/Olympus' is not a time zone"#]);
+        let offset = poll(r#"t.Schedule == "0 10 * * *" AND t.Zone == "+01:00""#, Some(&cursor), at("2026-10-19T09:30:00Z"), 60);
+        assert_eq!(identities(&offset), ["tick:0 10 * * *:+01:00:2026-10-19T09:00:00.000Z"]);
+        let bad_schedule = poll(r#"t.Schedule IN ["0 9 * * *", "61 * * * *"]"#, Some(&cursor), at("2026-10-19T09:30:00Z"), 60);
+        assert_eq!(identities(&bad_schedule), ["tick:0 9 * * *:UTC:2026-10-19T09:00:00.000Z"]);
+        assert_eq!(bad_schedule.unread, [r#"cron: schedule "61 * * * *" in UTC fires nothing: '61' is not a value in 0-59"#]);
     }
 
     #[test]

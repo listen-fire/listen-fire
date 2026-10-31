@@ -894,10 +894,25 @@ pub fn unreadable_listening(declarant: Declarant, entries: &[Js], descriptors: &
     }
 }
 
+/// Why a key's `absent` cannot be compared as its key compares a value: on
+/// a `type` key, a list on an `eq` key that is not one value, or a value its
+/// `values` do not spell (engine-contracts `absentRefusal` says the same).
+fn absent_refusal(name: &str, key: &movement_parser::catalog::types::KeyBecomes) -> Option<String> {
+    let texts = key.absent.as_ref()?.texts();
+    if key.op == KeyOp::Type {
+        return Some(format!("'listenSettingsBecome' gives '{name}' an absent value, but a 'type' key compares no field"));
+    }
+    if key.op == KeyOp::Eq && texts.len() != 1 {
+        return Some(format!("'listenSettingsBecome' gives '{name}' {} absent values, but an 'eq' key compares one", texts.len()));
+    }
+    let unspelled = key.values.as_ref().and_then(|values| texts.iter().find(|t| values.get(t.as_str()).is_none()))?;
+    Some(format!("'listenSettingsBecome' gives '{name}' the absent value \"{unspelled}\", which its values do not spell"))
+}
+
 /// The refusal of a module's `listenSettingsBecome` that cannot be the
 /// traversal it says (engine-contracts `unreadableSettingsBecome` says the
 /// same): an alias count that is not one per edge, a key mapped past the path
-/// or compared on no field, a path that starts at no root collection, or an
+/// or compared on no field, an `absent` its key cannot compare, a path that starts at no root collection, or an
 /// edge its type before it does not have. A connection positioned at a member
 /// stands on the path's first hops, so the path is read from its first edge
 /// that is a root collection here. A type nobody described is not judged.
@@ -917,6 +932,9 @@ pub fn unreadable_settings_become(become_: &SettingsBecome, entries: &[Js], desc
                 KeyOp::Type => "type",
             };
             return Some(format!("'listenSettingsBecome' maps '{name}' by '{op}' but names no field to compare"));
+        }
+        if let Some(refusal) = absent_refusal(name, key) {
+            return Some(refusal);
         }
     }
     let roots: Vec<&Js> = entries.iter().filter(|e| is_collection(e)).collect();
