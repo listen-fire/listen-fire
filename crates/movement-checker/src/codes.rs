@@ -147,7 +147,8 @@ pub const AWAIT_UNORDERED: &str = "MOV_AWAIT_UNORDERED";
 pub const AWAIT_VALUE_CAPTURED: &str = "MOV_AWAIT_VALUE_CAPTURED";
 /// A warning raised only by a check for an upgrade from before 0.13, with
 /// nothing to rewrite: an `await` on a record's edge that no `sleep` races,
-/// which waits forever once its record is deleted.
+/// which waits forever once its record is deleted, or a call no `sleep`
+/// races to a function that reaches one.
 pub const AWAIT_MAY_HANG: &str = "MOV_AWAIT_MAY_HANG";
 pub const PARALLEL_RETIRED: &str = "MOV_PARALLEL_RETIRED";
 pub const EXTRACT_KEYWORD_RETIRED: &str = "MOV_EXTRACT_KEYWORD_RETIRED";

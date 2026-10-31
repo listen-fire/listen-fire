@@ -30,6 +30,9 @@ const runStatus = (dir: string, movement: string) => row<{ status: string }>(dir
 /** The `wake_await` rows queued or dead. */
 const wakeRows = (dir: string) => row<{ n: number }>(dir, "select count(*) as n from work where kind = 'wake_await'").n;
 
+/** The arrivals logged as their record deleted. */
+const goneArrivals = (dir: string) => row<{ n: number }>(dir, 'select count(*) as n from arrival where gone = 1').n;
+
 test("a deleted company leaves its wait parked; the race's sleep wins", async () => {
   const dir = project('deleted_heads');
   const before = await served(dir);
@@ -46,6 +49,7 @@ test("a deleted company leaves its wait parked; the race's sleep wins", async ()
     // Long enough for a wake to have run, had the deletion queued one.
     await sleep(1500);
     assert.deepEqual(before.lines.filter((line) => /resumed .* decide:decide|failed/.test(line)), [], before.lines.join('\n'));
+    assert.ok(goneArrivals(dir) >= 1, 'the deletion was logged');
     assert.equal(wakeRows(dir), 0, 'the deletion woke nothing');
     assert.equal(runStatus(dir, 'decide'), 'parked');
   } finally {
@@ -96,6 +100,7 @@ test('a deleted Slack message leaves its Interactions wait parked and the run pa
     // Long enough for a wake to have run, had the deletion queued one.
     await sleep(1500);
     assert.deepEqual(serving.lines.filter((line) => /slack:decide/.test(line)), [], serving.lines.join('\n'));
+    assert.ok(goneArrivals(world.dir) >= 1, 'the deletion was logged');
     assert.equal(wakeRows(world.dir), 0, 'the deletion woke nothing');
     assert.equal(runStatus(world.dir, 'decide'), 'parked');
     // The write after the wait never ran.

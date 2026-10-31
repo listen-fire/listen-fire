@@ -369,6 +369,7 @@ impl Checker<'_> {
         // A race's arms are told apart by the race, so an await inside one
         // can learn whether a sibling sleeps.
         let race = (combinator.kind == CombinatorKind::Race).then(|| self.open_race());
+        let before = self.effect_row();
         let checked: Vec<(ReturnShape, EffectRow)> = arms
             .iter()
             .enumerate()
@@ -378,8 +379,8 @@ impl Checker<'_> {
             })
             .collect();
         if let Some(race) = race {
-            let sleeps: Vec<bool> = checked.iter().map(|(_, row)| row.sleeps).collect();
-            self.close_race(race, &sleeps);
+            let rows: Vec<EffectRow> = checked.iter().map(|(_, row)| *row).collect();
+            self.close_race(race, before, &rows);
         }
         let slots: Vec<ReturnShape> = checked.into_iter().map(|(slot, _)| slot).collect();
         if let Some(at) = recorded {
@@ -452,6 +453,9 @@ impl Checker<'_> {
         };
         let symbol = self.scopes.symbol(id).clone();
         if symbol.kind == SymbolKind::Movement {
+            if let Some(holder) = self.holder_of(id) {
+                self.note_hang_call(holder, span, written);
+            }
             self.call_movement(id);
             if let Some(params) = self.listens.movement_info(id).map(|info| info.params.iter().map(|p| p.name.clone()).collect::<Vec<_>>())
                 && params.len() != expected
@@ -461,6 +465,9 @@ impl Checker<'_> {
             return (self.function_returns.get(&id).copied(), self.movement_row(id));
         }
         if let Some(crate::types::position::Position::Closure(closure)) = &symbol.types.pos {
+            if let Some(holder) = self.holder_of(id) {
+                self.note_hang_call(holder, span, written);
+            }
             let row = self.closure_row(id);
             self.absorb(row);
             if closure.params.len() != expected {

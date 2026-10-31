@@ -496,7 +496,9 @@ slot! {
         /// Never interleaved with a `Wait` park on the same record's edge. A
         /// repeat (an identity and version its record's edge logged within
         /// the retention) is skipped and wakes nothing; an arrival without an
-        /// identity is never one.
+        /// identity is never one. A gone arrival (its record deleted) is
+        /// logged but wakes nothing, and is not in the answer: a wait whose
+        /// record is deleted keeps waiting.
         "waits.log" => fn log_arrivals(WaitsLog { team_id: String, adapter_type: String, arrivals: Vec<NewArrival>, at: String }) -> Vec<WaitWake>;
         /// A run that already waits on this edge of this record keeps that
         /// wait, and its `since`.

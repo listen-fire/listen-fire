@@ -314,6 +314,7 @@ impl<'c> Checker<'c> {
         self.enter_file_facts(statements);
         self.check_statement_list(statements, file);
         self.report_missing_listens();
+        self.report_waits_that_may_hang();
         file
     }
 
@@ -420,6 +421,9 @@ impl<'c> Checker<'c> {
                     && let Some(id) = self.scopes.scope(scope).symbols.get(&assign.name).copied()
                 {
                     self.effects.closures.insert(id, bound.closure_row);
+                    if let RValue::Closure { closure } = &assign.value {
+                        self.bind_closure_holder(id, closure.span);
+                    }
                 }
                 if let Some(mut types) = self.bound_types(Some(&assign.name), &assign.value, &bound, scope) {
                     self.within_type_limit(&assign.name, &mut types.field, &mut types.may_hold, Some(assign.span));
@@ -579,7 +583,13 @@ impl<'c> Checker<'c> {
             }
             RValue::Closure { closure } => {
                 let label = name.map_or_else(|| "this closure".to_string(), |n| format!("the closure '{n}'"));
-                let (body, row) = self.check_closure_walked(closure, scope, name, &label, 0);
+                // A closure bound to a name runs where it is called, not where it is written.
+                let (body, row) = match name {
+                    Some(name) => self.in_holder(crate::families::flow::Holder::closure(closure.span), name, |this| {
+                        this.check_closure_walked(closure, scope, Some(name), &label, 0)
+                    }),
+                    None => self.check_closure_walked(closure, scope, name, &label, 0),
+                };
                 let mut returns = self.closure_returns(closure, body.value, scope);
                 // An unbound closure's value is caught where it is bound.
                 if let Some(name) = name {
@@ -906,7 +916,14 @@ impl<'c> Checker<'c> {
         self.record_body(movement.span, "movement", movement.body.iter().any(|s| !matches!(s, Statement::Return(_)) && leaves(s, true)));
         self.open_effect_frame();
         let what = format!("'{}'", movement.name);
-        let mut returns = self.check_body(&movement.body, body, what.clone());
+        let declared = self.scopes.scope(scope).symbols.get(&movement.name).copied().filter(|id| self.scopes.symbol(*id).kind == SymbolKind::Movement);
+        let mut returns = match declared {
+            Some(id) => {
+                let holder = crate::families::flow::Holder::Function(self.declared_id(id));
+                self.in_holder(holder, &movement.name, |this| this.check_body(&movement.body, body, what.clone()))
+            }
+            None => self.check_body(&movement.body, body, what.clone()),
+        };
         let row = self.close_effect_frame();
         self.within_type_limit(&movement.name, &mut returns.value.plane.field, &mut returns.value.may_hold, Some(movement.span));
         if let Some(written) = &movement.return_type {

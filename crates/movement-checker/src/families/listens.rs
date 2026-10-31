@@ -232,6 +232,9 @@ impl Checker<'_> {
 
     /// `checkListen`: `listen to <instance> { <config> } fire <movement>`.
     pub fn check_listen(&mut self, statement: &ListenDeclaration, scope: ScopeId) {
+        if let Some(id) = self.scopes.resolve_function(scope, &statement.movement) {
+            self.note_fired(id);
+        }
         self.listens.count += 1;
         if self.scopes.scope(scope).parent.is_some() {
             self.report(

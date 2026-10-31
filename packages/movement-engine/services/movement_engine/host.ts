@@ -288,9 +288,9 @@ export interface EngineHost {
     /**
      * Queue the wake for one wait: "resume the run parked on it". The engine
      * calls it after an await park is durable, when its own second read of
-     * the wait's arrivals finds one its WHERE takes, or the record gone: an
-     * arrival logged between the first read and the park woke nothing,
-     * because the wait was not parked yet. Plain data in, nothing out.
+     * the wait's arrivals finds one its WHERE takes: an arrival logged
+     * between the first read and the park woke nothing, because the wait was
+     * not parked yet. Plain data in, nothing out.
      */
     wake(request: Scoped<AwaitWakeRequest>): Promise<void>;
     /** A run's waits on listenable edges (host families version 2). Absent ⇒

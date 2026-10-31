@@ -1575,6 +1575,9 @@ impl Checker<'_> {
         let callee = self.scopes.symbol(id).clone();
         let count = call.args.len();
         if callee.kind == SymbolKind::Movement {
+            if let Some(holder) = self.holder_of(id) {
+                self.note_hang_call(holder, call.span, &call.callee);
+            }
             self.call_movement(id);
             let params = self.movement_declared_params(id);
             if let Some(params) = &params
@@ -1589,6 +1592,9 @@ impl Checker<'_> {
         }
         if self.calls_closure(&callee) {
             self.note_self_call(id, call.span);
+            if let Some(holder) = self.holder_of(id) {
+                self.note_hang_call(holder, call.span, &call.callee);
+            }
             let row = self.closure_row(id);
             self.absorb(row);
             let Some(closure) = self.called_closure(id) else { return (None, ReturnShape::default()) };

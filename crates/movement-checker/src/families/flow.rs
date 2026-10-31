@@ -303,61 +303,179 @@ impl Checker<'_> {
         checked
     }
 
-    /// A `race` ends, `sleeps` saying of each arm whether it may sleep. An
-    /// await inside an arm whose sibling sleeps is raced; one not raced, and
-    /// in no race around this one, is told now.
-    pub fn close_race(&mut self, race: usize, sleeps: &[bool]) {
-        let raced = |arm: usize| sleeps.iter().enumerate().any(|(other, sleeps)| other != arm && *sleeps);
-        let mut untold = Vec::new();
-        self.races.awaits.retain(|waiting| {
-            let Some(&(_, arm)) = waiting.arms.iter().find(|(around, _)| *around == race) else { return true };
-            if raced(arm) {
+    /// A `race` ends, `rows` saying what each arm may do. A wait or a call
+    /// inside an arm with a sibling that sleeps and cannot hang is raced;
+    /// one not raced, in no race around this one, is unraced in its holder.
+    /// The open function body's row becomes the race's: it hangs only when
+    /// every arm can.
+    pub fn close_race(&mut self, race: usize, before: Option<EffectRow>, rows: &[EffectRow]) {
+        let escapes = |arm: usize| rows.iter().enumerate().any(|(other, row)| other != arm && row.sleeps && !row.hangs);
+        let mut unraced = Vec::new();
+        self.races.pending.retain(|site| {
+            let Some(&(_, arm)) = site.arms.iter().find(|(around, _)| *around == race) else { return true };
+            if escapes(arm) {
                 return false;
             }
-            if waiting.arms.first().is_some_and(|(outermost, _)| *outermost == race) {
-                untold.push((waiting.span, waiting.written.clone()));
+            if site.arms.first().is_some_and(|(outermost, _)| *outermost == race) {
+                unraced.push(site.site.clone());
                 return false;
             }
             true
         });
-        for (span, text) in untold {
-            self.tell_await_may_hang(span, &text);
+        self.races.unraced.extend(unraced);
+        if let Some(before) = before {
+            let raced = rows.iter().fold(EffectRow { hangs: !rows.is_empty(), ..EffectRow::default() }, |row, arm| EffectRow {
+                suspends: row.suspends || arm.suspends,
+                sleeps: row.sleeps || arm.sleeps,
+                hangs: row.hangs && arm.hangs,
+            });
+            self.set_effect_row(before.with(raced));
         }
     }
 
-    /// On a check for an upgrade from before 0.13: an `await` on a record's
-    /// edge (`text` as written), which waits forever once its record is
-    /// deleted unless a sibling arm of a race around it sleeps. Told when
-    /// the races around it say it is not raced.
+    /// Whether this walk notes waits that may hang: a check for an upgrade
+    /// from before 0.13, of the program's own text, not a walk made only to
+    /// learn types.
+    fn notes_hangs(&self) -> bool {
+        let Some(pin) = self.upgrading_from else { return false };
+        self.type_only == 0 && self.imports.current_path().is_none() && standing(pin, DELETED_WAITS_HANG_SINCE) == Standing::OlderKey
+    }
+
+    /// An `await` on a record's edge (`text` as written), which waits
+    /// forever once its record is deleted unless a race around it has a
+    /// sibling arm that sleeps.
     pub fn report_await_may_hang(&mut self, span: Span, text: String) {
-        let Some(pin) = self.upgrading_from else { return };
-        if self.type_only > 0 || standing(pin, DELETED_WAITS_HANG_SINCE) != Standing::OlderKey {
+        self.flag_hang();
+        self.note_hang_site(span, Reached::Wait(text));
+    }
+
+    /// A call (or a function named as an arm or an op's function) to
+    /// `callee`, as written: what waits in `callee` waits here too.
+    pub fn note_hang_call(&mut self, callee: Holder, span: Span, written: &str) {
+        if !self.notes_hangs() {
             return;
         }
+        self.races.called.insert(callee);
+        self.note_hang_site(span, Reached::Call { callee, written: written.to_string() });
+    }
+
+    fn note_hang_site(&mut self, span: Span, reached: Reached) {
+        if !self.notes_hangs() {
+            return;
+        }
+        let site = Site { holder: self.races.holder, span, reached };
         if self.races.arms.is_empty() {
-            self.tell_await_may_hang(span, &text);
+            self.races.unraced.push(site);
         } else {
             let arms = self.races.arms.clone();
-            self.races.awaits.push(AwaitInRace { span, written: text, arms });
+            self.races.pending.push(InRace { site, arms });
         }
     }
 
-    fn tell_await_may_hang(&mut self, span: Span, text: &str) {
-        let Some(pin) = self.upgrading_from else { return };
-        if self.races.told.contains(&span) {
-            return;
+    /// `check` walks the body of `holder`, named `name`: the races around
+    /// where it is written are not around what it does when called.
+    pub fn in_holder<T>(&mut self, holder: Holder, name: &str, check: impl FnOnce(&mut Self) -> T) -> T {
+        self.races.names.entry(holder).or_insert_with(|| name.to_string());
+        let outer = std::mem::replace(&mut self.races.holder, holder);
+        let arms = std::mem::take(&mut self.races.arms);
+        let checked = check(self);
+        self.races.arms = arms;
+        self.races.holder = outer;
+        checked
+    }
+
+    /// The name `id` is bound to the closure written at `span`.
+    pub fn bind_closure_holder(&mut self, id: SymbolId, span: Span) {
+        self.races.closures.insert(id, Holder::closure(span));
+    }
+
+    /// What calling the name `id` runs, when it is a function or a closure
+    /// bound to a name.
+    pub fn holder_of(&self, id: SymbolId) -> Option<Holder> {
+        if self.scopes.symbol(id).kind == SymbolKind::Movement {
+            return Some(Holder::Function(self.declared_id(id)));
         }
-        self.races.told.push(span);
-        let mut note = crate::diagnostic::Diagnostic::error(
-            codes::AWAIT_MAY_HANG,
-            format!(
-                "'{text}' is not in a `race` with a `sleep`: from 0.13 a wait whose record is deleted never ends (under {pin} the code after it was skipped), so this run can wait forever. Race it: `race(() => {{ return {text} }}, () => {{ await sleep(1d) }})` — reviews#deleted-records"
-            ),
-            span,
-        );
-        note.severity = Some(crate::diagnostic::Severity::Warning);
-        note.upgrade = Some(true);
-        self.push(note);
+        self.races.closures.get(&id).copied()
+    }
+
+    /// A listen fires function `id`: a run starts there.
+    pub fn note_fired(&mut self, id: SymbolId) {
+        let id = self.declared_id(id);
+        self.races.fired.insert(Holder::Function(id));
+    }
+
+    /// `MOV_AWAIT_MAY_HANG`, once the program is walked. A function a run
+    /// reaches with no race on the way exposes its waits: one a listen
+    /// fires, one nothing calls, or one called where no race covers the
+    /// call from a function so exposed. Each unraced wait in an exposed
+    /// function is told; so is each unraced call in one to a function that
+    /// reaches an unraced wait, naming the function and the wait.
+    pub fn report_waits_that_may_hang(&mut self) {
+        let Some(pin) = self.upgrading_from else { return };
+        let sites = std::mem::take(&mut self.races.unraced);
+        let holders: Vec<Holder> = std::iter::once(Holder::File).chain(self.races.names.keys().copied()).collect();
+        let mut exposed: std::collections::HashSet<Holder> =
+            holders.into_iter().filter(|h| *h == Holder::File || self.races.fired.contains(h) || !self.races.called.contains(h)).collect();
+        let mut queue: Vec<Holder> = exposed.iter().copied().collect();
+        while let Some(holder) = queue.pop() {
+            for site in sites.iter().filter(|site| site.holder == holder) {
+                if let Reached::Call { callee, .. } = &site.reached
+                    && exposed.insert(*callee)
+                {
+                    queue.push(*callee);
+                }
+            }
+        }
+        // The first unraced wait each function reaches, and the function it
+        // is written in.
+        let mut reaches: std::collections::HashMap<Holder, (String, Holder)> = std::collections::HashMap::new();
+        for site in &sites {
+            if let Reached::Wait(text) = &site.reached {
+                reaches.entry(site.holder).or_insert_with(|| (text.clone(), site.holder));
+            }
+        }
+        loop {
+            let found: Vec<(Holder, (String, Holder))> = sites
+                .iter()
+                .filter(|site| !reaches.contains_key(&site.holder))
+                .filter_map(|site| match &site.reached {
+                    Reached::Call { callee, .. } => reaches.get(callee).map(|wait| (site.holder, wait.clone())),
+                    Reached::Wait(_) => None,
+                })
+                .collect();
+            if found.is_empty() {
+                break;
+            }
+            for (holder, wait) in found {
+                reaches.entry(holder).or_insert(wait);
+            }
+        }
+        let mut told: Vec<(Span, String)> = Vec::new();
+        for site in sites.iter().filter(|site| exposed.contains(&site.holder)) {
+            if told.iter().any(|(span, _)| *span == site.span) {
+                continue;
+            }
+            let message = match &site.reached {
+                Reached::Wait(text) => format!(
+                    "'{text}' is not in a `race` with a `sleep`: from 0.13 a wait whose record is deleted never ends (under {pin} the code after it was skipped), so this run can wait forever. Race it: `race(() => {{ return {text} }}, () => {{ await sleep(1d) }})` — reviews#deleted-records"
+                ),
+                Reached::Call { callee, written } => {
+                    let Some((text, at)) = reaches.get(callee) else { continue };
+                    let holder = self.races.names.get(at).map_or(written.as_str(), String::as_str);
+                    format!(
+                        "this call to '{written}' reaches '{text}' (in '{holder}'), which is not in a `race` with a `sleep`: from 0.13 a wait whose record is deleted never ends (under {pin} the code after it was skipped), so this run can wait forever. Race the call: `race(() => {{ return {written}(…) }}, () => {{ await sleep(1d) }})` — reviews#deleted-records"
+                    )
+                }
+            };
+            told.push((site.span, message));
+        }
+        told.sort_by_key(|(span, _)| (span.start.line, span.start.col));
+        for (span, message) in told {
+            let mut note = crate::diagnostic::Diagnostic::error(codes::AWAIT_MAY_HANG, message, span);
+            note.severity = Some(crate::diagnostic::Severity::Warning);
+            note.upgrade = Some(true);
+            self.push(note);
+        }
     }
 
     /// Whether `name` holds a record the run read or wrote (not a connection).
@@ -470,38 +588,86 @@ pub struct EffectRow {
     pub suspends: bool,
     /// It may `await sleep(…)`, directly or through a function it calls.
     pub sleeps: bool,
+    /// It may wait on a record's edge with nothing to end the wait should
+    /// the record be deleted: an `await` on one outside a `race` that a
+    /// `sleep` ends, directly or through a function it calls.
+    pub hangs: bool,
 }
 
 impl EffectRow {
     /// What either may do.
     pub fn with(self, other: EffectRow) -> EffectRow {
-        EffectRow { suspends: self.suspends || other.suspends, sleeps: self.sleeps || other.sleeps }
+        EffectRow { suspends: self.suspends || other.suspends, sleeps: self.sleeps || other.sleeps, hangs: self.hangs || other.hangs }
     }
 }
 
-/// The `race` arms around the walk, and the awaits on a record's edge
-/// inside them, for `MOV_AWAIT_MAY_HANG`: an await is raced when an arm
-/// around it has a sibling that sleeps, which only the race's end can tell.
+/// What a wait or a call is written in, for `MOV_AWAIT_MAY_HANG`: the
+/// file's own statements, a function, or a closure bound to a name (keyed
+/// by where it is written). A closure written in place (an arm, an op's
+/// function) runs where it is written, so it is part of what holds it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Holder {
+    #[default]
+    File,
+    Function(SymbolId),
+    Closure(usize, usize),
+}
+
+impl Holder {
+    pub fn closure(span: Span) -> Holder {
+        Holder::Closure(span.start.line, span.start.col)
+    }
+}
+
+/// The `race` arms around the walk, and the waits and calls inside them,
+/// for `MOV_AWAIT_MAY_HANG`: one is raced when an arm around it has a
+/// sibling that sleeps, which only the race's end can tell; whether an
+/// unraced one can hang a run is known once every function is walked.
 #[derive(Default)]
 pub struct Races {
-    /// The arms being walked, outermost first.
+    /// The arms being walked in the current holder, outermost first.
     arms: Vec<RaceArm>,
     /// How many races the walk has opened.
     opened: usize,
-    /// Awaits inside a race not yet ended.
-    awaits: Vec<AwaitInRace>,
-    /// Awaits already told, so a body walked twice tells once.
-    told: Vec<Span>,
+    /// What the walk is in.
+    holder: Holder,
+    /// Waits and calls inside a race not yet ended.
+    pending: Vec<InRace>,
+    /// Waits and calls no race covers in their holder.
+    unraced: Vec<Site>,
+    /// Every holder something calls, raced or not.
+    called: std::collections::HashSet<Holder>,
+    /// The functions a listen fires.
+    fired: std::collections::HashSet<Holder>,
+    /// Each holder walked, by name.
+    names: std::collections::HashMap<Holder, String>,
+    /// What a name bound to a closure runs.
+    closures: std::collections::HashMap<SymbolId, Holder>,
 }
 
 /// One arm of a race being walked: the race's number, and the arm's index.
 type RaceArm = (usize, usize);
 
-/// An await inside a race not yet ended: where, as written, and the arms
-/// around it, outermost first.
-struct AwaitInRace {
+/// A wait or a call, where it is written.
+#[derive(Clone)]
+struct Site {
+    holder: Holder,
     span: Span,
-    written: String,
+    reached: Reached,
+}
+
+#[derive(Clone)]
+enum Reached {
+    /// An await on a record's edge, as written.
+    Wait(String),
+    /// A call to a holder, its callee as written.
+    Call { callee: Holder, written: String },
+}
+
+/// A site inside a race not yet ended, and the arms around it, outermost
+/// first.
+struct InRace {
+    site: Site,
     arms: Vec<RaceArm>,
 }
 
@@ -575,9 +741,27 @@ impl Checker<'_> {
         }
     }
 
+    /// The run may wait here on a record's edge that nothing ends.
+    pub fn flag_hang(&mut self) {
+        if let Some(top) = self.effects.frames.last_mut() {
+            top.hangs = true;
+        }
+    }
+
+    /// What the body being walked may do so far, if one is.
+    pub fn effect_row(&self) -> Option<EffectRow> {
+        self.effects.frames.last().copied()
+    }
+
+    fn set_effect_row(&mut self, row: EffectRow) {
+        if let Some(top) = self.effects.frames.last_mut() {
+            *top = row;
+        }
+    }
+
     /// A call that may wait, as a plugin's declared effects say.
     pub fn absorb_suspend(&mut self, suspends: bool) {
-        self.absorb(EffectRow { suspends, sleeps: false });
+        self.absorb(EffectRow { suspends, ..EffectRow::default() });
     }
 
     /// What a called or scheduled function does is the caller's too.
