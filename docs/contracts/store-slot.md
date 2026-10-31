@@ -113,7 +113,7 @@ The first request is always `store.open`. The others are the run host's store fa
 | `processes.list` | `{}` | `{ processes, version }`: the module processes the hosts on this store started (an array of `{ pid, listen-fire, machine, command }`), at its version; `{ processes: [], version: 0 }` for a list never written |
 | `processes.swap` | `{ version, processes }` | `true` when the list was still at `version` and is now `processes` at `version + 1`; `false` when another host wrote first (read again and retry) |
 | `events.claim` | `{ listen, key }` | `true` the first time this event key reaches this listen; `false` for a redelivery, which runs nothing |
-| `events.startRun` | `{ listen, key, id, file, movement, startedAt, input, deliveryId? }` | `events.claim` and, when it is `true`, `runs.start`, as one write: `false`, and no run, for a redelivery |
+| `events.startRun` | `{ listen, key, id, file, movement, startedAt, input, deliveryId? }` | `events.claim` and, when it is `true`, `runs.start`, as one write: `false`, and no run, for a redelivery. The engine package's TypeScript client (`ArrivalRunStore`) sends a team's receipt with `listen` the JSON `["<team>", "<pipeline>"]`, so a store that serves several teams keeps their receipts apart; it compares `listen`, never reads it |
 
 The rows:
 
