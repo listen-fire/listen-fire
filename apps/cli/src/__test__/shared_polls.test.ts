@@ -13,7 +13,7 @@ import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 
 import { lf, lfCommand } from './example';
-import { edgePolls, feed, feedProject, polls } from './feed';
+import { boards, edgePolls, feed, feedProject, polls } from './feed';
 
 // A workspace-built listen-fire finds its bundled modules beside its own
 // (canonical) path; a worktree's listen-fire may be the main checkout's, so the
@@ -225,4 +225,61 @@ test('an edge with a cursor keeps no receipts for what its arming poll saw: its 
   writeFileSync(join(dir, 'externals/feed/replay'), '');
   const drained = lfAt(dir, ['drain', '--until-idle'], 61_000);
   assert.deepEqual(saw(drained.out, 'a'), ['a1']);
+});
+
+/** The feed project whose one file holds `listen`, firing `discuss`, whose
+ *  body is `body`. */
+function awaitingProject(listen: string, body: string): string {
+  const dir = feedProject();
+  writeFileSync(join(dir, 'movements/notes.mvt'), `import { feed } from adapters\n\nf = connect feed\n\nfunction discuss(n: <f-[:Notes]->>) {\n${body}}\n\n${listen}\n`);
+  return dir;
+}
+
+/** What the runs of `discuss` said they heard, as a drain's output says. */
+function heard(out: string): string[] {
+  return [...out.matchAll(/MOVENG_ERROR: (\S+ heard \S+)/g)].map((said) => said[1]);
+}
+
+test("one poll's page: a comment on a note answers the await new of the run the note starts", () => {
+  const dir = awaitingProject('listen to f-[:Notes]-> fire discuss', '  c = await new n-[:Comments]->\n  fail("${n.Title} heard ${c.Text}")\n');
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  lfAt(dir, ['drain', '--until-idle']);
+  // One page: the note, and a comment on it carried with it.
+  feed(dir, [
+    { id: 'n1', title: 'First', at: 1 },
+    { id: 'n2', title: 'Second', at: 2 },
+    { id: 'n3', title: 'Third', at: 3, comments: [{ id: 'c1', text: 'hello' }] },
+  ]);
+  const drained = lfAt(dir, ['drain', '--until-idle'], 61_000);
+  assert.deepEqual(heard(drained.out), ['Third heard hello'], drained.out);
+  assert.doesNotMatch(lf(dir, 'runs').out, /parked/);
+  // The poll is kept as a delivery its run names.
+  assert.match(lf(dir, 'deliveries').out, / poll inline 0 event\(s\) 1 run\(s\)/);
+});
+
+test("a note on a board does not answer its own run's await new on its board's Notes; the next note there does", () => {
+  const dir = feedProject();
+  writeFileSync(join(dir, 'externals/feed/siblings'), '');
+  boards(dir, [{ id: 'b1', name: 'Ops' }]);
+  feed(dir, []);
+  writeFileSync(
+    join(dir, 'movements/notes.mvt'),
+    'import { feed } from adapters\n\nf = connect feed\n\nfunction discuss(n: <f-[:Notes]->>) {\n  s = await new n-[:Notes]->\n  fail("${n.Title} heard ${s.Title}")\n}\n\nlisten to f-[b:Boards WHERE b.Name == "Ops"]->-[n:Notes]-> fire discuss\n',
+  );
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  lfAt(dir, ['drain', '--until-idle']);
+  feed(dir, [{ id: 'n2', title: 'Second', at: 2, board: 'b1' }]);
+  const first = lfAt(dir, ['drain', '--until-idle'], 61_000);
+  // The note's own arrival on b1's Notes is no answer: its run waits.
+  assert.deepEqual(heard(first.out), [], first.out);
+  assert.match(lf(dir, 'runs').out, /notes:discuss parked/);
+  feed(dir, [
+    { id: 'n2', title: 'Second', at: 2, board: 'b1' },
+    { id: 'n3', title: 'Third', at: 3, board: 'b1' },
+  ]);
+  const next = lfAt(dir, ['drain', '--until-idle'], 122_000);
+  // n3 starts a run of its own, which waits in turn; n2's run takes n3.
+  assert.deepEqual(heard(next.out), ['Second heard Third'], next.out);
 });

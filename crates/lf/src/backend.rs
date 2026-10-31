@@ -248,8 +248,10 @@ pub trait RunHostStore {
     /// (the lowest mark an unexpired run lease took, else the latest seq),
     /// and the identities past their re-send window: how many arrivals went.
     /// A wait is live while its run exists, or one a delivery opened while
-    /// its run's `fire_event` row is queued.
-    fn sweep_arrivals(&self, limit: i64) -> Result<i64>;
+    /// its run's `fire_event` row is queued. `floor`: a mark the caller's
+    /// own running steps hold, held in its process rather than by a lease;
+    /// nothing above it goes either.
+    fn sweep_arrivals(&self, limit: i64, floor: Option<i64>) -> Result<i64>;
 
     // ── The run lease ───────────────────────────────────────────────────────
     /// The lease's token, or None while another holds it. It keeps the
@@ -484,8 +486,8 @@ impl RunHostStore for Store {
     fn note_arrival(&self, noted: &Noted<'_>) -> Result<bool> {
         Store::note_arrival(self, noted)
     }
-    fn sweep_arrivals(&self, limit: i64) -> Result<i64> {
-        Store::sweep_arrivals(self, limit)
+    fn sweep_arrivals(&self, limit: i64, floor: Option<i64>) -> Result<i64> {
+        Store::sweep_arrivals(self, limit, floor)
     }
 
     fn claim_lease(&self, run_id: &str, ttl_ms: i64) -> Result<Option<String>> {

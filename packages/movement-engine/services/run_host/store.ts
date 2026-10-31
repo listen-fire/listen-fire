@@ -239,8 +239,10 @@ export interface WaitStore {
    * the lowest mark an unexpired run lease took when it was claimed, else the
    * latest seq. A wait is live while its run exists, or, one a delivery
    * opened (`keepDelivery`'s `waits`), while its `fire_event` row is queued.
+   * `floor`: a mark the caller's own running steps hold in its process
+   * rather than by a lease; nothing above it goes either.
    */
-  sweep(input: { limit: number }): Promise<{ swept: number }>;
+  sweep(input: { limit: number; floor?: number }): Promise<{ swept: number }>;
 }
 
 export interface RunLeaseStore {
@@ -365,7 +367,10 @@ export interface OwedRace {
 
 // ── A delivery's one write (`inbound.keepDelivery`) ─────────────────────────
 
-export const DELIVERY_SOURCES = ['webhook', 'hook', 'emit', 'cli'] as const;
+/** Where a delivery came in: a provider's webhook, the older `/hooks/…` door,
+ *  a module's own push (`emit`), `listen-fire run --webhook` or a replay
+ *  (`cli`), or a poll of a listenable edge that fired a listen (`poll`). */
+export const DELIVERY_SOURCES = ['webhook', 'hook', 'emit', 'cli', 'poll'] as const;
 export type DeliverySource = (typeof DELIVERY_SOURCES)[number];
 
 /** `inbound.keepDelivery`'s `delivery`. */

@@ -521,8 +521,8 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
         notes.push({ waitId, identity, version, matched, leaf: leaf ?? null });
         return matched && last?.matched !== true;
       },
-      async sweep({ limit }) {
-        const below = floor();
+      async sweep({ limit, floor: held }) {
+        const below = Math.min(floor(), held ?? Number.POSITIVE_INFINITY);
         const readByLiveWait = (row: LogRow): boolean => [...waits.values()].some((wait) => onWaitsRecord(wait, row) && live(wait));
         const doomed = new Set(log.filter((row) => row.seq <= below && !readByLiveWait(row)).slice(0, limit).map((row) => row.seq));
         log = log.filter((row) => !doomed.has(row.seq));

@@ -1200,19 +1200,20 @@ impl RunHostStore for PgStore {
     /// latest seq. A wait is live while its run exists, or while the
     /// `fire_event` row that queues it (a wait a delivery opened) is there,
     /// not buried.
-    fn sweep_arrivals(&self, limit: i64) -> Result<i64> {
+    fn sweep_arrivals(&self, limit: i64, floor: Option<i64>) -> Result<i64> {
         self.transaction(|| {
             let swept = self.execute(
                 "delete from lf.arrival where seq in (
                    select a.seq from lf.arrival a
                    where a.seq <= coalesce((select min(lease_mark) from lf.trigger_run where lease_until > now() and lease_mark is not null),
                                            (select coalesce(max(seq), 0) from lf.arrival))
+                     and ($2::int8 is null or a.seq <= $2::int8)
                      and not exists (select 1 from lf.wait_row w
                        where w.team_id = a.team_id and w.adapter_type = a.adapter_type and w.edge = a.edge and w.key = a.key and w.since < a.seq
                          and (exists (select 1 from lf.trigger_run r where r.id = w.run_id)
                               or exists (select 1 from lf.work q where q.key = w.fire_key and q.dead_at is null)))
                    order by a.seq limit $1::int8)",
-                &[&limit],
+                &[&limit, &floor],
             )?;
             self.execute(
                 "delete from lf.arrival_identity where ctid in (select ctid from lf.arrival_identity where kept_until < now() limit $1::int8)",

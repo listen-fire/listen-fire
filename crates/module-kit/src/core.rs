@@ -347,6 +347,8 @@ pub enum DeliverySource {
     Hook,
     Emit,
     Cli,
+    /// A poll of a listenable edge that fired a listen.
+    Poll,
 }
 
 /// A delivery's receipt (`inbound.keepDelivery`'s `delivery`): the events it
@@ -618,9 +620,11 @@ slot! {
         /// it was claimed (`leases.claim` keeps `waits.mark` then), else the
         /// latest seq. A wait is live while its run exists, or one
         /// `inbound.keepDelivery` opened while its `fire_event` row is
-        /// queued (not buried). Forget too the identities past their
-        /// re-send window. How many arrivals went.
-        "waits.sweep" => fn sweep_arrivals(WaitsSweep { limit: i64 }) -> Swept;
+        /// queued (not buried). `floor`: a mark the caller's own running
+        /// steps hold in its process; nothing above it goes either. Forget
+        /// too the identities past their re-send window. How many arrivals
+        /// went.
+        "waits.sweep" => fn sweep_arrivals(WaitsSweep { limit: i64, #[serde(default)] floor: Option<i64> }) -> Swept;
         /// The stranded waits, oldest stranded first (ties by wait id): the
         /// run's, given `run_id`; else every run's, at most `limit`, after
         /// the wait `after` names. A wait is stranded when it is parked on a

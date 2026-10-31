@@ -49,6 +49,7 @@ import {
   WAKE_AWAIT_WORK_KIND,
   armTimerWake,
   drainDueTimers,
+  heldMarks,
   drainOwedRaces,
   logArrivals,
   memoryRunHostStore,
@@ -236,6 +237,9 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
   const manualUnit = modules.has(MANUAL) ? undefined : manualAdapter();
   const loaded = new Map<string, { module: AdapterModuleDefinition; instance: InProcessAdapterModule }>();
   const catalogs = new Map<string, Promise<CatalogSnapshot>>();
+  // A run's first segment takes no lease: each step holds its arrival mark
+  // here instead, so a tick's sweep keeps what it may yet read.
+  const marks = heldMarks();
   /** Where the run stands, or null for a run the host never started. */
   const statusOf = async (runId: string): Promise<EmbeddedRunStatus | null> => {
     const status = await store.runHost.runStatus({ runId });
@@ -426,7 +430,7 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
     let outcome: EmbeddedRunOutcome;
     let parked = false;
     try {
-      const result = await runMovement({ ...run.input, runId: run.runId, host: hostFor(run) });
+      const result = await marks.holding(store.runHost, () => runMovement({ ...run.input, runId: run.runId, host: hostFor(run) }));
       parked = result.parked === true;
       outcome = outcomeOf(run, result);
     } catch (error) {
@@ -449,10 +453,11 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
       const host = hostFor(run, { fence, ...(request.kind === 'leaf' ? { leaf: request.address } : {}) });
       const input = { ...run.input, runId: run.runId, priorSpentMicrodollars: run.spentMicrodollars, state: request.state, host };
       try {
-        const result =
+        const result = await marks.holding(store.runHost, () =>
           request.kind === 'leaf'
-            ? await resumeMovement({ ...input, ...(request.reenter ? { reenter: true } : {}), deferRaceSettlement: request.deferRaceSettlement })
-            : await settleRaceFrame({ ...input, frameAddress: request.frameAddress });
+            ? resumeMovement({ ...input, ...(request.reenter ? { reenter: true } : {}), deferRaceSettlement: request.deferRaceSettlement })
+            : settleRaceFrame({ ...input, frameAddress: request.frameAddress }),
+        );
         const outcome = outcomeOf(run, result);
         stepped.push(outcome);
         await store.runs.put(run);
@@ -685,7 +690,7 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
     },
 
     async tick(at = now()) {
-      await sweepArrivals(store.runHost);
+      await sweepArrivals(store.runHost, marks);
       return stepWork({ dueBy: at.toISOString() });
     },
   };

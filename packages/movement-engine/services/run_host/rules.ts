@@ -125,15 +125,47 @@ export async function logArrivals(
 export const ARRIVALS_PER_SWEEP = 100;
 
 /**
- * Forget the arrivals no live wait reads that are at or below the floor
- * (the lowest mark a running step's lease took, else the latest seq), and
- * the identities whose re-send window has passed: at most
- * `ARRIVALS_PER_SWEEP`; answers how many arrivals went. A product sweeps on
- * its own schedule, as listen-fire's drain does on each pass (an embedded
- * host's `tick` does): unswept, the log only grows.
+ * The arrival marks this process's running steps hold. A step takes the mark
+ * as it starts and lets it go as it ends: every mark it takes after (where
+ * the waits it opens read from) is at or above it, so a sweep between one of
+ * those marks and the wait opened from it forgets none of the arrivals
+ * logged in between. A host whose steps take no run lease (an embedded
+ * host's run starts without one) holds them here.
  */
-export async function sweepArrivals(store: RunHostStore): Promise<number> {
-  return (await store.waits.sweep({ limit: ARRIVALS_PER_SWEEP })).swept;
+export interface HeldMarks {
+  /** `step`, holding the mark taken as it starts until it ends. */
+  holding<T>(store: RunHostStore, step: () => Promise<T>): Promise<T>;
+  /** The lowest mark held, or undefined while no step runs. */
+  lowest(): number | undefined;
+}
+
+export function heldMarks(): HeldMarks {
+  const held = new Map<symbol, number>();
+  return {
+    async holding(store, step) {
+      const token = Symbol('step');
+      held.set(token, await store.waits.mark());
+      try {
+        return await step();
+      } finally {
+        held.delete(token);
+      }
+    },
+    lowest: () => (held.size === 0 ? undefined : Math.min(...held.values())),
+  };
+}
+
+/**
+ * Forget the arrivals no live wait reads that are at or below the floor
+ * (the lowest mark a running step's lease took, else the latest seq, and
+ * never above the lowest of `held`), and the identities whose re-send window
+ * has passed: at most `ARRIVALS_PER_SWEEP`; answers how many arrivals went.
+ * A product sweeps on its own schedule, as listen-fire's drain does on each
+ * pass (an embedded host's `tick` does): unswept, the log only grows.
+ */
+export async function sweepArrivals(store: RunHostStore, held?: HeldMarks): Promise<number> {
+  const floor = held?.lowest();
+  return (await store.waits.sweep({ limit: ARRIVALS_PER_SWEEP, ...(floor !== undefined ? { floor } : {}) })).swept;
 }
 
 // ── Completion ──────────────────────────────────────────────────────────────

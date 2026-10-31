@@ -130,9 +130,10 @@ pub trait Reader {
     /// is the wire's `WireInboundRequest`.
     async fn check_inbound(&self, external: &str, install: &Credential, request: &Js, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String>;
     /// The external's `awaitKeys` of `heads` on `edge`: one `{ key }` or
-    /// `{ gone: true }` per head. None when it offers no `awaitKeys`: a run
+    /// `{ gone: true }` per head, called as `install` (none for a module
+    /// that takes no credential). None when it offers no `awaitKeys`: a run
     /// waiting on it fails as it starts, saying so.
-    async fn await_keys(&self, external: &str, install: &Credential, edge: &str, heads: Js) -> Result<Option<Js>, String>;
+    async fn await_keys(&self, external: &str, install: Option<&Credential>, edge: &str, heads: Js) -> Result<Option<Js>, String>;
 }
 
 /// Where a verified event goes.
@@ -205,7 +206,7 @@ impl<R: Reader> LfDoors<'_, R> {
     /// is never answered by the arrival that started it; any other arrival of
     /// the delivery may answer it. A run judged here that the drain does not
     /// start has its waits dropped there.
-    async fn mint_runs(&self, adapter_type: &str, install: &str, credential: Option<&str>, landed: &[ArrivalIn]) -> Result<(Js, Vec<DeliveryWait>), String> {
+    pub(crate) async fn mint_runs(&self, adapter_type: &str, install: Option<&str>, credential: Option<&str>, landed: &[ArrivalIn]) -> Result<(Js, Vec<DeliveryWait>), String> {
         let (mut minted, mut waits) = (Vec::new(), Vec::new());
         let now_ms = crate::limiter::now_ms() as f64;
         for arrival in landed {
@@ -218,7 +219,7 @@ impl<R: Reader> LfDoors<'_, R> {
                 let receipt = crate::arrivals::arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), identity, arrival.version.as_deref());
                 minted.push(Js::Obj(obj! { "pipeline" => Js::str(listen.pipeline()), "receipt" => Js::str(receipt), "runId" => Js::str(&run_id) }));
                 let Some(head) = trigger_head(arrival) else { continue };
-                let caller = listen.credential.as_deref().and_then(|name| self.install(name)).or_else(|| self.install(install)).ok_or_else(|| format!("no install {install}"))?;
+                let caller = listen.credential.as_deref().or(install).map(|name| self.install(name).ok_or_else(|| format!("no install {name}"))).transpose()?;
                 for edge in &listen.trigger_awaits {
                     let Some(answer) = self.reader.await_keys(adapter_type, caller, edge, Js::Arr(vec![head.clone()])).await? else { continue };
                     let key = match answer.as_array().and_then(|keys| keys.first()) {
@@ -336,7 +337,7 @@ impl<R: Reader> LfDoors<'_, R> {
 
     /// The arrivals of `arrivals` that landed on an edge a listen of the
     /// connection they came for is on: what is judged against those listens.
-    fn landed_for_listens(&self, adapter_type: &str, credential: Option<&str>, arrivals: &[ArrivalIn]) -> Vec<ArrivalIn> {
+    pub(crate) fn landed_for_listens(&self, adapter_type: &str, credential: Option<&str>, arrivals: &[ArrivalIn]) -> Vec<ArrivalIn> {
         arrivals
             .iter()
             .filter(|arrival| !arrival.gone && self.listens.iter().any(|l| l.is_on(adapter_type, &arrival.edge) && l.hears(credential)))
@@ -441,7 +442,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         };
         let arrivals = self.under_head(kept.subscription_id, kept.arrivals);
         let landed = self.landed_for_listens(adapter_type, came_for.credential, &arrivals);
-        let (minted, mut waits) = self.mint_runs(adapter_type, &kept.source.install, came_for.credential, &landed).await?;
+        let (minted, mut waits) = self.mint_runs(adapter_type, Some(&kept.source.install), came_for.credential, &landed).await?;
         let mut work: Vec<NewWork> = match &self.sink {
             EventSink::Queue | EventSink::Listed(_) => {
                 let delivered = Delivered { id: Some(&receipt.id), ..came_for };
@@ -583,7 +584,7 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
             log_and_wake(self.store, &log)?;
             return Ok(());
         }
-        let (minted, mut waits) = self.mint_runs(&caller.adapter_type, &caller.subscription_id, credential, &landed).await?;
+        let (minted, mut waits) = self.mint_runs(&caller.adapter_type, Some(&caller.subscription_id), credential, &landed).await?;
         let receipt = NewDelivery { id: uuid::Uuid::new_v4().to_string(), external_id: None, received_at: at.clone(), source: DeliverySource::Emit, inline: false, replay_of: None, events: Vec::new() };
         let row = fire_arrivals_work(&caller.adapter_type, &landed, Delivered { id: Some(&receipt.id), credential, minted: Some(&minted), ..Delivered::default() });
         queued_by(&mut waits, &row.key);
@@ -614,7 +615,7 @@ pub struct SessionReader<'a> {
 }
 
 impl SessionReader<'_> {
-    async fn call(&self, external: &str, install: &Credential, method: &str, params: serde_json::Value) -> Result<Js, String> {
+    async fn call(&self, external: &str, install: Option<&Credential>, method: &str, params: serde_json::Value) -> Result<Js, String> {
         let set = self.session.file_set();
         let running = set.running.iter().find(|r| r.external.manifest.name == external).ok_or_else(|| format!("no external {external}"))?;
         // As the user credential the door names, as the platform reads a
@@ -623,7 +624,7 @@ impl SessionReader<'_> {
         // the install carries no user credential, and the install signs.
         let secrets = self.session.secrets();
         let credentials = secrets.credentials();
-        let carried = matches!(install.binding, Binding::Credential(_)).then_some(install);
+        let carried = install.filter(|install| matches!(install.binding, Binding::Credential(_)));
         let lease = running.reach.lease().await?;
         let target = Target {
             external: &running.external,
@@ -635,7 +636,7 @@ impl SessionReader<'_> {
             inbound_url: running.inbound_url.as_deref(),
         };
         let sending = Sending { tenant: LOCAL_TENANT, method, cache_scope_id: "<none>", params, settings: None };
-        let raw = send(&target, credentials, carried, signer_of(credentials, external, carried).or(Some(install)), sending).await?;
+        let raw = send(&target, credentials, carried, signer_of(credentials, external, carried).or(install), sending).await?;
         module_wire::results::check(method, external, &raw)
     }
 
@@ -649,7 +650,7 @@ impl Reader for SessionReader<'_> {
         self.lists(external, "preprocessInbound")
     }
 
-    async fn await_keys(&self, external: &str, install: &Credential, edge: &str, heads: Js) -> Result<Option<Js>, String> {
+    async fn await_keys(&self, external: &str, install: Option<&Credential>, edge: &str, heads: Js) -> Result<Option<Js>, String> {
         if !self.lists(external, "awaitKeys") {
             return Ok(None);
         }
@@ -662,7 +663,7 @@ impl Reader for SessionReader<'_> {
         if let Some(checkpoint) = checkpoint {
             params["checkpoint"] = crate::wire::json_of_js(checkpoint);
         }
-        let read = self.call(external, install, "preprocessInbound", params).await?;
+        let read = self.call(external, Some(install), "preprocessInbound", params).await?;
         Ok(Extraction {
             events: read.get("events").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default(),
             arrivals: arrivals_of(&read).map_err(|e| format!("preprocessInbound for adapter {external}: {e}"))?,
@@ -880,7 +881,7 @@ impl Store {
 }
 
 /// Each wait as opened for the run the `fire_event` row `fire_key` queues.
-fn queued_by(waits: &mut [DeliveryWait], fire_key: &str) {
+pub(crate) fn queued_by(waits: &mut [DeliveryWait], fire_key: &str) {
     for wait in waits {
         wait.fire_key = fire_key.to_string();
     }
@@ -1515,7 +1516,7 @@ pub(crate) mod tests {
     pub(crate) struct NoReader;
 
     impl Reader for NoReader {
-        async fn await_keys(&self, _: &str, _: &Credential, _: &str, _: Js) -> Result<Option<Js>, String> {
+        async fn await_keys(&self, _: &str, _: Option<&Credential>, _: &str, _: Js) -> Result<Option<Js>, String> {
             Ok(None)
         }
         fn reads_deliveries(&self, _external: &str) -> bool {
@@ -1576,7 +1577,7 @@ pub(crate) mod tests {
     struct ArrivalsReader(Vec<ArrivalIn>);
 
     impl Reader for ArrivalsReader {
-        async fn await_keys(&self, _: &str, _: &Credential, _: &str, _: Js) -> Result<Option<Js>, String> {
+        async fn await_keys(&self, _: &str, _: Option<&Credential>, _: &str, _: Js) -> Result<Option<Js>, String> {
             Ok(None)
         }
         fn reads_deliveries(&self, _external: &str) -> bool {

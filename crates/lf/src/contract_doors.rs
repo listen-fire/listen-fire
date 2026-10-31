@@ -376,7 +376,7 @@ fn delivery(raw: &Js) -> Result<SuiteDelivery, String> {
 
 impl Reader for SuiteReader {
     /// The suite's adapters are judged without waits.
-    async fn await_keys(&self, _: &str, _: &Credential, _: &str, _: Js) -> Result<Option<Js>, String> {
+    async fn await_keys(&self, _: &str, _: Option<&Credential>, _: &str, _: Js) -> Result<Option<Js>, String> {
         Ok(None)
     }
 

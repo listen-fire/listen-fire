@@ -38,7 +38,7 @@ use crate::movements_slot::{Change, ChangeKind, Listed, MovementsStore, Watched,
 use crate::sources::{MOVEMENT_EXTENSION, MovementFile, Parsed, scan_movements};
 use crate::backend::{RunHostStore, StoreSpec, open_store};
 use crate::edge_polls::EDGE_POLL_WORK_KIND;
-use crate::store::{ClaimDue, POLL_WORK_KIND, Release, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, iso};
+use crate::store::{ClaimDue, DeliverySource, NewDelivery, POLL_WORK_KIND, Release, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, iso};
 use module_wire::results as wire_results;
 
 /// How many files' parses a session's runs keep (movement_engine::program::keep_parses):
@@ -1093,10 +1093,15 @@ impl Session {
     /// cursor? })`, as the credential the connection names (else its
     /// module's). The first only arms: its cursor is kept, and what it
     /// returns is what was there before, so it fires nothing. After that,
-    /// each arrival is logged for the waits, then judged against each listen
-    /// sharing the key; the cursor is kept only once they are in, so a
-    /// failed poll is polled again from where the last good one ended. What
-    /// it fired, and the credential it polled as.
+    /// a poll whose arrivals fire a listen sharing the key is kept as a
+    /// delivery (`poll`): its receipt, its arrivals and the waits of the runs
+    /// it fires, each minted then, in one write, from the mark before its
+    /// arrivals, so another arrival of the same page answers a run it starts
+    /// and only the run's own trigger does not. A poll that fires nothing
+    /// only logs its arrivals. Each arrival is then judged against each
+    /// listen sharing the key; the cursor is kept only once they are in, so
+    /// a failed poll is polled again from where the last good one ended.
+    /// What it fired, and the credential it polled as.
     async fn poll_edge_once(&self, set: &FileSet, key: &crate::edge_polls::PollKey, shared: &crate::edge_polls::Shared, subscription: &str) -> Result<(Fired, Option<String>), String> {
         let running = set
             .running
@@ -1141,9 +1146,26 @@ impl Session {
             let (logged, at) = (crate::arrivals::logged(&arrivals), iso(0));
             let resend_window_ms = crate::externals::resend_window_ms(&self.project, &key.adapter, &running.manifest_answer);
             let log = crate::waits::DeliveryArrivals { team_id: LOCAL_TENANT, adapter_type: &key.adapter, arrivals: &logged, at: &at, resend_window_ms };
-            crate::arrivals::log_and_wake(&*self.store, &log)?;
-            let mark = self.store.arrival_mark().map_err(|e| e.to_string())?;
-            let delivered = Delivered { credential: key.credential.as_deref(), arrival_mark: Some(mark), ..Delivered::default() };
+            let came_for = Delivered { credential: key.credential.as_deref(), ..Delivered::default() };
+            let doors = crate::doors::LfDoors {
+                listens: shared.fires.iter().map(|i| set.listens[*i].clone()).collect(),
+                ..crate::doors::LfDoors::of_session(self, crate::doors::EventSink::Queue, &|| {})
+            };
+            let landed = doors.landed_for_listens(&key.adapter, came_for.credential, &arrivals);
+            let (minted, mut waits) = doors.mint_runs(&key.adapter, credential.map(|c| c.name.as_str()), came_for.credential, &landed).await?;
+            let receipt = NewDelivery { id: uuid::Uuid::new_v4().to_string(), external_id: None, received_at: at.clone(), source: DeliverySource::Poll, inline: true, replay_of: None, events: Vec::new() };
+            let delivered = if minted.as_array().is_some_and(|runs| !runs.is_empty()) {
+                // Started here, in the poll: no row queues its runs, so their
+                // waits name the poll's receipt.
+                crate::doors::queued_by(&mut waits, &format!("poll:{}", receipt.id));
+                let kept = self.store.keep_delivery(subscription, None, &receipt, &[], Some(&log), &waits).map_err(|e| e.to_string())?.ok_or("a poll's delivery was taken for a duplicate")?;
+                crate::wake::queued_rows(&kept.wakes);
+                Delivered { id: Some(&receipt.id), arrival_mark: Some(kept.arrival_mark), minted: Some(&minted), ..came_for }
+            } else {
+                let mark = self.store.arrival_mark().map_err(|e| e.to_string())?;
+                crate::arrivals::log_and_wake(&*self.store, &log)?;
+                Delivered { arrival_mark: Some(mark), ..came_for }
+            };
             fired = self.fire_arrivals_to(set, &key.adapter, &arrivals, delivered, JudgedBy::Sharing(shared)).await?;
         }
         let mut kept = obj! { "armed" => Js::Bool(true) };
@@ -1880,7 +1902,7 @@ impl Session {
         }
         let retain_ms = i64::from(self.project.delivery_retain_days) * 86_400_000;
         self.store.sweep_deliveries(&iso(-retain_ms), WORK_ROWS_PER_DRAIN).map_err(|e| e.to_string())?;
-        self.store.sweep_arrivals(WORK_ROWS_PER_DRAIN).map_err(|e| e.to_string())?;
+        self.store.sweep_arrivals(WORK_ROWS_PER_DRAIN, None).map_err(|e| e.to_string())?;
         Ok(())
     }
 

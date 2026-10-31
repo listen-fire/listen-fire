@@ -20,8 +20,14 @@ interface Written {
 
 /** A notes service: each tenant's fields on `Note` from `schemas`, every
  *  write recorded with the tenant and the book its credential names, every
- *  update with the record's id. */
-function notesModule(written: Written[], schemas: Map<string, string[]>, updated: Array<{ externalId: string; Title: string }> = []) {
+ *  update with the record's id (`updated`). `keying`, when given, is awaited
+ *  before each `awaitKeys` answers. */
+function notesModule(
+  written: Written[],
+  schemas: Map<string, string[]>,
+  options: { updated?: Array<{ externalId: string; Title: string }>; keying?: () => Promise<void> } = {},
+) {
+  const updated = options.updated ?? [];
   const create = (ctx: ModuleContext): AdapterModuleMethods => {
     const tenant = ctx.config.tenant;
     const adapter: Adapter = {
@@ -65,7 +71,12 @@ function notesModule(written: Written[], schemas: Map<string, string[]>, updated
         throw new Error('not used');
       },
       listEventTypes: async () => [{ tag: NOTE_CREATED, positionType: 'Note' }],
-      arrivals: { awaitKeys: async ({ heads }) => heads.map((head) => ({ key: `note:${head.recordId}` })) },
+      arrivals: {
+        awaitKeys: async ({ heads }) => {
+          await options.keying?.();
+          return heads.map((head) => ({ key: `note:${head.recordId}` }));
+        },
+      },
     };
     return adapter;
   };
@@ -110,7 +121,7 @@ function setup(options: { now?: () => Date } = {}) {
   const written: Written[] = [];
   const updated: Array<{ externalId: string; Title: string }> = [];
   const schemas = new Map<string, string[]>();
-  const notes = notesModule(written, schemas, updated);
+  const notes = notesModule(written, schemas, { updated });
   const host = createEmbeddedHost({ modules: [notes], ...options, moduleHost: () => ({ validateResults: true }) });
   return { host, notes, written, updated, schemas };
 }
@@ -225,6 +236,35 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
     // The entries went; their identities stay for the hour, so a retry logs nothing.
     await host.arrive('acme', { adapterType: 'notes', arrivals: [comment('recent')] });
     expect(await store.runHost.waits.mark()).toBe(2);
+  });
+
+  it("a tick between a starting run's mark and the wait it opens from there forgets no arrival logged in between", async () => {
+    const written: Written[] = [];
+    // The run has taken its mark and is asking for its wait's key.
+    let keying: () => void = () => {};
+    const asked = new Promise<void>((resolve) => (keying = resolve));
+    let answer: () => void = () => {};
+    const answered = new Promise<void>((resolve) => (answer = resolve));
+    const notes = notesModule(written, new Map(), {
+      keying: async () => {
+        keying();
+        await answered;
+      },
+    });
+    const host = createEmbeddedHost({ modules: [notes], moduleHost: () => ({ validateResults: true }) });
+    await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
+    await host.save('acme', { name: 'reply', source: copier('north', 'Re', 'said = await new note-[:Comments]->\n  ').replace('${note.Title}', '${said.Body}') });
+
+    const firing = host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    await asked;
+    const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
+    expect(await host.arrive('acme', { adapterType: 'notes', arrivals: [comment] })).toEqual([]);
+    expect(await host.tick()).toEqual([]);
+    answer();
+
+    const [fired] = await firing;
+    expect(fired.outcome).toMatchObject({ ok: true, parked: false });
+    expect(written).toEqual([{ tenant: 'acme', book: 'acme-north', Title: 'Re lunch?' }]);
   });
 
   it("steps only the arriving tenant's woken runs: another tenant's wake stays due for its own step", async () => {

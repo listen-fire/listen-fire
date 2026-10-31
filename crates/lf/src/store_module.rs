@@ -297,11 +297,15 @@ impl RunHostStore for ProcessStore {
         }
         self.flag("waits.note", params)
     }
-    fn sweep_arrivals(&self, limit: i64) -> Result<i64> {
+    fn sweep_arrivals(&self, limit: i64, floor: Option<i64>) -> Result<i64> {
         const METHOD: &str = "waits.sweep";
+        let mut params = obj! { "limit" => Js::Num(limit.into()) };
+        if let Some(floor) = floor {
+            params.insert("floor".into(), Js::Num(floor.into()));
+        }
         // A module written before waits logs no arrivals, so it has none to
         // forget: every drain sweeps, and such a module still drains.
-        match self.client.call(METHOD, obj! { "limit" => Js::Num(limit.into()) }) {
+        match self.client.call(METHOD, params) {
             Ok(answer) => answer.get("swept").and_then(int).ok_or_else(|| self.malformed(METHOD, &answer)),
             Err(error) if error.code == METHOD_NOT_IMPLEMENTED_CODE => Ok(0),
             Err(error) => Err(self.refused(METHOD, error)),

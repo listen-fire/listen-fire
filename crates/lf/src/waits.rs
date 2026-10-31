@@ -445,22 +445,23 @@ impl Store {
     }
 
     /// Forget at most `limit` arrivals no live wait on their record's edge
-    /// reads that are at or below the floor, and at most `limit` identities
-    /// past their re-send window: how many arrivals went.
-    pub fn sweep_arrivals(&self, limit: i64) -> Result<i64> {
+    /// reads that are at or below the floor (and `floor`, when given), and
+    /// at most `limit` identities past their re-send window: how many
+    /// arrivals went.
+    pub fn sweep_arrivals(&self, limit: i64, floor: Option<i64>) -> Result<i64> {
         self.transaction(|db| {
             let now = iso(0);
             let swept = db.execute(
                 &format!(
                     "delete from arrival where seq in (
                        select a.seq from arrival a
-                       where a.seq <= ({FLOOR})
+                       where a.seq <= ({FLOOR}) and (?3 is null or a.seq <= ?3)
                          and not exists (select 1 from wait_row w
                            where w.team_id = a.team_id and w.adapter_type = a.adapter_type and w.edge = a.edge and w.key = a.key and w.since < a.seq
                              and ({LIVE}))
                        order by a.seq limit ?2)"
                 ),
-                params![now, limit],
+                params![now, limit, floor],
             )?;
             db.execute("delete from arrival_identity where rowid in (select rowid from arrival_identity where kept_until < ?1 limit ?2)", params![now, limit])?;
             Ok(i64::try_from(swept).unwrap_or(i64::MAX))
@@ -903,7 +904,8 @@ mod tests {
                     assert!(store.drop_run_state(&names.id(text(step, "run")), None).unwrap(), "{at}: dropped");
                 }
                 "sweep" => {
-                    let swept = store.sweep_arrivals(step.get("limit").and_then(int).unwrap()).unwrap();
+                    let floor = opt_text(step, "floor").map(|name| names.marks[name]);
+                    let swept = store.sweep_arrivals(step.get("limit").and_then(int).unwrap(), floor).unwrap();
                     assert_eq!(swept, step.get("expect").and_then(int).unwrap(), "{at}: how many the sweep forgot");
                 }
                 "keepDelivery" => {
@@ -1028,6 +1030,7 @@ mod tests {
         a_race_a_segment_owes_is_kept_in_its_commit_until_the_commit_that_settles_it_and_goes_with_its_frame,
         an_arrival_resent_after_its_entry_was_swept_is_a_repeat_within_the_modules_window,
         a_running_steps_mark_keeps_arrivals_above_it_from_the_sweep,
+        a_mark_the_callers_own_running_steps_hold_keeps_arrivals_above_it_from_the_sweep,
         a_wait_opened_at_delivery_keeps_arrivals_until_its_run_ends_or_its_fire_row_is_buried,
     }
 
@@ -1059,7 +1062,7 @@ mod tests {
             // sweepable goes, and its leases lapse, so a case's sweep counts
             // its own arrivals under its own floor.
             crate::pg_store::block_on(client.execute("update lf.trigger_run set lease_until = now() - interval '1 millisecond' where lease_until > now()", &[])).unwrap();
-            while store.sweep_arrivals(10_000).unwrap() > 0 {}
+            while store.sweep_arrivals(10_000, None).unwrap() > 0 {}
             run_case(&store, &case, &claim_rows);
         }
         a_kept_delivery_logs_its_arrivals_once(&store);
@@ -1259,8 +1262,8 @@ mod tests {
         store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
         let arrival = |key: &str| NewArrival { edge: "Comments".into(), key: key.into(), identity: Some("k".into()), version: None, landing: None, gone: false };
         store.log_now("t", "acme", &[arrival("a"), arrival("b"), arrival("c")]).unwrap();
-        assert_eq!(store.sweep_arrivals(2).unwrap(), 2);
-        assert_eq!(store.sweep_arrivals(2).unwrap(), 1);
+        assert_eq!(store.sweep_arrivals(2, None).unwrap(), 2);
+        assert_eq!(store.sweep_arrivals(2, None).unwrap(), 1);
         let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: "no-such-wait" } };
         assert!(matches!(store.commit_park(&park), Err(StoreError::Invalid(_))));
         assert!(store.leaves("run-1", false, None, None).unwrap().is_empty());

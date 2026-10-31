@@ -271,9 +271,12 @@ async function runCase({ store, runRows, deliveries }: StoreWaitsBackend, steps:
       case 'drop':
         assert.equal(await store.leases.dropRunState({ runId: runId() }), true, `${at}: dropped`);
         break;
-      case 'sweep':
-        assert.deepEqual(await store.waits.sweep({ limit: Number(step.limit) }), { swept: Number(step.expect) }, `${at}: how many the sweep forgot`);
+      case 'sweep': {
+        const floor = optionalText(step, 'floor');
+        const held = floor === null ? {} : { floor: names.marks.get(floor) ?? assert.fail(`no mark named ${floor}`) };
+        assert.deepEqual(await store.waits.sweep({ limit: Number(step.limit), ...held }), { swept: Number(step.expect) }, `${at}: how many the sweep forgot`);
         break;
+      }
       case 'keepDelivery': {
         const fireKey = fireKeyOf(names, step);
         const waits: DeliveryWait[] = items(step, 'waits').map((w) => {

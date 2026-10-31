@@ -532,6 +532,9 @@ pub enum DeliverySource {
     Emit,
     /// `listen-fire run --webhook`, or a replay by `listen-fire deliveries replay`.
     Cli,
+    /// A poll of a listenable edge that fired a listen sharing it: its
+    /// arrivals, and the waits of the runs it started, kept in one write.
+    Poll,
 }
 
 impl DeliverySource {
@@ -541,6 +544,7 @@ impl DeliverySource {
             DeliverySource::Hook => "hook",
             DeliverySource::Emit => "emit",
             DeliverySource::Cli => "cli",
+            DeliverySource::Poll => "poll",
         }
     }
 
@@ -550,7 +554,8 @@ impl DeliverySource {
             "hook" => Ok(DeliverySource::Hook),
             "emit" => Ok(DeliverySource::Emit),
             "cli" => Ok(DeliverySource::Cli),
-            other => Err(StoreError::Invalid(format!("not a delivery source: {other} (webhook, hook, emit or cli)"))),
+            "poll" => Ok(DeliverySource::Poll),
+            other => Err(StoreError::Invalid(format!("not a delivery source: {other} (webhook, hook, emit, cli or poll)"))),
         }
     }
 }

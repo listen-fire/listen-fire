@@ -112,6 +112,13 @@ impl Params<'_> {
         }
     }
 
+    fn opt_int(&self, key: &str) -> Result<Option<i64>, Failure> {
+        match self.0.get(key) {
+            None | Some(Js::Null) => Ok(None),
+            Some(value) => crate::store_wire::int(value).map(Some).ok_or_else(|| Failure::Params(format!("{key}: expected an integer"))),
+        }
+    }
+
     fn int(&self, key: &str) -> Result<i64, Failure> {
         self.0.get(key).and_then(crate::store_wire::int).ok_or_else(|| Failure::Params(format!("{key}: expected an integer")))
     }
@@ -361,7 +368,7 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
             };
             Ok(Js::Bool(store.note_arrival(&noted)?))
         }
-        "waits.sweep" => Ok(Js::from(obj! { "swept" => Js::Num(store.sweep_arrivals(p.int("limit")?)?.into()) })),
+        "waits.sweep" => Ok(Js::from(obj! { "swept" => Js::Num(store.sweep_arrivals(p.int("limit")?, p.opt_int("floor")?)?.into()) })),
 
         "leases.claim" => Ok(match store.claim_lease(p.str("runId")?, p.int("ttlMs")?)? {
             None => Js::Null,

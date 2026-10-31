@@ -734,14 +734,16 @@ Report them in one of three places:
 
 What Listen-Fire does with them:
 
-- Every arrival is logged, waited on or not, and kept an hour; longer while a
-  wait reads it. A delivery's arrivals are logged with its receipt, so a
-  redelivery under the same delivery id logs nothing again, and an arrival
-  reported again with the same identity and version within the hour is
+- Every arrival is logged, waited on or not, and kept while a wait, or a
+  step about to open one, may read it. A delivery's arrivals are logged with
+  its receipt, so a redelivery under the same delivery id logs nothing
+  again, and an arrival reported again with the same identity and version
+  within your `resendWindowSeconds` (an hour unless you declare one) is
   logged once, wherever it comes from.
-- A run a delivery starts never waits for that delivery's own arrivals: `await new`
-  takes only what arrives after. A plain `await` on an edge that can be
-  listed still finds them there.
+- A run a delivery or a poll starts waits on its trigger's edges from just
+  before that delivery's or page's arrivals: any other arrival of the same
+  delivery or page may answer its `await new`, and only the arrival that is
+  its trigger, matched by identity, never does.
 - Each run waiting on the record's edge is woken. It reads the arrivals
   logged since it began waiting, judges each once by identity and version,
   and resumes with the first that passes the automation's `WHERE`.
@@ -1255,7 +1257,9 @@ polled with its own shape, once for every listen on it
   the edge's `pollEverySeconds`.
 - What a poll returns is handled as a pushed arrival is: logged for the
   waits, then judged against each listen sharing the poll, each running once
-  per identity and version. A record edited so that it newly matches a
+  per identity and version. A poll that fires a listen is kept as a delivery
+  of its own, so an arrival on another edge in the same page (a comment on
+  the note that started a run) answers that run. A record edited so that it newly matches a
   listen's filter is a new version, so it fires.
 - An entry point's root collection says what it takes with `capability` on
   the entry (`{ "filter": "native", "supportsLimit": false }`), as a

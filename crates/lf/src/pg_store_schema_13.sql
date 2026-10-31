@@ -26,3 +26,8 @@ CREATE INDEX wait_row_fire_key_idx ON lf.wait_row (fire_key) WHERE fire_key IS N
 -- it; the wait goes with its run's state (`leases.dropRunState`), or with its
 -- `fire_event` row's burial when the run never started.
 ALTER TABLE lf.wait_row DROP CONSTRAINT wait_row_run_id_fkey;
+
+-- A poll of a listenable edge that fires a listen is kept as a delivery of
+-- its own (`source` `poll`): its arrivals and its runs' waits in one write.
+ALTER TABLE lf.delivery DROP CONSTRAINT delivery_source_check;
+ALTER TABLE lf.delivery ADD CONSTRAINT delivery_source_check CHECK (source IN ('webhook', 'hook', 'emit', 'cli', 'poll'));

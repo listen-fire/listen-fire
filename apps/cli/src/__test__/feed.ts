@@ -19,6 +19,15 @@ export interface Note {
   edited?: number;
   /** The board it is pinned to: it arrives on that board's `Notes` too. */
   board?: string;
+  /** The comments on it, carried in the page that lists it: each arrives on
+   *  the note's `Comments` with it. */
+  comments?: Comment[];
+}
+
+/** A comment on a note: an arrival on its `Comments`, keyed `comments:<note>`. */
+export interface Comment {
+  id: string;
+  text: string;
 }
 
 /** A board notes are pinned to: a root `Boards` member. */
@@ -52,12 +61,18 @@ export interface Board {
  *  poll's `scope`: the notes pinned to it (`board`), each arrival naming
  *  the board as its `key` unless `nokey` is present. With `based` present a
  *  connection is constructed in a base (`connect feed { base: "…" }`), which
- *  changes nothing it lists. */
+ *  changes nothing it lists.
+ *
+ *  A note's `Comments` are listenable: a page that lists a note carries its
+ *  comments as arrivals keyed `comments:<note id>` (`awaitKeys`). With
+ *  `siblings` present a note's own `Notes` are listenable too: the notes on
+ *  its board, waited on under the board's id, as a board's `Notes` arrive. */
 const FEED_MODULE = `const { readFileSync, appendFileSync, existsSync } = require('node:fs');
 const { join } = require('node:path');
 const { defineModule } = require(${JSON.stringify(join(MODULE_KIT, 'define.ts'))});
 const at = (name) => join(__dirname, name);
 const takes = existsSync(at('takes'));
+const siblings = existsSync(at('siblings'));
 const noCursor = existsSync(at('nocursor'));
 const note = {
   typeId: 'note',
@@ -67,8 +82,23 @@ const note = {
     { fieldId: 'title', displayName: 'Title', kind: 'string', writable: false, required: false, ...(takes ? { capability: { filterOperators: ['eq'] } } : {}) },
     { fieldId: 'edited', displayName: 'Edited', kind: 'number', writable: false, required: false },
   ],
+  references: [
+    { fieldId: 'comments', name: 'Comments', targetTypeId: 'comment', cardinality: 'many', direction: 'outgoing', readable: false, writable: false, listenable: true, identity: 'Id' },
+    ...(siblings
+      ? [{ fieldId: 'notes', name: 'Notes', targetTypeId: 'note', cardinality: 'many', direction: 'outgoing', readable: false, writable: false, listenable: true, identity: 'Id', version: 'Edited' }]
+      : []),
+  ],
+};
+const comment = {
+  typeId: 'comment',
+  displayName: 'Comment',
+  fields: [
+    { fieldId: 'id', displayName: 'Id', kind: 'string', writable: false, required: false },
+    { fieldId: 'text', displayName: 'Text', kind: 'string', writable: false, required: false },
+  ],
   references: [],
 };
+const commentsKey = (note) => 'comments:' + note;
 const pushedBoards = existsSync(at('pushedboards'));
 const staticBoards = existsSync(at('staticboards'));
 const keyless = existsSync(at('nokey'));
@@ -106,15 +136,18 @@ const pollEdge = async ({ edge, filter, scope, cursor }) => {
     };
   }
   const notes = notesOf(since).filter((n) => (title === undefined || n.title === title) && (scope === undefined || n.board === scope));
+  const comments = notes.flatMap((n) =>
+    (n.comments ?? []).map((c) => ({ edge: 'Comments', key: commentsKey(n.id), identity: c.id, landing: { recordId: c.id, recordType: 'Comment', fields: { Id: c.id, Text: c.text } } })),
+  );
   return {
-    arrivals: notes.map((n) => ({
+    arrivals: [...notes.map((n) => ({
       edge: 'Notes',
       ...(scope === undefined || keyless ? {} : { key: scope }),
       identity: n.id,
       version: String(n.edited ?? 0),
       landing: { recordId: n.id, recordType: 'Note', fields: { Id: n.id, Title: n.title, Edited: n.edited ?? 0 } },
       ...(title === undefined ? {} : { takenApplied: true }),
-    })),
+    })), ...comments],
     ...(noCursor ? {} : { cursor: JSON.parse(readFileSync(at('feed.json'), 'utf8')).reduce((high, n) => Math.max(high, n.at), since) }),
   };
 };
@@ -167,13 +200,16 @@ module.exports = defineModule({
             ? {}
             : { cheapToList: true, relistEverySeconds: 300 }),
       },
+      // Reached only along a note's \`Comments\`; published so it is named.
+      { typeId: 'comment', displayName: 'Comment', readable: false, writable: false },
     ],
-    describe: async (typeId) => (typeId === 'note' || typeId === 'Note' ? note : typeId === 'board' || typeId === 'Board' ? board : null),
+    describe: async (typeId) =>
+      typeId === 'note' || typeId === 'Note' ? note : typeId === 'board' || typeId === 'Board' ? board : typeId === 'comment' || typeId === 'Comment' ? comment : null,
     resolveEntity: async () => ({ candidates: [] }),
     // A polled event's payload holds its fields by id; a landing's, by name.
     getFieldValue: async ({ position, fieldId }) => {
       const data = position.identity.data ?? {};
-      const fields = position.recordType === 'Board' || position.recordType === 'board' ? board.fields : note.fields;
+      const fields = position.recordType === 'Board' || position.recordType === 'board' ? board.fields : position.recordType === 'Comment' || position.recordType === 'comment' ? comment.fields : note.fields;
       const name = fields.find((f) => f.fieldId === fieldId.toLowerCase())?.displayName;
       return data[fieldId] ?? data[fieldId.toLowerCase()] ?? (name === undefined ? undefined : data[name]) ?? null;
     },
@@ -186,6 +222,17 @@ module.exports = defineModule({
     createRecord: async () => { throw new Error('read-only'); },
     updateRecord: async () => { throw new Error('read-only'); },
     deleteRecord: async () => { throw new Error('read-only'); },
+    // A note's comments are waited on under \`comments:<note id>\`; its siblings
+    // (\`siblings\`) under its board's id, as its board's \`Notes\` arrive.
+    arrivals: {
+      awaitKeys: async ({ edge, heads }) =>
+        heads.map(({ recordId }) => {
+          if (edge === 'Comments') return { key: commentsKey(recordId) };
+          const pinned = JSON.parse(readFileSync(at('feed.json'), 'utf8')).find((n) => n.id === recordId)?.board;
+          if (edge === 'Notes' && siblings && pinned !== undefined) return { key: pinned };
+          throw new Error(\`feed: no key for \${recordId} on '\${edge}'\`);
+        }),
+    },
     poll: async (input) => {
       if ('edge' in input) return pollEdge(input);
       const { checkpoint, movementId } = input;
