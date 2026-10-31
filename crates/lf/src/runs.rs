@@ -95,6 +95,11 @@ fn hold_all(running: &[Rc<RunningExternal>], keep: Keep) -> Vec<Hold> {
 }
 
 impl FileSet {
+    /// Each file's reading, in the files' order.
+    pub fn parsed(&self) -> &[Rc<Parsed>] {
+        &self.parsed
+    }
+
     /// The file a listen is in. Its listens are read from its own files, so
     /// every listen's file is there.
     pub fn file(&self, name: &str) -> &MovementFile {

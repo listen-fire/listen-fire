@@ -184,21 +184,75 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     Ok(0)
 }
 
-/// Each connection a listen hears deliveries for, with the URL its sender
+/// Each connection whose sender posts to this listener, with the URL it
 /// posts to: under lf.yaml's `publicUrl` when it names one, else this
-/// listener's own.
+/// listener's own. That is each connection a listen hears deliveries for,
+/// and each connection a program makes to a module that announces arrivals
+/// (`awaitKeys`): a run's `await` on a record of that module, or a press on
+/// the buttons it wrote, is answered through that door, whether or not a
+/// listen names the connection.
 fn hook_urls(session: &Session, local: &str) -> Vec<String> {
     let set = session.file_set();
     let base = session.project.public_url.as_deref().unwrap_or(local);
+    let takes_hooks = |external: &str, announcing: bool| {
+        set.running.iter().any(|r| r.external.manifest.name == external && crate::doors::inbound_of(r).is_some() && (!announcing || r.methods.iter().any(|m| m == "awaitKeys")))
+    };
     let mut seen = std::collections::BTreeSet::new();
     for listen in &set.listens {
         let Some(credential) = &listen.credential else { continue };
-        let takes_hooks = set.running.iter().any(|r| r.external.manifest.name == listen.adapter && crate::doors::inbound_of(r).is_some());
-        if takes_hooks {
+        if takes_hooks(&listen.adapter, false) {
             seen.insert((listen.adapter.clone(), credential.clone()));
         }
     }
+    for (external, credential) in connections(set.parsed()) {
+        if takes_hooks(&external, true) {
+            seen.insert((external, credential));
+        }
+    }
     seen.into_iter().filter_map(|(external, credential)| Some(format!("{external} {credential}: {}", hook_url(base, &external, &credential)?))).collect()
+}
+
+/// Every `connect … using <credential>` the files write, at any depth, as
+/// (module, credential), each named as imported (an alias read back).
+fn connections(files: &[Rc<crate::sources::Parsed>]) -> std::collections::BTreeSet<(String, String)> {
+    use movement_parser::ast::{RValue, Statement};
+    fn walk(statements: &[Statement], originals: &std::collections::BTreeMap<String, String>, out: &mut std::collections::BTreeSet<(String, String)>) {
+        for statement in statements {
+            let construct = match statement {
+                Statement::Assign(assign) => match &assign.value {
+                    RValue::Construct { construct } => Some(construct),
+                    _ => None,
+                },
+                Statement::Listen(listen) => listen.construct.as_ref(),
+                Statement::Movement(movement) => {
+                    walk(&movement.body, originals, out);
+                    None
+                }
+                _ => None,
+            };
+            let Some(construct) = construct else { continue };
+            let construction = crate::secrets::construction_of(construct, originals);
+            if let Some(credential) = construction.credential {
+                out.insert((construction.adapter, credential));
+            }
+        }
+    }
+    let mut out = std::collections::BTreeSet::new();
+    for file in files {
+        let Ok(program) = &file.program else { continue };
+        let mut originals = std::collections::BTreeMap::new();
+        for statement in &program.statements {
+            if let movement_parser::ast::Statement::Import(import) = statement {
+                for name in &import.names {
+                    if let Some(alias) = &name.alias {
+                        originals.insert(alias.clone(), name.name.clone());
+                    }
+                }
+            }
+        }
+        walk(&program.statements, &originals, &mut out);
+    }
+    out
 }
 
 /// `<base>/hooks/<external>/<credential>`, each segment percent-encoded.

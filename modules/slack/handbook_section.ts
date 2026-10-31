@@ -61,7 +61,7 @@ if (r[0] == null) {
 \`\`\`
 
 - A press made the moment the message appears still counts.
-- \`only(press-[:Actions]->).Value\` is \`"approve" | "reject"\` here: comparing it with a value the buttons never offered, such as \`"aprove"\`, is refused while you write it. Compare it where you read it, as here: the result of a \`race\` does not keep that type.
+- \`only(press-[:Actions]->).Value\` is \`"approve" | "reject"\` here: comparing it with a value the buttons never offered, such as \`"aprove"\`, is refused while you write it, here or on the \`race\`'s slot when an arm returns the \`Value\`.
 - \`press-[:By]->\` is the member who pressed.
 - A message deleted while a run waits on it ends the wait: nothing after the \`await\` runs.
 
@@ -113,7 +113,7 @@ This is the natural "I've picked this up" before a slower step runs, and reactin
 
 ### what-fires-a-run
 
-Slack delivers only the events its app is subscribed to, so an automation reading Slack usually fires on the bot being mentioned rather than on every message in a channel; narrow further with \`events\` and \`channels\` on the listener. A run also needs the person who sent the message (or added the reaction) to be a known member of the team, matched on their Slack profile email — activity from guests, external members of a shared channel, other bots, and this platform's own posts is dropped before anything runs. A press and a thread reply are different: they reach the run waiting on their message whoever made them, so say in a \`WHERE\` whose answer counts when it matters. Slack only sends presses and replies its app is set up to send — interactivity switched on, and message events subscribed.
+Slack delivers only the events its app is subscribed to, so an automation reading Slack usually fires on the bot being mentioned rather than on every message in a channel; narrow further with \`events\` and \`channels\` on the listener. A run also needs the person who sent the message (or added the reaction) to be a known member of the team, matched on their Slack profile email — activity from guests, external members of a shared channel, other bots, and this platform's own posts is dropped before anything runs. A press and a thread reply are different: they reach the run waiting on their message whoever made them, so say in a \`WHERE\` whose answer counts when it matters. Slack only sends presses and replies its app is set up to send — interactivity switched on, and message events subscribed. Point both of the app's request URLs, Interactivity's and Event Subscriptions', at the connection's door, the address your host gives for it: \`listen-fire serve\` prints it for every Slack connection a run can wait on, whether or not a listen names the connection.
 
 ### Common mistakes
 

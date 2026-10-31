@@ -8,8 +8,9 @@
 // reply, an Events API delivery, resumes `await msg-[:Replies]->`; a deleted
 // message settles a wait on it empty. `listen-fire check` types the press's
 // value by the Values the write offered. Every delivery goes to the door
-// `listen-fire serve` prints for the project's Slack listen: the credential's,
-// verified with the signing secret `listen-fire connect` put on the install.
+// `listen-fire serve` prints for the project's Slack connection, which no
+// listen names: the credential's, verified with the signing secret
+// `listen-fire connect` put on the install.
 
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
@@ -31,18 +32,12 @@ process.env.LF_SERVE_MODULE ??= join(REPO, 'apps/cli/node_modules/.bin/serve-mod
 
 const SIGNING_SECRET = 'slack-signing-secret';
 
-// The listen gives the project a Slack door, which \`listen-fire serve\` prints;
-// no delivery here is a mention, so it never fires.
+// No listen names the Slack connection: `listen-fire serve` prints its door
+// because a run awaits a record of it.
 const HEADER = `import { \`@lf/slack\` as slack } from adapters
 import { team_slack } from credentials
 
 chat = connect slack using team_slack
-
-function mentioned(m: <chat-[:Message]->>) {
-  return "mentioned"
-}
-
-listen to chat { events: ["app_mention"] } fire mentioned
 `;
 
 const PRESS = `${HEADER}
@@ -113,7 +108,7 @@ async function botMessages(channels: Fake): Promise<FakeMessage[]> {
   return rows.filter((m) => m.user === 'bot');
 }
 
-/** The door `listen-fire serve` prints for the Slack listen's connection. */
+/** The door `listen-fire serve` prints for the Slack connection. */
 async function slackDoor(serving: Served): Promise<string> {
   const line = await serving.waitFor(/^slack team_slack: http:\/\/\S+$/);
   return line.slice('slack team_slack: '.length);
