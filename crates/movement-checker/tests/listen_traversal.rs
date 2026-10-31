@@ -36,7 +36,8 @@ const CATALOG: &str = r#"{"adapters":{
     "writableRoots":{}}}},
   "at":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
     "Base":{"properties":{"Name":"text"},
-      "edges":{"Tables":{"target":"Table","cheapToList":true,"parentChanges":"pushed","capability":{"filter":"native","supportsLimit":false}}},
+      "edges":{"Tables":{"target":"Table","cheapToList":true,"parentChanges":"pushed","capability":{"filter":"native","supportsLimit":false}},
+        "Views":{"target":"Table","cheapToList":true,"parentChanges":"pushed","listenable":true,"delivery":"scope","capability":{"filter":"native","supportsLimit":false}}},
       "propertyCapabilities":{"Name":{"filterOperators":["eq"]}}},
     "Table":{"properties":{"Name":"text"},
       "edges":{
@@ -168,6 +169,21 @@ fn comments_across_a_table_are_unwatchable() {
     assert_eq!((plans.len(), codes), (0, vec!["MOV_LISTEN_UNWATCHABLE".to_string()]));
     // Unfiltered, the comments are listened to as they are polled.
     assert_eq!(judged(&plans_of("listen to at-[:Bases]->-[:Tables]->-[:Records]->-[:Comments]-> fire k\n")[0]), json!(["none", "none", "none", "arrival"]));
+}
+
+/// A hop the host lists whose changes its module reports per record it
+/// hangs off is refused by name: listen-fire follows a hop's changes only
+/// where they are reported for the connection. Reported off the connection
+/// itself, or not reported at all, the hop is listed as before.
+#[test]
+fn a_listed_hop_whose_changes_are_reported_per_record_is_unwatchable() {
+    assert_eq!(
+        check("listen to at-[:Bases]->-[v:Views WHERE v.Name == \"Deals\"]->-[:Changes]-> fire c\n"),
+        ["MOV_LISTEN_UNWATCHABLE 6:11-6:73 '-[:Views]->' on at's Base reports its changes only per Base (`parentChanges: pushed` with `delivery: scope`), and listen-fire does not follow changes reported per Base yet, so this listen would never list its Tables again"]
+    );
+    let (plans, codes) = answer_of("listen to at-[:Bases]->-[:Views]->-[:Changes]-> fire c\n");
+    assert_eq!((plans.len(), codes), (0, vec!["MOV_LISTEN_UNWATCHABLE".to_string()]), "listed under a scope, filtered or not");
+    assert_eq!(judged(&plans_of("listen to at-[:Bases]->-[t:Tables WHERE t.Name == \"Deals\"]->-[:Changes]-> fire c\n")[0]), json!(["resolved", "resolved", "arrival"]));
 }
 
 #[test]

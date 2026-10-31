@@ -55,6 +55,7 @@ use crate::host::{self, Instance, ResolveAdapter, Role};
 use crate::js::{self, Js};
 use crate::order_limit::{self, Substitution};
 use crate::extract::emission::Emission;
+use crate::listen_walk::StopAt;
 use crate::run::{Failure, Flow, Run, Scoped, Stop};
 use crate::trace::TraceEntry;
 use crate::unique::get;
@@ -907,9 +908,9 @@ impl Run<'_> {
         self.walk_until(start, step, read, scope, span, None).await
     }
 
-    /// `walk`, its fetch paging no further once it has kept `stop_at`
-    /// records (None: every page).
-    pub(crate) async fn walk_until(&self, start: &Js, step: &EdgeStep, read: Rc<Read>, scope: &Rc<Scope>, span: &Js, stop_at: Option<usize>) -> Result<Vec<Rc<Landed>>, Failure> {
+    /// `walk`, its fetch paging no further once it has kept what `stop_at`
+    /// waits for (None: every page).
+    pub(crate) async fn walk_until(&self, start: &Js, step: &EdgeStep, read: Rc<Read>, scope: &Rc<Scope>, span: &Js, stop_at: Option<StopAt<'_>>) -> Result<Vec<Rc<Landed>>, Failure> {
         if step.direction == EdgeDirection::Incoming && !read.incoming {
             return Err(Failure::unsupported(
                 &format!("incoming block-head hops ('{}')", step.edge_type_id),
@@ -966,7 +967,7 @@ impl Run<'_> {
                 for item in list_items(&get(&page, "items"))? {
                     self.keep(&mut kept, get(&item, "position"), &item, step, read, gate.as_ref(), scope, span).await?;
                 }
-                if next.is_nullish() || stop_at.is_some_and(|n| kept.len() >= n) {
+                if next.is_nullish() || stop_at.is_some_and(|stop_at| stop_at.reached(&kept)) {
                     break;
                 }
                 if pages >= MAX_RELATED_PAGES {
@@ -1494,8 +1495,9 @@ pub(crate) fn block_value(returned: Vec<Binding>) -> Binding {
 struct Fetch<'a> {
     pushdown: &'a [(String, Js)],
     paged: bool,
-    /// Page no further once this many records are kept; None: every page.
-    stop_at: Option<usize>,
+    /// Page no further once it has kept what this waits for; None: every
+    /// page.
+    stop_at: Option<StopAt<'a>>,
 }
 
 /// A step's own `type`.

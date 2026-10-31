@@ -85,8 +85,9 @@ impl Run<'_> {
             let mut distinct = BTreeSet::new();
             let mut next = Vec::new();
             'paths: for (scope, cursor) in &paths {
-                let room = stop_at.map(|n| n - distinct.len());
-                for landed in self.walk_until(&cursor.position(), &step, read.clone(), scope, &span, room).await.map_err(Stop::Thrown)? {
+                let room = stop_at.map(|n| StopAt { more: n - distinct.len(), seen: &distinct });
+                let fetched = self.walk_until(&cursor.position(), &step, read.clone(), scope, &span, room).await.map_err(Stop::Thrown)?;
+                for landed in fetched {
                     // Counted by the record it is: two paths may land on one.
                     if stop_at.is_some() && !distinct.insert(record_of(&landed.position())) {
                         continue;
@@ -122,6 +123,24 @@ impl Run<'_> {
         *self.file_scope.borrow_mut() = Some(file.clone());
         self.interpret_file(&DeclaringFile::Root, &file).await?;
         Ok(file)
+    }
+}
+
+/// Where a fetch for a walk past its limit may page no further: once it has
+/// kept `more` records that `seen`, what the walk's earlier paths landed on,
+/// does not hold, each counted once. A record an earlier path landed on
+/// takes no room, so converging paths never stop a fetch short.
+#[derive(Clone, Copy)]
+pub(crate) struct StopAt<'a> {
+    pub more: usize,
+    pub seen: &'a BTreeSet<String>,
+}
+
+impl StopAt<'_> {
+    /// Whether `kept` holds the records it waits for.
+    pub(crate) fn reached(&self, kept: &[Rc<Landed>]) -> bool {
+        let fresh: BTreeSet<String> = kept.iter().map(|landed| record_of(&landed.position())).filter(|record| !self.seen.contains(record)).collect();
+        fresh.len() >= self.more
     }
 }
 
@@ -231,6 +250,11 @@ mod tests {
     /// `walk`, stopping past `limit`; `paged`: the crm streams its edges, a
     /// record a page.
     fn walk_as(source: &str, hops: Vec<PlanHop>, limit: Option<usize>, paged: bool) -> (Json, Vec<String>) {
+        walk_over(world(), source, hops, limit, paged)
+    }
+
+    /// `walk_as`, over the boards and notes `(boards, notes)`.
+    fn walk_over((boards, notes): (Vec<Js>, BTreeMap<&'static str, Vec<Js>>), source: &str, hops: Vec<PlanHop>, limit: Option<usize>, paged: bool) -> (Json, Vec<String>) {
         let input = json!({
             "entry": "walk", "source": source, "languageVersion": movement_parser::version::LANGUAGE_VERSION, "segmentId": "g1", "serves": [],
             "now": "2026-10-31T12:00:00.000Z", "event": env::encode_plain(&env::object_of(vec![])),
@@ -238,7 +262,6 @@ mod tests {
             "connection": "boards", "hops": hops, "limit": limit,
         });
         let methods = if paged { json!(["getRelated", "getFieldValue", "iterateRelated", "iterateRelatedPage"]) } else { json!(["getRelated", "getFieldValue"]) };
-        let (boards, notes) = world();
         let positions: RefCell<BTreeMap<u64, Js>> = RefCell::default();
         let asked = RefCell::new(Vec::new());
         let serve = |request: &PendingRequest| match (request.family, request.method.as_str()) {
@@ -357,6 +380,22 @@ mod tests {
         let (done, asked) = walk_as(SOURCE, hops("boards-[b:Boards]->", &[]), None, true);
         assert_eq!(landed(&done), ["Board b1", "Board b2", "Board b3"], "{done}");
         assert_eq!(asked.len(), 3);
+    }
+
+    /// Paths that converge (a note pinned to two boards) take no room
+    /// twice: a fetch along a later path pages on past the records an
+    /// earlier one landed on, so a walk within its limit answers every
+    /// record, and one past it answers one more than its limit.
+    #[test]
+    fn converging_paths_are_paged_past_the_records_an_earlier_path_landed_on() {
+        let (boards, _) = world();
+        let note = |id: &str| record("Note", id, vec![("Owner", Js::str("ann"))]);
+        let shared = || (boards[..2].to_vec(), BTreeMap::from([("b1", vec![note("n1"), note("n2")]), ("b2", vec![note("n1"), note("n2"), note("n3")])]));
+        let (done, asked) = walk_over(shared(), SOURCE, hops("boards-[b:Boards]->-[n:Notes]->", &[]), Some(3), true);
+        assert_eq!(landed(&done), ["Note n1", "Note n2", "Note n3"], "within its limit: every note, the shared ones once");
+        assert!(asked.contains(&"Notes of b2 page 2".to_string()), "b2's notes are paged past the two b1 landed on: {asked:?}");
+        let (done, _) = walk_over(shared(), SOURCE, hops("boards-[b:Boards]->-[n:Notes]->", &[]), Some(2), true);
+        assert_eq!(landed(&done), ["Note n1", "Note n2", "Note n3"], "past its limit: one more than it");
     }
 
     /// A connection the program does not make is said by name.
