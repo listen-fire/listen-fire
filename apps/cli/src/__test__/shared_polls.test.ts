@@ -215,3 +215,14 @@ test('an edge without a cursor lists all of it again: what the arming poll saw i
   assert.deepEqual(saw(drained.out, 'a'), ['a3']);
   assert.equal(runsOf(dir, 'a'), 1);
 });
+
+test('an edge with a cursor keeps no receipts for what its arming poll saw: its cursor holds the backlog back', () => {
+  const dir = notesProject(['listen to f-[n:Notes WHERE n.Title CONTAINS "a"]-> fire a']);
+  feed(dir, [{ id: 'n1', title: 'a1', at: 1 }]);
+  lfAt(dir, ['drain', '--until-idle']);
+  assert.equal(runsOf(dir, 'a'), 0);
+  // The provider forgets the cursor and lists n1 again: with no receipt for it, it runs.
+  writeFileSync(join(dir, 'externals/feed/replay'), '');
+  const drained = lfAt(dir, ['drain', '--until-idle'], 61_000);
+  assert.deepEqual(saw(drained.out, 'a'), ['a1']);
+});

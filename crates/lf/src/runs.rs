@@ -968,7 +968,10 @@ impl Session {
         if state.is_none() {
             let listens: Vec<String> = sharing.iter().map(|i| &set.listens[*i]).map(|l| format!("{}:{}", set.file(&l.file).name, l.movement_name)).collect();
             fired.redelivered.push(format!("{}: {} armed; it fires on changes from now", key.adapter, listens.join(", ")));
-            self.note_seen_arrivals(set, &key.adapter, &arrivals, key.credential.as_deref(), sharing)?;
+            // A cursor already keeps the backlog from firing; only an edge listed whole each time needs its receipts.
+            if crate::edge_polls::declared(set, &set.listens[sharing[0]]).is_some_and(|d| d.cursorless) {
+                self.note_seen_arrivals(set, &key.adapter, &arrivals, key.credential.as_deref(), sharing)?;
+            }
         } else {
             crate::arrivals::log_and_wake(&*self.store, LOCAL_TENANT, &key.adapter, &crate::arrivals::logged(&arrivals))?;
             let mark = self.store.arrival_mark().map_err(|e| e.to_string())?;
@@ -984,9 +987,10 @@ impl Session {
         Ok((fired, credential.map(|c| c.name.clone())))
     }
 
-    /// What an arming poll saw is what each listen sharing it has already
-    /// seen: its receipt is kept, without a run, so an edge with no cursor
-    /// (whose next poll lists all of it again) fires only what is new.
+    /// What the arming poll of an edge with no cursor saw is what each
+    /// listen sharing it has already seen: its receipt is kept, without a
+    /// run, so the next poll (which lists all of it again) fires only what
+    /// is new.
     fn note_seen_arrivals(&self, set: &FileSet, adapter: &str, arrivals: &[ArrivalIn], credential: Option<&str>, sharing: &[usize]) -> Result<(), String> {
         let now_ms = self.now_ms() as f64;
         for arrival in arrivals.iter().filter(|a| !a.gone) {

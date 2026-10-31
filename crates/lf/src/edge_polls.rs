@@ -150,6 +150,8 @@ pub struct Declared {
     pub delivery: Option<Delivery>,
     /// How often it is polled when the operator says nothing.
     pub poll_every_seconds: Option<u64>,
+    /// It declares `cursor: false`: a poll lists all of it, however often it is polled.
+    pub cursorless: bool,
 }
 
 /// What the module declares of the listen's last edge, from the set's
@@ -170,7 +172,7 @@ pub fn declared(set: &FileSet, listen: &Listen) -> Option<Declared> {
         Some(Js::Num(n)) => n.as_u64(),
         _ => None,
     };
-    Some(Declared { delivery, poll_every_seconds })
+    Some(Declared { delivery, poll_every_seconds, cursorless: matches!(edge.get("cursor"), Some(Js::Bool(false))) })
 }
 
 /// The poll keys of the listens on polled edges, each with its listens.
@@ -342,14 +344,14 @@ mod tests {
     #[test]
     fn the_operators_interval_for_a_connection_is_over_the_edges() {
         let mut poll_every = BTreeMap::new();
-        let declared = Declared { delivery: Some(Delivery::Polled), poll_every_seconds: Some(60) };
+        let declared = Declared { delivery: Some(Delivery::Polled), poll_every_seconds: Some(60), cursorless: false };
         assert_eq!(interval_ms(&poll_every, &key("", None), None, Some(&declared)), Ok(60_000));
         poll_every.insert("feed".into(), 1_000);
         assert_eq!(interval_ms(&poll_every, &key("", None), None, Some(&declared)), Ok(1_000), "named by its module");
         assert_eq!(interval_ms(&poll_every, &key("", None), Some("work"), Some(&declared)), Ok(60_000), "polled as another credential");
         poll_every.insert("work".into(), 5_000);
         assert_eq!(interval_ms(&poll_every, &key("", None), Some("work"), Some(&declared)), Ok(5_000));
-        let undeclared = Declared { delivery: Some(Delivery::Polled), poll_every_seconds: None };
+        let undeclared = Declared { delivery: Some(Delivery::Polled), poll_every_seconds: None, cursorless: false };
         assert!(interval_ms(&poll_every, &key("", None), Some("other"), Some(&undeclared)).unwrap_err().contains("declares no pollEverySeconds"));
     }
 }
