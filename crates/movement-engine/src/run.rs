@@ -1255,7 +1255,11 @@ impl Run<'_> {
     fn trigger_binding(&self) -> Binding {
         let source = self.source.borrow().clone().expect("the trigger is seeded before its parameter is bound");
         match event_get(&self.event, "arrival") {
-            arrival @ Js::Object(_) => crate::awaits::landing_binding(&source.adapter_type, &event_get(&arrival, "landing"), &source.read, &source.read),
+            arrival @ Js::Object(_) => {
+                // A landing naming no record is read through the adapter itself, as a wait's is.
+                let raw = Rc::new(crate::traverse::Read { raw: true, ..(*source.read).clone() });
+                crate::awaits::landing_binding(&source.adapter_type, &event_get(&arrival, "landing"), &source.read, &raw)
+            }
             _ => Binding::Event,
         }
     }

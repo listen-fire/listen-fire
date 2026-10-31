@@ -189,7 +189,8 @@ pub fn check_answer(program: &Program, catalog: &CatalogSnapshot, options: Check
     }
     let link = link.map(|link| link_json(link, catalog));
     let listens = checker.listens.take_plans();
-    Answer { diagnostics, stamps, link, listens, unplaced }
+    let unwatched = checker.listens.take_unwatched();
+    Answer { diagnostics, stamps, link, listens, unwatched, unplaced }
 }
 
 /// What `check_answer` answers.
@@ -199,6 +200,9 @@ pub struct Answer {
     pub link: Option<Json>,
     /// How the host watches each `listen to <traversal>`, in source order.
     pub listens: Vec<movement_parser::listen_plan::ListenPlan>,
+    /// Where each `listen to <traversal>` the check refuses is written: it
+    /// has no plan, so no host watches it (never sent).
+    pub unwatched: Vec<movement_parser::ast::Span>,
     pub unplaced: Vec<String>,
 }
 

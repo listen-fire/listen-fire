@@ -612,7 +612,7 @@ describe('fetchRemoteManifest refuses an older server', () => {
 
   it('reads an unstated minor, and every minor up to its own, as before', async () => {
     const v2 = { protocolVersion: 2, adapterType: 'remote-email', supportedTriggers: [], runtimeCapabilities, methods: [] };
-    for (const stated of [{}, { protocolMinor: 0 }, { protocolMinor: 2 }, { protocolMinor: 3 }, { protocolMinor: 4 }, { protocolMinor: 5 }]) {
+    for (const stated of [{}, { protocolMinor: 0 }, { protocolMinor: 2 }, { protocolMinor: 3 }, { protocolMinor: 4 }, { protocolMinor: 5 }, { protocolMinor: 6 }]) {
       postRpcMock.mockResolvedValueOnce({ ...v2, ...stated });
       await expect(fetchRemoteManifest(config, 's3cr3t')).resolves.toMatchObject({ adapterType: 'remote-email' });
     }

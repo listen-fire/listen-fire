@@ -1,6 +1,8 @@
 //! How a host watches one `listen to <traversal> fire f`: the checker writes
 //! it, and both hosts read it instead of the listen's source.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::lowering::expression::Expression;
@@ -25,6 +27,43 @@ pub struct ListenPlan {
     /// arrival hands the judge.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub carries: Vec<String>,
+}
+
+impl ListenPlan {
+    /// What makes two listens one: the plan, each hop's alias read as its
+    /// place among the hops (`m` and `n` name one hop alike), and without the
+    /// lane's name, which names a listen but is not what it listens to, as for
+    /// the settings form. The checker refuses a second listen of one identity;
+    /// a host names each listen's receipts by it.
+    pub fn identity(&self) -> String {
+        let places: HashMap<&str, String> = self.hops.iter().enumerate().filter_map(|(i, hop)| hop.alias.as_deref().map(|a| (a, format!("#{i}")))).collect();
+        let mut json = serde_json::to_value(ListenPlan { alias: None, ..self.clone() }).expect("a plan is always JSON");
+        read_aliases_as_places(&mut json, &places);
+        json.to_string()
+    }
+}
+
+/// Every hop alias in a plan's JSON, the hops' own and those their WHEREs
+/// read (`aliasRoot`, an `alias_ref`'s `name`), replaced by its place.
+fn read_aliases_as_places(json: &mut serde_json::Value, places: &HashMap<&str, String>) {
+    match json {
+        serde_json::Value::Object(members) => {
+            let alias_ref = members.get("type").and_then(serde_json::Value::as_str) == Some("alias_ref");
+            for (key, value) in members.iter_mut() {
+                let names_alias = key == "alias" || key == "aliasRoot" || (alias_ref && key == "name");
+                match value {
+                    serde_json::Value::String(name) if names_alias => {
+                        if let Some(place) = places.get(name.as_str()) {
+                            *name = place.clone();
+                        }
+                    }
+                    other => read_aliases_as_places(other, places),
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(|item| read_aliases_as_places(item, places)),
+        _ => {}
+    }
 }
 
 /// One hop of a listen's traversal.

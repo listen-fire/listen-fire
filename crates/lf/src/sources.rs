@@ -35,11 +35,6 @@ pub struct Parsed {
 }
 
 impl Parsed {
-    /// The text it was read from.
-    pub fn source(&self) -> &str {
-        &self.source
-    }
-
     pub fn of(file: &MovementFile) -> Parsed {
         let program = crate::check::parse(&file.source);
         Parsed { name: file.name.clone(), path: file.path.clone(), source: file.source.clone(), program }
@@ -79,12 +74,12 @@ mod tests {
     fn a_file_whose_text_is_unchanged_keeps_its_parse() {
         let hello = "function hello(run: <manual-[:Invocation]->>) {\n  return \"v1\"\n}\nlisten to manual fire hello\n";
         let held = Parsed::each(&[file("hello", hello), file("other", hello.replace("hello", "other").as_str())], &[]);
-        assert_eq!(crate::routing::listens_across(&held, &crate::json::Js::Null).len(), 2, "each file's listen is read");
+        assert_eq!(crate::routing::listens_across(&held, &crate::json::Js::Null).unwrap().len(), 2, "each file's listen is read");
         let again = Parsed::each(&[file("hello", hello), file("other", "function other(")], &held);
         assert!(Rc::ptr_eq(&again[0], &held[0]), "the unchanged file is not parsed again");
         assert!(!Rc::ptr_eq(&again[1], &held[1]), "the changed one is");
-        assert!(again[1].program.is_err() && crate::routing::listens_across(&again, &crate::json::Js::Null).len() == 1, "a file that does not parse routes nothing");
+        assert!(again[1].program.is_err() && crate::routing::listens_across(&again, &crate::json::Js::Null).unwrap().len() == 1, "a file that does not parse routes nothing");
         let moved = Parsed::each(&[file("renamed", hello)], &held);
-        assert!(!Rc::ptr_eq(&moved[0], &held[0]) && crate::routing::listens_across(&moved, &crate::json::Js::Null)[0].file == "renamed", "a parse is kept by its file and its text");
+        assert!(!Rc::ptr_eq(&moved[0], &held[0]) && crate::routing::listens_across(&moved, &crate::json::Js::Null).unwrap()[0].file == "renamed", "a parse is kept by its file and its text");
     }
 }

@@ -89,6 +89,7 @@ mod http_out;
 mod inbound;
 mod init;
 mod lfjson;
+mod log;
 #[cfg(feature = "anthropic")]
 mod json_repair;
 mod guard_module;
@@ -208,6 +209,7 @@ const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|
   drain     fire each cron listen's due tick (once, however many workers drain), then claim due work rows one at a time and run them (a polled listen's row is its next poll, due every interval its source declares); with --until-idle exit once none is due, with --max-seconds stop claiming after n seconds, with --kinds only rows of those kinds (resume_timer, wake_await, fire_event, poll_listen, refresh_subscription, settle_race) and the cron ticks only when it names cron
   serve     the inbound doors and the work queue's drain (as `listen-fire serve`)
   --doors-only  (serve) only the doors, for compute billed by the request: nothing drains in this process, `/hooks/…` queues its events (answering 202 with the rows queued) instead of running them in the request; workers (`listen-fire drain`) run the work, started by the wake slot's module or a schedule. Also LF_DOORS_ONLY=1
+  LF_LOG=debug  also say the lines that explain why something ran nothing when nothing went wrong (an arrival a listen's WHERE refuses); unset, they stay unsaid
   cancel    cancel a run: settled failed now, or at its next statement if another listen-fire is stepping it
   --store   where run state is kept: a SQLite file or a Postgres database (set up by `listen-fire connect @lf/postgres-store`), instead of lf.yaml's `core: { store: … }`
   --team    the tenant (a uuid) of a Postgres store's rows
@@ -400,6 +402,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
         return contract_secrets::serve(std::path::Path::new(target)).await.map(|()| 0);
     }
     let args = parse_args(&argv)?;
+    log::install(std::env::var("LF_LOG").ok().as_deref())?;
     if let Some(code) = serve_contract_bridge(&args).await? {
         return Ok(code);
     }

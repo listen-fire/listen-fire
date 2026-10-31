@@ -64,6 +64,9 @@ pub struct ListenState {
     movements: HashMap<SymbolId, MovementInfo>,
     /// How the host watches each of the file's clean `listen to <traversal>`.
     plans: Vec<movement_parser::listen_plan::ListenPlan>,
+    /// Where each of the file's `listen to <traversal>` the check refuses is
+    /// written: no host watches it.
+    unwatched: Vec<Span>,
 }
 
 struct Dispatchable {
@@ -124,6 +127,7 @@ pub struct FileListens {
     aliases: HashSet<String>,
     dispatchables: Vec<Dispatchable>,
     plans: Vec<movement_parser::listen_plan::ListenPlan>,
+    unwatched: Vec<Span>,
 }
 
 impl ListenState {
@@ -135,6 +139,7 @@ impl ListenState {
             aliases: std::mem::take(&mut self.aliases),
             dispatchables: std::mem::take(&mut self.dispatchables),
             plans: std::mem::take(&mut self.plans),
+            unwatched: std::mem::take(&mut self.unwatched),
         }
     }
 
@@ -144,11 +149,17 @@ impl ListenState {
         self.aliases = outer.aliases;
         self.dispatchables = outer.dispatchables;
         self.plans = outer.plans;
+        self.unwatched = outer.unwatched;
     }
 
     /// The plans of the file's listens on a traversal, in source order.
     pub fn take_plans(&mut self) -> Vec<movement_parser::listen_plan::ListenPlan> {
         std::mem::take(&mut self.plans)
+    }
+
+    /// Where the file's refused listens on a traversal are written, in source order.
+    pub fn take_unwatched(&mut self) -> Vec<Span> {
+        std::mem::take(&mut self.unwatched)
     }
 
     /// A movement's parameters and the scope it was declared in.

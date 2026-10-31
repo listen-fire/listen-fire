@@ -343,7 +343,8 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     let files = scan_movements(&project)?;
     let parsed = Parsed::each(&files, &parsed);
     let catalog = catalog_of(&running, &schemas, credentials, &files);
-    let mut listens = crate::routing::listens_across(&parsed, &catalog);
+    // A listen on a traversal the check plans nothing for would never fire: refused, never served silent.
+    let mut listens = crate::routing::listens_across(&parsed, &catalog).map_err(|lines| lines.join("\n"))?;
     crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
     let user = local_identity(&project.user, |k| std::env::var(k).ok());
     let _holds = hold_all(&running, role.keep());
@@ -672,14 +673,17 @@ impl Session {
         let now_ms = self.now_ms() as f64;
         for arrival in arrivals.iter().filter(|a| !a.gone) {
             let identity = arrival.identity.as_deref().unwrap_or_default();
-            for listen in set.listens.iter().filter(|l| l.is_on(adapter, &arrival.edge) && l.hears(delivered.credential)) {
+            for listen in set.listens.iter().filter(|l| l.is_on(adapter, &arrival.edge)) {
                 let file = set.file(&listen.file);
                 let named = format!("{}:{}", file.name, listen.movement_name);
-                match listen.fires(arrival, delivered.credential, now_ms) {
+                let Some(verdict) = listen.fires(arrival, delivered.credential, now_ms) else { continue };
+                match verdict {
                     Verdict::Fires => {}
-                    Verdict::Skips { .. } if arrival.not_for.as_deref() == Some(listen.pipeline().as_str()) => continue,
+                    // Said only under LF_LOG=debug: one line per arrival and
+                    // listen would flood a busy edge's output with lines that
+                    // say nothing went wrong.
                     Verdict::Skips { hop } => {
-                        fired.redelivered.push(format!("{named}: the arrival {identity} on {} does not match the WHERE of hop {}: nothing is owed, and it runs nothing", arrival.edge, hop + 1));
+                        crate::log::debug(|| format!("{named}: the arrival {identity} on {} does not match the WHERE of hop {}: nothing is owed, and it runs nothing", arrival.edge, hop + 1));
                         continue;
                     }
                     Verdict::Undecided { reason } => {
@@ -1964,7 +1968,10 @@ impl Session {
             return self.refuse(log, pairs, rose);
         }
 
-        let mut listens = crate::routing::listens_across(&parsed, &catalog);
+        let mut listens = match crate::routing::listens_across(&parsed, &catalog) {
+            Ok(listens) => listens,
+            Err(unwatched) => return self.refuse(log, pairs, unwatched),
+        };
         crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
         let _holds = hold_all(&running, self.role.keep());
         let taken = Rc::new(FileSet { files, parsed, catalog, listens, running, schemas, errors: OnceCell::from(counts), _holds });
@@ -2558,6 +2565,24 @@ mod tests {
             assert!(log.starts_with("movements: kept the files listen-fire has; the new ones do not check:\n"), "{log}");
             assert!(!crate::module_hosts::external_is_running("acme_h"), "the module only the refused set imported was stopped with it");
             assert!(crate::module_hosts::external_is_running("acme_g"), "the running set's module runs on");
+        });
+    }
+
+    #[test]
+    fn a_reload_whose_listen_on_a_traversal_does_not_check_is_refused_and_the_running_listens_kept() {
+        let root = acme_project(&["acme_i"], "0");
+        // Two check errors the open does not refuse, so a reload whose only
+        // error is the new listen's raises no file's count: the listen itself refuses it.
+        let erring = acme_movement("acme_i").replace("${company.Name}", "${company.Nope} ${company.Nada}");
+        put(&root, "acme_i.mvt", &erring);
+        with_session_as(&root.clone(), Role::Command, async |session| {
+            put(&root, "acme_i.mvt", &format!("{}listen to crm-[c:Company WHERE c.Bogus == \"x\"]-> fire welcome\n", acme_movement("acme_i")));
+            let log = refreshed(session).await;
+            assert!(log.starts_with("movements: kept the files listen-fire has; the new ones do not check:\n"), "{log}");
+            assert!(log.contains("acme_i.mvt:11:1 the listen that fires welcome does not check, so nothing would fire it: run `listen-fire check`"), "{log}");
+            let kept = session.file_set();
+            let served: Vec<(&str, bool)> = kept.listens.iter().map(|l| (l.file.as_str(), l.plan.is_some())).collect();
+            assert_eq!(served, [("acme_i", false), ("hello", false)], "the running set's listens, in the settings form, are still served");
         });
     }
 

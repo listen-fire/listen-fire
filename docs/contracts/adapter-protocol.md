@@ -701,9 +701,13 @@ From adapter protocol 2.6 an arrival may say more, for the listens on its edge
   carry. A listen's filter on an earlier hop is judged against them.
 - **`about`**: `{ "recordType", "externalId" }`, the record the arrival is
   about when that is not its landing (a change to a row names the row).
-- **`notFor`**: the listen it must not run, by its pipeline
-  (`listen:<file>:<movement>` on `listen-fire`): a listen's own failure,
-  reported to the listens on the edge it failed on, never reaches it.
+- **`notFor`**: the listen it must not run, by its pipeline: a listen's own
+  failure, reported to the listens on the edge it failed on, never reaches
+  it. On `listen-fire` a listen on a traversal is
+  `listen:<file>:<movement>:<digest>`, the digest being the first 8 hex
+  digits of the sha256 of the listen's identity (what makes two listens one
+  to the checker), so two listens in one file that fire one function are
+  told apart. Nothing is said of the listen an arrival is not for.
 - **`takenApplied`**: `true` when your module applied the listen's filter
   before reporting it (a filtered poll or subscription). Absent, the host
   judges the whole filter itself.
@@ -740,9 +744,10 @@ What Listen-Fire does with them:
 - Each arrival that landed is judged against every listen on its edge that
   hears the connection it came for. A listen its filter takes runs, its
   parameter bound to the landing; the same arrival (edge, key, identity and
-  version) delivered again runs it once. One its filter refuses runs nothing,
-  and Listen-Fire says so; one it cannot judge runs nothing either, and its
-  reason is said once per delivery.
+  version) delivered again runs it once. One its filter refuses runs nothing;
+  `listen-fire` says so only under `LF_LOG=debug`, as one line per arrival
+  and listen would flood a busy edge. One it cannot judge runs nothing
+  either, and its reason is said once per delivery.
 - An arrival without an identity is refused, naming its place and edge
   (`arrival 0 on 'Comments' has no identity`): at the `wake` door with 400,
   on a delivery as your adapter's failure (500).

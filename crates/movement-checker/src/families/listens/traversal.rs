@@ -9,8 +9,6 @@
 //! MOV_LISTEN_NOT_INSTANCE, MOV_LISTEN_PARAM_MISMATCH,
 //! MOV_LISTEN_DUPLICATE, MOV_LISTEN_ALIAS_DUPLICATE.
 
-use std::collections::HashMap;
-
 use movement_parser::ast::{ListenDeclaration, PathHead, PathRoot};
 use movement_parser::catalog::types::{CollectionSchema, Delivery, EdgeSchema, InstanceSchema, PositionSchema};
 use movement_parser::listen_plan::{HopJudged, ListenPlan, PlanHop};
@@ -122,7 +120,7 @@ impl Checker<'_> {
             self.check_listen_fires(statement, path, &steps, walk.landed.as_ref(), scope);
         }
         let identity = match &plan {
-            Some(plan) => identity_of(plan),
+            Some(plan) => plan.identity(),
             None => format!("{}::{}", spell_path_head(path), statement.movement),
         };
         if !self.listens.identities.insert(format!("path::{identity}")) {
@@ -157,8 +155,9 @@ impl Checker<'_> {
         }
         // A host watches only a listen that checks clean.
         let clean = self.diagnostics[before.min(self.diagnostics.len())..].iter().all(|d| d.severity.is_some());
-        if let Some(plan) = plan.filter(|_| clean) {
-            self.listens.plans.push(plan);
+        match plan.filter(|_| clean) {
+            Some(plan) => self.listens.plans.push(plan),
+            None => self.listens.unwatched.push(statement.span),
         }
     }
 
@@ -439,40 +438,6 @@ fn without_walks(step: TraversalStep) -> TraversalStep {
         edge.expression_filter = joined(kept).map(Box::new);
     }
     TraversalStep::Edge(edge)
-}
-
-/// What makes two listens one: the plan, each hop's alias read as its place
-/// among the hops (`m` and `n` name one hop alike), and without the lane's
-/// name, which names a listen but is not what it listens to, as for the
-/// settings form.
-fn identity_of(plan: &ListenPlan) -> String {
-    let places: HashMap<&str, String> = plan.hops.iter().enumerate().filter_map(|(i, hop)| hop.alias.as_deref().map(|a| (a, format!("#{i}")))).collect();
-    let mut json = serde_json::to_value(ListenPlan { alias: None, ..plan.clone() }).expect("a plan is always JSON");
-    read_aliases_as_places(&mut json, &places);
-    json.to_string()
-}
-
-/// Every hop alias in a plan's JSON, the hops' own and those their WHEREs
-/// read (`aliasRoot`, an `alias_ref`'s `name`), replaced by its place.
-fn read_aliases_as_places(json: &mut serde_json::Value, places: &HashMap<&str, String>) {
-    match json {
-        serde_json::Value::Object(members) => {
-            let alias_ref = members.get("type").and_then(serde_json::Value::as_str) == Some("alias_ref");
-            for (key, value) in members.iter_mut() {
-                let names_alias = key == "alias" || key == "aliasRoot" || (alias_ref && key == "name");
-                match value {
-                    serde_json::Value::String(name) if names_alias => {
-                        if let Some(place) = places.get(name.as_str()) {
-                            *name = place.clone();
-                        }
-                    }
-                    other => read_aliases_as_places(other, places),
-                }
-            }
-        }
-        serde_json::Value::Array(items) => items.iter_mut().for_each(|item| read_aliases_as_places(item, places)),
-        _ => {}
-    }
 }
 
 /// Conjuncts joined back by AND; `None` for none.

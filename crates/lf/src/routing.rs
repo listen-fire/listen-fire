@@ -69,10 +69,20 @@ impl Listen {
         scope_of(&config, scope_keys)
     }
 
-    /// The listen's pipeline, `listen:<file>:<movement>`: what its receipts,
-    /// its runs and its polls name it by.
+    /// The listen's pipeline: what its receipts, its runs and its polls name
+    /// it by. `listen:<file>:<movement>` for one in the settings form; one on
+    /// a traversal adds the first 8 hex digits of the sha256 of its plan's
+    /// identity, so two in one file that fire one function are two listens,
+    /// each with its own receipts.
     pub fn pipeline(&self) -> String {
-        format!("listen:{}:{}", self.file, self.movement_name)
+        match &self.plan {
+            None => format!("listen:{}:{}", self.file, self.movement_name),
+            Some(plan) => {
+                use sha2::{Digest, Sha256};
+                let digest: String = Sha256::digest(plan.identity().as_bytes()).iter().take(4).map(|byte| format!("{byte:02x}")).collect();
+                format!("listen:{}:{}:{digest}", self.file, self.movement_name)
+            }
+        }
     }
 
     /// Whether an event delivered for `credential` reaches this listen (the
@@ -94,17 +104,18 @@ impl Listen {
     }
 
     /// Whether `arrival`, delivered for `credential`, fires this listen at
-    /// `now_ms`: it landed on the listen's last edge, from its connection,
-    /// is not marked for another listen's sake (`notFor` this one's
-    /// pipeline), and the judge finds every filter it can read holds. A
-    /// listen in the settings form, or an arrival of another edge, another
-    /// connection or one that went, skips at the last hop.
-    pub fn fires(&self, arrival: &ArrivalIn, credential: Option<&str>, now_ms: f64) -> Verdict {
-        let Some(plan) = &self.plan else { return Verdict::Skips { hop: 0 } };
-        let last = plan.hops.len().saturating_sub(1);
-        let landing = arrival.landing.as_ref().and_then(|landing| landing.get("fields"));
-        let (true, false, Some(landing)) = (self.hears(credential), arrival.not_for.as_deref() == Some(self.pipeline().as_str()), landing) else {
-            return Verdict::Skips { hop: last };
+    /// `now_ms`, as the judge finds its filters. None when the arrival is not
+    /// this listen's to judge: it is in the settings form, the arrival came
+    /// for another connection, or it is marked for this listen's own sake
+    /// (`notFor` its pipeline); nothing is said of those. An arrival with no
+    /// landing skips at the last hop.
+    pub fn fires(&self, arrival: &ArrivalIn, credential: Option<&str>, now_ms: f64) -> Option<Verdict> {
+        let plan = self.plan.as_ref()?;
+        if !self.hears(credential) || arrival.not_for.as_deref().is_some_and(|not_for| not_for == self.pipeline()) {
+            return None;
+        }
+        let Some(landing) = arrival.landing.as_ref().and_then(|landing| landing.get("fields")) else {
+            return Some(Verdict::Skips { hop: plan.hops.len().saturating_sub(1) });
         };
         let fields_of = |record: &Js| match record.get("fields") {
             Some(fields) => json_of(fields),
@@ -117,7 +128,7 @@ impl Listen {
             parents: arrival.parents.iter().map(fields_of).collect(),
             taken_applied: arrival.taken_applied,
         };
-        judge_arrival(plan, &planned, now_ms)
+        Some(judge_arrival(plan, &planned, now_ms))
     }
 
     /// Whether an event's payload fits the node the listen declares; a
@@ -409,37 +420,58 @@ const CREDENTIAL_ARG: &str = "credentials";
 /// the listen's file imports from another file is read from that file, the
 /// way the checker links it, so the listens of a set depend on the whole set
 /// and not on one file's text. A listen on a traversal is read from the
-/// checker's plan of it against `catalog`: one the checker refuses has none,
-/// and fires nothing (`listen-fire check` names why).
-pub fn listens_across(parsed: &[Rc<crate::sources::Parsed>], catalog: &Js) -> Vec<Listen> {
+/// checker's plan of it against `catalog`. One the checker plans none for
+/// (it does not check, or the catalog does not load) would never fire: the
+/// set is refused, a line naming each such listen.
+pub fn listens_across(parsed: &[Rc<crate::sources::Parsed>], catalog: &Js) -> Result<Vec<Listen>, Vec<String>> {
     let programs: Vec<(&crate::sources::Parsed, &movement_parser::ast::Program)> = parsed.iter().filter_map(|p| p.program.as_ref().ok().map(|program| (&**p, program))).collect();
     let scopes: HashMap<String, FileScope<'_>> = programs.iter().map(|(file, program)| (file.name.clone(), FileScope::of(program))).collect();
     let mut snapshot = None;
-    programs
-        .iter()
-        .flat_map(|(file, program)| {
-            let plans = match program.statements.iter().any(|s| matches!(s, Statement::Listen(listen) if listen.path.is_some())) {
-                true => plans_of(file.source(), snapshot.get_or_insert_with(|| catalog_snapshot(catalog)).as_ref()),
-                false => Vec::new(),
-            };
-            listens_of(&file.name, program, &scopes, plans)
+    let (mut listens, mut unwatched) = (Vec::new(), Vec::new());
+    for (file, program) in &programs {
+        let plans = match program.statements.iter().any(|s| matches!(s, Statement::Listen(listen) if listen.path.is_some())) {
+            true => plans_of(file, program, snapshot.get_or_insert_with(|| catalog_snapshot(catalog)).as_ref()),
+            false => Ok(Vec::new()),
+        };
+        match plans {
+            Ok(plans) => listens.extend(listens_of(&file.name, program, &scopes, plans)),
+            Err(lines) => unwatched.extend(lines),
+        }
+    }
+    match unwatched.is_empty() {
+        true => Ok(listens),
+        false => Err(unwatched),
+    }
+}
+
+/// The catalog as the checker reads it, or why it does not load.
+fn catalog_snapshot(catalog: &Js) -> Result<CatalogSnapshot, String> {
+    CatalogSnapshot::load(&movement_parser::util::form::read_json_text(&catalog.to_json())).map_err(|e| e.to_string())
+}
+
+/// How the checker plans each `listen to <traversal>` of `file`, in source
+/// order; or a line for each it plans none for, naming where it is written.
+fn plans_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Program, catalog: Result<&CatalogSnapshot, &String>) -> Result<Vec<ListenPlan>, Vec<String>> {
+    let traversals = || {
+        program.statements.iter().filter_map(|s| match s {
+            Statement::Listen(listen) if listen.path.is_some() => Some(listen),
+            _ => None,
         })
-        .collect()
-}
-
-/// The catalog as the checker reads it; None when it does not load (each
-/// check of the set says so).
-fn catalog_snapshot(catalog: &Js) -> Option<CatalogSnapshot> {
-    CatalogSnapshot::load(&movement_parser::util::form::read_json_text(&catalog.to_json())).ok()
-}
-
-/// How the checker plans each `listen to <traversal>` of the file `source`,
-/// in source order.
-fn plans_of(source: &str, catalog: Option<&CatalogSnapshot>) -> Vec<ListenPlan> {
-    let Some(catalog) = catalog else { return Vec::new() };
-    let Ok(program) = movement_parser::stmt::parse_program(&movement_parser::util::form::form_of_text(source), false) else { return Vec::new() };
+    };
+    let unwatched = |listen: &movement_parser::ast::ListenDeclaration, why: &str| {
+        let at = listen.span.start;
+        format!("{}:{}:{} the listen that fires {} {why}, so nothing would fire it: run `listen-fire check`", file.path.display(), at.line, at.col, listen.movement)
+    };
+    let catalog = match catalog {
+        Ok(catalog) => catalog,
+        Err(why) => return Err(traversals().map(|listen| unwatched(listen, &format!("is not planned, as the catalog does not load ({why})"))).collect()),
+    };
     let options = movement_checker::CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
-    movement_checker::answer::check_answer(&program, catalog, options).listens
+    let answer = movement_checker::answer::check_answer(program, catalog, options);
+    match answer.unwatched.is_empty() {
+        true => Ok(answer.listens),
+        false => Err(traversals().filter(|listen| answer.unwatched.contains(&listen.span)).map(|listen| unwatched(listen, "does not check")).collect()),
+    }
 }
 
 fn listens_of(file: &str, program: &movement_parser::ast::Program, scopes: &HashMap<String, FileScope<'_>>, plans: Vec<ListenPlan>) -> Vec<Listen> {
@@ -743,7 +775,7 @@ mod tests {
 
     /// Every listen across the files.
     fn collect_listens(files: &[MovementFile]) -> Vec<Listen> {
-        listens_across(&Parsed::each(files, &[]), &Js::Null)
+        listens_across(&Parsed::each(files, &[]), &Js::Null).unwrap()
     }
 
     fn js(text: &str) -> Js {
@@ -775,7 +807,7 @@ mod tests {
 
     fn crm_listens() -> Vec<Listen> {
         let files = vec![MovementFile { name: "crm".into(), path: PathBuf::from("crm.mvt"), source: CRM_LISTENS.into(), version: None }];
-        listens_across(&Parsed::each(&files, &[]), &js(CRM_CATALOG))
+        listens_across(&Parsed::each(&files, &[]), &js(CRM_CATALOG)).unwrap()
     }
 
     /// An arrival of a company on the CRM's root edge, its fields as given.
@@ -793,32 +825,60 @@ mod tests {
             read,
             [("welcome", Some("acme"), None, false), ("welcome", Some("acme"), Some("Company"), true), ("note", Some("acme"), Some("Company"), true), ("answer", Some("acme"), Some("Comments"), true)]
         );
-        assert_eq!((listens[1].pipeline(), listens[1].adapter.as_str()), ("listen:crm:welcome".to_string(), "acme_crm"));
+        assert_eq!(listens[1].adapter, "acme_crm");
         assert!(listens[1].is_on("acme_crm", "Company") && !listens[1].is_on("acme_crm", "Comments") && !listens[0].is_on("acme_crm", "Company"));
-        // Without a catalog the checker plans nothing, and nothing fires a
-        // listen on a traversal as if it were one in the settings form.
+    }
+
+    #[test]
+    fn a_listen_on_a_traversal_is_named_by_its_file_its_function_and_its_plan() {
+        let listens = crm_listens();
+        assert_eq!(listens[0].pipeline(), "listen:crm:welcome", "the settings form keeps its name");
+        let identity = listens[1].plan.as_ref().unwrap().identity();
+        use sha2::{Digest, Sha256};
+        let digest: String = Sha256::digest(identity.as_bytes()).iter().take(4).map(|b| format!("{b:02x}")).collect();
+        assert_eq!(listens[1].pipeline(), format!("listen:crm:welcome:{digest}"));
+        // Two listens in one file firing one function on two paths are two listens.
+        let twice = CRM_LISTENS.replace("listen to crm-[:Company]-> fire note", "listen to crm-[c:Company WHERE c.Name != \"Other\"]-> fire welcome");
+        let files = vec![MovementFile { name: "crm".into(), path: PathBuf::from("crm.mvt"), source: twice, version: None }];
+        let listens = listens_across(&Parsed::each(&files, &[]), &js(CRM_CATALOG)).unwrap();
+        let welcomes: Vec<String> = listens.iter().filter(|l| l.plan.is_some() && l.movement_name == "welcome").map(Listen::pipeline).collect();
+        assert_eq!(welcomes.len(), 2);
+        assert_ne!(welcomes[0], welcomes[1]);
+    }
+
+    #[test]
+    fn a_listen_on_a_traversal_the_check_plans_nothing_for_refuses_the_set_naming_where_it_is_written() {
+        // Without a catalog the checker plans nothing.
         let files = vec![MovementFile { name: "crm".into(), path: PathBuf::from("crm.mvt"), source: CRM_LISTENS.into(), version: None }];
-        assert_eq!(listens_across(&Parsed::each(&files, &[]), &Js::Null).len(), 1);
+        let refused = listens_across(&Parsed::each(&files, &[]), &Js::Null).unwrap_err();
+        assert_eq!(refused.len(), 3, "{refused:?}");
+        assert!(refused[0].starts_with("crm.mvt:18:1 the listen that fires welcome is not planned, as the catalog does not load ("), "{refused:?}");
+        assert!(refused[0].ends_with(", so nothing would fire it: run `listen-fire check`"), "{refused:?}");
+        // One the check refuses: its WHERE reads a field companies do not have.
+        let bogus = CRM_LISTENS.replace("listen to crm-[:Company]-> fire note", "listen to crm-[c:Company WHERE c.Bogus == \"x\"]-> fire note");
+        let files = vec![MovementFile { name: "crm".into(), path: PathBuf::from("crm.mvt"), source: bogus, version: None }];
+        let refused = listens_across(&Parsed::each(&files, &[]), &js(CRM_CATALOG)).unwrap_err();
+        assert_eq!(refused, ["crm.mvt:19:1 the listen that fires note does not check, so nothing would fire it: run `listen-fire check`"]);
     }
 
     #[test]
     fn a_listen_on_a_traversal_fires_on_an_arrival_its_where_takes_and_skips_one_it_does_not() {
         let listens = crm_listens();
         let welcome = &listens[1];
-        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Osprey"}"#), Some("acme"), 0.0), Verdict::Fires);
-        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Ignored"}"#), Some("acme"), 0.0), Verdict::Skips { hop: 0 });
-        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Osprey"}"#), Some("another"), 0.0), Verdict::Skips { hop: 0 }, "another connection's");
-        assert_eq!(listens[0].fires(&company(r#"{"Name":"Osprey"}"#), Some("acme"), 0.0), Verdict::Skips { hop: 0 }, "a settings listen takes events, never arrivals");
+        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Osprey"}"#), Some("acme"), 0.0), Some(Verdict::Fires));
+        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Ignored"}"#), Some("acme"), 0.0), Some(Verdict::Skips { hop: 0 }));
+        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Osprey"}"#), Some("another"), 0.0), None, "another connection's");
+        assert_eq!(listens[0].fires(&company(r#"{"Name":"Osprey"}"#), Some("acme"), 0.0), None, "a settings listen takes events, never arrivals");
     }
 
     #[test]
     fn an_arrival_marked_not_for_a_listen_runs_every_other_listen_on_its_edge_and_not_that_one() {
         let listens = crm_listens();
         let mut arrival = company(r#"{"id":"company-1","Name":"Osprey"}"#);
-        arrival.not_for = Some("listen:crm:note".into());
-        let on_edge: Vec<(&str, Verdict)> =
+        arrival.not_for = Some(listens[2].pipeline());
+        let on_edge: Vec<(&str, Option<Verdict>)> =
             listens.iter().filter(|l| l.is_on("acme_crm", "Company")).map(|l| (l.movement_name.as_str(), l.fires(&arrival, Some("acme"), 0.0))).collect();
-        assert_eq!(on_edge, [("welcome", Verdict::Fires), ("note", Verdict::Skips { hop: 0 })]);
+        assert_eq!(on_edge, [("welcome", Some(Verdict::Fires)), ("note", None)], "the listen it is not for is not judged, so nothing is said of it");
     }
 
     #[test]

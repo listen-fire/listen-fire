@@ -52,6 +52,35 @@ const companyArrival = (id: string, name: string) => ({
   landing: { recordId: id, recordType: 'Company', fields: { id, Name: name } },
 });
 
+/** The pipeline a run was fired for, as `runs show` prints its event. */
+function pipelineOf(dir: string, runId: string): string {
+  const shown = lf(dir, 'runs', 'show', runId);
+  assert.equal(shown.code, 0, shown.out);
+  return /"pipelineInputId": "([^"]+)"/.exec(shown.out)?.[1] ?? assert.fail(shown.out);
+}
+
+/** Resolves once `holds` is true, checked every 100ms, or rejects after `ms`. */
+async function until(holds: () => boolean, what: string, ms = 20_000): Promise<void> {
+  const by = Date.now() + ms;
+  while (!holds()) {
+    if (Date.now() > by) assert.fail(`not ${what} in ${ms}ms`);
+    await sleep(100);
+  }
+}
+
+/** The example project with the CRM's comments not listenable: a listen
+ *  ending on them does not check. */
+function withUnlistenableComments(dir: string): void {
+  const server = join(dir, 'externals/acme_crm/server.mjs');
+  const source = readFileSync(server, 'utf8');
+  const listenable = "listenable: true,\n      identity: 'Id',";
+  assert.ok(source.includes(listenable), 'the comments reference is listenable');
+  writeFileSync(server, source.replace(listenable, "identity: 'Id',"));
+}
+
+/** A listen on the comments, which the example's comments do not allow once unlistenable. */
+const ON_COMMENTS = '\nfunction note(k: <crm-[:Comment]->>) {\n  return k.Text\n}\n\nlisten to crm-[:Company]->-[:Comments]-> fire note\n';
+
 test('a pushed arrival fires a listen on the edge it landed on, its parameter bound to the landing', async () => {
   const dir = project('listen_arrivals');
   const serving = await served(dir);
@@ -70,6 +99,13 @@ test('a pushed arrival fires a listen on the edge it landed on, its parameter bo
     assert.match(shown.out, /"triggerType": "arrival"/);
     assert.match(shown.out, /"edge": "Company"/);
     assert.match(shown.out, /"Name": "Osprey"/);
+    // Without LF_LOG=debug an arrival the WHERE refuses runs nothing and says nothing.
+    await post('/dev/companies', { Name: 'Ignored' });
+    await post('/dev/companies', { Name: 'Heron' });
+    await until(() => companies(dir).includes('Welcome Heron'), 'Heron welcomed');
+    await sleep(500);
+    assert.equal(runsOf(dir).length, 2, serving.lines.join('\n'));
+    assert.deepEqual(serving.lines.filter((line) => /does not match the WHERE/.test(line)), []);
   } finally {
     await serving.stop();
   }
@@ -92,9 +128,9 @@ test('the same arrival delivered twice runs the listen once', async () => {
   }
 });
 
-test('an arrival the WHERE does not match runs nothing and says nothing is owed', async () => {
+test('an arrival the WHERE does not match runs nothing and, under LF_LOG=debug, says nothing is owed', async () => {
   const dir = project('listen_arrivals');
-  const serving = await served(dir);
+  const serving = await served(dir, [], { LF_LOG: 'debug' });
   try {
     const { post } = crmOf(dir, serving);
     await post('/dev/companies', { Name: 'Ignored' });
@@ -103,6 +139,74 @@ test('an arrival the WHERE does not match runs nothing and says nothing is owed'
     await sleep(1500);
     assert.deepEqual(runsOf(dir), []);
     assert.deepEqual(companies(dir), ['Ignored']);
+  } finally {
+    await serving.stop();
+  }
+});
+
+test('a landing that names no record binds the fired parameter to the fields it carries', async () => {
+  const dir = project('listen_arrivals');
+  const serving = await served(dir);
+  try {
+    const { wake } = crmOf(dir, serving);
+    const landing = { recordType: 'Company', fields: { id: 'company-9', Name: 'Kestrel' } };
+    assert.deepEqual(await wake({ arrivals: [{ edge: 'Company', identity: 'company-9', landing }] }), { status: 202, body: { accepted: 1 } });
+    await serving.waitFor(/run .* companies:welcome completed/);
+    assert.deepEqual(companies(dir), ['Welcome Kestrel']);
+  } finally {
+    await serving.stop();
+  }
+});
+
+test('two listens in one file firing one function each run once for an arrival both take; notFor skips only the one it names, silently', async () => {
+  const dir = project('listen_arrivals');
+  const file = join(dir, 'movements/companies.mvt');
+  const source = readFileSync(file, 'utf8');
+  writeFileSync(file, `${source}listen to crm-[c:Company WHERE c.Name != "Other"]-> fire welcome\n`);
+  const serving = await served(dir, [], { LF_LOG: 'debug' });
+  try {
+    const { post, wake } = crmOf(dir, serving);
+    await post('/dev/companies', { Name: 'Osprey' });
+    await until(() => runsOf(dir).length === 2, 'two runs');
+    const pipelines = runsOf(dir).map((run) => pipelineOf(dir, run.runId));
+    assert.equal(new Set(pipelines).size, 2, pipelines.join(', '));
+    for (const pipeline of pipelines) assert.match(pipeline, /^listen:companies:welcome:[0-9a-f]{8}$/);
+    await until(() => companies(dir).filter((name) => name === 'Welcome Osprey').length === 2, 'Osprey welcomed twice');
+    // An arrival not for the first runs only the second, and nothing is said of the first.
+    const notFor = pipelines[0]!;
+    assert.deepEqual(await wake({ arrivals: [{ ...companyArrival('company-2', 'Heron'), notFor }] }), { status: 202, body: { accepted: 1 } });
+    await until(() => runsOf(dir).length === 3, 'a third run');
+    await sleep(1500);
+    const runs = runsOf(dir);
+    assert.equal(runs.length, 3, serving.lines.join('\n'));
+    assert.equal(pipelineOf(dir, runs[0]!.runId), pipelines[1]);
+    assert.deepEqual(serving.lines.filter((line) => /does not match the WHERE|company-2 .*before/.test(line)), []);
+  } finally {
+    await serving.stop();
+  }
+});
+
+test('serve refuses a project whose listen on a traversal does not check, naming it', async () => {
+  const dir = project('listen_arrivals');
+  withUnlistenableComments(dir);
+  const file = join(dir, 'movements/companies.mvt');
+  writeFileSync(file, readFileSync(file, 'utf8') + ON_COMMENTS);
+  await assert.rejects(served(dir), /companies\.mvt:\d+:1 the listen that fires note does not check, so nothing would fire it: run `listen-fire check`/);
+});
+
+test('an edit that adds a listen on a traversal that does not check is refused, and the running files keep serving', async () => {
+  const dir = project('listen_arrivals');
+  withUnlistenableComments(dir);
+  const serving = await served(dir);
+  try {
+    const file = join(dir, 'movements/companies.mvt');
+    writeFileSync(file, readFileSync(file, 'utf8') + ON_COMMENTS);
+    await serving.waitFor(/kept the files listen-fire has; the new ones do not check/);
+    await serving.waitFor(/MOV_LISTEN_EDGE_NOT_LISTENABLE/);
+    const { post } = crmOf(dir, serving);
+    await post('/dev/companies', { Name: 'Osprey' });
+    await serving.waitFor(/run .* companies:welcome completed/);
+    assert.deepEqual(companies(dir), ['Osprey', 'Welcome Osprey']);
   } finally {
     await serving.stop();
   }

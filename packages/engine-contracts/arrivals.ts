@@ -44,9 +44,10 @@ export type Arrival =
       /** The record the arrival is about, when that is not its landing: a
        *  change to a row names the row (2.6). */
       about?: { recordType: string; externalId: string };
-      /** The listen it must not run, by its pipeline (`listen:<file>:<movement>`
-       *  on listen-fire): its own failure, reported to the listens on the
-       *  edge it failed on (2.6). */
+      /** The listen it must not run, by its pipeline (on listen-fire
+       *  `listen:<file>:<movement>:<digest>`, the first 8 hex digits of the
+       *  sha256 of the listen's identity): its own failure, reported to the
+       *  listens on the edge it failed on (2.6). */
       notFor?: string;
       /** The module applied the listen's taken filter before reporting it
        *  (a filtered poll or subscription): the host does not judge it again (2.6). */
