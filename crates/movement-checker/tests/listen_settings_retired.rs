@@ -27,6 +27,29 @@ const CATALOG: &str = r#"{"adapters":{
       "Notification":{"properties":{"Reason":"text","Title":"text"},"edges":{}}},
       "collections":{"Notifications":{"target":"Notification","listenable":true,"identity":"Id","delivery":"polled","pollEverySeconds":60}},
       "writableRoots":{},"eventPosition":"Notification","eventPositions":[{"position":"Notification"}]}}},
+  "ghd":{"canFire":true,"constructionArgs":[],"triggerConfig":["events"],
+    "triggerConfigOptions":{"events":["mention","assign","review_requested"]},"defaultEvents":["mention","assign"],
+    "listenSettingsBecome":{"path":["Notifications"],"aliases":["n"],"paramFrom":"Notification",
+      "keys":{"events":{"hop":0,"field":"Reason","op":"in"}}},
+    "schemas":{"":{"positions":{
+      "Notification":{"properties":{"Reason":"text","Title":"text"},"edges":{}}},
+      "collections":{"Notifications":{"target":"Notification","listenable":true,"identity":"Id","delivery":"polled","pollEverySeconds":60}},
+      "writableRoots":{},"eventPosition":"Notification","eventPositions":[{"position":"Notification"}]}}},
+  "ghv":{"canFire":true,"constructionArgs":[],"triggerConfig":["events"],
+    "triggerConfigOptions":{"events":["mention","assign"]},"defaultEvents":["mention","assign"],
+    "listenSettingsBecome":{"path":["Notifications"],"aliases":["n"],"paramFrom":"Notification",
+      "keys":{"events":{"hop":0,"field":"Reason","op":"in","values":{"mention":"mentioned"}}}},
+    "schemas":{"":{"positions":{
+      "Notification":{"properties":{"Reason":"text","Title":"text"},"edges":{}}},
+      "collections":{"Notifications":{"target":"Notification","listenable":true,"identity":"Id","delivery":"polled","pollEverySeconds":60}},
+      "writableRoots":{},"eventPosition":"Notification","eventPositions":[{"position":"Notification"}]}}},
+  "ghk":{"canFire":true,"constructionArgs":[],"triggerConfig":["kind"],
+    "listenSettingsBecome":{"path":["Notifications"],"aliases":["n"],
+      "keys":{"kind":{"hop":0,"field":"Subject","op":"eq","values":{"pr":"PullRequest"}}}},
+    "schemas":{"":{"positions":{
+      "Notification":{"properties":{"Subject":"text"},"edges":{}}},
+      "collections":{"Notifications":{"target":"Notification","listenable":true,"identity":"Id","delivery":"polled","pollEverySeconds":60}},
+      "writableRoots":{},"eventPosition":"Notification","eventPositions":[{"position":"Notification"}]}}},
   "at":{"canFire":true,
     "constructionArgs":[{"name":"base","kind":"position","required":false,"optionsFromType":"Base"}],
     "triggerConfig":["base","table","field","becomes","events"],
@@ -60,6 +83,9 @@ const CATALOG: &str = r#"{"adapters":{
 },"credentials":{},"plugins":{}}"#;
 
 const GH: &str = "import { gh as gh_module } from adapters\ngh = connect gh_module\n";
+const GHD: &str = "import { ghd as ghd_module } from adapters\nghd = connect ghd_module\n";
+const GHV: &str = "import { ghv as ghv_module } from adapters\nghv = connect ghv_module\n";
+const GHK: &str = "import { ghk as ghk_module } from adapters\nghk = connect ghk_module\n";
 const HIRING: &str = "import { at as at_module } from adapters\nhiring = connect at_module { base: \"Hiring\" }\n";
 const AT: &str = "import { at as at_module } from adapters\nat = connect at_module\n";
 const HOOK: &str = "import { hook as hook_module } from adapters\nhook = connect hook_module\nnode Payment { amount: <number> }\n";
@@ -270,4 +296,41 @@ fn a_settings_value_is_spelled_as_its_field_holds_it() {
     // A value the module does not spell has no rewrite.
     let unknown = source.replace("record.updated", "record.moved");
     assert_eq!(retired(&diagnostics(&unknown)).fix, None);
+}
+
+#[test]
+fn a_listen_that_writes_no_events_is_rewritten_to_the_events_its_module_defaults() {
+    let source = format!("{GHD}function f(n: <ghd-[:Notification]->>) {{ return 1 }}\nlisten to ghd {{}} fire f\n");
+    let d = diagnostics(&source);
+    let text = fixed(&source, &d);
+    assert_eq!(
+        text,
+        format!("{GHD}function f(n: <ghd-[:Notifications]->>) {{ return 1 }}\nlisten to ghd-[n:Notifications WHERE n.Reason IN [\"mention\", \"assign\"]]-> fire f\n")
+    );
+    assert_eq!(retired(&d).fix.as_ref().unwrap()["safe"], true);
+    assert_rechecks_clean(&text);
+}
+
+#[test]
+fn the_events_a_listen_writes_take_the_place_of_the_defaults() {
+    let source = format!("{GHD}function f(n: <ghd-[:Notification]->>) {{ return 1 }}\nlisten to ghd {{ events: [\"review_requested\"] }} fire f\n");
+    let text = fixed(&source, &diagnostics(&source));
+    assert!(text.contains("n.Reason IN [\"review_requested\"]]-> fire f"), "{text}");
+}
+
+#[test]
+fn a_default_the_events_mapping_cannot_spell_leaves_the_listen_unrewritten() {
+    let source = format!("{GHV}function f(n: <ghv-[:Notification]->>) {{ return 1 }}\nlisten to ghv {{}} fire f\n");
+    let d = diagnostics(&source);
+    assert!(retired(&d).fix.is_none(), "{d:?}");
+    assert!(retired(&d).message.contains("Write `listen to ghv-[:Notifications]-> fire f`"), "{}", retired(&d).message);
+}
+
+#[test]
+fn a_settings_value_missing_from_an_eq_keys_values_map_has_no_rewrite() {
+    let at = |kind: &str| format!("{GHK}function f(n: <ghk-[:Notification]->>) {{ return 1 }}\nlisten to ghk {{ kind: \"{kind}\" }} fire f\n");
+    let mapped = at("pr");
+    assert!(fixed(&mapped, &diagnostics(&mapped)).contains("listen to ghk-[n:Notifications WHERE n.Subject == \"PullRequest\"]-> fire f"));
+    let unmapped = at("issue");
+    assert!(retired(&diagnostics(&unmapped)).fix.is_none());
 }

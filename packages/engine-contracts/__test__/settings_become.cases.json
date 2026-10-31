@@ -58,5 +58,41 @@
       "become": { "path": ["Bases", "Sheets", "Changes"], "aliases": ["b", "s", "c"], "keys": {} },
       "refusal": "'listenSettingsBecome' names 'Sheets' after 'Bases', which is no edge off 'Base' (its edges: Tables)"
     }
-  ]
+  ],
+  "manifestReads": {
+    "about": "A manifest's listenSettingsBecome as it is read, by WireListenDeclarations and crates/lf externals.rs settings_become, word for word: unknown keys stripped, the parsed value kept, an empty name refused.",
+    "cases": [
+      {
+        "name": "unknown keys are stripped at both levels",
+        "raw": { "path": ["Notifications"], "aliases": ["n"], "extra": 1, "keys": { "events": { "hop": 0, "field": "Reason", "op": "in", "defaults": ["x"] } } },
+        "read": { "path": ["Notifications"], "aliases": ["n"], "keys": { "events": { "hop": 0, "field": "Reason", "op": "in" } } },
+        "refusal": null
+      },
+      {
+        "name": "a path of no edges",
+        "raw": { "path": [], "aliases": [], "keys": {} },
+        "refusal": "listenSettingsBecome.path: expected at least one edge"
+      },
+      {
+        "name": "an empty edge name",
+        "raw": { "path": ["Notifications", ""], "aliases": ["n", "m"], "keys": {} },
+        "refusal": "listenSettingsBecome.path: expected non-empty edge names"
+      },
+      {
+        "name": "an empty alias",
+        "raw": { "path": ["Notifications"], "aliases": [""], "keys": {} },
+        "refusal": "listenSettingsBecome.aliases: expected non-empty aliases"
+      },
+      {
+        "name": "an empty paramFrom",
+        "raw": { "path": ["Notifications"], "aliases": ["n"], "paramFrom": "", "keys": {} },
+        "refusal": "listenSettingsBecome.paramFrom: expected a non-empty string"
+      },
+      {
+        "name": "an empty field",
+        "raw": { "path": ["Notifications"], "aliases": ["n"], "keys": { "events": { "hop": 0, "field": "", "op": "in" } } },
+        "refusal": "listenSettingsBecome.keys.field: expected a non-empty string"
+      }
+    ]
+  }
 }

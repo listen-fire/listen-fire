@@ -15,6 +15,7 @@ import {
   type SchemaEntryPoint,
 } from '../catalog';
 import type { SettingsBecome } from 'movement-lang';
+import { WireListenDeclarations } from '../protocol';
 import cases from './write_paths.cases.json';
 import settingsBecome from './settings_become.cases.json';
 
@@ -395,6 +396,22 @@ describe('a listenSettingsBecome', () => {
     it(c.name, () => {
       const positioned = 'positioned' in c && c.positioned === true;
       expect(unreadableSettingsBecome(c.become as SettingsBecome, entries(positioned), descriptors) ?? null).toBe(c.refusal);
+    });
+  }
+});
+
+// The manifest read, in the words of crates/lf externals.rs
+// `settings_become` (the same cases).
+describe('a manifest listenSettingsBecome, as read', () => {
+  for (const c of settingsBecome.manifestReads.cases) {
+    it(c.name, () => {
+      const read = WireListenDeclarations.safeParse({ listenSettingsBecome: c.raw });
+      if (c.refusal !== null) {
+        expect(read.success).toBe(false);
+        expect(read.error?.issues[0]?.message).toBe(c.refusal);
+      } else {
+        expect(read.data?.listenSettingsBecome).toEqual(c.read);
+      }
     });
   }
 });

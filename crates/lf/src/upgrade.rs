@@ -438,6 +438,19 @@ mod tests {
     }
 
     #[test]
+    fn two_settings_listens_firing_one_function_settle_and_its_parameter_is_edited_once() {
+        let catalog = CatalogSnapshot::load(GH).unwrap();
+        let source = format!("{SETTINGS}listen to gh {{ events: [\"review_requested\"] }} fire triage\n");
+        let upgraded = upgrade_source(&source, &catalog, false, "0.12.13");
+        assert!(upgraded.settled);
+        assert!(upgraded.remaining.is_empty(), "{:?}", upgraded.remaining);
+        assert_eq!(upgraded.source.matches("<gh-[:Notifications]->>").count(), 1, "{}", upgraded.source);
+        assert!(upgraded.source.contains("listen to gh-[n:Notifications WHERE n.Reason IN [\"mention\", \"assign\"]]-> fire triage\n"), "{}", upgraded.source);
+        assert!(upgraded.source.contains("listen to gh-[n:Notifications WHERE n.Reason IN [\"review_requested\"]]-> fire triage\n"), "{}", upgraded.source);
+        assert_eq!(upgrade_source(&upgraded.source, &catalog, false, "0.12.13").source, upgraded.source);
+    }
+
+    #[test]
     fn a_settings_rewrite_that_changes_meaning_holds_the_pin_until_all() {
         let catalog = CatalogSnapshot::load(GH).unwrap();
         let source = SETTINGS.replace("] }", "], suppress_self: true }");

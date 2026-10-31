@@ -794,16 +794,18 @@ export const WireListenDeclarations = z.object({
     .optional(),
   // What a 0.12 settings listen becomes as a traversal (`SettingsBecome`):
   // whether its path names edges the module describes is judged at describe.
+  // The refusal texts are word for word those of `lf`'s manifest reader
+  // (settings_become.cases.json).
   listenSettingsBecome: z
     .object({
-      path: z.array(z.string().min(1)).min(1),
-      aliases: z.array(z.string().min(1)),
-      paramFrom: z.string().min(1).optional(),
+      path: z.array(z.string().min(1, 'listenSettingsBecome.path: expected non-empty edge names')).min(1, 'listenSettingsBecome.path: expected at least one edge'),
+      aliases: z.array(z.string().min(1, 'listenSettingsBecome.aliases: expected non-empty aliases')),
+      paramFrom: z.string().min(1, 'listenSettingsBecome.paramFrom: expected a non-empty string').optional(),
       keys: z.record(
         z.string(),
         z.object({
           hop: z.number().int().nonnegative(),
-          field: z.string().min(1).optional(),
+          field: z.string().min(1, 'listenSettingsBecome.keys.field: expected a non-empty string').optional(),
           op: z.enum(['eq', 'in', 'type']),
           values: z.record(z.string(), z.string()).optional(),
         }),

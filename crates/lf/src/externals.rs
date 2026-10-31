@@ -730,16 +730,45 @@ fn listen_declarations(raw: &Js) -> Result<Obj, String> {
         out.insert("listenConfig".into(), Js::Arr(entries));
     }
     if let Some(value) = raw.get("listenSettingsBecome") {
-        settings_become(value)?;
-        out.insert("listenSettingsBecome".into(), value.clone());
+        let parsed = settings_become(value)?;
+        let stored = serde_json::to_string(&parsed).map_err(|e| format!("listenSettingsBecome: {e}"))?;
+        out.insert("listenSettingsBecome".into(), Js::parse(stored.as_bytes()).map_err(|e| format!("listenSettingsBecome: {e}"))?);
     }
     Ok(out)
 }
 
-/// A manifest's `listenSettingsBecome`, read as the catalog types it; whether
-/// its path names edges the module describes is judged at describe.
+/// A manifest's `listenSettingsBecome`, read as the catalog types it, as
+/// `WireListenDeclarations` reads it: unknown keys stripped, the empty names
+/// refused in the same words. Whether its path names edges the module
+/// describes is judged at describe.
 pub fn settings_become(value: &Js) -> Result<movement_parser::catalog::types::SettingsBecome, String> {
-    serde_json::from_str(&value.to_json()).map_err(|e| format!("listenSettingsBecome: {e}"))
+    let refused = |e: &dyn std::fmt::Display| format!("listenSettingsBecome: {e}");
+    let mut raw: serde_json::Value = serde_json::from_str(&value.to_json()).map_err(|e| refused(&e))?;
+    let Some(object) = raw.as_object_mut() else { return Err(refused(&"expected an object")) };
+    object.retain(|k, _| ["path", "aliases", "paramFrom", "keys"].contains(&k.as_str()));
+    let empties = |value: Option<&serde_json::Value>| value.and_then(serde_json::Value::as_array).map(|items| items.iter().map(|i| i.as_str().is_some_and(str::is_empty)).collect::<Vec<_>>());
+    if empties(object.get("path")).is_some_and(|empties| empties.is_empty()) {
+        return Err("listenSettingsBecome.path: expected at least one edge".into());
+    }
+    if empties(object.get("path")).is_some_and(|empties| empties.contains(&true)) {
+        return Err("listenSettingsBecome.path: expected non-empty edge names".into());
+    }
+    if empties(object.get("aliases")).is_some_and(|empties| empties.contains(&true)) {
+        return Err("listenSettingsBecome.aliases: expected non-empty aliases".into());
+    }
+    if object.get("paramFrom").and_then(serde_json::Value::as_str).is_some_and(str::is_empty) {
+        return Err("listenSettingsBecome.paramFrom: expected a non-empty string".into());
+    }
+    if let Some(keys) = object.get_mut("keys").and_then(serde_json::Value::as_object_mut) {
+        for key in keys.values_mut() {
+            let Some(key) = key.as_object_mut() else { continue };
+            key.retain(|k, _| ["hop", "field", "op", "values"].contains(&k.as_str()));
+            if key.get("field").and_then(serde_json::Value::as_str).is_some_and(str::is_empty) {
+                return Err("listenSettingsBecome.keys.field: expected a non-empty string".into());
+            }
+        }
+    }
+    serde_json::from_value(raw).map_err(|e| refused(&e))
 }
 
 /// A module's own env, with `{lf}` standing for the module's own folder
@@ -1023,6 +1052,24 @@ mod tests {
         assert_eq!(Js::Obj(listen).to_json(), format!(r#"{{"listenSettingsBecome":{declared}}}"#));
         let unknown_op = Js::parse(br#"{ "listenSettingsBecome": { "path": ["N"], "aliases": ["n"], "keys": { "events": { "hop": 0, "field": "Reason", "op": "within" } } } }"#).unwrap();
         assert!(listen_declarations(&unknown_op).unwrap_err().starts_with("listenSettingsBecome: unknown variant `within`"));
+    }
+
+    #[test]
+    fn a_settings_mapping_is_read_as_the_wire_schema_reads_it() {
+        let cases = Js::parse(include_bytes!("../../../packages/engine-contracts/__test__/settings_become.cases.json")).unwrap();
+        let cases = cases.get("manifestReads").and_then(|m| m.get("cases")).and_then(Js::as_array).unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let name = case.get("name").and_then(Js::as_str).unwrap();
+            let read = settings_become(case.get("raw").unwrap());
+            match case.get("refusal").and_then(Js::as_str) {
+                Some(refusal) => assert_eq!(read.unwrap_err(), refusal, "{name}"),
+                None => {
+                    let expected: serde_json::Value = serde_json::from_str(&case.get("read").unwrap().to_json()).unwrap();
+                    assert_eq!(serde_json::to_value(read.unwrap()).unwrap(), expected, "{name}");
+                }
+            }
+        }
     }
 
     #[test]

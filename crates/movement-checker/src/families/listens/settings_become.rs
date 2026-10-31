@@ -9,7 +9,7 @@
 //! rewritten.
 
 use movement_parser::ast::{ListenDeclaration, ParamTypeRef, Span};
-use movement_parser::catalog::types::{ArgKind, InstanceSchema, KeyOp, SettingsBecome};
+use movement_parser::catalog::types::{ArgKind, InstanceSchema, KeyBecomes, KeyOp, SettingsBecome};
 use movement_parser::lowering::expression::{Expression, FilterOperator, ListElement, LogicalOp, StaticValue};
 use movement_parser::version::{Standing, standing};
 use serde_json::json;
@@ -26,6 +26,10 @@ use super::{EVERY_KEY, POLL_INTERVAL_KEY, SUPPRESS_SELF_KEY};
 
 /// The release whose checks refuse the settings form on a move up.
 const RETIRED_SINCE: &str = "0.13.0";
+
+/// The settings key an omitted value of which meant the module's default
+/// events (`AdapterSpec.default_events`).
+const EVENTS_KEY: &str = "events";
 
 const SUPPRESS_SELF_NOTE: &str = " (`suppress_self` is gone: a two-way sync's own echo now runs once more and finds nothing to change)";
 const EVERY_NOTE: &str = " (`every` is gone: the module sets the interval; set `pollEvery` for this connection in lf.yaml)";
@@ -62,10 +66,10 @@ impl Checker<'_> {
 
         let positioned = |key: &str| {
             spec.is_some_and(|s| s.construction_args.iter().any(|a| a.kind == ArgKind::Position && a.name == key))
-                && built.as_ref().and_then(|i| i.construction_args.get(key)).is_some_and(|v| !v.trim().is_empty())
+                && built.as_ref().is_some_and(|i| i.construction_args.contains_key(key))
         };
         let schema = built.as_ref().and_then(|i| i.schema.as_ref());
-        let rewrite = become_.zip(schema).and_then(|(become_, schema)| rewrite_of(statement, become_, schema, &positioned));
+        let rewrite = become_.zip(schema).and_then(|(become_, schema)| rewrite_of(statement, become_, schema, spec.and_then(|s| s.default_events.as_deref()), &positioned));
         let instance_name = spell_name(&statement.instance);
         let movement = spell_name(&statement.movement);
         let path = match (&rewrite, become_) {
@@ -112,8 +116,16 @@ impl Checker<'_> {
 /// The settings listen as the traversal its module maps it to: none when a
 /// key has no mapping, a value is not a literal, a hop has no alias, or the
 /// path is all taken by the connection's position. A `type` key (`payload: <T>`) has none either:
-/// a listen's traversal does not state its landing's type.
-fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, schema: &InstanceSchema, positioned: &dyn Fn(&str) -> bool) -> Option<Rewrite> {
+/// a listen's traversal does not state its landing's type. A listen that
+/// writes no `events` received the module's defaults, so they are written
+/// as the events' comparison, or the rewrite would widen the listen.
+fn rewrite_of(
+    statement: &ListenDeclaration,
+    become_: &SettingsBecome,
+    schema: &InstanceSchema,
+    default_events: Option<&[String]>,
+    positioned: &dyn Fn(&str) -> bool,
+) -> Option<Rewrite> {
     let consumed = consumed_hops(become_, positioned);
     let mut conjuncts: Vec<Vec<Expression>> = vec![Vec::new(); become_.path.len()];
     for arg in &statement.config {
@@ -127,15 +139,8 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, schema: &
         if key.hop >= become_.path.len() {
             return None;
         }
-        let value = |raw: &StaticValue| -> Option<StaticValue> {
-            match (raw, &key.values) {
-                (StaticValue::String(s), Some(values)) => values.get(s).map(|v| StaticValue::String(v.clone())),
-                (StaticValue::Null, _) => None,
-                (raw, _) => Some(raw.clone()),
-            }
-        };
-        let field = || Expression::Property { property_type_id: key.field.clone().unwrap_or_default(), field_only: true };
-        let compare = |op, right| Expression::Compare { op, left: Box::new(field()), right: Box::new(right) };
+        let value = |raw: &StaticValue| mapped(key, raw);
+        let compare = |op, right| compare_on(key, op, right);
         match key.op {
             KeyOp::Type => return None,
             KeyOp::Eq | KeyOp::In if key.field.is_none() || arg.is_type == Some(true) => return None,
@@ -161,6 +166,24 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, schema: &
             },
         }
     }
+    let defaults = default_events.filter(|d| !d.is_empty());
+    if let Some(defaults) = defaults.filter(|_| !statement.config.iter().any(|a| a.name == EVENTS_KEY)) {
+        let key = become_.keys.get(EVENTS_KEY)?;
+        if key.hop >= consumed {
+            let field_less = key.field.is_none();
+            let items = defaults.iter().map(|d| mapped(key, &StaticValue::String(d.clone()))).collect::<Option<Vec<_>>>()?;
+            let comparison = match (key.op, items.as_slice()) {
+                _ if field_less => return None,
+                (KeyOp::In, _) => {
+                    let elements = items.into_iter().map(|v| ListElement::Expression(Expression::Static { value: v })).collect();
+                    compare_on(key, FilterOperator::In, Expression::List { elements })
+                }
+                (KeyOp::Eq, [only]) => compare_on(key, FilterOperator::Eq, Expression::Static { value: only.clone() }),
+                (KeyOp::Eq | KeyOp::Type, _) => return None,
+            };
+            conjuncts.get_mut(key.hop)?.push(comparison);
+        }
+    }
     let kept = &become_.path[consumed.min(become_.path.len())..];
     if kept.is_empty() {
         return None;
@@ -184,6 +207,21 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, schema: &
         _ => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(landing_of(schema, kept)?)),
     };
     Some(Rewrite { path, param_type })
+}
+
+/// A settings value as the field holds it: through the key's `values` map
+/// when it has one (a value the map lacks has no spelling).
+fn mapped(key: &KeyBecomes, raw: &StaticValue) -> Option<StaticValue> {
+    match (raw, &key.values) {
+        (StaticValue::String(s), Some(values)) => values.get(s).map(|v| StaticValue::String(v.clone())),
+        (StaticValue::Null, _) => None,
+        (raw, _) => Some(raw.clone()),
+    }
+}
+
+fn compare_on(key: &KeyBecomes, op: FilterOperator, right: Expression) -> Expression {
+    let field = Expression::Property { property_type_id: key.field.clone().unwrap_or_default(), field_only: true };
+    Expression::Compare { op, left: Box::new(field), right: Box::new(right) }
 }
 
 /// The leading hops the connection's construction already stands on: each
