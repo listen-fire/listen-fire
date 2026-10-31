@@ -151,6 +151,16 @@ describe('the authoring tools over MCP', () => {
     expect((await call(client, 'deleteAutomation', { automation: id })).value).toEqual({ deleted: false, automation: id });
   });
 
+  it('saves a listen that does not check only with consent, and warns that nothing will fire it', async () => {
+    const client = await connect('globex-key');
+    const source = fileAs('Lead').replace('listen to manual-[:Invocations]->', 'listen to manual-[:Nowhere]->');
+
+    const saved = await call(client, 'saveAutomation', { name: 'Unheard', source, acknowledgeErrors: true });
+
+    expect(saved.value).toMatchObject({ ok: true, saved: true, runnable: false, warnings: ['1 of its listens do not check, so nothing will fire them until a text whose listens check is saved.'] });
+    expect((await call(client, 'deleteAutomation', { automation: saved.value.id })).value).toMatchObject({ deleted: true });
+  });
+
   it('serves the language tools: the handbook, its search, the connections and a describe', async () => {
     const client = await connect('globex-key');
     expect((await call(client, 'readHandbook', { chapter: 'front#maybe-absent' })).value).toMatchObject({ chapter: 'front', section: 'maybe-absent' });

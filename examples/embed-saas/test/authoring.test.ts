@@ -12,6 +12,7 @@ import type { Server } from 'node:http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
+import { companyArrived } from '../src/crm';
 import { Embedding } from '../src/embedding';
 import { fakeModels } from '../src/models';
 import { saasServer } from '../src/server';
@@ -30,10 +31,13 @@ listen to manual-[:Invocations]-> fire file_lead
 
 let server: Server;
 let base: string;
+let embedding: Embedding;
 const clients: Client[] = [];
+/** What the embedded host said it did not run. */
+const warned: string[] = [];
 
 before(async () => {
-  const embedding = new Embedding({ models: fakeModels() });
+  embedding = new Embedding({ models: fakeModels(), log: { warn: (line) => void warned.push(line) } });
   await embedding.addCustomer('acme', 'acme-key', [{ name: 'Stage', options: ['Lead', 'Customer'] }]);
   await embedding.addCustomer('globex', 'globex-key', [{ name: 'Stage', options: ['Prospect', 'Partner'] }]);
   server = saasServer(embedding);
@@ -119,4 +123,27 @@ test('an agent builds, fixes and runs a movement over MCP', async () => {
   const other = await connect('globex', 'globex-key');
   assert.deepEqual(await call(other, 'listAutomations'), { automations: [] });
   assert.deepEqual(await call(other, 'checkRun', { runId: ran.runId }), { error: `run ${ran.runId} not found` });
+});
+
+test('a listen the embedded host does not fire as written, saved over MCP all the same, runs nothing when a company arrives, and the host says why', async () => {
+  const agent = await connect('globex', 'globex-key');
+  const source = `import { crm } from adapters
+import { workspace } from credentials
+
+app = connect crm using workspace
+
+function greet(company: <app-[:Company]->>) {
+  write app-[:Company]-> { Name: "Hello \${company.Name}" }
+}
+
+listen to app fire greet
+`;
+  const saved = await call(agent, 'saveAutomation', { name: 'Greeter', source, acknowledgeErrors: true });
+  assert.equal(saved.saved, true);
+  warned.length = 0;
+
+  assert.deepEqual(await embedding.fire('globex', companyArrived({ id: 'c-9', Name: 'Hooli' })), []);
+  assert.deepEqual(warned, [
+    'Greeter:greet: `listen to app { … }` is in the retired settings form, which this host fires only as a listen on a traversal: write it as one and save it again; until then it runs nothing',
+  ]);
 });

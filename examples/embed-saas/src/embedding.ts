@@ -9,7 +9,7 @@
 import type { IncomingMessage } from 'node:http';
 
 import { createAuthoringHandler, type AuthoringHandler } from '@listen-fire/authoring-mcp';
-import { createEmbeddedHost, type Arrival, type EmbeddedHost, type EmbeddedRunLimits, type EmbeddedRunOutcome, type SaveAnswer } from '@listen-fire/embed';
+import { createEmbeddedHost, type Arrival, type EmbeddedHost, type EmbeddedHostOptions, type EmbeddedRunLimits, type EmbeddedRunOutcome, type SaveAnswer } from '@listen-fire/embed';
 import { pricedModels, type ModelClient } from '@listen-fire/engine/public/embed';
 import { slackModule } from '@listen-fire/slack';
 
@@ -54,13 +54,14 @@ export class Embedding {
   /** Each customer's API key: its CRM's credential, and the demo auth of its MCP endpoint. */
   private readonly apiKeys = new Map<string, string>();
 
-  constructor(options: { models?: ModelClient; limits?: EmbeddedRunLimits; now?: () => Date } = {}) {
+  constructor(options: { models?: ModelClient; limits?: EmbeddedRunLimits; now?: () => Date; log?: EmbeddedHostOptions['log'] } = {}) {
     this.kept = authoringStore(options.now ?? (() => new Date()));
     this.host = createEmbeddedHost({
       modules: [this.crm, slackModule],
       store: this.kept.store,
       limits: options.limits ?? DEFAULT_LIMITS,
       ...(options.now !== undefined ? { now: options.now } : {}),
+      ...(options.log !== undefined ? { log: options.log } : {}),
       ...(options.models !== undefined ? { engine: { llm: pricedModels({ client: options.models }) } } : {}),
     });
   }
