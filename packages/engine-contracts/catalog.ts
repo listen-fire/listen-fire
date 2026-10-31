@@ -853,11 +853,16 @@ export type SchemaFieldDescriptor = z.infer<typeof schemaFieldDescriptorSchema>;
 
 /** Why a reference that declares a key 0.13 retired is refused (listen-fire's
  *  describe refuses it in the same words). */
-export function retiredReferenceKey(name: string, key: string): string {
-  return `'${name}' declares '${key}', retired in 0.13: declare 'listenable: true' (and, optionally, 'identity': the landing's field that names an arrival)`;
+export function retiredReferenceKey(name: string, key: RetiredReferenceKey): string {
+  const instead =
+    key === 'resolvesEmpty'
+      ? 'a deleted record ends the wait on every edge, so there is nothing to declare: drop it'
+      : "declare 'listenable: true' (and, optionally, 'identity': the landing's field that names an arrival)";
+  return `'${name}' declares '${key}', retired in 0.13: ${instead}`;
 }
 
-const RETIRED_REFERENCE_KEYS = ['awaitable', 'watchable'] as const;
+const RETIRED_REFERENCE_KEYS = ['awaitable', 'watchable', 'resolvesEmpty'] as const;
+export type RetiredReferenceKey = (typeof RETIRED_REFERENCE_KEYS)[number];
 
 /** A retired key is refused rather than stripped: a module still declaring it
  *  would otherwise lose the capability without a word. */
@@ -1082,14 +1087,6 @@ const referenceDescriptorFieldsSchema = z.object({
    * naming this one.
    */
   listenable: z.boolean().optional(),
-  /**
-   * Whether a resolution along this listenable edge may carry NO landing (F20) —
-   * so `T | absent` appears downstream. True for ask `Response` (an explicit
-   * cancel resolves current awaiters EMPTY); false/absent for an edge whose
-   * resolution always carries content (Slack `Replies`). Meaningful only with
-   * `listenable: true`.
-   */
-  resolvesEmpty: z.boolean().optional(),
   /**
    * Whether the module can list the arrivals since a mark it hands out. Without
    * one, an arrival announced while nobody was listening is lost.

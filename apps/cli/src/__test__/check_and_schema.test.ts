@@ -65,6 +65,21 @@ test('listen-fire check: a module that declares a retired reference key', () => 
   );
 });
 
+test('listen-fire check: a module that declares resolvesEmpty', () => {
+  const dir = project();
+  const server = join(dir, 'externals/acme_crm/server.mjs');
+  const source = readFileSync(server, 'utf8');
+  const stale = source.replace('listenable: true,', 'listenable: true, resolvesEmpty: true,');
+  assert.notEqual(stale, source, 'the edit must change the external');
+  writeFileSync(server, stale);
+  const run = spawnSync(lfBinary(), ['check'], { cwd: dir, encoding: 'utf8' });
+  assert.equal(run.status, 1, run.stdout + run.stderr);
+  assert.match(
+    run.stdout + run.stderr,
+    /'Comments' declares 'resolvesEmpty', retired in 0\.13: a deleted record ends the wait on every edge, so there is nothing to declare: drop it/,
+  );
+});
+
 test('listen-fire check: a module whose identity names a field the landing does not declare', () => {
   const dir = project();
   const server = join(dir, 'externals/acme_crm/server.mjs');
@@ -128,7 +143,7 @@ const INTROSPECTIONS: Record<string, unknown> = {
             field('people_ref', 'reference', { displayName: 'People Ref' }),
           ],
           references: [
-            { fieldId: 'people', name: 'People', targetTypeId: 'pp', cardinality: 'many', direction: 'outgoing', writable: true, required: true, listenable: true, resolvesEmpty: true, cursor: false, identity: 'Email', version: 'Email' },
+            { fieldId: 'people', name: 'People', targetTypeId: 'pp', cardinality: 'many', direction: 'outgoing', writable: true, required: true, listenable: true, cursor: false, identity: 'Email', version: 'Email' },
             { fieldId: 'notes', name: 'Notes', targetTypeId: 'nt', cardinality: 'many', direction: 'outgoing', readable: false, linkable: false, sequenced: 'chronological' },
             { fieldId: 'related', name: 'Related', targetTypeId: 'pp', targetTypeIds: ['pp', 'dl', 'pp'], cardinality: 'many', direction: 'outgoing', writable: true },
             { fieldId: 'orphan', name: 'Orphan', targetTypeId: 'missing', cardinality: 'one', direction: 'outgoing' },

@@ -1,6 +1,7 @@
 import { CATALOG_SNAPSHOT_VERSION, EMPTY_CATALOG_SNAPSHOT, fromCatalogSnapshot, type CatalogSnapshot } from '../snapshot';
 
-// Version 2 retired an edge's `awaitable` and `watchable` for `listenable`. A
+// Version 2 retired an edge's `awaitable` and `watchable` for `listenable`,
+// and `resolvesEmpty`, since a deleted record ends a wait on every edge. A
 // snapshot still carrying one is refused, not read as an edge nothing can
 // listen to.
 const carrying = (member: string): CatalogSnapshot =>
@@ -30,6 +31,12 @@ describe("a snapshot's retired edge members", () => {
   it.each(['awaitable', 'watchable'])('refuses an edge that still carries %s', (member) => {
     expect(() => fromCatalogSnapshot(carrying(member))).toThrow(
       `the catalog snapshot's 'crm' edge 'Reply' carries '${member}', retired in catalog snapshot version 2: declare 'listenable'`,
+    );
+  });
+
+  it('refuses an edge that still carries resolvesEmpty', () => {
+    expect(() => fromCatalogSnapshot(carrying('resolvesEmpty'))).toThrow(
+      "the catalog snapshot's 'crm' edge 'Reply' carries 'resolvesEmpty', retired in catalog snapshot version 2: a deleted record ends the wait on every edge, so drop it",
     );
   });
 

@@ -555,11 +555,6 @@ export interface EdgeSchema {
    */
   listenable?: boolean;
   /**
-   * Only meaningful with `listenable` (F20): whether a resolution along this
-   * edge may carry NO landing (an explicit cancel resolves awaiters empty).
-   */
-  resolvesEmpty?: boolean;
-  /**
    * Whether the module can list the arrivals since a mark it hands out. Without
    * one, an arrival announced while nobody was listening is lost.
    */

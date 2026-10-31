@@ -329,7 +329,7 @@ reads every declaration from it, the listen declarations included.
   "references": [
     { "fieldId": "Comments", "name": "Comments", "targetTypeId": "Comment", "cardinality": "many",
       "direction": "outgoing", "writable": false, "listenable": true, "identity": "Id",
-      "sequenced": "chronological", "resolvesEmpty": true,
+      "sequenced": "chronological",
       "description": "What people said about the company, oldest first." }
   ]
 }
@@ -345,7 +345,7 @@ reads every declaration from it, the listen declarations included.
   - `readable` — defaults to true; `false` marks a write-only edge;
   - `writable` — only an explicit `true` allows creating along the edge;
     absent means read-only;
-  - `listenable`, `cursor`, `identity`, `version`, `resolvesEmpty` (see
+  - `listenable`, `cursor`, `identity`, `version` (see
     [awaits](#waiting-on-your-system-awaits));
   - `literalsFrom` (optional) — fields of what lands on the edge that take
     the text literals the write it hangs off wrote at a path. For example,
@@ -595,11 +595,12 @@ On the reference in `describe`:
   hand out. Without it, an arrival announced while nobody listened is lost.
 - `sequenced` — the order you list the edge in (`chronological`, `document`
   or `arrival`).
-- `resolvesEmpty: true` — the wait can end with nothing (for example, the
-  record was deleted). Then what follows the `await` runs zero times.
 
 A reference that still declares `awaitable` or `watchable` (retired in 0.13)
 is refused when `listen-fire` describes your adapter, naming `listenable`.
+One that declares `resolvesEmpty` (retired in 0.13) is refused too: a record
+that goes (a [gone arrival](#reporting-arrivals)) ends the wait on every
+edge, so there is nothing to declare.
 
 ### awaitKeys
 
@@ -660,82 +661,7 @@ What Listen-Fire does with them:
 
 ### The key form (before 2.5)
 
-From release 0.13.0 no run waits by key: a wait reads the arrivals you
-report. No host of the release calls `resolveAwait` or `wakeKeys`: not
-listen-fire, and not one built on the engine package's inbound doors. Each
-ignores a `checkInbound` acceptance's `wakeKeys`, and its `wake` door refuses
-`{ keys }`. The form is described here for a module moving off it.
-
-#### resolveAwait
-
-```json
-{ "recordId": "company-1", "edge": "Comments", "headData": { "Name": "Vireo Robotics" } }
-```
-
-- `recordId` is the `externalId` you returned when the record was written.
-- `headData` is the `data` you returned with it, when there was any.
-
-Answer one of three:
-
-```json
-{ "status": "pending", "correlationKey": "thread:company-1" }
-```
-
-```json
-{ "status": "landed", "correlationKey": "thread:company-1",
-  "landings": [ { "recordId": "comment-1", "recordType": "Comment", "fields": { "Text": "approved" } } ] }
-```
-
-```json
-{ "status": "empty" }
-```
-
-- `pending`: nothing yet. `correlationKey` is required: it is the key you
-  will later wake with. Listen-Fire stores the key against the waiting run.
-- `landed`: here is what arrived. `correlationKey` is required here too: if
-  no landing passes the automation's `WHERE`, the run keeps waiting on it.
-- `empty`: the wait is over with nothing, and what follows the `await` runs
-  zero times. Only on an edge declared `resolvesEmpty`. Listen-Fire does not
-  yet enforce this: an `empty` on any other edge is bound anyway, and its
-  downstream silently runs zero times where the author never planned for it.
-  Never return it there.
-- Each landing's `fields` are read back through your `getFieldValue` for its
-  `recordType`, so key them the way your positions' `data` is keyed.
-- The first landing that passes the `WHERE` wins.
-
-When Listen-Fire calls it:
-
-- once at the `await`;
-- once more right after the run is parked, so a wake that arrived between the
-  two is not lost;
-- again on every wake for the run's key.
-
-Make it a cheap, current read of your system. It must be safe to call any
-number of times.
-
-#### Waking a run by key
-
-Wake by key, two ways:
-
-- push the keys yourself: `POST …/wake` ([the doors](#the-two-doors-you-call));
-- or, if Listen-Fire receives your webhooks ([host door](#inbound-through-the-host-door)),
-  implement `wakeKeys`: `{ "raw": <the delivery body> }` → `["thread:company-1"]`.
-  Listen-Fire calls it for every delivery, whether or not the delivery also
-  carries events. If `wakeKeys` fails, the delivery's events are still
-  receipted and queued, and the delivery is answered 500 so you send it
-  again; the resend replays the events without running them twice and
-  retries the wakes.
-
-**Commit before you wake.** A wake makes Listen-Fire call `resolveAwait` for
-the key at once. If the landing is not yet visible to that read (still in an
-open transaction, or on a replica that lags), the run parks again on
-`pending` and nothing follows: no second wake comes unless you send one.
-
-A wake for a key nobody is waiting on does nothing. A run woken early simply
-calls `resolveAwait` again and parks again on `pending`.
-
-Cancelling a waiting run is Listen-Fire's alone: it drops its key. A later
-wake for that key finds nothing.
+The key form is retired in 0.13.0: no host calls `resolveAwait` or `wakeKeys`, a `checkInbound` acceptance's `wakeKeys` is ignored, and the `wake` door refuses `{ keys }` by name (400, saying to send `arrivals`).
 
 ## Telling Listen-Fire something happened
 
@@ -1585,8 +1511,7 @@ from `apps/cli`.
 2. **Describe your data.** `listEntryPoints` publishes `Company` (writable,
    fires) and `Comment`. `describe` gives `Company` its fields and its
    `Comments` edge, declared `listenable` (with `identity: "Id"`, a field
-   `Comment` declares, and `sequenced`)
-   and `resolvesEmpty`.
+   `Comment` declares, and `sequenced`).
 
 3. **Implement the required methods.** `resolveEntity` always answers no
    match, so every write creates. `createRecord` stores the company and
@@ -1665,6 +1590,7 @@ from `apps/cli`.
 
 ## Changes
 
+- **`resolvesEmpty` retired** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0). A reference that declares it is refused when listen-fire describes the module, naming it: a record that goes ends the wait on every edge, so there is nothing to declare.
 - **The key form retired** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0). listen-fire no longer calls `resolveAwait` or `wakeKeys`, and ignores a `checkInbound` acceptance's `wakeKeys`: a run waits on the arrivals a module reports (2.5). A module may still implement them; nothing calls them.
 - **Pages, replies on acceptance, the inbound URL and `answerShapeFrom`** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0; additive). A module that checks its own inbound may `reply` with `html` (sent as `text/html`), and its `accepted` answer may carry `reply`, what the door answers once it has kept the request in place of its own acknowledgement ([A module that checks its own inbound](#a-module-that-checks-its-own-inbound)). A request may carry `inbound: { url }`, where the install's inbound requests reach the module ([The envelope](#the-envelope)). A reference may declare `answerShapeFrom`, the write field naming the node that types its landing. Why: `@lf/forms` serves a form at its own door, hands out its link, thanks the person who answered, and types the answer by the node the program wrote. An older host sends no `inbound`, refuses an answer carrying `html` or an acceptance's `reply` as outside `checkInbound`'s shape, and reads no `answerShapeFrom`.
 - **`slack_v0` refuses a replay** (within version 2, no bump; 2026-10-30; listen-fire 0.13.0). A request whose `x-slack-request-timestamp` is more than five minutes from now is refused 401 though its signature is right, as Slack advises ([Declared inbound signatures](#declared-inbound-signatures)). Nothing changes for a module: Slack signs every request with the time it sends it.

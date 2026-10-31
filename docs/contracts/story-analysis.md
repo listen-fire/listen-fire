@@ -108,7 +108,7 @@ type StoryNode = { span: Span; scope: number } & (
 );
 
 type StoryAwaitedSource =
-  | { kind: 'traversal'; root?: string; edge?: string; awaitable?: boolean; resolvesEmpty?: boolean }
+  | { kind: 'traversal'; root?: string; edge?: string; awaitable?: boolean }
   | { kind: 'sleep'; duration: string }
   | { kind: 'until'; every?: string };
 

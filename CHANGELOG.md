@@ -36,9 +36,10 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
   - `readable` still says whether the edge can be listed, so an edge may be listenable, listable, or both.
   - Three optional keys describe arrivals: `identity` (the field of what lands that names an arrival), `version` (the field that changes when an arrival changes) and `cursor` (whether the module can list arrivals since a mark it hands out).
   - `identity` and `version` must name a field the landing's type declares, or `listen-fire` refuses the module, naming the field and what the landing declares.
-  - `@lf/slack`'s `Replies` declares `listenable` and no `identity`: a reply's record id (its channel and `ts`) names it, listed or announced. From this release it also says a deleted message settles its wait empty (`resolvesEmpty`).
+  - `@lf/slack`'s `Replies` declares `listenable` and no `identity`: a reply's record id (its channel and `ts`) names it, listed or announced.
   - A module that still declares `awaitable` or `watchable` on a reference is refused when `listen-fire` describes it, naming `listenable`.
-  - The catalog snapshot contract moves to version 2, since a member was removed. Version 1 is still read, and deprecated. A snapshot of either version that still carries `awaitable` or `watchable` is refused by both readers.
+  - `resolvesEmpty` is retired too: a deleted record ends the wait on every edge, so a module has nothing to declare. A reference that declares it is refused when `listen-fire` describes the module, saying so; `@lf/slack`, the example CRM and the catalog snapshot no longer carry it, and the story analysis's awaited traversal no longer reports it.
+  - The catalog snapshot contract moves to version 2, since a member was removed. Version 1 is still read, and deprecated. A snapshot of either version that still carries `awaitable`, `watchable` or `resolvesEmpty` is refused by both readers.
   - Why: an edge's two capabilities, being listed and announcing arrivals, are separate facts, and the two retired keys only ever said the second one twice.
 - `await x-[:E]->` waits for one record on an edge its module announces arrivals on (`listenable`), and `await new x-[:E]->` waits only for one that arrives after `x` entered the run.
   - A plain `await` takes the first match already on the edge, in the edge's declared order, or else the first to arrive. On an edge that can be listed but declares no order, it is refused (`MOV_AWAIT_UNORDERED`): write `await new`.
@@ -148,7 +149,7 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
   - Each one is refused where it is written (`MOV_CALLBACK_RETIRED`, an error), naming what replaces it.
     - For a form a person opens: a form from `@lf/forms` (`form = write forms-[:Forms]-> { Title: …, Fields: … }`), its `form.Url` sent, then `await form-[:Submissions]->`.
     - For buttons: `Buttons: [{ Text: …, Value: … }]` on the message, then `await msg-[:Interactions]->`.
-  - A callback that takes many answers (`once: false`) becomes a standing `listen` on the message's `Interactions` (from the listen half of 0.13) that keeps its state in a table; the message says so.
+  - A callback that takes many answers (`once: false`) becomes a standing `listen` on the message's `Interactions`, one run per answer, keeping its state in a table; the message says so.
   - A callback's `ttl` becomes the program's `race` with a `sleep`.
   - The binding keeps its old type, so a read of its `.id`, its `.url` or its `Called` edge raises nothing more.
   - `listen-fire upgrade` from a 0.12 pin lists each one by file and line, and leaves the pin where it was until each is replaced by hand.

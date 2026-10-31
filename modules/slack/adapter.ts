@@ -710,7 +710,6 @@ export class SlackAdapter extends BaseAdapter {
             // No identity field: a reply's record id, `channel:ts`, names it
             // both listed and announced. Its `Timestamp` reads as an instant
             // to the millisecond, which two replies can share.
-            resolvesEmpty: true,
             // `conversations.replies` answers oldest-first and the hop only
             // drops the root message from that page — it never reorders.
             sequenced: 'chronological',
@@ -732,7 +731,6 @@ export class SlackAdapter extends BaseAdapter {
             cursor: false,
             // The press's `trigger_id`, which Slack issues once per press.
             identity: 'Id',
-            resolvesEmpty: true,
             literalsFrom: [{ at: [SLACK_INTERACTION_EDGE_NAMES.actions, 'Value'], from: 'Buttons[].Value' }],
             description:
               'A press on one of this message\'s Buttons (or a control in its Blocks): ' +

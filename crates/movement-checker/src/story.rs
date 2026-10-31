@@ -95,7 +95,7 @@ pub(crate) enum LinkTo {
 }
 
 pub(crate) enum AwaitedSource {
-    Traversal { root: Option<String>, edge: Option<String>, awaitable: Option<bool>, resolves_empty: Option<bool> },
+    Traversal { root: Option<String>, edge: Option<String>, awaitable: Option<bool> },
     Sleep { duration: String },
     Until { every: Option<String> },
 }
@@ -406,7 +406,6 @@ impl Checker<'_> {
             root,
             edge,
             awaitable: schema.map(|s| s.listenable == Some(true)),
-            resolves_empty: schema.map(|s| s.resolves_empty == Some(true)),
         };
         self.record_node(span, scope, What::Await { binding: None, source });
     }
@@ -772,8 +771,8 @@ impl<'w, 'c> Writer<'w, 'c> {
                 "kind": "await",
                 "binding": binding,
                 "source": match source {
-                    AwaitedSource::Traversal { root, edge, awaitable, resolves_empty } => {
-                        json!({ "kind": "traversal", "root": root, "edge": edge, "awaitable": awaitable, "resolvesEmpty": resolves_empty })
+                    AwaitedSource::Traversal { root, edge, awaitable } => {
+                        json!({ "kind": "traversal", "root": root, "edge": edge, "awaitable": awaitable })
                     }
                     AwaitedSource::Sleep { duration } => json!({ "kind": "sleep", "duration": duration }),
                     AwaitedSource::Until { every } => json!({ "kind": "until", "every": every }),

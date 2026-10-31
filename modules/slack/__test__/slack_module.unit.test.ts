@@ -334,11 +334,10 @@ describe('@lf/slack', () => {
       listenable: true,
       cursor: false,
       identity: 'Id',
-      resolvesEmpty: true,
       literalsFrom: [{ at: ['Actions', 'Value'], from: 'Buttons[].Value' }],
     });
     const replies = message?.references.find((r) => r.name === 'Replies');
-    expect(replies).toMatchObject({ listenable: true, cursor: false, resolvesEmpty: true, sequenced: 'chronological' });
+    expect(replies).toMatchObject({ listenable: true, cursor: false, sequenced: 'chronological' });
     // A reply is named by its record id, `channel:ts`, listed or announced.
     expect(replies?.identity).toBeUndefined();
     const descriptors = new Map();

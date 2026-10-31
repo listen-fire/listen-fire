@@ -160,7 +160,6 @@ interface EdgeSchema {
   requiresLiveRecord?: boolean;
   subject?: boolean;
   listenable?: boolean;                           // the module announces arrivals on the edge: it can be listened to and awaited
-  resolvesEmpty?: boolean;
   cursor?: boolean;                               // the module can list the arrivals since a mark it hands out
   identity?: string;                              // the landing's field that names an arrival
   version?: string;                               // the landing's field that changes when an arrival changes

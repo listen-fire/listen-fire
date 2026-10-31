@@ -1227,14 +1227,12 @@
               "sequenced": "chronological",
               "writable": true,
               "listenable": true,
-              "resolvesEmpty": true,
               "cursor": false
             },
             "Interactions": {
               "target": "Interaction",
               "readable": false,
               "listenable": true,
-              "resolvesEmpty": true,
               "cursor": false,
               "identity": "Id",
               "literalsFrom": [
@@ -1417,14 +1415,12 @@
               "sequenced": "chronological",
               "writable": true,
               "listenable": true,
-              "resolvesEmpty": true,
               "cursor": false
             },
             "Interactions": {
               "target": "Interaction",
               "readable": false,
               "listenable": true,
-              "resolvesEmpty": true,
               "cursor": false,
               "identity": "Id",
               "literalsFrom": [
@@ -1682,8 +1678,7 @@
               "target": "Check Response",
               "sequenced": "arrival",
               "writable": true,
-              "listenable": true,
-              "resolvesEmpty": true
+              "listenable": true
             }
           },
           "requiredFields": [
@@ -1741,7 +1736,6 @@
               "sequenced": "arrival",
               "writable": true,
               "listenable": true,
-              "resolvesEmpty": true,
               "genericOver": {
                 "field": "Answer Type",
                 "onNonLiteral": "error"
@@ -1795,7 +1789,6 @@
               "sequenced": "arrival",
               "writable": true,
               "listenable": true,
-              "resolvesEmpty": true,
               "genericOver": {
                 "field": "Options"
               }
@@ -1848,7 +1841,6 @@
               "sequenced": "arrival",
               "writable": true,
               "listenable": true,
-              "resolvesEmpty": true,
               "genericOver": {
                 "field": "Options"
               }
@@ -1892,8 +1884,7 @@
               "target": "Review Response",
               "sequenced": "arrival",
               "writable": true,
-              "listenable": true,
-              "resolvesEmpty": true
+              "listenable": true
             }
           },
           "requiredFields": [
@@ -1932,8 +1923,7 @@
               "target": "Draft Response",
               "sequenced": "arrival",
               "writable": true,
-              "listenable": true,
-              "resolvesEmpty": true
+              "listenable": true
             }
           },
           "requiredFields": [
@@ -1980,8 +1970,7 @@
               "target": "Correct Response",
               "sequenced": "arrival",
               "writable": true,
-              "listenable": true,
-              "resolvesEmpty": true
+              "listenable": true
             }
           },
           "requiredFields": [
@@ -2031,7 +2020,6 @@
               "sequenced": "arrival",
               "writable": true,
               "listenable": true,
-              "resolvesEmpty": true,
               "genericOver": {
                 "field": "Fields",
                 "onNonLiteral": "warn"

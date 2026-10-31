@@ -216,7 +216,7 @@ pub struct Reference {
     pub cardinality: String,
     pub direction: String,
     pub writable: bool,
-    /// `listenable`, `cursor`, `identity`, `version`, `resolvesEmpty`, `readable`.
+    /// `listenable`, `cursor`, `identity`, `version`, `readable`.
     #[serde(flatten)]
     pub rest: Obj,
 }

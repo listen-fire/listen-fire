@@ -1159,7 +1159,6 @@
           "Result": {
            "target": "Poll Result",
            "listenable": true,
-           "resolvesEmpty": true,
            "readable": false,
            "genericOver": {
             "field": "Choices"
@@ -1189,7 +1188,6 @@
           "Result": {
            "target": "Rating Result",
            "listenable": true,
-           "resolvesEmpty": true,
            "readable": false,
            "genericOver": {
             "field": "Scale",
@@ -1288,7 +1286,6 @@
           "Result": {
            "target": "Poll Result",
            "listenable": true,
-           "resolvesEmpty": true,
            "readable": false,
            "genericOver": {
             "field": "Choices",
@@ -1319,7 +1316,6 @@
           "Result": {
            "target": "Rating Result",
            "listenable": true,
-           "resolvesEmpty": true,
            "readable": false,
            "genericOver": {
             "field": "Scale",

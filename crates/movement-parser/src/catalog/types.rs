@@ -318,8 +318,6 @@ pub struct EdgeSchema {
     /// awaited. Whether it can also be listed is `readable`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listenable: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resolves_empty: Option<bool>,
     /// Whether the module can list the arrivals since a mark it hands out;
     /// without one, an arrival announced while nobody listened is lost.
     #[serde(default, skip_serializing_if = "Option::is_none")]

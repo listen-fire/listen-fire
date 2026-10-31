@@ -6,9 +6,9 @@
 //! the path. Every rule is checked on two catalog shapes: a chat message with
 //! buttons whose answer's value is one hop away (`Actions`), and a poll with
 //! options whose vote's choice is on the vote itself. Both edges settle empty
-//! when their message or poll is deleted (`resolvesEmpty`), as Slack's do: an
-//! awaited answer is still present where it is read, since a wait that settles
-//! empty ends its scope.
+//! when their message or poll is deleted, as every edge does: an awaited
+//! answer is still present where it is read, since a wait that settles empty
+//! ends its scope.
 
 use movement_checker::families::writes::literals::parse_write_path;
 use movement_checker::{CheckOptions, Diagnostic, check_source};
@@ -18,7 +18,7 @@ const CHAT: &str = r#"{"adapters":{
   "chat":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
     "Channel":{"properties":{"Name":"text"},"edges":{"Messages":{"target":"Message","writable":true}}},
     "Message":{"properties":{"Message":"text","Timestamp":"text"},"edges":{
-      "Interactions":{"target":"Interaction","readable":false,"listenable":true,"resolvesEmpty":true,"identity":"Id",
+      "Interactions":{"target":"Interaction","readable":false,"listenable":true,"identity":"Id",
         "literalsFrom":[{"at":["Actions","Value"],"from":"Buttons[].Value"}]}}},
     "Interaction":{"properties":{"Id":"text","User":"text"},"edges":{"Actions":{"target":"Action"},"By":{"target":"Member"}}},
     "Action":{"properties":{"Text":"text","Value":"text"},"edges":{}},
@@ -33,7 +33,7 @@ const POLL: &str = r#"{"adapters":{
   "polls":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
     "Board":{"properties":{"Title":"text"},"edges":{"Polls":{"target":"Poll","writable":true}}},
     "Poll":{"properties":{"Question":"text"},"edges":{
-      "Votes":{"target":"Vote","readable":false,"listenable":true,"resolvesEmpty":true,"identity":"Voter",
+      "Votes":{"target":"Vote","readable":false,"listenable":true,"identity":"Voter",
         "literalsFrom":[{"at":["Choice"],"from":"Options[].Key"}]}}},
     "Vote":{"properties":{"Voter":"text","Choice":"text"},"edges":{}}},
     "collections":{},

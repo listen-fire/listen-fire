@@ -1,4 +1,4 @@
-// A reference's edge capabilities: what 0.13 declares, and the two keys it
+// A reference's edge capabilities: what 0.13 declares, and the three keys it
 // retired, refused rather than stripped.
 import {
   parseWritePath,
@@ -21,6 +21,14 @@ describe('a reference descriptor', () => {
         `'Replies' declares '${key}', retired in 0.13: declare 'listenable: true' (and, optionally, 'identity': the landing's field that names an arrival)`,
       );
     }
+  });
+
+  it('refuses resolvesEmpty on a reference: a deleted record ends the wait on every edge', () => {
+    const r = schemaReferenceDescriptorSchema.safeParse({ ...reference, listenable: true, resolvesEmpty: true });
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r.error?.issues)).toContain(
+      "'Replies' declares 'resolvesEmpty', retired in 0.13: a deleted record ends the wait on every edge, so there is nothing to declare: drop it",
+    );
   });
 
   it('carries literalsFrom: fields of the landing typed by the literals a write wrote at a path', () => {

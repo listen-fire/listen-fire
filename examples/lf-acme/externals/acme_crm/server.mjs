@@ -106,8 +106,6 @@ const COMPANY_DESCRIPTOR = {
       listenable: true,
       identity: 'Id',
       sequenced: 'chronological',
-      // A company the CRM deletes settles its waits empty rather than leaving them forever.
-      resolvesEmpty: true,
     },
     {
       fieldId: APPROVALS_EDGE,
@@ -120,7 +118,6 @@ const COMPANY_DESCRIPTOR = {
       readable: false,
       listenable: true,
       identity: 'id',
-      resolvesEmpty: true,
     },
   ],
 };

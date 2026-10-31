@@ -183,7 +183,7 @@ listen to runs {} fire `Book A Day`
 ### `ttl` and `once: false`
 
 - **`ttl`** is the program's `race` with a `sleep`, as in both programs above. A form never expires on its own.
-- **`once: false`** (many answers in one run) becomes a standing `listen` on the message's `Interactions` (from the listen half of 0.13): one run per answer, keeping its state in a table.
+- **`once: false`** (many answers in one run) becomes a standing `listen` on the message's `Interactions`, one run per answer, keeping its state in a table.
 
 ### What the callback's body did
 

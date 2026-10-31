@@ -919,7 +919,7 @@ impl Checker<'_> {
         let many_answers = callback.config.iter().any(|entry| entry.name == "once" && entry.value.raw.trim().eq_ignore_ascii_case("false"));
         let message = format!(
             "'callback(…)' is retired in 0.13. For a form a person opens, connect `@lf/forms` and write one: `form = write forms-[:Forms]-> {{ Title: …, Fields: … }}`, send `form.Url`, and `await form-[:Submissions]->`. For buttons, write them on the message (`Buttons: [{{ Text: …, Value: … }}]`) and `await msg-[:Interactions]->`.{}",
-            if many_answers { " Many answers in one run (`once: false`) become a standing `listen` on the message's `Interactions` (from the listen half of 0.13) that keeps its state in a table." } else { "" }
+            if many_answers { " Many answers in one run (`once: false`) become a standing `listen` on the message's `Interactions`, one run per answer, keeping its state in a table." } else { "" }
         );
         self.report(codes::CALLBACK_RETIRED, message, callback.span);
         match &callback.subject {
@@ -1084,7 +1084,6 @@ pub fn callback_type(params: Vec<(String, Option<Ty>)>) -> Position {
     let schema = EdgeSchema {
         target: "Called".to_string(),
         listenable: Some(true),
-        resolves_empty: Some(true),
         sequenced: Some(movement_parser::catalog::types::EdgeSequencing::Arrival),
         ..crate::types::position::edge_schema_to("Called")
     };

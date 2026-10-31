@@ -651,7 +651,7 @@ fn edge_schema(reference: &Js, target: Option<&str>, polymorphic: bool, field_id
     flag("readable", Js::is_false(reference.get("readable")), Js::Bool(false));
     flag("writable", Js::is_true(reference.get("writable")), Js::Bool(true));
     flag("linkable", Js::is_false(reference.get("linkable")), Js::Bool(false));
-    for name in ["requiresLiveRecord", "subject", "listenable", "resolvesEmpty"] {
+    for name in ["requiresLiveRecord", "subject", "listenable"] {
         flag(name, Js::is_true(reference.get(name)), Js::Bool(true));
     }
     for passed in ["cursor", "identity", "version"] {
@@ -674,9 +674,14 @@ fn edge_schema(reference: &Js, target: Option<&str>, polymorphic: bool, field_id
 /// The refusal of a reference that declares a key 0.13 retired, naming what
 /// replaces it (engine-contracts `retiredReferenceKey` says the same).
 pub fn retired_reference_key(reference: &Js) -> Option<String> {
-    let retired = ["awaitable", "watchable"].into_iter().find(|retired| reference.get(retired).is_some())?;
+    let retired = ["awaitable", "watchable", "resolvesEmpty"].into_iter().find(|retired| reference.get(retired).is_some())?;
     let name = key(nullish_or(reference.get("name"), reference.get("fieldId")));
-    Some(format!("'{name}' declares '{retired}', retired in 0.13: declare 'listenable: true' (and, optionally, 'identity': the landing's field that names an arrival)"))
+    let instead = if retired == "resolvesEmpty" {
+        "a deleted record ends the wait on every edge, so there is nothing to declare: drop it"
+    } else {
+        "declare 'listenable: true' (and, optionally, 'identity': the landing's field that names an arrival)"
+    };
+    Some(format!("'{name}' declares '{retired}', retired in 0.13: {instead}"))
 }
 
 /// The refusal of a reference whose `identity` or `version` names a field its
@@ -924,6 +929,14 @@ mod tests {
             "'replies' declares 'watchable', retired in 0.13: declare 'listenable: true' (and, optionally, 'identity': the landing's field that names an arrival)"
         );
         assert_eq!(retired_reference_key(&js(r#"{"name":"Replies","listenable":true}"#)), None);
+    }
+
+    #[test]
+    fn a_reference_declaring_resolves_empty_is_refused_by_name() {
+        assert_eq!(
+            retired_reference_key(&js(r#"{"name":"Interactions","listenable":true,"resolvesEmpty":true}"#)).unwrap(),
+            "'Interactions' declares 'resolvesEmpty', retired in 0.13: a deleted record ends the wait on every edge, so there is nothing to declare: drop it"
+        );
     }
 
     #[test]

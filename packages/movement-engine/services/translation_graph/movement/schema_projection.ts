@@ -687,9 +687,8 @@ export function instanceSchemaFromDescriptors(input: {
           ...(ref.subject === true ? { subject: true } : {}),
           // The module announces arrivals on the edge: it can be listened to
           // and awaited. Only `true` projects; its absence is the ordinary
-          // fact. `resolvesEmpty` rides it (F20).
+          // fact.
           ...(ref.listenable === true ? { listenable: true } : {}),
-          ...(ref.resolvesEmpty === true ? { resolvesEmpty: true } : {}),
           // How arrivals are told apart: whether the module lists them since a
           // mark, the field that names one, and the field that changes with it.
           ...(ref.cursor !== undefined ? { cursor: ref.cursor } : {}),
