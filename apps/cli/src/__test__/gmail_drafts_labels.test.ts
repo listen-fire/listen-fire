@@ -2,7 +2,7 @@
 // packages/fake-channels, every step as a person types it: listen-fire connect @lf/gmail
 // (pointed at the fake) → listen-fire credential add --headless (the plain sign-in, or
 // the `gmail_drafts` one that also asks for the compose scope) → listen-fire check →
-// listen-fire run, and listen-fire run --poll for a listen.
+// listen-fire run, and listen-fire run --poll for a listen on `Labelings`.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -86,8 +86,8 @@ import { henry_mail } from credentials
 
 mail = connect gmail using henry_mail
 
-function tagged(msg: <mail-[:Message]->>) {
-  fail("tagged \${msg.Subject} with \${msg.\`Added Label\`}")
+function tagged(l: <mail-[:Labelings]->>) {
+  fail("tagged \${l.Subject} with \${l.Label}")
 }
 
 ${listen}
@@ -101,7 +101,7 @@ test('labelling an existing message fires a listen on that label, named as a per
     const newsletters = await fake.makeLabel('Newsletters');
     await fake.message({ id: 'm-old', subject: 'Acme intro' });
     await fake.message({ id: 'm-other', subject: 'Newsletter' });
-    writeFileSync(join(dir, 'movements/hello.mvt'), labelled('listen to mail { events: ["label_added"], labels: ["Deals"] } fire tagged'));
+    writeFileSync(join(dir, 'movements/hello.mvt'), labelled('listen to mail-[l:Labelings WHERE l.Label == "Deals"]-> fire tagged'));
     const checked = lfSync(dir, 'check');
     assert.equal(checked.code, 0, checked.out);
 
@@ -131,13 +131,13 @@ test('labelling an existing message fires a listen on that label, named as a per
   }
 });
 
-test('a label listen naming no labels fires for user labels only, never for Gmail’s own', async () => {
+test('a label listen on the mailbox’s own labels fires for user labels only, never for Gmail’s', async () => {
   const fake = await fakeChannels();
   try {
     const { dir } = await gmailProject(fake, 'gmail');
     const deals = await fake.makeLabel('Deals');
     await fake.message({ id: 'm-old', subject: 'Acme intro', labelIds: ['UNREAD'] });
-    writeFileSync(join(dir, 'movements/hello.mvt'), labelled('listen to mail { events: ["label_added"] } fire tagged'));
+    writeFileSync(join(dir, 'movements/hello.mvt'), labelled('listen to mail-[l:Labelings WHERE l.`Label Type` == "user"]-> fire tagged'));
     lfSync(dir, 'run', '--poll', 'tagged');
 
     await fake.label('m-old', ['INBOX', 'STARRED']);
@@ -157,9 +157,9 @@ test('a label the mailbox does not have fails the poll, naming the labels it has
   try {
     const { dir } = await gmailProject(fake, 'gmail');
     await fake.makeLabel('Deals');
-    writeFileSync(join(dir, 'movements/hello.mvt'), labelled('listen to mail { events: ["label_added"], labels: ["Dealz"] } fire tagged'));
+    writeFileSync(join(dir, 'movements/hello.mvt'), labelled('listen to mail-[l:Labelings WHERE l.Label == "Dealz"]-> fire tagged'));
     const run = lfSync(dir, 'run', '--poll', 'tagged');
-    assert.match(run.out, /'Dealz', which dev-loop@listen-fire\.local does not have — its labels are Deals/, run.out);
+    assert.match(run.out, /a Gmail listen names the label 'Dealz', which dev-loop@listen-fire\.local does not have — its labels are Deals/, run.out);
   } finally {
     await fake.stop();
   }

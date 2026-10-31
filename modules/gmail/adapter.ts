@@ -43,7 +43,7 @@ import { naturalName } from 'module-kit/adapter/name_resolution';
 import { moduleFileRef } from 'module-kit/files';
 import { GmailApiError, type GmailApiClient } from './api_client';
 import { decodeGmailMessage, type GmailMessageRecord } from './mime';
-import { gmailQueryFromWhere } from './filter';
+import { gmailQueryFromWhere, gmailQueryOfWhere } from './filter';
 import { GMAIL_MANIFEST } from './manifest';
 import {
   GMAIL_MAILBOX_DESCRIPTOR,
@@ -58,13 +58,12 @@ import {
   GMAIL_ADAPTER_TYPE,
   GMAIL_ATTACHMENT_DISPLAY_NAME,
   GMAIL_DRAFT_TYPE_ID,
-  GMAIL_LABEL_EVENT_TAG,
+  GMAIL_LABELING_MESSAGE_EDGE,
   GMAIL_MAILBOX_TYPE_ID,
   GMAIL_MESSAGES_COLLECTION,
   GMAIL_MESSAGE_ATTACHMENTS_EDGE,
   GMAIL_MESSAGE_DISPLAY_NAME,
   GMAIL_MESSAGE_DRAFTS_EDGE_NAME,
-  GMAIL_MESSAGE_EVENT_TAG,
   GMAIL_MESSAGE_REPLIES_EDGE_NAME,
   GMAIL_MESSAGE_TYPE_ID,
   decodeAttachmentId,
@@ -157,9 +156,10 @@ export class GmailAdapter extends BaseAdapter implements Adapter {
     }
 
     const edgeId = await this.resolveEdgeReadId(input.position.recordType, input.fieldId);
+    const data = (positionData(input.position) ?? {}) as Record<string, unknown>;
+    if (edgeId === GMAIL_LABELING_MESSAGE_EDGE) return labelledMessage(data);
     if (edgeId !== GMAIL_MESSAGE_ATTACHMENTS_EDGE) return [];
 
-    const data = (positionData(input.position) ?? {}) as Record<string, unknown>;
     const attachments = Array.isArray(data['attachments']) ? data['attachments'] : [];
     return bounded(attachments, input.orderBy === undefined ? input.limit : undefined)
       .map(objectAt)
@@ -201,7 +201,8 @@ export class GmailAdapter extends BaseAdapter implements Adapter {
     const records = await Promise.all(
       bounded(messages, cap).map(async (ref) => decodeGmailMessage(await client.getMessage(ref.id))),
     );
-    return records.map(messagePosition);
+    const searched = gmailQueryOfWhere(input.where);
+    return records.map((record) => messagePosition(searched === undefined ? record : { ...record, query: searched }));
   }
 
   // ── 4. Read-back by id ─────────────────────────────────────────────────
@@ -325,25 +326,6 @@ export class GmailAdapter extends BaseAdapter implements Adapter {
     }
     return replyTargetFromParent(parent);
   }
-
-  // ── 7. Event typing ────────────────────────────────────────────────────
-
-  async listEventTypes(): Promise<EventType[]> {
-    // The PollSource tags every event it produces, so discrimination is by tag
-    // alone — never by sniffing the payload.
-    return [
-      {
-        tag: GMAIL_MESSAGE_EVENT_TAG,
-        positionType: GMAIL_MESSAGE_TYPE_ID,
-        match: { path: 'id', equals: [] },
-      },
-      {
-        tag: GMAIL_LABEL_EVENT_TAG,
-        positionType: GMAIL_MESSAGE_TYPE_ID,
-        match: { path: 'id', equals: [] },
-      },
-    ];
-  }
 }
 
 // ── Position minting ────────────────────────────────────────────────────────
@@ -361,7 +343,7 @@ function stringAt(value: unknown): string | null {
   return typeof value === 'string' && value !== '' ? value : null;
 }
 
-export function messagePosition(message: GmailMessageRecord): RelatedResult {
+export function messagePosition(message: GmailMessageRecord & { query?: string }): RelatedResult {
   return {
     position: makeStablePosition({
       adapterType: GMAIL_ADAPTER_TYPE,
@@ -371,6 +353,18 @@ export function messagePosition(message: GmailMessageRecord): RelatedResult {
     }),
   };
 }
+
+/** A labeling's message: the labeling carries it whole, under the message's
+ *  own field ids, so nothing is fetched. */
+function labelledMessage(data: Record<string, unknown>): RelatedResult[] {
+  const id = stringAt(data['id']);
+  if (id === null) return [];
+  const message = Object.fromEntries(Object.entries(data).filter(([key]) => !LABELING_OWN_FIELDS.has(key)));
+  return [{ position: makeStablePosition({ adapterType: GMAIL_ADAPTER_TYPE, recordType: GMAIL_MESSAGE_DISPLAY_NAME, recordId: id, data: message }) }];
+}
+
+/** What a labeling holds besides its message's fields. */
+const LABELING_OWN_FIELDS = new Set(['labelingId', 'label', 'labelType', 'query', 'Id', 'Label', 'Label Type', 'Query']);
 
 function attachmentPosition(data: Record<string, unknown>): RelatedResult {
   const messageId = stringAt(data['messageId']) ?? '';

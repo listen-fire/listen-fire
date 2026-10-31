@@ -13,18 +13,21 @@
 // and the walk hydrates every target rather than stubbing.
 
 import type { EdgeCapability } from 'engine-contracts/expression/expression';
-import type { SchemaEntryPoint, SchemaTypeDescriptor } from 'movement-engine/public/catalog';
+import type { SchemaEntryPoint, SchemaFieldDescriptor, SchemaTypeDescriptor } from 'movement-engine/public/catalog';
 
 import { META_RECORD_TYPE } from 'movement-engine/public/catalog';
 import {
-  GMAIL_ADDED_LABEL_FIELD,
   GMAIL_ATTACHMENT_DISPLAY_NAME,
   GMAIL_ATTACHMENT_TYPE_ID,
   GMAIL_MAILBOX_DISPLAY_NAME,
   GMAIL_DRAFTS_COLLECTION,
   GMAIL_DRAFT_DISPLAY_NAME,
   GMAIL_DRAFT_TYPE_ID,
-  GMAIL_LABEL_ADDED_EVENT,
+  GMAIL_LABELINGS_COLLECTION,
+  GMAIL_LABELING_DISPLAY_NAME,
+  GMAIL_LABELING_MESSAGE_EDGE,
+  GMAIL_LABELING_MESSAGE_EDGE_NAME,
+  GMAIL_LABELING_TYPE_ID,
   GMAIL_MAILBOX_TYPE_ID,
   GMAIL_MESSAGES_COLLECTION,
   GMAIL_MESSAGE_ATTACHMENTS_EDGE,
@@ -34,10 +37,13 @@ import {
   GMAIL_MESSAGE_DRAFTS_EDGE_NAME,
   GMAIL_MESSAGE_FILES_FIELD,
   GMAIL_MESSAGE_FILES_FIELD_NAME,
-  GMAIL_MESSAGE_RECEIVED_EVENT,
   GMAIL_MESSAGE_REPLIES_EDGE,
   GMAIL_MESSAGE_REPLIES_EDGE_NAME,
   GMAIL_MESSAGE_TYPE_ID,
+  GMAIL_POLL_EVERY_SECONDS,
+  GMAIL_QUERY_FIELD,
+  GMAIL_QUERY_FIELD_ID,
+  GMAIL_QUERY_TYPE,
 } from './types';
 
 /**
@@ -60,9 +66,6 @@ export const GMAIL_DRAFT_RULE =
   'unsent, threaded as a reply is. Drafts work only where the mailbox was ' +
   'signed in with drafts enabled (the `gmail_drafts` credential).';
 
-/** Every event a listen on the mailbox can ask for, as the fires edges say. */
-const FIRES_ON = [GMAIL_MESSAGE_RECEIVED_EVENT, GMAIL_LABEL_ADDED_EVENT];
-
 /** How many messages one unbounded `Messages` walk will fetch. Every message
  *  costs its own request, so the ceiling is low on purpose — an author who
  *  wants more narrows the search rather than paging the mailbox. */
@@ -80,7 +83,15 @@ const MESSAGES_DESCRIPTION =
   'it a LIMIT rather than expecting the whole mailbox. Every message is its own ' +
   'request, so `ORDER BY Date DESC LIMIT n` — the order Gmail already answers ' +
   `in — costs n requests; any other ORDER BY fetches up to ${GMAIL_SEARCH_CEILING} ` +
-  'and sorts them here.';
+  'and sorts them here. A listen on `Messages` is told about each message ' +
+  'added to the mailbox from go-live on (sent mail and drafts too: narrow it by ' +
+  '`Labels CONTAINS "INBOX"` for mail that arrived).';
+
+const LABELINGS_DESCRIPTION =
+  'Each label added to a message already in the mailbox — a person filing ' +
+  'mail, or a filter doing it later: what a listen hears, never a list to read. ' +
+  'Narrow it by `Label` (a label by its name or id) or `Label Type` ' +
+  '(`"user"` for the mailbox’s own labels), and by `Query`.';
 
 /**
  * The root collection, served by Gmail's own search. The WHERE reaches the `q`
@@ -89,6 +100,10 @@ const MESSAGES_DESCRIPTION =
  * LIMIT rides with it) and every other order is `bounded`: fetched up to the
  * ceiling and sorted by the engine.
  */
+/** A listen's WHERE on `Labelings` reaches the poll: the labels it names are
+ *  the history read. */
+const LABELINGS_TAKEN = { filter: 'native', supportsLimit: false } satisfies EdgeCapability;
+
 export const GMAIL_MAILBOX_SEARCH = {
   filter: 'native',
   order: 'bounded',
@@ -114,21 +129,28 @@ export function gmailEntryPoints(): SchemaEntryPoint[] {
       readable: true,
       collectionName: GMAIL_MESSAGES_COLLECTION,
       description: MESSAGES_DESCRIPTION,
+      // One edge, two promises: the mailbox can be searched, and each message
+      // added to it arrives on it.
+      listenable: true,
+      capability: GMAIL_MAILBOX_SEARCH,
+      delivery: 'polled',
+      pollEverySeconds: GMAIL_POLL_EVERY_SECONDS,
+      cursor: true,
+      identity: 'Message Id',
     },
-    // The EVENT edge onto the same node the readable collection lands on
-    // (adapters/CLAUDE.md rule 9 — two edges, two promises, one node).
     {
-      typeId: GMAIL_MESSAGE_TYPE_ID,
-      displayName: GMAIL_MESSAGE_DISPLAY_NAME,
+      typeId: GMAIL_LABELING_TYPE_ID,
+      displayName: GMAIL_LABELING_DISPLAY_NAME,
       writable: false,
       readable: false,
-      fires: true,
-      firesOn: FIRES_ON,
-      description:
-        'Delivered when a message arrives in the mailbox that was not there at ' +
-        'the last look (`message_received`), or when a label is added to a ' +
-        'message already there (`label_added`, with `Added Label` set). Read ' +
-        'its fields straight off, or walk `Attachments`.',
+      collectionName: GMAIL_LABELINGS_COLLECTION,
+      description: LABELINGS_DESCRIPTION,
+      listenable: true,
+      capability: LABELINGS_TAKEN,
+      delivery: 'polled',
+      pollEverySeconds: GMAIL_POLL_EVERY_SECONDS,
+      cursor: true,
+      identity: 'Id',
     },
     {
       typeId: GMAIL_DRAFT_TYPE_ID,
@@ -154,8 +176,8 @@ export const GMAIL_ROOT: SchemaTypeDescriptor = {
   displayName: GMAIL_MAILBOX_DISPLAY_NAME,
   description:
     'One Google Workspace mailbox. Walk `Messages` to search it, write along ' +
-    '`Messages` to send as the mailbox, or listen on `Message` to run when ' +
-    'mail arrives or is labelled. ' +
+    '`Messages` to send as the mailbox, listen on `Messages` to run when mail ' +
+    'arrives, or on `Labelings` when a message is labelled. ' +
     GMAIL_WRITE_RULE +
     ' ' +
     GMAIL_DRAFT_RULE +
@@ -177,6 +199,7 @@ export const GMAIL_ROOT: SchemaTypeDescriptor = {
       // Nothing to link: a mail already in the mailbox cannot be "added" to it.
       linkable: false,
       capability: GMAIL_MAILBOX_SEARCH,
+      listenable: true,
     },
     {
       fieldId: GMAIL_DRAFTS_COLLECTION,
@@ -192,17 +215,37 @@ export const GMAIL_ROOT: SchemaTypeDescriptor = {
       description: `Write here to keep a new message unsent. ${GMAIL_DRAFT_RULE}`,
     },
     {
-      fieldId: `fires:${GMAIL_MESSAGE_TYPE_ID}`,
-      targetTypeId: GMAIL_MESSAGE_TYPE_ID,
-      cardinality: 'one',
+      fieldId: GMAIL_LABELINGS_COLLECTION,
+      targetTypeId: GMAIL_LABELING_TYPE_ID,
+      cardinality: 'many',
       direction: 'outgoing',
-      name: GMAIL_MESSAGE_DISPLAY_NAME,
-      fires: true,
-      firesOn: FIRES_ON,
+      name: GMAIL_LABELINGS_COLLECTION,
+      description: LABELINGS_DESCRIPTION,
       readable: false,
-      description: 'A message that has just arrived, or just been labelled — what a listen delivers.',
+      writable: false,
+      linkable: false,
+      listenable: true,
+      capability: LABELINGS_TAKEN,
     },
   ],
+};
+
+/** The search a listen narrows by: Gmail parses it, so it is compared with
+ *  `==` only. An arrival carries the search its poll made, and a walk's
+ *  record the search it was found by, so a comparison the engine makes agrees
+ *  with the one Gmail made. */
+const QUERY_FIELD: SchemaFieldDescriptor = {
+  fieldId: GMAIL_QUERY_FIELD_ID,
+  displayName: GMAIL_QUERY_FIELD,
+  kind: 'owned',
+  owned: { name: GMAIL_QUERY_TYPE },
+  writable: false,
+  required: false,
+  capability: { filterOperators: ['eq'] },
+  description:
+    'A Gmail search written exactly as in Gmail’s own search box (`m.Query == "from:@acme.com has:attachment"`): ' +
+    'what is searched for comes back. Compared with `==` only. Read, it is the search the message was found by ' +
+    '(what its listen or walk compared it with), and nothing on a message found otherwise.',
 };
 
 const MESSAGE_DESCRIPTOR: SchemaTypeDescriptor = {
@@ -229,7 +272,7 @@ const MESSAGE_DESCRIPTOR: SchemaTypeDescriptor = {
     { fieldId: GMAIL_MESSAGE_FILES_FIELD, displayName: GMAIL_MESSAGE_FILES_FIELD_NAME, kind: 'file', cardinality: 'many', writable: true, readable: false, required: false, description: 'Files to attach to a message being sent — a list of file values the run already holds (an attachment read off another message, a document a movement produced). Send-side only: the files on a RECEIVED message are on its `Attachments` edge.' },
     { fieldId: 'labels', displayName: 'Labels', kind: 'string', cardinality: 'many', writable: false, required: false, description: 'Gmail label ids — the system ones (INBOX, UNREAD, IMPORTANT) in capitals, and a user label by the id Gmail gave it (Label_12). A WHERE reaches the search as `label:`. This connection can read them and can never set one.', capability: { filterOperators: ['eq', 'in', 'contains'] } },
     { fieldId: 'hasAttachments', displayName: 'Has Attachments', kind: 'boolean', writable: false, required: false, description: 'Whether walking `Attachments` would find anything — true without fetching a single byte.' },
-    { fieldId: GMAIL_ADDED_LABEL_FIELD, displayName: 'Added Label', kind: 'string', writable: false, required: false, description: 'On a message a `label_added` listen delivered: the label id that was just added. Empty on any other message.' },
+    QUERY_FIELD,
   ],
   references: [
     {
@@ -285,6 +328,38 @@ const MESSAGE_DESCRIPTOR: SchemaTypeDescriptor = {
   ],
 };
 
+/**
+ * One label added to one message: the label, and the message as it is now
+ * (its fields straight off, or walk `Message` for its attachments). Every
+ * addition is its own: a label removed and added again is a second one.
+ */
+const LABELING_DESCRIPTOR: SchemaTypeDescriptor = {
+  typeId: GMAIL_LABELING_TYPE_ID,
+  displayName: GMAIL_LABELING_DISPLAY_NAME,
+  description: LABELINGS_DESCRIPTION,
+  fields: [
+    { fieldId: 'labelingId', displayName: 'Id', kind: 'string', writable: false, required: true, description: 'This addition: the message, the label and the moment in the mailbox’s history it was added.' },
+    { fieldId: 'label', displayName: 'Label', kind: 'string', writable: false, required: true, capability: { filterOperators: ['eq', 'in'] }, description: 'The label id that was added (INBOX, STARRED… in capitals, a user label by its id, Label_12). A listen names a user label by its name as you see it in Gmail (`l.Label == "Deals"`) or by its id; a label the mailbox does not have fails the listen, naming the ones it has.' },
+    { fieldId: 'labelType', displayName: 'Label Type', kind: 'enum', enumValues: ['system', 'user'], writable: false, required: true, capability: { filterOperators: ['eq', 'in'] }, description: '`user` for the mailbox’s own labels, `system` for Gmail’s (inbox, unread, starred, important, sent, draft, spam, trash, chat, the category tabs), which change as mail is read and filed.' },
+    QUERY_FIELD,
+    ...MESSAGE_DESCRIPTOR.fields
+      .filter((f) => f.fieldId !== GMAIL_QUERY_FIELD_ID && f.fieldId !== GMAIL_MESSAGE_FILES_FIELD)
+      .map((f) => ({ ...f, writable: false })),
+  ],
+  references: [
+    {
+      fieldId: GMAIL_LABELING_MESSAGE_EDGE,
+      targetTypeId: GMAIL_MESSAGE_TYPE_ID,
+      cardinality: 'one',
+      direction: 'outgoing',
+      name: GMAIL_LABELING_MESSAGE_EDGE_NAME,
+      writable: false,
+      linkable: false,
+      description: 'The message that was labelled, whole: walk its `Attachments`, or reply along its `Replies`.',
+    },
+  ],
+};
+
 const DRAFT_DESCRIPTOR: SchemaTypeDescriptor = {
   typeId: GMAIL_DRAFT_TYPE_ID,
   displayName: GMAIL_DRAFT_DISPLAY_NAME,
@@ -324,6 +399,7 @@ const ATTACHMENT_DESCRIPTOR: SchemaTypeDescriptor = {
 const DESCRIPTORS: Record<string, SchemaTypeDescriptor> = {
   [GMAIL_MESSAGE_TYPE_ID]: MESSAGE_DESCRIPTOR,
   [GMAIL_DRAFT_TYPE_ID]: DRAFT_DESCRIPTOR,
+  [GMAIL_LABELING_TYPE_ID]: LABELING_DESCRIPTOR,
   [GMAIL_ATTACHMENT_TYPE_ID]: ATTACHMENT_DESCRIPTOR,
 };
 
@@ -345,4 +421,20 @@ export function describeGmailType(typeId: string): SchemaTypeDescriptor | null {
 export function gmailMessageFieldName(name: string): string | undefined {
   return MESSAGE_DESCRIPTOR.fields.find((f) => f.fieldId === name || f.displayName === name)
     ?.displayName;
+}
+
+/** A record's fields by the names a program reads them by, beside its own
+ *  ids, as an arrival's landing carries them: the host judges a listen's
+ *  WHERE by name, `getFieldValue` reads by id. */
+function landingFields(descriptor: SchemaTypeDescriptor, record: Record<string, unknown>): Record<string, unknown> {
+  const named = descriptor.fields.filter((f) => Reflect.has(record, f.fieldId)).map((f) => [f.displayName, Reflect.get(record, f.fieldId)]);
+  return { ...record, ...Object.fromEntries(named) };
+}
+
+export function messageLandingFields(record: Record<string, unknown>): Record<string, unknown> {
+  return landingFields(MESSAGE_DESCRIPTOR, record);
+}
+
+export function labelingLandingFields(record: Record<string, unknown>): Record<string, unknown> {
+  return landingFields(LABELING_DESCRIPTOR, record);
 }

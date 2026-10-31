@@ -53,24 +53,31 @@ export const GMAIL_MESSAGE_DRAFTS_EDGE_NAME = 'Drafts';
 export const GMAIL_MESSAGE_FILES_FIELD = 'files';
 export const GMAIL_MESSAGE_FILES_FIELD_NAME = 'Files';
 
-// ── The `events:` vocabulary ────────────────────────────────────────────────
-// Two kinds: a message that has arrived since the last look, and a label added
-// to a message already in the mailbox (a person filing mail is how a mailbox
-// hands work on). Gmail's history offers more (labels removed, messages
-// deleted), and nobody has asked to run on those.
+// ── Listening ───────────────────────────────────────────────────────────────
+// Two listenable edges off the mailbox: `Messages`, each message added to it,
+// and `Labelings`, each label added to a message already in it (a person
+// filing mail is how a mailbox hands work on). Gmail's history offers more
+// (labels removed, messages deleted), and nobody has asked to run on those.
 
-export const GMAIL_MESSAGE_RECEIVED_EVENT = 'message_received';
-export const GMAIL_LABEL_ADDED_EVENT = 'label_added';
+/** The root edge a label being added arrives on. Not readable: a mailbox
+ *  keeps no list of when its labels were added. */
+export const GMAIL_LABELINGS_COLLECTION = 'Labelings';
+export const GMAIL_LABELING_TYPE_ID = 'gmail:labeling';
+export const GMAIL_LABELING_DISPLAY_NAME = 'Labeling';
+/** A labeling's message, whole: its attachments are walked from there. */
+export const GMAIL_LABELING_MESSAGE_EDGE = 'labeling_message';
+export const GMAIL_LABELING_MESSAGE_EDGE_NAME = 'Message';
 
-export const GMAIL_SUBSCRIBABLE_EVENTS = [GMAIL_MESSAGE_RECEIVED_EVENT, GMAIL_LABEL_ADDED_EVENT] as const;
-export type GmailEventKind = (typeof GMAIL_SUBSCRIBABLE_EVENTS)[number];
+/** The Gmail search a listen narrows by, as typed into Gmail's search box:
+ *  an owned scalar Gmail parses, compared with `==` only. */
+export const GMAIL_QUERY_FIELD_ID = 'query';
+export const GMAIL_QUERY_FIELD = 'Query';
+export const GMAIL_QUERY_TYPE = 'GmailQuery';
 
-/** The discriminators the polled events carry. */
-export const GMAIL_MESSAGE_EVENT_TAG = 'gmail:message_received';
-export const GMAIL_LABEL_EVENT_TAG = 'gmail:label_added';
-
-/** The Message field a `label_added` event fills: the label that was added. */
-export const GMAIL_ADDED_LABEL_FIELD = 'addedLabel';
+/** How often the host polls a listenable edge unless lf.yaml's `pollEvery`
+ *  says otherwise: a minute of delay on arriving mail is what the push
+ *  machinery was traded away for. */
+export const GMAIL_POLL_EVERY_SECONDS = 60;
 
 /**
  * The opaque checkpoint the PollSource persists.

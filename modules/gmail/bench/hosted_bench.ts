@@ -17,6 +17,7 @@ import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
 
 import type { FileRef } from 'movement-engine/public/adapter';
+import type { PollEdgeInput } from 'module-kit';
 
 const MODES = ['legacy', 'module', 'validated'] as const;
 type Mode = (typeof MODES)[number];
@@ -26,6 +27,8 @@ const TSX = require.resolve('tsx/cjs', { paths: [require.resolve('module-kit/pac
 const WARMUP = 200;
 
 const MAILBOX = 'deals@example.com';
+/** `m.Labels CONTAINS "INBOX"`: mail that arrived, not what the mailbox sent. */
+const INBOX = { type: 'compare', op: 'contains', left: { type: 'property', propertyTypeId: 'Labels', fieldOnly: true }, right: { type: 'static', value: 'INBOX' } };
 const BYTES = 'quarter,revenue\nQ3,1200\n';
 const b64 = (value: string) => Buffer.from(value, 'utf8').toString('base64url');
 
@@ -111,7 +114,7 @@ async function runOne(mode: Mode): Promise<Record<string, number>> {
       const source = async () => client;
       const adapter = new gmail.GmailAdapter({ client: source, readFile: (ref) => files.read(ref), log: quiet });
       const poll = new gmail.GmailPollSource(source);
-      return { adapter: ownedFilesAdapter(adapter, owner), poll: (input: { config: unknown; checkpoint?: unknown }) => poll.getEvents(input) };
+      return { adapter: ownedFilesAdapter(adapter, owner), poll: (input: PollEdgeInput) => poll.poll(input) };
     }
     // As the platform's secrets family answers: the same fields until they change.
     const fields = { mailbox: MAILBOX, method: 'oauth', access_token: token, refresh_token: 'r', expires_at: '2099-01-01T00:00:00.000Z', granted_scopes: scopes.join(' ') };
@@ -126,7 +129,7 @@ async function runOne(mode: Mode): Promise<Record<string, number>> {
     });
     const poll = loaded.poll;
     if (poll === undefined) throw new Error('the module declares no poll');
-    return { adapter: ownedFilesAdapter(loaded.adapter, owner), poll: (input: { config: unknown; checkpoint?: unknown }) => poll({ config: input.config, ...(input.checkpoint !== undefined ? { checkpoint: input.checkpoint } : {}) }) };
+    return { adapter: ownedFilesAdapter(loaded.adapter, owner), poll: (input: PollEdgeInput) => poll(input) };
   };
   // Boot: the code loaded and the first adapter constructed.
   instanceFor('boot');
@@ -153,8 +156,8 @@ async function runOne(mode: Mode): Promise<Record<string, number>> {
       fields: { To: ['rita@acme.com'], Subject: 'Your Q3 figures', Body: 'Thanks.' },
       mutationContext,
     });
-    const polled = await writer.poll({ config: {}, checkpoint: { historyId: '1000', lastSeenAt: '2026-10-09T00:00:00.000Z' } });
-    if (!('events' in polled) || polled.events.length !== 3) throw new Error('the poll did not deliver');
+    const polled = await writer.poll({ edge: 'Messages', filter: INBOX, cursor: { historyId: '1000', lastSeenAt: '2026-10-09T00:00:00.000Z' } });
+    if (!('arrivals' in polled) || polled.arrivals.length !== 3) throw new Error('the poll did not deliver');
     if (round >= WARMUP) samples.push(Number(process.hrtime.bigint() - start) / 1e6);
   }
   fake.close();

@@ -46,14 +46,14 @@ import { henry_mail } from credentials
 
 mail = connect gmail using henry_mail
 
-function invoice(msg: <mail-[:Message]->>) {
+function invoice(msg: <mail-[:Messages]->>) {
   msg-[a:Attachments]-> {
     d = extractOne([a.File], node I: "the invoice" { total: <text> "the amount the invoice asks for" })
     fail("\${a.Name} total \${d.total}")
   }
 }
 
-listen to mail { every: 1s } fire invoice
+listen to mail-[m:Messages WHERE m.Labels CONTAINS "INBOX"]-> fire invoice
 `;
 
 test('listen-fire serve: an extraction over a Gmail PDF attachment reads the PDF through Gmail, with no bytes-unavailable warning', async () => {
@@ -63,6 +63,8 @@ test('listen-fire serve: an extraction over a Gmail PDF attachment reads the PDF
     const { dir } = await gmailProject(fake, 'gmail');
     appendFileSync(join(dir, '.lf/secrets.yaml'), `\nanthropic:\n  external: "@lf/anthropic"\n  api_key: test-key\n  base_url: ${anthropic.url}\n`);
     writeFileSync(join(dir, 'movements/hello.mvt'), INVOICE);
+    // Polled every second rather than the edge's minute, so the run comes soon.
+    appendFileSync(join(dir, 'lf.yaml'), '\npollEvery:\n  henry_mail: 1s\n');
     const checked = lf(dir, 'check');
     assert.equal(checked.code, 0, checked.out);
 

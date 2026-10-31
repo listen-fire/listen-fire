@@ -130,6 +130,12 @@ function epochSeconds(value: string | number | boolean | null | undefined): stri
 export function gmailQueryFromWhere(where: Expression | undefined): string | undefined {
   const terms: string[] = [];
   for (const conjunct of conjunctsOf(where)) {
+    // The author's own search, as Gmail takes it.
+    if (has(conjunct, 'query', 'Query')) {
+      const query = conjunct.op === 'eq' ? scalarOf(conjunct.value) : undefined;
+      if (typeof query === 'string' && query.trim() !== '') terms.push(query.trim());
+      continue;
+    }
     if (has(conjunct, 'subject', 'Subject')) {
       const pushed = anyOf('subject', stringsOf(conjunct.value) ?? []);
       if (pushed) terms.push(pushed);
@@ -190,4 +196,14 @@ export function combineGmailQueries(
  */
 export function anyGmailLabel(labels: readonly string[]): string | undefined {
   return anyOf('label', [...labels]);
+}
+
+/** The search a WHERE pins `Query` to with `==`: a walk stamps it on what
+ *  comes back, so the engine's own check of the WHERE agrees with Gmail's. */
+export function gmailQueryOfWhere(where: Expression | undefined): string | undefined {
+  for (const conjunct of conjunctsOf(where)) {
+    const value = has(conjunct, 'query', 'Query') && conjunct.op === 'eq' ? scalarOf(conjunct.value) : undefined;
+    if (typeof value === 'string') return value;
+  }
+  return undefined;
 }
