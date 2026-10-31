@@ -77,6 +77,29 @@ test('listen-fire run --poll polls at once; an event a listen has run is not run
   assert.match(none.out, /no listen on a polled source fires 'nope'/);
 });
 
+test('a listen first polled by run --poll is polled by the drains after it', () => {
+  const dir = feedProject();
+  lf(dir, 'run', '--poll', 'seen');
+  assert.deepEqual(polls(dir), [null]);
+  feed(dir, [
+    { id: 'n1', title: 'First', at: 1 },
+    { id: 'n2', title: 'Second', at: 2 },
+    { id: 'n3', title: 'Third', at: 3 },
+  ]);
+  const first = lfAt(dir, ['drain', '--until-idle'], 61_000);
+  assert.match(first.out, /MOVENG_ERROR: seen Third/);
+  feed(dir, [
+    { id: 'n1', title: 'First', at: 1 },
+    { id: 'n2', title: 'Second', at: 2 },
+    { id: 'n3', title: 'Third', at: 3 },
+    { id: 'n4', title: 'Fourth', at: 4 },
+  ]);
+  const second = lfAt(dir, ['drain', '--until-idle'], 200_000);
+  assert.match(second.out, /MOVENG_ERROR: seen Fourth/);
+  assert.equal(polls(dir).length, 3);
+  assert.equal(seen(dir), 4);
+});
+
 test('two drains at once poll a listen once', async () => {
   const dir = feedProject();
   await Promise.all([lfAsync(dir, ['drain', '--until-idle']), lfAsync(dir, ['drain', '--until-idle'])]);

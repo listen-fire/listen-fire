@@ -248,6 +248,13 @@ describe('a listening declaration', () => {
     expect(schemaEntryPointSchema.safeParse({ typeId: 't', displayName: 'T', writable: false, readable: false, delivery: 'pushed' }).success).toBe(false);
   });
 
+  it('refuses a root collection that delivers by scope: nothing comes before it', () => {
+    expect(ticks({ delivery: 'scope' })).toBe(
+      "'Ticks' declares 'delivery: scope', and 'Ticks' is a root collection: nothing comes before it to scope a subscription by",
+    );
+    expect(ticks({ delivery: 'connection' })).toBeUndefined();
+  });
+
   it('refuses a hop cheap to list that says nothing of how its members change', () => {
     expect(ticks({ cheapToList: true })).toBe(
       "'Ticks' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEverySeconds': say how a listen learns its members changed",

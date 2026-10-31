@@ -31,13 +31,15 @@ export interface Note {
  *  named by its `Id` and versioned by `Edited`. `edge-polls.log` holds what
  *  each poll of an edge was handed (`{ edge, filter?, scope?, cursor? }`);
  *  `replay` makes it forget the cursor too.
- *  With `takes` present the feed takes `Title ==` on `Notes`: it applies a
+ *  With `nocursor` present `Notes` declares `cursor: false`: every poll lists
+ *  all of it. With `takes` present the feed takes `Title ==` on `Notes`: it applies a
  *  filter it is handed and says so (`takenApplied`). */
 const FEED_MODULE = `const { readFileSync, appendFileSync, existsSync } = require('node:fs');
 const { join } = require('node:path');
 const { defineModule } = require(${JSON.stringify(join(MODULE_KIT, 'define.ts'))});
 const at = (name) => join(__dirname, name);
 const takes = existsSync(at('takes'));
+const noCursor = existsSync(at('nocursor'));
 const note = {
   typeId: 'note',
   displayName: 'Note',
@@ -66,7 +68,7 @@ const pollEdge = async ({ edge, filter, scope, cursor }) => {
       landing: { recordId: n.id, recordType: 'Note', fields: { Id: n.id, Title: n.title, Edited: n.edited ?? 0 } },
       ...(title === undefined ? {} : { takenApplied: true }),
     })),
-    cursor: JSON.parse(readFileSync(at('feed.json'), 'utf8')).reduce((high, n) => Math.max(high, n.at), since),
+    ...(noCursor ? {} : { cursor: JSON.parse(readFileSync(at('feed.json'), 'utf8')).reduce((high, n) => Math.max(high, n.at), since) }),
   };
 };
 module.exports = defineModule({
@@ -91,7 +93,7 @@ module.exports = defineModule({
         collectionName: 'Notes',
         delivery: 'polled',
         pollEverySeconds: existsSync(at('fast')) ? 1 : 60,
-        cursor: true,
+        cursor: !noCursor,
         identity: 'Id',
         version: 'Edited',
         ...(takes ? { capability: { filter: 'native', supportsLimit: false } } : {}),

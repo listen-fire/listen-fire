@@ -831,6 +831,11 @@ pub fn unreadable_listening(declarant: Declarant, entries: &[Js], descriptors: &
     {
         return Some(format!("'{name}' declares delivery {}, which is none of 'connection', 'scope' or 'polled'", delivery.to_json()));
     }
+    if let Declarant::Entry(_) = declarant
+        && delivery.and_then(Js::as_str) == Some("scope")
+    {
+        return Some(format!("'{name}' declares 'delivery: scope', and '{name}' is a root collection: nothing comes before it to scope a subscription by"));
+    }
     for seconds in ["pollEverySeconds", "relistEverySeconds"] {
         if let Some(value) = declared.get(seconds)
             && !matches!(value, Js::Num(n) if n.as_u64().is_some_and(|s| s > 0))
@@ -1371,6 +1376,15 @@ mod tests {
             ticks_refusal(r#","delivery":"pushed""#).unwrap(),
             r#"'Ticks' declares delivery "pushed", which is none of 'connection', 'scope' or 'polled'"#
         );
+    }
+
+    #[test]
+    fn a_root_collection_cannot_deliver_by_scope() {
+        assert_eq!(
+            ticks_refusal(r#","delivery":"scope""#).unwrap(),
+            "'Ticks' declares 'delivery: scope', and 'Ticks' is a root collection: nothing comes before it to scope a subscription by"
+        );
+        assert_eq!(ticks_refusal(r#","delivery":"connection""#), None);
     }
 
     #[test]

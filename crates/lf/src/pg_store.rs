@@ -1368,7 +1368,8 @@ impl RunHostStore for PgStore {
             "select checkpoint::text from lf.inbound_checkpoint where team_id = $1::text::uuid and subscription_id = $2::text",
             &[&self.tenant, &subscription_id],
         )?;
-        row.map(|r| parse_text(r.get(0))).transpose()
+        // A checkpoint saved as null is a forgotten one, as the state file reads it.
+        Ok(row.map(|r| parse_text(r.get(0))).transpose()?.filter(|checkpoint| *checkpoint != Js::Null))
     }
     fn save_inbound_checkpoint(&self, subscription_id: &str, checkpoint: &Js) -> Result<()> {
         let text = checkpoint.to_json();

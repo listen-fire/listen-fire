@@ -1744,6 +1744,9 @@ export function unreadableListening(
   if (delivery !== undefined && delivery !== 'connection' && delivery !== 'scope' && delivery !== 'polled') {
     return `'${name}' declares delivery ${JSON.stringify(delivery)}, which is none of 'connection', 'scope' or 'polled'`;
   }
+  if ('entry' in declarant && delivery === 'scope') {
+    return `'${name}' declares 'delivery: scope', and '${name}' is a root collection: nothing comes before it to scope a subscription by`;
+  }
   for (const seconds of ['pollEverySeconds', 'relistEverySeconds'] as const) {
     const value: unknown = declared[seconds];
     if (value !== undefined && !(typeof value === 'number' && Number.isInteger(value) && value > 0)) {

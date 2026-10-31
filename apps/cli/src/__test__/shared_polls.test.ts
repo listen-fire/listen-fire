@@ -175,3 +175,43 @@ test('listen-fire run --poll polls a listen\'s edge at once, once for every list
   assert.notEqual(none.code, 0);
   assert.match(none.out, /no listen on a polled source fires 'nope'/);
 });
+
+test('a poll first made by run --poll is polled by the drains after it', () => {
+  const dir = notesProject([A_IS_A]);
+  const armed = lfAt(dir, ['run', '--poll', 'a']);
+  assert.match(armed.out, /armed/);
+  assert.equal(edgePolls(dir).length, 1);
+  feed(dir, [{ id: 'n3', title: 'a', at: 3 }]);
+  const first = lfAt(dir, ['drain', '--until-idle'], 61_000);
+  assert.deepEqual(saw(first.out, 'a'), ['a']);
+  feed(dir, [
+    { id: 'n3', title: 'a', at: 3 },
+    { id: 'n4', title: 'a', at: 4 },
+  ]);
+  const second = lfAt(dir, ['drain', '--until-idle'], 200_000);
+  assert.deepEqual(saw(second.out, 'a'), ['a']);
+  assert.deepEqual(edgePolls(dir), [{ edge: 'Notes' }, { edge: 'Notes', cursor: 2 }, { edge: 'Notes', cursor: 3 }]);
+  assert.equal(runsOf(dir, 'a'), 2);
+});
+
+test('an edge without a cursor lists all of it again: what the arming poll saw is not fired by the next', () => {
+  const dir = notesProject(['listen to f-[n:Notes WHERE n.Title CONTAINS "a"]-> fire a']);
+  writeFileSync(join(dir, 'externals/feed/nocursor'), '');
+  feed(dir, [
+    { id: 'n1', title: 'a1', at: 1 },
+    { id: 'n2', title: 'b', at: 2 },
+  ]);
+  const armed = lfAt(dir, ['drain', '--until-idle']);
+  assert.match(armed.out, /armed; it fires on changes from now/);
+  assert.equal(runsOf(dir, 'a'), 0);
+  feed(dir, [
+    { id: 'n1', title: 'a1', at: 1 },
+    { id: 'n2', title: 'b', at: 2 },
+    { id: 'n3', title: 'a3', at: 3 },
+  ]);
+  const drained = lfAt(dir, ['drain', '--until-idle'], 61_000);
+  // Handed the whole listing again, no cursor: only the new note runs.
+  assert.deepEqual(edgePolls(dir), [{ edge: 'Notes' }, { edge: 'Notes' }]);
+  assert.deepEqual(saw(drained.out, 'a'), ['a3']);
+  assert.equal(runsOf(dir, 'a'), 1);
+});

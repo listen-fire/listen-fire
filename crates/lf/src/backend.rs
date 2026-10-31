@@ -544,6 +544,35 @@ pub struct ModuleProcesses {
 mod tests {
     use super::*;
 
+    /// A checkpoint saved as null is a forgotten one on every store: a poll
+    /// that finds none arms again, and a row that arms by it is not skipped.
+    fn a_null_checkpoint_reads_as_none(store: &dyn RunHostStore) {
+        let subscription = format!("sub-{}", uuid::Uuid::new_v4());
+        assert_eq!(store.inbound_checkpoint(&subscription).unwrap(), None);
+        let kept = Js::parse(br#"{"armed":true,"cursor":"c-2"}"#).unwrap();
+        store.save_inbound_checkpoint(&subscription, &kept).unwrap();
+        assert_eq!(store.inbound_checkpoint(&subscription).unwrap(), Some(kept));
+        store.save_inbound_checkpoint(&subscription, &Js::Null).unwrap();
+        assert_eq!(store.inbound_checkpoint(&subscription).unwrap(), None);
+    }
+
+    #[test]
+    fn a_null_checkpoint_reads_as_none_in_the_state_file() {
+        let dir = std::env::temp_dir().join(format!("lf-backend-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        a_null_checkpoint_reads_as_none(&Store::open(&dir.join("state.db")).unwrap());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Over Postgres when LF_TEST_PG names a database to set up and write into.
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn a_null_checkpoint_reads_as_none_over_postgres() {
+        let Some(url) = std::env::var("LF_TEST_PG").ok().filter(|u| !u.is_empty()) else { return };
+        PgStore::migrate(&url).unwrap();
+        a_null_checkpoint_reads_as_none(&PgStore::connect(&url, POSTGRES_TENANT).unwrap());
+    }
+
     #[test]
     fn a_postgres_url_is_a_postgres_store_and_anything_else_a_state_file() {
         let root = Path::new("/p");

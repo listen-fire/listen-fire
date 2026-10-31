@@ -873,8 +873,9 @@ impl Session {
         Ok(outcomes)
     }
 
-    /// Give each polled listen not yet polled its `poll_listen` work row,
-    /// due now. The row then lives as long as the listen: each poll releases
+    /// Give each polled listen without one its `poll_listen` work row, due
+    /// now. A checkpoint does not stand for the row: `run --poll` polls and
+    /// keeps one without queueing it. The row then lives as long as the listen: each poll releases
     /// it for the next interval, so whichever worker claims it (under the
     /// work lease, so never two at once) polls, and a poll due while no
     /// worker ran is one poll on the next drain. The row is queued only
@@ -883,10 +884,6 @@ impl Session {
     /// another worker holds, which would poll it again at once.
     fn arm_polls(&self, set: &FileSet) -> Result<(), String> {
         for (_, _, subscription) in set.polled_listens() {
-            // Polled before: its row is there, and its checkpoint says so.
-            if self.store.inbound_checkpoint(&subscription).map_err(|e| e.to_string())?.is_some() {
-                continue;
-            }
             let payload = Js::Obj(obj! { "subscription" => Js::str(&subscription) });
             if self.store.enqueue_if_absent(POLL_WORK_KIND, &format!("{POLL_WORK_KIND}:{subscription}"), &payload, None, None).map_err(|e| e.to_string())? {
                 crate::wake::queued(POLL_WORK_KIND, None);
@@ -895,15 +892,12 @@ impl Session {
         Ok(())
     }
 
-    /// Give each shared poll not yet polled its `poll_edge` work row, due
+    /// Give each shared poll without one its `poll_edge` work row, due
     /// now, as `arm_polls` does a listen's: the row then lives as long as
     /// some listen shares its key.
     fn arm_edge_polls(&self, set: &FileSet) -> Result<(), String> {
         for key in crate::edge_polls::polled_keys(set).into_keys() {
             let subscription = crate::edge_polls::poll_subscription(&key);
-            if self.store.inbound_checkpoint(&subscription).map_err(|e| e.to_string())?.is_some() {
-                continue;
-            }
             let mut payload = key.to_js();
             if let Js::Obj(members) = &mut payload {
                 members.insert("subscription".into(), Js::str(&subscription));
@@ -974,6 +968,7 @@ impl Session {
         if state.is_none() {
             let listens: Vec<String> = sharing.iter().map(|i| &set.listens[*i]).map(|l| format!("{}:{}", set.file(&l.file).name, l.movement_name)).collect();
             fired.redelivered.push(format!("{}: {} armed; it fires on changes from now", key.adapter, listens.join(", ")));
+            self.note_seen_arrivals(set, &key.adapter, &arrivals, key.credential.as_deref(), sharing)?;
         } else {
             crate::arrivals::log_and_wake(&*self.store, LOCAL_TENANT, &key.adapter, &crate::arrivals::logged(&arrivals))?;
             let mark = self.store.arrival_mark().map_err(|e| e.to_string())?;
@@ -987,6 +982,22 @@ impl Session {
         }
         self.store.save_inbound_checkpoint(subscription, &Js::Obj(kept)).map_err(|e| e.to_string())?;
         Ok((fired, credential.map(|c| c.name.clone())))
+    }
+
+    /// What an arming poll saw is what each listen sharing it has already
+    /// seen: its receipt is kept, without a run, so an edge with no cursor
+    /// (whose next poll lists all of it again) fires only what is new.
+    fn note_seen_arrivals(&self, set: &FileSet, adapter: &str, arrivals: &[ArrivalIn], credential: Option<&str>, sharing: &[usize]) -> Result<(), String> {
+        let now_ms = self.now_ms() as f64;
+        for arrival in arrivals.iter().filter(|a| !a.gone) {
+            let receipt = arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), arrival.identity.as_deref().unwrap_or_default(), arrival.version.as_deref());
+            for listen in sharing.iter().map(|i| &set.listens[*i]).filter(|l| l.is_on(adapter, &arrival.edge)) {
+                if matches!(listen.fires(arrival, credential, now_ms), Some(Verdict::Fires)) {
+                    self.store.claim_event(&listen.pipeline(), &receipt).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// One poll of one listen's source: `poll({ config, checkpoint? })`, each
