@@ -469,36 +469,6 @@ pub fn plain_value_of(value: &Js) -> Result<Js, EvalError> {
     plain_value(value, &mut Vec::new())
 }
 
-/// The records a walk landed on that `value` holds, each as its position
-/// (`{adapterType, recordType, identity: {kind, recordId, data}}`), in order:
-/// what a host that names records by their ids reads a returned walk as.
-/// Anything else in it says why it is not one.
-pub fn landed_positions(value: &Js) -> Result<Js, String> {
-    let mut positions = Vec::new();
-    collect_positions(value, &mut positions)?;
-    Ok(Js::array(positions))
-}
-
-fn collect_positions(value: &Js, into: &mut Vec<Js>) -> Result<(), String> {
-    match value {
-        Js::Array(list) => list.items().iter().try_for_each(|item| collect_positions(item, into)),
-        Js::Record(binding) => collect_binding_positions(binding, into),
-        other => Err(format!("{} is not a record a walk landed on", describe_held_value(other))),
-    }
-}
-
-fn collect_binding_positions(binding: &Binding, into: &mut Vec<Js>) -> Result<(), String> {
-    match binding {
-        Binding::Landed(landed) => {
-            into.push(landed.position());
-            Ok(())
-        }
-        Binding::Positions(landings) => landings.iter().try_for_each(|landing| collect_binding_positions(landing, into)),
-        Binding::Value(value) => collect_positions(&value.value, into),
-        other => Err(format!("{} is not a record a walk landed on", describe(other))),
-    }
-}
-
 fn plain_value(value: &Js, path: &mut Vec<Binding>) -> Result<Js, EvalError> {
     if let Some(record) = binding_of(value) {
         return plain_record(&record, path);

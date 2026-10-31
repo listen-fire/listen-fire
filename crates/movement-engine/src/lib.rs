@@ -46,6 +46,7 @@ pub mod js_string;
 pub mod js_regex;
 pub mod limits;
 pub mod listen_judge;
+pub mod listen_walk;
 pub mod marks;
 pub mod ledger;
 pub mod local;
@@ -79,7 +80,10 @@ use host::{Family, Request};
 
 /// The segment `start`'s input asks for, by its `entry`:
 ///
-/// - `segment`: a run, executed whole (crate::run says what it runs).
+/// - `segment`: a run, executed whole (crate::run says what it runs);
+/// - `walk`: a segment's input plus `connection` and `hops`, a listen's
+///   earlier hops walked through the program's connections, and the
+///   records they land on (crate::listen_walk).
 ///
 /// Two probes exist in test builds only, so they never ship: `echo` issues
 /// each of `requests` (`{family, method, args}`) at once and finishes with
@@ -108,6 +112,12 @@ pub fn begin(input_text: &str) -> Result<Segment, ProtocolError> {
             let segment: run::SegmentInput =
                 serde_json::from_str(input_text).map_err(|e| ProtocolError(format!("a segment's input does not read: {e}")))?;
             Ok(Segment::new(|host| run::segment(host, segment)))
+        }
+        Some("walk") => {
+            let segment: run::SegmentInput =
+                serde_json::from_str(input_text).map_err(|e| ProtocolError(format!("a walk's input does not read: {e}")))?;
+            let walk: listen_walk::Walk = serde_json::from_str(input_text).map_err(|e| ProtocolError(format!("a walk's input does not read: {e}")))?;
+            Ok(Segment::new(|host| listen_walk::segment(host, segment, walk)))
         }
         #[cfg(test)]
         Some("panic") => {

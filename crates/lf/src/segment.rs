@@ -88,6 +88,9 @@ pub enum Entry {
     Resume { address: String, state: Js, reenter: bool },
     /// A race a batch resume deferred, settled.
     Settle { state: Js, frame_address: String },
+    /// No function runs: the hops of a listen's plan are walked off its
+    /// connection, and the records they land on are read (`read_positions`).
+    Walk { connection: String, hops: Vec<movement_parser::listen_plan::PlanHop> },
 }
 
 /// What a segment runs: the run's facts and how it is entered.
@@ -106,9 +109,6 @@ pub struct SegmentInput<'a> {
     pub entry: Entry,
     /// The run's cost cap in microdollars (lf.yaml's `maxRunCostUsd`); None: no cap.
     pub cost_cap_microdollars: Option<f64>,
-    /// What the movement returns is read as the records a walk landed on,
-    /// each by its position (`read_positions`), not recorded as plain data.
-    pub returns_positions: bool,
 }
 
 /// What a segment that ran came to.
@@ -321,12 +321,12 @@ fn input_text(host: &SegmentHost<'_>, input: &SegmentInput<'_>) -> Result<String
     let mut wire = host.wire.borrow_mut();
     let event = wire.write(&Hv::of_js(input.event));
     let mut segment = serde_json::Map::new();
-    segment.insert("entry".into(), json!("segment"));
+    segment.insert("entry".into(), json!(if matches!(input.entry, Entry::Walk { .. }) { "walk" } else { "segment" }));
     if input.dry_run {
         segment.insert("dryRun".into(), json!(true));
     }
     let (state, reenter, settle) = match &input.entry {
-        Entry::Run => (None, false, None),
+        Entry::Run | Entry::Walk { .. } => (None, false, None),
         Entry::Resume { state, reenter, .. } => (Some(state), *reenter, None),
         Entry::Settle { state, frame_address } => (Some(state), false, Some(frame_address)),
     };
@@ -351,11 +351,17 @@ fn input_text(host: &SegmentHost<'_>, input: &SegmentInput<'_>) -> Result<String
     if let Some(frame_address) = settle {
         segment.insert("settle".into(), json!({ "frameAddress": frame_address }));
     }
+    if let Entry::Walk { connection, hops } = &input.entry {
+        segment.insert("connection".into(), json!(connection));
+        segment.insert("hops".into(), serde_json::to_value(hops).map_err(|e| e.to_string())?);
+    }
     segment.insert("source".into(), json!(input.source));
     segment.insert("nativeCheck".into(), json!(true));
     segment.insert("snapshotModels".into(), input.catalog.get("models").map(json_of_js).unwrap_or(Json::Null));
     segment.insert("languageVersion".into(), json!(input.language_version));
-    segment.insert("movementName".into(), json!(input.movement_name));
+    if !matches!(input.entry, Entry::Walk { .. }) {
+        segment.insert("movementName".into(), json!(input.movement_name));
+    }
     segment.insert("event".into(), event);
     segment.insert("segmentId".into(), json!(host.segment_id));
     let credential_ids: serde_json::Map<String, Json> = input
@@ -378,9 +384,6 @@ fn input_text(host: &SegmentHost<'_>, input: &SegmentInput<'_>) -> Result<String
     segment.insert("now".into(), json!(input.fired_at));
     segment.insert("serves".into(), json!(SERVES));
     segment.insert("recordsReturned".into(), json!(true));
-    if input.returns_positions {
-        segment.insert("returnsPositions".into(), json!(true));
-    }
     segment.insert("extractionFileChars".into(), json!(knob("EXTRACTION_FILE_CHARS", 50_000.0)));
     segment.insert("maxCallDepth".into(), json!(max_call_depth()?));
     segment.insert("limits".into(), segment_limits()?);
@@ -412,32 +415,24 @@ pub async fn run_segment(host: &SegmentHost<'_>, input: SegmentInput<'_>) -> Res
     }
 }
 
-/// Run a segment that only reads, with no run row and nothing committed:
-/// what its movement returned, as the records a walk landed on, each its
-/// position (`{adapterType, recordType, identity: {recordId, data}}`). A
-/// movement that writes, parks or fails says why instead.
+/// Walk a listen's hops (`Entry::Walk`), with no run row and nothing
+/// committed: the records they land on, each its position (`{adapterType,
+/// recordType, identity: {recordId, data}}`). A walk that fails says why
+/// instead.
 pub async fn read_positions(host: &SegmentHost<'_>, input: SegmentInput<'_>) -> Result<Vec<Js>, String> {
-    let input = SegmentInput { returns_positions: true, ..input };
     let text = input_text(host, &input)?;
     let wall_clock = segment_wall_clock()?;
     let done = drive(host, &text, wall_clock).await.map_err(|Fault(message)| message)?;
-    if let Some(error) = done.get("thrown").or_else(|| done.get("failed").and_then(|f| f.get("error"))) {
+    if let Some(error) = done.get("thrown") {
         return Err(match failure_of(host, error) {
             Ended::Failed(message) => message,
             Ended::LeaseLost => "its lease was lost".to_string(),
         });
     }
-    let result = done.get("result").ok_or_else(|| format!("the Rust engine finished with {done}, which this host does not decode"))?;
-    if result.get("parked") == Some(&json!(true)) || host.holds_progress() {
-        return Err("it parked, and a read never waits".into());
-    }
-    if let Some(why) = result.get("returnedUnwritable").and_then(Json::as_str) {
-        return Err(why.to_string());
-    }
-    let returned = result.get("returned").ok_or("it returned nothing")?;
-    match host.wire.borrow_mut().read(returned)?.js() {
+    let landed = done.get("result").and_then(|result| result.get("landed")).ok_or_else(|| format!("the Rust engine finished with {done}, which this host does not decode"))?;
+    match host.wire.borrow_mut().read(landed)?.js() {
         Js::Arr(positions) => Ok(positions),
-        other => Err(format!("it returned {}, not the positions it landed on", other.to_json())),
+        other => Err(format!("the walk answered {}, not the positions it landed on", other.to_json())),
     }
 }
 

@@ -248,7 +248,6 @@ mod tests {
             args: Vec::new(),
             address: Ok(BTreeMap::new()),
             plan,
-            written: None,
         }
     }
 

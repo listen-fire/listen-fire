@@ -178,3 +178,18 @@ test('a module that reports its boards changing re-resolves on each report, neve
   assert.equal(boardLists(dir), 2, reported.out);
   assert.match(listensLine(dir), /watching 2 Boards,/);
 });
+
+test('a file declaring any names of its own resolves its listens as it would without them', () => {
+  const dir = boardsProject([OPS_NOTES], [
+    { id: 'b1', name: 'Ops' },
+    { id: 'b2', name: 'Dev' },
+  ]);
+  // The names listen-fire's read of the boards was once written under.
+  appendFileSync(join(dir, 'movements/notes.mvt'), '\nnode __LfListenRead {\n  at: <text>\n}\n\nfunction __lf_listen_heads(read: <__LfListenRead>) {\n  return 1\n}\n');
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  const opened = lfAt(dir, ['drain', '--until-idle']);
+  assert.ok(!opened.out.includes('LISTEN_RESOLVE_FAILED'), opened.out);
+  assert.deepEqual(polledBoards(dir), ['b1'], 'only the board that matches is polled');
+  assert.match(listensLine(dir), / — watching 1 Board, resolved \d+s ago — ok;/);
+});

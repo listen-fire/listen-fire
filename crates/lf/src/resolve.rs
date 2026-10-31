@@ -32,13 +32,6 @@ use crate::store::iso;
 /// A listen's re-resolution row in the work queue: its next resolve.
 pub const RESOLVE_WORK_KIND: &str = "resolve_listen";
 
-/// The function the read of a listen's earlier hops is run as, appended to
-/// the listen's own file so it reads through the file's connections.
-const READ_FUNCTION: &str = "__lf_listen_heads";
-/// What that function is handed: a function the engine runs takes one
-/// parameter, typed by a node, and the read needs nothing from it.
-const READ_NODE: &str = "__LfListenRead";
-
 /// One record a listen's earlier hops land on, which its last edge is
 /// watched under.
 #[derive(Debug, Clone, PartialEq)]
@@ -114,20 +107,16 @@ pub fn position_of(listen: &Listen) -> String {
     hops.len().checked_sub(2).map(|i| hops[i].to.clone()).unwrap_or_default()
 }
 
-/// The listen's heads: its earlier hops read through the engine, as a walk
-/// in a run reads them (each hop's WHERE, the part its module takes and the
-/// part the engine checks alike), from its own file, with no run row. More
-/// than lf.yaml's `listenScopeLimit` is a failure, never a cut.
+/// The listen's heads: its plan's earlier hops walked through the engine off
+/// its connection, in its own file, as a walk in a run reads them (each
+/// hop's WHERE, the part its module takes and the part the engine checks
+/// alike), with no run row. More than lf.yaml's `listenScopeLimit` is a
+/// failure, never a cut.
 pub async fn resolve_heads(session: &Session, set: &FileSet, listen: &Listen) -> Result<Vec<Head>, ResolveFailure> {
     let plan = listen.plan.as_ref().ok_or_else(|| ResolveFailure::Read("it is not a listen on a traversal".into()))?;
-    let written = listen.written.as_ref().ok_or_else(|| ResolveFailure::Read("listen-fire could not read its traversal as written".into()))?;
-    let earlier = plan.hops.len().saturating_sub(1);
-    let source = format!(
-        "{}\n\nnode {READ_NODE} {{\n  at: <text>\n}}\n\nfunction {READ_FUNCTION}(read: <{READ_NODE}>) {{\n  return {}\n}}\n",
-        set.file(&listen.file).source,
-        written.walk(earlier)
-    );
-    let positions = session.read_positions(set, &source, READ_FUNCTION).await.map_err(ResolveFailure::Read)?;
+    let earlier = &plan.hops[..plan.hops.len().saturating_sub(1)];
+    let source = &set.file(&listen.file).source;
+    let positions = session.read_positions(set, source, &plan.connection, earlier).await.map_err(ResolveFailure::Read)?;
     let mut seen = BTreeSet::new();
     let mut heads = Vec::new();
     for position in positions {
@@ -309,7 +298,6 @@ mod tests {
             args: Vec::new(),
             address: Ok(Default::default()),
             plan: Some(serde_json::from_str(plan).unwrap()),
-            written: None,
         };
         assert_eq!(position_of(&listen), "Board");
         assert_eq!(

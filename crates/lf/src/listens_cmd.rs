@@ -4,7 +4,9 @@
 
 use std::io::Write;
 
-use movement_parser::listen_plan::HopJudged;
+use movement_checker::families::filter_split::spell;
+use movement_checker::families::names::spell_name;
+use movement_parser::listen_plan::{HopJudged, ListenPlan};
 
 use crate::json::Js;
 use crate::resolve::{ListenState, counted, position_of};
@@ -59,10 +61,7 @@ pub fn command(session: &Session, rest: &[String], out: &mut impl Write) -> Resu
 fn line(set: &FileSet, listen: &Listen, state: Option<&ListenState>, now_ms: i64) -> String {
     let Some(plan) = &listen.plan else { return String::new() };
     let alias = plan.alias.as_ref().map(|a| format!(" as \"{a}\"")).unwrap_or_default();
-    let path = match &listen.written {
-        Some(written) => written.walk(written.hops.len()),
-        None => format!("{}{}", plan.connection, plan.hops.iter().map(|h| format!("-[:{}]->", h.edge)).collect::<String>()),
-    };
+    let path = path_of(plan);
     let judged: Vec<&str> = plan
         .hops
         .iter()
@@ -84,6 +83,17 @@ fn line(set: &FileSet, listen: &Listen, state: Option<&ListenState>, now_ms: i64
         false => format!("; can't be protected from loops: {} names no record its arrivals are about", listen.adapter),
     };
     format!("{}:{}{alias} — {path} — {} — {watching} — {standing}{unprotected}", listen.file, listen.movement_name, judged.join(", "))
+}
+
+/// The listen's traversal as its plan holds it, each hop's WHERE whole
+/// (`f-[b:Boards WHERE b.Name == "Ops"]->-[n:Notes]->`).
+fn path_of(plan: &ListenPlan) -> String {
+    let hops = plan.hops.iter().map(|hop| {
+        let alias = hop.alias.as_deref();
+        let filter = hop.filter().map(|filter| format!(" WHERE {}", spell(&filter, alias))).unwrap_or_default();
+        format!("-[{}:{}{filter}]->", alias.map(spell_name).unwrap_or_default(), spell_name(&hop.edge))
+    });
+    format!("{}{}", spell_name(&plan.connection), hops.collect::<String>())
 }
 
 /// Whether the listened edge's arrivals name the record they are about
@@ -117,5 +127,19 @@ mod tests {
         assert_eq!(ago("2026-10-31T07:00:00.000Z", now), "3h ago");
         assert_eq!(ago("2026-10-29T10:00:00.000Z", now), "2d ago");
         assert_eq!(ago("soon", now), "at soon");
+    }
+
+    /// The path is said from the plan, each hop's WHERE whole again (the
+    /// part its module takes, then the part checked).
+    #[test]
+    fn a_listens_path_is_said_from_its_plan() {
+        let compare = |field: &str, value: &str| format!(r#"{{"type":"compare","op":"eq","left":{{"type":"property","propertyTypeId":"{field}","fieldOnly":true}},"right":{{"type":"static","value":"{value}"}}}}"#);
+        let plan = format!(
+            r#"{{"movement":"a","connection":"f","adapter":"feed","hops":[{{"edge":"Boards","from":"","to":"Board","alias":"b","taken":{},"checked":{},"judged":"resolved"}},{{"edge":"Open Notes","from":"Board","to":"Note","judged":"arrival"}}]}}"#,
+            compare("Name", "Ops"),
+            compare("Kind", "team")
+        );
+        let plan: ListenPlan = serde_json::from_str(&plan).unwrap();
+        assert_eq!(path_of(&plan), r#"f-[b:Boards WHERE b.Name == "Ops" AND b.Kind == "team"]->-[:`Open Notes`]->"#);
     }
 }

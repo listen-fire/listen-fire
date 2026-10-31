@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::lowering::expression::Expression;
+use crate::lowering::expression::{Expression, LogicalOp};
 
 /// One listen, as the host watches it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -91,6 +91,17 @@ pub struct PlanHop {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owned: Vec<String>,
     pub judged: HopJudged,
+}
+
+impl PlanHop {
+    /// Its WHERE whole again: the part its module takes AND the part the
+    /// host checks.
+    pub fn filter(&self) -> Option<Expression> {
+        match (self.taken.clone(), self.checked.clone()) {
+            (Some(taken), Some(checked)) => Some(Expression::Logical { op: LogicalOp::And, operands: vec![taken, checked] }),
+            (taken, checked) => taken.or(checked),
+        }
+    }
 }
 
 /// How the host honours a hop's filter.

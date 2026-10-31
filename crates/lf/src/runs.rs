@@ -1325,7 +1325,6 @@ impl Session {
             trigger_mark: facts.trigger_mark,
             entry,
             cost_cap_microdollars: self.project.cost_cap_microdollars,
-            returns_positions: false,
         };
         let ran = run_segment(&host, input).await;
         self.remember_writes(run_id, &host.adapters.wrote.borrow());
@@ -1334,11 +1333,11 @@ impl Session {
         Ok((ran, committed))
     }
 
-    /// What the function `movement` of `source` returns, read as the records
-    /// a walk landed on (crate::segment::read_positions): run through the
-    /// engine as a run's segment is, against the set's connections, with no
-    /// run row and nothing kept.
-    pub async fn read_positions(&self, set: &FileSet, source: &str, movement: &str) -> Result<Vec<Js>, String> {
+    /// The records `hops` land on off `connection` in `source`
+    /// (crate::segment::read_positions): walked through the engine as a
+    /// run's walk is, against the set's connections, with no run row and
+    /// nothing kept.
+    pub async fn read_positions(&self, set: &FileSet, source: &str, connection: &str, hops: &[movement_parser::listen_plan::PlanHop]) -> Result<Vec<Js>, String> {
         let secrets = self.secrets();
         let externals = self.externals_in(set, &secrets);
         let segment_id = uuid::Uuid::new_v4().to_string();
@@ -1359,15 +1358,14 @@ impl Session {
         let input = SegmentInput {
             source,
             language_version: &self.project.language_version,
-            movement_name: movement,
+            movement_name: "",
             event: &Js::Obj(Obj::new()),
             fired_at: &fired_at,
             catalog: &set.catalog,
             dry_run: false,
             trigger_mark: None,
-            entry: Entry::Run,
+            entry: Entry::Walk { connection: connection.to_string(), hops: hops.to_vec() },
             cost_cap_microdollars: self.project.cost_cap_microdollars,
-            returns_positions: true,
         };
         crate::segment::read_positions(&host, input).await
     }
@@ -2516,7 +2514,7 @@ mod tests {
     }
 
     fn polled(config: Obj) -> Listen {
-        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None, args: Vec::new(), payload: None, address: Ok(Default::default()), plan: None, written: None }
+        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None, args: Vec::new(), payload: None, address: Ok(Default::default()), plan: None }
     }
 
     #[test]
