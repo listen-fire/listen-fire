@@ -357,9 +357,11 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
   /** A wait a delivery opens for a run it queues; its trigger's own arrival
    *  noted as judged, not matched, so it never answers its own run. */
   const openDeliveryWait = (teamId: string, adapterType: string, wait: DeliveryWait, since: number): void => {
+    const opened = waits.size;
     const waitId = openWait({ runId: wait.runId, teamId, adapterType, edge: wait.edge, key: wait.key, since, fireKey: wait.fireKey });
+    // Only a wait this write opened has its trigger noted, as the other stores do.
     const noted = wait.preNoted;
-    if (noted !== undefined) notes.push({ waitId, identity: noted.identity, version: noted.version, matched: false, leaf: null });
+    if (noted !== undefined && waits.size > opened) notes.push({ waitId, identity: noted.identity, version: noted.version, matched: false, leaf: null });
   };
   /** A wait its run opened lives as long as its run's state; one a delivery
    *  opened, while its run exists or its `fire_event` row is queued. */
@@ -376,6 +378,11 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
   const dropWaits = (ids: ReadonlySet<string>): void => {
     notes = notes.filter((n) => !ids.has(n.waitId));
     for (const id of ids) waits.delete(id);
+  };
+  /** The waits a delivery opened under the `fire_event` row `fireKey` for
+   *  runs that never started: they read for nobody once the row is done. */
+  const dropUnstartedWaits = (fireKey: string): void => {
+    dropWaits(new Set([...waits.values()].filter((wait) => wait.fireKey === fireKey && !runs.has(wait.runId)).map((wait) => wait.id)));
   };
 
   return {
@@ -626,6 +633,9 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
 
     async keepDelivery(input: KeepDelivery): Promise<KeptDelivery> {
       const { subscriptionId, delivery, arrivals } = input;
+      if (arrivals === undefined && (input.waits?.length ?? 0) > 0) {
+        throw new Error('inbound.keepDelivery: `waits` came without `arrivals`; a delivery\'s waits are opened with its arrivals, under their team and adapter');
+      }
       if (delivery.externalId !== undefined && delivery.externalId !== null) {
         const id = JSON.stringify([subscriptionId, delivery.externalId]);
         if (deliveryIds.has(id)) return { kept: false };
@@ -648,11 +658,19 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
     async bury({ key, claim }) {
       const row = work.get(key);
       if (row === undefined || row.claim !== claim) return;
-      row.dead = true;
       row.claim = undefined;
       row.leasedUntil = 0;
-      // The waits it opened for runs that never started read for nobody.
-      dropWaits(new Set([...waits.values()].filter((wait) => wait.fireKey === key && !runs.has(wait.runId)).map((wait) => wait.id)));
+      // Re-armed since the claim: the re-arm stands, only unleased.
+      if (row.armed !== row.armedAtClaim) return;
+      row.dead = true;
+      dropUnstartedWaits(key);
+    },
+    async completeKey({ key }) {
+      const row = work.get(key);
+      if (row === undefined || row.dead || (row.claim !== undefined && row.leasedUntil > now())) return false;
+      work.delete(key);
+      dropUnstartedWaits(key);
+      return true;
     },
   };
 }

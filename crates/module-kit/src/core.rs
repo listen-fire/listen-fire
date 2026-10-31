@@ -656,6 +656,10 @@ slot! {
         /// `kinds` (a drain pool's) leases only rows of those kinds; absent, every kind.
         "work.claimDue" => fn claim_due(WorkClaimDue { limit: i64, lease_ms: i64, due_by: Option<String>, kinds: Option<Vec<String>> }) -> Vec<ClaimedWork>;
         "work.complete" => fn complete_work(WorkComplete { id: String, claim: String }) -> ();
+        /// A row its caller queued a run lease out and ran itself, done:
+        /// deleted unless a live claim holds it, with the waits opened under
+        /// its key for runs that never started. Whether it was deleted.
+        "work.completeKey" => fn complete_work_key(WorkCompleteKey { key: String }) -> bool;
         /// `why` absent is `failed`.
         "work.release" => fn release_work(WorkRelease { id: String, claim: String, due_at: Option<String>, #[serde(default)] why: ReleaseWhy }) -> ();
         /// Never claimed again, kept with `reason`, unless re-armed since the claim.

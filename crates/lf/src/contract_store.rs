@@ -35,7 +35,7 @@ pub const STORE_METHODS: &[&str] = &[
     "joins.frames", "joins.deleteFrames", "leases.claim", "leases.renew", "leases.release", "leases.dropRunState", "work.enqueue", "work.claimDue",
     "work.complete", "work.release", "sources.put", "sources.get", "inbound.checkpoint", "inbound.saveCheckpoint", "listens.states", "listens.claimResolve", "listens.saveResolution", "listens.setPaused", "processes.list",
     "processes.swap", "events.claim", "events.startRun", "runs.lapsed", "parks.commit", "work.bury", "inbound.keepDelivery",
-    "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries", "inbound.forgetDeliveryId", "work.enqueueIfAbsent",
+    "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries", "inbound.forgetDeliveryId", "work.enqueueIfAbsent", "work.completeKey",
     "runs.rerun", "waits.mark", "waits.log", "waits.open", "waits.arrivals", "waits.note", "waits.sweep", "waits.stranded",
 ];
 
@@ -395,6 +395,7 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
             store.complete(p.str("id")?, p.str("claim")?)?;
             none
         }
+        "work.completeKey" => Ok(Js::Bool(store.complete_key(p.str("key")?)?)),
         "work.release" => {
             store.release_work(p.str("id")?, p.str("claim")?, p.opt_str("dueAt")?, Release::of_wire(p.opt_str("why")?)?)?;
             none
@@ -645,6 +646,7 @@ mod tests {
             "parks.commit",
             "parks.owedRaces",
             "work.bury",
+            "work.completeKey",
             "inbound.keepDelivery",
             "inbound.deliveries",
             "inbound.delivery",

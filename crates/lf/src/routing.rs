@@ -1041,7 +1041,18 @@ mod tests {
 
     #[test]
     fn a_delivery_through_a_subscription_reaches_only_the_listens_of_its_scope() {
-        let mut listen = Listen { file: "f".into(), adapter: "airtable".into(), config: Obj::new(), movement_name: "m".into(), credential: Some("acme".into()), args: vec![], payload: None, address: Ok(BTreeMap::new()), plan: None , trigger_awaits: Vec::new()};
+        let mut listen = Listen {
+            file: "f".into(),
+            adapter: "airtable".into(),
+            config: Obj::new(),
+            movement_name: "m".into(),
+            credential: Some("acme".into()),
+            args: vec![],
+            payload: None,
+            address: Ok(BTreeMap::new()),
+            plan: None,
+            trigger_awaits: Vec::new(),
+        };
         listen.config.insert("base".into(), Js::str("appH"));
         listen.config.insert("table".into(), Js::str("tblC"));
         let keys = ["base".to_string(), "table".to_string()];

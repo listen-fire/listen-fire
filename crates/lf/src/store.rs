@@ -1343,6 +1343,18 @@ impl Store {
         })
     }
 
+    /// crate::backend::RunHostStore::complete_key: deleted unless a live
+    /// claim holds it, with the waits it opened for runs never started.
+    pub fn complete_key(&self, key: &str) -> Result<bool> {
+        self.transaction(|db| {
+            let done = db.execute("delete from work where key = ? and dead_at is null and (lease_until is null or lease_until < ?)", params![key, iso(0)])?;
+            if done > 0 {
+                Self::drop_unstarted_waits_in(db, key)?;
+            }
+            Ok(done > 0)
+        })
+    }
+
     pub fn release_work(&self, id: &str, claim: &str, due_at: Option<&str>, why: Release) -> Result<()> {
         let (lease_token, version) = work_claim(claim)?;
         let attempts = match why {

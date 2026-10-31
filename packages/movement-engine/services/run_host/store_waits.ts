@@ -316,6 +316,11 @@ async function runCase({ store, runRows, deliveries }: StoreWaitsBackend, steps:
         await deliveries.bury({ ...row, reason: 'gave up' });
         break;
       }
+      case 'completeKey': {
+        const key = fireKeyOf(names, step);
+        assert.equal(await deliveries.completeKey({ key }), step.expect === true, `${at}: whether ${key} was completed`);
+        break;
+      }
       case 'stranded': {
         const got = (await store.waits.stranded({ runId: runId() })).map((wait) => names.stranded(wait, false));
         const expected = items(step, 'waits').map((want) => ({ wait: field(want, 'wait'), edge: field(want, 'edge'), key: field(want, 'key'), parked: field(want, 'parked') }));

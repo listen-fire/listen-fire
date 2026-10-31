@@ -197,6 +197,16 @@ pub struct PreNoted {
     pub version: Option<String>,
 }
 
+/// A delivery's waits read from the mark before its arrivals, under their
+/// team and adapter: waits sent without arrivals are refused by name, not
+/// dropped.
+pub fn refuse_waits_without_arrivals(arrivals: Option<&DeliveryArrivals<'_>>, waits: &[DeliveryWait]) -> crate::store::Result<()> {
+    match (arrivals, waits) {
+        (None, [_, ..]) => Err(crate::store::StoreError::Invalid("inbound.keepDelivery: `waits` came without `arrivals`; a delivery's waits are opened with its arrivals, under their team and adapter".into())),
+        _ => Ok(()),
+    }
+}
+
 /// The work rows a kept delivery's arrivals change and add: each
 /// `fire_event` row carries `mark`, the mark before the delivery's own
 /// arrivals, as its `arrivalMark` (a run it starts reads its waits'
@@ -473,16 +483,14 @@ impl Store {
     /// run's trigger noted as judged.
     pub(crate) fn open_delivery_waits_in(db: &Connection, team_id: &str, adapter_type: &str, waits: &[DeliveryWait], since: i64) -> Result<()> {
         for wait in waits {
-            db.execute(
+            let id = uuid::Uuid::new_v4().to_string();
+            let opened = db.execute(
                 "insert into wait_row (id, run_id, team_id, adapter_type, edge, key, since, fire_key) values (?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
-                params![uuid::Uuid::new_v4().to_string(), wait.run_id, team_id, adapter_type, wait.edge, wait.key, since, wait.fire_key],
+                params![id, wait.run_id, team_id, adapter_type, wait.edge, wait.key, since, wait.fire_key],
             )?;
-            if let Some(PreNoted { identity, version }) = &wait.pre_noted {
-                db.execute(
-                    "insert into wait_seen (wait_id, identity, version, matched, leaf)
-                       select id, ?, ?, 0, null from wait_row where run_id = ? and team_id = ? and adapter_type = ? and edge = ? and key is ?",
-                    params![identity, version, wait.run_id, team_id, adapter_type, wait.edge, wait.key],
-                )?;
+            // Only a wait this write opened has its trigger noted.
+            if let (1, Some(PreNoted { identity, version })) = (opened, &wait.pre_noted) {
+                db.execute("insert into wait_seen (wait_id, identity, version, matched, leaf) values (?, ?, ?, 0, null)", params![id, identity, version])?;
             }
         }
         Ok(())
@@ -556,9 +564,10 @@ impl Store {
 /// lease's, so what arrives while it runs is above it.
 const FLOOR: &str = "select coalesce((select min(lease_mark) from run where lease_until > ?1 and lease_mark is not null), (select coalesce(max(seq), 0) from arrival))";
 
-/// Whether the wait `w` is live: its run exists, or the `fire_event` row
-/// that queues it (a wait a delivery opened) is there, not buried.
-const LIVE: &str = "exists (select 1 from run r where r.id = w.run_id) or exists (select 1 from work q where q.key = w.fire_key and q.dead_at is null)";
+/// Whether the wait `w` is live: one its run opened lives as long as its
+/// run's state; one a delivery opened (`fire_key`), while its run exists or
+/// the `fire_event` row that queues it is there, not buried.
+const LIVE: &str = "w.fire_key is null or exists (select 1 from run r where r.id = w.run_id) or exists (select 1 from work q where q.key = w.fire_key and q.dead_at is null)";
 
 /// The instant `ms` after `at`, as `iso` writes it.
 fn iso_after(at: &str, ms: i64) -> Result<String> {
@@ -954,6 +963,11 @@ mod tests {
                     let row = claim_rows(&team, "fire_event").into_iter().find(|row| row.key == key).unwrap_or_else(|| panic!("{at}: {key} is not queued"));
                     store.bury_work(&row.id, &row.claim, "gave up").unwrap();
                 }
+                "completeKey" => {
+                    let key = format!("fire_event:{}", names.id(text(step, "fire")));
+                    let expect = step.get("expect") == Some(&Js::Bool(true));
+                    assert_eq!(store.complete_key(&key).unwrap(), expect, "{at}: whether {key} was completed");
+                }
                 "stranded" => {
                     let run = names.id(text(step, "run"));
                     let got: Vec<Js> = store.stranded_waits(&StrandedOf::Run(&run)).unwrap().iter().map(|wait| names.stranded(wait, false)).collect();
@@ -1030,8 +1044,33 @@ mod tests {
         a_race_a_segment_owes_is_kept_in_its_commit_until_the_commit_that_settles_it_and_goes_with_its_frame,
         an_arrival_resent_after_its_entry_was_swept_is_a_repeat_within_the_modules_window,
         a_running_steps_mark_keeps_arrivals_above_it_from_the_sweep,
+        the_floor_is_the_lowest_mark_the_running_steps_took,
         a_mark_the_callers_own_running_steps_hold_keeps_arrivals_above_it_from_the_sweep,
-        a_wait_opened_at_delivery_keeps_arrivals_until_its_run_ends_or_its_fire_row_is_buried,
+        a_wait_opened_at_delivery_keeps_arrivals_until_its_run_ends_and_burying_its_fire_row_drops_those_of_runs_that_never_started,
+        a_fire_row_its_caller_ran_and_completed_by_key_drops_the_waits_of_runs_that_never_started,
+    }
+
+    /// The identities a store keeps are not read through the slot once
+    /// their window has passed (a repeat is judged against the unexpired
+    /// ones), so the state file is looked at here: the sweep forgets them.
+    #[test]
+    fn the_sweep_forgets_an_identity_once_its_re_send_window_has_passed() {
+        let store = state_file();
+        let arrival = |identity: &str| NewArrival { edge: "Charges".into(), key: "cus_1".into(), identity: Some(identity.into()), version: None, landing: None, gone: false };
+        let log = |identity: &str, at_ms: i64| {
+            let at = iso(at_ms);
+            let arrivals = [arrival(identity)];
+            store.log_arrivals(&DeliveryArrivals { team_id: "t", adapter_type: "acme", arrivals: &arrivals, at: &at, resend_window_ms: 3_600_000 }).unwrap();
+        };
+        log("lapsed", -7_200_000);
+        log("held", 0);
+        let kept = || -> Vec<String> {
+            let mut select = store.db.prepare("select identity from arrival_identity order by identity").unwrap();
+            select.query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        assert_eq!(kept(), ["held", "lapsed"]);
+        store.sweep_arrivals(10, None).unwrap();
+        assert_eq!(kept(), ["held"]);
     }
 
     #[test]

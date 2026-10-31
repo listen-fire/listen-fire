@@ -433,7 +433,8 @@ export interface KeepDelivery {
   /** Logged as `waits.log` logs them, its wakes queued in the write. */
   arrivals?: DeliveryArrivals;
   /** Opened before the arrivals are logged, from the mark before them; only
-   *  with `arrivals` (whose team and adapter they are). */
+   *  with `arrivals` (whose team and adapter they are): sent without them,
+   *  the store refuses the write. */
   waits?: readonly DeliveryWait[];
 }
 
@@ -453,6 +454,11 @@ export interface DeliveryRowStore {
    *  claimed again. Burying a `fire_event` row drops the waits a delivery
    *  opened for the runs it queued that never started. */
   bury(work: ClaimedWork & { reason: string }): Promise<void>;
+  /** A row its caller queued a run lease out (so a drain takes it only if
+   *  the caller died) and ran itself, done (`work.completeKey`): deleted,
+   *  unless a live claim holds it, and with it the waits it opened for runs
+   *  that never started. Whether it was deleted. */
+  completeKey(input: { key: string }): Promise<boolean>;
 }
 
 /**

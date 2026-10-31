@@ -172,7 +172,7 @@ export class RpcStoreBackend {
     this.store = this.families();
     this.runRows = this.runRowFamily();
     this.runs = this.runRecords();
-    this.deliveryRows = { keepDelivery: (input) => this.keepDelivery(input), bury: (work) => this.buryWork(work) };
+    this.deliveryRows = { keepDelivery: (input) => this.keepDelivery(input), bury: (work) => this.buryWork(work), completeKey: (input) => this.completeKey(input) };
   }
 
   /** One call; its result read by `schema`. A fenced write refused because
@@ -233,6 +233,11 @@ export class RpcStoreBackend {
   /** Give up on a claimed row (`work.bury`). */
   async buryWork(work: ClaimedWork & { reason: string }): Promise<void> {
     await this.call('work.bury', { id: work.id, claim: work.claim, reason: work.reason }, Nothing);
+  }
+
+  /** Done with a row its caller ran itself (`work.completeKey`). */
+  completeKey(input: { key: string }): Promise<boolean> {
+    return this.call('work.completeKey', input, z.boolean());
   }
 
   /** Kept deliveries, most recent first, without their events. */

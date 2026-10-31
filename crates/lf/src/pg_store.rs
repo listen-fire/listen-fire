@@ -1197,9 +1197,9 @@ impl RunHostStore for PgStore {
     }
 
     /// The floor: the lowest mark an unexpired run lease took, else the
-    /// latest seq. A wait is live while its run exists, or while the
-    /// `fire_event` row that queues it (a wait a delivery opened) is there,
-    /// not buried.
+    /// latest seq. A wait its run opened lives as long as its run's state;
+    /// one a delivery opened (`fire_key`), while its run exists or the
+    /// `fire_event` row that queues it is there, not buried.
     fn sweep_arrivals(&self, limit: i64, floor: Option<i64>) -> Result<i64> {
         self.transaction(|| {
             let swept = self.execute(
@@ -1210,7 +1210,7 @@ impl RunHostStore for PgStore {
                      and ($2::int8 is null or a.seq <= $2::int8)
                      and not exists (select 1 from lf.wait_row w
                        where w.team_id = a.team_id and w.adapter_type = a.adapter_type and w.edge = a.edge and w.key = a.key and w.since < a.seq
-                         and (exists (select 1 from lf.trigger_run r where r.id = w.run_id)
+                         and (w.fire_key is null or exists (select 1 from lf.trigger_run r where r.id = w.run_id)
                               or exists (select 1 from lf.work q where q.key = w.fire_key and q.dead_at is null)))
                    order by a.seq limit $1::int8)",
                 &[&limit, &floor],
@@ -1361,6 +1361,24 @@ impl RunHostStore for PgStore {
         Ok(())
     }
 
+    /// Deleted unless a live claim holds it, with the waits it opened for
+    /// runs that never started.
+    fn complete_key(&self, key: &str) -> Result<bool> {
+        self.transaction(|| {
+            let done = self.execute(
+                "delete from lf.work where key = $1::text and dead_at is null and (lease_until is null or lease_until < now())",
+                &[&key],
+            )?;
+            if done > 0 {
+                self.execute(
+                    "delete from lf.wait_row w where w.fire_key = $1::text and not exists (select 1 from lf.trigger_run r where r.id = w.run_id)",
+                    &[&key],
+                )?;
+            }
+            Ok(done > 0)
+        })
+    }
+
     /// Unleased for a retry at `due_at`, unless re-armed since the claim. A
     /// busy run's release gives the attempt back (`deferWork`).
     fn release_work(&self, id: &str, claim: &str, due_at: Option<&str>, why: Release) -> Result<()> {
@@ -1495,6 +1513,7 @@ impl RunHostStore for PgStore {
         arrivals: Option<&DeliveryArrivals<'_>>,
         waits: &[DeliveryWait],
     ) -> Result<Option<KeptDelivery>> {
+        crate::waits::refuse_waits_without_arrivals(arrivals, waits)?;
         let events = Js::Arr(delivery.events.clone()).to_json();
         let event_count = i64::try_from(delivery.events.len()).unwrap_or(i64::MAX);
         self.transaction(|| {

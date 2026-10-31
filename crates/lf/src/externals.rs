@@ -873,6 +873,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn lf_yaml_s_resend_window_for_a_module_wins_over_its_manifest_s_which_wins_over_the_hour() {
+        let root = std::env::temp_dir().join(format!("lf-resend-{}", uuid::Uuid::new_v4()));
+        crate::init::run(&root, &mut Vec::new()).unwrap();
+        let lf = root.join("lf.yaml");
+        std::fs::write(&lf, format!("{}resendWindow:\n  stripe: 7d\n", std::fs::read_to_string(&lf).unwrap())).unwrap();
+        let project = crate::project::load_project(&root).unwrap();
+        let declares = |seconds: u64| Js::Obj(crate::obj! { "resendWindowSeconds" => Js::Num(seconds.into()) });
+        assert_eq!(resend_window_ms(&project, "stripe", &declares(259_200)), 7 * 86_400_000, "lf.yaml's, over the manifest's three days");
+        assert_eq!(resend_window_ms(&project, "acme", &declares(120)), 120_000, "the manifest's, where lf.yaml names none");
+        assert_eq!(resend_window_ms(&project, "acme", &Js::Null), DEFAULT_RESEND_WINDOW_MS);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn lf_in_a_module_env_is_the_modules_own_folder() {
         let env: BTreeMap<String, String> = [("STATE".to_string(), "{lf}/state.json".to_string()), ("PLAIN".to_string(), "x".to_string())].into();
         let resolved = module_env(&env, Path::new("/p/.lf/externals/acme"));

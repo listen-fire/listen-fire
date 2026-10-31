@@ -25,6 +25,7 @@
 //! `wake_await` rows in listen-fire's state, drained by `listen-fire serve`.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use rusqlite::{OptionalExtension, params};
 
@@ -147,6 +148,16 @@ pub enum EventSink<'a> {
     Inline { session: &'a Session, fired: &'a RefCell<Fired> },
 }
 
+/// What landed for a delivery's traversal listens, run inside the request
+/// (`run_inline`): the `fire_event` row `row_key` that holds it was kept with
+/// the delivery, and is completed once it ran.
+struct LandedHere<'r> {
+    external: &'r str,
+    came_for: Delivered<'r>,
+    arrivals: &'r [ArrivalIn],
+    row_key: &'r str,
+}
+
 /// listen-fire's side of the core's two store interfaces (`createLfInboundStores`).
 pub struct LfDoors<'a, R: Reader> {
     pub store: &'a dyn RunHostStore,
@@ -201,15 +212,18 @@ impl<R: Reader> LfDoors<'_, R> {
     /// The runs `landed` fires on the connection it came for, each minted
     /// now as `{ pipeline, receipt, runId }`, and the waits each opens on its
     /// trigger as the delivery is kept: one per edge its fired function waits
-    /// on off its parameter, keyed by the module's `awaitKeys`. A wait on the
+    /// on off its parameter, keyed by the module's `awaitKeys`, asked once
+    /// per edge and connection for every trigger on it. A wait on the
     /// trigger's own edge and record has the trigger noted on it, so the run
     /// is never answered by the arrival that started it; any other arrival of
     /// the delivery may answer it. A run judged here that the drain does not
     /// start has its waits dropped there.
     pub(crate) async fn mint_runs(&self, adapter_type: &str, install: Option<&str>, credential: Option<&str>, landed: &[ArrivalIn]) -> Result<(Js, Vec<DeliveryWait>), String> {
-        let (mut minted, mut waits) = (Vec::new(), Vec::new());
+        // Each wait owed: its run, its edge, the connection that asks, and its trigger (by index).
+        let mut owed: Vec<(String, &str, Option<&Credential>, usize)> = Vec::new();
+        let mut minted = Vec::new();
         let now_ms = crate::limiter::now_ms() as f64;
-        for arrival in landed {
+        for (index, arrival) in landed.iter().enumerate() {
             let identity = arrival.identity.as_deref().unwrap_or_default();
             for listen in self.listens.iter().filter(|l| l.is_on(adapter_type, &arrival.edge) && l.hears(credential)) {
                 if !matches!(listen.fires(arrival, credential, now_ms), Some(movement_engine::listen_judge::Verdict::Fires)) {
@@ -218,20 +232,44 @@ impl<R: Reader> LfDoors<'_, R> {
                 let run_id = uuid::Uuid::new_v4().to_string();
                 let receipt = crate::arrivals::arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), identity, arrival.version.as_deref());
                 minted.push(Js::Obj(obj! { "pipeline" => Js::str(listen.pipeline()), "receipt" => Js::str(receipt), "runId" => Js::str(&run_id) }));
-                let Some(head) = trigger_head(arrival) else { continue };
-                let caller = listen.credential.as_deref().or(install).map(|name| self.install(name).ok_or_else(|| format!("no install {name}"))).transpose()?;
-                for edge in &listen.trigger_awaits {
-                    let Some(answer) = self.reader.await_keys(adapter_type, caller, edge, Js::Arr(vec![head.clone()])).await? else { continue };
-                    let key = match answer.as_array().and_then(|keys| keys.first()) {
-                        Some(one) if one.get("gone") == Some(&Js::Bool(true)) => None,
-                        Some(one) => Some(one.get("key").and_then(Js::as_str).filter(|k| !k.is_empty()).ok_or_else(|| format!("{}: awaitKeys answered {}, not {{ key }} or {{ gone: true }}", adapter_type, answer.to_json()))?.to_string()),
-                        None => return Err(format!("{}: awaitKeys answered {}, not one key per head", adapter_type, answer.to_json())),
-                    };
-                    let own = key.is_some() && *edge == arrival.edge && key == arrival.key;
-                    let pre_noted = own.then(|| arrival.identity.clone().map(|identity| PreNoted { identity, version: arrival.version.clone() })).flatten();
-                    waits.push(DeliveryWait { run_id: run_id.clone(), edge: edge.clone(), key, pre_noted, fire_key: String::new() });
+                if trigger_head(arrival).is_none() {
+                    continue;
                 }
+                let caller = listen.credential.as_deref().or(install).map(|name| self.install(name).ok_or_else(|| format!("no install {name}"))).transpose()?;
+                owed.extend(listen.trigger_awaits.iter().map(|edge| (run_id.clone(), edge.as_str(), caller, index)));
             }
+        }
+        // One `awaitKeys` per edge and connection, its heads each trigger once.
+        let mut keys: HashMap<(Option<&str>, &str, usize), Option<String>> = HashMap::new();
+        let mut asked: Vec<(Option<&Credential>, &str, Vec<usize>)> = Vec::new();
+        for (_, edge, caller, index) in &owed {
+            let name = caller.map(|c| c.name.as_str());
+            match asked.iter_mut().find(|(c, e, _)| c.map(|c| c.name.as_str()) == name && e == edge) {
+                Some((_, _, heads)) if heads.contains(index) => {}
+                Some((_, _, heads)) => heads.push(*index),
+                None => asked.push((*caller, edge, vec![*index])),
+            }
+        }
+        for (caller, edge, heads) in &asked {
+            let ask = Js::Arr(heads.iter().filter_map(|i| trigger_head(&landed[*i])).collect());
+            let Some(answer) = self.reader.await_keys(adapter_type, *caller, edge, ask).await? else { continue };
+            let answered = answer.as_array().filter(|keys| keys.len() == heads.len()).ok_or_else(|| format!("{}: awaitKeys answered {}, not one key per head", adapter_type, answer.to_json()))?;
+            for (index, one) in heads.iter().zip(answered) {
+                let key = match one.get("gone") == Some(&Js::Bool(true)) {
+                    true => None,
+                    false => Some(one.get("key").and_then(Js::as_str).filter(|k| !k.is_empty()).ok_or_else(|| format!("{}: awaitKeys answered {}, not {{ key }} or {{ gone: true }}", adapter_type, one.to_json()))?.to_string()),
+                };
+                keys.insert((caller.map(|c| c.name.as_str()), edge, *index), key);
+            }
+        }
+        let mut waits = Vec::new();
+        for (run_id, edge, caller, index) in owed {
+            // A module that offers no `awaitKeys` opens no wait here.
+            let Some(key) = keys.get(&(caller.map(|c| c.name.as_str()), edge, index)).cloned() else { continue };
+            let arrival = &landed[index];
+            let own = key.is_some() && edge == arrival.edge && key == arrival.key;
+            let pre_noted = own.then(|| arrival.identity.clone().map(|identity| PreNoted { identity, version: arrival.version.clone() })).flatten();
+            waits.push(DeliveryWait { run_id, edge: edge.to_string(), key, pre_noted, fire_key: String::new() });
         }
         Ok((Js::Arr(minted), waits))
     }
@@ -248,7 +286,7 @@ impl<R: Reader> LfDoors<'_, R> {
     /// its receipt, then what `landed` for its connection's traversal
     /// listens. One event's failure never stops the next; any failure is
     /// the delivery's, answered 500 for its sender to send again.
-    async fn run_inline(&self, receipt: &NewDelivery, mark: i64, landed: Option<(&str, Delivered<'_>, &[ArrivalIn])>) -> Result<(), String> {
+    async fn run_inline(&self, receipt: &NewDelivery, mark: i64, landed: Option<LandedHere<'_>>) -> Result<(), String> {
         let EventSink::Inline { session, fired } = &self.sink else { return Ok(()) };
         // The mark before the delivery's arrivals, as a queued row carries
         // it: a run the delivery starts has its own trigger noted on its
@@ -271,8 +309,9 @@ impl<R: Reader> LfDoors<'_, R> {
             }
         }
         // What landed is judged once the events have run, as its row is
-        // drained after theirs.
-        if let Some((external, came_for, arrivals)) = landed {
+        // drained after theirs. Its row is done once it ran; one that failed
+        // is left to a drain, a run lease from now.
+        if let Some(LandedHere { external, came_for, arrivals, row_key }) = landed {
             let delivered = Delivered { id: Some(&receipt.id), arrival_mark: Some(mark), ..came_for };
             match session.fire_arrivals(external, arrivals, delivered).await {
                 Ok(one) => {
@@ -280,6 +319,9 @@ impl<R: Reader> LfDoors<'_, R> {
                         eprintln!("listen-fire: {line}");
                     }
                     fired.borrow_mut().outcomes.extend(one.outcomes);
+                    if let Err(error) = self.store.complete_key(row_key) {
+                        eprintln!("listen-fire: the row of delivery {}'s arrivals was not completed ({error}): a drain runs it again a run lease from now, and it starts no run twice", receipt.id);
+                    }
                 }
                 Err(error) => {
                     eprintln!("Webhook arrivals processing failed: {error}");
@@ -420,14 +462,17 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
     }
 
     /// One store write: the delivery's receipt, the cursor, its arrivals, a
-    /// `fire_event` row per event and a `wake_await` row per key and per
-    /// wait its arrivals answer. Run inline instead, the receipt is kept
-    /// first and its events run after, so a cursor is never kept past events
-    /// its receipt does not hold. A duplicate writes nothing and runs
-    /// nothing: its arrivals were logged with the first.
+    /// `fire_event` row per event, one for what landed for its traversal
+    /// listens with the waits of the runs it minted, and a `wake_await` row
+    /// per key and per wait its arrivals answer. Run inline instead, the
+    /// receipt is kept first and its events run after, so a cursor is never
+    /// kept past events its receipt does not hold; what landed is still a
+    /// row, which the request runs and completes. A duplicate writes nothing
+    /// and runs nothing: its arrivals were logged with the first.
     ///
-    /// A `fire_event` row carries the arrival log's mark after the
-    /// delivery's own arrivals, so a run it starts never waits for them.
+    /// A `fire_event` row carries the arrival log's mark before the
+    /// delivery's own arrivals: any of them but a run's own trigger, which
+    /// is noted on its waits, may answer it.
     async fn keep(&self, kept: Kept<'_>) -> Result<bool, String> {
         let adapter_type = &kept.source.adapter_type;
         let came_for = Delivered { id: None, credential: self.delivering_credential(kept.source), subscription: subscription_of(kept.subscription_id).1, arrival_mark: None, minted: None };
@@ -443,22 +488,27 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         let arrivals = self.under_head(kept.subscription_id, kept.arrivals);
         let landed = self.landed_for_listens(adapter_type, came_for.credential, &arrivals);
         let (minted, mut waits) = self.mint_runs(adapter_type, Some(&kept.source.install), came_for.credential, &landed).await?;
-        let mut work: Vec<NewWork> = match &self.sink {
-            EventSink::Queue | EventSink::Listed(_) => {
-                let delivered = Delivered { id: Some(&receipt.id), ..came_for };
-                let mut rows: Vec<NewWork> = kept.receipts.iter().map(|event| fire_event_work(adapter_type, event.clone(), delivered)).collect();
-                if !landed.is_empty() {
-                    let row = fire_arrivals_work(adapter_type, &landed, Delivered { minted: Some(&minted), ..delivered });
-                    queued_by(&mut waits, &row.key);
-                    rows.push(row);
+        let delivered = Delivered { id: Some(&receipt.id), ..came_for };
+        let inline = matches!(self.sink, EventSink::Inline { .. });
+        // Run inline, the events run inside the request, from the receipt.
+        let mut work: Vec<NewWork> = match inline {
+            false => kept.receipts.iter().map(|event| fire_event_work(adapter_type, event.clone(), delivered)).collect(),
+            true => Vec::new(),
+        };
+        // What landed is a row, its runs' waits live while it is queued. Run
+        // inline, the request runs the row itself and completes it; it is
+        // due a run lease out, so a drain takes it only if this process died.
+        let landed_row = match landed.is_empty() {
+            true => None,
+            false => {
+                let mut row = fire_arrivals_work(adapter_type, &landed, Delivered { minted: Some(&minted), ..delivered });
+                if inline {
+                    row.due_at = Some(iso(crate::run_host::RUN_LEASE_TTL_MS));
                 }
-                rows
-            }
-            // Run inside the request: a run is started before the request
-            // is answered, so there is no queue to outlast.
-            EventSink::Inline { .. } => {
-                queued_by(&mut waits, &format!("inline:{}", receipt.id));
-                Vec::new()
+                queued_by(&mut waits, &row.key);
+                let key = row.key.clone();
+                work.push(row);
+                Some(key)
             }
         };
         let logged_at = iso(0);
@@ -482,7 +532,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         work.extend(written.wakes);
         crate::wake::queued_rows(&work);
         self.list(&work);
-        let landed = (!landed.is_empty()).then_some((adapter_type.as_str(), Delivered { minted: Some(&minted), ..came_for }, landed.as_slice()));
+        let landed = landed_row.as_deref().map(|row_key| LandedHere { external: adapter_type, came_for: Delivered { minted: Some(&minted), ..came_for }, arrivals: &landed, row_key });
         self.run_inline(&receipt, written.arrival_mark, landed).await?;
         Ok(true)
     }
@@ -862,6 +912,7 @@ impl Store {
         arrivals: Option<&DeliveryArrivals<'_>>,
         waits: &[DeliveryWait],
     ) -> Result<Option<KeptDelivery>, StoreError> {
+        crate::waits::refuse_waits_without_arrivals(arrivals, waits)?;
         self.transaction(|db| {
             if !Store::insert_delivery_in(db, subscription_id, delivery)? {
                 return Ok(None);
@@ -1152,7 +1203,9 @@ pub(crate) mod tests {
                         Ok(Js::Null)
                     }
                     "awaitKeys" => {
-                        if let Some(landing) = self.on_await_keys.lock().unwrap().take() {
+                        // Taken first: what lands may set the next one.
+                        let landing = self.on_await_keys.lock().unwrap().take();
+                        if let Some(landing) = landing {
                             landing();
                         }
                         // A note whose id starts `gone-` was deleted before its wait opened.
@@ -1887,6 +1940,77 @@ pub(crate) mod tests {
         });
     }
 
+    /// The `n`-th `awaitKeys` the inbox is asked from now sweeps the
+    /// arrival log of the state file `state` first.
+    fn sweep_at_await_keys(slot: inbox::OnAwaitKeys, n: usize, state: std::path::PathBuf) {
+        let again = slot.clone();
+        *slot.lock().unwrap() = Some(Box::new(move || match n {
+            1 => {
+                Store::open(&state).unwrap().sweep_arrivals(100, None).unwrap();
+            }
+            _ => sweep_at_await_keys(again, n - 1, state),
+        }));
+    }
+
+    /// Count each `awaitKeys` the inbox is asked from now in `asked`.
+    fn count_await_keys(slot: inbox::OnAwaitKeys, asked: Arc<std::sync::atomic::AtomicUsize>) {
+        let again = slot.clone();
+        *slot.lock().unwrap() = Some(Box::new(move || {
+            asked.fetch_add(1, Ordering::SeqCst);
+            count_await_keys(again, asked);
+        }));
+    }
+
+    #[test]
+    fn a_delivery_asks_await_keys_once_per_edge_for_every_run_it_mints() {
+        let project = InboxProject::pushed(NOTES_AWAIT_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        count_await_keys(project.on_await_keys.clone(), asked.clone());
+        in_local(async {
+            let session = project.session().await;
+            let note = |id: &str| format!(r#"{{"edge":"Notes","identity":"{id}","landing":{{"recordId":"{id}","recordType":"Note","fields":{{"Id":"{id}","Title":"x"}}}}}}"#);
+            let body = format!(r#"{{"arrivals":[{},{}]}}"#, note("n-1"), note("n-2"));
+            assert_eq!(queue_delivery(&session, body.as_bytes(), "d-1").await.status, 200);
+            assert_eq!(asked.load(Ordering::SeqCst), 1, "one ask for both notes' comments");
+            let [row] = claimed_fire_rows(&session).try_into().unwrap();
+            let outcomes = session.work_row("fire_event", &row).await.unwrap();
+            assert_eq!(outcomes.iter().map(|o| o.status.as_str()).collect::<Vec<_>>(), ["parked", "parked"]);
+            for (outcome, note) in outcomes.iter().zip(["n-1", "n-2"]) {
+                let comment = NewArrival { edge: "Comments".into(), key: format!("thread:{note}"), identity: Some(format!("k-{note}")), version: None, landing: Some(Js::parse(br#"{"fields":{"Text":"hi"}}"#).unwrap()), gone: false };
+                let wakes = session.store.log_now(LOCAL_TENANT, "inbox", &[comment]).unwrap().wakes;
+                assert_eq!(wakes.iter().map(|w| w.run_id.as_str()).collect::<Vec<_>>(), [outcome.run_id.as_str()], "each run waits on its own note");
+            }
+        });
+    }
+
+    /// An inline delivery of two notes and a comment on the second: what
+    /// landed is a row kept with the delivery, so the waits of the runs it
+    /// minted are live until each starts. A sweep while the first run opens
+    /// its wait (as `serve`'s drain loop may make one) forgets nothing the
+    /// second run's wait reads: that run binds the comment, and the request
+    /// completes the row.
+    #[test]
+    fn an_inline_delivery_s_waits_are_live_while_its_runs_start_and_its_row_is_completed() {
+        let project = InboxProject::pushed(NOTES_AWAIT_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        // Asked twice as the delivery mints its runs, then as the first run opens its wait.
+        sweep_at_await_keys(project.on_await_keys.clone(), 3, project.root.join(".lf/state.db"));
+        in_local(async {
+            let session = project.session().await;
+            let note = |id: &str| format!(r#"{{"edge":"Notes","identity":"{id}","landing":{{"recordId":"{id}","recordType":"Note","fields":{{"Id":"{id}","Title":"x"}}}}}}"#);
+            let body = format!(r#"{{"arrivals":[{},{}],"comments":[{{"note":"n-2","id":"k2","Text":"hi"}}]}}"#, note("n-1"), note("n-2"));
+            let (answer, fired) = hook(&session, body.as_bytes(), "d-1").await;
+            assert_eq!(answer.status, 200, "{}", answer.body.to_json());
+            assert!(project.on_await_keys.lock().unwrap().is_none(), "the sweep ran as the first run opened its wait");
+            let statuses: Vec<&str> = fired.outcomes.iter().map(|o| o.status.as_str()).collect();
+            assert_eq!(statuses, ["parked", "completed"], "{:?}", fired.outcomes.iter().map(|o| &o.error).collect::<Vec<_>>());
+            let second = session.store.run(&fired.outcomes[1].run_id).unwrap().unwrap();
+            assert!(second.outcome.as_deref().unwrap_or_default().contains(r#""hi""#), "{:?}", second.outcome);
+            let later = iso(2 * crate::run_host::RUN_LEASE_TTL_MS);
+            let due = crate::store::ClaimDue { limit: 10, lease_ms: 60_000, due_by: Some(&later), kinds: None };
+            assert!(session.store.claim_due(&due).unwrap().is_empty(), "the request completed its row");
+        });
+    }
+
     /// The segment that resumes the comment's arm settles the race, then
     /// dies before its commit: the run stays parked on that arm, resumed
     /// again by the retried wake, and finishes as though it never died.
@@ -2065,7 +2189,7 @@ pub(crate) mod tests {
             let mut session = project.session().await;
             hook(&session, NOTE, "d-1").await;
             let (run, leaves) = the_run(&session);
-            let (arm, timer) = (leaves[0].0.clone(), leaves[1].0.clone());
+            let timer = leaves[1].0.clone();
             let comment = NewArrival { edge: "Comments".into(), key: "thread:n-1".into(), identity: Some("k1".into()), version: None, landing: Some(Js::parse(br#"{"fields":{"Text":"hi"}}"#).unwrap()), gone: false };
             session.store.log_now(LOCAL_TENANT, "inbox", &[comment]).unwrap();
             crate::segment::DIES_AFTER_COMMIT.with(|dies| dies.set(1));

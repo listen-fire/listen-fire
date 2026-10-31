@@ -220,7 +220,10 @@ test('a reply logged while the run sat in the queue is taken by its await new', 
   assert.deepEqual(companies(dir), ['Osprey', 'Answered while queued']);
 });
 
-test("a batched delivery's later item answers the run its earlier item started; the trigger itself does not", async () => {
+// The trigger lands on `Company` and the run waits on `Comments`, so this
+// does not show the trigger kept from its own wait: a keyed trigger on the
+// awaited edge is the poll's case (shared_polls.test.ts).
+test("a batched delivery's later item answers the run its earlier item started", async () => {
   const dir = project('await_delivered');
   const serving = await served(dir);
   try {

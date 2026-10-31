@@ -358,6 +358,9 @@ impl RunHostStore for ProcessStore {
     fn complete(&self, id: &str, claim: &str) -> Result<()> {
         self.unit("work.complete", obj! { "id" => s(id), "claim" => s(claim) })
     }
+    fn complete_key(&self, key: &str) -> Result<bool> {
+        self.flag("work.completeKey", obj! { "key" => s(key) })
+    }
     fn release_work(&self, id: &str, claim: &str, due_at: Option<&str>, why: Release) -> Result<()> {
         self.unit("work.release", obj! { "id" => s(id), "claim" => s(claim), "dueAt" => opt(due_at), "why" => s(why.wire()) })
     }

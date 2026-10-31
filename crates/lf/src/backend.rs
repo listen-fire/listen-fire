@@ -270,6 +270,13 @@ pub trait RunHostStore {
     fn enqueue_if_absent(&self, kind: &str, key: &str, payload: &Js, due_at: Option<&str>, team_id: Option<&str>) -> Result<bool>;
     fn claim_due(&self, claim: &ClaimDue<'_>) -> Result<Vec<ClaimedWork>>;
     fn complete(&self, id: &str, claim: &str) -> Result<()>;
+    /// A row its own caller queued a run lease out (so a drain takes it
+    /// only if the caller died) and ran itself, done: deleted, unless a live
+    /// claim holds it (the caller was slow and a drain took it, which
+    /// completes it). Completing a `fire_event` row drops the waits opened
+    /// under its key for runs that never started, as burying it does.
+    /// Whether it was deleted.
+    fn complete_key(&self, key: &str) -> Result<bool>;
     fn release_work(&self, id: &str, claim: &str, due_at: Option<&str>, why: Release) -> Result<()>;
     /// The row gave up: never claimed again, kept with `reason` (unless it
     /// was re-armed since the claim, which then stands).
@@ -515,6 +522,9 @@ impl RunHostStore for Store {
     }
     fn complete(&self, id: &str, claim: &str) -> Result<()> {
         Store::complete(self, id, claim)
+    }
+    fn complete_key(&self, key: &str) -> Result<bool> {
+        Store::complete_key(self, key)
     }
     fn release_work(&self, id: &str, claim: &str, due_at: Option<&str>, why: Release) -> Result<()> {
         Store::release_work(self, id, claim, due_at, why)

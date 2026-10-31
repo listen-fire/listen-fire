@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 
 import { lf, lfCommand } from './example';
@@ -254,8 +255,30 @@ test("one poll's page: a comment on a note answers the await new of the run the 
   const drained = lfAt(dir, ['drain', '--until-idle'], 61_000);
   assert.deepEqual(heard(drained.out), ['Third heard hello'], drained.out);
   assert.doesNotMatch(lf(dir, 'runs').out, /parked/);
-  // The poll is kept as a delivery its run names.
-  assert.match(lf(dir, 'deliveries').out, / poll inline 0 event\(s\) 1 run\(s\)/);
+  // The poll is kept as a delivery its run names, its runs queued.
+  assert.match(lf(dir, 'deliveries').out, / poll 0 event\(s\) 1 run\(s\)/);
+});
+
+test("a poll's row that no drain ran before the next poll still binds the comment its page carried, and leaves no wait behind", () => {
+  const dir = awaitingProject('listen to f-[:Notes]-> fire discuss', '  c = await new n-[:Comments]->\n  fail("${n.Title} heard ${c.Text}")\n');
+  lfAt(dir, ['drain', '--until-idle']);
+  feed(dir, [{ id: 'n3', title: 'Third', at: 3, comments: [{ id: 'c1', text: 'hello' }] }]);
+  // Drains of the polls alone: the poll's row stays queued, as after a
+  // drain that died once the poll was kept. Each sweeps the arrival log.
+  const kept = lfAt(dir, ['drain', '--until-idle', '--kinds', 'poll_edge'], 61_000);
+  assert.deepEqual(heard(kept.out), [], kept.out);
+  lfAt(dir, ['drain', '--until-idle', '--kinds', 'poll_edge'], 122_000);
+  // The cursor moved in the poll's own write: the next poll asks after it.
+  assert.deepEqual(edgePolls(dir), [{ edge: 'Notes' }, { edge: 'Notes', cursor: 2 }, { edge: 'Notes', cursor: 3 }]);
+  const drained = lfAt(dir, ['drain', '--until-idle'], 123_000);
+  assert.deepEqual(heard(drained.out), ['Third heard hello'], drained.out);
+  const db = new DatabaseSync(join(dir, '.lf', 'state.db'));
+  try {
+    const orphans = db.prepare('select count(*) as n from wait_row w where not exists (select 1 from run r where r.id = w.run_id)').get() as { n: number };
+    assert.equal(orphans.n, 0);
+  } finally {
+    db.close();
+  }
 });
 
 test("a note on a board does not answer its own run's await new on its board's Notes; the next note there does", () => {
