@@ -152,3 +152,26 @@ test('two drains at once poll an edge once', async () => {
   await Promise.all([lfAsync(dir, ['drain', '--until-idle']), lfAsync(dir, ['drain', '--until-idle'])]);
   assert.deepEqual(edgePolls(dir), [{ edge: 'Notes' }]);
 });
+
+test('listen-fire run --poll polls a listen\'s edge at once, once for every listen sharing it', () => {
+  const dir = notesProject([A_IS_A, 'listen to f-[n:Notes WHERE n.Title CONTAINS "b"]-> fire b']);
+  // The first poll only arms, as the settings form's does.
+  const armed = lfAt(dir, ['run', '--poll', 'a']);
+  assert.equal(armed.code, 0, armed.out);
+  assert.match(armed.out, /armed; it fires on changes from now/);
+  assert.deepEqual(edgePolls(dir), [{ edge: 'Notes' }]);
+  feed(dir, [
+    { id: 'n3', title: 'a', at: 3 },
+    { id: 'n4', title: 'bee', at: 4 },
+  ]);
+  // Polled at once, inside the edge's minute; the poll is b's too.
+  // Each listen's function fails naming what it saw, so the command fails too.
+  const polled = lfAt(dir, ['run', '--poll', 'a']);
+  assert.deepEqual(edgePolls(dir), [{ edge: 'Notes' }, { edge: 'Notes', cursor: 2 }]);
+  assert.deepEqual(saw(polled.out, 'a'), ['a']);
+  assert.deepEqual(saw(polled.out, 'b'), ['bee']);
+  assert.deepEqual([runsOf(dir, 'a'), runsOf(dir, 'b')], [1, 1]);
+  const none = lfAt(dir, ['run', '--poll', 'nope']);
+  assert.notEqual(none.code, 0);
+  assert.match(none.out, /no listen on a polled source fires 'nope'/);
+});

@@ -35,6 +35,11 @@ pub struct PollKey {
     /// The credential the connection's construction names; None for one
     /// that names none.
     pub credential: Option<String>,
+    /// The canonical JSON of the connection's position (the construction's
+    /// arguments the module declares as position args, as the module is
+    /// handed them), "" for none: two connections that differ only there
+    /// read different data.
+    pub position: String,
     pub edge: String,
     /// The record the edge hangs off, by its id, for a listen whose earlier
     /// hops the host resolves; None for one over the whole connection.
@@ -51,6 +56,9 @@ impl PollKey {
         if let Some(credential) = &self.credential {
             key.insert("credential".into(), Js::str(credential));
         }
+        if !self.position.is_empty() {
+            key.insert("position".into(), Js::str(&self.position));
+        }
         if let Some(scope) = &self.scope {
             key.insert("scope".into(), Js::str(scope));
         }
@@ -60,6 +68,12 @@ impl PollKey {
     /// The filter the module is handed: the taken part, as the plan has it.
     pub fn filter(&self) -> Option<serde_json::Value> {
         (!self.taken.is_empty()).then(|| serde_json::from_str(&self.taken).expect("a taken part is written as JSON"))
+    }
+
+    /// The connection's position, as the module is handed it on each call
+    /// for the key; None for a connection with none.
+    pub fn position_settings(&self) -> Option<serde_json::Value> {
+        (!self.position.is_empty()).then(|| serde_json::from_str(&self.position).expect("a position is written as JSON"))
     }
 
     /// Who the operator names it by in lf.yaml's `pollEvery`: the credential
@@ -73,16 +87,31 @@ impl PollKey {
 /// sharing it (their indices in `set.listens`). `heads` gives a listen's
 /// scopes: `[None]` for one over the whole connection.
 pub fn poll_keys(set: &FileSet, heads: &dyn Fn(&Listen) -> Vec<Option<String>>) -> BTreeMap<PollKey, Vec<usize>> {
-    keys_of(&set.listens, heads)
+    keys_of(&set.listens, &|listen| Watched { position: position_of(set, listen), heads: heads(listen) })
 }
 
-fn keys_of(listens: &[Listen], heads: &dyn Fn(&Listen) -> Vec<Option<String>>) -> BTreeMap<PollKey, Vec<usize>> {
+/// Where one listen's connection reads, and the scopes it is watched in.
+struct Watched {
+    position: String,
+    heads: Vec<Option<String>>,
+}
+
+/// The canonical JSON of the position the listen's connection is in, as its
+/// module is handed it (crate::externals::RunningExternal::position_settings);
+/// "" for none.
+fn position_of(set: &FileSet, listen: &Listen) -> String {
+    let running = set.running.iter().find(|r| !r.is_plugin() && r.external.manifest.name == listen.adapter);
+    running.and_then(|r| r.position_settings(&listen.args)).map(|settings| settings.to_string()).unwrap_or_default()
+}
+
+fn keys_of(listens: &[Listen], watched: &dyn Fn(&Listen) -> Watched) -> BTreeMap<PollKey, Vec<usize>> {
     let mut keys: BTreeMap<PollKey, Vec<usize>> = BTreeMap::new();
     for (index, listen) in listens.iter().enumerate() {
         let Some(last) = listen.plan.as_ref().and_then(|plan| plan.hops.last()) else { continue };
         let taken = last.taken.as_ref().map(|taken| serde_json::to_string(taken).expect("a filter is always JSON")).unwrap_or_default();
-        for scope in heads(listen) {
-            let key = PollKey { adapter: listen.adapter.clone(), credential: listen.credential.clone(), edge: last.edge.clone(), scope, taken: taken.clone() };
+        let Watched { position, heads } = watched(listen);
+        for scope in heads {
+            let key = PollKey { adapter: listen.adapter.clone(), credential: listen.credential.clone(), position: position.clone(), edge: last.edge.clone(), scope, taken: taken.clone() };
             keys.entry(key).or_default().push(index);
         }
     }
@@ -92,8 +121,20 @@ fn keys_of(listens: &[Listen], heads: &dyn Fn(&Listen) -> Vec<Option<String>>) -
 /// What a shared poll's cursor and its subscription are kept under:
 /// `edge-poll:` and 16 hex digits of the sha256 of its key.
 pub fn poll_subscription(key: &PollKey) -> String {
-    let digest: String = Sha256::digest(key.to_js().to_json().as_bytes()).iter().take(8).map(|byte| format!("{byte:02x}")).collect();
-    format!("edge-poll:{digest}")
+    format!("edge-poll:{}", digest_of(key))
+}
+
+/// What a webhook subscription for the key's edge is kept under, beside the
+/// credential's other webhooks, and its door names it by
+/// (`/api/public/webhook-sync/<provider>/<credential>/<this>`): `edge-` and
+/// the same 16 hex digits as its poll's.
+pub fn edge_subscription(key: &PollKey) -> String {
+    format!("edge-{}", digest_of(key))
+}
+
+/// 16 hex digits of the sha256 of the key's canonical JSON.
+fn digest_of(key: &PollKey) -> String {
+    Sha256::digest(key.to_js().to_json().as_bytes()).iter().take(8).map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// A listen's scopes as the session opened: the whole connection for one
@@ -134,9 +175,43 @@ pub fn declared(set: &FileSet, listen: &Listen) -> Option<Declared> {
 
 /// The poll keys of the listens on polled edges, each with its listens.
 pub fn polled_keys(set: &FileSet) -> BTreeMap<PollKey, Vec<usize>> {
+    keys_delivered(set, &[Delivery::Polled])
+}
+
+/// The keys of the listens on edges pushed to the connection or per scope,
+/// each with its listens: each is one webhook subscription
+/// (crate::subscriptions).
+pub fn pushed_keys(set: &FileSet) -> BTreeMap<PollKey, Vec<usize>> {
+    keys_delivered(set, &[Delivery::Connection, Delivery::Scope])
+}
+
+/// The listens a delivery through the edge subscription `subscription`
+/// (`edge_subscription`) is judged against: those sharing its key; none
+/// when no listen shares it any more.
+pub fn sharing_subscription(set: &FileSet, subscription: &str) -> Vec<usize> {
+    pushed_keys(set).into_iter().find(|(key, _)| edge_subscription(key) == subscription).map(|(_, sharing)| sharing).unwrap_or_default()
+}
+
+fn keys_delivered(set: &FileSet, deliveries: &[Delivery]) -> BTreeMap<PollKey, Vec<usize>> {
     let mut keys = poll_keys(set, &|listen| set.heads(listen));
-    keys.retain(|_, listens| listens.first().and_then(|first| declared(set, &set.listens[*first])).is_some_and(|d| d.delivery == Some(Delivery::Polled)));
+    keys.retain(|_, listens| listens.first().and_then(|first| declared(set, &set.listens[*first])).and_then(|d| d.delivery).is_some_and(|d| deliveries.contains(&d)));
     keys
+}
+
+/// A line for each listen on a traversal with an earlier hop the host
+/// resolves whose heads were never resolved: such a listen has no key, so
+/// nothing polls or subscribes for it. Said rather than left silent until
+/// listen-fire re-resolves those hops.
+pub fn unresolved(set: &FileSet) -> Vec<String> {
+    unresolved_in(&set.listens, &|listen| set.heads(listen))
+}
+
+fn unresolved_in(listens: &[Listen], heads: &dyn Fn(&Listen) -> Vec<Option<String>>) -> Vec<String> {
+    listens
+        .iter()
+        .filter(|listen| resolves(listen) && heads(listen).is_empty())
+        .map(|listen| format!("warning: {}:{} is not watched: its traversal has an earlier hop listen-fire must resolve to the records it watches, and listen-fire does not resolve such hops yet", listen.file, listen.movement_name))
+        .collect()
 }
 
 /// How often the key's edge is polled, in milliseconds: the operator's
@@ -157,7 +232,7 @@ mod tests {
     use super::*;
 
     fn key(taken: &str, scope: Option<&str>) -> PollKey {
-        PollKey { adapter: "feed".into(), credential: None, edge: "Notes".into(), scope: scope.map(str::to_string), taken: taken.into() }
+        PollKey { adapter: "feed".into(), credential: None, position: String::new(), edge: "Notes".into(), scope: scope.map(str::to_string), taken: taken.into() }
     }
 
     /// A listen on `feed-[n:Notes WHERE …]->` firing `movement`, the taken
@@ -189,7 +264,7 @@ mod tests {
     #[test]
     fn listens_on_one_edge_of_one_connection_with_one_taken_filter_and_scope_share_a_poll() {
         let listens = [listen("a", Some("null"), false), listen("b", Some("null"), false), listen("c", Some(TITLE_A), false), listen("settings", None, false)];
-        let keys = keys_of(&listens, &|_| vec![None]);
+        let keys = keys_of(&listens, &|_| Watched { position: String::new(), heads: vec![None] });
         assert_eq!(keys.len(), 2, "{keys:?}");
         assert_eq!(keys[&key("", None)], vec![0, 1], "no filter taken: one poll for both");
         let (taken, sharing) = keys.iter().find(|(k, _)| !k.taken.is_empty()).unwrap();
@@ -207,11 +282,47 @@ mod tests {
             "b" => vec![Some("board-2".to_string())],
             _ => vec![None],
         };
-        let keys = keys_of(&listens, &heads);
+        let keys = keys_of(&listens, &|l| Watched { position: String::new(), heads: heads(l) });
         assert_eq!(keys.get(&key("", Some("board-1"))), Some(&vec![0]));
         assert_eq!(keys.get(&key("", Some("board-2"))), Some(&vec![0, 1]), "a board both watch is polled once");
         assert_eq!(keys.get(&key("", None)), Some(&vec![2]));
         assert_eq!(keys.len(), 3);
+    }
+
+    #[test]
+    fn two_connections_that_differ_only_in_position_never_share_a_poll() {
+        let listens = [listen("a", Some("null"), false), listen("b", Some("null"), false), listen("c", Some("null"), false)];
+        let position = |l: &Listen| match l.movement_name.as_str() {
+            "a" | "b" => r#"{"base":"CRM"}"#.to_string(),
+            _ => r#"{"base":"Hiring"}"#.to_string(),
+        };
+        let keys = keys_of(&listens, &|l| Watched { position: position(l), heads: vec![None] });
+        assert_eq!(keys.len(), 2, "{keys:?}");
+        let crm = PollKey { position: r#"{"base":"CRM"}"#.into(), ..key("", None) };
+        let hiring = PollKey { position: r#"{"base":"Hiring"}"#.into(), ..key("", None) };
+        assert_eq!(keys[&crm], vec![0, 1], "one position: one poll");
+        assert_eq!(keys[&hiring], vec![2], "another position: a poll of its own");
+        assert_eq!(hiring.position_settings(), Some(serde_json::json!({ "base": "Hiring" })), "each is polled in its own position");
+        assert_eq!(key("", None).position_settings(), None);
+        assert_ne!(poll_subscription(&crm), poll_subscription(&hiring), "each its own cursor");
+        assert_ne!(edge_subscription(&crm), edge_subscription(&hiring), "and its own webhook");
+        assert_ne!(poll_subscription(&crm), poll_subscription(&key("", None)));
+    }
+
+    #[test]
+    fn a_listen_whose_heads_were_never_resolved_is_said_to_be_unwatched() {
+        let listens = [listen("a", Some("null"), true), listen("b", Some("null"), true), listen("c", Some("null"), false), listen("settings", None, false)];
+        let heads = |l: &Listen| match l.movement_name.as_str() {
+            "b" => vec![Some("board-1".to_string())],
+            "c" | "settings" => vec![None],
+            _ => Vec::new(),
+        };
+        assert_eq!(
+            unresolved_in(&listens, &heads),
+            ["warning: notes:a is not watched: its traversal has an earlier hop listen-fire must resolve to the records it watches, and listen-fire does not resolve such hops yet"],
+            "only the listen with a resolved hop and no heads"
+        );
+        assert!(keys_of(&listens, &|l| Watched { position: String::new(), heads: heads(l) }).values().all(|sharing| !sharing.contains(&0)), "it has no key");
     }
 
     #[test]
@@ -222,6 +333,10 @@ mod tests {
         assert_ne!(plain, poll_subscription(&key("{\"type\":\"static\"}", None)), "another filter");
         assert_ne!(plain, poll_subscription(&key("", Some("board-1"))), "another scope");
         assert_ne!(plain, poll_subscription(&PollKey { credential: Some("work".into()), ..key("", None) }), "another connection");
+        // A key with no position hashes as before positions were in keys.
+        assert_eq!(key("", None).to_js().to_json(), r#"{"adapter":"feed","edge":"Notes","taken":""}"#);
+        let webhook = edge_subscription(&key("", None));
+        assert!(webhook.starts_with("edge-") && webhook[5..] == plain["edge-poll:".len()..], "its webhook is kept under the same digest: {webhook}");
     }
 
     #[test]

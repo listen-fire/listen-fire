@@ -214,6 +214,21 @@ describe('the module methods', () => {
     expect(METHODS.poll.result.parse(result)).toEqual(result);
   });
 
+  it('event subscriptions: a listen\'s events in the settings form, or from 2.6 one edge\'s arrivals', () => {
+    const events = { events: ['note.created'], callbackUrl: 'https://lf.example/hook', current: { externalId: 'wh-1', events: [] }, scope: { shelf: 'red' } };
+    expect(METHODS.ensureEventSubscription.params.parse(events)).toEqual(events);
+    const filter = { type: 'compare', op: 'eq', left: { type: 'property', propertyTypeId: 'Title', fieldOnly: true }, right: { type: 'static', value: 'a' } };
+    const edge = { edge: 'Notes', filter, scope: 'board-1', callbackUrl: 'https://lf.example/hook/edge-1', current: { externalId: 'wh-2' } };
+    expect(METHODS.ensureEventSubscription.params.parse(edge)).toEqual(edge);
+    expect(METHODS.ensureEventSubscription.params.safeParse({ callbackUrl: 'https://lf.example/hook' }).success).toBe(false);
+    expect(METHODS.ensureEventSubscription.params.safeParse({ edge: '', callbackUrl: 'https://lf.example/hook' }).success).toBe(false);
+    const removed = { edge: 'Notes', scope: 'board-1', callbackUrl: 'https://lf.example/hook/edge-1', externalId: 'wh-2' };
+    expect(METHODS.removeEventSubscription.params.parse(removed)).toEqual(removed);
+    expect(METHODS.removeEventSubscription.params.parse({ callbackUrl: 'u', scope: { shelf: 'red' } })).toEqual({ callbackUrl: 'u', scope: { shelf: 'red' } });
+    expect(METHODS.refreshEventSubscription.params.parse({ edge: 'Notes', filter, externalId: 'wh-2' })).toEqual({ edge: 'Notes', filter, externalId: 'wh-2' });
+    expect(METHODS.refreshEventSubscription.params.parse({ externalId: 'wh-1', scope: { shelf: 'red' } })).toEqual({ externalId: 'wh-1', scope: { shelf: 'red' } });
+  });
+
   it('refreshCredential: the changed fields out', () => {
     expect(METHODS.refreshCredential.params.parse({})).toEqual({});
     expect(METHODS.refreshCredential.result.parse({ fields: { access_token: 'at-2' } })).toEqual({ fields: { access_token: 'at-2' } });

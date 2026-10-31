@@ -20,7 +20,16 @@ import type {
   WirePluginResultShape,
 } from 'engine-contracts';
 import type { ZodType } from 'zod';
-import type { AdapterManifest, Arrival, DiscriminableEvent } from 'engine-contracts';
+import type {
+  AdapterManifest,
+  Arrival,
+  DiscriminableEvent,
+  EnsureEventSubscriptionInput,
+  EventSubscriptionRefresh,
+  EventSubscriptionRegistration,
+  RefreshEventSubscriptionInput,
+  RemoveEventSubscriptionInput,
+} from 'engine-contracts';
 import type { Adapter } from 'module-runtime/adapter';
 import type { BrowserSlot } from 'module-runtime/browser';
 import type { ChatModelName } from 'engine-contracts';
@@ -236,8 +245,48 @@ export interface PollEdgeAnswer {
   cursor?: unknown;
 }
 
-/** An adapter, plus the methods its declarations pair with. */
-export type AdapterModuleMethods = Adapter & {
+/** What every call about a subscription for one listenable edge's arrivals
+ *  says it is for (adapter protocol 2.6): the edge, the filter you take and
+ *  the scope, as its poll would be (PollEdgeInput). The host makes one for
+ *  every listen on the same connection, edge, filter and scope, when the
+ *  edge declares `delivery: connection` or `scope`. */
+export interface EdgeSubscription {
+  /** The edge, by its name in the schema (`Notes`). */
+  edge: string;
+  /** The part of the listens' WHERE on the edge you take; absent when you
+   *  take none of it. Set `takenApplied: true` on an arrival you deliver only
+   *  when you applied it. */
+  filter?: unknown;
+  /** The record the edge hangs off, by its id, when the listens watch it
+   *  under one; absent for the whole connection. */
+  scope?: string;
+}
+
+/** `ensureEventSubscription` for an edge's arrivals: deliver each one that
+ *  lands on the edge to `callbackUrl`, signed with the secret you answer. */
+export interface EnsureEdgeSubscriptionInput extends EdgeSubscription {
+  callbackUrl: string;
+  /** The subscription held for this URL, when one is: keep it rather than
+   *  adding another. */
+  current?: { externalId?: string };
+}
+
+export interface RemoveEdgeSubscriptionInput extends EdgeSubscription {
+  callbackUrl: string;
+  externalId?: string;
+}
+
+export interface RefreshEdgeSubscriptionInput extends EdgeSubscription {
+  externalId: string;
+}
+
+/** An adapter, plus the methods its declarations pair with. The event
+ *  subscription methods take either shape: a listen's in the settings form
+ *  (its `events`), or (adapter protocol 2.6) an edge's, told apart by `edge`. */
+export type AdapterModuleMethods = Omit<Adapter, 'ensureEventSubscription' | 'removeEventSubscription' | 'refreshEventSubscription'> & {
+  ensureEventSubscription?(input: EnsureEventSubscriptionInput | EnsureEdgeSubscriptionInput): Promise<EventSubscriptionRegistration | undefined>;
+  removeEventSubscription?(input: RemoveEventSubscriptionInput | RemoveEdgeSubscriptionInput): Promise<void>;
+  refreshEventSubscription?(input: RefreshEventSubscriptionInput | RefreshEdgeSubscriptionInput): Promise<EventSubscriptionRefresh | undefined>;
   /** Paired with the `poll` declaration. `edge` tells the two inputs apart:
    *  a listen's poll in the settings form, or (adapter protocol 2.6) a poll
    *  of a listenable edge, which answers its arrivals. */

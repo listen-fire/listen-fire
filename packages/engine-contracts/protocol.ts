@@ -1444,6 +1444,35 @@ export const WireRemoveEventSubscriptionInput = z.object({
   scope: z.record(z.string(), z.string()).optional(),
 });
 
+/** What every call about a subscription for one listenable edge's arrivals
+ *  says it is for (adapter protocol 2.6): made once for every listen on the
+ *  same connection, edge, filter and scope, when the edge declares
+ *  `delivery: connection` or `scope`. `filter` is the part of the listens'
+ *  WHERE on the edge the module takes, `scope` the record the edge hangs off
+ *  when the listens watch it under one. */
+const WireEdgeSubscription = {
+  edge: z.string().min(1),
+  filter: z.unknown().optional(),
+  scope: z.string().min(1).optional(),
+};
+
+export const WireEnsureEdgeSubscriptionInput = z.object({
+  ...WireEdgeSubscription,
+  callbackUrl: z.string(),
+  current: z.object({ externalId: z.string().optional() }).optional(),
+});
+
+export const WireRemoveEdgeSubscriptionInput = z.object({
+  ...WireEdgeSubscription,
+  callbackUrl: z.string(),
+  externalId: z.string().optional(),
+});
+
+export const WireRefreshEdgeSubscriptionInput = z.object({
+  ...WireEdgeSubscription,
+  externalId: z.string(),
+});
+
 // ── Plugins (invokePlugin) ───────────────────────────────────────────────────
 
 /** A file a plugin made: its bytes (base64, since bytes do not ride the
@@ -1557,18 +1586,21 @@ export const METHODS = {
     params: WireLinkRecordsInput,
     result: z.object({ removed: z.boolean() }),
   },
+  // A listen's in the settings form (its `events`), or from 2.6 an edge's
+  // (WireEnsureEdgeSubscriptionInput), told apart by `edge`; so too for
+  // removing and refreshing one.
   ensureEventSubscription: {
-    params: WireEnsureEventSubscriptionInput,
+    params: z.union([WireEnsureEdgeSubscriptionInput, WireEnsureEventSubscriptionInput]),
     // `null` is the documented no-op: nothing was registered.
     result: WireEventSubscriptionRegistration.nullable(),
   },
   removeEventSubscription: {
-    params: WireRemoveEventSubscriptionInput,
+    params: z.union([WireRemoveEdgeSubscriptionInput, WireRemoveEventSubscriptionInput]),
     result: z.null(),
   },
   // Adapter protocol 2.4: extend a subscription the source would let lapse.
   refreshEventSubscription: {
-    params: WireRefreshEventSubscriptionInput,
+    params: z.union([WireRefreshEdgeSubscriptionInput, WireRefreshEventSubscriptionInput]),
     result: WireEventSubscriptionRefresh.nullable(),
   },
   // Adapter protocol 2.5: the key each head's listenable edge is waited on

@@ -378,7 +378,13 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
     let user = local_identity(&project.user, |k| std::env::var(k).ok());
     let _holds = hold_all(&running, role.keep());
-    let file_set = RefCell::new(Rc::new(FileSet { files, parsed, catalog, listens, heads: BTreeMap::new(), running, schemas, _holds }));
+    let file_set = Rc::new(FileSet { files, parsed, catalog, listens, heads: BTreeMap::new(), running, schemas, _holds });
+    if routes_listens {
+        for line in crate::edge_polls::unresolved(&file_set) {
+            eprintln!("listen-fire: {line}");
+        }
+    }
+    let file_set = RefCell::new(file_set);
     Ok(Session {
         project,
         role,
@@ -696,9 +702,18 @@ impl Session {
     /// again runs a listen once (its receipt, `arrival_receipt_key`). An
     /// arrival a listen's filter refuses runs nothing, said once per listen;
     /// one the judge cannot decide runs nothing either, its reason said once
-    /// per delivery.
+    /// per delivery. One delivered through a webhook for an edge's arrivals
+    /// (crate::subscriptions) is judged only against the listens sharing
+    /// that webhook's key: the module may have applied that key's filter.
     pub async fn fire_arrivals(&self, adapter: &str, arrivals: &[ArrivalIn], delivered: Delivered<'_>) -> Result<Fired, String> {
-        self.fire_arrivals_to(&self.file_set(), adapter, arrivals, delivered, |_| true).await
+        let set = self.file_set();
+        let through_edge = delivered.subscription.filter(|key| crate::subscriptions::is_edge_webhook(self.secrets().credentials(), adapter, key));
+        let Some(subscription) = through_edge else {
+            return self.fire_arrivals_to(&set, adapter, arrivals, delivered, |_| true).await;
+        };
+        let sharing = crate::edge_polls::sharing_subscription(&set, subscription);
+        let shares = |listen: &Listen| sharing.iter().any(|i| std::ptr::eq(listen, &set.listens[*i]));
+        self.fire_arrivals_to(&set, adapter, arrivals, delivered, shares).await
     }
 
     /// `fire_arrivals`, to the listens `to` keeps of those on the edge (a
@@ -927,7 +942,6 @@ impl Session {
     /// failed poll is polled again from where the last good one ended. What
     /// it fired, and the credential it polled as.
     async fn poll_edge_once(&self, set: &FileSet, key: &crate::edge_polls::PollKey, sharing: &[usize], subscription: &str) -> Result<(Fired, Option<String>), String> {
-        let first = &set.listens[sharing[0]];
         let running = set
             .running
             .iter()
@@ -953,7 +967,7 @@ impl Session {
         if let Some(cursor) = state.as_ref().and_then(|s| s.get("cursor")) {
             params["cursor"] = crate::wire::json_of_js(cursor);
         }
-        let raw = rpc_in(running, credentials, credential, LOCAL_TENANT, "poll", params, running.position_settings(&first.args)).await?;
+        let raw = rpc_in(running, credentials, credential, LOCAL_TENANT, "poll", params, key.position_settings()).await?;
         let answer = wire_results::check("poll", &key.adapter, &raw)?;
         let arrivals = crate::arrivals::arrivals_of(&answer).map_err(|e| format!("{}: a poll of '{}' answered {e}", key.adapter, key.edge))?;
         let mut fired = Fired::default();
@@ -1042,12 +1056,21 @@ impl Session {
     pub async fn run_poll(&self, movement: &str) -> Result<Fired, String> {
         let set = self.file_set();
         let listens: Vec<_> = set.polled_listens().filter(|(l, _, _)| l.movement_name == movement).collect();
-        if listens.is_empty() {
-            return Err(format!("no listen on a polled source fires '{movement}': a source is polled when its manifest declares `poll`"));
+        // A listen on a traversal of a polled edge is polled through its
+        // shared key, once however many of the key's listens fire `movement`.
+        let mut edges = crate::edge_polls::polled_keys(&set);
+        edges.retain(|_, sharing| sharing.iter().any(|i| set.listens[*i].movement_name == movement));
+        if listens.is_empty() && edges.is_empty() {
+            return Err(format!("no listen on a polled source fires '{movement}': a source is polled when its manifest declares `poll`, an edge when it declares `delivery: polled`"));
         }
         let mut fired = Fired::default();
         for (listen, running, subscription) in listens {
             let one = self.poll_once(&set, listen, running, &subscription).await?;
+            fired.outcomes.extend(one.outcomes);
+            fired.redelivered.extend(one.redelivered);
+        }
+        for (key, sharing) in &edges {
+            let (one, _) = self.poll_edge_once(&set, key, sharing, &crate::edge_polls::poll_subscription(key)).await?;
             fired.outcomes.extend(one.outcomes);
             fired.redelivered.extend(one.redelivered);
         }
@@ -2103,6 +2126,10 @@ impl Session {
         crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
         let _holds = hold_all(&running, self.role.keep());
         let taken = Rc::new(FileSet { files, parsed, catalog, listens, heads: BTreeMap::new(), running, schemas, _holds });
+        let warned = crate::edge_polls::unresolved(&set);
+        for line in crate::edge_polls::unresolved(&taken).into_iter().filter(|line| !warned.contains(line)) {
+            let _ = writeln!(log, "listen-fire: {line}");
+        }
         self.file_set.replace(taken.clone());
         self.refused.replace(None);
         drop(starting);

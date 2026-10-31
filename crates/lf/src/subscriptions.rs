@@ -40,6 +40,19 @@
 //! that scales to zero (its wake slot told when the row is due). A refresh
 //! that fails is said once and tried again; a webhook found lapsed is
 //! registered anew, and its pull cursor starts again with the new webhook.
+//!
+//! A listen on a traversal whose last edge the module pushes to the
+//! connection or per scope (`delivery: connection` or `scope`, adapter
+//! protocol 2.6) is subscribed for differently: one webhook per poll key
+//! (crate::edge_polls::PollKey: connection, position, edge, the filter the
+//! module takes and scope), shared by every listen on that key, registered
+//! as `ensureEventSubscription({ edge, filter?, scope?, callbackUrl,
+//! current? })`. Each is kept in the credential's `edge_subscriptions`
+//! record under its key (crate::edge_polls::edge_subscription), with its own
+//! secret, at its own door; a delivery there is judged only against the
+//! listens sharing its key (crate::runs `fire_arrivals`). Every later call
+//! about it (`removeEventSubscription`, `refreshEventSubscription`, the
+//! registration anew once it lapsed) names its edge, filter and scope too.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -47,13 +60,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::connect::spread;
 use crate::units::{iso_of, ms_of};
 use crate::doors::inbound_of;
-use crate::externals::{RunningExternal, rpc_as};
+use crate::edge_polls::{edge_subscription, pushed_keys};
+use crate::externals::{RunningExternal, rpc_in};
 use crate::check::LOCAL_TENANT;
 use crate::json::{Js, Obj};
 use crate::routing::{Scope, subscription_key};
 use crate::runs::{FileSet, Session};
 use crate::secrets_slot::SecretsStore;
 use crate::secrets::{Binding, Credential, Credentials, credential_for};
+use crate::wire::{js_of_json, json_of_js};
 
 /// The source's id for the webhook it registered.
 const WEBHOOK_ID_FIELD: &str = "webhook_id";
@@ -68,6 +83,131 @@ const WEBHOOK_EXPIRES_FIELD: &str = "webhook_expires";
 /// one's `scope`, `id`, `events`, `url`, `secret` and `expires`. The
 /// unscoped webhook keeps the fields above, as it always has.
 const WEBHOOK_SUBSCRIPTIONS_FIELD: &str = "webhook_subscriptions";
+/// A credential's webhooks for the arrivals on an edge: one JSON object, by
+/// key (crate::edge_polls::edge_subscription), of each one's `edge`,
+/// `filter`, `scope`, `position`, `id`, `url`, `secret` and `expires`.
+const EDGE_SUBSCRIPTIONS_FIELD: &str = "edge_subscriptions";
+
+/// What one webhook is registered for, as every call about it says.
+#[derive(Debug, Clone, PartialEq)]
+enum Subscribed {
+    /// The events of listens in the settings form, under their values of
+    /// the module's `subscriptionScopeKeys` (empty for a module that
+    /// declares none).
+    Events(Scope),
+    /// The arrivals on one edge, for the listens sharing one poll key.
+    Arrivals(EdgeArrivals),
+}
+
+/// What a webhook for the arrivals on an edge is registered for.
+#[derive(Debug, Clone, PartialEq)]
+struct EdgeArrivals {
+    edge: String,
+    /// The part of the listens' WHERE on the edge the module takes.
+    filter: Option<serde_json::Value>,
+    /// The record the edge hangs off, by its id, for listens watched under one.
+    scope: Option<String>,
+    /// The connection's position, handed the module on each call about it.
+    position: Option<serde_json::Value>,
+}
+
+impl Subscribed {
+    /// `params` naming what the webhook is for: its scope, or its edge,
+    /// filter and scope.
+    fn on(&self, mut params: serde_json::Value) -> serde_json::Value {
+        match self {
+            Subscribed::Events(scope) => {
+                if !scope.is_empty() {
+                    params["scope"] = json_of_js(&scope_js(scope));
+                }
+            }
+            Subscribed::Arrivals(arrivals) => {
+                params["edge"] = serde_json::Value::String(arrivals.edge.clone());
+                if let Some(filter) = &arrivals.filter {
+                    params["filter"] = filter.clone();
+                }
+                if let Some(scope) = &arrivals.scope {
+                    params["scope"] = serde_json::Value::String(scope.clone());
+                }
+            }
+        }
+        params
+    }
+
+    /// `ensureEventSubscription`'s params, `current` the registration held
+    /// (its id and events). An edge's names no events.
+    fn ensure(&self, events: &[String], callback: &str, current: Option<(&str, &[String])>) -> serde_json::Value {
+        let mut params = serde_json::json!({ "callbackUrl": callback });
+        match self {
+            Subscribed::Events(_) => {
+                params["events"] = serde_json::json!(events);
+                if let Some((id, held)) = current {
+                    params["current"] = serde_json::json!({ "externalId": id, "events": held });
+                }
+            }
+            Subscribed::Arrivals(_) => {
+                if let Some((id, _)) = current {
+                    params["current"] = serde_json::json!({ "externalId": id });
+                }
+            }
+        }
+        self.on(params)
+    }
+
+    /// The position each call about it is made in.
+    fn position(&self) -> Option<serde_json::Value> {
+        match self {
+            Subscribed::Events(_) => None,
+            Subscribed::Arrivals(arrivals) => arrivals.position.clone(),
+        }
+    }
+
+    /// What its lines say it is registered for.
+    fn describe(&self, events: &[String]) -> String {
+        match self {
+            Subscribed::Events(_) => events.join(","),
+            Subscribed::Arrivals(arrivals) => format!("the arrivals on {}", arrivals.edge),
+        }
+    }
+
+    /// The credential's field a scoped registration of it is kept in, and
+    /// what its record keeps of what it is for.
+    fn kept_as(&self) -> (&'static str, Obj) {
+        match self {
+            Subscribed::Events(scope) => (WEBHOOK_SUBSCRIPTIONS_FIELD, crate::obj! { "scope" => scope_js(scope) }),
+            Subscribed::Arrivals(arrivals) => {
+                let mut record = crate::obj! { "edge" => Js::str(&arrivals.edge) };
+                if let Some(filter) = &arrivals.filter {
+                    record.insert("filter".into(), js_of_json(filter));
+                }
+                if let Some(scope) = &arrivals.scope {
+                    record.insert("scope".into(), Js::str(scope));
+                }
+                if let Some(position) = &arrivals.position {
+                    record.insert("position".into(), js_of_json(position));
+                }
+                (EDGE_SUBSCRIPTIONS_FIELD, record)
+            }
+        }
+    }
+
+    /// What a record kept in `field` is registered for.
+    fn of_record(field: &str, record: &Js) -> Subscribed {
+        if field == EDGE_SUBSCRIPTIONS_FIELD {
+            return Subscribed::Arrivals(EdgeArrivals {
+                edge: record.get("edge").and_then(Js::as_str).unwrap_or_default().to_string(),
+                filter: record.get("filter").map(json_of_js),
+                scope: record.get("scope").and_then(Js::as_str).map(str::to_string),
+                position: record.get("position").map(json_of_js),
+            });
+        }
+        let scope = match record.get("scope") {
+            Some(Js::Obj(scope)) => scope.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect(),
+            _ => Scope::new(),
+        };
+        Subscribed::Events(scope)
+    }
+}
 
 /// What one credential's entry holds of one registration.
 #[derive(Default)]
@@ -87,12 +227,21 @@ pub fn has_registered_webhook(credentials: &Credentials, external: &str) -> bool
     credentials.iter().any(|c| c.external == external && c.binding != Binding::Install && !registered_channels(c).is_empty())
 }
 
-/// The scoped webhooks the credential's entry holds, by subscription key.
-fn scoped_of(fields: impl Fn(&str) -> Option<String>) -> Obj {
-    match fields(WEBHOOK_SUBSCRIPTIONS_FIELD).map(|text| Js::parse(text.as_bytes())) {
-        Some(Ok(Js::Obj(scoped))) => scoped,
+/// The registrations the credential's entry holds in `field`, by key.
+fn records_of(fields: impl Fn(&str) -> Option<String>, field: &str) -> Obj {
+    match fields(field).map(|text| Js::parse(text.as_bytes())) {
+        Some(Ok(Js::Obj(records))) => records,
         _ => Obj::new(),
     }
+}
+
+/// The fields a keyed registration may be kept in.
+const KEYED_FIELDS: [&str; 2] = [WEBHOOK_SUBSCRIPTIONS_FIELD, EDGE_SUBSCRIPTIONS_FIELD];
+
+/// The record of the credential's webhook under `key` (never ""), and the
+/// field it is kept in.
+fn record_of(credential: &Credential, key: &str) -> Option<(&'static str, Js)> {
+    KEYED_FIELDS.into_iter().find_map(|field| Some((field, records_of(credential_field(credential), field).get(key)?.clone())))
 }
 
 fn credential_field(credential: &Credential) -> impl Fn(&str) -> Option<String> + '_ {
@@ -105,9 +254,17 @@ pub fn scoped_secret(credential: &Credential, key: &str) -> Option<String> {
     Registered::of(credential, key, "").secret
 }
 
-/// Whether the credential holds a scoped webhook under `key`.
+/// Whether the credential holds a scoped webhook, or one for an edge's
+/// arrivals, under `key`.
 pub fn has_scoped(credential: &Credential, key: &str) -> bool {
-    scoped_of(credential_field(credential)).contains_key(key)
+    record_of(credential, key).is_some()
+}
+
+/// Whether `key` names a webhook one of `external`'s credentials holds for
+/// the arrivals on an edge: a delivery through it is judged only against
+/// the listens sharing its poll key.
+pub fn is_edge_webhook(credentials: &Credentials, external: &str, key: &str) -> bool {
+    credentials.iter().filter(|c| c.external == external).any(|c| records_of(credential_field(c), EDGE_SUBSCRIPTIONS_FIELD).contains_key(key))
 }
 
 impl Registered {
@@ -124,8 +281,7 @@ impl Registered {
                 expires: field(WEBHOOK_EXPIRES_FIELD),
             };
         }
-        let scoped = scoped_of(field);
-        let Some(record) = scoped.get(key) else { return Registered::default() };
+        let Some((_, record)) = record_of(credential, key) else { return Registered::default() };
         let text = |name: &str| record.get(name).and_then(Js::as_str).filter(|v| !v.is_empty()).map(str::to_string);
         Registered {
             id: text("id"),
@@ -138,19 +294,17 @@ impl Registered {
 }
 
 /// Every webhook the credential's entry holds: its subscription key ("" the
-/// unscoped one) and scope.
-fn registered_channels(credential: &Credential) -> Vec<(String, Scope)> {
+/// unscoped one) and what it is registered for.
+fn registered_channels(credential: &Credential) -> Vec<(String, Subscribed)> {
     let field = credential_field(credential);
     let mut channels = Vec::new();
     if field(WEBHOOK_ID_FIELD).is_some() {
-        channels.push((String::new(), Scope::new()));
+        channels.push((String::new(), Subscribed::Events(Scope::new())));
     }
-    for (key, record) in scoped_of(field) {
-        let scope = match record.get("scope") {
-            Some(Js::Obj(scope)) => scope.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect(),
-            _ => Scope::new(),
-        };
-        channels.push((key, scope));
+    for kept_in in KEYED_FIELDS {
+        for (key, record) in records_of(&field, kept_in) {
+            channels.push((key, Subscribed::of_record(kept_in, &record)));
+        }
     }
     channels
 }
@@ -186,8 +340,8 @@ fn wanted(set: &FileSet, running: &RunningExternal, credentials: &Credentials) -
     let scope_keys = running.subscription_scope_keys();
     let mut wanted: BTreeMap<Channel, Want> = BTreeMap::new();
     let mut notes = Vec::new();
-    // A listen on a traversal is fired by the arrivals its connection
-    // delivers to its own door; it registers no webhook of its own.
+    // A listen on a traversal is subscribed for by the key it shares
+    // (`edge_webhooks`), or fired by what its connection pushes.
     for listen in set.listens.iter().filter(|l| l.adapter == *name && l.plan.is_none()) {
         let scope = match listen.scope(&scope_keys) {
             Ok(scope) => scope,
@@ -210,23 +364,58 @@ fn wanted(set: &FileSet, running: &RunningExternal, credentials: &Credentials) -
         }
     }
     for registered in credentials.iter().filter(|c| c.external == *name && c.binding != Binding::Install) {
-        for (key, scope) in registered_channels(registered) {
+        for (key, subscribed) in registered_channels(registered) {
+            let Subscribed::Events(scope) = subscribed else { continue };
             wanted.entry((Some(registered.name.clone()), key)).or_insert_with(|| Want { scope, events: BTreeSet::new() });
         }
     }
     (wanted, notes)
 }
 
-/// One webhook to reconcile: the external's, kept under `credential`, for
-/// `scope` (under its subscription `key`, "" when unscoped), for `events`.
+/// The external's webhooks for the arrivals on its pushed edges: one per
+/// poll key its listens share (crate::edge_polls::pushed_keys), kept under
+/// the key's credential (else the external's user credential), and each
+/// one a credential holds that no listen shares any more, to be removed.
+fn edge_webhooks(set: &FileSet, running: &RunningExternal, credentials: &Credentials) -> BTreeMap<Channel, Webhook> {
+    let name = &running.external.manifest.name;
+    let mut webhooks: BTreeMap<Channel, (Subscribed, bool)> = BTreeMap::new();
+    for key in pushed_keys(set).into_keys().filter(|key| key.adapter == *name) {
+        let credential = key.credential.clone().or_else(|| credential_for(credentials, name).map(|c| c.name.clone()));
+        let arrivals = EdgeArrivals { edge: key.edge.clone(), filter: key.filter(), scope: key.scope.clone(), position: key.position_settings() };
+        webhooks.insert((credential, edge_subscription(&key)), (Subscribed::Arrivals(arrivals), true));
+    }
+    for registered in credentials.iter().filter(|c| c.external == *name && c.binding != Binding::Install) {
+        for (key, subscribed) in registered_channels(registered) {
+            if matches!(subscribed, Subscribed::Arrivals(_)) {
+                webhooks.entry((Some(registered.name.clone()), key)).or_insert((subscribed, false));
+            }
+        }
+    }
+    let several = webhooks.keys().map(|(credential, _)| credential).collect::<BTreeSet<_>>().len() > 1;
+    webhooks
+        .into_iter()
+        .map(|((credential, key), (subscribed, needed))| {
+            let label = label_of(name, credential.as_deref().filter(|_| several), &subscribed, &key);
+            let webhook = Webhook { external: name.clone(), credential: credential.clone(), key: key.clone(), subscribed, events: Vec::new(), needed, label };
+            ((credential, key), webhook)
+        })
+        .collect()
+}
+
+/// One webhook to reconcile: the external's, kept under `credential`, under
+/// its subscription `key` ("" when unscoped), for what it is `subscribed`
+/// to.
 struct Webhook {
     external: String,
     credential: Option<String>,
     key: String,
-    scope: Scope,
+    subscribed: Subscribed,
+    /// The events its listens in the settings form name; none for an edge's.
     events: Vec<String>,
+    /// Whether any listen needs it: one none does is removed.
+    needed: bool,
     /// How its lines name it: the external, the credential when the
-    /// external's webhooks are kept under more than one, and the scope.
+    /// external's webhooks are kept under more than one, and what it is for.
     label: String,
 }
 
@@ -236,22 +425,32 @@ fn webhooks_of(external: &str, wanted: BTreeMap<Channel, Want>) -> Vec<Webhook> 
     wanted
         .into_iter()
         .map(|((credential, key), want)| {
-            let label = label_of(external, credential.as_deref().filter(|_| several), &want.scope);
-            Webhook { external: external.to_string(), credential, key, scope: want.scope, events: want.events.into_iter().collect(), label }
+            let subscribed = Subscribed::Events(want.scope);
+            let label = label_of(external, credential.as_deref().filter(|_| several), &subscribed, &key);
+            let events: Vec<String> = want.events.into_iter().collect();
+            Webhook { external: external.to_string(), credential, key, subscribed, needed: !events.is_empty(), events, label }
         })
         .collect()
 }
 
 /// How a webhook's lines name it: the external, the credential when it is
-/// one of several the external's webhooks are kept under, and the scope.
-fn label_of(external: &str, credential: Option<&str>, scope: &Scope) -> String {
+/// one of several the external's webhooks are kept under, and its scope, or
+/// the edge it is for and its key.
+fn label_of(external: &str, credential: Option<&str>, subscribed: &Subscribed, key: &str) -> String {
     let mut label = match credential {
         Some(credential) => format!("{external} as {credential}"),
         None => external.to_string(),
     };
-    if !scope.is_empty() {
-        let scope: Vec<String> = scope.iter().map(|(k, v)| format!("{k} {v}")).collect();
-        label.push_str(&format!(" ({})", scope.join(", ")));
+    match subscribed {
+        Subscribed::Events(scope) if !scope.is_empty() => {
+            let scope: Vec<String> = scope.iter().map(|(k, v)| format!("{k} {v}")).collect();
+            label.push_str(&format!(" ({})", scope.join(", ")));
+        }
+        Subscribed::Events(_) => {}
+        Subscribed::Arrivals(arrivals) => {
+            let of = arrivals.scope.as_ref().map(|scope| format!(" of {scope}")).unwrap_or_default();
+            label.push_str(&format!(" ({}{of}, {key})", arrivals.edge));
+        }
     }
     label
 }
@@ -296,6 +495,7 @@ pub async fn reconcile(session: &Session) -> Vec<String> {
         let (wanted, notes) = wanted(&set, running, secrets.credentials());
         lines.extend(notes);
         webhooks.extend(webhooks_of(&running.external.manifest.name, wanted));
+        webhooks.extend(edge_webhooks(&set, running, secrets.credentials()).into_values());
     }
     lines.extend(register(session, webhooks).await);
     lines.extend(arm_refreshes(session));
@@ -303,7 +503,8 @@ pub async fn reconcile(session: &Session) -> Vec<String> {
 }
 
 /// A refresh's registrations: each webhook whose listens want other events
-/// in `after` than in `before`, and each whose last registration failed. A
+/// in `after` than in `before`, each edge's webhook a listen newly shares or
+/// none shares any more, and each whose last registration failed. A
 /// failure is said once per message; a success is always said, and so is a
 /// listen the refresh left without a scope.
 pub async fn follow_refresh(session: &Session, before: &FileSet, after: &FileSet) -> Vec<String> {
@@ -320,6 +521,11 @@ pub async fn follow_refresh(session: &Session, before: &FileSet, after: &FileSet
             session.registrations.failing(&w.label) || before.as_ref() != Some(&w.events)
         });
         webhooks.extend(changed);
+        let was = edge_webhooks(before, running, credentials);
+        let edges = edge_webhooks(after, running, credentials).into_iter().filter(|(channel, w)| {
+            session.registrations.failing(&w.label) || was.get(channel).map(|before| before.needed) != Some(w.needed)
+        });
+        webhooks.extend(edges.map(|(_, w)| w));
     }
     lines.extend(register(session, webhooks).await);
     lines.extend(arm_refreshes(session));
@@ -367,7 +573,7 @@ async fn reconcile_one(session: &Session, webhook: &Webhook) -> Result<Option<(S
             Some(named) => format!("no credential \"{named}\" in the secrets to register its webhook under"),
             None => format!("no credential to register its webhook under: listen-fire credential add --module {name} <name>"),
         };
-        return Ok((!wanted.is_empty()).then_some((missing, false)));
+        return Ok(webhook.needed.then_some((missing, false)));
     };
     let setup = inbound_of(running).ok_or("it takes no webhooks")?;
     let provider = setup.declaration.provider_key.clone();
@@ -375,22 +581,21 @@ async fn reconcile_one(session: &Session, webhook: &Webhook) -> Result<Option<(S
     let secret_field = setup.secret_field;
     let registered = Registered::of(credential, &webhook.key, &secret_field);
     let kept = Kept { credential, key: &webhook.key, secret_field: &secret_field };
-    let call = |method: &'static str, params: serde_json::Value| async move {
-        let raw = rpc_as(running, credentials, Some(credential), LOCAL_TENANT, method, params).await?;
-        module_wire::results::check(method, name, &raw)
-    };
-    // The scope rides every call of a scoped webhook (the platform's `scope`).
-    let scoped = |mut params: serde_json::Value| {
-        if !webhook.scope.is_empty() {
-            params["scope"] = crate::wire::json_of_js(&scope_js(&webhook.scope));
+    let position = webhook.subscribed.position();
+    let call = |method: &'static str, params: serde_json::Value| {
+        let position = position.clone();
+        async move {
+            let raw = rpc_in(running, credentials, Some(credential), LOCAL_TENANT, method, params, position).await?;
+            module_wire::results::check(method, name, &raw)
         }
-        params
     };
+    // What it is for rides every call about it (the platform's `scope`).
+    let on = |params: serde_json::Value| webhook.subscribed.on(params);
 
-    if wanted.is_empty() {
+    if !webhook.needed {
         let Some(id) = registered.id else { return Ok(None) };
         let url = registered.url.clone().unwrap_or_default();
-        call("removeEventSubscription", scoped(serde_json::json!({ "callbackUrl": url, "externalId": id }))).await?;
+        call("removeEventSubscription", on(serde_json::json!({ "callbackUrl": url, "externalId": id }))).await?;
         // Its secret too: nothing is delivered to that door now.
         kept.forget().await?;
         return Ok(Some((format!("no listen needs its webhook any more; removed webhook {id}"), true)));
@@ -409,19 +614,16 @@ async fn reconcile_one(session: &Session, webhook: &Webhook) -> Result<Option<(S
     if let (Some((id, _)), Some(url)) = (&current, &registered.url)
         && *url != callback
     {
-        call("removeEventSubscription", scoped(serde_json::json!({ "callbackUrl": url, "externalId": id }))).await?;
+        call("removeEventSubscription", on(serde_json::json!({ "callbackUrl": url, "externalId": id }))).await?;
         current = None;
     }
-    let mut params = scoped(serde_json::json!({ "events": wanted, "callbackUrl": callback }));
-    if let Some((id, events)) = &current {
-        params["current"] = serde_json::json!({ "externalId": id, "events": events });
-    }
+    let params = webhook.subscribed.ensure(wanted, &callback, current.as_ref().map(|(id, events)| (id.as_str(), events.as_slice())));
     let had_webhook = current.is_some();
     let answer = call("ensureEventSubscription", params).await?;
-    let events = wanted.join(",");
+    let described = webhook.subscribed.describe(wanted);
     if answer == Js::Null {
         let id = current.map(|(id, _)| id).unwrap_or_default();
-        return Ok(Some((format!("webhook {id} is registered for {events} at {callback}"), false)));
+        return Ok(Some((format!("webhook {id} is registered for {described} at {callback}"), false)));
     }
     let id = answer.get("externalId").and_then(Js::as_str).map(str::to_string).or(current.map(|(id, _)| id)).unwrap_or_default();
     let issued = answer.get("secret").and_then(Js::as_str).filter(|s| !s.is_empty());
@@ -429,12 +631,12 @@ async fn reconcile_one(session: &Session, webhook: &Webhook) -> Result<Option<(S
     // held: nothing could verify a delivery, so the webhook is withdrawn.
     let held = registered.secret.is_some() && had_webhook;
     if issued_by_provider && issued.is_none() && !held {
-        call("removeEventSubscription", scoped(serde_json::json!({ "callbackUrl": callback, "externalId": id }))).await?;
+        call("removeEventSubscription", on(serde_json::json!({ "callbackUrl": callback, "externalId": id }))).await?;
         return Ok(Some((format!("registering its webhook returned no secret, and {name} issues the secret deliveries are signed with: withdrawn, as none could be verified"), false)));
     }
     let secret = issued.map(str::to_string).or(registered.secret);
     let expires = answer.get("expiresAt").and_then(Js::as_str);
-    kept.keep(Registration { scope: &webhook.scope, id: &id, events: wanted, url: &callback, secret: secret.as_deref(), expires }).await?;
+    kept.keep(Registration { subscribed: &webhook.subscribed, id: &id, events: wanted, url: &callback, secret: secret.as_deref(), expires }).await?;
     if let Some(expires) = expires.and_then(ms_of) {
         schedule_refresh(session, running, &Refreshing { credential: &credential.name, key: &webhook.key }, Some(refresh_due_ms(session.now_ms(), expires)))?;
     }
@@ -443,7 +645,7 @@ async fn reconcile_one(session: &Session, webhook: &Webhook) -> Result<Option<(S
     if registered.id.as_deref() != Some(id.as_str()) {
         session.store.save_inbound_checkpoint(&subscription_id(&credential.name, &webhook.key), &Js::Null).map_err(|e| e.to_string())?;
     }
-    Ok(Some((format!("registered webhook {id} for {events} at {callback}"), true)))
+    Ok(Some((format!("registered webhook {id} for {described} at {callback}"), true)))
 }
 
 // ── Refreshing a webhook the source lets lapse ──────────────────────────────
@@ -559,17 +761,16 @@ async fn refresh_one(session: &Session, external: &str, webhook: &Refreshing<'_>
     let Some(credential) = credentials.iter().find(|c| c.name == webhook.credential) else { return (None, None) };
     let registered = Registered::of(credential, webhook.key, &setup.secret_field);
     let Some(id) = registered.id.clone() else { return (None, None) };
-    let scope = registered_channels(credential).into_iter().find(|(k, _)| k == webhook.key).map(|(_, scope)| scope).unwrap_or_default();
+    let subscribed = registered_channels(credential).into_iter().find(|(k, _)| k == webhook.key).map(|(_, subscribed)| subscribed).unwrap_or(Subscribed::Events(Scope::new()));
     let several = credentials.iter().filter(|c| c.external == external && c.binding != Binding::Install && !registered_channels(c).is_empty()).count() > 1;
-    let label = label_of(external, Some(webhook.credential).filter(|_| several), &scope);
+    let label = label_of(external, Some(webhook.credential).filter(|_| several), &subscribed, webhook.key);
     // Its own key in the failures said, apart from its registration's.
     let said_as = format!("{label} refresh");
-    let call = |method: &'static str, mut params: serde_json::Value| {
-        if !scope.is_empty() {
-            params["scope"] = crate::wire::json_of_js(&scope_js(&scope));
-        }
+    let call = |method: &'static str, params: serde_json::Value| {
+        let params = subscribed.on(params);
+        let position = subscribed.position();
         async move {
-            let raw = rpc_as(running, credentials, Some(credential), LOCAL_TENANT, method, params).await?;
+            let raw = rpc_in(running, credentials, Some(credential), LOCAL_TENANT, method, params, position).await?;
             module_wire::results::check(method, external, &raw)
         }
     };
@@ -581,7 +782,9 @@ async fn refresh_one(session: &Session, external: &str, webhook: &Refreshing<'_>
             // the lapsed one removed first where the source still holds it.
             let url = registered.url.clone().unwrap_or_default();
             let _ = call("removeEventSubscription", serde_json::json!({ "callbackUrl": url, "externalId": id })).await;
-            let answer = match call("ensureEventSubscription", serde_json::json!({ "events": registered.events, "callbackUrl": url })).await {
+            // `on` adds what it is for to the registration anew, as to every call.
+            let ensure = subscribed.ensure(&registered.events, &url, None);
+            let answer = match call("ensureEventSubscription", ensure).await {
                 Ok(Js::Null) => return retry(format!("{label}: webhook {id} lapsed, and registering it anew registered nothing; trying again in 15 minutes")),
                 Ok(answer) => answer,
                 Err(message) => return retry(format!("{label}: webhook {id} lapsed, and registering it anew failed — {message}; trying again in 15 minutes")),
@@ -591,13 +794,13 @@ async fn refresh_one(session: &Session, external: &str, webhook: &Refreshing<'_>
             let secret = answer.get("secret").and_then(Js::as_str).filter(|s| !s.is_empty()).map(str::to_string).or(registered.secret.clone());
             let new_expires = answer.get("expiresAt").and_then(Js::as_str);
             let kept = Kept { credential, key: webhook.key, secret_field: &setup.secret_field };
-            let registration = Registration { scope: &scope, id: &new_id, events: &registered.events, url: &url, secret: secret.as_deref(), expires: new_expires };
+            let registration = Registration { subscribed: &subscribed, id: &new_id, events: &registered.events, url: &url, secret: secret.as_deref(), expires: new_expires };
             if let Err(message) = kept.keep(registration).await {
                 return retry(format!("{label}: webhook {id} lapsed and was registered anew as {new_id}, which could not be kept — {message}"));
             }
             // The new webhook's payload feed starts at its beginning.
             let subscription = subscription_id(webhook.credential, webhook.key);
-            let mut line = format!("{label}: webhook {id} lapsed at {}; registered webhook {new_id} for {} at {url}", iso_of(expires), registered.events.join(","));
+            let mut line = format!("{label}: webhook {id} lapsed at {}; registered webhook {new_id} for {} at {url}", iso_of(expires), subscribed.describe(&registered.events));
             if let Err(e) = session.store.save_inbound_checkpoint(&subscription, &Js::Null) {
                 line.push_str(&format!(" (its pull cursor was not reset: {e})"));
             }
@@ -613,7 +816,7 @@ async fn refresh_one(session: &Session, external: &str, webhook: &Refreshing<'_>
                 let new_expires = answer.get("expiresAt").and_then(Js::as_str);
                 let kept = Kept { credential, key: webhook.key, secret_field: &setup.secret_field };
                 let registration = Registration {
-                    scope: &scope,
+                    subscribed: &subscribed,
                     id: &id,
                     events: &registered.events,
                     url: registered.url.as_deref().unwrap_or_default(),
@@ -639,7 +842,7 @@ async fn refresh_one(session: &Session, external: &str, webhook: &Refreshing<'_>
 
 /// A registration as it is kept.
 struct Registration<'a> {
-    scope: &'a Scope,
+    subscribed: &'a Subscribed,
     id: &'a str,
     events: &'a [String],
     url: &'a str,
@@ -648,7 +851,8 @@ struct Registration<'a> {
 }
 
 /// Where one webhook's registration is kept: the credential's flat fields
-/// for the unscoped one, its record in `webhook_subscriptions` for a scoped one.
+/// for the unscoped one, its record in `webhook_subscriptions` for a scoped
+/// one, in `edge_subscriptions` for one for an edge's arrivals.
 struct Kept<'a> {
     credential: &'a Credential,
     key: &'a str,
@@ -671,12 +875,12 @@ impl Kept<'_> {
             let unexpiring = |stored: Vec<(String, String)>| stored.into_iter().filter(|(k, _)| k != WEBHOOK_EXPIRES_FIELD).collect();
             return replace(self.credential, &|stored| spread(unexpiring(stored), fields.clone())).await;
         }
-        let mut record = crate::obj! {
-            "scope" => scope_js(registration.scope),
-            "id" => Js::str(registration.id),
-            "events" => Js::strings(registration.events),
-            "url" => Js::str(registration.url),
-        };
+        let (field, mut record) = registration.subscribed.kept_as();
+        record.insert("id".into(), Js::str(registration.id));
+        if let Subscribed::Events(_) = registration.subscribed {
+            record.insert("events".into(), Js::strings(registration.events));
+        }
+        record.insert("url".into(), Js::str(registration.url));
         if let Some(secret) = registration.secret {
             record.insert("secret".into(), Js::str(secret));
         }
@@ -684,7 +888,7 @@ impl Kept<'_> {
             record.insert("expires".into(), Js::str(expires));
         }
         let record = Js::Obj(record);
-        replace(self.credential, &|stored| with_scoped(stored, self.key, Some(record.clone()))).await
+        replace(self.credential, &|stored| with_scoped(stored, field, self.key, Some(record.clone()))).await
     }
 
     async fn forget(&self) -> Result<(), String> {
@@ -692,14 +896,14 @@ impl Kept<'_> {
             let names = [WEBHOOK_ID_FIELD, WEBHOOK_EVENTS_FIELD, WEBHOOK_URL_FIELD, WEBHOOK_EXPIRES_FIELD, self.secret_field];
             return replace(self.credential, &|stored| stored.into_iter().filter(|(k, _)| !names.contains(&k.as_str())).collect()).await;
         }
-        replace(self.credential, &|stored| with_scoped(stored, self.key, None)).await
+        replace(self.credential, &|stored| KEYED_FIELDS.into_iter().fold(stored, |stored, field| with_scoped(stored, field, self.key, None))).await
     }
 }
 
-/// The entry with its scoped webhook `key` set to `record`, or dropped;
-/// the field itself dropped when it holds none.
-fn with_scoped(stored: Vec<(String, String)>, key: &str, record: Option<Js>) -> Vec<(String, String)> {
-    let mut scoped = scoped_of(|name| stored.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()));
+/// The entry with the registration `key` in `field` set to `record`, or
+/// dropped; the field itself dropped when it holds none.
+fn with_scoped(stored: Vec<(String, String)>, field: &str, key: &str, record: Option<Js>) -> Vec<(String, String)> {
+    let mut scoped = records_of(|name| stored.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()), field);
     match record {
         Some(record) => {
             scoped.insert(key.to_string(), record);
@@ -708,11 +912,11 @@ fn with_scoped(stored: Vec<(String, String)>, key: &str, record: Option<Js>) -> 
             scoped.shift_remove(key);
         }
     }
-    let others = stored.into_iter().filter(|(k, _)| k != WEBHOOK_SUBSCRIPTIONS_FIELD).collect();
+    let others = stored.into_iter().filter(|(k, _)| k != field).collect();
     if scoped.is_empty() {
         return others;
     }
-    spread(others, vec![(WEBHOOK_SUBSCRIPTIONS_FIELD.to_string(), Js::Obj(scoped).to_json())])
+    spread(others, vec![(field.to_string(), Js::Obj(scoped).to_json())])
 }
 
 /// The secrets module holding the credential's entry, as written by listen-fire.
@@ -941,6 +1145,133 @@ mod tests {
         });
     }
 
+    /// The inbox's notes pushed to one connection, a listen on them per
+    /// entry of `listens` (the function it fires, the title its WHERE takes).
+    fn on_notes(listens: &[(&str, &str)]) -> String {
+        let mut movement = "import { inbox } from adapters\nimport { inbox_a } from credentials\n\ni = connect inbox using inbox_a\n".to_string();
+        for (function, _) in listens {
+            movement.push_str(&format!("\nfunction {function}(n: <i-[:Note]->>) {{\n  return \"{function}\"\n}}\n"));
+        }
+        for (function, title) in listens {
+            movement.push_str(&format!("\nlisten to i-[n:Notes WHERE n.Title == \"{title}\"]-> fire {function}\n"));
+        }
+        movement
+    }
+
+    /// The key of the webhook registered for the listens whose WHERE takes `title`, and its secret.
+    fn edge_webhook_of(project: &InboxProject, title: &str) -> (String, String) {
+        let made = project.registrations.lock().unwrap();
+        let registration = made.iter().find(|r| r.get("filter").and_then(|f| f.get("right")).and_then(|r| r.get("value")).and_then(Js::as_str) == Some(title)).expect("registered");
+        let url = registration.get("callbackUrl").and_then(Js::as_str).unwrap();
+        let key = url.rsplit('/').next().unwrap().to_string();
+        let index = made.iter().position(|r| std::ptr::eq(r, registration)).unwrap();
+        (key, format!("secret-wh-{}", index + 1))
+    }
+
+    /// A delivery of `arrivals` to `subscription`'s door, signed with
+    /// `secret`: its answer's status and the movements it ran.
+    async fn arrived(session: &Session, subscription: &str, secret: &str, id: &str, arrivals: &str) -> (u16, Vec<String>) {
+        let body = format!(r#"{{"arrivals":{arrivals}}}"#);
+        let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::KeyInit>::new_from_slice(secret.as_bytes()).unwrap();
+        hmac::Mac::update(&mut mac, body.as_bytes());
+        let signature: String = hmac::Mac::finalize(mac).into_bytes().iter().map(|b| format!("{b:02x}")).collect();
+        let headers = vec![("x-listen-fire-signature".to_string(), signature), ("x-inbox-delivery".to_string(), id.to_string())];
+        let delivery = crate::inbound::Delivery { provider: "inbox", subscription_id: subscription, raw_body: body.as_bytes(), headers: &headers, method: "POST", path: "", query: "", source: crate::store::DeliverySource::Webhook };
+        let (answer, fired) = crate::doors::deliver_inline(session, delivery, &|| {}).await;
+        let mut movements: Vec<String> = fired.outcomes.into_iter().map(|o| o.movement).collect();
+        movements.sort();
+        (answer.status, movements)
+    }
+
+    /// A note titled `title` landing on `Notes`, the module saying whether it applied the filter.
+    fn note(id: &str, title: &str, taken_applied: bool) -> String {
+        format!(r#"[{{"edge":"Notes","identity":"{id}","landing":{{"recordId":"{id}","recordType":"Note","fields":{{"Id":"{id}","Title":"{title}"}}}},"takenApplied":{taken_applied}}}]"#)
+    }
+
+    #[test]
+    fn listens_on_one_pushed_edge_share_a_webhook_per_taken_filter_and_each_door_fires_only_its_own() {
+        let project = InboxProject::pushed(&on_notes(&[("a", "x"), ("b", "x"), ("c", "y")]), SCOPED_SECRETS, "publicUrl: https://lf.example\n");
+        in_local(async {
+            let session = project.session().await;
+            let lines = reconcile(&session).await;
+            assert_eq!(lines.len(), 2, "one webhook per taken filter: {lines:?}");
+            let made: Vec<Js> = project.registrations.lock().unwrap().clone();
+            assert_eq!(made.len(), 2, "{made:?}");
+            for registration in &made {
+                assert_eq!((registration.get("token"), registration.get("edge")), (Some(&Js::str("a")), Some(&Js::str("Notes"))), "registered as the connection, for its edge");
+                assert!(registration.get("events").is_none(), "an edge's webhook names no events");
+            }
+            let (x, x_secret) = edge_webhook_of(&project, "x");
+            let (y, y_secret) = edge_webhook_of(&project, "y");
+            assert!(x.starts_with("edge-") && y.starts_with("edge-") && x != y, "{x} {y}");
+            let mut expected = vec![
+                format!("inbox (Notes, {x}): registered webhook wh-{} for the arrivals on Notes at https://lf.example/api/public/webhook-sync/inbox/inbox_a/{x}", &x_secret["secret-wh-".len()..]),
+                format!("inbox (Notes, {y}): registered webhook wh-{} for the arrivals on Notes at https://lf.example/api/public/webhook-sync/inbox/inbox_a/{y}", &y_secret["secret-wh-".len()..]),
+            ];
+            expected.sort();
+            let mut lines = lines;
+            lines.sort();
+            assert_eq!(lines, expected);
+
+            // Asked again: held, so left as it is.
+            let again = reconcile(&session).await;
+            assert!(again.iter().all(|line| line.contains(": webhook wh-") && line.contains(" is registered for the arrivals on Notes at ")), "{again:?}");
+            assert_eq!(project.registrations.lock().unwrap().len(), 2, "nothing registered anew");
+
+            // Each door takes its own secret and runs only its own key's listens.
+            let session = project.session().await;
+            assert_eq!(arrived(&session, &format!("inbox_a/{x}"), &x_secret, "d-1", &note("n-1", "x", true)).await, (200, vec!["a".to_string(), "b".to_string()]));
+            assert_eq!(arrived(&session, &format!("inbox_a/{y}"), &y_secret, "d-2", &note("n-2", "y", true)).await, (200, vec!["c".to_string()]));
+            // A note c's filter takes, delivered through the other key's door
+            // and judged there, runs none: c's own webhook was not asked.
+            assert_eq!(arrived(&session, &format!("inbox_a/{x}"), &x_secret, "d-3", &note("n-3", "y", false)).await, (200, Vec::new()));
+            assert_eq!(arrived(&session, &format!("inbox_a/{x}"), &y_secret, "d-4", &note("n-4", "x", true)).await.0, 401, "another key's secret");
+        });
+
+        // c's listen gone: its webhook is removed, naming its edge and filter.
+        let before_refresh = project.registrations.lock().unwrap().len();
+        let (y, y_secret) = edge_webhook_of(&project, "y");
+        in_local(async {
+            let session = project.session().await;
+            let before = session.file_set();
+            std::fs::write(project.root.join("movements/noted.mvt"), on_notes(&[("a", "x"), ("b", "x")])).unwrap();
+            let refreshed = project.session().await;
+            let lines = follow_refresh(&refreshed, &before, &refreshed.file_set()).await;
+            assert_eq!(lines, [format!("inbox (Notes, {y}): no listen needs its webhook any more; removed webhook {}", &y_secret["secret-".len()..])]);
+            let made = project.registrations.lock().unwrap();
+            assert_eq!(made.len(), before_refresh + 1, "only the removal");
+            let removal = made.last().unwrap();
+            assert_eq!((removal.get("removed"), removal.get("edge")), (Some(&Js::str(&y_secret["secret-".len()..])), Some(&Js::str("Notes"))));
+            assert!(removal.get("filter").is_some(), "its filter too: {removal:?}");
+            drop(made);
+            assert_eq!(arrived(&refreshed, &format!("inbox_a/{y}"), &y_secret, "d-5", &note("n-5", "y", true)).await.0, 404, "its door is gone with it");
+        });
+    }
+
+    #[test]
+    fn a_listen_in_the_settings_form_keeps_its_webhook_beside_an_edges() {
+        let mut movement = on_notes(&[("a", "x")]);
+        movement.push_str("\nfunction noted(note: <i-[:Note]->>) {\n  return \"seen\"\n}\n\nlisten to i { events: [\"note.created\"] } fire noted\n");
+        let project = InboxProject::pushed(&movement, SCOPED_SECRETS, "publicUrl: https://lf.example\n");
+        in_local(async {
+            let session = project.session().await;
+            let mut lines = reconcile(&session).await;
+            lines.sort();
+            let (x, _) = edge_webhook_of(&project, "x");
+            assert_eq!(lines.len(), 2, "{lines:?}");
+            assert_eq!(lines[0], format!("inbox (Notes, {x}): registered webhook wh-2 for the arrivals on Notes at https://lf.example/api/public/webhook-sync/inbox/inbox_a/{x}"));
+            assert_eq!(lines[1], "inbox: registered webhook wh-1 for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a");
+            let session = project.session().await;
+            let credential = session.secrets().credentials().iter().find(|c| c.name == "inbox_a").cloned().unwrap();
+            assert!(is_edge_webhook(session.secrets().credentials(), "inbox", &x) && !is_edge_webhook(session.secrets().credentials(), "inbox", ""));
+            assert_eq!(Registered::of(&credential, "", "webhook_secret").id.as_deref(), Some("wh-1"), "the settings form's webhook is kept where it always was");
+            // An event through the edge's door reaches no listen in the
+            // settings form; through the credential's own door it does.
+            assert_eq!(delivered(&session, &format!("inbox_a/{x}"), "secret-wh-2", "d-1").await, (200, Vec::new()));
+            assert_eq!(delivered(&session, "inbox_a", "secret-a", "d-2").await, (200, vec!["noted".to_string()]));
+        });
+    }
+
     #[test]
     fn a_failure_is_said_once_per_message_and_again_after_a_success() {
         let registrations = Registrations::default();
@@ -1036,6 +1367,39 @@ mod tests {
             );
             // The new webhook's door takes its deliveries.
             assert_eq!(delivered(&session, "inbox_a/red", "secret-red", "d-1").await, (200, vec!["noted_red".to_string()]));
+        });
+    }
+
+    #[test]
+    fn an_edges_webhook_is_refreshed_and_registered_anew_naming_its_edge() {
+        let project = InboxProject::pushed_expiring(&on_notes(&[("a", "x")]), SCOPED_SECRETS, "publicUrl: https://lf.example\n", 7 * DAY_MS);
+        in_local(async {
+            let session = project.session().await;
+            assert_eq!(reconcile(&session).await.len(), 1);
+            let (x, _) = edge_webhook_of(&project, "x");
+            assert_eq!(refresh_rows_due_by(&session, 6 * DAY_MS + 60_000), [format!("refresh_subscription:inbox:inbox_a/{x}")], "its refresh is queued as a scoped one's is");
+            let session = project.session().await;
+            let kept = |session: &Session| {
+                let credential = session.secrets().credentials().iter().find(|c| c.name == "inbox_a").cloned().unwrap();
+                Registered::of(&credential, &x, "webhook_secret")
+            };
+            let expires = ms_of(&kept(&session).expires.unwrap()).unwrap();
+            let webhook = Refreshing { credential: "inbox_a", key: &x };
+            let (line, _) = refresh_one(&session, "inbox", &webhook, expires - DAY_MS / 2).await;
+            assert!(line.is_some_and(|l| l.starts_with(&format!("inbox (Notes, {x}): refreshed webhook wh-1"))));
+            assert_eq!(project.registrations.lock().unwrap().last().map(Js::to_json).as_deref(), Some(r#"{"token":"a","refreshed":"wh-1","edge":"Notes"}"#));
+            // Lapsed: registered anew for its edge and filter, no events.
+            let lapsed = ms_of(&kept(&session).expires.unwrap()).unwrap() + 60_000;
+            let (line, _) = refresh_one(&session, "inbox", &webhook, lapsed).await;
+            assert!(line.as_deref().is_some_and(|l| l.ends_with(&format!("registered webhook wh-4 for the arrivals on Notes at https://lf.example/api/public/webhook-sync/inbox/inbox_a/{x}"))), "{line:?}");
+            let made = project.registrations.lock().unwrap();
+            let anew = made.last().unwrap();
+            assert_eq!((anew.get("edge"), anew.get("events")), (Some(&Js::str("Notes")), None));
+            assert!(anew.get("filter").is_some());
+            assert_eq!(made[made.len() - 2].get("edge"), Some(&Js::str("Notes")), "the lapsed one removed naming its edge");
+            drop(made);
+            let now_kept = kept(&session);
+            assert_eq!((now_kept.id.as_deref(), now_kept.secret.as_deref()), (Some("wh-4"), Some("secret-wh-4")));
         });
     }
 

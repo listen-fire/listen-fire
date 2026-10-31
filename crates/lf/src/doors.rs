@@ -820,6 +820,12 @@ pub(crate) mod tests {
             /// Run once, as the next `awaitKeys` is asked: what lands while a
             /// run's wait opens.
             pub on_await_keys: OnAwaitKeys,
+            /// Its notes are a listenable root `Notes` pushed to the
+            /// connection (adapter protocol 2.6), taking `Title ==`: a webhook
+            /// asked for with an `edge` is noted with its edge and filter,
+            /// and its secret is `secret-<its id>`; a delivery's `arrivals`
+            /// are passed on as they are.
+            pub pushed: bool,
         }
 
         impl Adapter for Inbox {
@@ -839,6 +845,10 @@ pub(crate) mod tests {
                         .declare("listenConfig", Js::parse(br#"[{"key":"shelf"}]"#).unwrap()),
                     false => manifest,
                 };
+                let manifest = match self.pushed {
+                    true => manifest.declare("protocolMinor", Js::Num(6.into())),
+                    false => manifest,
+                };
                 match self.polled {
                     true => manifest.declare("poll", Js::parse(br#"{"intervalSeconds":60}"#).unwrap()),
                     false => manifest,
@@ -846,8 +856,13 @@ pub(crate) mod tests {
             }
 
             async fn list_entry_points(&self, _: &Ctx) -> Answer<Vec<EntryPoint>> {
+                let listenable = match self.pushed {
+                    true => Js::parse(br#"{"collectionName":"Notes","listenable":true,"delivery":"connection","identity":"Id","capability":{"filter":"native","supportsLimit":false}}"#).unwrap(),
+                    false => Js::Obj(Obj::new()),
+                };
+                let Js::Obj(listenable) = listenable else { unreachable!("an object") };
                 Ok(vec![
-                    EntryPoint { type_id: "Note".into(), display_name: "Note".into(), writable: false, readable: false, fires: Some(true), description: None, rest: Obj::new() },
+                    EntryPoint { type_id: "Note".into(), display_name: "Note".into(), writable: false, readable: false, fires: Some(true), description: None, rest: listenable },
                     EntryPoint { type_id: "Comment".into(), display_name: "Comment".into(), writable: false, readable: false, fires: None, description: None, rest: Obj::new() },
                 ])
             }
@@ -862,8 +877,13 @@ pub(crate) mod tests {
                     writable: false,
                     rest: obj! { "listenable" => Js::Bool(true), "readable" => Js::Bool(false), "identity" => Js::str("Id") },
                 };
+                let mut title = Field::new("Title", "string", true, true);
+                if self.pushed {
+                    title.rest.insert("capability".into(), Js::parse(br#"{"filterOperators":["eq"]}"#).unwrap());
+                }
                 let (fields, references) = match request.type_id.as_str() {
-                    "Note" => (vec![Field::new("Title", "string", true, true)], vec![comments]),
+                    "Note" if self.pushed => (vec![Field::new("Id", "string", false, false), title], vec![comments]),
+                    "Note" => (vec![title], vec![comments]),
                     "Comment" => (vec![Field::new("Id", "string", false, false), Field::new("Text", "string", false, false)], vec![]),
                     _ => return Ok(None),
                 };
@@ -881,6 +901,26 @@ pub(crate) mod tests {
             async fn optional(&self, ctx: &Ctx, method: &str, params: Js) -> Answer<Js> {
                 let token = ctx.credential.as_ref().and_then(|c| c.get("fields")).and_then(|f| f.get("token")).cloned().unwrap_or(Js::Null);
                 match method {
+                    "ensureEventSubscription" if params.get("edge").is_some() => {
+                        // Held already: left as it is.
+                        if params.get("current").is_some() {
+                            return Ok(Js::Null);
+                        }
+                        let mut registrations = self.registrations.lock().unwrap();
+                        let id = format!("wh-{}", registrations.len() + 1);
+                        let mut made = obj! { "token" => token, "callbackUrl" => params.get("callbackUrl").cloned().unwrap_or(Js::Null), "edge" => params.get("edge").cloned().unwrap_or(Js::Null) };
+                        for named in ["filter", "scope"] {
+                            if let Some(value) = params.get(named) {
+                                made.insert(named.into(), value.clone());
+                            }
+                        }
+                        registrations.push(Js::Obj(made));
+                        let mut answer = obj! { "externalId" => Js::str(&id), "secret" => Js::str(format!("secret-{id}")) };
+                        if let Some(lifetime) = self.expiring {
+                            answer.insert("expiresAt".into(), Js::str(crate::store::iso(lifetime)));
+                        }
+                        Ok(Js::Obj(answer))
+                    }
                     "ensureEventSubscription" => {
                         // As registered: the webhook is left as it is.
                         if params.get("current").and_then(|c| c.get("events")).is_some_and(|e| Some(e) == params.get("events")) {
@@ -903,7 +943,11 @@ pub(crate) mod tests {
                     }
                     "refreshEventSubscription" if self.down.load(Ordering::SeqCst) => Err(ModuleError::bad_request("the inbox is down")),
                     "refreshEventSubscription" => {
-                        self.registrations.lock().unwrap().push(Js::Obj(obj! { "token" => token, "refreshed" => params.get("externalId").cloned().unwrap_or(Js::Null) }));
+                        let mut refreshed = obj! { "token" => token, "refreshed" => params.get("externalId").cloned().unwrap_or(Js::Null) };
+                        if let Some(edge) = params.get("edge") {
+                            refreshed.insert("edge".into(), edge.clone());
+                        }
+                        self.registrations.lock().unwrap().push(Js::Obj(refreshed));
                         Ok(Js::Obj(obj! { "expiresAt" => Js::str(crate::store::iso(self.expiring.unwrap_or_default())) }))
                     }
                     "poll" => {
@@ -913,8 +957,10 @@ pub(crate) mod tests {
                     }
                     "removeEventSubscription" => {
                         let mut removed = obj! { "token" => token, "removed" => params.get("externalId").cloned().unwrap_or(Js::Null) };
-                        if let Some(scope) = params.get("scope") {
-                            removed.insert("scope".into(), scope.clone());
+                        for named in ["edge", "filter", "scope"] {
+                            if let Some(value) = params.get(named) {
+                                removed.insert(named.into(), value.clone());
+                            }
                         }
                         self.registrations.lock().unwrap().push(Js::Obj(removed));
                         Ok(Js::Null)
@@ -951,7 +997,8 @@ pub(crate) mod tests {
                             .collect();
                         // A comment on a note is an arrival on its `Comments`.
                         let comments = params.get("raw").and_then(|raw| raw.get("comments")).and_then(Js::as_array).unwrap_or(&[]).to_vec();
-                        let arrivals = comments
+                        let passed = params.get("raw").and_then(|raw| raw.get("arrivals")).and_then(Js::as_array).unwrap_or(&[]).to_vec();
+                        let arrivals = passed.into_iter().chain(comments
                             .iter()
                             .map(|comment| {
                                 let text = |key: &str| comment.get(key).cloned().unwrap_or(Js::Null);
@@ -962,7 +1009,7 @@ pub(crate) mod tests {
                                     "identity" => text("id"),
                                     "landing" => Js::Obj(obj! { "recordType" => Js::str("Comment"), "fields" => Js::Obj(obj! { "Text" => text("Text") }) }),
                                 })
-                            })
+                            }))
                             .collect();
                         Ok(Js::Obj(obj! { "events" => Js::Arr(events), "arrivals" => Js::Arr(arrivals) }))
                     }
@@ -1010,6 +1057,7 @@ pub(crate) mod tests {
         polled: bool,
         scoped: bool,
         expiring: Option<i64>,
+        pushed: bool,
     }
 
     impl InboxProject {
@@ -1037,6 +1085,18 @@ pub(crate) mod tests {
             InboxProject::made(movement, secrets, lf_yaml, Flavour { scoped: true, ..Flavour::default() })
         }
 
+        /// As `with`, its notes a listenable root `Notes` pushed to the
+        /// connection, each listen on it subscribed for by the key it shares.
+        pub(crate) fn pushed(movement: &str, secrets: &str, lf_yaml: &str) -> InboxProject {
+            InboxProject::made(movement, secrets, lf_yaml, Flavour { pushed: true, ..Flavour::default() })
+        }
+
+        /// As `pushed`, its webhooks lapsing `lifetime_ms` after each
+        /// registration or refresh.
+        pub(crate) fn pushed_expiring(movement: &str, secrets: &str, lf_yaml: &str, lifetime_ms: i64) -> InboxProject {
+            InboxProject::made(movement, secrets, lf_yaml, Flavour { pushed: true, expiring: Some(lifetime_ms), ..Flavour::default() })
+        }
+
         /// As `scoped`, its webhooks lapsing `lifetime_ms` after each
         /// registration or refresh.
         pub(crate) fn expiring(movement: &str, secrets: &str, lf_yaml: &str, lifetime_ms: i64) -> InboxProject {
@@ -1054,6 +1114,7 @@ pub(crate) mod tests {
                 scoped: flavour.scoped,
                 expiring: flavour.expiring,
                 on_await_keys: on_await_keys.clone(),
+                pushed: flavour.pushed,
             });
             let root = std::env::temp_dir().join(format!("lf-doors-inline-{}", uuid::Uuid::new_v4()));
             crate::init::run(&root, &mut Vec::new()).unwrap();

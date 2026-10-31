@@ -136,7 +136,7 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
 | 2.3 | a host behaviour: a polled source labels each poll event with its kind, `eventType`, and a host delivers an unlabelled one to the listen that polled it, with a notice ([Polled sources](#polled-sources-and-periodic-tasks)). An older host routes a labelled event correctly, so no module needs to state 2.3 | listen-fire 0.12.8 |
 | 2.4 | `refreshEventSubscription` ([Event subscriptions that expire](#event-subscriptions-that-expire)) | listen-fire 0.12.10 |
 | 2.5 | `awaitKeys`, arrivals on a delivery's reading, the `wake` door's arrivals, the store slot's `waits.*` (`waits.log` names it) ([Waiting on your system](#waiting-on-your-system-awaits)) | listen-fire 0.13.0 |
-| 2.6 | arrivals for listens ([Reporting arrivals](#reporting-arrivals)): one on a root edge names no `key`, and one may carry `parents`, `about`, `notFor` and `takenApplied`; a host fires the listens on the edge it landed on. A polled listenable edge is polled as `poll({ edge, filter?, scope?, cursor? })`, once per connection, edge, taken filter and scope ([Polled sources](#polled-sources-and-periodic-tasks)). A module that reports a root arrival states 2.6, since an older host refuses it | listen-fire 0.13.0 |
+| 2.6 | arrivals for listens ([Reporting arrivals](#reporting-arrivals)): one on a root edge names no `key`, and one may carry `parents`, `about`, `notFor` and `takenApplied`; a host fires the listens on the edge it landed on. A polled listenable edge is polled as `poll({ edge, filter?, scope?, cursor? })`, once per connection, edge, taken filter and scope ([Polled sources](#polled-sources-and-periodic-tasks)); a pushed one is subscribed for as `ensureEventSubscription({ edge, filter?, scope?, callbackUrl, current? })`, once per the same ([Subscribing for an edge's arrivals](#subscribing-for-an-edges-arrivals)). A module that reports a root arrival states 2.6, since an older host refuses it | listen-fire 0.13.0 |
 
 A module offering one of these methods states no minor for it. Until 0.12.9 the kits stamped a module with the minor of the methods it offered; from 0.12.10 they stamp only what its author declares.
 
@@ -527,9 +527,9 @@ an automation cannot delete any other.
 | `wakeKeys` | `{ raw }` | `string[]` ([the key form](#the-key-form-before-25)) |
 | `preprocessInbound` | `{ raw, checkpoint? }` | `{ events, arrivals?, checkpoint? }` — **required** to receive webhooks through the [host door](#inbound-through-the-host-door); `arrivals` from 2.5 ([Reporting arrivals](#reporting-arrivals)) |
 | `listEventTypes` | `{}` | `[{ tag, positionType, match? }]` |
-| `ensureEventSubscription` | `{ events, callbackUrl, current?, scope? }` | `{ externalId?, secret, expiresAt? }` |
-| `removeEventSubscription` | `{ callbackUrl, externalId?, scope? }` | `null` |
-| `refreshEventSubscription` | `{ externalId, scope? }` | `{ expiresAt? }` or `null` ([Event subscriptions that expire](#event-subscriptions-that-expire)); adapter protocol 2.4 |
+| `ensureEventSubscription` | `{ events, callbackUrl, current?, scope? }`, or from 2.6 `{ edge, filter?, scope?, callbackUrl, current? }` ([Subscribing for an edge's arrivals](#subscribing-for-an-edges-arrivals)) | `{ externalId?, secret, expiresAt? }` |
+| `removeEventSubscription` | `{ callbackUrl, externalId?, scope? }`, or from 2.6 `{ edge, filter?, scope?, callbackUrl, externalId? }` | `null` |
+| `refreshEventSubscription` | `{ externalId, scope? }`, or from 2.6 `{ edge, filter?, scope?, externalId }` | `{ expiresAt? }` or `null` ([Event subscriptions that expire](#event-subscriptions-that-expire)); adapter protocol 2.4 |
 | `readRecord` | `{ recordType, externalId, fieldIds? }` | the record's fields, or `null` (lets an update with no changes be skipped) |
 | `linkRecords` / `unlinkRecords` | `{ from: { recordType, externalId }, edgeName, to: { … }, mutationContext }` | `{ created }` / `{ removed }` |
 | `resolveFileRef` | `{ ref }` | `{ url, contentType? }` ([Files](#files)) |
@@ -932,6 +932,37 @@ If your system sends webhooks, let Listen-Fire subscribe:
 
 Protocol 2 has no replay protection: a captured signed delivery verifies
 again. Keep the callback on HTTPS.
+
+### Subscribing for an edge's arrivals
+
+From adapter protocol 2.6 a listenable edge declaring `delivery: connection`
+or `scope` is subscribed for with its own shape, once for every listen on it
+([Declaring a listenable edge](#declaring-a-listenable-edge)):
+
+- `ensureEventSubscription`: `{ edge, filter?, scope?, callbackUrl, current? }`
+  → `{ externalId?, secret, expiresAt? }`. `edge`, `filter` and `scope` mean
+  what they mean on an [edge's poll](#polled-sources-and-periodic-tasks):
+  the edge's name, the part of the listens' `WHERE` on it that you take, and
+  the record it hangs off when the listens watch it under one. `current`
+  (`{ externalId }`) arrives when the subscription is already held: keep it,
+  and answer `null` to leave it as it is. There are no `events`.
+- **One subscription per connection, edge, filter and scope.** Every listen
+  whose traversal ends on the same edge of the same connection (credential
+  and position), with the same filter you take and the same scope, shares
+  one subscription, with its own `callbackUrl` and secret. Two listens with
+  different taken filters are two subscriptions.
+- Deliver to its `callbackUrl` as for any subscription, reporting what
+  landed as `arrivals` from `preprocessInbound`
+  ([Reporting arrivals](#reporting-arrivals)). The host judges an arrival
+  delivered there only against the listens sharing that subscription, and
+  hands their events to no listen in the settings form.
+- **`takenApplied`.** Set it on an arrival only when you applied `filter`.
+  Without it, the host checks the whole filter itself.
+- `removeEventSubscription` (`{ edge, filter?, scope?, callbackUrl,
+  externalId? }`) comes once no listen shares it, and
+  `refreshEventSubscription` (`{ edge, filter?, scope?, externalId }`) as for
+  any [subscription that expires](#event-subscriptions-that-expire). One that
+  lapsed is asked for anew with `edge`, `filter` and `scope` too.
 
 ## Modules: credentials, signatures and schedules
 
@@ -1724,7 +1755,7 @@ from `apps/cli`.
 - **Pages, replies on acceptance, the inbound URL and `answerShapeFrom`** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0; additive). A module that checks its own inbound may `reply` with `html` (sent as `text/html`), and its `accepted` answer may carry `reply`, what the door answers once it has kept the request in place of its own acknowledgement ([A module that checks its own inbound](#a-module-that-checks-its-own-inbound)). A request may carry `inbound: { url }`, where the install's inbound requests reach the module ([The envelope](#the-envelope)). A reference may declare `answerShapeFrom`, the write field naming the node that types its landing. Why: `@lf/forms` serves a form at its own door, hands out its link, thanks the person who answered, and types the answer by the node the program wrote. An older host sends no `inbound`, refuses an answer carrying `html` or an acceptance's `reply` as outside `checkInbound`'s shape, and reads no `answerShapeFrom`.
 - **`slack_v0` refuses a replay** (within version 2, no bump; 2026-10-30; listen-fire 0.13.0). A request whose `x-slack-request-timestamp` is more than five minutes from now is refused 401 though its signature is right, as Slack advises ([Declared inbound signatures](#declared-inbound-signatures)). Nothing changes for a module: Slack signs every request with the time it sends it.
 - **Form-encoded deliveries** (within version 2, no bump; 2026-10-30; listen-fire 0.13.0). The host webhook door reads a delivery sent as `application/x-www-form-urlencoded` as well as JSON: its signature is checked over the raw bytes, and `preprocessInbound`'s `raw` is the form's fields ([Limits and timeouts](#limits-and-timeouts)). Why: Slack posts a press on a message's control that way (`payload=<json>`), so `@lf/slack` reports presses as arrivals on the host's own door, verified with Slack's own signature. An older host refuses such a delivery as not JSON.
-- **Adapter protocol 2.6: arrivals for listens** (within version 2; listen-fire 0.13.0). An arrival on a root edge names no `key`, and an arrival may carry `parents` (the records of the earlier hops its edge `carries`), `about`, `notFor` and `takenApplied` ([Reporting arrivals](#reporting-arrivals)). Listen-Fire judges each arrival that landed against the listens on its edge (`listen to <traversal> fire f`) and runs each one it fires, its parameter bound to the landing, once per arrival. Why: a listen is a traversal, fired by what lands on its last edge, not by a module's settings. A module reporting a root arrival states `protocolMinor: 6`; an older host refuses an arrival with no key. A listenable edge declaring `delivery: polled` is polled as `poll({ edge, filter?, scope?, cursor? }) → { arrivals, cursor? }`, once per connection, edge, filter the module takes and scope, shared by every listen on it; an arrival says `takenApplied` only when the module applied the filter. The interval is lf.yaml's `pollEvery` for the connection, else the edge's `pollEverySeconds`. An entry point may declare its root collection's `capability`.
+- **Adapter protocol 2.6: arrivals for listens** (within version 2; listen-fire 0.13.0). An arrival on a root edge names no `key`, and an arrival may carry `parents` (the records of the earlier hops its edge `carries`), `about`, `notFor` and `takenApplied` ([Reporting arrivals](#reporting-arrivals)). Listen-Fire judges each arrival that landed against the listens on its edge (`listen to <traversal> fire f`) and runs each one it fires, its parameter bound to the landing, once per arrival. Why: a listen is a traversal, fired by what lands on its last edge, not by a module's settings. A module reporting a root arrival states `protocolMinor: 6`; an older host refuses an arrival with no key. A listenable edge declaring `delivery: polled` is polled as `poll({ edge, filter?, scope?, cursor? }) → { arrivals, cursor? }`, once per connection, edge, filter the module takes and scope, shared by every listen on it; an arrival says `takenApplied` only when the module applied the filter. The interval is lf.yaml's `pollEvery` for the connection, else the edge's `pollEverySeconds`. An entry point may declare its root collection's `capability`. A listenable edge declaring `delivery: connection` or `scope` is subscribed for as `ensureEventSubscription({ edge, filter?, scope?, callbackUrl, current? })`, once per connection, edge, filter the module takes and scope; `removeEventSubscription` and `refreshEventSubscription` name the same `edge`, `filter` and `scope`. An arrival delivered through it is judged only against the listens sharing it.
 - **Adapter protocol 2.5: arrivals** (within version 2; listen-fire 0.13.0). A module with listenable edges names the key each record's edge is waited on under (`awaitKeys`, a new optional method), and reports what lands there as arrivals: `arrivals` beside the events `preprocessInbound` answers, on `checkInbound`'s `accepted`, or pushed to the `wake` door as `{ arrivals }` ([Waiting on your system](#waiting-on-your-system-awaits)). Listen-Fire logs every arrival and keeps each run's wait itself (the store slot's `waits.*`, [store-slot.md](store-slot.md)). An arrival names its identity; one without is refused by name. Why: a run waiting on an edge reads what arrived since it began waiting, so an arrival during the write that caused it is never lost, and Listen-Fire, not the module, decides whether an arrival matches. Offering `awaitKeys` states no minor. From listen-fire 0.13.0 a wait reads arrivals only: `resolveAwait` is not called for it, `wakeKeys` wakes nothing, and the `wake` door refuses `{ keys }` (400, naming adapter protocol 2.5 and `arrivals`).
 - **Adapter protocol 2.4: subscriptions that expire** (within version 2; 2026-10-27; listen-fire 0.12.10). `ensureEventSubscription` may answer `expiresAt`, and a new optional method, `refreshEventSubscription`, extends a subscription before it lapses ([Event subscriptions that expire](#event-subscriptions-that-expire)). Offering the method states no minor: a `listen-fire` up to 0.12.9 reads a module that lists it and never calls it, so its webhooks lapse there as before. `@lf/airtable` lists it. With this change the kits stop raising a module's stated minor for the methods it offers (`.watch`, `work.enqueueIfAbsent`, `refreshEventSubscription`): it is what the author declares, else 0.
 - **`narrows` on a listen config key** (within version 2, no bump; 2026-10-27; additive). A `listenConfig` entry may say which hop of an event's address it is ([The manifest and installing](#the-manifest-and-installing)). `listen-fire` narrows a signature's event to the node the address walks to, as the hosted product does. An older host ignores the field; a module that declares none is unchanged.
