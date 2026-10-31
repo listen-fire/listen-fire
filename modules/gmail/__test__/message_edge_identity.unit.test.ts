@@ -20,12 +20,12 @@
 // `positions` ends up with exactly `Message` (+ `Attachment`), never
 // `Messages`. The `Messages` name survives only as a COLLECTION key
 // (`collections.Messages.target === 'Message'`, via the entry's
-// `collectionName` override), which the TYPE-MARKER grammar (`<inst-[:X]->>`)
-// does not read at all — it resolves `X` against `positions`/`unions` only
-// (`positionRefIn` / `reportUnknownPosition`, check.ts). So `<mail-[:Message]->>`
-// is the only type marker Gmail's message type actually has; `<mail-[:Messages]->>`
-// is refused with MOV_UNKNOWN_POSITION ("it has: Message, Attachment") —
-// not a conformance refusal, a name that was never a position to begin with.
+// `collectionName` override). The type-marker grammar (`<inst-[:X]->>`) reads
+// a single hop onto a non-event edge as the position its records have, by the
+// position's name or by a collection's target (`positionFromAddress`), so
+// `<mail-[:Messages]->>` and `<mail-[:Message]->>` are the same type. A name
+// that is neither a position nor a collection is refused with
+// MOV_UNKNOWN_POSITION ("it has: Message, Attachment, Draft").
 //
 // Neither of the brief's two hypotheses (checker fix vs. "path is the
 // identity, report don't change") applies: there is no cross-edge type to
@@ -92,17 +92,24 @@ describe('the real Gmail projection: one position for two entries', () => {
   });
 });
 
-describe('<mail-[:Messages]->> is not a position — only <mail-[:Message]->> is', () => {
-  it('the collection name is refused as a type marker, naming the real positions', () => {
+describe('<mail-[:Messages]->> is the collection edge onto the one position; a name that is neither is refused', () => {
+  it('a parameter typed along the collection edge is the Message position and reads its fields', () => {
     const source = `${PRELUDE}
-movement Triage(m: <mail-[:Messages]->>) {
+function Triage(m: <mail-[:Messages]->>) {
   x = m.\`Subject\`
 }
 `;
-    const codes = errors(source).map((d) => d.code);
-    expect(codes).toContain('MOV_UNKNOWN_POSITION');
+    expect(errors(source)).toEqual([]);
+  });
+
+  it('a name that is no position and no collection is refused, naming the real positions', () => {
+    const source = `${PRELUDE}
+function Triage(m: <mail-[:Messagez]->>) {
+  x = m.\`Subject\`
+}
+`;
     const message = errors(source).find((d) => d.code === 'MOV_UNKNOWN_POSITION')?.message;
-    expect(message).toContain("has no position type 'Messages'");
+    expect(message).toContain("has no position type 'Messagez'");
     expect(message).toContain('Message');
   });
 });
