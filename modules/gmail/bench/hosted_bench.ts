@@ -154,7 +154,7 @@ async function runOne(mode: Mode): Promise<Record<string, number>> {
       mutationContext,
     });
     const polled = await writer.poll({ config: {}, checkpoint: { historyId: '1000', lastSeenAt: '2026-10-09T00:00:00.000Z' } });
-    if (polled.events.length !== 3) throw new Error('the poll did not deliver');
+    if (!('events' in polled) || polled.events.length !== 3) throw new Error('the poll did not deliver');
     if (round >= WARMUP) samples.push(Number(process.hrtime.bigint() - start) / 1e6);
   }
   fake.close();

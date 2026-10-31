@@ -343,7 +343,10 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
             let collection_name = nullish_or(entry.get("collectionName"), None).map(|c| key(Some(c))).unwrap_or_else(|| name.clone());
             if !leave_out_artificial_edge(adapter_type, &collection_name, &mut notes) {
                 let mut collection = obj! { "target" => Js::str(&name) };
-                if let Some(capability) = root_capabilities.get(&collection_name) {
+                // The root descriptor's word on the collection, else the
+                // entry's own: a host that asks no root descriptor (listen-fire)
+                // reads it there.
+                if let Some(capability) = root_capabilities.get(&collection_name).or(entry.get("capability")) {
                     collection.insert("capability".into(), capability.clone());
                 }
                 if !readable {

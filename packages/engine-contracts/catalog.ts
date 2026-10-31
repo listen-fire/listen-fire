@@ -1698,6 +1698,11 @@ export const schemaEntryPointSchema = z.object({
   cursor: z.boolean().optional(),
   identity: z.string().optional(),
   version: z.string().optional(),
+  /** What the module can do across its root collection, as a reference's
+   *  `capability` says of its edge (`{ filter: 'native' }`: it takes the
+   *  filters its fields' `filterOperators` name). A root descriptor's word on
+   *  the collection wins. */
+  capability: edgeCapabilitySchema.optional(),
   ...listeningDeclarationShape,
 });
 

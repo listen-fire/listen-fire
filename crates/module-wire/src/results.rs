@@ -247,7 +247,12 @@ fn result_schema(method: &str) -> Option<S> {
         "getRelated" => arr(related_result()),
         "iterateRelated" | "iterateRelatedPage" => related_page(),
         "preprocessInbound" => obj(vec![req("events", arr(discriminable_event())), opt("arrivals", arr(arrival())), opt("checkpoint", S::Unknown)]),
-        "poll" => obj(vec![req("events", arr(discriminable_event())), opt("checkpoint", S::Unknown)]),
+        // A listen's poll in the settings form, or, from 2.6, a poll of a
+        // listenable edge shared by the listens on it.
+        "poll" => S::Union(vec![
+            obj(vec![req("events", arr(discriminable_event())), opt("checkpoint", S::Unknown)]),
+            obj(vec![req("arrivals", arr(arrival())), opt("cursor", S::Unknown)]),
+        ]),
         "listEventTypes" => arr(obj(vec![
             req("tag", S::Str),
             req("positionType", S::Str),
@@ -520,6 +525,17 @@ mod tests {
         let unnamed = r#"{"events":[],"arrivals":[{"edge":"Comments","key":"thread:c1","landing":{"fields":{}}}]}"#;
         assert!(check("preprocessInbound", "acme", &js(unnamed)).unwrap_err().contains("Invalid input at arrivals.0"));
         assert!(check("poll", "acme", &js(r#"{"events":[],"arrivals":[]}"#)).unwrap().get("arrivals").is_none(), "a poll reports none");
+    }
+
+    #[test]
+    fn a_2_6_poll_of_an_edge_answers_its_arrivals_and_a_cursor() {
+        let note = r#"{"edge":"Notes","identity":"n1","version":"0","landing":{"recordId":"n1","fields":{"Title":"a"}},"takenApplied":true}"#;
+        let read = check("poll", "feed", &js(&format!(r#"{{"arrivals":[{note}],"cursor":7}}"#))).unwrap();
+        assert_eq!(read.to_json(), format!(r#"{{"arrivals":[{note}],"cursor":7}}"#));
+        assert_eq!(check("poll", "feed", &js(r#"{"arrivals":[]}"#)).unwrap().to_json(), r#"{"arrivals":[]}"#, "no cursor: none kept");
+        let unnamed = r#"{"arrivals":[{"edge":"Notes","landing":{"fields":{}}}]}"#;
+        assert!(check("poll", "feed", &js(unnamed)).is_err(), "an arrival names its identity");
+        assert!(check("poll", "feed", &js(r#"{"cursor":7}"#)).is_err(), "neither events nor arrivals");
     }
 
     #[test]

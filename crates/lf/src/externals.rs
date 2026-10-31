@@ -902,6 +902,7 @@ mod tests {
             call_timeout: crate::module_hosts::DEFAULT_CALL_TIMEOUT,
             cost_cap_microdollars: None,
             delivery_retain_days: crate::project::DEFAULT_DELIVERY_RETAIN_DAYS,
+            poll_every: Default::default(),
         }
     }
 

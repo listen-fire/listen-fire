@@ -37,6 +37,7 @@ use crate::segment::{Ended, Entry, Ran, SegmentHost, SegmentHostParts, SegmentIn
 use crate::movements_slot::{Change, ChangeKind, Listed, MovementsStore, Watched, movement_file, ordered};
 use crate::sources::{MOVEMENT_EXTENSION, MovementFile, Parsed, scan_movements};
 use crate::backend::{RunHostStore, StoreSpec, open_store};
+use crate::edge_polls::EDGE_POLL_WORK_KIND;
 use crate::store::{ClaimDue, POLL_WORK_KIND, Release, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, iso};
 use crate::waits::ARRIVAL_RETENTION_MS;
 use module_wire::results as wire_results;
@@ -67,6 +68,10 @@ pub struct FileSet {
     parsed: Vec<Rc<Parsed>>,
     pub catalog: Js,
     pub listens: Vec<Listen>,
+    /// The heads each listen with an earlier hop the host resolves watches,
+    /// by its pipeline, as resolved when the set was read
+    /// (crate::edge_polls::resolve_heads).
+    heads: BTreeMap<String, Vec<String>>,
     pub running: Vec<Rc<RunningExternal>>,
     schemas: IndexMap<String, ConnectionSchemas>,
     /// The set's claims on its externals' processes: a worker's keep them
@@ -104,6 +109,16 @@ impl FileSet {
     /// every listen's file is there.
     pub fn file(&self, name: &str) -> &MovementFile {
         self.files.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("no file {name} in the set its listen was read from"))
+    }
+
+    /// The scopes a listen on a traversal is watched in: the heads its
+    /// resolved hops matched, or the whole connection (`None`) for one with
+    /// no hop the host resolves.
+    pub fn heads(&self, listen: &Listen) -> Vec<Option<String>> {
+        if !crate::edge_polls::resolves(listen) {
+            return vec![None];
+        }
+        self.heads.get(&listen.pipeline()).into_iter().flatten().cloned().map(Some).collect()
     }
 
     /// The listens on a polled source (its manifest declares `poll`), each
@@ -363,7 +378,7 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
     let user = local_identity(&project.user, |k| std::env::var(k).ok());
     let _holds = hold_all(&running, role.keep());
-    let file_set = RefCell::new(Rc::new(FileSet { files, parsed, catalog, listens, running, schemas, _holds }));
+    let file_set = RefCell::new(Rc::new(FileSet { files, parsed, catalog, listens, heads: BTreeMap::new(), running, schemas, _holds }));
     Ok(Session {
         project,
         role,
@@ -683,12 +698,17 @@ impl Session {
     /// one the judge cannot decide runs nothing either, its reason said once
     /// per delivery.
     pub async fn fire_arrivals(&self, adapter: &str, arrivals: &[ArrivalIn], delivered: Delivered<'_>) -> Result<Fired, String> {
-        let set = self.file_set();
+        self.fire_arrivals_to(&self.file_set(), adapter, arrivals, delivered, |_| true).await
+    }
+
+    /// `fire_arrivals`, to the listens `to` keeps of those on the edge (a
+    /// shared poll's own).
+    async fn fire_arrivals_to(&self, set: &FileSet, adapter: &str, arrivals: &[ArrivalIn], delivered: Delivered<'_>, to: impl Fn(&Listen) -> bool) -> Result<Fired, String> {
         let mut fired = Fired::default();
         let now_ms = self.now_ms() as f64;
         for arrival in arrivals.iter().filter(|a| !a.gone) {
             let identity = arrival.identity.as_deref().unwrap_or_default();
-            for listen in set.listens.iter().filter(|l| l.is_on(adapter, &arrival.edge)) {
+            for listen in set.listens.iter().filter(|l| l.is_on(adapter, &arrival.edge) && to(l)) {
                 let file = set.file(&listen.file);
                 let named = format!("{}:{}", file.name, listen.movement_name);
                 let Some(verdict) = listen.fires(arrival, delivered.credential, now_ms) else { continue };
@@ -713,7 +733,7 @@ impl Session {
                 let receipt = arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), identity, arrival.version.as_deref());
                 let trigger = arrival_trigger_of(&pipeline, adapter, arrival, &iso(0));
                 let run_id = uuid::Uuid::new_v4().to_string();
-                match self.run_listen(&set, &run_id, listen, trigger, false, Some((pipeline.as_str(), receipt.as_str())), delivered.came_in()).await? {
+                match self.run_listen(set, &run_id, listen, trigger, false, Some((pipeline.as_str(), receipt.as_str())), delivered.came_in()).await? {
                     Some(outcome) => fired.outcomes.push(outcome),
                     None => fired.redelivered.push(format!("{named} has run the arrival {identity} on {} before: this delivery runs nothing", arrival.edge)),
                 }
@@ -858,6 +878,101 @@ impl Session {
             }
         }
         Ok(())
+    }
+
+    /// Give each shared poll not yet polled its `poll_edge` work row, due
+    /// now, as `arm_polls` does a listen's: the row then lives as long as
+    /// some listen shares its key.
+    fn arm_edge_polls(&self, set: &FileSet) -> Result<(), String> {
+        for key in crate::edge_polls::polled_keys(set).into_keys() {
+            let subscription = crate::edge_polls::poll_subscription(&key);
+            if self.store.inbound_checkpoint(&subscription).map_err(|e| e.to_string())?.is_some() {
+                continue;
+            }
+            let mut payload = key.to_js();
+            if let Js::Obj(members) = &mut payload {
+                members.insert("subscription".into(), Js::str(&subscription));
+            }
+            if self.store.enqueue_if_absent(EDGE_POLL_WORK_KIND, &format!("{EDGE_POLL_WORK_KIND}:{subscription}"), &payload, None, None).map_err(|e| e.to_string())? {
+                crate::wake::queued(EDGE_POLL_WORK_KIND, None);
+            }
+        }
+        Ok(())
+    }
+
+    /// A `poll_edge` row: poll its key's edge once for every listen sharing
+    /// it, and say when it is next due (crate::edge_polls::interval_ms). A
+    /// row no listen shares any more is done, and its cursor forgotten.
+    async fn poll_edge_row(&self, set: &FileSet, subscription: &str) -> Result<(Next, Vec<RunOutcome>), String> {
+        let keys = crate::edge_polls::polled_keys(set);
+        let Some((key, sharing)) = keys.iter().find(|(key, _)| crate::edge_polls::poll_subscription(key) == subscription) else {
+            self.store.save_inbound_checkpoint(subscription, &Js::Null).map_err(|e| e.to_string())?;
+            return Ok((Next::Done, Vec::new()));
+        };
+        let (fired, polled_as) = self.poll_edge_once(set, key, sharing, subscription).await?;
+        for line in &fired.redelivered {
+            eprintln!("listen-fire: {line}");
+        }
+        let declared = crate::edge_polls::declared(set, &set.listens[sharing[0]]);
+        let interval_ms = crate::edge_polls::interval_ms(&self.project.poll_every, key, polled_as.as_deref(), declared.as_ref())?;
+        Ok((Next::DueAt(iso(self.due_offset_ms + interval_ms)), fired.outcomes))
+    }
+
+    /// One poll of a shared key's edge: `poll({ edge, filter?, scope?,
+    /// cursor? })`, as the credential the connection names (else its
+    /// module's). The first only arms: its cursor is kept, and what it
+    /// returns is what was there before, so it fires nothing. After that,
+    /// each arrival is logged for the waits, then judged against each listen
+    /// sharing the key; the cursor is kept only once they are in, so a
+    /// failed poll is polled again from where the last good one ended. What
+    /// it fired, and the credential it polled as.
+    async fn poll_edge_once(&self, set: &FileSet, key: &crate::edge_polls::PollKey, sharing: &[usize], subscription: &str) -> Result<(Fired, Option<String>), String> {
+        let first = &set.listens[sharing[0]];
+        let running = set
+            .running
+            .iter()
+            .find(|r| !r.is_plugin() && r.external.manifest.name == key.adapter)
+            .ok_or_else(|| format!("{}: not running, so its polled edge '{}' is not polled", key.adapter, key.edge))?;
+        if !running.methods.iter().any(|m| m == "poll") {
+            return Err(format!("{}: its edge '{}' is polled, and it offers no `poll`: declare `poll` and answer `{{ edge, filter?, scope?, cursor? }}` (adapter protocol 2.6)", key.adapter, key.edge));
+        }
+        let state = self.store.inbound_checkpoint(subscription).map_err(|e| e.to_string())?;
+        let secrets = self.secrets();
+        let credentials = secrets.credentials();
+        let credential = match &key.credential {
+            Some(name) => Some(credentials.iter().find(|c| c.name == *name).ok_or_else(|| format!("no credential \"{name}\" in the secrets file"))?),
+            None => credential_for(credentials, &key.adapter),
+        };
+        let mut params = serde_json::json!({ "edge": key.edge });
+        if let Some(filter) = key.filter() {
+            params["filter"] = filter;
+        }
+        if let Some(scope) = &key.scope {
+            params["scope"] = serde_json::Value::String(scope.clone());
+        }
+        if let Some(cursor) = state.as_ref().and_then(|s| s.get("cursor")) {
+            params["cursor"] = crate::wire::json_of_js(cursor);
+        }
+        let raw = rpc_in(running, credentials, credential, LOCAL_TENANT, "poll", params, running.position_settings(&first.args)).await?;
+        let answer = wire_results::check("poll", &key.adapter, &raw)?;
+        let arrivals = crate::arrivals::arrivals_of(&answer).map_err(|e| format!("{}: a poll of '{}' answered {e}", key.adapter, key.edge))?;
+        let mut fired = Fired::default();
+        if state.is_none() {
+            let listens: Vec<String> = sharing.iter().map(|i| &set.listens[*i]).map(|l| format!("{}:{}", set.file(&l.file).name, l.movement_name)).collect();
+            fired.redelivered.push(format!("{}: {} armed; it fires on changes from now", key.adapter, listens.join(", ")));
+        } else {
+            crate::arrivals::log_and_wake(&*self.store, LOCAL_TENANT, &key.adapter, &crate::arrivals::logged(&arrivals))?;
+            let mark = self.store.arrival_mark().map_err(|e| e.to_string())?;
+            let delivered = Delivered { credential: key.credential.as_deref(), arrival_mark: Some(mark), ..Delivered::default() };
+            let shares = |listen: &Listen| sharing.iter().any(|i| std::ptr::eq(listen, &set.listens[*i]));
+            fired = self.fire_arrivals_to(set, &key.adapter, &arrivals, delivered, shares).await?;
+        }
+        let mut kept = obj! { "armed" => Js::Bool(true) };
+        if let Some(cursor) = answer.get("cursor").filter(|c| **c != Js::Null) {
+            kept.insert("cursor".into(), cursor.clone());
+        }
+        self.store.save_inbound_checkpoint(subscription, &Js::Obj(kept)).map_err(|e| e.to_string())?;
+        Ok((fired, credential.map(|c| c.name.clone())))
     }
 
     /// One poll of one listen's source: `poll({ config, checkpoint? })`, each
@@ -1461,6 +1576,9 @@ impl Session {
         if self.pool.takes(POLL_WORK_KIND) {
             self.arm_polls(set)?;
         }
+        if self.pool.takes(EDGE_POLL_WORK_KIND) {
+            self.arm_edge_polls(set)?;
+        }
         let due_by = self.due_by();
         let claim = ClaimDue { limit, lease_ms: WORK_LEASE_MS, due_by: Some(&due_by), kinds: self.pool.work_kinds() };
         self.sweep_lost_runs(log).await?;
@@ -1588,6 +1706,7 @@ impl Session {
                 Ok(self.drive_parked_run(set, &run_id, Drain::OwedRaces).await?.row_next())
             }
             POLL_WORK_KIND => self.poll_row(set, &text("subscription")?).await,
+            EDGE_POLL_WORK_KIND => self.poll_edge_row(set, &text("subscription")?).await,
             crate::subscriptions::REFRESH_WORK_KIND => Ok((
                 match crate::subscriptions::refresh_row(self, payload).await? {
                     Some(at) => Next::DueAt(at),
@@ -1983,7 +2102,7 @@ impl Session {
         }
         crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
         let _holds = hold_all(&running, self.role.keep());
-        let taken = Rc::new(FileSet { files, parsed, catalog, listens, running, schemas, _holds });
+        let taken = Rc::new(FileSet { files, parsed, catalog, listens, heads: BTreeMap::new(), running, schemas, _holds });
         self.file_set.replace(taken.clone());
         self.refused.replace(None);
         drop(starting);

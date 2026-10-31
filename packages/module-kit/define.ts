@@ -20,7 +20,7 @@ import type {
   WirePluginResultShape,
 } from 'engine-contracts';
 import type { ZodType } from 'zod';
-import type { AdapterManifest, DiscriminableEvent } from 'engine-contracts';
+import type { AdapterManifest, Arrival, DiscriminableEvent } from 'engine-contracts';
 import type { Adapter } from 'module-runtime/adapter';
 import type { BrowserSlot } from 'module-runtime/browser';
 import type { ChatModelName } from 'engine-contracts';
@@ -193,6 +193,7 @@ export interface ModuleContext {
 
 // ── What a module's `create` returns ────────────────────────────────────────
 
+/** A poll for one listen in the settings form (`listen to x { … } fire f`). */
 export interface PollInput {
   /** The listen's options. */
   config: unknown;
@@ -205,15 +206,42 @@ export interface PollInput {
   movementId?: string;
 }
 
+/** A poll of one listenable edge (adapter protocol 2.6), made once for every
+ *  listen on the same connection, edge, filter and scope. */
+export interface PollEdgeInput {
+  /** The edge, by its name in the schema (`Notes`). */
+  edge: string;
+  /** The part of the listens' WHERE on the edge you take (an Expression, as
+   *  a hop's `where` hint is); absent when you take none of it. */
+  filter?: unknown;
+  /** The record the edge hangs off, by its id, when the listens watch it
+   *  under one; absent for the whole connection. */
+  scope?: string;
+  /** What your previous poll answered as `cursor`; absent the first time.
+   *  The host fires nothing on a first poll: it only keeps the cursor. */
+  cursor?: unknown;
+}
+
 export interface PollAnswer {
   events: DiscriminableEvent[];
   checkpoint?: unknown;
 }
 
+export interface PollEdgeAnswer {
+  /** What arrived on the edge since `cursor`. Set `takenApplied: true` on
+   *  an arrival only when you applied `filter` to it; without it the host
+   *  checks the whole filter itself. */
+  arrivals: Arrival[];
+  /** What to hand you back next time. */
+  cursor?: unknown;
+}
+
 /** An adapter, plus the methods its declarations pair with. */
 export type AdapterModuleMethods = Adapter & {
-  /** Paired with the `poll` declaration. */
-  poll?(input: PollInput): Promise<PollAnswer>;
+  /** Paired with the `poll` declaration. `edge` tells the two inputs apart:
+   *  a listen's poll in the settings form, or (adapter protocol 2.6) a poll
+   *  of a listenable edge, which answers its arrivals. */
+  poll?(input: PollInput | PollEdgeInput): Promise<PollAnswer | PollEdgeAnswer>;
   /** Paired with the `periodic` declaration. */
   runPeriodic?(input: { name: string }): Promise<void>;
   /** For a provider whose refresh is not the standard OAuth 2 grant: the
@@ -263,7 +291,9 @@ export interface AdapterModuleDefinition extends Common {
   manifest: AdapterManifest;
   /** How its provider signs webhooks; the host verifies each delivery. */
   inbound?: WireInboundDeclarationShape;
-  /** A polled source: the host calls `poll` this often per listen. */
+  /** A polled source: the host calls `poll` this often per listen in the
+   *  settings form. A listenable edge declares its own `pollEverySeconds`
+   *  instead, and is polled with `{ edge, … }` (PollEdgeInput). */
   poll?: { intervalSeconds: number };
   /** Housekeeping the host runs per install. */
   periodic?: ReadonlyArray<{ name: string; intervalSeconds: number }>;

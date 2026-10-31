@@ -43,6 +43,11 @@ struct ProjectFile {
     max_run_cost_usd: Option<f64>,
     /// How long the drain keeps a settled delivery's receipt.
     deliveries: Option<DeliveriesFile>,
+    /// How often each connection's polled edges are polled, by the
+    /// credential it polls as (its module, for one that uses none): each a
+    /// duration (`30s`, `5m`), over what the edge declares.
+    #[serde(rename = "pollEvery", default)]
+    poll_every: std::collections::BTreeMap<String, serde_yaml::Value>,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +66,21 @@ fn retain_days_of(value: Option<&serde_yaml::Value>, at: &str) -> Result<u32, St
         .filter(|days| *days >= 1)
         .and_then(|days| u32::try_from(days).ok())
         .ok_or_else(|| format!("{at}: deliveries.retainDays: a whole number of days, at least 1 (default {DEFAULT_DELIVERY_RETAIN_DAYS})"))
+}
+
+/// `pollEvery`, each duration to milliseconds; a value that is no positive
+/// duration is refused, naming its key.
+fn poll_every_of(declared: &std::collections::BTreeMap<String, serde_yaml::Value>, at: &str) -> Result<std::collections::BTreeMap<String, i64>, String> {
+    declared
+        .iter()
+        .map(|(connection, value)| {
+            let ms = value.as_str().and_then(movement_engine::park::duration_ms).filter(|ms| ms.is_finite() && *ms >= 1.0);
+            match ms {
+                Some(ms) => Ok((connection.clone(), ms as i64)),
+                None => Err(format!("{at}: pollEvery.{connection}: a duration, such as 30s or 5m: how often that connection's polled edges are polled")),
+            }
+        })
+        .collect()
 }
 
 #[derive(Deserialize, Default)]
@@ -109,6 +129,11 @@ pub struct Project {
     /// How many days the drain keeps a settled delivery's receipt
     /// (lf.yaml's `deliveries.retainDays`).
     pub delivery_retain_days: u32,
+    /// How often, in milliseconds, each connection's polled edges are
+    /// polled (lf.yaml's `pollEvery`), by the credential it polls as, or its
+    /// module for one that uses none. A connection it does not name is
+    /// polled at the interval its edge declares (crate::edge_polls).
+    pub poll_every: std::collections::BTreeMap<String, i64>,
 }
 
 /// `maxRunCostUsd` as the platform reads `MOVEMENT_MAX_RUN_COST_USD`
@@ -216,6 +241,7 @@ fn load_pinned(from: &Path, older_key_loads: bool) -> Result<Project, String> {
     let call_timeout = seconds_or(file.call_timeout, crate::module_hosts::DEFAULT_CALL_TIMEOUT, "callTimeout")?;
     let cost_cap_microdollars = file.max_run_cost_usd.map(|d| cost_cap_of(d, &path.display().to_string())).transpose()?;
     let delivery_retain_days = retain_days_of(file.deliveries.as_ref().and_then(|d| d.retain_days.as_ref()), "lf.yaml")?;
+    let poll_every = poll_every_of(&file.poll_every, "lf.yaml")?;
     if file.store.is_some() {
         return Err(format!(
             "{}: store: run state is kept by the store module now: `core: {{ store: \"@lf/postgres-store\" }}` (or @lf/sqlite-store, the default), set up with `listen-fire connect @lf/postgres-store`",
@@ -249,6 +275,7 @@ fn load_pinned(from: &Path, older_key_loads: bool) -> Result<Project, String> {
         call_timeout,
         cost_cap_microdollars,
         delivery_retain_days,
+        poll_every,
         root: dir,
     })
 }
@@ -308,6 +335,20 @@ mod tests {
             assert_eq!(
                 retain_days_of(Some(&yaml(bad)), "lf.yaml"),
                 Err("lf.yaml: deliveries.retainDays: a whole number of days, at least 1 (default 14)".to_string()),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn poll_every_reads_a_duration_per_connection_and_refuses_one_that_is_none() {
+        let yaml = |text: &str| serde_yaml::from_str::<std::collections::BTreeMap<String, serde_yaml::Value>>(text).unwrap();
+        assert_eq!(poll_every_of(&yaml("feed: 1s\nmy_gmail: 5m"), "lf.yaml"), Ok([("feed".to_string(), 1_000), ("my_gmail".to_string(), 300_000)].into()));
+        assert_eq!(poll_every_of(&yaml("{}"), "lf.yaml"), Ok(Default::default()));
+        for bad in ["feed: soon", "feed: 30", "feed: 0s", "feed: -1m"] {
+            assert_eq!(
+                poll_every_of(&yaml(bad), "lf.yaml"),
+                Err("lf.yaml: pollEvery.feed: a duration, such as 30s or 5m: how often that connection's polled edges are polled".to_string()),
                 "{bad}"
             );
         }

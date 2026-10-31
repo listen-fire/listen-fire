@@ -468,6 +468,9 @@ export class RemoteAdapter implements Adapter {
   async poll(input: { config: unknown; checkpoint?: unknown }): Promise<{ events: DiscriminableEvent[]; checkpoint?: unknown }> {
     this.advertisedOrRefused('poll');
     const answer = await this.call('poll', { config: input.config ?? {}, ...(input.checkpoint !== undefined ? { checkpoint: input.checkpoint } : {}) });
+    if (!('events' in answer)) {
+      throw new Error(`Remote adapter "${this.config.adapterType}" answered a listen's poll with arrivals, which answer a poll of an edge (adapter protocol 2.6)`);
+    }
     return {
       // Sole sanctioned boundary `as`: validated wire events → the domain's.
       events: answer.events as DiscriminableEvent[],

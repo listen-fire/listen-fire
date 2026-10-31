@@ -150,7 +150,7 @@ pub const CORE_PARK_REASONS: &[&str] = &["timer", "await", "limit"];
 /// A polled listen's row in the work queue: its next poll.
 pub const POLL_WORK_KIND: &str = "poll_listen";
 /// The work kinds listen-fire queues.
-pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", "poll_listen", "refresh_subscription", SETTLE_RACE_WORK_KIND];
+pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", "poll_listen", crate::edge_polls::EDGE_POLL_WORK_KIND, "refresh_subscription", SETTLE_RACE_WORK_KIND];
 /// A race a resumed arm won and left to its run to settle (crate::run_host):
 /// the row is what the run owes until the commit of the step that settles
 /// the race deletes it.

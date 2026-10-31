@@ -1234,6 +1234,37 @@ export const WireArrival = z.union([
 ]);
 export type WireArrivalShape = z.infer<typeof WireArrival>;
 
+/** A listen's poll in the settings form. */
+export const WirePollListenInput = z.object({ config: z.unknown(), checkpoint: z.unknown().optional(), movementId: z.string().optional() });
+export type WirePollListenInputShape = z.infer<typeof WirePollListenInput>;
+export const WirePollListenResult = z.object({
+  events: z.array(WireDiscriminableEvent),
+  checkpoint: z.unknown().optional(),
+});
+export type WirePollListenResultShape = z.infer<typeof WirePollListenResult>;
+
+/** A poll of one listenable edge (adapter protocol 2.6), made once for every
+ *  listen on the same connection, edge, filter and scope. `filter` is the part
+ *  of the listens' WHERE on the edge that the module takes (an Expression, as
+ *  a hop's `where` is), `scope` the record the edge hangs off when the host
+ *  resolved it, `cursor` what the previous poll answered (absent the first
+ *  time). */
+export const WirePollEdgeInput = z.object({
+  edge: z.string().min(1),
+  filter: z.unknown().optional(),
+  scope: z.string().min(1).optional(),
+  cursor: z.unknown().optional(),
+});
+export type WirePollEdgeInputShape = z.infer<typeof WirePollEdgeInput>;
+/** What arrived on the edge since `cursor`, and the cursor to hand back next
+ *  time. An arrival says `takenApplied: true` only when the module applied
+ *  `filter` to it; otherwise the host checks the whole filter itself. */
+export const WirePollEdgeResult = z.object({
+  arrivals: z.array(WireArrival),
+  cursor: z.unknown().optional(),
+});
+export type WirePollEdgeResultShape = z.infer<typeof WirePollEdgeResult>;
+
 /** What the wake door says to a push naming keys: adapter protocol 2.5
  *  reports what arrived, and the host wakes the waits it answers. */
 export const WAKE_KEYS_RETIRED =
@@ -1583,16 +1614,18 @@ export const METHODS = {
   },
   // Module methods (within version 2; each paired with its manifest
   // declaration, see `refuseUnpairedDeclarations`).
-  // One solicited pull of a polled source: `config` is the listen's options,
-  // `checkpoint` whatever the previous poll returned (absent the first time),
-  // `movementId` the automation the listen belongs to where the host knows it
-  // (`listen-fire` sends the listen's pipeline, `listen:<file>:<movement>`).
+  // One solicited pull of a polled source, in one of two shapes.
+  // - A listen in the settings form: `config` is the listen's options,
+  //   `checkpoint` whatever the previous poll returned (absent the first
+  //   time), `movementId` the automation the listen belongs to where the host
+  //   knows it (`listen-fire` sends the listen's pipeline,
+  //   `listen:<file>:<movement>`). It answers `events`.
+  // - From 2.6, a listenable edge polled once for every listen on it
+  //   (WirePollEdgeInput). It answers `arrivals`, and the `cursor` to hand
+  //   back next time.
   poll: {
-    params: z.object({ config: z.unknown(), checkpoint: z.unknown().optional(), movementId: z.string().optional() }),
-    result: z.object({
-      events: z.array(WireDiscriminableEvent),
-      checkpoint: z.unknown().optional(),
-    }),
+    params: z.union([WirePollEdgeInput, WirePollListenInput]),
+    result: z.union([WirePollListenResult, WirePollEdgeResult]),
   },
   // Refresh the request's `credential` when the host's own OAuth 2 refresh
   // does not fit the provider. The host serialises it per credential. The

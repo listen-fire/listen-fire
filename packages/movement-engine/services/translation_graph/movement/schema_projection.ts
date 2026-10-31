@@ -528,7 +528,9 @@ export function instanceSchemaFromDescriptors(input: {
     if (metaEdgeTypeIds.has(entry.typeId) && (entry.readable || entry.writable || entry.listenable === true)) {
       const collectionName = entry.collectionName ?? name;
       if (!leaveOutArtificialEdge({ adapterType: input.adapterType, edge: collectionName, notes })) {
-        const capability = rootCapabilities.get(collectionName);
+        // The root descriptor's word on the collection, else the entry's
+        // own: a host that asks no root descriptor (listen-fire) reads it there.
+        const capability = rootCapabilities.get(collectionName) ?? entry.capability;
         collections[collectionName] = {
           target: name,
           ...(capability !== undefined ? { capability } : {}),
