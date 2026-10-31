@@ -18,7 +18,7 @@ import { RunLeaseLost } from '../movement_engine/errors';
 import { SlotClient, SlotRefused, startModule, type SlotAddress } from 'module-runtime/module_wire/wire';
 import type { RunRecords } from './rules';
 import { DELIVERY_SOURCES, type DeliveryRowStore, type DeliverySource, type KeepDelivery, type KeptDelivery } from './store';
-import type { ClaimedWork, NewArrival, ParkKind, RunHostStore, RunRowStore, WorkRelease } from './store';
+import type { ArrivalRunStore, ClaimedWork, NewArrival, ParkKind, RunHostStore, RunRowStore, WorkRelease } from './store';
 
 const Nothing = z.null();
 const Leaf = z.object({
@@ -159,6 +159,8 @@ export class RpcStoreBackend {
   readonly runs: RunRecords;
   /** A delivery's one write and a row's burial, as the shared waits cases reach them. */
   readonly deliveryRows: DeliveryRowStore;
+  /** A run an arrival starts and its receipt, as one write (`events.startRun`). */
+  readonly arrivalRuns: ArrivalRunStore;
   private readonly started: Promise<{ client: SlotClient; close(): Promise<void> }>;
 
   /** The store module `command` starts, or the one already at `address`. */
@@ -175,6 +177,12 @@ export class RpcStoreBackend {
     this.runRows = this.runRowFamily();
     this.runs = this.runRecords();
     this.deliveryRows = { keepDelivery: (input) => this.keepDelivery(input), bury: (work) => this.buryWork(work), completeKey: (input) => this.completeKey(input) };
+    this.arrivalRuns = {
+      // The slot's receipt names no team (listen-fire's store is one team's):
+      // the team is part of the listen's name here, compared and never read.
+      startArrivalRun: ({ teamId, listen, key, runId }) =>
+        this.call('events.startRun', { listen: JSON.stringify([teamId, listen]), key, id: runId, file: 'f', movement: 'm', startedAt: new Date().toISOString(), input: '{}', deliveryId: null }, z.boolean()),
+    };
   }
 
   /** One call; its result read by `schema`. A fenced write refused because

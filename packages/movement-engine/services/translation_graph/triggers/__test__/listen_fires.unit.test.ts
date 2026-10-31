@@ -10,18 +10,18 @@ import { listenPlanSchema, type Arrival, type ListenPlan } from 'engine-contract
 import { z } from 'zod';
 
 import { parsePinned } from '../../../movement_engine/program_check';
-import { arrivalTriggerOf, listenFires, listenPipeline, plannedListensOf, type PlannedListen } from '../listen_plans';
+import { arrivalReceiptKey, arrivalTriggerOf, listenFires, listenPipeline, plannedListensOf, type PlannedListen } from '../listen_plans';
 
 // Test data, not a published export: read where the repository keeps it.
 const pipelines = z
   .object({
-    cases: z.array(z.object({ case: z.string(), file: z.string(), plan: listenPlanSchema, credential: z.string().nullable(), args: z.record(z.string(), z.string()), pipeline: z.string() })),
+    cases: z.array(z.object({ case: z.string(), file: z.string(), plan: listenPlanSchema, credential: z.string().nullable(), args: z.array(z.tuple([z.string(), z.string()])), pipeline: z.string() })),
   })
   .parse(JSON.parse(readFileSync(join(__dirname, '../../../../../engine-contracts/conformance/listen-pipelines.json'), 'utf8')));
 
 describe('the pipeline a listen on a traversal is named by', () => {
   it.each(pipelines.cases)('$case', ({ file, plan, credential, args, pipeline }) => {
-    expect(listenPipeline({ file, plan, ...(credential !== null ? { credentialName: credential } : {}), constructionArgs: args })).toBe(pipeline);
+    expect(listenPipeline({ file, plan, ...(credential !== null ? { credentialName: credential } : {}), constructionArgs: Object.fromEntries(args) })).toBe(pipeline);
   });
 
   it("reads the credential of the listen's connection from the program, its import alias resolved, wherever the import is written", () => {
@@ -41,6 +41,24 @@ import { north as n } from credentials
     const [planned, ...more] = plannedListensOf({ file: 'notes', program, plans: [notesPlan] });
     expect(more).toEqual([]);
     expect(planned).toEqual({ plan: notesPlan, credentialName: 'north', pipeline: listenPipeline({ file: 'notes', plan: notesPlan, credentialName: 'north' }) });
+  });
+
+  it("reads the construction's other arguments from the program as listen-fire reads them, as the table's first case writes them", () => {
+    const [first] = pipelines.cases;
+    const written = first.args.map(([name, raw]) => `${name}: ${raw}`).join(', ');
+    const source = `import { acme_crm } from adapters
+import { ${first.credential} } from credentials
+
+crm = connect acme_crm using ${first.credential} { ${written} }
+
+function welcome(c: <crm-[:Companies]->>) {
+  return c.Name
+}
+
+listen to crm-[c:Companies WHERE c.Name == "Acme"]-> fire welcome
+`;
+    const [planned] = plannedListensOf({ file: first.file, program: parsePinned({ source }), plans: [first.plan] });
+    expect(planned.pipeline).toBe(first.pipeline);
   });
 
   it("names a listen on the host's manual unit by no credential, and refuses a plan on a name that is no connection", () => {
@@ -72,6 +90,13 @@ const listen: PlannedListen = { plan: notesPlan, pipeline: 'listen:notes:copy:00
 function note(title: string, more: Partial<Exclude<Arrival, { gone: true }>> = {}): Arrival {
   return { edge: 'Notes', identity: 'n1', landing: { recordId: 'n1', recordType: 'Note', fields: { Title: title } }, ...more };
 }
+
+describe('the receipt a listen takes of an arrival', () => {
+  it("is its edge, the record it landed on, its identity and its version, as listen-fire's", () => {
+    expect(arrivalReceiptKey(note('keep', { edge: 'Comments', key: 'note:n0', version: '3' }))).toBe('Comments:note:n0:n1:3');
+    expect(arrivalReceiptKey(note('keep'))).toBe('Notes::n1:');
+  });
+});
 
 describe('which listens an arrival is judged against', () => {
   const delivered = { adapterType: 'notes', credentialName: 'north' };

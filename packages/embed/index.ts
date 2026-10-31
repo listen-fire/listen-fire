@@ -1,10 +1,10 @@
 // The embedder's host in one piece. A tenant connects modules (each loaded in
 // process over the tenant's own credential) and saves programs, checked
 // against a catalog built from its connections and cached until they or its
-// schema change. What a module says arrived runs every listen of the tenant's
-// programs that it fires (`dispatch`) and wakes the runs awaiting it
-// (`arrive`), and `tick` steps on the runs that parked on a timer once it is
-// due. Every rule is the engine's own: the checker, the plan it answers for
+// schema change. What a module says arrived is one delivery (`dispatch`): kept
+// in one write, it runs every listen of the tenant's programs that it fires,
+// once per arrival, and wakes the runs awaiting it; `tick` steps on the runs
+// that parked on a timer once it is due. Every rule is the engine's own: the checker, the plan it answers for
 // each listen, the judge of an arrival (`listenFires`), the check of what
 // landed against the node a listen states it is (`landingMisfits`), the park sink, the
 // waits and the drains. The embedder supplies its modules, a
@@ -12,9 +12,9 @@
 // host that needs another shape (docs/embedding.md). Its own package, outside
 // the core, because it loads modules through the module kit.
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
-import { tenantIdOf, type Arrival, type ListenPlan, type RunInput, type SegmentLimits } from 'engine-contracts';
+import { listenPlanSchema, tenantIdOf, type Arrival, type AwaitHead, type ListenPlan, type RunInput, type SegmentLimits } from 'engine-contracts';
 import {
   adapterInProcess,
   inProcessValidationDefault,
@@ -30,7 +30,19 @@ import {
 import { buildCatalogSnapshot, type CatalogAdapterInput } from 'movement-engine/public/catalog';
 import { MovementEngineError, inProcessHost, introspectAdapter, type InProcessHostOptions } from 'movement-engine/public/embed';
 import type { EngineHost } from 'movement-engine/public/host';
-import { arrivalTriggerOf, landingMisfits, listenFires, listenPlansOf, plannedListensOf, type PlannedListen } from 'movement-engine/public/inbound';
+import {
+  arrivalReceiptKey,
+  arrivalTriggerOf,
+  collectFileListeners,
+  landingMisfits,
+  listenFires,
+  listenPlansOf,
+  plannedListensOf,
+  triggerAwaitsOf,
+  type FileListener,
+  type PlannedListen,
+} from 'movement-engine/public/inbound';
+import type { Adapter } from 'movement-engine/public/adapter';
 import {
   ENGINE_VERSION,
   checkAnswerInRust,
@@ -42,6 +54,7 @@ import {
   type MovementWriteRecord,
 } from 'movement-engine/public/movement-engine';
 import {
+  DEFAULT_RESEND_WINDOW_MS,
   RESUME_TIMER_WORK_KIND,
   RUN_HOST_WORK_KINDS,
   RUN_LEASE_TTL_MS,
@@ -51,8 +64,8 @@ import {
   drainDueTimers,
   heldMarks,
   drainOwedRaces,
-  logArrivals,
   memoryRunHostStore,
+  newArrivalsOf,
   nextTimerWake,
   parkSources,
   runHostWorkKindOf,
@@ -61,7 +74,11 @@ import {
   waitWakeOf,
   wakeWait,
   withRunLease,
+  type ArrivalRunStore,
   type ClaimedWork,
+  type DeliveryRowStore,
+  type DeliverySource,
+  type DeliveryWait,
   type HeldRunLease,
   type RunHost,
   type RunHostStore,
@@ -133,8 +150,11 @@ export interface EmbeddedHostStore {
   };
   /** Parked leaves, joins, timers, waits and the arrivals they read, run
    *  leases, queued work, pinned texts, and each run's row: a park marks its
-   *  run parked, and the step that ends a run settles it, in the same write. */
-  runHost: RunHostStore & RunRowStore;
+   *  run parked, and the step that ends a run settles it, in the same write.
+   *  A delivery is kept in one write (`keepDelivery`), and a run an arrival
+   *  starts takes its receipt in the write that starts it
+   *  (`startArrivalRun`). */
+  runHost: RunHostStore & RunRowStore & ArrivalRunStore & Pick<DeliveryRowStore, 'keepDelivery'>;
 }
 
 /** A secrets backend a connect can store a new credential in. */
@@ -168,7 +188,9 @@ export interface EmbeddedHostOptions {
    *  memory per connection, answers validated outside production. */
   moduleHost?: (input: { tenant: string; connection: string }) => Partial<Omit<ModuleHost, 'tenant' | 'credential'>>;
   /** Where the host says what it did not run: an arrival a listen's judge
-   *  could not decide. Default: the console's warnings. */
+   *  could not decide, one that fits no node its listens state, a listen
+   *  this host does not fire as written, a program it cannot read, a
+   *  redelivery. Default: the console's warnings. */
   log?: Pick<ModuleLog, 'warn'>;
 }
 
@@ -187,10 +209,14 @@ export interface EmbeddedRunOutcome {
 
 /** What a module of `adapterType` says arrived for a tenant on its
  *  listenable edges. `connection` names the connection it came for; absent,
- *  it is the module's own install's and reaches every connection's listens. */
+ *  it is the module's own install's and reaches every connection's listens.
+ *  `id` is the provider's id for the delivery, when it gives one: a second
+ *  delivery under it, from the same module for the same connection, runs
+ *  nothing. */
 export interface Delivery {
   adapterType: string;
   connection?: string;
+  id?: string;
   arrivals: readonly Arrival[];
 }
 
@@ -209,25 +235,28 @@ export interface EmbeddedHost {
    *  the retired settings form, one whose earlier hop only listen-fire
    *  lists. */
   save(tenant: string, program: { name: string; source: string }): Promise<SaveAnswer>;
-  /** Run every listen of the tenant's programs on whose last edge an
-   *  arrival of `delivery` landed, on the connection it came for, that the
-   *  listen's judge fires, one outcome each. One the judge cannot decide
-   *  runs nothing, said once per delivery (`log`). So does an arrival that
-   *  does not fit the node a listen states its landing is
-   *  (`-[:Requests]-><Payment>`), said when no listen on its edge took it. Runs awaiting what
-   *  arrived are woken by `arrive`, not here. */
+  /** One delivery, kept in one write as listen-fire keeps it: its arrivals
+   *  logged for the runs awaiting them, and the waits opened for each run it
+   *  starts from the mark before them, so any other arrival of the delivery
+   *  may answer its run's `await new` and its own trigger never does. Then
+   *  every listen of the tenant's programs on whose last edge an arrival
+   *  landed, on the connection it came for, that the listen's judge fires,
+   *  runs, one outcome each; and the runs the arrivals woke step on, one
+   *  outcome per segment. A listen runs an arrival once: a redelivery of it
+   *  runs nothing (its receipt), and so does a second delivery under the
+   *  same `id`. One the judge cannot decide runs nothing, said once per
+   *  delivery (`log`). So does an arrival that does not fit the node a
+   *  listen states its landing is (`-[:Requests]-><Payment>`), said when no
+   *  listen on its edge took it; a listen this host does not fire as
+   *  written; and a program it cannot read, which the others' listens do
+   *  not wait on. An arrival no run awaits yet is kept for an hour (the
+   *  module's `resendWindowSeconds`), for a run that starts waiting on it. */
   dispatch(tenant: string, delivery: Delivery): Promise<EmbeddedRunOutcome[]>;
   /** Run one program now: an Invocation lands on the manual unit's
    *  `Invocations`, `text` its `Text` (listen-fire's `listen-fire run <movement> --text`),
    *  and every listen of the program on it that fires runs. None, when the
    *  program is not saved or declares no such listen. */
   run(tenant: string, request: { program: string; text?: string }): Promise<EmbeddedRunOutcome[]>;
-  /** What a module of `adapterType` says arrived on its listenable edges for
-   *  `tenant` (a module reads them off the deliveries it accepts): each of
-   *  the tenant's runs awaiting one steps on, one outcome per segment. An arrival no run awaits
-   *  yet is kept for an hour, for a run that starts waiting on it. The
-   *  listens it fires run by `dispatch`. */
-  arrive(tenant: string, input: { adapterType: string; arrivals: readonly Arrival[] }): Promise<EmbeddedRunOutcome[]>;
   /** Step on every run whose timer is due by `now`, every run woken by an
    *  arrival, and every run that owes a race an earlier step left unsettled:
    *  one outcome per segment. First it forgets the arrivals logged more than
@@ -408,13 +437,106 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
 
   const failureOf = (run: EmbeddedRun, error: string): EmbeddedRunOutcome => ({ ...namesOf(run), outcome: { ok: false, error } });
 
-  const fire = async (tenant: string, program: SavedProgram, listen: PlannedListen, arrival: Exclude<Arrival, { gone: true }>): Promise<EmbeddedRunOutcome> => {
+  /** Each saved program as a delivery reads it, by its content: read once,
+   *  not per delivery or arrival. */
+  const readings = new Map<string, ReadProgram>();
+  const readingOf = (saved: SavedProgram): { key: string; reading: ReadProgram } => {
+    const key = contentKeyOf(saved);
+    let reading = readings.get(key);
+    if (reading === undefined) {
+      reading = readProgram(saved);
+      // A program saved again leaves its old reading behind: the oldest go.
+      if (readings.size >= READINGS_KEPT) readings.delete(readings.keys().next().value ?? '');
+      readings.set(key, reading);
+    }
+    return { key, reading };
+  };
+
+  /** The check's stamps of each program against one catalog of its tenant's,
+   *  by the program's content; null for one that no longer checks. */
+  const stampsByCatalog = new WeakMap<CatalogSnapshot, Map<string, Stamps | null>>();
+  const stampsOf = async (tenant: string, saved: SavedProgram, key: string): Promise<Stamps | null> => {
+    const snapshot = await catalog(tenant);
+    let known = stampsByCatalog.get(snapshot);
+    if (known === undefined) {
+      known = new Map();
+      stampsByCatalog.set(snapshot, known);
+    }
+    const kept = known.get(key);
+    if (kept !== undefined) return kept;
+    let stamps: Stamps | null = null;
+    try {
+      stamps = checkAnswerInRust({ source: saved.source, catalog: snapshot, languageVersion: saved.languageVersion }).stamps;
+    } catch (error) {
+      // A program that no longer checks opens no wait here: its run fails at
+      // its own check, and says so in its outcome.
+      if (!(error instanceof MovementEngineError)) throw error;
+    }
+    known.set(key, stamps);
+    return stamps;
+  };
+
+  /** The instance that names the keys a module's records are waited on
+   *  under: the connection `name`, else any of the module's. `awaitKeys`
+   *  reads only the heads it is handed, so any of them answers alike. */
+  const keyingInstance = async (tenant: string, adapterType: string, name: string | undefined): Promise<Adapter | undefined> => {
+    if (adapterType === MANUAL && manualUnit !== undefined) return manualUnit;
+    const ofType = (await store.connections.list(tenant)).filter((c) => c.adapterType === adapterType);
+    const connection = ofType.find((c) => c.name === name) ?? ofType[0];
+    return connection === undefined ? undefined : load(tenant, connection).instance.adapter;
+  };
+
+  /** The waits a delivery opens for the runs it starts, as listen-fire's door
+   *  opens them (crates/lf/src/doors.rs `mint_runs`): one per edge each
+   *  fired function awaits off its parameter, keyed by the module's
+   *  `awaitKeys`, asked once per edge and connection for every trigger on
+   *  it. A wait on the trigger's own edge and record has the trigger noted on
+   *  it, so the run is never answered by the arrival that started it. */
+  const deliveryWaitsOf = async (tenant: string, delivery: Delivery, minted: readonly MintedRun[], fireKey: string): Promise<DeliveryWait[]> => {
+    const asked = new Map<string, { connection: string | undefined; edge: string; heads: number[]; runs: MintedRun[] }>();
+    for (const run of minted) {
+      if (triggerHeadOf(run.arrival) === undefined) continue;
+      const stamps = await stampsOf(tenant, run.saved, run.key);
+      if (stamps === null) continue;
+      const connection = run.listen.credentialName ?? delivery.connection;
+      for (const edge of triggerAwaitsOf({ program: run.program, stamps, movement: run.listen.plan.movement })) {
+        const at = JSON.stringify([connection ?? null, edge]);
+        const group = asked.get(at) ?? { connection, edge, heads: [], runs: [] };
+        if (!group.heads.includes(run.index)) group.heads.push(run.index);
+        group.runs.push(run);
+        asked.set(at, group);
+      }
+    }
+    const waits: DeliveryWait[] = [];
+    for (const { connection, edge, heads, runs } of asked.values()) {
+      const keying = (await keyingInstance(tenant, delivery.adapterType, connection))?.arrivals;
+      // A module that offers no `awaitKeys` opens no wait here.
+      if (keying === undefined) continue;
+      const triggers = heads.map((index) => delivery.arrivals[index]);
+      const answered = await keying.awaitKeys({ edge, heads: triggers.flatMap((arrival) => triggerHeadOf(arrival) ?? []) });
+      if (answered.length !== heads.length) throw new Error(`${delivery.adapterType}: awaitKeys answered ${answered.length} keys for ${heads.length} heads`);
+      for (const run of runs) {
+        const one = answered[heads.indexOf(run.index)];
+        const key = 'gone' in one ? null : one.key;
+        const { arrival } = run;
+        const own = key !== null && edge === arrival.edge && key === arrival.key;
+        waits.push({ runId: run.runId, edge, key, fireKey, ...(own ? { preNoted: { identity: arrival.identity, version: arrival.version ?? null } } : {}) });
+      }
+    }
+    return waits;
+  };
+
+  /** Start `minted` from the delivery kept at `triggerMark`, taking its
+   *  receipt in the same write; null, and nothing run, when its listen has
+   *  run its arrival before. */
+  const fire = async (tenant: string, minted: MintedRun, triggerMark: number): Promise<EmbeddedRunOutcome | null> => {
+    const { saved: program, listen, arrival, runId } = minted;
     const connections = await store.connections.list(tenant);
     const firedAt = now();
     const triggerEvent = arrivalTriggerOf({ pipelineInputId: listen.pipeline, adapterType: listen.plan.adapter, arrival, now: firedAt });
     const { costCapMicrodollars, maxSegmentSeconds, ...segmentLimits } = limits;
     const run: EmbeddedRun = {
-      runId: randomUUID(),
+      runId,
       tenant,
       program: program.name,
       movement: listen.plan.movement,
@@ -428,13 +550,14 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
         catalog: await catalog(tenant),
         credentialIds: Object.fromEntries(connections.flatMap(({ name, credentialRef }) => (credentialRef !== undefined ? [[name, credentialRef]] : []))),
         limits: segmentLimits,
+        triggerMark,
         ...(costCapMicrodollars !== undefined ? { costCapMicrodollars } : {}),
         ...(maxSegmentSeconds !== undefined ? { maxSegmentSeconds } : {}),
       },
       spentMicrodollars: 0,
     };
+    if (!(await store.runHost.startArrivalRun({ teamId: tenant, listen: listen.pipeline, key: minted.receipt, runId }))) return null;
     await store.runs.put(run);
-    await store.runHost.startRun({ runId: run.runId });
     let outcome: EmbeddedRunOutcome;
     let parked = false;
     try {
@@ -450,56 +573,119 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
     return outcome;
   };
 
-  /** Each arrival of `delivery` judged against every listen of `programs`
-   *  on its edge (`listenFires`), and each listen it fires run, in the order
-   *  the arrivals came. An Undecided verdict runs nothing, its reason said
-   *  once per delivery. An arrival that does not fit the node a listen states
-   *  its landing is runs nothing either; what does not fit is said only when
-   *  no listen on its edge took the arrival, as listen-fire has it. */
-  const fireArrivals = async (tenant: string, programs: readonly SavedProgram[], delivery: Delivery): Promise<EmbeddedRunOutcome[]> => {
-    const listening = programs.map((program) => ({
-      program,
-      listens: plannedListensOf({ file: program.name, program: parsePinned({ source: program.source, languageVersion: program.languageVersion }), plans: program.listens }),
-    }));
-    const delivered = { adapterType: delivery.adapterType, ...(delivery.connection !== undefined ? { credentialName: delivery.connection } : {}) };
-    const nowMs = now().getTime();
-    const said = new Set<string>();
-    const outcomes: EmbeddedRunOutcome[] = [];
-    for (const arrival of delivery.arrivals) {
-      if ('gone' in arrival) continue;
-      // Whether a listen on the edge took it (an undecided one counts), and
-      // what was said of the listens it does not fit.
-      let taken = false;
-      const misfitLines: string[] = [];
-      for (const { program, listens } of listening) {
-        for (const listen of listens) {
-          const verdict = listenFires(listen, arrival, delivered, nowMs);
-          if (verdict === null || 'skips' in verdict) continue;
-          const named = `${program.name}:${listen.plan.movement}`;
-          if ('undecided' in verdict) {
-            taken = true;
-            const line = `${named}: an arrival on ${arrival.edge} cannot be judged (${verdict.undecided}): it runs nothing`;
-            if (!said.has(line)) log.warn(line);
-            said.add(line);
-            continue;
-          }
-          if (listen.plan.landing !== undefined) {
-            const { node, misfits } = landingMisfits({ source: program.source, node: listen.plan.landing, landing: arrival.landing.fields });
-            if (misfits.length > 0) {
-              misfitLines.push(`${named}: the arrival ${arrival.identity} on ${arrival.edge} is not a ${node} (${misfits.join('; ')}): it runs nothing`);
+  /**
+   * One delivery from `source`, to the listens of `programs`, as
+   * listen-fire's door takes it. Each arrival is judged against every listen
+   * on its edge (`listenFires`), and a run minted for each it fires, in the
+   * order the arrivals came. Then one write keeps the delivery: its arrivals
+   * logged, and the waits its runs open on their triggers, from the mark
+   * before them. Each minted run then starts, under its receipt, from that
+   * mark; then the runs the arrivals woke step on. What runs nothing is said
+   * once per delivery: an undecided verdict; an arrival that fits no node
+   * the listens on its edge state; a listen this host does not fire as
+   * written; a program it cannot read. A step's mark is held throughout, so
+   * a tick's sweep forgets none of the delivery's arrivals before its runs'
+   * waits read them.
+   */
+  const deliver = (tenant: string, programs: readonly SavedProgram[], delivery: Delivery, source: DeliverySource): Promise<EmbeddedRunOutcome[]> =>
+    marks.holding(store.runHost, async () => {
+      const at = now();
+      const lines: string[] = [];
+      const say = (line: string): void => {
+        if (!lines.includes(line)) lines.push(line);
+      };
+      const reading: Array<{ saved: SavedProgram; key: string; read: ReadableProgram }> = [];
+      for (const saved of programs) {
+        const { key, reading: read } = readingOf(saved);
+        if (read.readable) reading.push({ saved, key, read });
+        else say(read.why);
+      }
+      for (const { saved, read } of reading) {
+        for (const listener of read.settings) if (listener.adapter === delivery.adapterType) say(settingsLine(saved.name, listener));
+      }
+      const delivered = { adapterType: delivery.adapterType, ...(delivery.connection !== undefined ? { credentialName: delivery.connection } : {}) };
+      const nowMs = at.getTime();
+      const minted: MintedRun[] = [];
+      for (const [index, arrival] of delivery.arrivals.entries()) {
+        if ('gone' in arrival) continue;
+        // Whether a listen on the edge took it (an undecided one counts), and
+        // what was said of the listens it does not fit.
+        let taken = false;
+        const misfitLines: string[] = [];
+        for (const { saved, key, read } of reading) {
+          for (const listen of read.listens) {
+            const verdict = listenFires(listen, arrival, delivered, nowMs);
+            if (verdict === null) continue;
+            const named = `${saved.name}:${listen.plan.movement}`;
+            if (listen.refused !== undefined) {
+              taken = true;
+              say(`${named}: ${listen.refused}: it runs nothing`);
               continue;
             }
+            if ('skips' in verdict) continue;
+            if ('undecided' in verdict) {
+              taken = true;
+              say(`${named}: an arrival on ${arrival.edge} cannot be judged (${verdict.undecided}): it runs nothing`);
+              continue;
+            }
+            if (listen.plan.landing !== undefined) {
+              let fit: ReturnType<typeof landingMisfits>;
+              try {
+                fit = landingMisfits({ source: saved.source, node: listen.plan.landing, landing: arrival.landing.fields });
+              } catch (error) {
+                taken = true;
+                say(`${named}: an arrival on ${arrival.edge} cannot be checked against the node its listen states (${messageOf(error)}): it runs nothing`);
+                continue;
+              }
+              if (fit.misfits.length > 0) {
+                misfitLines.push(`${named}: the arrival ${arrival.identity} on ${arrival.edge} is not a ${fit.node} (${fit.misfits.join('; ')}): it runs nothing`);
+                continue;
+              }
+            }
+            taken = true;
+            minted.push({ saved, key, program: read.program, listen, arrival, index, runId: randomUUID(), receipt: arrivalReceiptKey(arrival) });
           }
-          taken = true;
-          outcomes.push(await fire(tenant, program, listen, arrival));
         }
+        // listen-fire says these at debug when another listen took the
+        // arrival; this host's log has no debug.
+        if (!taken) for (const line of misfitLines) say(line);
       }
-      // listen-fire says these at debug when another listen took the arrival;
-      // this host's log has no debug.
-      if (!taken) for (const line of misfitLines) log.warn(line);
-    }
-    return outcomes;
-  };
+
+      const receipt = randomUUID();
+      const waits = await deliveryWaitsOf(tenant, delivery, minted, receipt);
+      const resendSeconds = modules.get(delivery.adapterType)?.manifest.resendWindowSeconds;
+      const kept = await store.runHost.keepDelivery({
+        subscriptionId: JSON.stringify([tenant, delivery.adapterType, delivery.connection ?? null]),
+        delivery: { id: receipt, externalId: delivery.id ?? null, receivedAt: at.toISOString(), source, inline: true, events: [] },
+        work: [],
+        arrivals: {
+          teamId: tenant,
+          adapterType: delivery.adapterType,
+          arrivals: newArrivalsOf(delivery.arrivals),
+          at: at.toISOString(),
+          resendWindowMs: resendSeconds !== undefined ? resendSeconds * 1000 : DEFAULT_RESEND_WINDOW_MS,
+        },
+        waits,
+      });
+      if (!kept.kept) {
+        log.warn(`delivery ${delivery.id ?? receipt} was kept before: it runs nothing`);
+        return [];
+      }
+      for (const line of lines) log.warn(line);
+      const outcomes: EmbeddedRunOutcome[] = [];
+      for (const run of minted) {
+        const outcome = await fire(tenant, run, kept.arrivalMark);
+        if (outcome !== null) {
+          outcomes.push(outcome);
+          continue;
+        }
+        log.warn(`${run.saved.name}:${run.listen.plan.movement} has run the arrival ${run.arrival.identity} on ${run.arrival.edge} before: this delivery runs nothing`);
+        // The waits the delivery opened for a run that never starts go.
+        await store.runHost.leases.dropRunState({ runId: run.runId });
+      }
+      outcomes.push(...(await stepWork({ dueBy: now().toISOString(), kinds: [WAKE_AWAIT_WORK_KIND], tenant })));
+      return outcomes;
+    });
 
   /** One parked run's step: a segment re-entered from its leaf (or a race
    *  settled), its cost counted on from what the run spent before. A step
@@ -723,19 +909,13 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
     },
 
     async dispatch(tenant, delivery) {
-      return fireArrivals(tenant, await store.programs.list(tenant), delivery);
+      return deliver(tenant, await store.programs.list(tenant), delivery, 'emit');
     },
 
     async run(tenant, { program: name, text }) {
       const program = (await store.programs.list(tenant)).find((p) => p.name === name);
       if (program === undefined) return [];
-      return fireArrivals(tenant, [program], { adapterType: MANUAL, arrivals: [invocationOf({ firedAt: now(), ...(text !== undefined ? { text } : {}) })] });
-    },
-
-    async arrive(tenant, { adapterType, arrivals }) {
-      const declared = modules.get(adapterType)?.manifest.resendWindowSeconds;
-      await logArrivals(store.runHost, { teamId: tenant, adapterType, arrivals, at: now().toISOString(), ...(declared !== undefined ? { resendWindowMs: declared * 1000 } : {}) });
-      return stepWork({ dueBy: now().toISOString(), kinds: [WAKE_AWAIT_WORK_KIND], tenant });
+      return deliver(tenant, [program], { adapterType: MANUAL, arrivals: [invocationOf({ firedAt: now(), ...(text !== undefined ? { text } : {}) })] }, 'cli');
     },
 
     async tick(at = now()) {
@@ -748,6 +928,86 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
 /** The diagnostic a listen in the 0.12 settings form draws under 0.13: a
  *  warning until the form is gone, but this host never fires one. */
 const SETTINGS_RETIRED = 'MOV_LISTEN_SETTINGS_RETIRED';
+
+type Stamps = ReturnType<typeof checkAnswerInRust>['stamps'];
+
+/** A saved listen as a delivery routes it, and why this host would not fire
+ *  it as written, if it would not (`unfiredHere`). */
+interface ReadListen extends PlannedListen {
+  refused?: string;
+}
+
+/** A saved program as a delivery reads it: its parse, its listens on a
+ *  traversal and those in the retired settings form; or, for one saved
+ *  before this release or under a pin it does not read, why it runs nothing. */
+type ReadProgram = ReadableProgram | { readable: false; why: string };
+interface ReadableProgram {
+  readable: true;
+  program: Program;
+  listens: ReadListen[];
+  settings: FileListener[];
+}
+
+type Program = ReturnType<typeof parsePinned>;
+
+/** A run a delivery's arrival starts: the listen it runs, the arrival (by its
+ *  place in the delivery), the run's id, and the arrival's receipt. */
+interface MintedRun {
+  saved: SavedProgram;
+  /** The program's content (`contentKeyOf`). */
+  key: string;
+  program: Program;
+  listen: PlannedListen;
+  arrival: Exclude<Arrival, { gone: true }>;
+  index: number;
+  runId: string;
+  receipt: string;
+}
+
+/** How many programs' readings a host keeps. */
+const READINGS_KEPT = 1000;
+
+/** What a saved program reads as: its name (its listens' pipelines name it),
+ *  its source, its pin and its plans. */
+function contentKeyOf(saved: SavedProgram): string {
+  return createHash('sha256')
+    .update(JSON.stringify([saved.name, saved.source, saved.languageVersion, saved.listens ?? null]))
+    .digest('hex');
+}
+
+/** `saved` read on its own: its store is the embedder's, so it is checked
+ *  here. One that does not read runs nothing, and says how to mend it; the
+ *  tenant's other programs are read regardless. */
+function readProgram(saved: SavedProgram): ReadProgram {
+  const remedy = 'save it again; until then it runs nothing';
+  const plans = listenPlanSchema.array().safeParse(saved.listens);
+  if (!plans.success) return { readable: false, why: `${saved.name}: saved before this release, without the plan of each listen: ${remedy}` };
+  try {
+    const program = parsePinned({ source: saved.source, languageVersion: saved.languageVersion });
+    const listens = plannedListensOf({ file: saved.name, program, plans: plans.data }).map((listen): ReadListen => {
+      const refused = unfiredHere(listen.plan);
+      return refused.length > 0 ? { ...listen, refused: refused.join('; ') } : listen;
+    });
+    return { readable: true, program, listens, settings: collectFileListeners(program) };
+  } catch (error) {
+    return { readable: false, why: `${saved.name}: ${messageOf(error)}: ${remedy}` };
+  }
+}
+
+/** What is said of a listen in the retired settings form when its module delivers. */
+function settingsLine(program: string, listener: FileListener): string {
+  return `${program}:${listener.movementName}: \`listen to ${listener.instanceName} { … }\` is in the retired settings form, which this host fires only as a listen on a traversal: write it as one and save it again; until then it runs nothing`;
+}
+
+/** The record a run's trigger waits are keyed by, as `awaitKeys` is asked
+ *  for it; none for an arrival whose landing names no record
+ *  (crates/lf/src/doors.rs `trigger_head`). */
+function triggerHeadOf(arrival: Arrival): AwaitHead | undefined {
+  if ('gone' in arrival) return undefined;
+  const { recordId, fields } = arrival.landing;
+  if (recordId === undefined || recordId === '') return undefined;
+  return { recordId, headData: fields };
+}
 
 /** Why this host would not fire `plan` as it is written, if it would not.
  *  listen-fire alone lists the members of an earlier hop whose WHERE an

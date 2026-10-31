@@ -1,5 +1,5 @@
 {
-  "about": "The pipeline a host names a listen on a traversal by: listen:<file>:<movement>:<first 8 hex digits of the sha256 of the plan's identity, a newline, and {\"args\": <the construction's other arguments, [name, source text] pairs sorted by name>, \"credential\": <the credential, or null>} as JSON>. listen-fire (crates/lf/src/routing.rs Listen::pipeline) and the TypeScript host (movement-engine triggers/listen_plans.ts listenPipeline) both read this table, so a notFor or a receipt names one listen on either host.",
+  "about": "The pipeline a host names a listen on a traversal by: listen:<file>:<movement>:<first 8 hex digits of the sha256 of the plan's identity, a newline, and {\"args\": <the construction's other arguments, [name, source text] pairs sorted by name>, \"credential\": <the credential, or null>} as JSON>. listen-fire (crates/lf/src/routing.rs Listen::pipeline) and the TypeScript host (movement-engine triggers/listen_plans.ts listenPipeline) both read this table, so a notFor or a receipt names one listen on either host. A case's args are [name, source text] pairs in the order the construction writes them, so each host is seen sorting them.",
   "cases": [
     {
       "case": "a listen on a connection made with a credential and two arguments, written out of order",
@@ -20,7 +20,7 @@
         ]
       },
       "credential": "acme",
-      "args": { "space": "\"s\"", "base": "\"CRM\"" },
+      "args": [["space", "\"s\""], ["base", "\"CRM\""]],
       "pipeline": "listen:crm:welcome:85f7dafa"
     },
     {
@@ -43,7 +43,7 @@
         ]
       },
       "credential": "acme",
-      "args": { "base": "\"CRM\"", "space": "\"s\"" },
+      "args": [["base", "\"CRM\""], ["space", "\"s\""]],
       "pipeline": "listen:crm:welcome:85f7dafa"
     },
     {
@@ -65,7 +65,7 @@
         ]
       },
       "credential": "acme_b",
-      "args": { "base": "\"CRM\"", "space": "\"s\"" },
+      "args": [["base", "\"CRM\""], ["space", "\"s\""]],
       "pipeline": "listen:crm:welcome:5eaa1043"
     },
     {
@@ -78,7 +78,7 @@
         "hops": [{ "edge": "Invocations", "from": "", "to": "Invocation", "judged": "arrival" }]
       },
       "credential": null,
-      "args": {},
+      "args": [],
       "pipeline": "listen:leads:file_lead:6761be48"
     },
     {
@@ -91,7 +91,7 @@
         "hops": [{ "edge": "Notes", "from": "", "to": "Note", "judged": "arrival" }]
       },
       "credential": "north",
-      "args": { "title": "\"Café\t\\\"x\\\" \\\\ y\"" },
+      "args": [["title", "\"Café\t\\\"x\\\" \\\\ y\""]],
       "pipeline": "listen:notes:copy:e77ec3b2"
     }
   ]

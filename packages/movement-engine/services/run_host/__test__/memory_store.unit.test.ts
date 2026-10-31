@@ -46,3 +46,15 @@ describe('memoryRunHostStore keeps each row under its team', () => {
     expect((await store.work.claimDue({ limit: 10, leaseMs: 60_000 })).map((row) => row.key)).toEqual(['acme-wake']);
   });
 });
+
+describe('memoryRunHostStore starts a run an arrival fires under its receipt', () => {
+  it("starts it once per listen and arrival, a team's receipts its own", async () => {
+    const store = memoryRunHostStore();
+    expect(await store.startArrivalRun({ teamId: 'acme', listen: 'listen:a:f:1', key: 'Notes::n1:', runId: 'r1' })).toBe(true);
+    expect(await store.runStatus({ runId: 'r1' })).toBe('running');
+    expect(await store.startArrivalRun({ teamId: 'acme', listen: 'listen:a:f:1', key: 'Notes::n1:', runId: 'r2' })).toBe(false);
+    expect(await store.runStatus({ runId: 'r2' })).toBeNull();
+    expect(await store.startArrivalRun({ teamId: 'acme', listen: 'listen:a:g:1', key: 'Notes::n1:', runId: 'r3' })).toBe(true);
+    expect(await store.startArrivalRun({ teamId: 'globex', listen: 'listen:a:f:1', key: 'Notes::n1:', runId: 'r4' })).toBe(true);
+  });
+});

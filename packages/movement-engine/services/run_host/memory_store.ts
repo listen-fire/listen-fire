@@ -22,6 +22,7 @@ import {
   SETTLE_RACE_WORK_KIND,
   WAKE_AWAIT_WORK_KIND,
   settleRaceWorkKey,
+  type ArrivalRunStore,
   type ClaimedWork,
   type DeliveryRowStore,
   type DeliveryWait,
@@ -143,7 +144,7 @@ function byRun<T>(map: Map<string, Map<string, T>>, runId: string): Map<string, 
  *  delivery write a listen-fire store keeps beside it (for the shared waits
  *  cases). `now` is its clock (due times, leases, the identities' re-send
  *  windows); default the wall clock. */
-export function memoryRunHostStore(options: { now?: () => number } = {}): RunHostStore & RunRowStore & DeliveryRowStore {
+export function memoryRunHostStore(options: { now?: () => number } = {}): RunHostStore & RunRowStore & DeliveryRowStore & ArrivalRunStore {
   const now = options.now ?? Date.now;
   const leaves = new Map<string, Map<string, Leaf>>();
   const joins = new Map<string, Map<string, Join>>();
@@ -153,6 +154,8 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
   const work = new Map<string, WorkRow>();
   const sources = new Map<string, string>();
   const runs = new Map<string, string>();
+  /** Each listen's receipt of an arrival, by team. */
+  const receipts = new Set<string>();
   let lastSeq = 0;
   let log: LogRow[] = [];
   let identities: IdentityRow[] = [];
@@ -636,6 +639,13 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
     },
     async runStatus({ runId }) {
       return runs.get(runId) ?? null;
+    },
+    async startArrivalRun({ teamId, listen, key, runId }) {
+      const receipt = JSON.stringify([teamId, listen, key]);
+      if (receipts.has(receipt)) return false;
+      receipts.add(receipt);
+      if (!runs.has(runId)) runs.set(runId, 'running');
+      return true;
     },
 
     async keepDelivery(input: KeepDelivery): Promise<KeptDelivery> {

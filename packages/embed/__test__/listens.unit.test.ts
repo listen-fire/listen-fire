@@ -2,14 +2,17 @@
 // reports runs every saved listen on its edge whose judge fires it, a manual
 // run is an Invocation arriving, an arrival that does not fit the node a
 // listen states its landing is runs nothing, and a listen this host would not
-// fire as it is written is refused at save, by name.
+// fire as it is written is refused at save, by name, and runs nothing when a
+// store holds it all the same. A program the host cannot read runs nothing,
+// and the others still run.
 
 import { BASE_RUNTIME_CAPABILITIES, type Arrival } from 'engine-contracts';
 import { defineModule, type ModuleContext } from 'module-kit';
 import type { Adapter } from 'movement-engine/public/adapter';
-import { listenPipeline } from 'movement-engine/public/inbound';
+import { listenPipeline, listenPlansOf } from 'movement-engine/public/inbound';
+import { ENGINE_VERSION, checkAnswerInRust } from 'movement-engine/public/movement-engine';
 
-import { createEmbeddedHost, memoryEmbeddedHostStore } from '..';
+import { createEmbeddedHost, memoryEmbeddedHostStore, type SavedProgram } from '..';
 
 /** A CRM: its companies, a listenable root collection, and each company's
  *  people, listenable too, an arrival on them carrying their company when
@@ -237,7 +240,7 @@ describe("the embedded host's listens", () => {
 
     expect(await host.dispatch('acme', { adapterType: 'crm', arrivals: [company('Acme')] })).toHaveLength(2);
     written.length = 0;
-    expect(await host.dispatch('acme', { adapterType: 'crm', arrivals: [company('Acme', { notFor })] })).toHaveLength(1);
+    expect(await host.dispatch('acme', { adapterType: 'crm', arrivals: [company('Acme', { notFor, version: '2' })] })).toHaveLength(1);
     expect(written).toEqual(['acme: Seen Acme']);
   });
 
@@ -291,6 +294,48 @@ listen to stripe-[:Requests]-><Refund> fire refunded
     expect(warned).toEqual([
       'hooks:paid: the arrival evt_2 on Requests is not a Payment (`amount` is text, not a number): it runs nothing',
       'hooks:refunded: the arrival evt_2 on Requests is not a Refund (`reason` is missing (text)): it runs nothing',
+    ]);
+  });
+
+  it('runs nothing for a listen it would refuse at save that a store holds all the same, and says why each time its module delivers', async () => {
+    const { host, store, written, warned } = await setup({ carried: false });
+    // Saved by a host that refuses neither (an authoring tool's own store).
+    const storedAsChecked = async (name: string, source: string): Promise<void> => {
+      const answer = checkAnswerInRust({ source, catalog: await host.catalog('acme'), languageVersion: ENGINE_VERSION });
+      await store.programs.put('acme', { name, source, languageVersion: ENGINE_VERSION, listens: listenPlansOf(answer) });
+    };
+    await storedAsChecked('people', program('listen to app-[c:Companies WHERE c.Name == "Acme"]->-[p:People]-> fire f', 'p.Name', '<app-[:Person]->>').replace('f(company:', 'f(p:'));
+    await storedAsChecked('settings', program('listen to app fire f'));
+    const person: Arrival = { edge: 'People', key: 'company:acme', identity: 'person-ann', landing: { recordId: 'person-ann', recordType: 'Person', fields: { Name: 'Ann' } } };
+
+    expect(await host.dispatch('acme', { adapterType: 'crm', arrivals: [person, { ...person, identity: 'person-bob' }] })).toEqual([]);
+    expect(written).toEqual([]);
+    expect(warned).toEqual([
+      'settings:f: `listen to app { … }` is in the retired settings form, which this host fires only as a listen on a traversal: write it as one and save it again; until then it runs nothing',
+      "people:f: the listen that fires f filters `Companies` by a WHERE its module's arrivals do not carry the record for: only listen-fire lists those members to judge it, and this host would fire under every one. Filter that hop on the landing's fields instead, or run the listen on listen-fire: it runs nothing",
+    ]);
+  });
+
+  it('skips a program it cannot read, or a listen whose landing it cannot check, saying how to mend it; every other one still runs', async () => {
+    const { host, store, written, warned } = await setup();
+    const source = program('listen to app-[:Companies]-> fire f');
+    expect(await host.save('acme', { name: 'current', source })).toEqual({ saved: true, listens: 1 });
+    const [current] = await store.programs.list('acme');
+    // Saved by 0.12: its listeners, and no plans.
+    const stale: SavedProgram = JSON.parse(JSON.stringify({ name: 'stale', source, languageVersion: '0.12.0', listeners: [{ instanceName: 'app', adapter: 'crm', config: {}, movementName: 'f' }] }));
+    await store.programs.put('acme', stale);
+    await store.programs.put('acme', { ...current, name: 'pinned', languageVersion: '0.12.0' });
+    // A stated landing its source does not declare.
+    await store.programs.put('acme', { ...current, name: 'misnamed', listens: current.listens.map((plan) => ({ ...plan, landing: 'Payment' })) });
+
+    const fired = await host.dispatch('acme', { adapterType: 'crm', arrivals: [company('Acme')] });
+
+    expect(fired.map(({ program: name, outcome }) => ({ name, ok: outcome.ok }))).toEqual([{ name: 'current', ok: true }]);
+    expect(written).toEqual(['acme: Seen Acme']);
+    expect(warned).toEqual([
+      'stale: saved before this release, without the plan of each listen: save it again; until then it runs nothing',
+      expect.stringMatching(/^pinned: .*0\.12\.0.*: save it again; until then it runs nothing$/),
+      expect.stringMatching(/^misnamed:f: an arrival on Companies cannot be checked against the node its listen states \(.*Payment.*\): it runs nothing$/),
     ]);
   });
 

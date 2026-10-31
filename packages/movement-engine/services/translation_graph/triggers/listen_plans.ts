@@ -15,7 +15,7 @@ import { callJudgeArrival, callLandingMisfits, callListenIdentity } from 'moveme
 import { z } from 'zod';
 
 import type { Arrival, ListenPlan, PlanArrival, TriggerEvent, Verdict } from 'engine-contracts';
-import type { Program } from 'movement-lang';
+import type { CheckAnswer, Program } from 'movement-lang';
 
 import { listenConstructionsOf } from '../movement/file_listeners';
 import { listenHearsCredential } from './listen_config';
@@ -124,6 +124,28 @@ export function listenFires(listen: PlannedListen, arrival: Arrival, delivery: {
     },
     nowMs,
   );
+}
+
+/** The edges the check stamps as opening waits on the parameter of the
+ *  function `movement` that `program` declares: where a run of it enters
+ *  its trigger, and so the waits a delivery opens for the run as it is kept
+ *  (crates/lf/src/routing.rs `trigger_awaits_of`). `stamps` is the check's of
+ *  `program`. */
+export function triggerAwaitsOf(input: { program: Program; stamps: CheckAnswer['stamps']; movement: string }): string[] {
+  const index = input.program.statements.findIndex((statement) => statement.kind === 'movement' && statement.name === input.movement);
+  if (index === -1) return [];
+  const path = `/statements/${index}/params/0`;
+  for (const stamp of input.stamps) {
+    if (stamp.file === undefined && stamp.path === path && 'opensWaits' in stamp) return [...stamp.opensWaits];
+  }
+  return [];
+}
+
+/** The receipt a listen takes of `arrival` as it runs it, so a redelivery
+ *  of the same arrival runs it once: its edge, the record it landed on, its
+ *  identity and its version (crates/lf/src/arrivals.rs `arrival_receipt_key`). */
+export function arrivalReceiptKey(arrival: Exclude<Arrival, { gone: true }>): string {
+  return `${arrival.edge}:${arrival.key ?? ''}:${arrival.identity}:${arrival.version ?? ''}`;
 }
 
 /** The event a run fired by an arrival is handed: what landed on the

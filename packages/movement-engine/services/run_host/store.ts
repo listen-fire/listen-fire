@@ -476,3 +476,15 @@ export interface RunRowStore {
   /** The run's status (`runs.get`), or null for none. */
   runStatus(input: { runId: string }): Promise<string | null>;
 }
+
+/**
+ * A run an arrival starts, with its receipt, as one write (the store slot's
+ * `events.startRun`): `key` is the arrival's receipt
+ * (`arrivalReceiptKey`), `listen` the pipeline of the listen it runs. False,
+ * and no run, when that listen has taken that arrival before: a provider's
+ * redelivery runs each listen once. A receipt is its team's: the same
+ * listen and key under another team is another receipt.
+ */
+export interface ArrivalRunStore {
+  startArrivalRun(input: { teamId: string; listen: string; key: string; runId: string }): Promise<boolean>;
+}

@@ -798,7 +798,8 @@ mod tests {
         assert!(!cases.is_empty());
         for case in cases {
             let plan: ListenPlan = serde_json::from_value(case["plan"].clone()).unwrap();
-            let args = case["args"].as_object().unwrap().iter().map(|(name, raw)| (name.clone(), raw.as_str().unwrap().to_string())).collect();
+            // Pairs, in the order the construction writes them: a JSON object would reach here sorted.
+            let args = case["args"].as_array().unwrap().iter().map(|pair| (pair[0].as_str().unwrap().to_string(), pair[1].as_str().unwrap().to_string())).collect();
             let listen = Listen {
                 file: case["file"].as_str().unwrap().into(),
                 adapter: plan.adapter.clone(),

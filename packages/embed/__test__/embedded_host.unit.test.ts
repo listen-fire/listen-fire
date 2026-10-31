@@ -110,9 +110,9 @@ listen to book-[:Note]-> fire copy
 `;
 }
 
-/** The note n1, new, announced on the notes' root edge. */
+/** The note n1, announced on the notes' root edge, its title its version. */
 function noteArrived(title: string): Arrival {
-  return { edge: 'Note', identity: 'n1', landing: { recordId: 'n1', recordType: 'Note', fields: { Title: title } } };
+  return { edge: 'Note', identity: 'n1', version: title, landing: { recordId: 'n1', recordType: 'Note', fields: { Title: title } } };
 }
 
 function setup(options: { now?: () => Date } = {}) {
@@ -205,17 +205,17 @@ listen to book-[:Note]-> fire seen
     expect(fired.outcome).toEqual({ ok: true, writes: [], spentMicrodollars: 0, parked: true });
     // Nothing arrived on another note, or for another tenant.
     const comment = { edge: 'Comments', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
-    expect(await host.arrive('acme', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n2' }] })).toEqual([]);
-    expect(await host.arrive('globex', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n1' }] })).toEqual([]);
+    expect(await host.dispatch('acme', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n2' }] })).toEqual([]);
+    expect(await host.dispatch('globex', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n1' }] })).toEqual([]);
     expect(await host.tick()).toEqual([]);
     expect(written).toEqual([]);
 
-    const [stepped, ...more] = await host.arrive('acme', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n1' }] });
+    const [stepped, ...more] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n1' }] });
     expect(more).toEqual([]);
     expect(stepped).toMatchObject({ runId: fired.runId, program: 'reply', outcome: { ok: true, parked: false } });
     expect(written).toEqual([{ tenant: 'acme', book: 'acme-north', Title: 'Re lunch?' }]);
     // A sender's retry of the same comment wakes nothing.
-    expect(await host.arrive('acme', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n1' }] })).toEqual([]);
+    expect(await host.dispatch('acme', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n1' }] })).toEqual([]);
   });
 
   it('a tick forgets the arrivals no run awaits; a re-send within the hour is still a repeat', async () => {
@@ -225,26 +225,30 @@ listen to book-[:Note]-> fire seen
     const host = createEmbeddedHost({ modules: [notes], store, now: () => now, moduleHost: () => ({ validateResults: true }) });
     await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
     const comment = (identity: string) => ({ edge: 'Comments', key: 'note:n9', identity, landing: { recordId: identity, recordType: 'Comment', fields: { Id: identity, Body: 'hi' } } });
-    await host.arrive('acme', { adapterType: 'notes', arrivals: [comment('old')] });
+    await host.dispatch('acme', { adapterType: 'notes', arrivals: [comment('old')] });
     now = new Date('2026-10-27T09:30:00.000Z');
-    await host.arrive('acme', { adapterType: 'notes', arrivals: [comment('recent')] });
+    await host.dispatch('acme', { adapterType: 'notes', arrivals: [comment('recent')] });
 
     expect(await host.tick()).toEqual([]);
     expect(await store.runHost.waits.sweep({ limit: 100 })).toEqual({ swept: 0 });
     // The entries went; their identities stay for the hour, so a retry logs nothing.
-    await host.arrive('acme', { adapterType: 'notes', arrivals: [comment('recent')] });
+    await host.dispatch('acme', { adapterType: 'notes', arrivals: [comment('recent')] });
     expect(await store.runHost.waits.mark()).toBe(2);
   });
 
   it("a tick between a starting run's mark and the wait it opens from there forgets no arrival logged in between", async () => {
     const written: Written[] = [];
-    // The run has taken its mark and is asking for its wait's key.
+    // The delivery asks first, for the wait it opens as it is kept; then the
+    // run, from the delivery's mark, asks for its wait's key.
     let keying: () => void = () => {};
     const asked = new Promise<void>((resolve) => (keying = resolve));
     let answer: () => void = () => {};
     const answered = new Promise<void>((resolve) => (answer = resolve));
+    let asks = 0;
     const notes = notesModule(written, new Map(), {
       keying: async () => {
+        asks += 1;
+        if (asks < 2) return;
         keying();
         await answered;
       },
@@ -256,7 +260,7 @@ listen to book-[:Note]-> fire seen
     const firing = host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
     await asked;
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
-    expect(await host.arrive('acme', { adapterType: 'notes', arrivals: [comment] })).toEqual([]);
+    expect(await host.dispatch('acme', { adapterType: 'notes', arrivals: [comment] })).toEqual([]);
     expect(await host.tick()).toEqual([]);
     answer();
 
@@ -281,10 +285,10 @@ listen to book-[:Note]-> fire seen
     // Another process holds acme's run: its wake goes back, due.
     const held = await store.runHost.leases.claim({ runId: fired.runId, ttlMs: 60_000 });
     expect(held).not.toBeNull();
-    expect(await host.arrive('acme', { adapterType: 'notes', arrivals: [comment] })).toEqual([]);
+    expect(await host.dispatch('acme', { adapterType: 'notes', arrivals: [comment] })).toEqual([]);
     if (held !== null) await store.runHost.leases.release({ runId: fired.runId, token: held.token });
 
-    expect(await host.arrive('globex', { adapterType: 'notes', arrivals: [{ ...comment, identity: 'c2' }] })).toEqual([]);
+    expect(await host.dispatch('globex', { adapterType: 'notes', arrivals: [{ ...comment, identity: 'c2' }] })).toEqual([]);
     expect(written).toEqual([]);
     const [stepped, ...more] = await host.tick();
     expect(more).toEqual([]);
@@ -323,7 +327,7 @@ listen to book-[:Note]-> fire seen
 
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
     dies = true;
-    await expect(host.arrive('acme', { adapterType: 'notes', arrivals: [comment] })).rejects.toThrow('the drain died');
+    await expect(host.dispatch('acme', { adapterType: 'notes', arrivals: [comment] })).rejects.toThrow('the drain died');
     expect(written).toEqual([]);
     expect((await owedRaces({ runId: fired.runId })).length).toBe(1);
 
@@ -362,7 +366,7 @@ listen to book-[:Note]-> fire seen
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
 
     takeOver = true;
-    await host.arrive('acme', { adapterType: 'notes', arrivals: [comment] });
+    await host.dispatch('acme', { adapterType: 'notes', arrivals: [comment] });
     expect(theirs).toBeDefined();
     expect(await store.runHost.runStatus({ runId: fired.runId })).toBe('parked');
     expect((await parks.leaves({ runId: fired.runId, parkedOnly: true })).length).toBe(1);
@@ -395,7 +399,7 @@ listen to book-[:Note]-> fire seen
     await store.runHost.parks.commitSegment({ runId: fired.runId, teamId: 'acme', resumed: null, joins: [], parks: [], settle: { status: 'failed', outcome: null, at: new Date().toISOString() } });
 
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
-    expect(await host.arrive('acme', { adapterType: 'notes', arrivals: [comment] })).toEqual([]);
+    expect(await host.dispatch('acme', { adapterType: 'notes', arrivals: [comment] })).toEqual([]);
     expect(written).toEqual([]);
     expect(await store.runHost.runStatus({ runId: fired.runId })).toBe('failed');
     expect((await store.runHost.parks.leaves({ runId: fired.runId, parkedOnly: true })).length).toBe(1);
@@ -425,7 +429,7 @@ listen to book-[:Note]-> fire seen
 
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
     dies = true;
-    await expect(host.arrive('acme', { adapterType: 'notes', arrivals: [comment] })).rejects.toThrow('the process died');
+    await expect(host.dispatch('acme', { adapterType: 'notes', arrivals: [comment] })).rejects.toThrow('the process died');
     expect(written).toEqual([{ tenant: 'acme', book: 'acme-north', Title: 'Re lunch?' }]);
     expect(await store.runHost.runStatus({ runId: fired.runId })).toBe('completed');
     expect(await parks.leaves({ runId: fired.runId })).toEqual([]);
