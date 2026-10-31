@@ -6,6 +6,7 @@ import { proseViolations } from '../prose_rules';
 import { chapterRoute } from 'engine-contracts/handbook_section';
 import { CONTROL_FORMS, CORE_CHAPTERS, INTENT_INDEX, exampleText, frontEntries, getCoreChapter, renderCoreIndex } from '../index';
 import { HANDBOOK_CATALOG } from '../testing';
+import { FENCE, MODULES } from './module_manifests';
 
 // The hand-written chapters. The sections a host adds are held to the same
 // prose contract and the same examples check by that host's own tests, over
@@ -161,8 +162,8 @@ describe('movement_handbook referential integrity', () => {
 //
 // A wait on a person or an outside system that nothing bounds leaves its run
 // suspended for good when the answer never comes, so every example the
-// handbook SHOWS — a chapter's code, the front page's, the language search's —
-// puts such a wait in a `race` with a `sleep`.
+// handbook SHOWS — a chapter's code, the front page's, the language search's,
+// a module's section — puts such a wait in a `race` with a `sleep`.
 
 /** Every example a reader is shown, with where it is shown. */
 function shownExamples(): Array<{ chapter: string; code: string }> {
@@ -171,7 +172,10 @@ function shownExamples(): Array<{ chapter: string; code: string }> {
   );
   const front = frontEntries().flatMap((e) => (e.example ? [{ chapter: `front#${e.anchor}`, code: exampleText(e.example) }] : []));
   const search = CONTROL_FORMS.map((f) => ({ chapter: `language search: ${f.name}`, code: exampleText(f.example) }));
-  return [...fenced, ...front, ...search];
+  const host = Object.entries(MODULES).flatMap(([name, manifest]) =>
+    [...(manifest.handbookSection?.content ?? '').matchAll(FENCE)].map((m) => ({ chapter: `system:${name}`, code: m[1] })),
+  );
+  return [...fenced, ...front, ...search, ...host];
 }
 
 /** Where `code` awaits a traversal (`await x-[…]->`, `await new x-[…]->`) — a wait on what a system announces. */
@@ -183,15 +187,45 @@ function awaitTraversals(code: string): number[] {
 /** The index of the `)` closing the `(` at `open`, skipping strings. */
 function closing(code: string, open: number): number {
   let depth = 0;
-  for (let i = open; i < code.length; i++) {
+  for (let i = open; i < code.length; ) {
     const c = code[i];
     if (c === '"') {
-      i++;
-      while (i < code.length && code[i] !== '"') i += code[i] === '\\' ? 2 : 1;
-    } else if (c === '(') depth++;
+      i = stringEnd(code, i);
+      continue;
+    }
+    if (c === '(') depth++;
     else if (c === ')' && --depth === 0) return i;
+    i++;
   }
   return code.length;
+}
+
+/** The index just past the string whose `"` is at `start`. An interpolation
+ *  in it (`${…}`) may hold strings of its own, so its quotes end nothing. */
+function stringEnd(code: string, start: number): number {
+  let i = start + 1;
+  while (i < code.length && code[i] !== '"') {
+    if (code[i] === '\\') i += 2;
+    else if (code.startsWith('${', i)) i = interpolationEnd(code, i + 2);
+    else i++;
+  }
+  return i + 1;
+}
+
+/** The index just past the `}` closing an interpolation whose body starts at `i`. */
+function interpolationEnd(code: string, i: number): number {
+  let depth = 1;
+  while (i < code.length) {
+    const c = code[i];
+    if (c === '"') {
+      i = stringEnd(code, i);
+      continue;
+    }
+    if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) return i + 1;
+    i++;
+  }
+  return i;
 }
 
 /** Whether the wait at `at` sits inside a `race(…)` one of whose arms sleeps. */
@@ -247,6 +281,8 @@ describe('waits in the handbook', () => {
     expect(awaitTraversals(bare).map((at) => insideRaceWithSleep(bare, at))).toEqual([false]);
     const unslept = 'r = race(\n  () => { a = await msg-[:Replies]-> },\n  () => { b = await new msg-[:Replies]-> },\n)';
     expect(awaitTraversals(unslept).map((at) => insideRaceWithSleep(unslept, at))).toEqual([false, false]);
+    const quoted = 'r = race(\n  () => {\n    a = await msg-[:Replies]->\n    return "${coalesce(a.Note, ")")}"\n  },\n  () => { await sleep(1d) },\n)';
+    expect(awaitTraversals(quoted).map((at) => insideRaceWithSleep(quoted, at))).toEqual([true]);
   });
 });
 

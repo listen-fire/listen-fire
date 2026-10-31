@@ -111,12 +111,12 @@ fn an_await_walks_one_edge_off_a_record_a_name_holds() {
 fn an_unordered_iterable_edge_needs_await_new() {
     assert_eq!(
         check("  t = await msg-[:Thread]->\n"),
-        ["MOV_AWAIT_UNORDERED 2:13-2:28 'await' takes the first match already on '-[:Thread]->', and chat's Message declares no order for it, so 'first' would be a guess. Write `await new msg-[:Thread]->` to wait only for what arrives"]
+        ["MOV_AWAIT_UNORDERED 2:13-2:28 'await' takes the first match already on '-[:Thread]->', and chat's Message declares no order for it, so 'first' would be a guess. Write `await new msg-[:Thread]->` to wait only for what arrives (see handbook: reviews#await-and-await-new)"]
     );
     assert_eq!(check("  t = await new msg-[:Thread]->\n"), Vec::<String>::new());
     assert_eq!(
         check("  e = await deal-[:Emails]->\n"),
-        ["MOV_AWAIT_UNORDERED 2:13-2:29 'await' takes the first match already on '-[:Emails]->', and crm's Deal declares no order for it, so 'first' would be a guess. Write `await new deal-[:Emails]->` to wait only for what arrives"]
+        ["MOV_AWAIT_UNORDERED 2:13-2:29 'await' takes the first match already on '-[:Emails]->', and crm's Deal declares no order for it, so 'first' would be a guess. Write `await new deal-[:Emails]->` to wait only for what arrives (see handbook: reviews#await-and-await-new)"]
     );
     assert_eq!(check("  e = await new deal-[:Emails]->\n"), Vec::<String>::new());
 }

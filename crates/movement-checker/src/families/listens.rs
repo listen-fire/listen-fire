@@ -919,7 +919,7 @@ impl Checker<'_> {
         let many_answers = callback.config.iter().any(|entry| entry.name == "once" && entry.value.raw.trim().eq_ignore_ascii_case("false"));
         let message = format!(
             "'callback(…)' is retired in 0.13. For a form a person opens, connect `@lf/forms` and write one: `form = write forms-[:Forms]-> {{ Title: …, Fields: … }}`, send `form.Url`, and `await form-[:Submissions]->`. For buttons, write them on the message (`Buttons: [{{ Text: …, Value: … }}]`) and `await msg-[:Interactions]->`.{}",
-            if many_answers { " Many answers in one run (`once: false`) become a standing `listen` on the message's Interactions that keeps its state in a table." } else { "" }
+            if many_answers { " Many answers in one run (`once: false`) become a standing `listen` on the message's `Interactions` (from the listen half of 0.13) that keeps its state in a table." } else { "" }
         );
         self.report(codes::CALLBACK_RETIRED, message, callback.span);
         match &callback.subject {

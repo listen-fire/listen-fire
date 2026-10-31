@@ -78,10 +78,16 @@ write msg-[:Replies]-> {
   }
 }
 
-answer = await form-[:Submissions]->
+r = race(
+  () => {
+    answer = await form-[:Submissions]->
+    return answer.Send
+  },
+  () => { await sleep(1d) },
+)
 \`\`\`
 
-A form also asks for what a button cannot carry, a picked date or a typed answer, since WhatsApp captures nothing at tap time. To give up after a while, race the wait against a \`sleep\`.
+A form also asks for what a button cannot carry, a picked date or a typed answer, since WhatsApp captures nothing at tap time. If nobody answers within a day, \`r[0]\` is null.
 
 ### the-only-feedback-is-a-reply
 
@@ -98,7 +104,7 @@ WhatsApp cannot edit a message it already sent, and there is nothing like a toas
 - **Sending to someone who hasn't messaged the number recently.** Free-form sends — Interactive included — only reach people inside the 24-hour service window.`,
   engineClaims: [
     {
-      construct: 'a WhatsApp url button (cta_url) that opens a form from @lf/forms, the run waiting on its submission',
+      construct: 'a WhatsApp url button (cta_url) that opens a form from @lf/forms, the run waiting on its submission inside a race with a sleep',
       status: 'runs',
       probe: `
 import { \`@lf/whatsapp\` as whatsapp, \`@lf/forms\` as forms_module } from adapters
@@ -121,8 +127,14 @@ function confirm_send(msg: <wa-[:Message]->>) {
     }
   }
 
-  answer = await form-[:Submissions]->
-  if (answer.Send) {
+  r = race(
+    () => {
+      answer = await form-[:Submissions]->
+      return answer.Send
+    },
+    () => { await sleep(1d) },
+  )
+  if (r[0] == true) {
     write msg-[:Replies]-> { Body: "Sending now." }
   }
 }

@@ -115,7 +115,7 @@ test('listen-fire upgrade lists a wait whose run value is now captured, and stil
   assert.equal(code, 0, out);
   assert.match(
     out,
-    /^movements\/companies\.mvt:7:17 warning MOV_AWAIT_VALUE_CAPTURED 'company\.Name' in this wait's WHERE is read once, when the wait is reached \(0\.13\); under 0\.12\.13 it was read again at every check, .* against `refresh\(company\)`$/m,
+    /^movements\/companies\.mvt:7:17 warning MOV_AWAIT_VALUE_CAPTURED 'company\.Name' in this wait's WHERE is read once, when the wait is reached \(0\.13\); under 0\.12\.13 it was read again at every check, .* against `refresh\(company\)` \(see handbook: reviews#captured-values\)$/m,
   );
   assert.match(out, /lf\.yaml: engine: 0\.13\.\d+(-[\w.]+)? \(was 0\.12\.13\)/);
   assert.match(out, /1 file\(s\), 0 rewritten, 0 left to change by hand/);

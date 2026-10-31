@@ -21,6 +21,12 @@ export const HANDBOOK_POINTERS = {
   match: 'writes#match',
   /** What a write did — created, matched, changed — asked of its `@old`. */
   writeOutcome: 'writes#what-the-write-did',
+  /** A retired callback: the record a run writes and the edge it waits on. */
+  waiting: 'reviews#waiting-on-a-person',
+  /** A plain `await` that would guess which match is first, and `await new`. */
+  awaitNew: 'reviews#await-and-await-new',
+  /** What a wait's WHERE reads from the run, kept from when the wait is reached. */
+  capturedValues: 'reviews#captured-values',
 } as const;
 
 export type HandbookPointer = (typeof HANDBOOK_POINTERS)[keyof typeof HANDBOOK_POINTERS];
@@ -49,6 +55,9 @@ export const HANDBOOK_POINTER_BY_CODE: Readonly<Record<string, HandbookPointer>>
   MOV_HANDLE_READ_FOUND: HANDBOOK_POINTERS.writeOutcome,
   MOV_OLD_EDGE_NOT_A_WRITE: HANDBOOK_POINTERS.writeOutcome,
   MOV_ARTIFICIAL_EDGE_UNKNOWN: HANDBOOK_POINTERS.writeOutcome,
+  MOV_CALLBACK_RETIRED: HANDBOOK_POINTERS.waiting,
+  MOV_AWAIT_UNORDERED: HANDBOOK_POINTERS.awaitNew,
+  MOV_AWAIT_VALUE_CAPTURED: HANDBOOK_POINTERS.capturedValues,
 };
 
 /** `diagnostic`, its message ending in the handbook pointer its code has (if any). */

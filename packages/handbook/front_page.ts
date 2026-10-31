@@ -149,10 +149,10 @@ export const CONCEPTS: readonly FrontEntry[] = [
   },
   {
     anchor: 'runs',
-    title: 'Runs: effects, waiting, cost',
-    text: 'A run parks at each `await` until it settles; `race` and `all` combine waits. It pauses at its cost cap.',
+    title: 'Runs: waiting, cost',
+    text: 'A run parks at each `await`; `race` and `all` combine waits. Its cost cap pauses it.',
     example: {
-      program: 'function `Confirm`(msg: <chat-[:Message]->>) {\n  q = write msg-[:Replies]-> { Message: "Log?", Buttons: [{ Text: "Log", Value: "log" }] }\n  r = race(\n    () => {\n      press = await q-[:Interactions]->\n      return press.At\n    },\n    () => { await sleep(2d) },\n  )\n}',
+      program: 'function `Confirm`(m: <chat-[:Message]->>) {\n  msg = write m-[:Replies]-> { Message: "Log?", Buttons: [{ Text: "Log", Value: "log" }] }\n  r = race(\n    () => {\n      press = await msg-[:Interactions]->\n      return press.At\n    },\n    () => { await sleep(2d) },\n  )\n  if (r[0] == null) { fail("unanswered") }\n}',
     },
   },
 ];

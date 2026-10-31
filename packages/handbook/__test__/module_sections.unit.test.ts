@@ -5,36 +5,8 @@
 // not failures. The retired-spelling diagnostic is a hard failure.
 
 import { LANGUAGE_VERSION, checkSourceInRust } from 'movement-lang';
-import type { AdapterManifest } from 'movement-engine/public/adapter';
-
-import { AFFINITY_MANIFEST } from '../../../modules/affinity/manifest';
-import { DEALROOM_MANIFEST } from '../../../modules/dealroom/manifest';
-import { EVERTRACE_MANIFEST } from '../../../modules/evertrace/manifest';
-import { GITHUB_MANIFEST } from '../../../modules/github/manifest';
-import { GMAIL_MANIFEST } from '../../../modules/gmail/manifest';
-import { MCP_MANIFEST } from '../../../modules/mcp/manifest';
-import { SLACK_MANIFEST } from '../../../modules/slack/manifest';
-import { STRIPE_MANIFEST } from '../../../modules/stripe/manifest';
-import { TELEGRAM_MANIFEST } from '../../../modules/telegram/manifest';
-import { WEBHOOK_MANIFEST } from '../../../modules/webhook/manifest';
-import { WHATSAPP_MANIFEST } from '../../../modules/whatsapp/manifest';
 import { HANDBOOK_CATALOG } from '../testing';
-
-const MODULES: Record<string, AdapterManifest> = {
-  affinity: AFFINITY_MANIFEST,
-  dealroom: DEALROOM_MANIFEST,
-  evertrace: EVERTRACE_MANIFEST,
-  github: GITHUB_MANIFEST,
-  gmail: GMAIL_MANIFEST,
-  mcp: MCP_MANIFEST,
-  slack: SLACK_MANIFEST,
-  stripe: STRIPE_MANIFEST,
-  telegram: TELEGRAM_MANIFEST,
-  webhook: WEBHOOK_MANIFEST,
-  whatsapp: WHATSAPP_MANIFEST,
-};
-
-const FENCE = /^```[^\n]*\n([\s\S]*?)^```$/gm;
+import { FENCE, MODULES } from './module_manifests';
 
 const examples = Object.entries(MODULES).flatMap(([name, manifest]) =>
   [...(manifest.handbookSection?.content ?? '').matchAll(FENCE)].map((m, i) => ({ name: `${name} #${i + 1}`, source: m[1] })),

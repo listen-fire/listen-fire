@@ -119,10 +119,10 @@ promises belong to EDGES not nodes (`7_readable_means_readable.md`). Later layer
 supersede earlier ones; several sections are explicitly retracted — read to the end
 before building.
 
-**An arrival is an edge.** A module declares each edge iterable (it can list
-what is there), listenable (it announces what arrives), or both; a wait
-(`await x-[:E]->`, `await new x-[:E]->`) traverses a listenable edge and pulls
-one record. This replaces, on purpose, the earlier principle that an event is a
+**An arrival is an edge.** A module declares each edge iterable (`readable`: it
+can list what is there), listenable (it announces what arrives), or both; a
+wait (`await x-[:E]->`, `await new x-[:E]->`) traverses a listenable edge and
+pulls one record. This replaces, on purpose, the earlier principle that an event is a
 meta edge you cannot traverse (`8_event_edges.md`), and the checker's meta event
 kind that models it is superseded with it: don't "correct" code back towards it.
 Standing listens move onto the same edges in a later release; until then

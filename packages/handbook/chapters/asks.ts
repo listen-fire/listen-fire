@@ -47,6 +47,7 @@ if (r[0] == null) {
 - On an edge that only announces — a press, a form's answer — the two are the same: nothing is there before it arrives.
 - On an edge whose system keeps no order, plain \`await\` is refused when you save, because there is no "first already there": write \`await new\`.
 - A \`WHERE\` on the hop says which arrival counts.
+- Two plain \`await\`s on the same record's edge share one wait, and both bind the same first match.
 - The head is a name bound to one record, and the wait takes one hop off it. To wait at the end of a longer walk, bind the record the last hop leaves from, then await its edge.
 
 \`\`\`
@@ -88,7 +89,7 @@ if (r[0] == "approve") { … }
 
 - A press is an \`Interaction\`: when it happened (\`At\`), the controls used (\`Actions\`, each with the \`Value\` and \`Text\` it was written with), and who pressed (\`By\`).
 - \`Value\` is one of the values the buttons were written with, so \`r[0] == "aprove"\` is refused when you save, with a did-you-mean.
-- A value built at run time leaves \`Value\` plain text, with a warning naming the button.
+- A value built at run time leaves \`Value\` plain text, with a warning naming the path it was written at (\`Buttons[].Value\`).
 - Which systems carry buttons, and their limits, is in each system's chapter (\`system:slack\`).
 
 ### host-links
@@ -127,6 +128,7 @@ function \`Refund Check\`(go: <runs-[:Invocation]->>) {
 - The link is served at the host's public address (under \`listen-fire\`, \`lf.yaml\`'s \`publicUrl\`). A browser gets the form; a program fetching it as JSON gets the fields it must send.
 - \`answer.Approve\` is a boolean and \`answer.Note\` is text or null, because \`Fields\` named \`Refund\`. Reading a field the node does not declare is refused when you save.
 - \`Fields\` names a declared \`node\`: a record built in place is refused.
+- The node may not declare a field every answer already has, such as \`Id\`: that is refused when you save.
 - A form takes one answer; a different second one is turned away. It never expires, so the race's \`sleep\` is its deadline.
 - A form is written, never listed: only the run that wrote it holds the link.
 
@@ -257,23 +259,28 @@ if (r[0] == null) {
 Put one decision in several places by writing the message in each, and give each its own arm. An arm is written where you know the place, so it can hand that back along with the answer:
 
 \`\`\`
-dealflow = write \`Deals Channel\`-[:Messages]-> {
+dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+portfolio = only(team-[ch:Channels WHERE ch.Name == "portfolio"]->)
+general = only(team-[ch:Channels WHERE ch.Name == "general"]->)
+if (dealflow == null || portfolio == null || general == null) { fail("a channel is missing") }
+
+in_dealflow = write dealflow-[:Messages]-> {
   Message: "Approve this?"
   Buttons: [{ Text: "Approve", Value: "approve" }]
 }
-board = write \`Board Channel\`-[:Messages]-> {
+in_portfolio = write portfolio-[:Messages]-> {
   Message: "Approve this?"
   Buttons: [{ Text: "Approve", Value: "approve" }]
 }
 
 r = race(
   () => {
-    press = await dealflow-[:Interactions]->
-    return { channel: "deals", at: press.At }
+    press = await in_dealflow-[:Interactions]->
+    return { channel: "dealflow", at: press.At }
   },
   () => {
-    press = await board-[:Interactions]->
-    return { channel: "board", at: press.At }
+    press = await in_portfolio-[:Interactions]->
+    return { channel: "portfolio", at: press.At }
   },
   () => { await sleep(1d) },
 )
@@ -314,7 +321,7 @@ if (r[0] == true) { … }
 
 ### how-long-a-wait-lives
 
-What a person can act on lives as long as its system keeps it: a message's buttons, a form's link. The run waits only while it is parked on them: once its race settles or the run ends, a later press or answer wakes nothing. Something that must react at any time, forever, is an automation that LISTENS.`,
+What a person can act on lives as long as its system keeps it: a message's buttons, a form's link. The run waits only while it is parked on them: once its race settles or the run ends, a later press or answer wakes nothing, though a form answered then still records its answer. Something that must react at any time, forever, is an automation that LISTENS.`,
   engineClaims: [
     {
       construct: 'write an ask along a Check family edge, deliver its Url, and await its Response inside a race arm; the timeout is a null test on the slot',
@@ -335,9 +342,9 @@ function \`Triage Inbound\`(msg: <inbox-[:Email]->>) {
     Prompt: "Pursue \${\`Company Name\`}?"
     Detail: "\${msg.Subject}"
   }
-  deals = only(team-[ch:Channels WHERE ch.Name == "deals"]->)
-  if (deals == null) { fail("no #deals channel") }
-  write deals-[:Messages]-> { Message: "New: \${\`Company Name\`}. Pursue it? \${q.Url}" }
+  dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (dealflow == null) { fail("no #dealflow channel") }
+  write dealflow-[:Messages]-> { Message: "New: \${\`Company Name\`}. Pursue it? \${q.Url}" }
 
   r = race(
     () => {
@@ -355,7 +362,7 @@ function \`Triage Inbound\`(msg: <inbox-[:Email]->>) {
     }
   }
   if (decision == null) {
-    write deals-[:Messages]-> { Message: "Nobody decided in time." }
+    write dealflow-[:Messages]-> { Message: "Nobody decided in time." }
   }
 }
 
@@ -414,9 +421,9 @@ crm  = connect attio using acme_main
 runs = connect manual
 
 function \`Pursue Or Pass\`(go: <runs-[:Invocation]->>) {
-  deals = only(team-[ch:Channels WHERE ch.Name == "deals"]->)
-  if (deals == null) { fail("no #deals channel") }
-  msg = write deals-[:Messages]-> {
+  dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (dealflow == null) { fail("no #dealflow channel") }
+  msg = write dealflow-[:Messages]-> {
     Message: "New company: \${go.Text}. Pursue it?"
     Buttons: [{ Text: "Pursue", Value: "pursue" }, { Text: "Pass", Value: "pass" }]
   }
@@ -455,9 +462,9 @@ team = connect slack using team_workspace
 runs = connect manual
 
 function \`Who Takes It\`(go: <runs-[:Invocation]->>) {
-  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
-  if (ops == null) { fail("no #ops channel") }
-  msg = write ops-[:Messages]-> { Message: "Who can take \${go.Text}? Reply in the thread." }
+  dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (dealflow == null) { fail("no #dealflow channel") }
+  msg = write dealflow-[:Messages]-> { Message: "Who can take \${go.Text}? Reply in the thread." }
 
   r = race(
     () => {
@@ -468,7 +475,7 @@ function \`Who Takes It\`(go: <runs-[:Invocation]->>) {
   )
 
   if (r[0] == null) {
-    write ops-[:Messages]-> { Message: "Nobody picked up \${go.Text}." }
+    write dealflow-[:Messages]-> { Message: "Nobody picked up \${go.Text}." }
   }
 }
 
@@ -486,10 +493,10 @@ team = connect slack using team_workspace
 runs = connect manual
 
 function \`Chase The Author\`(go: <runs-[:Invocation]->>) {
-  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
-  if (ops == null) { fail("no #ops channel") }
-  thread = only(ops-[m:Messages WHERE m.Message == go.Text]->)
-  if (thread == null) { fail("no message \\"\${go.Text}\\" in #ops") }
+  dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (dealflow == null) { fail("no #dealflow channel") }
+  thread = only(dealflow-[m:Messages WHERE m.Message == go.Text]->)
+  if (thread == null) { fail("no message \\"\${go.Text}\\" in #dealflow") }
   write thread-[:Replies]-> { Message: "Any update on this?" }
 
   r = race(
@@ -501,7 +508,7 @@ function \`Chase The Author\`(go: <runs-[:Invocation]->>) {
   )
 
   if (r[0] != null) {
-    write ops-[:Messages]-> { Message: "Update: \${r[0]}" }
+    write dealflow-[:Messages]-> { Message: "Update: \${r[0]}" }
   }
 }
 
@@ -573,9 +580,9 @@ function \`Both Must Agree\`(go: <runs-[:Invocation]->>) {
   budget = write asks-[:Check]-> { Prompt: "Budget approved?" }
   legal  = write asks-[:Check]-> { Prompt: "Legal approved?" }
 
-  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
-  if (ops == null) { fail("no #ops channel") }
-  write ops-[:Messages]-> {
+  dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (dealflow == null) { fail("no #dealflow channel") }
+  write dealflow-[:Messages]-> {
     Message: "Budget: \${budget.Url}\\nLegal: \${legal.Url}"
   }
 
@@ -628,9 +635,9 @@ function \`Wait For The Name\`(go: <runs-[:Invocation]->>) {
     return co.Name == "Acme"
   }, { every: 1h })
 
-  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
-  if (ops == null) { fail("no #ops channel") }
-  write ops-[:Messages]-> { Message: "Renamed at last." }
+  dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (dealflow == null) { fail("no #dealflow channel") }
+  write dealflow-[:Messages]-> { Message: "Renamed at last." }
 }
 
 listen to runs {} fire \`Wait For The Name\`
@@ -653,9 +660,9 @@ function \`Record Headcount\`(go: <runs-[:Invocation]->>) {
     Prompt: "How many people work there?"
     \`Answer Type\`: "number"
   }
-  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
-  if (ops == null) { fail("no #ops channel") }
-  write ops-[:Messages]-> { Message: "How many people work there? \${q.Url}" }
+  dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (dealflow == null) { fail("no #dealflow channel") }
+  write dealflow-[:Messages]-> { Message: "How many people work there? \${q.Url}" }
 
   a = await q-[:Response]->
   write crm-[:Companies]-> {
@@ -685,9 +692,9 @@ function \`Decide Next Step\`(go: <runs-[:Invocation]->>) {
     Prompt: "What next?"
     Options: ["pursue", "hold", "pass"]
   }
-  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
-  if (ops == null) { fail("no #ops channel") }
-  write ops-[:Messages]-> { Message: "What next? \${q.Url}" }
+  dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (dealflow == null) { fail("no #dealflow channel") }
+  write dealflow-[:Messages]-> { Message: "What next? \${q.Url}" }
 
   a = await q-[:Response]->
   if (a.Answer == "pursue") {
@@ -717,12 +724,12 @@ function \`Pick Channels\`(go: <runs-[:Invocation]->>) {
     Prompt: "Which teams should hear about this?"
     Options: ["sales", "support", "finance"]
   }
-  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
-  if (ops == null) { fail("no #ops channel") }
-  write ops-[:Messages]-> { Message: "Who should hear about this? \${q.Url}" }
+  dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (dealflow == null) { fail("no #dealflow channel") }
+  write dealflow-[:Messages]-> { Message: "Who should hear about this? \${q.Url}" }
 
   a = await q-[:Response]->
-  write ops-[:Messages]-> { Message ?: "Telling: \${Text.join(a.Answer, ", ")}" }
+  write dealflow-[:Messages]-> { Message ?: "Telling: \${Text.join(a.Answer, ", ")}" }
 }
 
 listen to runs {} fire \`Pick Channels\`
@@ -745,9 +752,9 @@ function \`Acknowledge First\`(go: <runs-[:Invocation]->>) {
     Prompt: "Read this before it goes out"
     Detail: go.Text
   }
-  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
-  if (ops == null) { fail("no #ops channel") }
-  write ops-[:Messages]-> { Message: "Please read: \${q.Url}" }
+  dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (dealflow == null) { fail("no #dealflow channel") }
+  write dealflow-[:Messages]-> { Message: "Please read: \${q.Url}" }
 
   await q-[:Response]->
   write crm-[:Companies]-> {
@@ -775,12 +782,12 @@ function \`Draft The Reply\`(go: <runs-[:Invocation]->>) {
     Prompt: "Draft the reply"
     Detail: go.Text
   }
-  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
-  if (ops == null) { fail("no #ops channel") }
-  write ops-[:Messages]-> { Message: "Draft it here: \${q.Url}" }
+  dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (dealflow == null) { fail("no #dealflow channel") }
+  write dealflow-[:Messages]-> { Message: "Draft it here: \${q.Url}" }
 
   await q-[:Response]->
-  write ops-[:Messages]-> { Message: "The draft is in." }
+  write dealflow-[:Messages]-> { Message: "The draft is in." }
 }
 
 listen to runs {} fire \`Draft The Reply\`
@@ -805,12 +812,12 @@ function \`Fix The Rows\`(go: <runs-[:Invocation]->>) {
       { Name: "Initech", Stage: "Open", Owner: go.\`Run by (email)\` }
     ]
   }
-  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
-  if (ops == null) { fail("no #ops channel") }
-  write ops-[:Messages]-> { Message: "Check these before they land: \${q.Url}" }
+  dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (dealflow == null) { fail("no #dealflow channel") }
+  write dealflow-[:Messages]-> { Message: "Check these before they land: \${q.Url}" }
 
   await q-[:Response]->
-  write ops-[:Messages]-> { Message: "Corrections in." }
+  write dealflow-[:Messages]-> { Message: "Corrections in." }
 }
 
 listen to runs {} fire \`Fix The Rows\`
@@ -832,12 +839,12 @@ function \`Collect The Details\`(go: <runs-[:Invocation]->>) {
     Prompt: "Fill in the missing details"
     Fields: ["Company", "Contact", "Budget"]
   }
-  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
-  if (ops == null) { fail("no #ops channel") }
-  write ops-[:Messages]-> { Message: "A few details needed: \${q.Url}" }
+  dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (dealflow == null) { fail("no #dealflow channel") }
+  write dealflow-[:Messages]-> { Message: "A few details needed: \${q.Url}" }
 
   a = await q-[:Response]->
-  write ops-[:Messages]-> { Message: "Details in — budget \${a.Budget}." }
+  write dealflow-[:Messages]-> { Message: "Details in — budget \${a.Budget}." }
 }
 
 listen to runs {} fire \`Collect The Details\`
@@ -864,9 +871,9 @@ function \`Pick The Company\`(go: <runs-[:Invocation]->>) {
     Prompt: "Which company did they mean?"
     Options: found
   }
-  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
-  if (ops == null) { fail("no #ops channel") }
-  write ops-[:Messages]-> { Message: "Which one? \${q.Url}" }
+  dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (dealflow == null) { fail("no #dealflow channel") }
+  write dealflow-[:Messages]-> { Message: "Which one? \${q.Url}" }
 
   r = race(
     () => {
@@ -906,17 +913,17 @@ node Decision {
 }
 
 function \`Decide By Link\`(go: <runs-[:Invocation]->>) {
-  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
-  if (ops == null) { fail("no #ops channel") }
+  dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (dealflow == null) { fail("no #dealflow channel") }
 
   form = write forms-[:Forms]-> { Title: "Pursue this company?", Fields: Decision }
-  write ops-[:Messages]-> { Message: "Pursue it? Answer here: \${form.Url}" }
+  write dealflow-[:Messages]-> { Message: "Pursue it? Answer here: \${form.Url}" }
 
   r = race(
     () => {
       answer = await form-[:Submissions]->
       if (answer.Pursue) {
-        write ops-[:Messages]-> { Message: "Pursuing. \${coalesce(answer.Note, "")}" }
+        write dealflow-[:Messages]-> { Message: "Pursuing. \${coalesce(answer.Note, "")}" }
       }
       return answer.Pursue
     },
@@ -951,9 +958,9 @@ function \`Book The Follow Up\`(go: <runs-[:Invocation]->>) {
   }
 
   form = write forms-[:Forms]-> { Title: "Pick a day for \${company.Name}", Fields: Booking }
-  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
-  if (ops == null) { fail("no #ops channel") }
-  write ops-[:Messages]-> { Message: "Pick a day: \${form.Url}" }
+  dealflow = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (dealflow == null) { fail("no #dealflow channel") }
+  write dealflow-[:Messages]-> { Message: "Pick a day: \${form.Url}" }
 
   booking = await form-[:Submissions]->
   write company-[:Notes]-> {

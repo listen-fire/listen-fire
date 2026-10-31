@@ -30,6 +30,9 @@ fn handbook_anchor(code: &str) -> Option<&'static str> {
         "MOV_HANDLE_FIELD_RETIRED" | "MOV_OLD_EDGE_NOT_A_WRITE" | "MOV_ARTIFICIAL_EDGE_UNKNOWN" => {
             "writes#what-the-write-did"
         }
+        "MOV_CALLBACK_RETIRED" => "reviews#waiting-on-a-person",
+        "MOV_AWAIT_UNORDERED" => "reviews#await-and-await-new",
+        "MOV_AWAIT_VALUE_CAPTURED" => "reviews#captured-values",
         _ => return None,
     })
 }

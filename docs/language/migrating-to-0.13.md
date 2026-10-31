@@ -26,7 +26,7 @@ The order that works:
 
 1. Run `listen-fire upgrade --check` and read what it lists.
 2. Replace each `callback(…)` by hand (section 3).
-3. Run `listen-fire upgrade`. It respells `await first(…)` (section 2), lists the captured values (section 4), and moves the pin.
+3. Run `listen-fire upgrade`. It respells `await first(…)` (section 2), lists the captured values (section 4), and moves the pin. If it lists a wait it cannot respell, rewrite that wait (section 2) and run it again.
 4. Delete the `== null` guards after waits (section 5).
 
 ## 2. `await first(x)` is written `await x`
@@ -39,6 +39,16 @@ A wait pulls exactly one record off one edge, so the bare traversal says it.
 
 - `MOV_V5_SPELLING` carries the rewrite as a safe fix, and `listen-fire upgrade` applies it. It waits for the same one record.
 - New in 0.13: `await new msg-[:Replies]->` takes only a reply that arrives after `msg` entered the run, skipping any already in the thread.
+
+Two waits 0.12 accepted are refused once respelled, and the pin holds until each is rewritten by hand:
+
+- **An edge that can be listed but declares no order** (`MOV_AWAIT_UNORDERED`). A plain `await` takes the first match already there, and with no order there is no first. Write `await new`, which waits only for what arrives.
+- **A wait at the end of a walk of more than one edge** (`MOV_AWAIT_BARE_WALK`). Bind the record the last edge leaves from, then await that edge off it.
+
+| Before | After |
+| --- | --- |
+| `c = await first(deal-[:Comments]->)`, where `Comments` declares no order | `c = await new deal-[:Comments]->` |
+| `reply = await first(ops-[:Messages]->-[:Replies]->)` | `msg = only(ops-[:Messages]->)`, then `if (msg == null) { fail("no message") }`, then `reply = await msg-[:Replies]->` |
 
 ```
 import { `@lf/slack` as slack, `@lf/manual` as manual } from adapters
@@ -173,7 +183,7 @@ listen to runs {} fire `Book A Day`
 ### `ttl` and `once: false`
 
 - **`ttl`** is the program's `race` with a `sleep`, as in both programs above. A form never expires on its own.
-- **`once: false`** (many answers in one run) has no replacement inside a run in this release. It becomes a standing automation that keeps its state in a table, one run per answer.
+- **`once: false`** (many answers in one run) becomes a standing `listen` on the message's `Interactions` (from the listen half of 0.13): one run per answer, keeping its state in a table.
 
 ### What the callback's body did
 
@@ -210,7 +220,7 @@ For module authors only.
 - An edge declares `listenable: true` when the module announces what arrives on it, in place of `awaitable` and `watchable`. `readable` still says whether it can be listed.
 - A module that still declares either retired key is refused when `listen-fire` describes it, naming `listenable`.
 - A module reports what arrived as arrivals (adapter protocol 2.5), and answers `awaitKeys`. `resolveAwait` and `wakeKeys` are no longer called.
-- [docs/adapter-protocol.md](../adapter-protocol.md) ("Waiting on your system") has the contract.
+- [The adapter protocol](../contracts/adapter-protocol.md#waiting-on-your-system-awaits) ("Waiting on your system") has the contract.
 
 ## 8. Diagnostic code index
 
@@ -219,6 +229,5 @@ For module authors only.
 | `MOV_V5_SPELLING` (on `await first(…)`) | error, safe fix | [2](#2-await-firstx-is-written-await-x) |
 | `MOV_CALLBACK_RETIRED` | error, by hand | [3](#3-callback-is-retired) |
 | `MOV_AWAIT_VALUE_CAPTURED` | warning on an upgrade from 0.12 | [4](#4-a-waits-where-keeps-the-values-it-read-from-the-run) |
-| `MOV_AWAIT_UNORDERED` | error: write `await new` on an edge with no declared order | [2](#2-await-firstx-is-written-await-x) |
-| `MOV_AWAIT_NOT_AWAITABLE` | error: the edge announces nothing; read it, or `await until(…)` | [2](#2-await-firstx-is-written-await-x) |
-| `MOV_AWAIT_BARE_WALK` | error: bind the record the last hop leaves from, then await its edge | [2](#2-await-firstx-is-written-await-x) |
+| `MOV_AWAIT_UNORDERED` | error, by hand: write `await new` on an edge with no declared order | [2](#2-await-firstx-is-written-await-x) |
+| `MOV_AWAIT_BARE_WALK` | error, by hand: bind the record the last edge leaves from, then await that edge | [2](#2-await-firstx-is-written-await-x) |
