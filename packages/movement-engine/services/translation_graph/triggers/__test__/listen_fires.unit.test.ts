@@ -93,8 +93,9 @@ function note(title: string, more: Partial<Exclude<Arrival, { gone: true }>> = {
 
 describe('the receipt a listen takes of an arrival', () => {
   it("is its edge, the record it landed on, its identity and its version, as listen-fire's", () => {
-    expect(arrivalReceiptKey(note('keep', { edge: 'Comments', key: 'note:n0', version: '3' }))).toBe('Comments:note:n0:n1:3');
-    expect(arrivalReceiptKey(note('keep'))).toBe('Notes::n1:');
+    const landing = { recordId: 'n1', recordType: 'Note', fields: { Title: 'keep' } };
+    expect(arrivalReceiptKey({ edge: 'Comments', key: 'note:n0', identity: 'n1', version: '3', landing })).toBe('Comments:note:n0:n1:3');
+    expect(arrivalReceiptKey({ edge: 'Notes', identity: 'n1', landing })).toBe('Notes::n1:');
   });
 });
 
