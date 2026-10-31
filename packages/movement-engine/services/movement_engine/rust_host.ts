@@ -508,7 +508,7 @@ const ROUTES: Record<string, Route> = {
       adapterType: string(request.adapterType, 'park.waits.open adapterType'),
       edge: string(request.edge, 'park.waits.open edge'),
       key: string(request.key, 'park.waits.open key'),
-      since: count(request.since, 'park.waits.open since'),
+      since: integer(request.since, 'park.waits.open since'),
       segmentId: segmentOf(request),
     });
   },
@@ -736,6 +736,13 @@ function microdollars(value: unknown, what: string): number {
  *  asks an optional one only where the segment input says it is served. */
 function notServed(path: string): RustShimError {
   return new RustShimError(`the engine asked ${path} of a host that does not serve it`);
+}
+
+// Any integer, as the Rust host reads a mark: the log's marks are the host's
+// to number, and a negative one is still a place in its order.
+function integer(value: unknown, what: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value)) throw new RustShimError(`${what} is an integer`);
+  return value;
 }
 
 function count(value: unknown, what: string): number {

@@ -4,9 +4,9 @@
 //! suite (movement-engine `services/inbound/contract.ts`) holds them to the
 //! cases every host's doors pass (apps/cli inbound_contract.test.ts). The world's providers and installs
 //! become externals and credentials, the suite's adapter reads each delivery
-//! (`{ events?, checkpoint? }`), and the store calls are observed, and
-//! the suite's faults injected, around listen-fire's own stores over a scratch state
-//! file.
+//! (`{ events?, arrivals?, checkpoint? }`), and the store calls are observed,
+//! and the suite's faults injected, around listen-fire's own stores over a
+//! scratch state file.
 //!
 //!   doors.baseUrl     → { baseUrl }
 //!   doors.arrange     the world (`ContractWorld`) → null
@@ -20,12 +20,14 @@ use std::rc::Rc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
+use crate::arrivals::arrivals_of;
 use crate::doors::{EventSink, InboundSetup, LfDoors, Reader, Served};
 use crate::inbound::{Declaration, Extraction, InboundStore, Kept, PushAuth, PushCaller, PushStore, Source, Subscription};
 use crate::json::Js;
 use crate::obj;
 use crate::secrets::{Binding, Credential, Origin};
 use crate::store::{DeliveryQuery, Store};
+use crate::waits::NewArrival;
 
 #[derive(Default, Clone, Copy)]
 struct Faults {
@@ -33,6 +35,8 @@ struct Faults {
     capture_marked: bool,
     /// Queueing any captured event throws.
     enqueue: bool,
+    /// Logging arrivals throws.
+    log_arrivals: bool,
 }
 
 #[derive(Default)]
@@ -47,6 +51,8 @@ struct Observations {
     captured: u64,
     enqueued: u64,
     checkpoints: Vec<Js>,
+    /// Every arrival logged, in order, as the suite's adapter reported it.
+    arrivals: Vec<Js>,
     notified: u64,
 }
 
@@ -154,7 +160,7 @@ impl Bridge {
             installs.push(Credential { name: format!("push-{index}"), external: adapter_type, binding: Binding::Install, fields, origin: Origin::default() });
         }
         let faulted = |name: &str| Js::is_true(world.get("faults").and_then(|f| f.get(name)));
-        let faults = Faults { capture_marked: faulted("captureMarked"), enqueue: faulted("enqueue") };
+        let faults = Faults { capture_marked: faulted("captureMarked"), enqueue: faulted("enqueue"), log_arrivals: faulted("logArrivals") };
         *self.world.borrow_mut() = World { served, installs, faults };
         *self.seen.borrow_mut() = Observations::default();
         Ok(())
@@ -166,6 +172,7 @@ impl Bridge {
             "captured" => Js::Num(seen.captured.into()),
             "enqueued" => Js::Num(seen.enqueued.into()),
             "checkpoints" => Js::Arr(seen.checkpoints.clone()),
+            "arrivals" => Js::Arr(seen.arrivals.clone()),
             "notified" => Js::Num(seen.notified.into()),
         })
     }
@@ -263,27 +270,26 @@ impl InboundStore for Observed<'_> {
         Ok(captured)
     }
 
-    /// listen-fire keeps a delivery in one write, so the suite's faults land on it
-    /// whole: receipts that cannot be queued are each refused, the rest kept (the suite's per-receipt
-    /// failure) without the delivery's id, so the sender's retry is kept,
-    /// and the delivery fails. A duplicate is observed doing nothing.
-    async fn keep(&self, mut kept: Kept<'_>) -> Result<bool, String> {
-        let refused = self.faults.enqueue && !kept.receipts.is_empty();
-        if refused {
-            kept.receipts.clear();
-            kept.external_id = None;
+    /// listen-fire keeps a delivery in one write: its receipts, its cursor and
+    /// its arrivals. A fault fails that write whole, so nothing of the
+    /// delivery is kept. A duplicate is observed doing nothing.
+    async fn keep(&self, kept: Kept<'_>) -> Result<bool, String> {
+        if self.faults.enqueue && !kept.receipts.is_empty() {
+            return Err("work table unavailable".into());
+        }
+        if self.faults.log_arrivals && !kept.arrivals.is_empty() {
+            return Err("arrival log unavailable".into());
         }
         let (checkpoint, receipts) = (kept.checkpoint.cloned(), kept.receipts.len() as u64);
+        let arrivals: Vec<Js> = kept.arrivals.iter().map(suite_arrival).collect();
         if !self.lf().keep(kept).await? {
             return Ok(false);
         }
         self.note(|seen| {
             seen.checkpoints.extend(checkpoint);
             seen.enqueued += receipts;
+            seen.arrivals.extend(arrivals);
         });
-        if refused {
-            return Err("work table unavailable".into());
-        }
         Ok(true)
     }
 
@@ -312,8 +318,13 @@ impl PushStore for Observed<'_> {
         Ok(true)
     }
 
-    async fn log_pushed_arrivals(&self, adapter_type: &str, team_id: &str, arrivals: &[crate::waits::NewArrival]) -> Result<(), String> {
-        self.lf().log_pushed_arrivals(adapter_type, team_id, arrivals).await
+    async fn log_pushed_arrivals(&self, adapter_type: &str, team_id: &str, arrivals: &[NewArrival]) -> Result<(), String> {
+        if self.faults.log_arrivals {
+            return Err("arrival log unavailable".into());
+        }
+        self.lf().log_pushed_arrivals(adapter_type, team_id, arrivals).await?;
+        self.note(|seen| seen.arrivals.extend(arrivals.iter().map(suite_arrival)));
+        Ok(())
     }
 
     fn notify_pushed(&self) {
@@ -321,13 +332,33 @@ impl PushStore for Observed<'_> {
     }
 }
 
-/// The suite's adapter: a delivery's JSON body is `{ events?, checkpoint? }`;
-/// each event object is one event's payload.
+/// An arrival as the suite reported it (engine-contracts' `Arrival`): what
+/// it does not name is absent.
+fn suite_arrival(arrival: &NewArrival) -> Js {
+    let mut wire = obj! { "edge" => Js::str(&arrival.edge), "key" => Js::str(&arrival.key) };
+    if arrival.gone {
+        wire.insert("gone".into(), Js::Bool(true));
+    }
+    for (name, value) in [("identity", &arrival.identity), ("version", &arrival.version)] {
+        if let Some(value) = value {
+            wire.insert(name.into(), Js::str(value));
+        }
+    }
+    if let Some(landing) = &arrival.landing {
+        wire.insert("landing".into(), landing.clone());
+    }
+    Js::Obj(wire)
+}
+
+/// The suite's adapter: a delivery's JSON body is
+/// `{ events?, arrivals?, checkpoint? }`; each event object is one event's
+/// payload, and the arrivals are read as a module reports them.
 struct SuiteReader;
 
 /// A delivery as the suite's adapter reads it.
 struct SuiteDelivery {
     events: Vec<Js>,
+    arrivals: Vec<NewArrival>,
     checkpoint: Option<Js>,
 }
 
@@ -339,7 +370,7 @@ fn delivery(raw: &Js) -> Result<SuiteDelivery, String> {
         Some(Js::Arr(items)) if items.iter().all(|i| matches!(i, Js::Obj(_))) => items.clone(),
         Some(_) => return Err("events: expected an array of objects".into()),
     };
-    Ok(SuiteDelivery { events, checkpoint: raw.get("checkpoint").cloned() })
+    Ok(SuiteDelivery { events, arrivals: arrivals_of(raw)?, checkpoint: raw.get("checkpoint").cloned() })
 }
 
 impl Reader for SuiteReader {
@@ -348,8 +379,8 @@ impl Reader for SuiteReader {
     }
 
     async fn preprocess(&self, _external: &str, _install: &Credential, raw: &Js, _checkpoint: Option<&Js>) -> Result<Extraction, String> {
-        let SuiteDelivery { events, checkpoint, .. } = delivery(raw)?;
-        Ok(Extraction { events: events.into_iter().map(|payload| Js::Obj(obj! { "payload" => payload })).collect(), arrivals: Vec::new(), checkpoint })
+        let SuiteDelivery { events, arrivals, checkpoint } = delivery(raw)?;
+        Ok(Extraction { events: events.into_iter().map(|payload| Js::Obj(obj! { "payload" => payload })).collect(), arrivals, checkpoint })
     }
 
     async fn check_inbound(&self, _external: &str, _install: &Credential, _request: &Js, _secret: Option<&str>, _checkpoint: Option<&Js>) -> Result<Js, String> {

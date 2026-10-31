@@ -2,10 +2,11 @@
 // against the Rust listen-fire's doors: `listen-fire --contract-doors` serves them
 // over HTTP, and the suite's world is arranged, and what the doors did read
 // back, over its stdio JSON-RPC bridge (`StdioRpcBridge`). The same
-// cases the doors are held to.
+// cases the doors are held to, arrivals among them.
 
 import { test } from 'node:test';
 import { z } from 'zod';
+import { WireArrival } from 'engine-contracts';
 import { DELIVERY_RECEIPT_CONTRACT_CASES, INBOUND_CONTRACT_CASES, type DeliveryReceiptContractBackend } from 'movement-engine/public/inbound';
 import { StdioRpcBridge } from './stdio_rpc';
 import { lfBinary } from './lf_bin';
@@ -14,6 +15,7 @@ const Observations = z.object({
   captured: z.number(),
   enqueued: z.number(),
   checkpoints: z.array(z.unknown()),
+  arrivals: z.array(WireArrival),
   notified: z.number(),
 });
 
@@ -29,8 +31,7 @@ async function backendOnLfHost(): Promise<{ backend: DeliveryReceiptContractBack
     },
     async observed() {
       const seen = await bridge.call('doors.observed', {}, Observations);
-      // The bridge observes no arrivals: the cases that read them are skipped.
-      return { ...seen, arrivals: [], checkpoints: [...seen.checkpoints] };
+      return { ...seen, checkpoints: [...seen.checkpoints] };
     },
     async deliveries() {
       return bridge.call('doors.deliveries', {}, Deliveries);
@@ -40,18 +41,8 @@ async function backendOnLfHost(): Promise<{ backend: DeliveryReceiptContractBack
 }
 
 /** listen-fire has no synthetic (test-harness) subscription: every delivery is
- *  verified. Its contract bridge (`--contract-doors`) reads no arrivals off a
- *  delivery and observes none it logs, so the cases that read logged arrivals
- *  are skipped; listen-fire's arrivals are proved end to end instead
- *  (await_edges.test.ts). listen-fire keeps a delivery's receipts and its
- *  arrivals in one write, so a receipt that cannot be kept logs none. */
-const NOT_ON_LF = new Set([
-  'a synthetic subscription skips the signature and drains before the ack',
-  'arrivals are logged whether or not any event came with them',
-  'a receipt that cannot be queued is a 500 so the sender retries; the arrivals are still logged',
-  'arrivals that cannot be logged are a 500',
-  'wake logs what arrived: 202 accepted',
-]);
+ *  verified. */
+const NOT_ON_LF = new Set(['a synthetic subscription skips the signature and drains before the ack']);
 
 for (const entry of INBOUND_CONTRACT_CASES) {
   test(`inbound doors contract — listen-fire: ${entry.name}`, { skip: NOT_ON_LF.has(entry.name) }, async () => {

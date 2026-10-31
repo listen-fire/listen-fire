@@ -27,7 +27,7 @@ import {
   tenantIdOf,
 } from '../index';
 import { ModelsCallRequest } from '../slots';
-import { HOST_RECORDING_VERSION, hostRecordingSchema } from '../conformance';
+import { CALLBACK_BODY_RETIRED, HOST_RECORDING_VERSION, hostRecordingSchema } from '../conformance';
 
 describe('the tenant id', () => {
   it('brands any non-empty string, which it carries unchanged', () => {
@@ -331,9 +331,21 @@ describe('a host recording', () => {
     expect(hostRecordingSchema.safeParse({ ...resumed, entry: 'resume' }).success).toBe(true);
   });
 
-  it('records no callback body: callbacks retired with host families version 2', () => {
-    const body = { ...resumed, entry: 'callbackBody', input: { ...resumed.input, values: {}, callIndex: 0 } };
-    expect(hostRecordingSchema.safeParse(body).success).toBe(false);
+  it('is version 3, and reads a version 2 recording as it always did', () => {
+    expect(HOST_RECORDING_VERSION).toBe(3);
+    expect(hostRecordingSchema.safeParse({ ...resumed, version: 2, entry: 'resume' }).success).toBe(true);
+    expect(hostRecordingSchema.safeParse({ ...resumed, version: 4, entry: 'resume' }).success).toBe(false);
+  });
+
+  it.each([2, 3])('refuses a version %i recording of a callback body, naming its retirement', (version) => {
+    const body = { ...resumed, version, entry: 'callbackBody', input: { ...resumed.input, values: {}, callIndex: 0 } };
+    const parsed = hostRecordingSchema.safeParse(body);
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues).toEqual([expect.objectContaining({ path: ['entry'], message: CALLBACK_BODY_RETIRED })]);
+    expect(CALLBACK_BODY_RETIRED).toMatch(/^callbackBody retired in 0\.13/);
+  });
+
+  it('refuses a recording whose host served callbacks: they are on no manifest', () => {
     const minted = { ...resumed, entry: 'resume', methods: ['park.callbacks.mint'] };
     expect(hostRecordingSchema.safeParse(minted).success).toBe(false);
   });

@@ -10,7 +10,7 @@ import type { Arrival } from 'engine-contracts';
 
 import type { DiscriminableEvent } from '../../translation_graph/adapter';
 import { CONTRACT_PROVIDER_KEY, CONTRACT_PUSH_TYPE, memoryInboundStores, type ContractWorld } from '../contract';
-import { answerDelivery, type InboundStore } from '../deliver';
+import { answerDelivery, type DeliveryHost, type InboundStore } from '../deliver';
 import { answerWake } from '../push';
 import { CHECKED_BY_MODULE } from '../verify';
 
@@ -69,7 +69,7 @@ describe("a delivery's arrivals", () => {
 
 describe("a module's acceptance", () => {
   /** A door whose module checks its own inbound and accepts what `accepted` says. */
-  function moduleDoor(accepted: { events?: DiscriminableEvent[]; arrivals?: Arrival[]; reply?: { status: number; html?: string } }) {
+  function moduleDoor(accepted: { events?: DiscriminableEvent[]; arrivals?: Arrival[]; reply?: { status: number; html?: string } }, synthetic = false) {
     const logged: Array<readonly Arrival[]> = [];
     const queued: DiscriminableEvent[] = [];
     const store: InboundStore<DiscriminableEvent> = {
@@ -85,7 +85,7 @@ describe("a module's acceptance", () => {
           adapter: { adapterType: 'forms', checkInbound: async () => ({ outcome: 'accepted', events: accepted.events ?? [], ...accepted }) },
         }),
       }),
-      verifiesSignature: () => true,
+      verifiesSignature: () => !synthetic,
       capture: async ({ event }) => event,
       saveCheckpoint: async () => {},
       enqueue: async ({ event }) => {
@@ -95,7 +95,16 @@ describe("a module's acceptance", () => {
         logged.push(arrivals);
       },
     };
-    return { store, logged, queued, host: { notify: () => {} } };
+    const drained: number[] = [];
+    const host: DeliveryHost<DiscriminableEvent> = {
+      notify: () => {},
+      async drainBeforeAck(queue) {
+        const kept = await queue();
+        drained.push(kept.enqueued.length);
+        return { eventsProcessed: kept.enqueued.length, perEventErrors: [] };
+      },
+    };
+    return { store, logged, queued, drained, host };
   }
 
   it('is answered with its reply once the delivery is kept, its arrivals logged', async () => {
@@ -103,6 +112,14 @@ describe("a module's acceptance", () => {
     const answer = await answerDelivery(door.store, door.host, { provider: 'forms', subscriptionId: 'sub-forms', rawBody: Buffer.from('Answer=yes'), headers: {} });
     expect([answer.status, answer.body, answer.contentType]).toEqual([200, '<p>Thanks: your answer was recorded.</p>', 'text/html']);
     expect(door.logged).toEqual([[LANDED]]);
+  });
+
+  it('is answered with its reply once a synthetic delivery is drained', async () => {
+    const event: DiscriminableEvent = { payload: { Answer: 'yes' } };
+    const door = moduleDoor({ events: [event], arrivals: [LANDED], reply: { status: 200, html: '<p>Thanks.</p>' } }, true);
+    const answer = await answerDelivery(door.store, door.host, { provider: 'forms', subscriptionId: 'sub-forms', rawBody: Buffer.from('Answer=yes'), headers: {} });
+    expect([answer.status, answer.body, answer.contentType]).toEqual([200, '<p>Thanks.</p>', 'text/html']);
+    expect([door.drained, door.queued, door.logged]).toEqual([[1], [event], [[LANDED]]]);
   });
 
   it('with nothing to run and no reply is acknowledged as the door always did', async () => {

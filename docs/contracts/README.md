@@ -42,7 +42,7 @@ A host recording is one entry into the engine as data: what it was handed, every
 ```ts
 {
   kit: 'host';
-  version: 2;                          // the recording format's own version
+  version: 3;                          // the recording format's own version (2 still reads)
   entry: 'run' | 'resume' | 'settleRace';
   input: RunInput | ResumeInput | SettleRaceInput;  // with its languageVersion
   methods: string[];                   // every host method the recorded host served
@@ -57,6 +57,7 @@ A host recording is one entry into the engine as data: what it was handed, every
 
 - **`family` and `method`** are a manifest family and one of its methods (`park.sink` and `commitTimerPark`). `args` is the method's one request object, `answer` its answer (absent from a method that answers nothing), `error` what the host threw (a method that throws rather than rejecting is recorded the same way).
 - **`after`** lists the requests, by index into `requests`, the host had already answered when this one was made, less those another of them implies (one answered before a listed request was made). In a run with nothing concurrent it is the request before.
+- **`version`** 3 retired the `callbackBody` entry with callbacks (0.13). A reader reads a version 2 recording unless it records a callback body, which it refuses by name.
 - **`methods`** matters because a host may leave out an optional family or method, and the engine behaves differently without it (no park sink: a run that parks raises). A replay serves exactly these.
 - **Time and ids are answers.** The engine reads no clock and mints no id of its own (`clock.now`, `ids.mint`, [host-families.md](host-families.md)), so a recording holds every instant and id the entry used.
 - **An error** is the error envelope, `ThrownError` (`{ class, code?, message }`), defined with the three classes the engine branches on under "Failure" in [host-families.md](host-families.md#conventions). A replay rebuilds those three as themselves and throws any other as an `Error` under its recorded name.

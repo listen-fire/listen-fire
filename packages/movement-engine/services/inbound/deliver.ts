@@ -96,7 +96,8 @@ export interface InboundStore<Captured> {
   }): Promise<void>;
   /** Log what a delivery says arrived on the adapter's listenable edges, for
    *  the team: each arrival wakes the waits parked on its record, and one no
-   *  wait reads yet is kept for a wait opened later. */
+   *  wait reads yet is kept for a wait opened later. Asked only once every
+   *  receipt of the delivery is queued. */
   logArrivals(input: { adapterType: string; teamId: string; arrivals: readonly Arrival[] }): Promise<void>;
 }
 
@@ -261,7 +262,7 @@ export async function receiveDelivery<Captured>(
   const queue = async (): Promise<QueuedDelivery<Captured>> => {
     const enqueued: { event: DiscriminableEvent; captured: Captured }[] = [];
     const failures: EventError[] = [];
-    // One event's failure never stops the next; the arrivals are still logged.
+    // One event's failure never stops the next.
     for (const entry of captured) {
       try {
         await store.enqueue({ captured: entry.captured, event: entry.event, subscription, source: opened });
@@ -271,8 +272,11 @@ export async function receiveDelivery<Captured>(
         failures.push({ event: entry.event, error: err instanceof Error ? err.message : String(err) });
       }
     }
-    if (arrivals.length > 0) await store.logArrivals({ adapterType: adapter.adapterType, teamId: subscription.teamId, arrivals });
+    // The arrivals are kept only with the receipts, as listen-fire keeps both
+    // in one write: the sender's retry brings them again, and a wait never
+    // wakes on a delivery that was not kept.
     if (failures.length > 0) throw new InboundQueueFailed(failures);
+    if (arrivals.length > 0) await store.logArrivals({ adapterType: adapter.adapterType, teamId: subscription.teamId, arrivals });
     return { teamId: subscription.teamId, enqueued, captureErrors };
   };
 

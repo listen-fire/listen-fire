@@ -1,5 +1,6 @@
 // The inbound doors' contract suite: one set of HTTP-level cases every host's
-// doors must pass — the hosted express app, `listen-fire serve` (TypeScript and Rust).
+// doors must pass — this package's door core (__test__/contract.unit.test.ts),
+// the hosted express app, and `listen-fire serve` (apps/cli).
 // A case arranges a small world (one provider, one subscription, an adapter
 // whose behaviour is read off the delivery itself, injected faults), sends real
 // requests, and checks the answer and what the host queued.
@@ -305,13 +306,13 @@ export const INBOUND_CONTRACT_CASES: InboundContractCase[] = [
     },
   },
   {
-    name: 'a receipt that cannot be queued is a 500 so the sender retries; the arrivals are still logged',
+    name: 'a receipt that cannot be queued is a 500 so the sender retries; its arrivals are not logged either',
     async run(backend) {
       await arrangeAnd(backend, { faults: { enqueue: true } });
       const answer = await post(backend, CRM_DOOR, json({ ...TWO_EVENTS, arrivals: [ARRIVAL] }), crmSigned);
       assert.deepEqual([answer.status, answer.body], [500, { error: 'internal' }]);
       const seen = await backend.observed();
-      assert.deepEqual([seen.enqueued, seen.arrivals, seen.notified], [0, [ARRIVAL], 0]);
+      assert.deepEqual([seen.enqueued, seen.arrivals, seen.notified], [0, [], 0]);
     },
   },
   {

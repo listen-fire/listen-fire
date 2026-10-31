@@ -17,8 +17,14 @@ import type { ParkedScopeState } from '../park_state';
 import type { ResumeInput, RunInput, SettleRaceInput } from '../run_input';
 import { tenantIdSchema } from '../tenant';
 
-/** The recording format's own version, which a reader refuses past. */
-export const HOST_RECORDING_VERSION = 2;
+/** The recording format's own version, which a reader refuses past. Version
+ *  3 retired the `callbackBody` entry; a version 2 recording without one reads
+ *  as it always did. */
+export const HOST_RECORDING_VERSION = 3;
+
+/** Why a recording of a callback body reads on no release from 0.13. */
+export const CALLBACK_BODY_RETIRED =
+  'callbackBody retired in 0.13 with callbacks (host families version 2): a callback body is no entry into the engine, so its recording replays on no release from 0.13';
 
 /** JSON with every object's keys sorted and undefined members dropped: two
  *  values are the same request or the same result when these are equal. */
@@ -154,7 +160,7 @@ export type RecordedRequest = z.infer<typeof recordedRequestSchema>;
 
 const common = {
   kit: z.literal('host'),
-  version: z.literal(HOST_RECORDING_VERSION),
+  version: z.union([z.literal(2), z.literal(HOST_RECORDING_VERSION)]),
   /** Every method the recorded host served, by path. A family or method a
    *  host leaves out changes what the engine does (no park sink: a run that
    *  parks raises), so a replay serves exactly these. */
@@ -166,25 +172,37 @@ const common = {
   failure: recordedErrorSchema.optional(),
 };
 
+// Named before the entries are told apart, so a retired entry says why rather
+// than that it is no entry.
+const refuseRetiredEntry = (value: unknown, ctx: z.core.$RefinementCtx): unknown => {
+  if (isObject(value) && value.entry === 'callbackBody') {
+    ctx.addIssue({ code: 'custom', message: CALLBACK_BODY_RETIRED, path: ['entry'], input: value.entry });
+  }
+  return value;
+};
+
 /** One entry into the engine, by its entry point: `runMovement`,
  *  `resumeMovement` or `settleRaceFrame`. */
-export const hostRecordingSchema = z
-  .discriminatedUnion('entry', [
-    z.object({ ...common, entry: z.literal('run'), input: runInputSchema }),
-    z.object({ ...common, entry: z.literal('resume'), input: resumeInputSchema }),
-    z.object({
-      ...common,
-      entry: z.literal('settleRace'),
-      input: resumeInputSchema.extend({ frameAddress: z.string() }),
-    }),
-  ])
-  .refine((recording) => (recording.result === undefined) !== (recording.failure === undefined), {
-    message: 'a recording ends in exactly one of result and failure',
-  })
-  .refine(
-    (recording) => recording.requests.every((request, i) => request.after.every((before) => before < i)),
-    { message: "a request's `after` names only requests made before it" },
-  );
+export const hostRecordingSchema = z.preprocess(
+  refuseRetiredEntry,
+  z
+    .discriminatedUnion('entry', [
+      z.object({ ...common, entry: z.literal('run'), input: runInputSchema }),
+      z.object({ ...common, entry: z.literal('resume'), input: resumeInputSchema }),
+      z.object({
+        ...common,
+        entry: z.literal('settleRace'),
+        input: resumeInputSchema.extend({ frameAddress: z.string() }),
+      }),
+    ])
+    .refine((recording) => (recording.result === undefined) !== (recording.failure === undefined), {
+      message: 'a recording ends in exactly one of result and failure',
+    })
+    .refine(
+      (recording) => recording.requests.every((request, i) => request.after.every((before) => before < i)),
+      { message: "a request's `after` names only requests made before it" },
+    ),
+);
 
 export type HostRecording = z.infer<typeof hostRecordingSchema>;
 

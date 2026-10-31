@@ -18,18 +18,44 @@ import { TEAM, hostWith, inSegment, request, scriptedEngine } from './scripted_e
 
 type Waits = NonNullable<EngineHost['park']['waits']>;
 
-/** A host's waits that record each request and answer from `arrivals`. */
-function recordingWaits(arrivals: { gone: boolean; arrivals: LoggedArrival[] }): { waits: Waits; asked: Array<[string, unknown]> } {
+type Logged = { gone: boolean; arrivals: LoggedArrival[] };
+
+/** A host's waits that record each request and answer from `arrivals`, or
+ *  from what it says at each reading. */
+function recordingWaits(arrivals: Logged | (() => Logged)): { waits: Waits; asked: Array<[string, unknown]> } {
   const asked: Array<[string, unknown]> = [];
   return {
     asked,
     waits: {
       mark: async (input) => (asked.push(['mark', input]), { mark: 41 }),
       open: async (input) => (asked.push(['open', input]), { waitId: input.key === 'thread:c1' ? 'wait-1' : `wait:${input.key}` }),
-      arrivals: async (input) => (asked.push(['arrivals', input]), arrivals),
+      arrivals: async (input) => (asked.push(['arrivals', input]), typeof arrivals === 'function' ? arrivals() : arrivals),
       note: async (input) => (asked.push(['note', input]), { counts: input.matched }),
     },
   };
+}
+
+/** A waits request as the order assertions read it: the method, and the key
+ *  or wait it names. */
+function label([method, input]: [string, unknown]): string {
+  if (typeof input !== 'object' || input === null) return method;
+  const subject = 'key' in input ? input.key : 'waitId' in input ? input.waitId : undefined;
+  return typeof subject === 'string' ? `${method} ${subject}` : method;
+}
+
+/** The longest start of `wanted` that appears in `labels` in its order,
+ *  other requests between (as the Rust embed's end-to-end tests read an
+ *  order): all of `wanted` when they came in that order. */
+function inOrder(labels: string[], wanted: string[]): string[] {
+  const found: string[] = [];
+  let from = 0;
+  for (const want of wanted) {
+    const at = labels.indexOf(want, from);
+    if (at < 0) break;
+    found.push(want);
+    from = at + 1;
+  }
+  return found;
 }
 
 describe("the shim's park.waits routes", () => {
@@ -76,6 +102,24 @@ describe("the shim's park.waits routes", () => {
       { id: 2, answer: { value: new WireOut().value({ gone: false, arrivals: [landed] }) } },
       { id: 3, answer: { value: { counts: true } } },
     ]);
+  });
+
+  it('reads `since` as any integer, as the Rust host does, and refuses one that is not', async () => {
+    const opened = async (since: unknown) => {
+      const { waits, asked } = recordingWaits({ gone: false, arrivals: [] });
+      const served = await hostWith({ park: { waits } });
+      const segmentId = served.context.segmentId;
+      const { engine } = scriptedEngine((seen) =>
+        seen.length === 0
+          ? { pending: [request(1, 'park.waits', 'open', inSegment(segmentId, { adapterType: 'acme', edge: 'Comments', key: 'thread:c1', since }))] }
+          : { done: { ok: true } },
+      );
+      await driveEngine(engine, {}, served);
+      return asked;
+    };
+    expect(await opened(-1)).toEqual([['open', expect.objectContaining({ since: -1 })]]);
+    await expect(opened(1.5)).rejects.toThrow('park.waits.open since is an integer');
+    await expect(opened('41')).rejects.toThrow('park.waits.open since is an integer');
   });
 
   it('refuses a waits request of a host that serves no waits, naming the method', async () => {
@@ -190,6 +234,10 @@ describe('an await on a listenable edge, run in the Rust engine through the shim
         ['note', { segmentId, waitId: 'wait:thread:m-1', identity: '1.5', matched: true }],
       ]),
     );
+    // In that order: the mark before the wait opens, the wait open before
+    // the await reads it, and the reading before the note.
+    const order = ['mark', 'open thread:m-1', 'arrivals wait:thread:m-1', 'note wait:thread:m-1'];
+    expect(inOrder(asked.map(label), order)).toEqual(order);
     expect(reads).toContainEqual(['r-1', 'Text']);
   });
 
@@ -208,5 +256,28 @@ describe('an await on a listenable edge, run in the Rust engine through the shim
     expect(result.parked).toBe(true);
     expect(park.awaitParks).toEqual([{ address: expect.any(String), state: expect.objectContaining({ version: 3 }), waitId: 'wait:thread:m-1' }]);
     expect(wakes).toEqual([]);
+  });
+
+  it('wakes the run by its wait when a reply arrived while it parked', async () => {
+    const { adapter } = quietChat();
+    const arrived: LoggedArrival = { seq: 43, identity: '1.5', landing: { recordId: 'r-1', recordType: 'Message', fields: { Text: 'hi', Timestamp: '1.5' } } };
+    const park = makeFakeParkSink();
+    // Nothing at the await's first reading; the reply lands as the run parks.
+    const { waits, asked } = recordingWaits(() => ({ gone: false, arrivals: park.awaitParks.length > 0 ? [arrived] : [] }));
+    const wakes: QueuedWake[] = [];
+    const result = await runMovement({
+      source,
+      event: { pipelineInputId: 'p-1', adapterType: 'chat', triggerType: 'webhook', payload: { Text: 'hello' }, recordId: 'm-0' },
+      teamId: TEAM,
+      catalog,
+      host: makeTestHost({ adapters: { resolve: () => adapter }, park: { waits, sink: park.sink }, wakes }),
+    });
+    expect(result.parked).toBe(true);
+    expect(park.awaitParks).toEqual([{ address: expect.any(String), state: expect.objectContaining({ version: 3 }), waitId: 'wait:thread:m-1' }]);
+    expect(asked.filter(([method]) => method === 'arrivals')).toEqual([
+      ['arrivals', { segmentId: expect.any(String), waitId: 'wait:thread:m-1' }],
+      ['arrivals', { segmentId: expect.any(String), waitId: 'wait:thread:m-1' }],
+    ]);
+    expect(wakes).toEqual([{ teamId: TEAM, waitId: 'wait:thread:m-1' }]);
   });
 });
