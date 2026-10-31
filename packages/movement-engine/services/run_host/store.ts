@@ -1,15 +1,16 @@
 // The run host's backend: the durable state a run leaves between its segments
-// (parked leaves, the joins they hold, await correlations, the run lease, the
-// work queue), as the families every backend serves. The hosted product serves
+// (parked leaves, the joins they hold, the waits its awaits read and the
+// arrivals logged for them, the run lease, the work queue), as the families
+// every backend serves. The hosted product serves
 // them from Postgres and `listen-fire` from SQLite; the rules that read and write them
-// (when a run is complete, how a wake finds its parks, how a race settles,
+// (when a run is complete, how a wake reaches its park, how a race settles,
 // how a cancel or a failure tears a run down) are the core's (rules.ts,
 // drain.ts), written once over these families.
 //
 // Every method is plain data in and out. A backend is held to one meaning by
 // the contract suite (contract.ts), run against each.
 
-import type { CallbackCall, CallbackParamSpec, CoreParkReason, ParkReason } from 'engine-contracts';
+import type { CoreParkReason, ParkReason } from 'engine-contracts';
 
 /** One parked leaf of a run, as the backend lists it. */
 export interface LeafRow {
@@ -40,12 +41,28 @@ export interface ParkStore {
     rewritten?: boolean;
     fence?: string;
   }): Promise<void>;
+  /**
+   * Park a leaf and what wakes it, in one fenced write: the leaf (as
+   * `putLeaf`, the kind its reason; a wait's reason is `await`); a timer's
+   * run row armed at `wakeAt` (as `armTimerWake`); a wait's wait parked at
+   * `address` (a wait the run does not have writes nothing, and fails). Any
+   * kind unparks the run's wait parked at `address` before, and keeps the
+   * run's wait notes that name `address` as their `leaf`. A wait's park never
+   * interleaves with a `waits.log` on its record's edge: either the log sees
+   * the park and answers it, or the park lands after the log, so a run that
+   * reads its wait's arrivals after parking misses none. Throws
+   * `RunLeaseLost`, writing nothing, when `fence` is not the run's lease.
+   */
+  commit(input: { runId: string; address: string; state?: unknown; fence?: string; park: ParkKind; rewritten?: boolean }): Promise<void>;
   /** Claim a parked leaf for its resume (`parked` → `resuming`). Null when it
-   *  is not parked: another resume took it, or a race cancelled it. */
+   *  is not parked: another resume took it, or a race cancelled it. Claiming
+   *  drops the wait notes that name the leaf as their `leaf`: the segment
+   *  that made them died before its progress was kept. */
   claimLeaf(input: { runId: string; address: string; reason?: ParkReason }): Promise<{ state?: unknown; reason: ParkReason } | null>;
   /** The claimed leaf is done with: delete it unless its step parked it again
-   *  (the row is `parked` again, and stays). Given `fence`, only while the run's
-   *  lease is still that token's. */
+   *  (the row is `parked` again, and stays), keeping the wait notes that name
+   *  it as their `leaf`. Given `fence`, only while the run's lease is still
+   *  that token's. */
   finishLeaf(input: { runId: string; address: string; fence?: string }): Promise<void>;
   /** The run's leaves, by address. `parkedOnly` leaves out claimed ones;
    *  `dueBy` keeps only timers due by that instant. */
@@ -73,23 +90,78 @@ export interface JoinStore {
   deleteFrames(input: { runId: string; frameAddresses: readonly string[] }): Promise<void>;
 }
 
-/** One await park correlated to an adapter identity. */
-export interface CorrelatedAwait {
+/** What wakes a parked leaf: its wake time, a wait, or nothing (a limit
+ *  pause, resumed by an operator). */
+export type ParkKind = { kind: 'timer'; wakeAt: string } | { kind: 'wait'; waitId: string } | { kind: 'limit' };
+
+/** One arrival as the log keeps it. `identity` and `version` as the edge
+ *  declares them, null for none: an arrival without an identity is its own.
+ *  `gone`: the record went, and nothing more arrives on its edges. */
+export interface NewArrival {
+  edge: string;
+  /** The record whose edge it arrived on, as the module keys it. */
+  key: string;
+  identity: string | null;
+  version: string | null;
+  /** The arrived record as the module reported it (JSON), null for none. */
+  landing: unknown;
+  gone: boolean;
+}
+
+/** An arrival a wait has yet to note (`waits.arrivals`). */
+export interface ListedArrival {
+  seq: number;
+  /** The reported one, or `#` and the seq when it reported none. */
+  identity: string;
+  version: string | null;
+  landing: unknown;
+}
+
+/** A wait parked at `address` that a logged arrival answers. */
+export interface WaitWake {
   runId: string;
-  teamId: string;
+  waitId: string;
   address: string;
 }
 
-export interface CorrelationStore {
-  /** Map an adapter identity (its type and native key) to a park. Idempotent on
-   *  (run, address): a re-armed await rewrites its own entry. */
-  correlate(input: { runId: string; teamId: string; address: string; adapterType: string; correlationKey: string }): Promise<void>;
-  /** Every park correlated to one identity, within one team. */
-  correlated(input: { adapterType: string; teamId: string; correlationKey: string }): Promise<CorrelatedAwait[]>;
-  /** The run's correlations of one adapter type, with their keys. */
-  ofRun(input: { runId: string; adapterType: string }): Promise<Array<CorrelatedAwait & { correlationKey: string }>>;
-  drop(input: { runId: string; address: string }): Promise<void>;
-  dropRun(input: { runId: string }): Promise<void>;
+/**
+ * A run's waits on listenable edges and the log of arrivals they read
+ * (docs/contracts/store-slot.md, `waits.*`; the cases every store is held to
+ * are engine-contracts' conformance/store-waits.json).
+ */
+export interface WaitStore {
+  /** The latest seq logged (0 for none): every arrival logged after this
+   *  answer is above it. */
+  mark(): Promise<number>;
+  /**
+   * Log each arrival at `at`, in order, under a seq above every seq before
+   * it, in one write; answer the waits parked on their records (one each). A
+   * repeat (an identity and version its team, adapter, edge and record
+   * already logged within the hour) is skipped and answers nothing; an
+   * arrival without an identity is never a repeat.
+   */
+  log(input: { teamId: string; adapterType: string; arrivals: readonly NewArrival[]; at: string }): Promise<WaitWake[]>;
+  /** The run waits on this edge of this record, reading what is logged after
+   *  `since`. A run that already waits on it keeps that wait, and its `since`. */
+  open(input: { runId: string; teamId: string; adapterType: string; edge: string; key: string; since: number }): Promise<{ waitId: string }>;
+  /** What the wait has yet to note, in seq order, the first of each identity
+   *  and version only (one without an identity reads as `#` and its seq); and
+   *  `gone` when a gone arrival was logged there after `since`. An unknown
+   *  wait fails. */
+  arrivals(input: { waitId: string }): Promise<{ gone: boolean; arrivals: ListedArrival[] }>;
+  /**
+   * Note the wait judged an arrival, and whether its record matched: whether
+   * it counts (it matched, and its identity did not match at its last noted
+   * arrival). An arrival noted before answers false. `leaf` is the leaf the
+   * noting segment resumed: the note is kept with that segment's progress
+   * (`finishLeaf` of it, a `commit` at its address) and dropped by its next
+   * `claimLeaf`. Throws `RunLeaseLost`, noting nothing, when `fence` is not
+   * the run's lease.
+   */
+  note(input: { waitId: string; identity: string; version: string | null; matched: boolean; leaf?: string; fence?: string }): Promise<boolean>;
+  /** Forget at most `limit` arrivals logged before `before` that no wait
+   *  reads: how many went. */
+  sweep(input: { before: string; limit: number }): Promise<number>;
 }
 
 export interface RunLeaseStore {
@@ -101,7 +173,8 @@ export interface RunLeaseStore {
   /** Give it back. A no-op when it is no longer this token's. */
   release(input: { runId: string; token: string }): Promise<void>;
   /**
-   * Drop the run's live state, every leaf and every join with its exports.
+   * Drop the run's live state: every leaf, every join with its exports, and
+   * every wait with its notes.
    * Given `fence`, only while the run is still leased under it: false when it
    * is not, and nothing was dropped.
    */
@@ -154,106 +227,54 @@ export interface WorkQueue {
 export interface RunHostStore {
   parks: ParkStore;
   joins: JoinStore;
-  correlations: CorrelationStore;
+  waits: WaitStore;
   leases: RunLeaseStore;
   work: WorkQueue;
   sources: SourceStore;
 }
 
-/**
- * The run host's half of an awaitable adapter whose awaits are backed by
- * records of its own (an ask is: the ask settles, the await resolves; a
- * callback is: a call lands). The core reaches it only through this
- * interface: the resume drain loads each keeper's settled leaves, and
- * whatever withdraws parks (a lost race arm, a run that ended) hands them to
- * every keeper to close what stood behind them.
- */
-export interface AwaitKeeper {
-  /** The adapter type its correlations carry. */
-  adapterType: string;
-  /** The run's parked leaves whose records have settled. */
-  loadResolvable(input: { runId: string }): Promise<CorrelatedAwait[]>;
-  /** Withdraw parks that will never be consumed and close the records behind
-   *  them: the run's parks at `addresses`, or every one when absent. */
-  abandon(input: { runId: string; addresses?: readonly string[] }): Promise<void>;
+/** A race a segment's resumed arm won and left its run to settle, from the
+ *  arm's `state` (`parks.owedRaces`). */
+export interface OwedRace {
+  frameAddress: string;
+  state: unknown;
 }
-
-// ── Callbacks ───────────────────────────────────────────────────────────────
-
-/** `live` is the only state that takes a new call. `fired` is a single-use
- *  callback that took its one call; a repeatable one stays `live` and
- *  accumulates calls until its run ends and revokes it. */
-export type CallbackStatus = 'live' | 'fired' | 'revoked';
-
-/** A call as the ledger keeps it: the call itself, and when its body started.
- *  Until its body has started a call is on the ledger but not LANDED: no
- *  read of `cb-[:Called]->` sees it, and no await resolves on it, so an
- *  awaiter never runs ahead of the body its call fired. */
-export interface LedgerCall extends CallbackCall {
-  bodyStartedAt?: string;
-}
-
-/** One `callback(…)` mint: the captured closure its calls resume, the
- *  signature they are validated against, and its call ledger. */
-export interface CallbackRecord {
-  /** `cb_`-prefixed; the id IS the authorization a caller presents. */
-  id: string;
-  teamId: string;
-  runId: string;
-  /** The callback expression's address in the run's pinned program: where a
-   *  call's body resumes. */
-  address: string;
-  params: CallbackParamSpec[];
-  state?: unknown;
-  calls: LedgerCall[];
-  singleUse: boolean;
-  /** When it stops taking calls (ISO 8601); null for never. */
-  expiresAt: string | null;
-  status: CallbackStatus;
-}
-
-export type CallbackClaim =
-  | { kind: 'recorded'; callback: CallbackRecord; callIndex: number }
-  | { kind: 'not_found' }
-  /** Revoked (its run ended) or already fired (single-use). */
-  | { kind: 'closed'; callback: CallbackRecord }
-  | { kind: 'expired'; callback: CallbackRecord };
 
 /**
- * The callbacks a run mints. Kept beside the run host's families rather than
- * among them: a callback is not live run state the core tears down, it is a
- * record the product keeps for the run, revoked when the run ends.
+ * What a store keeps for a host that writes a segment's progress as one
+ * (listen-fire does; docs/contracts/store-slot.md, `parks.commitSegment`),
+ * beside the families above. The run host in this package writes each park
+ * as the engine makes it (`ParkStore.commit`), so it calls none of these; a
+ * store is held to them by the shared cases (conformance/store-waits.json),
+ * which listen-fire's stores run too.
  */
-export interface CallbackStore {
-  /** Mint a live callback with an empty ledger. Its id is the backend's to
-   *  choose, from `newCallbackId` (callbacks.ts). */
-  mint(input: {
-    teamId: string;
-    runId: string;
-    address: string;
-    params: CallbackParamSpec[];
-    state: unknown;
-    singleUse: boolean;
-    expiresAt?: string;
-  }): Promise<{ id: string }>;
-  /** The callback, or null (an id this backend never minted, or one without
-   *  the `cb_` prefix, which never reaches a query). */
-  get(input: { id: string }): Promise<CallbackRecord | null>;
+export interface SegmentCommitStore {
   /**
-   * Record one call: an atomic compare-and-set on a live, unexpired
-   * callback (single-use flips to `fired`; repeatable appends), and in the
-   * same transaction the call's body queued as work (`callbackBodyWork`,
-   * due at `bodyDueAt`), so a recorded call's body is never lost. The
-   * backend's own clock judges expiry and stamps the call's `at`. A refusal
-   * records nothing and queues nothing.
+   * One fenced write of what a segment held back until its end: each join
+   * recorded, each park committed in order, `resumed` finished unless a park
+   * is at its address, the run marked parked when anything parked, then the
+   * run settled by `settle`; the `settle_race` row of `settledRace` deleted
+   * and each of `owedRaces` queued (key `settle_race:<runId>:<frameAddress>`);
+   * and a `wake_await` row queued, and answered, for each wait a park parks
+   * whose arrivals are unread or whose record is gone. Throws `RunLeaseLost`
+   * when `fence` is not the run's lease; a park the store refuses writes
+   * nothing either.
    */
-  record(input: { id: string; values: Record<string, unknown>; bodyDueAt: string }): Promise<CallbackClaim>;
-  /** Mark call `callIndex`'s body started (the call lands). Given `fence`,
-   *  only while the callback's run is leased under it: false when it is not,
-   *  and nothing was marked. */
-  markBodyStarted(input: { id: string; callIndex: number; fence?: string }): Promise<boolean>;
-  /** Those of `ids` with at least one landed call. */
-  landed(input: { ids: readonly string[] }): Promise<string[]>;
-  /** Revoke the run's live callbacks; a fired one stays fired. Idempotent. */
-  revokeRun(input: { runId: string }): Promise<void>;
+  commitSegment(input: {
+    runId: string;
+    teamId: string;
+    fence?: string;
+    resumed: string | null;
+    joins: ReadonlyArray<{ frameAddress: string; pending: number }>;
+    parks: ReadonlyArray<{ address: string; state?: unknown; park: ParkKind }>;
+    settle: { status: string; outcome: unknown; at: string } | null;
+    owedRaces?: readonly OwedRace[];
+    settledRace?: string | null;
+  }): Promise<WaitWake[]>;
+  /** The run's owed races, oldest first. */
+  owedRaces(input: { runId: string }): Promise<OwedRace[]>;
+  /** A run row to park against (`runs.start`). */
+  startRun(input: { runId: string }): Promise<void>;
+  /** The run's status (`runs.get`), or null for none. */
+  runStatus(input: { runId: string }): Promise<string | null>;
 }

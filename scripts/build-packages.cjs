@@ -32,7 +32,7 @@ const ROOT = path.resolve(__dirname, '..');
  *  and `copies` (repo-relative files outside the package) into it. */
 const PACKAGES = [
   { dir: 'packages/movement-lang', assets: [/^wasm\/[^/]+\.wasm$/] },
-  { dir: 'packages/engine-contracts' },
+  { dir: 'packages/engine-contracts', assets: [/^conformance\/[^/]+\.json$/] },
   { dir: 'packages/module-runtime' },
   { dir: 'packages/movement-engine' },
   // The builtins chapter reads the language's reference where the repo keeps
@@ -172,7 +172,7 @@ function build({ dir, assets = [], copies = [] }) {
     if (!/\.(js|d\.ts)$/.test(file)) continue;
     const text = fs.readFileSync(file, 'utf8');
     const renamed = text.replace(
-      /(require\(|from |import\()(["'])(movement-engine|engine-contracts|module-kit|module-runtime|file-text|model-providers|files-s3|ocr-google|movement-lang)(\/[^"']*)?\2/g,
+      /(require\(|require\.resolve\(|from |import\()(["'])(movement-engine|engine-contracts|module-kit|module-runtime|file-text|model-providers|files-s3|ocr-google|movement-lang)(\/[^"']*)?\2/g,
       (_match, call, quote, spelling, rest = '') => `${call}${quote}${SPELLINGS[spelling]}${rest}${quote}`,
     );
     if (renamed !== text) fs.writeFileSync(file, renamed);

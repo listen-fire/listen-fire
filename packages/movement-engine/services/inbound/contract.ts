@@ -59,6 +59,9 @@ export interface ContractWorld {
     captureMarked?: boolean;
     /** Queueing any captured event throws. */
     enqueue?: boolean;
+    /** Queueing the event whose payload has `fail: true` throws, the first
+     *  time only: the sender's retry is kept. */
+    enqueueMarkedOnce?: boolean;
     /** Logging arrivals throws. */
     logArrivals?: boolean;
   };
@@ -313,6 +316,20 @@ export const INBOUND_CONTRACT_CASES: InboundContractCase[] = [
       assert.deepEqual([answer.status, answer.body], [500, { error: 'internal' }]);
       const seen = await backend.observed();
       assert.deepEqual([seen.enqueued, seen.arrivals, seen.notified], [0, [], 0]);
+    },
+  },
+  {
+    name: "a delivery whose receipts are partly queued is a 500 with no arrival logged; the sender's retry queues each receipt once and logs its arrivals",
+    async run(backend) {
+      await arrangeAnd(backend, { faults: { enqueueMarkedOnce: true } });
+      const delivery = json({ events: [{ id: 'e-1', n: 1 }, { id: 'e-2', n: 2, fail: true }], arrivals: [ARRIVAL] });
+      const failed = await post(backend, CRM_DOOR, delivery, crmSigned);
+      assert.deepEqual([failed.status, failed.body], [500, { error: 'internal' }]);
+      assert.deepEqual((await backend.observed()).arrivals, []);
+      const retried = await post(backend, CRM_DOOR, delivery, crmSigned);
+      assert.deepEqual([retried.status, retried.body], [200, { ok: true, eventsProcessed: 2 }]);
+      const seen = await backend.observed();
+      assert.deepEqual([seen.enqueued, seen.arrivals], [2, [ARRIVAL]]);
     },
   },
   {
@@ -603,6 +620,11 @@ export function memoryInboundStores(arranged: ContractWorld): {
   const seen: ContractObservations = { captured: 0, enqueued: 0, arrivals: [], checkpoints: [], notified: 0 };
   const providers = new Map(arranged.providers.map((p) => [p.providerKey, p]));
   const { faults } = arranged;
+  // Receipts are keyed on the event's own id, so a retried delivery queues
+  // what its failed attempt queued once (an event without one is its own).
+  const queued = new Set<string>();
+  let markedFailed = false;
+  const marked = (event: DiscriminableEvent): boolean => (event.payload as { fail?: unknown } | undefined)?.fail === true;
 
   const logArrivals = async (input: { arrivals: readonly Arrival[] }) => {
     if (faults.logArrivals) throw new Error('arrival log unavailable');
@@ -631,7 +653,7 @@ export function memoryInboundStores(arranged: ContractWorld): {
               async preprocessInbound({ raw }) {
                 const body = raw as { events?: Record<string, unknown>[]; arrivals?: Arrival[]; checkpoint?: unknown };
                 return {
-                  events: (body.events ?? []).map((payload) => ({ payload })),
+                  events: (body.events ?? []).map((payload) => ({ payload, ...(typeof payload.id === 'string' ? { externalId: payload.id } : {}) })),
                   ...(body.arrivals !== undefined ? { arrivals: body.arrivals } : {}),
                   ...(body.checkpoint !== undefined ? { checkpoint: body.checkpoint } : {}),
                 };
@@ -643,17 +665,23 @@ export function memoryInboundStores(arranged: ContractWorld): {
     },
     verifiesSignature: () => !arranged.synthetic,
     async capture({ event }) {
-      if (faults.captureMarked && (event.payload as { fail?: unknown } | undefined)?.fail === true) {
-        throw new Error('receipt store unavailable');
-      }
+      if (faults.captureMarked && marked(event)) throw new Error('receipt store unavailable');
       seen.captured += 1;
       return event;
     },
     async saveCheckpoint({ checkpoint }) {
       seen.checkpoints.push(checkpoint);
     },
-    async enqueue() {
+    async enqueue({ captured }) {
       if (faults.enqueue) throw new Error('work table unavailable');
+      if (faults.enqueueMarkedOnce && marked(captured) && !markedFailed) {
+        markedFailed = true;
+        throw new Error('work table unavailable');
+      }
+      if (captured.externalId !== undefined) {
+        if (queued.has(captured.externalId)) return;
+        queued.add(captured.externalId);
+      }
       seen.enqueued += 1;
     },
     logArrivals,

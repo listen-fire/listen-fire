@@ -1,7 +1,8 @@
 // The embedded host end to end over a module loaded in process: an event runs
 // only the listens that hear it (its tenant's, on the connection it came
-// for), a run that sleeps is stepped on by the tick past its wake, and a
-// tenant's catalog is rebuilt when its connection or its schema changes.
+// for), a run that sleeps is stepped on by the tick past its wake, a run that
+// awaits a comment is woken by its arrival, and a tenant's catalog is rebuilt
+// when its connection or its schema changes.
 
 import type { Adapter, DiscriminableEvent } from 'movement-engine/public/adapter';
 import { BASE_RUNTIME_CAPABILITIES } from 'engine-contracts';
@@ -27,16 +28,24 @@ function notesModule(written: Written[], schemas: Map<string, string[]>, updated
       adapterType: 'notes',
       supportedTriggers: ['webhook'],
       runtimeCapabilities: () => BASE_RUNTIME_CAPABILITIES,
-      listEntryPoints: async () => [{ typeId: 'Note', displayName: 'Note', readable: true, writable: true }],
-      describe: async (typeId) =>
-        typeId === 'Note'
-          ? {
-              typeId: 'Note',
-              displayName: 'Note',
-              fields: ['Title', ...(schemas.get(tenant) ?? [])].map((name) => ({ fieldId: name, displayName: name, kind: 'string' as const, writable: true, required: false })),
-              references: [],
-            }
-          : null,
+      listEntryPoints: async () => [
+        { typeId: 'Note', displayName: 'Note', readable: true, writable: true },
+        { typeId: 'Comment', displayName: 'Comment', readable: false, writable: false },
+      ],
+      describe: async (typeId) => {
+        if (typeId === 'Comment') {
+          const fields = ['Id', 'Body'].map((name) => ({ fieldId: name, displayName: name, kind: 'string' as const, writable: false, required: false }));
+          return { typeId, displayName: 'Comment', fields, references: [] };
+        }
+        if (typeId !== 'Note') return null;
+        return {
+          typeId: 'Note',
+          displayName: 'Note',
+          fields: ['Title', ...(schemas.get(tenant) ?? [])].map((name) => ({ fieldId: name, displayName: name, kind: 'string' as const, writable: true, required: false })),
+          // What people say about a note, announced as it is said.
+          references: [{ fieldId: 'Comments', name: 'Comments', targetTypeId: 'Comment', cardinality: 'many' as const, direction: 'outgoing' as const, readable: false, listenable: true, identity: 'Id' }],
+        };
+      },
       resolveEntity: async () => ({ candidates: [] }),
       getFieldValue: async ({ position, fieldId }) => {
         const data = position.identity.kind === 'stable' ? position.identity.data : undefined;
@@ -56,6 +65,7 @@ function notesModule(written: Written[], schemas: Map<string, string[]>, updated
         throw new Error('not used');
       },
       listEventTypes: async () => [{ tag: NOTE_CREATED, positionType: 'Note' }],
+      arrivals: { awaitKeys: async ({ heads }) => heads.map((head) => ({ key: `note:${head.recordId}` })) },
     };
     return adapter;
   };
@@ -67,7 +77,7 @@ function notesModule(written: Written[], schemas: Map<string, string[]>, updated
       displayName: 'Notes',
       description: 'A notes service.',
       supportedTriggers: ['webhook'],
-      methods: ['listEntryPoints', 'describe', 'resolveEntity', 'getFieldValue', 'getRelated', 'createRecord', 'updateRecord', 'listEventTypes'],
+      methods: ['listEntryPoints', 'describe', 'resolveEntity', 'getFieldValue', 'getRelated', 'createRecord', 'updateRecord', 'listEventTypes', 'awaitKeys'],
       subscribableEvents: [NOTE_CREATED],
       declaredCredentials: ['notes'],
       introspectedSchema: true,
@@ -172,6 +182,31 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
     expect(stepped).toMatchObject({ runId: fired.runId, tenant: 'acme', program: 'later', movement: 'copy', outcome: { ok: true, parked: false } });
     expect(written).toEqual([{ tenant: 'acme', book: 'acme-north', Title: 'Later one' }]);
     expect(await host.tick(new Date('2026-10-28T00:00:00.000Z'))).toEqual([]);
+  });
+
+  it('parks a run that awaits a comment, and the comment arriving steps it on to its write, binding what arrived', async () => {
+    const { host, notes, written } = setup();
+    await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
+    expect(await host.save('acme', { name: 'reply', source: copier('north', 'Re', 'said = await note-[:Comments]->\n  ').replace('${note.Title}', '${said.Body}') })).toEqual({
+      saved: true,
+      listens: 1,
+    });
+
+    const [fired] = await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    expect(fired.outcome).toEqual({ ok: true, writes: [], spentMicrodollars: 0, parked: true });
+    // Nothing arrived on another note, or for another tenant.
+    const comment = { edge: 'Comments', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
+    expect(await host.arrive('acme', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n2' }] })).toEqual([]);
+    expect(await host.arrive('globex', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n1' }] })).toEqual([]);
+    expect(await host.tick()).toEqual([]);
+    expect(written).toEqual([]);
+
+    const [stepped, ...more] = await host.arrive('acme', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n1' }] });
+    expect(more).toEqual([]);
+    expect(stepped).toMatchObject({ runId: fired.runId, program: 'reply', outcome: { ok: true, parked: false } });
+    expect(written).toEqual([{ tenant: 'acme', book: 'acme-north', Title: 'Re lunch?' }]);
+    // A sender's retry of the same comment wakes nothing.
+    expect(await host.arrive('acme', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n1' }] })).toEqual([]);
   });
 
   it("rebuilds a tenant's catalog when it reconnects, or when its schema changes", async () => {

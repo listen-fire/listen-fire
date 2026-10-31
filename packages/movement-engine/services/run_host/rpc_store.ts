@@ -7,18 +7,18 @@
 //
 // A method is `<family>.<method>` as `RunHostStore` names it, its params the
 // method's one input object, its result the method's answer; the callback
-// family is `callbacks.<method>` as `CallbackStore` names it, and the run
-// records `records.<method>` as `RunRecords` does. The error code
+// records are `records.<method>` as `RunRecords` names them, and the segment
+// commit `parks.commitSegment`, `parks.owedRaces`, `runs.start` and `runs.get`
+// (`SegmentCommitStore`). The error code
 // `run_lease_lost` (`data: { runId }`) is rethrown as the core's
 // `RunLeaseLost`, so the rules over the store see the one refusal they handle.
 
 import { z } from 'zod';
-import { CALLBACK_PARAM_TYPES } from 'engine-contracts';
 import { RUN_LEASE_LOST_CODE } from 'engine-contracts/slots';
 import { RunLeaseLost } from '../movement_engine/errors';
 import { SlotClient, SlotRefused, startModule, type SlotAddress } from 'module-runtime/module_wire/wire';
 import type { RunRecords } from './rules';
-import type { CallbackClaim, CallbackStore, ClaimedWork, RunHostStore } from './store';
+import type { ClaimedWork, NewArrival, ParkKind, RunHostStore, SegmentCommitStore } from './store';
 
 const Nothing = z.null();
 const Leaf = z.object({
@@ -28,26 +28,19 @@ const Leaf = z.object({
   wakeAt: z.string().nullable(),
 });
 const Claimed = z.object({ reason: z.string(), state: z.unknown().optional() }).nullable();
-const Correlated = z.object({ runId: z.string(), teamId: z.string(), address: z.string() });
 const Work = z.object({ id: z.string(), kind: z.string(), key: z.string(), payload: z.unknown().optional(), claim: z.string() });
-const Callback = z.object({
-  id: z.string(),
-  teamId: z.string(),
-  runId: z.string(),
-  address: z.string(),
-  params: z.array(z.object({ name: z.string(), type: z.enum(CALLBACK_PARAM_TYPES) })),
-  state: z.unknown().optional(),
-  calls: z.array(z.object({ at: z.string(), values: z.record(z.string(), z.unknown()), bodyStartedAt: z.string().optional() })),
-  singleUse: z.boolean(),
-  expiresAt: z.string().nullable(),
-  status: z.enum(['live', 'fired', 'revoked']),
-});
-const Claim: z.ZodType<CallbackClaim> = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('recorded'), callback: Callback, callIndex: z.number() }),
-  z.object({ kind: z.literal('not_found') }),
-  z.object({ kind: z.literal('closed'), callback: Callback }),
-  z.object({ kind: z.literal('expired'), callback: Callback }),
-]);
+const Wake = z.object({ runId: z.string(), waitId: z.string(), address: z.string() });
+const Listed = z.object({ seq: z.number(), identity: z.string(), version: z.string().nullable(), landing: z.unknown() });
+
+/** A park as the wire carries it: every member said. */
+function parkOf(park: ParkKind): Record<string, unknown> {
+  return { ...park };
+}
+
+/** An arrival as `waits.log` takes it: every member said, `null` for none. */
+function arrivalOf(arrival: NewArrival): Record<string, unknown> {
+  return { ...arrival, landing: arrival.landing ?? null };
+}
 
 // ── Delivery receipts (`inbound.*`) ─────────────────────────────────────────
 // What a door keeps of one delivery: the events it produced, in the door's one
@@ -160,7 +153,8 @@ function claimOf(work: ClaimedWork & { dueAt?: string }): Record<string, unknown
 
 export class RpcStoreBackend {
   readonly store: RunHostStore;
-  readonly callbacks: CallbackStore;
+  /** The segment commit listen-fire's stores keep beside the families. */
+  readonly segments: SegmentCommitStore;
   /** The run records the server keeps beside its families. */
   readonly runs: RunRecords;
   private readonly started: Promise<{ client: SlotClient; close(): Promise<void> }>;
@@ -176,7 +170,7 @@ export class RpcStoreBackend {
     // A failed start is met by the first call; never an unhandled rejection.
     this.started.catch(() => undefined);
     this.store = this.families();
-    this.callbacks = this.callbackFamily();
+    this.segments = this.segmentFamily();
     this.runs = this.runRecords();
   }
 
@@ -206,7 +200,7 @@ export class RpcStoreBackend {
     return this.call('runs.get', input, Run.nullable());
   }
 
-  /** Where the run stands (`runs.settle`): an ending revokes its callbacks. */
+  /** Where the run stands (`runs.settle`). */
   async runSettle(input: { runId: string; status: string; outcome: unknown; at: string }): Promise<void> {
     await this.call('runs.settle', input, Nothing);
   }
@@ -272,17 +266,24 @@ export class RpcStoreBackend {
     await started?.close();
   }
 
-  private callbackFamily(): CallbackStore {
+  private segmentFamily(): SegmentCommitStore {
     const call = this.call.bind(this);
     return {
-      mint: (input) => call('callbacks.mint', input, z.object({ id: z.string() })),
-      get: (input) => call('callbacks.get', input, Callback.nullable()),
-      record: (input) => call('callbacks.record', input, Claim),
-      markBodyStarted: (input) => call('callbacks.markBodyStarted', input, z.boolean()),
-      landed: (input) => call('callbacks.landed', input, z.array(z.string())),
-      revokeRun: async (input) => {
-        await call('callbacks.revokeRun', input, Nothing);
-      },
+      commitSegment: (input) =>
+        call(
+          'parks.commitSegment',
+          {
+            ...input,
+            fence: input.fence ?? null,
+            parks: input.parks.map((held) => ({ address: held.address, state: held.state ?? null, park: parkOf(held.park) })),
+            owedRaces: input.owedRaces ?? [],
+            settledRace: input.settledRace ?? null,
+          },
+          z.array(Wake),
+        ),
+      owedRaces: (input) => call('parks.owedRaces', input, z.array(z.object({ frameAddress: z.string(), state: z.unknown() }))),
+      startRun: (input) => this.startRun({ id: input.runId, file: 'f', movement: 'm', startedAt: new Date().toISOString(), input: '{}' }),
+      runStatus: async (input) => (await this.runGet(input))?.status ?? null,
     };
   }
 
@@ -293,9 +294,6 @@ export class RpcStoreBackend {
       markFailed: async (input) => {
         await call('records.markFailed', input, Nothing);
       },
-      closeRun: async (input) => {
-        await call('records.closeRun', input, Nothing);
-      },
     };
   }
 
@@ -305,6 +303,10 @@ export class RpcStoreBackend {
       parks: {
         putLeaf: async (input) => {
           await call('parks.putLeaf', input, Nothing);
+        },
+        // listen-fire keeps no `rewritten` stamp: it has no limit resume to read it.
+        commit: async ({ runId, address, state, fence, park }) => {
+          await call('parks.commit', { runId, address, state: state ?? null, fence: fence ?? null, park: parkOf(park) }, Nothing);
         },
         claimLeaf: (input) => call('parks.claimLeaf', input, Claimed),
         finishLeaf: async (input) => {
@@ -331,18 +333,13 @@ export class RpcStoreBackend {
           await call('joins.deleteFrames', input, Nothing);
         },
       },
-      correlations: {
-        correlate: async (input) => {
-          await call('correlations.correlate', input, Nothing);
-        },
-        correlated: (input) => call('correlations.correlated', input, z.array(Correlated)),
-        ofRun: (input) => call('correlations.ofRun', input, z.array(Correlated.extend({ correlationKey: z.string() }))),
-        drop: async (input) => {
-          await call('correlations.drop', input, Nothing);
-        },
-        dropRun: async (input) => {
-          await call('correlations.dropRun', input, Nothing);
-        },
+      waits: {
+        mark: () => call('waits.mark', {}, z.number()),
+        log: (input) => call('waits.log', { ...input, arrivals: input.arrivals.map(arrivalOf) }, z.array(Wake)),
+        open: (input) => call('waits.open', input, z.object({ waitId: z.string() })),
+        arrivals: (input) => call('waits.arrivals', input, z.object({ gone: z.boolean(), arrivals: z.array(Listed) })),
+        note: (input) => call('waits.note', input, z.boolean()),
+        sweep: (input) => call('waits.sweep', input, z.number()),
       },
       leases: {
         claim: (input) => call('leases.claim', input, z.object({ token: z.string() }).nullable()),

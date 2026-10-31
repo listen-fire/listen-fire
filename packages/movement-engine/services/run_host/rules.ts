@@ -5,29 +5,25 @@
 // keeps a copy.
 
 import { createHash, randomUUID } from 'node:crypto';
+import type { Arrival, AwaitWakeRequest, HostWaits, LoggedArrival } from 'engine-contracts';
 import { isAncestorOrSelf, parseAddress } from '../movement_engine/address';
 import type { ParkSink, RunLimitPause } from '../movement_engine/run_types';
 import type { ParkSources } from '../movement_engine/host';
-import type { AwaitKeeper, RunHostStore, SourceStore } from './store';
+import type { ListedArrival, NewArrival, RunHostStore, SourceStore, WaitWake } from './store';
 
 /** What the product keeps about a run beyond its live state: its status, and
- *  the records only it knows of (callbacks, the ops feed). */
+ *  the records only it knows of (the ops feed). */
 export interface RunRecords {
   /** The operator's cancel request on the run, with its reason; null when none. */
   cancelRequest(input: { runId: string }): Promise<{ reason: string | null } | null>;
   /** The run is over without completing: mark it failed with `message`. A run
    *  already settled stays as it is. */
   markFailed(input: { runId: string; message: string }): Promise<void>;
-  /** The run is over, however it ended: close what the product keeps for it
-   *  that a live run would still answer (a callback's link). */
-  closeRun?(input: { runId: string }): Promise<void>;
 }
 
-/** A run host: its backend, the adapters whose awaits are backed by records of
- *  their own, and the product's run records. */
+/** A run host: its backend and the product's run records. */
 export interface RunHost {
   store: RunHostStore;
-  keepers: readonly AwaitKeeper[];
   runs: RunRecords;
   log?: RunHostLog;
 }
@@ -76,22 +72,48 @@ export async function armTimerWake(store: RunHostStore, input: { runId: string; 
   });
 }
 
-/** The wake for one adapter identity: "resume whatever is parked on it". A
- *  signal's wake is never coalesced: a second signal while the first wake runs
- *  must still drive the parks the first pass looked past. A sweep or backstop
- *  that re-derives the same wake every pass names a `coalesceKey` instead. */
-export async function queueAwaitWake(
+/** The work kind that wakes a wait's park. */
+export const WAKE_AWAIT_WORK_KIND = 'wake_await';
+
+/** Queue the wake of one wait parked at `address`: its run re-enters the
+ *  await there, which reads the wait's arrivals. Never coalesced: a second
+ *  arrival while the first wake runs must still drive the park again. */
+export async function queueWaitWake(store: RunHostStore, wake: WaitWake & { teamId: string }): Promise<void> {
+  const { teamId, ...payload } = wake;
+  await store.work.enqueue({ kind: WAKE_AWAIT_WORK_KIND, key: `${WAKE_AWAIT_WORK_KIND}:${randomUUID()}`, teamId, payload });
+}
+
+/** A wake row's payload, or null for a row that is not one. */
+export function waitWakeOf(payload: unknown): WaitWake | null {
+  if (typeof payload !== 'object' || payload === null) return null;
+  const [runId, waitId, address]: unknown[] = ['runId', 'waitId', 'address'].map((key) => Reflect.get(payload, key));
+  return typeof runId === 'string' && typeof waitId === 'string' && typeof address === 'string' ? { runId, waitId, address } : null;
+}
+
+/** What a module reported, as the log keeps it. */
+export function newArrivalsOf(arrivals: readonly Arrival[]): NewArrival[] {
+  return arrivals.map((arrival) =>
+    'gone' in arrival
+      ? { edge: arrival.edge, key: arrival.key, identity: null, version: null, landing: null, gone: true }
+      : { edge: arrival.edge, key: arrival.key, identity: arrival.identity, version: arrival.version ?? null, landing: arrival.landing, gone: false },
+  );
+}
+
+/**
+ * Log what arrived on an adapter's listenable edges for a team, and queue a
+ * wake for each wait parked on their records. Two writes, the log then the
+ * wakes: a store that keeps them in one (listen-fire's `inbound.keepDelivery`)
+ * loses no wake to a crash between them; over the in-memory store there is no
+ * crash that leaves the log behind.
+ */
+export async function logArrivals(
   store: RunHostStore,
-  wake: { adapterType: string; teamId: string; correlationKey: string },
-  opts: { coalesceKey?: string; dueAt?: string } = {},
-): Promise<void> {
-  await store.work.enqueue({
-    kind: 'wake_await',
-    key: `wake_await:${opts.coalesceKey ?? randomUUID()}`,
-    teamId: wake.teamId,
-    payload: wake,
-    ...(opts.dueAt !== undefined ? { dueAt: opts.dueAt } : {}),
-  });
+  input: { teamId: string; adapterType: string; arrivals: readonly Arrival[]; at?: string },
+): Promise<WaitWake[]> {
+  const at = input.at ?? new Date().toISOString();
+  const wakes = await store.waits.log({ teamId: input.teamId, adapterType: input.adapterType, arrivals: newArrivalsOf(input.arrivals), at });
+  for (const wake of wakes) await queueWaitWake(store, { ...wake, teamId: input.teamId });
+  return wakes;
 }
 
 // ── Completion ──────────────────────────────────────────────────────────────
@@ -126,19 +148,13 @@ export async function clearIfQuiescent(store: RunHostStore, input: { runId: stri
 // ── A run that ends without completing ──────────────────────────────────────
 
 /**
- * Tear a run's live state down: every leaf and join, then every record-backed
- * await closed by its keeper (nothing is left to consume an answer), every
- * correlation dropped (a late signal lands as data), and what the product
- * keeps for a live run closed. Under `fence`, the fenced drop goes first and
- * gates the rest: a holder whose lease lapsed tears down nothing of the new
- * holder's. False when fenced out.
+ * Tear a run's live state down: every leaf, join and wait (a late arrival
+ * lands in the log and wakes nothing). Under `fence`, only while the run is
+ * still that holder's: a holder whose lease lapsed tears down nothing of the
+ * new holder's. False when fenced out.
  */
 export async function abandonRun(host: RunHost, input: { runId: string; fence?: string }): Promise<boolean> {
-  if (!(await host.store.leases.dropRunState(input))) return false;
-  for (const keeper of host.keepers) await keeper.abandon({ runId: input.runId });
-  await host.store.correlations.dropRun({ runId: input.runId });
-  await host.runs.closeRun?.({ runId: input.runId });
-  return true;
+  return host.store.leases.dropRunState(input);
 }
 
 /** An error in any branch fails the whole run; the writes it made stand. */
@@ -162,9 +178,9 @@ export async function settleIfCancelRequested(host: RunHost, input: { runId: str
  * Withdraw every park at or below one of the subtree addresses (a race's losing
  * arms), sparing `excludeLeaf` (the winner, whose own row may still be
  * mid-resume). The prefix algebra runs on the parsed address: `s1.b1` is not
- * an ancestor of `s1.b10`. Record-backed awaits are closed by their keeper,
- * every withdrawn park's correlation is dropped, and every join frame inside
- * the subtrees goes with its exports. Idempotent.
+ * an ancestor of `s1.b10`. A withdrawn await's wait answers no later log (its
+ * leaf is gone), and every join frame inside the subtrees goes with its
+ * exports. Idempotent.
  */
 export async function cancelSubtrees(
   host: RunHost,
@@ -176,11 +192,7 @@ export async function cancelSubtrees(
     address !== input.excludeLeaf && prefixes.some((p) => isAncestorOrSelf(p, parseAddress(address)));
   const { runId } = input;
   const doomed = (await host.store.parks.leaves({ runId, parkedOnly: true })).map((l) => l.address).filter(inSubtree);
-  if (doomed.length > 0) {
-    for (const keeper of host.keepers) await keeper.abandon({ runId, addresses: doomed });
-    for (const address of doomed) await host.store.correlations.drop({ runId, address });
-    await host.store.parks.deleteLeaves({ runId, addresses: doomed });
-  }
+  if (doomed.length > 0) await host.store.parks.deleteLeaves({ runId, addresses: doomed });
   const deadFrames = (await host.store.joins.frames({ runId })).filter(inSubtree);
   if (deadFrames.length > 0) await host.store.joins.deleteFrames({ runId, frameAddresses: deadFrames });
 }
@@ -197,28 +209,59 @@ export interface ParkRecords {
   markLimitPaused?(pause: RunLimitPause): Promise<void>;
 }
 
-/** The correlation map's `adapter_type` for an await parked on a wait
- *  (host families version 2), keyed by the wait's id: a wake names the wait,
- *  so the map finds its park as it found an adapter's key. A reserved
- *  identity, not a system. */
-export const WAIT_AWAIT_TYPE = 'wait';
+/** What the engine's `park` group needs of the run host for one segment:
+ *  where its parks go, its waits, and the wake it asks for an arrival that
+ *  landed while an await parked. */
+export interface RunParkHost {
+  sink: ParkSink;
+  waits: HostWaits;
+  wake(request: AwaitWakeRequest): Promise<void>;
+}
+
+/** A landing as the log kept it, in the shape the engine reads: a module
+ *  reports `{ recordId?, recordType?, fields }`; anything else is none. */
+function loggedLanding(landing: unknown): LoggedArrival['landing'] {
+  if (typeof landing !== 'object' || landing === null) return null;
+  const fields: unknown = Reflect.get(landing, 'fields');
+  if (typeof fields !== 'object' || fields === null) return null;
+  const recordId: unknown = Reflect.get(landing, 'recordId');
+  const recordType: unknown = Reflect.get(landing, 'recordType');
+  return {
+    fields: Object.fromEntries(Object.entries(fields)),
+    ...(typeof recordId === 'string' ? { recordId } : {}),
+    ...(typeof recordType === 'string' ? { recordType } : {}),
+  };
+}
+
+function loggedArrival(arrival: ListedArrival): LoggedArrival {
+  return { seq: arrival.seq, identity: arrival.identity, version: arrival.version, landing: loggedLanding(arrival.landing) };
+}
 
 /**
- * The engine's park sink for one run segment. Given the run lease the segment
- * holds (`fence`), every leaf and join it writes lands only while the run's
- * lease is still that token's; a holder whose lease lapsed is refused
- * (`RunLeaseLost`) rather than overwriting the parks of whoever took the run.
+ * The engine's park group for one run segment. Given the run lease the
+ * segment holds (`fence`), every leaf, join and note it writes lands only
+ * while the run's lease is still that token's; a holder whose lease lapsed is
+ * refused (`RunLeaseLost`) rather than overwriting the parks of whoever took
+ * the run. `resumed` is the leaf the segment resumed: a note its awaits make
+ * is kept with the segment's progress past that leaf, and read again if the
+ * segment dies first.
  *
- * After each park, a cancel an operator stamped meanwhile settles the run at
- * once: the park just written is stale.
+ * Each park is its own write, made as the engine parks (host-families.md
+ * allows a host to hold them to the segment's end; this one does not): a
+ * segment that dies after parking one arm of a `parallel` leaves that arm
+ * parked and the leaf it resumed resuming, which the next lease returns to
+ * parked. After each park, a cancel an operator stamped meanwhile settles the
+ * run at once: the park just written is stale.
  */
-export function runParkSink(
+export function runParkHost(
   host: RunHost,
-  input: { runId: string; teamId: string; fence?: string; records: ParkRecords },
-): ParkSink {
+  input: { runId: string; teamId: string; fence?: string; resumed?: string; records: ParkRecords },
+): RunParkHost {
   const { store } = host;
   const { runId, teamId, records } = input;
   const fence = input.fence !== undefined ? { fence: input.fence } : {};
+  /** Where this segment parked each wait, for the wake it may ask. */
+  const parkedWaits = new Map<string, string>();
   const afterPark = async (): Promise<void> => {
     await records.markParked();
     try {
@@ -228,21 +271,20 @@ export function runParkSink(
       host.log?.error('[ParkSink] cancel-race settle failed', { runId, error: error instanceof Error ? error.message : String(error) });
     }
   };
-  return {
+  const sink: ParkSink = {
     async commitTimerPark({ address, state, wakeAt }) {
       await records.ensureRun();
-      await store.parks.putLeaf({ runId, address, reason: 'timer', wakeAt, state, ...fence });
-      // The leaf is the truth; the work row only says when to look.
-      await armTimerWake(store, { runId, teamId, wakeAt });
+      // The leaf and its run's timer row, in one write.
+      await store.parks.commit({ runId, address, state, park: { kind: 'timer', wakeAt }, ...fence });
       await afterPark();
     },
     async commitAwaitPark({ address, state, waitId }) {
-      // The leaf first: it is the truth, the correlation only an index onto it.
-      // A wake between the two writes finds no correlation (the engine's
-      // re-read covers it) or both, never a correlation without its park.
+      // The leaf and its wait parked there, in one write: a log on the wait's
+      // record either sees the park and answers it, or lands before it and is
+      // read by the engine's second reading after this returns.
       await records.ensureRun();
-      await store.parks.putLeaf({ runId, address, reason: 'await', wakeAt: null, state, ...fence });
-      await store.correlations.correlate({ runId, teamId, address, adapterType: WAIT_AWAIT_TYPE, correlationKey: waitId });
+      await store.parks.commit({ runId, address, state, park: { kind: 'wait', waitId }, ...fence });
+      parkedWaits.set(waitId, address);
       await afterPark();
     },
     ...(records.markLimitPaused !== undefined
@@ -254,14 +296,12 @@ export function runParkSink(
         }
       : {}),
     async commitSuspension({ address, state }) {
-      // The fenced park first: a lapsed holder is refused before it drops
-      // anything. Then an await that took the pause before re-checking drops
-      // its correlation: resuming the run re-enters it, which re-registers it
-      // if it still waits. Left in place, every signal would wake it into the
-      // pause again.
+      // An await that took the pause before re-checking is unparked from its
+      // wait by this park at its address: resuming the run re-enters it, which
+      // parks it on its wait again if it still waits. Left parked, every
+      // arrival would wake it into the pause again.
       await records.ensureRun();
-      await store.parks.putLeaf({ runId, address, reason: 'limit', wakeAt: null, state, rewritten: true, ...fence });
-      await store.correlations.drop({ runId, address });
+      await store.parks.commit({ runId, address, state, park: { kind: 'limit' }, rewritten: true, ...fence });
       await afterPark();
     },
     async recordJoin({ frameAddress, parkedChildren }) {
@@ -274,5 +314,32 @@ export function runParkSink(
     collectBranchExports: ({ frameAddress }) => store.joins.collectBranchExports({ runId, frameAddress }),
     cancelSubtrees: ({ subtreeAddresses, excludeLeaf }) =>
       cancelSubtrees(host, { runId, subtreeAddresses, ...(excludeLeaf !== undefined ? { excludeLeaf } : {}) }),
+  };
+  const waits: HostWaits = {
+    mark: async () => ({ mark: await store.waits.mark() }),
+    open: ({ adapterType, edge, key, since }) => store.waits.open({ runId, teamId, adapterType, edge, key, since }),
+    arrivals: async ({ waitId }) => {
+      const { gone, arrivals } = await store.waits.arrivals({ waitId });
+      return { gone, arrivals: arrivals.map(loggedArrival) };
+    },
+    note: async ({ waitId, identity, version, matched }) => ({
+      counts: await store.waits.note({
+        waitId,
+        identity,
+        version: version ?? null,
+        matched,
+        ...(input.resumed !== undefined ? { leaf: input.resumed } : {}),
+        ...fence,
+      }),
+    }),
+  };
+  return {
+    sink,
+    waits,
+    async wake({ waitId }) {
+      const address = parkedWaits.get(waitId);
+      if (address === undefined) throw new Error(`park.wake names the wait ${waitId}, which this segment parked nothing on`);
+      await queueWaitWake(store, { runId, waitId, address, teamId });
+    },
   };
 }

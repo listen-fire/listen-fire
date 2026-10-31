@@ -81,6 +81,15 @@ export interface InboundStore<Captured> {
   sourceFor(subscription: InboundSubscription): Promise<InboundSource | null>;
   /** False only for deliveries the host fabricates itself (the dev loop's test team). */
   verifiesSignature(subscription: InboundSubscription): boolean;
+  /**
+   * `capture` receipts one event and `enqueue` queues it. Both are idempotent per receipt: a
+   * delivery whose receipts were not all queued is answered 500, and its
+   * sender's retry captures and queues every event again, so an event the
+   * failed attempt queued must be queued once (a store keys its receipt on
+   * the event's own id, `externalId`). Each event is its own write: unlike
+   * listen-fire's one write per delivery, a failed attempt leaves the
+   * receipts it queued before the failure.
+   */
   capture(input: {
     event: DiscriminableEvent;
     subscription: InboundSubscription;
@@ -97,7 +106,9 @@ export interface InboundStore<Captured> {
   /** Log what a delivery says arrived on the adapter's listenable edges, for
    *  the team: each arrival wakes the waits parked on its record, and one no
    *  wait reads yet is kept for a wait opened later. Asked only once every
-   *  receipt of the delivery is queued. */
+   *  receipt of the delivery is queued, after them: a delivery whose
+   *  receipts are not all queued logs no arrival, and its retry logs them
+   *  (as `logArrivals` of the run host: `waits.log` skips a repeat). */
   logArrivals(input: { adapterType: string; teamId: string; arrivals: readonly Arrival[] }): Promise<void>;
 }
 
@@ -272,9 +283,10 @@ export async function receiveDelivery<Captured>(
         failures.push({ event: entry.event, error: err instanceof Error ? err.message : String(err) });
       }
     }
-    // The arrivals are kept only with the receipts, as listen-fire keeps both
-    // in one write: the sender's retry brings them again, and a wait never
-    // wakes on a delivery that was not kept.
+    // The arrivals are logged only after every receipt is queued (listen-fire
+    // keeps both in one write; here they are in order): the sender's retry
+    // brings them again, and a wait never wakes on a delivery whose receipts
+    // were not all queued.
     if (failures.length > 0) throw new InboundQueueFailed(failures);
     if (arrivals.length > 0) await store.logArrivals({ adapterType: adapter.adapterType, teamId: subscription.teamId, arrivals });
     return { teamId: subscription.teamId, enqueued, captureErrors };

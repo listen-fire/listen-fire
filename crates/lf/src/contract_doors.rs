@@ -13,7 +13,7 @@
 //!   doors.observed    → what the doors did since the world was arranged
 //!   doors.deliveries  → the deliveries kept: [{ externalId, source, eventCount }]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -35,6 +35,9 @@ struct Faults {
     capture_marked: bool,
     /// Queueing any captured event throws.
     enqueue: bool,
+    /// Queueing the event whose payload has `fail: true` throws, the first
+    /// time only: the sender's retry is kept.
+    enqueue_marked_once: bool,
     /// Logging arrivals throws.
     log_arrivals: bool,
 }
@@ -54,6 +57,8 @@ struct Observations {
     /// Every arrival logged, in order, as the suite's adapter reported it.
     arrivals: Vec<Js>,
     notified: u64,
+    /// The marked event's queueing has failed its once.
+    marked_enqueue_failed: bool,
 }
 
 struct Bridge {
@@ -160,7 +165,12 @@ impl Bridge {
             installs.push(Credential { name: format!("push-{index}"), external: adapter_type, binding: Binding::Install, fields, origin: Origin::default() });
         }
         let faulted = |name: &str| Js::is_true(world.get("faults").and_then(|f| f.get(name)));
-        let faults = Faults { capture_marked: faulted("captureMarked"), enqueue: faulted("enqueue"), log_arrivals: faulted("logArrivals") };
+        let faults = Faults {
+            capture_marked: faulted("captureMarked"),
+            enqueue: faulted("enqueue"),
+            enqueue_marked_once: faulted("enqueueMarkedOnce"),
+            log_arrivals: faulted("logArrivals"),
+        };
         *self.world.borrow_mut() = World { served, installs, faults };
         *self.seen.borrow_mut() = Observations::default();
         Ok(())
@@ -198,7 +208,7 @@ impl Bridge {
     /// listen-fire's doors over the arranged world, observed.
     fn doors(&self) -> Observed<'_> {
         let world = self.world.borrow();
-        Observed { bridge: self, served: world.served.clone(), installs: world.installs.clone(), faults: world.faults }
+        Observed { bridge: self, served: world.served.clone(), installs: world.installs.clone(), faults: world.faults, marked: Cell::new(false) }
     }
 }
 
@@ -208,6 +218,8 @@ struct Observed<'b> {
     served: Vec<Served>,
     installs: Vec<Credential>,
     faults: Faults,
+    /// The delivery carries the event a marked fault fails.
+    marked: Cell<bool>,
 }
 
 impl Observed<'_> {
@@ -265,6 +277,9 @@ impl InboundStore for Observed<'_> {
         if self.faults.capture_marked && Js::is_true(event.get("payload").and_then(|p| p.get("fail"))) {
             return Err("receipt store unavailable".into());
         }
+        if self.faults.enqueue_marked_once && Js::is_true(event.get("payload").and_then(|p| p.get("fail"))) {
+            self.marked.set(true);
+        }
         let captured = self.lf().capture(event, source).await?;
         self.note(|seen| seen.captured += 1);
         Ok(captured)
@@ -275,6 +290,10 @@ impl InboundStore for Observed<'_> {
     /// delivery is kept. A duplicate is observed doing nothing.
     async fn keep(&self, kept: Kept<'_>) -> Result<bool, String> {
         if self.faults.enqueue && !kept.receipts.is_empty() {
+            return Err("work table unavailable".into());
+        }
+        if self.marked.get() && !self.bridge.seen.borrow().marked_enqueue_failed {
+            self.note(|seen| seen.marked_enqueue_failed = true);
             return Err("work table unavailable".into());
         }
         if self.faults.log_arrivals && !kept.arrivals.is_empty() {

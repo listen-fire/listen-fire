@@ -48,7 +48,7 @@ The public entries of `@listen-fire/engine` you will use:
 - **A customer connects modules.** Your product is one module; a ready-made one (`@lf/slack`, …) is another. Each connection is loaded for that customer over that customer's credential.
 - **A customer's movement is checked when it is saved.** The checker reads the customer's catalog: the modules it connected, as that customer sees them.
 - **A movement says what it listens for.** When something happens in your product, the movements that listen for it run.
-- **A run that waits parks.** `await sleep(1h)` stores the run; a tick past its wake steps it on.
+- **A run that waits parks.** `await sleep(1h)` stores the run; a tick past its wake steps it on. `await note-[:Comments]->` stores it until a comment arrives (`arrive`).
 
 `createEmbeddedHost` (`@listen-fire/embed`) does all of this. You write your module (its `describe`, its reads and writes), hand the host your events, and call its tick from a scheduler.
 
@@ -94,7 +94,8 @@ await host.tick();                                          // one outcome per p
 - **`connect(tenant, { name, module, credential })`.** `name` is what the customer's movement imports (`import { workspace } from credentials`). The credential is kept in the host's secrets, under an id only that tenant's runs may name; the module is loaded once per connection, its context built for you.
 - **`save(tenant, { name, source })`.** Checks the movement against the tenant's catalog and keeps it, pinned to this release (`ENGINE_VERSION`), with its listens read off the source.
 - **`dispatch(tenant, { adapterType, connection?, event })`.** Runs every listen of the tenant's saved movements that hears the event: a listen on that module, whose `events` (and Airtable's `table`) admit it. With `connection`, only the listens on that connection hear it, as listen-fire and the hosted product route; without, it is the module's own event and every connection's listens hear it. `event` is your product's event (`{ payload, externalId, eventType, recordType, … }`).
-- **`tick(now?)`.** Steps on every parked run whose timer is due. Call it from a scheduler.
+- **`arrive(tenant, { adapterType, arrivals })`.** What one of the tenant's modules says arrived on its listenable edges (each `{ edge, key, identity, version?, landing }`, or `{ edge, key, gone: true }`; adapter protocol 2.5's arrivals, which a module reads off the deliveries it accepts). Each run awaiting one steps on, one outcome per segment. An arrival no run awaits yet is kept for an hour, for a run that starts waiting on its record.
+- **`tick(now?)`.** Steps on every parked run whose timer is due, and every run an arrival woke. Call it from a scheduler.
 - **The catalog** is built per tenant from its connections, by asking each module its entry points and describing each one, and kept until the tenant's connections change. When a tenant's schema changes another way (a field added in your product), call `schemaChanged(tenant)`.
 - **An outcome** is `{ runId, tenant, program, movement, outcome }`: `outcome` is `{ ok: true, writes, spentMicrodollars, parked }` or `{ ok: false, error }`.
 
@@ -120,7 +121,7 @@ The embedded host is built from the engine's public parts, for a host that needs
 - **Check and save:** `checkPinnedInRust({ source, catalog, languageVersion: ENGINE_VERSION })` throws `MovementEngineError` (`MOVENG_CHECK`, `MOVENG_PARSE`, `MOVENG_LANGUAGE_VERSION`) when the movement does not check; `collectFileListeners(parsePinned(…))` reads its listens.
 - **Route an event:** `listenerHearsDelivery(listener, { adapterType, credentialName, event })` (`public/inbound`) is the whole routing rule; `triggerEventOf` turns your event into the run's event.
 - **Run:** `runMovement({ source, languageVersion, movementName, event, teamId, catalog, credentialIds, limits, costCapMicrodollars, host })`, over `inProcessHost` (`public/embed`).
-- **Park and resume:** `runParkSink` for each run's parks, then `drainDueTimers` under the run's lease (`withRunLease`) and `armTimerWake` for its next timer (`public/run-host`).
+- **Park and resume:** `runParkHost` for each segment's parks, waits and wakes (its `sink`, `waits` and `wake` are the engine's `park` group); `drainDueTimers` under the run's lease (`withRunLease`) and `armTimerWake` for its next timer; `logArrivals` for what a module says arrived, and `wakeWait` for each `wake_await` row it queues (`public/run-host`). Each park is its own write as the engine makes it: unlike listen-fire's run host, this one does not hold a segment's parks to its end.
 
 ## 4. The host's slots
 
@@ -130,7 +131,7 @@ The embedded host is built from the engine's public parts, for a host that needs
 |---|---|---|
 | models | `ai(…)` and `extract(…)` calls | `llm: pricedModels({ client, extractCall })`. A client answers `{ parsedJson }` and may report what it cost. The Anthropic clients are `makeAnthropicLlmClient` and `makeAnthropicExtractCallClient`, over `anthropicClient`, all from `@listen-fire/anthropic` (the models slot's module for Claude, which also holds the price table). |
 | judge | whether a written record is one already there, when the rules alone cannot tell | `llm.arbitrateEntities`. Absent: such a write fails, naming it. |
-| store | parks: `await`, `sleep` | The embedded host's `store`. `memoryRunHostStore` holds parked runs for one process; a store that must outlive a restart implements `RunHostStore` over your database and must pass the contract suite in `public/testing`. The store keeps library texts too (`sources`: a text kept once under its hash, read back by it). In a Rust embedding (`listen-fire-engine`), `Store` requires `save_source` and `load_source` the same way: an implementation that omits them does not compile. A run that awaits an adapter's listenable edge also needs the store's waits (`wait_mark`, `open_wait`, `wait_arrivals`, `note_arrival`, `commit_wait_park`, `wake_wait`: an arrival log and a wait per run and record, as listen-fire's run host keeps them, docs/contracts/host-families.md `park.waits`); a store that keeps parks without them fails such a run where the awaited record enters it (the mark is taken before the record's write or read), not at the await. Hand a run started by a delivery its mark (`RunInput.trigger_mark`) so its trigger's waits read what arrived since. |
+| store | parks: `await`, `sleep` | The embedded host's `store`. `memoryRunHostStore` holds parked runs for one process; a store that must outlive a restart implements `RunHostStore` over your database and must pass the contract suite in `public/testing`, and the waits cases every store runs (`storeWaitsCases`, there too, with the segment commit listen-fire's stores keep beside it, `SegmentCommitStore`). The store keeps library texts too (`sources`: a text kept once under its hash, read back by it). In a Rust embedding (`listen-fire-engine`), `Store` requires `save_source` and `load_source` the same way: an implementation that omits them does not compile. A run that awaits an adapter's listenable edge also needs the store's waits (`wait_mark`, `open_wait`, `wait_arrivals`, `note_arrival`, `commit_wait_park`, `wake_wait`: an arrival log and a wait per run and record, as listen-fire's run host keeps them, docs/contracts/host-families.md `park.waits`); a store that keeps parks without them fails such a run where the awaited record enters it (the mark is taken before the record's write or read), not at the await. Hand a run started by a delivery its mark (`RunInput.trigger_mark`) so its trigger's waits read what arrived since. |
 | files | reading a file's text, rendering a file | `files.resolveFileText` (`@listen-fire/file-text` reads PDFs, decks and sheets), `files.render`. |
 
 Two more pieces are yours and have safe defaults:
@@ -197,6 +198,6 @@ The example mounts it at `/customers/:tenant/mcp`, the customer's API key as a b
 
 - Parks that outlive the process. The example uses the embedded host's in-memory store; a restart forgets its connections, movements and parked runs.
 - A real vault and a database for write locks.
-- Awaits: the embedded host steps on timers only. It has no wake for an adapter's `await`.
+- Arrivals: the example's modules report none, so it never calls `arrive`.
 - Real auth on the MCP endpoint: the customer's API key stands in for it.
 - The live Anthropic path is wired (`ANTHROPIC_API_KEY`) but the test uses the fake model.

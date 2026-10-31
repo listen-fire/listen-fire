@@ -1,7 +1,7 @@
-// Stepping a parked run forward, written once for every backend: a wake on an
-// adapter identity finds its parks (await correlation), each run is stepped
-// under its lease, and each of the run's resolvable leaves is claimed and
-// stepped in one batch. A race branch that completes in the batch DEFERS its
+// Stepping a parked run forward, written once for every backend: a wake names
+// the wait an arrival answered and the address it is parked at, the run is
+// stepped under its lease, and each of the leaves a drain chooses is claimed
+// and stepped in one batch. A race branch that completes in the batch DEFERS its
 // race; once every leaf has stepped, each deferred race settles once, with
 // every winner on its receipt. Then a run that nothing waits on any more has
 // its residual state cleared.
@@ -21,7 +21,7 @@ import {
   settleIfCancelRequested,
   type RunHost,
 } from './rules';
-import type { CorrelatedAwait } from './store';
+import type { WaitWake } from './store';
 
 /** One segment the drain asks the product to run. */
 export type StepRequest =
@@ -91,9 +91,7 @@ export async function drainRun(
       // Not ours to judge once the lease is lost: the new holder may have
       // claimed it itself.
       if (lease?.isLost()) return 'leaseLost';
-      // Already drained, or cancelled as a race loser: later wakes need not
-      // drive it again.
-      await store.correlations.drop({ runId, address });
+      // Already drained, or cancelled as a race loser.
       continue;
     }
     const state = parkedStateOf(claimed.state);
@@ -115,12 +113,10 @@ export async function drainRun(
     if (outcome.kind !== 'parked' && outcome.kind !== 'completed') continue;
     for (const frame of outcome.deferredRaceFrames) if (!deferredRaces.has(frame)) deferredRaces.set(frame, state);
     // Parked again at its own address: the await re-armed without resolving,
-    // and its rows were just rewritten as parked. Anything else resolved this
-    // leaf: its correlation and its claimed row go.
-    if (!(outcome.kind === 'parked' && outcome.parkedAddress === address)) {
-      await store.correlations.drop({ runId, address });
-      await store.parks.finishLeaf({ runId, address, ...fence });
-    }
+    // and its row was just rewritten as parked, with its wait. Anything else
+    // resolved this leaf: its claimed row goes, and the notes its segment
+    // made are kept.
+    if (!(outcome.kind === 'parked' && outcome.parkedAddress === address)) await store.parks.finishLeaf({ runId, address, ...fence });
     if (input.until !== undefined && (await input.until())) break;
   }
 
@@ -174,7 +170,7 @@ function parkedStateOf(state: unknown): ParkedScopeState {
   return state as ParkedScopeState;
 }
 
-// ── Await correlation ───────────────────────────────────────────────────────
+// ── Waits ───────────────────────────────────────────────────────────────────
 
 /** How the drain reaches the product for one run: the step it runs each
  *  segment with, or null when the run cannot be resumed (logged by the
@@ -182,56 +178,37 @@ function parkedStateOf(state: unknown): ParkedScopeState {
 export type StepperFor = (input: { runId: string; lease: HeldRunLease }) => Promise<StepLeaf | null>;
 
 /**
- * Step every currently resolvable await leaf of one run, under the lease the
- * caller holds: the leaves each keeper's records have settled, plus the
- * `extra` ones the caller already knows are resolvable (an event-driven
- * signal's correlated parks). Deduplicated by address, so a leaf resolvable
- * both ways is stepped once.
+ * A wake on one wait (a `wake_await` row): under the run's lease (and inside
+ * `around`, the product's in-process slot, when it has one), re-enter the
+ * await parked at the wake's address, which reads the wait's arrivals. A run
+ * held elsewhere is `busy`, and its wake retries; a leaf no longer parked
+ * there (drained by another wake, withdrawn by a race) steps nothing.
  */
-export async function drainAwaits(
-  host: RunHost,
-  input: { runId: string; extra?: readonly CorrelatedAwait[]; lease: HeldRunLease; stepper: StepperFor },
-): Promise<'done' | 'leaseLost'> {
-  const addresses = new Set<string>();
-  for (const keeper of host.keepers) for (const leaf of await keeper.loadResolvable({ runId: input.runId })) addresses.add(leaf.address);
-  for (const leaf of input.extra ?? []) addresses.add(leaf.address);
-  if (addresses.size === 0) return 'done';
-  const step = await input.stepper({ runId: input.runId, lease: input.lease });
-  if (step === null) return 'done';
-  return drainRun(host, { runId: input.runId, leaves: { addresses: [...addresses] }, lease: input.lease, step });
-}
-
-/**
- * A wake on one adapter identity: look up the parks correlated to it and drive
- * each of their runs, each under its lease (and inside `around`, the
- * product's in-process slot, when it has one). A run held elsewhere is
- * reported busy; its wake retries, and its re-gather finds whatever is still
- * resolvable then.
- */
-export async function wakeAwaits(
+export async function wakeWait(
   host: RunHost,
   input: {
-    wake: { adapterType: string; teamId: string; correlationKey: string };
+    wake: WaitWake;
     stepper: StepperFor;
     around?: (runId: string, body: () => Promise<void>) => Promise<void>;
     lease?: LeaseOptions;
   },
-): Promise<{ busy: string[] }> {
-  const parks = await host.store.correlations.correlated(input.wake);
-  const byRun = new Map<string, CorrelatedAwait[]>();
-  for (const park of parks) byRun.set(park.runId, [...(byRun.get(park.runId) ?? []), park]);
-  const busy: string[] = [];
+): Promise<{ busy: boolean }> {
+  const { runId, address } = input.wake;
   const around = input.around ?? ((_runId: string, body: () => Promise<void>) => body());
-  const outcomes = await Promise.allSettled(
-    [...byRun.entries()].map(([runId, extra]) =>
-      around(runId, async () => {
-        const drained = await withRunLease(host.store.leases, runId, (lease) => drainAwaits(host, { runId, extra, lease, stepper: input.stepper }), input.lease);
-        if (drained.kind === 'busy') busy.push(runId);
-      }),
-    ),
-  );
-  const failed = outcomes.find((o): o is PromiseRejectedResult => o.status === 'rejected');
-  if (failed !== undefined) throw failed.reason;
+  let busy = false;
+  await around(runId, async () => {
+    const drained = await withRunLease(
+      host.store.leases,
+      runId,
+      async (lease) => {
+        const step = await input.stepper({ runId, lease });
+        if (step === null) return 'done';
+        return drainRun(host, { runId, leaves: { addresses: [address], reason: 'await' }, lease, step });
+      },
+      input.lease,
+    );
+    busy = drained.kind === 'busy';
+  });
   return { busy };
 }
 

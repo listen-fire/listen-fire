@@ -2,17 +2,18 @@
 // process over the tenant's own credential) and saves programs, checked
 // against a catalog built from its connections and cached until they or its
 // schema change. An event from the embedder's product runs every listen of the
-// tenant's programs that hears it, and `tick` steps on the runs that parked on
-// a timer once it is due. Every rule is the engine's own: the checker, the
-// listen table read off the source, the routing rule (`listenerHearsDelivery`),
-// the park sink and the timer drain. The embedder supplies its modules, a
+// tenant's programs that hears it, what a module says arrived wakes the runs
+// awaiting it, and `tick` steps on the runs that parked on a timer once it is
+// due. Every rule is the engine's own: the checker, the listen table read off
+// the source, the routing rule (`listenerHearsDelivery`), the park sink, the
+// waits and the drains. The embedder supplies its modules, a
 // store, and its events; the engine's public parts this is built from serve a
 // host that needs another shape (docs/embedding.md). Its own package, outside
 // the core, because it loads modules through the module kit.
 
 import { randomUUID } from 'node:crypto';
 
-import { tenantIdOf, type RunInput, type SegmentLimits } from 'engine-contracts';
+import { tenantIdOf, type Arrival, type RunInput, type SegmentLimits } from 'engine-contracts';
 import {
   adapterInProcess,
   inProcessValidationDefault,
@@ -42,13 +43,18 @@ import {
 } from 'movement-engine/public/movement-engine';
 import {
   RUN_LEASE_TTL_MS,
+  WAKE_AWAIT_WORK_KIND,
   armTimerWake,
   drainDueTimers,
+  logArrivals,
   memoryRunHostStore,
   nextTimerWake,
   parkSources,
-  runParkSink,
+  runParkHost,
+  waitWakeOf,
+  wakeWait,
   withRunLease,
+  type ClaimedWork,
   type RunHost,
   type RunHostStore,
   type StepLeaf,
@@ -105,7 +111,8 @@ export interface EmbeddedHostStore {
     put(run: EmbeddedRun): Promise<void>;
     get(runId: string): Promise<EmbeddedRun | null>;
   };
-  /** Parked leaves, joins, timers, run leases, queued work, pinned texts. */
+  /** Parked leaves, joins, timers, waits and the arrivals they read, run
+   *  leases, queued work, pinned texts. */
   runHost: RunHostStore;
 }
 
@@ -181,7 +188,13 @@ export interface EmbeddedHost {
    *  `text` as the Invocation's `Text` (listen-fire's `listen-fire run <movement> --text`).
    *  None, when the program is not saved or declares no such listen. */
   run(tenant: string, request: { program: string; text?: string }): Promise<EmbeddedRunOutcome[]>;
-  /** Step on every run whose timer is due by `now`: one outcome per segment. */
+  /** What a module of `adapterType` says arrived on its listenable edges for
+   *  `tenant` (a module reads them off the deliveries it accepts): each run
+   *  awaiting one steps on, one outcome per segment. An arrival no run awaits
+   *  yet is kept for an hour, for a run that starts waiting on it. */
+  arrive(tenant: string, input: { adapterType: string; arrivals: readonly Arrival[] }): Promise<EmbeddedRunOutcome[]>;
+  /** Step on every run whose timer is due by `now`, and every run woken by
+   *  an arrival: one outcome per segment. */
   tick(now?: Date): Promise<EmbeddedRunOutcome[]>;
 }
 
@@ -206,7 +219,6 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
   const catalogs = new Map<string, Promise<CatalogSnapshot>>();
   const runHost: RunHost = {
     store: store.runHost,
-    keepers: [],
     runs: {
       cancelRequest: async () => null,
       markFailed: async ({ runId }) => {
@@ -303,9 +315,23 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
   };
 
   /** The host one run's segments run against: its tenant's connections, and
-   *  the run's own park sink (fenced by the lease a resume holds). */
-  const hostFor = (run: EmbeddedRun, fence?: string): EngineHost =>
-    inProcessHost({
+   *  the run's own parks and waits (fenced by the lease a resume holds; a
+   *  resumed leaf's notes kept with the segment's progress past it). */
+  const hostFor = (run: EmbeddedRun, resume?: { fence: string; leaf?: string }): EngineHost => {
+    const parks = runParkHost(runHost, {
+      runId: run.runId,
+      teamId: run.tenant,
+      ...(resume !== undefined ? { fence: resume.fence } : {}),
+      ...(resume?.leaf !== undefined ? { resumed: resume.leaf } : {}),
+      records: {
+        ensureRun: async () => {},
+        markParked: async () => {
+          run.status = 'parked';
+          await store.runs.put(run);
+        },
+      },
+    });
+    return inProcessHost({
       ...options.engine,
       adapters: { resolve: ({ adapterType, credentialsId }) => resolve(run.tenant, adapterType, credentialsId) },
       // A run reaches only its own tenant's connections.
@@ -314,21 +340,13 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
       },
       clock: { now: async () => ({ nowIso: now().toISOString() }) },
       park: {
-        sink: runParkSink(runHost, {
-          runId: run.runId,
-          teamId: run.tenant,
-          ...(fence !== undefined ? { fence } : {}),
-          records: {
-            ensureRun: async () => {},
-            markParked: async () => {
-              run.status = 'parked';
-              await store.runs.put(run);
-            },
-          },
-        }),
+        sink: parks.sink,
+        waits: parks.waits,
+        wake: parks.wake,
         sources: parkSources(store.runHost.sources, run.tenant),
       },
     });
+  };
 
   const outcomeOf = (run: EmbeddedRun, result: MovementRunResult): EmbeddedRunOutcome => {
     run.spentMicrodollars = result.runSpentMicrodollars ?? run.spentMicrodollars + (result.spentMicrodollars ?? 0);
@@ -393,7 +411,8 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
    *  settled), its cost counted on from what the run spent before. */
   const stepFor = (run: EmbeddedRun, fence: string, stepped: EmbeddedRunOutcome[]): StepLeaf => {
     return async (request, settle) => {
-      const input = { ...run.input, runId: run.runId, priorSpentMicrodollars: run.spentMicrodollars, state: request.state, host: hostFor(run, fence) };
+      const host = hostFor(run, { fence, ...(request.kind === 'leaf' ? { leaf: request.address } : {}) });
+      const input = { ...run.input, runId: run.runId, priorSpentMicrodollars: run.spentMicrodollars, state: request.state, host };
       try {
         const result =
           request.kind === 'leaf'
@@ -411,6 +430,41 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
         return { kind: 'failed', error: message };
       }
     };
+  };
+
+  /** One claimed row's run, stepped under its lease: a timer's due leaves,
+   *  or the await a wake names. Busy when another process holds the run. */
+  const stepRow = async (claimed: ClaimedWork, dueBy: string, stepped: EmbeddedRunOutcome[]): Promise<'done' | 'busy'> => {
+    const wake = claimed.kind === WAKE_AWAIT_WORK_KIND ? waitWakeOf(claimed.payload) : null;
+    const runId: unknown = wake?.runId ?? (claimed.kind === 'resume_timer' ? Reflect.get(Object(claimed.payload), 'runId') : undefined);
+    const run = typeof runId === 'string' ? await store.runs.get(runId) : null;
+    if (run === null) return 'done';
+    if (wake !== null) {
+      const { busy } = await wakeWait(runHost, { wake, stepper: async ({ lease }) => stepFor(run, lease.token, stepped) });
+      return busy ? 'busy' : 'done';
+    }
+    const held = await withRunLease(store.runHost.leases, run.runId, (lease) =>
+      drainDueTimers(runHost, { runId: run.runId, dueBy, lease, step: stepFor(run, lease.token, stepped) }),
+    );
+    if (held.kind === 'busy') return 'busy';
+    // The run's one timer row, re-armed while it is claimed, outlives the
+    // completion that follows, due at the run's next timer.
+    const next = await nextTimerWake(runHost, { runId: run.runId });
+    if (next !== null) await armTimerWake(store.runHost, { runId: run.runId, teamId: run.tenant, wakeAt: next });
+    return 'done';
+  };
+
+  /** Every due row of `kinds` (absent: every kind) stepped once. */
+  const stepWork = async (input: { dueBy: string; kinds?: readonly string[] }): Promise<EmbeddedRunOutcome[]> => {
+    const work = store.runHost.work;
+    const stepped: EmbeddedRunOutcome[] = [];
+    const claims = await work.claimDue({ limit: 100, leaseMs: RUN_LEASE_TTL_MS, dueBy: input.dueBy, ...(input.kinds !== undefined ? { kinds: input.kinds } : {}) });
+    for (const claimed of claims) {
+      // Another process holds the run: its row goes back for later.
+      if ((await stepRow(claimed, input.dueBy, stepped)) === 'busy') await work.release(claimed);
+      else await work.complete(claimed);
+    }
+    return stepped;
   };
 
   return {
@@ -477,33 +531,12 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
       return outcomes;
     },
 
-    async tick(at = now()) {
-      const dueBy = at.toISOString();
-      const work = store.runHost.work;
-      const stepped: EmbeddedRunOutcome[] = [];
-      for (const claimed of await work.claimDue({ limit: 100, leaseMs: RUN_LEASE_TTL_MS, dueBy })) {
-        const runId: unknown = Reflect.get(Object(claimed.payload), 'runId');
-        const run = claimed.kind === 'resume_timer' && typeof runId === 'string' ? await store.runs.get(runId) : null;
-        if (run === null) {
-          await work.complete(claimed);
-          continue;
-        }
-        const held = await withRunLease(store.runHost.leases, run.runId, (lease) =>
-          drainDueTimers(runHost, { runId: run.runId, dueBy, lease, step: stepFor(run, lease.token, stepped) }),
-        );
-        // Another process holds the run: its timer row goes back for later.
-        if (held.kind === 'busy') {
-          await work.release(claimed);
-          continue;
-        }
-        // Completed before re-arming: the row is one per run, so a re-park
-        // during the drain shares it.
-        await work.complete(claimed);
-        const next = await nextTimerWake(runHost, { runId: run.runId });
-        if (next !== null) await armTimerWake(store.runHost, { runId: run.runId, teamId: run.tenant, wakeAt: next });
-      }
-      return stepped;
+    async arrive(tenant, { adapterType, arrivals }) {
+      await logArrivals(store.runHost, { teamId: tenant, adapterType, arrivals, at: now().toISOString() });
+      return stepWork({ dueBy: now().toISOString(), kinds: [WAKE_AWAIT_WORK_KIND] });
     },
+
+    tick: (at = now()) => stepWork({ dueBy: at.toISOString() }),
   };
 }
 

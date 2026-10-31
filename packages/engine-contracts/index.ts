@@ -13,7 +13,6 @@ export type { AdapterSnapshot, CatalogSnapshot, LanguageVersion } from 'movement
 
 export * from './adapter';
 export * from './arrivals';
-export * from './callback';
 export * from './catalog';
 export * from './cost';
 export * from './event';

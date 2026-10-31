@@ -2,9 +2,10 @@
 // families (store.ts) and the core's rules over them, run against every
 // backend (the hosted Postgres one in lf-platform's apps/api integration set, `listen-fire`'s
 // SQLite one in apps/cli's tests). Ported from the hosted integration tests
-// (work store, join_pending, park sink, run lease, await correlation, the
-// resume drivers) and listen-fire's state tests, keeping the cases about what the
-// state MEANS rather than how one database stores it.
+// (work store, join_pending, park sink, run lease, the resume drivers) and
+// listen-fire's state tests, keeping the cases about what the state MEANS
+// rather than how one database stores it. What a wait keeps is the shared
+// waits cases' (store_waits.ts); these hold the rules over it.
 //
 // Runner-agnostic: each case is a name and an async body that throws on
 // failure (node:assert), so jest and node:test both wrap the same list.
@@ -12,19 +13,21 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { RunLeaseLost } from '../movement_engine/errors';
-import { drainRun, wakeAwaits, type StepLeaf, type StepOutcome, type StepRequest } from './drain';
-import { cancelSubtrees, clearIfQuiescent, parkSources, runCompleteWithout, runParkSink, settleIfCancelRequested, abandonRun, WAIT_AWAIT_TYPE, type RunHost, type RunRecords } from './rules';
-import type { AwaitKeeper, CallbackStore, ClaimedWork, RunHostStore } from './store';
-import { CALLBACK_AWAIT_TYPE } from 'engine-contracts';
+import { drainRun, wakeWait, type StepLeaf, type StepOutcome, type StepRequest } from './drain';
 import {
-  callbackAwaitKeeper,
-  callbackSink,
-  CALLBACK_BODY_WORK_KIND,
-  isCallbackId,
-  recordCallbackCall,
-  runCallbackBody,
-  type CallbackBodyOutcome,
-} from './callbacks';
+  cancelSubtrees,
+  clearIfQuiescent,
+  logArrivals,
+  parkSources,
+  runCompleteWithout,
+  runParkHost,
+  settleIfCancelRequested,
+  waitWakeOf,
+  WAKE_AWAIT_WORK_KIND,
+  type RunHost,
+  type RunRecords,
+} from './rules';
+import type { ClaimedWork, RunHostStore, WaitWake } from './store';
 import type { HeldRunLease } from './lease';
 import type { DeliveryRow, NewDelivery, NewWorkRow, RunRow } from './rpc_store';
 
@@ -77,30 +80,43 @@ async function parkedAddresses(store: RunHostStore, runId: string): Promise<stri
   return (await store.parks.leaves({ runId, parkedOnly: true })).map((l) => l.address).sort();
 }
 
-/** A recording run host over the backend: the product's run records and one
- *  record-backed keeper, both in memory. */
-function hostOf(backend: ContractBackend, opts: { cancelReason?: string | null; resolvable?: string[] } = {}) {
+/** A recording run host over the backend, with the product's run records in
+ *  memory. */
+function hostOf(backend: ContractBackend, opts: { cancelReason?: string | null } = {}) {
   const failed: Array<{ runId: string; message: string }> = [];
-  const closed: string[] = [];
-  const abandoned: Array<{ runId: string; addresses?: readonly string[] }> = [];
   const runs: RunRecords = {
     cancelRequest: async () => (opts.cancelReason === undefined ? null : { reason: opts.cancelReason }),
     markFailed: async (input) => {
       failed.push(input);
     },
-    closeRun: async ({ runId }) => {
-      closed.push(runId);
-    },
   };
-  const keeper: AwaitKeeper = {
-    adapterType: 'ask',
-    loadResolvable: async ({ runId }) => (opts.resolvable ?? []).map((address) => ({ runId, teamId: backend.teamId, address })),
-    abandon: async (input) => {
-      abandoned.push(input);
-    },
-  };
-  const host: RunHost = { store: backend.store, keepers: [keeper], runs };
-  return { host, failed, closed, abandoned };
+  const host: RunHost = { store: backend.store, runs };
+  return { host, failed };
+}
+
+/** The run waits on `Comments` of `key`, from now. */
+async function openWait(backend: ContractBackend, runId: string, key: string): Promise<string> {
+  const since = await backend.store.waits.mark();
+  const { waitId } = await backend.store.waits.open({ runId, teamId: backend.teamId, adapterType: 'acme', edge: 'Comments', key, since });
+  return waitId;
+}
+
+/** An await at `address` parked on a wait of the run on `key`. */
+async function parkOnWait(backend: ContractBackend, runId: string, address: string, key: string): Promise<string> {
+  const waitId = await openWait(backend, runId, key);
+  await backend.store.parks.commit({ runId, address, state: { address }, park: { kind: 'wait', waitId } });
+  return waitId;
+}
+
+/** A comment arrives on `key`: the waits parked on it, by address. */
+async function comment(backend: ContractBackend, key: string): Promise<WaitWake[]> {
+  const identity = uniqueKey('comment');
+  return backend.store.waits.log({
+    teamId: backend.teamId,
+    adapterType: 'acme',
+    arrivals: [{ edge: 'Comments', key, identity, version: null, landing: { fields: { Body: 'hi' } }, gone: false }],
+    at: new Date().toISOString(),
+  });
 }
 
 /** A step scripted per leaf address (or race frame): what it does and what it
@@ -439,29 +455,6 @@ export const runHostContractCases: ContractCase[] = [
     },
   },
 
-  // ── Await correlation (await_correlation, adapter doors) ─────────────────
-  {
-    name: 'correlation: one entry per park, team-scoped, dropped per park or per run',
-    async run({ store, newRun, teamId }) {
-      const runId = await newRun();
-      const key = uniqueKey('thread');
-      await park(store, runId, 's0', { reason: 'await' });
-      await park(store, runId, 's1', { reason: 'await' });
-      await store.correlations.correlate({ runId, teamId, address: 's0', adapterType: 'slack', correlationKey: 'old' });
-      await store.correlations.correlate({ runId, teamId, address: 's0', adapterType: 'slack', correlationKey: key });
-      await store.correlations.correlate({ runId, teamId, address: 's1', adapterType: 'slack', correlationKey: key });
-      assert.deepEqual((await store.correlations.correlated({ adapterType: 'slack', teamId, correlationKey: 'old' })).filter((c) => c.runId === runId), []);
-      const found = await store.correlations.correlated({ adapterType: 'slack', teamId, correlationKey: key });
-      assert.deepEqual(found.map((c) => c.address).sort(), ['s0', 's1']);
-      assert.deepEqual(await store.correlations.correlated({ adapterType: 'slack', teamId: '00000000-0000-4000-8000-00000000beef', correlationKey: key }), []);
-      assert.deepEqual((await store.correlations.ofRun({ runId, adapterType: 'slack' })).map((c) => c.correlationKey), [key, key]);
-      await store.correlations.drop({ runId, address: 's0' });
-      assert.deepEqual((await store.correlations.correlated({ adapterType: 'slack', teamId, correlationKey: key })).map((c) => c.address), ['s1']);
-      await store.correlations.dropRun({ runId });
-      assert.deepEqual(await store.correlations.correlated({ adapterType: 'slack', teamId, correlationKey: key }), []);
-    },
-  },
-
   // ── The core's rules over the backend ────────────────────────────────────
   {
     name: 'completion: a run completes only when no join waits and no other leaf is parked; a quiescent run\'s joins clear',
@@ -484,14 +477,16 @@ export const runHostContractCases: ContractCase[] = [
     },
   },
   {
-    name: 'race: losing subtrees go by parsed address, sparing the winner, with their joins, correlations and keeper records',
+    name: 'race: losing subtrees go by parsed address, sparing the winner, with their joins; a withdrawn wait answers no arrival',
     async run(backend) {
-      const { store, newRun, teamId } = backend;
-      const { host, abandoned } = hostOf(backend);
+      const { store, newRun } = backend;
+      const { host } = hostOf(backend);
       const runId = await newRun();
+      const keys = new Map<string, string>();
       for (const address of ['s1.b1.s0', 's1.b1.s2', 's1.b10.s0', 's1.b2.s0']) {
-        await park(store, runId, address, { reason: 'await' });
-        await store.correlations.correlate({ runId, teamId, address, adapterType: 'slack', correlationKey: `k-${address}` });
+        const key = uniqueKey('thread');
+        keys.set(address, key);
+        await parkOnWait(backend, runId, address, key);
       }
       await store.joins.recordJoin({ runId, frameAddress: 's1.b1.s3', pending: 1 });
       await branch(store, runId, 's1.b1.s3', 's1.b1.s3.b0', 0);
@@ -500,20 +495,18 @@ export const runHostContractCases: ContractCase[] = [
       assert.deepEqual(await parkedAddresses(store, runId), ['s1.b1.s2', 's1.b10.s0']);
       assert.deepEqual(await store.joins.frames({ runId }), ['s1']);
       assert.deepEqual(await store.joins.collectBranchExports({ runId, frameAddress: 's1.b1.s3' }), []);
-      assert.deepEqual((await store.correlations.ofRun({ runId, adapterType: 'slack' })).map((c) => c.address).sort(), ['s1.b1.s2', 's1.b10.s0']);
-      assert.deepEqual(abandoned.map((a) => [...(a.addresses ?? [])].sort()), [['s1.b1.s0', 's1.b2.s0']]);
+      const woken: string[] = [];
+      for (const key of keys.values()) for (const wake of await comment(backend, key)) woken.push(wake.address);
+      assert.deepEqual(woken.sort(), ['s1.b1.s2', 's1.b10.s0']);
     },
   },
   {
     name: 'drain: branches completing in one batch defer their race, which settles once with every winner',
     async run(backend) {
-      const { store, newRun, teamId } = backend;
+      const { store, newRun } = backend;
       const { host } = hostOf(backend);
       const runId = await newRun();
-      for (const address of ['s1.b0.s0', 's1.b1.s0']) {
-        await park(store, runId, address, { reason: 'await' });
-        await store.correlations.correlate({ runId, teamId, address, adapterType: 'slack', correlationKey: 'k' });
-      }
+      for (const address of ['s1.b0.s0', 's1.b1.s0']) await parkOnWait(backend, runId, address, uniqueKey('thread'));
       let settledComplete: boolean | undefined;
       const { step, requests } = scriptedStep({
         's1.b0.s0': async () => ({ kind: 'completed', deferredRaceFrames: ['s1'] }),
@@ -535,21 +528,20 @@ export const runHostContractCases: ContractCase[] = [
       assert.deepEqual(requests.map((r) => (r.kind === 'leaf' ? `${r.address}:${r.reenter}` : `race:${r.frameAddress}`)), ['s1.b0.s0:true', 's1.b1.s0:true', 'race:s1']);
       assert.equal(settledComplete, true);
       assert.deepEqual(await store.parks.leaves({ runId }), []);
-      assert.deepEqual(await store.correlations.ofRun({ runId, adapterType: 'slack' }), []);
     },
   },
   {
-    name: 'drain: an await re-armed at its own address keeps its row and correlation; a slept timer steps past its sleep',
+    name: 'drain: an await re-armed at its own address keeps its row and its wait parked there; a slept timer steps past its sleep',
     async run(backend) {
-      const { store, newRun, teamId } = backend;
+      const { store, newRun } = backend;
       const { host } = hostOf(backend);
       const runId = await newRun();
-      await park(store, runId, 's0', { reason: 'await' });
-      await store.correlations.correlate({ runId, teamId, address: 's0', adapterType: 'slack', correlationKey: 'k' });
+      const key = uniqueKey('thread');
+      const waitId = await parkOnWait(backend, runId, 's0', key);
       await park(store, runId, 's1', { reason: 'timer' });
       const { step, requests } = scriptedStep({
         s0: async () => {
-          await park(store, runId, 's0', { reason: 'await' });
+          await store.parks.commit({ runId, address: 's0', state: { address: 's0' }, park: { kind: 'wait', waitId } });
           return { kind: 'parked', parkedAddress: 's0', deferredRaceFrames: [] };
         },
         s1: async () => {
@@ -560,26 +552,25 @@ export const runHostContractCases: ContractCase[] = [
       assert.equal(await drainRun(host, { runId, leaves: { addresses: ['s0', 's1'] }, step }), 'done');
       assert.deepEqual(requests.map((r) => (r.kind === 'leaf' ? r.reenter : null)), [true, false]);
       assert.deepEqual(await parkedAddresses(store, runId), ['s0', 's2']);
-      assert.deepEqual((await store.correlations.ofRun({ runId, adapterType: 'slack' })).map((c) => c.address), ['s0']);
+      assert.deepEqual((await comment(backend, key)).map((wake) => wake.address), ['s0']);
     },
   },
   {
-    name: 'drain: an engine failure tears the run down, closing its keeper records and correlations',
+    name: 'drain: an engine failure tears the run down, its leaves, joins and waits',
     async run(backend) {
-      const { store, newRun, teamId } = backend;
-      const { host, abandoned, closed } = hostOf(backend);
+      const { store, newRun } = backend;
+      const { host } = hostOf(backend);
       const runId = await newRun();
+      const key = uniqueKey('thread');
       await park(store, runId, 's0', { reason: 'await' });
-      await park(store, runId, 's1', { reason: 'await' });
-      await store.correlations.correlate({ runId, teamId, address: 's1', adapterType: 'slack', correlationKey: 'k' });
+      const waitId = await parkOnWait(backend, runId, 's1', key);
       await store.joins.recordJoin({ runId, frameAddress: 's9', pending: 1 });
       const { step } = scriptedStep({ s0: async () => ({ kind: 'failed', error: 'boom' }) });
       assert.equal(await drainRun(host, { runId, leaves: { addresses: ['s0', 's1'] }, step }), 'done');
       assert.deepEqual(await store.parks.leaves({ runId }), []);
       assert.deepEqual(await store.joins.frames({ runId }), []);
-      assert.deepEqual(await store.correlations.ofRun({ runId, adapterType: 'slack' }), []);
-      assert.deepEqual(abandoned, [{ runId }]);
-      assert.deepEqual(closed, [runId]);
+      assert.deepEqual(await comment(backend, key), []);
+      await assert.rejects(store.waits.arrivals({ waitId }), 'its wait went with it');
     },
   },
   {
@@ -618,26 +609,33 @@ export const runHostContractCases: ContractCase[] = [
     },
   },
   {
-    name: 'wake: a signal drives every run parked on its key, each under its lease; a run held elsewhere is busy',
+    name: 'wake: an arrival wakes each run parked on its record, each under its lease; a run held elsewhere is busy',
     async run(backend) {
       const { store, newRun, teamId } = backend;
       const { host } = hostOf(backend);
       const key = uniqueKey('thread');
       const free = await newRun();
       const held = await newRun();
-      for (const runId of [free, held]) {
-        await park(store, runId, 's0', { reason: 'await' });
-        await store.correlations.correlate({ runId, teamId, address: 's0', adapterType: 'slack', correlationKey: key });
-      }
+      for (const runId of [free, held]) await parkOnWait(backend, runId, 's0', key);
       assert.ok(await store.leases.claim({ runId: held, ttlMs: 60_000 }));
-      const stepped: string[] = [];
-      const { busy } = await wakeAwaits(host, {
-        wake: { adapterType: 'slack', teamId, correlationKey: key },
-        stepper: async ({ runId }) => async () => {
-          stepped.push(runId);
-          return { kind: 'completed', deferredRaceFrames: [] };
-        },
+      const wakes = await logArrivals(store, {
+        teamId,
+        adapterType: 'acme',
+        arrivals: [{ edge: 'Comments', key, identity: uniqueKey('comment'), landing: { fields: { Body: 'hi' } } }],
       });
+      assert.deepEqual(wakes.map((wake) => wake.runId).sort(), [free, held].sort());
+      const queued = (await store.work.claimDue({ limit: 1000, leaseMs: 60_000, kinds: [WAKE_AWAIT_WORK_KIND] })).flatMap((row) => {
+        const wake = waitWakeOf(row.payload);
+        return wake !== null && wakes.some((w) => w.waitId === wake.waitId) ? [wake] : [];
+      });
+      assert.deepEqual(queued.sort((a, b) => a.waitId.localeCompare(b.waitId)), [...wakes].sort((a, b) => a.waitId.localeCompare(b.waitId)), 'a wake row per wait');
+      const stepped: string[] = [];
+      const stepper = async ({ runId }: { runId: string }) => async () => {
+        stepped.push(runId);
+        return { kind: 'completed' as const, deferredRaceFrames: [] };
+      };
+      const busy: string[] = [];
+      for (const wake of queued) if ((await wakeWait(host, { wake, stepper })).busy) busy.push(wake.runId);
       assert.deepEqual(stepped, [free]);
       assert.deepEqual(busy, [held]);
       assert.deepEqual(await store.parks.leaves({ runId: free }), []);
@@ -645,40 +643,46 @@ export const runHostContractCases: ContractCase[] = [
     },
   },
   {
-    name: 'park sink: an await parks its leaf, then its correlation, and arms nothing; a timer arms its run\'s wake',
+    name: "park host: an await parks its leaf on its wait in one write; a timer arms its run's wake; a suspension at the await's address unparks its wait",
     async run(backend) {
       const { store, newRun, teamId } = backend;
       const { host } = hostOf(backend);
       const runId = await newRun();
+      const key = uniqueKey('thread');
       const marks: string[] = [];
-      const sink = runParkSink(host, {
+      const { sink, waits } = runParkHost(host, {
         runId,
         teamId,
         records: { ensureRun: async () => void marks.push('ensure'), markParked: async () => void marks.push('parked') },
       });
-      await sink.commitAwaitPark({ address: 's0', state: { a: 1 }, waitId: 'w1' });
+      const { waitId } = await waits.open({ adapterType: 'acme', edge: 'Comments', key, since: (await waits.mark()).mark });
+      await sink.commitAwaitPark({ address: 's0', state: { a: 1 }, waitId });
       assert.deepEqual(await parkedAddresses(store, runId), ['s0']);
-      assert.deepEqual((await store.correlations.ofRun({ runId, adapterType: WAIT_AWAIT_TYPE })).map((c) => c.correlationKey), ['w1']);
+      assert.deepEqual((await comment(backend, key)).map((wake) => [wake.waitId, wake.address]), [[waitId, 's0']]);
       await sink.commitTimerPark({ address: 's1', state: {}, wakeAt: PAST(1) });
       const timerRow = await claimKey(store, `resume_timer:${runId}`);
       assert.deepEqual(timerRow?.payload, { runId });
       if (timerRow) await store.work.complete(timerRow);
       await sink.commitSuspension?.({ address: 's0', state: { a: 2 } });
-      assert.deepEqual(await store.correlations.ofRun({ runId, adapterType: WAIT_AWAIT_TYPE }), [], 'a suspended await drops its correlation');
-      assert.deepEqual(marks, ['ensure', 'parked', 'ensure', 'parked', 'ensure', 'parked']);
+      assert.deepEqual(await comment(backend, key), [], 'a suspended await is parked on no wait');
+      await assert.rejects(sink.commitAwaitPark({ address: 's2', state: {}, waitId: 'no-such-wait' }), 'a wait the run does not have');
+      assert.deepEqual(await parkedAddresses(store, runId), ['s0', 's1']);
+      assert.deepEqual(marks, ['ensure', 'parked', 'ensure', 'parked', 'ensure', 'parked', 'ensure']);
     },
   },
   {
-    name: 'park sink: a cancel stamped while the run parked settles it at once; a lapsed holder\'s park is refused',
+    name: "park host: a cancel stamped while the run parked settles it at once; a lapsed holder's park is refused",
     async run(backend) {
       const { store, newRun, teamId } = backend;
       const cancelled = hostOf(backend, { cancelReason: null });
       const runId = await newRun();
       const records = { ensureRun: async () => {}, markParked: async () => {} };
-      await runParkSink(cancelled.host, { runId, teamId, records }).commitAwaitPark({ address: 's0', state: {}, waitId: 'w1' });
+      const key = uniqueKey('thread');
+      const waitId = await openWait(backend, runId, key);
+      await runParkHost(cancelled.host, { runId, teamId, records }).sink.commitAwaitPark({ address: 's0', state: {}, waitId });
       assert.deepEqual(cancelled.failed, [{ runId, message: 'Cancelled by an operator' }]);
       assert.deepEqual(await store.parks.leaves({ runId }), []);
-      assert.deepEqual(await store.correlations.ofRun({ runId, adapterType: WAIT_AWAIT_TYPE }), []);
+      assert.deepEqual(await comment(backend, key), []);
 
       const { host } = hostOf(backend);
       const other = await newRun();
@@ -686,9 +690,58 @@ export const runHostContractCases: ContractCase[] = [
       assert.ok(lapsed);
       await sleep(LAPSE_MS);
       assert.ok(await store.leases.claim({ runId: other, ttlMs: 60_000 }));
-      const sink = runParkSink(host, { runId: other, teamId, fence: lapsed.token, records });
+      const { sink } = runParkHost(host, { runId: other, teamId, fence: lapsed.token, records });
       await assert.rejects(sink.commitTimerPark({ address: 's0', state: {}, wakeAt: FUTURE(1) }), RunLeaseLost);
       assert.deepEqual(await store.parks.leaves({ runId: other }), []);
+    },
+  },
+  {
+    name: 'park host: a note is kept with the progress of the leaf its segment resumed, read again when that segment died, and refused to a lapsed holder',
+    async run(backend) {
+      const { store, newRun, teamId } = backend;
+      const { host } = hostOf(backend);
+      const runId = await newRun();
+      const key = uniqueKey('thread');
+      const records = { ensureRun: async () => {}, markParked: async () => {} };
+      const waitId = await parkOnWait(backend, runId, 's1', key);
+      await comment(backend, key);
+      const resume = async (fence: string) => {
+        assert.ok(await store.parks.claimLeaf({ runId, address: 's1' }));
+        const { waits } = runParkHost(host, { runId, teamId, fence, resumed: 's1', records });
+        const [arrival] = (await waits.arrivals({ waitId })).arrivals;
+        assert.ok(arrival, 'the comment is read');
+        return { waits, arrival };
+      };
+      const dead = await store.leases.claim({ runId, ttlMs: SHORT_MS });
+      assert.ok(dead);
+      const first = await resume(dead.token);
+      assert.deepEqual(await first.waits.note({ waitId, identity: first.arrival.identity, matched: true }), { counts: true });
+      await sleep(LAPSE_MS);
+      const live = await store.leases.claim({ runId, ttlMs: 60_000 });
+      assert.ok(live);
+      // The segment that noted it died before its progress was kept.
+      const second = await resume(live.token);
+      assert.equal(second.arrival.identity, first.arrival.identity);
+      await assert.rejects(first.waits.note({ waitId, identity: first.arrival.identity, matched: true }), RunLeaseLost);
+      assert.deepEqual(await second.waits.note({ waitId, identity: second.arrival.identity, matched: true }), { counts: true });
+      await store.parks.finishLeaf({ runId, address: 's1', fence: live.token });
+      assert.deepEqual((await store.waits.arrivals({ waitId })).arrivals, [], 'kept with the leaf it finished');
+    },
+  },
+  {
+    name: 'park host: a wake the engine asks for names a wait the segment parked, queued for its address; any other wait is refused',
+    async run(backend) {
+      const { store, newRun, teamId } = backend;
+      const { host } = hostOf(backend);
+      const runId = await newRun();
+      const records = { ensureRun: async () => {}, markParked: async () => {} };
+      const { sink, wake } = runParkHost(host, { runId, teamId, records });
+      const waitId = await openWait(backend, runId, uniqueKey('thread'));
+      await assert.rejects(wake({ waitId }), /parked nothing/);
+      await sink.commitAwaitPark({ address: 's3', state: {}, waitId });
+      await wake({ waitId });
+      const rows = await store.work.claimDue({ limit: 1000, leaseMs: 60_000, kinds: [WAKE_AWAIT_WORK_KIND] });
+      assert.deepEqual(rows.map((row) => waitWakeOf(row.payload)).filter((w) => w?.runId === runId), [{ runId, waitId, address: 's3' }]);
     },
   },
   {
@@ -708,17 +761,15 @@ export const runHostContractCases: ContractCase[] = [
   },
 ];
 
-// ── Callbacks and cancel ────────────────────────────────────────────────────
+// ── Cancel ──────────────────────────────────────────────────────────────────
 //
-// What a backend keeps beyond the run's live state: its callbacks, and its
-// run records (the status row, an operator's cancel request). Kept as their
-// own lists, over a richer backend, so a store that serves only the live
-// state families still runs the cases above.
+// What a backend keeps beyond the run's live state: its run records (the
+// status row, an operator's cancel request). Kept as their own list, over a
+// richer backend, so a store that serves only the live state families still
+// runs the cases above.
 
 export interface RecordsContractBackend extends ContractBackend {
-  callbacks: CallbackStore;
-  /** The product's run records over the same backend, `closeRun` revoking
-   *  the run's callbacks. */
+  /** The product's run records over the same backend. */
   runs: RunRecords;
   /** An operator asks to cancel the run, as the product's cancel door does. */
   requestCancel(input: { runId: string; reason: string | null }): Promise<void>;
@@ -735,226 +786,15 @@ export interface RecordsContractCase {
 }
 
 function recordsHost(backend: RecordsContractBackend): RunHost {
-  return { store: backend.store, keepers: [callbackAwaitKeeper(backend.store, backend.callbacks)], runs: backend.runs };
+  return { store: backend.store, runs: backend.runs };
 }
 
-async function mintFor(backend: RecordsContractBackend, runId: string, extra: { singleUse?: boolean; expiresAt?: string; params?: Array<{ name: string; type: 'text' | 'number' }> } = {}) {
-  return backend.callbacks.mint({
-    teamId: backend.teamId,
-    runId,
-    address: 's0.c1',
-    params: extra.params ?? [{ name: 'note', type: 'text' }],
-    state: { version: 2, address: 's0.c1', marker: uniqueKey('state') },
-    singleUse: extra.singleUse ?? true,
-    ...(extra.expiresAt !== undefined ? { expiresAt: extra.expiresAt } : {}),
-  });
-}
-
-const BODY_DUE = () => FUTURE(10);
-
-/** A lease held on the run, as the product holds one around a body. */
+/** A lease held on the run, as the product holds one around a segment. */
 async function holdLease(store: RunHostStore, runId: string, ttlMs = 60_000): Promise<HeldRunLease> {
   const claimed = await store.leases.claim({ runId, ttlMs });
   assert.ok(claimed, 'the run is free');
   return { runId, token: claimed.token, isLost: () => false, release: () => store.leases.release({ runId, token: claimed.token }) };
 }
-
-export const callbackContractCases: RecordsContractCase[] = [
-  {
-    name: 'callbacks: a mint is live with an empty ledger, its signature and state kept; ids are cb_-prefixed and distinct',
-    async run(backend) {
-      const runId = await backend.newRun();
-      const one = await mintFor(backend, runId);
-      const two = await mintFor(backend, runId);
-      assert.ok(isCallbackId(one.id) && isCallbackId(two.id));
-      assert.notEqual(one.id, two.id);
-      const got = await backend.callbacks.get({ id: one.id });
-      assert.ok(got);
-      assert.equal(got.status, 'live');
-      assert.equal(got.runId, runId);
-      assert.equal(got.teamId, backend.teamId);
-      assert.equal(got.address, 's0.c1');
-      assert.deepEqual(got.params, [{ name: 'note', type: 'text' }]);
-      assert.deepEqual(got.calls, []);
-      assert.equal(got.singleUse, true);
-      assert.equal(got.expiresAt, null);
-      assert.equal((got.state as { address: string }).address, 's0.c1');
-      assert.equal(await backend.callbacks.get({ id: 'cb_never-minted' }), null);
-      assert.equal(await backend.callbacks.get({ id: 'not-a-callback' }), null);
-    },
-  },
-  {
-    name: 'callbacks: a single-use callback takes one call, queued with its body; a second call is closed and queues nothing',
-    async run(backend) {
-      const runId = await backend.newRun();
-      const { id } = await mintFor(backend, runId);
-      const first = await backend.callbacks.record({ id, values: { note: 'yes' }, bodyDueAt: PAST(1) });
-      assert.equal(first.kind, 'recorded');
-      assert.ok(first.kind === 'recorded');
-      assert.equal(first.callIndex, 0);
-      assert.equal(first.callback.status, 'fired');
-      assert.deepEqual(first.callback.calls.map((c) => c.values), [{ note: 'yes' }]);
-      assert.ok(!Number.isNaN(Date.parse(first.callback.calls[0]?.at ?? '')), 'the call carries its instant');
-      const body = await claimKey(backend.store, `${CALLBACK_BODY_WORK_KIND}:${id}:0`);
-      assert.deepEqual(body?.payload, { callbackId: id, teamId: backend.teamId, callIndex: 0 });
-      assert.equal(body?.kind, CALLBACK_BODY_WORK_KIND);
-      if (body) await backend.store.work.complete(body);
-      const second = await backend.callbacks.record({ id, values: { note: 'again' }, bodyDueAt: PAST(1) });
-      assert.equal(second.kind, 'closed');
-      assert.equal(await claimKey(backend.store, `${CALLBACK_BODY_WORK_KIND}:${id}:1`), undefined);
-      assert.equal((await backend.callbacks.get({ id }))?.calls.length, 1);
-    },
-  },
-  {
-    name: 'callbacks: a repeatable callback stays live and appends each call at the next index',
-    async run(backend) {
-      const runId = await backend.newRun();
-      const { id } = await mintFor(backend, runId, { singleUse: false });
-      const a = await backend.callbacks.record({ id, values: { note: 'a' }, bodyDueAt: BODY_DUE() });
-      const b = await backend.callbacks.record({ id, values: { note: 'b' }, bodyDueAt: BODY_DUE() });
-      assert.ok(a.kind === 'recorded' && b.kind === 'recorded');
-      assert.deepEqual([a.callIndex, b.callIndex], [0, 1]);
-      const got = await backend.callbacks.get({ id });
-      assert.equal(got?.status, 'live');
-      assert.deepEqual(got?.calls.map((c) => c.values), [{ note: 'a' }, { note: 'b' }]);
-    },
-  },
-  {
-    name: 'callbacks: an expired callback refuses a call and records nothing; one inside its window records',
-    async run(backend) {
-      const runId = await backend.newRun();
-      const gone = await mintFor(backend, runId, { expiresAt: PAST(1) });
-      const open = await mintFor(backend, runId, { expiresAt: FUTURE(10) });
-      assert.equal((await backend.callbacks.record({ id: gone.id, values: { note: 'x' }, bodyDueAt: BODY_DUE() })).kind, 'expired');
-      assert.deepEqual((await backend.callbacks.get({ id: gone.id }))?.calls, []);
-      assert.equal((await backend.callbacks.record({ id: open.id, values: { note: 'x' }, bodyDueAt: BODY_DUE() })).kind, 'recorded');
-      assert.equal((await backend.callbacks.record({ id: 'cb_never-minted', values: {}, bodyDueAt: BODY_DUE() })).kind, 'not_found');
-      assert.equal((await backend.callbacks.record({ id: 'foreign', values: {}, bodyDueAt: BODY_DUE() })).kind, 'not_found');
-    },
-  },
-  {
-    name: 'callbacks: a values mismatch is refused before the claim, so a single-use callback stays live; a recorded call queues a coalesced wake',
-    async run(backend) {
-      const host = recordsHost(backend);
-      const runId = await backend.newRun();
-      const { id } = await mintFor(backend, runId, { params: [{ name: 'n', type: 'number' }] });
-      const wrong = await recordCallbackCall(host, backend.callbacks, { id, values: { n: 'many' }, bodyDueAt: BODY_DUE(), wakeDueAt: PAST(1) });
-      assert.equal(wrong.kind, 'mismatch');
-      const extra = await recordCallbackCall(host, backend.callbacks, { id, values: { n: 1, other: 2 }, bodyDueAt: BODY_DUE(), wakeDueAt: PAST(1) });
-      assert.equal(extra.kind, 'mismatch');
-      assert.equal((await backend.callbacks.get({ id }))?.status, 'live');
-      const right = await recordCallbackCall(host, backend.callbacks, { id, values: { n: '3' }, bodyDueAt: BODY_DUE(), wakeDueAt: PAST(1) });
-      assert.ok(right.kind === 'recorded');
-      assert.deepEqual(right.callback.calls[0]?.values, { n: 3 }, 'coerced to its declared type');
-      const wake = await claimKey(backend.store, `wake_await:callback_backstop:${id}`);
-      assert.deepEqual(wake?.payload, { adapterType: CALLBACK_AWAIT_TYPE, teamId: backend.teamId, correlationKey: id });
-      if (wake) await backend.store.work.complete(wake);
-    },
-  },
-  {
-    name: 'callbacks: a call lands only once its body is marked started; the keeper then finds the await parked on it',
-    async run(backend) {
-      const { store, teamId } = backend;
-      const keeper = callbackAwaitKeeper(store, backend.callbacks);
-      const runId = await backend.newRun();
-      const { id } = await mintFor(backend, runId);
-      const other = await mintFor(backend, runId);
-      for (const [address, key] of [['s1', id], ['s2', other.id]] as const) {
-        await park(store, runId, address, { reason: 'await' });
-        await store.correlations.correlate({ runId, teamId, address, adapterType: CALLBACK_AWAIT_TYPE, correlationKey: key });
-      }
-      const sink = callbackSink(backend.callbacks, { runId, teamId, url: (cb) => `http://lf.test/api/cb/${cb}` });
-      assert.ok((await backend.callbacks.record({ id, values: { note: 'n' }, bodyDueAt: BODY_DUE() })).kind === 'recorded');
-      assert.deepEqual(await sink.calls({ callbackId: id }), [], 'recorded, not landed');
-      assert.deepEqual(await keeper.loadResolvable({ runId }), []);
-      assert.deepEqual(await backend.callbacks.landed({ ids: [id, other.id] }), []);
-      assert.equal(await backend.callbacks.markBodyStarted({ id, callIndex: 0 }), true);
-      assert.deepEqual((await sink.calls({ callbackId: id })).map((c) => c.values), [{ note: 'n' }]);
-      assert.deepEqual(await backend.callbacks.landed({ ids: [id, other.id] }), [id]);
-      assert.deepEqual(await keeper.loadResolvable({ runId }), [{ runId, teamId, address: 's1' }]);
-    },
-  },
-  {
-    name: 'callbacks: a body is marked started only under the run\'s current lease; a lapsed holder marks nothing',
-    async run(backend) {
-      const { store } = backend;
-      const runId = await backend.newRun();
-      const { id } = await mintFor(backend, runId, { singleUse: false });
-      await backend.callbacks.record({ id, values: { note: 'n' }, bodyDueAt: BODY_DUE() });
-      const lapsed = await store.leases.claim({ runId, ttlMs: SHORT_MS });
-      assert.ok(lapsed);
-      await sleep(LAPSE_MS);
-      const current = await store.leases.claim({ runId, ttlMs: 60_000 });
-      assert.ok(current);
-      assert.equal(await backend.callbacks.markBodyStarted({ id, callIndex: 0, fence: lapsed.token }), false);
-      assert.equal((await backend.callbacks.get({ id }))?.calls[0]?.bodyStartedAt, undefined);
-      assert.equal(await backend.callbacks.markBodyStarted({ id, callIndex: 0, fence: current.token }), true);
-      assert.ok((await backend.callbacks.get({ id }))?.calls[0]?.bodyStartedAt !== undefined);
-      await store.leases.release({ runId, token: current.token });
-    },
-  },
-  {
-    name: 'callbacks: a body runs once under the lease, then wakes the run\'s await on it; the same call never runs twice',
-    async run(backend) {
-      const { store, teamId } = backend;
-      const host = recordsHost(backend);
-      const runId = await backend.newRun();
-      const { id } = await mintFor(backend, runId);
-      await park(store, runId, 's1', { reason: 'await' });
-      await store.correlations.correlate({ runId, teamId, address: 's1', adapterType: CALLBACK_AWAIT_TYPE, correlationKey: id });
-      assert.ok((await backend.callbacks.record({ id, values: { note: 'go' }, bodyDueAt: BODY_DUE() })).kind === 'recorded');
-      const bodies: unknown[] = [];
-      const stepped: string[] = [];
-      const lease = await holdLease(store, runId);
-      const run = (body: (values: unknown) => Promise<CallbackBodyOutcome>) =>
-        runCallbackBody(host, backend.callbacks, {
-          id,
-          callIndex: 0,
-          lease,
-          now: new Date().toISOString(),
-          runOpen: async () => true,
-          body: async ({ values }) => body(values),
-          stepper: async () => async (request) => {
-            stepped.push(request.kind === 'leaf' ? request.address : request.frameAddress);
-            return { kind: 'completed', deferredRaceFrames: [] };
-          },
-        });
-      const first = await run(async (values) => {
-        bodies.push(values);
-        // The call has landed by the time its body runs.
-        assert.equal((await backend.callbacks.landed({ ids: [id] })).length, 1);
-        return { kind: 'ran' };
-      });
-      assert.equal(first.kind, 'ran');
-      assert.deepEqual(bodies, [{ note: 'go' }]);
-      assert.deepEqual(stepped, ['s1']);
-      assert.deepEqual(await store.parks.leaves({ runId }), []);
-      const again = await run(async () => {
-        throw new Error('ran twice');
-      });
-      assert.deepEqual(again, { kind: 'refused', reason: 'its body already started' });
-      await lease.release();
-    },
-  },
-  {
-    name: 'callbacks: a run that ends revokes its live callbacks (a fired one stays fired), and a later call is closed',
-    async run(backend) {
-      const host = recordsHost(backend);
-      const runId = await backend.newRun();
-      const live = await mintFor(backend, runId, { singleUse: false });
-      const fired = await mintFor(backend, runId);
-      await backend.callbacks.record({ id: fired.id, values: { note: 'x' }, bodyDueAt: BODY_DUE() });
-      const elsewhere = await mintFor(backend, await backend.newRun());
-      assert.equal(await abandonRun(host, { runId }), true);
-      assert.equal((await backend.callbacks.get({ id: live.id }))?.status, 'revoked');
-      assert.equal((await backend.callbacks.get({ id: fired.id }))?.status, 'fired');
-      assert.equal((await backend.callbacks.get({ id: elsewhere.id }))?.status, 'live', 'another run\'s callback is untouched');
-      assert.equal((await backend.callbacks.record({ id: live.id, values: { note: 'late' }, bodyDueAt: BODY_DUE() })).kind, 'closed');
-      await backend.callbacks.revokeRun({ runId });
-      assert.equal((await backend.callbacks.get({ id: live.id }))?.status, 'revoked', 'idempotent');
-    },
-  },
-];
 
 export const cancelContractCases: RecordsContractCase[] = [
   {
@@ -969,14 +809,13 @@ export const cancelContractCases: RecordsContractCase[] = [
     },
   },
   {
-    name: 'cancel: a parked run with a cancel request settles failed with its reason; its leaves, correlations and callbacks close',
+    name: 'cancel: a parked run with a cancel request settles failed with its reason; its leaves and waits go',
     async run(backend) {
-      const { store, teamId } = backend;
+      const { store } = backend;
       const host = recordsHost(backend);
       const runId = await backend.newRun();
-      const { id } = await mintFor(backend, runId, { singleUse: false });
-      await park(store, runId, 's0', { reason: 'await' });
-      await store.correlations.correlate({ runId, teamId, address: 's0', adapterType: CALLBACK_AWAIT_TYPE, correlationKey: id });
+      const key = uniqueKey('thread');
+      await parkOnWait(backend, runId, 's0', key);
       await park(store, runId, 's1', { reason: 'timer' });
       await backend.requestCancel({ runId, reason: 'not needed' });
       assert.deepEqual(await backend.runs.cancelRequest({ runId }), { reason: 'not needed' });
@@ -984,8 +823,7 @@ export const cancelContractCases: RecordsContractCase[] = [
       assert.equal(await settleIfCancelRequested(host, { runId, fence: lease.token }), true);
       assert.equal(await backend.runStatus(runId), 'failed');
       assert.deepEqual(await store.parks.leaves({ runId }), []);
-      assert.deepEqual(await store.correlations.ofRun({ runId, adapterType: CALLBACK_AWAIT_TYPE }), []);
-      assert.equal((await backend.callbacks.get({ id }))?.status, 'revoked');
+      assert.deepEqual(await comment(backend, key), []);
       await lease.release();
     },
   },
