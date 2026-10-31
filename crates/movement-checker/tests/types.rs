@@ -138,7 +138,7 @@ fn positions_match_by_instance_and_variant() {
 fn closure(params: Vec<PlaneType>, returns: Option<PlaneType>) -> Ty {
     let params = params.into_iter().enumerate().map(|(i, plane)| ClosureParam { name: format!("p{i}"), plane }).collect();
     let returns = match returns {
-        Some(plane) => ReturnShape { returns: true, plane, may_hold: None },
+        Some(plane) => ReturnShape { returns: true, plane, may_hold: None, ends_on_gone_record: false },
         None => ReturnShape::default(),
     };
     Ty::record(Some(Position::Closure(ClosureType::new("a closure", params, returns, None))))

@@ -78,7 +78,7 @@ impl Checker<'_> {
                 PlaneType { field: Some(list_of(Ty::record(Some(found(&call.callee, fields))), CollectionOrder::Ordered)), pos: None }
             }
         };
-        ReturnShape { returns: true, plane, may_hold: None }
+        ReturnShape { returns: true, plane, may_hold: None, ends_on_gone_record: false }
     }
 
     /// `bindPluginCall`: a plugin's call with arguments by position, each

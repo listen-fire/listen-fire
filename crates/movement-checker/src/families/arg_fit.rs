@@ -166,7 +166,11 @@ impl Checker<'_> {
             self.infer_movement(id);
             return self.movement_inferred_return(id).unwrap_or_else(crate::families::returns::unknown_return);
         };
-        ReturnShape { returns: true, plane: self.plane_type_of(written, declared_in), may_hold: None }
+        // A declared type says what it hands back, not whether its body can
+        // end before it does: that is the body's.
+        self.infer_movement(id);
+        let ends_on_gone_record = self.movement_inferred_return(id).is_some_and(|inferred| inferred.ends_on_gone_record);
+        ReturnShape { returns: true, plane: self.plane_type_of(written, declared_in), may_hold: None, ends_on_gone_record }
     }
 
     /// Each argument checked, and held to the parameter it binds — by name,

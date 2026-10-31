@@ -125,11 +125,14 @@ test('listen-fire check types the answer by the node the write names', async () 
   const fixture = readFileSync(join(dir, 'movements/refund.mvt'), 'utf8');
   const clean = lfSync(dir, 'check');
   assert.equal(clean.code, 0, clean.out);
-  const awaited = fixture.slice(0, fixture.indexOf('  r = race(')) + '  s = await form-[:Submissions]->\n  if (s.Note == 1) { fail("no") }\n}\n\nlisten to crm {} fire ask\n';
-  writeMovement(dir, awaited);
+  // The race's slot holds the answer as its arm returned it, typed by Refund.
+  const guard = '  if (answer == null) { fail("nobody answered within a day") }\n';
+  assert.ok(fixture.includes(guard));
+  writeMovement(dir, fixture.replace(guard, `${guard}  if (answer.Note == 1) { fail("no") }\n  if (r[0].Missing == "x") { fail("no") }\n`));
   const said = lfSync(dir, 'check');
   assert.equal(said.code, 1, said.out);
   assert.match(said.out, /MOV_COMPARE_TYPE_MISMATCH .*Can't compare a text to a number/);
+  assert.match(said.out, /MOV_UNKNOWN_PROPERTY .*has no field 'Missing'/);
   writeMovement(dir, fixture.replace('Fields: Refund', 'Fields: { Approve: true }'));
   const unshaped = lfSync(dir, 'check');
   assert.equal(unshaped.code, 1, unshaped.out);

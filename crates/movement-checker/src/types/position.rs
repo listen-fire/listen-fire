@@ -126,6 +126,10 @@ pub struct ReturnShape {
     pub plane: PlaneType,
     /// What the value may hold where its type cannot say (a walk input).
     pub may_hold: Option<Ty>,
+    /// The body may end handing nothing back because a record it awaits is
+    /// gone (the run's quiet scope end), so a combinator slot or collection
+    /// member it answers is then null.
+    pub ends_on_gone_record: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -196,12 +200,13 @@ pub fn one_of_closures(closures: &[ClosureType]) -> ClosureType {
 pub fn union_returns(shapes: &[ReturnShape]) -> ReturnShape {
     let returning: Vec<&ReturnShape> = shapes.iter().filter(|shape| shape.returns).collect();
     let Some(first) = returning.first() else { return ReturnShape::default() };
+    let ends_on_gone_record = shapes.iter().any(|shape| shape.ends_on_gone_record);
     let only_position = |shape: &ReturnShape| shape.plane.field.is_none() && shape.may_hold.is_none() && shape.plane.pos.is_some();
     if returning.iter().all(|shape| {
         only_position(shape)
             && field_type_equals(&Ty::record(shape.plane.pos.as_deref().cloned()), &Ty::record(first.plane.pos.as_deref().cloned()))
     }) {
-        return ReturnShape { returns: true, plane: PlaneType { pos: first.plane.pos.clone(), field: None }, may_hold: None };
+        return ReturnShape { returns: true, plane: PlaneType { pos: first.plane.pos.clone(), field: None }, may_hold: None, ends_on_gone_record };
     }
     let mut arms: Vec<Ty> = Vec::new();
     fn add(arm: &Ty, arms: &mut Vec<Ty>) {
@@ -243,7 +248,7 @@ pub fn union_returns(shapes: &[ReturnShape]) -> ReturnShape {
         _ => None,
     };
     let may_hold = union.filter(|union| super::field::shows_more_handles(union, typed.as_ref()));
-    ReturnShape { returns: true, plane: PlaneType { field: typed, pos: None }, may_hold }
+    ReturnShape { returns: true, plane: PlaneType { field: typed, pos: None }, may_hold, ends_on_gone_record }
 }
 
 /// One field of an extracted node (`ExtractFieldInfo`, the part typing reads).

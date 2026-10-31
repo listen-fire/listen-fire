@@ -361,7 +361,7 @@
   },
   {
     "chapter": "reviews",
-    "construct": "all over two awaiting closures, run at once inside a race with a sleep — every slot filled, both answers combined",
+    "construct": "all over two awaiting closures, run at once inside a race with a sleep — both answers combined",
     "source": "\nimport { `@lf/slack` as slack, `@lf/ask` as ask, `@lf/manual` as manual } from adapters\nimport { team_workspace } from credentials\n\nteam = connect slack using team_workspace\nasks = connect ask\nruns = connect manual\n\nfunction `Both Must Agree`(go: <runs-[:Invocation]->>) {\n  budget = write asks-[:Check]-> { Prompt: \"Budget approved?\" }\n  legal  = write asks-[:Check]-> { Prompt: \"Legal approved?\" }\n\n  dealflow = only(team-[ch:Channels WHERE ch.Name == \"dealflow\"]->)\n  if (dealflow == null) { fail(\"no #dealflow channel\") }\n  write dealflow-[:Messages]-> {\n    Message: \"Budget: ${budget.Url}\\nLegal: ${legal.Url}\"\n  }\n\n  r = race(\n    () => {\n      both = all(\n        () => {\n          b = await budget-[:Response]->\n          return b.Answer\n        },\n        () => {\n          l = await legal-[:Response]->\n          return l.Answer\n        },\n      )\n      return both[0] && both[1]\n    },\n    () => { await sleep(3d) },\n  )\n\n  if (r[0] == true) {\n    general = only(team-[g:Channels WHERE g.Name == \"general\"]->)\n    if (general == null) { fail(\"no #general channel\") }\n    write general-[:Messages]-> { Message: \"Both approved: ${go.Text}.\" }\n  }\n}\n\nlisten to runs {} fire `Both Must Agree`\n"
   },
   {

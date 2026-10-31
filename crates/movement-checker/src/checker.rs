@@ -1282,6 +1282,7 @@ impl<'c> Checker<'c> {
         self.flag_suspend();
         match &awaited.source {
             AwaitSource::Traversal { head, arrivals_only, .. } => {
+                self.note_body_may_end_on_gone_record();
                 self.check_awaited_head(head);
                 self.report_await_on_list(head, scope);
                 self.check_path_head(head, scope);
@@ -1303,7 +1304,7 @@ impl<'c> Checker<'c> {
                 self.check_sleep_duration(duration);
                 // A woken sleep binds `true`.
                 let plane = crate::types::position::PlaneType { field: Some(crate::types::Ty::Boolean), pos: None };
-                Bound { returned: Some(crate::types::position::ReturnShape { returns: true, plane, may_hold: None }), ..Bound::default() }
+                Bound { returned: Some(crate::types::position::ReturnShape { returns: true, plane, may_hold: None, ends_on_gone_record: false }), ..Bound::default() }
             }
             AwaitSource::Until { condition, every, .. } => {
                 let source = crate::story::AwaitedSource::Until { every: every.as_ref().map(|e| e.raw.clone()) };
@@ -1337,7 +1338,7 @@ impl<'c> Checker<'c> {
                             }
                         }
                         let plane = crate::types::position::PlaneType { field: typed.ty, pos: None };
-                        until_bound(&crate::types::position::ReturnShape { returns: true, plane, may_hold: None })
+                        until_bound(&crate::types::position::ReturnShape { returns: true, plane, may_hold: None, ends_on_gone_record: false })
                     }
                 })
             }

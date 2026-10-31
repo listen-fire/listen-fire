@@ -101,6 +101,12 @@ fn combinator_may_leave_slots_null(combinator: &CombinatorExpression) -> bool {
     crate::families::collection_config::on_error_lets_through(&parsed, crate::families::collection_config::ALL_SETTING_KEYS)
 }
 
+/// Whether a slot may be left null: by its combinator, or by its arm's body
+/// ending quietly where a record it awaits is gone.
+fn slot_may_be_null(nullable: bool, slot: &ReturnShape) -> bool {
+    nullable || slot.ends_on_gone_record
+}
+
 /// `receiptMayHold`: each slot as what its arm's returns may hold, or the
 /// record it hands back, which the tuple cannot type.
 fn receipt_may_hold(nullable: bool, slots: &[ReturnShape]) -> Ty {
@@ -111,16 +117,22 @@ fn receipt_may_hold(nullable: bool, slots: &[ReturnShape]) -> Ty {
                 if !slot.returns {
                     return Some(Ty::Absent);
                 }
-                let held = slot.may_hold.clone().or_else(|| slot.plane.field.clone()).or_else(|| match slot.plane.pos.as_deref() {
-                    Some(crate::types::position::Position::Closure(_)) | None => None,
-                    Some(position) => Some(Ty::record(Some(position.clone()))),
-                })?;
-                Some(if nullable { crate::types::field::maybe_absent(held) } else { held })
+                let held = slot.may_hold.clone().or_else(|| slot_type(slot))?;
+                Some(if slot_may_be_null(nullable, slot) { crate::types::field::maybe_absent(held) } else { held })
             })
             .collect::<Vec<_>>()
             .into(),
         rest: None,
     }
+}
+
+/// What an arm's returns are typed as in its slot: its value, or the record
+/// it hands back.
+fn slot_type(slot: &ReturnShape) -> Option<Ty> {
+    slot.plane.field.clone().or_else(|| match slot.plane.pos.as_deref() {
+        Some(crate::types::position::Position::Closure(_)) | None => None,
+        Some(position) => Some(Ty::record(Some(position.clone()))),
+    })
 }
 
 fn arm_span(arm: &ArmExpression) -> Span {
@@ -387,13 +399,18 @@ impl Checker<'_> {
                     if !slot.returns {
                         return Some(Ty::Absent);
                     }
-                    let field = slot.plane.field.clone()?;
-                    Some(if nullable { crate::types::field::maybe_absent(field) } else { field })
+                    let field = slot_type(slot)?;
+                    Some(if slot_may_be_null(nullable, slot) { crate::types::field::maybe_absent(field) } else { field })
                 })
                 .collect::<Vec<_>>()
                 .into(),
             rest: None,
         };
+        // A race whose every arm can find its record gone can be left with
+        // no arm to settle it: the race ends the body it is in, as an await does.
+        if combinator.kind == CombinatorKind::Race && !slots.is_empty() && slots.iter().all(|slot| slot.ends_on_gone_record) {
+            self.note_body_may_end_on_gone_record();
+        }
         Receipt { ty: Some(ty), may_hold: Some(may_hold) }
     }
 
@@ -565,8 +582,10 @@ impl Checker<'_> {
             );
         }
         // A MAP function with no `return` leaves each slot absent.
-        let shape = if op.op == CollectionOp::Map && !shape.returns { ReturnShape { returns: true, plane: as_value(Some(Ty::Absent)), may_hold: None } } else { shape };
+        let shape = if op.op == CollectionOp::Map && !shape.returns { ReturnShape { returns: true, plane: as_value(Some(Ty::Absent)), may_hold: None, ends_on_gone_record: false } } else { shape };
         let returned = shape.plane.field.clone().or_else(|| shape.plane.pos.as_deref().map(|p| Ty::record(Some(p.clone()))));
+        // A member whose body ends where a record it awaits is gone answers null.
+        let returned = if shape.ends_on_gone_record { crate::types::field::maybe_absent_opt(returned) } else { returned };
         // A closure is not data: an op never files closures as its answer
         // — a MAP's members, a GROUPBY's groups or a KEYBY's values.
         use crate::types::field::{closure_not_data_message, may_be_closure};
@@ -612,12 +631,13 @@ impl Checker<'_> {
             Some(crate::types::position::Position::Closure(closure)) if op.op == CollectionOp::Map => Some(closure.returns.clone()),
             _ => None,
         };
+        let held = if shape.ends_on_gone_record { shape.may_hold.map(crate::types::field::maybe_absent) } else { shape.may_hold };
         let may_hold = match op.op {
-            CollectionOp::Map => shape.may_hold.map(|held| list_of(held, ordering)),
-            CollectionOp::Reduce => shape.may_hold,
+            CollectionOp::Map => held.map(|held| list_of(held, ordering)),
+            CollectionOp::Reduce => held,
             _ => None,
         };
-        (ReturnShape { returns: true, plane: as_value(value), may_hold }, arms_each_return)
+        (ReturnShape { returns: true, plane: as_value(value), may_hold, ends_on_gone_record: false }, arms_each_return)
     }
 
     /// The parameters of a function named as an op's function, with the

@@ -19,8 +19,9 @@ function ask(company: <crm-[:Company]->>) {
     () => { return await form-[:Submissions]-> },
     () => { await sleep(1d) },
   )
-  if (r[0] == null) { fail("nobody answered within a day") }
-  write crm-[:Company]-> { Name: "Approved ${r[0].Approve} ${coalesce(r[0].Note, "none")}" }
+  answer = r[0]
+  if (answer == null) { fail("nobody answered within a day") }
+  write crm-[:Company]-> { Name: "Approved ${answer.Approve} ${coalesce(answer.Note, "none")}" }
 }
 
 listen to crm {} fire ask

@@ -203,7 +203,7 @@ When the record a wait hangs off is deleted — the message, the form, the quest
 - In a \`map\` member, that member's answer is null and the others go on.
 - In a block, that record's iteration ends; in a function, its body ends; at the top of the automation, the run completes.
 
-So what \`await\` binds is always there where you read it.
+So what \`await\` binds is always there where you read it. What the arm or the member answers is not: the check types an \`all\` slot, or a \`map\` or \`reduce\` answer, as maybe absent when its function awaits a record, so test it (\`if (r[0] == null)\`) before you read it.
 
 ### captured-values
 
@@ -566,7 +566,7 @@ listen to runs {} fire \`Which Place Answered\`
 `,
     },
     {
-      construct: 'all over two awaiting closures, run at once inside a race with a sleep — every slot filled, both answers combined',
+      construct: 'all over two awaiting closures, run at once inside a race with a sleep — both answers combined',
       status: 'runs',
       probe: `
 import { \`@lf/slack\` as slack, \`@lf/ask\` as ask, \`@lf/manual\` as manual } from adapters
