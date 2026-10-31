@@ -1,0 +1,26 @@
+import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+# A decision has a day to arrive; after that the run records the timeout. A
+# decision record deleted meanwhile leaves its wait waiting, so the day ends
+# the race all the same.
+function decide(company: <crm-[:Company]->>) {
+  ask = write crm-[:Company]-> { Name: "Decide ${company.Name}" }
+  r = race(
+    () => {
+      a = await ask-[:Approvals]->
+      return a.Decision
+    },
+    () => { await sleep(1d) },
+  )
+  if (r[0] == null) {
+    write crm-[:Company]-> { Name: "Timed out" }
+  }
+  if (r[0] != null) {
+    write crm-[:Company]-> { Name: "Decided ${r[0]}" }
+  }
+}
+
+listen to crm {} fire decide

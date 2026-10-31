@@ -5,40 +5,19 @@
 // press arrives at `listen-fire serve`'s door form-encoded (`payload=<json>`)
 // and signed with Slack's own scheme (`v0:<timestamp>:<body>`, keyed by the
 // signing secret), and the run resumes with the button's value. A thread
-// reply, an Events API delivery, resumes `await msg-[:Replies]->`; a deleted
-// message settles a wait on it empty. `listen-fire check` types the press's
+// reply, an Events API delivery, resumes `await msg-[:Replies]->` (a deleted
+// message: deleted_heads.test.ts). `listen-fire check` types the press's
 // value by the Values the write offered. Every delivery goes to the door
 // `listen-fire serve` prints for the project's Slack connection, which no
 // listen names: the credential's, verified with the signing secret
 // `listen-fire connect` put on the install.
 
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 
-import { lf as lfSync, served, type Served } from './example';
-import { fakeChannels, type Fake } from './gmail_fixture';
-import { lf, ok } from './interactive';
-
-// A workspace-built listen-fire finds its bundled modules beside its own
-// (canonical) path; a worktree's listen-fire may be the main checkout's, so the
-// modules and serve-module this tree holds are named.
-const REPO = resolve(__dirname, '../../../..');
-process.env.LF_MODULES_DIR ??= join(REPO, 'modules');
-process.env.LF_SERVE_MODULE ??= join(REPO, 'apps/cli/node_modules/.bin/serve-module');
-
-const SIGNING_SECRET = 'slack-signing-secret';
-
-// No listen names the Slack connection: `listen-fire serve` prints its door
-// because a run awaits a record of it.
-const HEADER = `import { \`@lf/slack\` as slack } from adapters
-import { team_slack } from credentials
-
-chat = connect slack using team_slack
-`;
+import { served } from './example';
+import { lf } from './interactive';
+import { HEADER, botMessages, deliver, eventCallback, parkedRun, press, slackWorld } from './slack_world';
 
 const PRESS = `${HEADER}
 function decide(run: <manual-[:Invocation]->>) {
@@ -71,95 +50,6 @@ function ask(run: <manual-[:Invocation]->>) {
 
 listen to manual fire ask
 `;
-
-interface World {
-  dir: string;
-  channels: Fake;
-  close(): Promise<void>;
-}
-
-/** A project with Slack connected to the fake, its deliveries signed with
- *  SIGNING_SECRET, and `program` as its one movement. */
-async function slackWorld(program: string): Promise<World> {
-  const channels = await fakeChannels();
-  try {
-    const dir = join(mkdtempSync(join(tmpdir(), 'lf-slack-')), 'presses');
-    assert.equal(lfSync(join(dir, '..'), 'init', 'presses').code, 0);
-    await ok(lf(dir, ['connect', '@lf/slack', '--yes', '--webhook-secret', SIGNING_SECRET]));
-    await ok(lf(dir, ['credential', 'add', '--module', '@lf/slack', 'team_slack'], { answers: ['xoxb-test', '', '', `${channels.url}/slack/`] }));
-    writeFileSync(join(dir, 'movements/slack.mvt'), program);
-    return { dir, channels, close: () => channels.stop() };
-  } catch (error) {
-    await channels.stop();
-    throw error;
-  }
-}
-
-interface FakeMessage {
-  channel: string;
-  text: string;
-  ts: string;
-  user: string;
-  blocks: unknown[] | null;
-}
-
-async function botMessages(channels: Fake): Promise<FakeMessage[]> {
-  const rows = (await (await fetch(`${channels.url}/admin/slack/message/state`)).json()) as FakeMessage[];
-  return rows.filter((m) => m.user === 'bot');
-}
-
-/** The door `listen-fire serve` prints for the Slack connection. */
-async function slackDoor(serving: Served): Promise<string> {
-  const line = await serving.waitFor(/^slack team_slack: http:\/\/\S+$/);
-  return line.slice('slack team_slack: '.length);
-}
-
-interface Signing {
-  secret?: string;
-  /** Seconds since the epoch the request says it was sent at; now by default. */
-  at?: number;
-}
-
-/** POST `body` to the Slack door, signed as Slack signs: HMAC-SHA256 of
- *  `v0:<timestamp>:<body>`, keyed by the signing secret. */
-async function deliver(serving: Served, body: string, contentType: string, signing: Signing = {}): Promise<{ status: number; body: string }> {
-  const timestamp = String(signing.at ?? Math.floor(Date.now() / 1000));
-  const signature = `v0=${createHmac('sha256', signing.secret ?? SIGNING_SECRET).update(`v0:${timestamp}:${body}`).digest('hex')}`;
-  const response = await fetch(await slackDoor(serving), {
-    method: 'POST',
-    headers: { 'content-type': contentType, 'x-slack-request-timestamp': timestamp, 'x-slack-signature': signature },
-    body,
-  });
-  return { status: response.status, body: await response.text() };
-}
-
-/** Slack's `block_actions` payload for a press of the button valued `value`
- *  on the message `ts` in `channel`, form-encoded as Slack posts it. */
-function press(channel: string, ts: string, value: string, trigger = `trigger-${value}-${ts}`): string {
-  const payload = {
-    type: 'block_actions',
-    trigger_id: trigger,
-    user: { id: 'U001', username: 'ada', name: 'ada', team_id: 'T001' },
-    api_app_id: 'A001',
-    container: { type: 'message', message_ts: ts, channel_id: channel, is_ephemeral: false },
-    channel: { id: channel, name: 'general' },
-    message: { type: 'message', ts, text: 'Pursue?' },
-    actions: [{ type: 'button', action_id: 'lf_button_0', block_id: 'b', value, text: { type: 'plain_text', text: value }, action_ts: `${Date.now() / 1000}` }],
-  };
-  return new URLSearchParams({ payload: JSON.stringify(payload) }).toString();
-}
-
-/** An Events API delivery of `event`. */
-function eventCallback(event: Record<string, unknown>): string {
-  return JSON.stringify({ type: 'event_callback', team_id: 'T001', event_id: `Ev-${Math.random().toString(36).slice(2)}`, event });
-}
-
-/** The parked run `name` starts, once `listen-fire run` has parked it. */
-function parkedRun(dir: string, name: string): void {
-  const fired = lfSync(dir, 'run', name);
-  assert.equal(fired.code, 0, fired.out);
-  assert.match(fired.out, new RegExp(`${name} parked`), fired.out);
-}
 
 test('a press resumes the run with the button\'s literal value', async () => {
   const world = await slackWorld(PRESS);
@@ -237,29 +127,6 @@ test('the expense approval checks clean: an awaited press is walked off unguarde
     const checked = await lf(world.dir, ['check']).done;
     assert.equal(checked.code, 0, checked.out);
   } finally {
-    await world.close();
-  }
-});
-
-test('a deleted Slack message settles its Interactions wait empty', async () => {
-  const world = await slackWorld(PRESS);
-  const serving = await served(world.dir);
-  try {
-    parkedRun(world.dir, 'decide');
-    const [posted] = await botMessages(world.channels);
-    assert.ok(posted);
-    const deleted = await deliver(
-      serving,
-      eventCallback({ type: 'message', subtype: 'message_deleted', hidden: true, channel: posted.channel, ts: `${Date.now() / 1000}`, deleted_ts: posted.ts }),
-      'application/json',
-    );
-    assert.ok(deleted.status >= 200 && deleted.status < 300, deleted.body);
-    await serving.waitFor(/resumed .* slack:decide completed/);
-    assert.equal(serving.lines.filter((line) => /slack:decide failed/.test(line)).length, 0, serving.lines.join('\n'));
-    // The writes after the wait ran zero times.
-    assert.deepEqual((await botMessages(world.channels)).map((m) => m.text), ['Pursue?']);
-  } finally {
-    await serving.stop();
     await world.close();
   }
 });

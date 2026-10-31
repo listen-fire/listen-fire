@@ -187,8 +187,8 @@ pub trait RunHostStore {
     /// run marked parked when it parked, the run settled, the race it
     /// settled no longer owed and each race it owes queued as a
     /// `settle_race` row. In the same write, each wait it parks whose
-    /// arrivals are unread, or whose record is gone, gets a `wake_await`
-    /// row; those wakes are the answer.
+    /// arrivals are unread gets a `wake_await` row; those wakes are the
+    /// answer. A deleted record wakes nothing: its waits keep waiting.
     fn commit_segment(&self, commit: &SegmentCommit<'_>) -> Result<Vec<WaitWake>>;
     /// The races the run owes (`settle_race` rows), in the order first owed.
     fn owed_races(&self, run_id: &str) -> Result<Vec<OwedRace>>;

@@ -196,14 +196,14 @@ The answer names the record; the lookup after it keys on that name.
 
 ### deleted-records
 
-When the record a wait hangs off is deleted — the message, the form, the question — the wait settles empty: what follows the \`await\` in its scope runs zero times, and the scope around it goes on.
+A record deleted while a run waits on it leaves the wait waiting; race every wait on a person or a system with a \`sleep\`.
 
-- In a \`race\` arm, the arm drops out and the race goes on with its other arms, so the \`sleep\` settles it.
-- In an \`all\` arm, its slot is null.
-- In a \`map\` member, that member's answer is null and the others go on.
-- In a block, that record's iteration ends; in a function, its body ends; at the top of the automation, the run completes.
+When the record a wait hangs off is deleted — the message, the form, the question — nothing more arrives on it, and many systems cannot say it went. So the wait never ends: what follows the \`await\` never runs, and the run stays parked.
 
-So what \`await\` binds is always there where you read it. What the arm or the member answers is not: the check types an \`all\` slot, or a \`map\` or \`reduce\` answer, as maybe absent when its function awaits a record, so test it (\`if (r[0] == null)\`) before you read it.
+- In a \`race\` arm, the arm never settles, so the \`sleep\` beside it takes the race.
+- In an \`all\` arm or a \`map\` member, the \`all\` or the \`map\` never finishes.
+
+So what \`await\` binds is always there where you read it, and so is what a function that awaits returns. \`listen-fire upgrade\` from 0.12 warns on each \`await\` that no \`sleep\` races (\`MOV_AWAIT_MAY_HANG\`).
 
 ### captured-values
 

@@ -928,7 +928,7 @@ impl Store {
             for park in parks {
                 let ParkKind::Wait { wait_id } = park.kind else { continue };
                 let unread = Self::wait_arrivals_in(db, wait_id)?;
-                if unread.gone || !unread.arrivals.is_empty() {
+                if !unread.arrivals.is_empty() {
                     let wake = WaitWake { run_id: run_id.to_string(), wait_id: wait_id.to_string(), address: park.address.to_string() };
                     let row = crate::waits::wake_row(team_id, &wake);
                     Self::enqueue_in(db, &row.kind, &row.key, &row.payload, row.due_at.as_deref())?;

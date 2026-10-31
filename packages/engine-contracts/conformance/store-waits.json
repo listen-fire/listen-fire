@@ -165,12 +165,7 @@
           "queued": [{ "run": "run-1", "wait": "parked", "address": "s1" }]
         },
         { "do": "log", "adapter": "other", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k3" }], "wakes": [], "queued": [] },
-        {
-          "do": "log",
-          "arrivals": [{ "edge": "Comments", "key": "thread:c1", "gone": true }],
-          "wakes": [{ "run": "run-1", "wait": "parked", "address": "s1" }],
-          "queued": [{ "run": "run-1", "wait": "parked", "address": "s1" }]
-        },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "gone": true }], "wakes": [], "queued": [] },
         { "do": "deleteLeaves", "run": "run-1", "addresses": ["s1"] },
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k4" }], "wakes": [], "queued": [] }
       ]
@@ -412,7 +407,7 @@
       ]
     },
     {
-      "case": "a segment's commit wakes each wait it parks whose arrivals are unread or whose record is gone",
+      "case": "a segment's commit wakes each wait it parks whose arrivals are unread, and none whose record is gone",
       "steps": [
         { "do": "mark", "as": "m0" },
         { "do": "open", "as": "unread", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m0" },
@@ -433,10 +428,7 @@
           "do": "commitSegment",
           "run": "run-1",
           "parks": [{ "address": "s1", "wait": "unread" }, { "address": "s2", "wait": "judged" }, { "address": "s3", "wait": "gone" }, { "address": "s4", "wait": "quiet" }],
-          "wakes": [
-            { "run": "run-1", "wait": "unread", "address": "s1" },
-            { "run": "run-1", "wait": "gone", "address": "s3" }
-          ]
+          "wakes": [{ "run": "run-1", "wait": "unread", "address": "s1" }]
         },
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c4", "identity": "k4" }], "wakes": [{ "run": "run-1", "wait": "quiet", "address": "s4" }] }
       ]

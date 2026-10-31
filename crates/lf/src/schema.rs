@@ -677,7 +677,7 @@ pub fn retired_reference_key(reference: &Js) -> Option<String> {
     let retired = ["awaitable", "watchable", "resolvesEmpty"].into_iter().find(|retired| reference.get(retired).is_some())?;
     let name = key(nullish_or(reference.get("name"), reference.get("fieldId")));
     let instead = if retired == "resolvesEmpty" {
-        "a deleted record ends the wait on every edge, so there is nothing to declare: drop it"
+        "a deleted record leaves the wait waiting on every edge, so there is nothing to declare: drop it"
     } else {
         "declare 'listenable: true' (and, optionally, 'identity': the landing's field that names an arrival)"
     };
@@ -935,7 +935,7 @@ mod tests {
     fn a_reference_declaring_resolves_empty_is_refused_by_name() {
         assert_eq!(
             retired_reference_key(&js(r#"{"name":"Interactions","listenable":true,"resolvesEmpty":true}"#)).unwrap(),
-            "'Interactions' declares 'resolvesEmpty', retired in 0.13: a deleted record ends the wait on every edge, so there is nothing to declare: drop it"
+            "'Interactions' declares 'resolvesEmpty', retired in 0.13: a deleted record leaves the wait waiting on every edge, so there is nothing to declare: drop it"
         );
     }
 

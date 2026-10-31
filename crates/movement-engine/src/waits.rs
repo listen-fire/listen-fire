@@ -40,8 +40,9 @@ use crate::unique::get;
 pub(crate) enum WaitRef {
     /// The host's wait row.
     Open(String),
-    /// The adapter said the record is gone: nothing arrives on it, and an
-    /// `await` on it settles empty.
+    /// The adapter said the record is gone when the wait would have opened:
+    /// there is no wait row, nothing arrives, and an `await` on it parks
+    /// with nothing that can wake it.
     Gone,
 }
 
@@ -378,8 +379,7 @@ impl Run<'_> {
             Some(answer) => self.wire.decode(&answer).map_err(|e| Failure::engine("MOVENG_RUNTIME", format!("{CALL} answered what does not read: {e}")))?,
             None => Js::Undefined,
         };
-        let gone = matches!(get(&answer, "gone"), Js::Bool(true));
-        let Js::Array(listed) = get(&answer, "arrivals") else { return Err(Failure::host_answer(CALL, "{ gone, arrivals: [...] }", &answer)) };
+        let Js::Array(listed) = get(&answer, "arrivals") else { return Err(Failure::host_answer(CALL, "{ arrivals: [...] }", &answer)) };
         let arrivals = listed
             .items()
             .iter()
@@ -392,7 +392,7 @@ impl Run<'_> {
                 Ok(Arrival { identity: identity.into_string(), version, landing: get(arrival, "landing") })
             })
             .collect::<Result<_, _>>()?;
-        Ok(Logged { gone, arrivals })
+        Ok(Logged { arrivals })
     }
 
     /// The wait judged an arrival: whether it counts.
@@ -443,9 +443,9 @@ pub(crate) struct Arrival {
     pub(crate) landing: Js,
 }
 
-/// What a wait has yet to judge.
+/// What a wait has yet to judge. A record deleted meanwhile is not among
+/// it: its wait keeps waiting.
 pub(crate) struct Logged {
-    pub(crate) gone: bool,
     pub(crate) arrivals: Vec<Arrival>,
 }
 

@@ -5,10 +5,9 @@
 //! is not a literal gives the field its declared type, with a warning naming
 //! the path. Every rule is checked on two catalog shapes: a chat message with
 //! buttons whose answer's value is one hop away (`Actions`), and a poll with
-//! options whose vote's choice is on the vote itself. Both edges settle empty
-//! when their message or poll is deleted, as every edge does: an awaited
-//! answer is still present where it is read, since a wait that settles empty
-//! ends its scope.
+//! options whose vote's choice is on the vote itself. An awaited answer is
+//! present where it is read: a wait whose message or poll is deleted never
+//! answers.
 
 use movement_checker::families::writes::literals::parse_write_path;
 use movement_checker::{CheckOptions, Diagnostic, check_source};

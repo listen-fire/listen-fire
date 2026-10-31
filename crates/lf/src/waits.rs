@@ -206,6 +206,10 @@ impl Store {
                     i64::from(arrival.gone),
                     at
                 ])?;
+                // A deleted record answers no wait: its waits keep waiting.
+                if arrival.gone {
+                    continue;
+                }
                 let answered = parked.query_map(params![team_id, adapter_type, arrival.edge, arrival.key], |r| {
                     Ok(WaitWake { run_id: r.get(0)?, wait_id: r.get(1)?, address: r.get(2)? })
                 })?;
@@ -702,7 +706,7 @@ mod tests {
         a_segment_that_lost_the_runs_lease_notes_nothing_and_the_segment_that_took_the_run_over_reads_the_arrival,
         a_segments_commit_keeps_its_joins_its_parks_and_the_end_of_the_leaf_it_resumed_in_one_write_or_none_of_them,
         a_segments_commit_settles_its_run_in_the_same_write_or_leaves_the_leaf_it_resumed_to_be_resumed_again,
-        a_segments_commit_wakes_each_wait_it_parks_whose_arrivals_are_unread_or_whose_record_is_gone,
+        a_segments_commit_wakes_each_wait_it_parks_whose_arrivals_are_unread_and_none_whose_record_is_gone,
         a_race_a_segment_owes_is_kept_in_its_commit_until_the_commit_that_settles_it_and_goes_with_its_frame,
     }
 

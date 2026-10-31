@@ -76,7 +76,7 @@ test('listen-fire check: a module that declares resolvesEmpty', () => {
   assert.equal(run.status, 1, run.stdout + run.stderr);
   assert.match(
     run.stdout + run.stderr,
-    /'Comments' declares 'resolvesEmpty', retired in 0\.13: a deleted record ends the wait on every edge, so there is nothing to declare: drop it/,
+    /'Comments' declares 'resolvesEmpty', retired in 0\.13: a deleted record leaves the wait waiting on every edge, so there is nothing to declare: drop it/,
   );
 });
 

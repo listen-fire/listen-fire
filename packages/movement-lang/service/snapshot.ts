@@ -324,7 +324,7 @@ function refuseUnsupportedSnapshotVersion(snapshot: CatalogSnapshot): void {
 const RETIRED_EDGE_MEMBERS = {
   awaitable: "declare 'listenable'",
   watchable: "declare 'listenable'",
-  resolvesEmpty: 'a deleted record ends the wait on every edge, so drop it',
+  resolvesEmpty: 'a deleted record leaves the wait waiting on every edge, so drop it',
 } as const;
 
 function refuseRetiredEdgeMembers(snapshot: CatalogSnapshot): void {

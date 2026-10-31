@@ -23,11 +23,11 @@ describe('a reference descriptor', () => {
     }
   });
 
-  it('refuses resolvesEmpty on a reference: a deleted record ends the wait on every edge', () => {
+  it('refuses resolvesEmpty on a reference: a deleted record leaves the wait waiting on every edge', () => {
     const r = schemaReferenceDescriptorSchema.safeParse({ ...reference, listenable: true, resolvesEmpty: true });
     expect(r.success).toBe(false);
     expect(JSON.stringify(r.error?.issues)).toContain(
-      "'Replies' declares 'resolvesEmpty', retired in 0.13: a deleted record ends the wait on every edge, so there is nothing to declare: drop it",
+      "'Replies' declares 'resolvesEmpty', retired in 0.13: a deleted record leaves the wait waiting on every edge, so there is nothing to declare: drop it",
     );
   });
 

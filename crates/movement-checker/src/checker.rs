@@ -76,6 +76,8 @@ pub struct Checker<'c> {
     pub selves: crate::families::closures::Selves,
     /// Whether each open body may wait, and what each named function does.
     pub effects: crate::families::flow::Effects,
+    /// The races around the walk, for awaits no `sleep` races.
+    pub races: crate::families::flow::Races,
     /// Movement bodies walked to learn what a call to them returns and does.
     pub inference: crate::families::calls::Inference,
     /// Node declarations, as their uses read them.
@@ -192,7 +194,7 @@ pub struct Bound {
     /// The record the value is, when checking it typed one (a node literal, a lazy walk).
     pub pos: Option<Position>,
     /// For a closure: whether calling it may wait.
-    pub closure_suspends: bool,
+    pub closure_row: crate::families::flow::EffectRow,
     /// For a function's call: what it hands back.
     pub returned: Option<crate::types::position::ReturnShape>,
     /// For a closure: what its body was found to hand back.
@@ -264,6 +266,7 @@ impl<'c> Checker<'c> {
             param_needs: Default::default(),
             selves: Default::default(),
             effects: Default::default(),
+            races: Default::default(),
             inference: Default::default(),
             nodes: Default::default(),
             stamps: Default::default(),
@@ -416,7 +419,7 @@ impl<'c> Checker<'c> {
                 if bound.is_closure
                     && let Some(id) = self.scopes.scope(scope).symbols.get(&assign.name).copied()
                 {
-                    self.effects.closures.insert(id, bound.closure_suspends);
+                    self.effects.closures.insert(id, bound.closure_row);
                 }
                 if let Some(mut types) = self.bound_types(Some(&assign.name), &assign.value, &bound, scope) {
                     self.within_type_limit(&assign.name, &mut types.field, &mut types.may_hold, Some(assign.span));
@@ -576,13 +579,13 @@ impl<'c> Checker<'c> {
             }
             RValue::Closure { closure } => {
                 let label = name.map_or_else(|| "this closure".to_string(), |n| format!("the closure '{n}'"));
-                let (body, suspends) = self.check_closure_walked(closure, scope, name, &label, 0);
+                let (body, row) = self.check_closure_walked(closure, scope, name, &label, 0);
                 let mut returns = self.closure_returns(closure, body.value, scope);
                 // An unbound closure's value is caught where it is bound.
                 if let Some(name) = name {
                     self.within_type_limit(name, &mut returns.plane.field, &mut returns.may_hold, Some(closure.span));
                 }
-                return Bound { is_closure: true, closure_suspends: suspends, closure_returns: Some(returns), ..Bound::default() };
+                return Bound { is_closure: true, closure_row: row, closure_returns: Some(returns), ..Bound::default() };
             }
             RValue::Node { node } => {
                 let pos = self.check_node_literal(node, scope);
@@ -950,12 +953,12 @@ impl<'c> Checker<'c> {
 
     /// `checkClosure`, with whether calling the closure may wait: its body
     /// is its own function, so what it does is not the writer's.
-    pub fn check_closure_walked(&mut self, closure: &ClosureExpression, scope: ScopeId, self_name: Option<&str>, label: &str, supplied: usize) -> (Body, bool) {
+    pub fn check_closure_walked(&mut self, closure: &ClosureExpression, scope: ScopeId, self_name: Option<&str>, label: &str, supplied: usize) -> (Body, crate::families::flow::EffectRow) {
         self.check_closure_supplied(closure, scope, self_name, label, Supplied { count: supplied, types: &[], keeps: None })
     }
 
     /// `checkClosure` with `suppliedParams` (`Supplied`).
-    pub fn check_closure_supplied(&mut self, closure: &ClosureExpression, scope: ScopeId, self_name: Option<&str>, label: &str, given: Supplied) -> (Body, bool) {
+    pub fn check_closure_supplied(&mut self, closure: &ClosureExpression, scope: ScopeId, self_name: Option<&str>, label: &str, given: Supplied) -> (Body, crate::families::flow::EffectRow) {
         let Supplied { count: supplied, types, keeps } = given;
         let body = self.scopes.open(Some(scope));
         self.note_extent(closure.span, body);
@@ -981,7 +984,7 @@ impl<'c> Checker<'c> {
         let own = self_name.and_then(|name| self.declare_closure_self(name, closure, body));
         self.open_effect_frame();
         let returns = self.check_body_keeping(&closure.body, body, label.to_string(), keeps);
-        let suspends = self.close_effect_frame();
+        let row = self.close_effect_frame();
         // Reported once, where it is written: a type-only walk sees the same body.
         if let Some(written) = &closure.return_type {
             self.check_declared_return(written, label, &returns.returns, scope, closure.span);
@@ -989,7 +992,7 @@ impl<'c> Checker<'c> {
         if let Some(own) = own {
             self.close_closure_self(own, returns.returns.is_empty());
         }
-        (returns, suspends)
+        (returns, row)
     }
 
     fn check_target(&mut self, target: &WriteTarget, scope: ScopeId) {
@@ -1276,13 +1279,11 @@ impl<'c> Checker<'c> {
     }
 
     /// `checkAwait`: what the awaited value binds — the landing of the walk
-    /// it parks on (maybe empty where the edge can settle empty), `true` once
-    /// a sleep wakes.
+    /// it parks on, `true` once a sleep wakes.
     fn check_await(&mut self, awaited: &AwaitExpression, scope: ScopeId, _name: Option<&str>) -> Bound {
         self.flag_suspend();
         match &awaited.source {
             AwaitSource::Traversal { head, arrivals_only, .. } => {
-                self.note_body_may_end_on_gone_record();
                 self.check_awaited_head(head);
                 self.report_await_on_list(head, scope);
                 self.check_path_head(head, scope);
@@ -1290,6 +1291,8 @@ impl<'c> Checker<'c> {
                 self.check_awaitable(head, walk.as_ref(), *arrivals_only);
                 self.note_await(&awaited.source, walk.as_ref());
                 self.report_captured_values(head, scope);
+                let new = if *arrivals_only { format!("{} ", movement_parser::stmt::AWAIT_ARRIVALS_WORD) } else { String::new() };
+                self.report_await_may_hang(awaited.span, format!("await {new}{}", crate::families::flow::spell_path_head(head)));
                 self.record_awaited_walk(awaited.span, head, walk.as_ref(), scope);
                 awaited_walk(walk)
             }
@@ -1299,12 +1302,13 @@ impl<'c> Checker<'c> {
                 Bound { receipt: Some(receipt), ..Bound::default() }
             }
             AwaitSource::Sleep { duration, .. } => {
+                self.flag_sleep();
                 let source = crate::story::AwaitedSource::Sleep { duration: duration.raw.clone() };
                 self.record_node(awaited.span, scope, crate::story::What::Await { binding: None, source });
                 self.check_sleep_duration(duration);
                 // A woken sleep binds `true`.
                 let plane = crate::types::position::PlaneType { field: Some(crate::types::Ty::Boolean), pos: None };
-                Bound { returned: Some(crate::types::position::ReturnShape { returns: true, plane, may_hold: None, ends_on_gone_record: false }), ..Bound::default() }
+                Bound { returned: Some(crate::types::position::ReturnShape { returns: true, plane, may_hold: None }), ..Bound::default() }
             }
             AwaitSource::Until { condition, every, .. } => {
                 let source = crate::story::AwaitedSource::Until { every: every.as_ref().map(|e| e.raw.clone()) };
@@ -1320,9 +1324,9 @@ impl<'c> Checker<'c> {
                     UntilCondition::Closure { closure } => {
                         this.check_until_params(closure);
                         let impure = this.check_until_purity(&closure.body);
-                        let (body, suspends) = this.check_closure_walked(closure, scope, None, "this 'until' condition", 0);
-                        this.absorb_suspend(suspends);
-                        if suspends && !impure {
+                        let (body, row) = this.check_closure_walked(closure, scope, None, "this 'until' condition", 0);
+                        this.absorb(row);
+                        if row.suspends && !impure {
                             this.refuse_unresumable_wait("this 'until' condition", closure.span);
                         }
                         until_bound(&this.closure_returns(closure, body.value, scope))
@@ -1330,15 +1334,15 @@ impl<'c> Checker<'c> {
                     UntilCondition::Expr { expr } => {
                         let typed = this.check_expr_slot_with(expr, scope, SlotOptions::default());
                         if let Resolution::Found(id) = this.scopes.resolve(scope, expr.raw.trim()) {
-                            let suspends = this.closure_suspends(id);
-                            this.absorb_suspend(suspends);
+                            let row = this.closure_row(id);
+                            this.absorb(row);
                             // A named closure is the condition: what it returns is what the tick tests.
                             if let Some(Position::Closure(closure)) = &this.scopes.symbol(id).types.pos {
                                 return until_bound(&closure.returns);
                             }
                         }
                         let plane = crate::types::position::PlaneType { field: typed.ty, pos: None };
-                        until_bound(&crate::types::position::ReturnShape { returns: true, plane, may_hold: None, ends_on_gone_record: false })
+                        until_bound(&crate::types::position::ReturnShape { returns: true, plane, may_hold: None })
                     }
                 })
             }
@@ -1346,9 +1350,9 @@ impl<'c> Checker<'c> {
     }
 }
 
-/// An awaited walk binds its landing on the node plane, present: a wait that
-/// settles empty ends its scope rather than answering, so the name is never
-/// absent where it is read. A walk nobody can type binds a record nobody can type.
+/// An awaited walk binds its landing on the node plane, present: a wait whose
+/// record is deleted never answers, so the name is never absent where it is
+/// read. A walk nobody can type binds a record nobody can type.
 fn awaited_walk(walk: Option<crate::families::walks::HeadWalk>) -> Bound {
     let Some(landed) = walk.and_then(|w| w.landed) else { return Bound { record: true, ..Bound::default() } };
     Bound { pos: Some(landed), ..Bound::default() }

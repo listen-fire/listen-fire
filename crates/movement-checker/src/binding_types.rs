@@ -440,7 +440,7 @@ impl Checker<'_> {
                     return None;
                 }
                 let label = format!("a closure <{}>", crate::families::listens::spell_value_type(value));
-                let closure = ClosureType::new(label, planes, ReturnShape { returns: true, plane: returned, may_hold: None, ends_on_gone_record: false }, None);
+                let closure = ClosureType::new(label, planes, ReturnShape { returns: true, plane: returned, may_hold: None }, None);
                 Some(Ty::record(Some(Position::Closure(closure))))
             }
         }
@@ -460,7 +460,7 @@ impl Checker<'_> {
             })
             .collect();
         let returns = match &closure.return_type {
-            Some(written) => ReturnShape { returns: true, plane: self.plane_type_of(written, scope), may_hold: None, ends_on_gone_record: false },
+            Some(written) => ReturnShape { returns: true, plane: self.plane_type_of(written, scope), may_hold: None },
             None => ReturnShape { returns: true, ..ReturnShape::default() },
         };
         Some(ClosureType::new("a closure", params, returns, Some(closure.span)))

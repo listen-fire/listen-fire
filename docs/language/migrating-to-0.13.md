@@ -200,8 +200,10 @@ The body ran when the person acted. Write it after the wait instead, in the arm 
 
 ## 5. What a wait binds is always there
 
-- When the record a wait hangs off is deleted, the wait settles empty: the code after the `await` in its scope runs zero times, and the scope around it goes on. In a `race`, that arm drops out and the race goes on with the others.
-- So what `await` binds is typed present. A guard after it can never run: delete it.
+- When the record a wait hangs off is deleted, the wait keeps waiting: the code after the `await` never runs, and the run stays parked. Many systems cannot say a record went, so no module is relied on to.
+- So race every wait on a person or a system with a `sleep`: `race(() => { return await msg-[:Replies]-> }, () => { await sleep(2d) })`. A deleted record's arm never settles, and the `sleep` takes the race.
+- `listen-fire upgrade` lists each `await` no `sleep` races as a warning (`MOV_AWAIT_MAY_HANG`), showing the race to write. It does not hold the pin.
+- What `await` binds is typed present. A guard after it can never run: delete it.
 
 | Before | After |
 | --- | --- |

@@ -856,7 +856,7 @@ export type SchemaFieldDescriptor = z.infer<typeof schemaFieldDescriptorSchema>;
 export function retiredReferenceKey(name: string, key: RetiredReferenceKey): string {
   const instead =
     key === 'resolvesEmpty'
-      ? 'a deleted record ends the wait on every edge, so there is nothing to declare: drop it'
+      ? 'a deleted record leaves the wait waiting on every edge, so there is nothing to declare: drop it'
       : "declare 'listenable: true' (and, optionally, 'identity': the landing's field that names an arrival)";
   return `'${name}' declares '${key}', retired in 0.13: ${instead}`;
 }

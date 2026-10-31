@@ -31,7 +31,8 @@ const CHAT: &str = r#"{"adapters":{
     "writableRoots":{"Post":{"fields":{"Text":"text"},"resultShape":{"externalId":"text"}}}}}}
 },"credentials":{},"plugins":{}}"#;
 
-/// Every diagnostic on `body`, checked as an upgrade from `pin` if given.
+/// Every diagnostic on `body`, checked as an upgrade from `pin` if given,
+/// but the warning that no `sleep` races its waits (tests/deleted_heads.rs).
 /// It is the body of a function taking a text `t` and a person `p` (MAIL)
 /// or a ticket `p` (CHAT); its first line is line 2.
 fn diagnostics(catalog: &str, body: &str, pin: Option<&str>) -> Vec<Diagnostic> {
@@ -42,7 +43,9 @@ fn diagnostics(catalog: &str, body: &str, pin: Option<&str>) -> Vec<Diagnostic> 
     };
     let source = format!("{header}\n{body}}}\n");
     let options = CheckOptions { upgrading_from: pin, zones: &movement_checker::host::native::NativeZones };
-    check_source(&source, &CatalogSnapshot::load(catalog).unwrap(), options).unwrap_or_else(|e| panic!("{source}: {e:?}"))
+    let mut found = check_source(&source, &CatalogSnapshot::load(catalog).unwrap(), options).unwrap_or_else(|e| panic!("{source}: {e:?}"));
+    found.retain(|d| d.code != "MOV_AWAIT_MAY_HANG");
+    found
 }
 
 fn found(catalog: &str, body: &str, pin: Option<&str>) -> Vec<String> {

@@ -456,8 +456,9 @@ slot! {
         /// `settle_race:<runId>:<frameAddress>`, payload `{ runId,
         /// frameAddress, state }`, under `team_id`, due now).
         /// In the same write, each wait parked whose arrivals are unread
-        /// (`waits.arrivals` lists some) or whose record is gone gets a
-        /// `wake_await { waitId, runId, address }` row under `team_id`;
+        /// (`waits.arrivals` lists some) gets a `wake_await { waitId,
+        /// runId, address }` row under `team_id` (a deleted record wakes
+        /// nothing: its waits keep waiting);
         /// those wakes are the answer.
         "parks.commitSegment" => fn commit_segment(ParksCommitSegment {
             run_id: String,

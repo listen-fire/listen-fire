@@ -19,11 +19,7 @@
 //!
 //! A `race` settles on the arms that finished: the ones still parked stop
 //! being listened on (`cancelSubtrees`). With none finished it parks as a
-//! join of one. An arm whose awaited record is gone never finishes, as a
-//! promise that never settles loses a race: the race goes on with its other
-//! arms, and only when every arm is gone does it end its scope quietly (the
-//! gone arms are kept at its frame, so a parked arm whose record goes later
-//! can tell whether it was the last). A `parallel` with parked arms keeps
+//! join of one. A `parallel` with parked arms keeps
 //! what the finished ones returned at its frame (`persistBranchExport`) and
 //! parks as a join of as many as parked.
 
@@ -39,7 +35,7 @@ use crate::executor::join_all;
 use crate::flow::{Boundary, Code};
 use crate::host;
 use crate::js::Js;
-use crate::run::{Address, Failure, Flow, Quiet, RETURN_SLOT, Run, Stop};
+use crate::run::{Address, Failure, Flow, RETURN_SLOT, Run, Stop};
 use crate::trace::TraceEntry;
 
 /// How one lane's arm ended, with the trace it wrote.
@@ -63,23 +59,7 @@ enum Ended {
     /// It ran to its end (or ended quietly): what it returned.
     Settled(Binding),
     Parked,
-    /// A race arm whose awaited record is gone: it never settles.
-    Gone,
     Failed(Stop),
-}
-
-/// A race arm's export at its frame saying the arm is gone: never a
-/// binding's name, so no arm's own export reads as it.
-const GONE_ARM: &str = "#gone";
-
-/// The export a gone race arm keeps at its frame.
-pub(crate) fn gone_arm_export() -> Js {
-    crate::env::object_of(vec![(GONE_ARM, Js::Bool(true))])
-}
-
-/// How many of a race's arms its frame's exports say are gone.
-pub(crate) fn arms_gone(rows: &[(i64, Js)]) -> usize {
-    rows.iter().filter(|(index, exports)| *index >= 0 && matches!(crate::unique::get(exports, GONE_ARM), Js::Bool(true))).count()
 }
 
 /// `armLeftEmpty`: the warning `onError: "warn"` leaves for an `all` arm
@@ -133,11 +113,9 @@ impl Run<'_> {
                         };
                         match ran {
                             Ok(Flow::Returned) => Ended::Settled(env.resolve_own(RETURN_SLOT).unwrap_or_else(null_slot)),
-                            // A race arm whose record is gone never settles.
-                            Err(Stop::EndedQuietly(Quiet::WaitGone)) if expr.kind == CombinatorKind::Race => Ended::Gone,
-                            // Any other quiet scope end still completed: it ran to
-                            // its end, it just bound less on the way.
-                            Ok(Flow::FellThrough) | Err(Stop::EndedQuietly(_)) => Ended::Settled(null_slot()),
+                            // A quiet scope end (find-on-missing) still completed: it ran
+                            // to its end, it just bound less on the way.
+                            Ok(Flow::FellThrough) | Err(Stop::EndedQuietly) => Ended::Settled(null_slot()),
                             Err(Stop::Parked(_)) => Ended::Parked,
                             Err(other) => Ended::Failed(other),
                         }
@@ -184,7 +162,6 @@ impl Run<'_> {
         join_all((0..lanes).map(lane).collect()).await;
         let mut settled: Vec<Option<Binding>> = Vec::with_capacity(count);
         let mut parked: Vec<usize> = Vec::new();
-        let mut gone: Vec<usize> = Vec::new();
         let mut failure: Option<(usize, Stop)> = None;
         for (index, outcome) in ended.into_inner().into_iter().enumerate() {
             let Some((outcome, trace)) = outcome else {
@@ -203,10 +180,6 @@ impl Run<'_> {
                 Ended::Parked => {
                     settled.push(None);
                     parked.push(index);
-                }
-                Ended::Gone => {
-                    settled.push(None);
-                    gone.push(index);
                 }
             }
         }
@@ -230,16 +203,7 @@ impl Run<'_> {
                 }
                 return Ok(());
             }
-            // Every arm gone: nothing can settle the race, so its scope ends.
-            if parked.is_empty() {
-                return Err(Stop::EndedQuietly(Quiet::WaitGone));
-            }
             self.keep_arm_count(expr, &frame, arms.len()).await?;
-            // The gone arms are kept at the frame, so a parked arm whose
-            // record goes later can tell whether it was the last.
-            for index in &gone {
-                self.persist_branch_export(&frame, &addresses[*index].encode(), *index as i64, &gone_arm_export()).await?;
-            }
             self.record_join(&frame, 1).await?;
             return Err(Stop::Parked(frame));
         }

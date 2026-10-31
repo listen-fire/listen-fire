@@ -24,6 +24,7 @@ use movement_parser::ast::{
 use serde_json::json;
 
 use crate::checker::Checker;
+use crate::families::flow::EffectRow;
 use crate::slots::is_bare_ident;
 use crate::types::scope_env::SymbolTypes;
 use crate::codes;
@@ -101,12 +102,6 @@ fn combinator_may_leave_slots_null(combinator: &CombinatorExpression) -> bool {
     crate::families::collection_config::on_error_lets_through(&parsed, crate::families::collection_config::ALL_SETTING_KEYS)
 }
 
-/// Whether a slot may be left null: by its combinator, or by its arm's body
-/// ending quietly where a record it awaits is gone.
-fn slot_may_be_null(nullable: bool, slot: &ReturnShape) -> bool {
-    nullable || slot.ends_on_gone_record
-}
-
 /// `receiptMayHold`: each slot as what its arm's returns may hold, or the
 /// record it hands back, which the tuple cannot type.
 fn receipt_may_hold(nullable: bool, slots: &[ReturnShape]) -> Ty {
@@ -118,7 +113,7 @@ fn receipt_may_hold(nullable: bool, slots: &[ReturnShape]) -> Ty {
                     return Some(Ty::Absent);
                 }
                 let held = slot.may_hold.clone().or_else(|| slot_type(slot))?;
-                Some(if slot_may_be_null(nullable, slot) { crate::types::field::maybe_absent(held) } else { held })
+                Some(if nullable { crate::types::field::maybe_absent(held) } else { held })
             })
             .collect::<Vec<_>>()
             .into(),
@@ -371,7 +366,22 @@ impl Checker<'_> {
             }
         };
         let nullable = combinator_may_leave_slots_null(combinator);
-        let slots: Vec<ReturnShape> = arms.iter().map(|arm| self.check_arm(arm, kind, scope, 0)).collect();
+        // A race's arms are told apart by the race, so an await inside one
+        // can learn whether a sibling sleeps.
+        let race = (combinator.kind == CombinatorKind::Race).then(|| self.open_race());
+        let checked: Vec<(ReturnShape, EffectRow)> = arms
+            .iter()
+            .enumerate()
+            .map(|(index, arm)| match race {
+                Some(race) => self.in_race_arm(race, index, |this| this.check_arm(arm, kind, scope, 0)),
+                None => self.check_arm(arm, kind, scope, 0),
+            })
+            .collect();
+        if let Some(race) = race {
+            let sleeps: Vec<bool> = checked.iter().map(|(_, row)| row.sleeps).collect();
+            self.close_race(race, &sleeps);
+        }
+        let slots: Vec<ReturnShape> = checked.into_iter().map(|(slot, _)| slot).collect();
         if let Some(at) = recorded {
             self.record_arms(at, arms);
         }
@@ -400,46 +410,44 @@ impl Checker<'_> {
                         return Some(Ty::Absent);
                     }
                     let field = slot_type(slot)?;
-                    Some(if slot_may_be_null(nullable, slot) { crate::types::field::maybe_absent(field) } else { field })
+                    Some(if nullable { crate::types::field::maybe_absent(field) } else { field })
                 })
                 .collect::<Vec<_>>()
                 .into(),
             rest: None,
         };
-        // A race whose every arm can find its record gone can be left with
-        // no arm to settle it: the race ends the body it is in, as an await does.
-        if combinator.kind == CombinatorKind::Race && !slots.is_empty() && slots.iter().all(|slot| slot.ends_on_gone_record) {
-            self.note_body_may_end_on_gone_record();
-        }
         Receipt { ty: Some(ty), may_hold: Some(may_hold) }
     }
 
     /// `checkArm`: a closure written in place, or the name of a function; the
     /// combinator calls it with nothing, and what it returns is its slot.
-    fn check_arm(&mut self, arm: &ArmExpression, kind: &str, scope: ScopeId, expected: usize) -> ReturnShape {
+    /// With what calling it may do.
+    fn check_arm(&mut self, arm: &ArmExpression, kind: &str, scope: ScopeId, expected: usize) -> (ReturnShape, EffectRow) {
         match arm {
             ArmExpression::Closure { closure, span } => {
-                let (body, suspends) = self.check_closure_walked(closure, scope, None, &format!("an arm of '{kind}'"), 0);
+                let (body, row) = self.check_closure_walked(closure, scope, None, &format!("an arm of '{kind}'"), 0);
                 if closure.params.len() != expected {
                     self.report_arm_arity(kind, expected, closure.params.len(), closure.params.first().map(|p| p.name.as_str()), *span);
                 }
-                self.absorb_suspend(suspends);
-                self.closure_returns(closure, body.value, scope)
+                self.absorb(row);
+                (self.closure_returns(closure, body.value, scope), row)
             }
             ArmExpression::Ref { name, span } => {
-                self.check_named_arm(name, *span, kind, scope, expected);
-                self.named_function_return(name, scope)
+                let (_, row) = self.check_named_arm(name, *span, kind, scope, expected);
+                (self.named_function_return(name, scope), row)
             }
         }
     }
 
-    fn check_named_arm(&mut self, written: &str, span: Span, kind: &str, scope: ScopeId, expected: usize) -> Option<bool> {
+    /// An arm or an op's function given by name: whether it hands a value
+    /// back, where known, and what calling it may do.
+    fn check_named_arm(&mut self, written: &str, span: Span, kind: &str, scope: ScopeId, expected: usize) -> (Option<bool>, EffectRow) {
         let callee = written.to_string();
         let id = match self.scopes.resolve(scope, &callee) {
             Resolution::Found(id) => id,
             failure => {
                 self.report_resolution_failure(&callee, span, failure);
-                return None;
+                return (None, EffectRow::default());
             }
         };
         let symbol = self.scopes.symbol(id).clone();
@@ -450,25 +458,25 @@ impl Checker<'_> {
             {
                 self.report_arm_arity(kind, expected, params.len(), params.first().map(String::as_str), span);
             }
-            return self.function_returns.get(&id).copied();
+            return (self.function_returns.get(&id).copied(), self.movement_row(id));
         }
         if let Some(crate::types::position::Position::Closure(closure)) = &symbol.types.pos {
-            let suspends = self.closure_suspends(id);
-            self.absorb_suspend(suspends);
+            let row = self.closure_row(id);
+            self.absorb(row);
             if closure.params.len() != expected {
                 self.report_arm_arity(kind, expected, closure.params.len(), closure.params.first().map(|p| p.name.as_str()), span);
             }
-            return self.function_returns.get(&id).copied();
+            return (self.function_returns.get(&id).copied(), row);
         }
         if symbol.kind == SymbolKind::FileImport || symbol.is_closure {
-            return None;
+            return (None, EffectRow::default());
         }
         self.report(
             codes::COMBINATOR_ARM_NOT_FUNCTION,
             format!("'{written}' is {}, and '{kind}' RUNS its arms — an arm has to be a function. Name a movement, or write the work as a closure: `() => {{ … }}`.", symbol.kind.describe()),
             span,
         );
-        None
+        (None, EffectRow::default())
     }
 
     /// `reportArmArity`.
@@ -545,7 +553,7 @@ impl Checker<'_> {
                 }
                 let keeps = if op.op == CollectionOp::Filter { closure.params.first().map(|p| p.name.as_str()) } else { None };
                 let given = crate::checker::Supplied { count: arity, types: &supplied, keeps };
-                let (returned, suspends) = self.check_closure_supplied(closure, scope, None, &format!("the function for '{spelling}'"), given);
+                let (returned, row) = self.check_closure_supplied(closure, scope, None, &format!("the function for '{spelling}'"), given);
 
                 // A parameter left untyped takes the member's type.
                 let of = crate::binding_types::ParamOf::closure(closure, None);
@@ -561,12 +569,12 @@ impl Checker<'_> {
                 let callee = format!("the function for '{spelling}'");
                 self.check_members_fields_in_hand(spelling, &callee, &bound, &members, *span);
                 self.check_members_fit_params(op, spelling, &callee, &bound, &members);
-                self.absorb_suspend(suspends);
+                self.absorb(row);
                 let returns = Some(!returned.returns.is_empty() || closure.return_type.is_some());
                 (returns, self.closure_returns(closure, returned.value, scope), returned.kept_present)
             }
             ArmExpression::Ref { name, span } => {
-                let returns = self.check_named_arm(name, *span, spelling, scope, arity);
+                let (returns, _) = self.check_named_arm(name, *span, spelling, scope, arity);
                 let named: Vec<(ClosureParam, bool)> = self.named_function_params(name, scope).into_iter().map(|param| (param, true)).collect();
                 let callee = format!("'{name}'");
                 self.check_members_fields_in_hand(spelling, &callee, &named, &members, *span);
@@ -582,10 +590,8 @@ impl Checker<'_> {
             );
         }
         // A MAP function with no `return` leaves each slot absent.
-        let shape = if op.op == CollectionOp::Map && !shape.returns { ReturnShape { returns: true, plane: as_value(Some(Ty::Absent)), may_hold: None, ends_on_gone_record: false } } else { shape };
+        let shape = if op.op == CollectionOp::Map && !shape.returns { ReturnShape { returns: true, plane: as_value(Some(Ty::Absent)), may_hold: None } } else { shape };
         let returned = shape.plane.field.clone().or_else(|| shape.plane.pos.as_deref().map(|p| Ty::record(Some(p.clone()))));
-        // A member whose body ends where a record it awaits is gone answers null.
-        let returned = if shape.ends_on_gone_record { crate::types::field::maybe_absent_opt(returned) } else { returned };
         // A closure is not data: an op never files closures as its answer
         // — a MAP's members, a GROUPBY's groups or a KEYBY's values.
         use crate::types::field::{closure_not_data_message, may_be_closure};
@@ -631,13 +637,12 @@ impl Checker<'_> {
             Some(crate::types::position::Position::Closure(closure)) if op.op == CollectionOp::Map => Some(closure.returns.clone()),
             _ => None,
         };
-        let held = if shape.ends_on_gone_record { shape.may_hold.map(crate::types::field::maybe_absent) } else { shape.may_hold };
         let may_hold = match op.op {
-            CollectionOp::Map => held.map(|held| list_of(held, ordering)),
-            CollectionOp::Reduce => held,
+            CollectionOp::Map => shape.may_hold.map(|held| list_of(held, ordering)),
+            CollectionOp::Reduce => shape.may_hold,
             _ => None,
         };
-        (ReturnShape { returns: true, plane: as_value(value), may_hold, ends_on_gone_record: false }, arms_each_return)
+        (ReturnShape { returns: true, plane: as_value(value), may_hold }, arms_each_return)
     }
 
     /// The parameters of a function named as an op's function, with the

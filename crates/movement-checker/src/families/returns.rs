@@ -34,8 +34,6 @@ pub struct ReturnCollector {
     /// A filter's function: its member parameter, and whether each `return`
     /// that may keep a member proves the member present there (`keepsPresent`).
     pub keeps: Option<Keeps>,
-    /// An await here may find its record gone, which ends this body quietly.
-    pub ends_on_gone_record: bool,
 }
 
 pub struct Keeps {
@@ -78,10 +76,10 @@ impl Checker<'_> {
     /// `checkBody`, asking of each `return` whether it keeps `keeps` present.
     pub fn check_body_keeping(&mut self, statements: &[Statement], scope: ScopeId, what: String, keeps: Option<&str>) -> Body {
         let keeps = keeps.map(|member| Keeps { member: member.to_string(), present: Vec::new() });
-        self.return_stack.push(ReturnCollector { what, returns: Vec::new(), refuses: None, keeps, ends_on_gone_record: false });
+        self.return_stack.push(ReturnCollector { what, returns: Vec::new(), refuses: None, keeps });
         self.check_statement_list(statements, scope);
         let collector = self.return_stack.pop().expect("the body's own collector");
-        let value = ReturnShape { ends_on_gone_record: collector.ends_on_gone_record, ..self.close_returns(&collector) };
+        let value = self.close_returns(&collector);
         let kept = collector.keeps.map(|keeps| keeps.present).unwrap_or_default();
         Body { returns: collector.returns, value, kept_present: !kept.is_empty() && kept.iter().all(|present| *present) }
     }
@@ -108,7 +106,7 @@ impl Checker<'_> {
         }
         let bound = self.check_rvalue(&statement.value, scope, None, statement.span);
         let types = self.bound_types(None, &statement.value, &bound, scope).unwrap_or_default();
-        let shape = ReturnShape { returns: true, plane: PlaneType { pos: types.pos.map(Box::new), field: types.field }, may_hold: types.may_hold, ends_on_gone_record: false };
+        let shape = ReturnShape { returns: true, plane: PlaneType { pos: types.pos.map(Box::new), field: types.field }, may_hold: types.may_hold };
         let member = self.return_stack.last().and_then(|collector| collector.keeps.as_ref()).map(|keeps| keeps.member.clone());
         if let Some(member) = member
             && let Some(present) = self.keeps_present(&statement.value, &member, scope, statement.span)
@@ -159,15 +157,6 @@ impl Checker<'_> {
             return !self.movement_return(id).returns;
         }
         self.called_closure(id).is_some_and(|closure| !closure.returns.returns) && !self.selves.undeclared.contains(&id)
-    }
-
-    /// The engine ends the nearest body quietly when a record it awaits is
-    /// gone: a block's iteration, a function's or an arm's body. What that
-    /// body answers a combinator or a collection op is then null.
-    pub fn note_body_may_end_on_gone_record(&mut self) {
-        if let Some(collector) = self.return_stack.last_mut() {
-            collector.ends_on_gone_record = true;
-        }
     }
 
     /// `checkReturn`'s collecting half.
@@ -225,7 +214,7 @@ impl Checker<'_> {
             .collect();
         if closures.len() > 1 && closures.len() == collector.returns.len() {
             let merged = crate::types::position::one_of_closures(&closures);
-            return ReturnShape { returns: true, plane: PlaneType { pos: Some(Box::new(Position::Closure(merged))), field: None }, may_hold: None, ends_on_gone_record: false };
+            return ReturnShape { returns: true, plane: PlaneType { pos: Some(Box::new(Position::Closure(merged))), field: None }, may_hold: None };
         }
         if let Some(records) = self.joined_returns(&collector.returns) {
             return records;
@@ -254,7 +243,7 @@ impl Checker<'_> {
             _ => Some(Ty::Union(Rc::new(arms))),
         };
         let revealed = may_hold.filter(|held| shows_more_handles(held, first.shape.plane.field.as_ref()));
-        ReturnShape { returns: true, plane: first.shape.plane.clone(), may_hold: revealed, ends_on_gone_record: false }
+        ReturnShape { returns: true, plane: first.shape.plane.clone(), may_hold: revealed }
     }
 
     /// `joinedReturns`: returns that each hand back a record are what the
@@ -283,11 +272,11 @@ impl Checker<'_> {
             return None;
         }
         if first.shape.plane.pos.is_none() || first.shape.may_hold.is_some() {
-            return Some(ReturnShape { returns: true, plane: PlaneType { pos: None, field: Some(joined) }, may_hold: None, ends_on_gone_record: false });
+            return Some(ReturnShape { returns: true, plane: PlaneType { pos: None, field: Some(joined) }, may_hold: None });
         }
         let position = (**position).clone();
         let position = if maybe && !matches!(position, Position::MaybeEmpty(_)) { Position::MaybeEmpty(Box::new(position)) } else { position };
-        Some(ReturnShape { returns: true, plane: PlaneType { pos: Some(Box::new(position)), field: None }, may_hold: None, ends_on_gone_record: false })
+        Some(ReturnShape { returns: true, plane: PlaneType { pos: Some(Box::new(position)), field: None }, may_hold: None })
     }
 
     /// What a closure's call hands back: what it declares, else what its body
@@ -297,7 +286,7 @@ impl Checker<'_> {
             let pos = inferred.plane.pos.map(|pos| Box::new(crate::types::position::without_parameter(*pos)));
             return ReturnShape { plane: PlaneType { pos, ..inferred.plane }, ..inferred };
         };
-        ReturnShape { returns: true, plane: self.plane_type_of(written, scope), may_hold: None, ends_on_gone_record: inferred.ends_on_gone_record }
+        ReturnShape { returns: true, plane: self.plane_type_of(written, scope), may_hold: None }
     }
 
     /// `checkDeclaredReturn`: `): <R>` against what the body hands back —

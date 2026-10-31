@@ -359,6 +359,10 @@ impl PgStore {
                  values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text::json, $8::bool, $9::text::timestamptz)",
                 &[&team_id, &adapter_type, &arrival.edge, &arrival.key, &arrival.identity, &arrival.version, &landing, &arrival.gone, &at],
             )?;
+            // A deleted record answers no wait: its waits keep waiting.
+            if arrival.gone {
+                continue;
+            }
             // A wait whose park has finished needs no wake: its leaf is gone.
             let answered = self.query(
                 "select w.run_id::text, w.id::text, w.address from lf.wait_row w
@@ -856,7 +860,7 @@ impl RunHostStore for PgStore {
             for park in parks {
                 let ParkKind::Wait { wait_id } = park.kind else { continue };
                 let unread = self.wait_arrivals(wait_id)?;
-                if unread.gone || !unread.arrivals.is_empty() {
+                if !unread.arrivals.is_empty() {
                     let wake = WaitWake { run_id: run_id.to_string(), wait_id: wait_id.to_string(), address: park.address.to_string() };
                     let row = crate::waits::wake_row(team_id, &wake);
                     self.enqueue_row(&row.kind, &row.key, &row.payload, row.due_at.as_deref(), team_id)?;

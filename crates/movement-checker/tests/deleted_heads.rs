@@ -1,0 +1,143 @@
+//! A record a run waits on can be deleted while it waits. From 0.13 the
+//! wait then never ends: what follows the `await` never runs, and a `race`
+//! with a `sleep` is the way out. So what a function that awaits hands back
+//! is typed as what it returns, never maybe absent for the deletion; and a
+//! check for an upgrade from an older pin warns on every `await` no `sleep`
+//! races (`MOV_AWAIT_MAY_HANG`), since under the old pin the code after it
+//! was skipped instead.
+//!
+//! Two catalog shapes: a chat's message and its button presses, and a CRM's
+//! deal and its notes.
+
+use movement_checker::{CheckOptions, check_source};
+use movement_parser::catalog::types::CatalogSnapshot;
+
+const CATALOG: &str = r#"{"adapters":{
+  "chat":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
+    "Message":{"properties":{"Text":"text","Ts":"text"},"edges":{
+      "Interactions":{"target":"Interaction","listenable":true,"sequenced":"chronological","identity":"Id"}}},
+    "Interaction":{"properties":{"Id":"text","Value":"text"},"edges":{}}},
+    "collections":{"Messages":{"target":"Message"}},
+    "writableRoots":{"Message":{"fields":{"Text":"text"},"resultShape":{"externalId":"text"}}}}}},
+  "crm":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
+    "Deal":{"properties":{"Name":"text"},"edges":{
+      "Notes":{"target":"Note","listenable":true,"sequenced":"chronological","identity":"Id"}}},
+    "Note":{"properties":{"Id":"text","Title":"text"},"edges":{}}},
+    "collections":{"Deals":{"target":"Deal"}},
+    "writableRoots":{"Deal":{"fields":{"Name":"text"},"resultShape":{"externalId":"text"}}}}}}
+},"credentials":{},"plugins":{}}"#;
+
+/// The program's first line: the connections, and the function whose body
+/// `body` is (from line 2), handed a message `msg` and a deal `d`.
+const HEADER: &str = "import { chat as chat_module, crm as crm_module } from adapters; chat = connect chat_module; crm = connect crm_module; function go(msg: <chat-[:Message]->>, d: <crm-[:Deal]->>) {";
+
+/// Every diagnostic on `body` (with `functions` declared after it), checked
+/// as an upgrade from `pin` when one is given.
+fn found_with(body: &str, functions: &str, pin: Option<&str>) -> Vec<String> {
+    let source = format!("{HEADER}\n{body}}}\n{functions}");
+    let options = CheckOptions { upgrading_from: pin, zones: &movement_checker::host::native::NativeZones };
+    check_source(&source, &CatalogSnapshot::load(CATALOG).unwrap(), options)
+        .unwrap_or_else(|e| panic!("{source}: {e:?}"))
+        .into_iter()
+        .filter(|d| d.code != "MOV_LISTEN_MISSING")
+        .map(|d| {
+            let severity = match d.severity {
+                Some(movement_checker::Severity::Warning) => "warning",
+                _ => "error",
+            };
+            format!("{} {severity} {}:{}-{}:{} {}", d.code, d.span.start.line, d.span.start.col, d.span.end.line, d.span.end.col, d.message)
+        })
+        .collect()
+}
+
+fn found(body: &str, pin: Option<&str>) -> Vec<String> {
+    found_with(body, "", pin)
+}
+
+fn check(body: &str) -> Vec<String> {
+    found(body, None)
+}
+
+#[test]
+fn an_all_slot_whose_arm_awaits_is_typed_as_the_arm() {
+    assert_eq!(check("  r = all(() => { return await msg-[:Interactions]-> })\n  t = r[0].Id\n"), Vec::<String>::new());
+    // Written where a value is needed: the slot is there.
+    assert_eq!(check("  r = all(() => {\n    i = await msg-[:Interactions]->\n    return i.Value\n  }, () => \"b\")\n  write chat-[:Messages]-> { Text: r[0] }\n"), Vec::<String>::new());
+    assert_eq!(check("  r = all(() => {\n    n = await d-[:Notes]->\n    return n.Title\n  }, () => \"b\")\n  write crm-[:Deals]-> { Name: r[0] }\n"), Vec::<String>::new());
+}
+
+#[test]
+fn a_map_member_whose_function_awaits_is_present() {
+    let notes = "  ds = List.from(crm-[:Deals]->)\n  xs = map(ds, (deal) => { return await deal-[:Notes]-> })\n  ys = map(xs, (n) => Text.upper(n.Title))\n";
+    assert_eq!(check(notes), Vec::<String>::new());
+    let titles = "  ds = List.from(crm-[:Deals]->)\n  xs = map(ds, (deal) => {\n    n = await deal-[:Notes]->\n    return n.Title\n  })\n  ys = map(xs, (x: <text>) => Text.upper(x))\n";
+    assert_eq!(check(titles), Vec::<String>::new());
+    let values = "  ms = List.from(chat-[:Messages]->)\n  xs = map(ms, (m) => {\n    i = await m-[:Interactions]->\n    return i.Value\n  })\n  ys = map(xs, (x: <text>) => Text.upper(x))\n";
+    assert_eq!(check(values), Vec::<String>::new());
+}
+
+#[test]
+fn a_call_whose_body_awaits_answers_present() {
+    let closure = "  f = () => { return await d-[:Notes]-> }\n  x = f()\n  t = Text.upper(x.Title)\n";
+    assert_eq!(check(closure), Vec::<String>::new());
+    // A declared return type says what the body hands back, and it does.
+    let declared = "function pressed(m: <chat-[:Message]->>): <text> {\n  i = await m-[:Interactions]->\n  return i.Value\n}\n";
+    assert_eq!(found_with("  r = all(() => pressed(msg))\n  t = Text.upper(r[0])\n", declared, None), Vec::<String>::new());
+    let inferred = "function noted(deal: <crm-[:Deal]->>) {\n  return await deal-[:Notes]->\n}\n";
+    assert_eq!(found_with("  x = noted(d)\n  write crm-[:Deals]-> { Name: x.Title }\n", inferred, None), Vec::<String>::new());
+    assert_eq!(found_with("  r = all(() => noted(d))\n  write crm-[:Deals]-> { Name: r[0].Title }\n", inferred, None), Vec::<String>::new());
+}
+
+#[test]
+fn a_race_slot_keeps_its_record_type() {
+    let race = "  r = race(() => { return await msg-[:Interactions]-> }, () => { await sleep(1d) })\n  if (r[0] != null) { t = r[0].Nope }\n";
+    assert_eq!(
+        check(race),
+        ["MOV_UNKNOWN_PROPERTY error 3:27-3:36 chat.Interaction has no field 'Nope' — it has: Id, Value".to_string()]
+    );
+    let notes = "  r = race(() => { return await d-[:Notes]-> }, () => { await sleep(1d) })\n  if (r[0] != null) { t = r[0].Nope }\n";
+    assert_eq!(check(notes), ["MOV_UNKNOWN_PROPERTY error 3:27-3:36 crm.Note has no field 'Nope' — it has: Id, Title".to_string()]);
+}
+
+#[test]
+fn an_unraced_await_is_warned_on_upgrade_only() {
+    let src = "  i = await msg-[:Interactions]->\n";
+    assert_eq!(found(src, Some("0.12.13")), ["MOV_AWAIT_MAY_HANG warning 2:7-2:34 'await msg-[:Interactions]->' is not in a `race` with a `sleep`: from 0.13 a wait whose record is deleted never ends (under 0.12.13 the code after it was skipped), so this run can wait forever. Race it: `race(() => { return await msg-[:Interactions]-> }, () => { await sleep(1d) })` — reviews#deleted-records"]);
+    assert_eq!(found(src, None), Vec::<String>::new());
+    // Under this release's own key there is nothing to say.
+    assert_eq!(found(src, Some(movement_parser::version::LANGUAGE_VERSION)), Vec::<String>::new());
+    // `await new`, as written; and an `all` is no race.
+    let all = "  r = all(() => { return await new d-[:Notes]-> }, () => { await sleep(1d) })\n";
+    let hang = found(all, Some("0.12.13"));
+    assert_eq!(hang.len(), 1, "{hang:?}");
+    assert!(hang[0].starts_with("MOV_AWAIT_MAY_HANG warning 2:26-2:48 'await new d-[:Notes]->' is not in a `race` with a `sleep`"), "{}", hang[0]);
+}
+
+#[test]
+fn a_raced_await_is_not_warned() {
+    assert_eq!(found("  r = race(() => { return await new d-[:Notes]-> }, () => { await sleep(2d) })\n", Some("0.12.13")), Vec::<String>::new());
+    // The sleep through a function the sibling arm calls, or names.
+    let a_day = "function a_day() {\n  await sleep(1d)\n}\n";
+    let called = "  r = race(() => { return await msg-[:Interactions]-> }, () => { a_day() })\n";
+    assert_eq!(found_with(called, a_day, Some("0.12.13")), Vec::<String>::new());
+    let named = "  r = race(() => { return await msg-[:Interactions]-> }, a_day)\n";
+    assert_eq!(found_with(named, a_day, Some("0.12.13")), Vec::<String>::new());
+    // Inside a race nested in a raced arm.
+    let nested = "  r = race(() => {\n    q = race(() => { return await d-[:Notes]-> }, () => { return await msg-[:Interactions]-> })\n    return q[0]\n  }, () => { await sleep(1d) })\n";
+    assert_eq!(found(nested, Some("0.12.13")), Vec::<String>::new());
+}
+
+#[test]
+fn a_race_with_no_sleep_beside_the_await_is_warned() {
+    // Its sibling waits on a record too: both can wait forever.
+    let both = "  r = race(() => { return await d-[:Notes]-> }, () => { return await msg-[:Interactions]-> })\n";
+    let hang = found(both, Some("0.12.13"));
+    assert_eq!(hang.len(), 2, "{hang:?}");
+    assert!(hang[0].starts_with("MOV_AWAIT_MAY_HANG warning 2:27-2:45 'await d-[:Notes]->'"), "{}", hang[0]);
+    assert!(hang[1].starts_with("MOV_AWAIT_MAY_HANG warning 2:64-2:91 'await msg-[:Interactions]->'"), "{}", hang[1]);
+    // The sleep in the await's own arm races nothing.
+    let own = "  r = race(() => {\n    await sleep(1d)\n    return await d-[:Notes]->\n  })\n";
+    let hang = found(own, Some("0.12.13"));
+    assert_eq!(hang.len(), 1, "{hang:?}");
+    assert!(hang[0].starts_with("MOV_AWAIT_MAY_HANG warning 4:12-4:30 'await d-[:Notes]->'"), "{}", hang[0]);
+}

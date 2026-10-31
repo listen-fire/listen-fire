@@ -24,7 +24,7 @@ use movement_parser::ast::{LinkExpression, LinkTarget, MatchExpression, UnlinkSt
 use crate::bindings::{Binding, Handle, Scope};
 use crate::env;
 use crate::js::{self, Js, JsObject};
-use crate::run::{Failure, Quiet, Run, Stop};
+use crate::run::{Failure, Run, Stop};
 use crate::unique;
 use crate::write::{Line, Target, Verb, WriteRecord, Written, candidate_data, describe_binding, thrown};
 
@@ -144,7 +144,7 @@ impl Run<'_> {
                 }
                 Ok(absent)
             }
-            OnMiss::EndScope => Err(Stop::EndedQuietly(Quiet::NothingFound)),
+            OnMiss::EndScope => Err(Stop::EndedQuietly),
         }
     }
 

@@ -459,7 +459,7 @@ impl Run<'_> {
                 }
                 // A match inside found nothing: this iteration skips, the
                 // next runs.
-                Err(Stop::EndedQuietly(_)) => continue,
+                Err(Stop::EndedQuietly) => continue,
                 other => other?,
             };
             // The one way a value leaves an iteration is its `return`.

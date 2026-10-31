@@ -297,7 +297,7 @@ const DEV_ROUTES = {
     const arrived = await push('wake', { arrivals: approvals.map(approvalArrival) });
     return [200, { ids: approvals.map((a) => a.id), arrived }];
   },
-  // A company deleted: every wait on its edges settles empty.
+  // A company deleted: reported as gone on its edges; a wait on them keeps waiting.
   '/dev/companies/delete': async (body) => {
     if (typeof body?.company !== 'string') return [400, { error: 'expected { company }' }];
     const state = readState();

@@ -18,8 +18,7 @@
 //! out (`warn` traces why); a failure that is the run's (its cost cap, the
 //! call depth, the call ceiling, a match that found nothing) passes through
 //! whatever it says, and stops the op, as the first failure does under
-//! `"error"`. A member whose awaited record is gone ends its own body: its
-//! answer is null and the op goes on.
+//! `"error"`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -31,7 +30,7 @@ use crate::bindings::{Binding, Scope};
 use crate::env::{Trail, ValueBinding};
 use crate::js::{Js, JsObject};
 use crate::flow::Boundary;
-use crate::run::{Address, Failure, Flow, Quiet, Run, Stop};
+use crate::run::{Address, Failure, Flow, Run, Stop};
 use crate::trace::TraceEntry;
 
 /// `CollectionRunSettings`.
@@ -161,15 +160,6 @@ pub(crate) fn member_answer_in(op: CollectionOp, spelling: &str, flow: Flow, at:
             "MOVENG_RUNTIME",
             format!("the function for '{spelling}' returned nothing — the checker should have caught this"),
         ))),
-    }
-}
-
-/// A member whose awaited record is gone ends its own body: it settles null
-/// and the op goes on (any other stop is the op's).
-pub(crate) fn gone_member_settles(stop: Stop) -> Result<Js, Stop> {
-    match stop {
-        Stop::EndedQuietly(Quiet::WaitGone) => Ok(Js::Null),
-        other => Err(other),
     }
 }
 
@@ -617,10 +607,8 @@ impl Run<'_> {
         let address = run.address.iter(index);
         let body = async {
             let named = run.function.named.as_deref();
-            match self.within_named_call(named, self.body(&run.function.body, &at, &address, &run.function.path, 0)).await {
-                Ok(flow) => self.member_answer(run.op.op, spelling(run.op.op), flow, &at),
-                Err(stop) => gone_member_settles(stop),
-            }
+            let flow = self.within_named_call(named, self.body(&run.function.body, &at, &address, &run.function.path, 0)).await?;
+            self.member_answer(run.op.op, spelling(run.op.op), flow, &at)
         };
         match &run.site {
             Some(site) => {

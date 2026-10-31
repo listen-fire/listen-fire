@@ -157,7 +157,7 @@ impl Run<'_> {
                 Ok(Flow::Returned) => Ok(callee.resolve_own(crate::run::RETURN_SLOT)),
                 // Find-on-missing inside a callee ends the callee's scope;
                 // the caller goes on after the call.
-                Ok(Flow::FellThrough) | Err(Stop::EndedQuietly(_)) => Ok(None),
+                Ok(Flow::FellThrough) | Err(Stop::EndedQuietly) => Ok(None),
                 Err(other) => Err(other),
             }
         })
@@ -225,7 +225,7 @@ impl Run<'_> {
                 Ok((Flow::Returned, child)) => Ok(child.resolve_own(crate::run::RETURN_SLOT)),
                 // Find-on-missing inside the closure ends the closure's
                 // scope, as it ends a called movement's.
-                Ok((Flow::FellThrough, _)) | Err(Stop::EndedQuietly(_)) => Ok(None),
+                Ok((Flow::FellThrough, _)) | Err(Stop::EndedQuietly) => Ok(None),
                 Err(other) => Err(other),
             }
         })

@@ -78,7 +78,7 @@ struct World {
     /// Replies on each ticket (by id, or `*` on every one) the listing
     /// holds, oldest first.
     replies: Vec<(String, String)>,
-    /// Records gone from the world: their waits settle empty.
+    /// Records gone from the world: `awaitKeys` answers `gone` for them.
     gone: Vec<String>,
     /// Fields that read otherwise now than the record held them (a record
     /// changed since the run read it).
@@ -1031,10 +1031,12 @@ fn a_captured_value_is_parked_and_used_on_resume_though_the_record_changed() {
     assert_eq!(parks.waits[0].noted, vec![("reply-1".to_string(), false), ("reply-2".to_string(), true)]);
 }
 
-/// A gone record settles its wait empty: the scope the `await` is in ends
-/// quietly, so the code after it runs zero times, guarded or not.
+/// A record deleted while the run waits on it leaves the wait waiting:
+/// nothing after the `await` runs, and the run stays parked. Gone before
+/// its wait opened (`awaitKeys` answers `gone`), there is no wait row to
+/// park on, and nothing can wake the run.
 #[test]
-fn a_gone_wait_settles_empty() {
+fn a_deleted_record_leaves_its_wait_and_the_run_parked() {
     let body = "  t = write game-[:tickets]-> { Subject: monster.Name }
   r = await t-[:Reply]->
   write game-[:notes]-> { Title: \"after ${r.Body}\" }
@@ -1043,13 +1045,13 @@ fn a_gone_wait_settles_empty() {
     assert_eq!(errors(&source), vec![]);
     let (mut world, mut parks) = (World::default(), Parks::default());
     world.gone.push("*".into());
-    let ran = finished(block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))));
-    assert_eq!(ran.parked_address, None);
-    // No wait row for a gone record, and no park.
-    assert!(parks.waits.is_empty() && parks.wait_parks.is_empty());
+    let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
+    assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
+    assert!(parks.waits.is_empty() && parks.wait_parks.is_empty() && parks.wait_wakes.is_empty());
     assert_eq!(titles(&world), Vec::<&str>::new());
 
-    // A record that goes while the run waits: its gone arrival settles the wait.
+    // Deleted while the run waits: the gone arrival is no answer, so the
+    // resumed await parks on its wait again and asks no wake.
     let (mut world, mut parks) = (World::default(), Parks::default());
     let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
     assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
@@ -1057,8 +1059,10 @@ fn a_gone_wait_settles_empty() {
     let key = parks.waits[0].key.clone();
     parks.log.push(Logged { edge: "Reply".into(), key, identity: String::new(), landing: Data::Null, gone: true });
     let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &park.state, Wake::Arrival)).unwrap();
-    assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
-    assert!(parks.wait_parks.is_empty());
+    assert!(matches!(resumed, Outcome::Parked(_)), "{resumed:?}");
+    assert_eq!(parks.wait_parks.len(), 1, "parked on the same wait again");
+    assert_eq!(parks.wait_parks[0].wait_id, parks.waits[0].id);
+    assert!(parks.wait_wakes.is_empty(), "a gone record wakes nothing: {:?}", parks.wait_wakes);
     assert_eq!(titles(&world), Vec::<&str>::new());
 }
 
@@ -1273,11 +1277,12 @@ fn a_member_a_resumed_map_starts_waits_from_the_mark_the_op_took_before_its_firs
     assert_eq!(third.since, mark, "every member waits from the op's one mark");
 }
 
-/// A member whose record is gone ends its own body: its answer is null and
-/// the op goes on with the others, and so does the code after it. Gone as
-/// it enters (`note-1`) or while it is parked (`note-2`), the same.
+/// A member whose record is deleted keeps waiting, so its op never
+/// finishes: the members whose comments came are answered, and the code
+/// after the op never runs. Gone as it enters (`note-1`) or while it is
+/// parked (`note-2`), the same.
 #[test]
-fn a_gone_record_in_a_map_member_settles_that_member_null_and_the_map_goes_on() {
+fn a_deleted_record_in_a_map_member_leaves_the_map_parked() {
     let body = r#"  xs = map(monster-[:Lair]->, (n) => {
     c = await new n-[:Comments]->
     write game-[:notes]-> { Title: "comment ${c.Body}" }
@@ -1291,17 +1296,21 @@ fn a_gone_record_in_a_map_member_settles_that_member_null_and_the_map_goes_on() 
     world.gone.push("note-1".into());
     let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
     assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
-    assert_eq!(parks.wait_parks.len(), 2, "the members on note-0 and note-2 wait; note-1's is gone");
+    assert_eq!(parks.wait_parks.len(), 2, "the members on note-0 and note-2 wait on rows; note-1's has none");
+    assert_eq!(parks.joins.last().map(|(_, pending)| *pending), Some(3), "every member is pending, note-1's too");
     parks.arrives("Comments", "ticket:note-0", "comment-0", "zero");
     parks.log.push(Logged { edge: "Comments".into(), key: "ticket:note-2".into(), identity: String::new(), landing: Data::Null, gone: true });
     let state = parked_on_note(&mut parks, "note-0");
     let again = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &state, Wake::Arrival)).unwrap();
     assert!(!matches!(again, Outcome::Failed(_)), "{again:?}");
-    assert_eq!(titles(&world), vec!["comment zero"], "the op waits for its last member");
+    assert_eq!(titles(&world), vec!["comment zero"], "the op waits for its last members");
+    assert_eq!(parks.joins.last().map(|(_, pending)| *pending), Some(2));
     let state = parked_on_note(&mut parks, "note-2");
     let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &state, Wake::Arrival)).unwrap();
-    assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
-    assert_eq!(titles(&world), vec!["comment zero", "done"]);
+    assert!(matches!(resumed, Outcome::Parked(_)), "{resumed:?}");
+    parked_on_note(&mut parks, "note-2");
+    assert_eq!(parks.joins.last().map(|(_, pending)| *pending), Some(2), "note-1's and note-2's members still pending");
+    assert_eq!(titles(&world), vec!["comment zero"], "the code after the op never ran");
 }
 
 /// A race whose first arm awaits a reply on the ticket, its second a sleep;
@@ -1320,10 +1329,11 @@ const RACED: &str = r#"  t = write game-[:tickets]-> { Subject: monster.Name }
   write game-[:notes]-> { Title: "${coalesce(r[0], "-")}/${coalesce(r[1], "-")}" }
 "#;
 
-/// A wait that can never be answered loses a race, as a promise that never
-/// settles does: the arm drops out, and the sleep wins.
+/// A wait whose record is deleted never settles, so a race arm on it
+/// loses to a `sleep`, as a promise that never settles does. Gone before
+/// the wait opened, or deleted while the race waits, the same.
 #[test]
-fn a_race_arm_whose_record_is_gone_drops_out_and_the_other_arm_wins() {
+fn a_race_arm_whose_record_is_deleted_loses_to_the_sleep() {
     let source = movement("", RACED);
     assert_eq!(errors(&source), vec![]);
     let (mut world, mut parks) = (World::default(), Parks::default());
@@ -1331,8 +1341,20 @@ fn a_race_arm_whose_record_is_gone_drops_out_and_the_other_arm_wins() {
     let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
     assert!(matches!(parked, Outcome::Parked(_)), "the race waits on its sleep: {parked:?}");
     assert!(world.notes.is_empty() && parks.wait_parks.is_empty());
-    let gone: Vec<i64> = parks.exports.iter().filter(|(_, e)| e.exports.0.to_string().contains("#gone")).map(|(_, e)| e.branch_index).collect();
-    assert_eq!(gone, [0], "the gone arm is kept at the race's frame");
+    let timer = parks.timers.remove(0);
+    let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &timer.state, Wake::Timer)).unwrap();
+    assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
+    assert_eq!(titles(&world), vec!["-/slept"]);
+
+    let (mut world, mut parks) = (World::default(), Parks::default());
+    let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
+    assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
+    let key = parks.waits[0].key.clone();
+    parks.log.push(Logged { edge: "Reply".into(), key, identity: String::new(), landing: Data::Null, gone: true });
+    let arm = parks.wait_parks.remove(0);
+    let again = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &arm.state, Wake::Arrival)).unwrap();
+    assert!(matches!(again, Outcome::Parked(_)), "the arm parks on its wait again: {again:?}");
+    assert!(world.notes.is_empty());
     let timer = parks.timers.remove(0);
     let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &timer.state, Wake::Timer)).unwrap();
     assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
@@ -1356,20 +1378,20 @@ const BOTH_AWAIT: &str = r#"function settle(t: <game-[:Ticket]->>) {
 }
 "#;
 
-/// A race every arm of which is gone can never settle: it ends the scope it
-/// is in quietly, so the code after it in the function runs zero times and
-/// the caller goes on. Gone as the arms first reach their waits, or one by
-/// one while they are parked, the same.
+/// A race every arm of which waits on a deleted record never settles: the
+/// run stays parked in it, and neither the code after the race nor the
+/// caller's after the call runs. Gone as the arms first reach their waits,
+/// or deleted while they are parked, the same.
 #[test]
-fn a_race_every_arm_of_which_is_gone_ends_its_scope_quietly() {
+fn a_race_every_arm_of_which_waits_on_a_deleted_record_stays_parked() {
     let source = movement_with(BOTH_AWAIT, "  t = write game-[:tickets]-> { Subject: monster.Name }\n  settle(t)\n  write game-[:notes]-> { Title: \"after the call\" }\n");
     assert_eq!(errors(&source), vec![]);
     let (mut world, mut parks) = (World::default(), Parks::default());
     world.gone.push("*".into());
-    let ran = finished(block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))));
-    assert_eq!(ran.parked_address, None);
-    assert!(parks.wait_parks.is_empty() && parks.joins.is_empty());
-    assert_eq!(titles(&world), vec!["after the call"]);
+    let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
+    assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
+    assert!(parks.wait_parks.is_empty());
+    assert_eq!(titles(&world), Vec::<&str>::new());
 
     let (mut world, mut parks) = (World::default(), Parks::default());
     let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
@@ -1377,16 +1399,13 @@ fn a_race_every_arm_of_which_is_gone_ends_its_scope_quietly() {
     assert_eq!(parks.wait_parks.len(), 2, "both arms wait on the ticket's one wait");
     let key = parks.waits[0].key.clone();
     parks.log.push(Logged { edge: "Reply".into(), key, identity: String::new(), landing: Data::Null, gone: true });
-    let first = parks.wait_parks.remove(0);
-    let again = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &first.state, Wake::Arrival)).unwrap();
-    assert!(!matches!(again, Outcome::Failed(_)), "{again:?}");
-    assert!(world.notes.is_empty(), "the other arm still waits: {:?}", world.notes);
-    let gone: Vec<i64> = parks.exports.iter().filter(|(_, e)| e.exports.0.to_string().contains("#gone")).map(|(_, e)| e.branch_index).collect();
-    assert_eq!(gone, [0]);
-    let second = parks.wait_parks.remove(0);
-    let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &second.state, Wake::Arrival)).unwrap();
-    assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
-    assert_eq!(titles(&world), vec!["after the call"], "the write after the race ran zero times; the caller went on");
+    for _ in 0..2 {
+        let arm = parks.wait_parks.remove(0);
+        let again = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &arm.state, Wake::Arrival)).unwrap();
+        assert!(matches!(again, Outcome::Parked(_)), "{again:?}");
+    }
+    assert_eq!(parks.wait_parks.len(), 2, "both arms parked on the wait again");
+    assert_eq!(titles(&world), Vec::<&str>::new());
 }
 
 /// A reply bound off the arrival log is the record its landing names: a

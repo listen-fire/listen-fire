@@ -4,6 +4,7 @@
 //! - MOV_AWAIT_BAD_DURATION
 //! - MOV_AWAIT_BARE_WALK
 //! - MOV_AWAIT_IMPURE_CONDITION
+//! - MOV_AWAIT_MAY_HANG (a warning, on a check for an upgrade only)
 //! - MOV_AWAIT_NEEDS_CADENCE (raised by nothing since 0.13: see `check_awaitable`)
 //! - MOV_AWAIT_NOT_AWAITABLE
 //! - MOV_AWAIT_UNORDERED
@@ -33,6 +34,10 @@ const UNTIL_CADENCE_FLOOR_MS: u64 = 60_000;
 /// when the wait is reached; under an older pin it read it again at every
 /// check.
 const CAPTURED_SINCE: &str = "0.13.0";
+
+/// The release from which a wait whose record is deleted never ends; under
+/// an older pin the code after it was skipped.
+const DELETED_WAITS_HANG_SINCE: &str = "0.13.0";
 
 /// `durationToMs`, `None` for a text that is not a duration (`isValidDuration`:
 /// one or more `<digits><unit>` runs, units s/m/h/d/w).
@@ -284,6 +289,77 @@ impl Checker<'_> {
         }
     }
 
+    /// A `race` opens: its number, which its arms are walked under.
+    pub fn open_race(&mut self) -> usize {
+        self.races.opened += 1;
+        self.races.opened - 1
+    }
+
+    /// `check` walks arm `arm` of race `race`.
+    pub fn in_race_arm<T>(&mut self, race: usize, arm: usize, check: impl FnOnce(&mut Self) -> T) -> T {
+        self.races.arms.push((race, arm));
+        let checked = check(self);
+        self.races.arms.pop();
+        checked
+    }
+
+    /// A `race` ends, `sleeps` saying of each arm whether it may sleep. An
+    /// await inside an arm whose sibling sleeps is raced; one not raced, and
+    /// in no race around this one, is told now.
+    pub fn close_race(&mut self, race: usize, sleeps: &[bool]) {
+        let raced = |arm: usize| sleeps.iter().enumerate().any(|(other, sleeps)| other != arm && *sleeps);
+        let mut untold = Vec::new();
+        self.races.awaits.retain(|waiting| {
+            let Some(&(_, arm)) = waiting.arms.iter().find(|(around, _)| *around == race) else { return true };
+            if raced(arm) {
+                return false;
+            }
+            if waiting.arms.first().is_some_and(|(outermost, _)| *outermost == race) {
+                untold.push((waiting.span, waiting.written.clone()));
+                return false;
+            }
+            true
+        });
+        for (span, text) in untold {
+            self.tell_await_may_hang(span, &text);
+        }
+    }
+
+    /// On a check for an upgrade from before 0.13: an `await` on a record's
+    /// edge (`text` as written), which waits forever once its record is
+    /// deleted unless a sibling arm of a race around it sleeps. Told when
+    /// the races around it say it is not raced.
+    pub fn report_await_may_hang(&mut self, span: Span, text: String) {
+        let Some(pin) = self.upgrading_from else { return };
+        if self.type_only > 0 || standing(pin, DELETED_WAITS_HANG_SINCE) != Standing::OlderKey {
+            return;
+        }
+        if self.races.arms.is_empty() {
+            self.tell_await_may_hang(span, &text);
+        } else {
+            let arms = self.races.arms.clone();
+            self.races.awaits.push(AwaitInRace { span, written: text, arms });
+        }
+    }
+
+    fn tell_await_may_hang(&mut self, span: Span, text: &str) {
+        let Some(pin) = self.upgrading_from else { return };
+        if self.races.told.contains(&span) {
+            return;
+        }
+        self.races.told.push(span);
+        let mut note = crate::diagnostic::Diagnostic::error(
+            codes::AWAIT_MAY_HANG,
+            format!(
+                "'{text}' is not in a `race` with a `sleep`: from 0.13 a wait whose record is deleted never ends (under {pin} the code after it was skipped), so this run can wait forever. Race it: `race(() => {{ return {text} }}, () => {{ await sleep(1d) }})` — reviews#deleted-records"
+            ),
+            span,
+        );
+        note.severity = Some(crate::diagnostic::Severity::Warning);
+        note.upgrade = Some(true);
+        self.push(note);
+    }
+
     /// Whether `name` holds a record the run read or wrote (not a connection).
     fn holds_record(&self, name: &str, scope: ScopeId) -> bool {
         let Resolution::Found(id) = self.scopes.resolve(scope, name) else { return false };
@@ -385,16 +461,57 @@ pub(crate) fn statement_span(statement: &Statement) -> Option<Span> {
     serde_json::from_value(tree.get("span")?.clone()).ok()
 }
 
-/// What the open function bodies may do, as far as parking goes: a body that
-/// may wait (`await`, a combinator, or a call to a function that waits)
-/// suspends. The rest of the TypeScript's effect row (reads, writes, `ai`,
-/// `now`) is not modelled.
+/// What a function body may do, as far as parking goes. The rest of the
+/// TypeScript's effect row (reads, writes, `ai`, `now`) is not modelled.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EffectRow {
+    /// It may wait: an `await`, a combinator, or a call to a function that
+    /// waits.
+    pub suspends: bool,
+    /// It may `await sleep(…)`, directly or through a function it calls.
+    pub sleeps: bool,
+}
+
+impl EffectRow {
+    /// What either may do.
+    pub fn with(self, other: EffectRow) -> EffectRow {
+        EffectRow { suspends: self.suspends || other.suspends, sleeps: self.sleeps || other.sleeps }
+    }
+}
+
+/// The `race` arms around the walk, and the awaits on a record's edge
+/// inside them, for `MOV_AWAIT_MAY_HANG`: an await is raced when an arm
+/// around it has a sibling that sleeps, which only the race's end can tell.
+#[derive(Default)]
+pub struct Races {
+    /// The arms being walked, outermost first.
+    arms: Vec<RaceArm>,
+    /// How many races the walk has opened.
+    opened: usize,
+    /// Awaits inside a race not yet ended.
+    awaits: Vec<AwaitInRace>,
+    /// Awaits already told, so a body walked twice tells once.
+    told: Vec<Span>,
+}
+
+/// One arm of a race being walked: the race's number, and the arm's index.
+type RaceArm = (usize, usize);
+
+/// An await inside a race not yet ended: where, as written, and the arms
+/// around it, outermost first.
+struct AwaitInRace {
+    span: Span,
+    written: String,
+    arms: Vec<RaceArm>,
+}
+
+/// What the open function bodies may do.
 #[derive(Default)]
 pub struct Effects {
-    /// One flag per function body being walked, innermost last.
-    frames: Vec<bool>,
-    /// Whether each closure bound to a name may wait when called.
-    pub closures: std::collections::HashMap<SymbolId, bool>,
+    /// One row per function body being walked, innermost last.
+    frames: Vec<EffectRow>,
+    /// What each closure bound to a name may do when called.
+    pub closures: std::collections::HashMap<SymbolId, EffectRow>,
     /// While an `until` condition is checked: the edges it reads bare that
     /// their source would announce (`polledWatchableEdges`), in first-read order.
     polled_watchable: Option<Vec<String>>,
@@ -436,30 +553,42 @@ impl Checker<'_> {
 
     /// `withEffectFrame`'s opening half: a body whose effects are its own.
     pub fn open_effect_frame(&mut self) {
-        self.effects.frames.push(false);
+        self.effects.frames.push(EffectRow::default());
     }
 
-    /// Whether the body walked since the matching open may wait.
-    pub fn close_effect_frame(&mut self) -> bool {
-        self.effects.frames.pop().unwrap_or(false)
+    /// What the body walked since the matching open may do.
+    pub fn close_effect_frame(&mut self) -> EffectRow {
+        self.effects.frames.pop().unwrap_or_default()
     }
 
     /// The run may park here (`flag('suspend')`).
     pub fn flag_suspend(&mut self) {
         if let Some(top) = self.effects.frames.last_mut() {
-            *top = true;
+            top.suspends = true;
         }
+    }
+
+    /// The run may sleep here.
+    pub fn flag_sleep(&mut self) {
+        if let Some(top) = self.effects.frames.last_mut() {
+            top.sleeps = true;
+        }
+    }
+
+    /// A call that may wait, as a plugin's declared effects say.
+    pub fn absorb_suspend(&mut self, suspends: bool) {
+        self.absorb(EffectRow { suspends, sleeps: false });
     }
 
     /// What a called or scheduled function does is the caller's too.
-    pub fn absorb_suspend(&mut self, suspends: bool) {
-        if suspends {
-            self.flag_suspend();
+    pub fn absorb(&mut self, row: EffectRow) {
+        if let Some(top) = self.effects.frames.last_mut() {
+            *top = top.with(row);
         }
     }
 
-    /// Whether calling the closure a name holds may wait.
-    pub fn closure_suspends(&self, id: SymbolId) -> bool {
-        self.effects.closures.get(&id).copied().unwrap_or(false)
+    /// What calling the closure a name holds may do.
+    pub fn closure_row(&self, id: SymbolId) -> EffectRow {
+        self.effects.closures.get(&id).copied().unwrap_or_default()
     }
 }

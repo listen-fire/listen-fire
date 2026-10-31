@@ -36,7 +36,7 @@ describe("a snapshot's retired edge members", () => {
 
   it('refuses an edge that still carries resolvesEmpty', () => {
     expect(() => fromCatalogSnapshot(carrying('resolvesEmpty'))).toThrow(
-      "the catalog snapshot's 'crm' edge 'Reply' carries 'resolvesEmpty', retired in catalog snapshot version 2: a deleted record ends the wait on every edge, so drop it",
+      "the catalog snapshot's 'crm' edge 'Reply' carries 'resolvesEmpty', retired in catalog snapshot version 2: a deleted record leaves the wait waiting on every edge, so drop it",
     );
   });
 

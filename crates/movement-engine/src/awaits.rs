@@ -7,12 +7,11 @@
 //! - **A combinator**: crate::combinator.
 //! - **An edge of a record**: read off the wait the record opened when it
 //!   entered the run (crate::waits), in this order:
-//!   1. the record's wait on the edge. A gone record settles the wait
-//!      empty: the scope the `await` is in ends quietly, so the code after
-//!      it runs zero times (`Quiet::WaitGone`: a block's iteration, a
-//!      call's body, an `all` arm or a collection member, which settles
-//!      null; a race arm, which never settles and drops out of its race;
-//!      else the movement's body);
+//!   1. the record's wait on the edge. A record deleted while the run waits
+//!      leaves its wait waiting: nothing arrives on it, so the `await`
+//!      parks for good unless a `race` arm beside it settles (a `sleep`).
+//!      One the adapter already called gone when its wait opened has no
+//!      wait to park on: the `await` parks with nothing that can wake it;
 //!   2. the WHERE's parts that read only the run captured, once, when the
 //!      await is first reached (re-entered, the values it parked with);
 //!   3. a plain `await` on an edge that can be listed takes the first match
@@ -20,7 +19,7 @@
 //!      awaits on one record's edge share its wait and both take that first
 //!      match: "the existing match, or else the first to arrive";
 //!   4. else the wait's arrivals, in log order, each judged and noted: the
-//!      first that counts is bound; a gone record settles empty, as in 1;
+//!      first that counts is bound;
 //!   5. else the run parks on the wait (`commitAwaitPark`), reads the
 //!      arrivals once more, and is woken (`park.wake`) when one landed while
 //!      it parked. The resume re-enters the await, which judges again.
@@ -40,7 +39,7 @@ use crate::host;
 use crate::js::{Js, JsObject};
 use crate::park::Leaf;
 use crate::program::Stamp;
-use crate::run::{Address, Failure, Flow, Quiet, Run, Stop};
+use crate::run::{Address, Failure, Flow, Run, Stop};
 use crate::trace::TraceEntry;
 use crate::waits::{Unwaitable, WaitRef};
 
@@ -54,13 +53,6 @@ fn over_a_list(root: &str, edge: &str) -> Stop {
         &format!("await '{root}-[:{edge}]->' over a list of records"),
         "an await waits on one record's edge; await each record's edge in a flow of its own",
     ))
-}
-
-/// What an await on a wait found among the arrivals.
-enum Judged {
-    Bound(Binding),
-    Gone,
-    Pending,
 }
 
 impl Run<'_> {
@@ -224,7 +216,11 @@ impl Run<'_> {
         let reentered = self.reentered_at(&address);
         let wait_id = match self.waits_of(&waited.holder).get(edge).cloned() {
             Some(WaitRef::Open(id)) => id,
-            Some(WaitRef::Gone) => return Err(Stop::EndedQuietly(Quiet::WaitGone)),
+            // Nothing will arrive, so nothing can wake the await.
+            Some(WaitRef::Gone) => {
+                self.trace(TraceEntry::Gate { outcome: false });
+                return Err(Stop::Parked(address));
+            }
             None if !self.serves("park.waits.open") => {
                 return Err(Stop::Thrown(Failure::unsupported("await (a wait)", "this run has no wait sink — an await needs the durable trigger-run substrate")));
             }
@@ -277,15 +273,11 @@ impl Run<'_> {
                 return Ok(());
             }
         }
-        match self.judge_arrivals(&judge).await? {
-            Judged::Bound(landing) => {
-                if let Some(name) = binding_name {
-                    scope.declare(name, landing);
-                }
-                return Ok(());
+        if let Some(landing) = self.judge_arrivals(&judge).await? {
+            if let Some(name) = binding_name {
+                scope.declare(name, landing);
             }
-            Judged::Gone => return Err(Stop::EndedQuietly(Quiet::WaitGone)),
-            Judged::Pending => {}
+            return Ok(());
         }
         if !self.serves("park.sink.commitAwaitPark") {
             return Err(Stop::Thrown(Failure::unsupported("await (a durable park)", "this run has no park sink — an await needs the durable trigger-run substrate")));
@@ -312,26 +304,23 @@ impl Run<'_> {
     }
 
     /// The wait's arrivals in log order, each judged and noted: the first
-    /// that counts, or else whether the record is gone.
-    async fn judge_arrivals(&self, judge: &Judge<'_>) -> Result<Judged, Stop> {
+    /// that counts.
+    async fn judge_arrivals(&self, judge: &Judge<'_>) -> Result<Option<Binding>, Stop> {
         let logged = self.wait_arrivals(judge.wait_id).await.map_err(Stop::Thrown)?;
         for arrival in &logged.arrivals {
             let landing = arrival_landing(judge, &arrival.landing);
             let matched = self.arrival_matches(judge, &landing).await?;
             if self.note_arrival(judge.wait_id, &arrival.identity, arrival.version.as_deref(), matched).await.map_err(Stop::Thrown)? {
-                return Ok(Judged::Bound(landing));
+                return Ok(Some(landing));
             }
         }
-        Ok(if logged.gone { Judged::Gone } else { Judged::Pending })
+        Ok(None)
     }
 
-    /// Whether anything that would end the wait arrived: the record went, or
-    /// an arrival the WHERE takes. Noted by the resume, not here.
+    /// Whether an arrival the WHERE takes landed. Noted by the resume, not
+    /// here.
     async fn arrived_while_parking(&self, judge: &Judge<'_>) -> Result<bool, Stop> {
         let logged = self.wait_arrivals(judge.wait_id).await.map_err(Stop::Thrown)?;
-        if logged.gone {
-            return Ok(true);
-        }
         for arrival in &logged.arrivals {
             if self.arrival_matches(judge, &arrival_landing(judge, &arrival.landing)).await? {
                 return Ok(true);

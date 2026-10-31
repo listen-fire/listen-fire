@@ -63,7 +63,7 @@ if (r[0] == null) {
 - A press made the moment the message appears still counts.
 - \`only(press-[:Actions]->).Value\` is \`"approve" | "reject"\` here: comparing it with a value the buttons never offered, such as \`"aprove"\`, is refused while you write it, here or on the \`race\`'s slot when an arm returns the \`Value\`.
 - \`press-[:By]->\` is the member who pressed.
-- A message deleted while a run waits on it ends the wait: nothing after the \`await\` runs.
+- A message deleted while a run waits on it leaves the wait waiting: nothing after the \`await\` runs, so race it with a \`sleep\`.
 
 ### blocks-are-verbatim
 

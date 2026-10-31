@@ -36,6 +36,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::checker::Checker;
+use crate::families::flow::EffectRow;
 use crate::codes;
 use crate::scope::{Resolution, ScopeId, Symbol, SymbolId, SymbolKind};
 use crate::slots::SlotError;
@@ -603,14 +604,14 @@ impl Checker<'_> {
                         RValue::Construct { construct } => Some(&construct.callee),
                         _ => None,
                     };
-                    if row && let Some(callee) = callee {
+                    if row.suspends && let Some(callee) = callee {
                         self.report(
                             codes::NESTED_CALL_SUSPENDS,
                             format!("'{callee}' may wait ('await'), and a wait parks the run where it is written — inside an expression there is no place to come back to. Call it on its own line and use the name: `answer = {callee}(…)`"),
                             span,
                         );
                     }
-                    self.absorb_suspend(row);
+                    self.absorb(row);
                 }
                 Err(e) => self.report(codes::EXPR_PARSE, format!("{} (line {}, col {})", e.message, e.loc.line, e.loc.col), span),
             }
@@ -1588,8 +1589,8 @@ impl Checker<'_> {
         }
         if self.calls_closure(&callee) {
             self.note_self_call(id, call.span);
-            let suspends = self.closure_suspends(id);
-            self.absorb_suspend(suspends);
+            let row = self.closure_row(id);
+            self.absorb(row);
             let Some(closure) = self.called_closure(id) else { return (None, ReturnShape::default()) };
             let params = self.closure_call_params(call, &closure);
             return (Some(params), closure.returns);
@@ -1805,7 +1806,7 @@ impl Checker<'_> {
 struct CallCycle {
     members: Vec<SymbolId>,
     /// Each walked member's own body's flag, calls into the component left out.
-    rows: Vec<(SymbolId, bool)>,
+    rows: Vec<(SymbolId, EffectRow)>,
     closed: bool,
     /// The stack depth of the member entered first: the component closes
     /// when that walk finishes.
@@ -1834,8 +1835,8 @@ pub struct Inference {
     declarations: HashMap<SymbolId, (Rc<MovementDeclaration>, ScopeId)>,
     /// Started (false) or finished (true).
     inferred: HashMap<SymbolId, bool>,
-    /// Whether each movement's body may wait, once known.
-    suspends: HashMap<SymbolId, bool>,
+    /// What each movement's body may do, once known.
+    rows: HashMap<SymbolId, EffectRow>,
     /// What each movement's body hands back, once walked.
     returned: HashMap<SymbolId, ReturnShape>,
     /// An imported movement stands for the library's declaration: its
@@ -1880,34 +1881,34 @@ impl Checker<'_> {
         if !declared {
             self.infer_movement(id);
         }
-        let suspends = self.movement_suspends(id);
-        self.absorb_suspend(suspends);
+        let row = self.movement_row(id);
+        self.absorb(row);
     }
 
     /// Whether movement `id` may wait, as the walk settled it.
     pub(crate) fn suspends(&self, id: SymbolId) -> bool {
-        self.inference.suspends.get(&self.declared_id(id)).copied().unwrap_or(false)
+        self.inference.rows.get(&self.declared_id(id)).is_some_and(|row| row.suspends)
     }
 
-    /// `movementEffects`, the suspend flag of it.
-    pub fn movement_suspends(&mut self, id: SymbolId) -> bool {
+    /// `movementEffects`.
+    pub fn movement_row(&mut self, id: SymbolId) -> EffectRow {
         let id = self.declared_id(id);
         if !self.inference.declarations.contains_key(&id) {
-            return false;
+            return EffectRow::default();
         }
         if self.reaches(id) {
-            return false;
+            return EffectRow::default();
         }
-        if let Some(known) = self.inference.suspends.get(&id) {
+        if let Some(known) = self.inference.rows.get(&id) {
             return *known;
         }
         if !self.inference.inferred.contains_key(&id) {
             self.infer_movement(id);
         }
         if self.reaches(id) {
-            return false;
+            return EffectRow::default();
         }
-        self.inference.suspends.get(&id).copied().unwrap_or(false)
+        self.inference.rows.get(&id).copied().unwrap_or_default()
     }
 
     /// `inferMovement`: walks the body type-only, reporting nothing.
@@ -1959,9 +1960,9 @@ impl Checker<'_> {
 
     /// `recordMovementRow`: the row filed on the declaration, unless the
     /// movement is in a call cycle, whose members share the cycle's.
-    pub fn record_movement_row(&mut self, id: SymbolId, row: bool) {
+    pub fn record_movement_row(&mut self, id: SymbolId, row: EffectRow) {
         if !self.inference.cycle_of.contains_key(&id) {
-            self.inference.suspends.insert(id, row);
+            self.inference.rows.insert(id, row);
         }
     }
 
@@ -2046,21 +2047,21 @@ impl Checker<'_> {
 
     /// `leave`: outside any component the row is the movement's; inside one
     /// it waits for the component to close, when every member gets the union.
-    fn leave_inference(&mut self, id: SymbolId, row: bool) {
+    fn leave_inference(&mut self, id: SymbolId, row: EffectRow) {
         let depth = self.inference.walking.remove(&id);
         self.inference.stack.pop();
         let cycle = self.inference.cycle_of.get(&id).copied();
         let Some(cycle) = cycle.filter(|c| !self.inference.cycles[*c].closed) else {
-            self.inference.suspends.insert(id, row);
+            self.inference.rows.insert(id, row);
             return;
         };
         self.inference.cycles[cycle].rows.push((id, row));
         if depth != Some(self.inference.cycles[cycle].root_depth) {
             return;
         }
-        let shared = self.inference.cycles[cycle].rows.iter().any(|(_, r)| *r);
+        let shared = self.inference.cycles[cycle].rows.iter().fold(EffectRow::default(), |shared, (_, row)| shared.with(*row));
         for member in self.inference.cycles[cycle].members.clone() {
-            self.inference.suspends.insert(member, shared);
+            self.inference.rows.insert(member, shared);
         }
         self.inference.cycles[cycle].closed = true;
     }

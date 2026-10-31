@@ -22,9 +22,7 @@
 //! member that closes the op runs the members never started and hands the
 //! op's answer back to its statement. A quiet end inside a branch ends it
 //! as it would have before the run parked: an arm settles null, an
-//! iteration skips, a collection member whose record is gone answers null,
-//! and a race arm whose record is gone drops out of its race (the last to
-//! go ends the race's scope).
+//! iteration skips.
 //!
 //! One more entry shares the descent: a race settled after a batch resume
 //! (the leaf is the race).
@@ -42,7 +40,7 @@ use crate::flow::{Boundary, CallRecord, Code, Site};
 use crate::host;
 use crate::js::{Js, JsObject};
 use crate::park::{ParkReader, at, id_of, items, landing_shape_of, pairs, parse_address, text};
-use crate::run::{Address, Failure, Flow, Quiet, RETURN_SLOT, Run, Stop};
+use crate::run::{Address, Failure, Flow, RETURN_SLOT, Run, Stop};
 use crate::write::WriteRecord;
 
 /// What a resume does at its leaf statement (`ResumeLeaf`).
@@ -536,11 +534,7 @@ impl Run<'_> {
                         Err(Stop::Thrown(failure)) if self.forgives_arm_failure(frame, &failure)? => Completion::Done(Flow::FellThrough),
                         // A quiet end ends the branch it is in, as it would have
                         // before the run parked.
-                        Err(Stop::EndedQuietly(quiet)) => match quiet_end_of(frame, quiet) {
-                            QuietBranch::Settles => Completion::Done(Flow::FellThrough),
-                            QuietBranch::RaceArmGone => return self.race_arm_gone(frame).await,
-                            QuietBranch::Passes => return Err(Stop::EndedQuietly(quiet)),
-                        },
+                        Err(Stop::EndedQuietly) if quiet_end_settles(frame) => Completion::Done(Flow::FellThrough),
                         other => other?,
                     };
                     let Completion::Done(flow) = completed else { return Ok(Completion::Stopped) };
@@ -550,26 +544,6 @@ impl Run<'_> {
                 Spine::Member { .. } => self.finish_resumed_member(frame, inner, leaf_address).await,
             }
         })
-    }
-
-    /// A race arm resumed to find its awaited record gone: it drops out,
-    /// kept at the race's frame as gone. The race stays parked on its other
-    /// arms; the last arm to go ends the race's scope quietly.
-    async fn race_arm_gone(&self, frame: &Spine) -> Result<Completion, Stop> {
-        let Spine::Container { container, container_path, container_address, branch_address, branch_index, .. } = frame else {
-            unreachable!("a race arm")
-        };
-        if !self.serves("park.sink.decrementJoin") {
-            return Ok(Completion::Stopped);
-        }
-        let frame_address = container_address.encode();
-        self.persist_branch_export(&frame_address, &branch_address.encode(), *branch_index as i64, &crate::combinator::gone_arm_export()).await?;
-        let rows = self.collect_branch_exports(&frame_address).await?;
-        let Some((combinator, _)) = combinator_of(container, container_path) else { unreachable!("a race arm") };
-        if crate::combinator::arms_gone(&rows) < arm_count_of(&combinator, &rows) {
-            return Ok(Completion::Stopped);
-        }
-        Err(Stop::EndedQuietly(Quiet::WaitGone))
     }
 
     /// `forgivesArmFailure`: is `failure` an `all` arm's own failure that its
@@ -672,7 +646,7 @@ impl Run<'_> {
         let Spine::Call { caller, boundary, site, index, next, callee, scope } = frame else { unreachable!("a call level") };
         self.call_stack.borrow_mut().push(callee.clone());
         let completed = match self.within_boundary(boundary.clone(), inner).await {
-            Err(Stop::EndedQuietly(_)) => Ok(Completion::Done(Flow::FellThrough)),
+            Err(Stop::EndedQuietly) => Ok(Completion::Done(Flow::FellThrough)),
             other => other,
         };
         self.call_stack.borrow_mut().pop();
@@ -705,10 +679,7 @@ impl Run<'_> {
         let state = self.open_flow(self.fork_writes().branch(*member));
         let named = run.function.named_call().map(String::from);
         let flowed = async {
-            let completed = match self.within_boundary(boundary.clone(), self.within_called_name(named.as_deref(), inner)).await {
-                Ok(completed) => completed,
-                Err(stop) => return crate::collection::gone_member_settles(stop).map(Some),
-            };
+            let completed = self.within_boundary(boundary.clone(), self.within_called_name(named.as_deref(), inner)).await?;
             let Completion::Done(flow) = completed else { return Ok(None) };
             self.member_answer_of(run, flow, scope).map(Some)
         };
@@ -1520,27 +1491,12 @@ fn revived_field_value(descriptor: &Js) -> Result<Js, Stop> {
     })
 }
 
-/// What a quiet end inside a resumed branch does to it.
-enum QuietBranch {
-    /// The branch ends there: a combinator's arm settles null, a fan-out's
-    /// iteration skips.
-    Settles,
-    /// A race arm whose awaited record is gone: it never settles.
-    RaceArmGone,
-    /// Not a branch (an `if` arm): the scope around it ends.
-    Passes,
-}
-
-fn quiet_end_of(frame: &Spine, quiet: Quiet) -> QuietBranch {
-    let Spine::Container { container, container_path, descent, .. } = frame else { return QuietBranch::Passes };
-    if *descent == 'i' {
-        return QuietBranch::Settles;
-    }
-    match combinator_of(container, container_path) {
-        Some((combinator, _)) if combinator.kind == CombinatorKind::Race && quiet == Quiet::WaitGone => QuietBranch::RaceArmGone,
-        Some(_) => QuietBranch::Settles,
-        None => QuietBranch::Passes,
-    }
+/// Whether a quiet end inside a resumed branch ends only that branch: a
+/// combinator's arm settles null, a fan-out's iteration skips. Elsewhere
+/// (an `if` arm) the scope around it ends.
+fn quiet_end_settles(frame: &Spine) -> bool {
+    let Spine::Container { container, container_path, descent, .. } = frame else { return false };
+    *descent == 'i' || combinator_of(container, container_path).is_some()
 }
 
 /// `combinatorOf`: the `race([…])` / `parallel([…])` a statement carries

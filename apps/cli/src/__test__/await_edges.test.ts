@@ -124,23 +124,6 @@ test('two approvals in one wake resume the run once, binding the first', async (
   }
 });
 
-test('a deleted company settles its wait empty and the code after it runs zero times', async () => {
-  const dir = project('approvals');
-  const serving = await served(dir);
-  try {
-    const { post } = crmOf(dir, serving);
-    await post('/dev/companies', { Name: 'Osprey' });
-    await serving.waitFor(/run .* approvals:decide parked/);
-    await post('/dev/companies/delete', { company: RUNS_RECORD });
-    await serving.waitFor(/resumed .* approvals:decide completed/);
-    assert.equal(count(serving, /approvals:decide failed/), 0, serving.lines.join('\n'));
-    // The write after the wait is unguarded: it ran zero times.
-    assert.deepEqual(companies(dir), ['Osprey', 'Decide Osprey']);
-  } finally {
-    await serving.stop();
-  }
-});
-
 test('an approval after the sleep won wakes nothing', async () => {
   const dir = project('approvals_race');
   const serving = await served(dir);

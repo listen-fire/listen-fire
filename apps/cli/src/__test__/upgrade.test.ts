@@ -181,3 +181,51 @@ test('listen-fire upgrade on a 0.12 project with waits and callbacks', () => {
   assert.equal(again.code, 0, again.out);
   assert.match(again.out, /1 file\(s\), 0 would be rewritten, 0 left to change by hand/);
 });
+
+// A wait no `sleep` races: from 0.13 a wait whose record is deleted never
+// ends, where under 0.12 the code after it was skipped. Nothing to rewrite,
+// so the upgrade lists it and the pin moves; one raced with a sleep is not told.
+const UNRACED = `import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+function decide(company: <crm-[:Company]->>) {
+  ask = write crm-[:Company]-> { Name: "Decide \${company.Name}" }
+  a = await ask-[:Approvals]->
+  write crm-[:Company]-> { Name: "Decided \${a.Decision}" }
+}
+
+listen to crm { events: ["company.created"] } fire decide
+`;
+
+test('upgrade lists an unraced await as a warning and still moves the pin', () => {
+  const dir = project();
+  pinned(dir, '0.12.13');
+  const file = join(dir, 'movements', 'companies.mvt');
+  writeFileSync(file, UNRACED);
+
+  const { code, out } = lf(dir, 'upgrade');
+  assert.equal(code, 0, out);
+  assert.match(
+    out,
+    /^movements\/companies\.mvt:8:7 warning MOV_AWAIT_MAY_HANG 'await ask-\[:Approvals\]->' is not in a `race` with a `sleep`: from 0\.13 a wait whose record is deleted never ends \(under 0\.12\.13 the code after it was skipped\), so this run can wait forever\. Race it: `race\(\(\) => \{ return await ask-\[:Approvals\]-> \}, \(\) => \{ await sleep\(1d\) \}\)` — reviews#deleted-records$/m,
+  );
+  assert.match(out, /lf\.yaml: engine: 0\.13\.0 \(was 0\.12\.13\)/);
+  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.13\.0$/m);
+  assert.equal(readFileSync(file, 'utf8'), UNRACED);
+  const checked = lf(dir, 'check');
+  assert.equal(checked.code, 0, checked.out);
+  assert.doesNotMatch(checked.out, /MOV_AWAIT_MAY_HANG/);
+
+  const raced = project();
+  pinned(raced, '0.12.13');
+  writeFileSync(
+    join(raced, 'movements', 'companies.mvt'),
+    UNRACED.replace('  a = await ask-[:Approvals]->\n  write crm-[:Company]-> { Name: "Decided ${a.Decision}" }', '  r = race(() => { return await ask-[:Approvals]-> }, () => { await sleep(1d) })'),
+  );
+  const told = lf(raced, 'upgrade');
+  assert.equal(told.code, 0, told.out);
+  assert.doesNotMatch(told.out, /MOV_AWAIT_MAY_HANG/);
+  assert.match(told.out, /lf\.yaml: engine: 0\.13\.0 \(was 0\.12\.13\)/);
+});

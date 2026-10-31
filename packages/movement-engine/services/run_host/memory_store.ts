@@ -286,7 +286,7 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
         for (const { address, park } of parks) {
           if (park.kind !== 'wait') continue;
           const unread = waitArrivals(park.waitId);
-          if (!unread.gone && unread.arrivals.length === 0) continue;
+          if (unread.arrivals.length === 0) continue;
           const wake = { runId, waitId: park.waitId, address };
           queueWake(teamId, wake);
           wakes.push(wake);
@@ -380,6 +380,8 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
           if (identity !== null && log.some((row) => sameRecord(row) && row.identity === identity && row.version === version && row.loggedAt > retained)) continue;
           lastSeq += 1;
           log.push({ seq: lastSeq, teamId, adapterType, edge, key, identity, version, landing: arrival.landing === null ? null : stored(arrival.landing), gone: arrival.gone, loggedAt });
+          // A deleted record answers no wait: its waits keep waiting.
+          if (arrival.gone) continue;
           for (const wait of waits.values()) {
             if (!sameRecord(wait) || wait.address === null) continue;
             // A wait whose park has finished needs no wake: its leaf is gone.

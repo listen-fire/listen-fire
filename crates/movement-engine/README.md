@@ -320,7 +320,7 @@ this engine reads a member of (`lookup.resolveActingUser`:
 `{principal: {id, display?}, email?}`; `llm.transforms.invoke`: `{text?,
 data?, records?, outcome?}` with every record an object;
 an adapter's `awaitKeys`: one `{key}` or
-`{gone: true}` per head; `park.waits.arrivals`: `{gone, arrivals}`, each
+`{gone: true}` per head; `park.waits.arrivals`: `{arrivals}`, each
 arrival naming its identity; a refetching adapter's
 `readRecord`: an object or null; `files.resolveFileText`'s `unreadable`: one
 of its four reasons) is held to that shape where it is read. One of another
@@ -876,16 +876,14 @@ edge share its wait, and each takes the listing's first match, so the
 second binds the same oldest member as the first ("the existing match, or
 else the first to arrive"). An arrival whose landing names its record
 (`recordId`) is bound as that record, as the listing would have landed it.
-A record that is gone (an `awaitKeys` answer of `{gone: true}`, or a gone
-arrival) settles the wait empty: the scope the `await` is in ends quietly,
-so what follows it runs zero times (`Stop::EndedQuietly(Quiet::WaitGone)`).
-That scope is a block's iteration, a call's body, an `all` arm (its slot
-null), a collection member (its answer null; the op goes on with the
-others), else the movement's body. A `race` arm whose record is gone never
-settles, as a promise that never resolves loses a race: the race goes on
-with its other arms, the gone ones kept at its frame (`#gone`), and the
-last arm to go ends the race's own scope quietly. A resumed branch ends the
-same way as it would have before it parked. A function's or a closure's
+A record deleted while the run waits on it leaves the wait waiting: a gone
+arrival is no answer, and the engine does not read it. So what follows the
+`await` never runs, and the run stays parked, unless a `race` arm beside it
+settles (a `sleep`), as a promise that never resolves loses a race. A record
+the adapter already calls gone when the wait would open (an `awaitKeys`
+answer of `{gone: true}`) has no wait row: the `await` parks with nothing
+that can wake it. A quiet end (find-on-missing) inside a resumed branch ends
+it the same way as it would have before it parked. A function's or a closure's
 parameter takes its mark before the call reads its arguments (a `map`'s,
 before the op reads its members; a parked op keeps that mark at its frame,
 `since`, for the members its resume starts).

@@ -64,7 +64,7 @@ export interface ParkStore {
    * the `settle_race` row of `settledRace` deleted and each of `owedRaces`
    * queued (key `settle_race:<runId>:<frameAddress>`, team `teamId`); and a
    * `wake_await` row queued, and answered, for each wait a park parks whose
-   * arrivals are unread or whose record is gone. Throws `RunLeaseLost`,
+   * arrivals are unread (a deleted record wakes nothing). Throws `RunLeaseLost`,
    * writing nothing, when `fence` is not the run's lease; a park the store
    * refuses writes nothing either.
    *
