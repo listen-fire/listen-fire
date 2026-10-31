@@ -99,7 +99,7 @@ test("a deleted company leaves its wait parked; the race's sleep wins", async ()
 });
 
 const PRESS = `${HEADER}
-function decide(run: <manual-[:Invocation]->>) {
+function decide(run: <manual-[:Invocations]->>) {
   general = only(chat-[ch:Channels WHERE ch.Name == "general"]->)
   if (general == null) { fail("no #general channel") }
   msg = write general-[:Messages]-> {
@@ -110,7 +110,7 @@ function decide(run: <manual-[:Invocation]->>) {
   write general-[:Messages]-> { Message: "chose \${only(press-[:Actions]->).Value}" }
 }
 
-listen to manual fire decide
+listen to manual-[:Invocations]-> fire decide
 `;
 
 test('listen-fire runs says a wait is stranded when its message is deleted', async () => {

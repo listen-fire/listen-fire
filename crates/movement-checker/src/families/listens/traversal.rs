@@ -9,7 +9,7 @@
 //! MOV_LISTEN_NOT_INSTANCE, MOV_LISTEN_PARAM_MISMATCH,
 //! MOV_LISTEN_DUPLICATE, MOV_LISTEN_ALIAS_DUPLICATE.
 
-use movement_parser::ast::{ListenDeclaration, PathHead, PathRoot};
+use movement_parser::ast::{ListenDeclaration, PathHead, PathRoot, TypeRef};
 use movement_parser::catalog::types::{CollectionSchema, Delivery, EdgeSchema, InstanceSchema, ParentChanges, PositionSchema};
 use movement_parser::listen_plan::{HopJudged, ListenPlan, PlanHop};
 use movement_parser::lowering::expression::{EdgeStep, Expression, LogicalOp, TraversalStep};
@@ -20,7 +20,7 @@ use crate::families::filter_split::{EdgeView, owned_fields, split_hop, spell};
 use crate::families::flow::spell_path_head;
 use crate::families::names::spell_name;
 use crate::families::walks::is_pure_predicate;
-use crate::scope::{Resolution, ScopeId, SymbolKind};
+use crate::scope::{Resolution, ScopeId, SymbolId, SymbolKind};
 use crate::types::position::{Instance, Position, positions_match};
 
 /// A landing the schema declares no record type for (a union's name): its
@@ -122,9 +122,25 @@ impl Checker<'_> {
                 _ => None,
             })
             .collect();
-        let plan = instance.as_ref().and_then(|instance| self.plan_listen(statement, path, instance, &steps, scope));
+        let landing = statement.landing.as_ref().and_then(|stated| self.landing_node(stated, scope));
+        let plan = instance
+            .as_ref()
+            .and_then(|instance| self.plan_listen(statement, path, instance, &steps, scope))
+            .map(|plan| ListenPlan { landing: landing.and(statement.landing.as_ref()).map(|stated| stated.graph.clone()), ..plan });
         if let Some(walk) = &walk {
-            self.check_listen_fires(statement, path, &steps, walk.landed.as_ref(), scope);
+            let landed = walk.landed.as_ref().map(present);
+            if let (Some(stated), Some(landed)) = (&statement.landing, landed)
+                && !untyped(landed)
+            {
+                let message = format!(
+                    "'-[:{}]->' lands what {} describes, so its type is the module's — `<{}>` types only a landing its module leaves untyped (a webhook's body); drop it",
+                    steps.last().map(|s| s.edge_type_id.as_str()).unwrap_or_default(),
+                    statement.instance,
+                    stated.graph
+                );
+                self.report(codes::LISTEN_SHAPE_MISMATCH, message, stated.span);
+            }
+            self.check_listen_fires(statement, path, &steps, landed, landing, scope);
         }
         let identity = match &plan {
             Some(plan) => plan.identity(),
@@ -279,6 +295,7 @@ impl Checker<'_> {
             adapter: module.to_string(),
             hops: planned,
             carries: carries.to_vec(),
+            landing: None,
         })
     }
 
@@ -346,9 +363,32 @@ impl Checker<'_> {
         }
     }
 
+    /// The node a listen states its landing is (`-[:Requests]-><Payment>`):
+    /// one the program declares, else MOV_UNKNOWN_TYPE_NAME.
+    fn landing_node(&mut self, stated: &TypeRef, scope: ScopeId) -> Option<SymbolId> {
+        let name = stated.graph.as_str();
+        let found = match self.scopes.resolve(scope, name) {
+            Resolution::Found(id) => Some(id),
+            _ => None,
+        };
+        if let Some(id) = found.filter(|id| self.declared_node(*id).is_some()) {
+            return Some(id);
+        }
+        let message = if crate::checker::SCALAR_TYPE_NAMES.contains(&name) {
+            format!("what lands is a record, not the value type '<{name}>' — declare the fields it carries: `node Payment {{ amount: <number> }}`, then `-[:…]-><Payment>`")
+        } else if let Some(id) = found {
+            format!("'{name}' is {}, not a node the program declares — a listen types what lands as one: `node {name} {{ … }}`", self.scopes.symbol(id).kind.describe())
+        } else {
+            format!("no node '{name}' is declared — declare the fields what lands carries: `node {name} {{ amount: <number> }}`")
+        };
+        self.report(codes::UNKNOWN_TYPE_NAME, message, stated.span);
+        None
+    }
+
     /// The function a listen fires takes one parameter, and what lands on
-    /// the listen's last edge must be assignable to its type.
-    fn check_listen_fires(&mut self, statement: &ListenDeclaration, path: &PathHead, steps: &[EdgeStep], landed: Option<&Position>, scope: ScopeId) {
+    /// the listen's last edge must be assignable to its type: the node the
+    /// listen states it is, where its module leaves it untyped.
+    fn check_listen_fires(&mut self, statement: &ListenDeclaration, path: &PathHead, steps: &[EdgeStep], landed: Option<&Position>, landing: Option<SymbolId>, scope: ScopeId) {
         let Some(last) = steps.last().map(|s| s.edge_type_id.as_str()) else { return };
         let Some(id) = self.resolve_reference(&statement.movement, statement.span, scope) else { return };
         let kind = self.scopes.symbol(id).kind;
@@ -361,7 +401,7 @@ impl Checker<'_> {
             return;
         }
         let Some(info) = self.listens.movement_info(id) else { return };
-        let written: Vec<_> = info.params.clone();
+        let (written, decl_scope): (Vec<_>, _) = (info.params.clone(), info.decl_scope);
         if written.len() != 1 {
             let message = format!(
                 "'{}' takes {} parameters — a function a listen fires takes exactly one, what lands on '-[:{last}]->'",
@@ -372,9 +412,29 @@ impl Checker<'_> {
             return;
         }
         let Some(type_) = &written[0].type_ else { return };
+        if let Some(node) = landing {
+            return self.check_listen_payload_param(node, &written[0], type_, decl_scope, statement);
+        }
+        // A stated type that names no node was refused where it is written.
+        if statement.landing.is_some() {
+            return;
+        }
+        if landed.is_some_and(untyped) {
+            let message = format!(
+                "'{}' takes '{}: <{}>', but what lands on '-[:{last}]->' is untyped — state its type after the traversal: `listen to {}<{}> fire {}`",
+                statement.movement,
+                written[0].name,
+                super::spell_param_type(type_),
+                spell_path_head(path),
+                super::spell_param_type(type_),
+                spell_name(&statement.movement)
+            );
+            self.report(codes::LISTEN_PARAM_MISMATCH, message, statement.span);
+            return;
+        }
         let declared = self.movement_declared_params(id).and_then(|p| p.into_iter().next());
         let param = declared.as_ref().and_then(|p| p.plane.pos.as_deref());
-        let fits = match (param, landed.map(present)) {
+        let fits = match (param, landed) {
             (None, _) => declared.as_ref().is_none_or(|p| p.plane.field.is_none()),
             (Some(param), Some(landed)) => positions_match(landed, param) != Some(false),
             (Some(_), None) => true,
@@ -428,6 +488,12 @@ fn first_listenable(schema: &InstanceSchema, from: Option<&str>) -> Option<Strin
             edges.iter().find(|(_, e)| e.listenable == Some(true)).map(|(name, _)| name.clone())
         }
     }
+}
+
+/// A landing whose fields its module does not list (a webhook's body): a
+/// listen states its type.
+fn untyped(landed: &Position) -> bool {
+    crate::types::position::position_schema_of_ref(landed).is_some_and(|schema| schema.open_properties == Some(true) || schema.undescribed == Some(true))
 }
 
 /// The record a landing that may be empty holds when it is not.

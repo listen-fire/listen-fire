@@ -462,9 +462,10 @@ pub trait InboundStore {
     async fn arrivals_unkept(&self) -> Result<Option<String>, String> {
         Ok(None)
     }
-    /// Why the delivery's events are refused before anything is kept: none
-    /// fits what the listens they would reach declare. None to keep them.
-    fn refuse_events(&self, _source: &Source, _events: &[Js]) -> Option<String> {
+    /// Why the delivery's events and arrivals are refused before anything
+    /// is kept: one of them fits none of what the listens it would reach
+    /// declare it is. None to keep them.
+    fn refuse_events(&self, _source: &Source, _events: &[Js], _arrivals: &[crate::arrivals::ArrivalIn]) -> Option<String> {
         None
     }
 }
@@ -639,7 +640,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
         (store.preprocess(&source, &body, subscription.checkpoint.as_ref()).await?, external_id, None)
     };
 
-    if let Some(message) = store.refuse_events(&source, &extraction.events) {
+    if let Some(message) = store.refuse_events(&source, &extraction.events, &extraction.arrivals) {
         eprintln!("Webhook delivery refused for subscription {}: {message}", delivery.subscription_id);
         return refused(Refusal::PayloadMismatch(message));
     }

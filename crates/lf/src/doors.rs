@@ -539,10 +539,22 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
 
     /// A delivery none of whose events fits the payload every listen it
     /// would reach declares (`payload: <Payment>`) is refused, naming the
-    /// fields. A listen that declares none takes any event.
-    fn refuse_events(&self, source: &Source, events: &[Js]) -> Option<String> {
+    /// fields; so is one with an arrival that fits none of the types the
+    /// listens on its edge state (`-[:Requests]-><Payment>`). A listen that
+    /// declares none takes any event or arrival.
+    fn refuse_events(&self, source: &Source, events: &[Js], arrivals: &[ArrivalIn]) -> Option<String> {
         let credential = self.delivering_credential(source);
         let mut lines = Vec::new();
+        for arrival in arrivals.iter().filter(|a| !a.gone) {
+            let reached: Vec<&Listen> = self.listens.iter().filter(|l| l.is_on(&source.adapter_type, &arrival.edge) && l.hears(credential)).collect();
+            if reached.is_empty() || reached.iter().any(|l| l.misfits(arrival).is_empty()) {
+                continue;
+            }
+            for listen in reached {
+                let Some(declared) = &listen.payload else { continue };
+                lines.push(format!("{}, as the listen firing {}:{} states it: {}", declared.name, listen.file, listen.movement_name, listen.misfits(arrival).join("; ")));
+            }
+        }
         for event in events {
             let reached: Vec<&Listen> =
                 self.listens.iter().filter(|l| l.plan.is_none() && l.adapter == source.adapter_type && l.hears(credential) && event_matches_trigger_scope(event, &l.config, Arrival::Pushed)).collect();

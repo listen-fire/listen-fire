@@ -25,7 +25,7 @@ use crate::project::Project;
 use movement_parser::version::{LANGUAGE_VERSION, Standing, standing};
 use crate::remote::{Externals, SegmentAdapters};
 use crate::arrivals::{ArrivalIn, arrival_receipt_key};
-use crate::routing::{Arrival, Listen, address_matches_key, arrival_trigger_of, event_matches_trigger_scope, routes_by_key, trigger_event_of, unrouted_line, untyped_event_line};
+use crate::routing::{Arrival, Listen, arrival_trigger_of, event_matches_trigger_scope, trigger_event_of, untyped_event_line};
 use movement_engine::listen_judge::Verdict;
 use crate::run_host::{
     BUSY_RETRY_MS, CANCELLED_BY_OPERATOR, FailedWork, Lease, Settled, StepOutcome, StepRequest, Stepper, WORKER_LOST, after_step, arm_timer_wake,
@@ -426,16 +426,6 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     Ok(session)
 }
 
-/// The checkpoint a cron listen's ticks are kept under; None for any other listen.
-fn cron_subscription(file: &str, listen: &Listen) -> Option<String> {
-    if listen.adapter != crate::units::CRON {
-        return None;
-    }
-    let schedule = listen.config.get("schedule").and_then(Js::as_str)?;
-    let timezone = listen.config.get("timezone").and_then(Js::as_str).unwrap_or("UTC");
-    Some(format!("cron:{file}:{}:{schedule}:{timezone}", listen.movement_name))
-}
-
 /// What a run names of the delivery its event came in: the delivery's
 /// receipt, and the arrival log's mark when it was kept (its trigger's waits
 /// read from there). None of either for an event that came in no delivery.
@@ -570,7 +560,8 @@ fn under_scope(arrivals: &[ArrivalIn], key: &crate::edge_polls::PollKey) -> Vec<
 
 /// What firing one event came to: the runs it started, and a line for each
 /// way it ran nothing: a listen it was a redelivery to (its `idempotencyKey`
-/// seen there before) or an echo of, or mail no listen is keyed for.
+/// seen there before) or an echo of, or an arrival that is not what its
+/// listen states it is.
 #[derive(Default)]
 pub struct Fired {
     pub outcomes: Vec<RunOutcome>,
@@ -850,6 +841,12 @@ impl Session {
                     continue;
                 }
                 let Some(verdict) = listen.fires(arrival, delivered.credential, now_ms) else { continue };
+                let misfits = listen.misfits(arrival);
+                if !misfits.is_empty() {
+                    let declared = listen.payload.as_ref().map(|p| p.name.as_str()).unwrap_or_default();
+                    fired.redelivered.push(format!("{named}: the arrival {identity} on {} is not a {declared} ({}): it runs nothing", arrival.edge, misfits.join("; ")));
+                    continue;
+                }
                 match verdict {
                     Verdict::Fires => {}
                     // Said only under LF_LOG=debug: one line per arrival and
@@ -996,19 +993,14 @@ impl Session {
         let key = event.get("idempotencyKey").and_then(Js::as_str).filter(|k| !k.is_empty());
         let now_reads = RefCell::new(HashMap::new());
         let mut fired = Fired::default();
-        let keyed = set.running.iter().any(|r| r.external.manifest.name == external && routes_by_key(&r.listen));
-        let routed = |l: &Listen| !keyed || address_matches_key(event, &l.config);
         // An event reaches the listens in the settings form; a listen on a
         // traversal is fired by arrivals alone (`fire_arrivals`).
         let heard: Vec<&Listen> =
-            set.listens.iter().filter(|l| l.plan.is_none() && l.adapter == external && event_matches_trigger_scope(event, &l.config, arrival) && routed(l) && to(l)).collect();
+            set.listens.iter().filter(|l| l.plan.is_none() && l.adapter == external && event_matches_trigger_scope(event, &l.config, arrival) && to(l)).collect();
         let (reached, misfit): (Vec<&Listen>, Vec<&Listen>) = heard.into_iter().partition(|l| l.takes(event));
         for listen in misfit {
             let declared = listen.payload.as_ref().map(|p| (p.name.as_str(), p.misfits(event.get("payload").unwrap_or(&Js::Null)).join("; "))).unwrap_or_default();
             fired.redelivered.push(format!("{}:{} declares the payload {}, which this event does not fit ({}): it runs nothing", listen.file, listen.movement_name, declared.0, declared.1));
-        }
-        if keyed && reached.is_empty() {
-            fired.redelivered.push(unrouted_line(external, event));
         }
         for listen in reached {
             let run_id = uuid::Uuid::new_v4().to_string();
@@ -1043,57 +1035,33 @@ impl Session {
         Ok(fired)
     }
 
-    /// `listen-fire run <movement>`: one invocation on the manual unit, to the listens
-    /// that fire `movement` (`listen to manual fire <movement>`).
+    /// `listen-fire run <movement>`: one invocation on the manual unit, an
+    /// arrival on its `Invocations`, to the listens on it that fire
+    /// `movement` (`listen to manual-[:Invocations]-> fire <movement>`).
     pub async fn run_manual(&self, movement: &str, text: Option<&str>, dry_run: bool) -> Result<Fired, String> {
-        let manual = |l: &Listen| l.plan.is_none() && l.adapter == crate::units::MANUAL && l.movement_name == movement;
         let set = self.file_set();
-        if !set.listens.iter().any(manual) {
-            return Err(format!("no listen fires '{movement}' on manual: add `listen to manual fire {movement}` to run it with `listen-fire run {movement}`"));
+        let firing: Vec<usize> = set.listens.iter().enumerate().filter(|(_, l)| l.is_on(crate::units::MANUAL, crate::units::INVOCATIONS) && l.movement_name == movement).map(|(i, _)| i).collect();
+        if firing.is_empty() {
+            return Err(format!(
+                "no listen fires '{movement}' on manual: add `listen to manual-[:{}]-> fire {movement}` to run it with `listen-fire run {movement}`",
+                crate::units::INVOCATIONS
+            ));
         }
-        let event = crate::units::manual_event(&iso(0), &self.user, text);
-        self.fire_to(&set, crate::units::MANUAL, &event, Arrival::Pushed, dry_run, CameIn::default(), |l| l.movement_name == movement).await
-    }
-
-    /// The cron unit's due ticks (scale from zero): for each cron listen, the
-    /// latest occurrence since the last one it was fired for, fired once —
-    /// a tick missed while no worker ran fires on the next drain, and the
-    /// occurrence's receipt keeps a second worker from firing it again. A
-    /// listen seen for the first time starts from now: nothing before it is
-    /// owed.
-    async fn fire_due_ticks(&self, set: &FileSet, log: &mut impl Write) -> Result<Vec<RunOutcome>, String> {
-        let names = set.running.iter().filter(|r| !r.is_plugin()).map(|r| r.external.manifest.name.as_str());
-        if crate::units::unit_named(crate::units::CRON, names).is_none() {
-            return Ok(Vec::new());
+        let arrival = crate::units::invocation(&iso(0), &self.user, text);
+        let arrivals = crate::arrivals::arrivals_of(&Js::Obj(obj! { "arrivals" => Js::Arr(vec![arrival]) }))?;
+        if !dry_run {
+            let only = crate::edge_polls::Shared { fires: firing, ..Default::default() };
+            return self.fire_arrivals_to(&set, crate::units::MANUAL, &arrivals, Delivered::default(), JudgedBy::Sharing(&only)).await;
         }
-        let now = iso(self.due_offset_ms);
-        let now_ms = crate::units::ms_of(&now).ok_or("the clock reads no instant")?;
-        let mut outcomes = Vec::new();
-        for (index, listen) in set.listens.iter().enumerate() {
-            let file = set.file(&listen.file);
-            let Some(subscription) = cron_subscription(&file.name, listen) else { continue };
-            let Some(schedule) = listen.config.get("schedule").and_then(Js::as_str) else { continue };
-            let timezone = listen.config.get("timezone").and_then(Js::as_str);
-            let after = self.store.inbound_checkpoint(&subscription).map_err(|e| e.to_string())?;
-            let Some(after_ms) = after.as_ref().and_then(|c| c.get("after")).and_then(Js::as_str).and_then(crate::units::ms_of) else {
-                self.store.save_inbound_checkpoint(&subscription, &Js::Obj(obj! { "after" => Js::str(&now) })).map_err(|e| e.to_string())?;
-                continue;
-            };
-            let parsed = match crate::units::parse_schedule(schedule, timezone) {
-                Ok(parsed) => parsed,
-                Err(message) => {
-                    let _ = writeln!(log, "{}:{} schedule \"{schedule}\": {message}", file.name, listen.movement_name);
-                    continue;
-                }
-            };
-            let Some(due_ms) = parsed.latest_in(after_ms, now_ms) else { continue };
-            let due = crate::units::iso_of(due_ms);
-            let event = crate::units::tick_event(&due, schedule, timezone);
-            let fired = self.fire_to(set, crate::units::CRON, &event, Arrival::Pushed, false, CameIn::default(), |l| std::ptr::eq(l, &set.listens[index])).await?;
-            self.store.save_inbound_checkpoint(&subscription, &Js::Obj(obj! { "after" => Js::str(&due) })).map_err(|e| e.to_string())?;
-            outcomes.extend(fired.outcomes);
+        // A rehearsal keeps no receipt: an invocation is never delivered twice.
+        let mut fired = Fired::default();
+        for listen in firing.iter().map(|i| &set.listens[*i]) {
+            let trigger = arrival_trigger_of(&listen.pipeline(), crate::units::MANUAL, &arrivals[0], &iso(0));
+            if let Some(outcome) = self.run_listen(&set, &uuid::Uuid::new_v4().to_string(), listen, trigger, true, None, CameIn::default()).await? {
+                fired.outcomes.push(outcome);
+            }
         }
-        Ok(outcomes)
+        Ok(fired)
     }
 
     /// Give each polled listen without one its `poll_listen` work row, due
@@ -1217,33 +1185,37 @@ impl Session {
     async fn poll_edge_once(&self, set: &FileSet, key: &crate::edge_polls::PollKey, shared: &crate::edge_polls::Shared, row_runs: PolledRow) -> Result<EdgePolled, String> {
         let subscription = crate::edge_polls::poll_subscription(key);
         let subscription = subscription.as_str();
-        let running = set
-            .running
-            .iter()
-            .find(|r| !r.is_plugin() && r.external.manifest.name == key.adapter)
-            .ok_or_else(|| format!("{}: not running, so its polled edge '{}' is not polled", key.adapter, key.edge))?;
-        if !running.methods.iter().any(|m| m == "poll") {
-            return Err(format!("{}: its edge '{}' is polled, and it offers no `poll`: declare `poll` and answer `{{ edge, filter?, scope?, cursor? }}` (adapter protocol 2.6)", key.adapter, key.edge));
-        }
         let state = self.store.inbound_checkpoint(subscription).map_err(|e| e.to_string())?;
+        let cursor = state.as_ref().and_then(|s| s.get("cursor"));
         let secrets = self.secrets();
         let credentials = secrets.credentials();
-        let credential = match &key.credential {
-            Some(name) => Some(credentials.iter().find(|c| c.name == *name).ok_or_else(|| format!("no credential \"{name}\" in the secrets file"))?),
-            None => credential_for(credentials, &key.adapter),
+        let running = set.running.iter().find(|r| !r.is_plugin() && r.external.manifest.name == key.adapter);
+        // The cron unit's clock, answered in process.
+        let (answer, credential, resend_manifest) = match running {
+            None if key.adapter == crate::units::CRON && key.edge == crate::units::TICKS => (crate::units::poll_ticks(key.filter().as_ref(), cursor, self.now_ms())?, None, Js::Null),
+            None => return Err(format!("{}: not running, so its polled edge '{}' is not polled", key.adapter, key.edge)),
+            Some(running) => {
+                if !running.methods.iter().any(|m| m == "poll") {
+                    return Err(format!("{}: its edge '{}' is polled, and it offers no `poll`: declare `poll` and answer `{{ edge, filter?, scope?, cursor? }}` (adapter protocol 2.6)", key.adapter, key.edge));
+                }
+                let credential = match &key.credential {
+                    Some(name) => Some(credentials.iter().find(|c| c.name == *name).ok_or_else(|| format!("no credential \"{name}\" in the secrets file"))?),
+                    None => credential_for(credentials, &key.adapter),
+                };
+                let mut params = serde_json::json!({ "edge": key.edge });
+                if let Some(filter) = key.filter() {
+                    params["filter"] = filter;
+                }
+                if let Some(scope) = &key.scope {
+                    params["scope"] = serde_json::Value::String(scope.clone());
+                }
+                if let Some(cursor) = cursor {
+                    params["cursor"] = crate::wire::json_of_js(cursor);
+                }
+                let raw = rpc_in(running, credentials, credential, LOCAL_TENANT, "poll", params, key.position_settings()).await?;
+                (wire_results::check("poll", &key.adapter, &raw)?, credential, running.manifest_answer.clone())
+            }
         };
-        let mut params = serde_json::json!({ "edge": key.edge });
-        if let Some(filter) = key.filter() {
-            params["filter"] = filter;
-        }
-        if let Some(scope) = &key.scope {
-            params["scope"] = serde_json::Value::String(scope.clone());
-        }
-        if let Some(cursor) = state.as_ref().and_then(|s| s.get("cursor")) {
-            params["cursor"] = crate::wire::json_of_js(cursor);
-        }
-        let raw = rpc_in(running, credentials, credential, LOCAL_TENANT, "poll", params, key.position_settings()).await?;
-        let answer = wire_results::check("poll", &key.adapter, &raw)?;
         let arrivals = crate::arrivals::arrivals_of(&answer).map_err(|e| format!("{}: a poll of '{}' answered {e}", key.adapter, key.edge))?;
         let arrivals = under_scope(&arrivals, key);
         let mut cursor = obj! { "armed" => Js::Bool(true) };
@@ -1264,7 +1236,7 @@ impl Session {
             }
         } else {
             let (logged, at) = (crate::arrivals::logged(&arrivals), iso(0));
-            let resend_window_ms = crate::externals::resend_window_ms(&self.project, &key.adapter, &running.manifest_answer);
+            let resend_window_ms = crate::externals::resend_window_ms(&self.project, &key.adapter, &resend_manifest);
             let log = crate::waits::DeliveryArrivals { team_id: LOCAL_TENANT, adapter_type: &key.adapter, arrivals: &logged, at: &at, resend_window_ms };
             let came_for = Delivered { credential: key.credential.as_deref(), ..Delivered::default() };
             let doors = crate::doors::LfDoors {
@@ -1983,7 +1955,7 @@ impl Session {
 
     async fn drain_work_in(&self, set: &FileSet, limit: i64, log: &mut impl Write) -> Result<(usize, Vec<RunOutcome>), String> {
         self.follow_kept_heads(set).await?;
-        let mut outcomes = if self.pool.fires_cron() { self.fire_due_ticks(set, log).await? } else { Vec::new() };
+        let mut outcomes = Vec::new();
         if self.pool.takes(POLL_WORK_KIND) {
             self.arm_polls(set)?;
         }
@@ -2531,9 +2503,11 @@ impl Session {
         for line in changed.into_iter().chain(dropped).chain(started) {
             let _ = writeln!(log, "{line}");
         }
-        // A cron listen that returns is then seen for the first time, and owes nothing.
-        let crons = |s: &FileSet| s.listens.iter().filter_map(|l| cron_subscription(&l.file, l)).collect::<BTreeSet<_>>();
-        for left in crons(&set).difference(&crons(&taken)) {
+        // A polled edge no listen shares any more forgets its cursor: a
+        // listen that returns to it (a cron schedule put back) is then seen
+        // for the first time, and owes nothing.
+        let polled = |s: &FileSet| crate::edge_polls::polled_keys(s).keys().map(crate::edge_polls::poll_subscription).collect::<BTreeSet<_>>();
+        for left in polled(&set).difference(&polled(&taken)) {
             self.store.save_inbound_checkpoint(left, &Js::Null).map_err(|e| e.to_string())?;
         }
         if self.role.registers_webhooks() {
@@ -2764,9 +2738,9 @@ mod tests {
         tokio::task::LocalSet::new().block_on(&runtime, async {
             let project = crate::project::load_project(&root).unwrap();
             let session = open_session(project, &Opening { ephemeral: false, store: &StoreSpec::Sqlite(root.join(".lf/state.db")), role: Role::Command, routes_listens: false }).await.unwrap();
-            let event = crate::units::manual_event(&iso(0), &session.user, None);
             let row = |delivery_id: Option<&str>| {
-                let mut payload = obj! { "external" => Js::str(crate::units::MANUAL), "event" => event.clone() };
+                let arrival = crate::units::invocation(&iso(0), &session.user, None);
+                let mut payload = obj! { "external" => Js::str(crate::units::MANUAL), "arrivals" => Js::Arr(vec![arrival]) };
                 if let Some(id) = delivery_id {
                     payload.insert("deliveryId".into(), Js::str(id));
                 }
@@ -3146,13 +3120,13 @@ mod tests {
             assert_eq!(lines.last(), Some(&RUN_CHECK), "{log}");
             let kept = session.file_set();
             let served: Vec<(&str, bool)> = kept.listens.iter().map(|l| (l.file.as_str(), l.plan.is_some())).collect();
-            assert_eq!(served, [("acme_i", false), ("hello", false)], "the running set's listens, in the settings form, are still served");
+            assert_eq!(served, [("acme_i", false), ("hello", true)], "the running set's listens are still served");
         });
     }
 
     #[test]
     fn a_session_that_routes_refuses_a_project_with_a_check_error_and_one_that_runs_a_function_opens_it() {
-        let broken = "function other(run: <manual-[:Invocation]->>) {\n  return nowhere.Name\n}\nlisten to manual fire other\n";
+        let broken = "function other(run: <manual-[:Invocations]->>) {\n  return nowhere.Name\n}\nlisten to manual-[:Invocations]-> fire other\n";
         let root = refresh_project(&[("hello.mvt", MANUAL_V1), ("broken.mvt", broken)]);
         on_one_thread(&root.clone(), async || {
             let refused = open_at(&root, Role::Serve, true).await.err().expect("serving a project that does not check is refused");
@@ -3166,8 +3140,8 @@ mod tests {
     }
 
     #[test]
-    fn a_run_of_a_function_keeps_the_settings_listens_of_a_project_whose_listen_on_a_traversal_does_not_check() {
-        let watching = "function tick(run: <manual-[:Invocation]->>) {\n  return \"ticked\"\n}\nlisten to manual fire tick\nlisten to crm-[:Company]-> fire tick\n";
+    fn a_run_of_a_function_keeps_the_listens_that_check_of_a_project_whose_listen_on_a_traversal_does_not() {
+        let watching = "function tick(run: <manual-[:Invocations]->>) {\n  return \"ticked\"\n}\nlisten to manual-[:Invocations]-> fire tick\nlisten to crm-[:Company]-> fire tick\n";
         let root = refresh_project(&[("hello.mvt", MANUAL_V1), ("watching.mvt", watching)]);
         on_one_thread(&root.clone(), async || {
             let refused = open_at(&root, Role::Serve, true).await.err().expect("serving it is refused");
@@ -3176,7 +3150,7 @@ mod tests {
             assert_eq!(returns(&session, "hello").await, "v1", "a function of another file runs");
             let set = session.file_set();
             let read: Vec<(&str, &str, bool)> = set.listens.iter().map(|l| (l.file.as_str(), l.movement_name.as_str(), l.plan.is_some())).collect();
-            assert_eq!(read, [("hello", "hello", false), ("watching", "tick", false)], "the file's listen in the settings form is read beside the one that does not check");
+            assert_eq!(read, [("hello", "hello", true), ("watching", "tick", true)], "the file's listen that checks is read beside the one that does not");
         });
     }
 
@@ -3188,7 +3162,7 @@ mod tests {
                 "function {name}_step{helper}(word: <text>) {{\n  greeting = greet(\"${{word}} {salt} {helper}\")\n  if (greeting == \"\") {{\n    fail(\"nothing to say\")\n  }}\n  return greeting\n}}\n\n"
             ));
         }
-        text.push_str(&format!("function {name}(run: <manual-[:Invocation]->>) {{\n  return {name}_step0(\"{name}\")\n}}\n\nlisten to manual fire {name}\n"));
+        text.push_str(&format!("function {name}(run: <manual-[:Invocations]->>) {{\n  return {name}_step0(\"{name}\")\n}}\n\nlisten to manual-[:Invocations]-> fire {name}\n"));
         text
     }
 
@@ -3242,7 +3216,7 @@ mod tests {
         std::fs::remove_dir_all(root).ok();
     }
 
-    const MANUAL_V1: &str = "function hello(run: <manual-[:Invocation]->>) {\n  return \"v1\"\n}\nlisten to manual fire hello\n";
+    const MANUAL_V1: &str = "function hello(run: <manual-[:Invocations]->>) {\n  return \"v1\"\n}\nlisten to manual-[:Invocations]-> fire hello\n";
 
     /// A started project (`listen-fire init`, its own empty secrets) with `files`
     /// written into its movements folder.
@@ -3322,7 +3296,7 @@ mod tests {
             assert_eq!(returns(session, "hello").await, "v2");
             // An unchanged file a change breaks is still checked, and refused.
             put(&root, "lib/greet.mvt", "export function greet(name: <text>) {\n  return name\n}\n");
-            put(&root, "other.mvt", "import { greet } from \"lib/greet\"\n\nfunction other(run: <manual-[:Invocation]->>) {\n  return greet(\"o\")\n}\nlisten to manual fire other\n");
+            put(&root, "other.mvt", "import { greet } from \"lib/greet\"\n\nfunction other(run: <manual-[:Invocations]->>) {\n  return greet(\"o\")\n}\nlisten to manual-[:Invocations]-> fire other\n");
             assert_eq!(refreshed(session).await, "movements: lib/greet.mvt added\nmovements: other.mvt changed\n");
             put(&root, "lib/greet.mvt", "export function greet(name: <number>) {\n  return name\n}\n");
             let log = refreshed(session).await;
@@ -3343,11 +3317,13 @@ mod tests {
 
     #[test]
     fn a_removed_files_cron_stops_and_its_parked_run_still_resumes() {
-        let tick = "function tock(t: <cron-[:Tick]->>) {\n  fail(\"tick ${t.`Fired at`} on ${t.`Schedule`}\")\n}\nlisten to cron { schedule: \"* * * * *\" } fire tock\n";
-        let nap = "function nap(run: <manual-[:Invocation]->>) {\n  await sleep(1h)\n  return \"woke\"\n}\nlisten to manual fire nap\n";
+        let tick = "function tock(t: <cron-[:Ticks]->>) {\n  fail(\"tick ${t.`Fired at`} on ${t.`Schedule`}\")\n}\nlisten to cron-[t:Ticks WHERE t.Schedule == \"* * * * *\"]-> fire tock\n";
+        let nap = "function nap(run: <manual-[:Invocations]->>) {\n  await sleep(1h)\n  return \"woke\"\n}\nlisten to manual-[:Invocations]-> fire nap\n";
         let root = refresh_project(&[("tick.mvt", tick), ("nap.mvt", nap)]);
         with_session(&root.clone(), async |session| {
-            let subscription = "cron:tick:tock:* * * * *:UTC";
+            let keys = crate::edge_polls::polled_keys(&session.file_set());
+            assert_eq!(keys.keys().map(|k| (k.adapter.as_str(), k.edge.as_str())).collect::<Vec<_>>(), [("cron", "Ticks")], "the cron listen's ticks are one shared poll");
+            let subscription = &crate::edge_polls::poll_subscription(keys.keys().next().unwrap());
             session.drain_work(WORK_ROWS_PER_DRAIN, &mut Vec::new()).await.unwrap();
             assert!(session.store.inbound_checkpoint(subscription).unwrap().is_some(), "the first sighting saved now");
             let fired = session.run_manual("nap", None, false).await.unwrap();
@@ -3386,7 +3362,7 @@ mod tests {
             assert_eq!(returns(session, "hello").await, "v3");
 
             put(&root, "lib/greet.mvt", "export function greet(name: <text>) {\n  return \"Hello, ${name}!\"\n}\n");
-            put(&root, "hello.mvt", "import { greet } from \"lib/greet\"\n\nfunction hello(run: <manual-[:Invocation]->>) {\n  return greet(\"v4\")\n}\nlisten to manual fire hello\n");
+            put(&root, "hello.mvt", "import { greet } from \"lib/greet\"\n\nfunction hello(run: <manual-[:Invocations]->>) {\n  return greet(\"v4\")\n}\nlisten to manual-[:Invocations]-> fire hello\n");
             assert_eq!(refreshed(session).await, "movements: hello.mvt changed\nmovements: lib/greet.mvt added\n");
             assert_eq!(returns(session, "hello").await, "Hello, v4!");
 

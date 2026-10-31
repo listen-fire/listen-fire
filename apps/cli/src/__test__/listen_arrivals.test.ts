@@ -204,7 +204,7 @@ test('serve refuses a project whose listen on a traversal does not check, naming
 });
 
 /** A function whose body reads a name nothing binds: an ordinary check error, in no listen. */
-const BROKEN = 'function broken(run: <manual-[:Invocation]->>) {\n  return nowhere.Name\n}\n\nlisten to manual fire broken\n';
+const BROKEN = 'function broken(run: <manual-[:Invocations]->>) {\n  return nowhere.Name\n}\n\nlisten to manual-[:Invocations]-> fire broken\n';
 
 test('a project with a check error in a function is not served, drained or handed a webhook, and says to run check', async () => {
   const dir = project();
@@ -228,7 +228,7 @@ test('a run of a function, an event or a named run opens a project whose listen 
   const dir = project();
   withUnlistenableComments(dir);
   writeFileSync(join(dir, 'movements/notes.mvt'), `import { acme_crm } from adapters\nimport { acme } from credentials\n\ncrm = connect acme_crm using acme\n${ON_COMMENTS}`);
-  writeFileSync(join(dir, 'movements/hello.mvt'), 'function hello(run: <manual-[:Invocation]->>) {\n  return "hi"\n}\n\nlisten to manual fire hello\n');
+  writeFileSync(join(dir, 'movements/hello.mvt'), 'function hello(run: <manual-[:Invocations]->>) {\n  return "hi"\n}\n\nlisten to manual-[:Invocations]-> fire hello\n');
   const hello = lf(dir, 'run', 'hello');
   assert.equal(hello.code, 0, hello.out);
   assert.match(hello.out, /hello:hello completed/);

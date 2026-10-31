@@ -345,7 +345,6 @@ impl<'s> SegmentAdapters<'s> {
                 "capabilities" => Js::Obj(Obj::new()),
                 "methods" => Js::strings(crate::units::METHODS),
                 "walksContainers" => Js::Bool(false),
-                "webhookEventTypeId" => Js::str(crate::units::event_type_id(unit)),
             });
         }
         let running = self.running(instance);

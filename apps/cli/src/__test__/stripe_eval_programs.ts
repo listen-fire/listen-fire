@@ -74,7 +74,7 @@ ${listen}
 `;
 }
 
-export const WEEKLY_CHARGES = weekly('<cron-[:Tick]->>', 'listen to cron { schedule: "0 9 * * 5" } fire `Weekly Charges`');
+export const WEEKLY_CHARGES = weekly('<cron-[:Ticks]->>', 'listen to cron-[t:Ticks WHERE t.Schedule == "0 9 * * 5"]-> fire `Weekly Charges`');
 
 /** The same report body, run on demand so a test can read what it posts. */
-export const WEEKLY_CHARGES_ON_DEMAND = weekly('<manual-[:Invocation]->>', 'listen to manual fire `Weekly Charges`');
+export const WEEKLY_CHARGES_ON_DEMAND = weekly('<manual-[:Invocations]->>', 'listen to manual-[:Invocations]-> fire `Weekly Charges`');

@@ -1,14 +1,17 @@
 // The webhook adapter: one connection's door. A delivery is checked against
-// the connection's signing (signing.ts), and its JSON body becomes one event.
-// Its fields are read as the body holds them; what they are is the node the
-// listen declares, which listen-fire checks the body against before any run.
+// the connection's signing (signing.ts), and its JSON body arrives on the
+// connection's `Requests` edge. Its fields are read as the body holds them;
+// what they are is the node the listen states, which listen-fire checks the
+// body against before any run.
+
+import { randomUUID } from 'node:crypto';
 
 import type { InboundCheck, InboundCheckInput } from 'movement-engine/public/adapter';
-import type { EventType, SchemaEntryPoint, SchemaTypeDescriptor } from 'engine-contracts';
+import type { SchemaEntryPoint, SchemaTypeDescriptor } from 'engine-contracts';
 import { BaseAdapter } from 'module-kit/adapter/base';
 import { accepted, inboundRequest, refused, reply } from 'module-kit';
 
-import { DELIVERY_TAG, DELIVERY_TYPE, WEBHOOK_ADAPTER_TYPE } from './manifest';
+import { REQUESTS_EDGE, REQUEST_TYPE, WEBHOOK_ADAPTER_TYPE } from './manifest';
 import { verify, type Signing } from './signing';
 
 export interface WebhookSources {
@@ -31,20 +34,17 @@ export class WebhookAdapter extends BaseAdapter {
     super();
   }
 
-  /** The one event edge. Reading the signing first means a misconfigured
-   *  credential fails `listen-fire check`, naming what to set, before any delivery. */
+  /** The one edge, pushed to the connection: each delivery arrives on it.
+   *  Reading the signing first means a misconfigured credential fails
+   *  `listen-fire check`, naming what to set, before any delivery. */
   async listEntryPoints(): Promise<SchemaEntryPoint[]> {
     await this.sources.signing();
-    return [{ typeId: DELIVERY_TYPE, displayName: DELIVERY_TYPE, writable: false, readable: false, fires: true }];
+    return [{ typeId: REQUEST_TYPE, displayName: REQUEST_TYPE, collectionName: REQUESTS_EDGE, writable: false, readable: false, listenable: true, delivery: 'connection' }];
   }
 
-  /** A delivery has no fields of its own: the listen's `payload:` types it. */
+  /** A request's body is untyped: the listen states what it is (`-[:Requests]-><Payment>`). */
   async describe(_typeId: string): Promise<SchemaTypeDescriptor | null> {
     return null;
-  }
-
-  async listEventTypes(): Promise<EventType[]> {
-    return [{ tag: DELIVERY_TAG, positionType: DELIVERY_TYPE }];
   }
 
   async checkInbound(input: InboundCheckInput): Promise<InboundCheck> {
@@ -62,6 +62,8 @@ export class WebhookAdapter extends BaseAdapter {
     }
     const id = signing.idField === undefined ? undefined : body[signing.idField];
     const deliveryId = typeof id === 'string' && id !== '' ? id : typeof id === 'number' ? String(id) : undefined;
-    return accepted([{ payload: body, tag: DELIVERY_TAG }], deliveryId === undefined ? {} : { deliveryId });
+    // A delivery the sender names nothing by is its own arrival: nothing to dedupe it by.
+    const arrival = { edge: REQUESTS_EDGE, identity: deliveryId ?? randomUUID(), landing: { recordType: REQUEST_TYPE, fields: body } };
+    return accepted([], { arrivals: [arrival], ...(deliveryId === undefined ? {} : { deliveryId }) });
   }
 }

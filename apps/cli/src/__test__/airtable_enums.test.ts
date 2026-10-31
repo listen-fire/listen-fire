@@ -91,7 +91,7 @@ test('listen-fire check holds Airtable select values to the base\'s choices, and
     refused(check(dir, where('Lost')), /MOV_ENUM_UNKNOWN_VALUE "Lost"/);
 
     // The known write, run, reaches the base the connection names.
-    writeFileSync(join(dir, 'movements/tag.mvt'), `${HEAD}\nfunction tag(run: <manual-[:Invocation]->>) {\n  ${KNOWN}\n}\n\nlisten to manual fire tag\n`);
+    writeFileSync(join(dir, 'movements/tag.mvt'), `${HEAD}\nfunction tag(run: <manual-[:Invocations]->>) {\n  ${KNOWN}\n}\n\nlisten to manual-[:Invocations]-> fire tag\n`);
     const ran = lfSync(dir, 'run', 'tag');
     assert.equal(ran.code, 0, ran.out);
     const stored = JSON.stringify(await fake.json('/airtable/v0/appTEST001/tblCOMPANIES'));

@@ -26,7 +26,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   n    = Number.parse(m.Subject)
   tags = List.compact("inbound", Text.split(m.Subject, ";"))
   write crm-[:Companies]-> {
@@ -50,7 +50,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   if (exists(m-[a:Attachments WHERE a.Name CONTAINS "pdf"]->)) {
     write crm-[:Companies]-> {
       unique by (\`Name\`)
@@ -219,7 +219,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   today  = Date.today("Europe/Berlin")
   win    = DateTime.at(today, "07:00", "Europe/Berlin")
   ref    = Text.regexExtract(m.Subject, "(DEAL-\\\\d+)")

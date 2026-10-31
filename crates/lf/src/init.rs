@@ -15,18 +15,18 @@ const STARTER_MOVEMENT: &str = r#"# A movement is a program the host runs when s
 # when you ask: `listen-fire run hello`. `manual` and `cron` are the host's own, so they
 # need no import; to run on a schedule instead, write
 #
-#   listen to cron { schedule: "0 9 * * 1" } fire hello
+#   listen to cron-[t:Ticks WHERE t.Schedule == "0 9 * * 1"]-> fire hello
 #
-# (and type the parameter `<cron-[:Tick]->>`). To react to a system's events,
+# (and type the parameter `<cron-[:Ticks]->>`). To react to a system's events,
 # install it under externals/ and connect it:
 #
 #   import { crm } from adapters
-#   listen to crm { events: ["company.created"] } fire greet
-function hello(run: <manual-[:Invocation]->>) {
+#   listen to crm-[:Companies]-> fire greet
+function hello(run: <manual-[:Invocations]->>) {
   return "Hello, ${run.`Run by (name)`}!"
 }
 
-listen to manual fire hello
+listen to manual-[:Invocations]-> fire hello
 "#;
 
 const PROJECT_TAIL: &str = "# Who events act as on this machine (@user_name, @user_email). Defaults to the OS user;

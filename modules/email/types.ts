@@ -28,6 +28,17 @@ export const EMAIL_ADAPTER_NAMES: readonly string[] = [
 /** Top-level type id for an email record. */
 export const EMAIL_RECORD_TYPE_ID = 'email:message';
 
+/** The connection's one edge: each email arriving lands on it. */
+export const EMAILS_EDGE = 'Emails';
+
+/** The field an email is routed by: the plus-suffix of the address it was
+ *  sent to (`inbox+deals@…` is `deals`), lowercased. Mail sent to the box
+ *  itself has the empty key, which no listen names. */
+export const EMAIL_KEY_FIELD = 'Key';
+
+/** What a key a listen names may be: a slug. */
+export const EMAIL_KEY_PATTERN = '^[a-z0-9]+(-[a-z0-9]+)*$';
+
 /** Edge id on `email:message` that fans out one position per attachment. */
 export const EMAIL_ATTACHMENTS_FIELD = 'attachments';
 

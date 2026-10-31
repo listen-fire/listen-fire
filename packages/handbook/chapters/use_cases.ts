@@ -91,7 +91,7 @@ node Introducer: "the person who sent or forwarded this message to us" {
   email: <text | null> "their email address"
 }
 
-function \`Log Dealflow\`(msg: <inbox-[:Email]->>) {
+function \`Log Dealflow\`(msg: <inbox-[:Emails]->>) {
   decks     = vcUrlRetrieval(msg.Body, { email: @user_email })
   content   = [msg.Body, ...msg-[a:Attachments]->.File, ...map(decks, (d) => coalesce(d.text, ""))]
   companies = extract(content, Company, { tier: "careful" })

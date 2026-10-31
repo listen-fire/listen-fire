@@ -558,7 +558,7 @@ impl Checker<'_> {
     /// A listen that declares its events' type (`payload: <Payment>`) fires
     /// its movement with that node: the parameter is checked against it as a
     /// parameter is against its argument, field by field.
-    fn check_listen_payload_param(&mut self, payload: SymbolId, param: &MovementParam, type_: &ParamTypeRef, decl_scope: ScopeId, statement: &ListenDeclaration) {
+    pub(super) fn check_listen_payload_param(&mut self, payload: SymbolId, param: &MovementParam, type_: &ParamTypeRef, decl_scope: ScopeId, statement: &ListenDeclaration) {
         let Some(payload) = self.declared_node(payload).map(|d| d.instance.clone()) else { return };
         let declared = match type_ {
             ParamTypeRef::Name(declared) if declared.hops_raw.is_none() => match self.scopes.resolve(decl_scope, &declared.graph) {

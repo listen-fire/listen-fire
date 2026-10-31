@@ -14,7 +14,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Sort Inbound\`(m: <inbox-[:Email]->>) {
+function \`Sort Inbound\`(m: <inbox-[:Emails]->>) {
   wanted = jev.score(m.Body, "Is this email asking us to meet or to buy something?")
   if (wanted >= 0.7) {
     kind = jev.classify({ subject: m.Subject, body: m.Body }, ["introduction", "sales pitch", "support request", "other"], "What kind of email is this?")
@@ -25,7 +25,7 @@ function \`Sort Inbound\`(m: <inbox-[:Email]->>) {
   }
 }
 
-listen to inbox { key: "sort-inbound" } fire \`Sort Inbound\`
+listen to inbox-[e:Emails WHERE e.Key == "sort-inbound"]-> fire \`Sort Inbound\`
 `;
 
 export const JEV_HANDBOOK_SECTION: HandbookSection = {

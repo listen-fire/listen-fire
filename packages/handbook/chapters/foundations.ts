@@ -100,7 +100,7 @@ These hold everywhere, in every chapter, and are not restated per situation:
 - Everything happens on a connected instance: parameter types, traversal
   roots, writes, and listens all name an instance you connected
   (\`crm = connect attio using acme\`) — never a bare adapter type.
-- Types always wear angle brackets (\`m: <inbox-[:Email]->>\`, \`amount: <number>\`,
+- Types always wear angle brackets (\`m: <inbox-[:Emails]->>\`, \`amount: <number>\`,
   \`rec is <crm-[:companies]->>\`); positions, values, and handles never do.
   Inside a type, \`-[:…]->\` names the edge the type sits behind; \`.\` is only
   ever property access (\`msg.Subject\`, and the field tail of a borrowed

@@ -7,8 +7,8 @@
 //!   --max-seconds N   claim nothing new once N seconds have passed
 //!
 //!   --kinds k1,k2     a pool: claim only work rows of these kinds
-//!                     (crate::store::WORK_KINDS), and `cron` for the cron
-//!                     listens' due ticks, which are not rows
+//!                     (crate::store::WORK_KINDS); a cron listen's ticks are
+//!                     its shared poll's `poll_edge` rows
 //!
 //! Every module the movements import is started as the worker opens,
 //! together, and kept up until it exits (crate::runs::Role::Drain): a run
@@ -29,40 +29,31 @@ use crate::store::WORK_KINDS;
 const ROWS_PER_CLAIM: i64 = 1;
 const IDLE_POLL: Duration = Duration::from_secs(1);
 
-/// CRON names the cron listens' tick check in a pool: the one share of a
-/// drain that is not a work row (a tick fires from its checkpoint).
-pub const CRON: &str = "cron";
+/// What `--kinds cron` named until 0.13: the cron ticks are polled now.
+const RETIRED_CRON: &str = "cron";
 
 /// Which work one worker takes: every kind, or a pool's (`--kinds`), so
 /// polls and run steps can be drained by separately sized fleets.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Pool {
     /// The work rows' kinds; None: every kind.
     rows: Option<Vec<String>>,
-    cron: bool,
-}
-
-impl Default for Pool {
-    fn default() -> Pool {
-        Pool { rows: None, cron: true }
-    }
 }
 
 impl Pool {
-    /// `--kinds poll_listen,cron`: each a work kind or `cron`.
+    /// `--kinds poll_listen,poll_edge`: each a work kind.
     pub fn of(list: &str) -> Result<Pool, String> {
         let kinds: Vec<&str> = list.split(',').map(str::trim).filter(|k| !k.is_empty()).collect();
         if kinds.is_empty() {
             return Err("--kinds names no kind".into());
         }
-        if let Some(other) = kinds.iter().find(|k| **k != CRON && !WORK_KINDS.contains(k)) {
-            return Err(format!("--kinds {other}: not a kind of work (the kinds: {}, {CRON})", WORK_KINDS.join(", ")));
+        if kinds.contains(&RETIRED_CRON) {
+            return Err("--kinds cron: a cron listen's ticks are polled from 0.13, as `poll_edge` rows: name poll_edge".into());
         }
-        Ok(Pool { rows: Some(kinds.iter().filter(|k| **k != CRON).map(|k| k.to_string()).collect()), cron: kinds.contains(&CRON) })
-    }
-
-    pub fn fires_cron(&self) -> bool {
-        self.cron
+        if let Some(other) = kinds.iter().find(|k| !WORK_KINDS.contains(k)) {
+            return Err(format!("--kinds {other}: not a kind of work (the kinds: {})", WORK_KINDS.join(", ")));
+        }
+        Ok(Pool { rows: Some(kinds.iter().map(|k| k.to_string()).collect()) })
     }
 
     pub fn takes(&self, kind: &str) -> bool {
@@ -124,16 +115,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_pool_names_work_kinds_and_cron() {
-        let pool = Pool::of("poll_listen, cron").unwrap();
-        assert!(pool.fires_cron() && pool.takes("poll_listen") && !pool.takes("resume_timer"));
-        assert_eq!(pool.work_kinds(), Some(&["poll_listen".to_string()][..]));
+    fn a_pool_names_work_kinds() {
+        let pool = Pool::of("poll_listen, poll_edge").unwrap();
+        assert!(pool.takes("poll_listen") && pool.takes("poll_edge") && !pool.takes("resume_timer"));
+        assert_eq!(pool.work_kinds(), Some(&["poll_listen".to_string(), "poll_edge".to_string()][..]));
         let runs = Pool::of("fire_event,resume_timer").unwrap();
-        assert!(!runs.fires_cron() && !runs.takes("poll_listen"));
+        assert!(!runs.takes("poll_listen"));
         assert!(Pool::of("poll").unwrap_err().contains("not a kind of work"));
         assert!(Pool::of(",").is_err());
         let all = Pool::default();
-        assert!(all.fires_cron() && all.takes("wake_await") && all.work_kinds().is_none());
+        assert!(all.takes("wake_await") && all.work_kinds().is_none());
         assert!(Pool::of("fire_callback").unwrap_err().contains("not a kind of work"), "callbacks retired at 0.13");
+        assert_eq!(Pool::of("poll_listen,cron").unwrap_err(), "--kinds cron: a cron listen's ticks are polled from 0.13, as `poll_edge` rows: name poll_edge");
     }
 }

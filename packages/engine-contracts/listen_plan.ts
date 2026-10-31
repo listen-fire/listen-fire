@@ -45,6 +45,10 @@ export interface ListenPlan {
   /** The earlier hops' edges whose records an arrival on the last edge
    *  carries, outermost first. Absent when it carries none. */
   carries?: string[];
+  /** The node the listen states its untyped landing is
+   *  (`-[:Requests]-><Payment>`), by its name in the program: the host runs
+   *  only what fits it. Absent when it states none. */
+  landing?: string;
 }
 
 export const planHopSchema: z.ZodType<PlanHop> = z
@@ -68,6 +72,7 @@ export const listenPlanSchema: z.ZodType<ListenPlan> = z
     adapter: z.string(),
     hops: z.array(planHopSchema).min(1),
     carries: z.array(z.string()).optional(),
+    landing: z.string().optional(),
   })
   .strict();
 

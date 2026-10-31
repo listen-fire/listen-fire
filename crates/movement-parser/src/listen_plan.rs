@@ -27,6 +27,11 @@ pub struct ListenPlan {
     /// arrival hands the judge.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub carries: Vec<String>,
+    /// The node the listen states its untyped landing is
+    /// (`-[:Requests]-><Payment>`), by its name in the program: the host
+    /// runs only what fits it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landing: Option<String>,
 }
 
 impl ListenPlan {

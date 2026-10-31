@@ -10,7 +10,7 @@ Act only under a condition with a plain \`if\` over an ordinary boolean expressi
 ### conditions
 
 \`\`\`
-function \`Inbound Intake\`(msg: <inbox-[:Email]->>) {
+function \`Inbound Intake\`(msg: <inbox-[:Emails]->>) {
   if (Text.includes(msg.Subject, "order")) {
     write crm-[:Companies]-> { … }
   }
@@ -135,7 +135,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   if (m.From == "") {
     fail("no sender — refusing to create a contact without one")
   }
@@ -153,7 +153,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   sender = write crm-[:People]-> {
     unique by (\`Email\`)
     Name:  m.From

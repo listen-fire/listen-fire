@@ -115,8 +115,9 @@ impl Checker<'_> {
 
 /// The settings listen as the traversal its module maps it to: none when a
 /// key has no mapping, a value is not a literal, a hop has no alias, or the
-/// path is all taken by the connection's position. A `type` key (`payload: <T>`) has none either:
-/// a listen's traversal does not state its landing's type. A listen that
+/// path is all taken by the connection's position, or a kept hop would range
+/// over an unbounded edge. A `type` key (`payload: <T>`) becomes the type
+/// stated after the traversal (`-[:Requests]-><T>`). A listen that
 /// writes no `events` received the module's defaults, so they are written
 /// as the events' comparison, or the rewrite would widen the listen.
 fn rewrite_of(
@@ -128,6 +129,7 @@ fn rewrite_of(
 ) -> Option<Rewrite> {
     let consumed = consumed_hops(become_, positioned);
     let mut conjuncts: Vec<Vec<Expression>> = vec![Vec::new(); become_.path.len()];
+    let mut landing = None;
     for arg in &statement.config {
         if [SUPPRESS_SELF_KEY, EVERY_KEY, POLL_INTERVAL_KEY].contains(&arg.name.as_str()) {
             continue;
@@ -142,6 +144,11 @@ fn rewrite_of(
         let value = |raw: &StaticValue| mapped(key, raw);
         let compare = |op, right| compare_on(key, op, right);
         match key.op {
+            // The landing's type is stated after the traversal, which ends on the hop it types.
+            KeyOp::Type if arg.is_type == Some(true) && key.hop + 1 == become_.path.len() => {
+                let raw = arg.value.raw.trim();
+                landing = Some(format!("<{}>", raw.strip_prefix('<').and_then(|r| r.strip_suffix('>')).unwrap_or(raw)));
+            }
             KeyOp::Type => return None,
             KeyOp::Eq | KeyOp::In if key.field.is_none() || arg.is_type == Some(true) => return None,
             KeyOp::Eq => {
@@ -185,7 +192,7 @@ fn rewrite_of(
         }
     }
     let kept = &become_.path[consumed.min(become_.path.len())..];
-    if kept.is_empty() {
+    if kept.is_empty() || ranges_unbounded(schema, &become_.path, consumed, &conjuncts) {
         return None;
     }
     let mut path = spell_name(&statement.instance);
@@ -200,6 +207,7 @@ fn rewrite_of(
         };
         path.push_str(&hop_text);
     }
+    path.push_str(landing.as_deref().unwrap_or_default());
     // One hop off the connection is the edge's own address; a longer path
     // is typed by the record it lands on (a path is not a type's address).
     let param_type = match kept {
@@ -207,6 +215,27 @@ fn rewrite_of(
         _ => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(landing_of(schema, kept)?)),
     };
     Some(Rewrite { path, param_type })
+}
+
+/// Whether a kept hop would range over an edge its module declares
+/// unbounded (`bounded: false`) with nothing written on a field that bounds
+/// it: the settings left out what the 0.13 listen must say (a cron listen
+/// with no schedule), so there is no rewrite to offer.
+fn ranges_unbounded(schema: &InstanceSchema, path: &[String], consumed: usize, conjuncts: &[Vec<Expression>]) -> bool {
+    let mut from: Option<&str> = None;
+    for (hop, edge) in path.iter().enumerate() {
+        let declared = match from {
+            None => schema.collections.get(edge).map(|c| (c.bounded, c.bounded_by.as_deref(), c.target.as_str())),
+            Some(position) => schema.positions.get(position).and_then(|p| p.edges.get(edge)).map(|e| (e.bounded, e.bounded_by.as_deref(), e.target.as_str())),
+        };
+        let Some((bounded, bounded_by, target)) = declared else { return false };
+        let reads_bound = |c: &Expression| matches!(c, Expression::Compare { left, .. } if matches!(&**left, Expression::Property { property_type_id, .. } if bounded_by.unwrap_or_default().contains(property_type_id)));
+        if hop >= consumed && bounded == Some(false) && !conjuncts[hop].iter().any(reads_bound) {
+            return true;
+        }
+        from = Some(target);
+    }
+    false
 }
 
 /// A settings value as the field holds it: through the key's `values` map

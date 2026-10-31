@@ -23,7 +23,7 @@ node Company: "each company named in this message" {
   }
 }
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   content   = [m.Body, ...m-[a:Attachments]->.File]
   companies = extract(content, Company, { tier: "careful" })
 
@@ -200,7 +200,7 @@ node CompanyDetail: "the company" {
   summary: <text> "one line on what the company does"
 }
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   files     = m-[a:Attachments]->.File
   content   = [m.Body, ...files]
   companies = extract(content, Company, { tier: "careful" })
@@ -250,7 +250,7 @@ node Detailed {
   }
 }
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   content   = [m.Body]
   companies = extract(content, Company, { tier: "careful" })
 
@@ -290,7 +290,7 @@ node Lead: "the company this email is about" {
   \`Is Warm\`: <boolean> "true when the sender already knows us — a referral, a reply to outreach, or a repeat contact; false otherwise"
 }
 
-function \`Triage\`(m: <inbox-[:Email]->>) {
+function \`Triage\`(m: <inbox-[:Emails]->>) {
   lead = extractOne([m.Body], Lead)
   if (lead == null) { fail("no company in this email") }
   if (lead.\`Is Warm\`) {
@@ -322,7 +322,7 @@ node Company: "each company named in this message" {
   }
 }
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   content   = [m.Body, ...m-[a:Attachments]->.File]
   companies = extract(content, Company, { tier: "careful" })
 
@@ -369,7 +369,7 @@ node Detailed {
   node person { name: <text> }
 }
 
-function \`Enrich\`(m: <inbox-[:Email]->>) {
+function \`Enrich\`(m: <inbox-[:Emails]->>) {
   content   = [m.Body]
   companies = extract(content, Company, { tier: "careful" })
 
@@ -439,7 +439,7 @@ import { fetchUrl, research, vcUrlRetrieval } from plugins
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Enrich\`(m: <inbox-[:Email]->>) {
+function \`Enrich\`(m: <inbox-[:Emails]->>) {
   linked = vcUrlRetrieval(m.Body)
   deck   = first(linked)
   page   = fetchUrl("https://example.com")
@@ -469,7 +469,7 @@ node Profile: "more about the company described last" {
   summary: <text> "one line on what the company does"
 }
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   pdfs      = m-[a:Attachments WHERE a.\`Content Type\` == "application/pdf"]->.File
   content   = [m.Body, ...pdfs]
   companies = extract(content, node Company: "each company named in this message" {
@@ -510,7 +510,7 @@ node CompanyDetail: "the company" {
   employees: <number> "its headcount"
 }
 
-function \`Enrich\`(m: <inbox-[:Email]->>) {
+function \`Enrich\`(m: <inbox-[:Emails]->>) {
   content   = [m.Body]
   companies = extract(content, Company, { tier: "careful" })
 

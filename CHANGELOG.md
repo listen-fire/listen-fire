@@ -31,6 +31,12 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
 
 #### Changed
 
+- `cron`, `manual`, `@lf/email` and `@lf/webhook` are listened to as edges (`listen-fire upgrade` rewrites each 0.12 listen):
+  - `cron-[t:Ticks WHERE t.Schedule == "0 9 * * 1-5" AND t.Zone == "Europe/London"]->`: a tick per occurrence of each schedule and zone named (`==`, `IN`, or an `OR` of `==`). A listen naming no zone ticks in UTC. Two listens on one schedule and zone share one clock: the cron unit's `Ticks` is a polled edge (`pollEverySeconds: 60`, overridden per connection by `pollEvery: { cron: … }` in lf.yaml), and its ticks are its shared poll's `poll_edge` rows. `listen-fire drain --kinds cron` is refused by name: name `poll_edge`.
+  - `manual-[:Invocations]->`: `listen-fire run <movement>` is an arrival on it, to the listens that fire the movement.
+  - `inbox-[e:Emails WHERE e.Key == "deals"]->`: each message arrives on `Emails` with the plus-suffix it was sent to as its `Key`, lowercased. A listen names the keys it takes; mail no listen names runs nothing. Mail sent to the box itself has the empty key, which no 0.13 listen names, so a 0.12 listen with no key has no rewrite and holds the pin.
+  - `hooks-[:Requests]-><Payment>`: each delivery arrives on `Requests`, its body untyped JSON, and the listen states the node it is. A delivery that fits no stated node is answered 400, naming the fields, and runs nothing; one that fits another listen's node runs only that listen.
+- The judge of an arrival compares an owned field the arrival carries (a tick's `Schedule`, a message's `Key`) as the text it is; it is undecided only on one the arrival does not carry.
 - `listen-fire` refuses to serve a project that fails `listen-fire check`: any check error, not a warning, stops `serve` (with `--doors-only` too), `drain`, `run --webhook` and `resume` with no run id.
   - The refusal prints each error as `listen-fire check` does (file, line, column, code and message), then a line saying to run `listen-fire check`.
   - Under a running `serve` or `drain`, an edit that leaves any check error is refused and the running files keep serving. Before, an edit was refused only when it raised a file's count of errors, so a project that already had errors went on serving them.
@@ -90,6 +96,7 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
 
 #### Added
 
+- A listen states the type of an untyped landing after its traversal: `listen to hooks-[:Requests]-><Payment> fire paid`. The node must be one the program declares, the fired function's parameter must be assignable to it, and the plan carries it (`ListenPlan.landing`).
 - A module may declare `listenSettingsBecome` in its manifest: how its 0.12 settings listens become traversals (the edges from the connection to the listened edge, an alias per hop, the record type a fired parameter was typed as, and the hop, field and comparison of each settings key). `listen-fire` carries it into the catalog and refuses, when the module is described, a path naming an edge the module does not describe, a key mapped past the path, or a comparison naming no field; an embedder's describe refuses the same in the same words (docs/contracts/adapter-protocol.md).
 - A module declares how each listenable edge is listened to, and `listen-fire` carries it into the catalog (docs/contracts/adapter-protocol.md, "Declaring a listenable edge").
   - `delivery`: pushed to the connection, pushed per scope (a table), or `polled` every `pollEverySeconds`.
@@ -225,6 +232,7 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
 
 #### Removed
 
+- `cron`, `manual`, `@lf/email` and `@lf/webhook` declare no `listenConfig`, `subscribableEvents`, `fires` or event types: each listens on its edge.
 - `callback(…)` is retired.
   - Each one is refused where it is written (`MOV_CALLBACK_RETIRED`, an error), naming what replaces it.
     - For a form a person opens: a form from `@lf/forms` (`form = write forms-[:Forms]-> { Title: …, Fields: … }`), its `form.Url` sent, then `await form-[:Submissions]->`.
@@ -276,6 +284,8 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
 
 #### Checks
 
+- A stated landing type names a declared node (`MOV_UNKNOWN_TYPE_NAME`), types only a landing its module leaves untyped (`MOV_LISTEN_SHAPE_MISMATCH`), and the fired parameter must be assignable to it (`MOV_LISTEN_SHAPE_MISMATCH`, `MOV_LISTEN_PARAM_MISMATCH`). A function typed by a node on an untyped landing whose type the listen does not state is refused, naming the annotation to write (`MOV_LISTEN_PARAM_MISMATCH`).
+- `MOV_LISTEN_SETTINGS_RETIRED` rewrites a `type` key (`payload: <Payment>`) as the stated landing (`-[:Requests]-><Payment>`), and a listen with no settings (`listen to manual fire f`, `listen to x {}`) as the module's mapped edge. It offers no rewrite whose path would range over an unbounded edge with nothing on a field that bounds it (a keyless email listen).
 - Two checks stay warnings in 0.13.0, where earlier notes said this compatibility key would refuse them: a value handed to a plugin outside the type it declares (`MOV_CALL_ARG_TYPE`, as 0.12.10 said), and a text in a list an enum is tested against with `IN` (`MOV_ENUM_UNKNOWN_VALUE`, below). Refusing them is left to a later compatibility key.
 - A dot read off a record reads one field, whole; anything past it is refused, where it checked clean and then failed the run with `MOVENG_UNSUPPORTED` ("this read shape … is not supported"). Refused, since no such read could ever run:
   - a name the record lacks, read on past (`n.subject.title`): `MOV_UNKNOWN_PROPERTY`, naming the record's fields and its edges;

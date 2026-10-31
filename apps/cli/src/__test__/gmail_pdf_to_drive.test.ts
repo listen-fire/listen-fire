@@ -56,7 +56,7 @@ import { henry_mail, henry_drive } from credentials
 mail = connect gmail using henry_mail
 drive = connect google_drive using henry_drive
 
-function file_invoice(run: <manual-[:Invocation]->>) {
+function file_invoice(run: <manual-[:Invocations]->>) {
   msg = only(mail-[m:Messages WHERE m.Subject == "Invoice PW-20417"]->)
   if (msg == null) { fail("no invoice") }
   pdf = first(msg-[a:Attachments WHERE a.\`Content Type\` == "application/pdf"]->)
@@ -66,7 +66,7 @@ function file_invoice(run: <manual-[:Invocation]->>) {
   write folder-[:Files]-> { Name: pdf.Name, File: pdf.File }
 }
 
-listen to manual fire file_invoice
+listen to manual-[:Invocations]-> fire file_invoice
 `;
 
 test('a PDF attached to a Gmail message is filed in Drive as application/pdf, byte for byte', async () => {

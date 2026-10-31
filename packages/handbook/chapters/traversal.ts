@@ -209,7 +209,7 @@ inbox = connect email
 crm   = connect attio using acme
 team  = connect slack using team_workspace
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   orgs = m-[f:Attachments]-> {
     return write crm-[:Companies]-> {
       unique by (\`Name\`)
@@ -238,7 +238,7 @@ inbox = connect email
 crm   = connect attio using acme
 team  = connect slack using team_workspace
 
-function \`Digest\`(m: <inbox-[:Email]->>) {
+function \`Digest\`(m: <inbox-[:Emails]->>) {
   channel = only(team-[ch:Channels WHERE ch.Name == "general"]->)
   if (channel == null) { fail("no #general") }
   files  = Text.join(m-[a:Attachments]->.Name, ", ")
@@ -261,7 +261,7 @@ import { team_workspace } from credentials
 inbox = connect email
 team  = connect slack using team_workspace
 
-function \`Name Them\`(m: <inbox-[:Email]->>) {
+function \`Name Them\`(m: <inbox-[:Emails]->>) {
   names = m-[f:Attachments]-> {
     if (f.Name == "") {
       return "unnamed"

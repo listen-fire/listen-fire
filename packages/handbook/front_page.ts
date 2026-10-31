@@ -69,7 +69,7 @@ export const TS_EXCEPT: readonly FrontEntry[] = [
   {
     anchor: 'types',
     title: 'Types',
-    text: 'A type wears angle brackets: `<text>`, `<number>`, `<boolean>`, `<date>`, `<file>`, `<Lead>`, `<inbox-[:Email]->>`. A closure parameter needs one unless a built-in supplies it: `(n: <number>) => n * 2`.',
+    text: 'A type wears angle brackets: `<text>`, `<number>`, `<boolean>`, `<date>`, `<file>`, `<Lead>`, `<inbox-[:Emails]->>`. A closure parameter needs one unless a built-in supplies it: `(n: <number>) => n * 2`.',
   },
   {
     anchor: 'functions-not-methods',
@@ -106,7 +106,7 @@ export const TS_EXCEPT: readonly FrontEntry[] = [
     title: 'Only the graph changes',
     text: 'Values never change (no `x.field = …`); build a record with `graph<Shape> { … }`. Systems change only via `write`, `link`, `unlink`, `delete`.',
     example: {
-      program: 'node Lead {\n  Name: <text>\n}\nfunction `Lead Of`(m: <inbox-[:Email]->>) {\n  return graph<Lead> { Name: m.From }\n}',
+      program: 'node Lead {\n  Name: <text>\n}\nfunction `Lead Of`(m: <inbox-[:Emails]->>) {\n  return graph<Lead> { Name: m.From }\n}',
     },
   },
   {
@@ -123,7 +123,7 @@ export const CONCEPTS: readonly FrontEntry[] = [
     title: 'Import, then connect',
     text: 'Import a system by its package tag and its connection from `credentials`, then connect it once. An email listen needs a `key`, the address mail goes to.',
     example: {
-      file: 'import { `@lf/email` as email, `@lf/attio` as attio } from adapters\nimport { acme } from credentials\n\ninbox = connect email\ncrm = connect attio using acme\n\nfunction `Log Sender`(m: <inbox-[:Email]->>) {\n  write crm-[:People]-> { unique by (Email), Email: m.From, Name: m.From }\n}\n\nlisten to inbox { key: "senders" } fire `Log Sender`',
+      file: 'import { `@lf/email` as email, `@lf/attio` as attio } from adapters\nimport { acme } from credentials\n\ninbox = connect email\ncrm = connect attio using acme\n\nfunction `Log Sender`(m: <inbox-[:Emails]->>) {\n  write crm-[:People]-> { unique by (Email), Email: m.From, Name: m.From }\n}\n\nlisten to inbox-[e:Emails WHERE e.Key == "senders"]-> fire `Log Sender`',
     },
   },
   {
@@ -144,7 +144,7 @@ export const CONCEPTS: readonly FrontEntry[] = [
     title: 'Extraction is a function backed by a model',
     text: 'A `node` declaration is a type and a schema; its descriptions are the model\'s instructions. `extract(content, Shape, settings)` returns a list, `extractOne` one record or absent.',
     example: {
-      program: 'node Company: "the company this email is about" {\n  Name: <text> "its name"\n}\nfunction `File Company`(m: <inbox-[:Email]->>) {\n  co = extractOne([m.Body, m.Subject], Company, { tier: "careful" })\n  if (co == null) { fail("no company") }\n  write crm-[:Companies]-> { unique by (Name), Name: co.Name }\n}',
+      program: 'node Company: "the company this email is about" {\n  Name: <text> "its name"\n}\nfunction `File Company`(m: <inbox-[:Emails]->>) {\n  co = extractOne([m.Body, m.Subject], Company, { tier: "careful" })\n  if (co == null) { fail("no company") }\n  write crm-[:Companies]-> { unique by (Name), Name: co.Name }\n}',
     },
   },
   {
@@ -217,7 +217,7 @@ export function exampleProgram(example: FrontExample): string {
     .split('\n')
     .map((line) => `  ${line}`)
     .join('\n');
-  return `${PRELUDE}\nfunction \`Probe\`(m: <inbox-[:Email]->>) {\n${body}\n}\n`;
+  return `${PRELUDE}\nfunction \`Probe\`(m: <inbox-[:Emails]->>) {\n${body}\n}\n`;
 }
 
 /** The page's examples as claims the handbook's lockstep and checker tests hold. */

@@ -72,7 +72,7 @@ mod tests {
 
     #[test]
     fn a_file_whose_text_is_unchanged_keeps_its_parse() {
-        let hello = "function hello(run: <manual-[:Invocation]->>) {\n  return \"v1\"\n}\nlisten to manual fire hello\n";
+        let hello = "import { bell } from adapters\nb = connect bell\nfunction hello() {\n  return \"v1\"\n}\nlisten to b fire hello\n";
         let held = Parsed::each(&[file("hello", hello), file("other", hello.replace("hello", "other").as_str())], &[]);
         assert_eq!(crate::routing::listens_across(&held, &crate::json::Js::Null).listens.len(), 2, "each file's listen is read");
         let again = Parsed::each(&[file("hello", hello), file("other", "function other(")], &held);

@@ -8,18 +8,22 @@
 // The answers keep the platform's own mail doors' statuses, so a provider
 // sees the same thing from either host: no key 401; a bad or unreadable
 // delivery 406 (a code neither provider retries); a Resend event that is not
-// mail arriving 200 with nothing run. Who the mail is for is not decided
-// here: the host routes each message by its recipient's plus-suffix to the
-// listen whose `key` it is.
+// mail arriving 200 with nothing run. Each message arrives on the
+// connection's `Emails` with the plus-suffix it was sent to as its `Key`; the
+// host fires the listens whose `e.Key` it is.
+
+import { randomUUID } from 'node:crypto';
 
 import { accepted, inboundRequest, refused, type InboundRequest } from 'module-kit';
 
-import type { DiscriminableEvent, InboundCheck, InboundCheckInput } from 'movement-engine/public/adapter';
+import type { Arrival } from 'engine-contracts';
+import type { InboundCheck, InboundCheckInput } from 'movement-engine/public/adapter';
 
 import { normaliseInboundEmailPayload } from '../adapter';
+import { inboxKeyOf } from '../address';
 import { DEFAULT_API_BASE_URL } from '../resend';
 import { fetchResendEmailPayload } from '../resend_inbound';
-import { EMAIL_RECORD_TYPE_ID } from '../types';
+import { EMAILS_EDGE, EMAIL_KEY_FIELD } from '../types';
 import { RESEND_RECEIVED_EVENT_TYPE, mailgunSignatureVerifies, readMailgunMessage, readResendEnvelope } from './mail';
 import { verifySvixSignature } from './svix';
 
@@ -30,23 +34,23 @@ export interface EmailInboundSources {
   access(): Promise<EmailProviderAccess>;
 }
 
-/** The email an inbound message is, as a run is handed it. */
-function emailEvent(payload: Record<string, unknown>, deliveryId?: string): DiscriminableEvent {
+/** The email an inbound message is, arriving on the connection's `Emails`:
+ *  its fields as the message holds them, and the key it was routed by. */
+function emailArrival(payload: Record<string, unknown>, deliveryId?: string): Arrival {
   const messageId = typeof payload['messageId'] === 'string' && payload['messageId'].length > 0 ? payload['messageId'] : undefined;
-  const id = messageId ?? deliveryId;
+  const recipient = typeof payload['recipient'] === 'string' ? payload['recipient'] : undefined;
   return {
-    payload,
-    changeType: 'create',
-    recordType: EMAIL_RECORD_TYPE_ID,
-    tag: EMAIL_INBOUND_TAG,
-    ...(messageId !== undefined ? { externalId: messageId } : {}),
+    edge: EMAILS_EDGE,
     // Both providers redeliver on anything but a 2xx: one email, one run.
-    ...(id !== undefined ? { idempotencyKey: id } : {}),
+    identity: messageId ?? deliveryId ?? randomUUID(),
+    landing: { recordType: 'Email', fields: { ...payload, [EMAIL_KEY_FIELD]: inboxKeyOf(recipient) } },
   };
 }
 
-/** The one inbound event type: an email arrived. */
-export const EMAIL_INBOUND_TAG = 'email.received';
+/** One email, kept under the id its provider delivered it by. */
+function acceptedEmail(payload: Record<string, unknown>, deliveryId?: string): InboundCheck {
+  return accepted([], { arrivals: [emailArrival(payload, deliveryId)] });
+}
 
 function checkMailgun(request: InboundRequest): InboundCheck {
   const form = request.form();
@@ -56,7 +60,7 @@ function checkMailgun(request: InboundRequest): InboundCheck {
   // 406 rather than 401: Mailgun retries hard on anything it reads as
   // transient, and a bad signature will never become good.
   if (!mailgunSignatureVerifies(message, request.secret)) return refused(406);
-  return accepted([emailEvent(normaliseInboundEmailPayload(form), message.token || undefined)]);
+  return acceptedEmail(normaliseInboundEmailPayload(form), message.token || undefined);
 }
 
 async function checkResend(request: InboundRequest, sources: EmailInboundSources): Promise<InboundCheck> {
@@ -89,7 +93,7 @@ async function checkResend(request: InboundRequest, sources: EmailInboundSources
     { apiKey: access.resendApiKey, baseUrl: access.resendBaseUrl ?? DEFAULT_API_BASE_URL, fetch: access.fetch },
     envelope.email_id,
   );
-  return accepted([emailEvent(payload, envelope.email_id)]);
+  return acceptedEmail(payload, envelope.email_id);
 }
 
 /** One request at email's inbound door. */

@@ -79,13 +79,13 @@ import { henry_drive } from credentials
 
 drive = connect google_drive using henry_drive
 
-function copy(run: <manual-[:Invocation]->>) {
+function copy(run: <manual-[:Invocations]->>) {
   folder = only(drive-[f:Folders WHERE f.Name == "Briefs"]->)
   if (folder == null) { fail("no Briefs folder") }
 ${source}
 }
 
-listen to manual fire copy
+listen to manual-[:Invocations]-> fire copy
 `;
 
 const COPY_AND_RELINK = `  template = only(drive-[t:Files WHERE t.Name == "Brief template"]->)

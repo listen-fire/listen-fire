@@ -74,19 +74,19 @@ function resendDelivery(body: string, secret = RESEND_SECRET): Record<string, st
 }
 
 describe('@lf/email checks its own inbound', () => {
-  it('accepts a Mailgun post signed with the key, as one email', async () => {
+  it('accepts a Mailgun post signed with the key, as one email arriving on Emails under its plus-suffix', async () => {
     const { adapter } = load();
     const answer = await adapter.checkInbound!(request({ body: mailgunForm(), secret: MAILGUN_KEY }));
     expect(answer.outcome).toBe('accepted');
     if (answer.outcome !== 'accepted') return;
-    expect(answer.events).toHaveLength(1);
-    expect(answer.events[0]).toMatchObject({
-      externalId: '<m-1@example.com>',
-      idempotencyKey: '<m-1@example.com>',
-      recordType: 'email:message',
-      tag: 'email.received',
-      payload: { bodyText: 'Hi there', subject: 'Hello', sender: 'ada@example.com' },
+    expect(answer.events).toEqual([]);
+    expect(answer.arrivals).toHaveLength(1);
+    expect(answer.arrivals?.[0]).toMatchObject({
+      edge: 'Emails',
+      identity: '<m-1@example.com>',
+      landing: { recordType: 'Email', fields: { bodyText: 'Hi there', subject: 'Hello', sender: 'ada@example.com', Key: 'k' } },
     });
+    expect(answer.arrivals?.[0]).not.toHaveProperty('key');
   });
 
   it('refuses a Mailgun post signed with another key (406, never retried)', async () => {
@@ -107,7 +107,7 @@ describe('@lf/email checks its own inbound', () => {
     const answer = await adapter.checkInbound!(request({ body, headers: resendDelivery(body), secret: RESEND_SECRET }));
     expect(answer.outcome).toBe('accepted');
     if (answer.outcome !== 'accepted') return;
-    expect(answer.events[0]).toMatchObject({ externalId: '<m-1@example.com>', payload: { subject: 'Hello', bodyText: 'Hi' } });
+    expect(answer.arrivals?.[0]).toMatchObject({ edge: 'Emails', identity: '<m-1@example.com>', landing: { fields: { subject: 'Hello', bodyText: 'Hi' } } });
     expect(calls[0]).toBe('https://api.resend.com/emails/receiving/em_1');
   });
 

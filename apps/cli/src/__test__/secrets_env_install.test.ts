@@ -72,7 +72,7 @@ function project(url: string): string {
   mkdirSync(join(dir, 'movements'));
   writeFileSync(
     join(dir, 'movements/ping.mvt'),
-    'import { beacon } from adapters\n\nb = connect beacon\n\nfunction ping(run: <manual-[:Invocation]->>) {\n  write b-[:Ping]-> { Note: "hi" }\n}\n\nlisten to manual fire ping\n',
+    'import { beacon } from adapters\n\nb = connect beacon\n\nfunction ping(run: <manual-[:Invocations]->>) {\n  write b-[:Ping]-> { Note: "hi" }\n}\n\nlisten to manual-[:Invocations]-> fire ping\n',
   );
   mkdirSync(join(dir, '.lf'));
   writeFileSync(join(dir, '.lf/secrets.yaml'), '{}\n', { mode: 0o600 });

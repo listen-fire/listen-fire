@@ -40,8 +40,11 @@ import { BaseAdapter } from 'module-kit/adapter/base';
 import { parseEmailAddress } from './inbound/mail';
 import { EMAIL_MANIFEST, emailTriggerConfig } from './manifest';
 import {
+  EMAILS_EDGE,
   EMAIL_ADAPTER_NAMES,
   EMAIL_ADAPTER_TYPE,
+  EMAIL_KEY_FIELD,
+  EMAIL_KEY_PATTERN,
   EMAIL_ATTACHMENTS_FIELD,
   EMAIL_ATTACHMENT_DISPLAY_NAME,
   EMAIL_ATTACHMENT_TYPE_ID,
@@ -94,21 +97,23 @@ export class EmailAdapter extends BaseAdapter implements Adapter {
 
   async listEntryPoints(): Promise<SchemaEntryPoint[]> {
     return [
-      // The EVENT edge lands STRAIGHT on the email: `inbox -[:Email]-> <the
-      // email>`. A separate `Email Received` node carried no facts of its own
-      // — pure indirection — so rule 1 (adapters/CLAUDE.md) collapses it: the
-      // arrival IS the delivery of this record, whole, and a listen seeds it
-      // directly. `readable: false` stays the honest statement — nobody can
-      // enumerate an inbox; a fires edge is reachability, never a root read.
-      // Email has no change-kind axis (a listen names a routing `key`, never
-      // an event kind), so there is no `action` field and no `firesOn`.
+      // The edge an email ARRIVES on lands straight on the email:
+      // `inbox-[e:Emails WHERE e.Key == "deals"]->`. Nobody can list an
+      // inbox (`readable: false`), and every team's mail arrives on it, so
+      // it is unbounded: a listen names the keys it takes, the plus-suffix
+      // each message was sent to (`boundedBy: Key`).
       {
         typeId: EMAIL_RECORD_TYPE_ID,
         displayName: 'Email',
+        collectionName: EMAILS_EDGE,
         // Email is source-only — not writable today.
         writable: false,
         readable: false,
-        fires: true,
+        listenable: true,
+        bounded: false,
+        boundedBy: [EMAIL_KEY_FIELD],
+        delivery: 'connection',
+        capability: { filter: 'native', supportsLimit: false },
       },
       {
         typeId: EMAIL_ATTACHMENT_TYPE_ID,
@@ -152,14 +157,14 @@ export class EmailAdapter extends BaseAdapter implements Adapter {
       {
         fieldId: EMAIL_RECORD_TYPE_ID,
         targetTypeId: EMAIL_RECORD_TYPE_ID,
-        cardinality: 'one',
+        cardinality: 'many',
         direction: 'outgoing',
-        name: 'Email',
-        fires: true,
+        name: EMAILS_EDGE,
+        listenable: true,
         // Not readable: there is no call that lists emails. Traversing this
         // edge is something that happens TO you.
         readable: false,
-        description: 'An email arriving — what a listen delivers, whole.',
+        description: 'Each email arriving, under the key it was sent to — what a listen delivers, whole.',
       },
     ],
   };
@@ -188,6 +193,16 @@ export class EmailAdapter extends BaseAdapter implements Adapter {
           'read `e.`Subject``, `e.`From``, `e.`Body`` straight off the event.',
         fields: [
           { fieldId: 'messageId', displayName: 'Message Id', kind: 'string', writable: false, required: true, description: 'RFC 5322 Message-Id (or an inbound-adapter id when absent).' },
+          {
+            fieldId: EMAIL_KEY_FIELD,
+            displayName: EMAIL_KEY_FIELD,
+            kind: 'owned',
+            owned: { name: 'InboxKey', allowPattern: EMAIL_KEY_PATTERN },
+            writable: false,
+            required: true,
+            capability: { filterOperators: ['eq', 'in'] },
+            description: 'The plus-suffix of the address the message was sent to (`inbox+deals@…` is `deals`), lowercased: a listen takes the keys it names (`e.Key == "deals"`). Mail sent to the box itself has the empty key, which no listen names.',
+          },
           { fieldId: 'subject', displayName: 'Subject', kind: 'string', writable: false, required: false, description: 'The subject line.' },
           { fieldId: 'sender', displayName: 'From', kind: 'string', writable: false, required: false, description: 'The "From" header value.' },
           { fieldId: 'recipient', displayName: 'To', kind: 'string', writable: false, required: false, description: 'The primary recipient the message was routed on. Usually NOT helpful: for forwarded mail it shows the internal address the user forwarded it to (e.g. their Listen-Fire forwarding address), not the true recipient. Prefer `From` for who the message is about.' },

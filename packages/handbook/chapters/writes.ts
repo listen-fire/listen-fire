@@ -242,7 +242,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   a = write crm-[:Companies]-> { Name: m.Subject }
   b = write crm-[:People]-> { Name: m.From }
   link a -[:employs]-> b
@@ -259,7 +259,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   person = write crm-[:People]-> { unique by (\`Job Title\`), Name: m.From }
   employer = match person-[:Company]-> { unique by (Name), Name: "Acme" }
   if (employer != null) {
@@ -279,7 +279,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   person = write crm-[:People]-> { unique by (\`Job Title\`), Name: m.From }
   employer = match person-[:Company]-> { unique by (FUZZY Name), Name: "Acme" }
   if (employer != null) {
@@ -299,7 +299,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   company = match crm-[c:Companies WHERE EXISTS(c-[:Team]->)]-> {
     unique by (FUZZY Name)
     Name: m.Subject
@@ -320,7 +320,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   company = match crm-[:Companies]-> {
     unique by (FUZZY Name)
     unique by (Domains)
@@ -343,7 +343,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   co  = write crm-[:Companies]-> { unique by (Name), Name: m.Subject }
   inv = write crm-[:Investors]-> { unique by (Name), Name: m.From }
   write (co-[:investments]->, inv-[:investments]->) {
@@ -363,7 +363,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   write crm-[:Companies]-> {
     unique by (Name)
     Name:          m.Subject
@@ -382,7 +382,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   write crm-[:Companies]-> {
     unique by (Domains)
     Name:          m.Subject
@@ -441,7 +441,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   a = write crm-[:Companies]-> { Name: m.Subject }
   b = write crm-[:People]-> { Name: m.From }
   unlink a -[:employs]-> b
@@ -458,7 +458,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   stale = write crm-[:Companies]-> { Name: m.Subject }
   delete stale
 }

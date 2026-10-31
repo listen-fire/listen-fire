@@ -1,9 +1,10 @@
 // `@lf/webhook` in listen-fire, end to end: a Stripe-signed connection and an unsigned
-// one in one project, each a URL `listen-fire serve` prints. The movement declares what
-// a delivery carries (`node Payment`), `listen-fire check` refuses a field it does not
-// declare, and `listen-fire serve` runs a correctly signed delivery (its amount reaches
-// the fake CRM), refuses a mis-signed or stale one (401, no run), refuses a
-// body that does not fit the declared node (400, naming the field, no run),
+// one in one project, each a URL `listen-fire serve` prints. Each delivery arrives on
+// the connection's `Requests` edge, its body untyped JSON, and the listen states what
+// it is (`listen to stripe-[:Requests]-><Payment>`). `listen-fire check` refuses a field
+// the node does not declare, and `listen-fire serve` runs a correctly signed delivery
+// (its amount reaches the fake CRM), refuses a mis-signed or stale one (401, no run),
+// refuses a body that does not fit the stated node (400, naming the field, no run),
 // and takes an unsigned delivery on the connection whose credential says none.
 
 import { test } from 'node:test';
@@ -31,8 +32,8 @@ function \`Payment Failed\`(e: <Payment>) {
   write crm-[:Company]-> { Name: "\${e.id} failed: \${e.amount}" }
 }
 
-listen to stripe { payload: <Payment> } fire \`Payment Failed\`
-listen to forms { payload: <Payment> } fire \`Payment Failed\`
+listen to stripe-[:Requests]-><Payment> fire \`Payment Failed\`
+listen to forms-[:Requests]-><Payment> fire \`Payment Failed\`
 `;
 
 const SECRET = 'whsec_test_secret';
@@ -56,7 +57,7 @@ function post(url: string, body: string, headers: Record<string, string> = {}): 
 
 const now = () => Math.floor(Date.now() / 1000);
 
-test('listen-fire check types the event by the declared payload and refuses a field it does not declare', async () => {
+test('listen-fire check types the landing by the node the listen states and refuses a field it does not declare', async () => {
   const dir = await webhookProject();
   const check = await lf(dir, ['check']).done;
   assert.equal(check.code, 0, check.out);
@@ -66,10 +67,10 @@ test('listen-fire check types the event by the declared payload and refuses a fi
   assert.equal(refused.code, 1, refused.out);
   assert.match(refused.out, /MOV_UNKNOWN_PROPERTY .*has no field 'currency' — it has: id, amount, note/);
 
-  writeFileSync(join(dir, 'movements/payments.mvt'), PAYMENTS.replace('{ payload: <Payment> } fire `Payment Failed`\nlisten to forms', '{} fire `Payment Failed`\nlisten to forms'));
+  writeFileSync(join(dir, 'movements/payments.mvt'), PAYMENTS.replace('stripe-[:Requests]-><Payment> fire', 'stripe-[:Requests]-> fire'));
   const missing = await lf(dir, ['check']).done;
   assert.equal(missing.code, 1, missing.out);
-  assert.match(missing.out, /MOV_LISTEN_BAD_CONFIG .*requires a 'payload' config/);
+  assert.match(missing.out, /MOV_LISTEN_PARAM_MISMATCH .*what lands on '-\[:Requests\]->' is untyped — state its type after the traversal: `listen to stripe-\[:Requests\]-><Payment> fire `Payment Failed``/);
   console.log([refused.out.trim(), missing.out.trim()].join('\n'));
 });
 
@@ -106,6 +107,33 @@ test('listen-fire serve prints each connection’s URL, runs a signed delivery, 
     const unsignedOpen = await post(formsUrl, open);
     assert.equal(unsignedOpen.status, 202, unsignedOpen.body);
     assert.deepEqual(companies(dir), ['pay_1 failed: 1200', 'pay_6 failed: 7']);
+  } finally {
+    await serving.stop();
+  }
+});
+
+test('a webhook delivery fires a listen whose function types its parameter by the payload node; a misfit runs nothing', async () => {
+  const dir = await webhookProject();
+  // Two listens on one connection, each stating another node: a delivery fits one.
+  const refunds = PAYMENTS.replace(
+    'listen to forms-[:Requests]-><Payment> fire `Payment Failed`',
+    'node Refund {\n  refund: <text>\n}\n\nfunction refunded(r: <Refund>) {\n  write crm-[:Company]-> { Name: "refund ${r.refund}" }\n}\n\nlisten to forms-[:Requests]-><Payment> fire `Payment Failed`\nlisten to forms-[:Requests]-><Refund> fire refunded',
+  );
+  writeFileSync(join(dir, 'movements/payments.mvt'), refunds);
+  const check = await lf(dir, ['check']).done;
+  assert.equal(check.code, 0, check.out);
+  const serving = await served(dir);
+  try {
+    const url = (await serving.waitFor(/^webhook FormsHook: /)).replace(/^webhook FormsHook: /, '');
+    assert.equal((await post(url, '{"id":"pay_7","amount":3}')).status, 202);
+    assert.equal((await post(url, '{"refund":"re_1"}')).status, 202);
+    assert.deepEqual(companies(dir), ['pay_7 failed: 3', 'refund re_1'], 'each ran only the listen whose node it fits');
+    // A body that fits neither node is refused, naming what each listen states.
+    const misfit = await post(url, '{"id":"pay_8"}');
+    assert.equal(misfit.status, 400, misfit.body);
+    assert.match(misfit.body, /Payment, as the listen firing payments:Payment Failed states it: `amount` is missing/);
+    assert.match(misfit.body, /Refund, as the listen firing payments:refunded states it: `refund` is missing/);
+    assert.deepEqual(companies(dir), ['pay_7 failed: 3', 'refund re_1'], 'the misfit ran nothing');
   } finally {
     await serving.stop();
   }

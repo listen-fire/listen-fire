@@ -14,17 +14,25 @@ const at = (recordType: string) =>
   makeUnstablePosition({ adapterType: 'email', recordType, data: {} });
 
 describe('email edgesFrom — the walk', () => {
-  it('the root offers exactly one edge, and it is a FIRES edge, not a read', async () => {
+  it('the root offers exactly one edge, and it is a LISTENABLE edge, not a read', async () => {
     const result = await adapter().edgesFrom(at(META_RECORD_TYPE));
     expect(result).not.toBeNull();
     const refs = result!.descriptor.references;
     expect(refs).toHaveLength(1);
     const [edge] = refs;
-    expect(edge.name).toBe('Email');
+    expect(edge.name).toBe('Emails');
     // The honest shape of an inbox: you cannot list it, so the edge that
     // reaches an email is one you are PUSHED along.
-    expect(edge.fires).toBe(true);
+    expect(edge.listenable).toBe(true);
     expect(edge.readable).toBe(false);
+  });
+
+  it('the entry point is the unbounded Emails edge, narrowed by the key mail is sent to', async () => {
+    const [email] = await adapter().listEntryPoints();
+    expect(email).toMatchObject({ collectionName: 'Emails', listenable: true, readable: false, bounded: false, boundedBy: ['Key'], delivery: 'connection' });
+    expect(email).not.toHaveProperty('fires');
+    const described = await adapter().describe(EMAIL_RECORD_TYPE_ID);
+    expect(described?.fields.find((f) => f.displayName === 'Key')).toMatchObject({ kind: 'owned', owned: { name: 'InboxKey', allowPattern: '^[a-z0-9]+(-[a-z0-9]+)*$' } });
   });
 
   it('a root with no readable edge is a real answer, not an empty one', async () => {

@@ -82,7 +82,28 @@ function routingKeyFrom(
   return null;
 }
 
+/**
+ * The plus-suffix of the address a message was delivered to (its
+ * `recipient`, `<box>+<key>@<domain>`, possibly `Name <…>` or a comma list),
+ * lowercased: a mail server hands the address back in whatever case the
+ * sender typed. The empty string for mail sent to the box itself. Any
+ * deployment's address, configured or not: the key is what follows the `+`.
+ */
+function inboxKeyOf(recipient: string | undefined): string {
+  for (const part of (recipient ?? '').split(',')) {
+    const trimmed = part.trim();
+    const address = trimmed.includes('<') ? trimmed.slice(trimmed.lastIndexOf('<') + 1).replace(/>$/, '') : trimmed;
+    const at = address.lastIndexOf('@');
+    if (at < 0) continue;
+    const local = address.slice(0, at);
+    const plus = local.indexOf('+');
+    if (plus >= 0 && plus < local.length - 1) return local.slice(plus + 1).toLowerCase();
+  }
+  return '';
+}
+
 export {
+  inboxKeyOf,
   INBOUND_EMAIL_ADDRESS_VAR,
   inboundRoutingAddress,
   parseRoutingAddress,

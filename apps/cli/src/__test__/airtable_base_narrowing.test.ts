@@ -61,13 +61,13 @@ import { my_airtable } from credentials
 
 pipeline = connect airtable using my_airtable
 
-function track(run: <manual-[:Invocation]->>) {
+function track(run: <manual-[:Invocations]->>) {
   base = only(pipeline-[b:Base WHERE b.Name == "${input.base}"]->)
   if (base == null) { fail("no base") }
   write base-[:${input.table}]-> { ${input.field}: "Acme Narrowed" }
 }
 
-listen to manual fire track
+listen to manual-[:Invocations]-> fire track
 `;
 }
 

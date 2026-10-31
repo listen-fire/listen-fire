@@ -144,6 +144,14 @@ impl Listen {
         Some(judge_arrival(plan, &planned, now_ms))
     }
 
+    /// What of an arrival's landing does not fit the node the listen states
+    /// it is (`-[:Requests]-><Payment>`), one line each; empty when it fits,
+    /// or the listen states none.
+    pub fn misfits(&self, arrival: &ArrivalIn) -> Vec<String> {
+        let fields = arrival.landing.as_ref().and_then(|landing| landing.get("fields")).unwrap_or(&Js::Null);
+        self.payload.as_ref().map(|declared| declared.misfits(fields)).unwrap_or_default()
+    }
+
     /// Whether an event's payload fits the node the listen declares; a
     /// listen that declares none takes any.
     pub fn takes(&self, event: &Js) -> bool {
@@ -616,13 +624,16 @@ fn listens_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Pro
                 continue;
             }
         };
+        // The node the listen states its untyped landing is: what lands
+        // reaches it only when it fits.
+        let payload = plan.landing.as_deref().and_then(|name| DeclaredPayload::of(name, scope, scopes));
         read.listens.push(Listen {
             file: file.name.clone(),
             adapter,
             config: Obj::new(),
             movement_name: plan.movement.clone(),
             credential,
-            payload: None,
+            payload,
             args,
             address: Ok(BTreeMap::new()),
             plan: Some(plan),
@@ -706,48 +717,6 @@ fn same_value(held: Option<&Js>, value: &Js) -> bool {
         (None, _) => false,
         (Some(Js::Num(a)), Js::Num(b)) => a.as_f64() == b.as_f64(),
         (Some(held), value) => held.to_json() == value.to_json(),
-    }
-}
-
-/// The listen config key that routes inbound mail: a module that declares
-/// it (`@lf/email`) has each message reach the listen whose `key` is the
-/// plus-suffix of the address it was sent to.
-pub const ROUTING_KEY: &str = "key";
-
-/// Whether a module's listen vocabulary declares the routing key.
-pub fn routes_by_key(listen_vocabulary: &Obj) -> bool {
-    let entries = listen_vocabulary.get("listenConfig").and_then(Js::as_array).unwrap_or(&[]);
-    entries.iter().any(|entry| entry.get("key").and_then(Js::as_str) == Some(ROUTING_KEY))
-}
-
-/// The plus-suffix of the address a message was delivered to (its
-/// `recipient`, `<box>+<key>@<domain>`), lowercased: a mail server hands the
-/// address back in whatever case the sender typed. None for the box itself.
-pub fn plus_suffix_of(event: &Js) -> Option<String> {
-    let recipient = event.get("payload").and_then(|p| p.get("recipient")).and_then(Js::as_str)?;
-    recipient.split(',').find_map(|address| {
-        let address = address.trim();
-        let address = address.rsplit_once('<').map_or(address, |(_, bracketed)| bracketed.trim_end_matches('>'));
-        let (local, _domain) = address.rsplit_once('@')?;
-        let (_box, key) = local.split_once('+')?;
-        (!key.is_empty()).then(|| key.to_lowercase())
-    })
-}
-
-/// The routing gate (the platform's `findTriggerByInboundKey`): a message
-/// reaches a listen when its address's plus-suffix is the listen's `key`, and
-/// a listen with no key hears only the mail sent to the box itself. A suffix
-/// no listen has reaches none: mail is never fanned out to every listen.
-pub fn address_matches_key(event: &Js, config: &Obj) -> bool {
-    let key = config.get(ROUTING_KEY).and_then(Js::as_str).map(str::to_lowercase);
-    plus_suffix_of(event) == key
-}
-
-/// The line a message no listen is keyed for is refused with.
-pub fn unrouted_line(external: &str, event: &Js) -> String {
-    match plus_suffix_of(event) {
-        Some(key) => format!("no listen on {external} has the key \"{key}\" (the plus-suffix of the address the message was sent to): it runs nothing"),
-        None => format!("no listen on {external} is without a key, and the message was sent to the box itself, with no plus-suffix: it runs nothing"),
     }
 }
 
@@ -957,11 +926,11 @@ mod tests {
     fn a_listen_on_a_connection_imported_from_another_file_is_named_in_either_form() {
         // The checker refuses both (a file exports no connection: MOV_IMPORT_NOT_EXPORTED, MOV_LISTEN_NOT_INSTANCE).
         let connections = "import { acme_crm as crm_kind } from adapters\nimport { acme } from credentials\n\ncrm = connect crm_kind using acme\n";
-        let listening = "import { crm } from \"connections\"\n\nfunction welcome(c: <crm-[:Company]->>) {\n  return c.Name\n}\n\nlisten to crm { events: [\"company.created\"] } fire welcome\nlisten to manual fire welcome\n";
+        let listening = "import { crm } from \"connections\"; import { bell } from adapters; own = connect bell\n\nfunction welcome(c: <crm-[:Company]->>) {\n  return c.Name\n}\n\nlisten to crm { events: [\"company.created\"] } fire welcome\nlisten to own fire welcome\n";
         let file = |name: &str, source: &str| MovementFile { name: name.into(), path: PathBuf::from(format!("{name}.mvt")), source: source.into(), version: None };
         let read = listens_across(&Parsed::each(&[file("connections", connections), file("welcome", listening)], &[]), &Js::Null);
         assert_eq!(read.unwatched, ["welcome.mvt:7:1 the listen that fires welcome is on `crm`, which is imported from another file, which cannot make a connection, so nothing would fire it"]);
-        assert_eq!(read.listens.iter().map(|l| l.adapter.as_str()).collect::<Vec<_>>(), ["manual"], "the file's listen on a host unit is read");
+        assert_eq!(read.listens.iter().map(|l| l.adapter.as_str()).collect::<Vec<_>>(), ["bell"], "the file's listen on its own connection is read");
         // On a traversal, the checker plans nothing for it.
         let traversal = listening.replace("listen to crm { events: [\"company.created\"] } fire welcome", "listen to crm-[:Company]-> fire welcome");
         let mut catalog = js(CRM_CATALOG);
@@ -1064,11 +1033,11 @@ mod tests {
 
     #[test]
     fn a_listen_names_its_constructions_credential_and_hears_only_its_deliveries() {
-        let source = "import { inbox } from adapters\nimport { inbox_main as a_cred, `Inbox B` } from credentials\n\na = connect inbox using a_cred\nb = connect inbox using `Inbox B`\nc = connect inbox\n\nfunction noted() {\n}\n\nlisten to a fire noted\nlisten to b fire noted\nlisten to c fire noted\nlisten to manual fire noted\n";
+        let source = "import { inbox } from adapters\nimport { inbox_main as a_cred, `Inbox B` } from credentials\n\na = connect inbox using a_cred\nb = connect inbox using `Inbox B`\nc = connect inbox\n\nfunction noted() {\n}\n\nlisten to a fire noted\nlisten to b fire noted\nlisten to c fire noted\n";
         let files = vec![MovementFile { name: "noted".into(), path: PathBuf::from("noted.mvt"), source: source.into(), version: None }];
         let listens = collect_listens(&files);
         let credentials: Vec<Option<&str>> = listens.iter().map(|l| l.credential.as_deref()).collect();
-        assert_eq!(credentials, [Some("inbox_main"), Some("Inbox B"), None, None], "an alias is resolved to the secrets' name");
+        assert_eq!(credentials, [Some("inbox_main"), Some("Inbox B"), None], "an alias is resolved to the secrets' name");
         let (a, c) = (&listens[0], &listens[2]);
         assert!(a.hears(Some("inbox_main")) && !a.hears(Some("Inbox B")), "a listen hears only its own connection's deliveries");
         assert!(a.hears(None), "a delivery that names no credential reaches every listen");
@@ -1080,7 +1049,7 @@ mod tests {
         let file = |name: &str, movement: &str| MovementFile {
             name: name.into(),
             path: PathBuf::from(format!("{name}.mvt")),
-            source: format!("function {movement}() {{\n}}\n\nlisten to manual fire {movement}\n"),
+            source: format!("import {{ bell }} from adapters\nb = connect bell\n\nfunction {movement}() {{\n}}\n\nlisten to b fire {movement}\n"),
             version: None,
         };
         let pairs = |files: &[MovementFile]| {
@@ -1189,31 +1158,6 @@ mod tests {
             "the imported node's base and enum come from its own file"
         );
         assert!(!paid.takes(&event(r#"{"id":"p"}"#)));
-    }
-
-    #[test]
-    fn mail_reaches_the_listen_keyed_by_its_plus_suffix_and_no_other() {
-        let keyed = |key: &str| match js(&format!(r#"{{"key":"{key}"}}"#)) {
-            Js::Obj(map) => map,
-            _ => unreachable!(),
-        };
-        let listens = [("deals", keyed("deals")), ("intros", keyed("Intros")), ("box", Obj::new())];
-        let reached = |recipient: &str| -> Vec<&str> {
-            let event = js(&format!(r#"{{"payload":{{"recipient":"{recipient}"}}}}"#));
-            listens.iter().filter(|(_, config)| address_matches_key(&event, config)).map(|(name, _)| *name).collect()
-        };
-        assert_eq!(reached("inbox+deals@acme.test"), ["deals"]);
-        assert_eq!(reached("Inbox <inbox+INTROS@acme.test>"), ["intros"]);
-        assert_eq!(reached("inbox@acme.test"), ["box"]);
-        assert!(reached("inbox+hiring@acme.test").is_empty());
-        let stray = js(r#"{"payload":{"recipient":"inbox+hiring@acme.test"}}"#);
-        assert!(unrouted_line("email", &stray).contains(r#"no listen on email has the key "hiring""#));
-        let vocabulary = match js(r#"{"listenConfig":[{"key":"key","required":false}]}"#) {
-            Js::Obj(map) => map,
-            _ => unreachable!(),
-        };
-        assert!(routes_by_key(&vocabulary));
-        assert!(!routes_by_key(&Obj::new()));
     }
 
     #[test]

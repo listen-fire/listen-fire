@@ -20,7 +20,7 @@ import { lf } from './interactive';
 import { HEADER, botMessages, deliver, eventCallback, parkedRun, press, slackWorld } from './slack_world';
 
 const PRESS = `${HEADER}
-function decide(run: <manual-[:Invocation]->>) {
+function decide(run: <manual-[:Invocations]->>) {
   general = only(chat-[ch:Channels WHERE ch.Name == "general"]->)
   if (general == null) { fail("no #general channel") }
   msg = write general-[:Messages]-> {
@@ -36,11 +36,11 @@ function decide(run: <manual-[:Invocation]->>) {
   }
 }
 
-listen to manual fire decide
+listen to manual-[:Invocations]-> fire decide
 `;
 
 const REPLY = `${HEADER}
-function ask(run: <manual-[:Invocation]->>) {
+function ask(run: <manual-[:Invocations]->>) {
   general = only(chat-[ch:Channels WHERE ch.Name == "general"]->)
   if (general == null) { fail("no #general channel") }
   msg = write general-[:Messages]-> { Message: "Anyone?" }
@@ -48,7 +48,7 @@ function ask(run: <manual-[:Invocation]->>) {
   write general-[:Messages]-> { Message: "heard \${reply.Message}" }
 }
 
-listen to manual fire ask
+listen to manual-[:Invocations]-> fire ask
 `;
 
 test('a press resumes the run with the button\'s literal value', async () => {
@@ -97,7 +97,7 @@ test('listen-fire check refuses a typo against the written Values', async () => 
 // off where it is read, the receipt read after the race. An awaited record is
 // present where it is read, so nothing guards it.
 const APPROVAL = `${HEADER}
-function review(run: <manual-[:Invocation]->>) {
+function review(run: <manual-[:Invocations]->>) {
   finance = only(chat-[ch:Channels WHERE ch.Name == "general"]->)
   if (finance == null) { fail("no #general channel") }
   msg = write finance-[:Messages]-> {
@@ -118,7 +118,7 @@ function review(run: <manual-[:Invocation]->>) {
   write msg { Message: "\${msg.Message} (\${r[0].choice}d by \${r[0].by})" }
 }
 
-listen to manual fire review
+listen to manual-[:Invocations]-> fire review
 `;
 
 test('the expense approval checks clean: an awaited press is walked off unguarded', async () => {

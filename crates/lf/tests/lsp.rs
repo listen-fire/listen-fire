@@ -68,12 +68,12 @@ impl Client {
     }
 }
 
-const SOURCE: &str = "function hello(run: <manual-[:Invocation]->>) {
+const SOURCE: &str = "function hello(run: <manual-[:Invocations]->>) {
   shout = UPPER(run.`Text`)
   return \"Hello, ${shout}!\"
 }
 
-listen to manual fire hello
+listen to manual-[:Invocations]-> fire hello
 ";
 
 #[test]
@@ -110,7 +110,7 @@ fn an_editor_session_over_stdio() {
     assert!(contents.contains("shout: text") && contents.contains(&format!("{}/", movement_language::docs_base())), "{contents}");
 
     // `hello` in the listen: the function's declaration.
-    let definition = client.request("textDocument/definition", json!({ "textDocument": { "uri": uri }, "position": { "line": 5, "character": 24 } }));
+    let definition = client.request("textDocument/definition", json!({ "textDocument": { "uri": uri }, "position": { "line": 5, "character": 39 } }));
     assert_eq!(definition["uri"], json!(uri));
     assert_eq!(definition.pointer("/range/start"), Some(&json!({ "line": 0, "character": 9 })));
 

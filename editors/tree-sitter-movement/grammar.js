@@ -140,8 +140,9 @@ module.exports = grammar({
         'to',
         choice(
           // `listen to chat-[:Channels]->-[:Messages]-> fire f`: the
-          // traversal a listen is on.
-          field('path', $.walk_expression),
+          // traversal a listen is on; `-[:Requests]-><Payment>` states the
+          // type of an untyped landing.
+          seq(field('path', $.walk_expression), optional(field('landing', $.type_marker))),
           seq(field('channel', $._name), optional(field('arguments', $.arguments)), optional(field('config', $.record))),
         ),
         'fire',

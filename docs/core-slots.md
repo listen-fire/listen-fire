@@ -30,11 +30,11 @@ A slot accepts only a module of its own kind; `listen-fire check` and `listen-fi
 Two sources are the run host's own, not modules: every host has them, and a movement listens to them with no import and no `connect`.
 
 ```
-function digest(t: <cron-[:Tick]->>) { … }
-listen to cron { schedule: "0 9 * * 1", timezone: "Europe/London" } fire digest
+function digest(t: <cron-[:Ticks]->>) { … }
+listen to cron-[t:Ticks WHERE t.Schedule == "0 9 * * 1" AND t.Zone == "Europe/London"]-> fire digest
 
-function backfill(run: <manual-[:Invocation]->>) { … }
-listen to manual fire backfill
+function backfill(run: <manual-[:Invocations]->>) { … }
+listen to manual-[:Invocations]-> fire backfill
 ```
 
 - `manual` fires when you ask: `listen-fire run backfill` here (`--text "…"` gives the Invocation its `Text`), "Run now" on the platform.

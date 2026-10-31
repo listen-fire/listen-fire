@@ -21,6 +21,8 @@ export const webhookModule = defineModule({
   kind: 'adapter',
   name: '@lf/webhook',
   manifest: WEBHOOK_MANIFEST,
+  // An arrival on a root edge names no key (adapter protocol 2.6).
+  protocolMinor: 6,
   credentials: [
     {
       name: 'webhook',

@@ -4,14 +4,21 @@
     "email": {
       "canFire": true,
       "constructionArgs": [],
-      "triggerConfig": [
-        "key"
-      ],
-      "triggerConfigRequired": [
-        "key"
-      ],
-      "triggerConfigRequiredWhy": {
-        "key": "the key is this listener's address, inbox+<key>@example.com; without one nothing can be sent to it and it never fires"
+      "listenSettingsBecome": {
+        "path": [
+          "Emails"
+        ],
+        "aliases": [
+          "e"
+        ],
+        "paramFrom": "Email",
+        "keys": {
+          "key": {
+            "hop": 0,
+            "field": "Key",
+            "op": "eq"
+          }
+        }
       },
       "schemas": {
         "": {
@@ -24,12 +31,27 @@
                 "To": "text",
                 "HTML Body": "text",
                 "Plain Body": "text",
-                "Body": "text"
+                "Body": "text",
+                "Key": {
+                  "kind": "owned",
+                  "name": "InboxKey",
+                  "owner": "email",
+                  "allowPattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                }
               },
               "edges": {
                 "Attachments": {
                   "target": "Attachment",
-                  "sequenced": "document"
+                  "sequenced": "document",
+                  "description": "Files attached to the email (zero or more)."
+                }
+              },
+              "propertyCapabilities": {
+                "Key": {
+                  "filterOperators": [
+                    "eq",
+                    "in"
+                  ]
                 }
               }
             },
@@ -44,14 +66,23 @@
               "edges": {}
             }
           },
-          "collections": {},
-          "writableRoots": {},
-          "eventPosition": "Email",
-          "eventPositions": [
-            {
-              "position": "Email"
+          "collections": {
+            "Emails": {
+              "target": "Email",
+              "capability": {
+                "filter": "native",
+                "supportsLimit": false
+              },
+              "readable": false,
+              "listenable": true,
+              "bounded": false,
+              "boundedBy": [
+                "Key"
+              ],
+              "delivery": "connection"
             }
-          ]
+          },
+          "writableRoots": {}
         }
       }
     },
@@ -4175,6 +4206,16 @@
     "manual": {
       "canFire": true,
       "constructionArgs": [],
+      "listenSettingsBecome": {
+        "aliases": [
+          "i"
+        ],
+        "keys": {},
+        "paramFrom": "Invocation",
+        "path": [
+          "Invocations"
+        ]
+      },
       "schemas": {
         "": {
           "positions": {
@@ -4202,14 +4243,15 @@
               "edges": {}
             }
           },
-          "collections": {},
-          "writableRoots": {},
-          "eventPosition": "Invocation",
-          "eventPositions": [
-            {
-              "position": "Invocation"
+          "collections": {
+            "Invocations": {
+              "target": "Invocation",
+              "readable": false,
+              "listenable": true,
+              "delivery": "connection"
             }
-          ]
+          },
+          "writableRoots": {}
         }
       }
     },
@@ -4976,22 +5018,26 @@
     "cron": {
       "canFire": true,
       "constructionArgs": [],
-      "triggerConfig": [
-        "events",
-        "schedule",
-        "timezone"
-      ],
-      "triggerConfigOptions": {
-        "events": [
-          "tick"
+      "listenSettingsBecome": {
+        "aliases": [
+          "t"
+        ],
+        "keys": {
+          "schedule": {
+            "field": "Schedule",
+            "hop": 0,
+            "op": "eq"
+          },
+          "timezone": {
+            "field": "Zone",
+            "hop": 0,
+            "op": "eq"
+          }
+        },
+        "paramFrom": "Tick",
+        "path": [
+          "Ticks"
         ]
-      },
-      "triggerConfigRequired": [
-        "schedule"
-      ],
-      "triggerConfigFormats": {
-        "schedule": "cron",
-        "timezone": "timezone"
       },
       "schemas": {
         "": {
@@ -4999,19 +5045,53 @@
             "Tick": {
               "properties": {
                 "Fired at": "date",
-                "Schedule": "text"
+                "Schedule": {
+                  "kind": "owned",
+                  "name": "Cron",
+                  "owner": "cron"
+                },
+                "Zone": {
+                  "kind": "owned",
+                  "name": "Zone",
+                  "owner": "cron"
+                }
               },
-              "edges": {}
+              "edges": {},
+              "propertyCapabilities": {
+                "Schedule": {
+                  "filterOperators": [
+                    "eq",
+                    "in"
+                  ]
+                },
+                "Zone": {
+                  "filterOperators": [
+                    "eq",
+                    "in"
+                  ]
+                }
+              }
             }
           },
-          "collections": {},
-          "writableRoots": {},
-          "eventPosition": "Tick",
-          "eventPositions": [
-            {
-              "position": "Tick"
+          "collections": {
+            "Ticks": {
+              "target": "Tick",
+              "capability": {
+                "filter": "native",
+                "supportsLimit": false
+              },
+              "readable": false,
+              "listenable": true,
+              "cursor": true,
+              "bounded": false,
+              "boundedBy": [
+                "Schedule"
+              ],
+              "delivery": "polled",
+              "pollEverySeconds": 60
             }
-          ]
+          },
+          "writableRoots": {}
         }
       }
     },

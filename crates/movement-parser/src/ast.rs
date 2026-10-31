@@ -924,6 +924,10 @@ pub struct ListenDeclaration {
     /// `instance`. Absent for the settings form (`listen to x { … }`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathHead>,
+    /// `listen to hooks-[:Requests]-><Payment> fire f`: the node the
+    /// traversal's untyped landing is, as the listen states it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub landing: Option<TypeRef>,
     pub movement: String,
     pub span: Span,
 }

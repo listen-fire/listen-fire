@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { lf, project } from './example';
+import { lf as lfAsked, ok } from './interactive';
 
 const OLD = `import { acme_crm } from adapters
 import { acme } from credentials
@@ -296,3 +297,103 @@ test('listen-fire upgrade holds the pin on a settings listen it cannot rewrite, 
   );
   assert.match(out, /engine: left at 0\.12\.13 until the 1 remaining diagnostic\(s\) are fixed/);
 });
+
+/** The example project with `name.mvt` its only movement; `upgradesTo`
+ *  pins it 0.12.13 first. */
+function only012(name: string, source: string): { dir: string; file: string } {
+  const dir = project();
+  rmSync(join(dir, 'movements', 'companies.mvt'));
+  const file = join(dir, 'movements', `${name}.mvt`);
+  writeFileSync(file, source);
+  return { dir, file };
+}
+
+/** `dir` upgraded to `expected`, which checks clean, and a second run changes nothing. */
+function upgradesTo(dir: string, file: string, expected: string): void {
+  pinned(dir, '0.12.13');
+  const upgraded = lf(dir, 'upgrade');
+  assert.equal(upgraded.code, 0, upgraded.out);
+  assert.equal(readFileSync(file, 'utf8'), expected);
+  assert.match(upgraded.out, /lf\.yaml: engine: 0\.13\.0 \(was 0\.12\.13\)/);
+  const checked = lf(dir, 'check');
+  assert.equal(checked.code, 0, checked.out);
+  assert.doesNotMatch(checked.out, /MOV_LISTEN_SETTINGS_RETIRED/);
+  assert.match(lf(dir, 'upgrade', '--check').out, /1 file\(s\), 0 would be rewritten, 0 left to change by hand/);
+}
+
+test('upgrade rewrites `listen to cron { schedule, timezone }` and `listen to manual fire f`', () => {
+  const units = [
+    'function tock(t: <cron-[:Tick]->>) {',
+    '  return t.Schedule',
+    '}',
+    'function hello(run: <manual-[:Invocation]->>) {',
+    '  return run.Text',
+    '}',
+    'listen to cron { schedule: "0 9 * * 1-5", timezone: "Europe/London" } fire tock',
+    'listen to manual fire hello',
+    '',
+  ].join('\n');
+  const { dir, file } = only012('units', units);
+  upgradesTo(
+    dir,
+    file,
+    units
+      .replace('<cron-[:Tick]->>', '<cron-[:Ticks]->>')
+      .replace('<manual-[:Invocation]->>', '<manual-[:Invocations]->>')
+      .replace('listen to cron { schedule: "0 9 * * 1-5", timezone: "Europe/London" } fire tock', 'listen to cron-[t:Ticks WHERE t.Schedule == "0 9 * * 1-5" AND t.Zone == "Europe/London"]-> fire tock')
+      .replace('listen to manual fire hello', 'listen to manual-[:Invocations]-> fire hello'),
+  );
+});
+
+test('upgrade rewrites an email listen keyed by its plus-suffix, and holds the pin on one with no key', async () => {
+  const intake = [
+    'import { email } from adapters',
+    '',
+    'inbox = connect email',
+    '',
+    'function deal(m: <inbox-[:Email]->>) {',
+    '  return m.Subject',
+    '}',
+    'listen to inbox { key: "deals" } fire deal',
+    '',
+  ].join('\n');
+  const { dir, file } = only012('intake', intake);
+  await ok(lfAsked(dir, ['connect', '@lf/email', '--webhook-secret', 'mailgun-signing-key'], { answers: [''] }));
+  upgradesTo(
+    dir,
+    file,
+    intake.replace('<inbox-[:Email]->>', '<inbox-[:Emails]->>').replace('listen to inbox { key: "deals" } fire deal', 'listen to inbox-[e:Emails WHERE e.Key == "deals"]-> fire deal'),
+  );
+  // Mail to the box itself has no 0.13 listen: the pin holds, naming the edge.
+  pinned(dir, '0.12.13');
+  writeFileSync(file, intake.replace('listen to inbox { key: "deals" } fire deal', 'listen to inbox {} fire deal'));
+  const held = lf(dir, 'upgrade');
+  assert.equal(held.code, 1, held.out);
+  assert.match(held.out, /MOV_LISTEN_SETTINGS_RETIRED .*Write `listen to inbox-\[:Emails\]-> fire deal`/);
+  assert.match(held.out, /engine: left at 0\.12\.13/);
+});
+
+test('upgrade rewrites a webhook listen’s payload as the type stated after its traversal', async () => {
+  const payments = [
+    'import { webhook } from adapters',
+    'import { StripeHook } from credentials',
+    '',
+    'stripe = connect webhook using StripeHook',
+    '',
+    'node Payment {',
+    '  id: <text>',
+    '  amount: <number>',
+    '}',
+    '',
+    'function paid(e: <Payment>) {',
+    '  return e.amount',
+    '}',
+    'listen to stripe { payload: <Payment> } fire paid',
+    '',
+  ].join('\n');
+  const { dir, file } = only012('payments', payments);
+  await ok(lfAsked(dir, ['connect', '@lf/webhook', '--yes'], { answers: [] }));
+  await ok(lfAsked(dir, ['credential', 'add', '--module', 'webhook', 'StripeHook'], { answers: ['none', '', '', '', ''] }));
+  upgradesTo(dir, file, payments.replace('listen to stripe { payload: <Payment> } fire paid', 'listen to stripe-[:Requests]-><Payment> fire paid'));
+});
+

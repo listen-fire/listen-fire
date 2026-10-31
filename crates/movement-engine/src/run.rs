@@ -948,12 +948,16 @@ impl Run<'_> {
             // <Payment>`) fires a parameter typed by that node: the event is
             // its payload, held as a value is (as an extraction's is), and
             // not a position on any connection. The host has already checked
-            // the payload fits the node.
+            // the payload fits the node. So is an arrival's landing a listen
+            // states the type of (`-[:Requests]-><Payment>`): its fields.
             Some(Binding::Shape(_)) if type_ref.hops_raw.is_none() => {
                 *self.file_scope.borrow_mut() = Some(file.clone());
                 self.call_stack.borrow_mut().push(movement.name.clone());
                 let movement_scope = file.child();
-                let payload = event_get(&self.event, "payload");
+                let payload = match event_get(&self.event, "arrival") {
+                    arrival @ Js::Object(_) => event_get(&event_get(&arrival, "landing"), "fields"),
+                    _ => event_get(&self.event, "payload"),
+                };
                 movement_scope.declare(param.name.clone(), Binding::Value(ValueBinding { value: payload, trail: Some(Trail::default()), many: false }));
                 return Ok((movement, index, movement_scope));
             }

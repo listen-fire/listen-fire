@@ -16,7 +16,7 @@ import { henry_mail } from credentials
 
 mail = connect gmail using henry_mail
 
-function draft(run: <manual-[:Invocation]->>) {
+function draft(run: <manual-[:Invocations]->>) {
   fresh = write mail-[:Drafts]-> {
     To: ["rita@acme.example"]
     Subject: "Your Q3 figures"
@@ -28,7 +28,7 @@ function draft(run: <manual-[:Invocation]->>) {
   return "\${fresh.Id} \${fresh.Subject} / \${answer.Id} \${answer.Subject}"
 }
 
-listen to manual fire draft
+listen to manual-[:Invocations]-> fire draft
 `;
 
 test('with drafts enabled, a program creates a draft and a reply draft, and neither is sent', async () => {
@@ -177,7 +177,7 @@ import { henry_mail } from credentials
 
 mail = connect gmail using henry_mail
 
-function send(run: <manual-[:Invocation]->>) {
+function send(run: <manual-[:Invocations]->>) {
   sent = write mail-[:Messages]-> { To: ["rita@acme.example"], Subject: "Figures", Body: "Attached." }
   asked = only(mail-[m:Messages WHERE m.Subject == "Q3 question"]->)
   if (asked == null) { fail("no Q3 question") }
@@ -185,7 +185,7 @@ function send(run: <manual-[:Invocation]->>) {
   return "\${sent.\`Message Id\`} \${sent.\`Thread Id\`} \${sent.Subject} / \${reply.\`Message Id\`} \${reply.\`Thread Id\`} \${reply.Subject}"
 }
 
-listen to manual fire send
+listen to manual-[:Invocations]-> fire send
 `,
     );
     const run = lfSync(dir, 'run', 'send');

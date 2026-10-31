@@ -2,13 +2,18 @@
 //! file's scope in this language with no import
 //! (movement_parser::version::RUN_HOST_UNITS). listen-fire builds them in, as the
 //! platform does (lf-platform's apps/api translation_graph/adapters/{cron,manual}): their
-//! catalog entries, the in-process adapter a run reads its event through, the
-//! event `listen-fire run <movement>` fires on a manual listen, and the ticks `listen-fire serve`
-//! and `listen-fire drain` fire on a cron listen.
+//! catalog entries and the in-process adapter a run reads its landing through.
+//!
+//! Each is one listenable root edge. `cron-[t:Ticks WHERE t.Schedule == "…"]->`
+//! is polled (crate::edge_polls): one clock per schedule and zone a shared
+//! poll's filter names, which the unit answers itself (`poll_ticks`).
+//! `manual-[:Invocations]->` is pushed by `listen-fire run <movement>`.
 //!
 //! A project external of the same name replaces the unit.
 
 use serde_json::json;
+
+use movement_parser::lowering::expression::{Expression, FilterOperator, ListElement, LogicalOp, StaticValue};
 
 use crate::json::{Js, Obj};
 use crate::obj;
@@ -17,33 +22,59 @@ use crate::wire::{Hv, js_of_json};
 pub const CRON: &str = "cron";
 pub const MANUAL: &str = "manual";
 
+/// The cron unit's one edge, and the manual unit's.
+pub const TICKS: &str = "Ticks";
+pub const INVOCATIONS: &str = "Invocations";
+
+/// The zone a schedule is read in when a listen names none.
+const DEFAULT_ZONE: &str = "UTC";
+
 /// The unit `name` is, when no external of the project takes the name.
 pub fn unit_named<'a>(name: &str, externals: impl IntoIterator<Item = &'a str>) -> Option<&'static str> {
     let unit = movement_parser::version::RUN_HOST_UNITS.iter().copied().find(|u| *u == name)?;
     (!externals.into_iter().any(|e| e == unit)).then_some(unit)
 }
 
-/// What the unit's manifest says of its listens (`listenConfig`,
-/// `subscribableEvents`), as an external's manifest says it.
+/// What the unit's manifest says of its listens: how a 0.12 settings listen
+/// on it is written as a traversal (`listenSettingsBecome`). A cron listen
+/// always named its schedule; a manual one named nothing.
 pub fn listen_vocabulary(unit: &str) -> Obj {
     js_obj(match unit {
         CRON => json!({
-            "subscribableEvents": ["tick"],
-            "listenConfig": [
-                { "key": "schedule", "required": true, "format": "cron" },
-                { "key": "timezone", "required": false, "format": "timezone" },
-            ],
+            "listenSettingsBecome": {
+                "path": [TICKS],
+                "aliases": ["t"],
+                "paramFrom": "Tick",
+                "keys": {
+                    "schedule": { "hop": 0, "field": "Schedule", "op": "eq" },
+                    "timezone": { "hop": 0, "field": "Zone", "op": "eq" },
+                },
+            },
         }),
-        _ => json!({}),
+        _ => json!({ "listenSettingsBecome": { "path": [INVOCATIONS], "aliases": ["i"], "paramFrom": "Invocation", "keys": {} } }),
     })
 }
 
-/// `listEntryPoints`.
+/// `listEntryPoints`. A cron's ticks are polled every `pollEverySeconds`
+/// unless lf.yaml's `pollEvery` names another interval for `cron`.
 pub fn entry_points(unit: &str) -> Vec<Js> {
     let entries = match unit {
-        CRON => json!([{ "typeId": "tick", "displayName": "Tick", "writable": false, "readable": false, "fires": true }]),
+        CRON => json!([{
+            "typeId": "tick",
+            "displayName": "Tick",
+            "collectionName": TICKS,
+            "writable": false,
+            "readable": false,
+            "listenable": true,
+            "bounded": false,
+            "boundedBy": ["Schedule"],
+            "delivery": "polled",
+            "pollEverySeconds": 60,
+            "cursor": true,
+            "capability": { "filter": "native", "supportsLimit": false },
+        }]),
         _ => json!([
-            { "typeId": "invocation", "displayName": "Invocation", "writable": false, "readable": false, "fires": true },
+            { "typeId": "invocation", "displayName": "Invocation", "collectionName": INVOCATIONS, "writable": false, "readable": false, "listenable": true, "delivery": "connection" },
             { "typeId": "file", "displayName": "File", "writable": false, "readable": false },
         ]),
     };
@@ -58,12 +89,16 @@ pub fn describe(unit: &str, type_ref: &str) -> Option<Js> {
 /// Every type the unit describes, by type id (the catalog's projection input).
 pub fn descriptors(unit: &str) -> Vec<Js> {
     let field = |id: &str, name: &str, kind: &str, required: bool| json!({ "fieldId": id, "displayName": name, "kind": kind, "writable": false, "required": required });
+    // A scalar only the cron unit reads, compared by `==` or `IN`.
+    let owned = |id: &str, name: &str, scalar: &str| {
+        json!({ "fieldId": id, "displayName": name, "kind": "owned", "owned": { "name": scalar }, "writable": false, "required": true, "capability": { "filterOperators": ["eq", "in"] } })
+    };
     let list = match unit {
         CRON => vec![json!({
             "typeId": "tick",
             "displayName": "Tick",
-            "description": "One scheduled firing — when it was due, and on which schedule.",
-            "fields": [field("firedAt", "Fired at", "date", true), field("schedule", "Schedule", "string", true)],
+            "description": "One scheduled firing: when it was due, on which schedule, in which zone.",
+            "fields": [field("firedAt", "Fired at", "date", true), owned("schedule", "Schedule", "Cron"), owned("zone", "Zone", "Zone")],
             "references": [],
         })],
         _ => vec![
@@ -95,39 +130,38 @@ pub fn descriptors(unit: &str) -> Vec<Js> {
     list.iter().map(js_of_json).collect()
 }
 
-/// The type an unstable event position resolves to (`webhookEventTypeId`).
-pub fn event_type_id(unit: &str) -> &'static str {
+/// The type a position naming none is read as: what lands on the unit's edge.
+fn landing_type_id(unit: &str) -> &'static str {
     if unit == CRON { "tick" } else { "invocation" }
 }
 
 /// The methods the unit's in-process adapter answers.
 pub const METHODS: &[&str] = &["listEntryPoints", "describe", "getFieldValue", "getRelated"];
 
-/// One adapter call on the unit: `listEntryPoints`, `describe`, and the
-/// event's fields read off its position's data; nothing is related (a file
-/// supplied to a manual run is the platform's; listen-fire supplies none).
+/// One adapter call on the unit: `listEntryPoints`, `describe`, and a
+/// landing's fields read off its position's data, by id or by name; nothing
+/// is related (a file supplied to a manual run is the platform's;
+/// listen-fire supplies none).
 pub fn call(unit: &str, method: &str, args: &Hv) -> Result<Js, String> {
     match method {
         "listEntryPoints" => Ok(Js::Arr(entry_points(unit))),
         "describe" => Ok(describe(unit, args.get("typeId").and_then(Hv::as_str).unwrap_or_default()).unwrap_or(Js::Null)),
         "getFieldValue" => {
             let position = args.get("position").map(Hv::js).unwrap_or(Js::Null);
-            let record_type = position.get("recordType").and_then(Js::as_str).unwrap_or(event_type_id(unit));
+            let record_type = position.get("recordType").and_then(Js::as_str).unwrap_or(landing_type_id(unit));
             let written = args.get("fieldId").and_then(Hv::as_str).unwrap_or_default();
             let descriptor = describe(unit, record_type);
             let fields = descriptor.as_ref().and_then(|d| d.get("fields")).and_then(Js::as_array).unwrap_or(&[]);
-            let field_id = fields
-                .iter()
-                .find(|f| [f.get("fieldId"), f.get("displayName")].iter().any(|v| v.and_then(Js::as_str) == Some(written)))
-                .and_then(|f| f.get("fieldId").and_then(Js::as_str))
-                .unwrap_or(written)
-                .to_string();
+            let declared = fields.iter().find(|f| [f.get("fieldId"), f.get("displayName")].iter().any(|v| v.and_then(Js::as_str) == Some(written)));
+            let id = declared.and_then(|f| f.get("fieldId").and_then(Js::as_str)).unwrap_or(written);
+            let name = declared.and_then(|f| f.get("displayName").and_then(Js::as_str)).unwrap_or(written);
             let data = position.get("identity").and_then(|i| i.get("data")).cloned().unwrap_or(Js::Null);
-            Ok(match (unit, field_id.as_str()) {
+            let held = |key: &str| data.get(key).filter(|v| **v != Js::Null).cloned();
+            Ok(match (unit, id) {
                 // A run started with no text reads `""`, never absent: the
                 // schema types both as text, which is always present.
-                (MANUAL, "text" | "content") => data.get("text").cloned().unwrap_or(Js::str("")),
-                _ => data.get(&field_id).cloned().unwrap_or(Js::Null),
+                (MANUAL, "text" | "content") => held("Text").or_else(|| held("text")).unwrap_or(Js::str("")),
+                _ => held(id).or_else(|| held(name)).unwrap_or(Js::Null),
             })
         }
         "getRelated" => Ok(Js::Arr(Vec::new())),
@@ -135,29 +169,94 @@ pub fn call(unit: &str, method: &str, args: &Hv) -> Result<Js, String> {
     }
 }
 
-/// The event a manual run is: when it was asked for, by whom, and the text
-/// given with it.
-pub fn manual_event(fired_at: &str, user: &Js, text: Option<&str>) -> Js {
-    let mut payload = obj! { "firedAt" => Js::str(fired_at) };
+/// The arrival a manual run is, on `Invocations`: when it was asked for,
+/// by whom, and the text given with it. Each is its own invocation.
+pub fn invocation(fired_at: &str, user: &Js, text: Option<&str>) -> Js {
+    let mut fields = obj! { "Fired at" => Js::str(fired_at) };
     if let Some(email) = user.get("email").and_then(Js::as_str) {
-        payload.insert("actorEmail".into(), Js::str(email));
+        fields.insert("Run by (email)".into(), Js::str(email));
     }
     if let Some(name) = user.get("principal").and_then(|p| p.get("display")).and_then(Js::as_str) {
-        payload.insert("actorName".into(), Js::str(name));
+        fields.insert("Run by (name)".into(), Js::str(name));
     }
     if let Some(text) = text {
-        payload.insert("text".into(), Js::str(text));
+        fields.insert("Text".into(), Js::str(text));
     }
-    Js::Obj(obj! { "payload" => Js::Obj(payload) })
+    let identity = format!("invocation:{}", uuid::Uuid::new_v4());
+    Js::Obj(obj! {
+        "edge" => Js::str(INVOCATIONS),
+        "identity" => Js::str(&identity),
+        "landing" => Js::Obj(obj! { "recordType" => Js::str("Invocation"), "fields" => Js::Obj(fields) }),
+    })
 }
 
-/// The event one cron occurrence is. Its idempotency key is the schedule's
-/// occurrence, so however many workers find it due, a listen runs it once.
-pub fn tick_event(fired_at: &str, schedule: &str, timezone: Option<&str>) -> Js {
-    Js::Obj(obj! {
-        "payload" => Js::Obj(obj! { "firedAt" => Js::str(fired_at), "schedule" => Js::str(schedule) }),
-        "idempotencyKey" => Js::Str(format!("tick:{schedule}:{}:{fired_at}", timezone.unwrap_or("UTC"))),
-    })
+/// The cron unit's answer to a poll of `Ticks` (adapter protocol 2.6's
+/// `poll({ edge, filter, cursor })`), `now_ms` its clock: for each schedule
+/// and zone the filter names, the latest occurrence since the cursor, as one
+/// arrival. Its identity is the occurrence, so however many workers find it
+/// due, a listen runs it once. The first poll (no cursor) only sets the
+/// cursor: nothing before a listen is owed. The cursor is the instant it
+/// polled to. The unit applies the filter itself (`takenApplied`).
+pub fn poll_ticks(filter: Option<&serde_json::Value>, cursor: Option<&Js>, now_ms: i64) -> Result<Js, String> {
+    let now = iso_of(now_ms);
+    let next = obj! { "cursor" => Js::str(&now) };
+    let Some(after_ms) = cursor.and_then(Js::as_str).and_then(ms_of) else {
+        return Ok(Js::Obj(obj! { "arrivals" => Js::Arr(Vec::new()), "cursor" => Js::str(&now) }));
+    };
+    let filter: Expression = match filter {
+        Some(filter) => serde_json::from_value(filter.clone()).map_err(|e| format!("cron: the filter on {TICKS} is not one it reads: {e}"))?,
+        None => return Err(format!("cron: a poll of {TICKS} names no schedule")),
+    };
+    let schedules = values_of(&filter, "Schedule").ok_or_else(|| format!("cron: a poll of {TICKS} names no schedule it can read"))?;
+    let zones = values_of(&filter, "Zone").unwrap_or_else(|| vec![DEFAULT_ZONE.to_string()]);
+    let mut arrivals = Vec::new();
+    for schedule in &schedules {
+        for zone in &zones {
+            let parsed = parse_schedule(schedule, Some(zone)).map_err(|e| format!("cron: schedule \"{schedule}\" in {zone}: {e}"))?;
+            let Some(due_ms) = parsed.latest_in(after_ms, now_ms) else { continue };
+            let due = iso_of(due_ms);
+            let fields = obj! { "Fired at" => Js::str(&due), "Schedule" => Js::str(schedule), "Zone" => Js::str(zone) };
+            arrivals.push(Js::Obj(obj! {
+                "edge" => Js::str(TICKS),
+                "identity" => Js::Str(format!("tick:{schedule}:{zone}:{due}")),
+                "landing" => Js::Obj(obj! { "recordType" => Js::str("Tick"), "fields" => Js::Obj(fields) }),
+                "occurredAt" => Js::str(&due),
+                "takenApplied" => Js::Bool(true),
+            }));
+        }
+    }
+    let mut answer = next;
+    answer.insert("arrivals".into(), Js::Arr(arrivals));
+    Ok(Js::Obj(answer))
+}
+
+/// The literals `filter` compares `field` with, by `==` or `IN`, or an `OR`
+/// of `==`; `None` when it names none (the checker refuses any other form
+/// on a field only the unit reads).
+fn values_of(filter: &Expression, field: &str) -> Option<Vec<String>> {
+    let on_field = |left: &Expression| matches!(left, Expression::Property { property_type_id, .. } | Expression::EdgeProperty { property_type_id, .. } if property_type_id == field);
+    match filter {
+        Expression::Logical { op: LogicalOp::And, operands } => operands.iter().find_map(|o| values_of(o, field)),
+        Expression::Logical { op: LogicalOp::Or, operands } => {
+            let each: Option<Vec<Vec<String>>> = operands.iter().map(|o| values_of(o, field)).collect();
+            each.map(|v| v.concat())
+        }
+        Expression::Compare { op: FilterOperator::Eq, left, right } if on_field(left) => match &**right {
+            Expression::Static { value: StaticValue::String(value) } => Some(vec![value.clone()]),
+            _ => None,
+        },
+        Expression::Compare { op: FilterOperator::In, left, right } if on_field(left) => match &**right {
+            Expression::List { elements } => elements
+                .iter()
+                .map(|e| match e {
+                    ListElement::Expression(Expression::Static { value: StaticValue::String(value) }) => Some(value.clone()),
+                    _ => None,
+                })
+                .collect(),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn js_obj(value: serde_json::Value) -> Obj {
@@ -298,11 +397,11 @@ mod tests {
     fn a_manual_text_not_given_reads_as_the_empty_string_like_its_content() {
         let user = Js::Obj(Obj::new());
         let read = |text: Option<&str>, field: &str| {
-            let event = manual_event("2026-10-22T00:00:00.000Z", &user, text);
+            let arrival = invocation("2026-10-22T00:00:00.000Z", &user, text);
             let mut identity = Obj::new();
-            identity.insert("data".into(), event.get("payload").cloned().unwrap());
+            identity.insert("data".into(), arrival.get("landing").and_then(|l| l.get("fields")).cloned().unwrap());
             let mut position = Obj::new();
-            position.insert("recordType".into(), Js::str("invocation"));
+            position.insert("recordType".into(), Js::str("Invocation"));
             position.insert("identity".into(), Js::Obj(identity));
             let args = Hv::Obj(vec![("position".into(), Hv::of_js(&Js::Obj(position))), ("fieldId".into(), Hv::Str(field.into()))]);
             call(MANUAL, "getFieldValue", &args).unwrap()
@@ -311,6 +410,45 @@ mod tests {
             assert_eq!(read(None, field), Js::str(""), "{field}");
             assert_eq!(read(Some("hi there"), field), Js::str("hi there"), "{field}");
         }
+        assert_eq!(read(None, "Fired at"), Js::str("2026-10-22T00:00:00.000Z"));
+    }
+
+    fn filter(text: &str) -> serde_json::Value {
+        let walk = movement_checker::slots::expression_of_text(&format!("cron-[t:Ticks WHERE {text}]->")).unwrap();
+        let Expression::Traverse { steps, .. } = walk else { panic!("a walk") };
+        let movement_parser::lowering::expression::TraversalStep::Edge(step) = &steps[0] else { panic!("an edge step") };
+        serde_json::to_value(step.expression_filter.as_deref().unwrap()).unwrap()
+    }
+
+    fn ticked(answer: &Js) -> Vec<(String, String)> {
+        answer.get("arrivals").and_then(Js::as_array).unwrap().iter().map(|a| (a.get("identity").and_then(Js::as_str).unwrap().to_string(), a.get("landing").unwrap().to_json())).collect()
+    }
+
+    #[test]
+    fn a_poll_of_ticks_answers_the_latest_occurrence_of_each_schedule_and_zone_it_names() {
+        let (armed, now) = (at("2026-10-19T08:30:00Z"), at("2026-10-19T09:30:00Z"));
+        // The first poll only sets the cursor.
+        let first = poll_ticks(Some(&filter(r#"t.Schedule == "0 9 * * 1""#)), None, armed).unwrap();
+        assert_eq!(first.to_json(), r#"{"arrivals":[],"cursor":"2026-10-19T08:30:00.000Z"}"#);
+        let cursor = first.get("cursor").cloned().unwrap();
+        // 2026-10-19 is a Monday; with no zone, a schedule is read in UTC.
+        let one = poll_ticks(Some(&filter(r#"t.Schedule == "0 9 * * 1""#)), Some(&cursor), now).unwrap();
+        assert_eq!(
+            ticked(&one),
+            [("tick:0 9 * * 1:UTC:2026-10-19T09:00:00.000Z".to_string(), r#"{"recordType":"Tick","fields":{"Fired at":"2026-10-19T09:00:00.000Z","Schedule":"0 9 * * 1","Zone":"UTC"}}"#.to_string())]
+        );
+        assert_eq!(one.get("cursor").and_then(Js::as_str), Some("2026-10-19T09:30:00.000Z"));
+        // Two schedules, by IN or by OR, each fire; in London 09:00 is 08:00 UTC, before the cursor's 08:30.
+        for written in [r#"t.Schedule IN ["0 9 * * 1", "15 9 * * *"]"#, r#"t.Schedule == "0 9 * * 1" OR t.Schedule == "15 9 * * *""#] {
+            let two = poll_ticks(Some(&filter(written)), Some(&cursor), now).unwrap();
+            let identities: Vec<String> = ticked(&two).into_iter().map(|(i, _)| i).collect();
+            assert_eq!(identities, ["tick:0 9 * * 1:UTC:2026-10-19T09:00:00.000Z", "tick:15 9 * * *:UTC:2026-10-19T09:15:00.000Z"], "{written}");
+        }
+        let zoned = poll_ticks(Some(&filter(r#"t.Schedule == "0 9 * * 1" AND t.Zone == "Europe/London""#)), Some(&cursor), now).unwrap();
+        assert_eq!(ticked(&zoned), Vec::<(String, String)>::new());
+        let zoned = poll_ticks(Some(&filter(r#"t.Schedule == "0 10 * * 1" AND t.Zone == "Europe/London""#)), Some(&cursor), now).unwrap();
+        assert_eq!(ticked(&zoned)[0].0, "tick:0 10 * * 1:Europe/London:2026-10-19T09:00:00.000Z");
+        assert!(poll_ticks(None, Some(&cursor), now).unwrap_err().contains("names no schedule"));
     }
 
     #[test]

@@ -73,9 +73,21 @@ const CATALOG: &str = r#"{"adapters":{
         "writableRoots":{},"eventPosition":"Record Change","eventPositions":[{"position":"Record Change"}]}}},
   "hook":{"canFire":true,"constructionArgs":[],"triggerConfig":["payload"],"triggerConfigFormats":{"payload":"type"},
     "listenSettingsBecome":{"path":["Requests"],"aliases":["r"],"keys":{"payload":{"hop":0,"op":"type"}}},
-    "schemas":{"":{"positions":{"Request":{"properties":{"Body":"json"},"edges":{}}},
-      "collections":{"Requests":{"target":"Request","readable":false,"listenable":true,"identity":"Id","delivery":"connection"}},
+    "schemas":{"":{"positions":{"Request":{"properties":{},"edges":{},"undescribed":true}},
+      "collections":{"Requests":{"target":"Request","readable":false,"listenable":true,"delivery":"connection"}},
       "writableRoots":{},"eventPosition":"Request","eventPositions":[{"position":"Request"}]}}},
+  "inbox":{"canFire":true,"constructionArgs":[],"triggerConfig":["key"],
+    "listenSettingsBecome":{"path":["Emails"],"aliases":["e"],"paramFrom":"Email","keys":{"key":{"hop":0,"field":"Key","op":"eq"}}},
+    "schemas":{"":{"positions":{"Email":{"properties":{"Key":{"kind":"owned","name":"InboxKey","owner":"inbox"},"Subject":"text"},"edges":{},
+        "propertyCapabilities":{"Key":{"filterOperators":["eq","in"]}}}},
+      "collections":{"Emails":{"target":"Email","readable":false,"listenable":true,"bounded":false,"boundedBy":["Key"],"delivery":"connection",
+        "capability":{"filter":"native","supportsLimit":false}}},
+      "writableRoots":{},"eventPosition":"Email","eventPositions":[{"position":"Email"}]}}},
+  "bell":{"canFire":true,"constructionArgs":[],
+    "listenSettingsBecome":{"path":["Rings"],"aliases":["r"],"paramFrom":"Ring","keys":{}},
+    "schemas":{"":{"positions":{"Ring":{"properties":{"At":"datetime"},"edges":{}}},
+      "collections":{"Rings":{"target":"Ring","readable":false,"listenable":true,"delivery":"connection"}},
+      "writableRoots":{},"eventPosition":"Ring","eventPositions":[{"position":"Ring"}]}}},
   "feed":{"canFire":true,"constructionArgs":[],"triggerConfig":["topic"],
     "schemas":{"":{"positions":{"Item":{"properties":{"Topic":"text"},"edges":{}}},
       "collections":{"Items":{"target":"Item","listenable":true,"identity":"Id","delivery":"connection"}},
@@ -90,6 +102,8 @@ const HIRING: &str = "import { at as at_module } from adapters\nhiring = connect
 const AT: &str = "import { at as at_module } from adapters\nat = connect at_module\n";
 const HOOK: &str = "import { hook as hook_module } from adapters\nhook = connect hook_module\nnode Payment { amount: <number> }\n";
 const FEED: &str = "import { feed as feed_module } from adapters\nfeed = connect feed_module\n";
+const INBOX: &str = "import { inbox as inbox_module } from adapters\ninbox = connect inbox_module\n";
+const BELL: &str = "import { bell as bell_module } from adapters\nbell = connect bell_module\n";
 
 fn checked(source: &str, pin: Option<&str>) -> Vec<Diagnostic> {
     let options = CheckOptions { upgrading_from: pin, zones: &movement_checker::host::native::NativeZones };
@@ -273,14 +287,44 @@ fn a_move_up_from_0_12_is_held_by_it_and_this_release_only_warns() {
 }
 
 #[test]
-fn a_declared_payload_is_told_with_no_fix() {
-    // A listen's traversal does not state its landing's type, so a `type`
-    // key has no rewrite yet: the pin holds.
+fn a_declared_payload_becomes_the_type_stated_after_the_traversal() {
     let source = format!("{HOOK}function paid(p: <Payment>) {{ return p.amount }}\nlisten to hook {{ payload: <Payment> }} fire paid\n");
     let d = diagnostics(&source);
     let told = retired(&d);
-    assert_eq!(told.fix, None);
-    assert!(told.message.ends_with("Write `listen to hook-[:Requests]-> fire paid`"), "{}", told.message);
+    assert!(told.message.ends_with("Write `listen to hook-[:Requests]-><Payment> fire paid`"), "{}", told.message);
+    assert_eq!(told.fix.as_ref().unwrap()["safe"], true);
+    let text = fixed(&source, &d);
+    assert_eq!(text, format!("{HOOK}function paid(p: <Payment>) {{ return p.amount }}\nlisten to hook-[:Requests]-><Payment> fire paid\n"));
+    assert_rechecks_clean(&text);
+}
+
+#[test]
+fn a_bare_listen_becomes_the_whole_edge_its_module_maps_it_to() {
+    for listen in ["listen to bell fire rung", "listen to bell {} fire rung"] {
+        let source = format!("{BELL}function rung(r: <bell-[:Ring]->>) {{ return r.At }}\n{listen}\n");
+        let d = diagnostics(&source);
+        assert_eq!(retired(&d).fix.as_ref().unwrap()["safe"], true, "{listen}");
+        let text = fixed(&source, &d);
+        assert_eq!(text, format!("{BELL}function rung(r: <bell-[:Rings]->>) {{ return r.At }}\nlisten to bell-[:Rings]-> fire rung\n"));
+        assert_rechecks_clean(&text);
+    }
+}
+
+#[test]
+fn a_listen_that_leaves_an_unbounded_edge_unbounded_has_no_fix() {
+    let keyed = format!("{INBOX}function deal(m: <inbox-[:Email]->>) {{ return m.Subject }}\nlisten to inbox {{ key: \"deals\" }} fire deal\n");
+    let d = diagnostics(&keyed);
+    let text = fixed(&keyed, &d);
+    assert_eq!(text, format!("{INBOX}function deal(m: <inbox-[:Emails]->>) {{ return m.Subject }}\nlisten to inbox-[e:Emails WHERE e.Key == \"deals\"]-> fire deal\n"));
+    assert_rechecks_clean(&text);
+    // Mail to the box itself had no key: no 0.13 listen says that.
+    for listen in ["listen to inbox {} fire deal", "listen to inbox fire deal"] {
+        let source = format!("{INBOX}function deal(m: <inbox-[:Email]->>) {{ return m.Subject }}\n{listen}\n");
+        let d = diagnostics(&source);
+        let told = retired(&d);
+        assert_eq!(told.fix, None, "{listen}");
+        assert!(told.message.ends_with("Write `listen to inbox-[:Emails]-> fire deal`"), "{}", told.message);
+    }
 }
 
 #[test]

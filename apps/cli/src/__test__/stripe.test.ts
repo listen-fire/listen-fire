@@ -245,7 +245,7 @@ import { stripe_account } from credentials
 
 pay = connect stripe using stripe_account
 
-function owed(run: <manual-[:Invocation]->>) {
+function owed(run: <manual-[:Invocations]->>) {
   c = only(pay-[x:Customers WHERE x.Email == "diego@alvareztiles.es"]->)
   if (c == null) { fail("no customer") }
   open = only(c-[i:Invoices WHERE i.Status == "open"]->)
@@ -255,7 +255,7 @@ function owed(run: <manual-[:Invocation]->>) {
   return "\${c.Name} owes \${open.\`Amount Remaining\`} \${open.Currency} on \${open.Id}, subscription \${sub.Status}"
 }
 
-listen to manual fire owed
+listen to manual-[:Invocations]-> fire owed
 `,
     );
     const ran = await run(world.dir, 'run', 'owed');

@@ -22,14 +22,14 @@ crm   = connect attio using acme_main { dryRun: true }   # dryRun is universal
 
 prompt = "the company this email is about"     # file-scope binding
 
-function \`Intake\`(m: <inbox-[:Email]->>) { … }  # declaration; one typed parameter — the email ITSELF (read \`m.Subject\` straight off it)
+function \`Intake\`(m: <inbox-[:Emails]->>) { … }  # declaration; one typed parameter — the email ITSELF (read \`m.Subject\` straight off it)
 export function \`Log Lead\`(l: <Lead>) { … }    # shared across files
 export node Lead { Name: <text> }              # a named structure; nest \`node <edge> { … }\` for related records
 node Lead: "each lead" { Name: <text> "their name" }   # described: \`extract(content, Lead)\` uses its fields and words
 node Contact extends Lead { Email: <text> }    # Lead's fields and nested nodes, then its own; redefining one is refused
 type Thesis = <"Consumer" | "Infra">           # a written set of values: an annotation, and an extract constraint
 
-listen to inbox { key: "intake" } fire intake  # the one way an automation runs
+listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire intake  # the one way an automation runs
 \`Log Lead\`(graph<Lead> { Name: msg.Subject })  # call a function; arguments are positional
 doc = \`Email To Doc\`(msg)                      # a call's value: what the callee returned
 function \`Label\`(name: <text>, tags: <text[]>, cfg: <{ prefix: text, suffix?: text }>) { … }   # value parameters; convention: data, then a function, then a settings record last
@@ -47,7 +47,7 @@ inc = (v: <number>) => v + 1                   # an expression body; a closure b
 
 Types **always** wear angle brackets; positions, scalar values, and handles **never** do.
 
-- Brackets: automation params (\`m: <inbox-[:Email]->>\`, \`root: <crm>\`), extract field annotations (\`amount: <number>\`, borrowed \`stage: <crm-[:Requests]->.Stage>\`), declared fields (\`Name: <text>\`), \`is\` tests (\`rec is <crm-[:Companies]->>\`), explicit polymorphic targets (\`match a-[:related]-><Companies> { … }\`).
+- Brackets: automation params (\`m: <inbox-[:Emails]->>\`, \`root: <crm>\`), extract field annotations (\`amount: <number>\`, borrowed \`stage: <crm-[:Requests]->.Stage>\`), declared fields (\`Name: <text>\`), \`is\` tests (\`rec is <crm-[:Companies]->>\`), explicit polymorphic targets (\`match a-[:related]-><Companies> { … }\`).
 - No brackets: write targets (\`write crm-[:Companies]->\`), traversal hops and edge names, \`unique by\` components, call arguments, per-family answer types (a \`Check\` answers boolean, a \`Provide\` answers whatever its \`Answer Type\` names — no bracket-generic syntax).
 - Primitives: \`<text>\`, \`<number>\`, \`<boolean>\`, \`<date>\`, \`<datetime>\`, \`<file>\`, \`<json>\`. Borrowed path: \`<instance-[:record_type]->.field>\`. An extract or declared field may add \`| null\` (\`<text | null>\`): a missing one arrives null.
 - Declared refinement: \`type Thesis = <"Consumer" | "Infra">\` at file scope, then \`<Thesis>\` anywhere a type goes. It constrains an extraction to those values, tells the model which to pick from, and flags a literal that is not one of them; the values are ordinary text everywhere else.
@@ -169,7 +169,7 @@ Field ?: d                                 # '?:' takes a maybe-absent value, no
 ### listeners
 
 \`\`\`
-listen to inbox { key: "intake" } fire intake
+listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire intake
 listen as "Nightly digest" to timer { schedule: "0 9 * * 1" } fire \`Weekly Digest\`   # 5-field cron, UTC
 listen to crm { events: ["record.created"] } fire \`On New\`
 listen to crm { events: ["record.created", "record.updated"] } fire mirror

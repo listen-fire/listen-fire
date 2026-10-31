@@ -65,19 +65,19 @@ import { acme_main } from credentials
 inbox = connect email
 crm   = connect attio using acme_main
 
-function `Inbound Intake`(msg: <inbox-[:Email]->>) {
+function `Inbound Intake`(msg: <inbox-[:Emails]->>) {
   write crm-[:Companies]-> {
     unique by (Name)
     Name: msg.Subject
   }
 }
 
-listen to inbox { key: "intake" } fire `Inbound Intake`
+listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire `Inbound Intake`
 ```
 
 In plain English: every email that reaches the inbox becomes a company in the Attio CRM, named after the subject line, and an email with a subject already in the CRM updates that company instead of making a second one (`unique by`).
 
-Each system is presented to the program as a graph of records joined by edges, so `<inbox-[:Email]->>` is "an email that arrived in the inbox", and `crm-[:Companies]->` is "the companies in the CRM". The program starts from the record that arrived, follows edges to related records, and writes along other systems' edges. The language lives in [`packages/movement-lang`](packages/movement-lang) and the handbook in [`packages/handbook/chapters`](packages/handbook/chapters); [`foundations.ts`](packages/handbook/chapters/foundations.ts) and [`anatomy.ts`](packages/handbook/chapters/anatomy.ts) are the two to start with.
+Each system is presented to the program as a graph of records joined by edges, so `<inbox-[:Emails]->>` is "an email that arrived in the inbox", and `crm-[:Companies]->` is "the companies in the CRM". The program starts from the record that arrived, follows edges to related records, and writes along other systems' edges. The language lives in [`packages/movement-lang`](packages/movement-lang) and the handbook in [`packages/handbook/chapters`](packages/handbook/chapters); [`foundations.ts`](packages/handbook/chapters/foundations.ts) and [`anatomy.ts`](packages/handbook/chapters/anatomy.ts) are the two to start with.
 
 ## Worked example: CRM intake at a venture fund
 

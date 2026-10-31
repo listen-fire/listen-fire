@@ -1,6 +1,6 @@
 // The routing address is the deployment's, and nothing about it is a constant.
 
-import { inboundRoutingAddress, parseRoutingAddress, routingKeyFrom } from '../address';
+import { inboundRoutingAddress, inboxKeyOf, parseRoutingAddress, routingKeyFrom } from '../address';
 
 describe('reading the deployment’s inbound address', () => {
   it('splits it into the parts the config block shows', () => {
@@ -54,5 +54,15 @@ describe('finding the routing key on a message', () => {
 
   it('finds no key at all when the deployment has no address', () => {
     expect(routingKeyFrom(['inbox+deals@example.com'], null)).toBeNull();
+  });
+});
+
+describe('inboxKeyOf', () => {
+  it('reads the plus-suffix, lowercased, from a bare, named or listed recipient, and the empty key for the box itself', () => {
+    expect(inboxKeyOf('inbox+deals@acme.test')).toBe('deals');
+    expect(inboxKeyOf('Inbox <inbox+INTROS@acme.test>')).toBe('intros');
+    expect(inboxKeyOf('ada@acme.test, inbox+customer-support@acme.test')).toBe('customer-support');
+    expect(inboxKeyOf('inbox@acme.test')).toBe('');
+    expect(inboxKeyOf(undefined)).toBe('');
   });
 });

@@ -16,7 +16,7 @@ impl Project {
         assert!(made.status.success());
         std::fs::write(
             root.join("movements/nap.mvt"),
-            "function nap(run: <manual-[:Invocation]->>) {\n  await sleep(1h)\n  return \"rested\"\n}\n\nlisten to manual fire nap\n",
+            "function nap(run: <manual-[:Invocations]->>) {\n  await sleep(1h)\n  return \"rested\"\n}\n\nlisten to manual-[:Invocations]-> fire nap\n",
         )
         .unwrap();
         Project(root)

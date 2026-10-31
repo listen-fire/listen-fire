@@ -52,9 +52,11 @@ describe('@lf/email', () => {
     expect(manifest.methods).toContain('checkInbound');
   });
 
-  it('declares a listen’s `key` (the plus-suffix it is routed by) and a credential a host may leave out', () => {
+  it('declares how a 0.12 keyed listen becomes its Emails edge, and a credential a host may leave out', () => {
     const { manifest } = load({ credential: noCredential('email') });
-    expect(manifest.listenConfig).toEqual([{ key: 'key', required: false }]);
+    expect(manifest).not.toHaveProperty('listenConfig');
+    expect(manifest.listenSettingsBecome).toEqual({ path: ['Emails'], aliases: ['e'], paramFrom: 'Email', keys: { key: { hop: 0, field: 'Key', op: 'eq' } } });
+    expect(manifest.protocolMinor).toBe(6);
     expect(manifest.credentials?.every((c) => c.fields?.every((f) => f.optional === true))).toBe(true);
   });
 

@@ -70,7 +70,7 @@ write record-[:Files]-> { File: pdf.render(digest) }
 A schedule fires, a query gathers, a message goes out. The tick carries nothing you need — the query is the input.
 
 \`\`\`
-function \`Weekly Digest\`(t: <timer-[:Tick]->>) {
+function \`Weekly Digest\`(t: <timer-[:Ticks]->>) {
   lines = crm-[c:Companies WHERE c.\`Created At\` WITHIN 7d ORDER BY c.\`Created At\` DESC LIMIT 20]-> {
     return "- \${c.Name}"
   }
@@ -80,7 +80,7 @@ function \`Weekly Digest\`(t: <timer-[:Tick]->>) {
   write ops-[:Messages]-> { Message: "New this week:\\n\${Text.join(lines, "\\n")}" }
 }
 
-listen as "Weekly digest" to timer { schedule: "0 9 * * 1" } fire \`Weekly Digest\`
+listen as "Weekly digest" to timer-[k:Ticks WHERE k.Schedule == "0 9 * * 1"]-> fire \`Weekly Digest\`
 \`\`\`
 
 ### sections-from-a-type
@@ -270,7 +270,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Attachment Report\`(m: <inbox-[:Email]->>) {
+function \`Attachment Report\`(m: <inbox-[:Emails]->>) {
   lines = m-[f:Attachments]-> {
     return "- \${f.Name}"
   }
@@ -296,7 +296,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   all(
     () => {
       write crm-[:Companies]-> {
@@ -335,7 +335,7 @@ node Company: "each company this message is about" {
   }
 }
 
-function \`Extract And Connect\`(msg: <inbox-[:Email]->>) {
+function \`Extract And Connect\`(msg: <inbox-[:Emails]->>) {
   pages     = vcUrlRetrieval(msg.Body)
   content   = [msg.Body, ...map(pages, (p) => coalesce(p.text, ""))]
   companies = extract(content, Company, { tier: "careful" })
@@ -417,7 +417,7 @@ timer = connect cron
 crm   = connect attio using acme
 chat  = connect slack using team_workspace
 
-function \`Weekly Digest\`(t: <timer-[:Tick]->>) {
+function \`Weekly Digest\`(t: <timer-[:Ticks]->>) {
   lines = crm-[c:Companies WHERE c.\`Created At\` WITHIN 7d ORDER BY c.\`Created At\` DESC LIMIT 20]-> {
     return "- \${c.Name}"
   }
@@ -429,7 +429,7 @@ function \`Weekly Digest\`(t: <timer-[:Tick]->>) {
   }
 }
 
-listen as "Weekly digest" to timer { schedule: "0 9 * * 1" } fire \`Weekly Digest\`
+listen as "Weekly digest" to timer-[k:Ticks WHERE k.Schedule == "0 9 * * 1"]-> fire \`Weekly Digest\`
 `,
     },
   ],

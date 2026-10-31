@@ -69,13 +69,13 @@ import { Affinity } from credentials
 
 crm = connect affinity using Affinity
 
-function \`Deal Date\` (run: <manual-[:Invocation]->>) {
+function \`Deal Date\` (run: <manual-[:Invocations]->>) {
   dates = crm-[o:\`Organization\` WHERE o.\`Name\` == run.Text]->-[le:\`List Entries\` WHERE ${hopWhere}]-> {
     return le.\`Deal Created\`
   }
   return dates
 }
-listen to manual fire \`Deal Date\`
+listen to manual-[:Invocations]-> fire \`Deal Date\`
 `;
 
 function project(fake: Fake, hopWhere: string): string {

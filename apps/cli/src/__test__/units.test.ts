@@ -1,14 +1,23 @@
-// The run host's units in listen-fire: `manual` (fired by `listen-fire run <movement>`) and
-// `cron` (ticks fired by `listen-fire serve` and `listen-fire drain`), in scope with no import — and `listen-fire init`'s starter, which needs nothing else.
+// The run host's units in listen-fire: `manual` (an invocation on its
+// `Invocations`, fired by `listen-fire run <movement>`) and `cron` (ticks on its
+// `Ticks`, polled by `listen-fire serve` and `listen-fire drain`, one clock per
+// schedule and zone however many listens share it), in scope with no import —
+// and `listen-fire init`'s starter, which needs nothing else.
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 
 import { lf, lfCommand, served } from './example';
+
+// A workspace-built listen-fire finds its bundled modules beside its own
+// (canonical) path; a worktree's listen-fire may be the main checkout's.
+const REPO = resolve(__dirname, '../../../..');
+process.env.LF_MODULES_DIR ??= join(REPO, 'modules');
+process.env.LF_SERVE_MODULE ??= join(REPO, 'apps/cli/node_modules/.bin/serve-module');
 
 function initialised(): string {
   const dir = mkdtempSync(join(tmpdir(), 'lf-units-'));
@@ -16,16 +25,14 @@ function initialised(): string {
   return dir;
 }
 
-const TICK = [
-  'function tock(t: <cron-[:Tick]->>) {',
-  '  fail("tick ${t.`Fired at`} on ${t.`Schedule`}")',
-  '}',
-  'listen to cron { schedule: "* * * * *" } fire tock',
-  '',
-].join('\n');
+/** A function failing with the tick it is fired with, and a listen firing it on `where`. */
+const ticking = (name: string, where: string) =>
+  [`function ${name}(t: <cron-[:Ticks]->>) {`, `  fail("tick \${t.\`Fired at\`} on \${t.\`Schedule\`} in \${t.Zone}")`, '}', `listen to cron-[t:Ticks WHERE ${where}]-> fire ${name}`, ''].join('\n');
 
-function ticks(dir: string): number {
-  return lf(dir, 'runs').out.split('\n').filter((l) => l.includes('tick:tock')).length;
+const TICK = ticking('tock', 't.Schedule == "* * * * *"');
+
+function ticks(dir: string, fired = 'tick:tock'): number {
+  return lf(dir, 'runs').out.split('\n').filter((l) => l.includes(fired)).length;
 }
 
 test('listen-fire init → check → run works with nothing installed', () => {
@@ -41,7 +48,7 @@ test('listen-fire run <movement> hands the movement a manual invocation; a movem
   const dir = initialised();
   writeFileSync(
     join(dir, 'movements/hello.mvt'),
-    'function hello(run: <manual-[:Invocation]->>) {\n  fail("by ${run.`Run by (name)`} at ${run.`Fired at`}")\n}\nlisten to manual fire hello\n',
+    'function hello(run: <manual-[:Invocations]->>) {\n  fail("by ${run.`Run by (name)`} at ${run.`Fired at`}")\n}\nlisten to manual-[:Invocations]-> fire hello\n',
   );
   assert.match(spawnLf(dir, ['run', 'hello']), /MOVENG_ERROR: by Ada at \d{4}-\d\d-\d\dT/);
   const missing = lf(dir, 'run', 'nope');
@@ -51,7 +58,7 @@ test('listen-fire run <movement> hands the movement a manual invocation; a movem
 
 test('listen-fire run <movement> --text gives the manual Invocation its Text; an event file takes no --text', () => {
   const dir = initialised();
-  writeFileSync(join(dir, 'movements/echo.mvt'), 'function echo(run: <manual-[:Invocation]->>) {\n  return "Text: ${run.Text}"\n}\nlisten to manual fire echo\n');
+  writeFileSync(join(dir, 'movements/echo.mvt'), 'function echo(run: <manual-[:Invocations]->>) {\n  return "Text: ${run.Text}"\n}\nlisten to manual-[:Invocations]-> fire echo\n');
   const run = lf(dir, 'run', 'echo', '--text', 'Acme Robotics');
   assert.equal(run.code, 0, run.out);
   assert.match(run.out, /echo:echo completed/);
@@ -65,7 +72,7 @@ test('listen-fire run <movement> with no --text: the manual Invocation\'s Text i
   const dir = initialised();
   writeFileSync(
     join(dir, 'movements/echo.mvt'),
-    'function echo(run: <manual-[:Invocation]->>) {\n  if (run.Text == "") { return "empty: [${run.Text}]" }\n  return "given: [${run.Text}]"\n}\nlisten to manual fire echo\n',
+    'function echo(run: <manual-[:Invocations]->>) {\n  if (run.Text == "") { return "empty: [${run.Text}]" }\n  return "given: [${run.Text}]"\n}\nlisten to manual-[:Invocations]-> fire echo\n',
   );
   const check = lf(dir, 'check');
   assert.equal(check.code, 0, check.out);
@@ -84,7 +91,7 @@ test('a cron tick missed while no worker ran fires once on the next drain, never
   // Ten minutes on, ten occurrences were missed: the latest one fires, once.
   const drained = spawnLf(dir, ['drain', '--until-idle'], 600_000);
   assert.match(drained, /tick:tock failed/);
-  assert.match(drained, /MOVENG_ERROR: tick \S+:00\.000Z on \* \* \* \* \*/);
+  assert.match(drained, /MOVENG_ERROR: tick \S+:00\.000Z on \* \* \* \* \* in UTC/);
   assert.equal(ticks(dir), 1);
   spawnLf(dir, ['drain', '--until-idle'], 600_000);
   spawnLf(dir, ['resume'], 600_000);
@@ -106,6 +113,58 @@ test('listen-fire serve fires a cron listen when its schedule comes due', async 
     await server.stop();
   }
   assert.equal(ticks(dir), 1);
+});
+
+test('a cron listen on one schedule ticks once per occurrence; two listens on one schedule and zone share a clock', () => {
+  const dir = initialised();
+  const zoned = 't.Schedule == "*/5 * * * *" AND t.Zone == "Europe/London"';
+  writeFileSync(join(dir, 'movements/tick.mvt'), ticking('tock', zoned));
+  writeFileSync(join(dir, 'movements/tack.mvt'), ticking('tack', zoned));
+  // Another zone is another clock, though the schedule is the same.
+  writeFileSync(join(dir, 'movements/tuck.mvt'), ticking('tuck', 't.Schedule == "*/5 * * * *" AND t.Zone == "Asia/Tokyo"'));
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  const armed = spawnLf(dir, ['drain', '--until-idle']);
+  // One poll arms both listens sharing a clock; the other zone's arms on its own.
+  assert.equal(armed.match(/armed; it fires on changes from now/g)?.length, 2, armed);
+  assert.match(armed, /cron: (tack:tack, tick:tock|tick:tock, tack:tack) armed/);
+  // An hour on, twelve occurrences were missed: the latest fires once on each listen.
+  const drained = spawnLf(dir, ['drain', '--until-idle'], 3_600_000);
+  assert.match(drained, /MOVENG_ERROR: tick \S+:\d[05]:00\.000Z on \*\/5 \* \* \* \* in Europe\/London/);
+  assert.match(drained, /MOVENG_ERROR: tick \S+ on \*\/5 \* \* \* \* in Asia\/Tokyo/);
+  assert.deepEqual([ticks(dir, 'tick:tock'), ticks(dir, 'tack:tack'), ticks(dir, 'tuck:tuck')], [1, 1, 1]);
+  // The same instant, polled again, owes nothing.
+  spawnLf(dir, ['drain', '--until-idle'], 3_600_000);
+  assert.deepEqual([ticks(dir, 'tick:tock'), ticks(dir, 'tack:tack')], [1, 1]);
+});
+
+test('a cron listen on schedules IN two values fires on either', () => {
+  const dir = initialised();
+  writeFileSync(join(dir, 'movements/tick.mvt'), ticking('tock', 't.Schedule IN ["*/5 * * * *", "*/7 * * * *"]'));
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  assert.equal(lf(dir, 'drain', '--until-idle').code, 0);
+  const drained = spawnLf(dir, ['drain', '--until-idle'], 3_600_000);
+  assert.match(drained, /on \*\/5 \* \* \* \* in UTC/);
+  assert.match(drained, /on \*\/7 \* \* \* \* in UTC/);
+  assert.equal(ticks(dir), 2);
+});
+
+test('a schedule cron cannot parse is refused at check time by its owner', () => {
+  const dir = initialised();
+  writeFileSync(join(dir, 'movements/tick.mvt'), ticking('tock', 't.Schedule == "every monday"'));
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 1, check.out);
+  assert.match(check.out, /MOV_OWNED_VALUE_INVALID .*"every monday" is not a Cron/);
+  writeFileSync(join(dir, 'movements/tick.mvt'), ticking('tock', 't.Schedule == "* * * * *" AND t.Zone == "Mars/Olympus"'));
+  const zone = lf(dir, 'check');
+  assert.equal(zone.code, 1, zone.out);
+  assert.match(zone.out, /MOV_OWNED_VALUE_INVALID .*"Mars\/Olympus" is not a Zone/);
+  // Nothing to narrow it by is a listen that would range over every tick.
+  writeFileSync(join(dir, 'movements/tick.mvt'), ['function tock(t: <cron-[:Ticks]->>) {', '  return t.Schedule', '}', 'listen to cron-[:Ticks]-> fire tock', ''].join('\n'));
+  const unbounded = lf(dir, 'check');
+  assert.equal(unbounded.code, 1, unbounded.out);
+  assert.match(unbounded.out, /MOV_UNBOUNDED_EDGE/);
 });
 
 /** `listen-fire <args>` in `dir` as Ada, its clock `aheadMs` ahead. */

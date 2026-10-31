@@ -14,14 +14,14 @@ import { acme_main } from credentials
 inbox = connect email
 crm   = connect attio using acme_main
 
-function \`Inbound Intake\`(msg: <inbox-[:Email]->>) {
+function \`Inbound Intake\`(msg: <inbox-[:Emails]->>) {
   write crm-[:Companies]-> {
     unique by (Name)
     Name: msg.Subject
   }
 }
 
-listen to inbox { key: "intake" } fire \`Inbound Intake\`
+listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire \`Inbound Intake\`
 \`\`\`
 
 Imports name every external thing the file touches; constructions turn adapter types into the concrete systems ("instances") you read and write; declarations hold the automations, record structures, and file-scope values; \`listen\` lines wire an automation to what fires it (see the listeners chapter). Comments start with \`#\`.
@@ -80,7 +80,7 @@ node Message {
   }
 }
 
-function \`Snapshot\`(m: <inbox-[:Email]->>) {
+function \`Snapshot\`(m: <inbox-[:Emails]->>) {
   msg = graph<Message> {
     Body: m.Body
     Attachments: m-[a:Attachments]-> {
@@ -197,7 +197,7 @@ node \`Recap Entry\` extends Entry {
 An automation is a function over a **position** — the graph point a triggering event hands it:
 
 \`\`\`
-function \`Inbound Intake\`(e: <inbox-[:Email]->>) { … }
+function \`Inbound Intake\`(e: <inbox-[:Emails]->>) { … }
 \`\`\`
 
 An automation wired to a \`listen\` takes **exactly one** parameter, the event position; a library function, called from other functions, takes any number. The body is statements — writes, traversal blocks, branches, assignments, and \`return\`. There is no loop construct; repetition comes from traversals and \`map\`.
@@ -227,7 +227,7 @@ function \`Label\`(name: <text>, tags: <text[]>, cfg: <{ prefix: text, suffix?: 
   return "\${cfg.prefix}\${name} (\${Text.join(tags, ", ")})"
 }
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   title = Label(m.Subject, ["new", "inbound"], { prefix: "> " })
   write crm-[:Companies]-> {
     unique by (Name)
@@ -259,7 +259,7 @@ function \`Log Lead\`(l: <Lead>) {
   }
 }
 
-function \`Intake\`(msg: <inbox-[:Email]->>) {
+function \`Intake\`(msg: <inbox-[:Emails]->>) {
   \`Log Lead\`(graph<Lead> { Name: msg.Subject })
 }
 \`\`\`
@@ -285,14 +285,14 @@ node Doc {
   }
 }
 
-function \`Email To Doc\`(m: <inbox-[:Email]->>) {
+function \`Email To Doc\`(m: <inbox-[:Emails]->>) {
   return graph<Doc> {
     title: m.Subject
     files: m-[a:Attachments]-> { name: a.Name, blob: a.File }
   }
 }
 
-function \`Intake\`(msg: <inbox-[:Email]->>) {
+function \`Intake\`(msg: <inbox-[:Emails]->>) {
   doc = \`Email To Doc\`(msg)
   doc-[f:files]-> {
     write drive-[:Files]-> {
@@ -345,7 +345,7 @@ function team_size(name: <text>, people: <{ name: text, manager: text }[]>): <nu
   return 1 + List.sum(map(reports, (r) => team_size(r.name, people)))
 }
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   people = [
     { name: "Ada",   manager: "" },
     { name: "Grace", manager: "Ada" },
@@ -381,7 +381,7 @@ function \`Log Lead\`(l: <Lead>) {
   }
 }
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   \`Log Lead\`(graph<Lead> { Name: m.Subject })
 }
 `,
@@ -396,7 +396,7 @@ import { team_workspace } from credentials
 inbox = connect email
 chat  = connect slack using team_workspace
 
-function \`Post And Confirm\`(msg: <inbox-[:Email]->>) {
+function \`Post And Confirm\`(msg: <inbox-[:Emails]->>) {
   deals = only(chat-[ch:Channels WHERE ch.Name == "deals"]->)
   if (deals == null) { fail("no #deals channel") }
 
@@ -408,7 +408,7 @@ function \`Post And Confirm\`(msg: <inbox-[:Email]->>) {
   })
 }
 
-listen to inbox { key: "intake" } fire \`Post And Confirm\`
+listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire \`Post And Confirm\`
 `,
     },
     {
@@ -425,7 +425,7 @@ node Lead {
   Name: <text>
 }
 
-function \`Email To Lead\`(m: <inbox-[:Email]->>) {
+function \`Email To Lead\`(m: <inbox-[:Emails]->>) {
   return graph<Lead> { Name: m.Subject }
 }
 
@@ -436,7 +436,7 @@ function \`Log Lead\`(l: <Lead>) {
   }
 }
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   lead = \`Email To Lead\`(m)
   \`Log Lead\`(lead)
   \`Log Lead\`(\`Email To Lead\`(m))
@@ -458,14 +458,14 @@ node Doc {
   node files { name: <text | null> }
 }
 
-function \`Email To Doc\`(m: <inbox-[:Email]->>) {
+function \`Email To Doc\`(m: <inbox-[:Emails]->>) {
   return graph<Doc> {
     title: m.Subject
     files: m-[a:Attachments]-> { name: a.Name }
   }
 }
 
-function \`Intake\`(msg: <inbox-[:Email]->>) {
+function \`Intake\`(msg: <inbox-[:Emails]->>) {
   doc = \`Email To Doc\`(msg)
   doc-[f:files]-> {
     write crm-[:Companies]-> {
@@ -503,7 +503,7 @@ function \`Persist Pair\`(c: <Lead>, n: <Note>) {
   }
 }
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   \`Persist Pair\`(graph<Lead> { Name: m.Subject }, graph<Note> { Text: m.Subject })
 }
 `,
@@ -535,7 +535,7 @@ function \`Log Deal\`(d: <Deal>) {
   }
 }
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   \`Log Deal\`(graph<Deal> { Title: m.Subject, company: { Name: m.From } })
 }
 `,
@@ -567,7 +567,7 @@ function \`Store\`(d: <Doc>) {
   }
 }
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   \`Store\`(graph<Doc> { Title: m.Subject, files: m-[a:Attachments]-> { Label: coalesce(a.Name, "untitled") } })
 }
 `,
@@ -618,7 +618,7 @@ import { \`Log Lead\` } from "lib/intake-routines"
 
 inbox = connect email
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   \`Log Lead\`(m)
 }
 `,
@@ -646,7 +646,7 @@ node Setting {
   limit: <number | null>
 }
 
-function \`Snapshot\`(m: <inbox-[:Email]->>) {
+function \`Snapshot\`(m: <inbox-[:Emails]->>) {
   msg = graph<Message> {
     Body: m.Body
     Attachments: m-[a:Attachments]-> {
@@ -683,7 +683,7 @@ function \`Label\`(name: <text>, tags: <text[]>, cfg: <{ prefix: text, suffix?: 
   return "\${cfg.prefix}\${name} (\${Text.join(tags, ", ")})"
 }
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   title = Label(m.Subject, ["new", "inbound"], { prefix: "> " })
   write crm-[:Companies]-> {
     unique by (Name)

@@ -132,7 +132,10 @@ impl Judge<'_> {
         let taken = hop.taken.iter().filter(|_| !taken_applied).flat_map(conjuncts).map(|c| (c, true));
         let mut unknown = None;
         for (conjunct, is_taken) in checked.chain(taken) {
-            let owned = is_taken.then(|| reads_owned(conjunct, hop)).flatten();
+            // An owned scalar the arrival carries is the module's own value
+            // for it (the schedule a tick fired on, the key mail came in
+            // under): it compares as the text it is.
+            let owned = is_taken.then(|| reads_owned(conjunct, hop)).flatten().filter(|field| !self.carries(i, field));
             let judged = match owned {
                 Some(field) => Judged::Unknown(format!(
                     "{module} did not apply this listen's filter on {edge} to the arrival, and only {module} can evaluate {field}",
@@ -150,6 +153,14 @@ impl Judge<'_> {
             }
         }
         unknown.map_or(Judged::Holds, Judged::Unknown)
+    }
+
+    /// Whether the arrival carries a value for hop `i`'s record's `field`.
+    fn carries(&self, i: usize, field: &str) -> bool {
+        match &self.records[i] {
+            Some(Js::Object(fields)) => !matches!(object_property(fields, field), Js::Undefined | Js::Null),
+            _ => false,
+        }
     }
 
     /// One conjunct of hop `i`'s filter, its alias reads answered by the

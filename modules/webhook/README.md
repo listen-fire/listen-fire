@@ -39,7 +39,7 @@ function `Payment Failed`(e: <Payment>) {
   write crm-[:Company]-> { Name: "${e.id} failed: ${e.amount}" }
 }
 
-listen to stripe { payload: <Payment> } fire `Payment Failed`
+listen to stripe-[:Requests]-><Payment> fire `Payment Failed`
 ```
 
 - `payload:` is required. It names a node the program declares, and the event is that node.

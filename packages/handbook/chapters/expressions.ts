@@ -208,7 +208,7 @@ node Mention: "each company named, weighed against the team's own themes" {
   name: <text> "the company's name"
 }
 
-function \`Match Mentions\`(m: <inbox-[:Email]->>) {
+function \`Match Mentions\`(m: <inbox-[:Emails]->>) {
   themes = Text.join(map(roster, (r) => "\${r.Name} (\${r.Theme})"), ", ")
   byName = List.keyBy(roster, (r) => r.Name)
   found  = extract([m.Body], Mention)
@@ -346,7 +346,7 @@ node Mention: "each company named, weighed against the team's own themes" {
   name: <text> "the company's name"
 }
 
-function \`Match Mentions\`(m: <inbox-[:Email]->>) {
+function \`Match Mentions\`(m: <inbox-[:Emails]->>) {
   themes = Text.join(map(roster, (r) => "\${r.Name} (\${r.Theme})"), ", ")
   byName = List.keyBy(roster, (r) => r.Name)
   found  = extract([m.Body], Mention)
@@ -393,7 +393,7 @@ import { acme_slack } from credentials
 inbox = connect email
 team  = connect slack using acme_slack
 
-function \`Follow Up\`(m: <inbox-[:Email]->>) {
+function \`Follow Up\`(m: <inbox-[:Emails]->>) {
   \`Suggested Action\` = ai("a brief, actionable next step — only if one is genuinely needed")
   if (\`Suggested Action\` != null) {
     channel = only(team-[ch:Channels WHERE ch.Name == "follow-ups"]->)
@@ -415,7 +415,7 @@ crm   = connect attio using acme
 
 \`Company Prompt\` = "the company name this email is about"
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   write crm-[:Companies]-> {
     Name: ai(\`Company Prompt\`)
     Description: ai("summarise this message")
@@ -433,7 +433,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Triage\`(m: <inbox-[:Email]->>) {
+function \`Triage\`(m: <inbox-[:Emails]->>) {
   write crm-[:Companies]-> {
     Name:        ai("the company name this email is about", { tier: "quick" })
     Domains:     ai("the company's website", { tier: "careful" })
@@ -452,7 +452,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   if (exists(m-[a:Attachments WHERE a.Name CONTAINS "pdf"]->)) {
     write crm-[:Companies]-> { Name: m.Subject }
   }
@@ -469,7 +469,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   write crm-[:Companies]-> {
     Name: coalesce(m.Subject, "unknown")
     Description: Text.upper(Text.trim(m.Subject))
@@ -487,7 +487,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   write crm-[:Companies]-> {
     Name: DOMAIN_OF(m.Subject)
   }
@@ -505,7 +505,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   if (DOMAIN_OF(m.Subject) == "acme.dev") {
     write crm-[:Companies]-> { Name: m.Subject }
   }
@@ -522,7 +522,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   if (Text.regexExtract(m.Subject, "(DEAL-\\\\d+)") != null) {
     company = write crm-[:Companies]-> {
       Name:        Text.slug(m.Subject)
@@ -551,7 +551,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   berlin_today = Date.today("Europe/Berlin")
   win_end      = DateTime.at(berlin_today, "07:00", "Europe/Berlin")
   win_start    = DateTime.at(Date.addDays(berlin_today, -1), "07:00", "Europe/Berlin")
@@ -574,7 +574,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   digest = "From: \${m.Subject}"
   company = write crm-[:Companies]-> {
     Name: m.Subject
@@ -595,7 +595,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
+function \`Intake\`(m: <inbox-[:Emails]->>) {
   write crm-[:Companies]-> {
     Name:          m.Subject
     Description ?: "Owner: \${@user_email} — from \${@actor_name} on \${@current_date}"
@@ -656,7 +656,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Summarise\`(m: <inbox-[:Email]->>) {
+function \`Summarise\`(m: <inbox-[:Emails]->>) {
   inc     = (v: <number>) => v + 1
   shout   = (t: <text>) => Text.upper(t)
   counts  = [1, 2, 3]
@@ -684,7 +684,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Tidy\`(m: <inbox-[:Email]->>) {
+function \`Tidy\`(m: <inbox-[:Emails]->>) {
   lines = [m.Subject, m.Body]
   kept  = filter(lines, (t) => Text.length(t) > 0, { onError: "ignore" })
   map(kept, (t) => {
@@ -713,7 +713,7 @@ node Profile: "more about the company described last" {
   summary: <text> "one line on what the company does"
 }
 
-function \`Merge\`(m: <inbox-[:Email]->>) {
+function \`Merge\`(m: <inbox-[:Emails]->>) {
   base      = { stage: "Seed", source: "email" }
   row       = { ...base, stage: "Series A" }
   content   = [m.Body]
@@ -742,7 +742,7 @@ import { acme } from credentials
 inbox = connect email
 crm   = connect attio using acme
 
-function \`Gather\`(m: <inbox-[:Email]->>, n: <number>) {
+function \`Gather\`(m: <inbox-[:Emails]->>, n: <number>) {
   pdfs    = m-[a:Attachments WHERE a.\`Content Type\` == "application/pdf"]->.File
   content = [m.Body, ...pdfs, "end"]
   inline  = [m.Subject, ...m-[a:Attachments]->.File]

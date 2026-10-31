@@ -17,14 +17,13 @@
 
 import { defineModule, type ModuleContext } from 'module-kit';
 
-import type { EventType, InboundCheck, InboundCheckInput } from 'movement-engine/public/adapter';
+import type { InboundCheck, InboundCheckInput } from 'movement-engine/public/adapter';
 
 import { EmailAdapter, type EmailSources } from './adapter';
 import { EMAIL_CREDENTIAL, emailAccessFrom } from './credential';
-import { EMAIL_INBOUND_TAG, checkEmailInbound, type EmailInboundSources } from './inbound/check';
+import { checkEmailInbound, type EmailInboundSources } from './inbound/check';
 import { EMAIL_MANIFEST } from './manifest';
 import { fetchEmailAttachment } from './providers';
-import { EMAIL_RECORD_TYPE_ID } from './types';
 
 /** The adapter's sources over a module context. */
 export function emailSourcesFrom(ctx: ModuleContext): EmailSources {
@@ -34,7 +33,7 @@ export function emailSourcesFrom(ctx: ModuleContext): EmailSources {
 }
 
 /** The email adapter as the module serves it: it also checks the mail a
- *  provider posts to its door, and types what that mail becomes. The
+ *  provider posts to its door, each message an arrival on `Emails`. The
  *  platform's own mail doors keep the plain adapter. */
 export class InboundEmailAdapter extends EmailAdapter {
   constructor(
@@ -47,10 +46,6 @@ export class InboundEmailAdapter extends EmailAdapter {
   async checkInbound(input: InboundCheckInput): Promise<InboundCheck> {
     return checkEmailInbound(input, this.inbound);
   }
-
-  async listEventTypes(): Promise<EventType[]> {
-    return [{ tag: EMAIL_INBOUND_TAG, positionType: EMAIL_RECORD_TYPE_ID }];
-  }
 }
 
 export const emailModule = defineModule({
@@ -58,6 +53,8 @@ export const emailModule = defineModule({
   name: '@lf/email',
   manifest: EMAIL_MANIFEST,
   credentials: [EMAIL_CREDENTIAL],
+  // An arrival on a root edge names no key (adapter protocol 2.6).
+  protocolMinor: 6,
   // Mailgun and Resend each sign their own way, neither a declared scheme.
   inbound: { providerKey: 'email', scheme: 'module' },
   create: (ctx) => new InboundEmailAdapter(emailSourcesFrom(ctx), { access: () => emailAccessFrom(ctx) }),

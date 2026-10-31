@@ -1,13 +1,15 @@
 // The webhook module's manifest: data only, so a host can list it without
-// loading the adapter. The module has no types of its own: what a delivery
-// carries is the node the listen declares (`payload: <Payment>`).
+// loading the adapter. The module has no types of its own: a delivery's body
+// is untyped JSON, and the listen states what it is
+// (`listen to stripe-[:Requests]-><Payment> fire f`).
 
 import type { AdapterManifest } from 'movement-engine/public/adapter';
 
 export const WEBHOOK_ADAPTER_TYPE = 'webhook';
-/** The one event a connection fires: a delivery to its URL. */
-export const DELIVERY_TYPE = 'Delivery';
-export const DELIVERY_TAG = 'delivery';
+/** The one edge a connection has: each POST to its URL arrives on it. */
+export const REQUESTS_EDGE = 'Requests';
+/** What lands on it: a body the module does not describe. */
+export const REQUEST_TYPE = 'Request';
 
 const HANDBOOK = `## Incoming webhooks
 
@@ -30,10 +32,10 @@ function \`Payment Failed\`(e: <Payment>) {
   write crm-[:Company]-> { Name: "\${e.id} failed: \${e.amount}" }
 }
 
-listen to stripe { payload: <Payment> } fire \`Payment Failed\`
+listen to stripe-[:Requests]-><Payment> fire \`Payment Failed\`
 \`\`\`
 
-- \`payload:\` is required. It names a node the program declares, and the event is that node: reading a field it does not declare fails \`listen-fire check\`. The movement's parameter is checked against it field by field.
+- Each delivery arrives on the connection's \`Requests\` edge. Its body is untyped JSON, so a listen states what it is after the traversal: \`-[:Requests]-><Payment>\` names a node the program declares. The function it fires must take what that node carries: reading a field the node does not declare fails \`listen-fire check\`.
 - The node's fields are the body's top-level JSON keys.
 - A delivery whose body does not fit the node runs nothing. A field the node requires is missing or null, or holds another kind of value. When no listen on the connection takes it, the sender is answered 400, naming the fields.
 - A body that is not a JSON object is answered 400.
@@ -48,9 +50,11 @@ export const WEBHOOK_MANIFEST: AdapterManifest = {
   adapterType: WEBHOOK_ADAPTER_TYPE,
   displayName: 'Webhook',
   description:
-    'Incoming webhooks from any sender. Each connection is one signed URL; its credential holds the signing scheme (Stripe, an HMAC-SHA256 header, or none) and secret, and the listen declares the type its events carry.',
+    'Incoming webhooks from any sender. Each connection is one signed URL; its credential holds the signing scheme (Stripe, an HMAC-SHA256 header, or none) and secret. Each delivery arrives on its `Requests` edge, and the listen states the type its body is.',
   handbookSection: { title: 'Incoming webhooks', content: HANDBOOK },
   supportedTriggers: ['webhook'],
-  listenConfig: [{ key: 'payload', required: true, format: 'type' }],
-  methods: ['listEntryPoints', 'describe', 'getFieldValue', 'listEventTypes', 'checkInbound'],
+  methods: ['listEntryPoints', 'describe', 'getFieldValue', 'checkInbound'],
+  // A 0.12 `listen to stripe { payload: <Payment> }` is
+  // `listen to stripe-[:Requests]-><Payment>` (`listen-fire upgrade`).
+  listenSettingsBecome: { path: [REQUESTS_EDGE], aliases: ['r'], keys: { payload: { hop: 0, op: 'type' } } },
 };

@@ -335,7 +335,7 @@ team  = connect slack using team_workspace
 crm   = connect attio using acme_main
 asks  = connect ask
 
-function \`Triage Inbound\`(msg: <inbox-[:Email]->>) {
+function \`Triage Inbound\`(msg: <inbox-[:Emails]->>) {
   \`Company Name\` = ai("the company this message is about")
 
   q = write asks-[:Check]-> {
@@ -366,7 +366,7 @@ function \`Triage Inbound\`(msg: <inbox-[:Email]->>) {
   }
 }
 
-listen to inbox { key: "intake" } fire \`Triage Inbound\`
+listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire \`Triage Inbound\`
 `,
     },
     {

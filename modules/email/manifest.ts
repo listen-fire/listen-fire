@@ -5,7 +5,7 @@
 import type { AdapterManifest, ConfigBlock } from 'movement-engine/public/adapter';
 
 import { INBOUND_EMAIL_ADDRESS_VAR, inboundRoutingAddress } from './address';
-import { EMAIL_ADAPTER_ALIASES, EMAIL_ADAPTER_TYPE } from './types';
+import { EMAILS_EDGE, EMAIL_ADAPTER_ALIASES, EMAIL_ADAPTER_TYPE, EMAIL_KEY_FIELD } from './types';
 
 /**
  * Static manifest. Source-only — no write methods (so NOT a target) and no
@@ -82,8 +82,8 @@ export const EMAIL_MANIFEST: AdapterManifest = {
       'Fires once per email actually delivered to the movement\'s dedicated ' +
       `forwarding address (${inboundAddressShape()}) — it does NOT read an ` +
       'existing inbox or see mail sent elsewhere. The user must forward or ' +
-      'send mail to that address for it to fire; the listen key is the ' +
-      'plus-suffix, so different keys route different mail. Describe it as ' +
+      'send mail to that address for it to fire; the listen names the ' +
+      'plus-suffix as `e.Key`, so different keys route different mail. Describe it as ' +
       '"when an email is sent to your inbound address", not "when you get an ' +
       'email".'
     );
@@ -100,12 +100,11 @@ export const EMAIL_MANIFEST: AdapterManifest = {
   get triggerConfig() {
     return emailTriggerConfig();
   },
-  // The same `key`, declared where a host without the settings form reads a
-  // listen's vocabulary (listen-fire: `listen to inbox { key: "deals" }`). listen-fire routes
-  // by it too: a message to `<box>+deals@…` fires the listen keyed "deals".
-  // Not required here: under listen-fire a listen with no key hears the mail sent to
-  // the box itself; the platform still requires one through the block above.
-  listenConfig: [{ key: 'key', required: false }],
+  // A 0.12 `listen to inbox { key: "deals" }` is
+  // `listen to inbox-[e:Emails WHERE e.Key == "deals"]->` (`listen-fire upgrade`).
+  // One with no key heard mail sent to the box itself, which no 0.13 listen
+  // names: it has no rewrite.
+  listenSettingsBecome: { path: [EMAILS_EDGE], aliases: ['e'], paramFrom: 'Email', keys: { key: { hop: 0, field: EMAIL_KEY_FIELD, op: 'eq' } } },
   // Without an address there is no door for mail to arrive at, so an author
   // who imports email on such a deployment is writing something that can
   // never fire. That is a gap they are shown, not a boot failure: a

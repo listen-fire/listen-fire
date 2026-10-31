@@ -36,9 +36,21 @@ const now = () => Math.floor(Date.now() / 1000);
 describe('checkInbound', () => {
   const stripe = load({ scheme: 'stripe', secret: 'whsec_test' });
 
-  it('accepts a signed delivery as one event, its body the payload', async () => {
+  it('accepts a signed delivery as one arrival on Requests, its body the landing’s fields', async () => {
     const answer = await stripe.checkInbound!(post(BODY, { 'stripe-signature': stripeSignature('whsec_test', BODY, now()) }));
-    expect(answer).toEqual({ outcome: 'accepted', events: [{ payload: { id: 'pay_1', amount: 1200 }, tag: 'delivery' }], deliveryId: 'pay_1' });
+    expect(answer).toEqual({
+      outcome: 'accepted',
+      events: [],
+      arrivals: [{ edge: 'Requests', identity: 'pay_1', landing: { recordType: 'Request', fields: { id: 'pay_1', amount: 1200 } } }],
+      deliveryId: 'pay_1',
+    });
+  });
+
+  it('names an arrival the sender names nothing by afresh each time', async () => {
+    const open = load({ scheme: 'none' });
+    const identities = await Promise.all([1, 2].map(async () => ((await open.checkInbound!(post('{"amount":1}'))) as { arrivals: Array<{ identity: string }> }).arrivals[0]?.identity));
+    expect(identities[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(identities[0]).not.toEqual(identities[1]);
   });
 
   it('names a Stripe delivery by the body’s id, so a retry is the same delivery', async () => {
@@ -89,11 +101,17 @@ describe('the connection', () => {
     await expect(load({ scheme: 'stripe' }).listEntryPoints()).rejects.toThrow('the webhook credential StripeHook is signed with stripe but holds no secret');
   });
 
-  it('declares its door, its payload key and its one event', async () => {
+  it('declares its door, its one listenable edge, and how a 0.12 payload listen becomes it', async () => {
     const { manifest } = loaded({ scheme: 'none' });
     expect(manifest['inbound']).toEqual({ providerKey: 'webhook', scheme: 'module', secretIssuedBy: 'provider' });
-    expect(manifest['listenConfig']).toEqual([{ key: 'payload', required: true, format: 'type' }]);
-    expect(manifest['methods']).toEqual(expect.arrayContaining(['checkInbound', 'listEventTypes']));
-    expect(await load({ scheme: 'none' }).listEventTypes!()).toEqual([{ tag: 'delivery', positionType: 'Delivery' }]);
+    expect(manifest).not.toHaveProperty('listenConfig');
+    expect(manifest['listenSettingsBecome']).toEqual({ path: ['Requests'], aliases: ['r'], keys: { payload: { hop: 0, op: 'type' } } });
+    expect(manifest['methods']).toEqual(expect.arrayContaining(['checkInbound']));
+    expect(manifest['methods']).not.toContain('listEventTypes');
+    expect(manifest['protocolMinor']).toBe(6);
+    expect(await load({ scheme: 'none' }).listEntryPoints()).toEqual([
+      { typeId: 'Request', displayName: 'Request', collectionName: 'Requests', writable: false, readable: false, listenable: true, delivery: 'connection' },
+    ]);
+    expect(await load({ scheme: 'none' }).describe('Request')).toBeNull();
   });
 });

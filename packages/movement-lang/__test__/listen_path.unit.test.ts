@@ -18,6 +18,12 @@ describe('a listen on a traversal', () => {
     });
   });
 
+  it('carries the type it states its untyped landing is', () => {
+    const listen = listenOf('listen to hooks-[:Requests]-><Payment> fire paid\n');
+    expect(listen).toMatchObject({ path: { hopsRaw: '-[:Requests]->' }, landing: { graph: 'Payment' }, movement: 'paid' });
+    expect(listenOf('listen to hooks-[:Requests]-> fire paid\n')).not.toHaveProperty('landing');
+  });
+
   it('keeps its alias', () => {
     expect(listenOf('listen as "Lunch" to chat-[:Channels]-> fire f\n')).toMatchObject({ alias: 'Lunch', path: { hopsRaw: '-[:Channels]->' } });
   });

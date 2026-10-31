@@ -4290,11 +4290,14 @@ impl Parser {
                 _ => String::new(),
             };
             self.skip_inline_ws();
-            self.expect_word("fire", &format!("after 'listen to {}{}'", instance, path.hops_raw))?;
+            let landing = if self.is('<') { Some(type_ref_from_marker(self.read_type_marker("for the type of what lands", PLAIN)?)) } else { None };
+            let annotation = landing.as_ref().map(|t| format!("<{}>", t.graph)).unwrap_or_default();
+            self.skip_inline_ws();
+            self.expect_word("fire", &format!("after 'listen to {}{}{annotation}'", instance, path.hops_raw))?;
             self.skip_inline_ws();
             let movement = self.read_name("a movement name after 'fire'")?;
             self.expect_statement_end()?;
-            return Ok(ListenDeclaration { instance, alias, construct: None, config: Vec::new(), path: Some(path), movement, span: self.span_from(start) });
+            return Ok(ListenDeclaration { instance, alias, construct: None, config: Vec::new(), path: Some(path), landing, movement, span: self.span_from(start) });
         }
         let instance_start = self.pos;
         let instance = self.read_name("an instance name after 'listen to'")?;
@@ -4406,7 +4409,7 @@ impl Parser {
         self.skip_inline_ws();
         let movement = self.read_name("a movement name after 'fire'")?;
         self.expect_statement_end()?;
-        Ok(ListenDeclaration { instance, alias, construct, config, path: None, movement, span: self.span_from(start) })
+        Ok(ListenDeclaration { instance, alias, construct, config, path: None, landing: None, movement, span: self.span_from(start) })
     }
 
     /// `listen to <traversal>`: a head with hops off a name (or off nothing,
@@ -4999,6 +5002,21 @@ mod tests {
     #[test]
     fn a_listen_path_needs_its_fire() {
         assert_eq!(error("listen to chat-[:Channels]-> f")["message"], json!("Expected 'fire' after 'listen to chat-[:Channels]->', found 'f'"));
+        assert_eq!(error("listen to hooks-[:Requests]-><Payment> f")["message"], json!("Expected 'fire' after 'listen to hooks-[:Requests]-><Payment>', found 'f'"));
+    }
+
+    #[test]
+    fn a_listen_states_the_type_of_its_untyped_landing_after_its_path() {
+        let ast = program("listen to hooks-[:Requests]-><Payment> fire paid\n");
+        let listen = &ast["statements"][0];
+        assert_eq!(listen["path"]["hopsRaw"], json!("-[:Requests]->"));
+        assert_eq!(listen["landing"]["graph"], json!("Payment"));
+        assert_eq!(listen["landing"]["span"]["start"], json!({ "line": 1, "col": 30 }));
+        assert_eq!(listen["movement"], json!("paid"));
+        let spaced = &program("listen as \"Paid\" to hooks-[r:Requests]-> <Payment> fire paid\n")["statements"][0];
+        assert_eq!((&spaced["alias"], &spaced["landing"]["graph"]), (&json!("Paid"), &json!("Payment")));
+        assert!(program("listen to hooks-[:Requests]-> fire paid\n")["statements"][0].get("landing").is_none());
+        assert_eq!(error("listen to hooks-[:Requests]-><Payment fire paid")["message"].as_str().map(|m| m.contains("Expected '>'")), Some(true), "{}", error("listen to hooks-[:Requests]-><Payment fire paid"));
     }
 
     #[test]

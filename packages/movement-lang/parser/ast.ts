@@ -1492,6 +1492,9 @@ export interface ListenDeclaration {
   /** `listen to x-[:E]-> fire f`: the traversal listened on, rooted at
    *  `instance`. Absent for the settings form (`listen to x { … }`). */
   path?: PathHead;
+  /** `listen to hooks-[:Requests]-><Payment> fire f`: the node the
+   *  traversal's untyped landing is, as the listen states it. */
+  landing?: TypeRef;
   movement: string;
   span: Span;
 }
