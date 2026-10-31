@@ -1,0 +1,26 @@
+import { acme_crm, `@lf/forms` as forms_module } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+forms = connect forms_module
+
+node Refund {
+  Approve: <boolean>
+  Note: <text | null>
+}
+
+# A new company asks for a refund's approval on a form, its link written to
+# the CRM; the answer, typed by Refund, is recorded. Nobody answering within
+# a day ends the wait.
+function ask(company: <crm-[:Company]->>) {
+  form = write forms-[:Forms]-> { Title: "Approve the refund for ${company.Name}?", Fields: Refund }
+  write crm-[:Company]-> { Name: "Open ${form.Url}" }
+  r = race(
+    () => { return await form-[:Submissions]-> },
+    () => { await sleep(1d) },
+  )
+  if (r[0] == null) { fail("nobody answered within a day") }
+  write crm-[:Company]-> { Name: "Approved ${r[0].Approve} ${coalesce(r[0].Note, "none")}" }
+}
+
+listen to crm {} fire ask

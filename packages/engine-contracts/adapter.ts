@@ -1892,11 +1892,15 @@ export type InboundCheck =
       /** The provider's id for this delivery: a redelivery under an id the
        *  host kept before is acked and runs nothing. */
       deliveryId?: string;
+      /** What the door answers once the delivery is kept, in place of its
+       *  own acknowledgement: a 2xx with `text`, `html` or `json`. */
+      reply?: { status: number; text?: string; html?: string; json?: unknown };
     }
   /** The host answers `status` (401 when absent) with `signature_invalid`. */
   | { outcome: 'refused'; status?: number }
-  /** Sent as it is, nothing run: `text` as text/plain, `json` as JSON. */
-  | { outcome: 'reply'; status: number; text?: string; json?: unknown };
+  /** Sent as it is, nothing run: `text` as text/plain, `html` as text/html,
+   *  `json` as JSON. */
+  | { outcome: 'reply'; status: number; text?: string; html?: string; json?: unknown };
 
 export interface ReadInput {
   recordType: string;

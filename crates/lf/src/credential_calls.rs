@@ -40,6 +40,9 @@ pub struct Target<'a> {
     pub settings: &'a [String],
     /// The limits the manifest declares (crate::limiter).
     pub limits: &'a ModuleLimits,
+    /// Where the install's inbound requests reach the module, when it takes
+    /// any and the host has a door for them (`RunningExternal::inbound_url`).
+    pub inbound_url: Option<&'a str>,
 }
 
 #[derive(Debug)]
@@ -235,6 +238,7 @@ async fn post(target: &Target<'_>, credentials: &Credentials, sending: &Sending<
         credential: presented.sent,
         settings: settings.filter(|s| s.as_object().is_some_and(|o| !o.is_empty())),
         host_limits,
+        inbound: target.inbound_url.map(|url| json!({ "url": url })),
     };
     let auth = match crate::outgoing_auth::OutgoingAuth::of_fields(&install.map(current_fields).unwrap_or_default(), target.base_url) {
         Ok(auth) => auth,

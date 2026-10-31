@@ -14,7 +14,9 @@
 //! - where a record enters the run, the edges the program awaits off
 //!   records of its type (`opensWaits`, crate::families::wait_entries);
 //! - on a plain `await` of an edge that can also be listed, that it reads
-//!   the listing first (`listsFirst`).
+//!   the listing first (`listsFirst`);
+//! - on a write field naming a node as the shape of what lands on an edge
+//!   off the written record, the node's fields (`nodeSchema`).
 //!
 //! The engine re-parses the source, so these cross as STAMPS keyed by the
 //! node's place in the program's JSON (a JSON Pointer; through a nested
@@ -48,6 +50,10 @@ pub enum StampKind {
     /// A plain `await` whose edge can be listed: the first match already
     /// there is taken before any arrival.
     ListsFirst,
+    /// A write field naming a node as the shape of what lands on an edge
+    /// (`answerShapeFrom`): the node's fields, `{fields: {name: type}}`,
+    /// sent as the field's value.
+    NodeSchema(Json),
 }
 
 impl StampKind {
@@ -216,6 +222,7 @@ fn stamp_json(recorded: &Recorded, path: String) -> Json {
         StampKind::WrittenType(written) => stamp["writtenType"] = json!(written),
         StampKind::OpensWaits(edges) => stamp["opensWaits"] = json!(edges),
         StampKind::ListsFirst => stamp["listsFirst"] = json!(true),
+        StampKind::NodeSchema(schema) => stamp["nodeSchema"] = schema.clone(),
     }
     stamp
 }
@@ -242,6 +249,7 @@ fn place(tree: &Json, nested: &[(Span, At)], span: &Span, kind: &StampKind) -> O
                 StampKind::WrittenType(_) => is_linked_target(node),
                 StampKind::OpensWaits(_) => is_record_entry(node, path),
                 StampKind::ListsFirst => is_awaited_traversal(node, path),
+                StampKind::NodeSchema(_) => is_write_field_value(node, path),
             }
     };
     let (path, _) = find(&read, "", &fits)?;
@@ -286,6 +294,12 @@ pub fn is_record_entry(node: &Json, path: &str) -> bool {
 /// What an `await` waits on, when it is a walk to one edge.
 pub fn is_awaited_traversal(node: &Json, path: &str) -> bool {
     path.ends_with("/source") && node.get("kind").and_then(Json::as_str) == Some("traversal") && node.get("head").is_some_and(Json::is_object)
+}
+
+/// A write field line's value (`…/fields/<n>/value`).
+pub fn is_write_field_value(node: &Json, path: &str) -> bool {
+    let mut tokens = path.rsplit('/');
+    tokens.next() == Some("value") && tokens.next().is_some_and(|i| i.parse::<usize>().is_ok()) && tokens.next() == Some("fields") && is_slot(node)
 }
 
 /// An expression slot as the parser writes one.

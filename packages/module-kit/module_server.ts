@@ -177,6 +177,7 @@ async function answer(
         ...(ocr !== undefined ? { ocr } : {}),
         ...(options.baseUrlOverride !== undefined ? { baseUrlOverride: options.baseUrlOverride } : {}),
         constructionArgs,
+        ...(request.inbound !== undefined ? { inboundUrl: request.inbound.url } : {}),
         validateResults: false,
       }),
     );

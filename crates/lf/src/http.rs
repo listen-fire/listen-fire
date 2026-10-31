@@ -63,6 +63,10 @@ impl Response {
         Response { status, content_type: Some("text/plain; charset=utf-8"), body: text.as_bytes().to_vec() }
     }
 
+    pub fn html(status: u16, html: &str) -> Response {
+        Response { status, content_type: Some("text/html; charset=utf-8"), body: html.as_bytes().to_vec() }
+    }
+
     pub fn text(status: u16, text: &str) -> Response {
         Response { status, content_type: Some("text/plain; charset=utf-8"), body: format!("{text}\n").into_bytes() }
     }

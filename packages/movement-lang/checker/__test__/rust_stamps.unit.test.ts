@@ -13,6 +13,8 @@ describe('a stamp from the Rust checker', () => {
       listsFirst: true,
     });
     expect(stampOf({ path: '/statements/2/body/0/write/target', writtenType: 'Companies' })).toEqual({ path: '/statements/2/body/0/write/target', writtenType: 'Companies' });
+    const nodeSchema = { fields: { Approve: 'boolean' } };
+    expect(stampOf({ path: '/statements/3/body/0/value/write/fields/1/value', nodeSchema })).toEqual({ path: '/statements/3/body/0/value/write/fields/1/value', nodeSchema });
   });
 
   it('refuses a stamp of more than one fact, naming them', () => {

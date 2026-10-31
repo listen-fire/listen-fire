@@ -154,6 +154,11 @@ export interface ModuleConfig {
    *  install. Absent where the host names it itself (the process transport's
    *  client rewrites every owned file). */
   readonly credentialRef?: string;
+  /** Where the install's inbound requests reach this module (its door at
+   *  the host, a module that checks its own inbound): what a link to the
+   *  module points at. Absent where the host serves no door for it (no
+   *  `publicUrl`, no listener). */
+  readonly inboundUrl?: string;
 }
 
 /** Money a call spent on a paid service, charged to the run that made it

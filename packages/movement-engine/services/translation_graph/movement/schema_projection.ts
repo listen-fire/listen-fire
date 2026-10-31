@@ -703,6 +703,9 @@ export function instanceSchemaFromDescriptors(input: {
           // path (a message's buttons' values typing what a press answers).
           // Carried verbatim, as `genericOver` is.
           ...(ref.literalsFrom !== undefined ? { literalsFrom: ref.literalsFrom } : {}),
+          // The write field naming the node that types what lands here (a
+          // form's fields typing its submissions). Carried verbatim.
+          ...(ref.answerShapeFrom !== undefined ? { answerShapeFrom: ref.answerShapeFrom } : {}),
           // The system's resources edge (the reserved `_resources` reference,
           // walked by its own name — the knowledge graph's `Resources`). The
           // read wrapper sends a walk of it by its reserved fieldId (its

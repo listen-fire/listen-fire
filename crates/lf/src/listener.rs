@@ -22,7 +22,7 @@ use crate::backend::StoreSpec;
 use crate::callbacks::CallOutcome;
 use crate::doors::{EventSink, LfDoors, deliver_inline, hook_target};
 use crate::http::{Request, Response, decode_component};
-use crate::inbound::{Answer, Delivery, DeliverySource, InboundStore, Push, PushStore, answer_delivery, answer_push};
+use crate::inbound::{Answer, Delivery, DeliverySource, InboundStore, Push, PushStore, TextBody, answer_delivery, answer_push};
 use crate::json::{Js, Obj};
 #[cfg(feature = "oauth")]
 use crate::oauth_signin::deliver_public_redirect;
@@ -297,7 +297,8 @@ fn decoded(segment: &str) -> Result<String, String> {
 /// The answer, with the drain poked once it is composed when it asks.
 fn send(answer: Answer, notify: impl FnOnce()) -> Response {
     let response = match &answer.text {
-        Some(text) => Response::plain(answer.status, text),
+        Some(TextBody::Plain(text)) => Response::plain(answer.status, text),
+        Some(TextBody::Html(html)) => Response::html(answer.status, html),
         None => Response::json(answer.status, &answer.body),
     };
     if answer.notify_after {

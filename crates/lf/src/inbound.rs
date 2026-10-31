@@ -331,10 +331,19 @@ pub fn verify_declared(declaration: &Declaration, raw_body: &[u8], headers: &[(S
 pub struct Answer {
     pub status: u16,
     pub body: Js,
-    /// Sent as `text/plain` in place of `body` (a module's handshake reply).
-    pub text: Option<String>,
+    /// Sent in place of `body` (a module's reply: a handshake, a page).
+    pub text: Option<TextBody>,
     /// Poke whatever drains the work rows once this is sent (`afterAnswer`).
     pub notify_after: bool,
+}
+
+/// A module's reply as text, and what kind of text it is.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TextBody {
+    /// `text/plain`.
+    Plain(String),
+    /// `text/html`: a page a module serves at its door.
+    Html(String),
 }
 
 impl Answer {
@@ -514,8 +523,9 @@ enum Refusal {
 
 /// What a delivery that got in came to.
 enum Received {
-    /// Kept, with this many of its events.
-    Kept(usize),
+    /// Kept, with this many of its events, and what the module asked the
+    /// door to answer once it is (its `accepted` answer's `reply`).
+    Kept(usize, Option<Answer>),
     /// Its external id was kept at its subscription before: nothing kept.
     Duplicate,
 }
@@ -557,7 +567,8 @@ pub async fn answer_delivery<S: InboundStore>(store: &S, delivery: Delivery<'_>)
         }
     }
     match receive_delivery(store, &provider_key, &delivery).await {
-        Ok(Ok(Received::Kept(events_processed))) => Answer {
+        Ok(Ok(Received::Kept(_, Some(reply)))) => Answer { notify_after: true, ..reply },
+        Ok(Ok(Received::Kept(events_processed, None))) => Answer {
             status: 200,
             body: Js::Obj(obj! { "ok" => Js::Bool(true), "eventsProcessed" => Js::Num((events_processed as u64).into()) }),
             text: None,
@@ -590,7 +601,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
     }
     let Some(source) = store.source_for(&subscription).await? else { return refused(Refusal::UnknownProvider) };
 
-    let (extraction, wakes, external_id) = if source.declaration.scheme == Scheme::Module {
+    let (extraction, wakes, external_id, reply) = if source.declaration.scheme == Scheme::Module {
         let request = RawRequest { method: delivery.method, path: delivery.path, query: delivery.query, headers: delivery.headers, body: delivery.raw_body };
         let secret = is_usable_secret(&source.secret).then_some(source.secret.as_str());
         let answer = store.check_inbound(&source, &request, secret, subscription.checkpoint.as_ref()).await?;
@@ -606,7 +617,8 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
                 let keys = answer.get("wakeKeys").and_then(Js::as_array).unwrap_or(&[]).iter().filter_map(Js::as_str).map(str::to_string).collect::<Vec<_>>();
                 let external_id = answer.get("deliveryId").and_then(Js::as_str).filter(|id| !id.is_empty()).map(str::to_string);
                 let arrivals = arrivals_of(&answer).map_err(|e| format!("checkInbound for adapter {}: {e}", source.adapter_type))?;
-                (Extraction { events, arrivals, checkpoint: answer.get("checkpoint").cloned() }, Wakes::Known(keys), external_id)
+                let reply = answer.get("reply").map(module_reply);
+                (Extraction { events, arrivals, checkpoint: answer.get("checkpoint").cloned() }, Wakes::Known(keys), external_id, reply)
             }
         }
     } else {
@@ -627,7 +639,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
             eprintln!("[webhook] adapter for provider {} has no preprocessInbound — delivery dropped", subscription.provider_key);
             return refused(Refusal::CannotPreprocess);
         }
-        (store.preprocess(&source, &body, subscription.checkpoint.as_ref()).await?, Wakes::Read(body), external_id)
+        (store.preprocess(&source, &body, subscription.checkpoint.as_ref()).await?, Wakes::Read(body), external_id, None)
     };
 
     if let Some(message) = store.refuse_events(&source, &extraction.events) {
@@ -659,7 +671,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
         Wakes::Read(body) => store.wake_keys(&source, &body).await,
     };
     if extraction.events.is_empty() && extraction.arrivals.is_empty() && wakes.as_ref().is_ok_and(Vec::is_empty) {
-        return Ok(Ok(Received::Kept(0)));
+        return Ok(Ok(Received::Kept(0, reply)));
     }
     // The pull cursor rides on "receipted", not "run", and is kept with the
     // receipts it moved past: never one without the other.
@@ -684,7 +696,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
     }
     // The events are in; a failing wake door is still the sender's to retry.
     wakes.map_err(|error| format!("wakeKeys failed for adapter {}: {error}", source.adapter_type))?;
-    Ok(Ok(Received::Kept(events_processed)))
+    Ok(Ok(Received::Kept(events_processed, reply)))
 }
 
 /// A delivery's body as its module reads it: JSON, or a form's fields when it
@@ -723,14 +735,16 @@ fn status_of(value: Option<&Js>) -> Option<u16> {
     }
 }
 
-/// A module's `reply` as the door sends it: `text` as text, `json` as JSON,
-/// neither as an empty text.
+/// A module's `reply` as the door sends it: `text` as text, `html` as a
+/// page, `json` as JSON, none of them as an empty text.
 fn module_reply(answer: &Js) -> Answer {
     let status = status_of(answer.get("status")).filter(|s| (200..600).contains(s)).unwrap_or(200);
-    match (answer.get("text").and_then(Js::as_str), answer.get("json")) {
-        (Some(text), _) => Answer { status, body: Js::Null, text: Some(text.to_string()), notify_after: false },
-        (None, Some(json)) => Answer::of(status, json.clone()),
-        (None, None) => Answer { status, body: Js::Null, text: Some(String::new()), notify_after: false },
+    let text = |text: TextBody| Answer { status, body: Js::Null, text: Some(text), notify_after: false };
+    match (answer.get("text").and_then(Js::as_str), answer.get("html").and_then(Js::as_str), answer.get("json")) {
+        (Some(plain), _, _) => text(TextBody::Plain(plain.to_string())),
+        (None, Some(html), _) => text(TextBody::Html(html.to_string())),
+        (None, None, Some(json)) => Answer::of(status, json.clone()),
+        (None, None, None) => text(TextBody::Plain(String::new())),
     }
 }
 
@@ -1209,8 +1223,27 @@ mod tests {
         assert_eq!(default.status, 401);
         let store = ModuleChecked::answering(r#"{"outcome":"reply","status":200,"text":"challenge-1"}"#);
         let reply = answer_delivery(&store, delivery("GET", b"", &[])).await;
-        assert_eq!((reply.status, reply.text.as_deref()), (200, Some("challenge-1")));
+        assert_eq!((reply.status, reply.text), (200, Some(TextBody::Plain("challenge-1".into()))));
         assert_eq!(store.queued.get(), 0);
+        let page = answer_delivery(&ModuleChecked::answering(r#"{"outcome":"reply","status":404,"html":"<p>gone</p>"}"#), delivery("GET", b"", &[])).await;
+        assert_eq!((page.status, page.text), (404, Some(TextBody::Html("<p>gone</p>".into()))));
+    }
+
+    /// A module's acceptance may name what the door answers once the
+    /// delivery is kept (a page saying an answer was recorded); a repeat of
+    /// a delivery it names is the door's own duplicate.
+    #[tokio::test]
+    async fn an_acceptance_s_reply_is_answered_once_the_delivery_is_kept() {
+        let store = ModuleChecked::answering(
+            r#"{"outcome":"accepted","events":[],"deliveryId":"s-1","arrivals":[{"edge":"Responses","key":"s-1","identity":"s-1","landing":{"fields":{}}}],"reply":{"status":200,"json":{"outcome":"recorded"}}}"#,
+        );
+        let answer = answer_delivery(&store, delivery("POST", b"a=b", &[])).await;
+        assert_eq!((answer.status, answer.body.to_json(), answer.notify_after), (200, r#"{"outcome":"recorded"}"#.to_string(), true));
+        assert_eq!(store.arrived.borrow().clone(), ["s-1"]);
+        let again = answer_delivery(&store, delivery("POST", b"a=b", &[])).await;
+        assert_eq!(again.body.to_json(), r#"{"ok":true,"duplicate":true,"eventsProcessed":0}"#);
+        let unkept = ModuleChecked { unkept: Some("no waits".into()), ..ModuleChecked::answering(&store.answer.to_json()) };
+        assert_eq!(answer_delivery(&unkept, delivery("POST", b"a=b", &[])).await.status, 503, "not kept: the door's refusal, not the reply");
     }
 
     #[test]

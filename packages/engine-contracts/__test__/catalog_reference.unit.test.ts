@@ -5,6 +5,7 @@ import {
   schemaReferenceDescriptorSchema,
   schemaTypeDescriptorSchema,
   undeclaredArrivalField,
+  unreadableAnswerShapeFrom,
   unreadableLiteralsFrom,
 } from '../catalog';
 import cases from './write_paths.cases.json';
@@ -140,5 +141,48 @@ describe("a reference's literalsFrom", () => {
 
   it('leaves a landing nobody described unjudged', () => {
     expect(unreadableLiteralsFrom(interactions(['Anything'], 'Buttons[].Value'), new Map())).toBeUndefined();
+  });
+});
+
+describe("a reference's answerShapeFrom", () => {
+  const form = schemaTypeDescriptorSchema.parse({
+    typeId: 'f',
+    displayName: 'Form',
+    fields: [
+      { fieldId: 'title', displayName: 'Title', kind: 'string', writable: true, required: true },
+      { fieldId: 'fields', displayName: 'Fields', kind: 'json', writable: true, required: true },
+      { fieldId: 'url', displayName: 'Url', kind: 'string', writable: false, required: false },
+      { fieldId: 'seen', displayName: 'Seen', kind: 'json', writable: false, required: false },
+    ],
+    references: [],
+  });
+  const descriptors = new Map([
+    ['f', form],
+    ['s', schemaTypeDescriptorSchema.parse({ typeId: 's', displayName: 'Submission', fields: [], references: [] })],
+  ]);
+  const submissions = (answerShapeFrom: string, more: object = {}) =>
+    schemaReferenceDescriptorSchema.parse({ ...reference, name: 'Submissions', targetTypeId: 's', listenable: true, answerShapeFrom, ...more });
+
+  it('is carried by the reference schema', () => {
+    expect(submissions('Fields').answerShapeFrom).toBe('Fields');
+    expect(schemaReferenceDescriptorSchema.safeParse({ ...reference, answerShapeFrom: '' }).success).toBe(false);
+  });
+
+  it('names one writable json field of the type it hangs off', () => {
+    expect(unreadableAnswerShapeFrom(submissions('Fields'), form, descriptors)).toBeUndefined();
+  });
+
+  it("is refused, in listen-fire's words, when it cannot type what it says", () => {
+    expect(unreadableAnswerShapeFrom(submissions('Questions'), form, descriptors)).toBe(
+      "'Submissions' takes its answer's shape from 'Questions', a field 'Form' does not declare (it declares: Title, Fields, Url, Seen)",
+    );
+    for (const field of ['Title', 'Seen']) {
+      expect(unreadableAnswerShapeFrom(submissions(field), form, descriptors)).toBe(
+        `'Submissions' takes its answer's shape from '${field}', but '${field}' on 'Form' is not a single writable json field: the write names a node there, and the module receives its fields as json`,
+      );
+    }
+    expect(unreadableAnswerShapeFrom(submissions('Fields', { targetTypeIds: ['s', 'f'] }), form, descriptors)).toBe(
+      "'Submissions' takes its answer's shape from 'Fields', but it lands on more than one type (Submission, Form): a shape gives one landing its fields",
+    );
   });
 });

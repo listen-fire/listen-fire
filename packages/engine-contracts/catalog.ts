@@ -1140,6 +1140,15 @@ const referenceDescriptorFieldsSchema = z.object({
    * here names a field the checker knows: the module says both ends.
    */
   literalsFrom: z.array(z.object({ at: z.array(z.string()).min(1), from: z.string() })).optional(),
+  /**
+   * The WRITE-BODY field (its `displayName`) of the record this edge hangs off
+   * that names a node declared in the program (`Fields: Refund`): each record
+   * landing here has that node's fields too, typed as the node declares them.
+   * The field is a writable `json` field; the engine sends it the node's
+   * fields, `{ fields: { <name>: <field type> } }`, as its value. A form's
+   * submissions typed by the form's fields.
+   */
+  answerShapeFrom: z.string().min(1).optional(),
 }).superRefine((reference, ctx) => {
   if (reference.targetTypeIds === undefined) return;
   const members = [...new Set(reference.targetTypeIds)];
@@ -1501,6 +1510,37 @@ export function unreadableLiteralsFrom(
     if (found.kind !== 'string' || found.cardinality === 'many') {
       return `'${name}' declares literalsFrom at '${spelled}', but '${field}' on '${landing.displayName}' is not a single text field: a write's text literals type only text`;
     }
+  }
+  return undefined;
+}
+
+/**
+ * Why a reference's `answerShapeFrom` cannot type what it says, or
+ * `undefined`: it names no field of the type it hangs off (`owner`), or one
+ * that is not a single writable `json` field (the engine sends the node's
+ * fields as json), or the reference lands on more than one type. listen-fire's
+ * describe refuses in the same words (crates/lf `unreadable_answer_shape_from`).
+ */
+export function unreadableAnswerShapeFrom(
+  reference: SchemaReferenceDescriptor,
+  owner: SchemaTypeDescriptor,
+  descriptors: ReadonlyMap<string, SchemaTypeDescriptor>,
+): string | undefined {
+  const field = reference.answerShapeFrom;
+  if (field === undefined) return undefined;
+  const name = reference.name ?? reference.fieldId;
+  const landings = referenceTargetTypeIds(reference);
+  if (landings.length !== 1) {
+    const named = landings.map((id) => descriptors.get(id)?.displayName ?? id).join(', ');
+    return `'${name}' takes its answer's shape from '${field}', but it lands on more than one type (${named}): a shape gives one landing its fields`;
+  }
+  const found = owner.fields.find((f) => f.displayName === field);
+  if (found === undefined) {
+    const fields = owner.fields.map((f) => f.displayName);
+    return `'${name}' takes its answer's shape from '${field}', a field '${owner.displayName}' does not declare (it declares: ${fields.length === 0 ? 'nothing' : fields.join(', ')})`;
+  }
+  if (found.kind !== 'json' || found.cardinality === 'many' || !found.writable) {
+    return `'${name}' takes its answer's shape from '${field}', but '${field}' on '${owner.displayName}' is not a single writable json field: the write names a node there, and the module receives its fields as json`;
   }
   return undefined;
 }

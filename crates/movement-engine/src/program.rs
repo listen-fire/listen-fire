@@ -94,6 +94,9 @@ pub enum Stamp {
     /// A plain `await` on an edge that can also be listed: it takes the
     /// first match already there, so it reads the listing first.
     ListsFirst,
+    /// A write field naming a node as the shape of what lands on an edge
+    /// (`answerShapeFrom`): the node's fields, sent as the field's value.
+    NodeSchema(Json),
 }
 
 /// One parsed file: its typed AST, the same tree as JSON (what AST paths
@@ -405,8 +408,8 @@ pub fn join_check(root: File, answer: &Json) -> Result<Checked, String> {
 /// The fact `stamp` settles on `node` (at `path`): exactly one, of a kind
 /// that lands on a node like it, by the rules the check placed it by.
 fn stamp_of(path: &str, node: &Json, stamp: &Json) -> Result<Stamp, String> {
-    use movement_checker::answer::{is_awaited_traversal, is_linked_target, is_map_spread, is_record_entry, is_value_entry, is_write_spread};
-    const FACTS: [&str; 6] = ["spreadFields", "copy", "reference", "writtenType", "opensWaits", "listsFirst"];
+    use movement_checker::answer::{is_awaited_traversal, is_linked_target, is_map_spread, is_record_entry, is_value_entry, is_write_field_value, is_write_spread};
+    const FACTS: [&str; 7] = ["spreadFields", "copy", "reference", "writtenType", "opensWaits", "listsFirst", "nodeSchema"];
     let mut facts = FACTS.iter().filter_map(|fact| Some((*fact, stamp.get(*fact)?)));
     let stamped = match (facts.next(), facts.next()) {
         (Some(("spreadFields", fields)), None) if is_write_spread(node, path) => {
@@ -419,6 +422,7 @@ fn stamp_of(path: &str, node: &Json, stamp: &Json) -> Result<Stamp, String> {
             Some(Stamp::OpensWaits(serde_json::from_value(edges.clone()).map_err(|e| format!("the edges stamped at {path}: {e}"))?))
         }
         (Some(("listsFirst", Json::Bool(true))), None) if is_awaited_traversal(node, path) => Some(Stamp::ListsFirst),
+        (Some(("nodeSchema", schema @ Json::Object(_))), None) if is_write_field_value(node, path) => Some(Stamp::NodeSchema(schema.clone())),
         _ => None,
     };
     stamped.ok_or_else(|| format!("the stamp at {path} does not fit the node there: {stamp}"))
@@ -528,6 +532,19 @@ mod tests {
         assert!(join_check(parse(source).unwrap(), &on_a_write).unwrap_err().contains("does not fit"));
         let two_facts = json!({ "diagnostics": [], "stamps": [{ "path": awaited, "listsFirst": true, "opensWaits": [] }] });
         assert!(join_check(parse(source).unwrap(), &two_facts).unwrap_err().contains("does not fit"));
+    }
+
+    #[test]
+    fn a_node_schema_stamp_lands_on_a_write_field_s_value() {
+        let source = "import { surveys } from adapters\ns = connect surveys\nnode Lunch {\n  Hungry: <boolean>\n}\nfunction go(b: <s-[:Board]->>) {\n  survey = write b-[:Surveys]-> { Name: \"t\", Questions: Lunch }\n}";
+        let value = "/statements/3/body/0/value/write/fields/1/value";
+        let schema = json!({ "fields": { "Hungry": "boolean" } });
+        let checked = join_check(parse(source).unwrap(), &json!({ "diagnostics": [], "stamps": [{ "path": value, "nodeSchema": schema }] })).unwrap();
+        assert_eq!(checked.root.stamps.get(value), Some(&Stamp::NodeSchema(schema.clone())));
+        let on_the_line = json!({ "diagnostics": [], "stamps": [{ "path": "/statements/3/body/0/value/write/fields/1", "nodeSchema": schema }] });
+        assert!(join_check(parse(source).unwrap(), &on_the_line).unwrap_err().contains("does not fit"));
+        let not_an_object = json!({ "diagnostics": [], "stamps": [{ "path": value, "nodeSchema": "Lunch" }] });
+        assert!(join_check(parse(source).unwrap(), &not_an_object).unwrap_err().contains("does not fit"));
     }
 
     #[test]

@@ -116,6 +116,8 @@ pub struct Carried {
     pub credential: Option<serde_json::Value>,
     pub settings: Option<serde_json::Value>,
     pub host_limits: Option<serde_json::Value>,
+    /// Where the install's inbound requests reach the module (`{ url }`).
+    pub inbound: Option<serde_json::Value>,
 }
 
 tokio::task_local! {
@@ -271,7 +273,7 @@ async fn post(call: Call<'_>, carried: Carried, beside: &mut Beside) -> Result<J
         "cacheScopeId": call.cache_scope_id,
         "params": call.params,
     });
-    for (key, value) in [("credential", carried.credential), ("settings", carried.settings), ("hostLimits", carried.host_limits)] {
+    for (key, value) in [("credential", carried.credential), ("settings", carried.settings), ("hostLimits", carried.host_limits), ("inbound", carried.inbound)] {
         if let Some(value) = value {
             body[key] = value;
         }

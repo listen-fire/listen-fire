@@ -337,6 +337,10 @@ pub struct EdgeSchema {
     /// hangs off wrote at a path: each such field is an enum of exactly them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub literals_from: Option<Vec<LiteralsFrom>>,
+    /// The field of the write this edge hangs off that names a node declared
+    /// in the program: what lands here has that node's fields too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_shape_from: Option<String>,
     /// The system's resources edge (the describe's reserved `_resources`
     /// reference, the knowledge graph's `Resources`): walked by its name, sent
     /// to the adapter by the reserved field id (kg.ts `surfaceReadAdapter`).

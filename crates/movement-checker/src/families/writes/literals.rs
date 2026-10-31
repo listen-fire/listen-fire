@@ -62,7 +62,7 @@ impl Checker<'_> {
             }
         }
         if !answers.is_empty() {
-            handle_position.answer_literals = Some(std::rc::Rc::new(answers));
+            handle_position.answer_fields = Some(std::rc::Rc::new(answers));
         }
         Some(Position::Handle(handle_position))
     }

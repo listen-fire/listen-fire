@@ -197,6 +197,10 @@ export const RpcRequest = z.object({
    *  `hostLimits` from a host that offers one. Absent, the host counted the
    *  call itself and the module asks nobody. */
   hostLimits: WireHostLimitsDoor.optional(),
+  /** Within version 2: where the install's inbound requests reach a module
+   *  that takes any (its webhook door), when the host serves one. A module
+   *  hands out a link to itself with it. */
+  inbound: z.object({ url: z.string() }).optional(),
 });
 export type RpcRequestShape = z.infer<typeof RpcRequest>;
 
@@ -1273,6 +1277,11 @@ export const WireInboundCheck = z.discriminatedUnion('outcome', [
     /** The provider's id for this delivery: a redelivery under an id the
      *  host kept before is acked and runs nothing. */
     deliveryId: z.string().min(1).optional(),
+    /** What the door answers once the delivery is kept, in place of its own
+     *  acknowledgement (a page saying an answer was recorded). */
+    reply: z
+      .object({ status: z.number().int().min(200).max(299), text: z.string().optional(), html: z.string().optional(), json: z.unknown().optional() })
+      .optional(),
   }),
   z.object({
     outcome: z.literal('refused'),
@@ -1281,8 +1290,10 @@ export const WireInboundCheck = z.discriminatedUnion('outcome', [
   z.object({
     outcome: z.literal('reply'),
     status: z.number().int().min(200).max(599),
-    /** Sent as `text/plain`; `json` as `application/json`; neither, empty. */
+    /** Sent as `text/plain`; `html` as `text/html` (a page the module
+     *  serves at its door); `json` as `application/json`; none, empty. */
     text: z.string().optional(),
+    html: z.string().optional(),
     json: z.unknown().optional(),
   }),
 ]);

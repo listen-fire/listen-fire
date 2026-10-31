@@ -80,7 +80,14 @@ export function inboundRequest(input: WireCheckInboundInputShape): InboundReques
  *  edges (`arrivals`, adapter protocol 2.5). */
 export function accepted(
   events: DiscriminableEvent[],
-  more: { wakeKeys?: string[]; arrivals?: Arrival[]; checkpoint?: unknown; deliveryId?: string } = {},
+  more: {
+    wakeKeys?: string[];
+    arrivals?: Arrival[];
+    checkpoint?: unknown;
+    deliveryId?: string;
+    /** What the door answers once it kept the delivery, instead of its own ack. */
+    reply?: { status: number } & ({ text: string } | { html: string } | { json: unknown });
+  } = {},
 ): InboundCheck {
   return { outcome: 'accepted', events, ...more };
 }
@@ -91,8 +98,8 @@ export function refused(status?: number): InboundCheck {
   return { outcome: 'refused', ...(status !== undefined ? { status } : {}) };
 }
 
-/** Answer exactly this, run nothing: a handshake. */
-export function reply(status: number, body: { text: string } | { json: unknown } | Record<string, never> = {}): InboundCheck {
+/** Answer exactly this, run nothing: a handshake, or a page (`html`). */
+export function reply(status: number, body: { text: string } | { html: string } | { json: unknown } | Record<string, never> = {}): InboundCheck {
   return { outcome: 'reply', status, ...body };
 }
 

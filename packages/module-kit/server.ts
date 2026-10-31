@@ -234,6 +234,8 @@ export interface CheckedRequest {
   settings?: Readonly<Record<string, string>>;
   /** The limits door the host handed this call (`host_limits.ts`). */
   hostLimits?: WireHostLimitsDoorShape;
+  /** Where the install's inbound requests reach the module (`ctx.config.inboundUrl`). */
+  inbound?: { url: string };
 }
 
 /**
@@ -289,6 +291,7 @@ export async function readProtocolRequest(
       ...(parsed.credential !== undefined ? { credential: parsed.credential } : {}),
       ...(parsed.settings !== undefined ? { settings: parsed.settings } : {}),
       ...(parsed.hostLimits !== undefined ? { hostLimits: parsed.hostLimits } : {}),
+      ...(parsed.inbound !== undefined ? { inbound: parsed.inbound } : {}),
     },
   };
 }

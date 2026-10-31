@@ -498,6 +498,7 @@ impl SessionReader<'_> {
             methods: &running.methods,
             settings: &running.settings,
             limits: &running.limits,
+            inbound_url: running.inbound_url.as_deref(),
         };
         let sending = Sending { tenant: LOCAL_TENANT, method, cache_scope_id: "<none>", params, settings: None };
         let raw = send(&target, credentials, carried, signer_of(credentials, external, carried).or(Some(install)), sending).await?;
@@ -561,6 +562,7 @@ impl Reader for SessionReader<'_> {
             methods: &running.methods,
             settings: &running.settings,
             limits: &running.limits,
+            inbound_url: running.inbound_url.as_deref(),
         };
         let sending = Sending { tenant: LOCAL_TENANT, method: "checkInbound", cache_scope_id: "<none>", params, settings: None };
         let raw = send(&target, credentials, carried, signer_of(credentials, external, carried).or(Some(install)), sending).await?;

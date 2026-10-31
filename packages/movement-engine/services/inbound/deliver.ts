@@ -188,6 +188,7 @@ function wireRequest(delivery: Omit<InboundDelivery, 'provider'>): {
 /** A module's reply as the door sends it. */
 function replyAnswer(reply: Extract<InboundCheck, { outcome: 'reply' }>): InboundAnswer {
   if (reply.text !== undefined) return { status: reply.status, body: reply.text, contentType: 'text/plain' };
+  if (reply.html !== undefined) return { status: reply.status, body: reply.html, contentType: 'text/html' };
   if (reply.json !== undefined) return { status: reply.status, body: reply.json };
   return { status: reply.status, body: '', contentType: 'text/plain' };
 }
@@ -402,7 +403,7 @@ export interface InboundAnswer {
   status: number;
   /** JSON, unless `contentType` says text (then a string, sent as it is). */
   body: unknown;
-  contentType?: 'text/plain';
+  contentType?: 'text/plain' | 'text/html';
   /** Run once the answer is sent (poke the work drain). */
   afterAnswer?: () => void;
 }

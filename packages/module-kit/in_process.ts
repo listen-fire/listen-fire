@@ -55,6 +55,8 @@ export interface ModuleHost {
   baseUrlOverride?: string;
   constructionArgs?: Readonly<Record<string, string>>;
   credentialRef?: string;
+  /** Where the install's inbound requests reach the module, when the host serves its door. */
+  inboundUrl?: string;
   /** Check every answer against the protocol's result schema. */
   validateResults: boolean;
 }
@@ -88,6 +90,7 @@ export function moduleContext(host: ModuleHost): ModuleContext {
       ...(host.baseUrlOverride !== undefined ? { baseUrlOverride: host.baseUrlOverride } : {}),
       constructionArgs: host.constructionArgs ?? {},
       ...(host.credentialRef !== undefined ? { credentialRef: host.credentialRef } : {}),
+      ...(host.inboundUrl !== undefined ? { inboundUrl: host.inboundUrl } : {}),
     },
   };
 }

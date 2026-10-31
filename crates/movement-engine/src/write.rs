@@ -318,12 +318,15 @@ pub(crate) struct Line {
     name: String,
     slot: ast::ExprSlot,
     semantics: Option<FieldWriteMode>,
+    /// The value the check settled for the line instead of its text: the
+    /// fields of the node it names as an answer's shape (`nodeSchema`).
+    settled: Option<Js>,
 }
 
 impl Line {
     /// A field line as written (a match's, which has no spreads).
     pub(crate) fn of(field: &ast::FieldEntry) -> Line {
-        Line { name: field.name.clone(), slot: field.value.clone(), semantics: field.semantics }
+        Line { name: field.name.clone(), slot: field.value.clone(), semantics: field.semantics, settled: None }
     }
 }
 
@@ -461,7 +464,14 @@ impl Run<'_> {
         let mut lines: Vec<Line> = write
             .fields
             .iter()
-            .map(|f| Line { name: f.name.clone(), slot: f.value.clone(), semantics: f.semantics })
+            .enumerate()
+            .map(|(index, f)| {
+                let settled = match self.checked.stamp(&format!("{path}/fields/{index}/value")) {
+                    Some(Stamp::NodeSchema(schema)) => Some(env::js_of_json(&schema)),
+                    _ => None,
+                };
+                Line { name: f.name.clone(), slot: f.value.clone(), semantics: f.semantics, settled }
+            })
             .collect();
         let spreads = write.spreads.as_deref().unwrap_or_default();
         if spreads.is_empty() {
@@ -496,6 +506,7 @@ impl Run<'_> {
                         eager: false,
                     },
                     semantics: spread.semantics,
+                    settled: None,
                 });
             }
             these.extend(expanded);
@@ -785,6 +796,10 @@ impl Run<'_> {
             // `new Map(fields.map((f) => [f.displayName, f]))`: the last wins.
             let field = described.iter().rev().find(|f| matches!(unique::get(f, "displayName"), Js::String(n) if n == line.name));
             let functions = FieldFunctions::of(field, adapter, record_type, &line.name);
+            if let Some(settled) = &line.settled {
+                fields.set(line.name.clone(), settled.clone());
+                continue;
+            }
             let evaluated = match &functions {
                 Some(functions) => {
                     let staged = self.staged(&line.slot, scope).await?;

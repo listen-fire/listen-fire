@@ -659,7 +659,7 @@ fn edge_schema(reference: &Js, target: Option<&str>, polymorphic: bool, field_id
             flag(passed, true, value.clone());
         }
     }
-    for passed in ["genericOver", "literalsFrom"] {
+    for passed in ["genericOver", "literalsFrom", "answerShapeFrom"] {
         if let Some(value) = reference.get(passed) {
             flag(passed, true, value.clone());
         }
@@ -772,6 +772,37 @@ pub fn unreadable_literals_from(reference: &Js, descriptors: &IndexMap<String, J
     None
 }
 
+/// The refusal of a reference whose `answerShapeFrom` cannot type what it
+/// says (engine-contracts `unreadableAnswerShapeFrom` says the same): it
+/// names no field of the type it hangs off (`owner`), or one that is not a
+/// single writable json field (the engine sends the node's fields as json),
+/// or the reference lands on more than one type.
+pub fn unreadable_answer_shape_from(reference: &Js, owner: &Js, descriptors: &IndexMap<String, Js>) -> Option<String> {
+    let field = reference.get("answerShapeFrom").and_then(Js::as_str)?;
+    let name = key(nullish_or(reference.get("name"), reference.get("fieldId")));
+    let landings = reference_target_type_ids(reference);
+    if landings.len() != 1 {
+        let named: Vec<String> = landings.iter().map(|id| descriptors.get(id).map_or_else(|| id.clone(), |d| key(d.get("displayName")))).collect();
+        return Some(format!("'{name}' takes its answer's shape from '{field}', but it lands on more than one type ({}): a shape gives one landing its fields", named.join(", ")));
+    }
+    let owner_name = key(owner.get("displayName"));
+    let fields = items(owner.get("fields"));
+    let Some(found) = fields.iter().find(|f| f.get("displayName").and_then(Js::as_str) == Some(field)) else {
+        let declared: Vec<&str> = fields.iter().filter_map(|f| f.get("displayName").and_then(Js::as_str)).collect();
+        return Some(format!(
+            "'{name}' takes its answer's shape from '{field}', a field '{owner_name}' does not declare (it declares: {})",
+            if declared.is_empty() { "nothing".to_string() } else { declared.join(", ") }
+        ));
+    };
+    let single_json = found.get("kind").and_then(Js::as_str) == Some("json") && found.get("cardinality").and_then(Js::as_str) != Some("many");
+    if !single_json || !Js::is_true(found.get("writable")) {
+        return Some(format!(
+            "'{name}' takes its answer's shape from '{field}', but '{field}' on '{owner_name}' is not a single writable json field: the write names a node there, and the module receives its fields as json"
+        ));
+    }
+    None
+}
+
 /// A non-empty `description` the adapter wrote on a type, field or reference.
 fn described(declared: &Js) -> Option<String> {
     declared.get("description").and_then(Js::as_str).filter(|d| !d.is_empty()).map(str::to_string)
@@ -878,6 +909,8 @@ mod tests {
             Js::from(edge).to_json(),
             r#"{"target":"Interaction","readable":false,"listenable":true,"literalsFrom":[{"at":["Actions","Value"],"from":"Buttons[].Value"}]}"#
         );
+        let edge = edge_schema(&js(r#"{"name":"Responses","readable":false,"listenable":true,"answerShapeFrom":"Questions"}"#), Some("Response"), false, "responses");
+        assert_eq!(Js::from(edge).to_json(), r#"{"target":"Response","readable":false,"listenable":true,"answerShapeFrom":"Questions"}"#);
     }
 
     #[test]
@@ -908,6 +941,38 @@ mod tests {
             "'Replies' names 'Edited' as its version, a field its landing 'Message' does not declare (it declares: Timestamp)"
         );
         assert_eq!(undeclared_arrival_field(&replies(r#", "identity": "Anything""#), &IndexMap::new()), None, "an undescribed landing is not judged");
+    }
+
+    #[test]
+    fn an_answer_shape_from_must_name_one_writable_json_field_of_its_owner() {
+        let survey = js(r#"{ "typeId": "f", "displayName": "Survey", "fields": [
+            { "fieldId": "title", "displayName": "Name", "kind": "string", "writable": true },
+            { "fieldId": "fields", "displayName": "Questions", "kind": "json", "writable": true },
+            { "fieldId": "url", "displayName": "Url", "kind": "string", "writable": false },
+            { "fieldId": "seen", "displayName": "Seen", "kind": "json", "writable": false }
+        ], "references": [] }"#);
+        let descriptors: IndexMap<String, Js> =
+            [("f".to_string(), survey.clone()), ("s".to_string(), js(r#"{ "typeId": "s", "displayName": "Response", "fields": [], "references": [] }"#))].into_iter().collect();
+        let responses = |field: &str, landings: &str| {
+            js(&format!(r#"{{ "fieldId": "responses", "name": "Responses", "targetTypeId": "s", {landings} "listenable": true, "answerShapeFrom": "{field}" }}"#))
+        };
+        let refusal = |field: &str| unreadable_answer_shape_from(&responses(field, ""), &survey, &descriptors);
+        assert_eq!(refusal("Questions"), None);
+        assert_eq!(
+            refusal("Topics").unwrap(),
+            "'Responses' takes its answer's shape from 'Topics', a field 'Survey' does not declare (it declares: Name, Questions, Url, Seen)"
+        );
+        for field in ["Name", "Seen"] {
+            assert_eq!(
+                refusal(field).unwrap(),
+                format!("'Responses' takes its answer's shape from '{field}', but '{field}' on 'Survey' is not a single writable json field: the write names a node there, and the module receives its fields as json")
+            );
+        }
+        assert_eq!(
+            unreadable_answer_shape_from(&responses("Questions", r#""targetTypeIds": ["s", "f"],"#), &survey, &descriptors).unwrap(),
+            "'Responses' takes its answer's shape from 'Questions', but it lands on more than one type (Response, Survey): a shape gives one landing its fields"
+        );
+        assert_eq!(unreadable_answer_shape_from(&js(r#"{ "fieldId": "x", "targetTypeId": "s" }"#), &survey, &descriptors), None);
     }
 
     #[test]

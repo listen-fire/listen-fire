@@ -17,6 +17,7 @@
 
 mod identity;
 pub mod literals;
+mod answer_shape;
 mod link;
 
 pub use link::LinkVerb;
@@ -218,6 +219,7 @@ impl Checker<'_> {
         }
         handle = self.apply_generic_landings(handle, &fields, root.as_ref(), &root_description);
         handle = self.apply_answer_literals(handle, &fields, &root_description);
+        handle = self.apply_answer_shapes(handle, &fields, scope);
         if !position_write {
             handle = with_set_fields(handle, &fields);
         }
@@ -311,6 +313,10 @@ impl Checker<'_> {
                     field.span,
                     Severity::Info,
                 );
+            }
+            // A node named as an answer's shape is the node, not a value.
+            if self.names_answer_shape(handle.as_ref(), &field.name, &field.value, scope) {
+                continue;
             }
             if field.spread.is_none() {
                 self.check_expr_slot_in(&field.value, scope, true);
@@ -765,7 +771,7 @@ impl Checker<'_> {
             result_shape: result_shape.into_iter().collect(),
             edges: root.as_ref().and_then(|r| r.edges.clone()),
             generic_landings: None,
-            answer_literals: None,
+            answer_fields: None,
             written: purpose == Purpose::Write,
             set_fields: None,
             identity: Default::default(),
@@ -1186,7 +1192,7 @@ impl Checker<'_> {
                     result_shape: shape,
                     edges: root.and_then(|r| r.edges.clone()),
                     generic_landings: None,
-                    answer_literals: None,
+                    answer_fields: None,
                     written: true,
                     set_fields: None,
                     identity: Default::default(),

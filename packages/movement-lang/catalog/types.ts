@@ -611,6 +611,14 @@ export interface EdgeSchema {
    */
   literalsFrom?: { at: string[]; from: string }[];
   /**
+   * The field of the write this edge hangs off that names a node declared in
+   * the program (`Fields: Refund`): what lands here has that node's fields
+   * too, typed as the node declares them. The field's value reaches the
+   * module as the node's fields (`{ fields: { <name>: <field type> } }`).
+   * A value there that is not a node is MOV_ANSWER_SHAPE.
+   */
+  answerShapeFrom?: string;
+  /**
    * The edge is the one the system declared as its records' resources (the
    * describe's reserved `_resources` reference — the knowledge graph's
    * `Resources`). An ordinary edge, walked by its name like any other; what

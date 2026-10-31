@@ -472,13 +472,18 @@ fn report_read(typing: &mut Typing, position: &Position, property: &str) {
                 report_ambiguous_property(typing, position, schema, property);
                 return;
             }
+            let write_typed = crate::types::position::write_typed_names(position);
+            if write_typed.iter().any(|name| name == property) {
+                return;
+            }
             if is_write_only(schema, property) || report_undescribed(typing, position, schema, &format!("the field '{property}'")) {
                 return;
             }
             if schema.open_properties == Some(true) || report_edge_read_as_field(typing, position, &FieldRead { root: None, property, rest: &[] }) {
                 return;
             }
-            let available: Vec<&str> = schema.properties.keys().map(String::as_str).collect();
+            let mut available: Vec<&str> = schema.properties.keys().map(String::as_str).collect();
+            available.extend(write_typed.iter().map(String::as_str).filter(|name| !schema.properties.contains_key(*name)));
             let hint = match p.instance.schema.narrow_by.as_ref().and_then(|n| n.get(&p.position)).map(Vec::as_slice) {
                 Some([first, rest @ ..]) => {
                     let others = if rest.is_empty() {

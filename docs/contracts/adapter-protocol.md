@@ -54,6 +54,12 @@ in the body, not the path.
   - A module served by module-kit is answered inside the run scope this id
     names (its read memo and call ceiling), as it is in process.
 - `params` is the method's input (see [Methods](#methods)).
+- `inbound` (optional) is `{ "url": … }`: where the install's inbound
+  requests reach a module that takes any, its door at the host (under
+  `listen-fire`'s `publicUrl`, else the listener serving the call). A module
+  that hands out links to itself (a form's page) builds them from it. It is
+  absent when the module takes no inbound requests or nothing serves its
+  door. module-kit gives it as `ctx.config.inboundUrl`.
 
 You answer with HTTP 200 and one of two bodies:
 
@@ -351,6 +357,17 @@ reads every declaration from it, the listen declarations included.
     must be a single text field, and every reference on the way must land on
     one type. A `literalsFrom` that breaks either rule, or whose `from` does
     not parse, is refused when `listen-fire` describes your adapter.
+  - `answerShapeFrom` (optional) — the field of the write the edge hangs off
+    that names a node the program declares. For example, a form's
+    `Submissions` with `"answerShapeFrom": "Fields"` lets a program write
+    `Fields: Refund` (after `node Refund { Approve: <boolean> }`), and each
+    submission then has `Approve`, typed boolean, beside the landing's own
+    fields. The field must be a single writable `json` field of the type the
+    reference is on: your `createRecord` receives the node's fields there,
+    `{ "fields": { "Approve": "boolean" } }`, each a field type as this page
+    spells them. The reference must land on one type. One that breaks either
+    rule is refused when `listen-fire` describes your adapter. The records
+    you report landing on the edge carry those fields.
 - `description` (optional) on the type, a field or a reference: what it is,
   in a sentence. An author's editor shows it when they hover the record, the
   field or the walk along the reference. A write-only field's description is
@@ -1118,9 +1135,9 @@ The answer is one of three:
 
 | `outcome` | Fields | The door answers |
 |---|---|---|
-| `accepted` | `events`, `arrivals?`, `wakeKeys?`, `checkpoint?`, `deliveryId?` | 200 `{ ok, eventsProcessed }` once the arrivals are logged and the events and wakes are queued, as for any delivery; a non-empty `deliveryId` already kept at this subscription answers 200 `{ ok, duplicate: true, eventsProcessed: 0 }` and queues nothing |
+| `accepted` | `events`, `arrivals?`, `wakeKeys?`, `checkpoint?`, `deliveryId?`, `reply?` | 200 `{ ok, eventsProcessed }` once the arrivals are logged and the events and wakes are queued, as for any delivery, or `reply` (a 2xx `status` with `text`, `html` or `json`) in its place; a non-empty `deliveryId` already kept at this subscription answers 200 `{ ok, duplicate: true, eventsProcessed: 0 }` and queues nothing |
 | `refused` | `status?` (a 4xx) | `status`, default 401, `{ "error": "signature_invalid" }` |
-| `reply` | `status`, `text?` or `json?` | exactly that: `text` as `text/plain`, `json` as JSON, neither as an empty body; nothing runs |
+| `reply` | `status`, `text?`, `html?` or `json?` | exactly that: `text` as `text/plain`, `html` as `text/html` (a page your module serves at its door), `json` as JSON, none as an empty body; nothing runs |
 
 ```json
 { "outcome": "reply", "status": 200, "text": "1158201444" }
@@ -1648,6 +1665,7 @@ from `apps/cli`.
 
 ## Changes
 
+- **Pages, replies on acceptance, the inbound URL and `answerShapeFrom`** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0; additive). A module that checks its own inbound may `reply` with `html` (sent as `text/html`), and its `accepted` answer may carry `reply`, what the door answers once it has kept the request in place of its own acknowledgement ([A module that checks its own inbound](#a-module-that-checks-its-own-inbound)). A request may carry `inbound: { url }`, where the install's inbound requests reach the module ([The envelope](#the-envelope)). A reference may declare `answerShapeFrom`, the write field naming the node that types its landing. Why: `@lf/forms` serves a form at its own door, hands out its link, thanks the person who answered, and types the answer by the node the program wrote. An older host sends no `inbound`, refuses an answer carrying `html` or an acceptance's `reply` as outside `checkInbound`'s shape, and reads no `answerShapeFrom`.
 - **`slack_v0` refuses a replay** (within version 2, no bump; 2026-10-30; listen-fire 0.13.0). A request whose `x-slack-request-timestamp` is more than five minutes from now is refused 401 though its signature is right, as Slack advises ([Declared inbound signatures](#declared-inbound-signatures)). Nothing changes for a module: Slack signs every request with the time it sends it.
 - **Form-encoded deliveries** (within version 2, no bump; 2026-10-30; listen-fire 0.13.0). The host webhook door reads a delivery sent as `application/x-www-form-urlencoded` as well as JSON: its signature is checked over the raw bytes, and `preprocessInbound`'s `raw` is the form's fields ([Limits and timeouts](#limits-and-timeouts)). Why: Slack posts a press on a message's control that way (`payload=<json>`), so `@lf/slack` reports presses as arrivals on the host's own door, verified with Slack's own signature. An older host refuses such a delivery as not JSON.
 - **Adapter protocol 2.5: arrivals** (within version 2; listen-fire 0.13.0). A module with listenable edges names the key each record's edge is waited on under (`awaitKeys`, a new optional method), and reports what lands there as arrivals: `arrivals` beside the events `preprocessInbound` answers, on `checkInbound`'s `accepted`, or pushed to the `wake` door as `{ arrivals }` ([Waiting on your system](#waiting-on-your-system-awaits)). Listen-Fire logs every arrival and keeps each run's wait itself (the store slot's `waits.*`, [store-slot.md](store-slot.md)). An arrival names its identity; one without is refused by name. Why: a run waiting on an edge reads what arrived since it began waiting, so an arrival during the write that caused it is never lost, and Listen-Fire, not the module, decides whether an arrival matches. Offering `awaitKeys` states no minor. From listen-fire 0.13.0 a wait reads arrivals only: `resolveAwait` is not called for it, `wakeKeys` wakes nothing, and the `wake` door refuses `{ keys }` (400, naming adapter protocol 2.5 and `arrivals`).

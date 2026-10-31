@@ -235,11 +235,11 @@ impl<'a> Typing<'a> {
         let stepped = match &landing {
             // A record reached through a function's parameter is the
             // caller's record's child: what the body needs of it is the
-            // parameter's need. What a write's literals fix carries on.
+            // parameter's need. What a write types carries on.
             Some(EdgeLanding::Landed { landing, edge: schema }) => {
                 let selected = self.selected_member(landing.clone(), edge.expression_filter.as_deref());
-                let literals = from.and_then(|from| super::position::literals_past(from, &edge.edge_type_id));
-                (super::position::with_parameter_of(from, Some(super::position::with_literals(selected, literals))), schema.clone())
+                let typed = from.and_then(|from| super::position::write_typed_past(from, &edge.edge_type_id));
+                (super::position::with_parameter_of(from, Some(super::position::with_write_typed(selected, typed))), schema.clone())
             }
             Some(EdgeLanding::Untyped { edge }) => (None, edge.clone()),
             _ => (None, None),

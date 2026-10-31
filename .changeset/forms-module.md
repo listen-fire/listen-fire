@@ -1,0 +1,5 @@
+---
+"@listen-fire/forms": minor
+---
+
+`@lf/forms`, a new module: a form at a link, answered once. `form = write forms-[:Forms]-> { Title: "…", Fields: Refund }` makes a form whose fields are the `Refund` node's (text, a number, a boolean, a date, a date and time, or one of a set of words; optional with `| null`). `form.Url` is an unguessable link under the module's door at `listen-fire serve`: a browser gets the form, `Accept: application/json` gets `{ title, fields }`. A POST of JSON or a form records one answer (200 `recorded`); a value of the wrong kind is answered 400 `mismatch`, naming the field, and records nothing; a second answer 410 `answered`; a link to no form 404. The answer arrives on the form's `Submissions` (adapter protocol 2.5), typed by the node (`answerShapeFrom`). Forms are kept in the install's `ctx.kv`. `forms-[:Forms]->` lists them.

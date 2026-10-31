@@ -268,6 +268,11 @@ pub struct RunningExternal {
     /// How often its manifest says to call `poll` per listen (`poll:
     /// { intervalSeconds }`); None for a source that is not polled.
     pub poll_interval_seconds: Option<u64>,
+    /// Where its install's inbound requests reach it: the webhook door under
+    /// lf.yaml's `publicUrl`, else under this process's own listener when it
+    /// serves. None when it takes none, or nothing serves its door. Sent on
+    /// each call (`inbound`), so a module can hand out a link to itself.
+    pub inbound_url: Option<String>,
 }
 
 /// How an external is reached.
@@ -419,6 +424,7 @@ pub async fn rpc_in(running: &RunningExternal, credentials: &Credentials, creden
         methods: &running.methods,
         settings: &running.settings,
         limits: &running.limits,
+        inbound_url: running.inbound_url.as_deref(),
     };
     call_as(&target, credentials, credential, tenant, method, params, settings).await
 }
@@ -480,7 +486,28 @@ pub async fn start_externals(project: &Project, externals: &[External], credenti
         reaches.push(reach(project, external, install_field(install, BASE_URL_OVERRIDE_FIELD))?);
     }
     let started = movement_engine::executor::join_all(externals.iter().zip(reaches).map(|(external, reach)| start_external(external, reach, credentials, tenant)).collect()).await;
-    started.into_iter().collect()
+    let base = project.public_url.as_deref().or(crate::serve::host_url());
+    started
+        .into_iter()
+        .map(|running| {
+            running.map(|mut running| {
+                running.inbound_url = base.and_then(|base| inbound_url(base, &running, credentials));
+                running
+            })
+        })
+        .collect()
+}
+
+/// `<base>/api/public/webhook-sync/<provider>/<install>`: the door the
+/// install's inbound requests reach `running` at (crate::doors), each
+/// segment percent-encoded. None when it takes no inbound requests or has
+/// no install.
+fn inbound_url(base: &str, running: &RunningExternal, credentials: &Credentials) -> Option<String> {
+    let provider = &running.inbound.as_ref()?.provider_key;
+    let install = install_of(credentials, &running.external.manifest.name)?;
+    let mut url = url::Url::parse(base).ok()?;
+    url.path_segments_mut().ok()?.pop_if_empty().extend(["api", "public", "webhook-sync", provider, &install.name]);
+    Some(url.to_string())
 }
 
 /// One external's process started and its manifest read.
@@ -488,7 +515,7 @@ async fn start_external(external: &External, reach: Reach, credentials: &Credent
     let name = &external.manifest.name;
     let install = install_of(credentials, name);
     let lease = reach.lease().await?;
-    let target = Target { external, base_url: &lease.address, declarations: &[], methods: &[], settings: &[], limits: &crate::limiter::ModuleLimits::default() };
+    let target = Target { external, base_url: &lease.address, declarations: &[], methods: &[], settings: &[], limits: &crate::limiter::ModuleLimits::default(), inbound_url: None };
     let raw = call(&target, credentials, tenant, "manifest", json!({})).await?;
     drop(lease);
     crate::protocol::protocol_standing(&raw, &Speaker { name, slot: None, package: package_of(external) })?;
@@ -516,6 +543,7 @@ async fn start_external(external: &External, reach: Reach, credentials: &Credent
         manifest_answer: raw,
         inbound: manifest.inbound,
         poll_interval_seconds: manifest.poll_interval_seconds,
+        inbound_url: None,
     })
 }
 
@@ -698,6 +726,11 @@ fn reach(project: &Project, external: &External, base_url_override: Option<&str>
     let state_dir = project.lf_dir.join("externals").join(name);
     std::fs::create_dir_all(&state_dir).map_err(|e| format!("{}: {e}", state_dir.display()))?;
     let mut own_env = module_env(&external.manifest.env, &state_dir);
+    // A module keeps its `ctx.kv` in its own folder unless its install says
+    // where (module-kit's file kv): per install, kept with the project.
+    if external.manifest.module.is_some() {
+        own_env.entry("MODULE_STATE_DIR".into()).or_insert_with(|| state_dir.display().to_string());
+    }
     if let Some(url) = base_url_override.filter(|_| external.manifest.module.is_some()) {
         own_env.insert("MODULE_BASE_URL_OVERRIDE".into(), url.to_string());
     }
