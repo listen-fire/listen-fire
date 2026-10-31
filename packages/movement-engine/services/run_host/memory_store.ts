@@ -31,10 +31,7 @@ import {
   type RunRowStore,
   type WaitWake,
 } from './store';
-
-/** How long an arrival no live wait reads is kept: a repeat within it is a
- *  sender's retry. */
-export const ARRIVAL_RETENTION_MS = 3_600_000;
+import { ARRIVAL_RETENTION_MS } from './rules';
 
 interface Leaf {
   reason: ParkReason;

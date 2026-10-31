@@ -56,6 +56,7 @@ import {
   parkSources,
   runHostWorkKindOf,
   runParkHost,
+  sweepArrivals,
   waitWakeOf,
   wakeWait,
   withRunLease,
@@ -211,7 +212,8 @@ export interface EmbeddedHost {
   arrive(tenant: string, input: { adapterType: string; arrivals: readonly Arrival[] }): Promise<EmbeddedRunOutcome[]>;
   /** Step on every run whose timer is due by `now`, every run woken by an
    *  arrival, and every run that owes a race an earlier step left unsettled:
-   *  one outcome per segment. */
+   *  one outcome per segment. First it forgets the arrivals logged more than
+   *  an hour before `now` that no run awaits. */
   tick(now?: Date): Promise<EmbeddedRunOutcome[]>;
 }
 
@@ -681,7 +683,10 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
       return stepWork({ dueBy: now().toISOString(), kinds: [WAKE_AWAIT_WORK_KIND], tenant });
     },
 
-    tick: (at = now()) => stepWork({ dueBy: at.toISOString() }),
+    async tick(at = now()) {
+      await sweepArrivals(store.runHost, { now: at });
+      return stepWork({ dueBy: at.toISOString() });
+    },
   };
 }
 

@@ -110,6 +110,24 @@ export async function logArrivals(
   return store.waits.log({ teamId: input.teamId, adapterType: input.adapterType, arrivals: newArrivalsOf(input.arrivals), at });
 }
 
+/** How long an arrival no live wait reads is kept: a repeat within it is a
+ *  sender's retry. */
+export const ARRIVAL_RETENTION_MS = 3_600_000;
+
+/** How many arrivals one sweep forgets at most (listen-fire's drain takes as many). */
+export const ARRIVALS_PER_SWEEP = 100;
+
+/**
+ * Forget the arrivals logged more than `ARRIVAL_RETENTION_MS` before `now`
+ * that no wait reads, at most `ARRIVALS_PER_SWEEP`; answers how many went. A
+ * product sweeps on its own schedule, as listen-fire's drain does on each
+ * pass (an embedded host's `tick` does): unswept, the log only grows.
+ */
+export async function sweepArrivals(store: RunHostStore, input: { now: Date }): Promise<number> {
+  const before = new Date(input.now.getTime() - ARRIVAL_RETENTION_MS).toISOString();
+  return store.waits.sweep({ before, limit: ARRIVALS_PER_SWEEP });
+}
+
 // ── Completion ──────────────────────────────────────────────────────────────
 
 /**
