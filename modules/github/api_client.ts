@@ -412,8 +412,9 @@ export function normalizeRepository(repo: GithubRepository): GithubRepositoryPay
   };
 }
 
-export function normalizeNotification(thread: GithubThread): GithubNotificationPayload {
+export function normalizeNotification(thread: GithubThread, known: { participating?: boolean } = {}): GithubNotificationPayload {
   return {
+    ...known,
     id: thread.id,
     reason: thread.reason,
     unread: thread.unread,

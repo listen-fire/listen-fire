@@ -185,3 +185,16 @@ export function pinnedRepository(where: Expression | undefined): { owner: string
   }
   return undefined;
 }
+
+const PARTICIPATING_NAMES = new Set(['participating', 'Participating']);
+
+/** What a `Notifications` WHERE pins `Participating` to with `==`, which
+ *  GitHub answers by its `participating` filter. */
+export function participatingFromWhere(where: Expression | undefined): boolean | undefined {
+  for (const conjunct of conjunctsOf(where).conjuncts) {
+    if (PARTICIPATING_NAMES.has(conjunct.field) && conjunct.op === 'eq' && conjunct.value.type === 'static' && typeof conjunct.value.value === 'boolean') {
+      return conjunct.value.value;
+    }
+  }
+  return undefined;
+}

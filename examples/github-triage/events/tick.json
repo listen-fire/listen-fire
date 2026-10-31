@@ -1,4 +1,13 @@
 {
   "external": "cron",
-  "event": { "payload": { "firedAt": "2026-10-29T08:30:00Z", "schedule": "30 8 * * 1-5" } }
+  "event": {
+    "arrivals": [
+      {
+        "edge": "Ticks",
+        "identity": "tick:30 8 * * 1-5:UTC:2026-10-29T08:30:00.000Z",
+        "landing": { "recordType": "Tick", "fields": { "Fired at": "2026-10-29T08:30:00.000Z", "Schedule": "30 8 * * 1-5", "Zone": "UTC" } },
+        "occurredAt": "2026-10-29T08:30:00.000Z"
+      }
+    ]
+  }
 }

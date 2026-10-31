@@ -94,7 +94,13 @@ export const GITHUB_SUBJECT_TYPES = [
 export const GITHUB_STATES = ['open', 'closed'] as const;
 
 /** The discriminator every polled notification event carries. */
-export const GITHUB_NOTIFICATION_EVENT_TAG = 'github:notification';
+/** How often the host polls `Notifications` unless lf.yaml's `pollEvery`
+ *  says otherwise: GitHub's own `X-Poll-Interval`, as it usually answers it. */
+export const GITHUB_POLL_EVERY_SECONDS = 60;
+
+/** Whether you take part in a thread: GitHub's `participating` filter. */
+export const GITHUB_PARTICIPATING_FIELD = 'Participating';
+export const GITHUB_PARTICIPATING_FIELD_ID = 'participating';
 
 /** The opaque checkpoint the poll persists. */
 export interface GithubCheckpoint {
@@ -144,6 +150,8 @@ export interface GithubNotificationPayload {
    *  edges (GitHub's own link, so no number is parsed out of it). */
   subject_url: string | null;
   repository: GithubRepositoryPayload;
+  /** Known only when GitHub was asked by its `participating` filter. */
+  participating?: boolean;
 }
 
 /** The fields a pull request and an issue share. */

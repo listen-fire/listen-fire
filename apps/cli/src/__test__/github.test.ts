@@ -27,7 +27,7 @@ import { henry_github, team_slack } from credentials
 gh   = connect github using henry_github
 chat = connect slack using team_slack
 
-function triage(n: <gh-[:Notification]->>) {
+function triage(n: <gh-[:Notifications]->>) {
   general = only(chat-[ch:Channels WHERE ch.Name == "general"]->)
   if (general == null) { fail("no #general channel") }
   pr = only(n-[:\`Pull Request\`]->)
@@ -39,7 +39,7 @@ function triage(n: <gh-[:Notification]->>) {
   }
 }
 
-listen to gh { events: ["review_requested", "mention", "assign"] } fire triage
+listen to gh-[n:Notifications WHERE n.Reason IN ["review_requested", "mention", "assign"]]-> fire triage
 `;
 
 function run(dir: string, ...args: string[]): Promise<{ code: number; out: string }> {
@@ -85,9 +85,9 @@ test('listen-fire check types the triage against GitHub: a field GitHub lacks, a
     assert.equal(wrongField.code, 1, wrongField.out);
     assert.match(wrongField.out, /login/);
 
+    // A reason GitHub never sends is one the listen can never hear: said, by name.
     const wrongReason = await checkWith(dir, '"review_requested", "mention"', '"review_request", "mention"');
-    assert.notEqual(wrongReason.code, 0, wrongReason.out);
-    assert.match(wrongReason.out, /review_request\b/);
+    assert.match(wrongReason.out, /warning MOV_ENUM_UNKNOWN_VALUE "review_request" isn't a value of enum .*Did you mean "review_requested"\?/);
 
     const wrongEdge = await checkWith(dir, 'n-[:`Pull Request`]->', 'n-[:Subject]->');
     assert.equal(wrongEdge.code, 1, wrongEdge.out);

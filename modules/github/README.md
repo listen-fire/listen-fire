@@ -25,7 +25,7 @@ import { henry_github, team_slack } from credentials
 gh   = connect github using henry_github
 chat = connect slack using team_slack
 
-function triage(n: <gh-[:Notification]->>) {
+function triage(n: <gh-[:Notifications]->>) {
   general = only(chat-[ch:Channels WHERE ch.Name == "general"]->)
   if (general == null) { fail("no #general channel") }
   pr = only(n-[:`Pull Request`]->)
@@ -37,14 +37,15 @@ function triage(n: <gh-[:Notification]->>) {
   }
 }
 
-listen to gh { events: ["review_requested", "mention", "assign"] } fire triage
+listen to gh-[n:Notifications WHERE n.Reason IN ["review_requested", "mention", "assign"]]-> fire triage
 ```
 
 - The listen fires once per notification thread that is new or has changed since the last poll. A new comment on a thread already delivered fires it again.
-- `events` selects GitHub's reasons. `listen-fire check` refuses a reason GitHub does not send. Leave it out for every reason.
-- `participating: true` keeps only threads you take part in or are mentioned in.
+- `Reason` selects GitHub's reasons. `listen-fire check` refuses a reason GitHub does not send. Leave it out for every reason.
+- `n.Participating == true` keeps only threads you take part in or are mentioned in.
+- Listens on one connection with the same WHERE share one poll.
 - The first poll sets the mark and delivers nothing, so going live never replays your inbox. Walk `Notifications` for what is unread now.
-- Polls are conditional: an unchanged feed costs GitHub a 304 and no quota. GitHub sets how often the feed may be polled (`X-Poll-Interval`, usually a minute). A shorter `every:` polls no faster.
+- Polls are conditional: an unchanged feed costs GitHub a 304 and no quota. GitHub sets how often the feed may be polled (`X-Poll-Interval`, usually a minute). The connection is polled every minute; `pollEvery` in lf.yaml changes it, and a shorter one polls no faster.
 
 ## The graph
 

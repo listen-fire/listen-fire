@@ -505,6 +505,16 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
             }
             let session = runs::open_session(project, &runs::Opening { ephemeral: args.ephemeral, store: &store, role: runs::Role::Command, routes_listens: false }).await?;
             let (external, event) = runs::read_event_file(event_file)?;
+            // An event file of arrivals (adapter protocol 2.6) is judged
+            // against the traversal listens on their edges, as a delivery is.
+            if event.get("arrivals").is_some() {
+                if args.dry_run {
+                    eprintln!("listen-fire: --dry-run rehearses a settings event; an event file of arrivals runs as delivered");
+                    return Ok(2);
+                }
+                let arrivals = arrivals::arrivals_of(&event).map_err(|e| format!("{}: {e}", event_file.display()))?;
+                return report_fired(&session.fire_arrivals(&external, &arrivals, runs::Delivered::default()).await?, args.json, &mut out);
+            }
             report_fired(&session.fire_event(&external, &event, args.dry_run, runs::Delivered::default()).await?, args.json, &mut out)
         }
         "resume" => {

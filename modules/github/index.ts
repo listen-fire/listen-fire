@@ -5,12 +5,13 @@
 // `ctx.config.baseUrlOverride` (the dev loop's fake) wins over the
 // credential's own base URL.
 
-import { defineModule, type CredentialFields, type ModuleContext } from 'module-kit';
+import { defineModule, type CredentialFields, type ModuleContext, type PollEdgeInput, type PollInput } from 'module-kit';
 
 import { GithubClient, githubCredsParser } from './api_client';
 import { GithubAdapter, type GithubClientSource } from './adapter';
 import { GITHUB_MANIFEST } from './manifest';
-import { GITHUB_POLL_INTERVAL_SECONDS, pollGithub } from './poll';
+import { pollGithub } from './poll';
+import { GITHUB_POLL_EVERY_SECONDS } from './types';
 
 /** The client the context's credential reaches GitHub with. */
 export function githubClientFrom(ctx: ModuleContext): GithubClientSource {
@@ -51,11 +52,18 @@ export const githubModule = defineModule({
       ],
     },
   ],
-  poll: { intervalSeconds: GITHUB_POLL_INTERVAL_SECONDS },
+  // Adapter protocol 2.6: `Notifications` is a listenable edge, polled.
+  protocolMinor: 6,
+  poll: { intervalSeconds: GITHUB_POLL_EVERY_SECONDS },
   create: (ctx) => {
     const client = githubClientFrom(ctx);
     return Object.assign(new GithubAdapter(client), {
-      poll: async (input: Parameters<typeof pollGithub>[1]) => pollGithub(await client(), input),
+      poll: async (input: PollInput | PollEdgeInput) => {
+        if (!('edge' in input)) {
+          throw new Error('@lf/github is listened to on its Notifications edge: `listen to gh-[n:Notifications WHERE n.Reason IN ["mention"]]-> fire f` (`listen-fire upgrade` rewrites a 0.12 listen)');
+        }
+        return pollGithub(await client(), input);
+      },
     });
   },
 });

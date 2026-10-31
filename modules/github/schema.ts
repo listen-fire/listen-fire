@@ -32,6 +32,9 @@ import {
   GITHUB_NOTIFICATION_DISPLAY_NAME,
   GITHUB_NOTIFICATION_REASONS,
   GITHUB_NOTIFICATION_TYPE_ID,
+  GITHUB_PARTICIPATING_FIELD,
+  GITHUB_PARTICIPATING_FIELD_ID,
+  GITHUB_POLL_EVERY_SECONDS,
   GITHUB_PULL_REQUEST_DISPLAY_NAME,
   GITHUB_PULL_REQUEST_TYPE_ID,
   GITHUB_REPOSITORIES_COLLECTION,
@@ -49,6 +52,7 @@ import {
   GITHUB_SUBJECT_PULL_EDGE,
   GITHUB_SUBJECT_PULL_EDGE_NAME,
   GITHUB_SUBJECT_TYPES,
+  type GithubNotificationPayload,
 } from './types';
 
 /** A read-only field; `extra` carries what differs. */
@@ -85,7 +89,8 @@ const REPOSITORIES_DESCRIPTION =
 const NOTIFICATIONS_DESCRIPTION =
   'Your unread notifications now — the inbox github.com/notifications shows. ' +
   'An `Updated At` bound reaches GitHub; other filters run over what comes back. ' +
-  'Listen on `Notification` to be told about new ones instead.';
+  'A listen on `Notifications` is told about each thread that is new or changed, ' +
+  'narrowed by `Reason` and `Participating`.';
 
 export function githubEntryPoints(): SchemaEntryPoint[] {
   return [
@@ -97,6 +102,8 @@ export function githubEntryPoints(): SchemaEntryPoint[] {
       collectionName: GITHUB_REPOSITORIES_COLLECTION,
       description: REPOSITORIES_DESCRIPTION,
     },
+    // One edge, two promises: the inbox can be read, and each thread that is
+    // new or has changed since the last poll arrives on it.
     {
       typeId: GITHUB_NOTIFICATION_TYPE_ID,
       displayName: GITHUB_NOTIFICATION_DISPLAY_NAME,
@@ -104,19 +111,12 @@ export function githubEntryPoints(): SchemaEntryPoint[] {
       readable: true,
       collectionName: GITHUB_NOTIFICATIONS_COLLECTION,
       description: NOTIFICATIONS_DESCRIPTION,
-    },
-    // The EVENT edge onto the same node the readable collection lands on (two
-    // edges, two promises, one node): the inbox can be read, and a new or
-    // changed thread is delivered.
-    {
-      typeId: GITHUB_NOTIFICATION_TYPE_ID,
-      displayName: GITHUB_NOTIFICATION_DISPLAY_NAME,
-      writable: false,
-      readable: false,
-      fires: true,
-      description:
-        'Delivered once per notification thread that is new or has changed since ' +
-        'the last poll. `events` selects reasons (["review_requested", "mention"]).',
+      listenable: true,
+      delivery: 'polled',
+      pollEverySeconds: GITHUB_POLL_EVERY_SECONDS,
+      cursor: true,
+      identity: 'Id',
+      version: 'Updated At',
     },
     // Reached only through a parent, never enumerated from the root.
     { typeId: GITHUB_PULL_REQUEST_TYPE_ID, displayName: GITHUB_PULL_REQUEST_DISPLAY_NAME, writable: false, readable: false },
@@ -132,8 +132,8 @@ export const GITHUB_ROOT: SchemaTypeDescriptor = {
   displayName: GITHUB_ACCOUNT_DISPLAY_NAME,
   description:
     'The GitHub account the token belongs to. Walk `Repositories` for pull requests ' +
-    'and issues, `Notifications` for the unread inbox; listen on `Notification` to ' +
-    'be told about new ones.',
+    'and issues, `Notifications` for the unread inbox, or listen on it to ' +
+    'be told about new and changed threads.',
   fields: [],
   references: [
     {
@@ -153,16 +153,7 @@ export const GITHUB_ROOT: SchemaTypeDescriptor = {
       name: GITHUB_NOTIFICATIONS_COLLECTION,
       description: NOTIFICATIONS_DESCRIPTION,
       capability: { filter: 'native', order: 'bounded', supportsLimit: true },
-    },
-    {
-      fieldId: `fires:${GITHUB_NOTIFICATION_TYPE_ID}`,
-      targetTypeId: GITHUB_NOTIFICATION_TYPE_ID,
-      cardinality: 'one',
-      direction: 'outgoing',
-      name: GITHUB_NOTIFICATION_DISPLAY_NAME,
-      fires: true,
-      readable: false,
-      description: 'A notification thread, new or changed — what a listen delivers.',
+      listenable: true,
     },
   ],
 };
@@ -213,7 +204,8 @@ const NOTIFICATION_DESCRIPTOR: SchemaTypeDescriptor = {
     '`Subject Type`), and where. Walk `Pull Request` or `Issue` for the subject itself.',
   fields: [
     field('id', 'Id', 'string', { required: true, description: 'The thread id.' }),
-    field('reason', 'Reason', 'enum', { required: true, enumValues: [...GITHUB_NOTIFICATION_REASONS], description: 'Why you got it (`review_requested`, `mention`, `assign`, …). A thread’s reason can change as it moves.' }),
+    field('reason', 'Reason', 'enum', { required: true, enumValues: [...GITHUB_NOTIFICATION_REASONS], capability: { filterOperators: ['eq', 'in'] }, description: 'Why you got it (`review_requested`, `mention`, `assign`, …). A thread’s reason can change as it moves.' }),
+    field(GITHUB_PARTICIPATING_FIELD_ID, GITHUB_PARTICIPATING_FIELD, 'boolean', { capability: { filterOperators: ['eq'] }, description: 'Whether you take part in the thread or are mentioned in it: GitHub tells only by its `participating` filter, so a read or a listen that compares it asks GitHub, and a thread read without it carries none.' }),
     field('unread', 'Unread', 'boolean', { required: true }),
     field('updated_at', 'Updated At', 'date', { required: true, capability: { filterOperators: ['gt', 'gte', 'lt', 'lte'] } }),
     field('last_read_at', 'Last Read At', 'date'),
@@ -393,4 +385,12 @@ export const GITHUB_ACCOUNT_DESCRIPTOR: SchemaTypeDescriptor = {
  *  adapter does not own. */
 export function describeGithubType(typeId: string): SchemaTypeDescriptor | null {
   return DESCRIPTORS[typeId] ?? null;
+}
+
+/** A notification's fields by the names a program reads them by, as an
+ *  arrival's landing carries them for the host to judge a listen's WHERE. */
+export function notificationFields(record: GithubNotificationPayload): Record<string, unknown> {
+  return Object.fromEntries(
+    NOTIFICATION_DESCRIPTOR.fields.filter((f) => Reflect.has(record, f.fieldId)).map((f) => [f.displayName, Reflect.get(record, f.fieldId)]),
+  );
 }

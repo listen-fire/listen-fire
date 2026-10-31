@@ -5,8 +5,7 @@ import { emptyOcrSlot, type CredentialFields, type ModuleContext } from 'module-
 import { emptyBrowserSlot } from 'movement-engine/public/browser';
 
 import { GITHUB_API_VERSION } from '../api_client';
-import { GITHUB_NOTIFICATION_REASONS } from '../types';
-import { githubClientFrom, githubModule, GITHUB_POLL_INTERVAL_SECONDS } from '../index';
+import { githubClientFrom, githubModule, GITHUB_POLL_EVERY_SECONDS } from '../index';
 
 interface Seen {
   url: string;
@@ -32,6 +31,7 @@ function contextOver(fields: () => CredentialFields, config: { baseUrlOverride?:
     identities: { list: refuse, find: refuse },
     browser: emptyBrowserSlot('none'),
     ocr: emptyOcrSlot('none'),
+    records: { read: refuse },
     config: { tenant: 'team-1', constructionArgs: {}, ...config },
   };
   return { ctx, seen };
@@ -89,14 +89,22 @@ describe('githubModule', () => {
       ['token', false],
       ['baseUrl', true],
     ]);
-    expect(githubModule.poll).toEqual({ intervalSeconds: GITHUB_POLL_INTERVAL_SECONDS });
-    expect(GITHUB_POLL_INTERVAL_SECONDS).toBe(60);
+    expect(githubModule.poll).toEqual({ intervalSeconds: GITHUB_POLL_EVERY_SECONDS });
+    expect(GITHUB_POLL_EVERY_SECONDS).toBe(60);
   });
 
-  it('is a polled source with no inbound, whose events are GitHub’s notification reasons', () => {
+  it('is a polled source with no inbound, listened to on Notifications, whose 0.12 events and participating become Reason and Participating', () => {
     expect(githubModule.manifest.supportedTriggers).toEqual(['poll']);
     expect('inbound' in githubModule).toBe(false);
-    expect(githubModule.manifest.subscribableEvents).toEqual([...GITHUB_NOTIFICATION_REASONS]);
+    expect(githubModule.protocolMinor).toBe(6);
+    expect(githubModule.manifest.subscribableEvents).toBeUndefined();
+    expect(githubModule.manifest.listenConfig).toBeUndefined();
+    expect(githubModule.manifest.listenSettingsBecome).toEqual({
+      path: ['Notifications'],
+      aliases: ['n'],
+      paramFrom: 'Notification',
+      keys: { events: { hop: 0, field: 'Reason', op: 'in' }, participating: { hop: 0, field: 'Participating', op: 'eq' } },
+    });
     expect(githubModule.manifest.methods).toEqual(expect.arrayContaining(['createRecord']));
     expect(githubModule.manifest.methods).not.toEqual(expect.arrayContaining(['updateRecord']));
   });

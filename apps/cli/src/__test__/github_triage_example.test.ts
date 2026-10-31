@@ -5,7 +5,7 @@
 // nothing; and the schedule itself fires it under `listen-fire drain`.
 
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -62,7 +62,9 @@ test('the github-triage example: checks clean, refuses the wrong field, posts on
 
     // Read on github.com: nothing needs you, and nothing is posted.
     for (const thread of INBOX) fakes.github.notify({ ...thread, unread: false });
-    const quiet = await lf(dir, ['run', '--event', 'events/tick.json']);
+    // The next morning's tick: one tick runs a listen once, however often it is handed over.
+    writeFileSync(join(dir, 'events/next_tick.json'), readFileSync(join(dir, 'events/tick.json'), 'utf8').replaceAll('2026-10-29', '2026-10-30'));
+    const quiet = await lf(dir, ['run', '--event', 'events/next_tick.json']);
     assert.equal(quiet.code, 0, quiet.out);
     assert.match(quiet.out, /triage:triage completed — 0 write\(s\)/);
     assert.match(quiet.out, /returned "nothing needs you"/);

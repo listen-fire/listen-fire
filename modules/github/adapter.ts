@@ -11,7 +11,6 @@ import type {
   DeleteInput,
   DeleteResult,
   EdgesFromResult,
-  EventType,
   GetFieldValueInput,
   GetRelatedInput,
   RelatedResult,
@@ -41,7 +40,7 @@ import {
   type GithubIssue,
   type GithubPullRequest,
 } from './api_client';
-import { issueQueryFromWhere, pinnedRepository, pullQueryFromWhere, updatedWindowFromWhere } from './filter';
+import { issueQueryFromWhere, pinnedRepository, pullQueryFromWhere, updatedWindowFromWhere, participatingFromWhere } from './filter';
 import { GITHUB_MANIFEST } from './manifest';
 import { GITHUB_ACCOUNT_DESCRIPTOR, GITHUB_ROOT, describeGithubType, githubEntryPoints } from './schema';
 import { createGithubRecord, writableTypeId } from './write';
@@ -55,7 +54,6 @@ import {
   GITHUB_LABEL_DISPLAY_NAME,
   GITHUB_NOTIFICATIONS_COLLECTION,
   GITHUB_NOTIFICATION_DISPLAY_NAME,
-  GITHUB_NOTIFICATION_EVENT_TAG,
   GITHUB_NOTIFICATION_TYPE_ID,
   GITHUB_PULL_REQUEST_DISPLAY_NAME,
   GITHUB_REPOSITORIES_COLLECTION,
@@ -217,14 +215,17 @@ export class GithubAdapter extends BaseAdapter implements Adapter {
       }
       case GITHUB_NOTIFICATIONS_COLLECTION: {
         const window = updatedWindowFromWhere(input.where);
-        const answer = await client.listNotifications({ ...window, ...limitOf(input, input.where === undefined, 'Updated At', 'desc') });
+        // Only `== true` is a question GitHub answers; a thread read any
+        // other way carries no `Participating`, and the engine judges it.
+        const participating = participatingFromWhere(input.where) === true;
+        const answer = await client.listNotifications({ ...window, ...(participating ? { participating } : {}), ...limitOf(input, input.where === undefined, 'Updated At', 'desc') });
         if (!answer.modified) return [];
         return answer.threads.map((thread) => ({
           position: makeStablePosition({
             adapterType: GITHUB_ADAPTER_TYPE,
             recordType: GITHUB_NOTIFICATION_DISPLAY_NAME,
             recordId: thread.id,
-            data: normalizeNotification(thread),
+            data: normalizeNotification(thread, participating ? { participating } : {}),
           }),
         }));
       }
@@ -256,13 +257,6 @@ export class GithubAdapter extends BaseAdapter implements Adapter {
 
   async deleteRecord(input: DeleteInput): Promise<DeleteResult> {
     throw new Error(`GithubAdapter.deleteRecord: removing a GitHub ${input.recordType} is not supported; this module adds comments and labels only.`);
-  }
-
-  // ── 5. Event typing ────────────────────────────────────────────────────
-
-  async listEventTypes(): Promise<EventType[]> {
-    // The poll tags every event it produces, so discrimination is by tag.
-    return [{ tag: GITHUB_NOTIFICATION_EVENT_TAG, positionType: GITHUB_NOTIFICATION_TYPE_ID, match: { path: 'id', equals: [] } }];
   }
 }
 
