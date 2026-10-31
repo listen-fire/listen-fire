@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import type { Selection, Aggregation, TraversalStep } from 'movement-lang/expression/types';
 
-import { traversalStepSchema, fieldRefSchema } from './schemas';
+import { traversalStepSchema, legacyOrderKeySchema } from './schemas';
 
 // Re-export the Expression type as the single source of truth, plus the rest of
 // the vocabulary an adapter reads off a hop's `where` and capabilities, so an
@@ -138,7 +138,7 @@ const _expressionSchema: z.ZodTypeAny = z.lazy(() =>
       prompt: z.string().optional(),
       // `SORT`'s key is an expression over the element; a FieldRef is the
       // older spelling of the same.
-      orderBy: z.union([_expressionSchema, fieldRefSchema]).optional(),
+      orderBy: z.union([legacyOrderKeySchema, _expressionSchema]).optional(),
       orderDirection: z.enum(['asc', 'desc']).optional(),
     }),
     // Functions

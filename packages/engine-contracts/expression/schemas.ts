@@ -48,6 +48,23 @@ export const fieldRefSchema = z.discriminatedUnion('type', [
 
 export type FieldRef = z.infer<typeof fieldRefSchema>;
 
+/**
+ * The legacy field references as an ordering key reads them, next to an
+ * expression. The Expression `edge_property` and `linked_object` share a `type`
+ * with their FieldRef namesakes but carry different members (`fieldOnly` there;
+ * `old` and `actionNodeId` here), and a union keeps only the members of the
+ * first schema that matches. Strict objects make this one match only a key
+ * that is wholly a FieldRef, so every other key falls through to the
+ * expression schema and neither side loses a member.
+ */
+export const legacyOrderKeySchema = z.union([
+  nodePropertyRefSchema.strict(),
+  edgePropertyRefSchema.strict(),
+  linkedObjectRefSchema.strict(),
+  metaRefSchema,
+  parentResultRefSchema,
+]);
+
 // -- TraversalStep (discriminated union) --
 // Defined before FilterExpression because filterConditionSchema references traversalStepSchema
 
@@ -59,8 +76,8 @@ export type FieldRef = z.infer<typeof fieldRefSchema>;
  *
  */
 const orderKeySchema = z.union([
+  legacyOrderKeySchema,
   z.lazy(() => expressionSchema) as z.ZodType<Expression>,
-  fieldRefSchema,
 ]);
 
 const cardinalitySchema = z.object({
