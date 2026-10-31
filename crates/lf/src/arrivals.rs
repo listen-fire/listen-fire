@@ -76,6 +76,13 @@ impl ArrivalIn {
     }
 }
 
+/// The arrivals a poll or webhook made for one head (`head`; None: for the
+/// whole connection) reported, each that names no record it is under taken
+/// as under that head: what the waits log and the listens sharing it judge.
+pub fn under_head(arrivals: &[ArrivalIn], head: Option<&str>) -> Vec<ArrivalIn> {
+    arrivals.iter().cloned().map(|arrival| ArrivalIn { key: arrival.key.or_else(|| head.map(str::to_string)), ..arrival }).collect()
+}
+
 /// The ones of `arrivals` the waits' log keeps: each naming its record.
 pub fn logged(arrivals: &[ArrivalIn]) -> Vec<NewArrival> {
     arrivals.iter().filter_map(ArrivalIn::logged).collect()

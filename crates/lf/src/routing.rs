@@ -69,17 +69,24 @@ impl Listen {
         scope_of(&config, scope_keys)
     }
 
-    /// The listen's pipeline: what its receipts, its runs and its polls name
-    /// it by. `listen:<file>:<movement>` for one in the settings form; one on
-    /// a traversal adds the first 8 hex digits of the sha256 of its plan's
-    /// identity, so two in one file that fire one function are two listens,
-    /// each with its own receipts.
+    /// The listen's pipeline: what its receipts, its runs, its polls and
+    /// its resolved heads name it by. `listen:<file>:<movement>` for one in
+    /// the settings form; one on a traversal adds the first 8 hex digits of
+    /// the sha256 of its plan's identity and of its connection's
+    /// construction, so two in one file that fire one function are two
+    /// listens, and so is one whose connection is constructed with another
+    /// credential or other arguments: each has its own receipts, and its own
+    /// heads, listed afresh.
     pub fn pipeline(&self) -> String {
         match &self.plan {
             None => format!("listen:{}:{}", self.file, self.movement_name),
             Some(plan) => {
                 use sha2::{Digest, Sha256};
-                let digest: String = Sha256::digest(plan.identity().as_bytes()).iter().take(4).map(|byte| format!("{byte:02x}")).collect();
+                let mut args = self.args.clone();
+                args.sort();
+                let construction = serde_json::json!({ "credential": self.credential, "args": args });
+                let named = format!("{}\n{construction}", plan.identity());
+                let digest: String = Sha256::digest(named.as_bytes()).iter().take(4).map(|byte| format!("{byte:02x}")).collect();
                 format!("listen:{}:{}:{digest}", self.file, self.movement_name)
             }
         }
@@ -879,13 +886,20 @@ mod tests {
     }
 
     #[test]
-    fn a_listen_on_a_traversal_is_named_by_its_file_its_function_and_its_plan() {
+    fn a_listen_on_a_traversal_is_named_by_its_file_its_function_its_plan_and_its_connection() {
         let listens = crm_listens();
         assert_eq!(listens[0].pipeline(), "listen:crm:welcome", "the settings form keeps its name");
         let identity = listens[1].plan.as_ref().unwrap().identity();
         use sha2::{Digest, Sha256};
-        let digest: String = Sha256::digest(identity.as_bytes()).iter().take(4).map(|b| format!("{b:02x}")).collect();
+        let named = format!("{identity}\n{}", r#"{"args":[],"credential":"acme"}"#);
+        let digest: String = Sha256::digest(named.as_bytes()).iter().take(4).map(|b| format!("{b:02x}")).collect();
         assert_eq!(listens[1].pipeline(), format!("listen:crm:welcome:{digest}"));
+        // A connection constructed otherwise is another listen.
+        let elsewhere = Listen { credential: Some("acme_b".into()), ..listens[1].clone() };
+        assert_ne!(elsewhere.pipeline(), listens[1].pipeline(), "another credential");
+        let based = |args: &[(&str, &str)]| Listen { args: args.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), ..listens[1].clone() };
+        assert_ne!(based(&[("base", "\"one\"")]).pipeline(), listens[1].pipeline(), "other arguments");
+        assert_eq!(based(&[("base", "\"one\""), ("space", "\"s\"")]).pipeline(), based(&[("space", "\"s\""), ("base", "\"one\"")]).pipeline(), "in any order");
         // Two listens in one file firing one function on two paths are two listens.
         let twice = CRM_LISTENS.replace("listen to crm-[:Company]-> fire note", "listen to crm-[c:Company WHERE c.Name != \"Other\"]-> fire welcome");
         let files = vec![MovementFile { name: "crm".into(), path: PathBuf::from("crm.mvt"), source: twice, version: None }];

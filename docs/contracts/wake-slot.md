@@ -55,7 +55,7 @@ After every work row listen-fire writes or puts back with a due time, once the w
 - a race a resumed arm won and left to its run to settle (`settle_race`, now)
 - a polled listen's first poll (`poll_listen`, now) and each next one (at the next interval)
 - a shared poll of a listenable edge, for the listens on one connection, edge, filter and scope: its first poll (`poll_edge`, now) and each next one (at the next interval)
-- a listen's re-resolution of the earlier hops it filters (`resolve_listen`), one interval after it was resolved, and each next one
+- a listen's re-resolution of the earlier hops it filters (`resolve_listen`), one interval after it was resolved, and each next one; or due at once when a resolve met another process's hold on the listen, and again shortly while the hold stands
 - a webhook the source lets lapse (`refresh_subscription`): when `listen-fire serve` registers it, at its refresh time (a day before it expires), and after each refresh, at the next one
 - a row put back for a retry (its kind, at the retry time): its backoff after a failure, or a short wait while its run is held elsewhere
 - nothing for a row that gives up: it is kept dead, never due again

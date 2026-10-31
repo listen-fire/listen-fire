@@ -10,8 +10,9 @@
 
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 
 import { lf, lfCommand } from './example';
@@ -30,14 +31,16 @@ const OPS_NOTES = 'listen to f-[b:Boards WHERE b.Name == "Ops"]->-[n:Notes]-> fi
  *  firing a function that fails naming what it saw. `pushed`: the feed
  *  reports its boards' changes, polled every second, as are their notes.
  *  `fast`: the notes are polled every second. `still`: the boards declare no
- *  cadence and report nothing. `keyless`: a note names no board. */
-function boardsProject(listens: string[], held: Board[], options: { pushed?: boolean; fast?: boolean; still?: boolean; keyless?: boolean; limit?: number } = {}): string {
+ *  cadence and report nothing. `keyless`: a note names no board. `based`:
+ *  a connection names the base it is in. */
+function boardsProject(listens: string[], held: Board[], options: { pushed?: boolean; fast?: boolean; still?: boolean; keyless?: boolean; based?: boolean; limit?: number } = {}): string {
   const dir = feedProject();
   const flag = (name: string) => writeFileSync(join(dir, 'externals/feed', name), '');
   if (options.pushed === true) flag('pushedboards');
   if (options.pushed === true || options.fast === true) flag('fast');
   if (options.still === true) flag('staticboards');
   if (options.keyless === true) flag('nokey');
+  if (options.based === true) flag('based');
   if (options.limit !== undefined) appendFileSync(join(dir, 'lf.yaml'), `listenScopeLimit: ${options.limit}\n`);
   writeListens(dir, listens);
   boards(dir, held);
@@ -246,6 +249,23 @@ test('an edited filter is listed again as listen-fire opens, its schedule or not
   assert.deepEqual(polledBoards(dir).slice(1), ['b2'], 'the board the new filter matches, from then');
 });
 
+// A connection constructed otherwise is another listen: what was kept of the
+// one before is not its own.
+test('a listen whose connection names another base is listed again as listen-fire opens, its schedule or not', () => {
+  const dir = boardsProject([OPS_NOTES], [{ id: 'b1', name: 'Ops' }], { based: true });
+  const movement = join(dir, 'movements/notes.mvt');
+  const inBase = (base: string) => writeFileSync(movement, readFileSync(movement, 'utf8').replace(/^f = connect feed.*$/m, `f = connect feed { base: "${base}" }`));
+  inBase('one');
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  lfAt(dir, ['drain', '--until-idle']);
+  assert.equal(boardLists(dir), 1);
+  inBase('two');
+  const moved = lfAt(dir, ['drain', '--until-idle']);
+  assert.equal(boardLists(dir), 2, moved.out);
+  assert.match(listensLine(dir), / — watching 1 Board, resolved \d+s ago — ok;/);
+});
+
 test('a failed listing keeps the boards it had, and when they were listed', () => {
   const dir = boardsProject([OPS_NOTES], [{ id: 'b1', name: 'Ops' }]);
   const check = lf(dir, 'check');
@@ -342,4 +362,80 @@ test('a file declaring any names of its own resolves its listens as it would wit
   assert.ok(!opened.out.includes('LISTEN_RESOLVE_FAILED'), opened.out);
   assert.deepEqual(polledBoards(dir), ['b1'], 'only the board that matches is polled');
   assert.match(listensLine(dir), / — watching 1 Board, resolved \d+s ago — ok;/);
+});
+
+/** Run `sql` against the project's state file; its rows. */
+function stateRows<T>(dir: string, sql: string, ...params: string[]): T[] {
+  const db = new DatabaseSync(join(dir, '.lf', 'state.db'));
+  try {
+    return db.prepare(sql).all(...params) as T[];
+  } finally {
+    db.close();
+  }
+}
+
+/** Hold the listing of the project's one listen as a process that died
+ *  holding it would, for `ms` from now; `unlisted`: as it died before it
+ *  kept anything. */
+function heldByAGoneProcess(dir: string, ms: number, unlisted = false): void {
+  const until = new Date(Date.now() + ms).toISOString();
+  const never = JSON.stringify({ heads: [], resolvedAt: null, failure: null, paused: null });
+  const state = unlisted ? `, state = '${never}'` : '';
+  stateRows(dir, `update listen_state set lease_token = 'gone', lease_until = ?${state} returning pipeline`, until);
+}
+
+/** The `resolve_listen` rows queued. */
+const resolveRows = (dir: string) => stateRows<{ key: string }>(dir, "select key from work where kind = 'resolve_listen'").length;
+
+test('a worker that opens while a gone process holds a listen lists it once the hold lapses, though it is resolved at open only', async () => {
+  const dir = boardsProject([OPS_NOTES], [{ id: 'b1', name: 'Ops' }], { still: true });
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  lfAt(dir, ['drain', '--until-idle']);
+  assert.equal(boardLists(dir), 1);
+  heldByAGoneProcess(dir, 2_000, true);
+  // A worker opens on the hold, and is never opened again.
+  const [command, args] = lfCommand(['drain', '--max-seconds', '12']);
+  const worker = spawn(command, args, { cwd: dir, env: { ...process.env, NODE_NO_WARNINGS: '1' } });
+  let out = '';
+  worker.stdout.on('data', (chunk) => (out += chunk));
+  worker.stderr.on('data', (chunk) => (out += chunk));
+  const stopped = new Promise((done) => worker.on('close', done));
+  try {
+    // Listed, and its row done: armed at open, it runs once, and no clock re-arms it.
+    await waitFor(() => boardLists(dir) === 2 && resolveRows(dir) === 0, () => `the worker never listed the listen it opened on: ${out}`);
+  } finally {
+    worker.kill();
+    await stopped;
+  }
+  assert.equal(boardLists(dir), 2, out);
+  assert.match(listensLine(dir), / — watching 1 Board, resolved at open only \(\d+s ago\) — ok;/);
+});
+
+test('a report on the boards while another process holds their listing lists them once the hold is let go', () => {
+  const dir = boardsProject(
+    [OPS_NOTES],
+    [
+      { id: 'b1', name: 'Ops', at: 1 },
+      { id: 'b2', name: 'Dev', at: 1 },
+    ],
+    { pushed: true },
+  );
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  lfAt(dir, ['drain', '--until-idle']);
+  assert.equal(boardLists(dir), 1);
+  heldByAGoneProcess(dir, 2_000);
+  boards(dir, [
+    { id: 'b1', name: 'Ops', at: 1 },
+    { id: 'b2', name: 'Ops', at: 2 },
+  ]);
+  const reported = lfAt(dir, ['drain', '--until-idle'], 2_000);
+  assert.equal(boardLists(dir), 1, `the hold stands: ${reported.out}`);
+  assert.equal(resolveRows(dir), 1, 'the report is not lost: its row waits for the hold');
+  sleep(2_500);
+  const lapsed = lfAt(dir, ['drain', '--until-idle'], 8_000);
+  assert.equal(boardLists(dir), 2, lapsed.out);
+  assert.match(listensLine(dir), /watching 2 Boards,/);
+  assert.equal(resolveRows(dir), 0);
 });

@@ -513,10 +513,11 @@ enum JudgedBy<'a> {
     Sharing(&'a crate::edge_polls::Shared),
 }
 
-/// The arrivals a poll or subscription made for one head reported, each
-/// that names no record it is under taken as under that head.
+/// The arrivals the poll or subscription for `key` reported, each that
+/// names no record it is under taken as under its head
+/// (crate::arrivals::under_head).
 fn under_scope(arrivals: &[ArrivalIn], key: &crate::edge_polls::PollKey) -> Vec<ArrivalIn> {
-    arrivals.iter().cloned().map(|arrival| ArrivalIn { key: arrival.key.or_else(|| key.scope.clone()), ..arrival }).collect()
+    crate::arrivals::under_head(arrivals, key.scope.as_deref())
 }
 
 /// What firing one event came to: the runs it started, and a line for each
@@ -816,7 +817,9 @@ impl Session {
             JudgedBy::Sharing(_) => Vec::new(),
         };
         for listen in resolving {
-            self.re_resolve(set, listen).await?;
+            if !self.re_resolve(set, listen).await? {
+                crate::resolve::arm_again(self, listen)?;
+            }
         }
         Ok(fired)
     }
@@ -998,9 +1001,8 @@ impl Session {
         use crate::resolve::RESOLVE_WORK_KIND;
         for listen in &set.listens {
             let Some(every) = crate::resolve::every_ms(set, listen, &self.project.resolve_every) else { continue };
-            let key = format!("{RESOLVE_WORK_KIND}:{}", listen.pipeline());
             let due = iso(self.due_offset_ms + every);
-            if self.store.enqueue_if_absent(RESOLVE_WORK_KIND, &key, &crate::resolve::row_payload(listen), Some(&due), None).map_err(|e| e.to_string())? {
+            if self.store.enqueue_if_absent(RESOLVE_WORK_KIND, &crate::resolve::row_key(listen), &crate::resolve::row_payload(listen), Some(&due), None).map_err(|e| e.to_string())? {
                 crate::wake::queued(RESOLVE_WORK_KIND, Some(&due));
             }
         }
@@ -1008,29 +1010,39 @@ impl Session {
     }
 
     /// A `resolve_listen` row: resolve its listen again, and say when it is
-    /// next due. A row whose listen is gone, or no longer re-resolved on a
-    /// clock, is done. A listen another process is resolving now is left to
-    /// it, and due again an interval on.
+    /// next due: an interval on for a listen re-resolved on a clock, else
+    /// never (one armed by `crate::resolve::arm_again` runs once). A row
+    /// whose listen is gone is done. A listen another process holds is tried
+    /// again shortly, never done: that process's listing may predate what
+    /// armed this row, or the process may be gone, its hold left to lapse.
     async fn resolve_row(&self, set: &FileSet, pipeline: &str) -> Result<(Next, Vec<RunOutcome>), String> {
-        let Some(listen) = set.listens.iter().find(|l| l.pipeline() == pipeline) else { return Ok((Next::Done, Vec::new())) };
-        let Some(every) = crate::resolve::every_ms(set, listen, &self.project.resolve_every) else { return Ok((Next::Done, Vec::new())) };
-        self.re_resolve(set, listen).await?;
-        Ok((Next::DueAt(iso(self.due_offset_ms + every)), Vec::new()))
+        let Some(listen) = set.listens.iter().find(|l| l.pipeline() == pipeline && crate::edge_polls::resolves(l)) else { return Ok((Next::Done, Vec::new())) };
+        if !self.re_resolve(set, listen).await? {
+            return Ok((Next::Busy, Vec::new()));
+        }
+        let next = match crate::resolve::every_ms(set, listen, &self.project.resolve_every) {
+            Some(every) => Next::DueAt(iso(self.due_offset_ms + every)),
+            None => Next::Done,
+        };
+        Ok((next, Vec::new()))
     }
 
     /// Resolve the listen again (crate::resolve::resolve), say a failure that
-    /// changed, and move the webhooks a server holds with its heads.
-    async fn re_resolve(&self, set: &FileSet, listen: &Listen) -> Result<(), String> {
+    /// changed, and move the webhooks a server holds with its heads. False:
+    /// another process held it, and nothing was listed here.
+    async fn re_resolve(&self, set: &FileSet, listen: &Listen) -> Result<bool, String> {
         let before = set.heads(listen);
-        if let crate::resolve::Resolved::Kept(Some(line)) = crate::resolve::resolve(self, set, listen).await? {
-            eprintln!("listen-fire: {line}");
+        match crate::resolve::resolve(self, set, listen).await? {
+            crate::resolve::Resolved::Elsewhere => return Ok(false),
+            crate::resolve::Resolved::Kept(Some(line)) => eprintln!("listen-fire: {line}"),
+            crate::resolve::Resolved::Kept(None) => {}
         }
         if self.role.registers_webhooks() && set.heads(listen) != before {
             for line in crate::subscriptions::reconcile(self).await {
                 eprintln!("listen-fire: {line}");
             }
         }
-        Ok(())
+        Ok(true)
     }
 
     /// A `poll_edge` row: poll its key's edge once for every listen sharing
@@ -1928,8 +1940,8 @@ impl Session {
 enum Next {
     /// Deleted (unless something re-armed it meanwhile).
     Done,
-    /// Its run was held elsewhere, or taken over while its drain ran: tried
-    /// again shortly.
+    /// Its run was held elsewhere, or taken over while its drain ran, or
+    /// its listen's resolve was held elsewhere: tried again shortly.
     Busy,
     /// Kept, due again then (a polled listen's next poll).
     DueAt(String),

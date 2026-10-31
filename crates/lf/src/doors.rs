@@ -263,6 +263,16 @@ impl<R: Reader> LfDoors<'_, R> {
         Ok(())
     }
 
+    /// A delivery's arrivals, each that names no record it is under taken as
+    /// under the head the webhook it came through (`subscription_id`) was
+    /// made for, when it is one for an edge's arrivals under one head: the
+    /// waits log them, and the listens judge them, under that head.
+    fn under_head(&self, subscription_id: &str, arrivals: &[ArrivalIn]) -> Vec<ArrivalIn> {
+        let (name, key) = subscription_of(subscription_id);
+        let head = key.zip(self.install(name)).and_then(|(key, credential)| crate::subscriptions::edge_webhook_head(credential, key));
+        crate::arrivals::under_head(arrivals, head.as_deref())
+    }
+
     /// The arrivals of `arrivals` that landed on an edge a listen of the
     /// connection they came for is on: what is judged against those listens.
     fn landed_for_listens(&self, adapter_type: &str, credential: Option<&str>, arrivals: &[ArrivalIn]) -> Vec<ArrivalIn> {
@@ -368,7 +378,8 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
             replay_of: None,
             events: kept.receipts.iter().map(|event| kept_event(adapter_type, event.clone(), came_for)).collect(),
         };
-        let landed = self.landed_for_listens(adapter_type, came_for.credential, kept.arrivals);
+        let arrivals = self.under_head(kept.subscription_id, kept.arrivals);
+        let landed = self.landed_for_listens(adapter_type, came_for.credential, &arrivals);
         let mut work: Vec<NewWork> = match &self.sink {
             EventSink::Queue | EventSink::Listed(_) => {
                 let delivered = Delivered { id: Some(&receipt.id), ..came_for };
@@ -381,7 +392,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
             EventSink::Inline { .. } => Vec::new(),
         };
         let logged_at = iso(0);
-        let logged = logged(kept.arrivals);
+        let logged = logged(&arrivals);
         // A delivery without arrivals for the waits asks nothing of a store
         // module written before them; its rows carry the mark taken here.
         let arrivals = match logged.as_slice() {
@@ -1441,6 +1452,65 @@ pub(crate) mod tests {
         assert_eq!(queued(&store), [("wake_await".to_string(), format!(r#"{{"waitId":"{wait}","runId":"run-1","address":"s1"}}"#))]);
         let landed = store.wait_arrivals(&wait).unwrap().arrivals;
         assert_eq!(landed.iter().map(|a| (a.identity.as_str(), a.landing.to_json())).collect::<Vec<_>>(), [("k1", r#"{"fields":{"Text":"hi"}}"#.to_string())]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A module that reads every delivery as the arrivals it holds.
+    struct ArrivalsReader(Vec<ArrivalIn>);
+
+    impl Reader for ArrivalsReader {
+        fn reads_deliveries(&self, _external: &str) -> bool {
+            true
+        }
+        async fn preprocess(&self, _: &str, _: &Credential, _: &Js, _: Option<&Js>) -> Result<Extraction, String> {
+            Ok(Extraction { events: Vec::new(), arrivals: self.0.clone(), checkpoint: None })
+        }
+        async fn check_inbound(&self, _: &str, _: &Credential, _: &Js, _: Option<&str>, _: Option<&Js>) -> Result<Js, String> {
+            Err("checks no inbound".into())
+        }
+    }
+
+    /// A note that names no board, delivered through the webhook listen-fire
+    /// holds for one board's notes, is logged for the waits under that board,
+    /// as a poll made for the board logs it; one naming its board keeps it.
+    #[test]
+    fn an_arrival_through_a_webhook_for_one_head_that_names_none_is_logged_under_that_head() {
+        let (dir, store) = state_file();
+        let wait = parked_on(&store, "b1");
+        let note = |id: &str, key: Option<&str>| ArrivalIn {
+            edge: "Comments".into(),
+            key: key.map(str::to_string),
+            identity: Some(id.into()),
+            version: None,
+            landing: Some(Js::parse(br#"{"fields":{"Text":"hi"}}"#).unwrap()),
+            gone: false,
+            parents: Vec::new(),
+            about: None,
+            not_for: None,
+            taken_applied: false,
+        };
+        let webhooks = r#"{"edge-b1":{"edge":"Comments","scope":"b1","secret":"s3cret"},"edge-b9":{"edge":"Comments","scope":"b9","secret":"s3cret"}}"#;
+        let fields = std::collections::BTreeMap::from([("edge_subscriptions".to_string(), webhooks.to_string())]);
+        let credential = Credential { name: "acme_a".into(), external: "acme".into(), binding: Binding::Credential("acme".into()), fields, origin: Default::default() };
+        let declaration = Declaration { provider_key: "acme".into(), scheme: Scheme::Remote, signature_headers: Vec::new(), intercepts: Vec::new(), secret_from_provider: false, delivery_id_header: None };
+        let doors = LfDoors {
+            store: &store,
+            served: vec![Served { external: "acme".into(), inbound: Some(InboundSetup { declaration, secret_field: DEFAULT_WEBHOOK_SECRET_FIELD.into() }), push_field: None }],
+            installs: std::borrow::Cow::Owned(vec![credential]),
+            reader: ArrivalsReader(vec![note("k1", None), note("k2", Some("b9"))]),
+            sink: EventSink::Queue,
+            notify: &|| {},
+            listens: Vec::new(),
+        };
+        in_local(async {
+            let body = br#"{}"#;
+            let headers = signed_with("s3cret", body, "d-1");
+            let delivery = Delivery { provider: "acme", subscription_id: "acme_a/edge-b1", raw_body: body, headers: &headers, method: "POST", path: "", query: "", source: DeliverySource::Webhook };
+            let answer = answer_delivery(&doors, delivery).await;
+            assert_eq!(answer.status, 200, "{}", answer.body.to_json());
+        });
+        let landed = store.wait_arrivals(&wait).unwrap().arrivals;
+        assert_eq!(landed.iter().map(|a| a.identity.as_str()).collect::<Vec<_>>(), ["k1"], "the note naming no board is the board's; the one naming b9 is b9's");
         std::fs::remove_dir_all(dir).ok();
     }
 

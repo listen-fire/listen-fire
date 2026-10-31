@@ -50,7 +50,9 @@ export interface Board {
  *  not cheap to list and declares neither, and a board's `Notes` are pushed
  *  per board (`delivery: scope`). A board's `Notes` are polled per board, its id the
  *  poll's `scope`: the notes pinned to it (`board`), each arrival naming
- *  the board as its `key` unless `nokey` is present. */
+ *  the board as its `key` unless `nokey` is present. With `based` present a
+ *  connection is constructed in a base (`connect feed { base: "…" }`), which
+ *  changes nothing it lists. */
 const FEED_MODULE = `const { readFileSync, appendFileSync, existsSync } = require('node:fs');
 const { join } = require('node:path');
 const { defineModule } = require(${JSON.stringify(join(MODULE_KIT, 'define.ts'))});
@@ -121,7 +123,15 @@ module.exports = defineModule({
   name: 'feed',
   credentials: [],
   protocolMinor: 6,
-  manifest: { adapterType: 'feed', displayName: 'Feed', supportedTriggers: ['poll'], methods: [], webhookEventTypeId: 'note', subscribableEvents: ['note.added', 'note.removed'] },
+  manifest: {
+    adapterType: 'feed',
+    displayName: 'Feed',
+    supportedTriggers: ['poll'],
+    methods: [],
+    webhookEventTypeId: 'note',
+    subscribableEvents: ['note.added', 'note.removed'],
+    ...(existsSync(at('based')) ? { positionArgs: [{ name: 'base', optionsFrom: 'Board', label: 'Base' }] } : {}),
+  },
   poll: { intervalSeconds: existsSync(at('fast')) ? 1 : 60 },
   create: () => ({
     adapterType: 'feed',

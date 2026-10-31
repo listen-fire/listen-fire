@@ -267,6 +267,13 @@ pub fn is_edge_webhook(credentials: &Credentials, external: &str, key: &str) -> 
     credentials.iter().filter(|c| c.external == external).any(|c| records_of(credential_field(c), EDGE_SUBSCRIPTIONS_FIELD).contains_key(key))
 }
 
+/// The head a webhook the credential holds for an edge's arrivals was made
+/// for, by its key: None for one made for the whole connection, and for a
+/// key that names no such webhook.
+pub fn edge_webhook_head(credential: &Credential, key: &str) -> Option<String> {
+    records_of(credential_field(credential), EDGE_SUBSCRIPTIONS_FIELD).get(key)?.get("scope")?.as_str().map(str::to_string)
+}
+
 impl Registered {
     /// The registration under subscription `key` ("" the unscoped one, whose
     /// secret is the credential's `secret_field`).

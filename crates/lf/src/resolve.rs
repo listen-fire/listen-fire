@@ -13,8 +13,11 @@
 //!   `parentChanges: pushed`: listen-fire polls or subscribes to that edge
 //!   for the listen itself (crate::edge_polls), and no row is armed for it;
 //! - as a routing process opens, for a listen never resolved (an edited
-//!   listen among them: its plan names its pipeline, its state with it), or
-//!   one whose last resolve failed.
+//!   listen among them, or one whose connection is constructed otherwise:
+//!   its plan and its connection name its pipeline, its state with it), or
+//!   one whose last resolve failed;
+//! - once another process's hold on it is let go or lapses, when a resolve
+//!   met that hold (`arm_again`).
 //!
 //! A listen with none of these is resolved at open only, said once as it
 //! opens. The store keeps the heads, and every process routing the listen
@@ -195,8 +198,8 @@ pub enum Opening {
     /// The session that routes listens opens: each is watched on the heads
     /// the store kept, and those it kept none for, or a failure for, are
     /// resolved now (an edited listen is another listen, its pipeline named
-    /// by its plan, so it was never resolved); every failure is said, and a
-    /// failure that cleared.
+    /// by its plan and its connection, so it was never resolved); every
+    /// failure is said, and a failure that cleared.
     Routing,
     /// A routing session's set was reloaded: as `Routing`, saying only the
     /// failures that changed.
@@ -226,7 +229,10 @@ pub async fn open(session: &Session, set: &FileSet, opening: Opening) -> Result<
         }
         let changed = match resolve(session, set, listen).await? {
             Resolved::Kept(line) => line,
-            Resolved::Elsewhere => None,
+            Resolved::Elsewhere => {
+                arm_again(session, listen)?;
+                None
+            }
         };
         match opening {
             Opening::Routing => {
@@ -297,8 +303,21 @@ pub enum Resolved {
     /// (one that cleared included).
     Kept(Option<String>),
     /// Another process holds it, listing it now: it is watched on what that
-    /// one keeps (`watch_kept`).
+    /// one keeps (`watch_kept`). That listing may have begun before what
+    /// asked for this one changed, or its process may be gone, so the
+    /// listen is listed again once the hold is let go (`arm_again`).
     Elsewhere,
+}
+
+/// The listen's `resolve_listen` row, due now: a resolve another process
+/// held is tried again by whichever worker claims it, until the hold is let
+/// go or lapses (`Next::Busy` on each try it meets the hold). It is the
+/// listen's one row, so a listen also resolved on a clock has its next
+/// resolve brought forward, never a second row.
+pub fn arm_again(session: &Session, listen: &Listen) -> Result<(), String> {
+    session.store.enqueue(RESOLVE_WORK_KIND, &row_key(listen), &row_payload(listen), None, None).map_err(|e| e.to_string())?;
+    crate::wake::queued(RESOLVE_WORK_KIND, None);
+    Ok(())
 }
 
 /// Resolve the listen again, keep what it came to, and watch its last edge
@@ -378,6 +397,11 @@ pub fn pushed_parent_hops<'a>(set: &FileSet, listen: &'a Listen) -> Vec<&'a Plan
 fn resolved_hops<'l>(set: &FileSet, listen: &'l Listen) -> Vec<(&'l PlanHop, Js)> {
     let hops = listen.plan.as_ref().map(|plan| plan.hops.as_slice()).unwrap_or_default();
     hops.iter().filter(|hop| hop.judged == HopJudged::Resolved).filter_map(|hop| Some((hop, crate::edge_polls::hop_schema(set, listen, hop)?))).collect()
+}
+
+/// The key of the work row that resolves the listen again: one per listen.
+pub fn row_key(listen: &Listen) -> String {
+    format!("{RESOLVE_WORK_KIND}:{}", listen.pipeline())
 }
 
 /// The work row that resolves the listen again, as it is armed.
