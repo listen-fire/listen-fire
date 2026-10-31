@@ -5,7 +5,8 @@
 //! check for an upgrade from an older pin warns on every `await` no `sleep`
 //! races (`MOV_AWAIT_MAY_HANG`), since under the old pin the code after it
 //! was skipped instead. A wait in a function is raced when every call of the
-//! function is; an unraced call to it is warned where it is written.
+//! function is; each way it hangs a run is warned once, at the unraced call
+//! in the run's way in, spelling the calls down to the wait.
 //!
 //! Two catalog shapes: a chat's message and its button presses, and a CRM's
 //! deal and its notes.
@@ -172,42 +173,46 @@ fn a_wait_in_a_function_every_call_of_which_is_raced_is_not_warned() {
 }
 
 #[test]
-fn an_unraced_call_to_a_function_that_waits_is_warned_at_the_call() {
-    // The wait in the function, and the call that reaches it.
+fn an_unraced_call_to_a_function_that_waits_is_warned_once_at_the_call() {
+    // Told at the call, spelling the way down to the wait; the wait itself,
+    // in a function something calls, is not told again.
     assert_eq!(
-        hangs("  x = noted(d)\n", NOTED),
-        [
-            "MOV_AWAIT_MAY_HANG warning 2:7-2:15 this call to 'noted' reaches 'await deal-[:Notes]->' (in 'noted'), which is not in a `race` with a `sleep`",
-            "MOV_AWAIT_MAY_HANG warning 5:10-5:31 'await deal-[:Notes]->' is not in a `race` with a `sleep`",
-        ]
+        found_with("  x = noted(d)\n", NOTED, Some("0.12.13")),
+        ["MOV_AWAIT_MAY_HANG warning 2:7-2:15 'noted(d) → await deal-[:Notes]->' is not in a `race` with a `sleep`: from 0.13 a wait whose record is deleted never ends (under 0.12.13 the code after it was skipped), so this run can wait forever. Race the call: `race(() => { return noted(d) }, () => { await sleep(1d) })` — reviews#deleted-records"]
     );
-    // One raced call and one not: only the unraced call is told, beside the wait.
-    let both = "  r = race(() => { return pressed(msg) }, () => { await sleep(1d) })\n  p = pressed(msg)\n";
-    assert_eq!(
-        hangs(both, PRESSED),
-        [
-            "MOV_AWAIT_MAY_HANG warning 3:7-3:19 this call to 'pressed' reaches 'await m-[:Interactions]->' (in 'pressed'), which is not in a `race` with a `sleep`",
-            "MOV_AWAIT_MAY_HANG warning 6:10-6:35 'await m-[:Interactions]->' is not in a `race` with a `sleep`",
-        ]
-    );
-    // Through a function in between: each call on the way is told.
-    let asked = format!("{PRESSED}function asked(m: <chat-[:Message]->>) {{\n  return pressed(m)\n}}\n");
-    assert_eq!(
-        hangs("  p = asked(msg)\n", &asked),
-        [
-            "MOV_AWAIT_MAY_HANG warning 2:7-2:17 this call to 'asked' reaches 'await m-[:Interactions]->' (in 'pressed'), which is not in a `race` with a `sleep`",
-            "MOV_AWAIT_MAY_HANG warning 5:10-5:35 'await m-[:Interactions]->' is not in a `race` with a `sleep`",
-            "MOV_AWAIT_MAY_HANG warning 8:10-8:20 this call to 'pressed' reaches 'await m-[:Interactions]->' (in 'pressed'), which is not in a `race` with a `sleep`",
-        ]
-    );
+    assert_eq!(hangs("  p = pressed(msg)\n", PRESSED), ["MOV_AWAIT_MAY_HANG warning 2:7-2:19 'pressed(msg) → await m-[:Interactions]->' is not in a `race` with a `sleep`"]);
     // A closure bound to a name, called unraced.
     assert_eq!(
         hangs("  f = () => { return await d-[:Notes]-> }\n  x = f()\n", ""),
-        [
-            "MOV_AWAIT_MAY_HANG warning 2:22-2:40 'await d-[:Notes]->' is not in a `race` with a `sleep`",
-            "MOV_AWAIT_MAY_HANG warning 3:7-3:10 this call to 'f' reaches 'await d-[:Notes]->' (in 'f'), which is not in a `race` with a `sleep`",
-        ]
+        ["MOV_AWAIT_MAY_HANG warning 3:7-3:10 'f() → await d-[:Notes]->' is not in a `race` with a `sleep`"]
     );
+}
+
+#[test]
+fn a_chain_of_unraced_calls_is_warned_once_at_its_outermost_call() {
+    // Three levels: the run's way in calls `asked`, which calls `pressed`,
+    // which waits.
+    let asked = format!("{PRESSED}function asked(m: <chat-[:Message]->>) {{\n  return pressed(m)\n}}\n");
+    assert_eq!(
+        hangs("  p = asked(msg)\n", &asked),
+        ["MOV_AWAIT_MAY_HANG warning 2:7-2:17 'asked(msg) → pressed(m) → await m-[:Interactions]->' is not in a `race` with a `sleep`"]
+    );
+    let dealt = format!("{NOTED}function dealt(deal: <crm-[:Deal]->>) {{\n  return noted(deal)\n}}\n");
+    assert_eq!(
+        hangs("  n = dealt(d)\n", &dealt),
+        ["MOV_AWAIT_MAY_HANG warning 2:7-2:15 'dealt(d) → noted(deal) → await deal-[:Notes]->' is not in a `race` with a `sleep`"]
+    );
+    // A race inside the middle function covers the rest of the way down.
+    let raced = format!("{NOTED}function dealt(deal: <crm-[:Deal]->>) {{\n  return race(() => {{ return noted(deal) }}, () => {{ await sleep(1d) }})\n}}\n");
+    assert_eq!(hangs("  n = dealt(d)\n", &raced), Vec::<String>::new());
+}
+
+#[test]
+fn a_function_reached_raced_and_unraced_is_warned_once_at_the_unraced_call() {
+    let both = "  r = race(() => { return pressed(msg) }, () => { await sleep(1d) })\n  p = pressed(msg)\n";
+    assert_eq!(hangs(both, PRESSED), ["MOV_AWAIT_MAY_HANG warning 3:7-3:19 'pressed(msg) → await m-[:Interactions]->' is not in a `race` with a `sleep`"]);
+    let notes = "  n = noted(d)\n  r = race(() => { return noted(d) }, () => { await sleep(1d) })\n";
+    assert_eq!(hangs(notes, NOTED), ["MOV_AWAIT_MAY_HANG warning 2:7-2:15 'noted(d) → await deal-[:Notes]->' is not in a `race` with a `sleep`"]);
 }
 
 #[test]
@@ -224,8 +229,13 @@ fn a_sibling_that_can_hang_is_no_way_out() {
     // Through a function it calls.
     let slow = "function slow(deal: <crm-[:Deal]->>) {\n  n = await deal-[:Notes]->\n  await sleep(1d)\n}\n";
     let called = "  r = race(() => { return await msg-[:Interactions]-> }, () => { slow(d) })\n";
-    let warned = hangs(called, slow);
-    assert!(warned.iter().any(|w| w.starts_with("MOV_AWAIT_MAY_HANG warning 2:27-2:54 'await msg-[:Interactions]->'")), "{warned:?}");
+    assert_eq!(
+        hangs(called, slow),
+        [
+            "MOV_AWAIT_MAY_HANG warning 2:27-2:54 'await msg-[:Interactions]->' is not in a `race` with a `sleep`",
+            "MOV_AWAIT_MAY_HANG warning 2:66-2:73 'slow(d) → await deal-[:Notes]->' is not in a `race` with a `sleep`",
+        ]
+    );
     // After its sleep: it ends only if the record is not deleted.
     let after = "  r = race(() => { return await d-[:Notes]-> }, () => {\n    await sleep(1d)\n    i = await msg-[:Interactions]->\n  })\n";
     assert_eq!(hangs(after, "").len(), 2, "{:?}", hangs(after, ""));

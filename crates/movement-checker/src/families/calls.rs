@@ -1576,7 +1576,7 @@ impl Checker<'_> {
         let count = call.args.len();
         if callee.kind == SymbolKind::Movement {
             if let Some(holder) = self.holder_of(id) {
-                self.note_hang_call(holder, call.span, &call.callee);
+                self.note_hang_call(holder, call.span, crate::families::flow::spell_call(call));
             }
             self.call_movement(id);
             let params = self.movement_declared_params(id);
@@ -1593,7 +1593,7 @@ impl Checker<'_> {
         if self.calls_closure(&callee) {
             self.note_self_call(id, call.span);
             if let Some(holder) = self.holder_of(id) {
-                self.note_hang_call(holder, call.span, &call.callee);
+                self.note_hang_call(holder, call.span, crate::families::flow::spell_call(call));
             }
             let row = self.closure_row(id);
             self.absorb(row);

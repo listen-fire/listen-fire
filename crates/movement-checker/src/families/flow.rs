@@ -15,7 +15,7 @@
 //! - MOV_UNTIL_EDGE_WATCHABLE
 //! - MOV_WAIT_NOT_RESUMABLE
 
-use movement_parser::ast::{DurationLiteral, PathHead, PathRoot, RValue, Span, Statement};
+use movement_parser::ast::{CallArg, CallStatement, DurationLiteral, PathHead, PathRoot, RValue, Span, Statement};
 use movement_parser::lowering::captures::{Scoped, capture_holes, rooted_reads};
 use movement_parser::lowering::expression::{Expression, TraversalStep};
 use movement_parser::stmt::AWAIT_ARRIVALS_WORD;
@@ -97,6 +97,21 @@ pub fn spell_path_head(head: &PathHead) -> String {
         None => String::new(),
     };
     format!("{root}{}", head.hops_raw)
+}
+
+/// A call as a step of a chain of calls: its arguments as written, any
+/// that is not a plain value as `…`.
+pub fn spell_call(call: &CallStatement) -> String {
+    let args: Vec<String> = call
+        .args
+        .iter()
+        .map(|arg| match arg {
+            CallArg::Expr { name: Some(name), expr } => format!("{name}: {}", expr.raw),
+            CallArg::Expr { name: None, expr } => expr.raw.clone(),
+            _ => "…".to_string(),
+        })
+        .collect();
+    format!("{}({})", call.callee, args.join(", "))
 }
 
 fn rvalue_kind(value: &RValue) -> &'static str {
@@ -350,13 +365,13 @@ impl Checker<'_> {
     }
 
     /// A call (or a function named as an arm or an op's function) to
-    /// `callee`, as written: what waits in `callee` waits here too.
-    pub fn note_hang_call(&mut self, callee: Holder, span: Span, written: &str) {
+    /// `callee`, `step` spelling it: what waits in `callee` waits here too.
+    pub fn note_hang_call(&mut self, callee: Holder, span: Span, step: String) {
         if !self.notes_hangs() {
             return;
         }
         self.races.called.insert(callee);
-        self.note_hang_site(span, Reached::Call { callee, written: written.to_string() });
+        self.note_hang_site(span, Reached::Call { callee, step });
     }
 
     fn note_hang_site(&mut self, span: Span, reached: Reached) {
@@ -372,10 +387,9 @@ impl Checker<'_> {
         }
     }
 
-    /// `check` walks the body of `holder`, named `name`: the races around
-    /// where it is written are not around what it does when called.
-    pub fn in_holder<T>(&mut self, holder: Holder, name: &str, check: impl FnOnce(&mut Self) -> T) -> T {
-        self.races.names.entry(holder).or_insert_with(|| name.to_string());
+    /// `check` walks the body of `holder`: the races around where it is
+    /// written are not around what it does when called.
+    pub fn in_holder<T>(&mut self, holder: Holder, check: impl FnOnce(&mut Self) -> T) -> T {
         let outer = std::mem::replace(&mut self.races.holder, holder);
         let arms = std::mem::take(&mut self.races.arms);
         let checked = check(self);
@@ -404,54 +418,44 @@ impl Checker<'_> {
         self.races.fired.insert(Holder::Function(id));
     }
 
-    /// `MOV_AWAIT_MAY_HANG`, once the program is walked. A function a run
-    /// reaches with no race on the way exposes its waits: one a listen
-    /// fires, one nothing calls, or one called where no race covers the
-    /// call from a function so exposed. Each unraced wait in an exposed
-    /// function is told; so is each unraced call in one to a function that
-    /// reaches an unraced wait, naming the function and the wait.
+    /// `MOV_AWAIT_MAY_HANG`, once the program is walked: one warning per
+    /// way a run can hang, where it first leaves every race. A run comes
+    /// in through the file itself, a function a listen fires, or a
+    /// function nothing calls. In one of those, each unraced wait is told
+    /// where it is written, and each unraced call that reaches an unraced
+    /// wait (through further unraced calls) is told at the call, spelling
+    /// the calls down to the wait. A function something calls is told
+    /// only through its callers, raced or not.
     pub fn report_waits_that_may_hang(&mut self) {
         let Some(pin) = self.upgrading_from else { return };
         let sites = std::mem::take(&mut self.races.unraced);
-        let holders: Vec<Holder> = std::iter::once(Holder::File).chain(self.races.names.keys().copied()).collect();
-        let mut exposed: std::collections::HashSet<Holder> =
-            holders.into_iter().filter(|h| *h == Holder::File || self.races.fired.contains(h) || !self.races.called.contains(h)).collect();
-        let mut queue: Vec<Holder> = exposed.iter().copied().collect();
-        while let Some(holder) = queue.pop() {
-            for site in sites.iter().filter(|site| site.holder == holder) {
-                if let Reached::Call { callee, .. } = &site.reached
-                    && exposed.insert(*callee)
-                {
-                    queue.push(*callee);
-                }
-            }
-        }
-        // The first unraced wait each function reaches, and the function it
-        // is written in.
-        let mut reaches: std::collections::HashMap<Holder, (String, Holder)> = std::collections::HashMap::new();
+        // Each function that reaches an unraced wait, and the steps down to
+        // it: a wait it holds first, else the fewest calls.
+        let mut reaches: std::collections::HashMap<Holder, Vec<String>> = std::collections::HashMap::new();
         for site in &sites {
             if let Reached::Wait(text) = &site.reached {
-                reaches.entry(site.holder).or_insert_with(|| (text.clone(), site.holder));
+                reaches.entry(site.holder).or_insert_with(|| vec![text.clone()]);
             }
         }
         loop {
-            let found: Vec<(Holder, (String, Holder))> = sites
+            let found: Vec<(Holder, Vec<String>)> = sites
                 .iter()
                 .filter(|site| !reaches.contains_key(&site.holder))
                 .filter_map(|site| match &site.reached {
-                    Reached::Call { callee, .. } => reaches.get(callee).map(|wait| (site.holder, wait.clone())),
+                    Reached::Call { callee, step } => reaches.get(callee).map(|down| (site.holder, std::iter::once(step.clone()).chain(down.iter().cloned()).collect())),
                     Reached::Wait(_) => None,
                 })
                 .collect();
             if found.is_empty() {
                 break;
             }
-            for (holder, wait) in found {
-                reaches.entry(holder).or_insert(wait);
+            for (holder, steps) in found {
+                reaches.entry(holder).or_insert(steps);
             }
         }
+        let way_in = |holder: &Holder| *holder == Holder::File || self.races.fired.contains(holder) || !self.races.called.contains(holder);
         let mut told: Vec<(Span, String)> = Vec::new();
-        for site in sites.iter().filter(|site| exposed.contains(&site.holder)) {
+        for site in sites.iter().filter(|site| way_in(&site.holder)) {
             if told.iter().any(|(span, _)| *span == site.span) {
                 continue;
             }
@@ -459,11 +463,11 @@ impl Checker<'_> {
                 Reached::Wait(text) => format!(
                     "'{text}' is not in a `race` with a `sleep`: from 0.13 a wait whose record is deleted never ends (under {pin} the code after it was skipped), so this run can wait forever. Race it: `race(() => {{ return {text} }}, () => {{ await sleep(1d) }})` — reviews#deleted-records"
                 ),
-                Reached::Call { callee, written } => {
-                    let Some((text, at)) = reaches.get(callee) else { continue };
-                    let holder = self.races.names.get(at).map_or(written.as_str(), String::as_str);
+                Reached::Call { callee, step } => {
+                    let Some(down) = reaches.get(callee) else { continue };
+                    let chain = std::iter::once(step.as_str()).chain(down.iter().map(String::as_str)).collect::<Vec<_>>().join(" → ");
                     format!(
-                        "this call to '{written}' reaches '{text}' (in '{holder}'), which is not in a `race` with a `sleep`: from 0.13 a wait whose record is deleted never ends (under {pin} the code after it was skipped), so this run can wait forever. Race the call: `race(() => {{ return {written}(…) }}, () => {{ await sleep(1d) }})` — reviews#deleted-records"
+                        "'{chain}' is not in a `race` with a `sleep`: from 0.13 a wait whose record is deleted never ends (under {pin} the code after it was skipped), so this run can wait forever. Race the call: `race(() => {{ return {step} }}, () => {{ await sleep(1d) }})` — reviews#deleted-records"
                     )
                 }
             };
@@ -639,8 +643,6 @@ pub struct Races {
     called: std::collections::HashSet<Holder>,
     /// The functions a listen fires.
     fired: std::collections::HashSet<Holder>,
-    /// Each holder walked, by name.
-    names: std::collections::HashMap<Holder, String>,
     /// What a name bound to a closure runs.
     closures: std::collections::HashMap<SymbolId, Holder>,
 }
@@ -660,8 +662,9 @@ struct Site {
 enum Reached {
     /// An await on a record's edge, as written.
     Wait(String),
-    /// A call to a holder, its callee as written.
-    Call { callee: Holder, written: String },
+    /// A call to a holder, spelled as a step of a chain of calls
+    /// (`pressed(msg)`).
+    Call { callee: Holder, step: String },
 }
 
 /// A site inside a race not yet ended, and the arms around it, outermost

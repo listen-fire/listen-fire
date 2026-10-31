@@ -454,7 +454,7 @@ impl Checker<'_> {
         let symbol = self.scopes.symbol(id).clone();
         if symbol.kind == SymbolKind::Movement {
             if let Some(holder) = self.holder_of(id) {
-                self.note_hang_call(holder, span, written);
+                self.note_hang_call(holder, span, format!("{written}(…)"));
             }
             self.call_movement(id);
             if let Some(params) = self.listens.movement_info(id).map(|info| info.params.iter().map(|p| p.name.clone()).collect::<Vec<_>>())
@@ -466,7 +466,7 @@ impl Checker<'_> {
         }
         if let Some(crate::types::position::Position::Closure(closure)) = &symbol.types.pos {
             if let Some(holder) = self.holder_of(id) {
-                self.note_hang_call(holder, span, written);
+                self.note_hang_call(holder, span, format!("{written}(…)"));
             }
             let row = self.closure_row(id);
             self.absorb(row);

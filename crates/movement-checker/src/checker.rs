@@ -585,7 +585,7 @@ impl<'c> Checker<'c> {
                 let label = name.map_or_else(|| "this closure".to_string(), |n| format!("the closure '{n}'"));
                 // A closure bound to a name runs where it is called, not where it is written.
                 let (body, row) = match name {
-                    Some(name) => self.in_holder(crate::families::flow::Holder::closure(closure.span), name, |this| {
+                    Some(name) => self.in_holder(crate::families::flow::Holder::closure(closure.span), |this| {
                         this.check_closure_walked(closure, scope, Some(name), &label, 0)
                     }),
                     None => self.check_closure_walked(closure, scope, name, &label, 0),
@@ -920,7 +920,7 @@ impl<'c> Checker<'c> {
         let mut returns = match declared {
             Some(id) => {
                 let holder = crate::families::flow::Holder::Function(self.declared_id(id));
-                self.in_holder(holder, &movement.name, |this| this.check_body(&movement.body, body, what.clone()))
+                self.in_holder(holder, |this| this.check_body(&movement.body, body, what.clone()))
             }
             None => self.check_body(&movement.body, body, what.clone()),
         };
