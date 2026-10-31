@@ -1866,6 +1866,7 @@ function unreadableCarries(
  *  on a `type` key, a list on an `eq` key that is not one value, or a value
  *  its `values` do not spell. */
 function absentRefusal(name: string, key: KeyBecomes): string | undefined {
+  if (key.absentField !== undefined && key.absent === undefined) return `'listenSettingsBecome' gives '${name}' an 'absentField' but no 'absent' value to compare on it`;
   if (key.absent === undefined) return undefined;
   const texts = typeof key.absent === 'string' ? [key.absent] : key.absent;
   if (key.op === 'type') return `'listenSettingsBecome' gives '${name}' an absent value, but a 'type' key compares no field`;
@@ -1880,12 +1881,25 @@ function absentRefusal(name: string, key: KeyBecomes): string | undefined {
  * traversal it says (crates/lf schema.rs `unreadable_settings_become` says the
  * same): an alias count that is not one per edge, a key mapped past the path
  * or compared on no field, a `lowercase` on a key that compares no text, an `absent` its key cannot compare, a path that starts at no root collection, or an
- * edge its type before it does not have. A connection positioned at a member
+ * edge its type before it does not have; each `byEvent` mapping is judged the
+ * same. A connection positioned at a member
  * stands on the path's first hops, so the path is read from its first edge
  * that is a root collection here. A type nobody described is not judged.
  */
 export function unreadableSettingsBecome(
   become: SettingsBecome,
+  entries: readonly SchemaEntryPoint[],
+  descriptors: ReadonlyMap<string, SchemaTypeDescriptor>,
+): string | undefined {
+  for (const mapping of [become, ...Object.values(become.byEvent ?? {})]) {
+    const refusal = unreadableMapping(mapping, entries, descriptors);
+    if (refusal !== undefined) return refusal;
+  }
+  return undefined;
+}
+
+function unreadableMapping(
+  become: Omit<SettingsBecome, 'byEvent'>,
   entries: readonly SchemaEntryPoint[],
   descriptors: ReadonlyMap<string, SchemaTypeDescriptor>,
 ): string | undefined {

@@ -246,12 +246,20 @@ The manifest file registers your server with a team:
   events a listen with none heard): the rewrite of such a listen compares it,
   so the traversal hears what the listen heard. `"lowercase": true` says your
   module compared the key's values lowercased, so the rewrite writes them so.
-  A rewrite is offered only when every literal it writes is one the field's
+  `"absentField"` names the field `absent` is compared on when leaving the key
+  out meant something about another field (gmail's `labels` left out of a
+  `label_added` listen meant the mailbox's own labels: `Label Type == "user"`).
+  When your events arrive on more than one edge, `byEvent` maps an event to the
+  mapping a listen naming it becomes instead (`{ "label_added": { "path":
+  ["Labelings"], … } }`), with `events` spent choosing it; a listen that leaves
+  `events` out takes the top mapping, and one naming events of two mappings has
+  no rewrite (its author writes one listen per edge). A rewrite is offered only when every literal it writes is one the field's
   owned scalar takes. A connection positioned at a member (an Airtable `base`)
   stands on the hops its position keys map to. A path naming an edge you do
   not describe, a key mapped past the path, an `eq`/`in` key with no `field`,
   `lowercase: true` on a `type` key, or an `absent` the key cannot compare (on a
-  `type` key, several values on an `eq` key, a value its `values` do not spell)
+  `type` key, several values on an `eq` key, a value its `values` do not spell,
+  an `absentField` with no `absent`), in the mapping or any `byEvent` one,
   is refused when the module is described. A listen with a key you do not map is left for its author.
 - Optional fields: `handbookSection` (`{ title, content }`, prose the authoring
   handbook shows about your system), `vocabulary` (an icon and event phrasing),

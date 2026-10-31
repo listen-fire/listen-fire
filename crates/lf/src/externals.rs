@@ -744,8 +744,16 @@ fn listen_declarations(raw: &Js) -> Result<Obj, String> {
 pub fn settings_become(value: &Js) -> Result<movement_parser::catalog::types::SettingsBecome, String> {
     let refused = |e: &dyn std::fmt::Display| format!("listenSettingsBecome: {e}");
     let mut raw: serde_json::Value = serde_json::from_str(&value.to_json()).map_err(|e| refused(&e))?;
-    let Some(object) = raw.as_object_mut() else { return Err(refused(&"expected an object")) };
-    object.retain(|k, _| ["path", "aliases", "paramFrom", "keys"].contains(&k.as_str()));
+    normalised_mapping(&mut raw, true)?;
+    serde_json::from_value(raw).map_err(|e| refused(&e))
+}
+
+/// One mapping of `listenSettingsBecome` as `WireListenDeclarations` reads
+/// it, in place: unknown keys stripped (a `byEvent` mapping's own `byEvent`
+/// too), the empty names refused in the same words.
+fn normalised_mapping(raw: &mut serde_json::Value, top: bool) -> Result<(), String> {
+    let Some(object) = raw.as_object_mut() else { return Err("listenSettingsBecome: expected an object".into()) };
+    object.retain(|k, _| ["path", "aliases", "paramFrom", "keys"].contains(&k.as_str()) || (top && k == "byEvent"));
     let empties = |value: Option<&serde_json::Value>| value.and_then(serde_json::Value::as_array).map(|items| items.iter().map(|i| i.as_str().is_some_and(str::is_empty)).collect::<Vec<_>>());
     if empties(object.get("path")).is_some_and(|empties| empties.is_empty()) {
         return Err("listenSettingsBecome.path: expected at least one edge".into());
@@ -762,9 +770,12 @@ pub fn settings_become(value: &Js) -> Result<movement_parser::catalog::types::Se
     if let Some(keys) = object.get_mut("keys").and_then(serde_json::Value::as_object_mut) {
         for key in keys.values_mut() {
             let Some(key) = key.as_object_mut() else { continue };
-            key.retain(|k, _| ["hop", "field", "op", "values", "absent", "lowercase"].contains(&k.as_str()));
+            key.retain(|k, _| ["hop", "field", "op", "values", "absent", "absentField", "lowercase"].contains(&k.as_str()));
             if key.get("field").and_then(serde_json::Value::as_str).is_some_and(str::is_empty) {
                 return Err("listenSettingsBecome.keys.field: expected a non-empty string".into());
+            }
+            if key.get("absentField").and_then(serde_json::Value::as_str).is_some_and(str::is_empty) {
+                return Err("listenSettingsBecome.keys.absentField: expected a non-empty string".into());
             }
             let texts = |v: &serde_json::Value| v.is_string() || v.as_array().is_some_and(|items| items.iter().all(serde_json::Value::is_string));
             if key.get("absent").is_some_and(|v| !texts(v)) {
@@ -775,8 +786,14 @@ pub fn settings_become(value: &Js) -> Result<movement_parser::catalog::types::Se
             }
         }
     }
-    serde_json::from_value(raw).map_err(|e| refused(&e))
+    if let Some(ways) = object.get_mut("byEvent").and_then(serde_json::Value::as_object_mut) {
+        for way in ways.values_mut() {
+            normalised_mapping(way, false)?;
+        }
+    }
+    Ok(())
 }
+
 
 /// A module's own env, with `{lf}` standing for the module's own folder
 /// (`.lf/externals/<name>/`), never the project's `.lf`, which holds listen-fire's

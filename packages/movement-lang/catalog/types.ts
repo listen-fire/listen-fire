@@ -213,6 +213,12 @@ export interface SettingsBecome {
   paramFrom?: string;
   /** Each settings key, by name. */
   keys: Record<string, KeyBecomes>;
+  /** The mapping a listen naming one of these events in `events` becomes
+   *  instead, when the module's events arrive on more than one edge (gmail's
+   *  `label_added` lands on `Labelings`, not `Messages`); `events` is then
+   *  spent choosing it. A listen naming events of two mappings has no
+   *  rewrite: one listen per edge. One level deep. */
+  byEvent?: Record<string, Omit<SettingsBecome, 'byEvent'>>;
 }
 
 /** What one settings key becomes: a comparison on a hop's field (`eq`, `in`,
@@ -232,6 +238,10 @@ export interface KeyBecomes {
    *  rewrite of a listen that omits the key compares it, so the traversal
    *  hears what the listen heard. Absent, omitting the key narrowed nothing. */
   absent?: string | string[];
+  /** The field `absent` is compared on, when leaving the key out meant
+   *  something about another field than the key's own (gmail's `labels` left
+   *  out of a `label_added` listen meant its own labels: `Label Type == "user"`). */
+  absentField?: string;
   /** 0.12 compared this key's values lowercased: the rewrite writes them
    *  lowercased, so `{ key: "Deals" }` still hears what it heard. */
   lowercase?: boolean;

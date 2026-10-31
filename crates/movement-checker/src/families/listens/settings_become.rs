@@ -43,6 +43,8 @@ struct Rewrite {
     path: String,
     /// What a parameter typed as the 0.12 event position is typed as now.
     param_type: String,
+    /// The 0.12 event position the mapping it came from retypes.
+    param_from: Option<String>,
 }
 
 impl Checker<'_> {
@@ -88,6 +90,9 @@ impl Checker<'_> {
         let why_no_fix = match &rewrite {
             Some(Err(NoRewrite::Unbounded)) => " (its settings name no value that bounds the edge, so there is no rewrite: name the one it listens for)".to_string(),
             Some(Err(NoRewrite::Refused(reason))) => format!(" (there is no rewrite: {reason})"),
+            Some(Err(NoRewrite::SeveralEdges(edges))) => {
+                format!(" (there is no rewrite: its events arrive on {}, so write one listen for each)", edges.iter().map(|e| format!("`{}`", spell_name(e))).collect::<Vec<_>>().join(" and "))
+            }
             _ => String::new(),
         };
         let rewrite = rewrite.and_then(Result::ok);
@@ -102,7 +107,7 @@ impl Checker<'_> {
         if let Some(rewrite) = rewrite {
             let alias = statement.alias.as_ref().map(|a| format!(" as {}", serde_json::to_string(a).unwrap_or_default())).unwrap_or_default();
             let mut edits = vec![json!({ "span": statement.span, "text": format!("listen{alias} to {path} fire {movement}") })];
-            if let Some(span) = become_.and_then(|b| self.param_from_span(statement, b, scope)) {
+            if let Some(span) = rewrite.param_from.as_deref().and_then(|from| self.param_from_span(statement, from, scope)) {
                 edits.push(json!({ "span": span, "text": rewrite.param_type }));
             }
             let safe = !suppresses_self && !every;
@@ -113,8 +118,7 @@ impl Checker<'_> {
 
     /// Where the fired function's parameter type is written, when it names
     /// the 0.12 event position the module's settings listens fired with.
-    fn param_from_span(&self, statement: &ListenDeclaration, become_: &SettingsBecome, scope: ScopeId) -> Option<Span> {
-        let from = become_.param_from.as_deref()?;
+    fn param_from_span(&self, statement: &ListenDeclaration, from: &str, scope: ScopeId) -> Option<Span> {
         let id = self.scopes.resolve_function(scope, &statement.movement)?;
         let symbol = self.scopes.symbol(id);
         if symbol.kind != SymbolKind::Movement || symbol.imported_name.is_some() {
@@ -149,6 +153,41 @@ enum NoRewrite {
     /// A value written as its field holds it is one the field's owned type
     /// refuses: the checker's reason.
     Refused(String),
+    /// Its `events` name events of more than one mapping (`byEvent`): the
+    /// edges they arrive on.
+    SeveralEdges(Vec<String>),
+}
+
+/// The mapping a listen takes: the one its `events` choose (`byEvent`),
+/// with `events` spent choosing it, else the module's own. A listen that
+/// leaves `events` out chooses by the module's default events.
+fn chosen<'b>(statement: &ListenDeclaration, become_: &'b SettingsBecome, default_events: Option<&[String]>) -> Result<(&'b SettingsBecome, bool), NoRewrite> {
+    let Some(by_event) = become_.by_event.as_ref().filter(|b| !b.is_empty()) else { return Ok((become_, false)) };
+    let named: Vec<String> = match statement.config.iter().find(|a| a.name == EVENTS_KEY) {
+        Some(arg) => match expression_of_slot(&arg.value).map_err(|_| NoRewrite::Unmapped)? {
+            Expression::Static { value: StaticValue::String(event) } => vec![event],
+            Expression::List { elements } => elements
+                .iter()
+                .map(|e| match e {
+                    ListElement::Expression(Expression::Static { value: StaticValue::String(event) }) => Ok(event.clone()),
+                    _ => Err(NoRewrite::Unmapped),
+                })
+                .collect::<Result<_, _>>()?,
+            _ => return Err(NoRewrite::Unmapped),
+        },
+        None => default_events.unwrap_or_default().to_vec(),
+    };
+    let ways: Vec<Option<&SettingsBecome>> = named.iter().map(|event| by_event.get(event)).collect();
+    match ways.as_slice() {
+        [] => Ok((become_, false)),
+        _ if ways.iter().all(Option::is_none) => Ok((become_, false)),
+        [Some(first), rest @ ..] if rest.iter().all(|w| w.is_some_and(|w| std::ptr::eq(w, *first))) => Ok((*first, true)),
+        _ => {
+            let mut edges: Vec<String> = ways.iter().map(|w| w.unwrap_or(become_).path.last().cloned().unwrap_or_default()).collect();
+            edges.dedup();
+            Err(NoRewrite::SeveralEdges(edges))
+        }
+    }
 }
 
 /// The settings listen as the traversal its module maps it to. A `type` key
@@ -157,12 +196,13 @@ enum NoRewrite {
 /// leaving it out meant (`absent`; for `events`, else the module's default
 /// events), or the rewrite would widen the listen.
 fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Narrowing) -> Result<Rewrite, NoRewrite> {
+    let (become_, events_spent) = chosen(statement, become_, from.default_events)?;
     let schema = from.schema;
     let consumed = consumed_hops(become_, from.positioned);
     let mut conjuncts: Vec<Vec<Expression>> = vec![Vec::new(); become_.path.len()];
     let mut landing = None;
     for arg in &statement.config {
-        if [SUPPRESS_SELF_KEY, EVERY_KEY, POLL_INTERVAL_KEY].contains(&arg.name.as_str()) {
+        if [SUPPRESS_SELF_KEY, EVERY_KEY, POLL_INTERVAL_KEY].contains(&arg.name.as_str()) || (events_spent && arg.name == EVENTS_KEY) {
             continue;
         }
         let key = become_.keys.get(&arg.name).ok_or(NoRewrite::Unmapped)?;
@@ -216,8 +256,8 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
             }
         }
     }
-    let written = |name: &str| statement.config.iter().any(|a| a.name == name);
-    let defaults = from.default_events.filter(|d| !d.is_empty()).map(|d| SettingsValue::Many(d.to_vec()));
+    let written = |name: &str| (events_spent && name == EVENTS_KEY) || statement.config.iter().any(|a| a.name == name);
+    let defaults = from.default_events.filter(|d| !d.is_empty() && !events_spent).map(|d| SettingsValue::Many(d.to_vec()));
     if defaults.is_some() && !written(EVENTS_KEY) && !become_.keys.contains_key(EVENTS_KEY) {
         return Err(NoRewrite::Unmapped);
     }
@@ -259,12 +299,14 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
         [edge] => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(edge)),
         _ => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(landing_of(schema, kept).ok_or(NoRewrite::Unmapped)?)),
     };
-    Ok(Rewrite { path, param_type })
+    Ok(Rewrite { path, param_type, param_from: become_.param_from.clone() })
 }
 
 /// The comparison what omitting `key` meant is: one value by `==`, a list
 /// by `IN` (or by `==` on an `eq` key, when it holds one).
 fn absent_comparison(key: &KeyBecomes, meant: &SettingsValue) -> Option<Expression> {
+    let on = KeyBecomes { field: key.absent_field.clone().or_else(|| key.field.clone()), ..key.clone() };
+    let key = &on;
     key.field.as_ref()?;
     let items = meant.texts().iter().map(|t| mapped(key, &StaticValue::String(t.clone()))).collect::<Option<Vec<_>>>()?;
     match (key.op, meant, items.as_slice()) {

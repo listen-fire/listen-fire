@@ -87,6 +87,21 @@
       "name": "lowercase on a type key",
       "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "kind": { "hop": 0, "op": "type", "lowercase": true } } },
       "refusal": "'listenSettingsBecome' gives 'kind' 'lowercase: true', but a 'type' key compares no text"
+    },
+    {
+      "name": "an event's own mapping is judged as the module's is",
+      "become": { "path": ["Notifications"], "aliases": ["n"], "keys": {}, "byEvent": { "moved": { "path": ["Nowhere"], "aliases": ["x"], "keys": {} } } },
+      "refusal": "'listenSettingsBecome' starts nowhere: none of Nowhere is a root collection (the root collections: Bases, Notifications)"
+    },
+    {
+      "name": "an event's own mapping onto another root edge",
+      "become": { "path": ["Notifications"], "aliases": ["n"], "keys": {}, "byEvent": { "based": { "path": ["Bases"], "aliases": ["b"], "keys": { "labels": { "hop": 0, "field": "Name", "op": "in", "absent": "user", "absentField": "Kind" } } } } },
+      "refusal": null
+    },
+    {
+      "name": "an absentField with no absent value",
+      "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "labels": { "hop": 0, "field": "Reason", "op": "in", "absentField": "Kind" } } },
+      "refusal": "'listenSettingsBecome' gives 'labels' an 'absentField' but no 'absent' value to compare on it"
     }
   ],
   "manifestReads": {
@@ -138,6 +153,22 @@
         "name": "a lowercase that is not true or false",
         "raw": { "path": ["Emails"], "aliases": ["e"], "keys": { "key": { "hop": 0, "field": "Key", "op": "eq", "lowercase": "yes" } } },
         "refusal": "listenSettingsBecome.keys.lowercase: expected true or false"
+      },
+      {
+        "name": "an event's own mapping is kept, read as the module's is; its own byEvent is stripped",
+        "raw": { "path": ["Messages"], "aliases": ["m"], "keys": {}, "byEvent": { "label_added": { "path": ["Labelings"], "aliases": ["l"], "extra": 1, "byEvent": { "x": { "path": ["X"], "aliases": ["x"], "keys": {} } }, "keys": { "labels": { "hop": 0, "field": "Label", "op": "in", "absent": "user", "absentField": "Label Type" } } } } },
+        "read": { "path": ["Messages"], "aliases": ["m"], "keys": {}, "byEvent": { "label_added": { "path": ["Labelings"], "aliases": ["l"], "keys": { "labels": { "hop": 0, "field": "Label", "op": "in", "absent": "user", "absentField": "Label Type" } } } } },
+        "refusal": null
+      },
+      {
+        "name": "an empty name in an event's own mapping",
+        "raw": { "path": ["Messages"], "aliases": ["m"], "keys": {}, "byEvent": { "label_added": { "path": [""], "aliases": ["l"], "keys": {} } } },
+        "refusal": "listenSettingsBecome.path: expected non-empty edge names"
+      },
+      {
+        "name": "an empty absentField",
+        "raw": { "path": ["Emails"], "aliases": ["e"], "keys": { "key": { "hop": 0, "field": "Key", "op": "eq", "absent": "", "absentField": "" } } },
+        "refusal": "listenSettingsBecome.keys.absentField: expected a non-empty string"
       }
     ]
   }

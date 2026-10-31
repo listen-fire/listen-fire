@@ -898,6 +898,9 @@ pub fn unreadable_listening(declarant: Declarant, entries: &[Js], descriptors: &
 /// a `type` key, a list on an `eq` key that is not one value, or a value its
 /// `values` do not spell (engine-contracts `absentRefusal` says the same).
 fn absent_refusal(name: &str, key: &movement_parser::catalog::types::KeyBecomes) -> Option<String> {
+    if key.absent_field.is_some() && key.absent.is_none() {
+        return Some(format!("'listenSettingsBecome' gives '{name}' an 'absentField' but no 'absent' value to compare on it"));
+    }
     let texts = key.absent.as_ref()?.texts();
     if key.op == KeyOp::Type {
         return Some(format!("'listenSettingsBecome' gives '{name}' an absent value, but a 'type' key compares no field"));
@@ -913,10 +916,16 @@ fn absent_refusal(name: &str, key: &movement_parser::catalog::types::KeyBecomes)
 /// traversal it says (engine-contracts `unreadableSettingsBecome` says the
 /// same): an alias count that is not one per edge, a key mapped past the path
 /// or compared on no field, a `lowercase` on a key that compares no text, an `absent` its key cannot compare, a path that starts at no root collection, or an
-/// edge its type before it does not have. A connection positioned at a member
+/// edge its type before it does not have; each `byEvent` mapping is judged
+/// the same. A connection positioned at a member
 /// stands on the path's first hops, so the path is read from its first edge
 /// that is a root collection here. A type nobody described is not judged.
 pub fn unreadable_settings_become(become_: &SettingsBecome, entries: &[Js], descriptors: &IndexMap<String, Js>) -> Option<String> {
+    let ways = become_.by_event.iter().flat_map(|ways| ways.iter());
+    std::iter::once(become_).chain(ways.map(|(_, way)| way)).find_map(|mapping| unreadable_mapping(mapping, entries, descriptors))
+}
+
+fn unreadable_mapping(become_: &SettingsBecome, entries: &[Js], descriptors: &IndexMap<String, Js>) -> Option<String> {
     let path = &become_.path;
     if become_.aliases.len() != path.len() {
         return Some(format!("'listenSettingsBecome' gives {} aliases for a path of {} edges: give one per edge", become_.aliases.len(), path.len()));

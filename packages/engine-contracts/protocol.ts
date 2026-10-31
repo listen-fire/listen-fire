@@ -765,6 +765,28 @@ export const WireInvokeFieldFunctionInput = z.object({
  *     hop of the address the event is narrowed by (`narrows`).
  * All optional: an adapter declaring none leaves its listen config unchecked.
  */
+// One mapping of a 0.12 settings listen to a traversal (`SettingsBecome`):
+// whether its path names edges the module describes is judged at describe.
+// The refusal texts are word for word those of `lf`'s manifest reader
+// (settings_become.cases.json).
+const settingsMapping = z.object({
+  path: z.array(z.string().min(1, 'listenSettingsBecome.path: expected non-empty edge names')).min(1, 'listenSettingsBecome.path: expected at least one edge'),
+  aliases: z.array(z.string().min(1, 'listenSettingsBecome.aliases: expected non-empty aliases')),
+  paramFrom: z.string().min(1, 'listenSettingsBecome.paramFrom: expected a non-empty string').optional(),
+  keys: z.record(
+    z.string(),
+    z.object({
+      hop: z.number().int().nonnegative(),
+      field: z.string().min(1, 'listenSettingsBecome.keys.field: expected a non-empty string').optional(),
+      op: z.enum(['eq', 'in', 'contains', 'type']),
+      values: z.record(z.string(), z.string()).optional(),
+      absent: z.union([z.string(), z.array(z.string())], { error: 'listenSettingsBecome.keys.absent: expected a text or a list of texts' }).optional(),
+      absentField: z.string().min(1, 'listenSettingsBecome.keys.absentField: expected a non-empty string').optional(),
+      lowercase: z.boolean({ error: 'listenSettingsBecome.keys.lowercase: expected true or false' }).optional(),
+    }),
+  ),
+});
+
 export const WireListenDeclarations = z.object({
   subscribableEvents: z.array(z.string().min(1)).optional(),
   defaultSubscribedEvents: z.array(z.string().min(1)).optional(),
@@ -792,27 +814,9 @@ export const WireListenDeclarations = z.object({
       { message: "a 'field-value' listen key needs exactly one 'field' key to be a value of" },
     )
     .optional(),
-  // What a 0.12 settings listen becomes as a traversal (`SettingsBecome`):
-  // whether its path names edges the module describes is judged at describe.
-  // The refusal texts are word for word those of `lf`'s manifest reader
-  // (settings_become.cases.json).
-  listenSettingsBecome: z
-    .object({
-      path: z.array(z.string().min(1, 'listenSettingsBecome.path: expected non-empty edge names')).min(1, 'listenSettingsBecome.path: expected at least one edge'),
-      aliases: z.array(z.string().min(1, 'listenSettingsBecome.aliases: expected non-empty aliases')),
-      paramFrom: z.string().min(1, 'listenSettingsBecome.paramFrom: expected a non-empty string').optional(),
-      keys: z.record(
-        z.string(),
-        z.object({
-          hop: z.number().int().nonnegative(),
-          field: z.string().min(1, 'listenSettingsBecome.keys.field: expected a non-empty string').optional(),
-          op: z.enum(['eq', 'in', 'contains', 'type']),
-          values: z.record(z.string(), z.string()).optional(),
-          absent: z.union([z.string(), z.array(z.string())], { error: 'listenSettingsBecome.keys.absent: expected a text or a list of texts' }).optional(),
-          lowercase: z.boolean({ error: 'listenSettingsBecome.keys.lowercase: expected true or false' }).optional(),
-        }),
-      ),
-    })
+  // A `byEvent` mapping is one more of the same, one level deep.
+  listenSettingsBecome: settingsMapping
+    .extend({ byEvent: z.record(z.string(), settingsMapping).optional() })
     .optional(),
 });
 

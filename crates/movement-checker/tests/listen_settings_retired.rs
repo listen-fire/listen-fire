@@ -103,13 +103,22 @@ const CATALOG: &str = r#"{"adapters":{
     "schemas":{"":{"positions":{"Ring":{"properties":{"At":"datetime"},"edges":{}}},
       "collections":{"Rings":{"target":"Ring","readable":false,"listenable":true,"delivery":"connection"}},
       "writableRoots":{},"eventPosition":"Ring","eventPositions":[{"position":"Ring"}]}}},
-  "mail":{"canFire":true,"constructionArgs":[],"triggerConfig":["query","labels","every"],
+  "mail":{"canFire":true,"constructionArgs":[],"triggerConfig":["query","labels","events","every"],
     "listenSettingsBecome":{"path":["Messages"],"aliases":["m"],"paramFrom":"Message",
-      "keys":{"query":{"hop":0,"field":"Query","op":"eq"},"labels":{"hop":0,"field":"Labels","op":"contains","absent":"INBOX"}}},
+      "keys":{"query":{"hop":0,"field":"Query","op":"eq"},"labels":{"hop":0,"field":"Labels","op":"contains","absent":"INBOX"}},
+      "byEvent":{
+        "message_received":{"path":["Messages"],"aliases":["m"],"paramFrom":"Message",
+          "keys":{"query":{"hop":0,"field":"Query","op":"eq"},"labels":{"hop":0,"field":"Labels","op":"contains","absent":"INBOX"}}},
+        "label_added":{"path":["Labelings"],"aliases":["l"],"paramFrom":"Message",
+          "keys":{"query":{"hop":0,"field":"Query","op":"eq"},"labels":{"hop":0,"field":"Label","op":"in","absent":"user","absentField":"Label Type"}}}}},
     "schemas":{"":{"positions":{"Message":{"properties":{"Query":{"kind":"owned","name":"GmailQuery","owner":"mail"},"Labels":{"kind":"list","of":"text"},"Subject":"text"},"edges":{},
-        "propertyCapabilities":{"Query":{"filterOperators":["eq"]},"Labels":{"filterOperators":["eq","in","contains"]},"Subject":{"filterOperators":["eq","contains"]}}}},
+        "propertyCapabilities":{"Query":{"filterOperators":["eq"]},"Labels":{"filterOperators":["eq","in","contains"]},"Subject":{"filterOperators":["eq","contains"]}}},
+        "Labeling":{"properties":{"Query":{"kind":"owned","name":"GmailQuery","owner":"mail"},"Label":"text","Label Type":{"kind":"enum","options":["system","user"]},"Subject":"text"},"edges":{},
+        "propertyCapabilities":{"Query":{"filterOperators":["eq"]},"Label":{"filterOperators":["eq","in"]},"Label Type":{"filterOperators":["eq"]}}}},
       "collections":{"Messages":{"target":"Message","listenable":true,"identity":"Message Id","delivery":"polled","pollEverySeconds":60,"cursor":true,
-        "capability":{"filter":"native","supportsLimit":true}}},
+        "capability":{"filter":"native","supportsLimit":true}},
+        "Labelings":{"target":"Labeling","listenable":true,"readable":false,"identity":"Id","delivery":"polled","pollEverySeconds":60,"cursor":true,
+        "capability":{"filter":"native","supportsLimit":false}}},
       "writableRoots":{},"eventPosition":"Message","eventPositions":[{"position":"Message"}]}}},
   "feed":{"canFire":true,"constructionArgs":[],"triggerConfig":["topic"],
     "schemas":{"":{"positions":{"Item":{"properties":{"Topic":"text"},"edges":{}}},
@@ -477,4 +486,32 @@ fn a_list_key_mapped_by_contains_is_one_contains_or_an_or_of_them_and_leaving_it
     let text = fixed(&left_out, &d);
     assert!(text.contains("listen to mail-[m:Messages WHERE m.Query == \"from:acme\" AND m.Labels CONTAINS \"INBOX\"]-> fire f"), "{text}");
     assert_rechecks_clean(&text);
+}
+
+#[test]
+fn a_listen_naming_an_event_that_arrives_on_another_edge_is_rewritten_onto_that_edge() {
+    let labelled = format!("{MAIL}function f(m: <mail-[:Message]->>) {{ return 1 }}\nlisten to mail {{ events: [\"label_added\"], labels: [\"Deals\", \"Hiring\"] }} fire f\n");
+    let text = fixed(&labelled, &diagnostics(&labelled));
+    assert!(text.contains("listen to mail-[l:Labelings WHERE l.Label IN [\"Deals\", \"Hiring\"]]-> fire f"), "{text}");
+    assert!(text.contains("function f(m: <mail-[:Labelings]->>)"), "{text}");
+    assert_rechecks_clean(&text);
+
+    // Leaving `labels` out of a label listen meant the mailbox's own labels.
+    let own = format!("{MAIL}function f(m: <mail-[:Message]->>) {{ return 1 }}\nlisten to mail {{ events: \"label_added\", query: \"from:acme\" }} fire f\n");
+    let text = fixed(&own, &diagnostics(&own));
+    assert!(text.contains("listen to mail-[l:Labelings WHERE l.Query == \"from:acme\" AND l.`Label Type` == \"user\"]-> fire f"), "{text}");
+    assert_rechecks_clean(&text);
+
+    let received = format!("{MAIL}function f(m: <mail-[:Message]->>) {{ return 1 }}\nlisten to mail {{ events: [\"message_received\"] }} fire f\n");
+    let text = fixed(&received, &diagnostics(&received));
+    assert!(text.contains("listen to mail-[m:Messages WHERE m.Labels CONTAINS \"INBOX\"]-> fire f"), "{text}");
+    assert_rechecks_clean(&text);
+}
+
+#[test]
+fn a_listen_naming_events_that_arrive_on_two_edges_has_no_fix_and_is_told_to_write_one_per_edge() {
+    let both = format!("{MAIL}function f(m: <mail-[:Message]->>) {{ return 1 }}\nlisten to mail {{ events: [\"message_received\", \"label_added\"] }} fire f\n");
+    let d = diagnostics(&both);
+    assert!(retired(&d).fix.is_none(), "{:?}", retired(&d).fix);
+    assert!(retired(&d).message.ends_with("(there is no rewrite: its events arrive on `Messages` and `Labelings`, so write one listen for each)"), "{}", retired(&d).message);
 }

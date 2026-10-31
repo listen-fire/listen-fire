@@ -768,6 +768,13 @@ pub struct SettingsBecome {
     pub param_from: Option<String>,
     /// Each settings key, by name.
     pub keys: JsMap<KeyBecomes>,
+    /// The mapping a listen naming one of these events in `events` becomes
+    /// instead, when its module's events arrive on more than one edge (gmail's
+    /// `label_added` lands on `Labelings`, not `Messages`); `events` is then
+    /// spent choosing it. A listen naming events of two mappings has no
+    /// rewrite: one listen per edge. One level deep: a mapping here has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_event: Option<JsMap<SettingsBecome>>,
 }
 
 /// What one settings key becomes: a comparison on a hop's field, or the
@@ -791,6 +798,12 @@ pub struct KeyBecomes {
     /// hears what the listen heard. Absent, omitting the key narrowed nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub absent: Option<SettingsValue>,
+    /// The field `absent` is compared on, when leaving the key out meant
+    /// something about another field than the key's own (gmail's `labels`
+    /// left out of a `label_added` listen meant its own labels:
+    /// `Label Type == "user"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub absent_field: Option<String>,
     /// 0.12 compared this key's values lowercased: the rewrite writes them
     /// lowercased, so `{ key: "Deals" }` still hears what it heard.
     #[serde(default, skip_serializing_if = "Option::is_none")]
