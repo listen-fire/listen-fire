@@ -223,7 +223,7 @@ pub struct Reference {
     /// `readable`; `listenable`, `cursor`, `identity`, `version`; and how a
     /// listen reads it: `delivery`, `pollEverySeconds`, `bounded`,
     /// `boundedBy`, `carries`, `attributes`, `cheapToList`, `parentChanges`,
-    /// `relistEvery` (docs/contracts/adapter-protocol.md, "Declaring a
+    /// `relistEverySeconds` (docs/contracts/adapter-protocol.md, "Declaring a
     /// listenable edge").
     #[serde(flatten)]
     pub rest: Obj,

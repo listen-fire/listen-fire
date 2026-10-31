@@ -621,8 +621,6 @@ impl WireManifest {
     }
 }
 
-/// `WirePollDeclaration`, paired with the `poll` method as the manifest
-/// schema pairs them: its interval, a positive whole number of seconds.
 /// How long the module says a provider may re-send an arrival: a positive
 /// whole number of seconds, or none.
 pub fn resend_window_seconds(manifest: &Js) -> Option<u64> {
@@ -632,6 +630,8 @@ pub fn resend_window_seconds(manifest: &Js) -> Option<u64> {
     }
 }
 
+/// `WirePollDeclaration`, paired with the `poll` method as the manifest
+/// schema pairs them: its interval, a positive whole number of seconds.
 fn poll_declaration(raw: &Js, methods: &[String]) -> Result<Option<u64>, String> {
     let lists = methods.iter().any(|m| m == "poll");
     let Some(declared) = raw.get("poll") else {

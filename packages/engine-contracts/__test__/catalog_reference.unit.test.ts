@@ -10,6 +10,8 @@ import {
   unreadableAnswerShapeFrom,
   unreadableListening,
   unreadableLiteralsFrom,
+  unreadableOwnedField,
+  type SchemaEntryPoint,
 } from '../catalog';
 import cases from './write_paths.cases.json';
 
@@ -212,6 +214,16 @@ describe('a listening declaration', () => {
     return unreadableListening({ entry }, [entry], new Map([['tick', tick]]));
   };
 
+  // introspectAdapter does not zod-parse what an adapter answers, so a
+  // declaration the schema would have refused reaches `unreadableListening`
+  // as written.
+  const declaredAsWritten = (declares: object): SchemaEntryPoint =>
+    JSON.parse(JSON.stringify({ typeId: 'tick', displayName: 'Tick', collectionName: 'Ticks', writable: false, readable: false, listenable: true, ...declares }));
+  const ticksAsWritten = (declares: object) => {
+    const entry = declaredAsWritten(declares);
+    return unreadableListening({ entry }, [entry], new Map([['tick', tick]]));
+  };
+
   it('refuses an unbounded edge with nothing to narrow it by', () => {
     expect(ticks({ bounded: false })).toBe("'Ticks' declares 'bounded: false' but no 'boundedBy': name the fields a listen narrows it by");
     expect(ticks({ bounded: false, boundedBy: [] })).toBe("'Ticks' declares 'bounded: false' but no 'boundedBy': name the fields a listen narrows it by");
@@ -238,14 +250,42 @@ describe('a listening declaration', () => {
 
   it('refuses a hop cheap to list that says nothing of how its members change', () => {
     expect(ticks({ cheapToList: true })).toBe(
-      "'Ticks' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEvery': say how a listen learns its members changed",
+      "'Ticks' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEverySeconds': say how a listen learns its members changed",
     );
-    expect(ticks({ cheapToList: true, relistEvery: 300 })).toBeUndefined();
+    expect(ticks({ cheapToList: true, relistEverySeconds: 300 })).toBeUndefined();
     expect(ticks({ cheapToList: true, parentChanges: 'pushed' })).toBeUndefined();
-    expect(ticks({ cheapToList: true, parentChanges: 'pushed', relistEvery: 300 })).toBe(
-      "'Ticks' declares both 'parentChanges: pushed' and 'relistEvery': a module that reports its members' changes is not re-listed on a clock; declare one",
+    expect(ticks({ cheapToList: true, parentChanges: 'pushed', relistEverySeconds: 300 })).toBe(
+      "'Ticks' declares both 'parentChanges: pushed' and 'relistEverySeconds': a module that reports its members' changes is not re-listed on a clock; declare one",
     );
-    expect(ticks({ relistEvery: 300 })).toBe("'Ticks' declares 'relistEvery' but not 'cheapToList: true': only a hop cheap to list is re-listed");
+    expect(ticks({ relistEverySeconds: 300 })).toBe("'Ticks' declares 'relistEverySeconds' but not 'cheapToList: true': only a hop cheap to list is re-listed");
+  });
+
+  it('refuses a delivery that is none of the three, and a parentChanges that is not pushed', () => {
+    expect(ticksAsWritten({ delivery: 'pushed' })).toBe(`'Ticks' declares delivery "pushed", which is none of 'connection', 'scope' or 'polled'`);
+    expect(ticksAsWritten({ cheapToList: true, parentChanges: 'polled' })).toBe(`'Ticks' declares parentChanges "polled": the one value is 'pushed'`);
+  });
+
+  it('refuses parentChanges on a hop that is not cheap to list', () => {
+    expect(ticks({ parentChanges: 'pushed' })).toBe("'Ticks' declares 'parentChanges' but not 'cheapToList: true': only a hop cheap to list is re-listed");
+  });
+
+  it('refuses a number of seconds that is not a positive whole number', () => {
+    for (const [declared, shown] of [
+      [0, '0'],
+      [-5, '-5'],
+      [1.5, '1.5'],
+      ['300', '"300"'],
+    ] as const) {
+      expect(ticksAsWritten({ cheapToList: true, relistEverySeconds: declared })).toBe(
+        `'Ticks' declares 'relistEverySeconds: ${shown}': expected a positive whole number of seconds`,
+      );
+    }
+  });
+
+  it('refuses a root collection that declares what it carries: nothing comes before it', () => {
+    expect(ticks({ carries: ['Bases'] })).toBe(
+      "'Ticks' says its arrivals carry earlier hops, but 'carries' names 'Bases', and 'Ticks' is a root collection: nothing comes before it",
+    );
   });
 
   describe('carries', () => {
@@ -272,6 +312,26 @@ describe('a listening declaration', () => {
       expect(interactions(['Messages'])).toBeUndefined();
     });
 
+    it('carries naming the hops innermost first is refused: the innermost hop is the last', () => {
+      const bases = schemaEntryPointSchema.parse({ typeId: 'b', displayName: 'Base', collectionName: 'Bases', writable: false, readable: true });
+      const base = schemaTypeDescriptorSchema.parse({
+        typeId: 'b',
+        displayName: 'Base',
+        fields: [],
+        references: [{ ...reference, fieldId: 'm', name: 'Messages', targetTypeId: 'm' }],
+      });
+      const changes = (carries: string[]) =>
+        unreadableListening(
+          { reference: schemaReferenceDescriptorSchema.parse({ ...reference, fieldId: 'i', name: 'Interactions', targetTypeId: 'i', listenable: true, carries }), owner: 'm' },
+          [bases],
+          new Map([...descriptors, ['b', base]]),
+        );
+      expect(changes(['Bases', 'Messages'])).toBeUndefined();
+      expect(changes(['Messages', 'Bases'])).toBe(
+        "'Interactions' says its arrivals carry earlier hops, but 'carries' names 'Bases', which is no edge into 'Message' (the edges into it: Messages)",
+      );
+    });
+
     it('carries naming no earlier hop is refused', () => {
       expect(interactions(['Nope'])).toMatch(/'carries' names 'Nope', which is no edge into 'Message'/);
       expect(interactions(['Nope'])).toBe(
@@ -294,5 +354,15 @@ describe('an owned field', () => {
   it('is refused without the name, and a name on another kind is refused', () => {
     expect(schemaFieldDescriptorSchema.safeParse({ ...owned, kind: 'owned' }).success).toBe(false);
     expect(schemaFieldDescriptorSchema.safeParse({ ...owned, kind: 'string', owned: { name: 'Cron' } }).success).toBe(false);
+  });
+
+  it('is refused by name at describe when it names no scalar, as listen-fire refuses it', () => {
+    const asDescribed = (kind: string, extra: object = {}): Parameters<typeof unreadableOwnedField>[0] => JSON.parse(JSON.stringify({ ...owned, kind, ...extra }));
+    const expected = "'Schedule' is of kind 'owned' but declares no 'owned.name': name the scalar its adapter parses";
+    expect(unreadableOwnedField(asDescribed('owned', { owned: { name: 'Cron' } }))).toBeUndefined();
+    expect(unreadableOwnedField(asDescribed('string'))).toBeUndefined();
+    expect(unreadableOwnedField(asDescribed('owned'))).toBe(expected);
+    expect(unreadableOwnedField(asDescribed('owned', { owned: {} }))).toBe(expected);
+    expect(unreadableOwnedField(asDescribed('owned', { owned: { name: '' } }))).toBe(expected);
   });
 });

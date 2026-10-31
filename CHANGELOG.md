@@ -88,9 +88,9 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
   - `delivery`: pushed to the connection, pushed per scope (a table), or `polled` every `pollEverySeconds`.
   - `bounded: false` with `boundedBy`: an edge that spans more than a listen should range over (every cron schedule, every team's mail), and the fields whose `==` or `IN [ … ]` narrow it.
   - `carries`: the earlier hops whose records an arrival carries, outermost first. `attributes`: an arrival names the record it is about.
-  - `cheapToList`: a hop cheap enough to re-list, with either `parentChanges: "pushed"` (the module reports its members' changes, so nothing re-lists on a clock) or `relistEvery`, in seconds.
+  - `cheapToList`: a hop cheap enough to re-list, with either `parentChanges: "pushed"` (the module reports its members' changes, so nothing re-lists on a clock) or `relistEverySeconds`, in seconds.
   - An entry point may declare `listenable` (with `identity`, `version`, `cursor` and the keys above): a listen can then start at the instance, as `cron-[t:Ticks WHERE …]->` will.
-  - A field may be of kind `owned`: a named scalar its module parses, such as a cron schedule. A manifest may declare `resendWindowSeconds`, how long its provider may re-send an arrival.
+  - A field may be of kind `owned`: a named scalar its module parses, such as a cron schedule. One that names no scalar is refused, naming the field. A manifest may declare `resendWindowSeconds`, how long its provider may re-send an arrival.
   - Every number a module declares is a default the operator's `lf.yaml` overrides; the host has none of its own, so the module states each one.
   - A declaration that cannot mean what it says is refused, by name, when `listen-fire` or `introspectAdapter` describes the module: a polled edge without `pollEverySeconds`, `bounded: false` without `boundedBy`, a `boundedBy` field or a `carries` hop that is not there, a hop cheap to list that says nothing of how its members change.
   - The catalog snapshot carries them as optional members, so its version stays 2. A root collection that cannot be listed now says `readable: false`. The checker reads none of them yet.

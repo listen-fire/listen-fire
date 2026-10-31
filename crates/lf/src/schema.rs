@@ -267,7 +267,7 @@ const EDGE_TRUE_FLAGS: &[&str] = &["ephemeral"];
 /// What a reference or a listenable entry says of its arrivals and of being
 /// listed under a listen, passed through as declared, in this order.
 const LISTENING: [&str; 12] =
-    ["cursor", "identity", "version", "bounded", "boundedBy", "delivery", "pollEverySeconds", "carries", "attributes", "cheapToList", "parentChanges", "relistEvery"];
+    ["cursor", "identity", "version", "bounded", "boundedBy", "delivery", "pollEverySeconds", "carries", "attributes", "cheapToList", "parentChanges", "relistEverySeconds"];
 
 fn pass_listening(declared: &Js, onto: &mut Obj) {
     for passed in LISTENING {
@@ -714,33 +714,49 @@ pub fn retired_reference_key(reference: &Js) -> Option<String> {
     Some(format!("'{name}' declares '{retired}', retired in 0.13: {instead}"))
 }
 
+/// The refusal of a field of kind `owned` that names no scalar: it would
+/// project as nothing, leaving its position open (engine-contracts
+/// `unreadableOwnedField` says the same).
+pub fn unreadable_owned_field(field: &Js) -> Option<String> {
+    if field.get("kind").and_then(Js::as_str) != Some("owned") {
+        return None;
+    }
+    let named = field.get("owned").and_then(|owned| owned.get("name")).and_then(Js::as_str).is_some_and(|name| !name.is_empty());
+    (!named).then(|| format!("'{}' is of kind 'owned' but declares no 'owned.name': name the scalar its adapter parses", key(field.get("displayName"))))
+}
+
 /// The refusal of a reference whose `identity` or `version` names a field its
 /// landing does not declare (engine-contracts `undeclaredArrivalField` says
 /// the same). A landing nobody described is not judged: it declares nothing
 /// either way.
 pub fn undeclared_arrival_field(reference: &Js, descriptors: &IndexMap<String, Js>) -> Option<String> {
-    arrival_field_refusal(&Declarant::Reference { reference, owner: "" }, descriptors)
+    arrival_field_refusal(&reference_name(reference), reference, &reference_target_type_ids(reference), descriptors)
 }
 
-fn arrival_field_refusal(declarant: &Declarant, descriptors: &IndexMap<String, Js>) -> Option<String> {
-    let name = declarant.name();
+fn reference_name(reference: &Js) -> String {
+    key(nullish_or(reference.get("name"), reference.get("fieldId")))
+}
+
+/// The refusal of `name`'s `identity` or `version`, read from `declared`,
+/// naming a field none of its `landings` declares.
+fn arrival_field_refusal(name: &str, declared: &Js, landings: &[String], descriptors: &IndexMap<String, Js>) -> Option<String> {
     ["identity", "version"].into_iter().find_map(|role| {
-        let field = declarant.declared().get(role).and_then(Js::as_str)?;
-        undeclared_landing_field(declarant, descriptors, field, |field, landing, declared| {
+        let field = declared.get(role).and_then(Js::as_str)?;
+        undeclared_landing_field(landings, descriptors, field, |field, landing, declared| {
             format!("'{name}' names '{field}' as its {role}, a field its landing '{landing}' does not declare (it declares: {declared})")
         })
     })
 }
 
-/// `refusal(field, landing, what it declares)` when a landing of
-/// `declarant` that somebody described has no field `field`.
+/// `refusal(field, landing, what it declares)` when one of `landings` that
+/// somebody described has no field `field`.
 fn undeclared_landing_field(
-    declarant: &Declarant,
+    landings: &[String],
     descriptors: &IndexMap<String, Js>,
     field: &str,
     refusal: impl Fn(&str, &str, &str) -> String,
 ) -> Option<String> {
-    declarant.landings().iter().filter_map(|t| descriptors.get(t)).find_map(|landing| {
+    landings.iter().filter_map(|t| descriptors.get(t)).find_map(|landing| {
         let declared: Vec<&str> = items(landing.get("fields")).iter().filter_map(|f| f.get("displayName").and_then(Js::as_str)).collect();
         (!declared.contains(&field)).then(|| {
             let landing_name = landing.get("displayName").and_then(Js::as_str).unwrap_or_default();
@@ -768,7 +784,7 @@ impl Declarant<'_> {
     /// The edge's name as a program writes it.
     fn name(&self) -> String {
         match self {
-            Declarant::Reference { reference, .. } => key(nullish_or(reference.get("name"), reference.get("fieldId"))),
+            Declarant::Reference { reference, .. } => reference_name(reference),
             Declarant::Entry(entry) => collection_name_of(entry),
         }
     }
@@ -802,7 +818,7 @@ pub fn unreadable_listening(declarant: Declarant, entries: &[Js], descriptors: &
     let name = declarant.name();
     let has = |key: &str| declared.get(key).is_some();
     if let Declarant::Entry(_) = declarant
-        && let Some(refusal) = arrival_field_refusal(&declarant, descriptors)
+        && let Some(refusal) = arrival_field_refusal(&name, declared, &declarant.landings(), descriptors)
     {
         return Some(refusal);
     }
@@ -812,7 +828,7 @@ pub fn unreadable_listening(declarant: Declarant, entries: &[Js], descriptors: &
     {
         return Some(format!("'{name}' declares delivery {}, which is none of 'connection', 'scope' or 'polled'", delivery.to_json()));
     }
-    for seconds in ["pollEverySeconds", "relistEvery"] {
+    for seconds in ["pollEverySeconds", "relistEverySeconds"] {
         if let Some(value) = declared.get(seconds)
             && !matches!(value, Js::Num(n) if n.as_u64().is_some_and(|s| s > 0))
         {
@@ -836,7 +852,7 @@ pub fn unreadable_listening(declarant: Declarant, entries: &[Js], descriptors: &
     }
     for field in bounded_by {
         let field = key(Some(field));
-        if let Some(refusal) = undeclared_landing_field(&declarant, descriptors, &field, |field, landing, declared| {
+        if let Some(refusal) = undeclared_landing_field(&declarant.landings(), descriptors, &field, |field, landing, declared| {
             format!("'{name}' names '{field}' in its boundedBy, a field its landing '{landing}' does not declare (it declares: {declared})")
         }) {
             return Some(refusal);
@@ -851,16 +867,16 @@ pub fn unreadable_listening(declarant: Declarant, entries: &[Js], descriptors: &
     {
         return Some(format!("'{name}' declares parentChanges {}: the one value is 'pushed'", value.to_json()));
     }
-    match (parent_changes.is_some(), has("relistEvery"), Js::is_true(declared.get("cheapToList"))) {
+    match (parent_changes.is_some(), has("relistEverySeconds"), Js::is_true(declared.get("cheapToList"))) {
         (true, true, _) => Some(format!(
-            "'{name}' declares both 'parentChanges: pushed' and 'relistEvery': a module that reports its members' changes is not re-listed on a clock; declare one"
+            "'{name}' declares both 'parentChanges: pushed' and 'relistEverySeconds': a module that reports its members' changes is not re-listed on a clock; declare one"
         )),
         (false, false, true) => Some(format!(
-            "'{name}' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEvery': say how a listen learns its members changed"
+            "'{name}' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEverySeconds': say how a listen learns its members changed"
         )),
         (pushed, relisted, false) if pushed || relisted => Some(format!(
             "'{name}' declares '{}' but not 'cheapToList: true': only a hop cheap to list is re-listed",
-            if pushed { "parentChanges" } else { "relistEvery" }
+            if pushed { "parentChanges" } else { "relistEverySeconds" }
         )),
         _ => None,
     }
@@ -1358,19 +1374,56 @@ mod tests {
     fn a_hop_cheap_to_list_says_how_its_members_changes_are_learnt() {
         assert_eq!(
             ticks_refusal(r#","cheapToList":true"#).unwrap(),
-            "'Ticks' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEvery': say how a listen learns its members changed"
+            "'Ticks' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEverySeconds': say how a listen learns its members changed"
         );
-        assert_eq!(ticks_refusal(r#","cheapToList":true,"relistEvery":300"#), None);
+        assert_eq!(ticks_refusal(r#","cheapToList":true,"relistEverySeconds":300"#), None);
         assert_eq!(ticks_refusal(r#","cheapToList":true,"parentChanges":"pushed""#), None);
         assert_eq!(
-            ticks_refusal(r#","cheapToList":true,"parentChanges":"pushed","relistEvery":300"#).unwrap(),
-            "'Ticks' declares both 'parentChanges: pushed' and 'relistEvery': a module that reports its members' changes is not re-listed on a clock; declare one"
+            ticks_refusal(r#","cheapToList":true,"parentChanges":"pushed","relistEverySeconds":300"#).unwrap(),
+            "'Ticks' declares both 'parentChanges: pushed' and 'relistEverySeconds': a module that reports its members' changes is not re-listed on a clock; declare one"
         );
         assert_eq!(
-            ticks_refusal(r#","relistEvery":300"#).unwrap(),
-            "'Ticks' declares 'relistEvery' but not 'cheapToList: true': only a hop cheap to list is re-listed"
+            ticks_refusal(r#","relistEverySeconds":300"#).unwrap(),
+            "'Ticks' declares 'relistEverySeconds' but not 'cheapToList: true': only a hop cheap to list is re-listed"
         );
         assert_eq!(ticks_refusal(r#","cheapToList":true,"parentChanges":"polled""#).unwrap(), r#"'Ticks' declares parentChanges "polled": the one value is 'pushed'"#);
+    }
+
+    #[test]
+    fn a_number_of_seconds_is_a_positive_whole_number() {
+        for (declared, shown) in [("0", "0"), ("-5", "-5"), ("1.5", "1.5"), (r#""300""#, r#""300""#)] {
+            assert_eq!(
+                ticks_refusal(&format!(r#","cheapToList":true,"relistEverySeconds":{declared}"#)).unwrap(),
+                format!("'Ticks' declares 'relistEverySeconds: {shown}': expected a positive whole number of seconds")
+            );
+        }
+    }
+
+    #[test]
+    fn a_hop_that_is_pushed_is_still_cheap_to_list() {
+        assert_eq!(
+            ticks_refusal(r#","parentChanges":"pushed""#).unwrap(),
+            "'Ticks' declares 'parentChanges' but not 'cheapToList: true': only a hop cheap to list is re-listed"
+        );
+    }
+
+    #[test]
+    fn a_root_collection_carries_no_earlier_hop() {
+        assert_eq!(
+            ticks_refusal(r#","carries":["Bases"]"#).unwrap(),
+            "'Ticks' says its arrivals carry earlier hops, but 'carries' names 'Bases', and 'Ticks' is a root collection: nothing comes before it"
+        );
+    }
+
+    #[test]
+    fn an_owned_field_without_its_name_is_refused_by_name() {
+        let refusal = |field: &str| unreadable_owned_field(&js(field));
+        assert_eq!(refusal(r#"{"fieldId":"schedule","displayName":"Schedule","kind":"owned","owned":{"name":"Cron"}}"#), None);
+        assert_eq!(refusal(r#"{"fieldId":"schedule","displayName":"Schedule","kind":"string"}"#), None);
+        let expected = "'Schedule' is of kind 'owned' but declares no 'owned.name': name the scalar its adapter parses";
+        assert_eq!(refusal(r#"{"fieldId":"schedule","displayName":"Schedule","kind":"owned"}"#).unwrap(), expected);
+        assert_eq!(refusal(r#"{"fieldId":"schedule","displayName":"Schedule","kind":"owned","owned":{}}"#).unwrap(), expected);
+        assert_eq!(refusal(r#"{"fieldId":"schedule","displayName":"Schedule","kind":"owned","owned":{"name":""}}"#).unwrap(), expected);
     }
 
     #[test]

@@ -8,6 +8,7 @@ import { HANDBOOK_POINTER_BY_CODE } from 'movement-lang';
 import { authoringDiagnostics, checkProgram, unsavedRefusal, validationOf } from '../check';
 import { describeFromSnapshot, renderConnectionsDigest } from '../digest';
 import { readHandbook, searchHandbook } from '../handbook';
+import type { TenantCatalog } from '../host';
 import { CATALOG, fileAs } from './fixtures';
 
 const check = (source: string) => checkProgram({ source, catalog: CATALOG.snapshot });
@@ -63,6 +64,35 @@ describe('the digest of connected systems', () => {
     expect(digest).toContain('### manual — `listen to manual` (in scope with no import or connect)');
     expect(digest).toContain('- Invocation [fires]: `Fired at` date, Text text');
     expect(digest).toContain('Not connected yet: mail.');
+  });
+
+  it('marks a root readable only when it can be listed: a write-only root and a listen-only root are not', () => {
+    const only: TenantCatalog = {
+      ...CATALOG,
+      snapshot: {
+        ...CATALOG.snapshot,
+        adapters: {
+          ...CATALOG.snapshot.adapters,
+          mail: {
+            constructionArgs: [],
+            canFire: true,
+            schemaShape: 'introspected',
+            schemas: {
+              '': {
+                positions: { Draft: { properties: { Body: 'text' }, edges: {} }, Tick: { properties: { Schedule: 'text' }, edges: {} } },
+                collections: { Drafts: { target: 'Draft', readable: false }, Ticks: { target: 'Tick', readable: false, listenable: true } },
+                writableRoots: { Drafts: { fields: { Body: 'text' }, resultShape: { externalId: 'text' }, requiredFields: [] } },
+                eventPosition: 'Tick',
+                eventPositions: [{ position: 'Tick' }],
+              },
+            },
+          },
+        },
+      },
+    };
+    const digest = renderConnectionsDigest(only);
+    expect(digest).toContain('- Drafts [w]:');
+    expect(digest).not.toMatch(/- Ticks \[r/);
   });
 
   it('describes a system at its root, and at a position its root handed out', () => {

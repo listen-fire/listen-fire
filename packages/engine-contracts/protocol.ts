@@ -1099,6 +1099,10 @@ export function refuseUnpairedDeclarations(
   unique((manifest.plugins?.plugins ?? []).map((plugin) => plugin.name.replace(/-/g, '_')), 'plugins');
 }
 
+/** What listen-fire's manifest read says of a `resendWindowSeconds` that is
+ *  not a positive whole number (crates/lf `WireManifest::read`), word for word. */
+const RESEND_WINDOW_REFUSAL = 'expected a positive whole number';
+
 export const WireManifestResult = z.object({
   ...WireListenDeclarations.shape,
   ...WireModuleDeclarations.shape,
@@ -1145,7 +1149,7 @@ export const WireManifestResult = z.object({
   /** How long, in seconds, the provider may re-send an arrival it already
    *  sent: a repeat inside it is dropped by identity. A default lf.yaml
    *  overrides per connection. */
-  resendWindowSeconds: z.number().int().positive().optional(),
+  resendWindowSeconds: z.number(RESEND_WINDOW_REFUSAL).int(RESEND_WINDOW_REFUSAL).positive(RESEND_WINDOW_REFUSAL).optional(),
 }).superRefine(refuseUnpairedDeclarations);
 export type WireManifestResultShape = z.infer<typeof WireManifestResult>;
 

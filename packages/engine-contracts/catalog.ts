@@ -871,6 +871,18 @@ export const schemaFieldDescriptorSchema = z.object({
 export type SchemaFieldDescriptor = z.infer<typeof schemaFieldDescriptorSchema>;
 
 /**
+ * The refusal of a field of kind `owned` that names no scalar: it would
+ * project as nothing, leaving its position open. Nothing zod-parses an
+ * adapter's answer at run time, so describe refuses it here (listen-fire's
+ * describe says the same).
+ */
+export function unreadableOwnedField(field: Pick<SchemaFieldDescriptor, 'kind' | 'displayName' | 'owned'>): string | undefined {
+  return field.kind === 'owned' && !field.owned?.name
+    ? `'${field.displayName}' is of kind 'owned' but declares no 'owned.name': name the scalar its adapter parses`
+    : undefined;
+}
+
+/**
  * What an edge, or an entry point's root collection, says about being
  * listened to and about being listed under a listen (movement-lang
  * `EdgeListening`). Every number is a default the operator's lf.yaml
@@ -897,13 +909,13 @@ const listeningDeclarationShape = {
   attributes: z.boolean().optional(),
   /** Listing it is cheap enough to re-list on a schedule (a base's tables;
    *  never every message in a workspace). Such a hop declares how a listen
-   *  learns its members changed: `parentChanges` or `relistEvery`. */
+   *  learns its members changed: `parentChanges` or `relistEverySeconds`. */
   cheapToList: z.boolean().optional(),
   /** The module reports when a member is created, renamed or removed, so a
    *  listen re-resolves on the report and never on a clock. */
   parentChanges: z.literal('pushed').optional(),
   /** How often, in seconds, its members are re-listed. */
-  relistEvery: z.number().optional(),
+  relistEverySeconds: z.number().optional(),
 };
 
 /** Why a reference that declares a key 0.13 retired is refused (listen-fire's
@@ -1465,18 +1477,23 @@ export function undeclaredArrivalField(
   reference: SchemaReferenceDescriptor,
   descriptors: ReadonlyMap<string, SchemaTypeDescriptor>,
 ): string | undefined {
-  const name = reference.name ?? reference.fieldId;
+  return arrivalFieldRefusal(reference.name ?? reference.fieldId, reference, referenceTargetTypeIds(reference), descriptors);
+}
+
+/** The refusal of `name`'s `identity` or `version` naming a field none of its
+ *  `landings` declares: the one text a reference and an entry point share. */
+function arrivalFieldRefusal(
+  name: string,
+  declared: { identity?: string; version?: string },
+  landings: readonly string[],
+  descriptors: ReadonlyMap<string, SchemaTypeDescriptor>,
+): string | undefined {
   for (const role of ['identity', 'version'] as const) {
-    const field = reference[role];
+    const field = declared[role];
     if (field === undefined) continue;
-    for (const typeId of referenceTargetTypeIds(reference)) {
-      const landing = descriptors.get(typeId);
-      if (landing === undefined) continue;
-      const declared = landing.fields.map((f) => f.displayName);
-      if (!declared.includes(field)) {
-        return `'${name}' names '${field}' as its ${role}, a field its landing '${landing.displayName}' does not declare (it declares: ${declared.length === 0 ? 'nothing' : declared.join(', ')})`;
-      }
-    }
+    const refusal = undeclaredLandingField(landings, descriptors, field, (landing, has) =>
+      `'${name}' names '${field}' as its ${role}, a field its landing '${landing}' does not declare (it declares: ${has})`);
+    if (refusal !== undefined) return refusal;
   }
   return undefined;
 }
@@ -1715,19 +1732,14 @@ export function unreadableListening(
   const name = 'entry' in declarant ? collectionNameOf(declarant.entry) : declarant.reference.name ?? declarant.reference.fieldId;
   const landings = 'entry' in declarant ? [declarant.entry.typeId] : referenceTargetTypeIds(declarant.reference);
   if ('entry' in declarant) {
-    for (const role of ['identity', 'version'] as const) {
-      const field = declarant.entry[role];
-      if (field === undefined) continue;
-      const refusal = undeclaredLandingField(landings, descriptors, field, (landing, has) =>
-        `'${name}' names '${field}' as its ${role}, a field its landing '${landing}' does not declare (it declares: ${has})`);
-      if (refusal !== undefined) return refusal;
-    }
+    const arrival = arrivalFieldRefusal(name, declarant.entry, landings, descriptors);
+    if (arrival !== undefined) return arrival;
   }
   const delivery: unknown = declared.delivery;
   if (delivery !== undefined && delivery !== 'connection' && delivery !== 'scope' && delivery !== 'polled') {
     return `'${name}' declares delivery ${JSON.stringify(delivery)}, which is none of 'connection', 'scope' or 'polled'`;
   }
-  for (const seconds of ['pollEverySeconds', 'relistEvery'] as const) {
+  for (const seconds of ['pollEverySeconds', 'relistEverySeconds'] as const) {
     const value: unknown = declared[seconds];
     if (value !== undefined && !(typeof value === 'number' && Number.isInteger(value) && value > 0)) {
       return `'${name}' declares '${seconds}: ${JSON.stringify(value)}': expected a positive whole number of seconds`;
@@ -1760,17 +1772,17 @@ export function unreadableListening(
     return `'${name}' declares parentChanges ${JSON.stringify(parentChanges)}: the one value is 'pushed'`;
   }
   const pushed = parentChanges !== undefined;
-  const relisted = declared.relistEvery !== undefined;
+  const relisted = declared.relistEverySeconds !== undefined;
   if (pushed && relisted) {
-    return `'${name}' declares both 'parentChanges: pushed' and 'relistEvery': a module that reports its members' changes is not re-listed on a clock; declare one`;
+    return `'${name}' declares both 'parentChanges: pushed' and 'relistEverySeconds': a module that reports its members' changes is not re-listed on a clock; declare one`;
   }
   if (declared.cheapToList === true) {
     return pushed || relisted
       ? undefined
-      : `'${name}' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEvery': say how a listen learns its members changed`;
+      : `'${name}' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEverySeconds': say how a listen learns its members changed`;
   }
   if (pushed || relisted) {
-    return `'${name}' declares '${pushed ? 'parentChanges' : 'relistEvery'}' but not 'cheapToList: true': only a hop cheap to list is re-listed`;
+    return `'${name}' declares '${pushed ? 'parentChanges' : 'relistEverySeconds'}' but not 'cheapToList: true': only a hop cheap to list is re-listed`;
   }
   return undefined;
 }

@@ -119,6 +119,13 @@ describe('a module manifest', () => {
     expect(refusal({ ...MODULE_MANIFEST, inbound: { ...MODULE_MANIFEST.inbound, intercepts: ['ping'] } })[0]).toMatch(/^inbound\.intercepts/);
   });
 
+  it('refuses a resendWindowSeconds that is not a positive whole number, in the words listen-fire uses', () => {
+    expect(WireManifestResult.parse({ ...MODULE_MANIFEST, resendWindowSeconds: 259_200 }).resendWindowSeconds).toBe(259_200);
+    for (const resendWindowSeconds of [0, -1, 1.5, '3600']) {
+      expect(refusal({ ...MODULE_MANIFEST, resendWindowSeconds })).toEqual(['resendWindowSeconds: expected a positive whole number']);
+    }
+  });
+
   it('takes a module that checks its own inbound only with checkInbound, and no headers', () => {
     const checked = { ...MODULE_MANIFEST, inbound: { providerKey: 'mail', scheme: 'module' } };
     expect(WireManifestResult.safeParse({ ...checked, methods: [...MODULE_MANIFEST.methods, 'checkInbound'] }).success).toBe(true);

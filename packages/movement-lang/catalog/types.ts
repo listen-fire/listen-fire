@@ -488,7 +488,7 @@ export interface EdgeListening {
   /** How often, in seconds, its members are re-listed by default when the
    *  module does not report their changes (lf.yaml's `resolveEvery`
    *  overrides it). */
-  relistEvery?: number;
+  relistEverySeconds?: number;
 }
 
 /** A reference (edge) declared by a position type. */

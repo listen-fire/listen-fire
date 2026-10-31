@@ -128,7 +128,7 @@ function rootsOf(schema: InstanceSchema): RecordType[] {
     const fired = firing(target);
     return {
       name,
-      readable: name in schema.collections,
+      readable: schema.collections[name] !== undefined && schema.collections[name].readable !== false,
       writable: name in schema.writableRoots,
       fires: fired !== undefined,
       ...(fired?.on !== undefined ? { firesOn: fired.on } : {}),

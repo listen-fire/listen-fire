@@ -374,7 +374,7 @@ pub struct EdgeSchema {
     /// module does not report their changes: lf.yaml's `resolveEvery`
     /// overrides it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relist_every: Option<u64>,
+    pub relist_every_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generic_over: Option<GenericOver>,
     /// Fields of what lands here that take the literals the write this edge
@@ -576,7 +576,7 @@ pub struct CollectionSchema {
     /// module does not report their changes: lf.yaml's `resolveEvery`
     /// overrides it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relist_every: Option<u64>,
+    pub relist_every_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

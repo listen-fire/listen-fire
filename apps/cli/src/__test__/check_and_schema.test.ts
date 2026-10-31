@@ -158,7 +158,30 @@ const LISTENING_REFUSED: Array<{ name: string; change: [string, string]; refused
   {
     name: 'a root collection cheap to list that says nothing of how its members change',
     change: ['fires: true,', 'fires: true, cheapToList: true,'],
-    refused: /lists 'Company': 'Company' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEvery': say how a listen learns its members changed/,
+    refused: /lists 'Company': 'Company' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEverySeconds': say how a listen learns its members changed/,
+  },
+  {
+    name: 'a root collection that is pushed but not cheap to list',
+    change: ['fires: true,', "fires: true, parentChanges: 'pushed',"],
+    refused: /lists 'Company': 'Company' declares 'parentChanges' but not 'cheapToList: true': only a hop cheap to list is re-listed/,
+  },
+  {
+    name: 'a relist interval that is not a whole number of seconds',
+    change: ['fires: true,', 'fires: true, cheapToList: true, relistEverySeconds: 1.5,'],
+    refused: /'Company' declares 'relistEverySeconds: 1\.5': expected a positive whole number of seconds/,
+  },
+  {
+    name: 'a root collection that carries earlier hops',
+    change: ['fires: true,', "fires: true, carries: ['Company'],"],
+    refused: /'Company' says its arrivals carry earlier hops, but 'carries' names 'Company', and 'Company' is a root collection: nothing comes before it/,
+  },
+  {
+    name: 'an owned field that names no scalar',
+    change: [
+      "{ fieldId: 'Report', displayName: 'Report', kind: 'file', writable: true, required: false },",
+      "{ fieldId: 'Report', displayName: 'Report', kind: 'file', writable: true, required: false }, { fieldId: 'Schedule', displayName: 'Schedule', kind: 'owned', writable: false, required: false },",
+    ],
+    refused: /describes 'Company': 'Schedule' is of kind 'owned' but declares no 'owned\.name': name the scalar its adapter parses/,
   },
   {
     name: 'a resend window that is not a number of seconds',
@@ -317,7 +340,7 @@ const INTROSPECTIONS: Record<string, unknown> = {
           references: [],
         },
       ],
-      ['base', { typeId: 'base', displayName: 'Base', fields: [], references: [{ fieldId: 'tables', name: 'Tables', targetTypeId: 'tbl', cardinality: 'many', direction: 'outgoing', cheapToList: true, relistEvery: 300 }] }],
+      ['base', { typeId: 'base', displayName: 'Base', fields: [], references: [{ fieldId: 'tables', name: 'Tables', targetTypeId: 'tbl', cardinality: 'many', direction: 'outgoing', cheapToList: true, relistEverySeconds: 300 }] }],
       [
         'tbl',
         {
@@ -350,7 +373,7 @@ const EXERCISES: Record<string, { members: string[]; notes: number }> = {
   },
   'a walked instance: a root descriptor, reached types, a scoped describe': { members: ['capability', 'edgesCarryProperties', 'undescribed'], notes: 1 },
   'a listening adapter: a listenable root, what edges say of their arrivals, owned scalars': {
-    members: ['readable', 'listenable', 'identity', 'cursor', 'bounded', 'boundedBy', 'delivery', 'pollEverySeconds', 'carries', 'attributes', 'cheapToList', 'parentChanges', 'relistEvery', 'owner', 'allowPattern'],
+    members: ['readable', 'listenable', 'identity', 'cursor', 'bounded', 'boundedBy', 'delivery', 'pollEverySeconds', 'carries', 'attributes', 'cheapToList', 'parentChanges', 'relistEverySeconds', 'owner', 'allowPattern'],
     notes: 0,
   },
   'one readable entry and no event edge: the event position by the heuristic': { members: ['eventPosition'], notes: 0 },
