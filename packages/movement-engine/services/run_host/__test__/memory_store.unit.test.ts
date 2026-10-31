@@ -48,13 +48,36 @@ describe('memoryRunHostStore keeps each row under its team', () => {
 });
 
 describe('memoryRunHostStore starts a run an arrival fires under its receipt', () => {
+  const start = (teamId: string, listen: string, runId: string) => ({
+    teamId,
+    listen,
+    key: 'Notes::n1:',
+    runId,
+    file: 'a',
+    movement: 'f',
+    startedAt: '2026-10-31T09:00:00.000Z',
+    input: '{}',
+    deliveryId: null,
+  });
+
   it("starts it once per listen and arrival, a team's receipts its own", async () => {
     const store = memoryRunHostStore();
-    expect(await store.startArrivalRun({ teamId: 'acme', listen: 'listen:a:f:1', key: 'Notes::n1:', runId: 'r1' })).toBe(true);
+    expect(await store.startArrivalRun(start('acme', 'listen:a:f:1', 'r1'))).toBe(true);
     expect(await store.runStatus({ runId: 'r1' })).toBe('running');
-    expect(await store.startArrivalRun({ teamId: 'acme', listen: 'listen:a:f:1', key: 'Notes::n1:', runId: 'r2' })).toBe(false);
+    expect(await store.startArrivalRun(start('acme', 'listen:a:f:1', 'r2'))).toBe(false);
     expect(await store.runStatus({ runId: 'r2' })).toBeNull();
-    expect(await store.startArrivalRun({ teamId: 'acme', listen: 'listen:a:g:1', key: 'Notes::n1:', runId: 'r3' })).toBe(true);
-    expect(await store.startArrivalRun({ teamId: 'globex', listen: 'listen:a:f:1', key: 'Notes::n1:', runId: 'r4' })).toBe(true);
+    expect(await store.startArrivalRun(start('acme', 'listen:a:g:1', 'r3'))).toBe(true);
+    expect(await store.startArrivalRun(start('globex', 'listen:a:f:1', 'r4'))).toBe(true);
+  });
+
+  it("forgets a kept delivery's provider id, so its sender's retry is kept again", async () => {
+    const store = memoryRunHostStore();
+    const keep = (id: string) =>
+      store.keepDelivery({ subscriptionId: 's', delivery: { id, externalId: 'evt-1', receivedAt: '2026-10-31T09:00:00.000Z', source: 'emit', inline: true, events: [] }, work: [] });
+    expect(await keep('d1')).toMatchObject({ kept: true });
+    expect(await keep('d2')).toEqual({ kept: false });
+    await store.forgetDeliveryId({ id: 'd1' });
+    expect(await keep('d3')).toMatchObject({ kept: true });
+    expect(await keep('d4')).toEqual({ kept: false });
   });
 });

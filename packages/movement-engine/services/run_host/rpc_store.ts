@@ -176,12 +176,14 @@ export class RpcStoreBackend {
     this.store = this.families();
     this.runRows = this.runRowFamily();
     this.runs = this.runRecords();
-    this.deliveryRows = { keepDelivery: (input) => this.keepDelivery(input), bury: (work) => this.buryWork(work), completeKey: (input) => this.completeKey(input) };
+    this.deliveryRows = {
+      keepDelivery: (input) => this.keepDelivery(input),
+      bury: (work) => this.buryWork(work),
+      completeKey: (input) => this.completeKey(input),
+      forgetDeliveryId: (input) => this.forgetDeliveryId(input),
+    };
     this.arrivalRuns = {
-      // The slot's receipt names no team (listen-fire's store is one team's):
-      // the team is part of the listen's name here, compared and never read.
-      startArrivalRun: ({ teamId, listen, key, runId }) =>
-        this.call('events.startRun', { listen: JSON.stringify([teamId, listen]), key, id: runId, file: 'f', movement: 'm', startedAt: new Date().toISOString(), input: '{}', deliveryId: null }, z.boolean()),
+      startArrivalRun: ({ runId, ...start }) => this.call('events.startRun', { ...start, id: runId }, z.boolean()),
     };
   }
 
@@ -201,8 +203,9 @@ export class RpcStoreBackend {
   }
 
   /** A run row the backend can park against (the contract's `newRun`);
-   *  `deliveryId` names the delivery whose event started it. */
-  async startRun(input: { id: string; file: string; movement: string; startedAt: string; input: string; deliveryId?: string }): Promise<void> {
+   *  `deliveryId` names the delivery whose event started it, `teamId` the
+   *  team it is kept under (absent: the store's own tenant). */
+  async startRun(input: { id: string; file: string; movement: string; startedAt: string; input: string; deliveryId?: string; teamId?: string }): Promise<void> {
     await this.call('runs.start', { ...input, deliveryId: input.deliveryId ?? null }, Nothing);
   }
 
@@ -248,6 +251,11 @@ export class RpcStoreBackend {
   /** Done with a row its caller ran itself (`work.completeKey`). */
   completeKey(input: { key: string }): Promise<boolean> {
     return this.call('work.completeKey', input, z.boolean());
+  }
+
+  /** Clear a kept delivery's provider id, its receipt kept (`inbound.forgetDeliveryId`). */
+  async forgetDeliveryId(input: { id: string }): Promise<void> {
+    await this.call('inbound.forgetDeliveryId', input, Nothing);
   }
 
   /** Kept deliveries, most recent first, without their events. */

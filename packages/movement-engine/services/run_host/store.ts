@@ -288,6 +288,10 @@ export interface SourceStore {
 export const RESUME_TIMER_WORK_KIND = 'resume_timer';
 export const WAKE_AWAIT_WORK_KIND = 'wake_await';
 export const SETTLE_RACE_WORK_KIND = 'settle_race';
+/** A run a delivery queued, started by the row (`inbound.keepDelivery`'s
+ *  `work`): its waits live while the row is queued, and the row's payload
+ *  gains the arrival mark before the delivery's arrivals as it is kept. */
+export const FIRE_EVENT_WORK_KIND = 'fire_event';
 export type RunHostWorkKind = typeof RESUME_TIMER_WORK_KIND | typeof WAKE_AWAIT_WORK_KIND | typeof SETTLE_RACE_WORK_KIND;
 export const RUN_HOST_WORK_KINDS: readonly RunHostWorkKind[] = [RESUME_TIMER_WORK_KIND, WAKE_AWAIT_WORK_KIND, SETTLE_RACE_WORK_KIND];
 
@@ -462,6 +466,10 @@ export interface DeliveryRowStore {
    *  unless a live claim holds it, and with it the waits it opened for runs
    *  that never started. Whether it was deleted. */
   completeKey(input: { key: string }): Promise<boolean>;
+  /** Clear the kept delivery `id`'s provider id (`inbound.forgetDeliveryId`),
+   *  its receipt kept: a delivery whose runs failed to start inside the
+   *  call that kept it is kept again when its sender retries it. */
+  forgetDeliveryId(input: { id: string }): Promise<void>;
 }
 
 /**
@@ -486,5 +494,20 @@ export interface RunRowStore {
  * listen and key under another team is another receipt.
  */
 export interface ArrivalRunStore {
-  startArrivalRun(input: { teamId: string; listen: string; key: string; runId: string }): Promise<boolean>;
+  startArrivalRun(input: ArrivalRunStart): Promise<boolean>;
+}
+
+/** `startArrivalRun`'s input: the receipt (`listen`, `key`, its team), and
+ *  the run row as `runs.start` writes it. `input` is the run's facts as
+ *  JSON; `deliveryId` the kept delivery whose arrival started it. */
+export interface ArrivalRunStart {
+  teamId: string;
+  listen: string;
+  key: string;
+  runId: string;
+  file: string;
+  movement: string;
+  startedAt: string;
+  input: string;
+  deliveryId: string | null;
 }

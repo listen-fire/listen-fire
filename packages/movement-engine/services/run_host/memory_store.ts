@@ -163,6 +163,8 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
   /** Kept deliveries by subscription and the provider's id, to keep a
    *  duplicate out; and each subscription's pull cursor. */
   const deliveryIds = new Set<string>();
+  /** Each kept delivery's entry in `deliveryIds`, by the delivery's own id. */
+  const externalIdOf = new Map<string, string>();
   const checkpoints = new Map<string, string>();
   let notes: Note[] = [];
 
@@ -657,6 +659,7 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
         const id = JSON.stringify([subscriptionId, delivery.externalId]);
         if (deliveryIds.has(id)) return { kept: false };
         deliveryIds.add(id);
+        externalIdOf.set(delivery.id, id);
       }
       if ('checkpoint' in input) checkpoints.set(subscriptionId, stored(input.checkpoint));
       const arrivalMark = lastSeq;
@@ -681,6 +684,12 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
       if (row.armed !== row.armedAtClaim) return;
       row.dead = true;
       dropUnstartedWaits(key);
+    },
+    async forgetDeliveryId({ id }) {
+      const external = externalIdOf.get(id);
+      if (external === undefined) return;
+      deliveryIds.delete(external);
+      externalIdOf.delete(id);
     },
     async completeKey({ key }) {
       const row = work.get(key);

@@ -9,6 +9,7 @@
 // The delivery receipt's cases (`inbound.*`) run over both bridges too.
 
 import { test } from 'node:test';
+import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -115,4 +116,44 @@ function rerunBackend(backend: RpcStoreBackend): RerunContractBackend {
     claimLease: (input) => backend.store.leases.claim(input),
     releaseLease: (input) => backend.store.leases.release(input),
   };
+}
+
+// A run an arrival starts, as the embedded host starts one
+// (`ArrivalRunStore`): its receipt and its run row in one write, the row
+// holding what the run started with, and the receipt its team's.
+for (const bridge of bridges) {
+  test(`${bridge.over}: an arrival's run takes its receipt with its row, and a receipt is its team's`, async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'lf-contract-')), 'state.db');
+    const backend = new RpcStoreBackend(lfBinary(), bridge.args(path));
+    const start = (runId: string, teamId: string) => ({
+      teamId,
+      listen: 'listen:threads:answer:0a1b2c3d',
+      key: 'Messages::m1:',
+      runId,
+      file: 'threads',
+      movement: 'answer',
+      startedAt: '2026-10-31T09:00:00.000Z',
+      input: '{"movementName":"answer"}',
+      deliveryId: null,
+    });
+    try {
+      const first = randomUUID();
+      assert.equal(await backend.arrivalRuns.startArrivalRun(start(first, LOCAL_TENANT)), true);
+      assert.deepEqual(await backend.runGet({ runId: first }).then((row) => row && { file: row.file, movement: row.movement, status: row.status, startedAt: row.startedAt, input: row.input }), {
+        file: 'threads',
+        movement: 'answer',
+        status: 'running',
+        startedAt: '2026-10-31T09:00:00.000Z',
+        input: '{"movementName":"answer"}',
+      });
+      // The arrival again: no run.
+      const again = randomUUID();
+      assert.equal(await backend.arrivalRuns.startArrivalRun(start(again, LOCAL_TENANT)), false);
+      assert.equal(await backend.runGet({ runId: again }), null);
+      // Another team's listen of the same name takes its own receipt.
+      assert.equal(await backend.arrivalRuns.startArrivalRun(start(randomUUID(), 'globex')), true);
+    } finally {
+      await backend.close();
+    }
+  });
 }
