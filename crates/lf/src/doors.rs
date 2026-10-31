@@ -746,9 +746,15 @@ pub fn fire_event_work(external: &str, event: Js, delivered: Delivered<'_>) -> N
 
 /// A delivery's arrivals' `fire_event` row, for the drain: each judged then
 /// against the listens on its edge (Session::fire_arrivals), as the event
-/// rows of the same delivery are routed to the listens they reach.
+/// rows of the same delivery are routed to the listens they reach. The runs
+/// minted as it was kept ride on it (`runs`): the drain starts each under
+/// the id its waits were opened for.
 pub fn fire_arrivals_work(external: &str, arrivals: &[ArrivalIn], delivered: Delivered<'_>) -> NewWork {
-    fire_work(obj! { "external" => Js::str(external), "arrivals" => Js::Arr(arrivals.iter().map(ArrivalIn::to_js).collect()) }, delivered)
+    let mut payload = obj! { "external" => Js::str(external), "arrivals" => Js::Arr(arrivals.iter().map(ArrivalIn::to_js).collect()) };
+    if let Some(minted) = delivered.minted.filter(|minted| minted.as_array().is_some_and(|runs| !runs.is_empty())) {
+        payload.insert("runs".into(), minted.clone());
+    }
+    fire_work(payload, delivered)
 }
 
 fn fire_work(mut payload: crate::json::Obj, delivered: Delivered<'_>) -> NewWork {
@@ -1835,6 +1841,50 @@ pub(crate) mod tests {
 
     async fn drained(session: &Session) {
         crate::drain::drain(session, &crate::drain::DrainOptions { until_idle: true, max_seconds: None }, &mut Vec::new()).await.unwrap();
+    }
+
+    /// A note's run off the inbox's pushed `Notes`, waiting for the next
+    /// comment on its note.
+    const NOTES_AWAIT_A_COMMENT: &str = "import { inbox } from adapters\n\ni = connect inbox\n\nfunction noted(note: <i-[:Note]->>) {\n  c = await new note-[:Comments]->\n  return c.Text\n}\n\nlisten to i-[:Notes]-> fire noted\n";
+
+    /// One note landing on the pushed `Notes`, as a delivery's body.
+    fn landed_note(id: &str) -> String {
+        format!(r#"{{"arrivals":[{{"edge":"Notes","identity":"{id}","landing":{{"recordId":"{id}","recordType":"Note","fields":{{"Id":"{id}","Title":"x"}}}}}}]}}"#)
+    }
+
+    /// The queued `fire_event` rows, claimed: what a worker would take.
+    fn claimed_fire_rows(session: &Session) -> Vec<Js> {
+        let due = crate::store::ClaimDue { limit: 10, lease_ms: 60_000, due_by: None, kinds: None };
+        session.store.claim_due(&due).unwrap().into_iter().filter(|r| r.kind == "fire_event").map(|r| r.payload).collect()
+    }
+
+    /// A worker ran a delivery's arrivals row, its run parked, and the
+    /// worker died before the row was done: the row's retry finds the run
+    /// it minted started, leaves it as it is, and the run's comment wakes
+    /// it.
+    #[test]
+    fn a_retried_arrivals_row_leaves_the_run_its_earlier_attempt_started_to_its_wait() {
+        let project = InboxProject::pushed(NOTES_AWAIT_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        in_local(async {
+            let session = project.session().await;
+            assert_eq!(queue_delivery(&session, landed_note("n-1").as_bytes(), "d-1").await.status, 200);
+            let [row] = claimed_fire_rows(&session).try_into().unwrap();
+            let first = session.work_row("fire_event", &row).await.unwrap();
+            assert_eq!(first.iter().map(|o| o.status.as_str()).collect::<Vec<_>>(), ["parked"]);
+            let (run, leaves) = the_run(&session);
+
+            let retried = session.work_row("fire_event", &row).await.unwrap();
+            assert!(retried.is_empty(), "the retry starts nothing again");
+            assert_eq!(session.store.run(&run).unwrap().unwrap().status, "parked");
+            assert_eq!(the_run(&session).1, leaves, "the run keeps its leaf");
+
+            let comment = NewArrival { edge: "Comments".into(), key: "thread:n-1".into(), identity: Some("k1".into()), version: None, landing: Some(Js::parse(br#"{"fields":{"Text":"hi"}}"#).unwrap()), gone: false };
+            assert_eq!(session.store.log_now(LOCAL_TENANT, "inbox", &[comment]).unwrap().wakes.len(), 1, "its wait is still open");
+            drained(&session).await;
+            let row = session.store.run(&run).unwrap().unwrap();
+            assert_eq!(row.status, "completed", "{:?}", row.outcome);
+            assert!(row.outcome.as_deref().unwrap_or_default().contains(r#""hi""#), "{:?}", row.outcome);
+        });
     }
 
     /// The segment that resumes the comment's arm settles the race, then

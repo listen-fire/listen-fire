@@ -824,11 +824,14 @@ impl Session {
                 }
             }
         }
-        // A run the delivery minted that did not start here (its listen no
-        // longer fires the arrival, or ran it before) never will: the waits
-        // opened for it as the delivery was kept go.
+        // A run the delivery minted that was never started (its listen no
+        // longer fires the arrival, or another delivery ran it) never will:
+        // the waits opened for it as the delivery was kept go. One an
+        // earlier attempt at this row started is live, and keeps its state.
         for run_id in delivered.minted_runs().into_iter().filter(|id| !started.contains(id)) {
-            self.store.drop_run_state(&run_id, None).map_err(|e| e.to_string())?;
+            if self.store.run(&run_id).map_err(|e| e.to_string())?.is_none() {
+                self.store.drop_run_state(&run_id, None).map_err(|e| e.to_string())?;
+            }
         }
         // A module that reports its parents' changes reports them as
         // arrivals on the parents' own edge: the listens filtering that
