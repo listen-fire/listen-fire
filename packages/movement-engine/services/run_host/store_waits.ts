@@ -316,6 +316,12 @@ async function runCase({ store, runRows, deliveries }: StoreWaitsBackend, steps:
         await deliveries.bury({ ...row, reason: 'gave up' });
         break;
       }
+      case 'claimRow': {
+        const key = fireKeyOf(names, step);
+        const rows = await store.work.claimDue({ limit: 1000, leaseMs: 60_000, kinds: ['fire_event'], teamId });
+        assert.ok(rows.some((claimed) => claimed.key === key), `${at}: ${key} is not queued`);
+        break;
+      }
       case 'completeKey': {
         const key = fireKeyOf(names, step);
         assert.equal(await deliveries.completeKey({ key }), step.expect === true, `${at}: whether ${key} was completed`);

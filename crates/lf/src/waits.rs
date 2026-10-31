@@ -963,6 +963,10 @@ mod tests {
                     let row = claim_rows(&team, "fire_event").into_iter().find(|row| row.key == key).unwrap_or_else(|| panic!("{at}: {key} is not queued"));
                     store.bury_work(&row.id, &row.claim, "gave up").unwrap();
                 }
+                "claimRow" => {
+                    let key = format!("fire_event:{}", names.id(text(step, "fire")));
+                    assert!(claim_rows(&team, "fire_event").iter().any(|row| row.key == key), "{at}: {key} is not queued");
+                }
                 "completeKey" => {
                     let key = format!("fire_event:{}", names.id(text(step, "fire")));
                     let expect = step.get("expect") == Some(&Js::Bool(true));
@@ -1048,6 +1052,7 @@ mod tests {
         a_mark_the_callers_own_running_steps_hold_keeps_arrivals_above_it_from_the_sweep,
         a_wait_opened_at_delivery_keeps_arrivals_until_its_run_ends_and_burying_its_fire_row_drops_those_of_runs_that_never_started,
         a_fire_row_its_caller_ran_and_completed_by_key_drops_the_waits_of_runs_that_never_started,
+        a_fire_row_a_live_claim_holds_is_not_completed_by_key_it_stays_queued_and_its_waits_stay_live,
     }
 
     /// The identities a store keeps are not read through the slot once

@@ -822,7 +822,9 @@ impl Session {
         let fires = |listen: &Listen| match judged_by {
             JudgedBy::Every => true,
             JudgedBy::Sharing(shared) => shared.fires.iter().any(|i| std::ptr::eq(listen, &set.listens[*i])),
-            JudgedBy::Minted(_) => minted.contains(listen.pipeline().as_str()),
+            // Also still sharing the poll: a listen edited since the row was kept
+            // was not judged against a page the module filtered for the old key.
+            JudgedBy::Minted(shared) => minted.contains(listen.pipeline().as_str()) && shared.is_none_or(|shared| shared.fires.iter().any(|i| std::ptr::eq(listen, &set.listens[*i]))),
         };
         let mut started = BTreeSet::new();
         for arrival in arrivals.iter().filter(|a| !a.gone) {
@@ -1345,7 +1347,9 @@ impl Session {
             if let Some(row) = polled.row {
                 let (_, outcomes) = self.do_work(&set, &row.kind, &row.payload).await?;
                 fired.outcomes.extend(outcomes);
-                self.store.complete_key(&row.key).map_err(|e| e.to_string())?;
+                if let Err(error) = self.store.complete_key(&row.key) {
+                    eprintln!("listen-fire: the row of a poll's arrivals was not completed ({error}): a drain runs it again a run lease from now, and it starts no run twice");
+                }
             }
         }
         Ok(fired)

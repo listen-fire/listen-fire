@@ -1992,8 +1992,8 @@ pub(crate) mod tests {
     #[test]
     fn an_inline_delivery_s_waits_are_live_while_its_runs_start_and_its_row_is_completed() {
         let project = InboxProject::pushed(NOTES_AWAIT_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
-        // Asked twice as the delivery mints its runs, then as the first run opens its wait.
-        sweep_at_await_keys(project.on_await_keys.clone(), 3, project.root.join(".lf/state.db"));
+        // The delivery mints its runs in one ask; the sweep lands as the first run opens its wait.
+        sweep_at_await_keys(project.on_await_keys.clone(), 2, project.root.join(".lf/state.db"));
         in_local(async {
             let session = project.session().await;
             let note = |id: &str| format!(r#"{{"edge":"Notes","identity":"{id}","landing":{{"recordId":"{id}","recordType":"Note","fields":{{"Id":"{id}","Title":"x"}}}}}}"#);
