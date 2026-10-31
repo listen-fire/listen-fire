@@ -23,8 +23,13 @@ import {
   WAKE_AWAIT_WORK_KIND,
   settleRaceWorkKey,
   type ClaimedWork,
+  type DeliveryRowStore,
+  type DeliveryWait,
+  type KeepDelivery,
+  type KeptDelivery,
   type LeafRow,
   type ListedArrival,
+  type NewArrival,
   type OwedRace,
   type ParkKind,
   type RunHostStore,
@@ -32,7 +37,6 @@ import {
   type StrandedWait,
   type WaitWake,
 } from './store';
-import { ARRIVAL_RETENTION_MS } from './rules';
 
 interface Leaf {
   reason: ParkReason;
@@ -65,6 +69,8 @@ interface WorkRow {
    *  during the work is told from the work itself. */
   armed: number;
   armedAtClaim: number;
+  /** Buried (`work.bury`): never claimed again. */
+  dead: boolean;
 }
 
 interface LogRow {
@@ -80,6 +86,18 @@ interface LogRow {
   loggedAt: number;
 }
 
+/** An identity a log took, kept apart from its entry for the module's
+ *  re-send window: a repeat of it before `keptUntil` is a sender's retry. */
+interface IdentityRow {
+  teamId: string;
+  adapterType: string;
+  edge: string;
+  key: string;
+  identity: string;
+  version: string | null;
+  keptUntil: number;
+}
+
 interface WaitRow {
   id: string;
   runId: string;
@@ -93,6 +111,9 @@ interface WaitRow {
   address: string | null;
   /** When it was found parked on a deleted record (ms); null while it was not. */
   strandedAt: number | null;
+  /** The `fire_event` row that queues its run, for a wait a delivery
+   *  opened; null for one its run opened. */
+  fireKey: string | null;
 }
 
 interface Note {
@@ -116,22 +137,28 @@ function byRun<T>(map: Map<string, Map<string, T>>, runId: string): Map<string, 
   return inner;
 }
 
-/** A `RunHostStore` in this process's memory, with the run rows a
- *  listen-fire store keeps beside it (for the shared waits cases). `now` is
- *  its clock (due times, leases, the arrivals' retention); default the wall
- *  clock. */
-export function memoryRunHostStore(options: { now?: () => number } = {}): RunHostStore & RunRowStore {
+/** A `RunHostStore` in this process's memory, with the run rows and the
+ *  delivery write a listen-fire store keeps beside it (for the shared waits
+ *  cases). `now` is its clock (due times, leases, the identities' re-send
+ *  windows); default the wall clock. */
+export function memoryRunHostStore(options: { now?: () => number } = {}): RunHostStore & RunRowStore & DeliveryRowStore {
   const now = options.now ?? Date.now;
   const leaves = new Map<string, Map<string, Leaf>>();
   const joins = new Map<string, Map<string, Join>>();
   const branchExports = new Map<string, Map<string, Map<string, BranchExport>>>();
-  const leases = new Map<string, { token: string; until: number }>();
+  /** Each held lease, with the arrival mark it was claimed at. */
+  const leases = new Map<string, { token: string; until: number; mark: number }>();
   const work = new Map<string, WorkRow>();
   const sources = new Map<string, string>();
   const runs = new Map<string, string>();
   let lastSeq = 0;
   let log: LogRow[] = [];
+  let identities: IdentityRow[] = [];
   const waits = new Map<string, WaitRow>();
+  /** Kept deliveries by subscription and the provider's id, to keep a
+   *  duplicate out; and each subscription's pull cursor. */
+  const deliveryIds = new Set<string>();
+  const checkpoints = new Map<string, string>();
   let notes: Note[] = [];
 
   const leasedTo = (runId: string, fence: string): boolean => {
@@ -158,7 +185,7 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
     const due = input.dueAt !== undefined ? Date.parse(input.dueAt) : now();
     const row = work.get(input.key);
     if (row === undefined) {
-      work.set(input.key, { id: randomUUID(), kind: input.kind, key: input.key, payload: stored(input.payload), dueAt: due, teamId: input.teamId, claim: undefined, leasedUntil: 0, armed: 0, armedAtClaim: 0 });
+      work.set(input.key, { id: randomUUID(), kind: input.kind, key: input.key, payload: stored(input.payload), dueAt: due, teamId: input.teamId, claim: undefined, leasedUntil: 0, armed: 0, armedAtClaim: 0, dead: false });
       return;
     }
     const leased = row.claim !== undefined && row.leasedUntil > now();
@@ -269,6 +296,86 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
   };
   const queueWake = (teamId: string, wake: WaitWake): void => {
     enqueue({ kind: WAKE_AWAIT_WORK_KIND, key: `${WAKE_AWAIT_WORK_KIND}:${randomUUID()}`, payload: wake, teamId });
+  };
+  const logArrivals = (input: { teamId: string; adapterType: string; arrivals: readonly NewArrival[]; at: string; resendWindowMs: number }): { wakes: WaitWake[]; stranded: StrandedWait[] } => {
+    const { teamId, adapterType, arrivals, at } = input;
+    const loggedAt = Date.parse(at);
+    const keptUntil = loggedAt + input.resendWindowMs;
+    const wakes: WaitWake[] = [];
+    const stranded: StrandedWait[] = [];
+    for (const arrival of arrivals) {
+      const { edge, key, identity, version } = arrival;
+      const sameRecord = (row: { teamId: string; adapterType: string; edge: string; key: string | null }): boolean =>
+        row.teamId === teamId && row.adapterType === adapterType && row.edge === edge && row.key === key;
+      if (identity !== null) {
+        // A sender's retry: its identity and version logged there within the
+        // module's re-send window, even if the sweep forgot its entry since.
+        if (identities.some((row) => sameRecord(row) && row.identity === identity && row.version === version && row.keptUntil > loggedAt)) continue;
+        identities.push({ teamId, adapterType, edge, key, identity, version, keptUntil });
+      }
+      lastSeq += 1;
+      log.push({ seq: lastSeq, teamId, adapterType, edge, key, identity, version, landing: arrival.landing === null ? null : stored(arrival.landing), gone: arrival.gone, loggedAt });
+      // A deleted record answers no wait: the waits parked on it are
+      // stranded, once, and keep waiting.
+      if (arrival.gone) {
+        for (const wait of waits.values()) {
+          if (!sameRecord(wait) || wait.strandedAt !== null || !parkedNow(wait)) continue;
+          wait.strandedAt = loggedAt;
+          stranded.push(strandedOf({ ...wait, strandedAt: loggedAt }));
+        }
+        continue;
+      }
+      // The newest report on a record wins: one after a gone one says
+      // the record is back (or never went), so its waits are not
+      // stranded.
+      for (const wait of waits.values()) {
+        if (!sameRecord(wait) || wait.strandedAt === null) continue;
+        wait.strandedAt = null;
+        const unstranded = stranded.findIndex((w) => w.waitId === wait.id);
+        if (unstranded !== -1) stranded.splice(unstranded, 1);
+      }
+      for (const wait of waits.values()) {
+        if (!sameRecord(wait) || wait.address === null) continue;
+        // A wait whose park has finished needs no wake: its leaf is gone.
+        if (leaves.get(wait.runId)?.has(wait.address) !== true) continue;
+        if (!wakes.some((w) => w.waitId === wait.id)) wakes.push({ runId: wait.runId, waitId: wait.id, address: wait.address });
+      }
+    }
+    for (const wake of wakes) queueWake(teamId, wake);
+    return { wakes, stranded };
+  };
+  /** The run's wait on this edge of this record: the one it has, or a new one. */
+  const openWait = (input: { runId: string; teamId: string; adapterType: string; edge: string; key: string | null; since: number; fireKey: string | null }): string => {
+    const { runId, teamId, adapterType, edge, key, since, fireKey } = input;
+    for (const wait of waits.values()) {
+      if (wait.runId === runId && wait.teamId === teamId && wait.adapterType === adapterType && wait.edge === edge && wait.key === key) return wait.id;
+    }
+    const id = randomUUID();
+    waits.set(id, { id, runId, teamId, adapterType, edge, key, since, address: null, strandedAt: null, fireKey });
+    return id;
+  };
+  /** A wait a delivery opens for a run it queues; its trigger's own arrival
+   *  noted as judged, not matched, so it never answers its own run. */
+  const openDeliveryWait = (teamId: string, adapterType: string, wait: DeliveryWait, since: number): void => {
+    const waitId = openWait({ runId: wait.runId, teamId, adapterType, edge: wait.edge, key: wait.key, since, fireKey: wait.fireKey });
+    const noted = wait.preNoted;
+    if (noted !== undefined) notes.push({ waitId, identity: noted.identity, version: noted.version, matched: false, leaf: null });
+  };
+  /** A wait its run opened lives as long as its run's state; one a delivery
+   *  opened, while its run exists or its `fire_event` row is queued. */
+  const live = (wait: WaitRow): boolean => {
+    if (wait.fireKey === null || runs.has(wait.runId)) return true;
+    const fire = work.get(wait.fireKey);
+    return fire !== undefined && !fire.dead;
+  };
+  /** The lowest mark an unexpired lease took, else the latest seq. */
+  const floor = (): number => {
+    const held = [...leases.values()].filter((lease) => lease.until > now()).map((lease) => lease.mark);
+    return held.length > 0 ? Math.min(...held) : lastSeq;
+  };
+  const dropWaits = (ids: ReadonlySet<string>): void => {
+    notes = notes.filter((n) => !ids.has(n.waitId));
+    for (const id of ids) waits.delete(id);
   };
 
   return {
@@ -387,55 +494,11 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
       async mark() {
         return lastSeq;
       },
-      async log({ teamId, adapterType, arrivals, at }) {
-        const loggedAt = Date.parse(at);
-        const retained = now() - ARRIVAL_RETENTION_MS;
-        const wakes: WaitWake[] = [];
-        const stranded: StrandedWait[] = [];
-        for (const arrival of arrivals) {
-          const { edge, key, identity, version } = arrival;
-          const sameRecord = (row: { teamId: string; adapterType: string; edge: string; key: string | null }): boolean =>
-            row.teamId === teamId && row.adapterType === adapterType && row.edge === edge && row.key === key;
-          // A sender's retry: its identity and version already logged there.
-          if (identity !== null && log.some((row) => sameRecord(row) && row.identity === identity && row.version === version && row.loggedAt > retained)) continue;
-          lastSeq += 1;
-          log.push({ seq: lastSeq, teamId, adapterType, edge, key, identity, version, landing: arrival.landing === null ? null : stored(arrival.landing), gone: arrival.gone, loggedAt });
-          // A deleted record answers no wait: the waits parked on it are
-          // stranded, once, and keep waiting.
-          if (arrival.gone) {
-            for (const wait of waits.values()) {
-              if (!sameRecord(wait) || wait.strandedAt !== null || !parkedNow(wait)) continue;
-              wait.strandedAt = loggedAt;
-              stranded.push(strandedOf({ ...wait, strandedAt: loggedAt }));
-            }
-            continue;
-          }
-          // The newest report on a record wins: one after a gone one says
-          // the record is back (or never went), so its waits are not
-          // stranded.
-          for (const wait of waits.values()) {
-            if (!sameRecord(wait) || wait.strandedAt === null) continue;
-            wait.strandedAt = null;
-            const unstranded = stranded.findIndex((w) => w.waitId === wait.id);
-            if (unstranded !== -1) stranded.splice(unstranded, 1);
-          }
-          for (const wait of waits.values()) {
-            if (!sameRecord(wait) || wait.address === null) continue;
-            // A wait whose park has finished needs no wake: its leaf is gone.
-            if (leaves.get(wait.runId)?.has(wait.address) !== true) continue;
-            if (!wakes.some((w) => w.waitId === wait.id)) wakes.push({ runId: wait.runId, waitId: wait.id, address: wait.address });
-          }
-        }
-        for (const wake of wakes) queueWake(teamId, wake);
-        return { wakes, stranded };
+      async log(input) {
+        return logArrivals(input);
       },
       async open({ runId, teamId, adapterType, edge, key, since }) {
-        for (const wait of waits.values()) {
-          if (wait.runId === runId && wait.teamId === teamId && wait.adapterType === adapterType && wait.edge === edge && wait.key === key) return { waitId: wait.id };
-        }
-        const id = randomUUID();
-        waits.set(id, { id, runId, teamId, adapterType, edge, key, since, address: null, strandedAt: null });
-        return { waitId: id };
+        return { waitId: openWait({ runId, teamId, adapterType, edge, key, since, fireKey: null }) };
       },
       async stranded(of) {
         const every = [...waits.values()]
@@ -458,12 +521,15 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
         notes.push({ waitId, identity, version, matched, leaf: leaf ?? null });
         return matched && last?.matched !== true;
       },
-      async sweep({ before, limit }) {
-        const by = Date.parse(before);
-        const someWaitReads = (row: LogRow): boolean => [...waits.values()].some((wait) => onWaitsRecord(wait, row));
-        const doomed = new Set(log.filter((row) => row.loggedAt < by && !someWaitReads(row)).slice(0, limit).map((row) => row.seq));
+      async sweep({ limit }) {
+        const below = floor();
+        const readByLiveWait = (row: LogRow): boolean => [...waits.values()].some((wait) => onWaitsRecord(wait, row) && live(wait));
+        const doomed = new Set(log.filter((row) => row.seq <= below && !readByLiveWait(row)).slice(0, limit).map((row) => row.seq));
         log = log.filter((row) => !doomed.has(row.seq));
-        return doomed.size;
+        const at = now();
+        const lapsed = identities.filter((row) => row.keptUntil < at).slice(0, limit);
+        identities = identities.filter((row) => !lapsed.includes(row));
+        return { swept: doomed.size };
       },
     },
 
@@ -472,7 +538,7 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
         const held = leases.get(runId);
         if (held !== undefined && held.until > now()) return null;
         const token = randomUUID();
-        leases.set(runId, { token, until: now() + ttlMs });
+        leases.set(runId, { token, until: now() + ttlMs, mark: lastSeq });
         // Whatever a holder left claimed is parked again for this one: no
         // live holder is resuming it.
         for (const leaf of leaves.get(runId)?.values() ?? []) leaf.status = 'parked';
@@ -492,9 +558,7 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
         leaves.delete(runId);
         joins.delete(runId);
         branchExports.delete(runId);
-        const ofRun = waitsOfRun(runId);
-        notes = notes.filter((n) => !ofRun.has(n.waitId));
-        for (const id of ofRun) waits.delete(id);
+        dropWaits(waitsOfRun(runId));
         for (const race of owedOf(runId)) dropOwedRace(runId, race.frameAddress);
         return true;
       },
@@ -506,7 +570,7 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
       },
       async enqueueIfAbsent({ kind, key, payload, dueAt, teamId }) {
         if (work.has(key)) return false;
-        work.set(key, { id: randomUUID(), kind, key, payload: stored(payload), dueAt: dueAt !== undefined ? Date.parse(dueAt) : now(), teamId, claim: undefined, leasedUntil: 0, armed: 0, armedAtClaim: 0 });
+        work.set(key, { id: randomUUID(), kind, key, payload: stored(payload), dueAt: dueAt !== undefined ? Date.parse(dueAt) : now(), teamId, claim: undefined, leasedUntil: 0, armed: 0, armedAtClaim: 0, dead: false });
         return true;
       },
       async claimDue({ limit, leaseMs, dueBy, kinds, teamId }) {
@@ -514,7 +578,7 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
         const claimed: ClaimedWork[] = [];
         for (const row of [...work.values()].sort((a, b) => a.dueAt - b.dueAt)) {
           if (claimed.length >= limit) break;
-          if (row.dueAt > by || (row.claim !== undefined && row.leasedUntil > now())) continue;
+          if (row.dead || row.dueAt > by || (row.claim !== undefined && row.leasedUntil > now())) continue;
           if (kinds !== undefined && !kinds.includes(row.kind)) continue;
           if (teamId !== undefined && row.teamId !== teamId) continue;
           row.claim = randomUUID();
@@ -558,6 +622,37 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
     },
     async runStatus({ runId }) {
       return runs.get(runId) ?? null;
+    },
+
+    async keepDelivery(input: KeepDelivery): Promise<KeptDelivery> {
+      const { subscriptionId, delivery, arrivals } = input;
+      if (delivery.externalId !== undefined && delivery.externalId !== null) {
+        const id = JSON.stringify([subscriptionId, delivery.externalId]);
+        if (deliveryIds.has(id)) return { kept: false };
+        deliveryIds.add(id);
+      }
+      if ('checkpoint' in input) checkpoints.set(subscriptionId, stored(input.checkpoint));
+      const arrivalMark = lastSeq;
+      let wakes: WaitWake[] | undefined;
+      if (arrivals !== undefined) {
+        for (const wait of input.waits ?? []) openDeliveryWait(arrivals.teamId, arrivals.adapterType, wait, arrivalMark);
+        wakes = logArrivals(arrivals).wakes;
+      }
+      for (const row of input.work) {
+        // Each run a delivery queues reads from the mark before its arrivals.
+        const payload = row.kind === 'fire_event' && typeof row.payload === 'object' && row.payload !== null ? { ...row.payload, arrivalMark } : row.payload;
+        enqueue({ kind: row.kind, key: row.key, payload, ...(row.dueAt != null ? { dueAt: row.dueAt } : {}), ...(row.teamId != null ? { teamId: row.teamId } : {}) });
+      }
+      return wakes === undefined ? { kept: true, arrivalMark } : { kept: true, arrivalMark, wakes };
+    },
+    async bury({ key, claim }) {
+      const row = work.get(key);
+      if (row === undefined || row.claim !== claim) return;
+      row.dead = true;
+      row.claim = undefined;
+      row.leasedUntil = 0;
+      // The waits it opened for runs that never started read for nobody.
+      dropWaits(new Set([...waits.values()].filter((wait) => wait.fireKey === key && !runs.has(wait.runId)).map((wait) => wait.id)));
     },
   };
 }

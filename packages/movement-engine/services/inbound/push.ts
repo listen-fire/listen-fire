@@ -4,9 +4,10 @@
 //                                            caller's triggers as a webhook
 //                                            delivery's events are
 //   POST …/<adapterType>/wake  { arrivals }  what landed on listenable edges
-//                                            (adapter protocol 2.5), logged,
-//                                            waking the waits parked on each
-//                                            record
+//                                            (adapter protocol 2.5), kept as
+//                                            a delivery is: logged, waking the
+//                                            waits parked on each record, with
+//                                            the runs it starts
 //
 // The caller presents the credential its install holds and the install whose
 // secret matches is the team (the store decides). Both answer 202
@@ -55,9 +56,11 @@ export interface PushStore<Captured> {
   /** The receipts one event earns (one per matching trigger). */
   capture(input: { caller: PushCaller; event: DiscriminableEvent; eventTypes: readonly EventType[] }): Promise<Captured[]>;
   enqueue(captured: readonly Captured[]): Promise<void>;
-  /** Log what arrived on the caller's listenable edges, waking the waits
-   *  parked on each record (as `InboundStore.logArrivals`). */
-  logArrivals(input: { adapterType: string; teamId: string; arrivals: readonly Arrival[] }): Promise<void>;
+  /** Keep what arrived on the caller's listenable edges in one write, as
+   *  `InboundStore.keepDelivery` keeps a delivery's arrivals: logged, waking
+   *  the waits parked on each record, with each run an arrival starts
+   *  queued and its trigger's waits opened from the mark before them. */
+  keepArrivals(input: { adapterType: string; teamId: string; arrivals: readonly Arrival[] }): Promise<void>;
   notify(): void;
 }
 
@@ -128,13 +131,13 @@ export async function emitEvents<C>(
   return { accepted: captured.length, failed };
 }
 
-/** Log what arrived. An arrival no wait reads is kept for a wait opened
+/** Keep what arrived. An arrival no wait reads is kept for a wait opened
  *  later; `accepted` counts them. */
-export async function logArrivals<C>(
+export async function keepArrivals<C>(
   store: PushStore<C>,
   input: { caller: PushCaller; arrivals: readonly Arrival[] },
 ): Promise<{ accepted: number }> {
-  await store.logArrivals({ adapterType: input.caller.adapterType, teamId: input.caller.teamId, arrivals: input.arrivals });
+  await store.keepArrivals({ adapterType: input.caller.adapterType, teamId: input.caller.teamId, arrivals: input.arrivals });
   store.notify();
   return { accepted: input.arrivals.length };
 }
@@ -162,7 +165,7 @@ export async function answerWake<C>(store: PushStore<C>, request: PushRequest): 
     const caller = await callerOf(store, request);
     if ('status' in caller) return caller;
     if (!body.success) return badRequest(body.error);
-    return { status: 202, body: await logArrivals(store, { caller, arrivals: body.data.arrivals }) };
+    return { status: 202, body: await keepArrivals(store, { caller, arrivals: body.data.arrivals }) };
   } catch (err) {
     logger.error('[AdapterDoors] wake failed', { err });
     return { status: 500, body: { error: 'internal' } };

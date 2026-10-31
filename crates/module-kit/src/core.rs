@@ -453,6 +453,25 @@ pub struct Checkpoint {
     pub checkpoint: Js,
 }
 
+/// What a listen's heads were last resolved to: the heads, when, and why
+/// the resolve failed (`None`: it did not).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListenResolution {
+    pub heads: Vec<String>,
+    pub resolved_at: Option<String>,
+    pub failure: Option<String>,
+}
+
+/// A listen's kept state (`listens.states`): its resolution, and why it is
+/// paused (`None`: it is not).
+#[derive(Debug, Clone, Serialize)]
+pub struct ListenState {
+    #[serde(flatten)]
+    pub resolution: ListenResolution,
+    pub paused: Option<String>,
+}
+
 /// The module processes the hosts on this store started, at the version a
 /// `processes.swap` writes over (0: never written).
 #[derive(Debug, Clone, Serialize)]
@@ -641,6 +660,18 @@ slot! {
         "sources.get" => fn source(SourcesGet { team_id: String, hash: String }) -> Option<String>;
         "inbound.checkpoint" => fn inbound_checkpoint(InboundCheckpoint { subscription_id: String }) -> Option<Checkpoint>;
         "inbound.saveCheckpoint" => fn save_inbound_checkpoint(InboundSaveCheckpoint { subscription_id: String, checkpoint: Js }) -> ();
+        /// Each named listen's state, by its pipeline; one with nothing kept
+        /// is absent.
+        "listens.states" => fn listen_states(ListensStates { pipelines: Vec<String> }) -> BTreeMap<String, ListenState>;
+        /// Hold the listen's resolve for `ttl_ms`, so one process lists it
+        /// at a time; `None` while another's hold has not lapsed.
+        "listens.claimResolve" => fn claim_listen_resolve(ListensClaimResolve { pipeline: String, ttl_ms: i64 }) -> Option<Lease>;
+        /// Keep what the resolve held by `token` came to, the listen's
+        /// `paused` as it is, and let the hold go, as one write. `false`, and
+        /// nothing kept, when the hold lapsed and another took it since.
+        "listens.saveResolution" => fn save_listen_resolution(ListensSaveResolution { pipeline: String, token: String, resolution: ListenResolution }) -> bool;
+        /// Why the listen is paused (`None`: it is not), its resolution as it is.
+        "listens.setPaused" => fn set_listen_paused(ListensSetPaused { pipeline: String, #[serde(default)] paused: Option<String> }) -> ();
         /// One write: the receipt first, then the cursor (absent: left as it
         /// is), the arrivals and the work rows. A duplicate
         /// (`delivery.external_id` kept at this subscription before) writes

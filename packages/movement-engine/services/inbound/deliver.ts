@@ -3,8 +3,9 @@
 // host keeps its subscriptions, receipts and work rows in (InboundStore).
 //
 //   intercepts → subscription → provider check → signature → preprocessInbound
-//   → capture a receipt per matching trigger → advance the pull cursor
-//   → queue a work row per receipt, and log what arrived → ack
+//   → capture a receipt per matching trigger → keep the delivery in one write
+//   (its pull cursor, a work row per receipt, what arrived, and the waits of
+//   the runs it starts) → ack
 //
 // A module that checks its own inbound (`inbound.scheme: module`) replaces
 // the signature and `preprocessInbound` with one `checkInbound` of the raw
@@ -14,14 +15,14 @@
 // answer was recorded), in place of its acknowledgement.
 //
 // What a delivery says landed on listenable edges (its arrivals, adapter
-// protocol 2.5) is handed to the run host to log, which wakes each wait
-// parked on its record.
+// protocol 2.5) is logged in the same write, waking each wait parked on its
+// record.
 //
-// Capture, queue, then ack: the sender's 200 means every receipt has its work
+// Capture, keep, then ack: the sender's 200 means every receipt has its work
 // row and every arrival is logged, so nothing it delivered can be lost after
 // the ack, and the movements run off the request so a slow run never reads as
-// a failed delivery. Anything that cannot be queued or logged answers 500, so
-// the sender's retry replays the stored receipts idempotently.
+// a failed delivery. A delivery that cannot be kept answers 500, with nothing
+// of it kept, so the sender's retry keeps it whole.
 
 import type { Arrival, WireInboundIntercept } from 'engine-contracts';
 import type { z } from 'zod';
@@ -70,7 +71,7 @@ export interface OpenedSource {
 }
 
 /** What a door needs from its host. `Captured` is the host's own receipt
- *  handle: the core only carries it from capture to queue. */
+ *  handle: the core only carries it from capture to the delivery's keep. */
 export interface InboundStore<Captured> {
   findSubscription(id: string): Promise<InboundSubscription | null>;
   /** Whether a provider key is one this host serves itself (so a missing row
@@ -81,35 +82,37 @@ export interface InboundStore<Captured> {
   sourceFor(subscription: InboundSubscription): Promise<InboundSource | null>;
   /** False only for deliveries the host fabricates itself (the dev loop's test team). */
   verifiesSignature(subscription: InboundSubscription): boolean;
-  /**
-   * `capture` receipts one event and `enqueue` queues it. Both are idempotent per receipt: a
-   * delivery whose receipts were not all queued is answered 500, and its
-   * sender's retry captures and queues every event again, so an event the
-   * failed attempt queued must be queued once (a store keys its receipt on
-   * the event's own id, `externalId`). Each event is its own write: unlike
-   * listen-fire's one write per delivery, a failed attempt leaves the
-   * receipts it queued before the failure.
-   */
+  /** One event's receipt: one per trigger it matches, what `keepDelivery`
+   *  queues. A receipt that cannot be made drops its event from the count;
+   *  the rest go on. */
   capture(input: {
     event: DiscriminableEvent;
     subscription: InboundSubscription;
     source: OpenedSource;
     eventTypes: readonly EventType[];
   }): Promise<Captured>;
-  saveCheckpoint(input: { subscriptionId: string; checkpoint: unknown }): Promise<void>;
-  enqueue(input: {
-    captured: Captured;
-    event: DiscriminableEvent;
+  /**
+   * What the delivery leaves, kept in one write (the store slot's
+   * `inbound.keepDelivery`): its pull cursor (absent: left as it is), a
+   * work row per receipt, and its arrivals logged (`waits.log`, under the
+   * module's re-send window), waking each wait parked on their records. The
+   * host mints each run a receipt or an arrival starts, and opens the waits
+   * its function awaits off its trigger (the edges the checker stamps
+   * `opensWaits` on its parameter, keyed by the module's `awaitKeys`) from
+   * the mark before the delivery's arrivals, in the same write: a reply that
+   * lands while the run sits in the queue, or later in the same delivery,
+   * answers it, and the trigger's own arrival, noted on its waits, does not.
+   * `arrivalMark` is that mark, each queued run's. `kept: false`, and
+   * nothing kept, for a duplicate. A failure keeps nothing: the sender's
+   * retry keeps the delivery whole.
+   */
+  keepDelivery(input: {
     subscription: InboundSubscription;
     source: OpenedSource;
-  }): Promise<void>;
-  /** Log what a delivery says arrived on the adapter's listenable edges, for
-   *  the team: each arrival wakes the waits parked on its record, and one no
-   *  wait reads yet is kept for a wait opened later. Asked only once every
-   *  receipt of the delivery is queued, after them: a delivery whose
-   *  receipts are not all queued logs no arrival, and its retry logs them
-   *  (as `logArrivals` of the run host: `waits.log` skips a repeat). */
-  logArrivals(input: { adapterType: string; teamId: string; arrivals: readonly Arrival[] }): Promise<void>;
+    captured: ReadonlyArray<{ event: DiscriminableEvent; captured: Captured }>;
+    arrivals: readonly Arrival[];
+    checkpoint?: unknown;
+  }): Promise<{ kept: boolean; arrivalMark?: number }>;
 }
 
 export interface InboundDelivery {
@@ -140,12 +143,14 @@ export interface EventError {
   error: string;
 }
 
-/** What `queue` put in the work table. */
+/** What `queue` kept. */
 export interface QueuedDelivery<Captured> {
   teamId: string;
   enqueued: { event: DiscriminableEvent; captured: Captured }[];
   /** Events whose receipt could not be stored: dropped from the count, logged. */
   captureErrors: EventError[];
+  /** Kept before under the provider's id: nothing was kept this time. */
+  duplicate: boolean;
 }
 
 export type ReceivedDelivery<Captured> =
@@ -162,9 +167,9 @@ export type ReceivedDelivery<Captured> =
       ok: true;
       /** Events CAPTURED — receipted and ready to run. */
       eventsProcessed: number;
-      /** The work rows, to queue (and the arrivals, to log) before the ack.
-       *  Absent when the delivery carried nothing to run or log. Rejects when
-       *  anything could not be queued or logged. */
+      /** The delivery's one write, made before the ack. Absent when the
+       *  delivery carried nothing to run or log. Rejects when it could not
+       *  be kept. */
       queue?: () => Promise<QueuedDelivery<Captured>>;
       /** The host drains the rows before acking (the dev loop's test team). */
       drainFirst?: boolean;
@@ -172,14 +177,6 @@ export type ReceivedDelivery<Captured> =
        *  acknowledgement: the module's reply on its acceptance. */
       replyOnceKept?: InboundAnswer;
     };
-
-/** One or more receipts have no work row; the sender must retry. */
-export class InboundQueueFailed extends Error {
-  constructor(readonly failures: readonly EventError[]) {
-    super(`${failures.length} receipt(s) of the delivery could not be queued: ${failures.map((f) => f.error).join('; ')}`);
-    this.name = 'InboundQueueFailed';
-  }
-}
 
 const refused = (error: DeliveryRefusal, status?: number) => ({
   ok: false as const,
@@ -264,32 +261,17 @@ export async function receiveDelivery<Captured>(
     return { ok: true, eventsProcessed: 0, ...(replyOnceKept !== undefined ? { replyOnceKept } : {}) };
   }
 
-  // The pull cursor rides on "receipted", not "run": a crash before the queue
-  // replays receipts rather than re-pulling.
-  if (extraction.checkpoint !== undefined) {
-    await store.saveCheckpoint({ subscriptionId, checkpoint: extraction.checkpoint });
-  }
-
+  // One write: the pull cursor rides with the receipts it moved past, and the
+  // arrivals with the runs they start, never one without the other.
   const queue = async (): Promise<QueuedDelivery<Captured>> => {
-    const enqueued: { event: DiscriminableEvent; captured: Captured }[] = [];
-    const failures: EventError[] = [];
-    // One event's failure never stops the next.
-    for (const entry of captured) {
-      try {
-        await store.enqueue({ captured: entry.captured, event: entry.event, subscription, source: opened });
-        enqueued.push(entry);
-      } catch (err) {
-        logger.error(`Webhook event processing failed:`, { event: entry.event, err });
-        failures.push({ event: entry.event, error: err instanceof Error ? err.message : String(err) });
-      }
-    }
-    // The arrivals are logged only after every receipt is queued (listen-fire
-    // keeps both in one write; here they are in order): the sender's retry
-    // brings them again, and a wait never wakes on a delivery whose receipts
-    // were not all queued.
-    if (failures.length > 0) throw new InboundQueueFailed(failures);
-    if (arrivals.length > 0) await store.logArrivals({ adapterType: adapter.adapterType, teamId: subscription.teamId, arrivals });
-    return { teamId: subscription.teamId, enqueued, captureErrors };
+    const { kept } = await store.keepDelivery({
+      subscription,
+      source: opened,
+      captured,
+      arrivals,
+      ...(extraction.checkpoint !== undefined ? { checkpoint: extraction.checkpoint } : {}),
+    });
+    return { teamId: subscription.teamId, enqueued: kept ? captured : [], captureErrors, duplicate: !kept };
   };
 
   return {
@@ -500,7 +482,7 @@ export async function answerDelivery<Captured>(
         }
       );
     }
-    if (result.queue) await result.queue();
+    if (result.queue && (await result.queue()).duplicate) return { status: 200, body: { ok: true, duplicate: true, eventsProcessed: 0 } };
     const kept = result.replyOnceKept ?? { status: 200, body: { ok: true, eventsProcessed: result.eventsProcessed } };
     return { ...kept, afterAnswer: () => host.notify() };
   } catch (err) {

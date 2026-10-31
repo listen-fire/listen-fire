@@ -98,38 +98,42 @@ export function newArrivalsOf(arrivals: readonly Arrival[]): NewArrival[] {
   });
 }
 
+/** How long a module's provider may re-send an arrival it already sent,
+ *  when its manifest declares none (`resendWindowSeconds`). */
+export const DEFAULT_RESEND_WINDOW_MS = 3_600_000;
+
 /**
  * Log what arrived on an adapter's listenable edges for a team, and queue a
  * wake for each wait parked on their records: one write (`waits.log`), so a
  * crash leaves both or neither, and a sender's retry of arrivals that were
- * not kept logs them again. Answers the wakes queued. A deleted record wakes
- * nothing: its parked waits are stranded (`waits.stranded`) until the record
- * reports again.
+ * not kept logs them again. A re-send within the module's window
+ * (`resendWindowMs`, an hour when it declares none) is a repeat, and logs
+ * nothing. Answers the wakes queued. A deleted record wakes nothing: its
+ * parked waits are stranded (`waits.stranded`) until the record reports
+ * again.
  */
 export async function logArrivals(
   store: RunHostStore,
-  input: { teamId: string; adapterType: string; arrivals: readonly Arrival[]; at?: string },
+  input: { teamId: string; adapterType: string; arrivals: readonly Arrival[]; at?: string; resendWindowMs?: number },
 ): Promise<WaitWake[]> {
   const at = input.at ?? new Date().toISOString();
-  return (await store.waits.log({ teamId: input.teamId, adapterType: input.adapterType, arrivals: newArrivalsOf(input.arrivals), at })).wakes;
+  const resendWindowMs = input.resendWindowMs ?? DEFAULT_RESEND_WINDOW_MS;
+  return (await store.waits.log({ teamId: input.teamId, adapterType: input.adapterType, arrivals: newArrivalsOf(input.arrivals), at, resendWindowMs })).wakes;
 }
-
-/** How long an arrival no live wait reads is kept: a repeat within it is a
- *  sender's retry. */
-export const ARRIVAL_RETENTION_MS = 3_600_000;
 
 /** How many arrivals one sweep forgets at most (listen-fire's drain takes as many). */
 export const ARRIVALS_PER_SWEEP = 100;
 
 /**
- * Forget the arrivals logged more than `ARRIVAL_RETENTION_MS` before `now`
- * that no wait reads, at most `ARRIVALS_PER_SWEEP`; answers how many went. A
- * product sweeps on its own schedule, as listen-fire's drain does on each
- * pass (an embedded host's `tick` does): unswept, the log only grows.
+ * Forget the arrivals no live wait reads that are at or below the floor
+ * (the lowest mark a running step's lease took, else the latest seq), and
+ * the identities whose re-send window has passed: at most
+ * `ARRIVALS_PER_SWEEP`; answers how many arrivals went. A product sweeps on
+ * its own schedule, as listen-fire's drain does on each pass (an embedded
+ * host's `tick` does): unswept, the log only grows.
  */
-export async function sweepArrivals(store: RunHostStore, input: { now: Date }): Promise<number> {
-  const before = new Date(input.now.getTime() - ARRIVAL_RETENTION_MS).toISOString();
-  return store.waits.sweep({ before, limit: ARRIVALS_PER_SWEEP });
+export async function sweepArrivals(store: RunHostStore): Promise<number> {
+  return (await store.waits.sweep({ limit: ARRIVALS_PER_SWEEP })).swept;
 }
 
 // ── Completion ──────────────────────────────────────────────────────────────

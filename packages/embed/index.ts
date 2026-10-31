@@ -679,12 +679,13 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
     },
 
     async arrive(tenant, { adapterType, arrivals }) {
-      await logArrivals(store.runHost, { teamId: tenant, adapterType, arrivals, at: now().toISOString() });
+      const declared = modules.get(adapterType)?.manifest.resendWindowSeconds;
+      await logArrivals(store.runHost, { teamId: tenant, adapterType, arrivals, at: now().toISOString(), ...(declared !== undefined ? { resendWindowMs: declared * 1000 } : {}) });
       return stepWork({ dueBy: now().toISOString(), kinds: [WAKE_AWAIT_WORK_KIND], tenant });
     },
 
     async tick(at = now()) {
-      await sweepArrivals(store.runHost, { now: at });
+      await sweepArrivals(store.runHost);
       return stepWork({ dueBy: at.toISOString() });
     },
   };

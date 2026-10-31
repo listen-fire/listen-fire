@@ -24,7 +24,7 @@ describe('memoryRunHostStore keeps waits as every store does', () => {
   for (const waitsCase of cases) {
     it(waitsCase.name, async () => {
       const store = memoryRunHostStore();
-      await waitsCase.run({ store, runRows: store });
+      await waitsCase.run({ store, runRows: store, deliveries: store });
     });
   }
 

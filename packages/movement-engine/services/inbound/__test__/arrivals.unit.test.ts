@@ -1,8 +1,8 @@
 // What a delivery says landed on listenable edges (adapter protocol 2.5) is
-// handed to the run host to log, which wakes each wait parked on its record:
-// on a signed delivery's reading, on a module's acceptance (whose reply the
-// door answers once the delivery is kept), and at the wake door, which
-// refuses the keys a wake named before 2.5.
+// kept in the delivery's one write, which logs it and wakes each wait parked
+// on its record: on a signed delivery's reading, on a module's acceptance
+// (whose reply the door answers once the delivery is kept), and at the wake
+// door, which refuses the keys a wake named before 2.5.
 
 import { createHmac } from 'node:crypto';
 
@@ -27,18 +27,28 @@ const WORLD: ContractWorld = {
   faults: {},
 };
 
-/** The stores, with every arrival the run host was handed and for whom. */
+/** The stores, with every arrival they were handed to keep and for whom,
+ *  and every delivery's one write. */
 function storesLogging(world: ContractWorld = WORLD) {
   const stores = memoryInboundStores(world);
   const logged: Array<{ adapterType: string; teamId: string; arrivals: readonly Arrival[] }> = [];
-  const keep = <S extends { logArrivals(input: { adapterType: string; teamId: string; arrivals: readonly Arrival[] }): Promise<void> }>(store: S): S => ({
-    ...store,
-    logArrivals: async (input) => {
-      logged.push(input);
-      await store.logArrivals(input);
+  const writes: Array<{ captured: number; arrivals: number; checkpoint?: unknown }> = [];
+  const store: InboundStore<DiscriminableEvent> = {
+    ...stores.store,
+    keepDelivery: async (input) => {
+      writes.push({ captured: input.captured.length, arrivals: input.arrivals.length, ...('checkpoint' in input ? { checkpoint: input.checkpoint } : {}) });
+      if (input.arrivals.length > 0) logged.push({ adapterType: input.source.adapterType, teamId: input.subscription.teamId, arrivals: input.arrivals });
+      return stores.store.keepDelivery(input);
     },
-  });
-  return { ...stores, store: keep(stores.store), push: keep(stores.push), logged };
+  };
+  const push = {
+    ...stores.push,
+    keepArrivals: async (input: { adapterType: string; teamId: string; arrivals: readonly Arrival[] }) => {
+      logged.push(input);
+      await stores.push.keepArrivals(input);
+    },
+  };
+  return { ...stores, store, push, logged, writes };
 }
 
 function signed(body: unknown) {
@@ -58,6 +68,13 @@ describe("a delivery's arrivals", () => {
       { adapterType: 'contract_crm', teamId: TEAM, arrivals: [GONE] },
     ]);
     expect(observed().arrivals).toEqual([LANDED, GONE]);
+  });
+
+  it("are kept in the delivery's one write, with its receipts and its cursor", async () => {
+    const { store, host, writes } = storesLogging();
+    const answer = await answerDelivery(store, host, { provider: 'contract_crm', subscriptionId: 'sub-crm', ...signed({ events: [{ n: 1 }, { n: 2 }], arrivals: [LANDED], checkpoint: { cursor: 'c-1' } }) });
+    expect([answer.status, answer.body]).toEqual([200, { ok: true, eventsProcessed: 2 }]);
+    expect(writes).toEqual([{ captured: 2, arrivals: 1, checkpoint: { cursor: 'c-1' } }]);
   });
 
   it('that cannot be logged fail the delivery, so the sender retries', async () => {
@@ -87,12 +104,10 @@ describe("a module's acceptance", () => {
       }),
       verifiesSignature: () => !synthetic,
       capture: async ({ event }) => event,
-      saveCheckpoint: async () => {},
-      enqueue: async ({ event }) => {
-        queued.push(event);
-      },
-      logArrivals: async ({ arrivals }) => {
-        logged.push(arrivals);
+      keepDelivery: async ({ captured, arrivals }) => {
+        queued.push(...captured.map((entry) => entry.event));
+        if (arrivals.length > 0) logged.push(arrivals);
+        return { kept: true, arrivalMark: 0 };
       },
     };
     const drained: number[] = [];
@@ -133,7 +148,7 @@ describe("a module's acceptance", () => {
 describe('the wake door', () => {
   const caller = { adapterType: CONTRACT_PUSH_TYPE, headers: { authorization: 'Bearer push-credential' } };
 
-  it('hands what arrived to the run host to log: 202 accepted', async () => {
+  it('keeps what arrived: 202 accepted', async () => {
     const { push, logged } = storesLogging();
     const answer = await answerWake(push, { ...caller, body: { arrivals: [LANDED, GONE] } });
     expect([answer.status, answer.body]).toEqual([202, { accepted: 2 }]);

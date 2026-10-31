@@ -17,6 +17,7 @@ import { RUN_LEASE_LOST_CODE } from 'engine-contracts/slots';
 import { RunLeaseLost } from '../movement_engine/errors';
 import { SlotClient, SlotRefused, startModule, type SlotAddress } from 'module-runtime/module_wire/wire';
 import type { RunRecords } from './rules';
+import { DELIVERY_SOURCES, type DeliveryRowStore, type DeliverySource, type KeepDelivery, type KeptDelivery } from './store';
 import type { ClaimedWork, NewArrival, ParkKind, RunHostStore, RunRowStore, WorkRelease } from './store';
 
 const Nothing = z.null();
@@ -29,6 +30,10 @@ const Leaf = z.object({
 const Claimed = z.object({ reason: z.string(), state: z.unknown().optional() }).nullable();
 const Work = z.object({ id: z.string(), kind: z.string(), key: z.string(), payload: z.unknown().optional(), claim: z.string() });
 const Wake = z.object({ runId: z.string(), waitId: z.string(), address: z.string() });
+const Kept = z.union([
+  z.object({ kept: z.literal(false) }),
+  z.object({ kept: z.literal(true), arrivalMark: z.number(), wakes: z.array(Wake).optional() }),
+]);
 const Listed = z.object({ seq: z.number(), identity: z.string(), version: z.string().nullable(), landing: z.unknown() });
 const Stranded = z.object({
   waitId: z.string(),
@@ -55,29 +60,7 @@ function arrivalOf(arrival: NewArrival): Record<string, unknown> {
 // write. Only listen-fire's doors call these, so they live on this client rather than
 // on `RunHostStore`.
 
-export const DELIVERY_SOURCES = ['webhook', 'hook', 'emit', 'cli'] as const;
-export type DeliverySource = (typeof DELIVERY_SOURCES)[number];
-
-/** `inbound.keepDelivery`'s `delivery`. */
-export interface NewDelivery {
-  id: string;
-  /** The provider's id for the delivery: a second one under it, at the same subscription, is kept out. */
-  externalId?: string | null;
-  receivedAt: string;
-  source: DeliverySource;
-  inline: boolean;
-  replayOf?: string | null;
-  events: unknown[];
-}
-
-/** A work row as `inbound.keepDelivery` queues it (`work.enqueue`'s input). */
-export interface NewWorkRow {
-  kind: string;
-  key: string;
-  payload: unknown;
-  dueAt?: string | null;
-  teamId?: string | null;
-}
+export { DELIVERY_SOURCES, type DeliverySource, type NewDelivery, type NewWorkRow } from './store';
 
 export interface DeliveryRun {
   id: string;
@@ -172,6 +155,8 @@ export class RpcStoreBackend {
   readonly runRows: RunRowStore;
   /** The run records the server keeps beside its families. */
   readonly runs: RunRecords;
+  /** A delivery's one write and a row's burial, as the shared waits cases reach them. */
+  readonly deliveryRows: DeliveryRowStore;
   private readonly started: Promise<{ client: SlotClient; close(): Promise<void> }>;
 
   /** The store module `command` starts, or the one already at `address`. */
@@ -187,6 +172,7 @@ export class RpcStoreBackend {
     this.store = this.families();
     this.runRows = this.runRowFamily();
     this.runs = this.runRecords();
+    this.deliveryRows = { keepDelivery: (input) => this.keepDelivery(input), bury: (work) => this.buryWork(work) };
   }
 
   /** One call; its result read by `schema`. A fenced write refused because
@@ -227,17 +213,26 @@ export class RpcStoreBackend {
     return answer?.attempt ?? null;
   }
 
-  /** The door's one write: the receipt, the cursor (absent: left as it is)
-   *  and the work rows; `kept: false`, and nothing written, for a duplicate. */
-  keepDelivery(input: { subscriptionId: string; checkpoint?: unknown; delivery: NewDelivery; work: NewWorkRow[] }): Promise<{ kept: boolean }> {
-    const { delivery, work } = input;
+  /** The door's one write (`inbound.keepDelivery`): the receipt, the cursor
+   *  (absent: left as it is), the work rows, and the arrivals with the waits
+   *  the delivery opens for the runs it queues; `kept: false`, and nothing
+   *  written, for a duplicate. */
+  keepDelivery(input: KeepDelivery): Promise<KeptDelivery> {
+    const { delivery, work, arrivals, waits } = input;
     const params = {
       subscriptionId: input.subscriptionId,
       ...('checkpoint' in input ? { checkpoint: input.checkpoint } : {}),
       delivery: { ...delivery, externalId: delivery.externalId ?? null, replayOf: delivery.replayOf ?? null },
       work: work.map((row) => ({ ...row, dueAt: row.dueAt ?? null, teamId: row.teamId ?? null })),
+      ...(arrivals !== undefined ? { arrivals: { ...arrivals, arrivals: arrivals.arrivals.map(arrivalOf) } } : {}),
+      ...(waits !== undefined && waits.length > 0 ? { waits } : {}),
     };
-    return this.call('inbound.keepDelivery', params, z.object({ kept: z.boolean() }));
+    return this.call('inbound.keepDelivery', params, Kept);
+  }
+
+  /** Give up on a claimed row (`work.bury`). */
+  async buryWork(work: ClaimedWork & { reason: string }): Promise<void> {
+    await this.call('work.bury', { id: work.id, claim: work.claim, reason: work.reason }, Nothing);
   }
 
   /** Kept deliveries, most recent first, without their events. */
@@ -355,7 +350,7 @@ export class RpcStoreBackend {
         arrivals: (input) => call('waits.arrivals', input, z.object({ arrivals: z.array(Listed) })),
         stranded: (of) => call('waits.stranded', of, z.array(Stranded)),
         note: (input) => call('waits.note', input, z.boolean()),
-        sweep: (input) => call('waits.sweep', input, z.number()),
+        sweep: (input) => call('waits.sweep', input, z.object({ swept: z.number() })),
       },
       leases: {
         claim: (input) => call('leases.claim', input, z.object({ token: z.string() }).nullable()),

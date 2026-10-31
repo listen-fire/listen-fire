@@ -57,12 +57,12 @@ export interface ContractWorld {
   faults: {
     /** Capturing the event whose payload has `fail: true` throws. */
     captureMarked?: boolean;
-    /** Queueing any captured event throws. */
+    /** Keeping a delivery with any captured event throws. */
     enqueue?: boolean;
-    /** Queueing the event whose payload has `fail: true` throws, the first
-     *  time only: the sender's retry is kept. */
+    /** Keeping the delivery that captured the event whose payload has
+     *  `fail: true` throws, the first time only: the sender's retry is kept. */
     enqueueMarkedOnce?: boolean;
-    /** Logging arrivals throws. */
+    /** Keeping a delivery's arrivals throws. */
     logArrivals?: boolean;
   };
   /** The subscription's deliveries are synthetic: no signature check, drained before the ack. */
@@ -626,7 +626,7 @@ export function memoryInboundStores(arranged: ContractWorld): {
   let markedFailed = false;
   const marked = (event: DiscriminableEvent): boolean => (event.payload as { fail?: unknown } | undefined)?.fail === true;
 
-  const logArrivals = async (input: { arrivals: readonly Arrival[] }) => {
+  const keepArrivals = async (input: { arrivals: readonly Arrival[] }) => {
     if (faults.logArrivals) throw new Error('arrival log unavailable');
     seen.arrivals.push(...input.arrivals);
   };
@@ -669,22 +669,25 @@ export function memoryInboundStores(arranged: ContractWorld): {
       seen.captured += 1;
       return event;
     },
-    async saveCheckpoint({ checkpoint }) {
-      seen.checkpoints.push(checkpoint);
-    },
-    async enqueue({ captured }) {
-      if (faults.enqueue) throw new Error('work table unavailable');
-      if (faults.enqueueMarkedOnce && marked(captured) && !markedFailed) {
+    // One write: a fault keeps nothing of the delivery.
+    async keepDelivery({ captured, arrivals, ...input }) {
+      if (faults.enqueue && captured.length > 0) throw new Error('work table unavailable');
+      if (faults.enqueueMarkedOnce && captured.some((entry) => marked(entry.captured)) && !markedFailed) {
         markedFailed = true;
         throw new Error('work table unavailable');
       }
-      if (captured.externalId !== undefined) {
-        if (queued.has(captured.externalId)) return;
-        queued.add(captured.externalId);
+      if (faults.logArrivals && arrivals.length > 0) throw new Error('arrival log unavailable');
+      if ('checkpoint' in input) seen.checkpoints.push(input.checkpoint);
+      for (const { captured: event } of captured) {
+        if (event.externalId !== undefined) {
+          if (queued.has(event.externalId)) continue;
+          queued.add(event.externalId);
+        }
+        seen.enqueued += 1;
       }
-      seen.enqueued += 1;
+      seen.arrivals.push(...arrivals);
+      return { kept: true, arrivalMark: 0 };
     },
-    logArrivals,
   };
 
   const host: DeliveryHost<DiscriminableEvent> = {
@@ -720,7 +723,7 @@ export function memoryInboundStores(arranged: ContractWorld): {
     async enqueue(captured) {
       seen.enqueued += captured.length;
     },
-    logArrivals,
+    keepArrivals,
     notify: () => {
       seen.notified += 1;
     },

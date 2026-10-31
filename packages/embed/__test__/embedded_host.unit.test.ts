@@ -209,7 +209,7 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
     expect(await host.arrive('acme', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n1' }] })).toEqual([]);
   });
 
-  it('a tick forgets the arrivals logged more than an hour before it that no run awaits', async () => {
+  it('a tick forgets the arrivals no run awaits; a re-send within the hour is still a repeat', async () => {
     let now = new Date('2026-10-27T09:00:00.000Z');
     const store = memoryEmbeddedHostStore({ now: () => now.getTime() });
     const notes = notesModule([], new Map());
@@ -220,9 +220,11 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
     now = new Date('2026-10-27T09:30:00.000Z');
     await host.arrive('acme', { adapterType: 'notes', arrivals: [comment('recent')] });
 
-    expect(await host.tick(new Date('2026-10-27T10:00:01.000Z'))).toEqual([]);
-    // What is left: only the arrival logged within the hour.
-    expect(await store.runHost.waits.sweep({ before: '2026-10-28T00:00:00.000Z', limit: 100 })).toBe(1);
+    expect(await host.tick()).toEqual([]);
+    expect(await store.runHost.waits.sweep({ limit: 100 })).toEqual({ swept: 0 });
+    // The entries went; their identities stay for the hour, so a retry logs nothing.
+    await host.arrive('acme', { adapterType: 'notes', arrivals: [comment('recent')] });
+    expect(await store.runHost.waits.mark()).toBe(2);
   });
 
   it("steps only the arriving tenant's woken runs: another tenant's wake stays due for its own step", async () => {

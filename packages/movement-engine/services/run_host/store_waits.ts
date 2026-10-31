@@ -14,12 +14,14 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { RunLeaseLost } from '../movement_engine/errors';
+import { DEFAULT_RESEND_WINDOW_MS } from './rules';
 import { WAKE_AWAIT_WORK_KIND } from './store';
-import type { ListedArrival, NewArrival, ParkKind, RunHostStore, RunRowStore, StrandedWait, WaitWake } from './store';
+import type { DeliveryRowStore, DeliveryWait, ListedArrival, NewArrival, ParkKind, RunHostStore, RunRowStore, StrandedWait, WaitWake } from './store';
 
 export interface StoreWaitsBackend {
   store: RunHostStore;
   runRows: RunRowStore;
+  deliveries: DeliveryRowStore;
 }
 
 export interface StoreWaitsCase {
@@ -120,9 +122,27 @@ class Names {
 
 const fromNow = (ms: unknown): string => new Date(Date.now() + (typeof ms === 'number' ? ms : 0)).toISOString();
 
-async function runCase({ store, runRows }: StoreWaitsBackend, steps: readonly Step[]): Promise<void> {
+/** A log step's arrivals, as `waits.log` takes them. */
+function newArrivals(names: Names, step: Step): NewArrival[] {
+  return items(step, 'arrivals').map((a) => ({
+    edge: text(a, 'edge'),
+    key: text(a, 'key'),
+    identity: names.identity(a),
+    version: optionalText(a, 'version'),
+    landing: field(a, 'landing') ?? null,
+    gone: field(a, 'gone') === true,
+  }));
+}
+
+/** The step's re-send window: an hour when it gives none, as a module that declares none has. */
+const resendWindowOf = (step: Step): number => (typeof step.resendWindowMs === 'number' ? step.resendWindowMs : DEFAULT_RESEND_WINDOW_MS);
+
+const fireKeyOf = (names: Names, step: Step): string => `fire_event:${names.id(text(step, 'fire'))}`;
+
+async function runCase({ store, runRows, deliveries }: StoreWaitsBackend, steps: readonly Step[], unstarted: readonly string[]): Promise<void> {
   const names = new Names();
-  for (const run of new Set(steps.flatMap((step) => (typeof step.run === 'string' ? [step.run] : [])))) {
+  // A run a delivery queued is started only by a `start` step, as the drain starts it.
+  for (const run of new Set(steps.flatMap((step) => (typeof step.run === 'string' && !unstarted.includes(step.run) ? [step.run] : [])))) {
     await runRows.startRun({ runId: names.id(run) });
   }
   for (const [index, step] of steps.entries()) {
@@ -140,15 +160,8 @@ async function runCase({ store, runRows }: StoreWaitsBackend, steps: readonly St
         names.marks.set(text(step, 'as'), await store.waits.mark());
         break;
       case 'log': {
-        const arrivals: NewArrival[] = items(step, 'arrivals').map((a) => ({
-          edge: text(a, 'edge'),
-          key: text(a, 'key'),
-          identity: names.identity(a),
-          version: optionalText(a, 'version'),
-          landing: field(a, 'landing') ?? null,
-          gone: field(a, 'gone') === true,
-        }));
-        const { wakes, stranded } = await store.waits.log({ teamId, adapterType, arrivals, at: fromNow(step.at) });
+        const arrivals = newArrivals(names, step);
+        const { wakes, stranded } = await store.waits.log({ teamId, adapterType, arrivals, at: fromNow(step.at), resendWindowMs: resendWindowOf(step) });
         assert.deepEqual(wakes.sort(byWait), names.wakes(step).sort(byWait), `${at}: the wakes`);
         const strands = Array.isArray(step.stranded) ? texts(step, 'stranded').map((name) => names.wait(name)) : [];
         assert.deepEqual(stranded.map((wait) => wait.waitId).sort(), strands.sort(), `${at}: the waits stranded`);
@@ -259,8 +272,47 @@ async function runCase({ store, runRows }: StoreWaitsBackend, steps: readonly St
         assert.equal(await store.leases.dropRunState({ runId: runId() }), true, `${at}: dropped`);
         break;
       case 'sweep':
-        await store.waits.sweep({ before: fromNow(step.before), limit: 1000 });
+        assert.deepEqual(await store.waits.sweep({ limit: Number(step.limit) }), { swept: Number(step.expect) }, `${at}: how many the sweep forgot`);
         break;
+      case 'keepDelivery': {
+        const fireKey = fireKeyOf(names, step);
+        const waits: DeliveryWait[] = items(step, 'waits').map((w) => {
+          const noted = field(w, 'preNoted');
+          return {
+            runId: names.id(text(w, 'run')),
+            edge: text(w, 'edge'),
+            key: optionalText(w, 'key'),
+            fireKey,
+            ...(noted !== undefined ? { preNoted: { identity: text(noted, 'identity'), version: optionalText(noted, 'version') } } : {}),
+          };
+        });
+        const kept = await deliveries.keepDelivery({
+          subscriptionId: names.id('subscription'),
+          delivery: { id: randomUUID(), externalId: null, receivedAt: fromNow(0), source: 'webhook', inline: false, events: [] },
+          work: [{ kind: 'fire_event', key: fireKey, payload: {}, teamId }],
+          arrivals: { teamId, adapterType, arrivals: newArrivals(names, step), at: fromNow(0), resendWindowMs: resendWindowOf(step) },
+          waits,
+        });
+        assert.ok(kept.kept, `${at}: kept`);
+        const mark = text(step, 'arrivalMark');
+        assert.equal(kept.arrivalMark, names.marks.get(mark) ?? assert.fail(`no mark named ${mark}`), `${at}: the mark before its arrivals`);
+        for (const [i, wait] of waits.entries()) {
+          // The wait its run's own open finds: the one the delivery opened.
+          const { waitId } = await store.waits.open({ runId: wait.runId, teamId, adapterType, edge: wait.edge, key: wait.key, since: 0 });
+          names.waits.set(text(items(step, 'waits')[i], 'as'), waitId);
+        }
+        break;
+      }
+      case 'start':
+        await runRows.startRun({ runId: names.id(text(step, 'minted')) });
+        break;
+      case 'bury': {
+        const key = fireKeyOf(names, step);
+        const rows = await store.work.claimDue({ limit: 1000, leaseMs: 60_000, kinds: ['fire_event'], teamId });
+        const row = rows.find((claimed) => claimed.key === key) ?? assert.fail(`${at}: ${key} is not queued`);
+        await deliveries.bury({ ...row, reason: 'gave up' });
+        break;
+      }
       case 'stranded': {
         const got = (await store.waits.stranded({ runId: runId() })).map((wait) => names.stranded(wait, false));
         const expected = items(step, 'waits').map((want) => ({ wait: field(want, 'wait'), edge: field(want, 'edge'), key: field(want, 'key'), parked: field(want, 'parked') }));
@@ -307,6 +359,7 @@ export function storeWaitsCaseNames(): string[] {
 export function storeWaitsCases(): StoreWaitsCase[] {
   return fileCases().map((entry) => {
     const steps = items(entry, 'steps').map((step) => (typeof step === 'object' && step !== null ? Object.fromEntries(Object.entries(step)) : assert.fail('a step is an object')));
-    return { name: text(entry, 'case'), run: (backend) => runCase(backend, steps) };
+    const unstarted = Array.isArray(field(entry, 'unstarted')) ? texts(entry, 'unstarted') : [];
+    return { name: text(entry, 'case'), run: (backend) => runCase(backend, steps, unstarted) };
   });
 }

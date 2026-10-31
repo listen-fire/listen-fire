@@ -17,6 +17,7 @@ import { drainOwedRaces, drainRun, wakeWait, type StepLeaf, type StepOutcome, ty
 import {
   cancelSubtrees,
   clearIfQuiescent,
+  DEFAULT_RESEND_WINDOW_MS,
   logArrivals,
   parkSources,
   runCompleteWithout,
@@ -27,7 +28,7 @@ import {
   type RunHost,
   type RunRecords,
 } from './rules';
-import { SETTLE_RACE_WORK_KIND, WAKE_AWAIT_WORK_KIND, settleRaceWorkKey, type ClaimedWork, type RunHostStore, type WaitWake } from './store';
+import { SETTLE_RACE_WORK_KIND, WAKE_AWAIT_WORK_KIND, settleRaceWorkKey, type ClaimedWork, type KeepDelivery, type KeptDelivery, type RunHostStore, type WaitWake } from './store';
 import type { HeldRunLease } from './lease';
 import type { DeliveryRow, NewDelivery, NewWorkRow, RunRow } from './rpc_store';
 
@@ -116,6 +117,7 @@ async function comment(backend: ContractBackend, key: string): Promise<WaitWake[
     adapterType: 'acme',
     arrivals: [{ edge: 'Comments', key, identity, version: null, landing: { fields: { Body: 'hi' } }, gone: false }],
     at: new Date().toISOString(),
+    resendWindowMs: DEFAULT_RESEND_WINDOW_MS,
   });
   return logged.wakes;
 }
@@ -854,6 +856,7 @@ export const runHostContractCases: ContractCase[] = [
         adapterType: 'acme',
         arrivals: [{ edge: 'Comments', key, identity: 'c1', version: null, landing: { Body: 'no fields' }, gone: false }],
         at: new Date().toISOString(),
+        resendWindowMs: DEFAULT_RESEND_WINDOW_MS,
       });
       await assert.rejects(waits.arrivals({ waitId }), /the arrival logged at seq \d+ \(identity c1\) has a landing without an object of fields/);
     },
@@ -994,7 +997,7 @@ export const cancelContractCases: RecordsContractCase[] = [
 export interface DeliveryContractBackend {
   /** The tenant every row of the case belongs to. */
   teamId: string;
-  keepDelivery(input: { subscriptionId: string; checkpoint?: unknown; delivery: NewDelivery; work: NewWorkRow[] }): Promise<{ kept: boolean }>;
+  keepDelivery(input: KeepDelivery): Promise<KeptDelivery>;
   deliveries(input: { subscriptionId?: string | null; since?: string | null; limit: number }): Promise<DeliveryRow[]>;
   delivery(input: { id: string }): Promise<DeliveryRow | null>;
   sweepDeliveries(input: { before: string; limit: number }): Promise<number>;
@@ -1049,7 +1052,7 @@ async function redelivered(backend: DeliveryContractBackend, opts: { claimBetwee
   const externalId = uniqueKey('delivery');
   const first = newDelivery({ externalId });
   const firstRow = fireRow(first.id, 1);
-  assert.deepEqual(await backend.keepDelivery({ subscriptionId, checkpoint: { cursor: 'c-1' }, delivery: first, work: [firstRow] }), { kept: true });
+  assert.equal((await backend.keepDelivery({ subscriptionId, checkpoint: { cursor: 'c-1' }, delivery: first, work: [firstRow] })).kept, true);
   if (opts.claimBetween) {
     const [claimed] = await claimedKeys(backend, [firstRow.key]);
     assert.ok(claimed, "the first's row was queued");
@@ -1070,7 +1073,7 @@ export const deliveryContractCases: DeliveryContractCase[] = [
       const subscriptionId = uniqueKey('sub');
       const delivery = newDelivery({ externalId: uniqueKey('delivery'), events: [{ external: 'crm', event: { n: 1 } }, { external: 'crm', event: { n: 2 } }] });
       const work = [fireRow(delivery.id, 1), fireRow(delivery.id, 2)];
-      assert.deepEqual(await backend.keepDelivery({ subscriptionId, checkpoint: { cursor: 'c-1' }, delivery, work }), { kept: true });
+      assert.equal((await backend.keepDelivery({ subscriptionId, checkpoint: { cursor: 'c-1' }, delivery, work })).kept, true);
       const keys = work.map((w) => w.key);
       assert.deepEqual((await claimedKeys(backend, keys)).map((w) => w.key).sort(), [...keys].sort());
       assert.deepEqual(await backend.checkpoint({ subscriptionId }), { checkpoint: { cursor: 'c-1' } });

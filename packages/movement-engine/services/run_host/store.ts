@@ -197,12 +197,14 @@ export interface WaitStore {
    * arrival wakes none: it strands each wait parked on its record not
    * stranded already, at `at`. Any other arrival on a record clears its
    * waits' stranding (the newest report wins) and wakes the parked ones.
-   * `stranded` is the waits the log left stranded. A repeat (an
-   * identity and version its team, adapter, edge and record already logged
-   * within the hour) is skipped and answers nothing; an arrival without an
-   * identity is never a repeat.
+   * `stranded` is the waits the log left stranded. A repeat (an identity
+   * and version its team, adapter, edge and record logged within the
+   * module's re-send window `resendWindowMs` before `at`) is skipped and
+   * answers nothing, even after the sweep forgot its entry: each identity
+   * is kept apart from its entry until `at` plus the window. An arrival
+   * without an identity is never a repeat.
    */
-  log(input: { teamId: string; adapterType: string; arrivals: readonly NewArrival[]; at: string }): Promise<{ wakes: WaitWake[]; stranded: StrandedWait[] }>;
+  log(input: { teamId: string; adapterType: string; arrivals: readonly NewArrival[]; at: string; resendWindowMs: number }): Promise<{ wakes: WaitWake[]; stranded: StrandedWait[] }>;
   /** The run waits on this edge of this record, reading what is logged after
    *  `since`. A run that already waits on it keeps that wait, and its `since`.
    *  A null `key`: the record was already gone, so nothing arrives on it and
@@ -230,16 +232,24 @@ export interface WaitStore {
    * the run's lease.
    */
   note(input: { waitId: string; identity: string; version: string | null; matched: boolean; leaf?: string; fence?: string }): Promise<boolean>;
-  /** Forget at most `limit` arrivals logged before `before` that no wait
-   *  reads: how many went. */
-  sweep(input: { before: string; limit: number }): Promise<number>;
+  /**
+   * Forget at most `limit` arrivals, and the identities whose re-send window
+   * has passed: how many arrivals went. An arrival goes when no live wait on
+   * its record's edge reads from below it, and it is at or below the floor:
+   * the lowest mark an unexpired run lease took when it was claimed, else the
+   * latest seq. A wait is live while its run exists, or, one a delivery
+   * opened (`keepDelivery`'s `waits`), while its `fire_event` row is queued.
+   */
+  sweep(input: { limit: number }): Promise<{ swept: number }>;
 }
 
 export interface RunLeaseStore {
   /** Take the run's lease if it is free or lapsed, returning every leaf left
    *  claimed (`resuming`) to `parked`, whether its holder lapsed or released
-   *  the lease: no live holder is resuming it. Null while someone else holds
-   *  it. */
+   *  the lease: no live holder is resuming it. The lease keeps the arrival
+   *  mark it was claimed at (`waits.mark`), the floor the sweep keeps
+   *  arrivals above while it holds: its step takes its marks after. Null
+   *  while someone else holds it. */
   claim(input: { runId: string; ttlMs: number }): Promise<{ token: string } | null>;
   /** Extend a held lease. False once it is not this token's, or has lapsed. */
   renew(input: { runId: string; token: string; ttlMs: number }): Promise<boolean>;
@@ -351,6 +361,93 @@ export interface RunSettle {
 export interface OwedRace {
   frameAddress: string;
   state: unknown;
+}
+
+// ── A delivery's one write (`inbound.keepDelivery`) ─────────────────────────
+
+export const DELIVERY_SOURCES = ['webhook', 'hook', 'emit', 'cli'] as const;
+export type DeliverySource = (typeof DELIVERY_SOURCES)[number];
+
+/** `inbound.keepDelivery`'s `delivery`. */
+export interface NewDelivery {
+  id: string;
+  /** The provider's id for the delivery: a second one under it, at the same subscription, is kept out. */
+  externalId?: string | null;
+  receivedAt: string;
+  source: DeliverySource;
+  inline: boolean;
+  replayOf?: string | null;
+  events: unknown[];
+}
+
+/** A work row as `inbound.keepDelivery` queues it (`work.enqueue`'s input). */
+export interface NewWorkRow {
+  kind: string;
+  key: string;
+  payload: unknown;
+  dueAt?: string | null;
+  teamId?: string | null;
+}
+
+/** What a delivery says arrived, as `waits.log` takes it. */
+export interface DeliveryArrivals {
+  teamId: string;
+  adapterType: string;
+  arrivals: readonly NewArrival[];
+  at: string;
+  resendWindowMs: number;
+}
+
+/**
+ * A wait a delivery opens for a run it queues, on the run's trigger: an
+ * edge the run's function awaits off its parameter, on the record the
+ * module's `awaitKeys` keys the trigger by. It reads from the mark before
+ * the delivery's arrivals, so a reply that lands while the run sits in the
+ * queue, or later in the same delivery, answers it. `fireKey` is the
+ * `fire_event` row that queues the run: the wait is live while that row is
+ * queued or the run exists, and goes when the row is buried before the run
+ * started. `preNoted` is the trigger's own arrival, noted on the wait as
+ * judged and not matched, so the trigger never answers its own run.
+ */
+export interface DeliveryWait {
+  runId: string;
+  edge: string;
+  /** Null for a record already gone. */
+  key: string | null;
+  fireKey: string;
+  preNoted?: { identity: string; version: string | null };
+}
+
+/** `inbound.keepDelivery`'s input: the door's one write. */
+export interface KeepDelivery {
+  subscriptionId: string;
+  /** The pull cursor; absent, the saved one is left as it is. */
+  checkpoint?: unknown;
+  delivery: NewDelivery;
+  work: readonly NewWorkRow[];
+  /** Logged as `waits.log` logs them, its wakes queued in the write. */
+  arrivals?: DeliveryArrivals;
+  /** Opened before the arrivals are logged, from the mark before them; only
+   *  with `arrivals` (whose team and adapter they are). */
+  waits?: readonly DeliveryWait[];
+}
+
+/** `inbound.keepDelivery`'s answer. `kept: false`, and nothing written, for
+ *  a duplicate. `arrivalMark`: the latest seq before the delivery's
+ *  arrivals, each `fire_event` row's `arrivalMark`. `wakes`: the waits its
+ *  arrivals answered, when it logged any. */
+export type KeptDelivery = { kept: false } | { kept: true; arrivalMark: number; wakes?: WaitWake[] };
+
+/**
+ * A delivery's one write and the burial of a row it queued, as the shared
+ * waits cases reach them (listen-fire's stores, and the in-memory one).
+ */
+export interface DeliveryRowStore {
+  keepDelivery(input: KeepDelivery): Promise<KeptDelivery>;
+  /** Give up on a claimed row (`work.bury`): it stays, dead, and is never
+   *  claimed again. Burying a `fire_event` row drops the waits a delivery
+   *  opened for the runs it queued that never started. */
+  bury(work: ClaimedWork & { reason: string }): Promise<void>;
 }
 
 /**

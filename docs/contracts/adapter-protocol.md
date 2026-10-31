@@ -223,9 +223,11 @@ The manifest file registers your server with a team:
   which, and a module with a live schema is summarised without describing it.
 - `resendWindowSeconds` (optional): how long, in seconds, your system may
   re-send an arrival it already sent (Stripe retries an event for three days).
-  Listen-Fire drops a repeat inside it by its identity. It is a default: the
-  operator's `lf.yaml` overrides it per connection. A value that is not a
-  positive whole number is refused.
+  An hour when you declare none. The host keeps each arrival's identity that
+  long, apart from the arrival itself, and drops a repeat inside it, even one
+  that comes after the arrival was swept from the log. It is a default: the
+  operator's `lf.yaml` overrides it per module (`resendWindow: { stripe: 7d }`).
+  A value that is not a positive whole number is refused.
 - Optional fields: `handbookSection` (`{ title, content }`, prose the authoring
   handbook shows about your system), `vocabulary` (an icon and event phrasing),
   `webhookEventTypeId`.
