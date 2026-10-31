@@ -318,6 +318,19 @@ fn reads_fields(expr: &Expression, target: &PositionSchema) -> Vec<String> {
     out
 }
 
+/// The landing's fields `conjuncts` read that hold an owned scalar: only the
+/// module can evaluate them, so a host handed a record the module did not
+/// filter cannot judge them.
+pub fn owned_fields(conjuncts: &[Expression], target: &PositionSchema) -> Vec<String> {
+    let mut owned: Vec<String> = Vec::new();
+    for field in conjuncts.iter().flat_map(|c| reads_fields(c, target)) {
+        if owned_name(target, &field).is_some() && !owned.contains(&field) {
+            owned.push(field);
+        }
+    }
+    owned
+}
+
 /// The name of the owned scalar `field` holds, if it holds one.
 fn owned_name(target: &PositionSchema, field: &str) -> Option<String> {
     fn of(ty: &FieldType) -> Option<&str> {

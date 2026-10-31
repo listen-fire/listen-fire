@@ -25,6 +25,9 @@ export interface PlanHop {
   taken?: Expression;
   /** The part the host checks on what comes back. */
   checked?: Expression;
+  /** The fields `taken` reads that hold a scalar only the module can
+   *  evaluate (an owned one). Absent when it reads none. */
+  owned?: string[];
   judged: HopJudged;
 }
 
@@ -52,6 +55,7 @@ export const planHopSchema: z.ZodType<PlanHop> = z
     alias: z.string().optional(),
     taken: expressionSchema.optional(),
     checked: expressionSchema.optional(),
+    owned: z.array(z.string()).optional(),
     judged: hopJudgedSchema,
   })
   .strict();
@@ -66,3 +70,41 @@ export const listenPlanSchema: z.ZodType<ListenPlan> = z
     carries: z.array(z.string()).optional(),
   })
   .strict();
+
+/** One arrival on a listen's last edge, as the judge reads it
+ *  (crates/movement-engine/src/listen_judge.rs). */
+export interface PlanArrival {
+  /** The edge it arrived on. */
+  edge: string;
+  /** Its identity on that edge; absent on a root edge's arrival. */
+  key?: string;
+  /** The record that landed, its fields. */
+  landing: Record<string, unknown>;
+  /** The records it carries from earlier hops, their fields, aligned to the
+   *  plan's `carries`; null for one it does not carry. */
+  parents?: Array<Record<string, unknown> | null>;
+  /** Its module applied the plan's taken parts (a filtered poll or
+   *  subscription). Absent or false, the judge evaluates them too. */
+  takenApplied?: boolean;
+}
+
+export const planArrivalSchema: z.ZodType<PlanArrival> = z
+  .object({
+    edge: z.string(),
+    key: z.string().optional(),
+    landing: z.record(z.string(), z.unknown()),
+    parents: z.array(z.record(z.string(), z.unknown()).nullable()).optional(),
+    takenApplied: z.boolean().optional(),
+  })
+  .strict();
+
+/** Whether an arrival fires a listen: it does; it fails the filter of hop
+ *  `skips` (outermost is 0); or the judge cannot tell, and says why. An
+ *  undecided arrival runs nothing, and the host logs the reason. */
+export type Verdict = { fires: true } | { skips: number } | { undecided: string };
+
+export const verdictSchema: z.ZodType<Verdict> = z.union([
+  z.object({ fires: z.literal(true) }).strict(),
+  z.object({ skips: z.number().int().nonnegative() }).strict(),
+  z.object({ undecided: z.string() }).strict(),
+]);

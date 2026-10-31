@@ -46,6 +46,11 @@ pub struct PlanHop {
     /// The part the host checks on what comes back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checked: Option<Expression>,
+    /// The fields `taken` reads that hold a scalar only the module can
+    /// evaluate (an owned one): on an arrival the module did not filter, the
+    /// host cannot judge them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owned: Vec<String>,
     pub judged: HopJudged,
 }
 

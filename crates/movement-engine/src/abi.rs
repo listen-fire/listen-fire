@@ -289,6 +289,38 @@ fn standing_json(pin: &str) -> serde_json::Value {
     json!({ "standing": name, "message": refusal_message(pin, LANGUAGE_VERSION, standing) })
 }
 
+/// `judge_arrival({plan, arrival, nowMs})`: whether the arrival fires the
+/// listen (crate::listen_judge) — `{"fires":true}`, `{"skips":n}` or
+/// `{"undecided":"…"}` — and 0; `{error}` and 1 for an input that does not
+/// read.
+///
+/// # Safety
+/// The input range must be readable; the out slots writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn judge_arrival(input_ptr: *const u8, input_len: u32, out_ptr_ptr: *mut usize, out_len_ptr: *mut usize) -> u32 {
+    install_panic_hook();
+    let (status, answer) = match unsafe { utf8(input_ptr, input_len, "the input") }.and_then(judgement_json) {
+        Ok(verdict) => (OK, verdict),
+        Err(error) => (ERROR, json!({ "error": error })),
+    };
+    unsafe { write_out(to_sorted_json(&answer), out_ptr_ptr, out_len_ptr) };
+    status
+}
+
+fn judgement_json(input: &str) -> Result<serde_json::Value, serde_json::Value> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Judging {
+        plan: movement_parser::listen_plan::ListenPlan,
+        arrival: crate::listen_judge::PlanArrival,
+        now_ms: f64,
+    }
+    let judging: Judging =
+        serde_json::from_str(input).map_err(|e| json!({ "message": format!("judge_arrival's input is not a plan, an arrival and nowMs: {e}") }))?;
+    let verdict = crate::listen_judge::judge_arrival(&judging.plan, &judging.arrival, judging.now_ms);
+    Ok(serde_json::to_value(verdict).expect("a verdict is always JSON"))
+}
+
 #[cfg(test)]
 mod tests {
     use movement_parser::abi::{alloc, dealloc, last_panic};
@@ -416,6 +448,28 @@ mod tests {
         assert_eq!(newer["message"], json!(format!("this automation pins language 99.0.0, newer than this release ({own}); upgrade the engine")));
         assert_eq!(standing_of("0.11.0").1["standing"], json!("olderKey"));
         assert_eq!(standing_of("5").1["standing"], json!("malformed"));
+    }
+
+    #[test]
+    fn the_judge_answers_a_verdict_and_refuses_an_input_that_does_not_read() {
+        let judge = |text: &str| {
+            let (ptr, len) = input(text);
+            let (mut out_ptr, mut out_len) = (0usize, 0usize);
+            let status = unsafe { judge_arrival(ptr, len, &mut out_ptr, &mut out_len) };
+            unsafe { dealloc(ptr, len) };
+            (status, output(out_ptr, out_len))
+        };
+        let plan = json!({
+            "movement": "f", "connection": "chat", "adapter": "chat",
+            "hops": [{ "edge": "Messages", "from": "", "to": "Message", "judged": "arrival",
+                "checked": { "type": "compare", "op": "eq", "left": { "type": "edge_property", "propertyTypeId": "Topic", "fieldOnly": true }, "right": { "type": "static", "value": "lunch" } } }]
+        });
+        let judging = |topic: &str| json!({ "plan": plan, "arrival": { "edge": "Messages", "landing": { "Topic": topic } }, "nowMs": 0 }).to_string();
+        assert_eq!(judge(&judging("lunch")), (OK, json!({ "fires": true })));
+        assert_eq!(judge(&judging("standup")), (OK, json!({ "skips": 0 })));
+        let (status, answer) = judge(r#"{"plan":{},"arrival":{},"nowMs":0}"#);
+        assert_eq!(status, ERROR);
+        assert!(answer["error"]["message"].as_str().unwrap().starts_with("judge_arrival's input is not a plan, an arrival and nowMs: "), "{answer}");
     }
 
     #[test]

@@ -1,0 +1,483 @@
+{
+  "about": "Whether an arrival fires a listen, by its plan's filters. Each plan is the checker's answer for its listen's source against `catalog` (both runners check that it still is). Only hops judged on arrival are judged, each against the record the arrival carries for it: `landing` for the last hop, `parents` (aligned to the plan's `carries`) for earlier ones. A hop's checked part is always evaluated; its taken part too, unless `takenApplied` says the module applied it. `now` is the instant WITHIN measures from. The verdict is `{fires: true}`, `{skips: n}` (the hop whose filter fails, outermost 0), or `{undecided: reason}` (the host logs it and runs nothing). Held by listen-fire's Rust (crates/movement-engine/src/listen_judge.rs, judge_arrival), the engine's TypeScript (judgeArrival, through the wasm) and the hosted product.",
+  "catalog": {
+    "adapters": {
+      "chat": {
+        "canFire": false,
+        "constructionArgs": [],
+        "schemas": {
+          "": {
+            "positions": {
+              "Channel": {
+                "properties": {
+                  "Name": "text"
+                },
+                "edges": {
+                  "Messages": {
+                    "target": "Message",
+                    "listenable": true,
+                    "identity": "Id",
+                    "delivery": "connection",
+                    "carries": [
+                      "Channels"
+                    ],
+                    "capability": {
+                      "filter": "native",
+                      "supportsLimit": false
+                    }
+                  }
+                },
+                "propertyCapabilities": {
+                  "Name": {
+                    "filterOperators": [
+                      "eq"
+                    ]
+                  }
+                }
+              },
+              "Message": {
+                "properties": {
+                  "Id": "text",
+                  "Topic": "text",
+                  "Posted At": "datetime"
+                },
+                "edges": {
+                  "Interactions": {
+                    "target": "Interaction",
+                    "readable": false,
+                    "listenable": true,
+                    "identity": "Id",
+                    "delivery": "connection",
+                    "carries": [
+                      "Channels",
+                      "Messages"
+                    ]
+                  }
+                },
+                "propertyCapabilities": {
+                  "Topic": {
+                    "filterOperators": [
+                      "eq"
+                    ]
+                  }
+                }
+              },
+              "Interaction": {
+                "properties": {
+                  "Id": "text",
+                  "Value": "text"
+                },
+                "edges": {}
+              }
+            },
+            "collections": {
+              "Channels": {
+                "target": "Channel",
+                "capability": {
+                  "filter": "native",
+                  "supportsLimit": false
+                }
+              }
+            },
+            "writableRoots": {}
+          }
+        }
+      },
+      "at": {
+        "canFire": false,
+        "constructionArgs": [],
+        "schemas": {
+          "": {
+            "positions": {
+              "Base": {
+                "properties": {
+                  "Name": "text"
+                },
+                "edges": {
+                  "Tables": {
+                    "target": "Table",
+                    "cheapToList": true,
+                    "parentChanges": "pushed",
+                    "capability": {
+                      "filter": "native",
+                      "supportsLimit": false
+                    }
+                  }
+                },
+                "propertyCapabilities": {
+                  "Name": {
+                    "filterOperators": [
+                      "eq"
+                    ]
+                  }
+                }
+              },
+              "Table": {
+                "properties": {
+                  "Name": "text"
+                },
+                "edges": {
+                  "Changes": {
+                    "target": "Change",
+                    "readable": false,
+                    "listenable": true,
+                    "identity": "Id",
+                    "delivery": "scope"
+                  }
+                },
+                "propertyCapabilities": {
+                  "Name": {
+                    "filterOperators": [
+                      "eq"
+                    ]
+                  }
+                }
+              },
+              "Change": {
+                "properties": {
+                  "Id": "text",
+                  "Kind": "text"
+                },
+                "edges": {}
+              }
+            },
+            "collections": {
+              "Bases": {
+                "target": "Base",
+                "cheapToList": true,
+                "relistEverySeconds": 300,
+                "capability": {
+                  "filter": "native",
+                  "supportsLimit": false
+                }
+              }
+            },
+            "writableRoots": {}
+          }
+        }
+      },
+      "gmail": {
+        "canFire": false,
+        "constructionArgs": [],
+        "schemas": {
+          "": {
+            "positions": {
+              "Message": {
+                "properties": {
+                  "Id": "text",
+                  "Query": {
+                    "kind": "owned",
+                    "name": "GmailQuery",
+                    "owner": "gmail"
+                  },
+                  "Subject": "text"
+                },
+                "edges": {},
+                "propertyCapabilities": {
+                  "Query": {
+                    "filterOperators": [
+                      "eq"
+                    ]
+                  },
+                  "Subject": {}
+                }
+              }
+            },
+            "collections": {
+              "Messages": {
+                "target": "Message",
+                "listenable": true,
+                "identity": "Id",
+                "delivery": "connection",
+                "capability": {
+                  "filter": "native",
+                  "supportsLimit": false
+                }
+              }
+            },
+            "writableRoots": {}
+          }
+        }
+      }
+    },
+    "credentials": {},
+    "plugins": {}
+  },
+  "plans": {
+    "lunch": {
+      "source": "import { chat as chat_module } from adapters; chat = connect chat_module\nfunction tally(i: <chat-[:Interaction]->>) { return i.Id }\nlisten to chat-[h:Channels WHERE h.Name == \"office\"]->-[m:Messages WHERE m.Topic == \"lunch-poll\" AND m.`Posted At` WITHIN 3d]->-[i:Interactions WHERE i.Value != \"skip\"]-> fire tally\n",
+      "plan": {
+        "adapter": "chat",
+        "carries": [
+          "Channels",
+          "Messages"
+        ],
+        "connection": "chat",
+        "hops": [
+          {
+            "alias": "h",
+            "edge": "Channels",
+            "from": "",
+            "judged": "arrival",
+            "taken": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Name",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "office"
+              },
+              "type": "compare"
+            },
+            "to": "Channel"
+          },
+          {
+            "alias": "m",
+            "checked": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Posted At",
+                "type": "edge_property"
+              },
+              "op": "within",
+              "right": {
+                "type": "static",
+                "value": "3d"
+              },
+              "type": "compare"
+            },
+            "edge": "Messages",
+            "from": "Channel",
+            "judged": "arrival",
+            "taken": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Topic",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "lunch-poll"
+              },
+              "type": "compare"
+            },
+            "to": "Message"
+          },
+          {
+            "alias": "i",
+            "checked": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Value",
+                "type": "edge_property"
+              },
+              "op": "neq",
+              "right": {
+                "type": "static",
+                "value": "skip"
+              },
+              "type": "compare"
+            },
+            "edge": "Interactions",
+            "from": "Message",
+            "judged": "arrival",
+            "to": "Interaction"
+          }
+        ],
+        "movement": "tally"
+      }
+    },
+    "echo": {
+      "source": "import { chat as chat_module } from adapters; chat = connect chat_module\nfunction echo(i: <chat-[:Interaction]->>) { return i.Id }\nlisten to chat-[:Channels]->-[m:Messages]->-[i:Interactions WHERE i.Value == m.Topic]-> fire echo\n",
+      "plan": {
+        "adapter": "chat",
+        "carries": [
+          "Channels",
+          "Messages"
+        ],
+        "connection": "chat",
+        "hops": [
+          {
+            "edge": "Channels",
+            "from": "",
+            "judged": "none",
+            "to": "Channel"
+          },
+          {
+            "alias": "m",
+            "edge": "Messages",
+            "from": "Channel",
+            "judged": "none",
+            "to": "Message"
+          },
+          {
+            "alias": "i",
+            "checked": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Value",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "aliasRoot": "m",
+                "expression": {
+                  "propertyTypeId": "Topic",
+                  "type": "edge_property"
+                },
+                "steps": [],
+                "type": "traverse"
+              },
+              "type": "compare"
+            },
+            "edge": "Interactions",
+            "from": "Message",
+            "judged": "arrival",
+            "to": "Interaction"
+          }
+        ],
+        "movement": "echo"
+      }
+    },
+    "changes": {
+      "source": "import { at as at_module } from adapters; at = connect at_module\nfunction changed(x: <at-[:Change]->>) { return x.Kind }\nlisten to at-[b:Bases WHERE b.Name == \"Finance\"]->-[t:Tables WHERE t.Name == \"Expenses\"]->-[x:Changes WHERE x.Kind == \"created\"]-> fire changed\n",
+      "plan": {
+        "adapter": "at",
+        "connection": "at",
+        "hops": [
+          {
+            "alias": "b",
+            "edge": "Bases",
+            "from": "",
+            "judged": "resolved",
+            "taken": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Name",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "Finance"
+              },
+              "type": "compare"
+            },
+            "to": "Base"
+          },
+          {
+            "alias": "t",
+            "edge": "Tables",
+            "from": "Base",
+            "judged": "resolved",
+            "taken": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Name",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "Expenses"
+              },
+              "type": "compare"
+            },
+            "to": "Table"
+          },
+          {
+            "alias": "x",
+            "checked": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Kind",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "created"
+              },
+              "type": "compare"
+            },
+            "edge": "Changes",
+            "from": "Table",
+            "judged": "arrival",
+            "to": "Change"
+          }
+        ],
+        "movement": "changed"
+      }
+    },
+    "invoices": {
+      "source": "import { gmail as gmail_module } from adapters; mail = connect gmail_module\nfunction filed(e: <mail-[:Message]->>) { return e.Subject }\nlisten to mail-[e:Messages WHERE e.Query == \"from:acme\" AND e.Subject CONTAINS \"invoice\"]-> fire filed\n",
+      "plan": {
+        "adapter": "gmail",
+        "connection": "mail",
+        "hops": [
+          {
+            "alias": "e",
+            "checked": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Subject",
+                "type": "edge_property"
+              },
+              "op": "contains",
+              "right": {
+                "type": "static",
+                "value": "invoice"
+              },
+              "type": "compare"
+            },
+            "edge": "Messages",
+            "from": "",
+            "judged": "arrival",
+            "owned": [
+              "Query"
+            ],
+            "taken": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Query",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "from:acme"
+              },
+              "type": "compare"
+            },
+            "to": "Message"
+          }
+        ],
+        "movement": "filed"
+      }
+    }
+  },
+  "cases": [
+    {"case": "a press on a lunch poll fires", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "office"}, {"Topic": "lunch-poll", "Posted At": "2026-10-30T10:00:00Z"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a press on a poll older than 3d skips at Messages", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "office"}, {"Topic": "lunch-poll", "Posted At": "2026-10-27T09:00:00Z"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a change of another kind skips at Changes", "plan": "changes", "arrival": {"edge": "Changes", "key": "c2", "landing": {"Id": "c2", "Kind": "updated"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 2}},
+    {"case": "a press carrying no message is undecided", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "office"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival carries no Messages record, which this listen's filter on it reads"}},
+    {"case": "a press carrying null for its message is undecided", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "office"}, null]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival carries no Messages record, which this listen's filter on it reads"}},
+    {"case": "a pushed press its module did not filter, in another channel, skips at Channels", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "random"}, {"Topic": "lunch-poll", "Posted At": "2026-10-30T10:00:00Z"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "the same press fires when its module applied the taken parts", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "random"}, {"Topic": "lunch-poll", "Posted At": "2026-10-30T10:00:00Z"}], "takenApplied": true}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a press on another topic its module did not filter skips at Messages", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "office"}, {"Topic": "standup", "Posted At": "2026-10-30T10:00:00Z"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a press its module filtered is still checked: an old poll skips at Messages", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "random"}, {"Topic": "lunch-poll", "Posted At": "2026-10-27T09:00:00Z"}], "takenApplied": true}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a later hop that fails decides over a parent the arrival lacks", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1", "Value": "skip"}, "parents": [{"Name": "office"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 2}},
+    {"case": "an arrival on another edge skips at the last hop", "plan": "lunch", "arrival": {"edge": "Reactions", "landing": {"Id": "r1"}, "parents": [{"Name": "office"}, {"Topic": "lunch-poll", "Posted At": "2026-10-30T10:00:00Z"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 2}},
+    {"case": "a created change fires: the hops the host resolves are not judged here", "plan": "changes", "arrival": {"edge": "Changes", "key": "c1", "landing": {"Id": "c1", "Kind": "created"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a press whose value is its message's topic fires", "plan": "echo", "arrival": {"edge": "Interactions", "landing": {"Id": "t1", "Value": "lunch-poll"}, "parents": [{"Name": "office"}, {"Topic": "lunch-poll"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a press whose value is not its message's topic skips at Interactions", "plan": "echo", "arrival": {"edge": "Interactions", "landing": {"Id": "t1", "Value": "standup"}, "parents": [{"Name": "office"}, {"Topic": "lunch-poll"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 2}},
+    {"case": "a press whose filter reads a message it does not carry is undecided", "plan": "echo", "arrival": {"edge": "Interactions", "landing": {"Id": "t1", "Value": "lunch-poll"}, "parents": [{"Name": "office"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival carries no Messages record, which this listen's filter on it reads"}},
+    {"case": "an unfiltered mail whose taken part reads an owned field is undecided", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"Id": "m1", "Subject": "invoice 42"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "gmail did not apply this listen's filter on Messages to the arrival, and only gmail can evaluate Query"}},
+    {"case": "a mail its module filtered on the owned field fires on the checked part", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"Id": "m1", "Subject": "invoice 42"}, "takenApplied": true}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "an unfiltered mail that fails the checked part skips, though the owned part is undecided", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"Id": "m2", "Subject": "lunch"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}}
+  ]
+}

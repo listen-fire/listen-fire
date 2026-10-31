@@ -73,7 +73,8 @@ type CheckerFunction =
   | 'language_version'
   | 'language_standing'
   | 'language_query'
-  | 'story_analysis';
+  | 'story_analysis'
+  | 'judge_arrival';
 
 interface ParserExports extends BufferExports {
   call(fn: WasmFunction, args: number[]): number;
@@ -288,6 +289,18 @@ export function callLanguageQuery(source: string, snapshotJson: string, queryJso
  */
 export function callStoryAnalysis(source: string, snapshotJson: string, options: CheckCallOptions): { ok: boolean; json: unknown } {
   return callChecker('story_analysis', [source, snapshotJson, optionsJson(options)], []);
+}
+
+/**
+ * Whether an arrival fires a listen (crates/movement-engine/src/abi.rs
+ * `judge_arrival`): `{plan, arrival, nowMs}` as JSON, and the reply — the
+ * verdict, `{fires: true}`, `{skips}` or `{undecided}` — or `{error}` for an
+ * input that does not read.
+ *
+ * @internal Used by the engine's judge (movement-engine triggers/listen_plans.ts).
+ */
+export function callJudgeArrival(inputJson: string): { ok: boolean; json: unknown } {
+  return callChecker('judge_arrival', [inputJson], []);
 }
 
 function callChecker(fn: CheckerFunction, inputs: string[], extra: number[]): { ok: boolean; json: unknown } {
@@ -552,6 +565,7 @@ function readExports(raw: Record<string, unknown>): ParserExports {
     'language_standing',
     'language_query',
     'story_analysis',
+    'judge_arrival',
   ] as const) {
     if (typeof raw[fn] !== 'function') continue;
     const call = exported(fn);

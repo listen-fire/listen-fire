@@ -2,7 +2,7 @@
 // `listenPlanSchema` reads: the wire, end to end through the wasm.
 import { callCheckAnswer } from 'movement-lang/wasm/loader';
 
-import { listenPlanSchema } from '../listen_plan';
+import { listenPlanSchema, planArrivalSchema, verdictSchema } from '../listen_plan';
 
 const CATALOG = {
   adapters: {
@@ -74,5 +74,36 @@ describe('a listen plan on the check answer', () => {
     const plan = { movement: 'f', connection: 'c', adapter: 'a', hops: [{ edge: 'E', from: '', to: 'T', judged: 'arrival', extra: 1 }] };
     expect(listenPlanSchema.safeParse(plan).success).toBe(false);
     expect(listenPlanSchema.safeParse({ ...plan, hops: [{ edge: 'E', from: '', to: 'T', judged: 'sometimes' }] }).success).toBe(false);
+  });
+});
+
+describe('what the listen judge reads and answers', () => {
+  it('keeps a hop alias read, a WITHIN and the owned fields a plan carries', () => {
+    const hop = {
+      edge: 'Messages',
+      from: '',
+      to: 'Message',
+      judged: 'arrival',
+      owned: ['Query'],
+      taken: { type: 'compare', op: 'eq', left: { type: 'edge_property', propertyTypeId: 'Query', fieldOnly: true }, right: { type: 'static', value: 'from:acme' } },
+      checked: { type: 'compare', op: 'within', left: { type: 'edge_property', propertyTypeId: 'At', fieldOnly: true }, right: { type: 'static', value: '3d' } },
+    };
+    const plan = { movement: 'f', connection: 'mail', adapter: 'gmail', hops: [hop] };
+    expect(listenPlanSchema.parse(plan)).toEqual(plan);
+  });
+
+  it('reads an arrival, its parents null where it carries none, and refuses a member it does not know', () => {
+    const arrival = { edge: 'Interactions', key: 't1', landing: { Id: 't1' }, parents: [{ Name: 'office' }, null], takenApplied: true };
+    expect(planArrivalSchema.parse(arrival)).toEqual(arrival);
+    expect(planArrivalSchema.safeParse({ ...arrival, filtered: true }).success).toBe(false);
+  });
+
+  it('answers exactly one of fires, skips and undecided', () => {
+    for (const verdict of [{ fires: true }, { skips: 2 }, { undecided: 'the arrival carries no Messages record' }]) {
+      expect(verdictSchema.parse(verdict)).toEqual(verdict);
+    }
+    for (const verdict of [{ fires: false }, { skips: -1 }, { skips: 1.5 }, { fires: true, skips: 0 }, {}]) {
+      expect(verdictSchema.safeParse(verdict).success).toBe(false);
+    }
   });
 });

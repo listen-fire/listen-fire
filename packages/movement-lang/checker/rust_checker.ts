@@ -117,11 +117,14 @@ export interface LinkData {
 }
 
 /** The check as the engine's `check.program` request is answered: every
- *  diagnostic, the import link, the checker's stamps. */
+ *  diagnostic, the import link, the checker's stamps, and a plan per
+ *  `listen to <traversal>` that checked clean (absent when there is none),
+ *  as JSON: the engine reads them (`listenPlansOf`). */
 export interface CheckAnswer {
   diagnostics: Diagnostic[];
   link?: LinkData;
   stamps: Stamp[];
+  listens?: unknown[];
 }
 
 /** `checkSourceInRust` as data (crates/movement-checker/src/answer.rs). */
@@ -138,6 +141,7 @@ export function checkAnswerInRust(source: string, snapshot: CatalogSnapshot, opt
     diagnostics: json.diagnostics.map(diagnosticOf),
     stamps: json.stamps.map(stampOf),
     ...(json.link !== undefined ? { link: linkOf(json.link) } : {}),
+    ...(Array.isArray(json.listens) ? { listens: json.listens } : {}),
   };
 }
 

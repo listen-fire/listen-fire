@@ -18,7 +18,7 @@ use movement_parser::lowering::expression::{EdgeStep, Expression, LogicalOp, Tra
 
 use crate::checker::Checker;
 use crate::codes;
-use crate::families::filter_split::{EdgeView, split_hop, spell};
+use crate::families::filter_split::{EdgeView, owned_fields, split_hop, spell};
 use crate::families::flow::spell_path_head;
 use crate::families::names::spell_name;
 use crate::families::walks::is_pure_predicate;
@@ -254,6 +254,7 @@ impl Checker<'_> {
                 from: hop.from.unwrap_or_default().to_string(),
                 to: hop.to.to_string(),
                 alias: hop.step.alias.clone(),
+                owned: owned_fields(&split.taken, target),
                 taken: joined(split.taken),
                 checked: joined(split.checked),
                 judged,

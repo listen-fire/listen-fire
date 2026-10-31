@@ -107,6 +107,12 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
   - The settings form, `listen to x { … } fire f`, checks and runs as before. Nothing runs a traversal listen yet: neither `listen-fire` nor the embed host routes one, and the hosts read the plans in a later change.
   - Editors: after `listen to x-[`, completion offers the edges a listen can take, those it can end on first.
   - Why: a standing listen is a traversal over the edges a module declares listenable, checked as a wait is, so the host can push filters to the module and never range over what it cannot watch.
+- One judge decides whether an arrival fires a traversal listen, the same on both hosts: `judge_arrival` in the engine (`crates/movement-engine/src/listen_judge.rs`), reached from TypeScript through the wasm as `judgeArrival` (`@listen-fire/engine/public/inbound`, beside `listenPlansOf`, which reads the plans off a check answer).
+  - It judges only the hops the plan judges on arrival, each against the record the arrival carries for it. A hop's checked part is always evaluated; its taken part too, unless the arrival says its module applied it (`takenApplied`).
+  - Its verdict is `{fires: true}`, `{skips: n}` (the hop whose filter fails), or `{undecided: reason}`. An arrival is undecided when it lacks a record a filter reads, or when its module did not apply a filter on a field only the module can evaluate. A hop that fails decides over one that is undecided.
+  - A plan's hop names those fields (`owned`). The engine contracts' expression schema now keeps a hop's alias read (`fieldOnly`) and takes `within`, which a plan's filters carry; the TypeScript check answer carries `listens`.
+  - Both hosts are held to the cases in `packages/engine-contracts/conformance/listen-arrivals.json` (`listenArrivalCasesSchema`). No host calls the judge yet.
+  - Why: an arrival must fire the same listens whichever host receives it, and a filter the host cannot judge must be said, never guessed.
 - A module can declare that a field of what lands on an edge takes the text literals the write wrote at a path, with `literalsFrom` on the edge's reference: `[{ "at": ["Actions", "Value"], "from": "Buttons[].Value" }]`.
   - After `msg = write ch-[:Messages]-> { …, Buttons: [{ Text: "Pursue", Value: "pursue" }, { Text: "Pass", Value: "pass" }] }` and `i = await msg-[:Interactions]->`, the `Value` of each action `i` carries is `"pursue" | "pass"`.
   - Comparing it against a value no button offered is refused (`MOV_ENUM_UNKNOWN_VALUE`, with a did-you-mean).

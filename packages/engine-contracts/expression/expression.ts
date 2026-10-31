@@ -25,8 +25,10 @@ import type { Expression } from 'movement-lang/expression/types';
 const _expressionSchema: z.ZodTypeAny = z.lazy(() =>
   z.union([
     // Leaves
-    z.object({ type: z.literal('property'), propertyTypeId: z.string() }),
-    z.object({ type: z.literal('edge_property'), propertyTypeId: z.string() }),
+    // `fieldOnly`: a hop's alias read (`m.email`), the record's own field
+    // even where a name of the same text is in scope.
+    z.object({ type: z.literal('property'), propertyTypeId: z.string(), fieldOnly: z.literal(true).optional() }),
+    z.object({ type: z.literal('edge_property'), propertyTypeId: z.string(), fieldOnly: z.literal(true).optional() }),
     z.object({ type: z.literal('static'), value: z.union([z.string(), z.number(), z.boolean(), z.null()]) }),
     z.object({ type: z.literal('llm'), prompt: z.string(), promptExpression: _expressionSchema.optional() }),
     z.object({ type: z.literal('meta'), key: z.string() }),
@@ -100,7 +102,7 @@ const _expressionSchema: z.ZodTypeAny = z.lazy(() =>
     }),
     z.object({
       type: z.literal('compare'),
-      op: z.enum(['eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte', 'exists', 'in']),
+      op: z.enum(['eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte', 'exists', 'in', 'within']),
       left: _expressionSchema,
       right: _expressionSchema,
     }),
