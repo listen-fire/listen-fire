@@ -307,6 +307,30 @@ pub unsafe extern "C" fn judge_arrival(input_ptr: *const u8, input_len: u32, out
     status
 }
 
+/// `listen_identity(plan)`: what makes the listen one listen
+/// (`ListenPlan::identity`), as `{"identity": "…"}`, and 0; `{error}` and 1
+/// for a plan that does not read. A host names a listen's pipeline by it, as
+/// listen-fire does (crates/lf/src/routing.rs `Listen::pipeline`).
+///
+/// # Safety
+/// The input range must be readable; the out slots writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn listen_identity(plan_ptr: *const u8, plan_len: u32, out_ptr_ptr: *mut usize, out_len_ptr: *mut usize) -> u32 {
+    install_panic_hook();
+    let (status, answer) = match unsafe { utf8(plan_ptr, plan_len, "the plan") }.and_then(identity_json) {
+        Ok(identity) => (OK, identity),
+        Err(error) => (ERROR, json!({ "error": error })),
+    };
+    unsafe { write_out(to_sorted_json(&answer), out_ptr_ptr, out_len_ptr) };
+    status
+}
+
+fn identity_json(plan: &str) -> Result<serde_json::Value, serde_json::Value> {
+    let plan: movement_parser::listen_plan::ListenPlan =
+        serde_json::from_str(plan).map_err(|e| json!({ "message": format!("listen_identity's input is not a plan: {e}") }))?;
+    Ok(json!({ "identity": plan.identity() }))
+}
+
 fn judgement_json(input: &str) -> Result<serde_json::Value, serde_json::Value> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -470,6 +494,23 @@ mod tests {
         let (status, answer) = judge(r#"{"plan":{},"arrival":{},"nowMs":0}"#);
         assert_eq!(status, ERROR);
         assert!(answer["error"]["message"].as_str().unwrap().starts_with("judge_arrival's input is not a plan, an arrival and nowMs: "), "{answer}");
+    }
+
+    #[test]
+    fn the_identity_of_a_plan_is_the_one_listen_fire_names_its_listen_by_and_a_plan_that_does_not_read_is_refused() {
+        let identify = |text: &str| {
+            let (ptr, len) = input(text);
+            let (mut out_ptr, mut out_len) = (0usize, 0usize);
+            let status = unsafe { listen_identity(ptr, len, &mut out_ptr, &mut out_len) };
+            unsafe { dealloc(ptr, len) };
+            (status, output(out_ptr, out_len))
+        };
+        let plan = json!({ "movement": "f", "alias": "lane", "connection": "chat", "adapter": "chat", "hops": [{ "edge": "Messages", "from": "", "to": "Message", "alias": "m", "judged": "arrival" }] });
+        let read: movement_parser::listen_plan::ListenPlan = serde_json::from_value(plan.clone()).unwrap();
+        assert_eq!(identify(&plan.to_string()), (OK, json!({ "identity": read.identity() })));
+        let (status, answer) = identify(r#"{"movement":"f"}"#);
+        assert_eq!(status, ERROR);
+        assert!(answer["error"]["message"].as_str().unwrap().starts_with("listen_identity's input is not a plan: "), "{answer}");
     }
 
     #[test]

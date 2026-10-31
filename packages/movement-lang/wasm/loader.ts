@@ -74,7 +74,8 @@ type CheckerFunction =
   | 'language_standing'
   | 'language_query'
   | 'story_analysis'
-  | 'judge_arrival';
+  | 'judge_arrival'
+  | 'listen_identity';
 
 interface ParserExports extends BufferExports {
   call(fn: WasmFunction, args: number[]): number;
@@ -301,6 +302,17 @@ export function callStoryAnalysis(source: string, snapshotJson: string, options:
  */
 export function callJudgeArrival(inputJson: string): { ok: boolean; json: unknown } {
   return callChecker('judge_arrival', [inputJson], []);
+}
+
+/**
+ * What makes a listen one listen (crates/movement-engine/src/abi.rs
+ * `listen_identity`, `ListenPlan::identity`): the plan as JSON, and the reply
+ * — `{identity}` — or `{error}` for a plan that does not read.
+ *
+ * @internal Used by the engine's pipeline names (movement-engine triggers/listen_plans.ts).
+ */
+export function callListenIdentity(planJson: string): { ok: boolean; json: unknown } {
+  return callChecker('listen_identity', [planJson], []);
 }
 
 function callChecker(fn: CheckerFunction, inputs: string[], extra: number[]): { ok: boolean; json: unknown } {
@@ -566,6 +578,7 @@ function readExports(raw: Record<string, unknown>): ParserExports {
     'language_query',
     'story_analysis',
     'judge_arrival',
+    'listen_identity',
   ] as const) {
     if (typeof raw[fn] !== 'function') continue;
     const call = exported(fn);

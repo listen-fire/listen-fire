@@ -970,6 +970,32 @@ mod tests {
         );
     }
 
+    /// The pipelines the TypeScript host names the same listens by
+    /// (movement-engine `listenPipeline`): one table, read by both.
+    #[test]
+    fn a_listen_on_a_traversal_is_named_as_the_shared_table_of_pipelines_names_it() {
+        let table: Json = serde_json::from_str(include_str!("../../../packages/engine-contracts/conformance/listen-pipelines.json")).unwrap();
+        let cases = table["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let plan: ListenPlan = serde_json::from_value(case["plan"].clone()).unwrap();
+            let args = case["args"].as_object().unwrap().iter().map(|(name, raw)| (name.clone(), raw.as_str().unwrap().to_string())).collect();
+            let listen = Listen {
+                file: case["file"].as_str().unwrap().into(),
+                adapter: plan.adapter.clone(),
+                config: Obj::new(),
+                movement_name: plan.movement.clone(),
+                credential: case["credential"].as_str().map(str::to_string),
+                payload: None,
+                args,
+                address: Ok(BTreeMap::new()),
+                plan: Some(plan),
+                trigger_awaits: Vec::new(),
+            };
+            assert_eq!(listen.pipeline(), case["pipeline"].as_str().unwrap(), "{}", case["case"]);
+        }
+    }
+
     /// The table of cases the engine's TypeScript is held to as well
     /// (`listenHearsCredential`, `listenerHearsDelivery`).
     #[test]

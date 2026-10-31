@@ -1,0 +1,98 @@
+{
+  "about": "The pipeline a host names a listen on a traversal by: listen:<file>:<movement>:<first 8 hex digits of the sha256 of the plan's identity, a newline, and {\"args\": <the construction's other arguments, [name, source text] pairs sorted by name>, \"credential\": <the credential, or null>} as JSON>. listen-fire (crates/lf/src/routing.rs Listen::pipeline) and the TypeScript host (movement-engine triggers/listen_plans.ts listenPipeline) both read this table, so a notFor or a receipt names one listen on either host.",
+  "cases": [
+    {
+      "case": "a listen on a connection made with a credential and two arguments, written out of order",
+      "file": "crm",
+      "plan": {
+        "movement": "welcome",
+        "connection": "crm",
+        "adapter": "acme_crm",
+        "hops": [
+          {
+            "edge": "Companies",
+            "from": "",
+            "to": "Company",
+            "alias": "c",
+            "checked": { "type": "compare", "op": "eq", "left": { "type": "edge_property", "propertyTypeId": "Name", "fieldOnly": true }, "right": { "type": "static", "value": "Acme" } },
+            "judged": "arrival"
+          }
+        ]
+      },
+      "credential": "acme",
+      "args": { "space": "\"s\"", "base": "\"CRM\"" },
+      "pipeline": "listen:crm:welcome:85f7dafa"
+    },
+    {
+      "case": "the same listen under another alias and a lane's name is the same listen",
+      "file": "crm",
+      "plan": {
+        "movement": "welcome",
+        "alias": "greeting",
+        "connection": "crm",
+        "adapter": "acme_crm",
+        "hops": [
+          {
+            "edge": "Companies",
+            "from": "",
+            "to": "Company",
+            "alias": "n",
+            "checked": { "type": "compare", "op": "eq", "left": { "type": "edge_property", "propertyTypeId": "Name", "fieldOnly": true }, "right": { "type": "static", "value": "Acme" } },
+            "judged": "arrival"
+          }
+        ]
+      },
+      "credential": "acme",
+      "args": { "base": "\"CRM\"", "space": "\"s\"" },
+      "pipeline": "listen:crm:welcome:85f7dafa"
+    },
+    {
+      "case": "the same listen on a connection made with another credential is another listen",
+      "file": "crm",
+      "plan": {
+        "movement": "welcome",
+        "connection": "crm",
+        "adapter": "acme_crm",
+        "hops": [
+          {
+            "edge": "Companies",
+            "from": "",
+            "to": "Company",
+            "alias": "c",
+            "checked": { "type": "compare", "op": "eq", "left": { "type": "edge_property", "propertyTypeId": "Name", "fieldOnly": true }, "right": { "type": "static", "value": "Acme" } },
+            "judged": "arrival"
+          }
+        ]
+      },
+      "credential": "acme_b",
+      "args": { "base": "\"CRM\"", "space": "\"s\"" },
+      "pipeline": "listen:crm:welcome:5eaa1043"
+    },
+    {
+      "case": "a listen on the host's manual unit names no credential and no arguments",
+      "file": "leads",
+      "plan": {
+        "movement": "file_lead",
+        "connection": "manual",
+        "adapter": "manual",
+        "hops": [{ "edge": "Invocations", "from": "", "to": "Invocation", "judged": "arrival" }]
+      },
+      "credential": null,
+      "args": {},
+      "pipeline": "listen:leads:file_lead:6761be48"
+    },
+    {
+      "case": "an argument written with a tab, quotes, a backslash and an accented letter",
+      "file": "notes",
+      "plan": {
+        "movement": "copy",
+        "connection": "book",
+        "adapter": "notes",
+        "hops": [{ "edge": "Notes", "from": "", "to": "Note", "judged": "arrival" }]
+      },
+      "credential": "north",
+      "args": { "title": "\"Café\t\\\"x\\\" \\\\ y\"" },
+      "pipeline": "listen:notes:copy:e77ec3b2"
+    }
+  ]
+}

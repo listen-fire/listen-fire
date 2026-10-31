@@ -51,23 +51,25 @@ function configValueOf(arg: NamedArg): unknown {
   return arg.value.raw.trim();
 }
 
+/** The connection a listen's instance is: its module, the credential its
+ *  construction names (by its imported name) and its other arguments. */
+export interface ListenConstruction {
+  adapter: string;
+  credentialName?: string;
+  constructionArgs?: Record<string, string>;
+}
+
 /**
- * Collect the file's `listen` statements with each listened instance
- * resolved to its construction (adapter + credential import name). Runs
- * after a clean check, so unresolvable pieces have already been reported;
- * anything still unresolvable here is skipped defensively.
+ * Each connection `program` makes, by the instance's name, as a listen on it
+ * is routed: the adapter (import alias resolved), the credential and the
+ * other arguments, raw. A run host unit (`manual`) the file does not bind
+ * itself is the host's own, credential-free and argument-free. Undefined for
+ * a name that is neither: the checker refuses a listen on one.
  */
-export function collectFileListeners(
-  program: Program,
-  options: { languageVersion?: LanguageVersion } = {},
-): FileListener[] {
+export function listenConstructionsOf(program: Program): (instance: string) => ListenConstruction | undefined {
   const importOriginals = new Map<string, string>();
   const imported = new Set<string>();
-  const constructions = new Map<
-    string,
-    { adapter: string; credentialName?: string; constructionArgs?: Record<string, string> }
-  >();
-  const listens: ListenDeclaration[] = [];
+  const constructions = new Map<string, ListenConstruction>();
 
   const recordImports = (statement: ImportStatement): void => {
     for (const { name, alias } of statement.names) {
@@ -75,16 +77,16 @@ export function collectFileListeners(
       imported.add(alias ?? name);
     }
   };
-  // A run host unit (`listen to manual fire …`) the file does not bind itself
-  // is the host's own, credential-free and argument-free.
-  const units = RUN_HOST_UNITS;
-  const unitConstruction = (name: string) => (units.includes(name) && !imported.has(name) ? { adapter: name } : undefined);
   const original = (local: string): string => importOriginals.get(local) ?? local;
 
+  // Every import first, wherever it is written, as listen-fire reads them
+  // (crates/lf/src/routing.rs `import_originals`): the credential a
+  // construction names is part of its listens' pipeline names.
   for (const statement of program.statements) {
-    if (statement.kind === 'import') {
-      recordImports(statement);
-    } else if (statement.kind === 'assign' && statement.value.kind === 'construct') {
+    if (statement.kind === 'import') recordImports(statement);
+  }
+  for (const statement of program.statements) {
+    if (statement.kind === 'assign' && statement.value.kind === 'construct') {
       const construct = statement.value.construct;
       const credentialRaw = construct.args.find((a) => a.name === 'credentials')?.value.raw.trim();
       const credentialName = credentialRaw !== undefined ? unwrapCredentialArg(credentialRaw) : null;
@@ -100,13 +102,26 @@ export function collectFileListeners(
         ...(credentialName !== null ? { credentialName: original(credentialName) } : {}),
         ...(Object.keys(constructionArgs).length > 0 ? { constructionArgs } : {}),
       });
-    } else if (statement.kind === 'listen' && statement.path === undefined) {
-      // A listen on a traversal is watched by its plan, which nothing routes
-      // yet; read as a settings listen on its root, it would fire on
-      // everything its connection's module delivers.
-      listens.push(statement);
     }
   }
+  return (instance) => constructions.get(instance) ?? (RUN_HOST_UNITS.includes(instance) && !imported.has(instance) ? { adapter: instance } : undefined);
+}
+
+/**
+ * Collect the file's `listen` statements with each listened instance
+ * resolved to its construction (adapter + credential import name). Runs
+ * after a clean check, so unresolvable pieces have already been reported;
+ * anything still unresolvable here is skipped defensively.
+ */
+export function collectFileListeners(
+  program: Program,
+  options: { languageVersion?: LanguageVersion } = {},
+): FileListener[] {
+  const constructionOf = listenConstructionsOf(program);
+  // A listen on a traversal is watched by its plan (triggers/listen_plans.ts);
+  // read as a settings listen on its root, it would fire on everything its
+  // connection's module delivers.
+  const listens = program.statements.filter((statement): statement is ListenDeclaration => statement.kind === 'listen' && statement.path === undefined);
 
   const listeners: FileListener[] = [];
   for (const listen of listens) {
@@ -116,8 +131,7 @@ export function collectFileListeners(
     // checker, so a clean program never reaches here with `listen.construct`
     // set. Every listen references a NAMED construction; anything still
     // unresolvable was reported as MOV_LISTEN_NOT_INSTANCE.
-    const construction: { adapter: string; credentialName?: string; constructionArgs?: Record<string, string> } | undefined =
-      constructions.get(listen.instance) ?? unitConstruction(listen.instance);
+    const construction = constructionOf(listen.instance);
     if (!construction) continue;
     listeners.push({
       instanceName: listen.instance,
