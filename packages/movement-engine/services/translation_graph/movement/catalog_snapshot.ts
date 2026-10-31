@@ -40,6 +40,7 @@ type CatalogManifest = Pick<
   | 'triggerExpectation'
   | 'introspectedSchema'
   | 'description'
+  | 'resendWindowSeconds'
 >;
 
 /**
@@ -201,6 +202,7 @@ function adapterSnapshotOf(input: CatalogAdapterInput): AdapterSnapshot {
     ...(input.connect !== undefined ? { connect: input.connect } : {}),
     ...(manifest.triggerExpectation !== undefined ? { triggerExpectation: manifest.triggerExpectation } : {}),
     ...(manifest.description !== undefined && manifest.description.length > 0 ? { description: manifest.description } : {}),
+    ...(manifest.resendWindowSeconds !== undefined ? { resendWindowSeconds: manifest.resendWindowSeconds } : {}),
     schemaShape: manifest.introspectedSchema ? 'introspected' : 'static',
     schemas: input.schemas ?? {},
     ...(input.schemaNotes !== undefined ? { schemaNotes: input.schemaNotes } : {}),

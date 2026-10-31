@@ -249,6 +249,7 @@ fn guide_type(type_: Option<&FieldType>) -> String {
             Composite::Tuple { .. } => "a list of values".into(),
             Composite::Dict { .. } => "a set of named values".into(),
             Composite::Record { .. } => "a record".into(),
+            Composite::Owned { name, .. } => format!("text, a {name}"),
             Composite::Union { of } => of.iter().map(|member| guide_type(Some(member))).collect::<Vec<_>>().join(" or "),
             Composite::Enum { options, open: Some(_) } => format!("text, known values: {}", options.join(" | ")),
             Composite::Enum { options, open: None } => format!("enum: {}", options.join(" | ")),

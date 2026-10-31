@@ -573,6 +573,12 @@ const schemaFieldKindSchema = z.enum([
    *
    */
   'file',
+  /**
+   * A named scalar the module owns and parses: a cron schedule, a mailbox
+   * key. The field says which in `owned`; the catalog projects it as
+   * `{ kind: 'owned', name, owner }`, the owner being the module.
+   */
+  'owned',
 ]);
 
 export type SchemaFieldKind = z.infer<typeof schemaFieldKindSchema>;
@@ -748,7 +754,7 @@ const edgeSequencingSchema = z.enum([
   'arrival',
 ]) satisfies z.ZodType<EdgeSequencing>;
 
-const schemaFieldDescriptorSchema = z.object({
+export const schemaFieldDescriptorSchema = z.object({
   fieldId: z.string(),
   displayName: z.string(),
   kind: schemaFieldKindSchema,
@@ -847,9 +853,58 @@ const schemaFieldDescriptorSchema = z.object({
    * to `native` edges; a `bounded` edge filters any field via the shared unit.
    */
   capability: fieldCapabilitySchema.optional(),
+  /**
+   * With `kind: 'owned'`: the scalar's name (`Cron`), and the least the
+   * module says of its values, a pattern every one matches.
+   */
+  owned: z.object({ name: z.string().min(1), allowPattern: z.string().optional() }).optional(),
+}).superRefine((field, ctx) => {
+  if ((field.kind === 'owned') !== (field.owned !== undefined)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['owned'],
+      message: `'${field.displayName}': 'owned' names the scalar of a field of kind 'owned', and only of one`,
+    });
+  }
 });
 
 export type SchemaFieldDescriptor = z.infer<typeof schemaFieldDescriptorSchema>;
+
+/**
+ * What an edge, or an entry point's root collection, says about being
+ * listened to and about being listed under a listen (movement-lang
+ * `EdgeListening`). Every number is a default the operator's lf.yaml
+ * overrides. `unreadableListening` refuses what cannot mean what it says.
+ */
+const listeningDeclarationShape = {
+  /**
+   * Absent means bounded: the edge holds what one record has. `false`: it
+   * spans more than any listen should range over (every schedule, every
+   * team's mail), and only a filter on `boundedBy` narrows it.
+   */
+  bounded: z.boolean().optional(),
+  /** The landing's fields whose `==` or `IN [literals]` make an unbounded
+   *  edge bounded. */
+  boundedBy: z.array(z.string()).optional(),
+  /** How arrivals reach the host: pushed to the connection, pushed per scope
+   *  (a table), or polled every `pollEverySeconds`. */
+  delivery: z.enum(['connection', 'scope', 'polled']).optional(),
+  pollEverySeconds: z.number().optional(),
+  /** The earlier hops' edges whose records an arrival carries, outermost
+   *  first: a filter on one of them is judged on the arrival. */
+  carries: z.array(z.string()).optional(),
+  /** An arrival names the record it is about. */
+  attributes: z.boolean().optional(),
+  /** Listing it is cheap enough to re-list on a schedule (a base's tables;
+   *  never every message in a workspace). Such a hop declares how a listen
+   *  learns its members changed: `parentChanges` or `relistEvery`. */
+  cheapToList: z.boolean().optional(),
+  /** The module reports when a member is created, renamed or removed, so a
+   *  listen re-resolves on the report and never on a clock. */
+  parentChanges: z.literal('pushed').optional(),
+  /** How often, in seconds, its members are re-listed. */
+  relistEvery: z.number().optional(),
+};
 
 /** Why a reference that declares a key 0.13 retired is refused (listen-fire's
  *  describe refuses it in the same words). */
@@ -1099,6 +1154,7 @@ const referenceDescriptorFieldsSchema = z.object({
    * only a new member counts as an arrival.
    */
   version: z.string().optional(),
+  ...listeningDeclarationShape,
   /**
    * This edge's LANDING TYPE is generic over the CONSTRUCTION SITE: the literal
    * value(s) a write body gives `field` fix what the landing looks like. The
@@ -1615,9 +1671,169 @@ export const schemaEntryPointSchema = z.object({
    *  Received`; `reaction_added` does not). Meaningful only with `fires`.
    *  Absent ⇒ every subscribable event (or the adapter has no vocabulary). */
   firesOn: z.array(z.string()).optional(),
+  /**
+   * The module announces arrivals on this entry's root collection, as a
+   * reference's `listenable` says of its edge: a listen can start at the
+   * instance (`cron-[t:Ticks WHERE …]->`). The collection exists whether or
+   * not the entry is `readable`; `readable: false` says it cannot be listed.
+   */
+  listenable: z.boolean().optional(),
+  cursor: z.boolean().optional(),
+  identity: z.string().optional(),
+  version: z.string().optional(),
+  ...listeningDeclarationShape,
 });
 
 export type SchemaEntryPoint = z.infer<typeof schemaEntryPointSchema>;
+
+/** What declares how it is listened to: a reference of the type `owner` (a
+ *  type id), or an entry point, whose root collection hangs off the
+ *  instance itself. */
+export type ListeningDeclarant = { reference: SchemaReferenceDescriptor; owner: string } | { entry: SchemaEntryPoint };
+
+/** An edge into a type: its name, and the type it hangs off (none for the instance). */
+interface EdgeInto {
+  edge: string;
+  from: string | undefined;
+}
+
+/**
+ * The refusal of what a reference or entry point declares about listening to
+ * it that cannot mean what it says (listen-fire's describe says the same): an
+ * unknown delivery, a polled edge with no interval, an unbounded one with
+ * nothing to narrow it by, a field or hop named that is not there, a hop
+ * cheap to list that says nothing of how its members' changes are learnt.
+ * Every number declared is a default lf.yaml overrides, so the module must
+ * state it. A landing nobody described is not judged.
+ */
+export function unreadableListening(
+  declarant: ListeningDeclarant,
+  entries: readonly SchemaEntryPoint[],
+  descriptors: ReadonlyMap<string, SchemaTypeDescriptor>,
+): string | undefined {
+  const declared = 'entry' in declarant ? declarant.entry : declarant.reference;
+  const name = 'entry' in declarant ? collectionNameOf(declarant.entry) : declarant.reference.name ?? declarant.reference.fieldId;
+  const landings = 'entry' in declarant ? [declarant.entry.typeId] : referenceTargetTypeIds(declarant.reference);
+  if ('entry' in declarant) {
+    for (const role of ['identity', 'version'] as const) {
+      const field = declarant.entry[role];
+      if (field === undefined) continue;
+      const refusal = undeclaredLandingField(landings, descriptors, field, (landing, has) =>
+        `'${name}' names '${field}' as its ${role}, a field its landing '${landing}' does not declare (it declares: ${has})`);
+      if (refusal !== undefined) return refusal;
+    }
+  }
+  const delivery: unknown = declared.delivery;
+  if (delivery !== undefined && delivery !== 'connection' && delivery !== 'scope' && delivery !== 'polled') {
+    return `'${name}' declares delivery ${JSON.stringify(delivery)}, which is none of 'connection', 'scope' or 'polled'`;
+  }
+  for (const seconds of ['pollEverySeconds', 'relistEvery'] as const) {
+    const value: unknown = declared[seconds];
+    if (value !== undefined && !(typeof value === 'number' && Number.isInteger(value) && value > 0)) {
+      return `'${name}' declares '${seconds}: ${JSON.stringify(value)}': expected a positive whole number of seconds`;
+    }
+  }
+  const polled = delivery === 'polled';
+  if (polled && declared.pollEverySeconds === undefined) {
+    return `'${name}' declares 'delivery: polled' but no 'pollEverySeconds': state how often the module polls it`;
+  }
+  if (!polled && declared.pollEverySeconds !== undefined) {
+    return `'${name}' declares 'pollEverySeconds' but not 'delivery: polled': only a polled edge is polled`;
+  }
+  const boundedBy = declared.boundedBy ?? [];
+  if (declared.bounded === false) {
+    if (boundedBy.length === 0) {
+      return `'${name}' declares 'bounded: false' but no 'boundedBy': name the fields a listen narrows it by`;
+    }
+  } else if (declared.boundedBy !== undefined) {
+    return `'${name}' declares 'boundedBy' but not 'bounded: false': only an unbounded edge is narrowed by it`;
+  }
+  for (const field of boundedBy) {
+    const refusal = undeclaredLandingField(landings, descriptors, field, (landing, has) =>
+      `'${name}' names '${field}' in its boundedBy, a field its landing '${landing}' does not declare (it declares: ${has})`);
+    if (refusal !== undefined) return refusal;
+  }
+  const carried = unreadableCarries(name, 'entry' in declarant ? undefined : declarant.owner, declared.carries ?? [], entries, descriptors);
+  if (carried !== undefined) return carried;
+  const parentChanges: unknown = declared.parentChanges;
+  if (parentChanges !== undefined && parentChanges !== 'pushed') {
+    return `'${name}' declares parentChanges ${JSON.stringify(parentChanges)}: the one value is 'pushed'`;
+  }
+  const pushed = parentChanges !== undefined;
+  const relisted = declared.relistEvery !== undefined;
+  if (pushed && relisted) {
+    return `'${name}' declares both 'parentChanges: pushed' and 'relistEvery': a module that reports its members' changes is not re-listed on a clock; declare one`;
+  }
+  if (declared.cheapToList === true) {
+    return pushed || relisted
+      ? undefined
+      : `'${name}' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEvery': say how a listen learns its members changed`;
+  }
+  if (pushed || relisted) {
+    return `'${name}' declares '${pushed ? 'parentChanges' : 'relistEvery'}' but not 'cheapToList: true': only a hop cheap to list is re-listed`;
+  }
+  return undefined;
+}
+
+function collectionNameOf(entry: SchemaEntryPoint): string {
+  return entry.collectionName ?? entry.displayName;
+}
+
+/** `refusal(landing, what it declares)` when a landing somebody described has no field `field`. */
+function undeclaredLandingField(
+  landings: readonly string[],
+  descriptors: ReadonlyMap<string, SchemaTypeDescriptor>,
+  field: string,
+  refusal: (landing: string, declares: string) => string,
+): string | undefined {
+  for (const typeId of landings) {
+    const landing = descriptors.get(typeId);
+    if (landing === undefined) continue;
+    const declared = landing.fields.map((f) => f.displayName);
+    if (!declared.includes(field)) return refusal(landing.displayName, declared.length === 0 ? 'nothing' : declared.join(', '));
+  }
+  return undefined;
+}
+
+/** `carries` names the hops before the declarant, outermost first: read from
+ *  the innermost, each must be an edge into the type the one after it hangs
+ *  off. `owner` is the type the declarant hangs off, none for a root. */
+function unreadableCarries(
+  name: string,
+  owner: string | undefined,
+  carries: readonly string[],
+  entries: readonly SchemaEntryPoint[],
+  descriptors: ReadonlyMap<string, SchemaTypeDescriptor>,
+): string | undefined {
+  if (carries.length === 0) return undefined;
+  const into = new Map<string, EdgeInto[]>();
+  const add = (typeId: string, edge: EdgeInto) => into.set(typeId, [...(into.get(typeId) ?? []), edge]);
+  for (const [from, descriptor] of descriptors) {
+    for (const reference of descriptor.references) {
+      for (const target of referenceTargetTypeIds(reference)) add(target, { edge: reference.name ?? reference.fieldId, from });
+    }
+  }
+  for (const entry of entries) {
+    if (entry.readable || entry.writable || entry.listenable === true) add(entry.typeId, { edge: collectionNameOf(entry), from: undefined });
+  }
+  const display = (typeId: string) => descriptors.get(typeId)?.displayName ?? entries.find((e) => e.typeId === typeId)?.displayName ?? typeId;
+  let hangsOff = owner === undefined ? [] : [owner];
+  let inner = name;
+  for (const hop of [...carries].reverse()) {
+    if (hangsOff.length === 0) {
+      return `'${name}' says its arrivals carry earlier hops, but 'carries' names '${hop}', and '${inner}' is a root collection: nothing comes before it`;
+    }
+    const edgesIn = hangsOff.flatMap((t) => into.get(t) ?? []);
+    const matched = edgesIn.filter((e) => e.edge === hop);
+    if (matched.length === 0) {
+      const edges = [...new Set(edgesIn.map((e) => e.edge))];
+      return `'${name}' says its arrivals carry earlier hops, but 'carries' names '${hop}', which is no edge into ${hangsOff.map((t) => `'${display(t)}'`).join(' or ')} (the edges into it: ${edges.length === 0 ? 'none' : edges.join(', ')})`;
+    }
+    hangsOff = [...new Set(matched.flatMap((e) => (e.from === undefined ? [] : [e.from])))];
+    inner = hop;
+  }
+  return undefined;
+}
 
 // ── Position: a typed node in the source graph ─────────────────────────────
 // A position is a node with a type (null/abstract until narrowed) carrying

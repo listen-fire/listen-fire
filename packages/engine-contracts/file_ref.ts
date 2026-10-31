@@ -226,6 +226,7 @@ export function filesAtType(type: SchemaFieldType | undefined, value: unknown): 
     case 'maybeAbsent':
       return filesAtType(type.of, value);
     case 'enum':
+    case 'owned':
       return value;
   }
 }

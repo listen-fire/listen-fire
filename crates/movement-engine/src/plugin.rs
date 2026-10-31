@@ -279,6 +279,7 @@ fn fits(value: &Js, declared: &FieldType) -> bool {
             Composite::MaybeAbsent { of } => value.is_nullish() || fits(value, of),
             Composite::Union { of } => of.iter().any(|arm| fits(value, arm)),
             Composite::Record { .. } => matches!(value, Js::Object(_) | Js::Record(_)),
+            Composite::Owned { .. } => matches!(value, Js::String(_)),
         },
     }
 }

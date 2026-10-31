@@ -132,6 +132,7 @@ pub fn describe_field_type(type_: &FieldType) -> Result<String, String> {
             return Err("describing a record's position is the typing layer's, which is not ported".into());
         }
         Composite::Record { position: None } => "a record".into(),
+        Composite::Owned { name, .. } => name.clone(),
         Composite::Enum { options, open: Some(_) } => format!("known values ({}, …)", options.join(" | ")),
         Composite::Enum { options, open: None } if options.is_empty() => "enum (no available values)".into(),
         Composite::Enum { options, open: None } => format!("enum ({})", options.join(" | ")),

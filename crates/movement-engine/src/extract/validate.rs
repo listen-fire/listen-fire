@@ -373,6 +373,7 @@ impl Parse {
                 }
                 Js::Null
             }
+            FieldType::Composite(Composite::Owned { .. }) => self.nullable(value, "string", |v| matches!(v, Js::String(_))),
             FieldType::Composite(Composite::MaybeAbsent { of }) => self.value(Some(of), value, ctx),
             FieldType::Composite(Composite::List { of, .. }) => self.list(of, value, ctx),
             FieldType::Composite(Composite::Tuple { .. } | Composite::Dict { .. } | Composite::Record { .. }) => value.clone(),

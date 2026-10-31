@@ -157,6 +157,15 @@ pub enum Composite {
     Union {
         of: Vec<FieldType>,
     },
+    /// A named scalar its owner (the module that declared it) parses: a
+    /// cron schedule, a mailbox key. `allow_pattern` is the least an owner
+    /// says of its values.
+    Owned {
+        name: String,
+        owner: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        allow_pattern: Option<String>,
+    },
     /// `position` is the typing layer's `PositionTypeRef`, which this crate
     /// does not model yet; it is carried, not read.
     Record {
@@ -188,7 +197,7 @@ impl FieldType {
                 Composite::List { of, .. } | Composite::MaybeAbsent { of } => of.is_schema(),
                 Composite::Dict { of, shape } => shape.is_none() && of.is_schema(),
                 Composite::Tuple { of, rest } => rest.is_none() && of.iter().flatten().all(FieldType::is_schema),
-                Composite::Enum { .. } => true,
+                Composite::Enum { .. } | Composite::Owned { .. } => true,
                 Composite::Union { .. } | Composite::Record { .. } => false,
             },
         }
@@ -329,6 +338,43 @@ pub struct EdgeSchema {
     /// one, only a new member counts as an arrival.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// Absent means bounded: the edge holds what one record has. `false`:
+    /// it spans more than any listen should range over (every schedule,
+    /// every team's mail), and only a filter on `bounded_by` narrows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounded: Option<bool>,
+    /// The landing's fields whose `==` or `IN [literals]` make an unbounded
+    /// edge bounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounded_by: Option<Vec<String>>,
+    /// How its arrivals reach the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<Delivery>,
+    /// How often a polled edge is polled, by default: lf.yaml's `pollEvery`
+    /// overrides it per connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_every_seconds: Option<u64>,
+    /// The earlier hops' edges whose records an arrival carries, outermost
+    /// first: a filter on one of them is judged on the arrival.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carries: Option<Vec<String>>,
+    /// An arrival names the record it is about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attributes: Option<bool>,
+    /// Listing it is cheap enough to re-list on a schedule (a base's
+    /// tables; never every message in a workspace), so a filter on it as an
+    /// earlier hop can be re-resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cheap_to_list: Option<bool>,
+    /// The module reports when one of its members is created, renamed or
+    /// removed, so a listen re-resolves on the report and never on a clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_changes: Option<ParentChanges>,
+    /// How often, in seconds, its members are re-listed by default when the
+    /// module does not report their changes: lf.yaml's `resolveEvery`
+    /// overrides it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relist_every: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generic_over: Option<GenericOver>,
     /// Fields of what lands here that take the literals the write this edge
@@ -454,12 +500,83 @@ pub struct WritableRootSchema {
     pub uniqueness_authorable: Option<bool>,
 }
 
+/// How a listenable edge's arrivals reach the host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Delivery {
+    /// Pushed to the connection: one subscription serves every listen on it.
+    Connection,
+    /// Pushed per scope: one subscription per watched parent (a table).
+    Scope,
+    /// Polled, every `poll_every_seconds` unless lf.yaml says otherwise.
+    Polled,
+}
+
+/// How a listen learns that a hop's members changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ParentChanges {
+    /// The module reports each change.
+    Pushed,
+}
+
+/// A root collection: an edge off the instance itself, declared by an entry
+/// point. It says what an edge says of being listed and listened to.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CollectionSchema {
     pub target: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability: Option<EdgeCapability>,
+    /// Absent: it can be listed. `false`: it is only written to or
+    /// listened to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readable: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listenable: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Absent means bounded: the edge holds what one record has. `false`:
+    /// it spans more than any listen should range over (every schedule,
+    /// every team's mail), and only a filter on `bounded_by` narrows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounded: Option<bool>,
+    /// The landing's fields whose `==` or `IN [literals]` make an unbounded
+    /// edge bounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounded_by: Option<Vec<String>>,
+    /// How its arrivals reach the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<Delivery>,
+    /// How often a polled edge is polled, by default: lf.yaml's `pollEvery`
+    /// overrides it per connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_every_seconds: Option<u64>,
+    /// The earlier hops' edges whose records an arrival carries, outermost
+    /// first: a filter on one of them is judged on the arrival.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carries: Option<Vec<String>>,
+    /// An arrival names the record it is about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attributes: Option<bool>,
+    /// Listing it is cheap enough to re-list on a schedule (a base's
+    /// tables; never every message in a workspace), so a filter on it as an
+    /// earlier hop can be re-resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cheap_to_list: Option<bool>,
+    /// The module reports when one of its members is created, renamed or
+    /// removed, so a listen re-resolves on the report and never on a clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_changes: Option<ParentChanges>,
+    /// How often, in seconds, its members are re-listed by default when the
+    /// module does not report their changes: lf.yaml's `resolveEvery`
+    /// overrides it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relist_every: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -611,6 +728,11 @@ pub struct AdapterSpec {
     /// What the adapter says it is (its manifest's `description`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// How long, by default, a provider may re-send an arrival it already
+    /// sent (Stripe: three days): a repeat inside it is dropped by identity.
+    /// lf.yaml overrides it per connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resend_window_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

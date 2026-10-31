@@ -187,6 +187,12 @@ export interface AdapterSpec {
   /** What the adapter says it is (its manifest's `description`). The checker
    *  never reads it; the language service's hover leads with it. */
   description?: string;
+  /**
+   * How long, by default, a provider may re-send an arrival it already sent
+   * (Stripe: three days): a repeat inside it is dropped by identity. lf.yaml
+   * overrides it per connection.
+   */
+  resendWindowSeconds?: number;
 }
 
 
@@ -443,8 +449,50 @@ export type PluginOutput =
 
 // ── Per-instance schema ──
 
+/** How a listenable edge's arrivals reach the host: pushed to the
+ *  connection (one subscription serves every listen on it), pushed per scope
+ *  (one per watched parent, a table), or polled. */
+export type Delivery = 'connection' | 'scope' | 'polled';
+
+/**
+ * What an edge, or a root collection, says about being listened to and about
+ * being listed under a listen. Each member is present only when the module
+ * declared it. Every number is a default the operator's lf.yaml overrides.
+ */
+export interface EdgeListening {
+  /**
+   * Absent means bounded: the edge holds what one record has. `false`: it
+   * spans more than any listen should range over (every schedule, every
+   * team's mail), and only a filter on `boundedBy` narrows it.
+   */
+  bounded?: boolean;
+  /** The landing's fields whose `==` or `IN [literals]` make an unbounded
+   *  edge bounded. */
+  boundedBy?: string[];
+  delivery?: Delivery;
+  /** How often a polled edge is polled, by default (lf.yaml's `pollEvery`
+   *  overrides it per connection). */
+  pollEverySeconds?: number;
+  /** The earlier hops' edges whose records an arrival carries, outermost
+   *  first: a filter on one of them is judged on the arrival. */
+  carries?: string[];
+  /** An arrival names the record it is about. */
+  attributes?: boolean;
+  /** Listing it is cheap enough to re-list on a schedule (a base's tables;
+   *  never every message in a workspace), so a filter on it as an earlier
+   *  hop can be re-resolved. */
+  cheapToList?: boolean;
+  /** The module reports when one of its members is created, renamed or
+   *  removed, so a listen re-resolves on the report and never on a clock. */
+  parentChanges?: 'pushed';
+  /** How often, in seconds, its members are re-listed by default when the
+   *  module does not report their changes (lf.yaml's `resolveEvery`
+   *  overrides it). */
+  relistEvery?: number;
+}
+
 /** A reference (edge) declared by a position type. */
-export interface EdgeSchema {
+export interface EdgeSchema extends EdgeListening {
   /** The position type (or union) the edge points at. */
   target: string;
   /**
@@ -970,12 +1018,19 @@ export interface WritableRootSchema {
  * stays silent.
  *
  */
-export interface CollectionSchema {
+export interface CollectionSchema extends EdgeListening {
   /** The position type name the collection's members land on. */
   target: string;
   /** Whether — and how — filter / order / limit push across this collection.
    *  Read by the hop gate exactly as `EdgeSchema.capability` is. */
   capability?: EdgeCapability;
+  /** Absent: it can be listed. `false`: it is only written to or listened to. */
+  readable?: false;
+  /** As `EdgeSchema.listenable`, `cursor`, `identity` and `version` say. */
+  listenable?: true;
+  cursor?: boolean;
+  identity?: string;
+  version?: string;
 }
 
 
@@ -1452,6 +1507,10 @@ export type SchemaFieldType =
   | { kind: 'tuple'; of: Array<SchemaFieldType | null> }
   | { kind: 'dict'; of: SchemaFieldType }
   | { kind: 'enum'; options: string[]; open?: { allowPattern?: string } }
+  /** A named scalar its owner (the module that declared it) parses: a cron
+   *  schedule, a mailbox key. `allowPattern` is the least an owner says of
+   *  its values. */
+  | { kind: 'owned'; name: string; owner: string; allowPattern?: string }
   | { kind: 'maybeAbsent'; of: SchemaFieldType };
 
 /** `T | absent` over a surface type; a surface type in is a surface type out. */

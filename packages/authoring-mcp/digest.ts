@@ -63,6 +63,8 @@ export function compactType(type: SchemaFieldType): string {
       return 'tuple';
     case 'dict':
       return 'dict';
+    case 'owned':
+      return type.name;
     default:
       return unreachable(type);
   }

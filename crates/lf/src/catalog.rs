@@ -142,6 +142,7 @@ pub fn catalog_of(running: &[Rc<RunningExternal>], schemas: &IndexMap<String, Co
             construction_args.push(Js::from(arg));
         }
         let description = r.manifest_answer.get("description").and_then(Js::as_str).filter(|d| !d.is_empty()).map(str::to_string);
+        let resend_window_seconds = crate::externals::resend_window_seconds(&r.manifest_answer);
         adapters.insert(
             name.clone(),
             adapter_snapshot_of(AdapterDeclarations {
@@ -150,6 +151,7 @@ pub fn catalog_of(running: &[Rc<RunningExternal>], schemas: &IndexMap<String, Co
                 construction_args,
                 declared_credentials: &declared_names(&r.credential_declarations),
                 description,
+                resend_window_seconds,
                 schemas: adapter_schemas,
                 construction_arg_options,
             }),
@@ -179,6 +181,7 @@ fn unit_snapshot(unit: &str) -> Js {
         construction_args: Vec::new(),
         declared_credentials: &[],
         description: None,
+        resend_window_seconds: None,
         schemas,
         construction_arg_options: Obj::new(),
     })
@@ -202,6 +205,8 @@ struct AdapterDeclarations<'a> {
     declared_credentials: &'a [String],
     /// Its manifest's `description`.
     description: Option<String>,
+    /// Its manifest's `resendWindowSeconds`.
+    resend_window_seconds: Option<u64>,
     schemas: Obj,
     construction_arg_options: Obj,
 }
@@ -218,6 +223,9 @@ fn adapter_snapshot_of(adapter: AdapterDeclarations) -> Js {
     }
     if let Some(description) = adapter.description {
         snapshot.insert("description".into(), Js::str(description));
+    }
+    if let Some(seconds) = adapter.resend_window_seconds {
+        snapshot.insert("resendWindowSeconds".into(), Js::Num(seconds.into()));
     }
     snapshot.insert("schemaShape".into(), Js::str("introspected"));
     snapshot.insert("schemas".into(), Js::from(adapter.schemas));

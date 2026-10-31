@@ -95,8 +95,9 @@ fn leave_out_artificial_edge(adapter_type: &str, edge: &str, notes: &mut Vec<Str
 }
 
 /// `fieldTypeFromDescriptor`: a field's type, or none for a reference (an
-/// edge) or a kind with no projection.
-pub fn field_type_from_descriptor(field: &Js) -> Option<Js> {
+/// edge) or a kind with no projection. `owner` is the adapter, which owns
+/// the scalars it names.
+pub fn field_type_from_descriptor(field: &Js, owner: &str) -> Option<Js> {
     let scalar = match field.get("kind").and_then(Js::as_str) {
         Some("string") => {
             let known = items(field.get("knownValues"));
@@ -115,6 +116,14 @@ pub fn field_type_from_descriptor(field: &Js) -> Option<Js> {
             None => Js::str("text"),
             Some(values) => Js::from(obj! { "kind" => Js::str("enum"), "options" => values.clone() }),
         },
+        Some("owned") => {
+            let owned = field.get("owned")?;
+            let mut type_ = obj! { "kind" => Js::str("owned"), "name" => Js::str(owned.get("name").and_then(Js::as_str)?), "owner" => Js::str(owner) };
+            if let Some(pattern) = owned.get("allowPattern") {
+                type_.insert("allowPattern".into(), pattern.clone());
+            }
+            Js::from(type_)
+        }
         _ => return None,
     };
     Some(if field.get("cardinality").and_then(Js::as_str) == Some("many") {
@@ -255,6 +264,19 @@ fn merge_variant_shape(base: &Obj, variant: Option<&Obj>) -> Obj {
 /// projected only when it is `true`).
 const EDGE_TRUE_FLAGS: &[&str] = &["ephemeral"];
 
+/// What a reference or a listenable entry says of its arrivals and of being
+/// listed under a listen, passed through as declared, in this order.
+const LISTENING: [&str; 12] =
+    ["cursor", "identity", "version", "bounded", "boundedBy", "delivery", "pollEverySeconds", "carries", "attributes", "cheapToList", "parentChanges", "relistEvery"];
+
+fn pass_listening(declared: &Js, onto: &mut Obj) {
+    for passed in LISTENING {
+        if let Some(value) = declared.get(passed) {
+            onto.insert(passed.into(), value.clone());
+        }
+    }
+}
+
 pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
     let mut notes = Vec::new();
     let adapter_type = input.adapter_type;
@@ -316,18 +338,26 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
         type_id_by_name.insert(name.clone(), type_id.clone());
 
         let readable = truthy(entry.get("readable"));
-        if meta_edge_type_ids.contains(&type_id) && (readable || truthy(entry.get("writable"))) {
+        let listenable = Js::is_true(entry.get("listenable"));
+        if meta_edge_type_ids.contains(&type_id) && (readable || truthy(entry.get("writable")) || listenable) {
             let collection_name = nullish_or(entry.get("collectionName"), None).map(|c| key(Some(c))).unwrap_or_else(|| name.clone());
             if !leave_out_artificial_edge(adapter_type, &collection_name, &mut notes) {
                 let mut collection = obj! { "target" => Js::str(&name) };
                 if let Some(capability) = root_capabilities.get(&collection_name) {
                     collection.insert("capability".into(), capability.clone());
                 }
+                if !readable {
+                    collection.insert("readable".into(), Js::Bool(false));
+                }
+                if listenable {
+                    collection.insert("listenable".into(), Js::Bool(true));
+                }
+                pass_listening(entry, &mut collection);
                 collections.insert(collection_name, Js::from(collection));
             }
         }
 
-        let positioned = readable || Js::is_true(entry.get("fires")) || edge_target_names.contains(&name);
+        let positioned = readable || listenable || Js::is_true(entry.get("fires")) || edge_target_names.contains(&name);
         let Some(descriptor) = input.descriptors.get(&type_id) else {
             if positioned {
                 positions.insert(name, undescribed());
@@ -348,7 +378,7 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
         let mut dropped_field = false;
         let fields = items(descriptor.get("fields"));
         for field in fields {
-            let Some(type_) = field_type_from_descriptor(field) else {
+            let Some(type_) = field_type_from_descriptor(field, adapter_type) else {
                 if field.get("kind").and_then(Js::as_str) != Some("reference") {
                     dropped_field = true;
                 }
@@ -580,7 +610,7 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
         .collect();
     let published_collection_names: HashSet<String> = all_entries
         .iter()
-        .filter(|e| Js::is_true(e.get("readable")) || Js::is_true(e.get("writable")))
+        .filter(|e| Js::is_true(e.get("readable")) || Js::is_true(e.get("writable")) || Js::is_true(e.get("listenable")))
         .map(|e| key(nullish_or(e.get("collectionName"), e.get("displayName"))))
         .collect();
     for collection_name in root_capabilities.keys() {
@@ -654,7 +684,7 @@ fn edge_schema(reference: &Js, target: Option<&str>, polymorphic: bool, field_id
     for name in ["requiresLiveRecord", "subject", "listenable"] {
         flag(name, Js::is_true(reference.get(name)), Js::Bool(true));
     }
-    for passed in ["cursor", "identity", "version"] {
+    for passed in LISTENING {
         if let Some(value) = reference.get(passed) {
             flag(passed, true, value.clone());
         }
@@ -689,19 +719,199 @@ pub fn retired_reference_key(reference: &Js) -> Option<String> {
 /// the same). A landing nobody described is not judged: it declares nothing
 /// either way.
 pub fn undeclared_arrival_field(reference: &Js, descriptors: &IndexMap<String, Js>) -> Option<String> {
-    let name = key(nullish_or(reference.get("name"), reference.get("fieldId")));
-    for role in ["identity", "version"] {
-        let Some(field) = reference.get(role).and_then(Js::as_str) else { continue };
-        for landing in reference_target_type_ids(reference).iter().filter_map(|t| descriptors.get(t)) {
-            let declared: Vec<&str> = items(landing.get("fields")).iter().filter_map(|f| f.get("displayName").and_then(Js::as_str)).collect();
-            if !declared.contains(&field) {
-                let landing_name = landing.get("displayName").and_then(Js::as_str).unwrap_or_default();
-                return Some(format!(
-                    "'{name}' names '{field}' as its {role}, a field its landing '{landing_name}' does not declare (it declares: {})",
-                    if declared.is_empty() { "nothing".to_string() } else { declared.join(", ") }
-                ));
+    arrival_field_refusal(&Declarant::Reference { reference, owner: "" }, descriptors)
+}
+
+fn arrival_field_refusal(declarant: &Declarant, descriptors: &IndexMap<String, Js>) -> Option<String> {
+    let name = declarant.name();
+    ["identity", "version"].into_iter().find_map(|role| {
+        let field = declarant.declared().get(role).and_then(Js::as_str)?;
+        undeclared_landing_field(declarant, descriptors, field, |field, landing, declared| {
+            format!("'{name}' names '{field}' as its {role}, a field its landing '{landing}' does not declare (it declares: {declared})")
+        })
+    })
+}
+
+/// `refusal(field, landing, what it declares)` when a landing of
+/// `declarant` that somebody described has no field `field`.
+fn undeclared_landing_field(
+    declarant: &Declarant,
+    descriptors: &IndexMap<String, Js>,
+    field: &str,
+    refusal: impl Fn(&str, &str, &str) -> String,
+) -> Option<String> {
+    declarant.landings().iter().filter_map(|t| descriptors.get(t)).find_map(|landing| {
+        let declared: Vec<&str> = items(landing.get("fields")).iter().filter_map(|f| f.get("displayName").and_then(Js::as_str)).collect();
+        (!declared.contains(&field)).then(|| {
+            let landing_name = landing.get("displayName").and_then(Js::as_str).unwrap_or_default();
+            refusal(field, landing_name, &if declared.is_empty() { "nothing".to_string() } else { declared.join(", ") })
+        })
+    })
+}
+
+/// What declares how it is listened to: a reference of the type `owner`
+/// (a type id), or an entry point, whose root collection hangs off the
+/// instance itself.
+pub enum Declarant<'a> {
+    Reference { reference: &'a Js, owner: &'a str },
+    Entry(&'a Js),
+}
+
+impl Declarant<'_> {
+    fn declared(&self) -> &Js {
+        match self {
+            Declarant::Reference { reference, .. } => reference,
+            Declarant::Entry(entry) => entry,
+        }
+    }
+
+    /// The edge's name as a program writes it.
+    fn name(&self) -> String {
+        match self {
+            Declarant::Reference { reference, .. } => key(nullish_or(reference.get("name"), reference.get("fieldId"))),
+            Declarant::Entry(entry) => collection_name_of(entry),
+        }
+    }
+
+    fn landings(&self) -> Vec<String> {
+        match self {
+            Declarant::Reference { reference, .. } => reference_target_type_ids(reference),
+            Declarant::Entry(entry) => vec![key(entry.get("typeId"))],
+        }
+    }
+}
+
+fn collection_name_of(entry: &Js) -> String {
+    key(nullish_or(entry.get("collectionName"), entry.get("displayName")))
+}
+
+/// Whether an entry point publishes a root collection.
+fn is_collection(entry: &Js) -> bool {
+    truthy(entry.get("readable")) || truthy(entry.get("writable")) || Js::is_true(entry.get("listenable"))
+}
+
+/// The refusal of what a reference or entry point declares about listening
+/// to it that cannot mean what it says (engine-contracts `unreadableListening`
+/// says the same): an unknown delivery, a polled edge with no interval, an
+/// unbounded one with nothing to narrow it by, a field or hop named that is
+/// not there, a hop cheap to list that says nothing of how its members'
+/// changes are learnt. Every number declared is a default lf.yaml overrides,
+/// so the module must state it. A landing nobody described is not judged.
+pub fn unreadable_listening(declarant: Declarant, entries: &[Js], descriptors: &IndexMap<String, Js>) -> Option<String> {
+    let declared = declarant.declared();
+    let name = declarant.name();
+    let has = |key: &str| declared.get(key).is_some();
+    if let Declarant::Entry(_) = declarant
+        && let Some(refusal) = arrival_field_refusal(&declarant, descriptors)
+    {
+        return Some(refusal);
+    }
+    let delivery = declared.get("delivery");
+    if let Some(delivery) = delivery
+        && !matches!(delivery.as_str(), Some("connection" | "scope" | "polled"))
+    {
+        return Some(format!("'{name}' declares delivery {}, which is none of 'connection', 'scope' or 'polled'", delivery.to_json()));
+    }
+    for seconds in ["pollEverySeconds", "relistEvery"] {
+        if let Some(value) = declared.get(seconds)
+            && !matches!(value, Js::Num(n) if n.as_u64().is_some_and(|s| s > 0))
+        {
+            return Some(format!("'{name}' declares '{seconds}: {}': expected a positive whole number of seconds", value.to_json()));
+        }
+    }
+    let polled = delivery.and_then(Js::as_str) == Some("polled");
+    if polled && !has("pollEverySeconds") {
+        return Some(format!("'{name}' declares 'delivery: polled' but no 'pollEverySeconds': state how often the module polls it"));
+    }
+    if !polled && has("pollEverySeconds") {
+        return Some(format!("'{name}' declares 'pollEverySeconds' but not 'delivery: polled': only a polled edge is polled"));
+    }
+    let bounded_by = items(declared.get("boundedBy"));
+    if Js::is_false(declared.get("bounded")) {
+        if bounded_by.is_empty() {
+            return Some(format!("'{name}' declares 'bounded: false' but no 'boundedBy': name the fields a listen narrows it by"));
+        }
+    } else if has("boundedBy") {
+        return Some(format!("'{name}' declares 'boundedBy' but not 'bounded: false': only an unbounded edge is narrowed by it"));
+    }
+    for field in bounded_by {
+        let field = key(Some(field));
+        if let Some(refusal) = undeclared_landing_field(&declarant, descriptors, &field, |field, landing, declared| {
+            format!("'{name}' names '{field}' in its boundedBy, a field its landing '{landing}' does not declare (it declares: {declared})")
+        }) {
+            return Some(refusal);
+        }
+    }
+    if let Some(refusal) = unreadable_carries(&declarant, entries, descriptors) {
+        return Some(refusal);
+    }
+    let parent_changes = declared.get("parentChanges");
+    if let Some(value) = parent_changes
+        && value.as_str() != Some("pushed")
+    {
+        return Some(format!("'{name}' declares parentChanges {}: the one value is 'pushed'", value.to_json()));
+    }
+    match (parent_changes.is_some(), has("relistEvery"), Js::is_true(declared.get("cheapToList"))) {
+        (true, true, _) => Some(format!(
+            "'{name}' declares both 'parentChanges: pushed' and 'relistEvery': a module that reports its members' changes is not re-listed on a clock; declare one"
+        )),
+        (false, false, true) => Some(format!(
+            "'{name}' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEvery': say how a listen learns its members changed"
+        )),
+        (pushed, relisted, false) if pushed || relisted => Some(format!(
+            "'{name}' declares '{}' but not 'cheapToList: true': only a hop cheap to list is re-listed",
+            if pushed { "parentChanges" } else { "relistEvery" }
+        )),
+        _ => None,
+    }
+}
+
+/// `carries` names the hops before the declarant, outermost first: read
+/// from the innermost, each must be an edge into the type the one after it
+/// hangs off.
+fn unreadable_carries(declarant: &Declarant, entries: &[Js], descriptors: &IndexMap<String, Js>) -> Option<String> {
+    let carries = items(declarant.declared().get("carries"));
+    if carries.is_empty() {
+        return None;
+    }
+    let name = declarant.name();
+    // Each type's edges in: (edge name, the type it hangs off, none for the instance).
+    let mut into: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
+    for (owner, descriptor) in descriptors {
+        for reference in items(descriptor.get("references")) {
+            for target in reference_target_type_ids(reference) {
+                into.entry(target).or_default().push((key(nullish_or(reference.get("name"), reference.get("fieldId"))), Some(owner.clone())));
             }
         }
+    }
+    for entry in entries.iter().filter(|e| is_collection(e)) {
+        into.entry(key(entry.get("typeId"))).or_default().push((collection_name_of(entry), None));
+    }
+    let display = |type_id: &str| {
+        descriptors.get(type_id).or_else(|| entries.iter().find(|e| key(e.get("typeId")) == type_id)).map_or_else(|| type_id.to_string(), |d| key(d.get("displayName")))
+    };
+    let (mut hangs_off, mut inner): (IndexSet<String>, String) = match declarant {
+        Declarant::Reference { owner, .. } => ([owner.to_string()].into_iter().collect(), name.clone()),
+        Declarant::Entry(_) => (IndexSet::new(), name.clone()),
+    };
+    for hop in carries.iter().rev() {
+        let hop = key(Some(hop));
+        if hangs_off.is_empty() {
+            return Some(format!("'{name}' says its arrivals carry earlier hops, but 'carries' names '{hop}', and '{inner}' is a root collection: nothing comes before it"));
+        }
+        let edges_in = || hangs_off.iter().flat_map(|t| into.get(t).into_iter().flatten());
+        let matched: Vec<&Option<String>> = edges_in().filter(|(edge, _)| *edge == hop).map(|(_, owner)| owner).collect();
+        if matched.is_empty() {
+            let types: Vec<String> = hangs_off.iter().map(|t| format!("'{}'", display(t))).collect();
+            let edges: IndexSet<&str> = edges_in().map(|(edge, _)| edge.as_str()).collect();
+            return Some(format!(
+                "'{name}' says its arrivals carry earlier hops, but 'carries' names '{hop}', which is no edge into {} (the edges into it: {})",
+                types.join(" or "),
+                if edges.is_empty() { "none".to_string() } else { edges.into_iter().collect::<Vec<_>>().join(", ") }
+            ));
+        }
+        hangs_off = matched.into_iter().flatten().cloned().collect();
+        inner = hop;
     }
     None
 }
@@ -1033,5 +1243,160 @@ mod tests {
             "'Answers' declares literalsFrom, but 'Answers' lands on more than one type (Action, Interaction): a field typed by a write's literals needs one landing"
         );
         assert_eq!(unreadable_literals_from(&interactions(r#"["Anything"]"#, "Buttons[].Value"), &IndexMap::new()), None, "an undescribed landing is not judged");
+    }
+
+    fn tick_schema(entry: &str) -> Js {
+        let tick = js(r#"{ "typeId": "tick", "displayName": "Tick", "fields": [{ "fieldId": "schedule", "displayName": "Schedule", "kind": "owned", "owned": { "name": "Cron" }, "writable": false, "required": true }], "references": [] }"#);
+        let descriptors: IndexMap<String, Js> = [("tick".to_string(), tick)].into_iter().collect();
+        describe_external_schema("cron", &[js(entry)], &descriptors)
+    }
+
+    #[test]
+    fn a_listenable_root_projects_its_capabilities() {
+        let schema = tick_schema(
+            r#"{"typeId":"tick","displayName":"Tick","writable":false,"listenable":true,"readable":false,"bounded":false,"boundedBy":["Schedule"],"delivery":"polled","pollEverySeconds":60}"#,
+        );
+        let collection = schema.get("collections").and_then(|c| c.get("Tick")).unwrap();
+        assert_eq!(
+            collection.to_json(),
+            r#"{"target":"Tick","readable":false,"listenable":true,"bounded":false,"boundedBy":["Schedule"],"delivery":"polled","pollEverySeconds":60}"#
+        );
+        assert!(schema.get("positions").and_then(|p| p.get("Tick")).is_some(), "what a root listen lands on is a position");
+    }
+
+    #[test]
+    fn a_reference_projects_how_it_is_listened_to() {
+        let edge = edge_schema(
+            &js(r#"{"name":"Changes","listenable":true,"identity":"Id","delivery":"scope","carries":["Bases","Tables"],"attributes":true,"bounded":true}"#),
+            Some("Change"),
+            false,
+            "changes",
+        );
+        assert_eq!(
+            Js::from(edge).to_json(),
+            r#"{"target":"Change","listenable":true,"identity":"Id","bounded":true,"delivery":"scope","carries":["Bases","Tables"],"attributes":true}"#
+        );
+        let tables = edge_schema(&js(r#"{"name":"Tables","cheapToList":true,"parentChanges":"pushed"}"#), Some("Table"), false, "tables");
+        assert_eq!(Js::from(tables).to_json(), r#"{"target":"Table","cheapToList":true,"parentChanges":"pushed"}"#);
+    }
+
+    #[test]
+    fn an_owned_field_projects_as_owned() {
+        let field = js(r#"{"fieldId":"schedule","displayName":"Schedule","kind":"owned","owned":{"name":"Cron"},"writable":false,"required":true}"#);
+        assert_eq!(field_type_from_descriptor(&field, "cron").unwrap().to_json(), r#"{"kind":"owned","name":"Cron","owner":"cron"}"#);
+        let keyed = js(r#"{"fieldId":"key","displayName":"Key","kind":"owned","owned":{"name":"Key","allowPattern":"^[a-z0-9]+$"},"cardinality":"many","writable":false,"required":true}"#);
+        assert_eq!(
+            field_type_from_descriptor(&keyed, "email").unwrap().to_json(),
+            r#"{"kind":"list","of":{"kind":"owned","name":"Key","owner":"email","allowPattern":"^[a-z0-9]+$"}}"#
+        );
+        let schema = tick_schema(r#"{"typeId":"tick","displayName":"Tick","writable":false,"readable":true}"#);
+        let read: movement_parser::catalog::types::InstanceSchema = movement_parser::catalog::types::read_catalog(&schema.to_json()).unwrap();
+        assert_eq!(
+            read.positions["Tick"].properties["Schedule"],
+            movement_parser::catalog::types::FieldType::Composite(movement_parser::catalog::types::Composite::Owned {
+                name: "Cron".into(),
+                owner: "cron".into(),
+                allow_pattern: None
+            })
+        );
+    }
+
+    /// The entry point `Ticks`, its descriptor and the refusal of what it declares.
+    fn ticks_refusal(declares: &str) -> Option<String> {
+        let entry = js(&format!(r#"{{"typeId":"tick","displayName":"Tick","collectionName":"Ticks","writable":false,"readable":false,"listenable":true{declares}}}"#));
+        let tick = js(r#"{ "typeId": "tick", "displayName": "Tick", "fields": [{ "fieldId": "schedule", "displayName": "Schedule", "kind": "string", "writable": false, "required": true }], "references": [] }"#);
+        let descriptors: IndexMap<String, Js> = [("tick".to_string(), tick)].into_iter().collect();
+        unreadable_listening(Declarant::Entry(&entry), std::slice::from_ref(&entry), &descriptors)
+    }
+
+    #[test]
+    fn bounded_false_without_bounded_by_is_refused_naming_it() {
+        assert_eq!(ticks_refusal(r#","bounded":false"#).unwrap(), "'Ticks' declares 'bounded: false' but no 'boundedBy': name the fields a listen narrows it by");
+        assert_eq!(ticks_refusal(r#","bounded":false,"boundedBy":[]"#).unwrap(), "'Ticks' declares 'bounded: false' but no 'boundedBy': name the fields a listen narrows it by");
+        assert_eq!(ticks_refusal(r#","bounded":false,"boundedBy":["Schedule"]"#), None);
+        assert_eq!(
+            ticks_refusal(r#","boundedBy":["Schedule"]"#).unwrap(),
+            "'Ticks' declares 'boundedBy' but not 'bounded: false': only an unbounded edge is narrowed by it"
+        );
+    }
+
+    #[test]
+    fn bounded_by_must_name_a_field_the_landing_declares() {
+        assert_eq!(
+            ticks_refusal(r#","bounded":false,"boundedBy":["Cron"]"#).unwrap(),
+            "'Ticks' names 'Cron' in its boundedBy, a field its landing 'Tick' does not declare (it declares: Schedule)"
+        );
+        assert_eq!(
+            ticks_refusal(r#","identity":"Id""#).unwrap(),
+            "'Ticks' names 'Id' as its identity, a field its landing 'Tick' does not declare (it declares: Schedule)",
+            "a root collection's identity is held to its landing as an edge's is"
+        );
+    }
+
+    #[test]
+    fn a_polled_edge_states_its_interval() {
+        assert_eq!(
+            ticks_refusal(r#","delivery":"polled""#).unwrap(),
+            "'Ticks' declares 'delivery: polled' but no 'pollEverySeconds': state how often the module polls it"
+        );
+        assert_eq!(ticks_refusal(r#","delivery":"polled","pollEverySeconds":60"#), None);
+        assert_eq!(
+            ticks_refusal(r#","delivery":"polled","pollEverySeconds":0"#).unwrap(),
+            "'Ticks' declares 'pollEverySeconds: 0': expected a positive whole number of seconds"
+        );
+        assert_eq!(
+            ticks_refusal(r#","delivery":"connection","pollEverySeconds":60"#).unwrap(),
+            "'Ticks' declares 'pollEverySeconds' but not 'delivery: polled': only a polled edge is polled"
+        );
+        assert_eq!(
+            ticks_refusal(r#","delivery":"pushed""#).unwrap(),
+            r#"'Ticks' declares delivery "pushed", which is none of 'connection', 'scope' or 'polled'"#
+        );
+    }
+
+    #[test]
+    fn a_hop_cheap_to_list_says_how_its_members_changes_are_learnt() {
+        assert_eq!(
+            ticks_refusal(r#","cheapToList":true"#).unwrap(),
+            "'Ticks' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEvery': say how a listen learns its members changed"
+        );
+        assert_eq!(ticks_refusal(r#","cheapToList":true,"relistEvery":300"#), None);
+        assert_eq!(ticks_refusal(r#","cheapToList":true,"parentChanges":"pushed""#), None);
+        assert_eq!(
+            ticks_refusal(r#","cheapToList":true,"parentChanges":"pushed","relistEvery":300"#).unwrap(),
+            "'Ticks' declares both 'parentChanges: pushed' and 'relistEvery': a module that reports its members' changes is not re-listed on a clock; declare one"
+        );
+        assert_eq!(
+            ticks_refusal(r#","relistEvery":300"#).unwrap(),
+            "'Ticks' declares 'relistEvery' but not 'cheapToList: true': only a hop cheap to list is re-listed"
+        );
+        assert_eq!(ticks_refusal(r#","cheapToList":true,"parentChanges":"polled""#).unwrap(), r#"'Ticks' declares parentChanges "polled": the one value is 'pushed'"#);
+    }
+
+    #[test]
+    fn carries_names_the_hops_before_the_edge_outermost_first() {
+        let entries = [js(r#"{"typeId":"base","displayName":"Base","collectionName":"Bases","writable":false,"readable":true}"#)];
+        let base = js(r#"{ "typeId": "base", "displayName": "Base", "fields": [], "references": [{ "fieldId": "tables", "name": "Tables", "targetTypeId": "table", "cardinality": "many", "direction": "outgoing" }] }"#);
+        let table = js(r#"{ "typeId": "table", "displayName": "Table", "fields": [], "references": [] }"#);
+        let descriptors: IndexMap<String, Js> = [("base".to_string(), base), ("table".to_string(), table)].into_iter().collect();
+        let changes = |carries: &str| {
+            let reference = js(&format!(r#"{{"fieldId":"changes","name":"Changes","targetTypeId":"table","listenable":true,"carries":{carries}}}"#));
+            unreadable_listening(Declarant::Reference { reference: &reference, owner: "table" }, &entries, &descriptors)
+        };
+        assert_eq!(changes(r#"["Bases","Tables"]"#), None);
+        assert_eq!(changes(r#"["Tables"]"#), None);
+        assert_eq!(
+            changes(r#"["Nope"]"#).unwrap(),
+            "'Changes' says its arrivals carry earlier hops, but 'carries' names 'Nope', which is no edge into 'Table' (the edges into it: Tables)"
+        );
+        assert_eq!(
+            changes(r#"["Tables","Bases"]"#).unwrap(),
+            "'Changes' says its arrivals carry earlier hops, but 'carries' names 'Bases', which is no edge into 'Table' (the edges into it: Tables)",
+            "outermost first: the innermost hop is last"
+        );
+        assert_eq!(
+            changes(r#"["Nope","Bases","Tables"]"#).unwrap(),
+            "'Changes' says its arrivals carry earlier hops, but 'carries' names 'Nope', and 'Bases' is a root collection: nothing comes before it"
+        );
     }
 }

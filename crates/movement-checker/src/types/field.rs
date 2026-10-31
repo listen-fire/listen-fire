@@ -97,6 +97,9 @@ impl Ty {
                 Composite::Union { of } => value_union(&of.iter().map(Ty::from_schema).collect::<Vec<_>>()).unwrap_or(Ty::Json),
                 // A schema never declares a record (catalog.ts); one carried here names no position.
                 Composite::Record { .. } => Ty::Record(None),
+                // An owned scalar is a text its owner parses; the checker
+                // reads it as text until it validates the owner's values.
+                Composite::Owned { .. } => Ty::Text,
             },
         }
     }

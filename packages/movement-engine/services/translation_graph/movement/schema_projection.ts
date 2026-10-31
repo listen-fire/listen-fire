@@ -26,6 +26,7 @@ import { isArtificialEdge, unionDisplay, unionKey, unionVariants } from 'movemen
 import type {
   CollectionSchema,
   DiscriminatedWriteShape,
+  EdgeListening,
   EdgeSchema,
   SchemaFieldType,
   InstanceSchema,
@@ -215,6 +216,34 @@ export function importIdentifier(raw: string): string {
   return /^[0-9]/.test(named) ? `_${named}` : named;
 }
 
+/**
+ * What a reference or a listenable entry says of its arrivals and of being
+ * listed under a listen, passed through as declared: how arrivals are told
+ * apart (whether the module lists them since a mark, the field that names
+ * one, the field that changes with it), boundedness, delivery, what an
+ * arrival carries, and how a hop's members are re-listed.
+ */
+function listeningOf(declared: Pick<SchemaReferenceDescriptor, 'cursor' | 'identity' | 'version' | keyof EdgeListening>): EdgeListening & {
+  cursor?: boolean;
+  identity?: string;
+  version?: string;
+} {
+  return {
+    ...(declared.cursor !== undefined ? { cursor: declared.cursor } : {}),
+    ...(declared.identity !== undefined ? { identity: declared.identity } : {}),
+    ...(declared.version !== undefined ? { version: declared.version } : {}),
+    ...(declared.bounded !== undefined ? { bounded: declared.bounded } : {}),
+    ...(declared.boundedBy !== undefined ? { boundedBy: declared.boundedBy } : {}),
+    ...(declared.delivery !== undefined ? { delivery: declared.delivery } : {}),
+    ...(declared.pollEverySeconds !== undefined ? { pollEverySeconds: declared.pollEverySeconds } : {}),
+    ...(declared.carries !== undefined ? { carries: declared.carries } : {}),
+    ...(declared.attributes !== undefined ? { attributes: declared.attributes } : {}),
+    ...(declared.cheapToList !== undefined ? { cheapToList: declared.cheapToList } : {}),
+    ...(declared.parentChanges !== undefined ? { parentChanges: declared.parentChanges } : {}),
+    ...(declared.relistEvery !== undefined ? { relistEvery: declared.relistEvery } : {}),
+  };
+}
+
 /** A non-empty `description` the adapter wrote on a type, field or reference. */
 function describedBy(declared: { description?: string }): string | undefined {
   return declared.description !== undefined && declared.description.length > 0 ? declared.description : undefined;
@@ -225,8 +254,9 @@ function describedBy(declared: { description?: string }): string | undefined {
 export function fieldTypeFromDescriptor(
   field: Pick<
     SchemaFieldDescriptor,
-    'kind' | 'enumValues' | 'cardinality' | 'knownValues' | 'knownValuePattern'
+    'kind' | 'enumValues' | 'cardinality' | 'knownValues' | 'knownValuePattern' | 'owned'
   >,
+  owner: string,
 ): SchemaFieldType | undefined {
   const scalar = ((): SchemaFieldType | undefined => {
     switch (field.kind) {
@@ -272,6 +302,17 @@ export function fieldTypeFromDescriptor(
         // DATA top type — the author assembles a value with an object literal
         // and passes it through verbatim.
         return 'json';
+      case 'owned':
+        // A named scalar the adapter parses (a cron schedule): the adapter is
+        // its owner. Without its name there is no type to give it.
+        return field.owned === undefined
+          ? undefined
+          : {
+              kind: 'owned',
+              name: field.owned.name,
+              owner,
+              ...(field.owned.allowPattern !== undefined ? { allowPattern: field.owned.allowPattern } : {}),
+            };
       case 'reference':
         return undefined;
       default:
@@ -481,13 +522,19 @@ export function instanceSchemaFromDescriptors(input: {
     // other (D2).
     // …but ONLY for a type the meta node actually publishes. A traversed type
     // is reached through its container's edge, not off the root.
-    if (metaEdgeTypeIds.has(entry.typeId) && (entry.readable || entry.writable)) {
+    // A LISTENABLE entry's edge is where a listen starts (`cron-[t:Ticks WHERE
+    // …]->`), whether or not the collection can be listed: `readable: false`
+    // says it cannot, as on any edge.
+    if (metaEdgeTypeIds.has(entry.typeId) && (entry.readable || entry.writable || entry.listenable === true)) {
       const collectionName = entry.collectionName ?? name;
       if (!leaveOutArtificialEdge({ adapterType: input.adapterType, edge: collectionName, notes })) {
         const capability = rootCapabilities.get(collectionName);
         collections[collectionName] = {
           target: name,
           ...(capability !== undefined ? { capability } : {}),
+          ...(entry.readable ? {} : { readable: false as const }),
+          ...(entry.listenable === true ? { listenable: true as const } : {}),
+          ...listeningOf(entry),
         };
       }
     }
@@ -506,7 +553,7 @@ export function instanceSchemaFromDescriptors(input: {
       // asking "may I say this surface lacks X?" is still answered no either way
       // (`surfaceNotEnumerated`); a READ through the handle is now an error,
       // because nothing ever claimed it carries anything.
-      if (entry.readable || entry.fires === true || edgeTargetNames.has(name)) {
+      if (entry.readable || entry.listenable === true || entry.fires === true || edgeTargetNames.has(name)) {
         positions[name] = { properties: {}, edges: {}, undescribed: true };
       }
       continue;
@@ -529,7 +576,7 @@ export function instanceSchemaFromDescriptors(input: {
     const writeFieldNameById = new Map<string, string>();
     let droppedField = false;
     for (const field of descriptor.fields) {
-      const type = fieldTypeFromDescriptor(field);
+      const type = fieldTypeFromDescriptor(field, input.adapterType);
       if (type === undefined) {
         // Reference fields surface as edges; other unmappable kinds are
         // genuinely dropped, so the position must stay OPEN to property
@@ -689,11 +736,7 @@ export function instanceSchemaFromDescriptors(input: {
           // and awaited. Only `true` projects; its absence is the ordinary
           // fact.
           ...(ref.listenable === true ? { listenable: true } : {}),
-          // How arrivals are told apart: whether the module lists them since a
-          // mark, the field that names one, and the field that changes with it.
-          ...(ref.cursor !== undefined ? { cursor: ref.cursor } : {}),
-          ...(ref.identity !== undefined ? { identity: ref.identity } : {}),
-          ...(ref.version !== undefined ? { version: ref.version } : {}),
+          ...listeningOf(ref),
           // The landing is decided by the WRITE (`Options` fixing an ask's
           // answer enum). Carried verbatim: the checker matches `field` against
           // the body's authored names, which are these same display names.
@@ -724,7 +767,7 @@ export function instanceSchemaFromDescriptors(input: {
       edgeSurfaceByFieldId.set(ref.fieldId, edge);
     }
 
-    if (entry.readable || entry.fires === true || edgeTargetNames.has(name)) {
+    if (entry.readable || entry.listenable === true || entry.fires === true || edgeTargetNames.has(name)) {
       // Readable from the root, reachable by traversing to it, OR delivered by
       // a listen (`fires`). A type you can only arrive at still has a surface
       // once you're there.
@@ -970,7 +1013,7 @@ export function instanceSchemaFromDescriptors(input: {
   // ones.
   const publishedCollectionNames = new Set(
     allEntries
-      .filter((e) => e.readable === true || e.writable === true)
+      .filter((e) => e.readable === true || e.writable === true || e.listenable === true)
       .map((e) => e.collectionName ?? e.displayName),
   );
   for (const collectionName of rootCapabilities.keys()) {

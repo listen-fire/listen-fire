@@ -604,6 +604,9 @@ impl WireManifest {
         let plugins = plugins_declaration(raw, &methods)?;
         let inbound = raw.get("inbound").map(crate::inbound::Declaration::read).transpose().map_err(|issue| format!("inbound.{issue}"))?;
         let poll_interval_seconds = poll_declaration(raw, &methods)?;
+        if raw.get("resendWindowSeconds").is_some() && resend_window_seconds(raw).is_none() {
+            return Err("resendWindowSeconds: expected a positive whole number".into());
+        }
         Ok(WireManifest {
             adapter_type,
             supported_triggers,
@@ -620,6 +623,15 @@ impl WireManifest {
 
 /// `WirePollDeclaration`, paired with the `poll` method as the manifest
 /// schema pairs them: its interval, a positive whole number of seconds.
+/// How long the module says a provider may re-send an arrival: a positive
+/// whole number of seconds, or none.
+pub fn resend_window_seconds(manifest: &Js) -> Option<u64> {
+    match manifest.get("resendWindowSeconds") {
+        Some(Js::Num(n)) => n.as_u64().filter(|s| *s > 0),
+        _ => None,
+    }
+}
+
 fn poll_declaration(raw: &Js, methods: &[String]) -> Result<Option<u64>, String> {
     let lists = methods.iter().any(|m| m == "poll");
     let Some(declared) = raw.get("poll") else {

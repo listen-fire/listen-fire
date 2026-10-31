@@ -92,6 +92,91 @@ test('listen-fire check: a module whose identity names a field the landing does 
   assert.match(run.stdout + run.stderr, /'Comments' names 'id' as its identity, a field its landing 'Comment' does not declare \(it declares: Id, Text\)/);
 });
 
+/** The example's external, its source changed by each `[from, to]`. */
+function external(dir: string, ...changes: Array<[string, string]>): void {
+  const server = join(dir, 'externals/acme_crm/server.mjs');
+  const source = readFileSync(server, 'utf8');
+  const changed = changes.reduce((text, [from, to]) => text.replace(from, to), source);
+  for (const [from] of changes) assert.ok(source.includes(from), `the external has no ${from}`);
+  writeFileSync(server, changed);
+}
+
+test('listen-fire check and catalog: what a module declares about listening reaches the catalog', () => {
+  const dir = project();
+  external(
+    dir,
+    ["identity: 'Id',", "identity: 'Id', delivery: 'connection', carries: ['Company'], attributes: true,"],
+    ['fires: true,', "fires: true, listenable: true, identity: 'Name', delivery: 'polled', pollEverySeconds: 60,"],
+    [
+      "{ fieldId: 'Report', displayName: 'Report', kind: 'file', writable: true, required: false },",
+      "{ fieldId: 'Report', displayName: 'Report', kind: 'file', writable: true, required: false }, { fieldId: 'Schedule', displayName: 'Schedule', kind: 'owned', owned: { name: 'Cron' }, writable: false, required: false },",
+    ],
+    ["adapterType: 'acme_crm',", "adapterType: 'acme_crm', resendWindowSeconds: 259200,"],
+  );
+  const check = spawnSync(lfBinary(), ['check'], { cwd: dir, encoding: 'utf8' });
+  assert.equal(check.status, 0, check.stdout + check.stderr);
+  const run = spawnSync(lfBinary(), ['catalog'], { cwd: dir, encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  const Catalog = z.object({
+    adapters: z.record(
+      z.string(),
+      z.object({ resendWindowSeconds: z.number().optional(), schemas: z.record(z.string(), z.object({ collections: z.record(z.string(), z.unknown()), positions: z.record(z.string(), z.unknown()) })) }),
+    ),
+  });
+  const acme = Catalog.parse(JSON.parse(run.stdout)).adapters.acme_crm;
+  assert.ok(acme !== undefined);
+  assert.equal(acme.resendWindowSeconds, 259200);
+  const schema = Object.values(acme.schemas)[0];
+  assert.ok(schema !== undefined);
+  assert.deepEqual(schema.collections.Company, { target: 'Company', readable: false, listenable: true, identity: 'Name', delivery: 'polled', pollEverySeconds: 60 });
+  const company = JSON.stringify(schema.positions.Company);
+  assert.ok(company.includes('"delivery":"connection","carries":["Company"],"attributes":true'), company);
+  assert.ok(company.includes('"Schedule":{"kind":"owned","name":"Cron","owner":"acme_crm"}'), company);
+});
+
+const LISTENING_REFUSED: Array<{ name: string; change: [string, string]; refused: RegExp }> = [
+  {
+    name: 'a polled edge that does not state its interval',
+    change: ["identity: 'Id',", "identity: 'Id', delivery: 'polled',"],
+    refused: /describes 'Company': 'Comments' declares 'delivery: polled' but no 'pollEverySeconds': state how often the module polls it/,
+  },
+  {
+    name: 'an unbounded edge with nothing to narrow it by',
+    change: ["identity: 'Id',", "identity: 'Id', bounded: false,"],
+    refused: /'Comments' declares 'bounded: false' but no 'boundedBy': name the fields a listen narrows it by/,
+  },
+  {
+    name: 'a boundedBy that names no field of the landing',
+    change: ["identity: 'Id',", "identity: 'Id', bounded: false, boundedBy: ['Author'],"],
+    refused: /'Comments' names 'Author' in its boundedBy, a field its landing 'Comment' does not declare \(it declares: Id, Text\)/,
+  },
+  {
+    name: 'carries naming no earlier hop',
+    change: ["identity: 'Id',", "identity: 'Id', carries: ['Nope'],"],
+    refused: /'Comments' says its arrivals carry earlier hops, but 'carries' names 'Nope', which is no edge into 'Company' \(the edges into it: Company\)/,
+  },
+  {
+    name: 'a root collection cheap to list that says nothing of how its members change',
+    change: ['fires: true,', 'fires: true, cheapToList: true,'],
+    refused: /lists 'Company': 'Company' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEvery': say how a listen learns its members changed/,
+  },
+  {
+    name: 'a resend window that is not a number of seconds',
+    change: ["adapterType: 'acme_crm',", "adapterType: 'acme_crm', resendWindowSeconds: 0,"],
+    refused: /resendWindowSeconds: expected a positive whole number/,
+  },
+];
+
+for (const c of LISTENING_REFUSED) {
+  test(`listen-fire check: a module that declares ${c.name}`, () => {
+    const dir = project();
+    external(dir, c.change);
+    const run = spawnSync(lfBinary(), ['check'], { cwd: dir, encoding: 'utf8' });
+    assert.equal(run.status, 1, run.stdout + run.stderr);
+    assert.match(run.stdout + run.stderr, c.refused);
+  });
+}
+
 // ── The schema projection over shapes the example's external never sends ──
 
 const Introspection = z.object({
@@ -198,6 +283,56 @@ const INTROSPECTIONS: Record<string, unknown> = {
       ['tbl', { typeId: 'tbl', displayName: 'Table', fields: [field('cell', 'string', { displayName: 'Cell', writable: true })], references: [] }],
     ],
   },
+  'a listening adapter: a listenable root, what edges say of their arrivals, owned scalars': {
+    adapterType: 'listening',
+    supportsInPlaceUpdate: false,
+    entries: [
+      entry('tick', 'Tick', {
+        collectionName: 'Ticks',
+        readable: false,
+        writable: false,
+        listenable: true,
+        identity: 'Fired At',
+        bounded: false,
+        boundedBy: ['Schedule'],
+        delivery: 'polled',
+        pollEverySeconds: 60,
+      }),
+      entry('base', 'Base', { collectionName: 'Bases', writable: false, cheapToList: true, parentChanges: 'pushed' }),
+      entry('tbl', 'Table', { readable: false, writable: false }),
+      entry('chg', 'Change', { readable: false, writable: false }),
+      entry('log', 'Log', { readable: false }),
+    ],
+    descriptors: [
+      [
+        'tick',
+        {
+          typeId: 'tick',
+          displayName: 'Tick',
+          fields: [
+            field('fired', 'date', { displayName: 'Fired At' }),
+            field('schedule', 'owned', { displayName: 'Schedule', owned: { name: 'Cron' } }),
+            field('keys', 'owned', { displayName: 'Keys', cardinality: 'many', owned: { name: 'Key', allowPattern: '^[a-z]+$' } }),
+          ],
+          references: [],
+        },
+      ],
+      ['base', { typeId: 'base', displayName: 'Base', fields: [], references: [{ fieldId: 'tables', name: 'Tables', targetTypeId: 'tbl', cardinality: 'many', direction: 'outgoing', cheapToList: true, relistEvery: 300 }] }],
+      [
+        'tbl',
+        {
+          typeId: 'tbl',
+          displayName: 'Table',
+          fields: [],
+          references: [
+            { fieldId: 'changes', name: 'Changes', targetTypeId: 'chg', cardinality: 'many', direction: 'outgoing', readable: false, listenable: true, identity: 'Id', cursor: true, delivery: 'scope', carries: ['Bases', 'Tables'], attributes: true },
+          ],
+        },
+      ],
+      ['chg', { typeId: 'chg', displayName: 'Change', fields: [field('id', 'string', { displayName: 'Id' })], references: [] }],
+      ['log', { typeId: 'log', displayName: 'Log', fields: [field('line', 'string', { displayName: 'Line', writable: true })], references: [] }],
+    ],
+  },
   'one readable entry and no event edge: the event position by the heuristic': {
     adapterType: 'single',
     supportsInPlaceUpdate: true,
@@ -214,6 +349,10 @@ const EXERCISES: Record<string, { members: string[]; notes: number }> = {
     notes: 6,
   },
   'a walked instance: a root descriptor, reached types, a scoped describe': { members: ['capability', 'edgesCarryProperties', 'undescribed'], notes: 1 },
+  'a listening adapter: a listenable root, what edges say of their arrivals, owned scalars': {
+    members: ['readable', 'listenable', 'identity', 'cursor', 'bounded', 'boundedBy', 'delivery', 'pollEverySeconds', 'carries', 'attributes', 'cheapToList', 'parentChanges', 'relistEvery', 'owner', 'allowPattern'],
+    notes: 0,
+  },
   'one readable entry and no event edge: the event position by the heuristic': { members: ['eventPosition'], notes: 0 },
 };
 

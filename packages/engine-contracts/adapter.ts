@@ -357,6 +357,12 @@ export interface AdapterManifest {
    *  `types`. Absent/false = the schema is static and describing is free. */
   introspectedSchema?: boolean;
   /**
+   * How long, in seconds, the provider may re-send an arrival it already sent
+   * (Stripe retries an event for three days): the host drops a repeat inside
+   * it by identity. A default: lf.yaml overrides it per connection.
+   */
+  resendWindowSeconds?: number;
+  /**
    * Construction args that pick the instance's ENTRY POSITION — the node the
    * cursor starts at, instead of the meta node (Sheets' `spreadsheet:`,
    * Airtable's `base:`). Each names a construction arg and the meta-node

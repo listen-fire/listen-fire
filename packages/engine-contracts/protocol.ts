@@ -1142,6 +1142,10 @@ export const WireManifestResult = z.object({
    *  upstream calls. Absent: the schema is the module's own and describing is
    *  free. `listen-fire modules show` says which. */
   introspectedSchema: z.boolean().optional(),
+  /** How long, in seconds, the provider may re-send an arrival it already
+   *  sent: a repeat inside it is dropped by identity. A default lf.yaml
+   *  overrides per connection. */
+  resendWindowSeconds: z.number().int().positive().optional(),
 }).superRefine(refuseUnpairedDeclarations);
 export type WireManifestResultShape = z.infer<typeof WireManifestResult>;
 

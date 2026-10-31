@@ -30,7 +30,7 @@ pub struct AdapterManifest {
     pub optional_methods: Vec<String>,
     /// Every other declaration, written into the manifest as given:
     /// `subscribableEvents`, `credentials`, `inbound`, `poll`, `settings`,
-    /// `limits`, `listenConfig`, `runtimeCapabilities`, …
+    /// `limits`, `listenConfig`, `runtimeCapabilities`, `resendWindowSeconds`, …
     pub declarations: Obj,
 }
 
@@ -132,6 +132,8 @@ pub struct EntryPoint {
     pub fires: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// `collectionName`, and, for a root edge a listen starts at,
+    /// `listenable` with what a listenable [`Reference`] declares.
     #[serde(flatten)]
     pub rest: Obj,
 }
@@ -155,7 +157,9 @@ pub struct TypeDescriptor {
 pub struct Field {
     pub field_id: String,
     pub display_name: String,
-    /// `string`, `number`, `boolean`, `date`, `file`, `json` or `enum`.
+    /// `string`, `number`, `boolean`, `date`, `file`, `json`, `enum`, or
+    /// `owned` (a scalar the module parses, named in `rest`'s `owned: { name,
+    /// allowPattern? }`).
     pub kind: String,
     pub writable: bool,
     pub required: bool,
@@ -216,7 +220,11 @@ pub struct Reference {
     pub cardinality: String,
     pub direction: String,
     pub writable: bool,
-    /// `listenable`, `cursor`, `identity`, `version`, `readable`.
+    /// `readable`; `listenable`, `cursor`, `identity`, `version`; and how a
+    /// listen reads it: `delivery`, `pollEverySeconds`, `bounded`,
+    /// `boundedBy`, `carries`, `attributes`, `cheapToList`, `parentChanges`,
+    /// `relistEvery` (docs/contracts/adapter-protocol.md, "Declaring a
+    /// listenable edge").
     #[serde(flatten)]
     pub rest: Obj,
 }

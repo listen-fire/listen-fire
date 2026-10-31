@@ -84,6 +84,17 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
 
 #### Added
 
+- A module declares how each listenable edge is listened to, and `listen-fire` carries it into the catalog (docs/contracts/adapter-protocol.md, "Declaring a listenable edge").
+  - `delivery`: pushed to the connection, pushed per scope (a table), or `polled` every `pollEverySeconds`.
+  - `bounded: false` with `boundedBy`: an edge that spans more than a listen should range over (every cron schedule, every team's mail), and the fields whose `==` or `IN [ … ]` narrow it.
+  - `carries`: the earlier hops whose records an arrival carries, outermost first. `attributes`: an arrival names the record it is about.
+  - `cheapToList`: a hop cheap enough to re-list, with either `parentChanges: "pushed"` (the module reports its members' changes, so nothing re-lists on a clock) or `relistEvery`, in seconds.
+  - An entry point may declare `listenable` (with `identity`, `version`, `cursor` and the keys above): a listen can then start at the instance, as `cron-[t:Ticks WHERE …]->` will.
+  - A field may be of kind `owned`: a named scalar its module parses, such as a cron schedule. A manifest may declare `resendWindowSeconds`, how long its provider may re-send an arrival.
+  - Every number a module declares is a default the operator's `lf.yaml` overrides; the host has none of its own, so the module states each one.
+  - A declaration that cannot mean what it says is refused, by name, when `listen-fire` or `introspectAdapter` describes the module: a polled edge without `pollEverySeconds`, `bounded: false` without `boundedBy`, a `boundedBy` field or a `carries` hop that is not there, a hop cheap to list that says nothing of how its members change.
+  - The catalog snapshot carries them as optional members, so its version stays 2. A root collection that cannot be listed now says `readable: false`. The checker reads none of them yet.
+  - Why: a standing listen becomes a traversal over the edges a module declares listenable, and only the module knows how its arrivals arrive, what bounds an edge, and how often to poll or re-list.
 - A run parked on a record that was deleted says so. The store marks such a wait stranded and keeps it parked, until the record reports again (docs/contracts/stranded-waits.md).
   - `listen-fire runs` lists the run `parked (stranded)`; `--json` gives each run `stranded`.
   - `listen-fire runs show` lists each stranded wait under `stranded`, saying what it waits on: `waiting on Interactions of slack C1:… — its record was deleted, so nothing will arrive; a race with a sleep is the way out`.
