@@ -886,6 +886,9 @@ pub fn unreadable_listening(declarant: Declarant, entries: &[Js], descriptors: &
             "'{name}' declares '{}' but not 'cheapToList: true': only a hop cheap to list is re-listed",
             if pushed { "parentChanges" } else { "relistEverySeconds" }
         )),
+        (true, false, true) if !Js::is_true(declared.get("listenable")) => Some(format!(
+            "'{name}' declares 'parentChanges: pushed' but not 'listenable: true': the module reports its members' changes as arrivals on '{name}' itself, so it must announce them"
+        )),
         _ => None,
     }
 }
@@ -1414,6 +1417,18 @@ mod tests {
                 format!("'Ticks' declares 'relistEverySeconds: {shown}': expected a positive whole number of seconds")
             );
         }
+    }
+
+    #[test]
+    fn a_hop_whose_changes_are_pushed_announces_them() {
+        let entry = js(r#"{"typeId":"board","displayName":"Board","collectionName":"Boards","writable":false,"cheapToList":true,"parentChanges":"pushed"}"#);
+        let board = js(r#"{ "typeId": "board", "displayName": "Board", "fields": [], "references": [] }"#);
+        let descriptors: IndexMap<String, Js> = [("board".to_string(), board)].into_iter().collect();
+        assert_eq!(
+            unreadable_listening(Declarant::Entry(&entry), std::slice::from_ref(&entry), &descriptors).unwrap(),
+            "'Boards' declares 'parentChanges: pushed' but not 'listenable: true': the module reports its members' changes as arrivals on 'Boards' itself, so it must announce them"
+        );
+        assert_eq!(ticks_refusal(r#","cheapToList":true,"parentChanges":"pushed""#), None, "a listenable root may");
     }
 
     #[test]

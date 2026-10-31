@@ -1785,9 +1785,12 @@ export function unreadableListening(
     return `'${name}' declares both 'parentChanges: pushed' and 'relistEverySeconds': a module that reports its members' changes is not re-listed on a clock; declare one`;
   }
   if (declared.cheapToList === true) {
-    return pushed || relisted
-      ? undefined
-      : `'${name}' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEverySeconds': say how a listen learns its members changed`;
+    if (!pushed && !relisted) {
+      return `'${name}' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEverySeconds': say how a listen learns its members changed`;
+    }
+    return pushed && declared.listenable !== true
+      ? `'${name}' declares 'parentChanges: pushed' but not 'listenable: true': the module reports its members' changes as arrivals on '${name}' itself, so it must announce them`
+      : undefined;
   }
   if (pushed || relisted) {
     return `'${name}' declares '${pushed ? 'parentChanges' : 'relistEverySeconds'}' but not 'cheapToList: true': only a hop cheap to list is re-listed`;

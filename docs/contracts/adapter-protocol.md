@@ -636,7 +636,9 @@ overrides; you state it because Listen-Fire has none of its own.
   filter on it as an earlier hop can be re-resolved. Such an edge says how a
   listen learns its members changed, with one of:
   - `parentChanges: "pushed"` — you report when a member is created, renamed
-    or removed, so a listen re-resolves on your report and never on a clock;
+    or removed, as an arrival on this edge itself (so it must be
+    `listenable`), and a listen re-resolves on each such arrival listen-fire
+    receives, never on a clock;
   - `relistEverySeconds` — how often, in seconds, its members should be re-listed.
     `lf.yaml`'s `resolveEvery` overrides it.
 
@@ -647,7 +649,7 @@ polled), `bounded: false` without `boundedBy` (or `boundedBy` on a bounded
 edge), a `boundedBy` field the landing does not declare, a `carries` hop that
 is no edge into the type the next one hangs off, `cheapToList` with neither
 `parentChanges` nor `relistEverySeconds` (or both, or either without
-`cheapToList`), a number that is not a positive whole number of seconds, or a
+`cheapToList`), `parentChanges: "pushed"` on an edge that is not `listenable`, a number that is not a positive whole number of seconds, or a
 field of kind `owned` that names no scalar.
 
 A reference that still declares `awaitable` or `watchable` (retired in 0.13)

@@ -255,6 +255,14 @@ describe('a listening declaration', () => {
     expect(ticks({ delivery: 'connection' })).toBeUndefined();
   });
 
+  it('refuses a hop whose changes are pushed that announces nothing', () => {
+    expect(ticks({ listenable: false, cheapToList: true, parentChanges: 'pushed' })).toBe(
+      "'Ticks' declares 'parentChanges: pushed' but not 'listenable: true': the module reports its members' changes as arrivals on 'Ticks' itself, so it must announce them",
+    );
+    expect(ticks({ listenable: false, cheapToList: true, relistEverySeconds: 300 })).toBeUndefined();
+    expect(ticks({ cheapToList: true, parentChanges: 'pushed' })).toBeUndefined();
+  });
+
   it('refuses a hop cheap to list that says nothing of how its members change', () => {
     expect(ticks({ cheapToList: true })).toBe(
       "'Ticks' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEverySeconds': say how a listen learns its members changed",
