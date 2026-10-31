@@ -28,7 +28,7 @@ use crate::core;
 use crate::project::Project;
 use crate::resolve::{ListenState, Resolution};
 use crate::store::{
-    BranchExport, ClaimDue, ClaimedWork, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, OwedRace, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit,
+    BranchExport, ClaimDue, ClaimedWork, DeliveryQuery, DeliveryRow, EventReceipt, LeafRow, NewDelivery, NewWork, OwedRace, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit,
     Store,
 };
 use crate::waits::{DeliveryArrivals, DeliveryWait, KeptDelivery, Logged, Noted, OpenWait, Stranded, StrandedOf, WaitArrivals, WaitWake};
@@ -134,7 +134,7 @@ pub trait RunHostStore {
     /// Note the event's receipt on the listen (as `claim_event`) and start
     /// its run, as one write: false, and no run, for a redelivery. A crash
     /// never leaves a receipt whose run was never started.
-    fn start_event_run(&self, listen: &str, key: &str, run: &RunStart<'_>) -> Result<bool>;
+    fn start_event_run(&self, receipt: &EventReceipt<'_>, run: &RunStart<'_>) -> Result<bool>;
     /// Runs still `running` whose lease lapsed, or which hold none, started
     /// more than `stale_ms` ago: their worker is gone (a live first firing
     /// holds its lease and renews it). Oldest first.
@@ -392,7 +392,7 @@ pub trait RunHostStore {
     /// `idempotencyKey` (the provider's own id for the occurrence): true the
     /// first time, false for a redelivery, which runs nothing (the
     /// platform's `trigger_event` unique on trigger and external event id).
-    fn claim_event(&self, listen: &str, key: &str) -> Result<bool>;
+    fn claim_event(&self, receipt: &EventReceipt<'_>) -> Result<bool>;
 }
 
 impl RunHostStore for Store {
@@ -403,8 +403,8 @@ impl RunHostStore for Store {
     fn start_run(&self, run: &RunStart<'_>) -> Result<()> {
         Store::start_run(self, run)
     }
-    fn start_event_run(&self, listen: &str, key: &str, run: &RunStart<'_>) -> Result<bool> {
-        Store::start_event_run(self, listen, key, run)
+    fn start_event_run(&self, receipt: &EventReceipt<'_>, run: &RunStart<'_>) -> Result<bool> {
+        Store::start_event_run(self, receipt, run)
     }
     fn lapsed_runs(&self, stale_ms: i64, limit: i64) -> Result<Vec<String>> {
         Store::lapsed_runs(self, stale_ms, limit)
@@ -631,8 +631,8 @@ impl RunHostStore for Store {
         Store::swap_module_processes(self, version, processes)
     }
 
-    fn claim_event(&self, listen: &str, key: &str) -> Result<bool> {
-        Store::claim_event(self, listen, key)
+    fn claim_event(&self, receipt: &EventReceipt<'_>) -> Result<bool> {
+        Store::claim_event(self, receipt)
     }
 }
 

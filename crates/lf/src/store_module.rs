@@ -16,10 +16,10 @@ use crate::obj;
 use crate::slot_client::SlotClient;
 use module_wire::envelope::METHOD_NOT_IMPLEMENTED_CODE;
 use crate::store::{
-    BranchExport, ClaimDue, ClaimedWork, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, OwedRace, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit,
+    BranchExport, ClaimDue, ClaimedWork, DeliveryQuery, DeliveryRow, EventReceipt, LeafRow, NewDelivery, NewWork, OwedRace, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit,
     StoreError,
 };
-use crate::store_wire::{Wire, delivery_params, event_run_params, int, num, open_wait_params, opt, park_params, rows, run_start_params, segment_commit_params, stranded_params, to_rows};
+use crate::store_wire::{Wire, delivery_params, event_run_params, int, num, open_wait_params, opt, park_params, receipt_params, rows, run_start_params, segment_commit_params, stranded_params, to_rows};
 use crate::waits::{DeliveryArrivals, DeliveryWait, KeptDelivery, Logged, Noted, OpenWait, Stranded, StrandedOf, WaitArrivals, WaitWake};
 
 /// The error code a fenced write answers when the run's lease is gone
@@ -115,8 +115,8 @@ impl RunHostStore for ProcessStore {
     fn start_run(&self, run: &RunStart<'_>) -> Result<()> {
         self.unit("runs.start", run_start_params(run))
     }
-    fn start_event_run(&self, listen: &str, key: &str, run: &RunStart<'_>) -> Result<bool> {
-        self.flag("events.startRun", event_run_params(listen, key, run))
+    fn start_event_run(&self, receipt: &EventReceipt<'_>, run: &RunStart<'_>) -> Result<bool> {
+        self.flag("events.startRun", event_run_params(receipt, run))
     }
     fn lapsed_runs(&self, stale_ms: i64, limit: i64) -> Result<Vec<String>> {
         self.strings("runs.lapsed", obj! { "staleMs" => Js::Num(stale_ms.into()), "limit" => Js::Num(limit.into()) })
@@ -559,8 +559,8 @@ impl RunHostStore for ProcessStore {
         self.flag("processes.swap", obj! { "version" => Js::Num(version.into()), "processes" => processes.clone() })
     }
 
-    fn claim_event(&self, listen: &str, key: &str) -> Result<bool> {
-        self.flag("events.claim", obj! { "listen" => s(listen), "key" => s(key) })
+    fn claim_event(&self, receipt: &EventReceipt<'_>) -> Result<bool> {
+        self.flag("events.claim", receipt_params(receipt))
     }
 }
 

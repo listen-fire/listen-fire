@@ -305,7 +305,7 @@ mod tests {
 
     fn fail(store: &dyn RunHostStore, facts: &str, at: i64) -> String {
         let id = uuid::Uuid::new_v4().to_string();
-        store.start_run(&RunStart { id: &id, file: "ops", movement: "sync", started_at: &iso_at(at - 1000), input: facts, delivery_id: None }).unwrap();
+        store.start_run(&RunStart { id: &id, file: "ops", movement: "sync", started_at: &iso_at(at - 1000), input: facts, delivery_id: None, team_id: None }).unwrap();
         store.settle_run(&id, "failed", &Js::Obj(obj! { "error" => Js::str("boom") }), &iso_at(at)).unwrap();
         id
     }
@@ -327,7 +327,7 @@ mod tests {
         let a = fail(&*store, r#"{"dryRun":true}"#, t0 + 1000);
         let c = fail(&*store, "{}", t0 + 9000);
         let ok = uuid::Uuid::new_v4().to_string();
-        store.start_run(&RunStart { id: &ok, file: "ops", movement: "sync", started_at: &iso_at(t0), input: "{}", delivery_id: None }).unwrap();
+        store.start_run(&RunStart { id: &ok, file: "ops", movement: "sync", started_at: &iso_at(t0), input: "{}", delivery_id: None, team_id: None }).unwrap();
         store.settle_run(&ok, "completed", &Js::Obj(Default::default()), &iso_at(t0 + 1500)).unwrap();
 
         let (status, read) = ask("records.failedRuns", Js::Obj(obj! { "after" => mark(), "until" => Js::Str(iso_at(t0 + 5000)), "limit" => Js::Num(10.into()) }));
@@ -369,7 +369,7 @@ mod tests {
         install(store.clone(), KEPT_MS);
         let failed_at = crate::limiter::now_ms() - 600_000;
         let id = uuid::Uuid::new_v4().to_string();
-        store.start_run(&RunStart { id: &id, file: "ops", movement: "sync", started_at: &iso_at(failed_at - 1000), input: r#"{"chain":["run-0"]}"#, delivery_id: None }).unwrap();
+        store.start_run(&RunStart { id: &id, file: "ops", movement: "sync", started_at: &iso_at(failed_at - 1000), input: r#"{"chain":["run-0"]}"#, delivery_id: None, team_id: None }).unwrap();
         store.settle_run(&id, "failed", &Js::Obj(obj! { "error" => Js::str("boom") }), &iso_at(failed_at)).unwrap();
 
         let page = Js::Obj(obj! { "after" => Js::Obj(obj! { "at" => Js::Str(iso_at(failed_at - 1)), "runId" => Js::str("00000000-0000-0000-0000-000000000000") }), "until" => Js::Str(iso_at(failed_at)), "limit" => Js::Num(10.into()) });

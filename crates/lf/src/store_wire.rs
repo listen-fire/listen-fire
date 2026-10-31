@@ -7,7 +7,7 @@
 use crate::json::{Js, Obj};
 use crate::obj;
 use crate::store::{
-    BranchExport, ClaimedWork, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind, RunRow, RunStart, SegmentCommit,
+    BranchExport, ClaimedWork, DeliveryRow, DeliveryRun, DeliverySource, EventReceipt, LeafRow, NewDelivery, NewWork, Park, ParkKind, RunRow, RunStart, SegmentCommit,
 };
 use crate::waits::{DeliveryWait, Logged, LoggedArrival, NewArrival, OpenWait, PreNoted, Stranded, StrandedAfter, StrandedOf, WaitArrivals, WaitWake};
 
@@ -210,19 +210,34 @@ pub fn park_kind(value: &Js) -> Option<ParkKind<'_>> {
 
 /// `runs.start`'s params.
 pub fn run_start_params(run: &RunStart<'_>) -> Obj {
-    obj! {
+    let mut params = obj! {
         "id" => Js::str(run.id),
         "file" => Js::str(run.file),
         "movement" => Js::str(run.movement),
         "startedAt" => Js::str(run.started_at),
         "input" => Js::str(run.input),
         "deliveryId" => opt(run.delivery_id),
+    };
+    // Sent only when it names one: a store module written before the
+    // member keeps every run under its own tenant.
+    if let Some(team_id) = run.team_id {
+        params.insert("teamId".into(), Js::str(team_id));
     }
+    params
 }
 
-/// `events.startRun`'s params: `runs.start`'s, with the listen and the key.
-pub fn event_run_params(listen: &str, key: &str, run: &RunStart<'_>) -> Obj {
-    let mut params = obj! { "listen" => Js::str(listen), "key" => Js::str(key) };
+/// `events.claim`'s params: the listen, the key and, when it names one, the team.
+pub fn receipt_params(receipt: &EventReceipt<'_>) -> Obj {
+    let mut params = obj! { "listen" => Js::str(receipt.listen), "key" => Js::str(receipt.key) };
+    if let Some(team_id) = receipt.team_id {
+        params.insert("teamId".into(), Js::str(team_id));
+    }
+    params
+}
+
+/// `events.startRun`'s params: `runs.start`'s, with the receipt's.
+pub fn event_run_params(receipt: &EventReceipt<'_>, run: &RunStart<'_>) -> Obj {
+    let mut params = receipt_params(receipt);
     params.extend(run_start_params(run));
     params
 }

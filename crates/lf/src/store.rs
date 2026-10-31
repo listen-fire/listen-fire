@@ -11,6 +11,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
+use crate::backend::SQLITE_TENANT;
 use crate::json::Js;
 use crate::waits::WaitWake;
 
@@ -111,10 +112,11 @@ create table if not exists module_processes (
   version integer not null
 );
 create table if not exists event_receipt (
+  team_id text not null default 'local',
   listen text not null,
   key text not null,
   received_at text not null,
-  primary key (listen, key)
+  primary key (team_id, listen, key)
 );
 create table if not exists delivery (
   id text primary key,
@@ -214,7 +216,7 @@ create index if not exists wait_row_stranded on wait_row (stranded_at, id) where
 ";
 
 /// Columns a state file written by an earlier listen-fire lacks, added on open.
-const ADDED_RUN_COLUMNS: &[&str] = &["cancel_requested_at", "cancel_reason", "delivery_id"];
+const ADDED_RUN_COLUMNS: &[&str] = &["cancel_requested_at", "cancel_reason", "delivery_id", "team_id"];
 /// Added to a state file written before a failed run could be run again.
 const ATTEMPT_COLUMNS: &[(&str, &str)] = &[("attempt", "integer not null default 1"), ("attempts", "text not null default '[]'")];
 /// Added to a state file written before a run's lease kept the arrival
@@ -537,6 +539,25 @@ pub struct RunStart<'a> {
     pub input: &'a str,
     /// The delivery whose event started it (`delivery.id`), when one did.
     pub delivery_id: Option<&'a str>,
+    /// The team it is kept under; None: the store's own tenant.
+    pub team_id: Option<&'a str>,
+}
+
+/// A listen's receipt of an event or arrival (`events.claim`): its key
+/// (the event's `idempotencyKey`, or the arrival's receipt key) on the
+/// listen's pipeline, under a team. None: the store's own tenant.
+#[derive(Clone, Copy)]
+pub struct EventReceipt<'a> {
+    pub team_id: Option<&'a str>,
+    pub listen: &'a str,
+    pub key: &'a str,
+}
+
+impl<'a> EventReceipt<'a> {
+    /// A receipt under the store's own tenant, as listen-fire's runs take one.
+    pub fn own(listen: &'a str, key: &'a str) -> EventReceipt<'a> {
+        EventReceipt { team_id: None, listen, key }
+    }
 }
 
 /// Where a delivery came in.
@@ -706,6 +727,7 @@ impl Store {
         }
         db.execute_batch("create index if not exists run_delivery on run (delivery_id)")?;
         Self::open_wait_rows(&db)?;
+        Self::open_event_receipts(&db)?;
         // Callbacks and the waits keyed by a correlation retired at 0.13: a
         // run parked on one cannot resume on this release, and the work rows
         // that would have woken it (a callback's firing, a wake by key
@@ -772,6 +794,41 @@ impl Store {
         }
     }
 
+    /// The receipts, rebuilt from a state file written before a receipt was
+    /// a team's (SQLite cannot change a primary key): each kept is the
+    /// store's own tenant's.
+    fn open_event_receipts(db: &Connection) -> Result<()> {
+        db.execute_batch("begin immediate")?;
+        let rebuilt = (|| -> Result<()> {
+            let columns = db
+                .prepare("select name from pragma_table_info('event_receipt')")?
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if columns.iter().any(|c| c == "team_id") {
+                return Ok(());
+            }
+            Ok(db.execute_batch(&format!(
+                "alter table event_receipt rename to event_receipt_before;
+                 create table event_receipt (
+                   team_id text not null default '{SQLITE_TENANT}',
+                   listen text not null,
+                   key text not null,
+                   received_at text not null,
+                   primary key (team_id, listen, key)
+                 );
+                 insert into event_receipt (listen, key, received_at) select listen, key, received_at from event_receipt_before;
+                 drop table event_receipt_before;"
+            ))?)
+        })();
+        match rebuilt {
+            Ok(()) => Ok(db.execute_batch("commit")?),
+            Err(error) => {
+                db.execute_batch("rollback")?;
+                Err(error)
+            }
+        }
+    }
+
     /// One write transaction, taken before its first read.
     pub(crate) fn transaction<T>(&self, body: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
         self.db.execute_batch("begin immediate")?;
@@ -814,17 +871,17 @@ impl Store {
 
     fn start_run_in(db: &Connection, run: &RunStart<'_>) -> Result<()> {
         db.execute(
-            "insert into run (id, file, movement, status, started_at, input, delivery_id) values (?, ?, ?, ?, ?, ?, ?)",
-            params![run.id, run.file, run.movement, "running", run.started_at, run.input, run.delivery_id],
+            "insert into run (id, file, movement, status, started_at, input, delivery_id, team_id) values (?, ?, ?, ?, ?, ?, ?, ?)",
+            params![run.id, run.file, run.movement, "running", run.started_at, run.input, run.delivery_id, run.team_id.unwrap_or(SQLITE_TENANT)],
         )?;
         Ok(())
     }
 
     /// crate::backend::RunHostStore::start_event_run: the receipt and the
     /// run, or neither.
-    pub fn start_event_run(&self, listen: &str, key: &str, run: &RunStart<'_>) -> Result<bool> {
+    pub fn start_event_run(&self, receipt: &EventReceipt<'_>, run: &RunStart<'_>) -> Result<bool> {
         self.transaction(|db| {
-            if !Self::claim_event_in(db, listen, key)? {
+            if !Self::claim_event_in(db, receipt)? {
                 return Ok(false);
             }
             Self::start_run_in(db, run)?;
@@ -1513,12 +1570,15 @@ impl Store {
     }
 
     /// crate::backend::RunHostStore::claim_event.
-    pub fn claim_event(&self, listen: &str, key: &str) -> Result<bool> {
-        Self::claim_event_in(&self.db, listen, key)
+    pub fn claim_event(&self, receipt: &EventReceipt<'_>) -> Result<bool> {
+        Self::claim_event_in(&self.db, receipt)
     }
 
-    fn claim_event_in(db: &Connection, listen: &str, key: &str) -> Result<bool> {
-        let inserted = db.execute("insert into event_receipt (listen, key, received_at) values (?, ?, ?) on conflict do nothing", params![listen, key, iso(0)])?;
+    fn claim_event_in(db: &Connection, receipt: &EventReceipt<'_>) -> Result<bool> {
+        let inserted = db.execute(
+            "insert into event_receipt (team_id, listen, key, received_at) values (?, ?, ?, ?) on conflict do nothing",
+            params![receipt.team_id.unwrap_or(SQLITE_TENANT), receipt.listen, receipt.key, iso(0)],
+        )?;
         Ok(inserted == 1)
     }
 }
@@ -1585,11 +1645,45 @@ mod tests {
     #[test]
     fn an_event_key_is_received_once_per_listen() {
         let (store, path) = state_file();
-        assert!(store.claim_event("listen:a:welcome", "delivery-1").unwrap());
-        assert!(!store.claim_event("listen:a:welcome", "delivery-1").unwrap());
-        assert!(store.claim_event("listen:a:other", "delivery-1").unwrap());
+        assert!(store.claim_event(&EventReceipt::own("listen:a:welcome", "delivery-1")).unwrap());
+        assert!(!store.claim_event(&EventReceipt::own("listen:a:welcome", "delivery-1")).unwrap());
+        assert!(store.claim_event(&EventReceipt::own("listen:a:other", "delivery-1")).unwrap());
         // Kept in the state file: another handle sees the receipt.
-        assert!(!Store::open(&path).unwrap().claim_event("listen:a:welcome", "delivery-1").unwrap());
+        assert!(!Store::open(&path).unwrap().claim_event(&EventReceipt::own("listen:a:welcome", "delivery-1")).unwrap());
+    }
+
+    /// A receipt is its team's: the same listen and key under another team
+    /// is another receipt, and its run is kept under that team.
+    #[test]
+    fn a_receipt_and_its_run_are_their_teams() {
+        let (store, _) = state_file();
+        let other = EventReceipt { team_id: Some("globex"), ..EventReceipt::own("listen:a:welcome", "delivery-1") };
+        assert!(store.claim_event(&EventReceipt::own("listen:a:welcome", "delivery-1")).unwrap());
+        assert!(store.claim_event(&other).unwrap());
+        assert!(!store.claim_event(&other).unwrap());
+        let run = RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None, team_id: Some("globex") };
+        assert!(store.start_event_run(&EventReceipt { key: "delivery-2", ..other }, &run).unwrap());
+        let team: String = store.db.query_row("select team_id from run where id = 'run-1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(team, "globex");
+    }
+
+    /// A state file written before a receipt was a team's keeps each of its
+    /// receipts as the store's own tenant's.
+    #[test]
+    fn a_receipt_kept_before_teams_is_the_stores_own() {
+        let (store, path) = state_file();
+        store
+            .db
+            .execute_batch(
+                "drop table event_receipt;
+                 create table event_receipt (listen text not null, key text not null, received_at text not null, primary key (listen, key));
+                 insert into event_receipt values ('listen:a:welcome', 'delivery-1', '2026-10-30T00:00:00.000Z');",
+            )
+            .unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert!(!store.claim_event(&EventReceipt::own("listen:a:welcome", "delivery-1")).unwrap());
+        assert!(store.claim_event(&EventReceipt { team_id: Some("globex"), ..EventReceipt::own("listen:a:welcome", "delivery-1") }).unwrap());
     }
 
     fn work_row(store: &Store, key: &str) -> (String, Option<String>) {
@@ -1698,7 +1792,7 @@ mod tests {
     #[test]
     fn a_lapsed_run_lease_is_taken_by_another_process_with_the_abandoned_claim_parked_again() {
         let (store, path) = state_file();
-        store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+        store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None, team_id: None }).unwrap();
         store.put_leaf("run-1", "s1", "timer", Some(&iso(-1_000)), &no_payload(), None).unwrap();
         let first = store.claim_lease("run-1", 60_000).unwrap().expect("the run was free");
         assert!(store.claim_leaf("run-1", "s1", None).unwrap().is_some());
@@ -1732,7 +1826,7 @@ mod tests {
     }
 
     fn running(store: &Store, run_id: &str) -> String {
-        store.start_run(&RunStart { id: run_id, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+        store.start_run(&RunStart { id: run_id, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None, team_id: None }).unwrap();
         store.claim_lease(run_id, 60_000).unwrap().unwrap()
     }
 
@@ -1783,13 +1877,13 @@ mod tests {
     #[test]
     fn an_event_receipt_and_its_run_are_one_write() {
         let (store, _) = state_file();
-        let start = |id: &'static str| RunStart { id, file: "f", movement: "m", started_at: "2026-10-20T00:00:00.000Z", input: "{}", delivery_id: None };
+        let start = |id: &'static str| RunStart { id, file: "f", movement: "m", started_at: "2026-10-20T00:00:00.000Z", input: "{}", delivery_id: None, team_id: None };
         // Before: the receipt was noted, then the crash, and the event never ran.
         failing(&store, "no_run", "before insert on run");
-        assert!(store.start_event_run("listen:f:m", "delivery-1", &start("run-1")).is_err());
+        assert!(store.start_event_run(&EventReceipt::own("listen:f:m", "delivery-1"), &start("run-1")).is_err());
         unfail(&store, "no_run");
-        assert!(store.start_event_run("listen:f:m", "delivery-1", &start("run-1")).unwrap(), "its receipt went with the failed run");
-        assert!(!store.start_event_run("listen:f:m", "delivery-1", &start("run-2")).unwrap());
+        assert!(store.start_event_run(&EventReceipt::own("listen:f:m", "delivery-1"), &start("run-1")).unwrap(), "its receipt went with the failed run");
+        assert!(!store.start_event_run(&EventReceipt::own("listen:f:m", "delivery-1"), &start("run-2")).unwrap());
         assert!(store.run("run-1").unwrap().is_some());
         assert!(store.run("run-2").unwrap().is_none(), "a redelivery starts no run");
     }
@@ -1869,7 +1963,7 @@ mod tests {
             kept.id
         };
         let start = |id: &str, delivery_id: &str| {
-            store.start_run(&RunStart { id, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: Some(delivery_id) }).unwrap()
+            store.start_run(&RunStart { id, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: Some(delivery_id), team_id: None }).unwrap()
         };
         let (settled, running, queued) = (old(&store), old(&store), old(&store));
         start("done", &settled);
@@ -1904,7 +1998,7 @@ mod tests {
         assert_eq!(store.run("old").unwrap().unwrap().delivery_id, None);
         let first = delivery(None);
         store.keep_delivery("sub", None, &first, &[], None, &[]).unwrap();
-        store.start_run(&RunStart { id: "new", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: Some(&first.id) }).unwrap();
+        store.start_run(&RunStart { id: "new", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: Some(&first.id), team_id: None }).unwrap();
         assert_eq!(store.run("new").unwrap().unwrap().delivery_id.as_deref(), Some(first.id.as_str()));
         let runs: Vec<String> = store.delivery(&first.id).unwrap().unwrap().runs.into_iter().map(|r| r.id).collect();
         assert_eq!(runs, ["new"]);
@@ -1916,7 +2010,7 @@ mod tests {
     fn a_run_is_lapsed_when_it_is_running_without_a_live_lease_a_lease_length_after_it_started() {
         let (store, _) = state_file();
         let long_ago = iso(-120_000);
-        let start = |id: &str, at: &str| store.start_run(&RunStart { id, file: "f", movement: "m", started_at: at, input: "{}", delivery_id: None }).unwrap();
+        let start = |id: &str, at: &str| store.start_run(&RunStart { id, file: "f", movement: "m", started_at: at, input: "{}", delivery_id: None, team_id: None }).unwrap();
         let lease_until = |id: &str, until: Option<String>| {
             store.db.execute("update run set lease_token = 't', lease_until = ? where id = ?", params![until, id]).unwrap();
         };

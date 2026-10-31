@@ -54,7 +54,7 @@ use crate::records_door::{FailedPage, ReleaseAfter, SeenRelease};
 use crate::obj;
 use crate::resolve::{ListenState, Resolution};
 use crate::store::{
-    BranchExport, ClaimDue, ClaimedWork, DeliveryQuery, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind,
+    BranchExport, ClaimDue, ClaimedWork, DeliveryQuery, DeliveryRow, DeliveryRun, DeliverySource, EventReceipt, LeafRow, NewDelivery, NewWork, Park, ParkKind,
     HeldPark, OwedRace, Release, Rerun, Result, RunRow, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, SegmentCommit, StoreError, WORK_KINDS, settle_race_work_key,
     settle_race_work_payload, timer_work_key, timer_work_payload,
 };
@@ -544,7 +544,7 @@ impl PgStore {
             "insert into lf.trigger_run (id, team_id, trigger_id, trigger_type, status, started_at, trigger_payload, delivery_id)
              values ($1::text::uuid, $2::text::uuid, $3::text, 'webhook', 'running', $4::text::timestamptz,
                      jsonb_build_object('file', $5::text, 'movement', $6::text, 'facts', $7::text), $8::text::uuid)",
-            &[&run.id, &self.tenant, &trigger, &run.started_at, &run.file, &run.movement, &run.input, &run.delivery_id],
+            &[&run.id, &run.team_id.unwrap_or(&self.tenant), &trigger, &run.started_at, &run.file, &run.movement, &run.input, &run.delivery_id],
         )?;
         Ok(())
     }
@@ -621,9 +621,9 @@ impl RunHostStore for PgStore {
         self.start_run_row(run)
     }
 
-    fn start_event_run(&self, listen: &str, key: &str, run: &RunStart<'_>) -> Result<bool> {
+    fn start_event_run(&self, receipt: &EventReceipt<'_>, run: &RunStart<'_>) -> Result<bool> {
         self.transaction(|| {
-            if !self.claim_event(listen, key)? {
+            if !self.claim_event(receipt)? {
                 return Ok(false);
             }
             self.start_run_row(run)?;
@@ -1715,10 +1715,10 @@ impl RunHostStore for PgStore {
         Ok(written == 1)
     }
 
-    fn claim_event(&self, listen: &str, key: &str) -> Result<bool> {
+    fn claim_event(&self, receipt: &EventReceipt<'_>) -> Result<bool> {
         let inserted = self.execute(
             "insert into lf.event_receipt (team_id, listen, key) values ($1::text::uuid, $2::text, $3::text) on conflict do nothing",
-            &[&self.tenant, &listen, &key],
+            &[&receipt.team_id.unwrap_or(&self.tenant), &receipt.listen, &receipt.key],
         )?;
         Ok(inserted == 1)
     }
@@ -1761,6 +1761,29 @@ mod tests {
         let left: Vec<String> = store.query("select key from lf.work where key like '%' || $1", &[&tag]).unwrap().iter().map(|r| r.get(0)).collect();
         assert_eq!(left, [format!("wait-wake:{tag}")]);
         store.execute("delete from lf.work where key like '%' || $1", &[&tag]).unwrap();
+    }
+
+    /// A receipt is its team's, and so is its run: the store's own tenant
+    /// when it names none. Needs LF_TEST_PG.
+    #[test]
+    fn a_receipt_and_its_run_are_their_teams() {
+        let Some(url) = std::env::var("LF_TEST_PG").ok().filter(|u| !u.is_empty()) else { return };
+        PgStore::migrate(&url).unwrap();
+        let store = PgStore::connect(&url, crate::backend::POSTGRES_TENANT).unwrap();
+        let (team, key) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
+        let own = EventReceipt::own("listen:f:m", &key);
+        let theirs = EventReceipt { team_id: Some(&team), ..own };
+        assert!(store.claim_event(&own).unwrap());
+        assert!(store.claim_event(&theirs).unwrap());
+        assert!(!store.claim_event(&theirs).unwrap());
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let run = RunStart { id: &run_id, file: "f", movement: "m", started_at: &crate::store::iso(0), input: "{}", delivery_id: None, team_id: Some(&team) };
+        let again = uuid::Uuid::new_v4().to_string();
+        assert!(store.start_event_run(&EventReceipt { key: &again, ..theirs }, &run).unwrap());
+        let kept: String = store.query("select team_id::text from lf.trigger_run where id = $1::text::uuid", &[&run_id]).unwrap()[0].get(0);
+        assert_eq!(kept, team);
+        store.execute("delete from lf.trigger_run where id = $1::text::uuid", &[&run_id]).unwrap();
+        store.execute("delete from lf.event_receipt where key = $1 or key = $2", &[&key, &again]).unwrap();
     }
 
     #[test]

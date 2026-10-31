@@ -22,7 +22,7 @@ use crate::backend::{RunHostStore, StoreSpec, open_store};
 use crate::json::Js;
 use crate::obj;
 use crate::slot_server::{Listen, Refusal};
-use crate::store::{ClaimDue, DeliveryQuery, HeldJoin, HeldPark, HeldRace, NewWork, Park, Release, Rerun, RunSettle, RunStart, SegmentCommit, StoreError, iso};
+use crate::store::{ClaimDue, DeliveryQuery, EventReceipt, HeldJoin, HeldPark, HeldRace, NewWork, Park, Release, Rerun, RunSettle, RunStart, SegmentCommit, StoreError, iso};
 use crate::store_wire::{Wire, new_delivery, num, opt, park_kind, rows, to_rows};
 use crate::waits::{DeliveryArrivals, DeliveryWait, NewArrival, Noted, OpenWait, StrandedAfter, StrandedOf};
 
@@ -150,7 +150,12 @@ impl Params<'_> {
             started_at: self.str("startedAt")?,
             input: self.str("input")?,
             delivery_id: self.opt_str("deliveryId")?,
+            team_id: self.opt_str("teamId")?,
         })
+    }
+
+    fn receipt(&self) -> Result<EventReceipt<'_>, Failure> {
+        Ok(EventReceipt { team_id: self.opt_str("teamId")?, listen: self.str("listen")?, key: self.str("key")? })
     }
 
     fn strings(&self, key: &str) -> Result<Vec<String>, Failure> {
@@ -536,8 +541,8 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
         }
         "processes.swap" => Ok(Js::Bool(store.swap_module_processes(p.int("version")?, &p.value("processes"))?)),
 
-        "events.claim" => Ok(Js::Bool(store.claim_event(p.str("listen")?, p.str("key")?)?)),
-        "events.startRun" => Ok(Js::Bool(store.start_event_run(p.str("listen")?, p.str("key")?, &p.run_start()?)?)),
+        "events.claim" => Ok(Js::Bool(store.claim_event(&p.receipt()?)?)),
+        "events.startRun" => Ok(Js::Bool(store.start_event_run(&p.receipt()?, &p.run_start()?)?)),
 
         _ => Err(Failure::Unknown),
     }
@@ -547,7 +552,7 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
 mod tests {
     use super::*;
     use crate::store::{DeliverySource, NewDelivery, NewWork, Park, ParkKind, RunStart, Store};
-    use crate::store_wire::{delivery_params, event_run_params, int, open_wait_params, park_params};
+    use crate::store_wire::{delivery_params, event_run_params, int, open_wait_params, park_params, receipt_params};
     use crate::waits::WaitArrivals;
 
     fn state_file() -> Store {
@@ -624,10 +629,14 @@ mod tests {
             replay_of: None,
             events: vec![Js::str("e-1")],
         };
-        let run = RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(-120_000), input: "{}", delivery_id: Some(&receipt.id) };
-        assert_eq!(call(&store, "events.startRun", event_run_params("listen:f:m", "d-1", &run)), Js::Bool(true));
+        let run = RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(-120_000), input: "{}", delivery_id: Some(&receipt.id), team_id: None };
+        assert_eq!(call(&store, "events.startRun", event_run_params(&EventReceipt::own("listen:f:m", "d-1"), &run)), Js::Bool(true));
         assert_eq!(call(&store, "runs.get", obj! { "runId" => Js::str("run-1") }).get("deliveryId"), Some(&Js::str(&receipt.id)));
-        assert_eq!(call(&store, "events.startRun", event_run_params("listen:f:m", "d-1", &run)), Js::Bool(false));
+        assert_eq!(call(&store, "events.startRun", event_run_params(&EventReceipt::own("listen:f:m", "d-1"), &run)), Js::Bool(false));
+        // Another team's receipt of the same listen and key is its own.
+        let theirs = EventReceipt { team_id: Some("globex"), ..EventReceipt::own("listen:f:m", "d-1") };
+        assert_eq!(call(&store, "events.claim", receipt_params(&theirs)), Js::Bool(true));
+        assert_eq!(call(&store, "events.claim", receipt_params(&theirs)), Js::Bool(false));
         assert_eq!(call(&store, "runs.lapsed", obj! { "staleMs" => Js::Num(60_000.into()), "limit" => Js::Num(10.into()) }), Js::strings(["run-1"]));
 
         let token = store.claim_lease("run-1", 60_000).unwrap().unwrap();
@@ -683,7 +692,7 @@ mod tests {
     #[test]
     fn a_wait_crosses_the_store_wire() {
         let store = state_file();
-        store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+        store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None, team_id: None }).unwrap();
         let mark = call(&store, "waits.mark", obj! {});
         let arrival = |identity: &str| NewArrival {
             edge: "Comments".into(),

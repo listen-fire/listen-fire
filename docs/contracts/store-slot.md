@@ -41,7 +41,7 @@ The first request is always `store.open`. The others are the run host's store fa
 | method | params | result |
 |---|---|---|
 | `store.open` | `{ settings: { [name]: string } }` | `{ tenant }`: the team id listen-fire's own runs are kept under |
-| `runs.start` | `{ id, file, movement, startedAt, input, deliveryId? }`; `deliveryId` names the delivery whose event started the run | `null` |
+| `runs.start` | `{ id, file, movement, startedAt, input, deliveryId?, teamId? }`; `deliveryId` names the delivery whose event started the run; `teamId` the team the run is kept under (absent or `null`: the tenant the store was opened under) | `null` |
 | `runs.status` | `{ runId }` | the run's status, or `"missing"`: a contract suite helper, not called by listen-fire |
 | `runs.complete` | `{ runId }` | `null`. The run settled `completed`: a contract suite helper, not called by listen-fire |
 | `runs.lapsed` | `{ staleMs, limit }` | the ids of runs still `running` whose lease lapsed or was never taken, started more than `staleMs` ago, oldest first: their worker is gone (a live first firing holds its lease and renews it every third of its length) |
@@ -112,8 +112,8 @@ The first request is always `store.open`. The others are the run host's store fa
 | `inbound.sweepDeliveries` | `{ before, limit }` | how many went. Forgets at most `limit` deliveries received before `before` whose runs are all settled (none `running` or `parked`) and that no `fire_event` work row names (its `payload.deliveryId`) |
 | `processes.list` | `{}` | `{ processes, version }`: the module processes the hosts on this store started (an array of `{ pid, listen-fire, machine, command }`), at its version; `{ processes: [], version: 0 }` for a list never written |
 | `processes.swap` | `{ version, processes }` | `true` when the list was still at `version` and is now `processes` at `version + 1`; `false` when another host wrote first (read again and retry) |
-| `events.claim` | `{ listen, key }` | `true` the first time this event key reaches this listen; `false` for a redelivery, which runs nothing |
-| `events.startRun` | `{ listen, key, id, file, movement, startedAt, input, deliveryId? }` | `events.claim` and, when it is `true`, `runs.start`, as one write: `false`, and no run, for a redelivery. The engine package's TypeScript client (`ArrivalRunStore`) sends a team's receipt with `listen` the JSON `["<team>", "<pipeline>"]`, so a store that serves several teams keeps their receipts apart; it compares `listen`, never reads it |
+| `events.claim` | `{ listen, key, teamId? }`; `teamId` as `runs.start` takes it | `true` the first time this event key reaches this listen under this team; `false` for a redelivery, which runs nothing. The same listen and key under another team is another receipt |
+| `events.startRun` | `{ listen, key, id, file, movement, startedAt, input, deliveryId?, teamId? }`; `teamId` the receipt's and the run's | `events.claim` and, when it is `true`, `runs.start`, as one write: `false`, and no run, for a redelivery. `@listen-fire/embed` sends each run an arrival starts with its tenant as `teamId`, and the run's facts as `input` |
 
 The rows:
 
@@ -137,6 +137,8 @@ A run's `outcome` is the JSON object listen-fire settled it with: `{ writes, wri
 `listen-fire --contract-store <state.db|postgres://…>` serves these methods over listen-fire's own stores, as a store module on a Unix socket. A module may forward to it, as the test module does (`apps/cli/src/__test__/store_module/forward.mjs`). `runs.status` and `runs.complete` are the contract suite's helpers and are not called by listen-fire.
 
 ## Changes
+
+- **2026-10-31, later** (listen-fire 0.13.0; a store module that serves several teams must take it): `runs.start`, `events.claim` and `events.startRun` take an optional `teamId`, as `waits.*`, `work.enqueue`, `sources.*` and `parks.commitSegment` already do: absent, the tenant the store was opened under. A receipt is its team's (the same listen and key under another team is another receipt), and a run row is kept under its team. listen-fire sends none for its own runs. Why: `@listen-fire/embed` serves many tenants over one store, and packed the team into `listen` before. listen-fire's SQLite state file keys `event_receipt` by `team_id` (each receipt kept before is the store's own tenant's) and adds `run.team_id`; `@lf/postgres-store` already keys both by team.
 
 - **2026-10-31** (listen-fire 0.13.0; a store module may take it): what the records door reads ([system-events.md](system-events.md)). `runs.failed` pages the failed runs, `releases.note` keeps each release the store is opened under once and `releases.list` pages them; a store that answers `method_not_implemented` to any of them reports none. `waits.open` takes the record's `recordId`, and `waits.stranded` answers it. Why: `@lf/system` reports a failed run, a release and a wait that lost its record, with the record it lost. `@lf/postgres-store`'s migration 15 and the SQLite state file add `wait_row.record_id`, `release_seen` and an index on failed runs.
 

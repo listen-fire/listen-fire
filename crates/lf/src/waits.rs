@@ -750,7 +750,7 @@ mod tests {
                     continue;
                 }
                 let id = names.id(run);
-                store.start_run(&RunStart { id: &id, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+                store.start_run(&RunStart { id: &id, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None, team_id: None }).unwrap();
             }
         }
         for (index, step) in steps.iter().enumerate() {
@@ -968,7 +968,7 @@ mod tests {
                 }
                 "start" => {
                     let id = names.id(text(step, "minted"));
-                    store.start_run(&RunStart { id: &id, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+                    store.start_run(&RunStart { id: &id, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None, team_id: None }).unwrap();
                 }
                 "bury" => {
                     let key = format!("fire_event:{}", names.id(text(step, "fire")));
@@ -1133,7 +1133,7 @@ mod tests {
         // The store's own team: its drain claims the rows.
         let (run, team, subscription) = (uuid::Uuid::new_v4().to_string(), store.tenant().to_string(), uuid::Uuid::new_v4().to_string());
         let key = format!("thread:{run}");
-        store.start_run(&RunStart { id: &run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+        store.start_run(&RunStart { id: &run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None, team_id: None }).unwrap();
         let wait = store.open_wait(&OpenWait { run_id: &run, team_id: &team, adapter_type: "acme", edge: "Comments", key: Some(&key), record_id: None, since: store.arrival_mark().unwrap() }).unwrap();
         store.commit_park(&Park { run_id: &run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
         let receipt = || NewDelivery {
@@ -1182,7 +1182,7 @@ mod tests {
         PgStore::migrate(&url).unwrap();
         let store = PgStore::connect(&url, crate::backend::POSTGRES_TENANT).unwrap();
         let (run, team) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
-        store.start_run(&RunStart { id: &run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+        store.start_run(&RunStart { id: &run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None, team_id: None }).unwrap();
         let since = store.arrival_mark().unwrap();
         let wait = store.open_wait(&OpenWait { run_id: &run, team_id: &team, adapter_type: "acme", edge: "Comments", key: Some("thread:c1"), record_id: None, since }).unwrap();
         let (locked, held) = std::sync::mpsc::channel();
@@ -1229,7 +1229,7 @@ mod tests {
             )
             .unwrap();
         let store = Store::open(&path).unwrap();
-        store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+        store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None, team_id: None }).unwrap();
         let kept = OpenWait { run_id: "run-1", team_id: "t", adapter_type: "acme", edge: "Comments", key: Some("thread:c1"), record_id: None, since: 5 };
         assert_eq!(store.open_wait(&kept).unwrap(), "w1");
         let keyless = store.open_wait(&OpenWait { key: None, ..kept }).unwrap();
@@ -1294,7 +1294,7 @@ mod tests {
     fn a_stranded_time_is_written_as_iso_writes_it_whatever_form_the_log_gave() {
         let store = state_file();
         let wait_on = |run: &str, key: &str| {
-            store.start_run(&RunStart { id: run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+            store.start_run(&RunStart { id: run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None, team_id: None }).unwrap();
             let wait = store.open_wait(&OpenWait { run_id: run, team_id: "t", adapter_type: "acme", edge: "Comments", key: Some(key), record_id: None, since: 0 }).unwrap();
             store.commit_park(&Park { run_id: run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
             wait
@@ -1316,7 +1316,7 @@ mod tests {
     #[test]
     fn the_sweep_says_how_many_went_and_a_parked_unknown_wait_writes_nothing() {
         let store = state_file();
-        store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+        store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None, team_id: None }).unwrap();
         let arrival = |key: &str| NewArrival { edge: "Comments".into(), key: key.into(), identity: Some("k".into()), version: None, landing: None, gone: false };
         store.log_now("t", "acme", &[arrival("a"), arrival("b"), arrival("c")]).unwrap();
         assert_eq!(store.sweep_arrivals(2, None).unwrap(), 2);

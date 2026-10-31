@@ -38,7 +38,7 @@ use crate::movements_slot::{Change, ChangeKind, Listed, MovementsStore, Watched,
 use crate::sources::{MOVEMENT_EXTENSION, MovementFile, Parsed, scan_movements};
 use crate::backend::{RunHostStore, StoreSpec, open_store};
 use crate::edge_polls::EDGE_POLL_WORK_KIND;
-use crate::store::{ClaimDue, DeliverySource, NewDelivery, NewWork, POLL_WORK_KIND, Release, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, iso, iso_at};
+use crate::store::{ClaimDue, DeliverySource, EventReceipt, NewDelivery, NewWork, POLL_WORK_KIND, Release, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, iso, iso_at};
 use module_wire::results as wire_results;
 
 /// How many files' parses a session's runs keep (movement_engine::program::keep_parses):
@@ -906,7 +906,7 @@ impl Session {
                 // limit) takes its receipt as a run would, so a redelivery
                 // of it is not counted twice, or taken for a new chain.
                 if is_paused {
-                    if self.store.claim_event(&pipeline, &receipt).map_err(|e| e.to_string())? {
+                    if self.store.claim_event(&EventReceipt::own(&pipeline, &receipt)).map_err(|e| e.to_string())? {
                         self.store.hold_listen_arrival(&pipeline).map_err(|e| e.to_string())?;
                         fired.redelivered.push(format!("{named}: the arrival {identity} on {} runs nothing, {}", arrival.edge, crate::loop_breaker::HELD));
                     } else {
@@ -916,7 +916,7 @@ impl Session {
                 }
                 let chain = self.chain_before(adapter, listen, arrival)?;
                 if chain.len() >= self.project.loop_depth {
-                    if !self.store.claim_event(&pipeline, &receipt).map_err(|e| e.to_string())? {
+                    if !self.store.claim_event(&EventReceipt::own(&pipeline, &receipt)).map_err(|e| e.to_string())? {
                         fired.redelivered.push(format!("{named} has taken the arrival {identity} on {} before: this delivery runs nothing", arrival.edge));
                         continue;
                     }
@@ -1057,7 +1057,7 @@ impl Session {
                 // The echo's receipt is noted all the same, so its redelivery
                 // runs nothing however the record moves meanwhile.
                 if let Some(key) = receipt
-                    && !self.store.claim_event(&pipeline, key).map_err(|e| e.to_string())?
+                    && !self.store.claim_event(&EventReceipt::own(&pipeline, key)).map_err(|e| e.to_string())?
                 {
                     fired.redelivered.push(ran_before(key));
                     continue;
@@ -1355,7 +1355,7 @@ impl Session {
             let receipt = arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), arrival.identity.as_deref().unwrap_or_default(), arrival.version.as_deref());
             for listen in sharing.iter().map(|i| &set.listens[*i]).filter(|l| l.is_on(adapter, &arrival.edge)) {
                 if matches!(listen.fires(arrival, credential, now_ms), Some(Verdict::Fires)) {
-                    self.store.claim_event(&listen.pipeline(), &receipt).map_err(|e| e.to_string())?;
+                    self.store.claim_event(&EventReceipt::own(&listen.pipeline(), &receipt)).map_err(|e| e.to_string())?;
                 }
             }
         }
@@ -1497,11 +1497,11 @@ impl Session {
             chain: came_in.chain.to_vec(),
         };
         let input = facts.to_js().to_json();
-        let start = RunStart { id: run_id, file: &file.name, movement: &facts.movement_name, started_at: &fired_at, input: &input, delivery_id: came_in.delivery_id };
+        let start = RunStart { id: run_id, file: &file.name, movement: &facts.movement_name, started_at: &fired_at, input: &input, delivery_id: came_in.delivery_id, team_id: None };
         match receipt {
             None => self.store.start_run(&start).map_err(|e| e.to_string())?,
             Some((listen, key)) => {
-                if !self.store.start_event_run(listen, key, &start).map_err(|e| e.to_string())? {
+                if !self.store.start_event_run(&EventReceipt::own(listen, key), &start).map_err(|e| e.to_string())? {
                     return Ok(None);
                 }
             }

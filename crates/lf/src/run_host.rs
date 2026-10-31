@@ -461,7 +461,7 @@ mod tests {
     }
 
     fn started(store_: &Store, run_id: &str, at: &str) {
-        store_.start_run(&crate::store::RunStart { id: run_id, file: "f", movement: "m", started_at: at, input: "{}", delivery_id: None }).unwrap();
+        store_.start_run(&crate::store::RunStart { id: run_id, file: "f", movement: "m", started_at: at, input: "{}", delivery_id: None, team_id: None }).unwrap();
     }
 
     fn lease_until(store_: &Store, run_id: &str, until: &str) {

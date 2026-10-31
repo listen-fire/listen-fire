@@ -234,7 +234,7 @@ mod tests {
     fn run(store: &dyn RunHostStore, chain: &[&str]) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         let input = format!(r#"{{"chain":{}}}"#, serde_json::to_string(chain).unwrap());
-        store.start_run(&RunStart { id: &id, file: "companies", movement: "note", started_at: T0, input: &input, delivery_id: None }).unwrap();
+        store.start_run(&RunStart { id: &id, file: "companies", movement: "note", started_at: T0, input: &input, delivery_id: None, team_id: None }).unwrap();
         id
     }
 
