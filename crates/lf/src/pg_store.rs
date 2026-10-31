@@ -39,6 +39,7 @@
 //! Blocking, as the SQLite store is: the connection lives on its own thread
 //! with its own runtime, and each call waits for its answer.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -49,7 +50,7 @@ use tokio_postgres::{Client, Row};
 use crate::backend::RunHostStore;
 use crate::json::Js;
 use crate::obj;
-use crate::resolve::ListenState;
+use crate::resolve::{ListenState, Resolution};
 use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, DeliveryQuery, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind,
     HeldPark, OwedRace, Release, Rerun, Result, RunRow, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, SegmentCommit, StoreError, WORK_KINDS, settle_race_work_key,
@@ -1384,20 +1385,48 @@ impl RunHostStore for PgStore {
         Ok(())
     }
 
-    fn listen_state(&self, pipeline: &str) -> Result<Option<ListenState>> {
-        let row = self.query_opt("select state::text from lf.listen_state where team_id = $1::text::uuid and pipeline = $2::text", &[&self.tenant, &pipeline])?;
-        row.map(|r| {
-            let text: String = r.get(0);
-            ListenState::from_js(&parse_text(&text)?).ok_or_else(|| StoreError::Invalid(format!("a stored listen's state is not one: {text}")))
-        })
-        .transpose()
+    fn listen_states(&self, pipelines: &[String]) -> Result<BTreeMap<String, ListenState>> {
+        let rows = self.query("select pipeline, state::text from lf.listen_state where team_id = $1::text::uuid and pipeline = any($2::text[])", &[&self.tenant, &pipelines])?;
+        rows.into_iter()
+            .map(|r| {
+                let (pipeline, text): (String, String) = (r.get(0), r.get(1));
+                let state = ListenState::from_js(&parse_text(&text)?).ok_or_else(|| StoreError::Invalid(format!("a stored listen's state is not one: {text}")))?;
+                Ok((pipeline, state))
+            })
+            .collect()
     }
-    fn save_listen_state(&self, pipeline: &str, state: &ListenState) -> Result<()> {
-        let text = state.to_js().to_json();
+    /// A listen never resolved is kept from its first hold, with nothing
+    /// resolved.
+    fn claim_listen_resolve(&self, pipeline: &str, ttl_ms: i64) -> Result<Option<String>> {
+        let token = uuid::Uuid::new_v4().to_string();
+        let empty = ListenState::default().to_js().to_json();
+        let claimed = self.query_opt(
+            "insert into lf.listen_state (team_id, pipeline, state, lease_token, lease_until)
+             values ($1::text::uuid, $2::text, $3::text::jsonb, $4::text::uuid, now() + $5::int8 * interval '1 millisecond')
+             on conflict (team_id, pipeline) do update set lease_token = excluded.lease_token, lease_until = excluded.lease_until
+             where lf.listen_state.lease_until is null or lf.listen_state.lease_until < now()
+             returning pipeline",
+            &[&self.tenant, &pipeline, &empty, &token, &ttl_ms],
+        )?;
+        Ok(claimed.map(|_| token))
+    }
+    /// The resolution replaces the state but for `paused`, read in the same
+    /// statement.
+    fn save_listen_resolution(&self, pipeline: &str, token: &str, resolution: &Resolution) -> Result<bool> {
+        let text = resolution.to_js().to_json();
+        let saved = self.execute(
+            "update lf.listen_state set state = $3::text::jsonb || jsonb_build_object('paused', state->'paused'), lease_token = null, lease_until = null, updated_at = now()
+             where team_id = $1::text::uuid and pipeline = $2::text and lease_token = $4::text::uuid",
+            &[&self.tenant, &pipeline, &text, &token],
+        )?;
+        Ok(saved > 0)
+    }
+    fn set_listen_paused(&self, pipeline: &str, paused: Option<&str>) -> Result<()> {
+        let fresh = ListenState { paused: paused.map(str::to_string), ..Default::default() }.to_js().to_json();
         self.execute(
             "insert into lf.listen_state (team_id, pipeline, state) values ($1::text::uuid, $2::text, $3::text::jsonb)
-             on conflict (team_id, pipeline) do update set state = excluded.state, updated_at = now()",
-            &[&self.tenant, &pipeline, &text],
+             on conflict (team_id, pipeline) do update set state = lf.listen_state.state || jsonb_build_object('paused', $4::text), updated_at = now()",
+            &[&self.tenant, &pipeline, &fresh, &paused],
         )?;
         Ok(())
     }

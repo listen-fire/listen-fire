@@ -679,21 +679,58 @@ impl Store {
         Self::save_checkpoint_in(&self.db, subscription_id, checkpoint)
     }
 
-    /// What a listen was last resolved to (crate::resolve), or None.
-    pub fn listen_state(&self, pipeline: &str) -> Result<Option<crate::resolve::ListenState>, StoreError> {
-        let text: Option<String> = self.db.query_row("select state from listen_state where pipeline = ?", params![pipeline], |r| r.get(0)).optional()?;
-        text.map(|text| {
-            Js::parse(text.as_bytes()).ok().as_ref().and_then(crate::resolve::ListenState::from_js).ok_or_else(|| StoreError::Invalid(format!("a stored listen's state is not one: {text}")))
-        })
-        .transpose()
+    /// What each listen named was last resolved to (crate::resolve), by its
+    /// pipeline.
+    pub fn listen_states(&self, pipelines: &[String]) -> Result<std::collections::BTreeMap<String, crate::resolve::ListenState>, StoreError> {
+        let mut states = std::collections::BTreeMap::new();
+        let mut read = self.db.prepare("select state from listen_state where pipeline = ?")?;
+        for pipeline in pipelines {
+            let Some(text) = read.query_row(params![pipeline], |r| r.get::<_, String>(0)).optional()? else { continue };
+            states.insert(pipeline.clone(), Self::listen_state_of(&text)?);
+        }
+        Ok(states)
     }
 
-    pub fn save_listen_state(&self, pipeline: &str, state: &crate::resolve::ListenState) -> Result<(), StoreError> {
-        self.db.execute(
-            "insert into listen_state (pipeline, state) values (?, ?) on conflict (pipeline) do update set state = excluded.state",
-            params![pipeline, state.to_js().to_json()],
+    /// Hold the listen's resolve: a listen never resolved is kept from now,
+    /// with nothing resolved.
+    pub fn claim_listen_resolve(&self, pipeline: &str, ttl_ms: i64) -> Result<Option<String>, StoreError> {
+        let token = crate::store::uuid();
+        let claimed = self.db.execute(
+            "insert into listen_state (pipeline, state, lease_token, lease_until) values (?1, ?2, ?3, ?4)
+             on conflict (pipeline) do update set lease_token = excluded.lease_token, lease_until = excluded.lease_until
+             where listen_state.lease_until is null or listen_state.lease_until < ?5",
+            params![pipeline, crate::resolve::ListenState::default().to_js().to_json(), token, iso(ttl_ms), iso(0)],
         )?;
-        Ok(())
+        Ok((claimed > 0).then_some(token))
+    }
+
+    pub fn save_listen_resolution(&self, pipeline: &str, token: &str, resolution: &crate::resolve::Resolution) -> Result<bool, StoreError> {
+        self.transaction(|db| {
+            let Some(text) = db.query_row("select state from listen_state where pipeline = ? and lease_token = ?", params![pipeline, token], |r| r.get::<_, String>(0)).optional()? else {
+                return Ok(false);
+            };
+            let state = crate::resolve::ListenState { resolution: resolution.clone(), ..Self::listen_state_of(&text)? };
+            db.execute("update listen_state set state = ?, lease_token = null, lease_until = null where pipeline = ?", params![state.to_js().to_json(), pipeline])?;
+            Ok(true)
+        })
+    }
+
+    /// A stored listen's state, read back.
+    fn listen_state_of(text: &str) -> Result<crate::resolve::ListenState, StoreError> {
+        Js::parse(text.as_bytes()).ok().as_ref().and_then(crate::resolve::ListenState::from_js).ok_or_else(|| StoreError::Invalid(format!("a stored listen's state is not one: {text}")))
+    }
+
+    pub fn set_listen_paused(&self, pipeline: &str, paused: Option<&str>) -> Result<(), StoreError> {
+        self.transaction(|db| {
+            let text: Option<String> = db.query_row("select state from listen_state where pipeline = ?", params![pipeline], |r| r.get(0)).optional()?;
+            let kept = text.as_deref().map(Self::listen_state_of).transpose()?.unwrap_or_default();
+            let state = crate::resolve::ListenState { paused: paused.map(str::to_string), ..kept };
+            db.execute(
+                "insert into listen_state (pipeline, state) values (?, ?) on conflict (pipeline) do update set state = excluded.state",
+                params![pipeline, state.to_js().to_json()],
+            )?;
+            Ok(())
+        })
     }
 
     fn save_checkpoint_in(db: &rusqlite::Connection, subscription_id: &str, checkpoint: &Js) -> Result<(), StoreError> {

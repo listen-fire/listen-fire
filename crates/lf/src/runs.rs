@@ -121,9 +121,10 @@ impl FileSet {
         self.heads.borrow().get(&listen.pipeline()).into_iter().flatten().cloned().map(Some).collect()
     }
 
-    /// Watch the listen's last edge under `heads` from now (crate::resolve).
-    pub fn watch(&self, listen: &Listen, heads: Vec<String>) {
-        self.heads.borrow_mut().insert(listen.pipeline(), heads);
+    /// Watch the listen's last edge under `heads` from now (crate::resolve):
+    /// whether they are not those it was watched under.
+    pub fn watch(&self, listen: &Listen, heads: Vec<String>) -> bool {
+        self.heads.borrow_mut().insert(listen.pipeline(), heads.clone()).is_none_or(|before| before != heads)
     }
 
     /// The listens on a polled source (its manifest declares `poll`), each
@@ -214,6 +215,17 @@ pub struct Opening<'s> {
 /// The line that closes a refusal of files that do not check.
 const RUN_CHECK: &str = "run `listen-fire check`, and fix its errors: listen-fire serves a project only once it checks";
 
+/// A walk of a plan's hops with no run (`Session::read_positions`): the
+/// program it is walked in, the connection it starts from, its hops, and the
+/// most distinct records its last hop may land on before it stops (None:
+/// every one).
+pub struct Walk<'a> {
+    pub source: &'a str,
+    pub connection: &'a str,
+    pub hops: &'a [movement_parser::listen_plan::PlanHop],
+    pub limit: Option<usize>,
+}
+
 pub struct Session {
     pub project: Project,
     pub role: Role,
@@ -252,6 +264,8 @@ pub struct Session {
     /// Why the movements module last did not answer the watch loop (its
     /// watch, or its list): said once until it answers again.
     watch_failed: RefCell<Option<String>>,
+    /// The lines said once in this session (`says_once`).
+    said: RefCell<BTreeSet<String>>,
 }
 
 impl Drop for Session {
@@ -404,6 +418,7 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
         watch_pause,
         refused: Default::default(),
         watch_failed: Default::default(),
+        said: Default::default(),
     };
     let opening = if routes_listens { crate::resolve::Opening::Routing } else { crate::resolve::Opening::Kept };
     for line in crate::resolve::open(&session, &set, opening).await? {
@@ -485,6 +500,23 @@ impl<'a> Delivered<'a> {
 /// The external's `subscriptionScopeKeys`, when it is running.
 fn scope_keys_of(set: &FileSet, external: &str) -> Vec<String> {
     set.running.iter().find(|r| r.external.manifest.name == external).map(|r| r.subscription_scope_keys()).unwrap_or_default()
+}
+
+/// Which listens an arrival is judged against, and which it lists again.
+#[derive(Clone, Copy)]
+enum JudgedBy<'a> {
+    /// Every listen on its edge that hears the connection it came for; and
+    /// every listen on that connection with a resolved hop on its edge,
+    /// whose module reports that edge's changes, is listed again.
+    Every,
+    /// Those sharing one poll or subscription (crate::edge_polls::Shared).
+    Sharing(&'a crate::edge_polls::Shared),
+}
+
+/// The arrivals a poll or subscription made for one head reported, each
+/// that names no record it is under taken as under that head.
+fn under_scope(arrivals: &[ArrivalIn], key: &crate::edge_polls::PollKey) -> Vec<ArrivalIn> {
+    arrivals.iter().cloned().map(|arrival| ArrivalIn { key: arrival.key.or_else(|| key.scope.clone()), ..arrival }).collect()
 }
 
 /// What firing one event came to: the runs it started, and a line for each
@@ -713,23 +745,27 @@ impl Session {
     /// that webhook's key: the module may have applied that key's filter.
     pub async fn fire_arrivals(&self, adapter: &str, arrivals: &[ArrivalIn], delivered: Delivered<'_>) -> Result<Fired, String> {
         let set = self.file_set();
+        self.follow_kept_heads(&set).await?;
         let through_edge = delivered.subscription.filter(|key| crate::subscriptions::is_edge_webhook(self.secrets().credentials(), adapter, key));
         let Some(subscription) = through_edge else {
-            return self.fire_arrivals_to(&set, adapter, arrivals, delivered, |_| true).await;
+            return self.fire_arrivals_to(&set, adapter, arrivals, delivered, JudgedBy::Every).await;
         };
-        let sharing = crate::edge_polls::sharing_subscription(&set, subscription);
-        let shares = |listen: &Listen| sharing.iter().any(|i| std::ptr::eq(listen, &set.listens[*i]));
-        self.fire_arrivals_to(&set, adapter, arrivals, delivered, shares).await
+        let Some((key, shared)) = crate::edge_polls::sharing_subscription(&set, subscription) else { return Ok(Fired::default()) };
+        let arrivals = under_scope(arrivals, &key);
+        self.fire_arrivals_to(&set, adapter, &arrivals, delivered, JudgedBy::Sharing(&shared)).await
     }
 
-    /// `fire_arrivals`, to the listens `to` keeps of those on the edge (a
-    /// shared poll's own).
-    async fn fire_arrivals_to(&self, set: &FileSet, adapter: &str, arrivals: &[ArrivalIn], delivered: Delivered<'_>, to: impl Fn(&Listen) -> bool) -> Result<Fired, String> {
+    /// `fire_arrivals`, to the listens `judged_by` keeps of those on the edge.
+    async fn fire_arrivals_to(&self, set: &FileSet, adapter: &str, arrivals: &[ArrivalIn], delivered: Delivered<'_>, judged_by: JudgedBy<'_>) -> Result<Fired, String> {
         let mut fired = Fired::default();
         let now_ms = self.now_ms() as f64;
+        let fires = |listen: &Listen| match judged_by {
+            JudgedBy::Every => true,
+            JudgedBy::Sharing(shared) => shared.fires.iter().any(|i| std::ptr::eq(listen, &set.listens[*i])),
+        };
         for arrival in arrivals.iter().filter(|a| !a.gone) {
             let identity = arrival.identity.as_deref().unwrap_or_default();
-            for listen in set.listens.iter().filter(|l| l.is_on(adapter, &arrival.edge) && to(l)) {
+            for listen in set.listens.iter().filter(|l| l.is_on(adapter, &arrival.edge) && fires(l)) {
                 let file = set.file(&listen.file);
                 let named = format!("{}:{}", file.name, listen.movement_name);
                 // A listen whose earlier hops the host resolves is watched
@@ -768,14 +804,39 @@ impl Session {
         }
         // A module that reports its parents' changes reports them as
         // arrivals on the parents' own edge: the listens filtering that
-        // edge resolve again.
+        // edge, on the connection they came for, resolve again.
         let edges: BTreeSet<&str> = arrivals.iter().map(|a| a.edge.as_str()).collect();
-        for listen in set.listens.iter().filter(|l| l.adapter == adapter) {
-            if crate::resolve::pushed_parents(set, listen).iter().any(|edge| edges.contains(edge.as_str())) {
-                self.re_resolve(set, listen).await?;
-            }
+        let resolving: Vec<&Listen> = match judged_by {
+            JudgedBy::Every => set
+                .listens
+                .iter()
+                .filter(|l| l.adapter == adapter && l.hears(delivered.credential) && crate::resolve::pushed_parents(set, l).iter().any(|edge| edges.contains(edge.as_str())))
+                .collect(),
+            JudgedBy::Sharing(shared) if !arrivals.is_empty() => shared.resolves.iter().map(|i| &set.listens[*i]).collect(),
+            JudgedBy::Sharing(_) => Vec::new(),
+        };
+        for listen in resolving {
+            self.re_resolve(set, listen).await?;
         }
         Ok(fired)
+    }
+
+    /// Watch each listen on the heads the store keeps for it now
+    /// (crate::resolve::watch_kept): another process may have resolved it.
+    /// A server moves its webhooks with them.
+    pub async fn follow_kept_heads(&self, set: &FileSet) -> Result<(), String> {
+        if crate::resolve::watch_kept(self, set)?.moved && self.role.registers_webhooks() {
+            for line in crate::subscriptions::reconcile(self).await {
+                eprintln!("listen-fire: {line}");
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `line` is said for the first time in this session: a line
+    /// said as each set opens is said once.
+    pub fn says_once(&self, line: &str) -> bool {
+        self.said.borrow_mut().insert(line.to_string())
     }
 
     /// `fire_event`, to the listens `to` keeps of those the event reaches.
@@ -948,7 +1009,8 @@ impl Session {
 
     /// A `resolve_listen` row: resolve its listen again, and say when it is
     /// next due. A row whose listen is gone, or no longer re-resolved on a
-    /// clock, is done.
+    /// clock, is done. A listen another process is resolving now is left to
+    /// it, and due again an interval on.
     async fn resolve_row(&self, set: &FileSet, pipeline: &str) -> Result<(Next, Vec<RunOutcome>), String> {
         let Some(listen) = set.listens.iter().find(|l| l.pipeline() == pipeline) else { return Ok((Next::Done, Vec::new())) };
         let Some(every) = crate::resolve::every_ms(set, listen, &self.project.resolve_every) else { return Ok((Next::Done, Vec::new())) };
@@ -960,7 +1022,7 @@ impl Session {
     /// changed, and move the webhooks a server holds with its heads.
     async fn re_resolve(&self, set: &FileSet, listen: &Listen) -> Result<(), String> {
         let before = set.heads(listen);
-        if let Some(line) = crate::resolve::resolve(self, set, listen).await? {
+        if let crate::resolve::Resolved::Kept(Some(line)) = crate::resolve::resolve(self, set, listen).await? {
             eprintln!("listen-fire: {line}");
         }
         if self.role.registers_webhooks() && set.heads(listen) != before {
@@ -976,16 +1038,15 @@ impl Session {
     /// row no listen shares any more is done, and its cursor forgotten.
     async fn poll_edge_row(&self, set: &FileSet, subscription: &str) -> Result<(Next, Vec<RunOutcome>), String> {
         let keys = crate::edge_polls::polled_keys(set);
-        let Some((key, sharing)) = keys.iter().find(|(key, _)| crate::edge_polls::poll_subscription(key) == subscription) else {
+        let Some((key, shared)) = keys.iter().find(|(key, _)| crate::edge_polls::poll_subscription(key) == subscription) else {
             self.store.save_inbound_checkpoint(subscription, &Js::Null).map_err(|e| e.to_string())?;
             return Ok((Next::Done, Vec::new()));
         };
-        let (fired, polled_as) = self.poll_edge_once(set, key, sharing, subscription).await?;
+        let (fired, polled_as) = self.poll_edge_once(set, key, shared, subscription).await?;
         for line in &fired.redelivered {
             eprintln!("listen-fire: {line}");
         }
-        let declared = crate::edge_polls::declared(set, &set.listens[sharing[0]]);
-        let interval_ms = crate::edge_polls::interval_ms(&self.project.poll_every, key, polled_as.as_deref(), declared.as_ref())?;
+        let interval_ms = crate::edge_polls::interval_ms(&self.project.poll_every, key, polled_as.as_deref(), shared.declared.as_ref())?;
         Ok((Next::DueAt(iso(self.due_offset_ms + interval_ms)), fired.outcomes))
     }
 
@@ -997,7 +1058,7 @@ impl Session {
     /// sharing the key; the cursor is kept only once they are in, so a
     /// failed poll is polled again from where the last good one ended. What
     /// it fired, and the credential it polled as.
-    async fn poll_edge_once(&self, set: &FileSet, key: &crate::edge_polls::PollKey, sharing: &[usize], subscription: &str) -> Result<(Fired, Option<String>), String> {
+    async fn poll_edge_once(&self, set: &FileSet, key: &crate::edge_polls::PollKey, shared: &crate::edge_polls::Shared, subscription: &str) -> Result<(Fired, Option<String>), String> {
         let running = set
             .running
             .iter()
@@ -1026,20 +1087,22 @@ impl Session {
         let raw = rpc_in(running, credentials, credential, LOCAL_TENANT, "poll", params, key.position_settings()).await?;
         let answer = wire_results::check("poll", &key.adapter, &raw)?;
         let arrivals = crate::arrivals::arrivals_of(&answer).map_err(|e| format!("{}: a poll of '{}' answered {e}", key.adapter, key.edge))?;
+        let arrivals = under_scope(&arrivals, key);
         let mut fired = Fired::default();
         if state.is_none() {
-            let listens: Vec<String> = sharing.iter().map(|i| &set.listens[*i]).map(|l| format!("{}:{}", set.file(&l.file).name, l.movement_name)).collect();
-            fired.redelivered.push(format!("{}: {} armed; it fires on changes from now", key.adapter, listens.join(", ")));
+            let listens: Vec<String> = shared.fires.iter().map(|i| &set.listens[*i]).map(|l| format!("{}:{}", set.file(&l.file).name, l.movement_name)).collect();
+            if !listens.is_empty() {
+                fired.redelivered.push(format!("{}: {} armed; it fires on changes from now", key.adapter, listens.join(", ")));
+            }
             // A cursor already keeps the backlog from firing; only an edge listed whole each time needs its receipts.
-            if crate::edge_polls::declared(set, &set.listens[sharing[0]]).is_some_and(|d| d.cursorless) {
-                self.note_seen_arrivals(set, &key.adapter, &arrivals, key.credential.as_deref(), sharing)?;
+            if shared.declared.as_ref().is_some_and(|d| d.cursorless) {
+                self.note_seen_arrivals(set, &key.adapter, &arrivals, key.credential.as_deref(), &shared.fires)?;
             }
         } else {
             crate::arrivals::log_and_wake(&*self.store, LOCAL_TENANT, &key.adapter, &crate::arrivals::logged(&arrivals))?;
             let mark = self.store.arrival_mark().map_err(|e| e.to_string())?;
             let delivered = Delivered { credential: key.credential.as_deref(), arrival_mark: Some(mark), ..Delivered::default() };
-            let shares = |listen: &Listen| sharing.iter().any(|i| std::ptr::eq(listen, &set.listens[*i]));
-            fired = self.fire_arrivals_to(set, &key.adapter, &arrivals, delivered, shares).await?;
+            fired = self.fire_arrivals_to(set, &key.adapter, &arrivals, delivered, JudgedBy::Sharing(shared)).await?;
         }
         let mut kept = obj! { "armed" => Js::Bool(true) };
         if let Some(cursor) = answer.get("cursor").filter(|c| **c != Js::Null) {
@@ -1136,7 +1199,7 @@ impl Session {
         // A listen on a traversal of a polled edge is polled through its
         // shared key, once however many of the key's listens fire `movement`.
         let mut edges = crate::edge_polls::polled_keys(&set);
-        edges.retain(|_, sharing| sharing.iter().any(|i| set.listens[*i].movement_name == movement));
+        edges.retain(|_, shared| shared.fires.iter().any(|i| set.listens[*i].movement_name == movement));
         if listens.is_empty() && edges.is_empty() {
             return Err(format!("no listen on a polled source fires '{movement}': a source is polled when its manifest declares `poll`, an edge when it declares `delivery: polled`"));
         }
@@ -1146,8 +1209,8 @@ impl Session {
             fired.outcomes.extend(one.outcomes);
             fired.redelivered.extend(one.redelivered);
         }
-        for (key, sharing) in &edges {
-            let (one, _) = self.poll_edge_once(&set, key, sharing, &crate::edge_polls::poll_subscription(key)).await?;
+        for (key, shared) in &edges {
+            let (one, _) = self.poll_edge_once(&set, key, shared, &crate::edge_polls::poll_subscription(key)).await?;
             fired.outcomes.extend(one.outcomes);
             fired.redelivered.extend(one.redelivered);
         }
@@ -1317,7 +1380,7 @@ impl Session {
         let input = SegmentInput {
             source: &facts.source,
             language_version: &facts.language_version,
-            movement_name: &facts.movement_name,
+            movement_name: Some(&facts.movement_name),
             event: &facts.event,
             fired_at: &facts.fired_at,
             catalog: &set.catalog,
@@ -1333,11 +1396,10 @@ impl Session {
         Ok((ran, committed))
     }
 
-    /// The records `hops` land on off `connection` in `source`
-    /// (crate::segment::read_positions): walked through the engine as a
-    /// run's walk is, against the set's connections, with no run row and
-    /// nothing kept.
-    pub async fn read_positions(&self, set: &FileSet, source: &str, connection: &str, hops: &[movement_parser::listen_plan::PlanHop]) -> Result<Vec<Js>, String> {
+    /// The records `walk`'s hops land on (crate::segment::read_positions):
+    /// walked through the engine as a run's walk is, against the set's
+    /// connections, with no run row and nothing kept.
+    pub async fn read_positions(&self, set: &FileSet, walk: Walk<'_>) -> Result<Vec<Js>, String> {
         let secrets = self.secrets();
         let externals = self.externals_in(set, &secrets);
         let segment_id = uuid::Uuid::new_v4().to_string();
@@ -1356,15 +1418,15 @@ impl Session {
         });
         let fired_at = iso(0);
         let input = SegmentInput {
-            source,
+            source: walk.source,
             language_version: &self.project.language_version,
-            movement_name: "",
+            movement_name: None,
             event: &Js::Obj(Obj::new()),
             fired_at: &fired_at,
             catalog: &set.catalog,
             dry_run: false,
             trigger_mark: None,
-            entry: Entry::Walk { connection: connection.to_string(), hops: hops.to_vec() },
+            entry: Entry::Walk { connection: walk.connection.to_string(), hops: walk.hops.to_vec(), limit: walk.limit },
             cost_cap_microdollars: self.project.cost_cap_microdollars,
         };
         crate::segment::read_positions(&host, input).await
@@ -1710,6 +1772,7 @@ impl Session {
     }
 
     async fn drain_work_in(&self, set: &FileSet, limit: i64, log: &mut impl Write) -> Result<(usize, Vec<RunOutcome>), String> {
+        self.follow_kept_heads(set).await?;
         let mut outcomes = if self.pool.fires_cron() { self.fire_due_ticks(set, log).await? } else { Vec::new() };
         if self.pool.takes(POLL_WORK_KIND) {
             self.arm_polls(set)?;

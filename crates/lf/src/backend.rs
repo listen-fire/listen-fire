@@ -16,6 +16,7 @@
 //! thread, so the rules over the store (crate::run_host) read alike over
 //! both.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::json::Js;
@@ -23,7 +24,7 @@ use crate::json::Js;
 use crate::pg_store::PgStore;
 use crate::core;
 use crate::project::Project;
-use crate::resolve::ListenState;
+use crate::resolve::{ListenState, Resolution};
 use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, OwedRace, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit,
     Store,
@@ -267,10 +268,22 @@ pub trait RunHostStore {
     fn save_inbound_checkpoint(&self, subscription_id: &str, checkpoint: &Js) -> Result<()>;
 
     // ── Listens' resolved heads ─────────────────────────────────────────────
-    /// What the listen with this pipeline was last resolved to
-    /// (crate::resolve), or None for one never resolved.
-    fn listen_state(&self, pipeline: &str) -> Result<Option<ListenState>>;
-    fn save_listen_state(&self, pipeline: &str, state: &ListenState) -> Result<()>;
+    /// What each listen named was last resolved to (crate::resolve), and
+    /// why it is paused, by its pipeline: one with nothing kept is absent.
+    fn listen_states(&self, pipelines: &[String]) -> Result<BTreeMap<String, ListenState>>;
+    /// `listen_states` of one listen.
+    fn listen_state(&self, pipeline: &str) -> Result<Option<ListenState>> {
+        Ok(self.listen_states(&[pipeline.to_string()])?.remove(pipeline))
+    }
+    /// Hold the listen's resolve for `ttl_ms`, so one process lists it at a
+    /// time: the hold's token, or None while another's has not lapsed.
+    fn claim_listen_resolve(&self, pipeline: &str, ttl_ms: i64) -> Result<Option<String>>;
+    /// Keep what the resolve held by `token` came to, the listen's `paused`
+    /// as it is, and let the hold go, as one write. False, and nothing
+    /// kept, when the hold lapsed and another took it since.
+    fn save_listen_resolution(&self, pipeline: &str, token: &str, resolution: &Resolution) -> Result<bool>;
+    /// Why the listen is paused (None: it is not), its resolution as it is.
+    fn set_listen_paused(&self, pipeline: &str, paused: Option<&str>) -> Result<()>;
     /// What one inbound delivery leaves, as one write: its receipt, its pull
     /// cursor (when it moved), its arrivals and its work rows (its events,
     /// its wakes). A crash never leaves a cursor past events its receipt does
@@ -503,11 +516,17 @@ impl RunHostStore for Store {
     fn save_inbound_checkpoint(&self, subscription_id: &str, checkpoint: &Js) -> Result<()> {
         Store::save_inbound_checkpoint(self, subscription_id, checkpoint)
     }
-    fn listen_state(&self, pipeline: &str) -> Result<Option<ListenState>> {
-        Store::listen_state(self, pipeline)
+    fn listen_states(&self, pipelines: &[String]) -> Result<BTreeMap<String, ListenState>> {
+        Store::listen_states(self, pipelines)
     }
-    fn save_listen_state(&self, pipeline: &str, state: &ListenState) -> Result<()> {
-        Store::save_listen_state(self, pipeline, state)
+    fn claim_listen_resolve(&self, pipeline: &str, ttl_ms: i64) -> Result<Option<String>> {
+        Store::claim_listen_resolve(self, pipeline, ttl_ms)
+    }
+    fn save_listen_resolution(&self, pipeline: &str, token: &str, resolution: &Resolution) -> Result<bool> {
+        Store::save_listen_resolution(self, pipeline, token, resolution)
+    }
+    fn set_listen_paused(&self, pipeline: &str, paused: Option<&str>) -> Result<()> {
+        Store::set_listen_paused(self, pipeline, paused)
     }
     fn keep_delivery(
         &self,
@@ -569,17 +588,41 @@ mod tests {
         assert_eq!(store.inbound_checkpoint(&subscription).unwrap(), None);
     }
 
-    /// A listen's state is kept whole and replaced whole on every store.
+    /// A listen's resolution is kept by the one resolve that holds it, and
+    /// its pause by a pause alone, on every store: neither undoes the
+    /// other.
     fn a_listens_state_is_kept_as_it_was_saved(store: &dyn RunHostStore) {
         let pipeline = format!("listen:notes:a:{}", uuid::Uuid::new_v4());
         assert_eq!(store.listen_state(&pipeline).unwrap(), None);
-        let resolved = ListenState { heads: vec!["b1".into(), "b2".into()], resolved_at: "2026-10-31T09:00:00.000Z".into(), failure: None, paused: None };
-        store.save_listen_state(&pipeline, &resolved).unwrap();
-        assert_eq!(store.listen_state(&pipeline).unwrap(), Some(resolved.clone()));
-        let suspended = ListenState { failure: Some("LISTEN_SCOPE_LIMIT: …".into()), paused: Some("LISTEN_LOOP: …".into()), ..resolved };
-        store.save_listen_state(&pipeline, &suspended).unwrap();
-        assert_eq!(store.listen_state(&pipeline).unwrap(), Some(suspended));
-        assert_eq!(store.listen_state("listen:notes:other").unwrap(), None);
+        let token = store.claim_listen_resolve(&pipeline, 60_000).unwrap().expect("no one holds it");
+        assert_eq!(store.claim_listen_resolve(&pipeline, 60_000).unwrap(), None, "held: a second resolve waits");
+        assert_eq!(store.listen_state(&pipeline).unwrap().map(|s| s.resolution.resolved_at), Some(None), "held, never resolved");
+        let resolved = Resolution { heads: vec!["b1".into(), "b2".into()], resolved_at: Some("2026-10-31T09:00:00.000Z".into()), failure: None };
+        // A pause lands while the resolve reads: the resolve keeps it.
+        store.set_listen_paused(&pipeline, Some("LISTEN_LOOP: …")).unwrap();
+        assert!(store.save_listen_resolution(&pipeline, &token, &resolved).unwrap());
+        let paused = ListenState { resolution: resolved.clone(), paused: Some("LISTEN_LOOP: …".into()) };
+        assert_eq!(store.listen_state(&pipeline).unwrap(), Some(paused));
+        assert!(!store.save_listen_resolution(&pipeline, &token, &resolved).unwrap(), "a hold is let go as its resolution is kept");
+        let token = store.claim_listen_resolve(&pipeline, 60_000).unwrap().expect("let go: held again");
+        store.set_listen_paused(&pipeline, None).unwrap();
+        let suspended = Resolution { heads: Vec::new(), failure: Some("LISTEN_SCOPE_LIMIT: …".into()), ..resolved };
+        assert!(store.save_listen_resolution(&pipeline, &token, &suspended).unwrap());
+        assert_eq!(store.listen_state(&pipeline).unwrap(), Some(ListenState { resolution: suspended.clone(), paused: None }));
+        // A lapsed hold is taken over, and the first holder keeps nothing.
+        let lapsed = store.claim_listen_resolve(&pipeline, -1).unwrap().expect("let go: held again");
+        let taken = store.claim_listen_resolve(&pipeline, 60_000).unwrap().expect("lapsed: taken over");
+        assert!(!store.save_listen_resolution(&pipeline, &lapsed, &Resolution::default()).unwrap());
+        assert!(store.save_listen_resolution(&pipeline, &taken, &suspended).unwrap());
+        let never = format!("listen:notes:b:{}", uuid::Uuid::new_v4());
+        store.set_listen_paused(&never, Some("LISTEN_LOOP: …")).unwrap();
+        assert_eq!(store.listen_state(&never).unwrap(), Some(ListenState { resolution: Resolution::default(), paused: Some("LISTEN_LOOP: …".into()) }), "paused before it was ever resolved");
+        let both = store.listen_states(&[pipeline.clone(), never.clone(), "listen:notes:other".into()]).unwrap();
+        assert_eq!(both.keys().collect::<Vec<_>>(), {
+            let mut keys = vec![&pipeline, &never];
+            keys.sort();
+            keys
+        }, "one read for many; one with nothing kept is absent");
     }
 
     #[test]

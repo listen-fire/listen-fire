@@ -165,7 +165,9 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
         let session = session.clone();
         async move { match session.watch_movements(&mut std::io::stdout()).await {} }
     });
-    let drain = (!doors_only).then(|| tokio::task::spawn_local(drain_forever(session.clone(), poke.clone())));
+    // Doors only, nothing drains here: the webhooks still follow the heads
+    // the workers resolve (a drain follows them as it drains).
+    let drain = if doors_only { tokio::task::spawn_local(follow_heads_forever(session.clone())) } else { tokio::task::spawn_local(drain_forever(session.clone(), poke.clone())) };
     println!("listen-fire serving on http://127.0.0.1:{port}/hooks/<external>/<install>");
     for line in hook_urls(&session, &format!("http://127.0.0.1:{port}")) {
         println!("{line}");
@@ -175,7 +177,7 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     }
 
     stopped().await;
-    for task in [doors, watching].into_iter().chain(drain) {
+    for task in [doors, watching, drain] {
         task.abort();
         let _ = task.await;
     }
@@ -297,6 +299,19 @@ async fn drain_forever(session: Rc<Session>, poke: Rc<Notify>) {
         match session.drain_work(WORK_ROWS_PER_DRAIN, &mut std::io::stdout()).await {
             Ok((_, outcomes)) => log_runs(&outcomes),
             Err(message) => println!("drain failed: {message}"),
+        }
+    }
+}
+
+/// A doors-only server's webhooks moved with the heads its listens are
+/// resolved to elsewhere (crate::resolve::watch_kept), every TICK.
+async fn follow_heads_forever(session: Rc<Session>) {
+    let mut tick = tokio::time::interval(TICK);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        if let Err(message) = session.follow_kept_heads(&session.file_set()).await {
+            println!("following the listens' heads failed: {message}");
         }
     }
 }

@@ -33,7 +33,7 @@ pub const STORE_METHODS: &[&str] = &[
     "records.markFailed", "parks.putLeaf", "parks.claimLeaf", "parks.finishLeaf", "parks.leaves", "parks.deleteLeaves", "parks.commitSegment", "parks.owedRaces",
     "joins.recordJoin", "joins.decrementJoin", "joins.persistBranchExport", "joins.collectBranchExports", "joins.hasPendingJoins",
     "joins.frames", "joins.deleteFrames", "leases.claim", "leases.renew", "leases.release", "leases.dropRunState", "work.enqueue", "work.claimDue",
-    "work.complete", "work.release", "sources.put", "sources.get", "inbound.checkpoint", "inbound.saveCheckpoint", "listens.state", "listens.saveState", "processes.list",
+    "work.complete", "work.release", "sources.put", "sources.get", "inbound.checkpoint", "inbound.saveCheckpoint", "listens.states", "listens.claimResolve", "listens.saveResolution", "listens.setPaused", "processes.list",
     "processes.swap", "events.claim", "events.startRun", "runs.lapsed", "parks.commit", "work.bury", "inbound.keepDelivery",
     "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries", "inbound.forgetDeliveryId", "work.enqueueIfAbsent",
     "runs.rerun", "waits.mark", "waits.log", "waits.open", "waits.arrivals", "waits.note", "waits.sweep", "waits.stranded",
@@ -442,11 +442,18 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
             none
         }
 
-        "listens.state" => Ok(store.listen_state(p.str("pipeline")?)?.map(|state| state.to_js()).unwrap_or(Js::Null)),
-        "listens.saveState" => {
-            let state = crate::resolve::ListenState::from_js(&p.value("state"))
-                .ok_or_else(|| Failure::Params("state: expected { heads, resolvedAt, failure, paused }".into()))?;
-            store.save_listen_state(p.str("pipeline")?, &state)?;
+        "listens.states" => {
+            let states = store.listen_states(&p.strings("pipelines")?)?;
+            Ok(Js::Obj(states.into_iter().map(|(pipeline, state)| (pipeline, state.to_js())).collect()))
+        }
+        "listens.claimResolve" => Ok(store.claim_listen_resolve(p.str("pipeline")?, p.int("ttlMs")?)?.map(|token| Js::Obj(obj! { "token" => Js::Str(token) })).unwrap_or(Js::Null)),
+        "listens.saveResolution" => {
+            let resolution = crate::resolve::Resolution::from_js(&p.value("resolution"))
+                .ok_or_else(|| Failure::Params("resolution: expected { heads, resolvedAt, failure }".into()))?;
+            Ok(Js::Bool(store.save_listen_resolution(p.str("pipeline")?, p.str("token")?, &resolution)?))
+        }
+        "listens.setPaused" => {
+            store.set_listen_paused(p.str("pipeline")?, p.opt_str("paused")?)?;
             none
         }
 

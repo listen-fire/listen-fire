@@ -3,11 +3,13 @@
 // watched on the boards that match: listen-fire lists them through the engine,
 // polls each one's notes, and lists them again as the module declares — every
 // `relistEverySeconds`, or on each arrival on `Boards` when it declares
-// `parentChanges: pushed`. Over lf.yaml's `listenScopeLimit` the listen is
-// suspended, by name. `listen-fire listens` says where each listen stands.
+// `parentChanges: pushed` (listen-fire polls `Boards` itself for it) — and as
+// it opens when the filter was edited. Over lf.yaml's `listenScopeLimit` the
+// listen is suspended, by name. The store keeps the boards, and every process
+// watches what it keeps. `listen-fire listens` says where each listen stands.
 
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -26,20 +28,30 @@ const OPS_NOTES = 'listen to f-[b:Boards WHERE b.Name == "Ops"]->-[n:Notes]-> fi
 
 /** The feed project holding `held` boards, its one file the `listens`, each
  *  firing a function that fails naming what it saw. `pushed`: the feed
- *  reports its boards' changes, polled every second, as are their notes. */
-function boardsProject(listens: string[], held: Board[], options: { pushed?: boolean; limit?: number } = {}): string {
+ *  reports its boards' changes, polled every second, as are their notes.
+ *  `fast`: the notes are polled every second. `still`: the boards declare no
+ *  cadence and report nothing. `keyless`: a note names no board. */
+function boardsProject(listens: string[], held: Board[], options: { pushed?: boolean; fast?: boolean; still?: boolean; keyless?: boolean; limit?: number } = {}): string {
   const dir = feedProject();
-  if (options.pushed === true) {
-    writeFileSync(join(dir, 'externals/feed/pushedboards'), '');
-    writeFileSync(join(dir, 'externals/feed/fast'), '');
-  }
+  const flag = (name: string) => writeFileSync(join(dir, 'externals/feed', name), '');
+  if (options.pushed === true) flag('pushedboards');
+  if (options.pushed === true || options.fast === true) flag('fast');
+  if (options.still === true) flag('staticboards');
+  if (options.keyless === true) flag('nokey');
   if (options.limit !== undefined) appendFileSync(join(dir, 'lf.yaml'), `listenScopeLimit: ${options.limit}\n`);
-  const fired = 'function a(n: <f-[:Notes]->>) {\n  fail("a saw ${n.Title}")\n}\n\nfunction changed(b: <f-[:Boards]->>) {\n  fail("board ${b.Name}")\n}\n';
-  writeFileSync(join(dir, 'movements/notes.mvt'), `import { feed } from adapters\n\nf = connect feed\n\n${fired}\n${listens.join('\n')}\n`);
+  writeListens(dir, listens);
   boards(dir, held);
   feed(dir, []);
   return dir;
 }
+
+/** The project's one file, its listens `listens`. */
+function writeListens(dir: string, listens: string[]): void {
+  const fired = 'function a(n: <f-[:Notes]->>) {\n  fail("a saw ${n.Title}")\n}\n\nfunction changed(b: <f-[:Boards]->>) {\n  fail("board ${b.Name}")\n}\n';
+  writeFileSync(join(dir, 'movements/notes.mvt'), `import { feed } from adapters\n\nf = connect feed\n\n${fired}\n${listens.join('\n')}\n`);
+}
+
+const sleep = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 function lfAt(dir: string, args: string[], aheadMs = 0): { code: number; out: string } {
   const run = spawnSync(...lfCommand(args), { cwd: dir, encoding: 'utf8', env: { ...process.env, NODE_NO_WARNINGS: '1', LF_CLOCK_AHEAD_MS: String(aheadMs) } });
@@ -124,23 +136,34 @@ test('a board renamed out keeps firing until the next re-resolution, then stops;
   assert.deepEqual(saw(after.out), ['n6']);
 });
 
-test('a listen whose filter matches more boards than the limit is suspended by name', () => {
+test('a listen whose filter matches more boards than the limit is suspended by name, and watches again once it matches fewer', () => {
   const dir = boardsProject(
     [OPS_NOTES],
     [
       { id: 'b1', name: 'Ops' },
       { id: 'b2', name: 'Ops' },
+      { id: 'b3', name: 'Ops' },
     ],
     { limit: 1 },
   );
   const check = lf(dir, 'check');
   assert.equal(check.code, 0, check.out);
-  const limit = 'LISTEN_SCOPE_LIMIT: notes:a matched 2 Boards, over the limit of 1; it is suspended until its filter matches fewer';
+  const limit = 'LISTEN_SCOPE_LIMIT: notes:a matched more Boards than its limit of 1; it is suspended until its filter matches fewer';
   const opened = lfAt(dir, ['drain', '--until-idle']);
   assert.ok(opened.out.includes(`listen-fire: ${limit}`), opened.out);
   assert.ok(listensLine(dir).endsWith(` — watching 0 Boards, resolved ${/resolved (\d+s ago)/.exec(listensLine(dir))?.[1]} — ${limit}; can't be protected from loops: feed names no record its arrivals are about`), listensLine(dir));
   lfAt(dir, ['drain', '--until-idle'], 61_000);
   assert.deepEqual(polledBoards(dir), [], 'a suspended listen is polled nowhere');
+  // Renamed down to one: watched again from its next listing.
+  boards(dir, [
+    { id: 'b1', name: 'Ops' },
+    { id: 'b2', name: 'Dev' },
+    { id: 'b3', name: 'Dev' },
+  ]);
+  const back = lfAt(dir, ['drain', '--until-idle'], 301_000);
+  assert.ok(back.out.includes('listen-fire: notes:a watches 1 Board again'), back.out);
+  assert.match(listensLine(dir), / — watching 1 Board, resolved \d+s ago — ok;/);
+  assert.deepEqual(polledBoards(dir), ['b1'], 'polled from then');
 });
 
 test('a listen with filters only on its last hop never re-resolves', () => {
@@ -156,7 +179,7 @@ test('a listen with filters only on its last hop never re-resolves', () => {
 
 test('a module that reports its boards changing re-resolves on each report, never on a clock', () => {
   const dir = boardsProject(
-    [OPS_NOTES, 'listen to f-[:Boards]-> fire changed'],
+    [OPS_NOTES],
     [
       { id: 'b1', name: 'Ops', at: 1 },
       { id: 'b2', name: 'Dev', at: 1 },
@@ -165,19 +188,146 @@ test('a module that reports its boards changing re-resolves on each report, neve
   );
   const check = lf(dir, 'check');
   assert.equal(check.code, 0, check.out);
-  lfAt(dir, ['drain', '--until-idle']);
-  assert.equal(boardLists(dir), 1);
+  const opened = lfAt(dir, ['drain', '--until-idle']);
+  assert.equal(boardLists(dir), 1, opened.out);
   assert.match(listensLine(dir), /watching 1 Board,/);
+  assert.ok(edgePollsOf(dir, 'Boards') >= 1, 'listen-fire polls the boards itself, no listen on them asked');
+  assert.ok(!opened.out.includes('resolved at open only'), opened.out);
   boards(dir, [
     { id: 'b1', name: 'Ops', at: 1 },
     { id: 'b2', name: 'Ops', at: 2 },
   ]);
   // Its boards' next poll reports the rename: listed again at once, five minutes or not.
   const reported = lfAt(dir, ['drain', '--until-idle'], 2_000);
-  assert.match(reported.out, /board Ops/, 'the rename arrived on Boards');
   assert.equal(boardLists(dir), 2, reported.out);
   assert.match(listensLine(dir), /watching 2 Boards,/);
+  assert.doesNotMatch(reported.out, /board Ops/, 'a report on the boards fires nothing of its own');
 });
+
+test('a listen whose boards declare no cadence and report nothing is resolved at open only, said once', () => {
+  const dir = boardsProject([OPS_NOTES], [{ id: 'b1', name: 'Ops' }], { still: true });
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  const opened = lfAt(dir, ['drain', '--until-idle']);
+  const said = "listen-fire: notes:a is resolved at open only: no hop it resolves declares relistEverySeconds or parentChanges: pushed, so the Boards it watches are listed again only when listen-fire opens; lf.yaml's `resolveEvery: { feed: <duration> }` lists them on a clock";
+  assert.equal(opened.out.split(said).length - 1, 1, opened.out);
+  assert.match(listensLine(dir), / — watching 1 Board, resolved at open only \(\d+s ago\) — ok;/);
+  appendFileSync(join(dir, 'lf.yaml'), 'resolveEvery:\n  feed: 5m\n');
+  const timed = lfAt(dir, ['drain', '--until-idle']);
+  assert.ok(!timed.out.includes('resolved at open only'), timed.out);
+  assert.match(listensLine(dir), / — watching 1 Board, resolved \d+s ago — ok;/);
+});
+
+test('a note that names no board is under the board its poll was made for', () => {
+  const dir = boardsProject([OPS_NOTES], [{ id: 'b1', name: 'Ops' }], { keyless: true });
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  lfAt(dir, ['drain', '--until-idle']);
+  feed(dir, [note('n3', 'b1', 3)]);
+  const out = lfAt(dir, ['drain', '--until-idle'], 61_000);
+  assert.deepEqual(saw(out.out), ['n3'], out.out);
+});
+
+// An edited listen is another listen: its plan names it, and what was kept
+// of the one before is not its own.
+test('an edited filter is listed again as listen-fire opens, its schedule or not', () => {
+  const dir = boardsProject([OPS_NOTES], [
+    { id: 'b1', name: 'Ops' },
+    { id: 'b2', name: 'Dev' },
+  ]);
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  lfAt(dir, ['drain', '--until-idle']);
+  assert.deepEqual(polledBoards(dir), ['b1']);
+  writeListens(dir, ['listen to f-[b:Boards WHERE b.Name == "Dev"]->-[n:Notes]-> fire a']);
+  const edited = lfAt(dir, ['drain', '--until-idle'], 61_000);
+  assert.equal(boardLists(dir), 2, edited.out);
+  assert.match(listensLine(dir), /^notes:a — f-\[b:Boards WHERE b\.Name == "Dev"\]->-\[n:Notes\]-> — resolved, arrival — watching 1 Board, resolved \d+s ago — ok;/);
+  assert.deepEqual(polledBoards(dir).slice(1), ['b2'], 'the board the new filter matches, from then');
+});
+
+test('a failed listing keeps the boards it had, and when they were listed', () => {
+  const dir = boardsProject([OPS_NOTES], [{ id: 'b1', name: 'Ops' }]);
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  lfAt(dir, ['drain', '--until-idle']);
+  sleep(4_000);
+  writeFileSync(join(dir, 'externals/feed/boards.json'), 'not json');
+  const failed = lfAt(dir, ['drain', '--until-idle'], 301_000);
+  assert.match(failed.out, /LISTEN_RESOLVE_FAILED: notes:a could not list the Boards it watches/);
+  const line = listensLine(dir);
+  assert.match(line, / — watching 1 Board, resolved \d+s ago — LISTEN_RESOLVE_FAILED/);
+  assert.ok(Number(/resolved (\d+)s ago/.exec(line)?.[1]) >= 4, `dated by the listing it kept, not the failure: ${line}`);
+});
+
+test('two processes opening at once list a listen once', async () => {
+  const dir = boardsProject([OPS_NOTES], [{ id: 'b1', name: 'Ops' }]);
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  const [command, args] = lfCommand(['drain', '--until-idle']);
+  const both = [0, 1].map(
+    () =>
+      new Promise<string>((done) => {
+        const child = spawn(command, args, { cwd: dir, env: { ...process.env, NODE_NO_WARNINGS: '1' } });
+        let out = '';
+        child.stdout.on('data', (chunk) => (out += chunk));
+        child.stderr.on('data', (chunk) => (out += chunk));
+        child.on('close', () => done(out));
+      }),
+  );
+  const outs = await Promise.all(both);
+  assert.equal(boardLists(dir), 1, outs.join('\n---\n'));
+  assert.match(listensLine(dir), /watching 1 Board,/);
+});
+
+test('a worker that did not list a listen polls by the boards another listed', async () => {
+  const dir = boardsProject(
+    [OPS_NOTES],
+    [
+      { id: 'b1', name: 'Ops' },
+      { id: 'b2', name: 'Dev' },
+    ],
+    { fast: true },
+  );
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  lfAt(dir, ['drain', '--until-idle']);
+  // A worker that polls, and lists nothing on a clock.
+  const [command, args] = lfCommand(['drain', '--kinds', 'poll_edge', '--max-seconds', '30']);
+  const poller = spawn(command, args, { cwd: dir, env: { ...process.env, NODE_NO_WARNINGS: '1' } });
+  let polled = '';
+  poller.stdout.on('data', (chunk) => (polled += chunk));
+  poller.stderr.on('data', (chunk) => (polled += chunk));
+  const stopped = new Promise((done) => poller.on('close', done));
+  try {
+    await waitFor(() => polledBoards(dir).length >= 2, () => `the worker never polled: ${polled}`);
+    boards(dir, [
+      { id: 'b1', name: 'Ops' },
+      { id: 'b2', name: 'Ops' },
+    ]);
+    // Another worker lists it on its clock.
+    const listed = lfAt(dir, ['drain', '--until-idle', '--kinds', 'resolve_listen'], 301_000);
+    assert.equal(boardLists(dir), 2, listed.out);
+    await waitFor(() => polledBoards(dir).includes('b2'), () => `the polling worker kept to the boards it opened with: ${polled}`);
+  } finally {
+    poller.kill();
+    await stopped;
+  }
+});
+
+/** Wait up to 15 seconds for `ready`. */
+async function waitFor(ready: () => boolean, why: () => string): Promise<void> {
+  const until = Date.now() + 15_000;
+  while (!ready()) {
+    if (Date.now() > until) assert.fail(why());
+    await new Promise((done) => setTimeout(done, 200));
+  }
+}
+
+/** How many polls of `edge` were made. */
+function edgePollsOf(dir: string, edge: string): number {
+  return (edgePolls(dir) as Array<{ edge: string }>).filter((p) => p.edge === edge).length;
+}
 
 test('a file declaring any names of its own resolves its listens as it would without them', () => {
   const dir = boardsProject([OPS_NOTES], [

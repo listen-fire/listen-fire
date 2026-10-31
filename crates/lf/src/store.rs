@@ -85,7 +85,9 @@ create table if not exists inbound_checkpoint (
 );
 create table if not exists listen_state (
   pipeline text primary key,
-  state text not null
+  state text not null,
+  lease_token text,
+  lease_until text
 );
 create table if not exists module_processes (
   id integer primary key check (id = 1),
@@ -611,7 +613,7 @@ pub(crate) fn canonical_iso(text: &str) -> Result<String> {
     text.parse::<jiff::Timestamp>().map(|at| iso_at(at.as_millisecond())).map_err(|_| StoreError::Invalid(format!("{text}: not an ISO 8601 instant")))
 }
 
-fn uuid() -> String {
+pub(crate) fn uuid() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 

@@ -21,7 +21,8 @@ pub fn command(session: &Session, rest: &[String], out: &mut impl Write) -> Resu
             let now = crate::limiter::now_ms();
             for listen in set.listens.iter().filter(|l| l.plan.is_some()) {
                 let state = session.store.listen_state(&listen.pipeline()).map_err(|e| e.to_string())?;
-                writeln!(out, "{}", line(&set, listen, state.as_ref(), now)).map_err(|e| e.to_string())?;
+                let cadence = if crate::resolve::resolved_at_open_only(session, &set, listen) { Cadence::AtOpenOnly } else { Cadence::Kept };
+                writeln!(out, "{}", line(&set, listen, state.as_ref(), cadence, now)).map_err(|e| e.to_string())?;
             }
             Ok(0)
         }
@@ -41,7 +42,7 @@ pub fn command(session: &Session, rest: &[String], out: &mut impl Write) -> Resu
                 let state = session.store.listen_state(&pipeline).map_err(|e| e.to_string())?;
                 match state {
                     Some(state) if state.paused.is_some() => {
-                        session.store.save_listen_state(&pipeline, &ListenState { paused: None, ..state }).map_err(|e| e.to_string())?;
+                        session.store.set_listen_paused(&pipeline, None).map_err(|e| e.to_string())?;
                         writeln!(out, "{named}: resumed; it fires again").map_err(|e| e.to_string())?;
                     }
                     _ => writeln!(out, "{named}: not paused").map_err(|e| e.to_string())?,
@@ -56,9 +57,18 @@ pub fn command(session: &Session, rest: &[String], out: &mut impl Write) -> Resu
     }
 }
 
+/// When a listen's heads are listed again.
+#[derive(Clone, Copy, PartialEq)]
+enum Cadence {
+    /// On a clock, or as its parents report changes (crate::resolve).
+    Kept,
+    /// Only as listen-fire opens (crate::resolve::at_open_only).
+    AtOpenOnly,
+}
+
 /// `{file}:{movement}{ as "alias"} — {path} — {judged per hop} — {watching}
 /// — {standing}{; loops}`.
-fn line(set: &FileSet, listen: &Listen, state: Option<&ListenState>, now_ms: i64) -> String {
+fn line(set: &FileSet, listen: &Listen, state: Option<&ListenState>, cadence: Cadence, now_ms: i64) -> String {
     let Some(plan) = &listen.plan else { return String::new() };
     let alias = plan.alias.as_ref().map(|a| format!(" as \"{a}\"")).unwrap_or_default();
     let path = path_of(plan);
@@ -71,12 +81,19 @@ fn line(set: &FileSet, listen: &Listen, state: Option<&ListenState>, now_ms: i64
             HopJudged::None => "unfiltered",
         })
         .collect();
-    let watching = match (crate::edge_polls::resolves(listen), state) {
+    let resolved = state.map(|state| &state.resolution);
+    let watching = match (crate::edge_polls::resolves(listen), resolved.and_then(|r| r.resolved_at.as_deref())) {
         (false, _) => format!("watching all of {}", plan.connection),
-        (true, None) => format!("watching {}, never resolved", counted(0, &position_of(listen))),
-        (true, Some(state)) => format!("watching {}, resolved {}", counted(state.heads.len(), &position_of(listen)), ago(&state.resolved_at, now_ms)),
+        (true, None) => format!("watching {}, never resolved", counted(resolved.map_or(0, |r| r.heads.len()), &position_of(listen))),
+        (true, Some(at)) => {
+            let heads = counted(resolved.map_or(0, |r| r.heads.len()), &position_of(listen));
+            match cadence {
+                Cadence::Kept => format!("watching {heads}, resolved {}", ago(at, now_ms)),
+                Cadence::AtOpenOnly => format!("watching {heads}, resolved at open only ({})", ago(at, now_ms)),
+            }
+        }
     };
-    let standing: Vec<String> = state.into_iter().flat_map(|s| [s.failure.clone(), s.paused.as_ref().map(|p| format!("paused: {p}"))]).flatten().collect();
+    let standing: Vec<String> = state.into_iter().flat_map(|s| [s.resolution.failure.clone(), s.paused.as_ref().map(|p| format!("paused: {p}"))]).flatten().collect();
     let standing = if standing.is_empty() { "ok".to_string() } else { standing.join("; ") };
     let unprotected = match about_declared(set, listen) {
         true => String::new(),

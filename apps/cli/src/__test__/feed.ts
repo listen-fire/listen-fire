@@ -46,8 +46,11 @@ export interface Board {
  *  filter it is handed and says so (`takenApplied`).
  *  Its root `Boards` (`boards.json`) is cheap to list, re-listed every 300
  *  seconds; with `pushedboards` present it is listenable and polled instead,
- *  and declares `parentChanges: pushed`. A board's `Notes` are polled per
- *  board, its id the poll's `scope`: the notes pinned to it (`board`). */
+ *  and declares `parentChanges: pushed`; with `staticboards` present it is
+ *  not cheap to list and declares neither, and a board's `Notes` are pushed
+ *  per board (`delivery: scope`). A board's `Notes` are polled per board, its id the
+ *  poll's `scope`: the notes pinned to it (`board`), each arrival naming
+ *  the board as its `key` unless `nokey` is present. */
 const FEED_MODULE = `const { readFileSync, appendFileSync, existsSync } = require('node:fs');
 const { join } = require('node:path');
 const { defineModule } = require(${JSON.stringify(join(MODULE_KIT, 'define.ts'))});
@@ -65,6 +68,8 @@ const note = {
   references: [],
 };
 const pushedBoards = existsSync(at('pushedboards'));
+const staticBoards = existsSync(at('staticboards'));
+const keyless = existsSync(at('nokey'));
 const every = existsSync(at('fast')) ? 1 : 60;
 const notesOf = (since) => JSON.parse(readFileSync(at('feed.json'), 'utf8')).filter((n) => n.at > since);
 const boardsOf = () => (existsSync(at('boards.json')) ? JSON.parse(readFileSync(at('boards.json'), 'utf8')) : []);
@@ -78,7 +83,9 @@ const board = {
     { fieldId: 'name', displayName: 'Name', kind: 'string', writable: false, required: false },
   ],
   references: [
-    { fieldId: 'notes', name: 'Notes', targetTypeId: 'note', cardinality: 'many', direction: 'outgoing', readable: false, listenable: true, delivery: 'polled', pollEverySeconds: every, cursor: true, identity: 'Id', version: 'Edited' },
+    staticBoards
+      ? { fieldId: 'notes', name: 'Notes', targetTypeId: 'note', cardinality: 'many', direction: 'outgoing', readable: false, listenable: true, delivery: 'scope', identity: 'Id', version: 'Edited' }
+      : { fieldId: 'notes', name: 'Notes', targetTypeId: 'note', cardinality: 'many', direction: 'outgoing', readable: false, listenable: true, delivery: 'polled', pollEverySeconds: every, cursor: true, identity: 'Id', version: 'Edited' },
   ],
 };
 // The one filter the feed takes: Title == a literal; every other one is left to the host.
@@ -100,7 +107,7 @@ const pollEdge = async ({ edge, filter, scope, cursor }) => {
   return {
     arrivals: notes.map((n) => ({
       edge: 'Notes',
-      ...(scope === undefined ? {} : { key: scope }),
+      ...(scope === undefined || keyless ? {} : { key: scope }),
       identity: n.id,
       version: String(n.edited ?? 0),
       landing: { recordId: n.id, recordType: 'Note', fields: { Id: n.id, Title: n.title, Edited: n.edited ?? 0 } },
@@ -137,17 +144,18 @@ module.exports = defineModule({
         ...(takes ? { capability: { filter: 'native', supportsLimit: false } } : {}),
       },
       // Cheap to list: re-listed every 5 minutes, or, with \`pushedboards\`, re-listed on each
-      // arrival on \`Boards\` (polled every \`pollEverySeconds\`).
+      // arrival on \`Boards\` (polled every \`pollEverySeconds\`); with \`staticboards\`, neither.
       {
         typeId: 'board',
         displayName: 'Board',
         collectionName: 'Boards',
         readable: true,
         writable: false,
-        cheapToList: true,
         ...(pushedBoards
-          ? { parentChanges: 'pushed', listenable: true, delivery: 'polled', pollEverySeconds: every, cursor: true, identity: 'Id' }
-          : { relistEverySeconds: 300 }),
+          ? { cheapToList: true, parentChanges: 'pushed', listenable: true, delivery: 'polled', pollEverySeconds: every, cursor: true, identity: 'Id' }
+          : staticBoards
+            ? {}
+            : { cheapToList: true, relistEverySeconds: 300 }),
       },
     ],
     describe: async (typeId) => (typeId === 'note' || typeId === 'Note' ? note : typeId === 'board' || typeId === 'Board' ? board : null),

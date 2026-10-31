@@ -89,15 +89,17 @@ pub enum Entry {
     /// A race a batch resume deferred, settled.
     Settle { state: Js, frame_address: String },
     /// No function runs: the hops of a listen's plan are walked off its
-    /// connection, and the records they land on are read (`read_positions`).
-    Walk { connection: String, hops: Vec<movement_parser::listen_plan::PlanHop> },
+    /// connection, and the records they land on are read (`read_positions`),
+    /// the walk stopping once its last hop lands on more than `limit`.
+    Walk { connection: String, hops: Vec<movement_parser::listen_plan::PlanHop>, limit: Option<usize> },
 }
 
 /// What a segment runs: the run's facts and how it is entered.
 pub struct SegmentInput<'a> {
     pub source: &'a str,
     pub language_version: &'a str,
-    pub movement_name: &'a str,
+    /// The function the segment runs; None for a walk, which runs none.
+    pub movement_name: Option<&'a str>,
     /// The trigger event, as data.
     pub event: &'a Js,
     pub fired_at: &'a str,
@@ -351,16 +353,19 @@ fn input_text(host: &SegmentHost<'_>, input: &SegmentInput<'_>) -> Result<String
     if let Some(frame_address) = settle {
         segment.insert("settle".into(), json!({ "frameAddress": frame_address }));
     }
-    if let Entry::Walk { connection, hops } = &input.entry {
+    if let Entry::Walk { connection, hops, limit } = &input.entry {
         segment.insert("connection".into(), json!(connection));
         segment.insert("hops".into(), serde_json::to_value(hops).map_err(|e| e.to_string())?);
+        if let Some(limit) = limit {
+            segment.insert("limit".into(), json!(limit));
+        }
     }
     segment.insert("source".into(), json!(input.source));
     segment.insert("nativeCheck".into(), json!(true));
     segment.insert("snapshotModels".into(), input.catalog.get("models").map(json_of_js).unwrap_or(Json::Null));
     segment.insert("languageVersion".into(), json!(input.language_version));
-    if !matches!(input.entry, Entry::Walk { .. }) {
-        segment.insert("movementName".into(), json!(input.movement_name));
+    if let Some(movement_name) = input.movement_name {
+        segment.insert("movementName".into(), json!(movement_name));
     }
     segment.insert("event".into(), event);
     segment.insert("segmentId".into(), json!(host.segment_id));

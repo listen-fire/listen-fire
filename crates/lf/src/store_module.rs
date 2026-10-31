@@ -381,14 +381,22 @@ impl RunHostStore for ProcessStore {
     fn save_inbound_checkpoint(&self, subscription_id: &str, checkpoint: &Js) -> Result<()> {
         self.unit("inbound.saveCheckpoint", obj! { "subscriptionId" => s(subscription_id), "checkpoint" => checkpoint.clone() })
     }
-    fn listen_state(&self, pipeline: &str) -> Result<Option<crate::resolve::ListenState>> {
-        match self.call("listens.state", obj! { "pipeline" => s(pipeline) })? {
+    fn listen_states(&self, pipelines: &[String]) -> Result<std::collections::BTreeMap<String, crate::resolve::ListenState>> {
+        let answer = self.call("listens.states", obj! { "pipelines" => Js::strings(pipelines.to_vec()) })?;
+        let Js::Obj(states) = &answer else { return Err(self.malformed("listens.states", &answer)) };
+        states.iter().map(|(pipeline, state)| Ok((pipeline.clone(), crate::resolve::ListenState::from_js(state).ok_or_else(|| self.malformed("listens.states", &answer))?))).collect()
+    }
+    fn claim_listen_resolve(&self, pipeline: &str, ttl_ms: i64) -> Result<Option<String>> {
+        match self.call("listens.claimResolve", obj! { "pipeline" => s(pipeline), "ttlMs" => Js::Num(ttl_ms.into()) })? {
             Js::Null => Ok(None),
-            answer => crate::resolve::ListenState::from_js(&answer).map(Some).ok_or_else(|| self.malformed("listens.state", &answer)),
+            answer => answer.get("token").and_then(Js::as_str).map(|token| Some(token.to_string())).ok_or_else(|| self.malformed("listens.claimResolve", &answer)),
         }
     }
-    fn save_listen_state(&self, pipeline: &str, state: &crate::resolve::ListenState) -> Result<()> {
-        self.unit("listens.saveState", obj! { "pipeline" => s(pipeline), "state" => state.to_js() })
+    fn save_listen_resolution(&self, pipeline: &str, token: &str, resolution: &crate::resolve::Resolution) -> Result<bool> {
+        self.flag("listens.saveResolution", obj! { "pipeline" => s(pipeline), "token" => s(token), "resolution" => resolution.to_js() })
+    }
+    fn set_listen_paused(&self, pipeline: &str, paused: Option<&str>) -> Result<()> {
+        self.unit("listens.setPaused", obj! { "pipeline" => s(pipeline), "paused" => paused.map(Js::str).unwrap_or(Js::Null) })
     }
     fn keep_delivery(
         &self,
