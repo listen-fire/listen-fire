@@ -14,24 +14,30 @@
 use std::collections::HashMap;
 
 use movement_parser::ast::{ImportSource, Program, ShapeDeclaration, ShapeNode, Statement};
+use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
 /// A listen's stated landing: the node, as a host checks what lands against
-/// it before any run.
-#[derive(Debug, Clone)]
+/// it before any run. As JSON (`landing_node`), a host reads it once per
+/// program and checks each arrival against it without parsing the program
+/// again; its shape is this module's own, read back only here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeclaredPayload {
     pub name: String,
     node: PayloadNode,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PayloadNode {
     fields: Vec<PayloadField>,
     /// A nested node: the key holds an object, or a list of them.
     children: Vec<(String, PayloadNode)>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PayloadField {
     name: String,
     kind: ValueKind,
@@ -39,7 +45,7 @@ struct PayloadField {
 }
 
 /// What JSON a declared field's type takes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum ValueKind {
     Text,
     Number,
@@ -205,11 +211,17 @@ impl DeclaredPayload {
 }
 
 /// `node` as the single file `source` declares it (an embedded host's
-/// program imports from no other file), and what of `landing` does not fit
-/// it. Err for a source that does not parse or declares no such node.
-pub fn landing_misfits(source: &str, node: &str, landing: &Json) -> Result<(DeclaredPayload, Vec<String>), String> {
+/// program imports from no other file). Err for a source that does not
+/// parse or declares no such node.
+pub fn landing_node(source: &str, node: &str) -> Result<DeclaredPayload, String> {
     let program = movement_parser::stmt::parse_program(source, false).map_err(|e| format!("the source does not parse: {}", e.message))?;
-    let declared = DeclaredPayload::of(node, &FileScope::of(&program), &HashMap::new()).ok_or_else(|| format!("the source declares no node {node}"))?;
+    DeclaredPayload::of(node, &FileScope::of(&program), &HashMap::new()).ok_or_else(|| format!("the source declares no node {node}"))
+}
+
+/// `node` as the single file `source` declares it (`landing_node`), and what
+/// of `landing` does not fit it.
+pub fn landing_misfits(source: &str, node: &str, landing: &Json) -> Result<(DeclaredPayload, Vec<String>), String> {
+    let declared = landing_node(source, node)?;
     let misfits = declared.misfits(landing);
     Ok((declared, misfits))
 }

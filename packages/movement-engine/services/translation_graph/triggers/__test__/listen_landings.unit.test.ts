@@ -1,14 +1,15 @@
 // The landing check against the table of cases listen-fire's Rust is held to
 // as well (packages/engine-contracts/conformance/listen-landings.json): each
 // arrival's landing, checked against the node its listen states, names the
-// case's misfits.
+// case's misfits, whether the node is read from the source on each check or
+// read once.
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { z } from 'zod';
 
-import { landingMisfits } from '../listen_plans';
+import { landingMisfits, landingNode } from '../listen_plans';
 
 // Test data, not a published export: read where the repository keeps it.
 const table = z
@@ -27,9 +28,11 @@ describe('whether what landed fits the node a listen states it is', () => {
     const text = table.sources[source];
     if (text === undefined) throw new Error(`no source '${source}' in the table`);
     expect(landingMisfits({ source: text, node, landing })).toEqual({ node: named, misfits });
+    expect(landingMisfits({ ...landingNode({ source: text, node }), landing })).toEqual({ node: named, misfits });
   });
 
   it('refuses a source that declares no such node', () => {
     expect(() => landingMisfits({ source: 'node Charge {\n  id: <text>\n}\n', node: 'Payment', landing: {} })).toThrow(/the source declares no node Payment/);
+    expect(() => landingNode({ source: 'node Charge {\n  id: <text>\n}\n', node: 'Payment' })).toThrow(/the source declares no node Payment/);
   });
 });

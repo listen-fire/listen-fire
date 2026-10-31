@@ -35,10 +35,12 @@ import {
   arrivalTriggerOf,
   collectFileListeners,
   landingMisfits,
+  landingNode,
   listenFires,
   listenPlansOf,
   plannedListensOf,
   triggerAwaitsOf,
+  type DeclaredNode,
   type FileListener,
   type PlannedListen,
 } from 'movement-engine/public/inbound';
@@ -628,15 +630,13 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
               say(`${named}: an arrival on ${arrival.edge} cannot be judged (${verdict.undecided}): it runs nothing`);
               continue;
             }
-            if (listen.plan.landing !== undefined) {
-              let fit: ReturnType<typeof landingMisfits>;
-              try {
-                fit = landingMisfits({ source: saved.source, node: listen.plan.landing, landing: arrival.landing.fields });
-              } catch (error) {
+            if (listen.landing !== undefined) {
+              if ('unread' in listen.landing) {
                 taken = true;
-                say(`${named}: an arrival on ${arrival.edge} cannot be checked against the node its listen states (${messageOf(error)}): it runs nothing`);
+                say(`${named}: an arrival on ${arrival.edge} cannot be checked against the node its listen states (${listen.landing.unread}): it runs nothing`);
                 continue;
               }
+              const fit = landingMisfits({ ...listen.landing, landing: arrival.landing.fields });
               if (fit.misfits.length > 0) {
                 misfitLines.push(`${named}: the arrival ${arrival.identity} on ${arrival.edge} is not a ${fit.node} (${fit.misfits.join('; ')}): it runs nothing`);
                 continue;
@@ -931,10 +931,12 @@ const SETTINGS_RETIRED = 'MOV_LISTEN_SETTINGS_RETIRED';
 
 type Stamps = ReturnType<typeof checkAnswerInRust>['stamps'];
 
-/** A saved listen as a delivery routes it, and why this host would not fire
- *  it as written, if it would not (`unfiredHere`). */
+/** A saved listen as a delivery routes it: why this host would not fire it
+ *  as written, if it would not (`unfiredHere`); and the node it states its
+ *  landing is, read once, or why it could not be. */
 interface ReadListen extends PlannedListen {
   refused?: string;
+  landing?: DeclaredNode | { unread: string };
 }
 
 /** A saved program as a delivery reads it: its parse, its listens on a
@@ -986,11 +988,27 @@ function readProgram(saved: SavedProgram): ReadProgram {
     const program = parsePinned({ source: saved.source, languageVersion: saved.languageVersion });
     const listens = plannedListensOf({ file: saved.name, program, plans: plans.data }).map((listen): ReadListen => {
       const refused = unfiredHere(listen.plan);
-      return refused.length > 0 ? { ...listen, refused: refused.join('; ') } : listen;
+      const { landing } = listen.plan;
+      return {
+        ...listen,
+        ...(refused.length > 0 ? { refused: refused.join('; ') } : {}),
+        ...(landing !== undefined ? { landing: declaredLanding(saved.source, landing) } : {}),
+      };
     });
     return { readable: true, program, listens, settings: collectFileListeners(program) };
   } catch (error) {
     return { readable: false, why: `${saved.name}: ${messageOf(error)}: ${remedy}` };
+  }
+}
+
+/** The node a listen states its landing is, read once; or why it cannot be
+ *  read (a node the program imports from another file, which this host
+ *  never keeps), which skips that listen alone. */
+function declaredLanding(source: string, node: string): DeclaredNode | { unread: string } {
+  try {
+    return landingNode({ source, node });
+  } catch (error) {
+    return { unread: messageOf(error) };
   }
 }
 

@@ -76,6 +76,7 @@ type CheckerFunction =
   | 'story_analysis'
   | 'judge_arrival'
   | 'listen_identity'
+  | 'landing_node'
   | 'landing_misfits';
 
 interface ParserExports extends BufferExports {
@@ -317,11 +318,24 @@ export function callListenIdentity(planJson: string): { ok: boolean; json: unkno
 }
 
 /**
+ * The node a listen states its landing is, as a program declares it, as data
+ * (crates/movement-engine/src/abi.rs `landing_node`): `{source, node}` as
+ * JSON, and the reply — `{declared}` — or `{error}` for an input that does
+ * not read, a source that does not parse, or one that declares no such node.
+ *
+ * @internal Used by the engine's landing check (movement-engine triggers/listen_plans.ts).
+ */
+export function callLandingNode(inputJson: string): { ok: boolean; json: unknown } {
+  return callChecker('landing_node', [inputJson], []);
+}
+
+/**
  * What of an arrival's landing does not fit the node a listen states it is
  * (crates/movement-engine/src/abi.rs `landing_misfits`): `{source, node,
- * landing}` as JSON, and the reply — `{node, misfits}`, the misfits empty
- * when it fits — or `{error}` for an input that does not read, a source that
- * does not parse, or one that declares no such node.
+ * landing}`, or `{declared, landing}` with what `landing_node` answered, as
+ * JSON, and the reply — `{node, misfits}`, the misfits empty when it fits —
+ * or `{error}` for an input that does not read, a source that does not
+ * parse, or one that declares no such node.
  *
  * @internal Used by the engine's landing check (movement-engine triggers/listen_plans.ts).
  */
@@ -593,6 +607,7 @@ function readExports(raw: Record<string, unknown>): ParserExports {
     'story_analysis',
     'judge_arrival',
     'listen_identity',
+    'landing_node',
     'landing_misfits',
   ] as const) {
     if (typeof raw[fn] !== 'function') continue;

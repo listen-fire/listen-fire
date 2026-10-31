@@ -331,8 +331,41 @@ fn identity_json(plan: &str) -> Result<serde_json::Value, serde_json::Value> {
     Ok(json!({ "identity": plan.identity() }))
 }
 
-/// `landing_misfits({source, node, landing})`: what of an arrival's landing
-/// (its record's fields) does not fit the node `node` the listen states it is,
+/// `landing_node({source, node})`: the node `node` a listen states its
+/// landing is, as `source` declares it (crate::listen_landing), as data —
+/// `{"declared": …}` and 0 — for `landing_misfits` to check each arrival
+/// against without parsing the source again; `{error}` and 1 for an input
+/// that does not read, a source that does not parse or one that declares no
+/// such node.
+///
+/// # Safety
+/// The input range must be readable; the out slots writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn landing_node(input_ptr: *const u8, input_len: u32, out_ptr_ptr: *mut usize, out_len_ptr: *mut usize) -> u32 {
+    install_panic_hook();
+    let (status, answer) = match unsafe { utf8(input_ptr, input_len, "the input") }.and_then(declared_json) {
+        Ok(declared) => (OK, declared),
+        Err(error) => (ERROR, json!({ "error": error })),
+    };
+    unsafe { write_out(to_sorted_json(&answer), out_ptr_ptr, out_len_ptr) };
+    status
+}
+
+fn declared_json(input: &str) -> Result<serde_json::Value, serde_json::Value> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Node {
+        source: String,
+        node: String,
+    }
+    let asked: Node = serde_json::from_str(input).map_err(|e| json!({ "message": format!("landing_node's input is not a source and a node: {e}") }))?;
+    let declared = crate::listen_landing::landing_node(&asked.source, &asked.node).map_err(|message| json!({ "message": format!("landing_node: {message}") }))?;
+    Ok(json!({ "declared": serde_json::to_value(declared).expect("a declared node is always JSON") }))
+}
+
+/// `landing_misfits({source, node, landing})`, or `({declared, landing})`
+/// with what `landing_node` answered: what of an arrival's landing (its
+/// record's fields) does not fit the node `node` the listen states it is,
 /// as `source` declares it (crate::listen_landing) — `{"node": "…",
 /// "misfits": ["…"]}`, empty when it fits — and 0; `{error}` and 1 for an
 /// input that does not read, a source that does not parse or one that
@@ -354,16 +387,32 @@ pub unsafe extern "C" fn landing_misfits(input_ptr: *const u8, input_len: u32, o
 
 fn misfits_json(input: &str) -> Result<serde_json::Value, serde_json::Value> {
     #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Landing {
+        Declared(Declared),
+        Written(Written),
+    }
+    #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
-    struct Landing {
+    struct Declared {
+        declared: crate::listen_landing::DeclaredPayload,
+        landing: serde_json::Value,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Written {
         source: String,
         node: String,
         landing: serde_json::Value,
     }
-    let landing: Landing =
-        serde_json::from_str(input).map_err(|e| json!({ "message": format!("landing_misfits's input is not a source, a node and a landing: {e}") }))?;
-    let (declared, misfits) =
-        crate::listen_landing::landing_misfits(&landing.source, &landing.node, &landing.landing).map_err(|message| json!({ "message": format!("landing_misfits: {message}") }))?;
+    let refused = |e: serde_json::Error| json!({ "message": format!("landing_misfits's input is not a source, a node and a landing, or a declared node and a landing: {e}") });
+    let (declared, landing) = match serde_json::from_str(input).map_err(refused)? {
+        Landing::Declared(Declared { declared, landing }) => (declared, landing),
+        Landing::Written(Written { source, node, landing }) => {
+            (crate::listen_landing::landing_node(&source, &node).map_err(|message| json!({ "message": format!("landing_misfits: {message}") }))?, landing)
+        }
+    };
+    let misfits = declared.misfits(&landing);
     Ok(json!({ "node": declared.name, "misfits": misfits }))
 }
 
@@ -564,9 +613,32 @@ mod tests {
         assert_eq!(misfits(&asking(json!({ "amount": "1" }))), (OK, json!({ "node": "Payment", "misfits": ["`amount` is text, not a number"] })));
         let (status, answer) = misfits(r#"{"source":""}"#);
         assert_eq!(status, ERROR);
-        assert!(answer["error"]["message"].as_str().unwrap().starts_with("landing_misfits's input is not a source, a node and a landing: "), "{answer}");
+        assert!(
+            answer["error"]["message"].as_str().unwrap().starts_with("landing_misfits's input is not a source, a node and a landing, or a declared node and a landing: "),
+            "{answer}"
+        );
         let (status, answer) = misfits(&json!({ "source": source, "node": "Refund", "landing": {} }).to_string());
         assert_eq!((status, answer), (ERROR, json!({ "error": { "message": "landing_misfits: the source declares no node Refund" } })));
+    }
+
+    #[test]
+    fn a_declared_node_is_read_once_and_checks_each_landing_as_its_source_does() {
+        let call = |export: unsafe extern "C" fn(*const u8, u32, *mut usize, *mut usize) -> u32, text: &str| {
+            let (ptr, len) = input(text);
+            let (mut out_ptr, mut out_len) = (0usize, 0usize);
+            let status = unsafe { export(ptr, len, &mut out_ptr, &mut out_len) };
+            unsafe { dealloc(ptr, len) };
+            (status, output(out_ptr, out_len))
+        };
+        let source = "type Kind = <\"card\" | \"bank\">\n\nnode Payment {\n  amount: <number>\n  kind: <Kind>\n}\n";
+        let (status, node) = call(landing_node, &json!({ "source": source, "node": "`Payment`" }).to_string());
+        assert_eq!(status, OK, "{node}");
+        for landing in [json!({ "amount": 1, "kind": "card" }), json!({ "amount": "1", "kind": "cash" }), json!([])] {
+            let read = call(landing_misfits, &json!({ "declared": node["declared"], "landing": landing }).to_string());
+            let written = call(landing_misfits, &json!({ "source": source, "node": "Payment", "landing": landing }).to_string());
+            assert_eq!(read, written, "{landing}");
+        }
+        assert_eq!(call(landing_node, &json!({ "source": source, "node": "Refund" }).to_string()), (ERROR, json!({ "error": { "message": "landing_node: the source declares no node Refund" } })));
     }
 
     #[test]

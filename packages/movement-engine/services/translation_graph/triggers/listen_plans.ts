@@ -11,7 +11,7 @@
 import { createHash } from 'node:crypto';
 
 import { listenPlanSchema, verdictSchema } from 'engine-contracts';
-import { callJudgeArrival, callLandingMisfits, callListenIdentity } from 'movement-lang';
+import { callJudgeArrival, callLandingMisfits, callLandingNode, callListenIdentity } from 'movement-lang';
 import { z } from 'zod';
 
 import type { Arrival, ListenPlan, PlanArrival, TriggerEvent, Verdict } from 'engine-contracts';
@@ -37,12 +37,28 @@ export function judgeArrival(plan: ListenPlan, arrival: PlanArrival, nowMs: numb
 
 const landingMisfitsSchema = z.object({ node: z.string(), misfits: z.array(z.string()) }).strict();
 
+/** The node a listen states its landing is, as the engine read it from a
+ *  program (`landingNode`): its shape is the engine's, handed back as it came. */
+export interface DeclaredNode {
+  readonly declared: unknown;
+}
+
+/** `node`, the node a listen states its landing is (`-[:Requests]-><Payment>`),
+ *  as the single file `source` declares it, read once: `landingMisfits`
+ *  checks each arrival against it without reading the program again. Throws
+ *  for a source that does not parse or declares no such node. */
+export function landingNode(input: { source: string; node: string }): DeclaredNode {
+  const reply = callLandingNode(JSON.stringify(input));
+  if (!reply.ok) throw new Error(`the landing check refused its input: ${JSON.stringify(reply.json)}`);
+  return z.object({ declared: z.unknown() }).strict().parse(reply.json);
+}
+
 /** What of `landing` (an arrival's record's fields) does not fit `node`,
  *  the node a listen states its landing is (`-[:Requests]-><Payment>`), as
- *  the single file `source` declares it: the node's name as the lines name
- *  it, and one line per misfit, none when it fits. An arrival that misfits
- *  runs nothing, as listen-fire has it. */
-export function landingMisfits(input: { source: string; node: string; landing: unknown }): z.infer<typeof landingMisfitsSchema> {
+ *  the single file `source` declares it, or as `landingNode` read it: the
+ *  node's name as the lines name it, and one line per misfit, none when it
+ *  fits. An arrival that misfits runs nothing, as listen-fire has it. */
+export function landingMisfits(input: ({ source: string; node: string } | DeclaredNode) & { landing: unknown }): z.infer<typeof landingMisfitsSchema> {
   const reply = callLandingMisfits(JSON.stringify(input));
   if (!reply.ok) throw new Error(`the landing check refused its input: ${JSON.stringify(reply.json)}`);
   return landingMisfitsSchema.parse(reply.json);
