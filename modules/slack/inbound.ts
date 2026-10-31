@@ -214,7 +214,9 @@ const slackBlockActionsSchema = z
   .object({
     type: z.literal('block_actions'),
     trigger_id: z.string().min(1),
-    user: z.object({ id: z.string(), username: z.string().optional(), name: z.string().optional(), team_id: z.string().optional() }).passthrough(),
+    // Slack may send an optional member field as null: a press that says so
+    // still lands.
+    user: z.object({ id: z.string(), username: z.string().nullish(), name: z.string().nullish(), team_id: z.string().nullish() }).passthrough(),
     container: z.object({ channel_id: z.string().optional(), message_ts: z.string().optional() }).passthrough().optional(),
     channel: z.object({ id: z.string() }).passthrough().optional(),
     message: z.object({ ts: z.string() }).passthrough().optional(),
@@ -284,9 +286,9 @@ function interactionArrival(press: z.infer<typeof slackBlockActionsSchema>): Arr
     actions: press.actions.map(slackAction),
     user: {
       id,
-      ...(username !== undefined ? { username } : {}),
-      ...(name !== undefined ? { name } : {}),
-      ...(team_id !== undefined ? { team_id } : {}),
+      ...(username != null ? { username } : {}),
+      ...(name != null ? { name } : {}),
+      ...(team_id != null ? { team_id } : {}),
     },
   };
   return {

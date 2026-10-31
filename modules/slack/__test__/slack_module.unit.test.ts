@@ -254,6 +254,11 @@ describe('@lf/slack', () => {
         },
       ],
     });
+    // An optional member field Slack sends as null is left out, not a reason
+    // to drop the press.
+    const nulled = { ...payload, user: { id: 'U1', username: null, name: null, team_id: null } };
+    const landed = await adapter.preprocessInbound?.({ raw: { payload: JSON.stringify(nulled) } });
+    expect(landed?.arrivals?.map((arrival) => ('landing' in arrival ? arrival.landing?.fields.user : undefined))).toEqual([{ id: 'U1' }]);
     // A press outside a message (a modal) names none, and arrives on nothing.
     const { container: _container, channel: _channel, message: _message, ...modal } = payload;
     await expect(adapter.preprocessInbound?.({ raw: { payload: JSON.stringify(modal) } })).resolves.toEqual({ events: [] });
