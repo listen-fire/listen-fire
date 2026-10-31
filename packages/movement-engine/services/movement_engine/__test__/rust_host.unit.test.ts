@@ -91,6 +91,25 @@ describe("the shim's park.waits routes", () => {
     expect(answers).toEqual([{ id: 1, answer: { value: { waitId: 'wait:gone' } } }]);
   });
 
+  it('refuses a park.waits.open that names a key and gone at once, as the Rust host does', async () => {
+    const opened = async (record: Record<string, unknown>) => {
+      const { waits, asked } = recordingWaits({ arrivals: [] });
+      const served = await hostWith({ park: { waits } });
+      const segmentId = served.context.segmentId;
+      const { engine } = scriptedEngine((seen) =>
+        seen.length === 0
+          ? { pending: [request(1, 'park.waits', 'open', inSegment(segmentId, { adapterType: 'acme', edge: 'Comments', since: 41, ...record }))] }
+          : { done: { ok: true } },
+      );
+      await driveEngine(engine, {}, served);
+      return asked;
+    };
+    const refusal = "park.waits.open names its record's key, or gone: true for a record already gone";
+    await expect(opened({ key: 'thread:c1', gone: true })).rejects.toThrow(refusal);
+    await expect(opened({ key: 'thread:c1', gone: false })).rejects.toThrow(refusal);
+    await expect(opened({ gone: false })).rejects.toThrow(refusal);
+  });
+
   it("answers the mark, the wait's arrivals on the eval wire, and whether a noted arrival counts", async () => {
     const landed: LoggedArrival = { seq: 42, identity: 'k1', version: null, landing: { recordId: 'k1', recordType: 'Comment', fields: { Text: 'hi' } } };
     const { waits, asked } = recordingWaits({ arrivals: [landed] });

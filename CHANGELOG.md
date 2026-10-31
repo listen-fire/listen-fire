@@ -84,7 +84,7 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
 
 #### Added
 
-- A run parked on a record that was deleted says so. The store marks such a wait stranded and keeps it parked (docs/contracts/stranded-waits.md).
+- A run parked on a record that was deleted says so. The store marks such a wait stranded and keeps it parked, until the record reports again (docs/contracts/stranded-waits.md).
   - `listen-fire runs` lists the run `parked (stranded)`; `--json` gives each run `stranded`.
   - `listen-fire runs show` lists each stranded wait under `stranded`, saying what it waits on: `waiting on Interactions of slack C1:… — its record was deleted, so nothing will arrive; a race with a sleep is the way out`.
   - Why: from 0.13 such a wait never resolves, so a run stuck on one would otherwise look like any parked run.

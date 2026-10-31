@@ -101,7 +101,8 @@ export function newArrivalsOf(arrivals: readonly Arrival[]): NewArrival[] {
  * wake for each wait parked on their records: one write (`waits.log`), so a
  * crash leaves both or neither, and a sender's retry of arrivals that were
  * not kept logs them again. Answers the wakes queued. A deleted record wakes
- * nothing: its parked waits are stranded (`waits.stranded`).
+ * nothing: its parked waits are stranded (`waits.stranded`) until the record
+ * reports again.
  */
 export async function logArrivals(
   store: RunHostStore,

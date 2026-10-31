@@ -210,13 +210,16 @@ pub trait RunHostStore {
     /// Log the arrivals, in order, and queue a `wake_await` row for each
     /// wait parked on their records, as one write: the waits it woke (one
     /// each). A gone arrival wakes none: it strands each wait parked on its
-    /// record not stranded already, and those are the answer's `stranded`.
+    /// record not stranded already. Any other arrival clears the stranding
+    /// of its record's waits (the newest report wins). The answer's
+    /// `stranded` is the waits the log left stranded.
     /// It never interleaves with a wait's park on the same record's edge, so
     /// a run that reads its wait's arrivals after parking misses none.
     fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Logged>;
     /// The wait's id; a run that already waits on this edge of this record
     /// keeps that wait and its mark. Without a key (the record already
-    /// gone), always a new wait, stranded when it parks.
+    /// gone), stranded when it parks; a run that already waits on this edge
+    /// of a record already gone keeps that wait.
     fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String>;
     /// The arrivals logged after the wait's mark on its record's edge that it
     /// has not noted, the first of each identity and version only, in log

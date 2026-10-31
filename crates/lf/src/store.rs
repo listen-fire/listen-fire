@@ -156,10 +156,9 @@ pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", "p
 /// the race deletes it.
 pub const SETTLE_RACE_WORK_KIND: &str = "settle_race";
 
-/// Columns a state file written by an earlier listen-fire lacks, added on open.
 /// A run's waits (crate::waits). `key` is null for a wait opened on a record
-/// already gone; `stranded_at` is when the wait was found parked on a
-/// deleted record.
+/// already gone, one per run and edge as a keyed wait is one per record;
+/// `stranded_at` is when the wait was found parked on a deleted record.
 const WAIT_ROW: &str = "
 create table if not exists wait_row (
   id text primary key,
@@ -173,10 +172,12 @@ create table if not exists wait_row (
   stranded_at text
 );
 create unique index if not exists wait_row_edge on wait_row (run_id, team_id, adapter_type, edge, key);
+create unique index if not exists wait_row_keyless on wait_row (run_id, team_id, adapter_type, edge) where key is null;
 create index if not exists wait_row_key on wait_row (team_id, adapter_type, edge, key);
 create index if not exists wait_row_stranded on wait_row (stranded_at, id) where stranded_at is not null;
 ";
 
+/// Columns a state file written by an earlier listen-fire lacks, added on open.
 const ADDED_RUN_COLUMNS: &[&str] = &["cancel_requested_at", "cancel_reason", "delivery_id"];
 /// Added to a state file written before a failed run could be run again.
 const ATTEMPT_COLUMNS: &[(&str, &str)] = &[("attempt", "integer not null default 1"), ("attempts", "text not null default '[]'")];
@@ -599,6 +600,13 @@ pub fn iso_at(at: i64) -> String {
     format!("{}.{:03}Z", ts.strftime("%Y-%m-%dT%H:%M:%S"), at.rem_euclid(1000))
 }
 
+/// An instant a caller gave, as `iso` writes it: the state file orders and
+/// compares instants as text, so one written in another form (an offset,
+/// no milliseconds) would sort apart from the instant it names.
+pub(crate) fn canonical_iso(text: &str) -> Result<String> {
+    text.parse::<jiff::Timestamp>().map(|at| iso_at(at.as_millisecond())).map_err(|_| StoreError::Invalid(format!("{text}: not an ISO 8601 instant")))
+}
+
 fn uuid() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -684,24 +692,34 @@ impl Store {
     /// The wait rows, rebuilt from a state file written before a wait could
     /// be stranded or keyless (SQLite cannot drop a column's `not null`).
     fn open_wait_rows(db: &Connection) -> Result<()> {
-        let columns = db
-            .prepare("select name from pragma_table_info('wait_row')")?
-            .query_map([], |r| r.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        if columns.is_empty() || columns.iter().any(|c| c == "stranded_at") {
-            return Ok(db.execute_batch(WAIT_ROW)?);
+        fn open(db: &Connection) -> Result<()> {
+            let columns = db
+                .prepare("select name from pragma_table_info('wait_row')")?
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if columns.is_empty() || columns.iter().any(|c| c == "stranded_at") {
+                return Ok(db.execute_batch(WAIT_ROW)?);
+            }
+            Ok(db.execute_batch(&format!(
+                "drop index if exists wait_row_edge; drop index if exists wait_row_key;
+                 alter table wait_row rename to wait_row_before;
+                 {WAIT_ROW}
+                 insert into wait_row (id, run_id, team_id, adapter_type, edge, key, since, address)
+                   select id, run_id, team_id, adapter_type, edge, key, since, address from wait_row_before;
+                 drop table wait_row_before;"
+            ))?)
         }
-        db.execute_batch(&format!(
-            "begin immediate;
-             drop index wait_row_edge; drop index wait_row_key;
-             alter table wait_row rename to wait_row_before;
-             {WAIT_ROW}
-             insert into wait_row (id, run_id, team_id, adapter_type, edge, key, since, address)
-               select id, run_id, team_id, adapter_type, edge, key, since, address from wait_row_before;
-             drop table wait_row_before;
-             commit;"
-        ))?;
-        Ok(())
+        // Read under the write lock: another process opening the same state
+        // file may be rebuilding the table, and a second rebuild would
+        // rename the rebuilt table (its indexes with it) before dropping it.
+        db.execute_batch("begin immediate")?;
+        match open(db) {
+            Ok(()) => Ok(db.execute_batch("commit")?),
+            Err(error) => {
+                db.execute_batch("rollback")?;
+                Err(error)
+            }
+        }
     }
 
     /// One write transaction, taken before its first read.

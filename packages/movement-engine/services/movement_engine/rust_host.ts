@@ -511,8 +511,9 @@ const ROUTES: Record<string, Route> = {
       since: integer(request.since, 'park.waits.open since'),
       segmentId: segmentOf(request),
     };
+    if (request.gone === undefined) return waits.open({ ...opened, key: string(request.key, 'park.waits.open key') });
     if (request.gone === true && request.key === undefined) return waits.open({ ...opened, gone: true });
-    return waits.open({ ...opened, key: string(request.key, 'park.waits.open key') });
+    throw new RustShimError("park.waits.open names its record's key, or gone: true for a record already gone");
   },
   /** What a wait has yet to judge, in log order: on the eval wire, its
    *  landings data as an adapter's answer is. */

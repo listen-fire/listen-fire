@@ -593,7 +593,7 @@ answer:  { waitId: string }
 ```
 
 - **Persist:** the segment's run waits on `edge` of the record the module keys `key`, reading the arrivals logged after `since`.
-- **`gone: true` instead of a key:** the module's `awaitKeys` answered the record gone. The wait opens all the same, without a key: nothing can arrive on it, so an `await` on it parks for good, and the host marks that park stranded ([stranded-waits.md](stranded-waits.md)). It is always a new wait.
+- **`gone: true` instead of a key:** the module's `awaitKeys` answered the record gone. The wait opens all the same, without a key: nothing can arrive on it, so an `await` on it parks for good, and the host marks that park stranded ([stranded-waits.md](stranded-waits.md)). A run that already waits on this edge of a record already gone keeps that wait, as it keeps a wait on a record.
 - **Retry:** a run that already waits on this edge of this record keeps that wait and its first mark: the same `waitId` answers.
 
 #### `park.waits.arrivals`

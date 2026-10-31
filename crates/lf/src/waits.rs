@@ -13,17 +13,20 @@
 //!   an arrival counts when the record newly matches.
 //! - Logging answers the waits parked on the arrival's record, so the host
 //!   can wake their runs. A gone arrival (its record deleted) wakes none: it
-//!   strands them, and they stay parked (docs/contracts/stranded-waits.md). A log and a park on one record's edge never
-//!   interleave (the state file has one writer at a time; Postgres takes a
-//!   lock on the record's edge), so a run that reads its wait's arrivals
-//!   after parking misses none: either the log saw the park and answers it,
-//!   or the read sees the arrival.
+//!   strands them, and they stay parked (docs/contracts/stranded-waits.md).
+//!   The newest report on a record wins: an arrival logged after it wakes
+//!   them and clears their stranding.
+//! - A log and a park on one record's edge never interleave (the state file
+//!   has one writer at a time; Postgres takes a lock on the record's edge),
+//!   so a run that reads its wait's arrivals after parking misses none:
+//!   either the log saw the park and answers it, or the read sees the
+//!   arrival.
 
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::json::Js;
 use crate::obj;
-use crate::store::{NewWork, Store, StoreError, iso};
+use crate::store::{NewWork, Store, StoreError, canonical_iso, iso};
 
 type Result<T> = std::result::Result<T, StoreError>;
 
@@ -101,9 +104,9 @@ pub struct WaitWake {
     pub address: String,
 }
 
-/// A wait whose record went while it was parked on it (`waits.stranded`):
-/// nothing will arrive, so it never resolves, and its run stays parked
-/// unless something else in it moves.
+/// A wait parked on a record whose newest report is that it went
+/// (`waits.stranded`): it never resolves unless the record reports again,
+/// and its run stays parked unless something else in it moves.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Stranded {
     pub wait_id: String,
@@ -119,7 +122,8 @@ pub struct Stranded {
 }
 
 /// What a `waits.log` did: the waits it answered, each now owed a wake, and
-/// the waits it stranded.
+/// the waits it left stranded (a later arrival in the same log on the
+/// record clears a stranding it made).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Logged {
     pub wakes: Vec<WaitWake>,
@@ -211,6 +215,7 @@ impl Store {
     }
 
     pub(crate) fn log_arrivals_in(db: &Connection, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Logged> {
+        let at = &canonical_iso(at)?;
         {
             let mut log = db.prepare(
                 "insert into arrival (team_id, adapter_type, edge, key, identity, version, landing, gone, logged_at)
@@ -235,6 +240,14 @@ impl Store {
                  where team_id = ? and adapter_type = ? and edge = ? and key = ? and stranded_at is null and address is not null
                    and exists (select 1 from leaf l where l.run_id = wait_row.run_id and l.address = wait_row.address)
                  returning id, run_id, adapter_type, edge, key",
+            )?;
+            // The newest report on a record wins: one after a gone one says
+            // the record is back (or never went), so its waits are not
+            // stranded.
+            let mut unstrand = db.prepare(
+                "update wait_row set stranded_at = null
+                 where team_id = ? and adapter_type = ? and edge = ? and key = ? and stranded_at is not null
+                 returning id",
             )?;
             let since = iso(-ARRIVAL_RETENTION_MS);
             let mut answer = Logged::default();
@@ -265,6 +278,8 @@ impl Store {
                     }
                     continue;
                 }
+                let unstranded = unstrand.query_map(params![team_id, adapter_type, arrival.edge, arrival.key], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                answer.stranded.retain(|wait| !unstranded.contains(&wait.wait_id));
                 let answered = parked.query_map(params![team_id, adapter_type, arrival.edge, arrival.key], |r| {
                     Ok(WaitWake { run_id: r.get(0)?, wait_id: r.get(1)?, address: r.get(2)? })
                 })?;
@@ -281,26 +296,17 @@ impl Store {
     }
 
     /// The wait's id. A run that already waits on this edge of this record
-    /// keeps that wait, and its mark. A wait on a record already gone (no
-    /// key) is always a new one.
+    /// keeps that wait, and its mark; likewise one that already waits on
+    /// this edge of a record already gone (no key).
     pub fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {
         let OpenWait { run_id, team_id, adapter_type, edge, key, since } = *wait;
-        let Some(key) = key else {
-            let id = uuid::Uuid::new_v4().to_string();
-            self.db.execute(
-                "insert into wait_row (id, run_id, team_id, adapter_type, edge, key, since) values (?, ?, ?, ?, ?, null, ?)",
-                params![id, run_id, team_id, adapter_type, edge, since],
-            )?;
-            return Ok(id);
-        };
         self.transaction(|db| {
             db.execute(
-                "insert into wait_row (id, run_id, team_id, adapter_type, edge, key, since) values (?, ?, ?, ?, ?, ?, ?)
-                 on conflict (run_id, team_id, adapter_type, edge, key) do nothing",
+                "insert into wait_row (id, run_id, team_id, adapter_type, edge, key, since) values (?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
                 params![uuid::Uuid::new_v4().to_string(), run_id, team_id, adapter_type, edge, key, since],
             )?;
             Ok(db.query_row(
-                "select id from wait_row where run_id = ? and team_id = ? and adapter_type = ? and edge = ? and key = ?",
+                "select id from wait_row where run_id = ? and team_id = ? and adapter_type = ? and edge = ? and key is ?",
                 params![run_id, team_id, adapter_type, edge, key],
                 |r| r.get(0),
             )?)
@@ -355,7 +361,7 @@ impl Store {
             StrandedOf::Page { after: Some(StrandedAfter { at, wait_id }), limit } => self
                 .db
                 .prepare(&format!("{COLUMNS} and (w.stranded_at, w.id) > (?, ?) order by w.stranded_at, w.id limit ?"))?
-                .query_map(params![at, wait_id, limit], read)?
+                .query_map(params![canonical_iso(at)?, wait_id, limit], read)?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         };
         Ok(rows)
@@ -404,8 +410,8 @@ impl Store {
     }
 
     /// A wait park's row: the wait is parked at `address`. Parked on a
-    /// record already gone (a gone arrival logged after its mark, or no key),
-    /// it is stranded as it parks.
+    /// record already gone (the newest arrival logged on it after its mark
+    /// is gone, or no key), it is stranded as it parks.
     pub(crate) fn park_wait_in(db: &Connection, run_id: &str, address: &str, wait_id: &str) -> Result<()> {
         let parked = db.execute("update wait_row set address = ? where id = ? and run_id = ?", params![address, wait_id, run_id])?;
         if parked == 0 {
@@ -413,9 +419,9 @@ impl Store {
         }
         db.execute(
             "update wait_row set stranded_at = ? where id = ? and stranded_at is null
-               and (key is null or exists (select 1 from arrival a
+               and (key is null or coalesce((select a.gone from arrival a
                  where a.team_id = wait_row.team_id and a.adapter_type = wait_row.adapter_type and a.edge = wait_row.edge and a.key = wait_row.key
-                   and a.seq > wait_row.since and a.gone = 1))",
+                   and a.seq > wait_row.since order by a.seq desc limit 1), 0) = 1)",
             params![iso(0), wait_id],
         )?;
         Ok(())
@@ -834,7 +840,11 @@ mod tests {
         two_arrivals_on_one_wait_count_in_log_order,
         a_gone_arrival_strands_the_parked_waits_on_its_record_once_and_wakes_none,
         a_wait_parked_after_its_record_went_is_stranded_as_it_parks,
-        a_wait_opened_on_a_record_already_gone_has_no_key_nothing_wakes_it_and_it_is_stranded_as_it_parks,
+        a_wait_opened_on_a_record_already_gone_has_no_key_is_one_per_run_and_edge_nothing_wakes_it_and_it_is_stranded_as_it_parks,
+        a_later_arrival_on_a_stranded_waits_record_wakes_the_parked_waits_on_it_and_strands_none_of_its_waits_any_more,
+        a_gone_arrival_after_the_record_came_back_strands_its_parked_waits_again,
+        in_one_log_the_last_report_on_a_record_decides_whether_its_waits_are_stranded,
+        a_wait_parked_on_a_record_that_went_and_came_back_is_not_stranded_as_it_parks,
         every_runs_stranded_waits_page_by_page_in_the_order_they_were_stranded_a_wait_no_longer_parked_among_them,
         logging_answers_only_the_parked_waits_on_its_key,
         a_park_at_an_address_leaves_no_other_wait_of_its_run_parked_there,
@@ -991,6 +1001,78 @@ mod tests {
         // Opened again, it is rebuilt no more.
         drop(store);
         assert_eq!(Store::open(&path).unwrap().stranded_waits(&StrandedOf::Run("run-1")).unwrap().len(), 1);
+    }
+
+    /// Processes opening one state file written before stranded waits at
+    /// once: one rebuilds the wait rows, and the rest, reading the table
+    /// under the write lock, find it rebuilt and keep it.
+    #[test]
+    fn a_state_file_opened_by_many_at_once_is_rebuilt_once() {
+        let dir = std::env::temp_dir().join(format!("lf-waits-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+        Store::open(&path).unwrap();
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "drop table wait_row;
+                 create table wait_row (id text primary key, run_id text not null, team_id text not null, adapter_type text not null,
+                   edge text not null, key text not null, since integer not null, address text);
+                 create unique index wait_row_edge on wait_row (run_id, team_id, adapter_type, edge, key);
+                 create index wait_row_key on wait_row (team_id, adapter_type, edge, key);
+                 insert into wait_row values ('w1', 'run-1', 't', 'acme', 'Comments', 'thread:c1', 0, null);",
+            )
+            .unwrap();
+        let opening = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let opened: Vec<_> = (0..8)
+            .map(|_| {
+                let (path, opening) = (path.clone(), opening.clone());
+                std::thread::spawn(move || {
+                    opening.wait();
+                    Store::open(&path).map(|_| ())
+                })
+            })
+            .collect();
+        for open in opened {
+            open.join().unwrap().unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        let rows: Vec<(String, Option<String>)> =
+            store.db.prepare("select id, stranded_at from wait_row").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(rows, [("w1".to_string(), None)]);
+        // A second rebuild would have renamed the rebuilt table, and its
+        // indexes with it, before dropping it.
+        let mut indexes: Vec<String> =
+            store.db.prepare("select name from pragma_index_list('wait_row')").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        indexes.retain(|name| !name.starts_with("sqlite_autoindex"));
+        indexes.sort();
+        assert_eq!(indexes, ["wait_row_edge", "wait_row_key", "wait_row_keyless", "wait_row_stranded"]);
+    }
+
+    /// A log's `at` in another form than `iso` writes (an offset, no
+    /// milliseconds) is kept as `iso` writes it, so the stranded times sort
+    /// as the instants do and a page's cursor holds.
+    #[test]
+    fn a_stranded_time_is_written_as_iso_writes_it_whatever_form_the_log_gave() {
+        let store = state_file();
+        let wait_on = |run: &str, key: &str| {
+            store.start_run(&RunStart { id: run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+            let wait = store.open_wait(&OpenWait { run_id: run, team_id: "t", adapter_type: "acme", edge: "Comments", key: Some(key), since: 0 }).unwrap();
+            store.commit_park(&Park { run_id: run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
+            wait
+        };
+        let (early, late) = (wait_on("run-1", "thread:c1"), wait_on("run-2", "thread:c2"));
+        let gone = |key: &str| NewArrival { edge: "Comments".into(), key: key.into(), identity: None, version: None, landing: None, gone: true };
+        // 10:00 in UTC, written at an offset: as text it sorts after 10:30Z.
+        let logged = store.log_arrivals("t", "acme", &[gone("thread:c1")], "2026-10-31T11:00:00+01:00").unwrap();
+        assert_eq!(logged.stranded.iter().map(|w| w.at.as_str()).collect::<Vec<_>>(), ["2026-10-31T10:00:00.000Z"]);
+        store.log_arrivals("t", "acme", &[gone("thread:c2")], "2026-10-31T10:30:00Z").unwrap();
+        let page = |after: Option<StrandedAfter<'_>>| store.stranded_waits(&StrandedOf::Page { after, limit: 1 }).unwrap();
+        let first = page(None);
+        assert_eq!((first[0].wait_id.as_str(), first[0].at.as_str()), (early.as_str(), "2026-10-31T10:00:00.000Z"));
+        let second = page(Some(StrandedAfter { at: "2026-10-31T11:00:00+01:00", wait_id: &early }));
+        assert_eq!((second[0].wait_id.as_str(), second[0].at.as_str()), (late.as_str(), "2026-10-31T10:30:00.000Z"));
+        assert!(matches!(store.log_arrivals("t", "acme", &[gone("thread:c1")], "yesterday"), Err(StoreError::Invalid(_))));
     }
 
     #[test]

@@ -9,20 +9,30 @@ A record a run waits on can be deleted while the run waits. From listen-fire 0.1
 A module reports a deletion in one of two ways:
 
 - **A gone arrival:** `{ edge, key, gone: true }` among the arrivals it reports (adapter protocol 2.5).
-- **An `awaitKeys` answer of `{ gone: true }`:** the record was already gone when the run's wait would have opened. The engine opens the wait all the same, without a key (`park.waits.open { gone: true }`). Nothing can arrive on it.
+- **An `awaitKeys` answer of `{ gone: true }`:** the record was already gone when the run's wait would have opened. The engine opens the wait all the same, without a key (`park.waits.open { gone: true }`). Nothing can arrive on it. A run has one such wait per edge, as it has one wait per edge of a record.
 
 The store marks a wait stranded, once, when it finds the wait parked on a deleted record:
 
 - `waits.log` logs a gone arrival while the wait is parked on its record;
-- `parks.commit` or `parks.commitSegment` parks the wait on a record that already has a gone arrival after the wait's mark;
+- `parks.commit` or `parks.commitSegment` parks the wait on a record whose newest arrival after the wait's mark is gone;
 - `parks.commit` or `parks.commitSegment` parks a wait opened without a key.
 
 A wait opened but never parked is never stranded: a run that does not await the record does not wait on it.
 
+## The newest report wins
+
+A module may report a record gone wrongly, or the record may come back. So any arrival logged on a record after its gone arrival ends the stranding:
+
+- the arrival wakes the record's parked waits, as any arrival does, and the wait reads it;
+- `waits.log` clears `stranded_at` on every wait on the record, so `waits.stranded` no longer lists them;
+- a gone arrival after that strands the parked waits again, with a new `stranded_at`.
+
+A wait opened without a key has no record to report again: it stays stranded.
+
 ## What the host does
 
-- **The wait stays parked.** A gone arrival wakes nothing and is no answer. What follows the `await` never runs. A `race` with a `sleep` is the way out.
-- **The store keeps when.** `stranded_at` on the wait's row, until the run's rows go.
+- **The wait stays parked.** A gone arrival wakes nothing and is no answer. What follows the `await` never runs unless the record reports again. A `race` with a `sleep` is the way out.
+- **The store keeps when.** `stranded_at` on the wait's row (ISO 8601 in UTC with milliseconds, so it sorts as the instants do), until the record reports again or the run's rows go.
 - **`listen-fire runs` shows it.** A parked run with a stranded wait still parked reads `parked (stranded)` (`--json`: `"stranded": true`).
 - **`listen-fire runs show` says it.** One entry per stranded wait still parked, under `stranded` ([lf-json](../lf-json.md)):
   - `waiting on Interactions of slack C1:1730000000.000100 — its record was deleted, so nothing will arrive; a race with a sleep is the way out`;
@@ -50,4 +60,4 @@ lf-platform's `@lf/system` adds the same event.
 
 ## Changes
 
-- **2026-10-31** (listen-fire 0.13.0): written. A deleted record strands the waits parked on it; `listen-fire runs` and `runs show` say so; `waits.stranded` reads them.
+- **2026-10-31** (listen-fire 0.13.0): written. A deleted record strands the waits parked on it, until the record reports again; `listen-fire runs` and `runs show` say so; `waits.stranded` reads them.

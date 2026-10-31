@@ -3297,6 +3297,9 @@ mod tests {
             // for the older language, which this engine never resumes.
             (json!({ "version": 1, "address": "s0" }), "resume_state_version"),
             (json!({ "version": 3, "address": "s0", "scopeChain": scope(json!({ "kind": "blockMeta", "edges": [] })) }), "resume_state_kind:blockMeta"),
+            // A park written while a record already gone kept no wait id
+            // (`{ gone: true }`, before stranded waits): every wait is an id now.
+            (json!({ "version": 3, "address": "s0", "eventWaits": { "Comments": { "gone": true } } }), "resume_state_does_not_read"),
         ] {
             let input = json!({
                 "entry": "segment", "source": source, "languageVersion": movement_parser::version::LANGUAGE_VERSION, "segmentId": "g1", "serves": [],
@@ -3322,6 +3325,9 @@ mod tests {
             } }],
         });
         assert_eq!(crate::park::resume_refusal(&wire(resumable.clone())), None);
+        let mut waiting = resumable.clone();
+        waiting["eventWaits"] = json!({ "Comments": "wait-1" });
+        assert_eq!(crate::park::resume_refusal(&wire(waiting)), None);
         // A suspension's state, whose journal is empty: this engine keeps no
         // call's answer for a statement run again.
         let mut suspended = resumable;

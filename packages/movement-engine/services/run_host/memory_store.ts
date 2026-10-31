@@ -205,8 +205,9 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
         const wait = waits.get(park.waitId);
         if (wait === undefined) return;
         wait.address = address;
-        // Parked on a record already gone, it is stranded as it parks.
-        if (wait.strandedAt === null && (wait.key === null || log.some((row) => row.gone && onWaitsRecord(wait, row)))) wait.strandedAt = now();
+        // Parked on a record already gone (the newest arrival on it after
+        // its mark is gone, or no key), it is stranded as it parks.
+        if (wait.strandedAt === null && (wait.key === null || log.filter((row) => onWaitsRecord(wait, row)).at(-1)?.gone === true)) wait.strandedAt = now();
         return;
       }
       case 'limit':
@@ -409,6 +410,15 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
             }
             continue;
           }
+          // The newest report on a record wins: one after a gone one says
+          // the record is back (or never went), so its waits are not
+          // stranded.
+          for (const wait of waits.values()) {
+            if (!sameRecord(wait) || wait.strandedAt === null) continue;
+            wait.strandedAt = null;
+            const unstranded = stranded.findIndex((w) => w.waitId === wait.id);
+            if (unstranded !== -1) stranded.splice(unstranded, 1);
+          }
           for (const wait of waits.values()) {
             if (!sameRecord(wait) || wait.address === null) continue;
             // A wait whose park has finished needs no wake: its leaf is gone.
@@ -421,7 +431,7 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
       },
       async open({ runId, teamId, adapterType, edge, key, since }) {
         for (const wait of waits.values()) {
-          if (key !== null && wait.runId === runId && wait.teamId === teamId && wait.adapterType === adapterType && wait.edge === edge && wait.key === key) return { waitId: wait.id };
+          if (wait.runId === runId && wait.teamId === teamId && wait.adapterType === adapterType && wait.edge === edge && wait.key === key) return { waitId: wait.id };
         }
         const id = randomUUID();
         waits.set(id, { id, runId, teamId, adapterType, edge, key, since, address: null, strandedAt: null });
@@ -433,7 +443,8 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
           .sort((a, b) => (a.at === b.at ? (a.waitId < b.waitId ? -1 : 1) : a.at < b.at ? -1 : 1));
         if ('runId' in of) return every.filter((wait) => wait.runId === of.runId);
         const { after } = of;
-        const later = after === undefined ? every : every.filter((wait) => wait.at > after.at || (wait.at === after.at && wait.waitId > after.waitId));
+        const afterAt = after === undefined ? '' : new Date(after.at).toISOString();
+        const later = after === undefined ? every : every.filter((wait) => wait.at > afterAt || (wait.at === afterAt && wait.waitId > after.waitId));
         return later.slice(0, of.limit);
       },
       async arrivals({ waitId }) {

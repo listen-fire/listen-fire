@@ -364,11 +364,14 @@ impl PgStore {
             // stranded, once, and keep waiting.
             if arrival.gone {
                 let stranded = self.query(
-                    "update lf.wait_row w set stranded_at = $5::text::timestamptz
-                     where w.team_id = $1::text::uuid and w.adapter_type = $2::text and w.edge = $3::text and w.key = $4::text
-                       and w.stranded_at is null and w.address is not null
-                       and exists (select 1 from lf.parked_run p where p.run_id = w.run_id and p.address = w.address)
-                     returning w.id::text, w.run_id::text, w.adapter_type, w.edge, w.key",
+                    concat!(
+                        "update lf.wait_row w set stranded_at = date_trunc('milliseconds', $5::text::timestamptz)
+                         where w.team_id = $1::text::uuid and w.adapter_type = $2::text and w.edge = $3::text and w.key = $4::text
+                           and w.stranded_at is null and w.address is not null
+                           and exists (select 1 from lf.parked_run p where p.run_id = w.run_id and p.address = w.address)
+                         returning w.id::text, w.run_id::text, w.adapter_type, w.edge, w.key, ",
+                        iso!("w.stranded_at")
+                    ),
                     &[&team_id, &adapter_type, &arrival.edge, &arrival.key, &at],
                 )?;
                 answer.stranded.extend(stranded.iter().map(|r| Stranded {
@@ -377,11 +380,21 @@ impl PgStore {
                     adapter_type: r.get(2),
                     edge: r.get(3),
                     key: r.get(4),
-                    at: at.to_string(),
+                    at: r.get(5),
                     parked: true,
                 }));
                 continue;
             }
+            // The newest report on a record wins: one after a gone one says
+            // the record is back (or never went), so its waits are not
+            // stranded.
+            let unstranded = self.query(
+                "update lf.wait_row w set stranded_at = null
+                 where w.team_id = $1::text::uuid and w.adapter_type = $2::text and w.edge = $3::text and w.key = $4::text and w.stranded_at is not null
+                 returning w.id::text",
+                &[&team_id, &adapter_type, &arrival.edge, &arrival.key],
+            )?;
+            answer.stranded.retain(|wait| !unstranded.iter().any(|r| r.get::<_, String>(0) == wait.wait_id));
             // A wait whose park has finished needs no wake: its leaf is gone.
             let answered = self.query(
                 "select w.run_id::text, w.id::text, w.address from lf.wait_row w
@@ -472,13 +485,15 @@ impl PgStore {
                     return Err(StoreError::Invalid(format!("run {run_id} has no wait {wait_id}")));
                 }
                 self.execute("update lf.wait_row set address = $2::text where id = $1::text::uuid", &[wait_id, &address])?;
-                // Parked on a record already gone (a gone arrival logged
-                // after its mark, or no key), it is stranded as it parks.
+                // Parked on a record already gone (the newest arrival logged
+                // on it after its mark is gone, or no key), it is stranded as
+                // it parks.
                 self.execute(
                     "update lf.wait_row w set stranded_at = date_trunc('milliseconds', now())
                      where w.id = $1::text::uuid and w.stranded_at is null
-                       and (w.key is null or exists (select 1 from lf.arrival a
-                         where a.team_id = w.team_id and a.adapter_type = w.adapter_type and a.edge = w.edge and a.key = w.key and a.seq > w.since and a.gone))",
+                       and (w.key is null or coalesce((select a.gone from lf.arrival a
+                         where a.team_id = w.team_id and a.adapter_type = w.adapter_type and a.edge = w.edge and a.key = w.key and a.seq > w.since
+                         order by a.seq desc limit 1), false))",
                     &[wait_id],
                 )?;
                 Ok(())
@@ -1036,29 +1051,24 @@ impl RunHostStore for PgStore {
         })
     }
 
+    /// A keyed wait is one per run and record's edge, a keyless one (its
+    /// record already gone) one per run and edge: an open of either again
+    /// is the first.
     fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {
         let OpenWait { run_id, team_id, adapter_type, edge, key, since } = *wait;
-        let Some(key) = key else {
-            let row = self.query_opt(
-                "insert into lf.wait_row (run_id, team_id, adapter_type, edge, key, since)
-                 values ($1::text::uuid, $2::text::uuid, $3::text, $4::text, null, $5::int8) returning id::text",
-                &[&run_id, &team_id, &adapter_type, &edge, &since],
-            )?;
-            return row.map(|r| r.get(0)).ok_or_else(|| StoreError::Invalid(format!("run {run_id}'s wait on {edge} was not kept")));
-        };
         self.transaction(|| {
             self.execute(
                 "insert into lf.wait_row (run_id, team_id, adapter_type, edge, key, since)
                  values ($1::text::uuid, $2::text::uuid, $3::text, $4::text, $5::text, $6::int8)
-                 on conflict (run_id, team_id, adapter_type, edge, key) do nothing",
+                 on conflict do nothing",
                 &[&run_id, &team_id, &adapter_type, &edge, &key, &since],
             )?;
             let row = self.query_opt(
                 "select id::text from lf.wait_row
-                 where run_id = $1::text::uuid and team_id = $2::text::uuid and adapter_type = $3::text and edge = $4::text and key = $5::text",
+                 where run_id = $1::text::uuid and team_id = $2::text::uuid and adapter_type = $3::text and edge = $4::text and key is not distinct from $5::text",
                 &[&run_id, &team_id, &adapter_type, &edge, &key],
             )?;
-            row.map(|r| r.get(0)).ok_or_else(|| StoreError::Invalid(format!("run {run_id}'s wait on {edge} of {key} was not kept")))
+            row.map(|r| r.get(0)).ok_or_else(|| StoreError::Invalid(format!("run {run_id}'s wait on {edge} of {} was not kept", key.unwrap_or("a record already gone"))))
         })
     }
 
