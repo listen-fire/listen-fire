@@ -30,7 +30,7 @@ const _expressionSchema: z.ZodTypeAny = z.lazy(() =>
     z.object({ type: z.literal('property'), propertyTypeId: z.string(), fieldOnly: z.literal(true).optional() }),
     z.object({ type: z.literal('edge_property'), propertyTypeId: z.string(), fieldOnly: z.literal(true).optional() }),
     z.object({ type: z.literal('static'), value: z.union([z.string(), z.number(), z.boolean(), z.null()]) }),
-    z.object({ type: z.literal('llm'), prompt: z.string(), promptExpression: _expressionSchema.optional() }),
+    z.object({ type: z.literal('llm'), prompt: z.string(), promptExpression: _expressionSchema.optional(), tier: z.string().optional() }),
     z.object({ type: z.literal('meta'), key: z.string() }),
     z.object({ type: z.literal('parent_result'), field: z.enum(['created', 'external_id']) }),
     // `action_result` — a previously-applied action's result (write-handle
@@ -57,10 +57,14 @@ const _expressionSchema: z.ZodTypeAny = z.lazy(() =>
       ])),
     }),
     // `object` — object literal (`{ key: expr, … }`); keys are the target
-    // API's verbatim spelling, values are ordinary expressions.
+    // API's verbatim spelling, values are ordinary expressions. A member is
+    // an entry or a spread of another object (`{ ...xs, k: v }`).
     z.object({
       type: z.literal('object'),
-      entries: z.array(z.object({ key: z.string(), value: _expressionSchema })),
+      entries: z.array(z.union([
+        z.object({ key: z.string(), value: _expressionSchema }),
+        z.object({ type: z.literal('spread'), expression: _expressionSchema }),
+      ])),
     }),
     // Traversal — `aliasRoot` (optional) starts the walk from a named
     // alias's bound position instead of the surrounding context. F3 emits
@@ -112,6 +116,7 @@ const _expressionSchema: z.ZodTypeAny = z.lazy(() =>
       operands: z.array(_expressionSchema),
     }),
     z.object({ type: z.literal('not'), expression: _expressionSchema }),
+    z.object({ type: z.literal('negate'), expression: _expressionSchema }),
     z.object({ type: z.literal('concat'), parts: z.array(_expressionSchema) }),
     z.object({
       type: z.literal('conditional'),
@@ -127,11 +132,13 @@ const _expressionSchema: z.ZodTypeAny = z.lazy(() =>
     // Aggregation
     z.object({
       type: z.literal('aggregate'),
-      fn: z.enum(['first', 'last', 'count', 'sum', 'avg', 'min', 'max', 'join', 'collect', 'llm']),
+      fn: z.enum(['first', 'last', 'only', 'count', 'sum', 'avg', 'min', 'max', 'join', 'collect', 'sort', 'llm']),
       expression: _expressionSchema,
       separator: z.string().optional(),
       prompt: z.string().optional(),
-      orderBy: fieldRefSchema.optional(),
+      // `SORT`'s key is an expression over the element; a FieldRef is the
+      // older spelling of the same.
+      orderBy: z.union([_expressionSchema, fieldRefSchema]).optional(),
       orderDirection: z.enum(['asc', 'desc']).optional(),
     }),
     // Functions

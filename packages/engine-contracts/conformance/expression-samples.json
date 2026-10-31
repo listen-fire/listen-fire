@@ -1,0 +1,815 @@
+{
+  "about": "One sample of every Expression variant, and of each member shape nested in one, as the checker writes them (crates/movement-parser/tests/expression_wire_samples.rs, LF_BLESS=1 to rewrite). The TypeScript expression schema parses every one.",
+  "samples": {
+    "ActionResult": {
+      "field": "external_id",
+      "nodeId": "n1",
+      "type": "action_result"
+    },
+    "Aggregate": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      },
+      "fn": "join",
+      "orderBy": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      },
+      "orderDirection": "asc",
+      "prompt": "p",
+      "separator": ", ",
+      "type": "aggregate"
+    },
+    "AliasRef": {
+      "name": "m",
+      "type": "alias_ref"
+    },
+    "Arithmetic": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "op": "+",
+      "right": {
+        "fieldOnly": true,
+        "propertyTypeId": "B",
+        "type": "edge_property"
+      },
+      "type": "arithmetic"
+    },
+    "At": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Items",
+        "type": "edge_property"
+      },
+      "index": {
+        "type": "static",
+        "value": 0
+      },
+      "type": "at"
+    },
+    "Compare": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "At",
+        "type": "edge_property"
+      },
+      "op": "within",
+      "right": {
+        "type": "static",
+        "value": "3d"
+      },
+      "type": "compare"
+    },
+    "Concat": {
+      "parts": [
+        {
+          "type": "static",
+          "value": "a"
+        },
+        {
+          "fieldOnly": true,
+          "propertyTypeId": "B",
+          "type": "edge_property"
+        }
+      ],
+      "type": "concat"
+    },
+    "Conditional": {
+      "condition": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "else": {
+        "type": "static",
+        "value": "n"
+      },
+      "then": {
+        "type": "static",
+        "value": "y"
+      },
+      "type": "conditional"
+    },
+    "EdgeProperty": {
+      "fieldOnly": true,
+      "propertyTypeId": "Name",
+      "type": "edge_property"
+    },
+    "Exists": {
+      "steps": [
+        {
+          "alias": "m",
+          "cardinality": {
+            "limit": 3,
+            "mode": "n",
+            "orderBy": {
+              "fieldOnly": true,
+              "propertyTypeId": "Posted At",
+              "type": "edge_property"
+            },
+            "orderDirection": "desc"
+          },
+          "direction": "outgoing",
+          "edgeTypeId": "Messages",
+          "expressionFilter": {
+            "left": {
+              "fieldOnly": true,
+              "propertyTypeId": "Topic",
+              "type": "edge_property"
+            },
+            "op": "eq",
+            "right": {
+              "type": "static",
+              "value": "lunch"
+            },
+            "type": "compare"
+          },
+          "type": "edge"
+        },
+        {
+          "type": "linkBack"
+        },
+        {
+          "cardinality": {
+            "limit": 1,
+            "mode": "first"
+          },
+          "filter": {
+            "hasDocument": true,
+            "mimeType": "text/html",
+            "namePattern": "^a",
+            "resourceType": "URL"
+          },
+          "type": "resource"
+        },
+        {
+          "alias": "x",
+          "config": {
+            "data": [
+              {
+                "fieldOnly": true,
+                "propertyTypeId": "Name",
+                "type": "edge_property"
+              }
+            ],
+            "description": {
+              "type": "static",
+              "value": "what to take"
+            },
+            "enrichWith": [
+              {
+                "argument": {
+                  "fieldOnly": true,
+                  "propertyTypeId": "Name",
+                  "type": "edge_property"
+                },
+                "transform": {
+                  "type": "static",
+                  "value": "t"
+                }
+              }
+            ],
+            "extra": {
+              "k": {
+                "type": "static",
+                "value": "v"
+              }
+            },
+            "plugin": {
+              "type": "static",
+              "value": "p"
+            }
+          },
+          "expressionFilter": {
+            "fieldOnly": true,
+            "propertyTypeId": "Name",
+            "type": "edge_property"
+          },
+          "filter": {
+            "hasDocument": true,
+            "mimeType": "text/html",
+            "namePattern": "^a",
+            "resourceType": "URL"
+          },
+          "metaEdge": "extract",
+          "type": "meta_edge"
+        }
+      ],
+      "type": "exists",
+      "where": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      }
+    },
+    "ExtractValue": {
+      "description": "the total",
+      "type": "extract_value"
+    },
+    "Function": {
+      "args": [
+        {
+          "fieldOnly": true,
+          "propertyTypeId": "Name",
+          "type": "edge_property"
+        }
+      ],
+      "fn": "lower",
+      "type": "function"
+    },
+    "KgExists": {
+      "params": [
+        {
+          "fieldOnly": true,
+          "propertyTypeId": "Name",
+          "type": "edge_property"
+        }
+      ],
+      "query": "q",
+      "type": "kg_exists"
+    },
+    "KgValue": {
+      "params": [
+        {
+          "fieldOnly": true,
+          "propertyTypeId": "Name",
+          "type": "edge_property"
+        }
+      ],
+      "query": "q",
+      "type": "kg_value"
+    },
+    "LinkedObject": {
+      "adapter": "chat",
+      "field": "Id",
+      "type": "linked_object"
+    },
+    "List": {
+      "elements": [
+        {
+          "type": "static",
+          "value": "a"
+        },
+        {
+          "expression": {
+            "fieldOnly": true,
+            "propertyTypeId": "Tags",
+            "type": "edge_property"
+          },
+          "type": "spread"
+        }
+      ],
+      "type": "list"
+    },
+    "Llm": {
+      "prompt": "summarise",
+      "promptExpression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Body",
+        "type": "edge_property"
+      },
+      "tier": "fast",
+      "type": "llm"
+    },
+    "Logical": {
+      "op": "or",
+      "operands": [
+        {
+          "fieldOnly": true,
+          "propertyTypeId": "A",
+          "type": "edge_property"
+        },
+        {
+          "fieldOnly": true,
+          "propertyTypeId": "B",
+          "type": "edge_property"
+        }
+      ],
+      "type": "logical"
+    },
+    "Meta": {
+      "key": "now",
+      "type": "meta"
+    },
+    "Negate": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Score",
+        "type": "edge_property"
+      },
+      "type": "negate"
+    },
+    "Not": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Done",
+        "type": "edge_property"
+      },
+      "type": "not"
+    },
+    "Object": {
+      "entries": [
+        {
+          "key": "k",
+          "value": {
+            "type": "static",
+            "value": "v"
+          }
+        },
+        {
+          "expression": {
+            "fieldOnly": true,
+            "propertyTypeId": "Extra",
+            "type": "edge_property"
+          },
+          "type": "spread"
+        }
+      ],
+      "type": "object"
+    },
+    "ParentResult": {
+      "field": "created",
+      "type": "parent_result"
+    },
+    "Property": {
+      "fieldOnly": true,
+      "propertyTypeId": "Name",
+      "type": "property"
+    },
+    "Resource": {
+      "field": "url",
+      "type": "resource"
+    },
+    "ResourceTraverse": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      },
+      "expressionFilter": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      },
+      "filter": {
+        "hasDocument": true,
+        "mimeType": "text/html",
+        "namePattern": "^a",
+        "resourceType": "URL"
+      },
+      "type": "resource_traverse"
+    },
+    "Static": {
+      "type": "static",
+      "value": 1.5
+    },
+    "Traverse": {
+      "aliasRoot": "m",
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Topic",
+        "type": "edge_property"
+      },
+      "steps": [
+        {
+          "alias": "m",
+          "cardinality": {
+            "limit": 3,
+            "mode": "n",
+            "orderBy": {
+              "fieldOnly": true,
+              "propertyTypeId": "Posted At",
+              "type": "edge_property"
+            },
+            "orderDirection": "desc"
+          },
+          "direction": "outgoing",
+          "edgeTypeId": "Messages",
+          "expressionFilter": {
+            "left": {
+              "fieldOnly": true,
+              "propertyTypeId": "Topic",
+              "type": "edge_property"
+            },
+            "op": "eq",
+            "right": {
+              "type": "static",
+              "value": "lunch"
+            },
+            "type": "compare"
+          },
+          "type": "edge"
+        },
+        {
+          "type": "linkBack"
+        },
+        {
+          "cardinality": {
+            "limit": 1,
+            "mode": "first"
+          },
+          "filter": {
+            "hasDocument": true,
+            "mimeType": "text/html",
+            "namePattern": "^a",
+            "resourceType": "URL"
+          },
+          "type": "resource"
+        },
+        {
+          "alias": "x",
+          "config": {
+            "data": [
+              {
+                "fieldOnly": true,
+                "propertyTypeId": "Name",
+                "type": "edge_property"
+              }
+            ],
+            "description": {
+              "type": "static",
+              "value": "what to take"
+            },
+            "enrichWith": [
+              {
+                "argument": {
+                  "fieldOnly": true,
+                  "propertyTypeId": "Name",
+                  "type": "edge_property"
+                },
+                "transform": {
+                  "type": "static",
+                  "value": "t"
+                }
+              }
+            ],
+            "extra": {
+              "k": {
+                "type": "static",
+                "value": "v"
+              }
+            },
+            "plugin": {
+              "type": "static",
+              "value": "p"
+            }
+          },
+          "expressionFilter": {
+            "fieldOnly": true,
+            "propertyTypeId": "Name",
+            "type": "edge_property"
+          },
+          "filter": {
+            "hasDocument": true,
+            "mimeType": "text/html",
+            "namePattern": "^a",
+            "resourceType": "URL"
+          },
+          "metaEdge": "extract",
+          "type": "meta_edge"
+        }
+      ],
+      "type": "traverse"
+    },
+    "aggregate avg": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      },
+      "fn": "avg",
+      "type": "aggregate"
+    },
+    "aggregate collect": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      },
+      "fn": "collect",
+      "type": "aggregate"
+    },
+    "aggregate count": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      },
+      "fn": "count",
+      "type": "aggregate"
+    },
+    "aggregate first": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      },
+      "fn": "first",
+      "type": "aggregate"
+    },
+    "aggregate join": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      },
+      "fn": "join",
+      "type": "aggregate"
+    },
+    "aggregate last": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      },
+      "fn": "last",
+      "type": "aggregate"
+    },
+    "aggregate llm": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      },
+      "fn": "llm",
+      "type": "aggregate"
+    },
+    "aggregate max": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      },
+      "fn": "max",
+      "type": "aggregate"
+    },
+    "aggregate min": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      },
+      "fn": "min",
+      "type": "aggregate"
+    },
+    "aggregate only": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      },
+      "fn": "only",
+      "type": "aggregate"
+    },
+    "aggregate sort": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      },
+      "fn": "sort",
+      "type": "aggregate"
+    },
+    "aggregate sum": {
+      "expression": {
+        "fieldOnly": true,
+        "propertyTypeId": "Name",
+        "type": "edge_property"
+      },
+      "fn": "sum",
+      "type": "aggregate"
+    },
+    "arithmetic %": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "op": "%",
+      "right": {
+        "fieldOnly": true,
+        "propertyTypeId": "B",
+        "type": "edge_property"
+      },
+      "type": "arithmetic"
+    },
+    "arithmetic *": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "op": "*",
+      "right": {
+        "fieldOnly": true,
+        "propertyTypeId": "B",
+        "type": "edge_property"
+      },
+      "type": "arithmetic"
+    },
+    "arithmetic +": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "op": "+",
+      "right": {
+        "fieldOnly": true,
+        "propertyTypeId": "B",
+        "type": "edge_property"
+      },
+      "type": "arithmetic"
+    },
+    "arithmetic -": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "op": "-",
+      "right": {
+        "fieldOnly": true,
+        "propertyTypeId": "B",
+        "type": "edge_property"
+      },
+      "type": "arithmetic"
+    },
+    "arithmetic /": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "op": "/",
+      "right": {
+        "fieldOnly": true,
+        "propertyTypeId": "B",
+        "type": "edge_property"
+      },
+      "type": "arithmetic"
+    },
+    "compare contains": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "op": "contains",
+      "right": {
+        "fieldOnly": true,
+        "propertyTypeId": "B",
+        "type": "edge_property"
+      },
+      "type": "compare"
+    },
+    "compare eq": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "op": "eq",
+      "right": {
+        "fieldOnly": true,
+        "propertyTypeId": "B",
+        "type": "edge_property"
+      },
+      "type": "compare"
+    },
+    "compare exists": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "op": "exists",
+      "right": {
+        "fieldOnly": true,
+        "propertyTypeId": "B",
+        "type": "edge_property"
+      },
+      "type": "compare"
+    },
+    "compare gt": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "op": "gt",
+      "right": {
+        "fieldOnly": true,
+        "propertyTypeId": "B",
+        "type": "edge_property"
+      },
+      "type": "compare"
+    },
+    "compare gte": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "op": "gte",
+      "right": {
+        "fieldOnly": true,
+        "propertyTypeId": "B",
+        "type": "edge_property"
+      },
+      "type": "compare"
+    },
+    "compare in": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "op": "in",
+      "right": {
+        "fieldOnly": true,
+        "propertyTypeId": "B",
+        "type": "edge_property"
+      },
+      "type": "compare"
+    },
+    "compare lt": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "op": "lt",
+      "right": {
+        "fieldOnly": true,
+        "propertyTypeId": "B",
+        "type": "edge_property"
+      },
+      "type": "compare"
+    },
+    "compare lte": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "op": "lte",
+      "right": {
+        "fieldOnly": true,
+        "propertyTypeId": "B",
+        "type": "edge_property"
+      },
+      "type": "compare"
+    },
+    "compare neq": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "op": "neq",
+      "right": {
+        "fieldOnly": true,
+        "propertyTypeId": "B",
+        "type": "edge_property"
+      },
+      "type": "compare"
+    },
+    "compare within": {
+      "left": {
+        "fieldOnly": true,
+        "propertyTypeId": "A",
+        "type": "edge_property"
+      },
+      "op": "within",
+      "right": {
+        "fieldOnly": true,
+        "propertyTypeId": "B",
+        "type": "edge_property"
+      },
+      "type": "compare"
+    },
+    "static \"s\"": {
+      "type": "static",
+      "value": "s"
+    },
+    "static -2": {
+      "type": "static",
+      "value": -2
+    },
+    "static false": {
+      "type": "static",
+      "value": false
+    },
+    "static null": {
+      "type": "static",
+      "value": null
+    }
+  }
+}

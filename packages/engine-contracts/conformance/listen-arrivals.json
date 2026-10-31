@@ -52,6 +52,18 @@
                       "Channels",
                       "Messages"
                     ]
+                  },
+                  "Stars": {
+                    "target": "Star",
+                    "readable": false,
+                    "listenable": true,
+                    "identity": "Id",
+                    "delivery": "connection",
+                    "carries": [
+                      "Messages",
+                      "Pins",
+                      "Channels"
+                    ]
                   }
                 },
                 "propertyCapabilities": {
@@ -63,6 +75,14 @@
                 }
               },
               "Interaction": {
+                "properties": {
+                  "Id": "text",
+                  "Value": "text",
+                  "Score": "number"
+                },
+                "edges": {}
+              },
+              "Star": {
                 "properties": {
                   "Id": "text",
                   "Value": "text"
@@ -189,6 +209,57 @@
                 "listenable": true,
                 "identity": "Id",
                 "delivery": "connection",
+                "capability": {
+                  "filter": "native",
+                  "supportsLimit": false
+                }
+              }
+            },
+            "writableRoots": {}
+          }
+        }
+      },
+      "fs": {
+        "canFire": false,
+        "constructionArgs": [],
+        "schemas": {
+          "": {
+            "positions": {
+              "Folder": {
+                "properties": {
+                  "Name": "text"
+                },
+                "edges": {
+                  "Folders": {
+                    "target": "Folder",
+                    "capability": {
+                      "filter": "native",
+                      "supportsLimit": false
+                    }
+                  },
+                  "Files": {
+                    "target": "File",
+                    "readable": false,
+                    "listenable": true,
+                    "identity": "Id",
+                    "delivery": "connection",
+                    "carries": [
+                      "Folders",
+                      "Folders"
+                    ]
+                  }
+                }
+              },
+              "File": {
+                "properties": {
+                  "Id": "text"
+                },
+                "edges": {}
+              }
+            },
+            "collections": {
+              "Folders": {
+                "target": "Folder",
                 "capability": {
                   "filter": "native",
                   "supportsLimit": false
@@ -458,6 +529,190 @@
         ],
         "movement": "filed"
       }
+    },
+    "negated": {
+      "source": "import { chat as chat_module } from adapters; chat = connect chat_module\nfunction tally(i: <chat-[:Interaction]->>) { return i.Id }\nlisten to chat-[:Channels]->-[:Messages]->-[i:Interactions WHERE -i.Score < 1]-> fire tally\n",
+      "plan": {
+        "adapter": "chat",
+        "carries": [
+          "Channels",
+          "Messages"
+        ],
+        "connection": "chat",
+        "hops": [
+          {
+            "edge": "Channels",
+            "from": "",
+            "judged": "none",
+            "to": "Channel"
+          },
+          {
+            "edge": "Messages",
+            "from": "Channel",
+            "judged": "none",
+            "to": "Message"
+          },
+          {
+            "alias": "i",
+            "checked": {
+              "left": {
+                "expression": {
+                  "fieldOnly": true,
+                  "propertyTypeId": "Score",
+                  "type": "edge_property"
+                },
+                "type": "negate"
+              },
+              "op": "lt",
+              "right": {
+                "type": "static",
+                "value": 1
+              },
+              "type": "compare"
+            },
+            "edge": "Interactions",
+            "from": "Message",
+            "judged": "arrival",
+            "to": "Interaction"
+          }
+        ],
+        "movement": "tally"
+      }
+    },
+    "stars": {
+      "source": "import { chat as chat_module } from adapters; chat = connect chat_module\nfunction starred(s: <chat-[:Star]->>) { return s.Id }\nlisten to chat-[c:Channels WHERE c.Name == \"office\"]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[s:Stars WHERE s.Value == \"yes\"]-> fire starred\n",
+      "plan": {
+        "adapter": "chat",
+        "carries": [
+          "Messages",
+          "Pins",
+          "Channels"
+        ],
+        "connection": "chat",
+        "hops": [
+          {
+            "alias": "c",
+            "edge": "Channels",
+            "from": "",
+            "judged": "arrival",
+            "taken": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Name",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "office"
+              },
+              "type": "compare"
+            },
+            "to": "Channel"
+          },
+          {
+            "alias": "m",
+            "edge": "Messages",
+            "from": "Channel",
+            "judged": "arrival",
+            "taken": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Topic",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "lunch-poll"
+              },
+              "type": "compare"
+            },
+            "to": "Message"
+          },
+          {
+            "alias": "s",
+            "checked": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Value",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "yes"
+              },
+              "type": "compare"
+            },
+            "edge": "Stars",
+            "from": "Message",
+            "judged": "arrival",
+            "to": "Star"
+          }
+        ],
+        "movement": "starred"
+      }
+    },
+    "nested": {
+      "source": "import { fs as fs_module } from adapters; fs = connect fs_module\nfunction filed(f: <fs-[:File]->>) { return f.Id }\nlisten to fs-[a:Folders WHERE a.Name == \"root\"]->-[b:Folders WHERE b.Name == \"docs\"]->-[:Files]-> fire filed\n",
+      "plan": {
+        "adapter": "fs",
+        "carries": [
+          "Folders",
+          "Folders"
+        ],
+        "connection": "fs",
+        "hops": [
+          {
+            "alias": "a",
+            "checked": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Name",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "root"
+              },
+              "type": "compare"
+            },
+            "edge": "Folders",
+            "from": "",
+            "judged": "arrival",
+            "to": "Folder"
+          },
+          {
+            "alias": "b",
+            "checked": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Name",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "docs"
+              },
+              "type": "compare"
+            },
+            "edge": "Folders",
+            "from": "Folder",
+            "judged": "arrival",
+            "to": "Folder"
+          },
+          {
+            "edge": "Files",
+            "from": "Folder",
+            "judged": "arrival",
+            "to": "File"
+          }
+        ],
+        "movement": "filed"
+      }
     }
   },
   "cases": [
@@ -478,6 +733,18 @@
     {"case": "a press whose filter reads a message it does not carry is undecided", "plan": "echo", "arrival": {"edge": "Interactions", "landing": {"Id": "t1", "Value": "lunch-poll"}, "parents": [{"Name": "office"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival carries no Messages record, which this listen's filter on it reads"}},
     {"case": "an unfiltered mail whose taken part reads an owned field is undecided", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"Id": "m1", "Subject": "invoice 42"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "gmail did not apply this listen's filter on Messages to the arrival, and only gmail can evaluate Query"}},
     {"case": "a mail its module filtered on the owned field fires on the checked part", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"Id": "m1", "Subject": "invoice 42"}, "takenApplied": true}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
-    {"case": "an unfiltered mail that fails the checked part skips, though the owned part is undecided", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"Id": "m2", "Subject": "lunch"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}}
+    {"case": "an unfiltered mail that fails the checked part skips, though the owned part is undecided", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"Id": "m2", "Subject": "lunch"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "a press scoring 5 fires: its negation is below 1", "plan": "negated", "arrival": {"edge": "Interactions", "landing": {"Id": "t1", "Score": 5}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a press scoring -2 skips at Interactions: its negation is not below 1", "plan": "negated", "arrival": {"edge": "Interactions", "landing": {"Id": "t1", "Score": -2}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 2}},
+    {"case": "a folder in a folder, each read from its own record, fires", "plan": "nested", "arrival": {"edge": "Files", "key": "f1", "landing": {"Id": "f1"}, "parents": [{"Name": "root"}, {"Name": "docs"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a folder in another folder skips at the inner Folders hop, not the first", "plan": "nested", "arrival": {"edge": "Files", "key": "f1", "landing": {"Id": "f1"}, "parents": [{"Name": "root"}, {"Name": "other"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "the same two folders in the opposite order skip at the outer Folders hop", "plan": "nested", "arrival": {"edge": "Files", "key": "f1", "landing": {"Id": "f1"}, "parents": [{"Name": "docs"}, {"Name": "root"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "a star whose carries are not in hop order, one a hop it does not take, fires", "plan": "stars", "arrival": {"edge": "Stars", "landing": {"Id": "s1", "Value": "yes"}, "parents": [{"Topic": "lunch-poll"}, {"Pinned": true}, {"Name": "office"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a star in another channel skips at Channels, read from the third carried record", "plan": "stars", "arrival": {"edge": "Stars", "landing": {"Id": "s1", "Value": "yes"}, "parents": [{"Topic": "lunch-poll"}, {"Pinned": true}, {"Name": "random"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "a star on another topic skips at Messages, read from the first carried record", "plan": "stars", "arrival": {"edge": "Stars", "landing": {"Id": "s1", "Value": "yes"}, "parents": [{"Topic": "standup"}, {"Pinned": true}, {"Name": "office"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a null in the slot of a carried edge that is no hop changes nothing", "plan": "stars", "arrival": {"edge": "Stars", "landing": {"Id": "s1", "Value": "yes"}, "parents": [{"Topic": "lunch-poll"}, null, {"Name": "office"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a star that stops short of the channel record is undecided on Channels", "plan": "stars", "arrival": {"edge": "Stars", "landing": {"Id": "s1", "Value": "yes"}, "parents": [{"Topic": "lunch-poll"}, {"Pinned": true}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival carries no Channels record, which this listen's filter on it reads"}},
+    {"case": "a poll posted a day before an instant in 2020 is within 3d of it", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "office"}, {"Topic": "lunch-poll", "Posted At": "2020-01-01T10:00:00Z"}]}, "now": "2020-01-02T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a poll posted a week before an instant in 2020 is not, and skips at Messages", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "office"}, {"Topic": "lunch-poll", "Posted At": "2019-12-26T10:00:00Z"}]}, "now": "2020-01-02T10:00:00Z", "verdict": {"skips": 1}}
   ]
 }

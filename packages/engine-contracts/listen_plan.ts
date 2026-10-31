@@ -81,7 +81,8 @@ export interface PlanArrival {
   /** The record that landed, its fields. */
   landing: Record<string, unknown>;
   /** The records it carries from earlier hops, their fields, aligned to the
-   *  plan's `carries`; null for one it does not carry. */
+   *  plan's `carries` (the k-th hop on an edge name reads the k-th carried
+   *  record of it); null for one it does not carry. */
   parents?: Array<Record<string, unknown> | null>;
   /** Its module applied the plan's taken parts (a filtered poll or
    *  subscription). Absent or false, the judge evaluates them too. */

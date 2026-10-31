@@ -41,7 +41,8 @@ pub struct PlanArrival {
     /// The record that landed, its fields.
     pub landing: Json,
     /// The records it carries from earlier hops, their fields, aligned to
-    /// the plan's `carries`; null for one it does not carry.
+    /// the plan's `carries` (the k-th hop on an edge name reads the k-th
+    /// carried record of it); null for one it does not carry.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parents: Vec<Json>,
     /// Its module applied the plan's taken parts (a filtered poll or
@@ -89,7 +90,10 @@ pub fn judge_arrival(plan: &ListenPlan, arrival: &PlanArrival, now_ms: f64) -> V
             if i == last {
                 return Some(js_of_json(&arrival.landing));
             }
-            let at = plan.carries.iter().position(|edge| *edge == hop.edge)?;
+            // An edge crossed twice (a folder in a folder) is carried twice:
+            // the k-th hop on a name reads the k-th carried record of it.
+            let nth = plan.hops[..i].iter().filter(|earlier| earlier.edge == hop.edge).count();
+            let at = plan.carries.iter().enumerate().filter(|(_, edge)| **edge == hop.edge).nth(nth)?.0;
             arrival.parents.get(at).filter(|parent| !parent.is_null()).map(js_of_json)
         })
         .collect();
