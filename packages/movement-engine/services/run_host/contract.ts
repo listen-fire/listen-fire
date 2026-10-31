@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { RunLeaseLost } from '../movement_engine/errors';
 import { drainRun, wakeAwaits, type StepLeaf, type StepOutcome, type StepRequest } from './drain';
-import { cancelSubtrees, clearIfQuiescent, parkSources, runCompleteWithout, runParkSink, settleIfCancelRequested, abandonRun, type RunHost, type RunRecords } from './rules';
+import { cancelSubtrees, clearIfQuiescent, parkSources, runCompleteWithout, runParkSink, settleIfCancelRequested, abandonRun, WAIT_AWAIT_TYPE, type RunHost, type RunRecords } from './rules';
 import type { AwaitKeeper, CallbackStore, ClaimedWork, RunHostStore } from './store';
 import { CALLBACK_AWAIT_TYPE } from 'engine-contracts';
 import {
@@ -656,15 +656,15 @@ export const runHostContractCases: ContractCase[] = [
         teamId,
         records: { ensureRun: async () => void marks.push('ensure'), markParked: async () => void marks.push('parked') },
       });
-      await sink.commitAwaitPark({ address: 's0', state: { a: 1 }, adapterType: 'slack', correlationKey: 'k' });
+      await sink.commitAwaitPark({ address: 's0', state: { a: 1 }, waitId: 'w1' });
       assert.deepEqual(await parkedAddresses(store, runId), ['s0']);
-      assert.deepEqual((await store.correlations.ofRun({ runId, adapterType: 'slack' })).map((c) => c.correlationKey), ['k']);
+      assert.deepEqual((await store.correlations.ofRun({ runId, adapterType: WAIT_AWAIT_TYPE })).map((c) => c.correlationKey), ['w1']);
       await sink.commitTimerPark({ address: 's1', state: {}, wakeAt: PAST(1) });
       const timerRow = await claimKey(store, `resume_timer:${runId}`);
       assert.deepEqual(timerRow?.payload, { runId });
       if (timerRow) await store.work.complete(timerRow);
       await sink.commitSuspension?.({ address: 's0', state: { a: 2 } });
-      assert.deepEqual(await store.correlations.ofRun({ runId, adapterType: 'slack' }), [], 'a suspended await drops its correlation');
+      assert.deepEqual(await store.correlations.ofRun({ runId, adapterType: WAIT_AWAIT_TYPE }), [], 'a suspended await drops its correlation');
       assert.deepEqual(marks, ['ensure', 'parked', 'ensure', 'parked', 'ensure', 'parked']);
     },
   },
@@ -675,10 +675,10 @@ export const runHostContractCases: ContractCase[] = [
       const cancelled = hostOf(backend, { cancelReason: null });
       const runId = await newRun();
       const records = { ensureRun: async () => {}, markParked: async () => {} };
-      await runParkSink(cancelled.host, { runId, teamId, records }).commitAwaitPark({ address: 's0', state: {}, adapterType: 'slack', correlationKey: 'k' });
+      await runParkSink(cancelled.host, { runId, teamId, records }).commitAwaitPark({ address: 's0', state: {}, waitId: 'w1' });
       assert.deepEqual(cancelled.failed, [{ runId, message: 'Cancelled by an operator' }]);
       assert.deepEqual(await store.parks.leaves({ runId }), []);
-      assert.deepEqual(await store.correlations.ofRun({ runId, adapterType: 'slack' }), []);
+      assert.deepEqual(await store.correlations.ofRun({ runId, adapterType: WAIT_AWAIT_TYPE }), []);
 
       const { host } = hostOf(backend);
       const other = await newRun();

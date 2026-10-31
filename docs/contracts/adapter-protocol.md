@@ -660,9 +660,10 @@ What Listen-Fire does with them:
 
 ### The key form (before 2.5)
 
-From listen-fire 0.13.0 no run waits by key: a wait reads the arrivals you
-report. listen-fire calls neither `resolveAwait` nor `wakeKeys`, ignores a
-`checkInbound` acceptance's `wakeKeys`, and its `wake` door refuses
+From release 0.13.0 no run waits by key: a wait reads the arrivals you
+report. No host of the release calls `resolveAwait` or `wakeKeys`: not
+listen-fire, and not one built on the engine package's inbound doors. Each
+ignores a `checkInbound` acceptance's `wakeKeys`, and its `wake` door refuses
 `{ keys }`. The form is described here for a module moving off it.
 
 #### resolveAwait

@@ -13,8 +13,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import { CALLBACK_AWAIT_TYPE, type CallbackCall, type CallbackParamSpec } from 'engine-contracts';
-import type { CallbackSink } from '../movement_engine/host';
+import { CALLBACK_AWAIT_TYPE, type AnyParkedScopeState, type CallbackCall, type CallbackParamSpec } from 'engine-contracts';
 import { drainAwaits, type StepperFor } from './drain';
 import type { HeldRunLease } from './lease';
 import { failRun, queueAwaitWake, CANCELLED_BY_OPERATOR, type RunHost } from './rules';
@@ -168,7 +167,21 @@ export function landedCalls(callback: CallbackRecord | null): CallbackCall[] {
   return (callback?.calls ?? []).filter((call) => call.bodyStartedAt !== undefined).map(({ at, values }) => ({ at, values }));
 }
 
-/** The engine's callback seam for one run, over the family. `ensureRun`: the
+/** The callback seam the engine's host served until host families version 2
+ *  retired it (callbacks retired at 0.13): minting a callback, and reading
+ *  its landed calls. Kept for the run host's callback family alone. */
+export interface CallbackSink {
+  mint(input: {
+    address: string;
+    params: CallbackParamSpec[];
+    state: AnyParkedScopeState;
+    singleUse: boolean;
+    expiresAt?: string;
+  }): Promise<{ id: string; url: string }>;
+  calls(input: { callbackId: string }): Promise<CallbackCall[]>;
+}
+
+/** The callback seam for one run, over the family. `ensureRun`: the
  *  product's run record exists before a callback is minted against it. */
 export function callbackSink(
   callbacks: CallbackStore,

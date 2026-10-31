@@ -149,6 +149,7 @@ interface RunInput {
   credentialIds?: Record<string, string>; // import name to credential id
   dryRun?: boolean;                       // rehearse every target
   suspendAt?: string[];                   // addresses to suspend at, once each
+  triggerMark?: number;                   // the arrival log's mark where the delivery that started the run was kept; absent: the mark as the trigger's record enters
 }
 ```
 
@@ -175,7 +176,7 @@ resumeMovement(input: RunInput & {
 })
 ```
 
-- **The engine.** `parkedOnEngine` is the engine the host recorded running the run's last segment (`trigger_run.engine`). The resume runs on it; a state the TypeScript engine parked fails its resume, saying so; absent, it is routed by the run's pin as a new run is. A race settlement and a callback body carry it too. Each engine reads the park state version it writes ([`park-state.md`](park-state.md)).
+- **The engine.** `parkedOnEngine` is the engine the host recorded running the run's last segment (`trigger_run.engine`). The resume runs on it; a state the TypeScript engine parked fails its resume, saying so; absent, it is routed by the run's pin as a new run is. A race settlement carries it too. Each engine reads the park state version it writes ([`park-state.md`](park-state.md)).
 
 - **The address.** `state.address` is the parked leaf's own address, the `address` its `commitTimerPark`, `commitAwaitPark` or `commitSuspension` was given. The resume descends the program to it through `state`'s frames and scopes.
 - **Step past** (`reenter` false). The parked statement is done. The resume binds `answer` (when given) at `state.bindingName` and continues with the statement after it. An answer is a JSON scalar, or a curated row set `{ __correct: { type: string; rows: Array<{ fields: Record<string, unknown> }> } }`. A timer's `sleep` resumes this way, with no answer.

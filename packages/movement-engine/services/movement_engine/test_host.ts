@@ -67,7 +67,7 @@ export const TEST_HOST_NOW = '2026-01-01T00:00:00.000Z';
  * and closes with nothing behind it (no read memo, no call ceiling, nothing
  * spent); a test of the host's segment scope supplies the real one. `park.wake`
  * records into `overrides.wakes` (a fresh array when absent). No default
- * reaches a network or a database. Parks, callbacks and file imports stay
+ * reaches a network or a database. Parks, waits and file imports stay
  * absent unless supplied, which the engine refuses loudly as it does for any
  * host without them (`makeFakeParkSink` is an in-memory park sink).
  */
@@ -99,10 +99,10 @@ export function makeTestHost(overrides: TestHostOverrides = {}): EngineHost {
       ...park,
       wake:
         park.wake ??
-        (async ({ segmentId, adapterType, correlationKey }) => {
+        (async ({ segmentId, waitId }) => {
           const teamId = segmentTeams.get(segmentId);
           if (teamId === undefined) throw new Error(`segment ${segmentId} is not open`);
-          wakes.push({ adapterType, teamId, correlationKey });
+          wakes.push({ teamId, waitId });
         }),
     },
     files: { render: renderIntoNowhere(), ...files },
@@ -185,11 +185,11 @@ export function recordingWriteLocks(acquired: string[][]): WriteLocks {
 export function makeFakeParkSink(): {
   sink: ParkSink;
   timerParks: Array<{ address: string; state: unknown; wakeAt: string }>;
-  awaitParks: Array<{ address: string; state: unknown }>;
+  awaitParks: Array<{ address: string; state: unknown; waitId: string }>;
   joins: Array<{ frameAddress: string; parkedChildren: number }>;
 } {
   const timerParks: Array<{ address: string; state: unknown; wakeAt: string }> = [];
-  const awaitParks: Array<{ address: string; state: unknown }> = [];
+  const awaitParks: Array<{ address: string; state: unknown; waitId: string }> = [];
   const joins: Array<{ frameAddress: string; parkedChildren: number }> = [];
   const sink: ParkSink = {
     async recordJoin(input) {
@@ -199,7 +199,7 @@ export function makeFakeParkSink(): {
       timerParks.push({ address: input.address, state: input.state, wakeAt: input.wakeAt });
     },
     async commitAwaitPark(input) {
-      awaitParks.push({ address: input.address, state: input.state });
+      awaitParks.push({ address: input.address, state: input.state, waitId: input.waitId });
     },
     async decrementJoin() {
       return { closed: true };

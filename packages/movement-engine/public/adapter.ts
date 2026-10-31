@@ -1,9 +1,10 @@
 // What an adapter is: its manifest, the live instance a run calls, the
-// awaitable capability, the dry-run wrapper, and the type name rules.
+// arrivals capability (adapter protocol 2.5), the dry-run wrapper, and the
+// type name rules.
 
 export * from '../services/translation_graph/adapter';
 export { normalizeAdapterType } from '../services/translation_graph/adapter_type';
-export * from 'engine-contracts/awaitable';
+export * from 'engine-contracts/arrivals';
 export {
   newDryRunRehearsal,
   wrapAdapterForDryRun,

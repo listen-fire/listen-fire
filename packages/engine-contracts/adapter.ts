@@ -8,7 +8,6 @@ import type { FileRef } from './file_ref';
 import type { TriggerEvent, TriggerType } from './event';
 import type { MutationContext } from './mutation_context';
 import type { Arrival, ArrivalsCapability } from './arrivals';
-import type { AwaitableCapability } from './awaitable';
 import type { Actor } from './mutation_context';
 import type { UniquenessConstraints } from './uniqueness';
 import type { ConfigBlock } from './trigger_config';
@@ -594,15 +593,6 @@ export interface Adapter {
   readonly adapterType: string;
 
   /**
-   * The AWAITABLE capability (asks-as-adapter §A) — present ONLY on adapters
-   * that advertise awaitable edges (`await x-[:E]->`). It answers whether an
-   * awaited edge has resolved and, if not, the key that will wake it; the engine
-   * keeps the correlation itself. Absent on every ordinary adapter.
-   * Delivery-orthogonal (P12) — this is not rendering or delivery.
-   */
-  readonly awaitable?: AwaitableCapability;
-
-  /**
    * Arrivals (adapter protocol 2.5) — present on adapters with listenable
    * edges. It names the key each record's edge is waited on under; what
    * lands there the adapter reports with the inbound delivery it read
@@ -871,18 +861,9 @@ export interface Adapter {
   }>;
 
   /**
-   * The wake door, separate from `preprocessInbound`'s events: the correlation
-   * keys (as `awaitable.resolveAwait` names them when pending) that this raw
-   * inbound payload may have resolved. The engine resumes whatever is parked on
-   * them; a key nothing waits on is a no-op. No ordering against the events —
-   * a resumed await re-checks live, so it never relies on the payload.
-   */
-  wakeKeys?(input: { raw: unknown }): Promise<string[]>;
-
-  /**
    * The module checks its own inbound requests (its manifest declares
    * `inbound.scheme: module`): one request at its door, raw, in place of the
-   * host's signature check, `preprocessInbound` and `wakeKeys`. The answer is
+   * host's signature check and `preprocessInbound`. The answer is
    * its events, a refusal, or a reply the host sends as it is (a handshake).
    */
   checkInbound?(input: InboundCheckInput): Promise<InboundCheck>;
@@ -1885,7 +1866,6 @@ export type InboundCheck =
   | {
       outcome: 'accepted';
       events: DiscriminableEvent[];
-      wakeKeys?: string[];
       /** What the request says landed on listenable edges (2.5). */
       arrivals?: Arrival[];
       checkpoint?: unknown;

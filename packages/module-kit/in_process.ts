@@ -105,8 +105,8 @@ export class ModuleAnswerInvalid extends Error {
 
 /** Methods whose in-process answer is the wire's answer. The paged ones
  *  stream in process, `resolveFileRef` answers bytes rather than a URL, and
- *  `resolveAwait` lives on `awaitable` and `awaitKeys` on `arrivals`, so
- *  those cross differently (`awaitKeys` is validated on its capability). */
+ *  `awaitKeys` lives on `arrivals`, so those cross differently (`awaitKeys`
+ *  is validated on its capability). */
 const VALIDATED_METHODS: ReadonlySet<string> = new Set<MethodName>([
   'listEntryPoints',
   'describe',
@@ -124,7 +124,6 @@ const VALIDATED_METHODS: ReadonlySet<string> = new Set<MethodName>([
   'ensureEventSubscription',
   'removeEventSubscription',
   'refreshEventSubscription',
-  'wakeKeys',
   'readRecord',
   'translateFilter',
   'getDedupRules',

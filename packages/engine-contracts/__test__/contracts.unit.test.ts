@@ -6,6 +6,8 @@ import { LANGUAGE_VERSION, compatibilityKey, languageStanding, languageVersionDi
 import {
   CATALOG_SNAPSHOT_VERSION,
   CONTRACTS,
+  ADAPTER_METHODS,
+  AdapterWakeBody,
   CORE_PARK_REASONS,
   LANGUAGE_CONTRACT,
   HOST_FAMILIES,
@@ -19,11 +21,13 @@ import {
   SYSTEM_CALLER_VERSION,
   hostMethodPaths,
   isCorePark,
+  missingHostMethods,
   refuseUnsupportedHostFamiliesVersion,
   refuseUnsupportedParkStateVersion,
   tenantIdOf,
 } from '../index';
 import { ModelsCallRequest } from '../slots';
+import { HOST_RECORDING_VERSION, hostRecordingSchema } from '../conformance';
 
 describe('the tenant id', () => {
   it('brands any non-empty string, which it carries unchanged', () => {
@@ -49,6 +53,41 @@ describe('the host families manifest', () => {
     expect(new Set(paths).size).toBe(paths.length);
     expect(paths).toContain('park.sink.commitAwaitPark');
     expect(Object.keys(HOST_FAMILIES)).toContain('segment');
+  });
+
+  it("serves a run's waits on listenable edges as an optional family, and no callbacks (version 2)", () => {
+    expect(HOST_FAMILIES['park.waits']).toEqual({ optional: true, methods: ['mark', 'open', 'arrivals', 'note'] });
+    expect(Object.keys(HOST_FAMILIES)).not.toContain('park.callbacks');
+    expect(hostMethodPaths().filter((path) => path.startsWith('park.callbacks'))).toEqual([]);
+    // A host without the waits is not refused for it: such a run opens none.
+    expect(missingHostMethods({ park: {} }).filter((path) => path.startsWith('park.waits'))).toEqual([]);
+  });
+
+  it('asks an adapter for its await keys, and never resolves an await or reads wake keys of it', () => {
+    expect(ADAPTER_METHODS).toContain('awaitKeys');
+    expect(ADAPTER_METHODS).not.toContain('resolveAwait');
+    expect(ADAPTER_METHODS).not.toContain('wakeKeys');
+  });
+});
+
+describe("the wake door's body", () => {
+  const arrival = { edge: 'Comments', key: 'thread:c1', identity: 'k1', landing: { fields: { Text: 'hi' } } };
+
+  it('is what arrived: one to a thousand arrivals, a gone record among them', () => {
+    const gone = { edge: 'Comments', key: 'thread:c2', gone: true };
+    expect(AdapterWakeBody.parse({ arrivals: [arrival, gone] })).toEqual({ arrivals: [arrival, gone] });
+    expect(AdapterWakeBody.safeParse({ arrivals: [] }).success).toBe(false);
+  });
+
+  it('refuses keys first, by name, naming adapter protocol 2.5 and `arrivals`', () => {
+    for (const body of [{ keys: ['thread:c1'] }, { keys: ['thread:c1'], arrivals: [arrival] }]) {
+      const parsed = AdapterWakeBody.safeParse(body);
+      expect(parsed.success).toBe(false);
+      const first = parsed.error?.issues[0];
+      expect(first?.path).toEqual(['keys']);
+      expect(first?.message).toContain('adapter protocol 2.5');
+      expect(first?.message).toContain('`arrivals`');
+    }
   });
 });
 
@@ -179,6 +218,9 @@ describe('a host families version is refused at segment.open unless this host se
   });
 
   it('refuses another version, or none, naming the contract, what it saw and what it serves', () => {
+    expect(() => refuseUnsupportedHostFamiliesVersion({ hostFamiliesVersion: 1 })).toThrow(
+      'segment.open carries host families version 1, which this host does not serve (supported: 2)',
+    );
     expect(() => refuseUnsupportedHostFamiliesVersion({ hostFamiliesVersion: 9 })).toThrow(
       'segment.open carries host families version 9, which this host does not serve (supported: 2)',
     );
@@ -265,5 +307,34 @@ describe('the host model request', () => {
 
   it('refuses a run id that is not a string', () => {
     expect(HostModelRequest.safeParse({ ...request, runId: 7 }).success).toBe(false);
+  });
+});
+
+describe('a host recording', () => {
+  const resumed = {
+    kit: 'host',
+    version: HOST_RECORDING_VERSION,
+    input: {
+      source: 'movement m() {}',
+      languageVersion: LANGUAGE_VERSION,
+      event: { adapterType: 'manual' },
+      teamId: 'team-1',
+      catalog: { adapters: {}, credentials: {}, plugins: {} },
+      state: { address: 's0' },
+    },
+    methods: ['park.wake'],
+    requests: [{ family: 'park', method: 'wake', args: { segmentId: 'seg-1', waitId: 'w1' }, after: [] }],
+    result: {},
+  };
+
+  it('records a resume, a wake naming its wait among its requests', () => {
+    expect(hostRecordingSchema.safeParse({ ...resumed, entry: 'resume' }).success).toBe(true);
+  });
+
+  it('records no callback body: callbacks retired with host families version 2', () => {
+    const body = { ...resumed, entry: 'callbackBody', input: { ...resumed.input, values: {}, callIndex: 0 } };
+    expect(hostRecordingSchema.safeParse(body).success).toBe(false);
+    const minted = { ...resumed, entry: 'resume', methods: ['park.callbacks.mint'] };
+    expect(hostRecordingSchema.safeParse(minted).success).toBe(false);
   });
 });

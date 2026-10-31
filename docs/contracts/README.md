@@ -43,8 +43,8 @@ A host recording is one entry into the engine as data: what it was handed, every
 {
   kit: 'host';
   version: 2;                          // the recording format's own version
-  entry: 'run' | 'resume' | 'settleRace' | 'callbackBody';
-  input: RunInput | ResumeInput | SettleRaceInput | CallbackBodyInput;  // with its languageVersion
+  entry: 'run' | 'resume' | 'settleRace';
+  input: RunInput | ResumeInput | SettleRaceInput;  // with its languageVersion
   methods: string[];                   // every host method the recorded host served
   requests: Array<
     { family: string; method: string; args: unknown; after: number[] } &

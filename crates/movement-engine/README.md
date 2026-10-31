@@ -985,7 +985,7 @@ alone refuses it). What it writes is Unicode text, so it holds none.
 
 **The input** (`engine_start`): `{entry: "segment", source, languageVersion,
 movementName?, event, segmentId, credentialIds?, spend?, now,
-catalog, dryRun?, nativeCheck?, snapshotModels?, resume?, triggerMark?, fire?, settle?, limitPaused?, suspendAt?, serves,
+catalog, dryRun?, nativeCheck?, snapshotModels?, resume?, triggerMark?, settle?, limitPaused?, suspendAt?, serves,
 extractionFileChars?, maxCallDepth?, extractionTiers?, limits?, recordsReturned?}`. `segmentId` is the segment the run host opened (`segment.open`),
 named on every host request; `credentialIds` maps an import's credential name
 to its id; `spend` is the run's account as the segment starts

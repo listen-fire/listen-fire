@@ -18,7 +18,6 @@ import type {
   Span,
 } from 'movement-lang';
 
-import type { CallbackParamSpec } from './callback';
 import type { FileRef } from './file_ref';
 import type { SourcePosition } from './position';
 import type { Provenance, ProvenanceOrigin } from './provenance';
@@ -28,7 +27,7 @@ import type { LocalLandingShape, WriteRecord } from './write_record';
 // ── Park reasons ────────────────────────────────────────────────────────────
 
 /** The park reasons the core writes: a timer `sleep` / `await until`, an
- *  await on an awaitable edge, and a suspension at a limit. */
+ *  await on a listenable edge, and a suspension at a limit. */
 export const CORE_PARK_REASONS = ['timer', 'await', 'limit'] as const;
 
 export type CoreParkReason = (typeof CORE_PARK_REASONS)[number];
@@ -223,16 +222,6 @@ export type BindingDescriptor<C extends ParkedCode = CodeAsTree> =
    * before this existed still reads as `value`, and one written after says so.
    */
   | { kind: 'recordValue'; value: ValueDescriptor<C>; provenance?: Provenance; many?: true }
-  /** Bucket 1 — a minted callback is pure data: its id, its link, its fire-time
-   *  signature. The CALLS are deliberately NOT here (they arrive after the park
-   *  and are read live from the store), and neither is the body (it is code, at
-   *  the address the store row names). */
-  | {
-      kind: 'callback';
-      callbackId: string;
-      url: string;
-      params: CallbackParamSpec[];
-    }
   // Bucket 3 — code refs carry ONLY the re-resolution tag (the name), and the
   // library it is declared in. The live declaration / fileEnv comes from the
   // re-parsed program.

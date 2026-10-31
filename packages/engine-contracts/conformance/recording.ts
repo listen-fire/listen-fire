@@ -14,7 +14,7 @@ import type { CatalogSnapshot } from 'movement-lang';
 import type { TriggerEvent } from '../event';
 import { hostMethodPaths } from '../host_families';
 import type { ParkedScopeState } from '../park_state';
-import type { CallbackBodyInput, ResumeInput, RunInput, SettleRaceInput } from '../run_input';
+import type { ResumeInput, RunInput, SettleRaceInput } from '../run_input';
 import { tenantIdSchema } from '../tenant';
 
 /** The recording format's own version, which a reader refuses past. */
@@ -83,6 +83,7 @@ const runInputSchema = z.object({
     .strict()
     .optional(),
   maxSegmentSeconds: z.number().optional(),
+  triggerMark: z.number().int().optional(),
 });
 
 const resumeInputSchema = runInputSchema.extend({
@@ -166,7 +167,7 @@ const common = {
 };
 
 /** One entry into the engine, by its entry point: `runMovement`,
- *  `resumeMovement`, `settleRaceFrame` or `fireCallbackBody`. */
+ *  `resumeMovement` or `settleRaceFrame`. */
 export const hostRecordingSchema = z
   .discriminatedUnion('entry', [
     z.object({ ...common, entry: z.literal('run'), input: runInputSchema }),
@@ -175,11 +176,6 @@ export const hostRecordingSchema = z
       ...common,
       entry: z.literal('settleRace'),
       input: resumeInputSchema.extend({ frameAddress: z.string() }),
-    }),
-    z.object({
-      ...common,
-      entry: z.literal('callbackBody'),
-      input: resumeInputSchema.extend({ values: z.record(z.string(), z.unknown()), callIndex: z.number() }),
     }),
   ])
   .refine((recording) => (recording.result === undefined) !== (recording.failure === undefined), {
@@ -199,7 +195,6 @@ export interface EntryInputs {
   run: RunInput;
   resume: ResumeInput;
   settleRace: SettleRaceInput;
-  callbackBody: CallbackBodyInput;
 }
 
 /** How an entry ended: its result, or the error it threw. */

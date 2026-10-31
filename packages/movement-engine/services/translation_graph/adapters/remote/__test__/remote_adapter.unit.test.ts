@@ -73,7 +73,6 @@ const ALL_METHODS = [
   'unlinkRecords',
   'ensureEventSubscription',
   'removeEventSubscription',
-  'wakeKeys',
 ];
 
 function manifest(methods: readonly string[] = ALL_METHODS): RemoteManifest {
@@ -327,46 +326,28 @@ describe('RemoteAdapter v2 forwarders', () => {
     ]);
   });
 
-  it('wakeKeys forwards the raw payload', async () => {
-    enqueue(['C1:1.2']);
-    const adapter = buildAdapter();
-    expect(await adapter.wakeKeys!({ raw: { thread_ts: '1.2' } })).toEqual(['C1:1.2']);
-    expect(postRpcMock).toHaveBeenCalledWith(
-      expect.objectContaining({ method: 'wakeKeys', params: { raw: { thread_ts: '1.2' } } }),
-    );
-  });
-
   it('prunes each v2 forwarder the manifest does not advertise', () => {
     const adapter = buildAdapter(['listEntryPoints', 'describe']);
     expect(adapter.linkRecords).toBeUndefined();
     expect(adapter.unlinkRecords).toBeUndefined();
     expect(adapter.ensureEventSubscription).toBeUndefined();
     expect(adapter.removeEventSubscription).toBeUndefined();
-    expect(adapter.wakeKeys).toBeUndefined();
   });
 });
 
-describe('RemoteAdapter awaitable gating', () => {
-  const point = { recordId: 'ask-1', edge: 'Response', headData: { channel: 'C1' } };
+describe('RemoteAdapter arrivals gating', () => {
+  const heads = [{ recordId: '1.2', headData: { channel: 'C1' } }, { recordId: '9.9' }];
 
-  it('has no awaitable capability unless the manifest advertises resolveAwait', () => {
-    expect(buildAdapter(ALL_METHODS).awaitable).toBeUndefined();
+  it('has no arrivals capability unless the manifest advertises awaitKeys', () => {
+    expect(buildAdapter(ALL_METHODS).arrivals).toBeUndefined();
   });
 
-  it('forwards resolveAwait when advertised and returns the resolution', async () => {
-    const adapter = buildAdapter([...ALL_METHODS, 'resolveAwait']);
-    expect(adapter.awaitable).toBeDefined();
-    enqueue(
-      { status: 'pending', correlationKey: 'C1:1.2' },
-      { status: 'landed', correlationKey: 'C1:1.2', landings: [{ recordType: 'Response', fields: { Answer: 'yes' } }] },
-    );
-    expect(await adapter.awaitable!.resolveAwait(point)).toEqual({ status: 'pending', correlationKey: 'C1:1.2' });
-    expect(await adapter.awaitable!.resolveAwait(point)).toEqual({
-      status: 'landed',
-      correlationKey: 'C1:1.2',
-      landings: [{ recordType: 'Response', fields: { Answer: 'yes' } }],
-    });
-    expect(postRpcMock).toHaveBeenCalledWith(expect.objectContaining({ method: 'resolveAwait', params: point }));
+  it('forwards awaitKeys when advertised and answers each head its key, or gone', async () => {
+    const adapter = buildAdapter([...ALL_METHODS, 'awaitKeys']);
+    expect(adapter.arrivals).toBeDefined();
+    enqueue([{ key: 'C1:1.2' }, { gone: true }]);
+    expect(await adapter.arrivals!.awaitKeys({ edge: 'Replies', heads })).toEqual([{ key: 'C1:1.2' }, { gone: true }]);
+    expect(postRpcMock).toHaveBeenCalledWith(expect.objectContaining({ method: 'awaitKeys', params: { edge: 'Replies', heads } }));
   });
 });
 

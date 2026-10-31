@@ -7,17 +7,19 @@
 // The world is plain data so a host in any language can build it. The adapter
 // every case uses reads a delivery's JSON body as:
 //
-//   { events?: object[], wake?: string[], checkpoint?: unknown }
+//   { events?: object[], arrivals?: Arrival[], checkpoint?: unknown }
 //
-// events → one event each (payload = the object), wake → the correlation keys,
-// checkpoint → the pull cursor to save. A captured event counts once (one
-// matching trigger per event).
+// events → one event each (payload = the object), arrivals → what landed on
+// listenable edges (adapter protocol 2.5), checkpoint → the pull cursor to
+// save. A captured event counts once (one matching trigger per event).
 //
 // Runner-agnostic: each case is a name and an async body that throws on
 // failure (node:assert), so jest and node:test both wrap the same list.
 
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
+
+import type { Arrival } from 'engine-contracts';
 
 import type { DiscriminableEvent } from '../translation_graph/adapter';
 import type {
@@ -56,10 +58,8 @@ export interface ContractWorld {
     captureMarked?: boolean;
     /** Queueing any captured event throws. */
     enqueue?: boolean;
-    /** The adapter's wakeKeys throws. */
-    wakeKeys?: boolean;
-    /** Queueing the wakes throws. */
-    enqueueWakes?: boolean;
+    /** Logging arrivals throws. */
+    logArrivals?: boolean;
   };
   /** The subscription's deliveries are synthetic: no signature check, drained before the ack. */
   synthetic?: boolean;
@@ -69,7 +69,8 @@ export interface ContractWorld {
 export interface ContractObservations {
   captured: number;
   enqueued: number;
-  wakes: string[];
+  /** Every arrival logged, in order. */
+  arrivals: Arrival[];
   checkpoints: unknown[];
   notified: number;
 }
@@ -157,6 +158,8 @@ const door = (provider: string, subscription: string) => `/api/public/webhook-sy
 const CRM_DOOR = door('contract_crm', 'sub-crm');
 
 const TWO_EVENTS = { events: [{ n: 1 }, { n: 2 }] };
+const ARRIVAL: Arrival = { edge: 'Comments', key: 'thread:1', identity: 'c1', landing: { fields: { Text: 'hi' } } };
+const GONE: Arrival = { edge: 'Comments', key: 'thread:2', gone: true };
 
 async function arrangeAnd(backend: InboundContractBackend, overrides: Partial<ContractWorld> = {}): Promise<void> {
   await backend.arrange(world(overrides));
@@ -280,16 +283,16 @@ export const INBOUND_CONTRACT_CASES: InboundContractCase[] = [
       const answer = await post(backend, CRM_DOOR, json({}), crmSigned);
       assert.deepEqual([answer.status, answer.body], [200, { ok: true, eventsProcessed: 0 }]);
       const seen = await backend.observed();
-      assert.deepEqual([seen.enqueued, seen.wakes], [0, []]);
+      assert.deepEqual([seen.enqueued, seen.arrivals], [0, []]);
     },
   },
   {
-    name: 'wake keys are queued whether or not any event came with them',
+    name: 'arrivals are logged whether or not any event came with them',
     async run(backend) {
       await arrangeAnd(backend);
-      const answer = await post(backend, CRM_DOOR, json({ wake: ['thread:1', 'thread:2'] }), crmSigned);
+      const answer = await post(backend, CRM_DOOR, json({ arrivals: [ARRIVAL, GONE] }), crmSigned);
       assert.deepEqual([answer.status, answer.body], [200, { ok: true, eventsProcessed: 0 }]);
-      assert.deepEqual((await backend.observed()).wakes, ['thread:1', 'thread:2']);
+      assert.deepEqual((await backend.observed()).arrivals, [ARRIVAL, GONE]);
     },
   },
   {
@@ -302,29 +305,20 @@ export const INBOUND_CONTRACT_CASES: InboundContractCase[] = [
     },
   },
   {
-    name: 'a receipt that cannot be queued is a 500 so the sender retries; the wakes still go in',
+    name: 'a receipt that cannot be queued is a 500 so the sender retries; the arrivals are still logged',
     async run(backend) {
       await arrangeAnd(backend, { faults: { enqueue: true } });
-      const answer = await post(backend, CRM_DOOR, json({ ...TWO_EVENTS, wake: ['thread:1'] }), crmSigned);
+      const answer = await post(backend, CRM_DOOR, json({ ...TWO_EVENTS, arrivals: [ARRIVAL] }), crmSigned);
       assert.deepEqual([answer.status, answer.body], [500, { error: 'internal' }]);
       const seen = await backend.observed();
-      assert.deepEqual([seen.enqueued, seen.wakes, seen.notified], [0, ['thread:1'], 0]);
+      assert.deepEqual([seen.enqueued, seen.arrivals, seen.notified], [0, [ARRIVAL], 0]);
     },
   },
   {
-    name: 'a wake door that fails is a 500 after the events are queued',
+    name: 'arrivals that cannot be logged are a 500',
     async run(backend) {
-      await arrangeAnd(backend, { faults: { wakeKeys: true } });
-      const answer = await post(backend, CRM_DOOR, json(TWO_EVENTS), crmSigned);
-      assert.equal(answer.status, 500);
-      assert.equal((await backend.observed()).enqueued, 2);
-    },
-  },
-  {
-    name: 'wakes that cannot be queued are a 500',
-    async run(backend) {
-      await arrangeAnd(backend, { faults: { enqueueWakes: true } });
-      const answer = await post(backend, CRM_DOOR, json({ wake: ['thread:1'] }), crmSigned);
+      await arrangeAnd(backend, { faults: { logArrivals: true } });
+      const answer = await post(backend, CRM_DOOR, json({ arrivals: [ARRIVAL] }), crmSigned);
       assert.equal(answer.status, 500);
     },
   },
@@ -386,7 +380,7 @@ export const INBOUND_CONTRACT_CASES: InboundContractCase[] = [
     async run(backend) {
       await arrangeAnd(backend);
       for (const verb of ['emit', 'wake']) {
-        const big = json({ keys: [], events: [], pad: 'x'.repeat(1_100_000) });
+        const big = json({ arrivals: [], events: [], pad: 'x'.repeat(1_100_000) });
         const answer = await post(backend, `/api/public/adapter/${CONTRACT_PUSH_TYPE}/${verb}`, big, () => ({
           authorization: 'Bearer push-credential',
         }));
@@ -448,14 +442,28 @@ export const INBOUND_CONTRACT_CASES: InboundContractCase[] = [
     },
   },
   {
-    name: 'wake queues one wake per key: 202 accepted',
+    name: 'wake logs what arrived: 202 accepted',
     async run(backend) {
       await arrangeAnd(backend);
-      const answer = await post(backend, `/api/public/adapter/${CONTRACT_PUSH_TYPE}/wake`, json({ keys: ['k1', 'k2'] }), () => ({
+      const answer = await post(backend, `/api/public/adapter/${CONTRACT_PUSH_TYPE}/wake`, json({ arrivals: [ARRIVAL, GONE] }), () => ({
         authorization: 'Bearer push-credential',
       }));
       assert.deepEqual([answer.status, answer.body], [202, { accepted: 2 }]);
-      assert.deepEqual((await backend.observed()).wakes, ['k1', 'k2']);
+      assert.deepEqual((await backend.observed()).arrivals, [ARRIVAL, GONE]);
+    },
+  },
+  {
+    name: 'a wake naming keys is a 400 naming adapter protocol 2.5, after authentication',
+    async run(backend) {
+      await arrangeAnd(backend);
+      const wake = (credential: string) =>
+        post(backend, `/api/public/adapter/${CONTRACT_PUSH_TYPE}/wake`, json({ keys: ['k1'] }), () => ({ authorization: `Bearer ${credential}` }));
+      assert.equal((await wake('nobody')).status, 401);
+      const answer = await wake('push-credential');
+      assert.equal(answer.status, 400);
+      const issue = (answer.body as { issues?: { path?: unknown; message?: unknown }[] }).issues?.[0];
+      assert.equal(issue?.path, 'keys');
+      assert.match(String(issue?.message), /adapter protocol 2\.5/);
     },
   },
 ];
@@ -553,21 +561,6 @@ export const DELIVERY_RECEIPT_CONTRACT_CASES: DeliveryReceiptContractCase[] = [
     },
   },
   {
-    name: 'a delivery whose wakes failed is kept without its id, so the retry is kept too',
-    async run(backend) {
-      await arrangeAnd(backend, withIds({ faults: { wakeKeys: true } }));
-      for (let i = 0; i < 2; i += 1) {
-        const answer = await post(backend, CRM_DOOR, json(TWO_EVENTS), crmSignedAs('d-1'));
-        assert.equal(answer.status, 500);
-      }
-      assert.equal((await backend.observed()).enqueued, 4);
-      assert.deepEqual(
-        (await backend.deliveries()).map((d) => d.externalId),
-        [null, null],
-      );
-    },
-  },
-  {
     name: "emit's deliveryId keeps the batch out the second time",
     async run(backend) {
       await arrangeAnd(backend);
@@ -606,13 +599,13 @@ export function memoryInboundStores(arranged: ContractWorld): {
   push: PushStore<DiscriminableEvent>;
   observed(): ContractObservations;
 } {
-  const seen: ContractObservations = { captured: 0, enqueued: 0, wakes: [], checkpoints: [], notified: 0 };
+  const seen: ContractObservations = { captured: 0, enqueued: 0, arrivals: [], checkpoints: [], notified: 0 };
   const providers = new Map(arranged.providers.map((p) => [p.providerKey, p]));
   const { faults } = arranged;
 
-  const enqueueWakes = async (input: { keys: readonly string[] }) => {
-    if (faults.enqueueWakes) throw new Error('wake queue unavailable');
-    seen.wakes.push(...input.keys);
+  const logArrivals = async (input: { arrivals: readonly Arrival[] }) => {
+    if (faults.logArrivals) throw new Error('arrival log unavailable');
+    seen.arrivals.push(...input.arrivals);
   };
 
   const store: InboundStore<DiscriminableEvent> = {
@@ -635,15 +628,12 @@ export function memoryInboundStores(arranged: ContractWorld): {
             adapter: {
               adapterType: provider.providerKey.toLowerCase(),
               async preprocessInbound({ raw }) {
-                const body = raw as { events?: Record<string, unknown>[]; checkpoint?: unknown };
+                const body = raw as { events?: Record<string, unknown>[]; arrivals?: Arrival[]; checkpoint?: unknown };
                 return {
                   events: (body.events ?? []).map((payload) => ({ payload })),
+                  ...(body.arrivals !== undefined ? { arrivals: body.arrivals } : {}),
                   ...(body.checkpoint !== undefined ? { checkpoint: body.checkpoint } : {}),
                 };
-              },
-              async wakeKeys({ raw }) {
-                if (faults.wakeKeys) throw new Error('wake door down');
-                return (raw as { wake?: string[] }).wake ?? [];
               },
             },
           };
@@ -665,7 +655,7 @@ export function memoryInboundStores(arranged: ContractWorld): {
       if (faults.enqueue) throw new Error('work table unavailable');
       seen.enqueued += 1;
     },
-    enqueueWakes,
+    logArrivals,
   };
 
   const host: DeliveryHost<DiscriminableEvent> = {
@@ -701,11 +691,11 @@ export function memoryInboundStores(arranged: ContractWorld): {
     async enqueue(captured) {
       seen.enqueued += captured.length;
     },
-    enqueueWakes,
+    logArrivals,
     notify: () => {
       seen.notified += 1;
     },
   };
 
-  return { store, host, push, observed: () => ({ ...seen, wakes: [...seen.wakes], checkpoints: [...seen.checkpoints] }) };
+  return { store, host, push, observed: () => ({ ...seen, arrivals: [...seen.arrivals], checkpoints: [...seen.checkpoints] }) };
 }

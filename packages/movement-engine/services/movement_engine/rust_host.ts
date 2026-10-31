@@ -24,7 +24,7 @@ import {
   type InstanceSchema,
   type Program,
 } from 'movement-lang';
-import { filesAtType, fileValueOf, isFileValue, PARK_STATE_VERSION, type CodeByPlace, type ParkedScopeState } from 'engine-contracts';
+import { filesAtType, fileValueOf, isFileValue } from 'engine-contracts';
 import type { Resource } from '../translation_graph/adapter';
 import { withResourceFile } from '../translation_graph/engine/files/resources';
 import { z } from 'zod';
@@ -49,7 +49,6 @@ import {
   RustShimError,
   WireOut,
   filesInBranchExports,
-  isCallbackParam,
   schemaFieldTypeOf,
   optionalString,
   optionalStringList,
@@ -406,8 +405,8 @@ const ROUTES: Record<string, Route> = {
     });
     return undefined;
   },
-  /** An await park (an awaitable adapter's edge, a callback's `Called`):
-   *  its state on the eval wire and the key a wake names it by. */
+  /** An await park on a listenable edge: its state on the eval wire and the
+   *  wait it parks on. */
   async 'park.sink.commitAwaitPark'(request, { host, wire }) {
     const sink = host.park.sink;
     if (sink?.commitAwaitPark === undefined) throw notServed('park.sink.commitAwaitPark');
@@ -415,8 +414,7 @@ const ROUTES: Record<string, Route> = {
     await sink.commitAwaitPark({
       address: string(request.address, 'park.sink.commitAwaitPark address'),
       state: wire.read(request.state),
-      adapterType: string(request.adapterType, 'park.sink.commitAwaitPark adapterType'),
-      correlationKey: string(request.correlationKey, 'park.sink.commitAwaitPark correlationKey'),
+      waitId: string(request.waitId, 'park.sink.commitAwaitPark waitId'),
       segmentId: segmentOf(request),
     });
     return undefined;
@@ -490,47 +488,52 @@ const ROUTES: Record<string, Route> = {
     });
     return undefined;
   },
-  /** "Resume whatever is parked on this key." */
+  /** "Resume the run parked on this wait." */
   async 'park.wake'(request, { host }) {
-    await host.park.wake({
-      adapterType: string(request.adapterType, 'park.wake adapterType'),
-      correlationKey: string(request.correlationKey, 'park.wake correlationKey'),
-      segmentId: segmentOf(request),
-    });
+    await host.park.wake({ waitId: string(request.waitId, 'park.wake waitId'), segmentId: segmentOf(request) });
     return undefined;
   },
-  /** A callback minted, its captured continuation on the eval wire:
-   *  `{id, url}`. */
-  async 'park.callbacks.mint'(request, { host, wire }) {
-    const callbacks = host.park.callbacks;
-    if (callbacks === undefined) throw notServed('park.callbacks.mint');
-    if (request.wire !== true) throw new RustShimError('park.callbacks.mint carries its state on the eval wire');
-    if (typeof request.singleUse !== 'boolean') throw new RustShimError('park.callbacks.mint singleUse is a boolean');
-    const params = request.params;
-    if (!Array.isArray(params) || !params.every(isCallbackParam)) throw new RustShimError('park.callbacks.mint params are {name, type} each');
-    const expiresAt = request.expiresAt === undefined ? undefined : instant(request.expiresAt, 'park.callbacks.mint expiresAt');
-    const state = wire.read(request.state);
-    if (!isParkedState(state)) throw new RustShimError('park.callbacks.mint state is a parked state');
-    return callbacks.mint({
-      address: string(request.address, 'park.callbacks.mint address'),
-      params,
-      state,
-      singleUse: request.singleUse,
-      ...(expiresAt !== undefined ? { expiresAt } : {}),
+  /** The arrival log's mark now: `{mark}`. */
+  async 'park.waits.mark'(request, { host }) {
+    const waits = host.park.waits;
+    if (waits === undefined) throw notServed('park.waits.mark');
+    return waits.mark({ segmentId: segmentOf(request) });
+  },
+  /** A wait on `edge` of the record the adapter keys `key`, reading what
+   *  arrived after `since`: `{waitId}`. */
+  async 'park.waits.open'(request, { host }) {
+    const waits = host.park.waits;
+    if (waits === undefined) throw notServed('park.waits.open');
+    return waits.open({
+      adapterType: string(request.adapterType, 'park.waits.open adapterType'),
+      edge: string(request.edge, 'park.waits.open edge'),
+      key: string(request.key, 'park.waits.open key'),
+      since: count(request.since, 'park.waits.open since'),
       segmentId: segmentOf(request),
     });
   },
-  /** A callback's live call ledger, as data on the eval wire. */
-  async 'park.callbacks.calls'(request, { host, wire }) {
-    const callbacks = host.park.callbacks;
-    if (callbacks === undefined) throw notServed('park.callbacks.calls');
-    const calls = await callbacks.calls({
-      callbackId: string(request.callbackId, 'park.callbacks.calls callbackId'),
+  /** What a wait has yet to judge, in log order, and whether its record
+   *  went: on the eval wire, its landings data as an adapter's answer is. */
+  async 'park.waits.arrivals'(request, { host, wire }) {
+    const waits = host.park.waits;
+    if (waits === undefined) throw notServed('park.waits.arrivals');
+    if (request.wire !== true) throw new RustShimError('park.waits.arrivals answers on the eval wire');
+    const logged = await waits.arrivals({ waitId: string(request.waitId, 'park.waits.arrivals waitId'), segmentId: segmentOf(request) });
+    return new Plain(wired(wire, logged, 'park.waits.arrivals'));
+  },
+  /** The wait judged an arrival: `{counts}`. */
+  async 'park.waits.note'(request, { host }) {
+    const waits = host.park.waits;
+    if (waits === undefined) throw notServed('park.waits.note');
+    if (typeof request.matched !== 'boolean') throw new RustShimError('park.waits.note matched is a boolean');
+    const version = optionalString(request.version, 'park.waits.note version');
+    return waits.note({
+      waitId: string(request.waitId, 'park.waits.note waitId'),
+      identity: string(request.identity, 'park.waits.note identity'),
+      ...(version !== undefined ? { version } : {}),
+      matched: request.matched,
       segmentId: segmentOf(request),
     });
-    const value = wire.value(calls);
-    if (value === REFUSED) throw new RustShimError('park.callbacks.calls answered calls the eval wire cannot carry as themselves');
-    return new Plain(value);
   },
   /** A library text a park pins, kept once by its content: answered its hash. */
   async 'park.sources.save'(request, { host }) {
@@ -733,17 +736,6 @@ function microdollars(value: unknown, what: string): number {
  *  asks an optional one only where the segment input says it is served. */
 function notServed(path: string): RustShimError {
   return new RustShimError(`the engine asked ${path} of a host that does not serve it`);
-}
-
-/** The parked state's own fields, as the engine writes them; the rest is
- *  the engine's to read back. */
-function isParkedState(value: unknown): value is ParkedScopeState<CodeByPlace> {
-  if (typeof value !== 'object' || value === null) return false;
-  return (
-    Reflect.get(value, 'version') === PARK_STATE_VERSION
-    && typeof Reflect.get(value, 'address') === 'string'
-    && Array.isArray(Reflect.get(value, 'scopeChain'))
-  );
 }
 
 function count(value: unknown, what: string): number {

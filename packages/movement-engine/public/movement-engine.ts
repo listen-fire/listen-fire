@@ -4,7 +4,7 @@
 
 import { LANGUAGE_VERSION } from 'movement-lang';
 
-export { fireCallbackBody, resumeMovement, runMovement, settleRaceFrame } from '../services/movement_engine/rust_run';
+export { resumeMovement, runMovement, settleRaceFrame } from '../services/movement_engine/rust_run';
 export { MovementRunFailed, RunCancelledSignal, runFailureCause } from '../services/movement_engine/errors';
 export type {
   CancelGate,

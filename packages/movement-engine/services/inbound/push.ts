@@ -1,14 +1,17 @@
 // The two push doors a module calls when it owns its own inbound URL:
 //
-//   POST …/<adapterType>/emit  { events }  new data, receipted against the
-//                                          caller's triggers as a webhook
-//                                          delivery's events are
-//   POST …/<adapterType>/wake  { keys }    resume whatever is parked on these
-//                                          correlation keys
+//   POST …/<adapterType>/emit  { events }    new data, receipted against the
+//                                            caller's triggers as a webhook
+//                                            delivery's events are
+//   POST …/<adapterType>/wake  { arrivals }  what landed on listenable edges
+//                                            (adapter protocol 2.5), logged,
+//                                            waking the waits parked on each
+//                                            record
 //
 // The caller presents the credential its install holds and the install whose
 // secret matches is the team (the store decides). Both answer 202
-// `{ accepted }` once the rows are queued; 401 with no detail when the
+// `{ accepted }` once the rows are queued or the arrivals logged; a wake that
+// names `keys` (before 2.5) is a 400 naming `arrivals`; 401 with no detail when the
 // credential matches no install, so the door says nothing about who installed
 // what; 409 when it matches installs on several teams and none is named; 400
 // for a malformed body, judged only after authentication.
@@ -22,7 +25,7 @@
 // answer's `cost` rides back on the response of the call whose work asked,
 // so the run that made that call is charged.
 
-import { AdapterEmitBody, AdapterWakeBody, HostModelRequest, type HostModelAnswerShape, type HostModelRequestShape } from 'engine-contracts';
+import { AdapterEmitBody, AdapterWakeBody, HostModelRequest, type Arrival, type HostModelAnswerShape, type HostModelRequestShape } from 'engine-contracts';
 import type { z } from 'zod';
 
 import type { DiscriminableEvent, EventType } from '../translation_graph/adapter';
@@ -52,7 +55,9 @@ export interface PushStore<Captured> {
   /** The receipts one event earns (one per matching trigger). */
   capture(input: { caller: PushCaller; event: DiscriminableEvent; eventTypes: readonly EventType[] }): Promise<Captured[]>;
   enqueue(captured: readonly Captured[]): Promise<void>;
-  enqueueWakes(input: { adapterType: string; teamId: string; keys: readonly string[] }): Promise<void>;
+  /** Log what arrived on the caller's listenable edges, waking the waits
+   *  parked on each record (as `InboundStore.logArrivals`). */
+  logArrivals(input: { adapterType: string; teamId: string; arrivals: readonly Arrival[] }): Promise<void>;
   notify(): void;
 }
 
@@ -123,14 +128,15 @@ export async function emitEvents<C>(
   return { accepted: captured.length, failed };
 }
 
-/** Queue a wake per key. A key nothing is parked on drains as a no-op. */
-export async function wakeKeys<C>(
+/** Log what arrived. An arrival no wait reads is kept for a wait opened
+ *  later; `accepted` counts them. */
+export async function logArrivals<C>(
   store: PushStore<C>,
-  input: { caller: PushCaller; keys: readonly string[] },
+  input: { caller: PushCaller; arrivals: readonly Arrival[] },
 ): Promise<{ accepted: number }> {
-  await store.enqueueWakes({ adapterType: input.caller.adapterType, teamId: input.caller.teamId, keys: input.keys });
+  await store.logArrivals({ adapterType: input.caller.adapterType, teamId: input.caller.teamId, arrivals: input.arrivals });
   store.notify();
-  return { accepted: input.keys.length };
+  return { accepted: input.arrivals.length };
 }
 
 export async function answerEmit<C>(store: PushStore<C>, request: PushRequest): Promise<InboundAnswer> {
@@ -156,7 +162,7 @@ export async function answerWake<C>(store: PushStore<C>, request: PushRequest): 
     const caller = await callerOf(store, request);
     if ('status' in caller) return caller;
     if (!body.success) return badRequest(body.error);
-    return { status: 202, body: await wakeKeys(store, { caller, keys: body.data.keys }) };
+    return { status: 202, body: await logArrivals(store, { caller, arrivals: body.data.arrivals }) };
   } catch (err) {
     logger.error('[AdapterDoors] wake failed', { err });
     return { status: 500, body: { error: 'internal' } };

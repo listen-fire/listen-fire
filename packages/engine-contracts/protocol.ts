@@ -1174,48 +1174,21 @@ export const WireDiscriminableEvent = z.object({
  *  split by its sender. */
 export const ADAPTER_DOOR_MAX_BATCH = 1000;
 
-/** The bodies the host's two push doors accept — shared with the conformance
- *  CLI's host double so a vendor is checked against the door's own shapes. */
+/** The body the host's `emit` door accepts — shared with the conformance
+ *  CLI's host double so a vendor is checked against the door's own shape. */
 export const AdapterEmitBody = z.object({
   events: z.array(WireDiscriminableEvent).min(1).max(ADAPTER_DOOR_MAX_BATCH),
 });
-export const AdapterWakeBody = z.object({
-  keys: z.array(z.string().min(1)).min(1).max(ADAPTER_DOOR_MAX_BATCH),
-});
 
-// ── Await (the awaitable capability over the wire) ───────────────────────────
+// ── Arrivals (adapter protocol 2.5; `arrivals.ts`) ───────────────────────────
 
-export const WireAwaitPoint = z.object({
-  recordId: z.string(),
-  edge: z.string(),
-  headData: z.record(z.string(), z.unknown()).optional(),
-});
-
+/** One landing along a listenable edge: its fields, read back through the
+ *  module's own `getFieldValue` for `recordType`. */
 export const WireAwaitLanding = z.object({
   recordId: z.string().optional(),
   recordType: z.string().optional(),
   fields: z.record(z.string(), z.unknown()),
 });
-
-/**
- * What an awaited edge resolves to now. A pending answer names the
- * correlation key the adapter will later `wake` with — the engine keeps the
- * key → parked-run map, so the adapter never writes the engine's tables. A
- * landed answer names it too, for when no landing passes the await's WHERE
- * and the engine has to keep waiting.
- */
-export const WireAwaitResolution = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('pending'), correlationKey: z.string() }),
-  z.object({
-    status: z.literal('landed'),
-    landings: z.array(WireAwaitLanding),
-    correlationKey: z.string(),
-  }),
-  z.object({ status: z.literal('empty') }),
-]);
-export type WireAwaitResolutionShape = z.infer<typeof WireAwaitResolution>;
-
-// ── Arrivals (adapter protocol 2.5; `arrivals.ts`) ───────────────────────────
 
 export const WireAwaitHead = z.object({
   recordId: z.string(),
@@ -1237,6 +1210,18 @@ export const WireArrival = z.union([
   z.object({ edge: z.string().min(1), key: z.string().min(1), gone: z.literal(true) }),
 ]);
 export type WireArrivalShape = z.infer<typeof WireArrival>;
+
+/** What the wake door says to a push naming keys: adapter protocol 2.5
+ *  reports what arrived, and the host wakes the waits it answers. */
+export const WAKE_KEYS_RETIRED =
+  'a wake names what arrived from adapter protocol 2.5: send `arrivals`, not `keys` (docs/contracts/adapter-protocol.md, Reporting arrivals)';
+
+/** What a module pushes to the host's `wake` door: what arrived (1 to 1,000).
+ *  A push naming `keys` is refused, by name, before anything else is read. */
+export const AdapterWakeBody = z.object({
+  keys: z.never({ error: WAKE_KEYS_RETIRED }).optional(),
+  arrivals: z.array(WireArrival).min(1).max(ADAPTER_DOOR_MAX_BATCH),
+});
 
 /** One request at a module-checked inbound door, as it arrived. */
 export const WireInboundRequest = z.object({
@@ -1263,14 +1248,13 @@ export const WireCheckInboundInput = z.object({
 export type WireCheckInboundInputShape = z.infer<typeof WireCheckInboundInput>;
 
 /** What the module decided about one request. `accepted`: it came from the
- *  provider; its events and the await keys it wakes. `refused`: it did not
+ *  provider; its events and what arrived on listenable edges. `refused`: it did not
  *  (the host answers `status`, 401 by default, with `signature_invalid`).
  *  `reply`: answer exactly this and run nothing (a handshake). */
 export const WireInboundCheck = z.discriminatedUnion('outcome', [
   z.object({
     outcome: z.literal('accepted'),
     events: z.array(WireDiscriminableEvent),
-    wakeKeys: z.array(z.string().min(1)).optional(),
     /** What landed on listenable edges, as the request reports it (2.5). */
     arrivals: z.array(WireArrival).optional(),
     checkpoint: z.unknown().optional(),
@@ -1532,16 +1516,6 @@ export const METHODS = {
   refreshEventSubscription: {
     params: WireRefreshEventSubscriptionInput,
     result: WireEventSubscriptionRefresh.nullable(),
-  },
-  resolveAwait: {
-    params: WireAwaitPoint,
-    result: WireAwaitResolution,
-  },
-  // The correlation keys an inbound payload resolves — the same keys a
-  // pending `resolveAwait` returned — so the host can wake the parked runs.
-  wakeKeys: {
-    params: z.object({ raw: z.unknown().optional() }),
-    result: z.array(z.string()),
   },
   // Adapter protocol 2.5: the key each head's listenable edge is waited on
   // under, in the order of `heads`, read off the heads alone.

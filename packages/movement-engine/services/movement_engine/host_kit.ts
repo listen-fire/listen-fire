@@ -74,11 +74,11 @@ export class SegmentDirectory {
   }
 }
 
-/** A wake as a host queues it: the request's key, for the segment's team. */
+/** A wake as a host queues it: the wait the request names, for the
+ *  segment's team. */
 export interface QueuedWake {
-  adapterType: string;
   teamId: TenantId;
-  correlationKey: string;
+  waitId: string;
 }
 
 /** An acting-user lookup with the source's candidates as a call: what the

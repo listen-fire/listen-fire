@@ -1,29 +1,18 @@
 // The engine's run entry: run a movement, resume a parked one, settle a race
-// frame, fire a callback's body. Each opens one segment (`inRunContext`) and
+// frame. Each opens one segment (`inRunContext`) and
 // runs it on the Rust engine (rust_engine.ts). The engine runs a pin that
 // shares this release's compatibility key; any other is refused at the
 // entry, by name, with the remedy. Saved movements of an older language run
 // where they were saved, on a platform that keeps an engine for them.
 
 import { LANGUAGE_VERSION, languageVersionDiagnostic } from 'movement-lang';
-import {
-  refuseUnsupportedParkStateVersion,
-  type CallbackBodyInput,
-  type RunInput,
-  type SettleRaceInput,
-} from 'engine-contracts';
+import { refuseUnsupportedParkStateVersion, type RunInput, type SettleRaceInput } from 'engine-contracts';
 
 import { MovementEngineError, MovementRunFailed, PARKED_ON_TYPESCRIPT } from './errors';
 import type { EngineHost } from './host';
 import { withIsoEvent } from './host_adapter';
 import { checkPinnedInRust, type CheckInput } from './program_check';
-import {
-  checkBeforeRustSegment,
-  fireSegmentInRust,
-  resumeSegmentInRust,
-  runSegmentInRust,
-  settleSegmentInRust,
-} from './rust_engine';
+import { checkBeforeRustSegment, resumeSegmentInRust, runSegmentInRust, settleSegmentInRust } from './rust_engine';
 import type { MovementRunResult, ResumeMovementInput, RunMovementInput } from './run_types';
 import { inRunContext } from './segment_context';
 
@@ -61,19 +50,6 @@ export async function settleRaceFrame(given: SettleRaceInput & { host: EngineHos
   refuseEarlierPin(input);
   checkBeforeRustSegment(input, () => checkPinnedInRust(checkInputOf(input)));
   return inRunContext(input, (context) => settleSegmentInRust({ input, context, checkedBefore: true }));
-}
-
-/**
- * Run a fired callback's body against its captured continuation. `source` MUST
- * be the run's version-pinned source, so the address resolves to the same
- * expression it was minted from.
- */
-export async function fireCallbackBody(given: CallbackBodyInput & { host: EngineHost }): Promise<MovementRunResult> {
-  const input = withIsoEvent(given);
-  refuseUnsupportedParkStateVersion(input.state.version);
-  refuseEarlierPin(input);
-  checkBeforeRustSegment(input, () => checkPinnedInRust(checkInputOf(input)));
-  return inRunContext(input, (context) => fireSegmentInRust({ input, context, checkedBefore: true }));
 }
 
 /**

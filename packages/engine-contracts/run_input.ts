@@ -1,5 +1,5 @@
 // What each entry into the engine is handed, as data: a first firing, a
-// resume, a race settlement and a callback body. The engine is handed a host
+// resume and a race settlement. The engine is handed a host
 // beside it (`EngineHost`), which is not data and so not here.
 
 import type { CatalogSnapshot, LanguageVersion } from 'movement-lang';
@@ -97,6 +97,11 @@ export interface RunInput {
    *  MOVENG_LIMIT_WALL_CLOCK. Absent ⇒ the deployment's
    *  MOVEMENT_MAX_SEGMENT_SECONDS, else 900. */
   maxSegmentSeconds?: number;
+  /** The arrival log's mark where the delivery that started the run was kept
+   *  (`park.waits.mark`): the trigger's record waits on what arrived after
+   *  it. Absent ⇒ the engine asks for the mark as the record enters the run.
+   *  (The Rust engine; host families version 2.) */
+  triggerMark?: number;
 }
 
 /** A segment's limits, each a whole positive number; an absent one is the
@@ -153,12 +158,4 @@ export interface ResumeInput extends RunInput {
  *  `deferredRaceFrames`). */
 export interface SettleRaceInput extends ResumeInput {
   frameAddress: string;
-}
-
-/** A fired callback's body: the callback's captured continuation as `state`,
- *  the call's values (validated against the callback's parameters) and its
- *  index on the callback's ledger. */
-export interface CallbackBodyInput extends ResumeInput {
-  values: Record<string, unknown>;
-  callIndex: number;
 }

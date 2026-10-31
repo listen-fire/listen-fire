@@ -24,7 +24,7 @@ import { MovementEngineError, MovementRunFailed, isCheckFailure, type MovementEn
 import { servedHostMethods } from './host';
 import { deploymentWallClockSeconds, maxFileChars, segmentLimitsFor, wallClockExceeded } from './segment_limits';
 import type { MovementRunResult, ResumeMovementInput, RunMovementInput } from './run_types';
-import type { CallbackBodyInput, SettleRaceInput } from 'engine-contracts';
+import type { SettleRaceInput } from 'engine-contracts';
 import type { RunContext } from './segment_context';
 import { serve, type RouteContext } from './rust_host';
 import { recordRunEngine, rustRunStats } from './rust_stats';
@@ -124,20 +124,6 @@ function settlementOf(input: SettleRaceInput): Resumption {
   return { state: input.state, settle: { frameAddress: input.frameAddress } };
 }
 
-/** A fired callback's body run in the Rust engine (`fireCallbackBody`):
- *  `state` the callback's captured continuation. */
-export async function fireSegmentInRust(
-  segment: RustSegment<CallbackBodyInput & { host: RunMovementInput['host'] }>,
-  engine?: EngineProtocol,
-): Promise<MovementRunResult> {
-  return segmentInRust(segment, firingOf(segment.input), engine);
-}
-
-/** What a callback's firing hands the engine. */
-function firingOf(input: CallbackBodyInput): Resumption {
-  return { state: input.state, fire: { values: input.values, callIndex: input.callIndex } };
-}
-
 /** What a segment resumes from, and how. */
 interface Resumption {
   state: unknown;
@@ -145,7 +131,6 @@ interface Resumption {
   answer?: unknown;
   deferRaceSettlement?: true;
   settle?: { frameAddress: string };
-  fire?: { values: Record<string, unknown>; callIndex: number };
 }
 
 async function segmentInRust(
@@ -479,12 +464,9 @@ function segmentInput(
   // the engine is handed their handles, never their descriptors.
   const state = resume !== undefined ? new WireOut({ files: wire.files }).value(filesInParkState(resume.state)) : undefined;
   if (state === REFUSED) return undefined;
-  // The answer a step-past resume binds and a fired callback's values are
-  // data, as the event is.
+  // The answer a step-past resume binds is data, as the event is.
   const answer = resume?.answer !== undefined ? wire.value(resume.answer) : undefined;
   if (answer === REFUSED) return undefined;
-  const values = resume?.fire !== undefined ? wire.value(resume.fire.values) : undefined;
-  if (values === REFUSED) return undefined;
   const resumed =
     resume === undefined
       ? undefined
@@ -500,7 +482,8 @@ function segmentInput(
       ...(input.dryRun === true ? { dryRun: true } : {}),
       ...(resumed !== undefined ? { resume: resumed } : {}),
       ...(resume?.settle !== undefined ? { settle: resume.settle } : {}),
-      ...(resume?.fire !== undefined ? { fire: { values, callIndex: resume.fire.callIndex } } : {}),
+      // Where the delivery that started the run was kept in the arrival log.
+      ...(input.triggerMark !== undefined ? { triggerMark: input.triggerMark } : {}),
       source: input.source,
       // The engine checks the program itself (the Rust checker): a run on
       // this engine is held to it, and the host is never asked.

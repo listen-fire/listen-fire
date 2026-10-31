@@ -159,6 +159,11 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
 - `listen-fire` no longer wakes a waiting run by key.
   - It calls neither `resolveAwait` nor `wakeKeys`, ignores a `checkInbound` acceptance's `wakeKeys`, and queues no `wake_await` row by key: modules report arrivals (adapter protocol 2.5).
   - The Rust module kit's store slot loses `correlations.*` and `callbacks.*`.
+- The engine package's host (`@listen-fire/engine`, `@listen-fire/engine-contracts`) moves to host families version 2, as the Rust embed did.
+  - `EngineHost.park.waits` (`mark`, `open`, `arrivals`, `note`) serves a run's waits, and the in-process host passes the waits it is given to the engine. `park.sink.commitAwaitPark` and `park.wake` take a `waitId`. `RunInput.triggerMark` names the arrival log's mark where the delivery that started the run was kept.
+  - Gone: `park.callbacks`, `fireCallbackBody`, `CallbackBodyInput` and a host recording's `callbackBody` entry; an adapter's `awaitable` capability (`resolveAwait`) and `wakeKeys`, and the remote adapter's forwarding of both. A remote module that offers `awaitKeys` is asked it.
+  - The inbound doors (`answerDelivery`, `answerWake`) hand what a delivery says arrived to the store's `logArrivals`, in place of `enqueueWakes` by key. The `wake` door takes `{ arrivals }` and refuses `{ keys }` (400, naming adapter protocol 2.5 and `arrivals`), as `listen-fire`'s does. A module's acceptance that names a `reply` is answered with it once the delivery is kept, in place of the door's acknowledgement.
+  - Why: a host built on the engine package serves the same contract as `listen-fire`, so a run waits on arrivals there too.
 - The Telegram and WhatsApp handbook sections, and their `Reply Markup` and `Interactive` field descriptions, teach a url button that opens a form from `@lf/forms`, in place of a callback id on the button.
   - A `callback_data` or reply button's tap reaches no run until those modules report taps as `Interactions`, as Slack does.
 

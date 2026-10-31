@@ -78,12 +78,6 @@ const DISPATCH: { [M in AdapterMethod]: (adapter: Adapter, args: AdapterCallMap[
     await implemented(adapter, 'removeEventSubscription', adapter.removeEventSubscription)(args);
     return null;
   },
-  resolveAwait: (adapter, point) => {
-    const awaitable = adapter.awaitable;
-    if (awaitable === undefined) throw notImplemented(adapter, 'resolveAwait');
-    return awaitable.resolveAwait(point);
-  },
-  wakeKeys: (adapter, args) => implemented(adapter, 'wakeKeys', adapter.wakeKeys)(args),
   awaitKeys: (adapter, args) => {
     const arrivals = adapter.arrivals;
     if (arrivals === undefined) throw notImplemented(adapter, 'awaitKeys');
@@ -133,7 +127,6 @@ async function relatedPage(
 /** What an instance is, as data. */
 function describeInstance(instance: string, adapter: Adapter): ResolvedAdapter {
   const methods: ResolvedAdapter['methods'] = ADAPTER_METHODS.filter((method) => {
-    if (method === 'resolveAwait') return adapter.awaitable !== undefined;
     if (method === 'awaitKeys') return adapter.arrivals !== undefined;
     return typeof adapter[method] === 'function';
   });

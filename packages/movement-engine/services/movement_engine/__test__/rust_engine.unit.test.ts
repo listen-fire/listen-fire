@@ -4,9 +4,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { EMPTY_CATALOG_SNAPSHOT, LANGUAGE_VERSION, mockCatalogSnapshot, type CatalogSnapshot } from 'movement-lang';
+import { EMPTY_CATALOG_SNAPSHOT, LANGUAGE_VERSION, mockCatalogSnapshot } from 'movement-lang';
 
-import { fileValue, isFileValue, tenantIdOf } from 'engine-contracts';
+import { fileValue, isFileValue } from 'engine-contracts';
 
 import { RunCostCapExceeded } from '../../../lib/run_cost';
 import { containerAssociation, type Adapter } from '../../translation_graph/adapter';
@@ -17,7 +17,7 @@ import { openRunContext, RunLedger } from '../segment_context';
 import { ENGINE_OWN_ROUTES, shimRoutePaths } from '../rust_host';
 import { resetRustRunStats, rustRunStats } from '../rust_stats';
 import { REFUSED, WireOut } from '../rust_wire';
-import { makeFakeParkSink, makeTestHost, type TestHostOverrides } from '../test_host';
+import { makeFakeParkSink, makeTestHost } from '../test_host';
 import {
   driveEngine,
   readRunResult,
@@ -25,48 +25,9 @@ import {
   EVENT_DOES_NOT_CROSS,
   RustShimError,
   type EngineProtocol,
-  type EngineStep,
-  type HostAnswer,
   type HostRequest,
 } from '../rust_engine';
-
-const TEAM = tenantIdOf('team-1');
-
-/** A double that issues what `script` says, step by step: each reply is
- *  computed from every answer received so far, so a test can assert both
- *  what the shim answered and in what order. */
-function scriptedEngine(script: (answers: Array<{ id: number; answer: HostAnswer }>) => EngineStep): {
-  engine: EngineProtocol;
-  answers: Array<{ id: number; answer: HostAnswer }>;
-  started: unknown[];
-  finished: () => boolean;
-} {
-  const answers: Array<{ id: number; answer: HostAnswer }> = [];
-  const started: unknown[] = [];
-  let finished = false;
-  return {
-    engine: {
-      start(input) {
-        started.push(input);
-        return script(answers);
-      },
-      answer(id, answer) {
-        answers.push({ id, answer });
-        return script(answers);
-      },
-      finish() {
-        finished = true;
-      },
-    },
-    answers,
-    started,
-    finished: () => finished,
-  };
-}
-
-function request(id: number, family: string, method: string, args: unknown): HostRequest {
-  return { id, family, method, args };
-}
+import { TEAM, hostWith, inSegment, request, scriptedEngine } from './scripted_engine';
 
 function fakeAdapter(methods: Partial<Adapter> = {}): Adapter {
   return {
@@ -88,21 +49,6 @@ function fakeAdapter(methods: Partial<Adapter> = {}): Adapter {
     deleteRecord: async () => ({}),
     ...methods,
   };
-}
-
-/** The driver's input: a test host, and a segment opened on it as the run
- *  host opens one. */
-async function hostWith(overrides: TestHostOverrides, catalog: CatalogSnapshot = EMPTY_CATALOG_SNAPSHOT) {
-  const host = makeTestHost(overrides);
-  // The pins in this file are the protocol's fixtures: scripted engines and
-  // programs no version reads differently, so this release's throughout.
-  const context = await openRunContext({ host, teamId: TEAM, languageVersion: LANGUAGE_VERSION, spend: {} });
-  return { host, context, catalog };
-}
-
-/** A request bound for the host names the segment the driver serves. */
-function inSegment(segmentId: string, args: Record<string, unknown>): Record<string, unknown> {
-  return { segmentId, ...args };
 }
 
 const RESOLVE = { adapterType: 'fake', role: 'source' };

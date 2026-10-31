@@ -44,7 +44,6 @@ import type {
   RelatedPage,
   RuntimeCapabilities,
 } from '../translation_graph/adapter';
-import type { AwaitPoint, AwaitResolution } from 'engine-contracts/awaitable';
 import type { UniquenessConstraints } from 'engine-contracts/uniqueness';
 import type { SourcePosition } from 'engine-contracts/catalog';
 import type { TriggerEvent } from '../translation_graph/triggers/types';
@@ -54,9 +53,7 @@ import type {
   LlmCallInput,
   LlmCallResult,
 } from '../translation_graph/engine/batched_extraction/llm_call';
-import type { CallbackCall, CallbackParamSpec } from 'engine-contracts';
 import type { CancelGate, FileTextResolution, MovementTraceEntry, ParkSink } from './run_types';
-import type { AnyParkedScopeState } from 'engine-contracts';
 
 export {
   ADAPTER_METHODS,
@@ -124,9 +121,6 @@ export interface AdapterCallMap {
   unlinkRecords: OneInput<'unlinkRecords'>;
   ensureEventSubscription: OneInput<'ensureEventSubscription'>;
   removeEventSubscription: { args: Parameters<LiveMethod<'removeEventSubscription'>>[0]; result: null };
-  /** The awaitable capability's live check. */
-  resolveAwait: { args: AwaitPoint; result: AwaitResolution };
-  wakeKeys: OneInput<'wakeKeys'>;
   /** The key each record's listenable edge is waited on under (adapter protocol 2.5). */
   awaitKeys: { args: { edge: string; heads: AwaitHead[] }; result: AwaitKey[] };
   readRecord: OneInput<'readRecord'>;
@@ -257,27 +251,6 @@ export interface ParkSources {
   load(input: { hash: string }): Promise<{ source: string } | null>;
 }
 
-/** The callback seam: minting `callback(…)` and reading its call ledger (an
- *  `await cb-[:Called]->` parks through `ParkSink` like any await). Separate from `ParkSink` on purpose:
- *  a park is a leaf the run is waiting on, a callback is not one. */
-export interface CallbackSink {
-  /** Mint a callback: persist the captured continuation + signature, yield the
-   *  binding's `{ id, url }`. */
-  mint(input: {
-    address: string;
-    params: CallbackParamSpec[];
-    state: AnyParkedScopeState;
-    singleUse: boolean;
-    /** When it stops answering, as an ISO 8601 instant. Absent ⇒ never. */
-    expiresAt?: string;
-  }): Promise<{ id: string; url: string }>;
-  /** The LIVE call ledger — what `cb-[:Called]->` reads and what a re-entered
-   *  `await cb-[:Called]->` re-checks. */
-  calls(input: { callbackId: string }): Promise<CallbackCall[]>;
-}
-
-
-
 export interface EngineHost {
   /**
    * The host's half of a run segment: what its adapter calls have already read
@@ -313,20 +286,17 @@ export interface EngineHost {
      */
     sink?: SegmentScoped<ParkSink>;
     /**
-     * Queue the wake for one correlation key: "resume whatever is parked on
-     * it". The engine calls it after an await park is durable, when its own
-     * re-check finds the await resolved (or cannot tell): a landing that
-     * arrived between the first check and the park woke nothing, because a
-     * wake for a key with no parked run is a no-op. Plain data in, nothing out.
+     * Queue the wake for one wait: "resume the run parked on it". The engine
+     * calls it after an await park is durable, when its own second read of
+     * the wait's arrivals finds one its WHERE takes, or the record gone: an
+     * arrival logged between the first read and the park woke nothing,
+     * because the wait was not parked yet. Plain data in, nothing out.
      */
     wake(request: Scoped<AwaitWakeRequest>): Promise<void>;
     /** A run's waits on listenable edges (host families version 2). Absent ⇒
      *  the run opens no waits, and an await on an adapter's edge fails as
      *  unsupported. */
     waits?: SegmentScoped<HostWaits>;
-    /** Minting `callback(…)`, reading its call ledger, correlating an
-     *  `await cb-[:Called]->`. Absent ⇒ a callback raises MOVENG_UNSUPPORTED. */
-    callbacks?: SegmentScoped<CallbackSink>;
     bindings: SegmentScoped<RecordBindings>;
     /** Where the library texts a park pins are kept, once each, by their
      *  hash. Absent ⇒ a park carries each text itself. */
@@ -367,9 +337,9 @@ export interface EngineHost {
     append(input: Scoped<{ entries: MovementTraceEntry[] }>): Promise<void>;
   };
   /** The instant now. Every time the engine needs that is not the run's
-   *  firing instant — a sleep's wake, a callback's expiry, a measured
-   *  duration, the pin of a segment handed no `firedAt` — it asks here, so a
-   *  recorded run replays to the same instants. */
+   *  firing instant — a sleep's wake, a measured duration, the pin of a
+   *  segment handed no `firedAt` — it asks here, so a recorded run replays
+   *  to the same instants. */
   clock: HostClock;
   /** Fresh ids (an extraction's resource ids), minted by the host so a
    *  recorded run replays to the same ids. */

@@ -197,6 +197,12 @@ export interface ParkRecords {
   markLimitPaused?(pause: RunLimitPause): Promise<void>;
 }
 
+/** The correlation map's `adapter_type` for an await parked on a wait
+ *  (host families version 2), keyed by the wait's id: a wake names the wait,
+ *  so the map finds its park as it found an adapter's key. A reserved
+ *  identity, not a system. */
+export const WAIT_AWAIT_TYPE = 'wait';
+
 /**
  * The engine's park sink for one run segment. Given the run lease the segment
  * holds (`fence`), every leaf and join it writes lands only while the run's
@@ -230,13 +236,13 @@ export function runParkSink(
       await armTimerWake(store, { runId, teamId, wakeAt });
       await afterPark();
     },
-    async commitAwaitPark({ address, state, adapterType, correlationKey }) {
+    async commitAwaitPark({ address, state, waitId }) {
       // The leaf first: it is the truth, the correlation only an index onto it.
       // A wake between the two writes finds no correlation (the engine's
-      // re-check covers it) or both, never a correlation without its park.
+      // re-read covers it) or both, never a correlation without its park.
       await records.ensureRun();
       await store.parks.putLeaf({ runId, address, reason: 'await', wakeAt: null, state, ...fence });
-      await store.correlations.correlate({ runId, teamId, address, adapterType, correlationKey });
+      await store.correlations.correlate({ runId, teamId, address, adapterType: WAIT_AWAIT_TYPE, correlationKey: waitId });
       await afterPark();
     },
     ...(records.markLimitPaused !== undefined

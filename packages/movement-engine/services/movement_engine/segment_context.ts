@@ -33,7 +33,6 @@ import type { MovementTraceEntry, CancelGate, MovementRunResult, ParkSink, RunMo
 import type {
   AwaitWakeRequest,
   AdapterResolution,
-  CallbackSink,
   EngineHost,
   RecordBindings,
   ResolveActingUserInput,
@@ -310,7 +309,6 @@ export interface SegmentHost {
   park: {
     sink?: ParkSink;
     wake(request: AwaitWakeRequest): Promise<void>;
-    callbacks?: CallbackSink;
     bindings: RecordBindings;
   };
   control: { cancel: CancelGate };
@@ -321,21 +319,13 @@ export interface SegmentHost {
 }
 
 function bindSegment(host: EngineHost, segmentId: string): SegmentHost {
-  const { sink, callbacks, bindings } = host.park;
+  const { sink, bindings } = host.park;
   const cancel = host.control.cancel;
   return {
     adapters: { resolve: (input) => host.adapters.resolve({ ...input, segmentId }) },
     park: {
       ...(sink !== undefined ? { sink: bindParkSink(sink, segmentId) } : {}),
       wake: (request) => host.park.wake({ ...request, segmentId }),
-      ...(callbacks !== undefined
-        ? {
-            callbacks: {
-              mint: (input) => callbacks.mint({ ...input, segmentId }),
-              calls: (input) => callbacks.calls({ ...input, segmentId }),
-            },
-          }
-        : {}),
       bindings: {
         record: (input) => bindings.record({ ...input, segmentId }),
         findBoundCounterpart: (input) => bindings.findBoundCounterpart({ ...input, segmentId }),

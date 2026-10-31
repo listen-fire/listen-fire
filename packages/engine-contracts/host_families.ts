@@ -134,8 +134,6 @@ export const ADAPTER_METHODS = [
   'unlinkRecords',
   'ensureEventSubscription',
   'removeEventSubscription',
-  'resolveAwait',
-  'wakeKeys',
   'awaitKeys',
   'readRecord',
   'translateFilter',
@@ -212,12 +210,11 @@ export interface RecordBindings {
   }): Promise<void>;
 }
 
-/** The key an await parked under, as `park.wake` takes it (the tenant is the
- *  segment's). */
+/** The wait an await parked on, as `park.wake` takes it: "resume the run
+ *  parked on this wait" (the run is the segment's). */
 export interface AwaitWakeRequest {
-  /** The awaitable adapter's type, or the reserved callback identity. */
-  adapterType: string;
-  correlationKey: string;
+  /** The wait's id, as `park.waits.open` answered it. */
+  waitId: string;
 }
 
 /** One arrival a wait has yet to judge (`park.waits.arrivals`). */
@@ -252,8 +249,8 @@ export interface HostLocks {
 }
 
 /** The host's clock: the instant now, which the engine reads for a sleep's
- *  wake, a callback's expiry, a segment with no firing instant, and a
- *  measured duration. The engine reads no clock of its own. */
+ *  wake, a segment with no firing instant, and a measured duration. The
+ *  engine reads no clock of its own. */
 export interface HostClock {
   now(input: InSegment): Promise<{ nowIso: string }>;
 }
@@ -310,7 +307,6 @@ export const HOST_FAMILIES = {
   },
   park: { methods: ['wake'] },
   'park.waits': { optional: true, methods: ['mark', 'open', 'arrivals', 'note'] },
-  'park.callbacks': { optional: true, methods: ['mint', 'calls'] },
   'park.sources': { optional: true, methods: ['save', 'load'] },
   'park.bindings': { methods: ['record', 'findBoundCounterpart', 'delete'] },
   'control.cancel': { methods: ['cancelled', 'cancelledNow'] },

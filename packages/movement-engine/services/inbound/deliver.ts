@@ -4,22 +4,28 @@
 //
 //   intercepts → subscription → provider check → signature → preprocessInbound
 //   → capture a receipt per matching trigger → advance the pull cursor
-//   → queue a work row per receipt and per await wake → ack
+//   → queue a work row per receipt, and log what arrived → ack
 //
 // A module that checks its own inbound (`inbound.scheme: module`) replaces
-// the signature, `preprocessInbound` and `wakeKeys` with one `checkInbound`
-// of the raw request; its answer may also be a reply to send as it is (a
-// provider's handshake), and only such a module's door takes a GET.
+// the signature and `preprocessInbound` with one `checkInbound` of the raw
+// request; its answer may also be a reply to send as it is (a provider's
+// handshake), and only such a module's door takes a GET. An acceptance may
+// name what the door answers once the delivery is kept (a page saying an
+// answer was recorded), in place of its acknowledgement.
 //
-// Capture, queue, then ack: the sender's 200 means every receipt and every wake
-// has its work row, so nothing it delivered can be lost after the ack, and the
-// movements run off the request so a slow run never reads as a failed
-// delivery. Anything that cannot be queued answers 500, so the sender's retry
-// replays the stored receipts idempotently.
+// What a delivery says landed on listenable edges (its arrivals, adapter
+// protocol 2.5) is handed to the run host to log, which wakes each wait
+// parked on its record.
+//
+// Capture, queue, then ack: the sender's 200 means every receipt has its work
+// row and every arrival is logged, so nothing it delivered can be lost after
+// the ack, and the movements run off the request so a slow run never reads as
+// a failed delivery. Anything that cannot be queued or logged answers 500, so
+// the sender's retry replays the stored receipts idempotently.
 
-import type { WireInboundIntercept } from 'engine-contracts';
+import type { Arrival, WireInboundIntercept } from 'engine-contracts';
 import type { z } from 'zod';
-import type { Adapter, DiscriminableEvent, EventType, InboundCheck } from '../translation_graph/adapter';
+import type { Adapter, DiscriminableEvent, EventType } from '../translation_graph/adapter';
 
 import { logger } from '../logger';
 import { CHECKED_BY_MODULE, isUsableInboundSecret, verifyInbound, type InboundHeaders, type InboundVerifier } from './verify';
@@ -27,7 +33,7 @@ import { CHECKED_BY_MODULE, isUsableInboundSecret, verifyInbound, type InboundHe
 export type InboundIntercept = z.infer<typeof WireInboundIntercept>;
 
 /** The adapter surface a delivery is read through. */
-export type InboundAdapter = Pick<Adapter, 'adapterType' | 'preprocessInbound' | 'wakeKeys' | 'listEventTypes' | 'checkInbound'>;
+export type InboundAdapter = Pick<Adapter, 'adapterType' | 'preprocessInbound' | 'listEventTypes' | 'checkInbound'>;
 
 
 /** The row a door URL names. */
@@ -88,7 +94,10 @@ export interface InboundStore<Captured> {
     subscription: InboundSubscription;
     source: OpenedSource;
   }): Promise<void>;
-  enqueueWakes(input: { adapterType: string; teamId: string; keys: readonly string[] }): Promise<void>;
+  /** Log what a delivery says arrived on the adapter's listenable edges, for
+   *  the team: each arrival wakes the waits parked on its record, and one no
+   *  wait reads yet is kept for a wait opened later. */
+  logArrivals(input: { adapterType: string; teamId: string; arrivals: readonly Arrival[] }): Promise<void>;
 }
 
 export interface InboundDelivery {
@@ -141,14 +150,18 @@ export type ReceivedDelivery<Captured> =
       ok: true;
       /** Events CAPTURED — receipted and ready to run. */
       eventsProcessed: number;
-      /** The work rows, to queue before the ack. Absent when the delivery
-       *  carried nothing to run. Rejects when anything could not be queued. */
+      /** The work rows, to queue (and the arrivals, to log) before the ack.
+       *  Absent when the delivery carried nothing to run or log. Rejects when
+       *  anything could not be queued or logged. */
       queue?: () => Promise<QueuedDelivery<Captured>>;
       /** The host drains the rows before acking (the dev loop's test team). */
       drainFirst?: boolean;
+      /** What the door answers once the delivery is kept, in place of its
+       *  acknowledgement: the module's reply on its acceptance. */
+      replyOnceKept?: InboundAnswer;
     };
 
-/** One or more receipts or wakes have no work row; the sender must retry. */
+/** One or more receipts have no work row; the sender must retry. */
 export class InboundQueueFailed extends Error {
   constructor(readonly failures: readonly EventError[]) {
     super(`${failures.length} receipt(s) of the delivery could not be queued: ${failures.map((f) => f.error).join('; ')}`);
@@ -185,8 +198,8 @@ function wireRequest(delivery: Omit<InboundDelivery, 'provider'>): {
   };
 }
 
-/** A module's reply as the door sends it. */
-function replyAnswer(reply: Extract<InboundCheck, { outcome: 'reply' }>): InboundAnswer {
+/** A module's reply as the door sends it: a handshake's, or an acceptance's. */
+function replyAnswer(reply: { status: number; text?: string; html?: string; json?: unknown }): InboundAnswer {
   if (reply.text !== undefined) return { status: reply.status, body: reply.text, contentType: 'text/plain' };
   if (reply.html !== undefined) return { status: reply.status, body: reply.html, contentType: 'text/html' };
   if (reply.json !== undefined) return { status: reply.status, body: reply.json };
@@ -216,7 +229,8 @@ export async function receiveDelivery<Captured>(
   if ('result' in read) return read.result;
   const { opened, extraction } = read;
   const { adapter } = opened;
-  const events = extraction.events;
+  const { events, arrivals } = extraction;
+  const replyOnceKept = read.replyOnceKept;
 
   // Capture: the durable receipts, one per matching trigger. Nothing here runs
   // a movement; the receipt is what makes the queued half safe to replay.
@@ -232,11 +246,11 @@ export async function receiveDelivery<Captured>(
     }
   }
 
-  // The wake door is independent of the events — a delivery may resolve a
-  // parked await whether or not a trigger listens for it — and read after the
-  // capture, so a failing wake door never costs the delivery its receipts.
-  const wakes = await read.wakes();
-  if (!events.length && wakes.ok && !wakes.keys.length) return { ok: true, eventsProcessed: 0 };
+  // Arrivals are independent of the events: a delivery may land on a wait
+  // whether or not a trigger listens for it.
+  if (!events.length && !arrivals.length) {
+    return { ok: true, eventsProcessed: 0, ...(replyOnceKept !== undefined ? { replyOnceKept } : {}) };
+  }
 
   // The pull cursor rides on "receipted", not "run": a crash before the queue
   // replays receipts rather than re-pulling.
@@ -247,7 +261,7 @@ export async function receiveDelivery<Captured>(
   const queue = async (): Promise<QueuedDelivery<Captured>> => {
     const enqueued: { event: DiscriminableEvent; captured: Captured }[] = [];
     const failures: EventError[] = [];
-    // One event's failure never stops the next; the wakes still go in.
+    // One event's failure never stops the next; the arrivals are still logged.
     for (const entry of captured) {
       try {
         await store.enqueue({ captured: entry.captured, event: entry.event, subscription, source: opened });
@@ -257,8 +271,7 @@ export async function receiveDelivery<Captured>(
         failures.push({ event: entry.event, error: err instanceof Error ? err.message : String(err) });
       }
     }
-    if (!wakes.ok) throw wakes.error;
-    await store.enqueueWakes({ adapterType: adapter.adapterType, teamId: subscription.teamId, keys: wakes.keys });
+    if (arrivals.length > 0) await store.logArrivals({ adapterType: adapter.adapterType, teamId: subscription.teamId, arrivals });
     if (failures.length > 0) throw new InboundQueueFailed(failures);
     return { teamId: subscription.teamId, enqueued, captureErrors };
   };
@@ -268,19 +281,18 @@ export async function receiveDelivery<Captured>(
     eventsProcessed: captured.length,
     queue,
     ...(store.verifiesSignature(subscription) ? {} : { drainFirst: true }),
+    ...(replyOnceKept !== undefined ? { replyOnceKept } : {}),
   };
 }
 
-type WakeRead = { ok: true; keys: string[] } | { ok: false; error: unknown };
-
-/** A delivery read: its adapter, its events and cursor, and its wakes (read
- *  after the capture); or the answer that ends it first. */
+/** A delivery read: its adapter, its events, arrivals and cursor, and what
+ *  the door answers once it is kept; or the answer that ends it first. */
 type DeliveryRead<Captured> =
   | { result: ReceivedDelivery<Captured> }
   | {
       opened: OpenedSource;
-      extraction: { events: DiscriminableEvent[]; checkpoint?: unknown };
-      wakes(): Promise<WakeRead>;
+      extraction: { events: DiscriminableEvent[]; arrivals: Arrival[]; checkpoint?: unknown };
+      replyOnceKept?: InboundAnswer;
     };
 
 /**
@@ -333,11 +345,11 @@ async function readSigned<Captured>(
   }
   if (opened.intercept && (await opened.intercept(body)) === 'handled') return { result: { ok: true, eventsProcessed: 0 } };
 
-  const extraction = await preprocess.call(opened.adapter, {
+  const { events, arrivals = [], checkpoint } = await preprocess.call(opened.adapter, {
     raw: body,
     checkpoint: subscription.checkpoint ?? undefined,
   });
-  return { opened, extraction, wakes: () => readWakeKeys(opened.adapter, body) };
+  return { opened, extraction: { events, arrivals, ...(checkpoint !== undefined ? { checkpoint } : {}) } };
 }
 
 /** A module that checks its own inbound: the raw request to `checkInbound`. */
@@ -368,33 +380,17 @@ async function readCheckedByModule<Captured>(
     case 'accepted':
       return {
         opened,
-        extraction: { events: answer.events, ...(answer.checkpoint !== undefined ? { checkpoint: answer.checkpoint } : {}) },
-        wakes: async () => ({ ok: true, keys: answer.wakeKeys ?? [] }),
+        extraction: {
+          events: answer.events,
+          arrivals: answer.arrivals ?? [],
+          ...(answer.checkpoint !== undefined ? { checkpoint: answer.checkpoint } : {}),
+        },
+        ...(answer.reply !== undefined ? { replyOnceKept: replyAnswer(answer.reply) } : {}),
       };
     default: {
       const unknown: never = answer;
       throw new Error(`unknown inbound check outcome ${JSON.stringify(unknown)}`);
     }
-  }
-}
-
-/**
- * The correlation keys an adapter's `wakeKeys` names for one delivery. A throw
- * comes back as the error, for `queue` to refuse the delivery with once its
- * events are queued.
- */
-async function readWakeKeys(
-  adapter: InboundAdapter,
-  raw: unknown,
-): Promise<WakeRead> {
-  if (!adapter.wakeKeys) return { ok: true, keys: [] };
-  try {
-    return { ok: true, keys: await adapter.wakeKeys({ raw }) };
-  } catch (error) {
-    logger.error(`[webhook] wakeKeys failed for adapter ${adapter.adapterType}; the delivery will be refused for a retry`, {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return { ok: false, error };
   }
 }
 
@@ -477,17 +473,20 @@ export async function answerDelivery<Captured>(
 
     if (result.queue && result.drainFirst && host.drainBeforeAck) {
       const drained = await host.drainBeforeAck(result.queue);
-      return {
-        status: 200,
-        body: {
-          ok: true,
-          eventsProcessed: drained.eventsProcessed,
-          ...(drained.perEventErrors.length > 0 ? { perEventErrors: drained.perEventErrors } : {}),
-        },
-      };
+      return (
+        result.replyOnceKept ?? {
+          status: 200,
+          body: {
+            ok: true,
+            eventsProcessed: drained.eventsProcessed,
+            ...(drained.perEventErrors.length > 0 ? { perEventErrors: drained.perEventErrors } : {}),
+          },
+        }
+      );
     }
     if (result.queue) await result.queue();
-    return { status: 200, body: { ok: true, eventsProcessed: result.eventsProcessed }, afterAnswer: () => host.notify() };
+    const kept = result.replyOnceKept ?? { status: 200, body: { ok: true, eventsProcessed: result.eventsProcessed } };
+    return { ...kept, afterAnswer: () => host.notify() };
   } catch (err) {
     logger.error('Webhook sync endpoint error:', err);
     return { status: 500, body: { error: 'internal' } };

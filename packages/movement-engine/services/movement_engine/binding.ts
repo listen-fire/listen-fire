@@ -15,7 +15,7 @@ import type {
   PathHead,
   ShapeDeclaration,
 } from 'movement-lang';
-import type { CallbackParamSpec, LocalLandingShape, WriteRecord as RecordedWrite } from 'engine-contracts';
+import type { LocalLandingShape, WriteRecord as RecordedWrite } from 'engine-contracts';
 import type { SourcePosition } from 'engine-contracts/catalog';
 import type { Adapter, Resource } from '../translation_graph/adapter';
 import type { Provenance, ProvenanceOrigin } from './provenance';
@@ -372,22 +372,6 @@ export type BindingShape =
    * deferral, not a cache).
    */
   | { kind: 'lazyWalk'; walk: DeferredWalk }
-  /**
-   * `cb = callback(…)` — the minted deferred invocation. A CHECKER-LOCAL node
-   * (typing.ts `local`): it belongs to no graph, so there is no adapter and no
-   * position, just what the construct declared — `id` / `url` on the dot plane,
-   * and the `Called` edge on the arrow plane, whose landings are read LIVE from
-   * the store (the calls arrive after this scope was captured, so they can never
-   * be carried on the binding).
-   */
-  | {
-      kind: 'callback';
-      callbackId: string;
-      url: string;
-      /** The fire-time signature, declaration order — the `Called` landing's
-       *  fields beyond `At`. */
-      params: CallbackParamSpec[];
-    }
   /** Imports. A credential import is marked: it is never a value in any
    *  sense, so no read short-cuts past the refusal every other read gets. */
   | { kind: 'opaque'; what: string; credential?: true };

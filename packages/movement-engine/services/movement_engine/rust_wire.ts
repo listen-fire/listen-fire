@@ -6,11 +6,9 @@
 import {
   fileHandle,
   fileValueOf,
-  isCallbackParamType,
   isFileValue,
   isPlainObject,
   type BindingDescriptor,
-  type CallbackParamSpec,
   type DeferredWalkDescriptor,
   type ExtractEmissionDescriptor,
   type FileFields,
@@ -151,30 +149,15 @@ export function ownEntry(object: object, key: string, value: unknown): void {
   Object.defineProperty(object, key, { value, writable: true, enumerable: true, configurable: true });
 }
 
-export function isCallbackParam(value: unknown): value is CallbackParamSpec {
-  if (typeof value !== 'object' || value === null) return false;
-  const type: unknown = Reflect.get(value, 'type');
-  return typeof Reflect.get(value, 'name') === 'string' && typeof type === 'string' && isCallbackParamType(type);
-}
-
 /**
  * A record the engine handed the host (`["x", id, descriptor]`), built from
- * the descriptor the engine wrote: the event's binding object, or a
- * callback's. Only the wire's own tag makes one, so nothing the host or a
- * webhook sends can become one, whatever keys it carries.
+ * the descriptor the engine wrote: the event's binding object. Only the
+ * wire's own tag makes one, so nothing the host or a webhook sends can become
+ * one, whatever keys it carries.
  */
 function bindingFromWire(descriptor: unknown): Binding {
   const kind = typeof descriptor === 'object' && descriptor !== null ? Reflect.get(descriptor, 'kind') : undefined;
   if (kind === 'event') return binding({ kind: 'event' });
-  if (kind === 'callback' && typeof descriptor === 'object' && descriptor !== null) {
-    const callbackId: unknown = Reflect.get(descriptor, 'callbackId');
-    const url: unknown = Reflect.get(descriptor, 'url');
-    const params: unknown = Reflect.get(descriptor, 'params');
-    if (typeof callbackId !== 'string' || typeof url !== 'string' || !Array.isArray(params) || !params.every(isCallbackParam)) {
-      throw new RustShimError('the engine handed the host a callback that is not {callbackId, url, params}');
-    }
-    return binding({ kind: 'callback', callbackId, url, params });
-  }
   throw new RustShimError(`the engine handed the host a record of kind ${String(kind)}, which the shim does not rebuild`);
 }
 
@@ -600,7 +583,6 @@ function descriptorFiles(descriptor: BindingDescriptor): unknown {
     case 'nodeRef':
     case 'sourcePosition':
     case 'value':
-    case 'callback':
     case 'shape':
     case 'localShape':
     case 'movement':

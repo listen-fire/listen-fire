@@ -76,11 +76,7 @@ import type {
   InboundCheck,
   InboundCheckInput,
 } from '../../adapter';
-import type {
-  AwaitableCapability,
-  AwaitPoint,
-  AwaitResolution,
-} from 'engine-contracts/awaitable';
+import type { ArrivalsCapability } from 'engine-contracts/arrivals';
 import type {
   SchemaEntryPoint,
   SchemaTypeDescriptor,
@@ -189,8 +185,8 @@ function isCredentialChannel(baseUrl: string): boolean {
  * deletes any of these the manifest didn't advertise so the engine's
  * `if (adapter.method)` capability gates see `undefined`. Two optional
  * surfaces are gated differently: `iterateRelated` and `iterateRelatedPage`
- * stay while the server advertises either paging method, and `awaitable` exists only when the
- * server advertises `resolveAwait`.
+ * stay while the server advertises either paging method, and `arrivals`
+ * exists only when the server advertises `awaitKeys`.
  */
 export const OPTIONAL_REMOTE_METHODS = [
   'edgesFrom',
@@ -208,7 +204,6 @@ export const OPTIONAL_REMOTE_METHODS = [
   'unlinkRecords',
   'ensureEventSubscription',
   'removeEventSubscription',
-  'wakeKeys',
   'checkInbound',
 ] as const satisfies readonly (keyof Adapter)[];
 
@@ -292,7 +287,7 @@ export class RemoteAdapter implements Adapter {
   private readonly _runtimeCapabilities: RuntimeCapabilities;
   readonly webhookEventTypeId?: string;
 
-  readonly awaitable?: AwaitableCapability;
+  readonly arrivals?: ArrivalsCapability;
 
   private readonly config: RemoteAdapterConfig;
   private readonly authorize: <T>(call: (secret: string) => Promise<T>) => Promise<T>;
@@ -316,7 +311,7 @@ export class RemoteAdapter implements Adapter {
     this._runtimeCapabilities = input.manifest.runtimeCapabilities;
     this.webhookEventTypeId = input.manifest.webhookEventTypeId;
     this.advertised = new Set(input.manifest.methods);
-    if (this.advertised.has('resolveAwait')) this.awaitable = this.remoteAwaitable();
+    if (this.advertised.has('awaitKeys')) this.arrivals = this.remoteArrivals();
     this.bound = input.credential !== undefined ? this.bind(input.credential, input.manifest) : undefined;
     this.files = new FileOwnership(
       { adapterType: this.adapterType, credentialsId: this.config.credentialsId },
@@ -702,26 +697,15 @@ export class RemoteAdapter implements Adapter {
     await this.call('removeEventSubscription', input);
   }
 
-  /** The correlation keys an inbound payload resolves — the keys a pending
-   *  `resolveAwait` named — so the host can wake the runs parked on them. */
-  wakeKeys(input: { raw: unknown }): Promise<string[]> {
-    return this.call('wakeKeys', input);
-  }
-
   /** One request at a module-checked inbound door, checked by the server. */
   checkInbound(input: InboundCheckInput): Promise<InboundCheck> {
     return this.call('checkInbound', input) as Promise<InboundCheck>;
   }
 
-  private remoteAwaitable(): AwaitableCapability {
-    return {
-      resolveAwait: (point: AwaitPoint): Promise<AwaitResolution> =>
-        this.call('resolveAwait', {
-          recordId: point.recordId,
-          edge: point.edge,
-          ...(point.headData !== undefined ? { headData: point.headData } : {}),
-        }),
-    };
+  /** The key each head's listenable edge is waited on under, as the server
+   *  names it (adapter protocol 2.5). */
+  private remoteArrivals(): ArrivalsCapability {
+    return { awaitKeys: (input) => this.call('awaitKeys', input) };
   }
 
   getActorCandidates(input: { event: TriggerEvent }): Promise<ActorCandidate[]> {

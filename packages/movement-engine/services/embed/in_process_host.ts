@@ -37,7 +37,7 @@ export interface InProcessHostOptions {
   credentials?: CredentialOwnership;
   /** The models slot: the model calls a run makes. Absent ⇒ refused by name. */
   llm?: Partial<EngineHost['llm']>;
-  /** The store slot's run half: where parks, callbacks and pinned texts go.
+  /** The store slot's run half: where parks, waits and pinned texts go.
    *  Absent ⇒ a run that parks fails (it has no durable substrate). */
   park?: Partial<EngineHost['park']>;
   control?: Partial<EngineHost['control']>;
@@ -107,7 +107,7 @@ export function inProcessHost(options: InProcessHostOptions = {}): EngineHost {
     },
     park: {
       ...(park.sink !== undefined ? { sink: park.sink } : {}),
-      ...(park.callbacks !== undefined ? { callbacks: park.callbacks } : {}),
+      ...(park.waits !== undefined ? { waits: park.waits } : {}),
       ...(park.sources !== undefined ? { sources: park.sources } : {}),
       wake: park.wake ?? refused('park.wake'),
       bindings: park.bindings ?? {

@@ -52,21 +52,19 @@ export interface ParkSink {
     wakeAt: string;
   }): Promise<void>;
   /**
-   * Record an AWAIT park (`await x-[:E]->` untilNonEmpty, asks-as-adapter §A):
-   * a `parked_run` row with `park_reason='await'` + the serialized scope, then
-   * the correlation from `(adapterType, correlationKey)` to this park. Unlike
-   * `commitPark` there is NO `interaction_request` and NO token — a wake on the
-   * key drives resume, which RE-ENTERS at the await (`reenter`) and re-checks
-   * live. Idempotent on `(run_id, address)`. The engine re-checks once after
-   * this returns and asks `park.wake` when the await already resolved.
+   * Record an AWAIT park (`await x-[:E]->` on a listenable edge): a
+   * `parked_run` row with `park_reason='await'` + the serialized scope, and
+   * the wait parked there, as one write. An arrival logged on the wait's
+   * record afterwards wakes the run, which RE-ENTERS at the await (`reenter`)
+   * and reads the wait's arrivals. Idempotent on `(run_id, address)`. The
+   * engine reads the wait once more after this returns and asks `park.wake`
+   * when an arrival landed while it parked.
    */
   commitAwaitPark(input: {
     address: string;
     state: unknown;
-    /** Whose key it is: the awaitable adapter's type, or the reserved callback
-     *  identity. */
-    adapterType: string;
-    correlationKey: string;
+    /** The wait it parks on, as `park.waits.open` answered it. */
+    waitId: string;
   }): Promise<void>;
   /** Resume-unwind join decrement (§6.1). Returns { closed } — true for the unique
    *  branch that closes the frame (runs the post-join continuation). Crash-safe closer
@@ -93,16 +91,15 @@ export interface ParkSink {
   /**
    * Cancel every park under the given subtree prefixes (asks-as-adapter chunk C
    * — the race cascade, P17). For each parked leaf whose address is at-or-below
-   * a prefix: deliver the one cancellation signal (drop its awaitable-adapter
-   * correlation so a late resolution lands as data, F7), delete its `parked_run`
-   * row, and clear any `join_pending` frame within the cancelled subtree (S19 —
+   * a prefix: delete its `parked_run` row (a wait parked there is parked no
+   * more, so a late arrival wakes nothing), and clear any `join_pending` frame within the cancelled subtree (S19 —
    * no dangling bookkeeping). Idempotent (a re-scan finds the rows gone).
    */
   cancelSubtrees(input: { subtreeAddresses: string[]; excludeLeaf?: string }): Promise<void>;
   /**
    * Record an ENGINE-INITIATED suspension (`suspendFlow`): a `parked_run` row
    * whose state says `suspended` — resume re-enters AT the statement
-   * (`reenter`) and replays the calls it had finished. No correlation and no
+   * (`reenter`) and replays the calls it had finished. No wait and no
    * wake time: what resumes it is resuming the run (`limit_pause.ts`).
    * Optional: a sink without it (a rehearsal) cannot suspend, so a run that
    * meets its cost cap there fails on the cap instead.
