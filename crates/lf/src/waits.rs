@@ -36,8 +36,9 @@ pub struct NewArrival {
     /// The record whose edge it arrived on.
     pub key: String,
     /// What the edge declares identifies an arrival. None: this report is an
-    /// arrival of its own; its identity is `#` and its seq, never the same
-    /// as a bare seq a module reports.
+    /// arrival of its own; its identity is `#` and its seq. Only such a report
+    /// is named so by the log, which keeps it apart from a bare seq a module
+    /// reports; a module identity of exactly `#` and a number could collide.
     pub identity: Option<String>,
     pub version: Option<String>,
     pub landing: Option<Js>,
@@ -685,7 +686,7 @@ mod tests {
         an_arrival_is_the_waits_only_on_its_own_record_edge_adapter_and_team,
         without_a_version_an_identity_is_one_arrival_and_with_one_each_version_is_another,
         an_arrival_without_an_identity_is_its_own,
-        an_arrival_without_an_identity_never_shares_one_a_module_reports,
+        an_arrival_without_an_identity_is_named_apart_from_a_bare_seq_a_module_reports,
         newly_matches_counts_once_until_it_stops_matching,
         a_noted_arrival_is_no_longer_listed,
         two_arrivals_on_one_wait_count_in_log_order,

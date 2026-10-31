@@ -75,7 +75,7 @@
       ]
     },
     {
-      "case": "an arrival without an identity never shares one a module reports",
+      "case": "an arrival without an identity is named apart from a bare seq a module reports",
       "steps": [
         { "do": "mark", "as": "m" },
         { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
