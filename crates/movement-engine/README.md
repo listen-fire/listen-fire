@@ -65,7 +65,7 @@ the checker. The conformance corpora run on this engine.
 | `code` | code a park names by its place in the program: an AST path read back as the typed node it names in the pinned source |
 | `flow` | a flow's own state (its trace buffer, ledger slot, call sites, lock holds), swapped in on each poll; shared futures several flows await (an adapter's resolution) |
 | `combinator` | `parallel` and `race`: arms as flows joined on the executor, the write ledger spliced in arm order, a race's winner and its losers cancelled, arms that park joined through their frame |
-| `awaits` | `await` of a record's edge (off its wait), an `until`, and the park each writes; `callback(…)`, retired at 0.13, is refused |
+| `awaits` | `await` of a record's edge (off its wait), an `until`, and the park each writes |
 | `bindings` | what a name in a run is bound to, the lexical scopes (in declaration order), the source `Position` |
 | `trace` | the `MovementTraceEntry` kinds a run appends (`warning`, `gate`, `field_miss`, `block`, `extraction`, `plugin`, `ai`, `read`, `chunks`), and the per-flow buffer they wait in until their statement ends |
 | `program` | the pinned source parsed, joined with the `check.program` host call's answer: diagnostics, the import link, the checker's stamps by AST path; the declarations (`Declarations`: the root's and each library's shapes and `type`s, each shape with the file that wrote it, and the plugin imports, by local name) |

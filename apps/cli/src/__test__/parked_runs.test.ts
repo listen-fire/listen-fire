@@ -72,6 +72,19 @@ test('listen-fire run --dry-run rehearses past a wait: a refresh of a rehearsed 
   assert.deepEqual(companies(dir), [], 'a rehearsal writes nothing, before its wait or after');
 });
 
+test('listen-fire run --dry-run rehearses an await on an edge: it opens no wait, binds the empty landing, and what follows the await is captured in the same segment', () => {
+  const dir = project('await');
+  const fired = lf(dir, 'run', '--dry-run', '--event', 'events/company_created.json');
+  assert.equal(fired.code, 0, fired.out);
+  assert.match(fired.out, /await:discuss completed/);
+  assert.doesNotMatch(fired.out, /parked/);
+  assert.match(fired.out, /dry run, not written: .*"Name":"Discuss Vireo Robotics"/);
+  assert.match(fired.out, /dry run, not written: .*"Name":"Answered/);
+  assert.equal(fired.out.match(/await:discuss/g)?.length, 1, fired.out);
+  assert.deepEqual(companies(dir), [], 'a rehearsal writes nothing, before its await or after');
+  assert.equal(stateOf(dir, (db) => db.prepare('select count(*) as n from wait_row').get() as { n: number }).n, 0, 'a rehearsal opens no wait');
+});
+
 test('listen-fire cancel: a parked run is settled failed with the reason, and its wait goes with it', () => {
   const dir = project('approvals');
   const runId = runIdOf(lf(dir, 'run', '--event', 'events/company_created.json').out, 'approvals:decide');

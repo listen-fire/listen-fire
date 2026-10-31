@@ -52,7 +52,6 @@
 mod anthropic;
 mod arrivals;
 mod backend;
-#[cfg(feature = "serve")]
 mod catalog;
 mod check;
 mod completion;

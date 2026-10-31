@@ -124,7 +124,7 @@ impl FileSet {
 /// What a session is opened for, which its module processes follow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
-    /// One command (`listen-fire run`, `listen-fire resume`, `listen-fire call`, …): a module stops when idle.
+    /// One command (`listen-fire run`, `listen-fire resume`, …): a module stops when idle.
     Command,
     /// `listen-fire drain`: every module the files use is started as the session
     /// opens and kept up for the worker's life, so no run pays a start.
@@ -464,7 +464,7 @@ pub struct RunOutcome {
     pub run_id: String,
     pub file: String,
     pub movement: String,
-    /// `fired` or `resumed`.
+    /// `fired`, `resumed` or `rerun`.
     pub entry: &'static str,
     /// `completed`, `parked`, `failed` or `leaseLost`.
     pub status: String,

@@ -2,7 +2,7 @@
 
 Version: 3
 
-When a flow parks (on a timer, an await or a limit), the engine writes everything a resume needs to rebuild the scopes the leaf was parked in as one JSON value, `ParkedScopeState`. A host stores it, through `park.sink` or `park.callbacks.mint` ([`host-families.md`](host-families.md)), and hands it back byte for byte on resume. **A host never reads inside it.** The contract an embedder serves is the persistence `park.sink` describes; this document is the value it persists, which engines read.
+When a flow parks (on a timer, an await or a limit), the engine writes everything a resume needs to rebuild the scopes the leaf was parked in as one JSON value, `ParkedScopeState`. A host stores it, through `park.sink` ([`host-families.md`](host-families.md)), and hands it back byte for byte on resume. **A host never reads inside it.** The contract an embedder serves is the persistence `park.sink` describes; this document is the value it persists, which engines read.
 
 - **The type:** `ParkedScopeState` and its descriptors (`packages/engine-contracts/park_state.ts`).
 - **Written and read by:** each engine its own version. The TypeScript engine (`movement_engine/serialize.ts` and the resume path in `run.ts`) runs the platform's earlier integer-pinned languages and writes and reads version 1. The Rust engine (`crates/movement-engine/src/park.rs`, `resume.rs`, `code.rs`) runs the language of this repository's releases and writes and reads version 3 (0.12's wrote 2). Neither reads the other's: a run never changes engine, so its parks never do.

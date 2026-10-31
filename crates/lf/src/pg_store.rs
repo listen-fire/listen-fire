@@ -621,7 +621,13 @@ impl RunHostStore for PgStore {
     }
 
     fn request_cancel(&self, id: &str, reason: Option<&str>) -> Result<()> {
-        self.execute("update lf.trigger_run set cancel_requested_at = now(), cancel_reason = $2::text where id = $1::text::uuid", &[&id, &reason])?;
+        // As the state file does: only a run still going takes a request, and
+        // the first one stands (a settled run has nothing left to cancel).
+        self.execute(
+            "update lf.trigger_run set cancel_requested_at = now(), cancel_reason = $2::text
+             where id = $1::text::uuid and cancel_requested_at is null and status in ('running', 'parked')",
+            &[&id, &reason],
+        )?;
         Ok(())
     }
 
@@ -1447,6 +1453,26 @@ mod tests {
         let (token, version) = work_claim(r#"{"leaseToken":"t","claimedUpdatedAt":"2026-10-17T00:00:00.000Z"}"#).unwrap();
         assert_eq!((token.as_str(), version.as_str()), ("t", "2026-10-17T00:00:00.000Z"));
         assert!(work_claim("t/3").is_err());
+    }
+
+    /// Migration 10 over a database that holds the retired kinds of work:
+    /// run again after its record is forgotten, as a 0.12 database meets it.
+    /// Needs LF_TEST_PG to name a database to set up and write into.
+    #[test]
+    fn migration_10_drops_the_retired_work_rows() {
+        let Some(url) = std::env::var("LF_TEST_PG").ok().filter(|u| !u.is_empty()) else { return };
+        PgStore::migrate(&url).unwrap();
+        let store = PgStore::connect(&url, crate::backend::POSTGRES_TENANT).unwrap();
+        let tag = uuid::Uuid::new_v4().to_string();
+        let keys = [("fire_callback", "{}", format!("legacy-fire:{tag}")), ("wake_await", r#"{"correlationKey":"k"}"#, format!("legacy-wake:{tag}")), ("wake_await", r#"{"waitId":"w1","runId":"r","address":"s1"}"#, format!("wait-wake:{tag}"))];
+        for (kind, payload, key) in &keys {
+            store.execute("insert into lf.work (kind, key, payload) values ($1, $2, $3::text::jsonb)", &[kind, key, payload]).unwrap();
+        }
+        store.execute("delete from lf.schema_migration where version = 10", &[]).unwrap();
+        assert_eq!(PgStore::migrate(&url).unwrap(), [10]);
+        let left: Vec<String> = store.query("select key from lf.work where key like '%' || $1", &[&tag]).unwrap().iter().map(|r| r.get(0)).collect();
+        assert_eq!(left, [format!("wait-wake:{tag}")]);
+        store.execute("delete from lf.work where key like '%' || $1", &[&tag]).unwrap();
     }
 
     #[test]

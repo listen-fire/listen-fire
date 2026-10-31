@@ -5861,6 +5861,67 @@
         }
       }
     },
+    "forms": {
+      "canFire": true,
+      "constructionArgs": [],
+      "description": "A form at a link, answered once. A write makes it; the node the write names in Fields says what it asks, and its answer lands on the form’s Submissions, typed by that node.",
+      "schemaShape": "introspected",
+      "schemas": {
+        "": {
+          "positions": {
+            "Submission": {
+              "properties": {
+                "Id": "text"
+              },
+              "edges": {},
+              "description": "An answer to a form: the fields of the node the form asked for, and its Id.",
+              "fieldDocs": {
+                "Id": "The answer’s id: a form takes one, so its form’s."
+              }
+            }
+          },
+          "collections": {
+            "Forms": {
+              "target": "Form"
+            }
+          },
+          "writableRoots": {
+            "Form": {
+              "fields": {
+                "Title": "text",
+                "Fields": "json"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Url": "text",
+                "Title": "text",
+                "Fields": "json"
+              },
+              "edges": {
+                "Submissions": {
+                  "target": "Submission",
+                  "readable": false,
+                  "listenable": true,
+                  "identity": "Id",
+                  "answerShapeFrom": "Fields",
+                  "description": "The form’s one answer, with the fields of the node the write named."
+                }
+              },
+              "requiredFields": [
+                "Title",
+                "Fields"
+              ],
+              "fieldDocs": {
+                "Title": "What the form asks, shown above its fields.",
+                "Fields": "The node the form asks for (`Fields: Refund`): its fields are the form’s, and its submissions have them."
+              }
+            }
+          },
+          "supportsInPlaceUpdate": true
+        }
+      }
+    },
     "kg": {
       "canFire": true,
       "constructionArgs": [],

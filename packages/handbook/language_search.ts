@@ -93,11 +93,12 @@ export const CONTROL_FORMS: readonly ControlForm[] = [
     anchor: 'front#runs',
   },
   {
-    name: 'callback',
-    signature: 'callback({ … } | (value: <T>) => { … }, { once?: boolean, ttl?: duration }) → { id, url }',
-    purpose: 'work a person triggers later from a button (its id) or a link (its url)',
+    name: 'form',
+    signature: 'form = write forms-[:Forms]-> { Title: text, Fields: <Node> } → { Url }; await form-[:Submissions]-> → one answer typed by the node',
+    purpose: 'get typed answers from a person at a link, and wait for what they submit',
     example: {
-      body: 'q = write asks-[:Check]-> { Prompt: "Pursue ${m.Subject}?" }\nyes = callback({ write q-[:Response]-> { Answer: true } })\nlinks = "${q.Url} or ${yes.url}"',
+      program:
+        'import { `@lf/forms` as forms_module } from adapters\nforms = connect forms_module\nnode Decision {\n  Pursue: <boolean>\n}\nfunction `Ask`(m: <inbox-[:Email]->>) {\n  form = write forms-[:Forms]-> { Title: "Pursue ${m.Subject}?", Fields: Decision }\n  ops = only(chat-[c:Channels WHERE c.Name == "ops"]->)\n  if (ops == null) { fail("no #ops channel") }\n  write ops-[:Messages]-> { Message: "Answer at ${form.Url}" }\n  answer = await form-[:Submissions]->\n  if (answer.Pursue) { write crm-[:Companies]-> { unique by (Name), Name: m.Subject } }\n}',
     },
     anchor: 'reviews#in-chat-answers',
   },

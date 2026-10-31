@@ -1,7 +1,7 @@
 //! What a run's movement returned, treated as a cron job's output: every
 //! run records it in its history (the `returned` member of the run's
 //! outcome), however the run was started; it is shown to a person who
-//! started or drove the run (`listen-fire run`, `listen-fire resume`, `listen-fire call`), and it never
+//! started or drove the run (`listen-fire run`, `listen-fire resume`), and it never
 //! reaches an external system — no door answers with it, so what a run
 //! returns can never be a side door for an effect.
 //!

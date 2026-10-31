@@ -167,7 +167,7 @@ export interface StoryExtractNode {
 /** A statement list the story caps a lane by, and whether it leaves. */
 export interface StoryBody {
   span: Span;
-  kind: 'movement' | 'arm' | 'else' | 'combinatorArm' | 'callback';
+  kind: 'movement' | 'arm' | 'else' | 'combinatorArm';
   terminates: boolean;
 }
 
@@ -289,7 +289,7 @@ const NODE_KINDS: ReadonlySet<string> = new Set<StoryNodeKind>([
   'refresh',
 ]);
 
-const BODY_KINDS: ReadonlySet<string> = new Set<StoryBody['kind']>(['movement', 'arm', 'else', 'combinatorArm', 'callback']);
+const BODY_KINDS: ReadonlySet<string> = new Set<StoryBody['kind']>(['movement', 'arm', 'else', 'combinatorArm']);
 
 function isScope(value: unknown): value is StoryScope {
   return (

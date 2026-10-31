@@ -75,7 +75,7 @@ interface StoryWrite {
 
 interface StoryBody {
   span: Span;
-  kind: 'movement' | 'arm' | 'else' | 'combinatorArm' | 'callback';
+  kind: 'movement' | 'arm' | 'else' | 'combinatorArm';
   terminates: boolean;
 }
 
@@ -137,7 +137,7 @@ A body is a statement list a lane is capped by. `terminates` says whether it lea
 
 - **`movement`:** a `return` written straight in the body is a step on the spine, not a leave. It terminates by an error.
 - **`arm` and `else`:** a `return` leaves.
-- **`combinatorArm` and `callback`:** only an error leaves, because a `return` there is the closure's value.
+- **`combinatorArm`:** only an error leaves, because a `return` there is the closure's value.
 
 ## The effects rule
 

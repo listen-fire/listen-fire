@@ -646,8 +646,13 @@ impl Store {
         }
         db.execute_batch("create index if not exists run_delivery on run (delivery_id)")?;
         // Callbacks and the waits keyed by a correlation retired at 0.13: a
-        // run parked on one cannot resume on this release.
-        db.execute_batch("drop table if exists callback; drop table if exists await_correlation;")?;
+        // run parked on one cannot resume on this release, and the work rows
+        // that would have woken it (a callback's firing, a wake by key
+        // rather than by wait) have no kind left to run as.
+        db.execute_batch(
+            "drop table if exists callback; drop table if exists await_correlation;
+             delete from work where kind = 'fire_callback' or (kind = 'wake_await' and json_extract(payload, '$.waitId') is null);",
+        )?;
         // Added to a state file written before the cost cap kept run spend.
         for column in SPEND_COLUMNS {
             if !columns.iter().any(|c| c == column) {
@@ -1479,6 +1484,25 @@ mod tests {
 
     fn no_payload() -> Js {
         Js::Obj(crate::json::Obj::new())
+    }
+
+    #[test]
+    fn work_rows_of_the_retired_callbacks_go_on_open() {
+        let (store, path) = state_file();
+        let due = iso(-1_000);
+        for (kind, key, payload) in [
+            ("fire_callback", "legacy-fire", r#"{"callbackId":"c1"}"#),
+            ("wake_await", "legacy-key-wake", r#"{"adapterType":"slack","correlationKey":"k"}"#),
+            ("wake_await", "wait-wake", r#"{"waitId":"w1","runId":"r1","address":"s1"}"#),
+            ("resume_timer", "timer", r#"{"runId":"r1"}"#),
+        ] {
+            store.db.execute("insert into work (kind, key, payload, due_at) values (?, ?, ?, ?)", params![kind, key, payload, due]).unwrap();
+        }
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        let left: Vec<String> = reopened.claim_due(&claim(10, 60_000)).unwrap().into_iter().map(|w| w.key).collect();
+        assert_eq!(left.len(), 2, "a firing and a wake by key are dropped: {left:?}");
+        assert!(left.contains(&"wait-wake".to_string()) && left.contains(&"timer".to_string()), "{left:?}");
     }
 
     #[test]

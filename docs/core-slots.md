@@ -13,7 +13,7 @@ core:
 |---|---|---|---|
 | `models` | the model calls a run makes: `ai(…)`, `extract(…)` | `@lf/anthropic` | none in listen-fire; `@listen-fire/models` fills it with Gemini, OpenAI or Claude on Vertex |
 | `judge` | settles whether a written record is one already there, when the rules cannot | `@lf/judge` (declines every question, so an ambiguous match creates a new record) | |
-| `store` | where run state lives: runs, parks, callbacks, work to drain | `@lf/sqlite-store` (`.lf/state.db`) | `@lf/postgres-store` |
+| `store` | where run state lives: runs, parks, waits, work to drain | `@lf/sqlite-store` (`.lf/state.db`) | `@lf/postgres-store` |
 | `files` | where documents a run stores are kept | `@lf/local-files` (`.lf/files/`) | |
 | `limiter` | keeps calls to modules and models inside the providers' limits | `@lf/memory-limiter` (in listen-fire's own process) | |
 | `loopGuard` | tells a movement's own write echoing back from a real change | none: the slot is empty and nothing is suppressed | `@lf/fingerprint-guard` (opt in) |

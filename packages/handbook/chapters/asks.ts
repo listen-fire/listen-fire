@@ -332,7 +332,7 @@ listen to inbox { key: "intake" } fire \`Triage Inbound\`
 `,
     },
     {
-      construct: 'one callback delivered to every channel, its tap raced against a timeout, the tap time read off slot 0',
+      construct: 'buttons on a message, their press raced against a timeout, the press time read off slot 0',
       status: 'runs',
       probe: `
 import { \`@lf/slack\` as slack, \`@lf/manual\` as manual } from adapters
@@ -342,24 +342,17 @@ team = connect slack using team_workspace
 runs = connect manual
 
 function \`First Approval Wins\`(go: <runs-[:Invocation]->>) {
-  approve = callback({ })
-
-  team-[ch:Channels WHERE ch.Topic == "approvals"]-> {
-    write ch-[:Messages]-> {
-      Message: "Approve this?"
-      Blocks: [
-        { type: "actions", elements: [
-          { type: "button", text: { type: "plain_text", text: "Approve" },
-            value: "\${approve.id}" }
-        ] }
-      ]
-    }
+  approvals = only(team-[ch:Channels WHERE ch.Topic == "approvals"]->)
+  if (approvals == null) { fail("no #approvals channel") }
+  msg = write approvals-[:Messages]-> {
+    Message: "Approve this?"
+    Buttons: [{ Text: "Approve", Value: "approve" }]
   }
 
   r = race(
     () => {
-      tap = await approve-[:Called]->
-      return tap.At
+      press = await msg-[:Interactions]->
+      return press.At
     },
     () => { await sleep(1d) },
   )
@@ -389,41 +382,28 @@ team = connect slack using team_workspace
 runs = connect manual
 
 function \`Which Place Answered\`(go: <runs-[:Invocation]->>) {
-  dealflow = callback({ })
-  portfolio = callback({ })
-
   \`Dealflow Channel\` = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
   if (\`Dealflow Channel\` == null) { fail("no #dealflow channel") }
   \`Portfolio Channel\` = only(team-[p:Channels WHERE p.Name == "portfolio"]->)
   if (\`Portfolio Channel\` == null) { fail("no #portfolio channel") }
 
-  write \`Dealflow Channel\`-[:Messages]-> {
+  dealflow = write \`Dealflow Channel\`-[:Messages]-> {
     Message: "Approve this?"
-    Blocks: [
-      { type: "actions", elements: [
-        { type: "button", text: { type: "plain_text", text: "Approve" },
-          value: "\${dealflow.id}" }
-      ] }
-    ]
+    Buttons: [{ Text: "Approve", Value: "approve" }]
   }
-  write \`Portfolio Channel\`-[:Messages]-> {
+  portfolio = write \`Portfolio Channel\`-[:Messages]-> {
     Message: "Approve this?"
-    Blocks: [
-      { type: "actions", elements: [
-        { type: "button", text: { type: "plain_text", text: "Approve" },
-          value: "\${portfolio.id}" }
-      ] }
-    ]
+    Buttons: [{ Text: "Approve", Value: "approve" }]
   }
 
   r = race(
     () => {
-      tap = await dealflow-[:Called]->
-      return { channel: "dealflow", at: tap.At }
+      press = await dealflow-[:Interactions]->
+      return { channel: "dealflow", at: press.At }
     },
     () => {
-      tap = await portfolio-[:Called]->
-      return { channel: "portfolio", at: tap.At }
+      press = await portfolio-[:Interactions]->
+      return { channel: "portfolio", at: press.At }
     },
   )
 
@@ -757,35 +737,31 @@ listen to runs {} fire \`Pick The Company\`
 `,
     },
     {
-      construct: 'callbacks handed out as links (url) answering a question, one repeatable',
+      construct: 'a form handed out as a link (Url), its submission awaited',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/ask\` as ask, \`@lf/manual\` as manual } from adapters
+import { \`@lf/slack\` as slack, \`@lf/forms\` as forms_module, \`@lf/manual\` as manual } from adapters
 import { team_workspace } from credentials
 
-team = connect slack using team_workspace
-asks = connect ask
-runs = connect manual
+team  = connect slack using team_workspace
+forms = connect forms_module
+runs  = connect manual
+
+node Decision {
+  Pursue: <boolean>
+  Note: <text | null>
+}
 
 function \`Decide By Link\`(go: <runs-[:Invocation]->>) {
   ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
   if (ops == null) { fail("no #ops channel") }
 
-  q   = write asks-[:Check]-> { Prompt: "Pursue this company?" }
-  yes = callback({ write q-[:Response]-> { Answer: true } })
-  no  = callback({ write q-[:Response]-> { Answer: false } })
-  nudge = callback(
-    { write ops-[:Messages]-> { Message: "Still waiting: \${q.Url}" } },
-    { once: false, ttl: 2d }
-  )
+  form = write forms-[:Forms]-> { Title: "Pursue this company?", Fields: Decision }
+  write ops-[:Messages]-> { Message: "Pursue it? Answer here: \${form.Url}" }
 
-  write ops-[:Messages]-> {
-    Message: "Pursue it?\\nYes: \${yes.url}\\nNo: \${no.url}\\nNudge the channel: \${nudge.url}\\nOr decide on the page: \${q.Url}"
-  }
-
-  answer = await q-[:Response]->
-  if (answer.Answer) {
-    write ops-[:Messages]-> { Message: "Pursuing." }
+  answer = await form-[:Submissions]->
+  if (answer.Pursue) {
+    write ops-[:Messages]-> { Message: "Pursuing. \${coalesce(answer.Note, "")}" }
   }
 }
 
@@ -793,21 +769,19 @@ listen to runs {} fire \`Decide By Link\`
 `,
     },
     {
-      construct: 'a parameterized callback awaited on Called, alongside one deferring a named function',
+      construct: 'a form whose answer is typed by a node, its fields read after the await',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/attio\` as attio, \`@lf/manual\` as manual } from adapters
+import { \`@lf/slack\` as slack, \`@lf/attio\` as attio, \`@lf/forms\` as forms_module, \`@lf/manual\` as manual } from adapters
 import { team_workspace, acme_main } from credentials
 
-team = connect slack using team_workspace
-crm  = connect attio using acme_main
-runs = connect manual
+team  = connect slack using team_workspace
+crm   = connect attio using acme_main
+forms = connect forms_module
+runs  = connect manual
 
-function \`Chase\`(c: <crm-[:Companies]->>) {
-  write c-[:Notes]-> {
-    Title:   "Chased"
-    Content: "Nudged again."
-  }
+node Booking {
+  Day: <date>
 }
 
 function \`Book The Follow Up\`(go: <runs-[:Invocation]->>) {
@@ -816,37 +790,35 @@ function \`Book The Follow Up\`(go: <runs-[:Invocation]->>) {
     Name: go.Text
   }
 
-  booked = callback((day: <date>) => {
-    write company-[:Notes]-> {
-      Title:   "Follow-up booked"
-      Content: "Booked for \${day}."
-    }
-  })
-  again = callback(() => \`Chase\`(company), { once: false })
-
+  form = write forms-[:Forms]-> { Title: "Pick a day for \${company.Name}", Fields: Booking }
   ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
   if (ops == null) { fail("no #ops channel") }
-  write ops-[:Messages]-> {
-    Message: "Pick a day: \${booked.url}\\nOr chase again: \${again.url}"
-  }
+  write ops-[:Messages]-> { Message: "Pick a day: \${form.Url}" }
 
-  call = await booked-[:Called]->
-  write ops-[:Messages]-> { Message: "Booked for \${call.day} (\${call.At})." }
+  booking = await form-[:Submissions]->
+  write company-[:Notes]-> {
+    Title:   "Follow-up booked"
+    Content: "Booked for \${booking.Day}."
+  }
 }
 
 listen to runs {} fire \`Book The Follow Up\`
 `,
     },
     {
-      construct: 'a named function deferred by a closure, its last parameter left for the acting side to fill',
+      construct: 'a named function called with the answer a form returned',
       status: 'runs',
       probe: `
-import { \`@lf/slack\` as slack, \`@lf/attio\` as attio, \`@lf/manual\` as manual } from adapters
-import { team_workspace, acme_main } from credentials
+import { \`@lf/attio\` as attio, \`@lf/forms\` as forms_module, \`@lf/manual\` as manual } from adapters
+import { acme_main } from credentials
 
-team = connect slack using team_workspace
-crm  = connect attio using acme_main
-runs = connect manual
+crm   = connect attio using acme_main
+forms = connect forms_module
+runs  = connect manual
+
+node Booking {
+  Day: <date>
+}
 
 function \`Book\`(c: <crm-[:Companies]->>, day: <date>) {
   write c-[:Notes]-> { Title: "Booked", Content: "Booked for \${day}." }
@@ -854,11 +826,13 @@ function \`Book\`(c: <crm-[:Companies]->>, day: <date>) {
 
 function \`Offer\`(go: <runs-[:Invocation]->>) {
   company = write crm-[:Companies]-> { unique by (FUZZY Name), Name: go.Text }
-  pick = callback((day: <date>) => \`Book\`(company, day))
-  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
-  if (ops == null) { fail("no #ops channel") }
-  write ops-[:Messages]-> { Message: "Pick a day: \${pick.url}" }
+  form = write forms-[:Forms]-> { Title: "Pick a day for \${company.Name}", Fields: Booking }
+  write company-[:Notes]-> { Title: "Pick a day", Content: "\${form.Url}" }
+  booking = await form-[:Submissions]->
+  \`Book\`(company, booking.Day)
 }
+
+listen to runs {} fire \`Offer\`
 `,
     },
   ],

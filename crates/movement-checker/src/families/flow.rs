@@ -350,7 +350,7 @@ impl Checker<'_> {
         self.report(
             codes::WAIT_NOT_RESUMABLE,
             format!(
-                "{where_} may wait ('await', or a call to a function that awaits), and a run cannot be resumed there — it would park and never come back. Do the waiting in the movement itself, before or after this, and keep the callback body or condition to work that finishes without waiting."
+                "{where_} may wait ('await', or a call to a function that awaits), and a run cannot be resumed there — it would park and never come back. Do the waiting in the movement itself, before or after this, and keep the condition to work that finishes without waiting."
             ),
             span,
         );
