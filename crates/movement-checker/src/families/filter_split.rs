@@ -16,6 +16,7 @@ use movement_parser::lowering::expression::{Expression, FilterOperator, ListElem
 
 use crate::codes;
 use crate::families::names::spell_name;
+use crate::families::values::with_article;
 use crate::families::walks::is_pure_predicate;
 
 /// What the split needs of an edge, whether a record's edge or a system's
@@ -66,16 +67,39 @@ pub struct Split {
 /// program writes it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Untaken {
-    /// An unbounded edge with no taken filter on a bounding field. The
-    /// `conjunct` is the one that reads a bounding field and is neither `==`
-    /// nor `IN [ … ]` (empty when none reads one); `field` is the bounding
-    /// field to narrow by.
-    Unbounded { conjunct: String, field: String },
+    /// An unbounded edge with no taken filter on a bounding field; `field`
+    /// is the bounding field to narrow by.
+    Unbounded { field: String, why: Unbounding },
     /// A conjunct that reads `field`, a scalar only the module can evaluate
     /// (`ty`), and that the module cannot take.
-    OwnedField { conjunct: String, field: String, ty: String },
-    /// Two `==` that give one owned field two values.
+    OwnedField { conjunct: String, field: String, ty: String, why: OwnedUntaken },
+    /// Two `==` that give one owned field two different literals.
     Contradiction { a: String, b: String, field: String, ty: String },
+}
+
+/// What a hop over an unbounded edge lacks.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Unbounding {
+    /// The hop has no WHERE.
+    NoWhere,
+    /// Its WHERE reads no bounding field.
+    NoFilter,
+    /// This conjunct reads a bounding field, by neither `==` nor `IN [ … ]`.
+    Neither(String),
+    /// This conjunct reads a bounding field by `==` or `IN`, compared with
+    /// something other than literals.
+    NotLiteral(String),
+}
+
+/// Why the module cannot take a conjunct that reads an owned field.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OwnedUntaken {
+    /// The field does not take the comparison, or the conjunct is no
+    /// comparison of the field.
+    Operator,
+    /// The comparison is one the field takes, against a value that is not a
+    /// literal.
+    NotLiteral,
 }
 
 impl Untaken {
@@ -93,18 +117,33 @@ impl Untaken {
             None => spell_name(field),
         };
         match self {
-            Untaken::Unbounded { conjunct, field } => {
+            Untaken::Unbounded { field, why } => {
                 let fields = edge.bounded_by.iter().map(String::as_str).collect::<Vec<_>>().join(" or ");
-                let neither = if conjunct.is_empty() { String::new() } else { format!(": `{conjunct}` is neither") };
-                format!(
-                    "'-[:{}]->' is unbounded: {} can narrow it only by {fields} written `==` or `IN [ … ]` with literals, and this WHERE has no such filter{neither}. Narrow it: `{} == \"…\"`",
-                    edge.name,
-                    edge.module,
-                    read(field)
-                )
+                let lacks = match why {
+                    Unbounding::NoWhere => "this hop has no WHERE".to_string(),
+                    Unbounding::NoFilter => "this WHERE has no such filter".to_string(),
+                    Unbounding::Neither(conjunct) => format!("this WHERE has no such filter: `{conjunct}` is neither"),
+                    Unbounding::NotLiteral(conjunct) => format!("this WHERE has no such filter: `{conjunct}` does not compare it with a literal"),
+                };
+                let remedy = match (why, alias) {
+                    (Unbounding::NoWhere, None) => {
+                        let alias = suggested_alias(edge.name);
+                        format!("`-[{alias}:{} WHERE {alias}.{} == \"…\"]->`", spell_name(edge.name), spell_name(field))
+                    }
+                    _ => format!("`{} == \"…\"`", read(field)),
+                };
+                format!("'-[:{}]->' is unbounded: {} can narrow it only by {fields} written `==` or `IN [ … ]` with literals, and {lacks}. Narrow it: {remedy}", edge.name, edge.module)
             }
-            Untaken::OwnedField { conjunct, field, ty } => format!(
-                "`{conjunct}` reads '{field}', a {ty} only {} can evaluate, and it can't take it here — write it as `{} == \"…\"` joined to the rest with AND",
+            Untaken::OwnedField { conjunct, field, ty, why: OwnedUntaken::Operator } => format!(
+                "`{conjunct}` reads '{field}', {} only {} can evaluate, and it can't take it here — write it as `{} == \"…\"` joined to the rest with AND",
+                with_article(ty),
+                edge.module,
+                read(field)
+            ),
+            Untaken::OwnedField { conjunct, field, ty, why: OwnedUntaken::NotLiteral } => format!(
+                "`{conjunct}` reads '{field}', {} only {} can evaluate, and {} takes it only compared with a literal — write the value as one: `{} == \"…\"`",
+                with_article(ty),
+                edge.module,
                 edge.module,
                 read(field)
             ),
@@ -113,36 +152,51 @@ impl Untaken {
     }
 }
 
+/// An alias to write on a hop over `edge` that has none: the edge's first
+/// letter, lower-cased.
+fn suggested_alias(edge: &str) -> String {
+    edge.chars().next().filter(char::is_ascii_alphabetic).map_or_else(|| "x".to_string(), |c| c.to_ascii_lowercase().to_string())
+}
+
 /// `filter`, the WHERE on a hop over `edge` landing on `target`, split.
 ///
 /// - A conjunct is taken when it is pure and compares one field of the
-///   landing, by an operator that field takes, on an edge whose module
-///   filters it (`native`). An `OR` of `==` on one field, or an `IN`, is
-///   taken when the field takes `in`.
-/// - A conjunct reading an owned field must be taken, and two `==` on one
-///   owned field are a contradiction.
+///   landing with literals, by an operator that field takes, on an edge
+///   whose module filters it (`native`). An `OR` of `==` on one field, or an
+///   `IN`, is taken when the field takes `in`. A conjunct that compares
+///   with a value read off another record or a name the run holds is
+///   checked on the host: what is taken is the same on every run.
+/// - A conjunct reading an owned field must be taken, and two `==` giving
+///   one owned field different literals are a contradiction.
 /// - An unbounded edge needs a taken conjunct on a bounding field written
-///   `==` or `IN [ … ]` with literals.
+///   `==` or `IN [ … ]`.
 pub fn split_where(filter: &Expression, alias: Option<&str>, edge: &EdgeView, target: &PositionSchema) -> Result<Split, Untaken> {
     let conjuncts = crate::types::event_address::conjuncts(filter);
-    let taken: Vec<Option<Taken>> = conjuncts.iter().map(|c| taken(c, edge, target)).collect();
-    if !edge.bounded && !taken.iter().flatten().any(|t| t.bounds && edge.bounded_by.iter().any(|f| *f == t.field)) {
-        let unbounding = conjuncts.iter().find_map(|c| reads_fields(c, target).into_iter().find(|f| edge.bounded_by.iter().any(|b| b == f)).map(|f| (*c, f)));
-        let (conjunct, field) = match unbounding {
-            Some((conjunct, field)) => (spell(conjunct, alias), field),
-            None => (String::new(), edge.bounded_by.first().cloned().unwrap_or_default()),
-        };
-        return Err(Untaken::Unbounded { conjunct, field });
+    let filtered: Vec<Option<Filtered>> = conjuncts.iter().map(|c| filtered(c, edge, target)).collect();
+    let is_taken = |f: &Option<Filtered>| f.as_ref().is_some_and(|f| f.literal);
+    let bounding = |field: &str| edge.bounded_by.iter().any(|f| f == field);
+    if !edge.bounded && !filtered.iter().flatten().any(|f| f.literal && f.narrows && bounding(&f.field)) {
+        let unbounding = conjuncts.iter().zip(&filtered).find_map(|(c, f)| reads_fields(c, target).into_iter().find(|r| bounding(r)).map(|r| (*c, f, r)));
+        return Err(match unbounding {
+            Some((conjunct, f, field)) => {
+                let conjunct = spell(conjunct, alias);
+                let why = if f.as_ref().is_some_and(|f| f.narrows && f.field == field) { Unbounding::NotLiteral(conjunct) } else { Unbounding::Neither(conjunct) };
+                Untaken::Unbounded { field, why }
+            }
+            None => Untaken::Unbounded { field: edge.bounded_by.first().cloned().unwrap_or_default(), why: Unbounding::NoFilter },
+        });
     }
-    for (conjunct, taken) in conjuncts.iter().zip(&taken) {
-        if taken.is_some() {
+    for (conjunct, f) in conjuncts.iter().zip(&filtered) {
+        if is_taken(f) {
             continue;
         }
         if let Some((field, ty)) = reads_fields(conjunct, target).into_iter().find_map(|f| owned_name(target, &f).map(|ty| (f, ty))) {
-            return Err(Untaken::OwnedField { conjunct: spell(conjunct, alias), field, ty });
+            let why = if f.is_some() { OwnedUntaken::NotLiteral } else { OwnedUntaken::Operator };
+            return Err(Untaken::OwnedField { conjunct: spell(conjunct, alias), field, ty, why });
         }
     }
-    let equalities: Vec<(&Expression, &Taken)> = conjuncts.iter().zip(&taken).filter_map(|(c, t)| t.as_ref().filter(|t| t.equality.is_some()).map(|t| (*c, t))).collect();
+    let equalities: Vec<(&Expression, &Filtered)> =
+        conjuncts.iter().zip(&filtered).filter_map(|(c, f)| f.as_ref().filter(|f| f.literal && f.equality.is_some()).map(|f| (*c, f))).collect();
     for (i, (a, first)) in equalities.iter().enumerate() {
         let Some(ty) = owned_name(target, &first.field) else { continue };
         let other = equalities[i + 1..].iter().find(|(_, second)| second.field == first.field && second.equality != first.equality);
@@ -151,8 +205,8 @@ pub fn split_where(filter: &Expression, alias: Option<&str>, edge: &EdgeView, ta
         }
     }
     let mut split = Split::default();
-    for (conjunct, taken) in conjuncts.into_iter().zip(taken) {
-        if taken.is_some() { split.taken.push(conjunct.clone()) } else { split.checked.push(conjunct.clone()) }
+    for (conjunct, f) in conjuncts.into_iter().zip(&filtered) {
+        if is_taken(f) { split.taken.push(conjunct.clone()) } else { split.checked.push(conjunct.clone()) }
     }
     Ok(split)
 }
@@ -162,21 +216,23 @@ pub fn split_where(filter: &Expression, alias: Option<&str>, edge: &EdgeView, ta
 pub fn split_hop(filter: Option<&Expression>, alias: Option<&str>, edge: &EdgeView, target: &PositionSchema) -> Result<Split, Untaken> {
     match filter {
         Some(filter) => split_where(filter, alias, edge, target),
-        None if !edge.bounded => Err(Untaken::Unbounded { conjunct: String::new(), field: edge.bounded_by.first().cloned().unwrap_or_default() }),
+        None if !edge.bounded => Err(Untaken::Unbounded { field: edge.bounded_by.first().cloned().unwrap_or_default(), why: Unbounding::NoWhere }),
         None => Ok(Split::default()),
     }
 }
 
-/// A conjunct the module takes: the landing's field it filters, whether it
-/// bounds an unbounded edge (`==` or `IN [ … ]` with literals), and, for a
-/// `==`, the value as written.
-struct Taken {
+/// A conjunct shaped as a filter the module takes: the landing's field it
+/// filters, whether it narrows the field to listed values (`==`, `IN`, an
+/// OR of `==`), whether every value it compares with is a literal (only
+/// then is it taken), and, for a `==`, the value as written.
+struct Filtered {
     field: String,
-    bounds: bool,
+    narrows: bool,
+    literal: bool,
     equality: Option<String>,
 }
 
-fn taken(conjunct: &Expression, edge: &EdgeView, target: &PositionSchema) -> Option<Taken> {
+fn filtered(conjunct: &Expression, edge: &EdgeView, target: &PositionSchema) -> Option<Filtered> {
     if !edge.native() || !is_pure_predicate(conjunct) {
         return None;
     }
@@ -193,7 +249,7 @@ fn taken(conjunct: &Expression, edge: &EdgeView, target: &PositionSchema) -> Opt
             let equalities: Vec<(String, &Expression)> = operands.iter().map(|o| field_equality(o, target)).collect::<Option<_>>()?;
             let field = &equalities.first()?.0;
             (equalities.iter().all(|(f, _)| f == field) && takes(field, "in"))
-                .then(|| Taken { field: field.clone(), bounds: equalities.iter().all(|(_, v)| is_literal(v)), equality: None })
+                .then(|| Filtered { field: field.clone(), narrows: true, literal: equalities.iter().all(|(_, v)| is_literal(v)), equality: None })
         }
         Expression::Compare { op, left, right } => {
             let (field, value) = match (landing_field(left, target), landing_field(right, target)) {
@@ -204,13 +260,13 @@ fn taken(conjunct: &Expression, edge: &EdgeView, target: &PositionSchema) -> Opt
             if !reads_fields(value, target).is_empty() || !takes(field, filter_operator_name(*op)) {
                 return None;
             }
-            let bounds = match op {
-                FilterOperator::Eq => is_literal(value),
+            let literal = match op {
                 FilterOperator::In => matches!(value, Expression::List { elements } if elements.iter().all(|e| matches!(e, ListElement::Expression(e) if is_literal(e)))),
-                _ => false,
+                _ => is_literal(value),
             };
+            let narrows = matches!(op, FilterOperator::Eq | FilterOperator::In);
             let equality = (*op == FilterOperator::Eq).then(|| spell(value, None));
-            Some(Taken { field: field.to_string(), bounds, equality })
+            Some(Filtered { field: field.to_string(), narrows, literal, equality })
         }
         _ => None,
     }
@@ -241,7 +297,8 @@ fn landing_field<'e>(expr: &'e Expression, target: &PositionSchema) -> Option<&'
 }
 
 /// The landing's fields `expr` reads, in the order it reads them. A walk
-/// inside it reads the records it walks to, not the landing.
+/// inside it reads the records it walks to, and a read off another alias
+/// (`a.Name`) reads that alias's record, not the landing.
 fn reads_fields(expr: &Expression, target: &PositionSchema) -> Vec<String> {
     fn visit(expr: &Expression, target: &PositionSchema, out: &mut Vec<String>) {
         if let Some(field) = landing_field(expr, target) {
@@ -251,7 +308,7 @@ fn reads_fields(expr: &Expression, target: &PositionSchema) -> Vec<String> {
             return;
         }
         match expr {
-            Expression::Traverse { steps, .. } if !steps.is_empty() => {}
+            Expression::Traverse { alias_root, steps, .. } if !steps.is_empty() || alias_root.is_some() => {}
             Expression::Exists { .. } => {}
             _ => crate::families::values::sub_expressions(expr).into_iter().for_each(|e| visit(e, target, out)),
         }

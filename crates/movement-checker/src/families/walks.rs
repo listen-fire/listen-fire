@@ -53,7 +53,7 @@ use crate::types::field::{CollectionOrder, Ty, describe_field_type, holds_record
 use crate::types::scope_env::SymbolTypes;
 use crate::types::event_address::conjuncts;
 use crate::types::infer::Typing;
-use crate::types::position::{EdgeLanding, Position, describe_position, display_name_of, is_artificial_edge, position_schema_of_ref};
+use crate::types::position::{EdgeLanding, Instance, Position, describe_position, display_name_of, is_artificial_edge, position_schema_of_ref};
 
 /// The engine-made edge to the record as it stood before a write.
 pub const OLD_EDGE: &str = "@old";
@@ -733,52 +733,67 @@ fn and_list(items: &[String]) -> String {
 /// no traversal, a read or a wait, ranges over an unbounded edge. False
 /// when the hop is refused, here or as it was stepped.
 fn split_hop_where(typing: &mut Typing, from: &Position, step: &EdgeStep, target: Option<&PositionSchema>) -> bool {
-    use crate::families::filter_split::{EdgeView, split_hop};
     if typing.address {
         return true;
     }
-    let edge = step.edge_type_id.as_str();
-    enum Declared {
-        Collection(CollectionSchema),
-        Edge(EdgeSchema),
+    let mut refusals = Vec::new();
+    let split = hop_splits(typing, from, step, target, &mut refusals);
+    for (code, message) in refusals {
+        typing.report(code, message);
     }
-    let (declared, instance) = match from {
+    split
+}
+
+/// `split_hop_where` off `from`, its refusals pushed to `refusals` once
+/// each. A record that may be absent is the record it may be; one of
+/// several records is each of them, every member's edge split on its own
+/// and landing where that edge lands. `target` is the hop's landing, when
+/// known; otherwise the edge's declared one.
+fn hop_splits(typing: &Typing, from: &Position, step: &EdgeStep, target: Option<&PositionSchema>, refusals: &mut Vec<(&'static str, String)>) -> bool {
+    use crate::families::filter_split::{EdgeView, split_hop};
+    static NO_LANDING: std::sync::LazyLock<PositionSchema> = std::sync::LazyLock::new(crate::types::position::empty_position_schema);
+    let edge = step.edge_type_id.as_str();
+    let (declared, instance, landing): (Declared, &Instance, &str) = match from {
+        Position::MaybeEmpty(of) => return hop_splits(typing, of, step, target, refusals),
+        Position::OneOf(members) => return members.iter().fold(true, |split, member| hop_splits(typing, member, step, None, refusals) && split),
         Position::Meta { instance } => match instance.schema.collections.get(edge) {
             Some(collection) if collection_refused(typing, collection) => return false,
-            Some(collection) => (Declared::Collection(collection.clone()), instance.clone()),
+            Some(collection) => (Declared::Collection(collection), instance.as_ref(), &collection.target),
             None => return true,
         },
-        Position::Position(p) => match position_schema_of_ref(from).and_then(|s| s.edges.get(edge).cloned()) {
-            Some(schema) => (Declared::Edge(schema), p.instance.clone()),
+        Position::Position(p) => match p.instance.schema.positions.get(&p.position).and_then(|s| s.edges.get(edge)) {
+            Some(schema) => (Declared::Edge(schema), p.instance.as_ref(), &schema.target),
             None => return true,
         },
-        Position::Handle(h) => match position_schema_of_ref(from).and_then(|s| s.edges.get(edge).cloned()) {
-            Some(schema) => (Declared::Edge(schema), h.instance.clone()),
+        Position::Handle(h) => match h.position.as_ref().and_then(|name| h.instance.schema.positions.get(name)).and_then(|s| s.edges.get(edge)) {
+            Some(schema) => (Declared::Edge(schema), h.instance.as_ref(), &schema.target),
             None => return true,
         },
         _ => return true,
     };
     let module = instance.adapter.as_deref().unwrap_or(&instance.name);
-    let view = match &declared {
+    let view = match declared {
         Declared::Collection(schema) => EdgeView::of_collection(edge, module, schema),
         Declared::Edge(schema) => EdgeView::of_edge(edge, module, schema),
     };
-    let landing;
-    let target = match target {
-        Some(target) => target,
-        None => {
-            let Ok(empty) = serde_json::from_value::<PositionSchema>(serde_json::json!({ "properties": {}, "edges": {} })) else { return true };
-            landing = empty;
-            &landing
-        }
-    };
+    let target = target.or_else(|| instance.schema.positions.get(landing)).unwrap_or(&NO_LANDING);
     match split_hop(step.expression_filter.as_deref(), step.alias.as_deref(), &view, target) {
         Ok(_) => true,
         Err(untaken) => {
-            typing.report(untaken.code(), untaken.message(&view, step.alias.as_deref()));
+            let refusal = (untaken.code(), untaken.message(&view, step.alias.as_deref()));
+            if !refusals.contains(&refusal) {
+                refusals.push(refusal);
+            }
             false
         }
     }
+}
+
+/// The schema a hop's edge is declared by: a system's root collection, or
+/// a record's edge.
+enum Declared<'a> {
+    Collection(&'a CollectionSchema),
+    Edge(&'a EdgeSchema),
 }
 
 /// `edgeCapabilityFor`.

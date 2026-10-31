@@ -8,6 +8,9 @@
 //! - `gmail`: `Messages` is bounded; `Query` (a `GmailQuery`) is taken with
 //!   `==` only, and `Subject` is taken with nothing. `Drafts` is written to
 //!   and never read.
+//! - `mail`: an unbounded edge off a record. An `Account` has `Boxes`; a
+//!   `Box`, and a `Box2` reached from the root, each have `Emails`, narrowed
+//!   only by `Key`.
 //!
 //! A listen is a traversal (Task 5 gives it its statement): until then a
 //! wait on the path checks its hop the same way, so `check_listen` waits.
@@ -54,14 +57,30 @@ const CATALOG: &str = r#"{"adapters":{
     "collections":{
       "People":{"target":"Person","capability":{"filter":"bounded","supportsLimit":true}},
       "Orgs":{"target":"Org","capability":{"supportsLimit":false}}},
+    "writableRoots":{}}}},
+  "mail":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
+    "Account":{"properties":{"Name":"text"},
+      "edges":{"Boxes":{"target":"Box","capability":{"filter":"native","supportsLimit":false}}},
+      "propertyCapabilities":{"Name":{"filterOperators":["eq"]}}},
+    "Box":{"properties":{"Key":{"kind":"owned","name":"InboxKey","owner":"mail"},"Label":"text"},
+      "edges":{"Emails":{"target":"Email","listenable":true,"readable":true,"sequenced":"arrival","bounded":false,"boundedBy":["Key"],"capability":{"filter":"native","supportsLimit":false}}},
+      "propertyCapabilities":{"Key":{"filterOperators":["eq","in"]},"Label":{"filterOperators":["eq"]}}},
+    "Box2":{"properties":{"Key":{"kind":"owned","name":"InboxKey","owner":"mail"},"Other":"text"},
+      "edges":{"Emails":{"target":"Email","listenable":true,"readable":true,"sequenced":"arrival","bounded":false,"boundedBy":["Key"],"capability":{"filter":"native","supportsLimit":false}}},
+      "propertyCapabilities":{"Key":{"filterOperators":["eq","in"]}}},
+    "Email":{"properties":{"Key":{"kind":"owned","name":"InboxKey","owner":"mail"},"Subject":"text","At":"datetime"},"edges":{},
+      "propertyCapabilities":{"Key":{"filterOperators":["eq","in"]},"Subject":{"filterOperators":["eq"]}}}},
+    "collections":{"Accounts":{"target":"Account","capability":{"filter":"native","supportsLimit":false}},
+                   "Box2s":{"target":"Box2","capability":{"filter":"native","supportsLimit":false}}},
     "writableRoots":{}}}}
 },"credentials":{},"plugins":{}}"#;
 
-/// `body` as the body of a function, its first line line 2, with the four
-/// systems connected under their modules' names.
+/// `body` as the body of a function taking two texts, `pick` and `q`, its
+/// first line line 2, with the five systems connected under their modules'
+/// names.
 fn diagnostics(body: &str) -> Vec<Diagnostic> {
     let source = format!(
-        "import {{ cron as cron_module, inbox as inbox_module, gmail as gmail_module, crm as crm_module }} from adapters; cron = connect cron_module; inbox = connect inbox_module; gmail = connect gmail_module; crm = connect crm_module; function reads() {{\n{body}}}\n"
+        "import {{ cron as cron_module, inbox as inbox_module, gmail as gmail_module, crm as crm_module, mail as mail_module }} from adapters; cron = connect cron_module; inbox = connect inbox_module; gmail = connect gmail_module; crm = connect crm_module; mail = connect mail_module; function reads(pick: <text>, q: <text>) {{\n{body}}}\n"
     );
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
     let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
@@ -205,7 +224,7 @@ fn a_bad_cron_literal_is_refused_by_its_owner() {
     );
     assert_eq!(
         check_listen("inbox-[e:Emails WHERE e.Key IN [\"sales\", \"Support Desk\"]]->"),
-        ["MOV_OWNED_VALUE_INVALID 2:13-2:72 \"Support Desk\" is not a InboxKey: it does not match ^[a-z0-9]+(-[a-z0-9]+)*$"]
+        ["MOV_OWNED_VALUE_INVALID 2:13-2:72 \"Support Desk\" is not an InboxKey: it does not match ^[a-z0-9]+(-[a-z0-9]+)*$"]
     );
     // Written, as compared.
     assert_eq!(
@@ -219,7 +238,7 @@ fn a_bad_cron_literal_is_refused_by_its_owner() {
 fn a_read_over_an_unbounded_edge_is_refused_like_a_listen() {
     assert_eq!(
         check("  xs = inbox-[e:Emails]->\n"),
-        ["MOV_UNBOUNDED_EDGE 2:8-2:26 '-[:Emails]->' is unbounded: inbox can narrow it only by Key written `==` or `IN [ … ]` with literals, and this WHERE has no such filter. Narrow it: `e.Key == \"…\"`"]
+        ["MOV_UNBOUNDED_EDGE 2:8-2:26 '-[:Emails]->' is unbounded: inbox can narrow it only by Key written `==` or `IN [ … ]` with literals, and this hop has no WHERE. Narrow it: `e.Key == \"…\"`"]
     );
     assert_eq!(
         check("  xs = inbox-[e:Emails WHERE e.Subject == \"x\"]->\n"),
@@ -228,7 +247,7 @@ fn a_read_over_an_unbounded_edge_is_refused_like_a_listen() {
     assert_eq!(check("  xs = inbox-[e:Emails WHERE e.Key == \"sales\"]->\n"), Vec::<String>::new());
     assert_eq!(
         check_listen("cron-[:Ticks]->"),
-        ["MOV_UNBOUNDED_EDGE 2:13-2:28 '-[:Ticks]->' is unbounded: cron can narrow it only by Schedule written `==` or `IN [ … ]` with literals, and this WHERE has no such filter. Narrow it: `Schedule == \"…\"`"]
+        ["MOV_UNBOUNDED_EDGE 2:13-2:28 '-[:Ticks]->' is unbounded: cron can narrow it only by Schedule written `==` or `IN [ … ]` with literals, and this hop has no WHERE. Narrow it: `-[t:Ticks WHERE t.Schedule == \"…\"]->`"]
     );
 }
 
@@ -271,4 +290,76 @@ fn reads_on_bounded_edges_keep_todays_filter_messages() {
         check("  xs = crm-[o:Orgs WHERE o.Name == \"Acme\"]->\n"),
         ["MOV_HOP_FILTER_UNSUPPORTED 2:8-2:45 'Orgs' can't be filtered here — this source doesn't support a WHERE across that relationship."]
     );
+}
+
+/// The WHERE `filter` on `mail-[a:Accounts]->-[b:Boxes]->-[e:Emails WHERE …]->`,
+/// split: `Subject` is taken with `==`.
+fn split_of_emails(filter: &str) -> Split {
+    let walk = movement_checker::slots::expression_of_text(&format!("mail-[a:Accounts]->-[b:Boxes]->-[e:Emails WHERE {filter}]->")).unwrap();
+    let Expression::Traverse { steps, .. } = walk else { panic!("a walk") };
+    let TraversalStep::Edge(step) = &steps[2] else { panic!("an edge step") };
+    let catalog = CatalogSnapshot::load(CATALOG).unwrap();
+    let schema = &catalog.adapters["mail"].schemas[""];
+    let emails = &schema.positions["Box"].edges["Emails"];
+    let edge = EdgeView::of_edge("Emails", "mail", emails);
+    split_where(step.expression_filter.as_deref().unwrap(), Some("e"), &edge, &schema.positions["Email"]).unwrap_or_else(|u| panic!("{filter}: {u:?}"))
+}
+
+fn spelled_e(conjuncts: &[Expression]) -> Vec<String> {
+    conjuncts.iter().map(|c| spell(c, Some("e"))).collect()
+}
+
+#[test]
+fn a_hop_off_a_record_that_may_be_absent_is_split() {
+    // The wait gets no MOV_ABSENT_REQUIRED, as the read does: that predates
+    // the split (it checks the same at 043aa21624).
+    let half_guarded = |hop: &str| format!("  a = only(mail-[:Accounts]->)\n  if (a != null) {{\n  b = only(a-[:Boxes]->)\n  {hop}\n  }}\n");
+    assert_eq!(check(&half_guarded("x = await new b-[e:Emails]->")), vec![r#"MOV_UNBOUNDED_EDGE 5:17-5:31 '-[:Emails]->' is unbounded: mail can narrow it only by Key written `==` or `IN [ … ]` with literals, and this hop has no WHERE. Narrow it: `e.Key == "…"`"#]);
+    assert_eq!(check(&half_guarded("xs = b-[e:Emails]->")), vec![r#"MOV_ABSENT_REQUIRED 5:8-5:22 'b' may be absent, and a walk inside an expression off a record that is not there fails the run. Guard the walk: 'if (b != null) { … }'. (see handbook: front#maybe-absent)"#, r#"MOV_UNBOUNDED_EDGE 5:8-5:22 '-[:Emails]->' is unbounded: mail can narrow it only by Key written `==` or `IN [ … ]` with literals, and this hop has no WHERE. Narrow it: `e.Key == "…"`"#]);
+    assert_eq!(check(&half_guarded("x = await new b-[e:Emails WHERE e.Key == \"sales\"]->")), Vec::<String>::new());
+}
+
+#[test]
+fn a_hop_off_one_of_several_records_is_split_for_each() {
+    let either = |hops: &str| {
+        format!("  b1 = only(mail-[:Box2s]->)\n  a = only(mail-[:Accounts]->)\n  if (a != null && b1 != null) {{\n  b0 = only(a-[:Boxes]->)\n  if (b0 != null) {{\n  r = pick == \"x\" ? b0 : b1\n{hops}  }}\n  }}\n")
+    };
+    assert_eq!(check(&either("  xs = r-[e:Emails]->\n  y = await new r-[e:Emails]->\n")), vec![r#"MOV_UNBOUNDED_EDGE 8:8-8:22 '-[:Emails]->' is unbounded: mail can narrow it only by Key written `==` or `IN [ … ]` with literals, and this hop has no WHERE. Narrow it: `e.Key == "…"`"#, r#"MOV_UNBOUNDED_EDGE 9:17-9:31 '-[:Emails]->' is unbounded: mail can narrow it only by Key written `==` or `IN [ … ]` with literals, and this hop has no WHERE. Narrow it: `e.Key == "…"`"#]);
+    assert_eq!(check(&either("  xs = r-[e:Emails WHERE e.Key == \"sales\"]->\n  y = await new r-[e:Emails WHERE e.Key == \"sales\"]->\n")), Vec::<String>::new());
+}
+
+#[test]
+fn only_a_comparison_with_literals_is_taken() {
+    // A value read off another alias, or a name the run holds, varies by
+    // run; what the module takes does not, so the host checks it.
+    for filter in ["e.Key == \"sales\" AND e.Subject == a.Name", "e.Key == \"sales\" AND e.Subject == y"] {
+        let split = split_of_emails(filter);
+        assert_eq!((spelled_e(&split.taken), spelled_e(&split.checked)), (vec!["e.Key == \"sales\"".to_string()], vec![filter["e.Key == \"sales\" AND ".len()..].to_string()]), "{filter}");
+    }
+    let split = split_of_emails("e.Key == \"sales\" AND e.Subject == \"hi\"");
+    assert_eq!((spelled_e(&split.taken), spelled_e(&split.checked)), (vec!["e.Key == \"sales\"".to_string(), "e.Subject == \"hi\"".to_string()], vec![]));
+    assert_eq!(check("  xs = mail-[a:Accounts]->-[b:Boxes WHERE b.Key == \"k\"]->-[e:Emails WHERE e.Key == \"sales\" AND e.Subject == a.Name]->\n"), Vec::<String>::new());
+}
+
+#[test]
+fn an_owned_field_compared_with_what_is_not_a_literal_is_refused() {
+    assert_eq!(check("  xs = gmail-[m:Messages WHERE m.Query == q]->\n"), vec![r#"MOV_FILTER_NOT_TAKEN 2:8-2:47 `m.Query == q` reads 'Query', a GmailQuery only gmail can evaluate, and gmail takes it only compared with a literal — write the value as one: `m.Query == "…"`"#]);
+    // Not a contradiction: `q` may be "b".
+    assert_eq!(check("  xs = gmail-[m:Messages WHERE m.Query == q AND m.Query == \"b\"]->\n"), vec![r#"MOV_FILTER_NOT_TAKEN 2:8-2:66 `m.Query == q` reads 'Query', a GmailQuery only gmail can evaluate, and gmail takes it only compared with a literal — write the value as one: `m.Query == "…"`"#]);
+    assert_eq!(check_listen("cron-[t:Ticks WHERE t.Schedule == \"0 9 * * 1\" AND t.Zone == q]->"), vec![r#"MOV_FILTER_NOT_TAKEN 2:13-2:77 `t.Zone == q` reads 'Zone', a Zone only cron can evaluate, and cron takes it only compared with a literal — write the value as one: `t.Zone == "…"`"#]);
+    assert_eq!(
+        check("  a = only(mail-[:Accounts]->)\n  if (a != null) {\n  xs = mail-[:Box2s]->-[e:Emails WHERE e.Key == \"sales\" AND e.Key == a.Name]->\n  }\n"),
+        vec![r#"MOV_FILTER_NOT_TAKEN 4:8-4:79 `e.Key == a.Name` reads 'Key', an InboxKey only mail can evaluate, and mail takes it only compared with a literal — write the value as one: `e.Key == "…"`"#]
+    );
+}
+
+#[test]
+fn a_bounding_field_compared_with_what_is_not_a_literal_does_not_bound() {
+    assert_eq!(check_listen("cron-[t:Ticks WHERE t.Schedule == q]->"), vec![r#"MOV_UNBOUNDED_EDGE 2:13-2:51 '-[:Ticks]->' is unbounded: cron can narrow it only by Schedule written `==` or `IN [ … ]` with literals, and this WHERE has no such filter: `t.Schedule == q` does not compare it with a literal. Narrow it: `t.Schedule == "…"`"#]);
+    assert_eq!(check_listen("inbox-[e:Emails WHERE e.Key IN [q, \"sales\"]]->"), vec![r#"MOV_UNBOUNDED_EDGE 2:13-2:59 '-[:Emails]->' is unbounded: inbox can narrow it only by Key written `==` or `IN [ … ]` with literals, and this WHERE has no such filter: `e.Key IN [q, "sales"]` does not compare it with a literal. Narrow it: `e.Key == "…"`"#]);
+}
+
+#[test]
+fn an_owned_type_starting_with_a_vowel_takes_an() {
+    assert_eq!(check_listen("inbox-[e:Emails WHERE e.Key == \"sales\" AND e.Key CONTAINS \"x\"]->"), vec![r#"MOV_FILTER_NOT_TAKEN 2:13-2:77 `e.Key CONTAINS "x"` reads 'Key', an InboxKey only inbox can evaluate, and it can't take it here — write it as `e.Key == "…"` joined to the rest with AND"#]);
 }

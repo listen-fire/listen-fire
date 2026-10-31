@@ -626,7 +626,8 @@ pub fn edge_schema_to(target: &str) -> EdgeSchema {
     serde_json::from_value(serde_json::json!({ "target": target })).unwrap_or_else(|_| unreachable!("an edge schema needs only its target"))
 }
 
-fn empty_position_schema() -> PositionSchema {
+/// A record type declaring nothing.
+pub(crate) fn empty_position_schema() -> PositionSchema {
     serde_json::from_value(serde_json::json!({ "properties": {}, "edges": {} })).unwrap_or_else(|_| unreachable!("a position schema needs only properties and edges"))
 }
 

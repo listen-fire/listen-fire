@@ -578,7 +578,13 @@ pub fn owned_value_error(literal: &str, owned: &crate::types::field::OwnedScalar
         "Zone" => is_zone(literal).and_then(|known| crate::host::time_zone_error(&Known(known), literal)),
         _ => owned.allow_pattern.as_deref().filter(|pattern| pattern_matches(pattern, literal) == Some(false)).map(|pattern| format!("it does not match {pattern}")),
     }?;
-    Some(format!("\"{literal}\" is not a {}: {reason}", owned.name))
+    Some(format!("\"{literal}\" is not {}: {reason}", with_article(&owned.name)))
+}
+
+/// `noun` after the article its first letter takes: `a Cron`, `an InboxKey`.
+pub fn with_article(noun: &str) -> String {
+    let article = if noun.starts_with(['A', 'E', 'I', 'O', 'U', 'a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
+    format!("{article} {noun}")
 }
 
 /// `checkComparable`: `overlap` for equality and membership, otherwise every
