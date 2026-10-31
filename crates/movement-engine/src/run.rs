@@ -176,6 +176,12 @@ pub struct SegmentInput {
     /// Off for a host that reads no such member.
     #[serde(default)]
     pub records_returned: bool,
+    /// With `records_returned`: what the movement returned is the records a
+    /// walk landed on, each written as its position (its type, its id and its
+    /// data), not as plain data. listen-fire's read of a listen's earlier
+    /// hops (crates/lf/src/resolve.rs) names the records it watches by them.
+    #[serde(default)]
+    pub returns_positions: bool,
 }
 
 /// A field that is there, null included (serde reads a null `Option` as
@@ -870,6 +876,13 @@ impl Run<'_> {
     /// run has completed, and what it returned is only ever recorded.
     fn add_returned(&self, result: &mut Json, scope: &Rc<Scope>) {
         let value = scope.resolve_own(RETURN_SLOT).unwrap_or_else(crate::combinator::null_slot);
+        if self.input.returns_positions {
+            match crate::record::landed_positions(&crate::record::held(value)) {
+                Ok(positions) => result["returned"] = self.wire.encode_result(&positions),
+                Err(why) => result["returnedUnwritable"] = json!(why),
+            }
+            return;
+        }
         match crate::record::plain_value_of(&crate::record::held(value)) {
             Ok(plain) => result["returned"] = self.wire.encode_result(&plain),
             Err(EvalError::Thrown { message, .. } | EvalError::Fallback(message)) => result["returnedUnwritable"] = json!(message),
@@ -3183,6 +3196,20 @@ mod tests {
         assert!(recording("Bye")["result"].get("returned").is_none());
         let (unrecorded, _) = drive(source, json!(["o", [["subject", "Hi"]]]), plain_host(json!({ "subject": "Hi" })));
         assert_eq!(unrecorded, json!({ "result": { "movementName": "m", "writes": ["l", []] } }));
+    }
+
+    /// A host that reads what the movement returned as positions is told,
+    /// for a value that is no record a walk landed on, why it is not one,
+    /// and never gets it as plain data.
+    #[test]
+    fn a_host_reading_positions_is_told_why_a_value_is_none() {
+        let source = "node Payment {\n  id: <text>\n}\nfunction m(e: <Payment>) {\n  return [e.id]\n}";
+        let mut input = segment_input(source, json!(["o", [["id", "pay_1"]]]), &[]);
+        input["recordsReturned"] = json!(true);
+        input["returnsPositions"] = json!(true);
+        let (done, _) = drive_input(input, plain_host(json!({})));
+        assert!(done["result"].get("returned").is_none(), "{done}");
+        assert_eq!(done["result"]["returnedUnwritable"], json!("a string is not a record a walk landed on"), "{done}");
     }
 
     /// The event's position crosses once, registered by handle on its first
