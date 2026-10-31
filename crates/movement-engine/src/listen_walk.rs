@@ -9,8 +9,12 @@
 //!
 //! Its `done` is `{result: {landed}}`, each record it landed on as its
 //! position (`{adapterType, recordType, identity}`), on the eval wire; or
-//! `{thrown: error}` / `{declined: reason}`, as a segment's.
+//! `{thrown: error}` / `{declined: reason}`, as a segment's. With a `limit`,
+//! the walk stops once its last hop has landed on more than `limit`
+//! distinct records: it answers `limit + 1` of them, and lists no further,
+//! so a host refusing a walk over its limit never has all of it read.
 
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use movement_parser::ast::Statement;
@@ -24,6 +28,7 @@ use crate::executor::Host;
 use crate::js::Js;
 use crate::program::DeclaringFile;
 use crate::run::{Failure, Run, SegmentInput, Stop};
+use crate::unique::get;
 
 /// What the `walk` entry reads beside a segment's own input: where the walk
 /// starts and its hops.
@@ -33,6 +38,10 @@ pub struct Walk {
     pub connection: String,
     /// Outermost first.
     pub hops: Vec<PlanHop>,
+    /// The most distinct records the last hop may land on: one more ends
+    /// the walk. None: no limit.
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
 /// The `walk` entry: `walk`'s hops off `walk.connection` in the program
@@ -69,11 +78,19 @@ impl Run<'_> {
         let span = Js::Undefined;
         let start = Rc::new(Landed::new(crate::traverse::meta_position(&instance.adapter_slug), None, read.clone()));
         let mut paths: Vec<(Rc<Scope>, Rc<Landed>)> = vec![(file, start)];
-        for hop in &walk.hops {
+        let last = walk.hops.len().saturating_sub(1);
+        for (index, hop) in walk.hops.iter().enumerate() {
             let step = step_of(hop);
+            let stop_at = walk.limit.filter(|_| index == last).map(|limit| limit + 1);
+            let mut distinct = BTreeSet::new();
             let mut next = Vec::new();
-            for (scope, cursor) in &paths {
-                for landed in self.walk(&cursor.position(), &step, read.clone(), scope, &span).await.map_err(Stop::Thrown)? {
+            'paths: for (scope, cursor) in &paths {
+                let room = stop_at.map(|n| n - distinct.len());
+                for landed in self.walk_until(&cursor.position(), &step, read.clone(), scope, &span, room).await.map_err(Stop::Thrown)? {
+                    // Counted by the record it is: two paths may land on one.
+                    if stop_at.is_some() && !distinct.insert(record_of(&landed.position())) {
+                        continue;
+                    }
                     let onward = match &step.alias {
                         Some(alias) => {
                             let child = scope.child();
@@ -83,6 +100,9 @@ impl Run<'_> {
                         None => scope.clone(),
                     };
                     next.push((onward, landed));
+                    if stop_at.is_some_and(|n| distinct.len() >= n) {
+                        break 'paths;
+                    }
                 }
             }
             paths = next;
@@ -102,6 +122,16 @@ impl Run<'_> {
         *self.file_scope.borrow_mut() = Some(file.clone());
         self.interpret_file(&DeclaringFile::Root, &file).await?;
         Ok(file)
+    }
+}
+
+/// Which record a position is: its type and id, or the whole of it for one
+/// with no id.
+fn record_of(position: &Js) -> String {
+    let id = crate::traverse::record_id(position);
+    match id {
+        Js::Undefined | Js::Null => crate::js::json_stringify(position, 0),
+        id => format!("{}:{}", get(position, "recordType").to_js_string(), crate::js::json_stringify(&id, 0)),
     }
 }
 
@@ -195,18 +225,25 @@ mod tests {
     /// The walk of `hops` off `boards` in `source`, driven against the
     /// world: its `done`, and every getRelated it asked.
     fn walk(source: &str, hops: Vec<PlanHop>) -> (Json, Vec<String>) {
+        walk_as(source, hops, None, false)
+    }
+
+    /// `walk`, stopping past `limit`; `paged`: the crm streams its edges, a
+    /// record a page.
+    fn walk_as(source: &str, hops: Vec<PlanHop>, limit: Option<usize>, paged: bool) -> (Json, Vec<String>) {
         let input = json!({
             "entry": "walk", "source": source, "languageVersion": movement_parser::version::LANGUAGE_VERSION, "segmentId": "g1", "serves": [],
             "now": "2026-10-31T12:00:00.000Z", "event": env::encode_plain(&env::object_of(vec![])),
             "catalog": serde_json::from_str::<Json>(CATALOG).unwrap(),
-            "connection": "boards", "hops": hops,
+            "connection": "boards", "hops": hops, "limit": limit,
         });
+        let methods = if paged { json!(["getRelated", "getFieldValue", "iterateRelated", "iterateRelatedPage"]) } else { json!(["getRelated", "getFieldValue"]) };
         let (boards, notes) = world();
         let positions: RefCell<BTreeMap<u64, Js>> = RefCell::default();
         let asked = RefCell::new(Vec::new());
         let serve = |request: &PendingRequest| match (request.family, request.method.as_str()) {
             ("check", "program") => json!({ "value": { "diagnostics": [], "stamps": [] } }),
-            ("adapters", "resolve") => json!({ "value": { "instance": "i1", "adapterType": "crm", "methods": ["getRelated", "getFieldValue"] } }),
+            ("adapters", "resolve") => json!({ "value": { "instance": "i1", "adapterType": "crm", "methods": methods } }),
             ("trace", "append") => json!({}),
             ("adapters", "call") => {
                 let handle = request.args["positionRef"].as_u64().unwrap();
@@ -216,15 +253,25 @@ mod tests {
                 let position = positions.borrow()[&handle].clone();
                 let args = env::decode(&request.args["args"]).unwrap();
                 let field = get(&args, "fieldId").to_js_string();
+                let from = crate::traverse::record_id(&position).to_js_string();
+                let related = match field.as_str() {
+                    "Boards" => boards.clone(),
+                    _ => notes.get(from.as_str()).cloned().unwrap_or_default(),
+                };
                 let result = match request.args["method"].as_str().unwrap() {
                     "getRelated" => {
-                        let from = crate::traverse::record_id(&position).to_js_string();
                         asked.borrow_mut().push(format!("{field} of {from}"));
-                        let related = match field.as_str() {
-                            "Boards" => boards.clone(),
-                            _ => notes.get(from.as_str()).cloned().unwrap_or_default(),
-                        };
                         Js::array(related.into_iter().map(|p| env::object_of(vec![("position", p)])).collect())
+                    }
+                    "iterateRelatedPage" => {
+                        let at = match get(&args, "cursor") {
+                            Js::Undefined => 0,
+                            cursor => cursor.to_js_string().parse::<usize>().unwrap(),
+                        };
+                        asked.borrow_mut().push(format!("{field} of {from} page {at}"));
+                        let next = if at + 1 < related.len() { Js::str((at + 1).to_string()) } else { Js::Null };
+                        let items = related.get(at).cloned().into_iter().map(|p| env::object_of(vec![("position", p)])).collect();
+                        env::object_of(vec![("items", Js::array(items)), ("nextCursor", next)])
                     }
                     "getFieldValue" => get(&crate::traverse::position_data(&position), &field),
                     other => panic!("unexpected {other}"),
@@ -286,6 +333,30 @@ mod tests {
         let source = format!("{SOURCE}node __LfListenRead {{\n  at: <text>\n}}\nfunction __lf_listen_heads(read: <__LfListenRead>) {{\n  return 1\n}}\n");
         let (done, _) = walk(&source, hops("boards-[b:Boards WHERE b.Name == \"Dev\"]->", &[]));
         assert_eq!(landed(&done), ["Board b3"], "{done}");
+    }
+
+    /// Past its limit the walk stops at one record more, its last hop
+    /// counted across every path it walks: the boards after the first are
+    /// never asked for their notes.
+    #[test]
+    fn a_walk_past_its_limit_stops_one_record_over_it() {
+        let (done, asked) = walk_as(SOURCE, hops("boards-[b:Boards]->-[n:Notes]->", &[]), Some(1), false);
+        assert_eq!(landed(&done), ["Note n1", "Note n2"], "{done}");
+        assert_eq!(asked, ["Boards of undefined", "Notes of b1"]);
+        let (done, _) = walk_as(SOURCE, hops("boards-[b:Boards]->-[n:Notes]->", &[]), Some(4), false);
+        assert_eq!(landed(&done), ["Note n1", "Note n2", "Note n3", "Note n4"], "within its limit: all of it");
+    }
+
+    /// An edge listed a page at a time is paged no further than the limit
+    /// needs.
+    #[test]
+    fn a_paged_walk_past_its_limit_pages_no_further() {
+        let (done, asked) = walk_as(SOURCE, hops("boards-[b:Boards]->", &[]), Some(1), true);
+        assert_eq!(landed(&done), ["Board b1", "Board b2"], "{done}");
+        assert_eq!(asked, ["Boards of undefined page 0", "Boards of undefined page 1"], "the third board's page is never asked for");
+        let (done, asked) = walk_as(SOURCE, hops("boards-[b:Boards]->", &[]), None, true);
+        assert_eq!(landed(&done), ["Board b1", "Board b2", "Board b3"], "{done}");
+        assert_eq!(asked.len(), 3);
     }
 
     /// A connection the program does not make is said by name.

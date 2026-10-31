@@ -673,7 +673,7 @@ impl Run<'_> {
             let pushdown = self.pushdown_args(step, &read, scope, span).await?;
             let mut next = Vec::new();
             for (aliases, cursor) in &paths {
-                let kept = self.fetch(&cursor.position(), step, &read, Fetch { pushdown: &pushdown, paged: read.streams }, scope, span).await?;
+                let kept = self.fetch(&cursor.position(), step, &read, Fetch { pushdown: &pushdown, paged: read.streams, stop_at: None }, scope, span).await?;
                 for landed in self.ordered(kept, step, scope, span).await? {
                     let mut aliases = aliases.clone();
                     if let Some(alias) = &step.alias {
@@ -904,6 +904,12 @@ impl Run<'_> {
 
     /// `walkSourceHeadPaths` for one hop from `start`.
     pub(crate) async fn walk(&self, start: &Js, step: &EdgeStep, read: Rc<Read>, scope: &Rc<Scope>, span: &Js) -> Result<Vec<Rc<Landed>>, Failure> {
+        self.walk_until(start, step, read, scope, span, None).await
+    }
+
+    /// `walk`, its fetch paging no further once it has kept `stop_at`
+    /// records (None: every page).
+    pub(crate) async fn walk_until(&self, start: &Js, step: &EdgeStep, read: Rc<Read>, scope: &Rc<Scope>, span: &Js, stop_at: Option<usize>) -> Result<Vec<Rc<Landed>>, Failure> {
         if step.direction == EdgeDirection::Incoming && !read.incoming {
             return Err(Failure::unsupported(
                 &format!("incoming block-head hops ('{}')", step.edge_type_id),
@@ -911,7 +917,7 @@ impl Run<'_> {
             ));
         }
         let pushdown = self.pushdown_args(step, &read, scope, span).await?;
-        let kept = self.fetch(start, step, &read, Fetch { pushdown: &pushdown, paged: read.streams }, scope, span).await?;
+        let kept = self.fetch(start, step, &read, Fetch { pushdown: &pushdown, paged: read.streams, stop_at }, scope, span).await?;
         self.ordered(kept, step, scope, span).await
     }
 
@@ -928,7 +934,7 @@ impl Run<'_> {
     /// or, `paged`, the instance's stream a page at a time; each record kept
     /// when it is a member the hop is about and its WHERE holds.
     async fn fetch(&self, start: &Js, step: &EdgeStep, read: &Rc<Read>, how: Fetch<'_>, scope: &Rc<Scope>, span: &Js) -> Result<Vec<Rc<Landed>>, Failure> {
-        let Fetch { pushdown, paged } = how;
+        let Fetch { pushdown, paged, stop_at } = how;
         let gate = member_gate(step, start, read);
         let mut args = vec![("fieldId", Js::str(step.edge_type_id.clone())), ("direction", Js::str(direction_text(step.direction)))];
         args.extend(pushdown.iter().map(|(k, v)| (k.as_str(), v.clone())));
@@ -960,7 +966,7 @@ impl Run<'_> {
                 for item in list_items(&get(&page, "items"))? {
                     self.keep(&mut kept, get(&item, "position"), &item, step, read, gate.as_ref(), scope, span).await?;
                 }
-                if next.is_nullish() {
+                if next.is_nullish() || stop_at.is_some_and(|n| kept.len() >= n) {
                     break;
                 }
                 if pages >= MAX_RELATED_PAGES {
@@ -1242,7 +1248,7 @@ impl Run<'_> {
             let pushdown = self.pushdown_args(step, read, scope, span).await?;
             let mut next = Vec::new();
             for cursor in &landed {
-                let kept = self.fetch(&cursor.position(), step, read, Fetch { pushdown: &pushdown, paged: false }, scope, span).await?;
+                let kept = self.fetch(&cursor.position(), step, read, Fetch { pushdown: &pushdown, paged: false, stop_at: None }, scope, span).await?;
                 next.extend(self.ordered(kept, step, scope, span).await?);
             }
             landed = next;
@@ -1488,6 +1494,8 @@ pub(crate) fn block_value(returned: Vec<Binding>) -> Binding {
 struct Fetch<'a> {
     pushdown: &'a [(String, Js)],
     paged: bool,
+    /// Page no further once this many records are kept; None: every page.
+    stop_at: Option<usize>,
 }
 
 /// A step's own `type`.
