@@ -1,16 +1,15 @@
-//! Listens and callbacks: what fires a movement, and with what.
+//! Listens, and the callbacks 0.13 retired: what fires a movement, and with
+//! what.
 //!
 //! Codes: MOV_LISTEN_FILE_LEVEL, MOV_LISTEN_NOT_INSTANCE,
 //! MOV_LISTEN_BAD_CONFIG, MOV_LISTEN_DUPLICATE, MOV_LISTEN_ALIAS_DUPLICATE,
 //! MOV_LISTEN_CANNOT_FIRE, MOV_LISTEN_PARAM_MISMATCH,
-//! MOV_LISTEN_SHAPE_MISMATCH, MOV_LISTEN_MISSING, MOV_CALLBACK_NOT_MOVEMENT,
-//! MOV_CALLBACK_PARAM_NOT_VALUE, MOV_CALLBACK_BAD_CONFIG (and
+//! MOV_LISTEN_SHAPE_MISMATCH, MOV_LISTEN_MISSING, MOV_CALLBACK_RETIRED (and
 //! MOV_ADAPTER_NOT_CONSTRUCTED and MOV_CALL_NOT_MOVEMENT where a listen
 //! raises them).
 //!
 //! TypeScript: check.ts `checkListen`, `reportMissingListens`, the
-//! dispatchable half of `checkMovement`, `checkCallback`,
-//! `checkCallbackNamed`, `checkCallbackParamType`, `checkCallbackConfig`.
+//! dispatchable half of `checkMovement`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -36,7 +35,6 @@ use crate::cron::cron_schedule_error;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::families::names::spell_name;
 use crate::families::systems::{is_boolean_literal, is_value_param_type};
-use crate::meta::did_you_mean;
 use crate::scope::{Resolution, ScopeId, SymbolId, SymbolKind};
 
 const EVERY_KEY: &str = "every";
@@ -48,9 +46,6 @@ mod watched_field;
 
 /// `SUPPRESS_SELF_KEY`: the listen key every listener accepts.
 const SUPPRESS_SELF_KEY: &str = "suppress_self";
-
-/// `CALLBACK_CONFIG_KEYS`.
-const CALLBACK_CONFIG_KEYS: &[&str] = &["once", "ttl"];
 
 /// What the walk remembers across the file for its listens.
 #[derive(Default)]
@@ -916,73 +911,34 @@ impl Checker<'_> {
         self.check_expr_slot(&arg.value, scope);
     }
 
-    /// `checkCallback`: `callback({ … })` or `callback(movement, args…)`.
-    /// Hands back the fire-time signature (`CallbackParams`).
-    pub fn check_callback(&mut self, callback: &CallbackExpression, scope: ScopeId) -> Vec<(String, Option<Ty>)> {
-        let params = match &callback.subject {
+    /// `callback(…)` is retired at 0.13: one MOV_CALLBACK_RETIRED naming
+    /// what replaces it. Its subject is still walked, so the names it uses
+    /// stay used, and its fire-time parameters are handed back, so the
+    /// binding keeps the type it had and nothing read off it is refused too.
+    pub fn retire_callback(&mut self, callback: &CallbackExpression, scope: ScopeId) -> Vec<(String, Option<Ty>)> {
+        let many_answers = callback.config.iter().any(|entry| entry.name == "once" && entry.value.raw.trim().eq_ignore_ascii_case("false"));
+        let message = format!(
+            "'callback(…)' is retired in 0.13. For a form a person opens, connect `@lf/forms` and write one: `form = write forms-[:Forms]-> {{ Title: …, Fields: … }}`, send `form.Url`, and `await form-[:Submissions]->`. For buttons, write them on the message (`Buttons: [{{ Text: …, Value: … }}]`) and `await msg-[:Interactions]->`.{}",
+            if many_answers { " Many answers in one run (`once: false`) become a standing `listen` on the message's Interactions that keeps its state in a table." } else { "" }
+        );
+        self.report(codes::CALLBACK_RETIRED, message, callback.span);
+        match &callback.subject {
             CallbackSubject::Inline { closure, .. } => {
-                // TODO(type-core): the TypeScript checks each parameter's type as
-                // the closure declares it; here they are checked just before.
-                let params = closure
-                    .params
-                    .iter()
-                    .map(|param| (param.name.clone(), self.check_callback_param_type(param.type_.as_ref(), &param.name, Some(scope), None)))
-                    .collect();
-                let (_, suspends) = self.check_closure_walked(closure, scope, None, "a callback body", 0);
-                self.record_body(closure.span, "callback", crate::checker::terminates_with(&closure.body, false));
-                if suspends {
-                    self.refuse_unresumable_wait("a callback body", closure.span);
-                }
-                self.absorb_suspend(suspends);
-                params
+                self.check_closure_walked(closure, scope, None, "a callback body", 0);
+                closure.params.iter().map(|param| (param.name.clone(), scalar_param_type(param.type_.as_ref()))).collect()
             }
-            CallbackSubject::Named { movement, args, name_span, span } => self.check_callback_named(movement, args, *name_span, *span, scope),
-        };
-        self.check_callback_config(&callback.config, scope);
-        params
+            CallbackSubject::Named { movement, args, span, .. } => {
+                self.check_callback_arguments(movement, args, *span, scope);
+                self.callback_left_open(movement, args, scope)
+            }
+        }
     }
 
-    /// `checkCallbackNamed`: a movement deferred by name; the parameters its
-    /// arguments leave out are the callback's fire-time signature.
-    fn check_callback_named(&mut self, movement: &str, args: &[CallArg], name_span: Span, span: Span, scope: ScopeId) -> Vec<(String, Option<Ty>)> {
-        let callee = match self.scopes.resolve(scope, movement) {
-            Resolution::Found(id) => Some(id),
-            _ => None,
-        };
-        let kind = callee.map(|id| self.scopes.symbol(id).kind);
-        if !matches!(kind, Some(SymbolKind::Movement | SymbolKind::FileImport)) {
-            let message = match kind {
-                None => format!(
-                    "'{movement}' is not a movement in this file{} — a callback defers an inline body ('callback({{ … }})') or a movement by name",
-                    did_you_mean(movement, &self.movement_names_in_scope(scope))
-                ),
-                Some(kind) => format!(
-                    "'{movement}' is {}, not a movement — a callback defers an inline body ('callback({{ … }})') or a movement by name",
-                    kind.describe()
-                ),
-            };
-            self.report(codes::CALLBACK_NOT_MOVEMENT, message, name_span);
-        }
-        self.check_callback_suspends(movement, name_span, scope);
-        self.check_callback_arguments(movement, args, span, scope);
-        if kind != Some(SymbolKind::Movement) {
-            return Vec::new();
-        }
-        let Some(info) = callee.and_then(|id| self.listens.movements.get(&id)) else { return Vec::new() };
-        let params = info.params.clone();
-        // A call written in place (`() => f(x)`) is a closure
-        // with no parameters calling `f`, so `f` is held to its arity as
-        // TypeScript holds `() => f(x)`: the platform fills only what the
-        // closure declares. A function named bare (`callback(f)`) still
-        // leaves every parameter for the platform.
-        if span.end != name_span.end {
-            if args.len() != params.len() {
-                let message = callback_call_arity_message(movement, params.len(), args.len());
-                let fix = self.callback_closure_fix(movement, args, &params, span);
-                self.push(Diagnostic { fix, ..Diagnostic::error(codes::CALL_ARITY, message, span) });
-            }
-            return Vec::new();
-        }
+    /// The parameters a movement deferred by name leaves for the platform to
+    /// send: those its arguments do not supply.
+    fn callback_left_open(&self, movement: &str, args: &[CallArg], scope: ScopeId) -> Vec<(String, Option<Ty>)> {
+        let Resolution::Found(id) = self.scopes.resolve(scope, movement) else { return Vec::new() };
+        let Some(info) = self.listens.movements.get(&id) else { return Vec::new() };
         let mut supplied = HashSet::new();
         for (index, arg) in args.iter().enumerate() {
             match call_arg_name(arg) {
@@ -990,146 +946,13 @@ impl Checker<'_> {
                     supplied.insert(name.to_string());
                 }
                 None => {
-                    if let Some(param) = params.get(index) {
+                    if let Some(param) = info.params.get(index) {
                         supplied.insert(param.name.clone());
                     }
                 }
             }
         }
-        params
-            .iter()
-            .filter(|p| !supplied.contains(&p.name))
-            .map(|param| (param.name.clone(), self.check_callback_param_type(param.type_.as_ref(), &param.name, None, Some(name_span))))
-            .collect()
-    }
-
-    /// `callbackClosureFix`: the upgrade of `callback(f(x))`
-    /// where `f` has a parameter left open, read off `f`'s signature:
-    /// `callback((d: <date>) => f(x, d))`, each open parameter declared under
-    /// its own name and type, so the platform sends what it sent before and
-    /// `f` is called as before. Only for positional arguments that leave the
-    /// trailing parameters open, each a scalar the platform can send. Never
-    /// marked safe: both engines refuse to run a named callback that leaves a
-    /// parameter unsupplied, so the rewrite turns a run that failed into one
-    /// that fires — a person decides that.
-    fn callback_closure_fix(&self, movement: &str, args: &[CallArg], params: &[MovementParam], span: Span) -> Option<serde_json::Value> {
-        if args.len() >= params.len() {
-            return None;
-        }
-        let mut written = Vec::new();
-        for arg in args {
-            match arg {
-                CallArg::Expr { name: None, expr } => written.push(expr.raw.trim().to_string()),
-                _ => return None,
-            }
-        }
-        let open = &params[args.len()..];
-        let mut declared = Vec::new();
-        for param in open {
-            match &param.type_ {
-                Some(ParamTypeRef::Name(t)) if t.hops_raw.is_none() && parse_field_type_name(Some(&t.graph)).is_some() => {
-                    declared.push(format!("{}: <{}>", spell_name(&param.name), t.graph));
-                }
-                _ => return None,
-            }
-        }
-        written.extend(open.iter().map(|p| spell_name(&p.name)));
-        let text = format!("({}) => {}({})", declared.join(", "), spell_name(movement), written.join(", "));
-        Some(json!({ "edits": [{ "span": span, "text": text }] }))
-    }
-
-    /// `checkCallbackParamType`: a fire-time parameter is one scalar a
-    /// platform sends. `scope` is set when the callback declares it itself.
-    /// The parameter's scalar type, when it has one.
-    fn check_callback_param_type(&mut self, type_: Option<&ParamTypeRef>, name: &str, scope: Option<ScopeId>, at: Option<Span>) -> Option<Ty> {
-        let type_ = type_?;
-        let reference = match type_ {
-            ParamTypeRef::Value(value) => {
-                let message = format!(
-                    "a callback's parameter '{name}' is a value the platform sends when the callback fires, one per control, so it has to be a single scalar type (<text>, <number>, <boolean>, <date>, <datetime>, <json>, <file>) — '<{}>' is more than one. Supply it as a fixed argument instead.",
-                    spell_value_type(value)
-                );
-                self.report(codes::CALLBACK_PARAM_NOT_VALUE, message, at.unwrap_or(value_type_span(value)));
-                return None;
-            }
-            ParamTypeRef::Name(reference) => reference,
-        };
-        if reference.hops_raw.is_none()
-            && let Some(scalar) = parse_field_type_name(Some(&reference.graph))
-        {
-            return Some(Ty::from_schema(&scalar));
-        }
-        let span = at.unwrap_or(reference.span);
-        if let Some(scope) = scope {
-            self.resolve_name(&reference.graph, span, scope);
-        }
-        let message = format!(
-            "a callback's parameter '{name}' is a value the platform sends when the callback fires, so it has to be a scalar type (<text>, <number>, <boolean>, <date>, <datetime>, <json>, <file>) — '<{}{}>' is a record position, which nothing can hand us. Supply it as a fixed argument instead.",
-            reference.graph,
-            reference.hops_raw.as_deref().unwrap_or("")
-        );
-        self.report(codes::CALLBACK_PARAM_NOT_VALUE, message, span);
-        None
-    }
-
-    /// `checkCallbackConfig`: `{ once: <boolean>, ttl: <duration> }`, closed.
-    fn check_callback_config(&mut self, config: &[NamedArg], scope: ScopeId) {
-        let mut seen = HashSet::new();
-        for entry in config {
-            let raw = entry.value.raw.trim();
-            if !seen.insert(entry.name.as_str()) {
-                self.report(
-                    codes::CALLBACK_BAD_CONFIG,
-                    format!("Duplicate callback config '{}' — each setting is given once", entry.name),
-                    entry.value.span,
-                );
-            }
-            match entry.name.as_str() {
-                "once" => match scalar_literal_kind(raw) {
-                    Some(kind) if kind != "boolean" => self.report(
-                        codes::CALLBACK_BAD_CONFIG,
-                        format!("'once' says whether the callback may fire more than once — write {} or {}, not {raw}", self.code("TRUE"), self.code("FALSE")),
-                        entry.value.span,
-                    ),
-                    Some(_) => {}
-                    None => self.check_expr_slot(&entry.value, scope),
-                },
-                "ttl" => {
-                    if !is_valid_duration(raw) {
-                        self.report(
-                            codes::CALLBACK_BAD_CONFIG,
-                            format!("'{raw}' is not a valid ttl — use unit-suffixed duration literals like 4h, 2d, 90m, 1h30m"),
-                            entry.value.span,
-                        );
-                    }
-                }
-                other => self.report(
-                    codes::CALLBACK_BAD_CONFIG,
-                    format!(
-                        "'{other}' is not a callback setting{} — a callback takes: {}",
-                        did_you_mean(other, CALLBACK_CONFIG_KEYS),
-                        CALLBACK_CONFIG_KEYS.join(", ")
-                    ),
-                    entry.value.span,
-                ),
-            }
-        }
-    }
-
-    /// `movementNamesInScope`: innermost first, each once.
-    fn movement_names_in_scope(&self, scope: ScopeId) -> Vec<String> {
-        let mut names: Vec<String> = Vec::new();
-        let mut at = Some(scope);
-        while let Some(id) = at {
-            let s = self.scopes.scope(id);
-            for symbol in s.symbols.values().map(|id| self.scopes.symbol(*id)) {
-                if symbol.kind == SymbolKind::Movement && !names.contains(&symbol.name) {
-                    names.push(symbol.name.clone());
-                }
-            }
-            at = s.parent;
-        }
-        names
+        info.params.iter().filter(|p| !supplied.contains(&p.name)).map(|param| (param.name.clone(), scalar_param_type(param.type_.as_ref()))).collect()
     }
 }
 
@@ -1142,45 +965,6 @@ fn call_arg_name(arg: &CallArg) -> Option<&str> {
         | CallArg::Closure { name, .. }
         | CallArg::Type { name, .. } => name.as_deref(),
     }
-}
-
-/// `scalarLiteralType`, as the kind's name: a bare literal's type.
-fn scalar_literal_kind(raw: &str) -> Option<&'static str> {
-    let upper = raw.to_uppercase();
-    if upper == "TRUE" || upper == "FALSE" {
-        return Some("boolean");
-    }
-    if upper == "NULL" {
-        return None;
-    }
-    let digits = raw.strip_prefix('-').unwrap_or(raw);
-    let (whole, fraction) = digits.split_once('.').map_or((digits, None), |(w, f)| (w, Some(f)));
-    let all_digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    if all_digits(whole) && fraction.is_none_or(all_digits) {
-        return Some("number");
-    }
-    if is_quoted(raw, '"') || is_quoted(raw, '\'') {
-        return Some("text");
-    }
-    None
-}
-
-/// `/^"(?:[^"\\]|\\.)*"$/` for either quote.
-fn is_quoted(raw: &str, quote: char) -> bool {
-    let Some(inner) = raw.strip_prefix(quote).and_then(|r| r.strip_suffix(quote)) else { return false };
-    if raw.len() < 2 {
-        return false;
-    }
-    let mut chars = inner.chars();
-    while let Some(c) = chars.next() {
-        if c == quote {
-            return false;
-        }
-        if c == '\\' && chars.next().is_none() {
-            return false;
-        }
-    }
-    true
 }
 
 /// `isValidDuration`: `4h`, `2d`, `90m`, `1h30m`.
@@ -1275,38 +1059,27 @@ pub fn spell_value_type(type_: &ValueType) -> String {
     }
 }
 
-fn value_type_span(type_: &ValueType) -> Span {
-    match type_ {
-        ValueType::Name { span, .. } | ValueType::List { span, .. } | ValueType::Record { span, .. } | ValueType::Closure { span, .. } => *span,
-    }
-}
-
 /// `surfaceNotEnumerated`: a position whose fields nobody listed.
 fn surface_not_enumerated(position: &movement_parser::catalog::types::PositionSchema) -> bool {
     position.open_properties == Some(true) || position.undescribed == Some(true) || position.pending == Some(true)
 }
 
-/// A callback's call written in place that leaves its
-/// function a parameter open, or passes one too many.
-fn callback_call_arity_message(movement: &str, arity: usize, given: usize) -> String {
-    format!(
-        "'{movement}' takes {arity} argument{}, got {given} — a callback's closure is called with nothing, so it passes every argument itself, and what the platform sends when it fires is a parameter the closure declares: callback((d: <date>) => {movement}(…, d))",
-        if arity == 1 { "" } else { "s" }
-    )
+/// A fire-time parameter's scalar type, when it declares one.
+fn scalar_param_type(type_: Option<&ParamTypeRef>) -> Option<Ty> {
+    match type_? {
+        ParamTypeRef::Name(reference) if reference.hops_raw.is_none() => parse_field_type_name(Some(&reference.graph)).map(|scalar| Ty::from_schema(&scalar)),
+        _ => None,
+    }
 }
 
-
-/// `callbackType`: a callback is a local node with `.id` / `.url` reads and a
-/// listenable `Called` edge, landing on the call — `At` plus one field per
-/// typed fire-time parameter.
+/// `callbackType`: what a callback was before 0.13 retired it, kept so a
+/// retired `callback(…)` raises nothing past its own refusal: a local node
+/// with `.id` / `.url` reads and a listenable `Called` edge, landing on the
+/// call — `At` plus one field per fire-time parameter.
 pub fn callback_type(params: Vec<(String, Option<Ty>)>) -> Position {
     let mut fields = IndexMap::new();
     fields.insert("At".to_string(), Some(Ty::Datetime));
-    for (name, ty) in params {
-        if let Some(ty) = ty {
-            fields.insert(name, Some(ty));
-        }
-    }
+    fields.extend(params);
     let call = Position::Local(LocalNode { label: "a callback's call".to_string(), reads: fields, edges: None, run_built: None, extracted: None });
     let schema = EdgeSchema {
         target: "Called".to_string(),
@@ -1333,12 +1106,9 @@ mod tests {
     }
 
     #[test]
-    fn reads_durations_and_literals() {
+    fn reads_durations() {
         assert!(is_valid_duration("1h30m"));
         assert!(!is_valid_duration("1x"));
         assert!(!is_valid_duration("h"));
-        assert_eq!(scalar_literal_kind("-3.5"), Some("number"));
-        assert_eq!(scalar_literal_kind("\"x\""), Some("text"));
-        assert_eq!(scalar_literal_kind("yes"), None);
     }
 }

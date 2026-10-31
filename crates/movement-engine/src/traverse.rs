@@ -593,26 +593,6 @@ impl Run<'_> {
                     }
                     Ok(iterations)
                 }
-                // `cb-[c:Called]-> { … }`: the calls so far, read off the
-                // ledger; none before anything fires is an empty walk.
-                callback @ Binding::Callback(_) => match steps {
-                    Some([TraversalStep::Edge(step)]) if step.edge_type_id == crate::awaits::CALLED => {
-                        let filter = step.expression_filter.as_deref().map(|filter| (filter.clone(), step.alias.clone()));
-                        let landings = self.called_landings(&callback, filter.as_ref(), scope).await?;
-                        Ok(landings
-                            .into_iter()
-                            .map(|landing| {
-                                let aliases = step.alias.iter().map(|alias| (alias.clone(), landing.clone())).collect();
-                                (aliases, landing)
-                            })
-                            .collect())
-                    }
-                    Some([TraversalStep::Edge(step)]) => Err(Stop::Thrown(Failure::unsupported(
-                        &format!("'-[:{}]->' on a callback", step.edge_type_id),
-                        &format!("a callback has one edge, '{}'", crate::awaits::CALLED),
-                    ))),
-                    _ => Err(Stop::Thrown(Failure::unsupported("this block head over a callback", ""))),
-                },
                 // `org-[w:@old]-> { … }`: the record before `org`'s write,
                 // which the handle holds itself (no system has the edge): one
                 // iteration, or none when the write created the record. Hops

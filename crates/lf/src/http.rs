@@ -193,23 +193,6 @@ pub fn decode_component(text: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// `new URLSearchParams(query)`: its pairs in order, `+` a space, each
-/// percent-decoded (an undecodable escape is kept as written).
-pub fn query_pairs(query: &str) -> Vec<(String, String)> {
-    let decode = |part: &str| {
-        let spaced = part.replace('+', " ");
-        decode_component(&spaced).unwrap_or(spaced)
-    };
-    query
-        .split('&')
-        .filter(|pair| !pair.is_empty())
-        .map(|pair| match pair.split_once('=') {
-            Some((k, v)) => (decode(k), decode(v)),
-            None => (decode(pair), String::new()),
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,10 +203,5 @@ mod tests {
         assert_eq!(decode_component("caf%C3%A9").as_deref(), Some("café"));
         assert_eq!(decode_component("bad%2"), None);
         assert_eq!(decode_component("bad%FF"), None);
-    }
-
-    #[test]
-    fn a_query_reads_as_url_search_params_reads_it() {
-        assert_eq!(query_pairs("note=a+b&x=%41&flag"), vec![("note".into(), "a b".into()), ("x".into(), "A".into()), ("flag".into(), String::new())]);
     }
 }

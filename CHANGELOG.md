@@ -136,6 +136,32 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
 - A module's acceptance's `reply` is refused by `listen-fire` unless its status is a success (200–299), as the adapter protocol and the TypeScript client say.
 - A module `listen-fire` starts keeps its `ctx.kv` in its own folder (`.lf/externals/<name>/`) unless its install names another `MODULE_STATE_DIR`. Before, `ctx.kv` refused unless the install named one.
 
+#### Removed
+
+- `callback(…)` is retired.
+  - Each one is refused where it is written (`MOV_CALLBACK_RETIRED`, an error), naming what replaces it.
+    - For a form a person opens: a form from `@lf/forms` (`form = write forms-[:Forms]-> { Title: …, Fields: … }`), its `form.Url` sent, then `await form-[:Submissions]->`.
+    - For buttons: `Buttons: [{ Text: …, Value: … }]` on the message, then `await msg-[:Interactions]->`.
+  - A callback that takes many answers (`once: false`) becomes a standing `listen` on the message's Interactions that keeps its state in a table; the message says so.
+  - A callback's `ttl` becomes the program's `race` with a `sleep`.
+  - The binding keeps its old type, so a read of its `.id`, its `.url` or its `Called` edge raises nothing more.
+  - `listen-fire upgrade` from a 0.12 pin lists each one by file and line, and leaves the pin where it was until each is replaced by hand.
+  - `MOV_CALLBACK_NOT_MOVEMENT`, `MOV_CALLBACK_BAD_CONFIG` and `MOV_CALLBACK_PARAM_NOT_VALUE` are raised by nothing; their names are not reused.
+  - Why: a callback was a second way for a run to wait, outside the graph. A form and buttons are records on edges, and a run awaits them like any other.
+- The host machinery for callbacks went with them.
+  - `listen-fire call` exits 2, saying a run waits on a form from `@lf/forms` instead.
+  - `/api/cb/<id>` answers any request 410 `{ "outcome": "retired", "message": … }`: a link minted by an earlier release is gone for good.
+  - The engine refuses a `callback(…)` that reaches it, as one the checker should have caught.
+  - Store modules: `listen-fire` no longer calls `callbacks.*`, `correlations.*` or `records.closeRun`, and `parks.commit` takes no `{ kind: "await" }` park.
+  - The SQLite state file drops its `callback` and `await_correlation` tables. `@lf/postgres-store`'s migration 10 drops `lf.callback` and `lf.adapter_await`: run `listen-fire connect @lf/postgres-store` to apply it.
+  - Embedders: the host families lose `park.callbacks`, `fireCallbackBody` and the run input's `fire`, and `park.sink.commitAwaitPark` and `park.wake` take a `waitId` only. The Rust embed loses `fire`, `CallbackCall`, `CallbackMint`, `MintedCallback`, `AwaitPark`, and the store's `mint_callback`, `callback_calls`, `commit_await_park` and `wake`.
+  - A run parked on a callback under 0.12 cannot resume on 0.13, as no run parked under 0.12 can.
+- `listen-fire` no longer wakes a waiting run by key.
+  - It calls neither `resolveAwait` nor `wakeKeys`, ignores a `checkInbound` acceptance's `wakeKeys`, and queues no `wake_await` row by key: modules report arrivals (adapter protocol 2.5).
+  - The Rust module kit's store slot loses `correlations.*` and `callbacks.*`.
+- The Telegram and WhatsApp handbook sections, and their `Reply Markup` and `Interactive` field descriptions, teach a url button that opens a form from `@lf/forms`, in place of a callback id on the button.
+  - A `callback_data` or reply button's tap reaches no run until those modules report taps as `Interactions`, as Slack does.
+
 ### Added
 
 - `listen-fire modules` lists every module this `listen-fire` can install, the bundled `@lf/*` ones, with a line on what each is and which the project has installed. A bare `listen-fire connect` prints the same list; it listed only the slot modules and what the project already held.

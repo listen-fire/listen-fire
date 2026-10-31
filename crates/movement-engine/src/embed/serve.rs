@@ -323,18 +323,9 @@ impl Session {
                 let park = TimerPark { address: text(args, "address", label)?.into(), state: state(args, "state", label)?, wake_at: text(args, "wakeAt", label)?.into() };
                 then(store(hosts, label)?.commit_timer_park(park), |()| Ok(None))
             }
-            "park.sink.commitAwaitPark" if args.get("waitId").is_some() => {
+            "park.sink.commitAwaitPark" => {
                 let park = WaitPark { address: text(args, "address", label)?.into(), state: state(args, "state", label)?, wait_id: text(args, "waitId", label)?.into() };
                 then(store(hosts, label)?.commit_wait_park(park), |()| Ok(None))
-            }
-            "park.sink.commitAwaitPark" => {
-                let park = AwaitPark {
-                    address: text(args, "address", label)?.into(),
-                    state: state(args, "state", label)?,
-                    adapter_type: text(args, "adapterType", label)?.into(),
-                    correlation_key: args.get("correlationKey").cloned().unwrap_or(Json::Null),
-                };
-                then(store(hosts, label)?.commit_await_park(park), |()| Ok(None))
             }
             "park.sink.commitSuspension" => {
                 let (address, state) = (text(args, "address", label)?.to_string(), state(args, "state", label)?);
@@ -367,7 +358,7 @@ impl Session {
                 let subtrees = texts(args.get("subtreeAddresses"), label)?;
                 then(store(hosts, label)?.cancel_subtrees(&subtrees, args.get("excludeLeaf").and_then(Json::as_str)), |()| Ok(None))
             }
-            "park.wake" if args.get("waitId").is_some() => then(store(hosts, label)?.wake_wait(text(args, "waitId", label)?), |()| Ok(None)),
+            "park.wake" => then(store(hosts, label)?.wake_wait(text(args, "waitId", label)?), |()| Ok(None)),
             "park.waits.mark" => then(store(hosts, label)?.wait_mark(), |mark| Ok(Some(json!({ "mark": mark })))),
             "park.waits.open" => {
                 let since = args.get("since").and_then(Json::as_i64).ok_or_else(|| HostFailure::new(format!("{label}: since is an integer")))?;
@@ -393,29 +384,6 @@ impl Session {
                 let matched = args.get("matched").and_then(Json::as_bool).ok_or_else(|| HostFailure::new(format!("{label}: matched is a boolean")))?;
                 let counts = store(hosts, label)?.note_arrival(text(args, "waitId", label)?, text(args, "identity", label)?, args.get("version").and_then(Json::as_str), matched);
                 then(counts, |counts| Ok(Some(json!({ "counts": counts }))))
-            }
-            "park.wake" => {
-                let key = args.get("correlationKey").cloned().unwrap_or(Json::Null);
-                then(store(hosts, label)?.wake(text(args, "adapterType", label)?, &key), |()| Ok(None))
-            }
-            "park.callbacks.mint" => {
-                let params = args
-                    .get("params")
-                    .and_then(Json::as_array)
-                    .and_then(|list| list.iter().map(|p| Some((p.get("name")?.as_str()?.to_string(), p.get("type")?.as_str()?.to_string()))).collect::<Option<Vec<_>>>())
-                    .ok_or_else(|| HostFailure::new(format!("{label}: params are {{name, type}} each")))?;
-                let mint = CallbackMint {
-                    address: text(args, "address", label)?.into(),
-                    params,
-                    state: state(args, "state", label)?,
-                    single_use: args.get("singleUse").and_then(Json::as_bool).unwrap_or(false),
-                    expires_at: args.get("expiresAt").and_then(Json::as_str).map(str::to_string),
-                };
-                then(store(hosts, label)?.mint_callback(mint), |minted| Ok(Some(json!({ "id": minted.id, "url": minted.url }))))
-            }
-            "park.callbacks.calls" => {
-                let id = args.get("callbackId").cloned().unwrap_or(Json::Null);
-                then(store(hosts, label)?.callback_calls(&id), |calls| Ok(Some(calls.to_wire())))
             }
             "park.sources.save" => then(store(hosts, label)?.save_source(text(args, "source", label)?), |hash| Ok(Some(json!({ "hash": hash })))),
             "park.sources.load" => then(store(hosts, label)?.load_source(text(args, "hash", label)?), |source| {

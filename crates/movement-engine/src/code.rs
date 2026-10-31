@@ -8,7 +8,7 @@
 //! that parked it read it.
 
 use movement_parser::ast::{
-    self, ArmExpression, AwaitSource, CallArg, CallStatement, CallbackSubject, ClosureExpression, CombinatorArms, CombinatorExpression,
+    self, ArmExpression, AwaitSource, CallArg, CallStatement, ClosureExpression, CombinatorArms, CombinatorExpression,
     CollectionOpExpression, ExprSlot, LinkTarget, MatchExpression, MovementDeclaration, NodeEntry, NodeLiteral, PathHead, PathRoot, RValue,
     ShapeDeclaration, Span, Statement, UntilCondition, WriteExpression, WriteTarget,
 };
@@ -135,14 +135,6 @@ impl Walk {
             (RValue::Combinator { combinator }, "combinator") => self.combinator(combinator, rest),
             (RValue::Collection { collection }, "collection") => self.collection(collection, rest),
             (RValue::InlineBlock { inline_block }, "inlineBlock") => self.statements(&inline_block.body, rest.strip_prefix(&["body"])?),
-            (RValue::Callback { callback }, "callback") => match rest.split_first()? {
-                (&"subject", rest) => match &callback.subject {
-                    CallbackSubject::Inline { closure, .. } => self.closure(closure, rest.strip_prefix(&["closure"])?),
-                    CallbackSubject::Named { args, .. } => self.call_args(args, rest.strip_prefix(&["args"])?),
-                },
-                (&"config", rest) => self.named_args(&callback.config, rest),
-                _ => None,
-            },
             (RValue::Closure { closure }, "closure") => self.closure(closure, rest),
             (RValue::Node { node }, "node") => self.literal(node, rest),
             (RValue::Lazy { lazy }, "lazy") => match rest.split_first()? {

@@ -1,6 +1,6 @@
 //! The run host's backend as one trait (movement-engine
-//! `services/run_host/store.ts` `RunHostStore`, with listen-fire's run records and
-//! its callbacks beside it), so every command runs over whichever store it
+//! `services/run_host/store.ts` `RunHostStore`, with listen-fire's run records
+//! beside it), so every command runs over whichever store it
 //! was given: a SQLite state file (crate::store), the hosted product's
 //! Postgres tables (crate::pg_store), or a store module's process.
 //!
@@ -24,7 +24,7 @@ use crate::pg_store::PgStore;
 use crate::core;
 use crate::project::Project;
 use crate::store::{
-    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, OwedRace, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit,
+    BranchExport, ClaimDue, ClaimedWork, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, OwedRace, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit,
     Store,
 };
 use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait, WaitArrivals, WaitWake};
@@ -120,44 +120,6 @@ pub fn open_store(spec: &StoreSpec) -> std::result::Result<Box<dyn RunHostStore>
     opened.map_err(|e| format!("{}: {e}", spec.display()))
 }
 
-// ── Callbacks ───────────────────────────────────────────────────────────────
-
-/// One `callback(…)` mint as the store keeps it (`CallbackRecord`).
-#[derive(Debug, Clone)]
-pub struct CallbackRecord {
-    pub id: String,
-    pub team_id: String,
-    pub run_id: String,
-    pub address: String,
-    /// `[{ name, type }]`, in declaration order.
-    pub params: Js,
-    pub state: Js,
-    /// The ledger: `[{ at, values, bodyStartedAt? }]`.
-    pub calls: Js,
-    pub single_use: bool,
-    pub expires_at: Option<String>,
-    /// `live`, `fired` or `revoked`.
-    pub status: String,
-}
-
-/// What recording a call came to (`CallbackClaim`).
-pub enum CallbackClaim {
-    Recorded { callback: CallbackRecord, call_index: i64 },
-    NotFound,
-    Closed(CallbackRecord),
-    Expired(CallbackRecord),
-}
-
-pub struct MintCallback<'a> {
-    pub team_id: &'a str,
-    pub run_id: &'a str,
-    pub address: &'a str,
-    pub params: &'a Js,
-    pub state: &'a Js,
-    pub single_use: bool,
-    pub expires_at: Option<&'a str>,
-}
-
 /// Every family a run host's backend serves, and listen-fire's run records.
 pub trait RunHostStore {
     /// The tenant this store's rows of listen-fire's own runs belong to.
@@ -173,7 +135,7 @@ pub trait RunHostStore {
     /// more than `stale_ms` ago: their worker is gone (a live first firing
     /// holds its lease and renews it). Oldest first.
     fn lapsed_runs(&self, stale_ms: i64, limit: i64) -> Result<Vec<String>>;
-    /// `completed`, `parked`, `running` or `failed`; an ending revokes the run's live callbacks.
+    /// `completed`, `parked`, `running` or `failed`.
     fn settle_run(&self, id: &str, status: &str, outcome: &Js, at: &str) -> Result<()>;
     fn mark_parked(&self, id: &str) -> Result<()>;
     /// The run is over without completing; the writes it settled with stay in its outcome.
@@ -215,8 +177,8 @@ pub trait RunHostStore {
     fn leaves(&self, run_id: &str, parked_only: bool, reason: Option<&str>, due_by: Option<&str>) -> Result<Vec<LeafRow>>;
     fn delete_leaves(&self, run_id: &str, addresses: &[String]) -> Result<()>;
     /// A park and what wakes it, as one fenced write: the leaf, its kind's
-    /// row (a timer's `resume_timer` row, an await's correlation, a wait's
-    /// address, a limit's correlation dropped), and the run marked parked.
+    /// row (a timer's `resume_timer` row, a wait's address), and the run
+    /// marked parked.
     /// A wait parked at the address before is parked there no more.
     fn commit_park(&self, park: &Park<'_>) -> Result<()>;
     /// What a segment held back, as one fenced write at its end: its join
@@ -240,13 +202,6 @@ pub trait RunHostStore {
     fn frames(&self, run_id: &str) -> Result<Vec<String>>;
     /// The frames, their exports, and the races owed at them.
     fn delete_frames(&self, run_id: &str, frame_addresses: &[String]) -> Result<()>;
-
-    // ── Await correlations ──────────────────────────────────────────────────
-    fn correlate(&self, run_id: &str, team_id: &str, address: &str, adapter_type: &str, correlation_key: &str) -> Result<()>;
-    fn correlated(&self, adapter_type: &str, team_id: &str, correlation_key: &str) -> Result<Vec<CorrelatedAwait>>;
-    fn of_run(&self, run_id: &str, adapter_type: &str) -> Result<Vec<(CorrelatedAwait, String)>>;
-    fn drop_correlation(&self, run_id: &str, address: &str) -> Result<()>;
-    fn drop_run_correlations(&self, run_id: &str) -> Result<()>;
 
     // ── Waits on listenable edges (crate::waits) ────────────────────────────
     /// The latest seq logged: a wait opened since it reads every arrival
@@ -295,15 +250,6 @@ pub trait RunHostStore {
     // ── Library sources ─────────────────────────────────────────────────────
     fn put_source(&self, team_id: &str, hash: &str, source: &str) -> Result<()>;
     fn get_source(&self, team_id: &str, hash: &str) -> Result<Option<String>>;
-
-    // ── Callbacks ───────────────────────────────────────────────────────────
-    fn mint_callback(&self, input: MintCallback<'_>) -> Result<String>;
-    fn callback(&self, id: &str) -> Result<Option<CallbackRecord>>;
-    /// Record one call and queue its body, in one transaction.
-    fn record_callback_call(&self, id: &str, values: &Js, body_due_at: &str) -> Result<CallbackClaim>;
-    fn mark_callback_body_started(&self, id: &str, call_index: i64, fence: Option<&str>) -> Result<bool>;
-    fn landed_callbacks(&self, ids: &[String]) -> Result<Vec<String>>;
-    fn revoke_run_callbacks(&self, run_id: &str) -> Result<()>;
 
     // ── Inbound pull cursors ────────────────────────────────────────────────
     /// An install's saved pull cursor (a notify-then-pull source's), or None.
@@ -473,22 +419,6 @@ impl RunHostStore for Store {
         Store::delete_frames(self, run_id, frame_addresses)
     }
 
-    fn correlate(&self, run_id: &str, team_id: &str, address: &str, adapter_type: &str, correlation_key: &str) -> Result<()> {
-        Store::correlate(self, run_id, team_id, address, adapter_type, correlation_key)
-    }
-    fn correlated(&self, adapter_type: &str, team_id: &str, correlation_key: &str) -> Result<Vec<CorrelatedAwait>> {
-        Store::correlated(self, adapter_type, team_id, correlation_key)
-    }
-    fn of_run(&self, run_id: &str, adapter_type: &str) -> Result<Vec<(CorrelatedAwait, String)>> {
-        Store::of_run(self, run_id, adapter_type)
-    }
-    fn drop_correlation(&self, run_id: &str, address: &str) -> Result<()> {
-        Store::drop_correlation(self, run_id, address)
-    }
-    fn drop_run_correlations(&self, run_id: &str) -> Result<()> {
-        Store::drop_run_correlations(self, run_id)
-    }
-
     fn arrival_mark(&self) -> Result<i64> {
         Store::arrival_mark(self)
     }
@@ -546,25 +476,6 @@ impl RunHostStore for Store {
     }
     fn get_source(&self, team_id: &str, hash: &str) -> Result<Option<String>> {
         Store::get_source(self, team_id, hash)
-    }
-
-    fn mint_callback(&self, input: MintCallback<'_>) -> Result<String> {
-        Store::mint_callback(self, input)
-    }
-    fn callback(&self, id: &str) -> Result<Option<CallbackRecord>> {
-        Store::callback(self, id)
-    }
-    fn record_callback_call(&self, id: &str, values: &Js, body_due_at: &str) -> Result<CallbackClaim> {
-        Store::record_callback_call(self, id, values, body_due_at)
-    }
-    fn mark_callback_body_started(&self, id: &str, call_index: i64, fence: Option<&str>) -> Result<bool> {
-        Store::mark_callback_body_started(self, id, call_index, fence)
-    }
-    fn landed_callbacks(&self, ids: &[String]) -> Result<Vec<String>> {
-        Store::landed_callbacks(self, ids)
-    }
-    fn revoke_run_callbacks(&self, run_id: &str) -> Result<()> {
-        Store::revoke_run_callbacks(self, run_id)
     }
 
     fn inbound_checkpoint(&self, subscription_id: &str) -> Result<Option<Js>> {

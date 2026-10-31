@@ -43,7 +43,7 @@ the checker. The conformance corpora run on this engine.
 | module | what |
 |---|---|
 | `executor` | a single-threaded async runtime: the segment is one future; a `HostCall` future registers its request and yields; `join_all` keeps several in flight; `map_concurrent` runs a fan at most so many at a time (fans.ts `mapConcurrent`) |
-| `host` | one request builder per host call, each family spelled as host.ts's `HOST_FAMILIES` spells it (`adapters`, `llm`, `llm.client`, `llm.transforms`, `park`, `park.sink`, `park.callbacks`, `control.cancel`, `locks`, `trace`, `clock`, `files`, `ids`), plus the engine's own (`check`, `log`); every host request but those names the segment |
+| `host` | one request builder per host call, each family spelled as host.ts's `HOST_FAMILIES` spells it (`adapters`, `llm`, `llm.client`, `llm.transforms`, `park`, `park.sink`, `park.waits`, `control.cancel`, `locks`, `trace`, `clock`, `files`, `ids`), plus the engine's own (`check`, `log`); every host request but those names the segment |
 | `ledger` | the run's spend account for one segment: the budget a priced call is sent, the cost each answers charged, the cap met (`exceeded`) once a budget refusal is charged, a priced plugin refused before the host is asked once the cap is spent (`plugin_refusal`), the charges handed back with `done` |
 | `abi` | the C ABI: `engine_start`, `engine_answer`, `engine_finish`; the checker's `check_program` and `check_answer` `(src_ptr, src_len, catalog_ptr, catalog_len, options_ptr, options_len, out_ptr_ptr, out_len_ptr) -> status` (options: `{"upgradingFrom": "0.11.0" \| null}`; no pin: the artifact checks in its own release's language), `check_compatible`; `standard_library` `(out_ptr_ptr, out_len_ptr) -> 0`, no input: the built-in table as JSON (`[{name, params: [{name, type, optional?, rest?}], returns, summary}]`, movement_checker `types::stdlib::standard_library_json`), which the handbook's language search reads; `language_version` `(out_ptr_ptr, out_len_ptr) -> 0`: the release's version as a JSON string, the language this artifact reads; `language_standing` `(pin_ptr, pin_len, out_ptr_ptr, out_len_ptr) -> status`: `{standing: "compatible" \| "newer" \| "olderKey" \| "malformed", message}` (the refusal's text, null when compatible), how a pin stands against this release; `language_query` `(src, catalog, query, out…) -> status`: the language service's completion, hover, definition and code actions for a position (crates/movement-language, docs/contracts/language-service.md); `story_analysis` `(src, catalog, options, out…) -> status`: what the check settled, as data (docs/contracts/story-analysis.md) |
 | `eval` | `evalMovementExpr`: the expression kinds, with their provenance rules and errors; the folds; what a walk, an `EXISTS` over a record, or a count needs asked of the run (`Reader`) |
@@ -61,11 +61,11 @@ the checker. The conformance corpora run on this engine.
 | `local` | the engine as a run-built node's adapter (local_edge_adapter.ts): the store over an edge's landings, its candidate block, the writes, matches, position writes and links into it |
 | `marks` | `/\p{M}/u`'s code points, as Node reads them (generated) |
 | `park` | `ParkedScopeState` version 2 (one `ParkWriter` across scopes, frames and journal; code named by its place in the pinned program, libraries pinned by `park.sources` hash), the suspension points, and the state's refusal (`resume_refusal`) |
-| `resume` | `resumeAlongAddress`: a state's spine descended (`if` arms, iterations, branches, call and member frames), the leaf bound or re-entered, each enclosing body finished, joins closed and races settled through the host; `settleRaceFrame` and `fireCallbackBody`; every descriptor kind rehydrated |
+| `resume` | `resumeAlongAddress`: a state's spine descended (`if` arms, iterations, branches, call and member frames), the leaf bound or re-entered, each enclosing body finished, joins closed and races settled through the host; `settleRaceFrame`; every descriptor kind rehydrated |
 | `code` | code a park names by its place in the program: an AST path read back as the typed node it names in the pinned source |
 | `flow` | a flow's own state (its trace buffer, ledger slot, call sites, lock holds), swapped in on each poll; shared futures several flows await (an adapter's resolution) |
 | `combinator` | `parallel` and `race`: arms as flows joined on the executor, the write ledger spliced in arm order, a race's winner and its losers cancelled, arms that park joined through their frame |
-| `awaits` | `await` of a landing, an `until`, a callback (`park.callbacks.mint`, its `called` edge), and the park each writes |
+| `awaits` | `await` of a record's edge (off its wait), an `until`, and the park each writes; `callback(…)`, retired at 0.13, is refused |
 | `bindings` | what a name in a run is bound to, the lexical scopes (in declaration order), the source `Position` |
 | `trace` | the `MovementTraceEntry` kinds a run appends (`warning`, `gate`, `field_miss`, `block`, `extraction`, `plugin`, `ai`, `read`, `chunks`), and the per-flow buffer they wait in until their statement ends |
 | `program` | the pinned source parsed, joined with the `check.program` host call's answer: diagnostics, the import link, the checker's stamps by AST path; the declarations (`Declarations`: the root's and each library's shapes and `type`s, each shape with the file that wrote it, and the plugin imports, by local name) |
@@ -171,7 +171,7 @@ Step = {"pending": [{id, family, method, args}]} | {"done": result}
   out), a lone surrogate is U+FFFD. Nothing crosses by identity: an object
   reached twice is written twice, and an object the host sends again
   crosses again, as it now is. A record whose binding object is data (the
-  event, a callback, a shape position, a resource) crosses to the host as
+  event, a shape position, a resource) crosses to the host as
   `["x", id, descriptor]` and back as `["x", id]`; a request holding any
   other record is never made. A file crosses as an opaque handle: the host
   sends `["F", id, { handle, name, contentType, size }]` and the engine
@@ -279,7 +279,7 @@ Rust engine does not run this movement (<reason>)" and counts it in
 
 | reason | when | what closes it |
 |---|---|---|
-| `event_does_not_cross` | the shim's, before the instance opens: an event, parked state, answer or callback's values that is not data (a function, a bigint, a symbol, a class instance, a value that holds itself, an array hole, a non-enumerable own key) | nothing a host sends: the event is data a webhook's or a poll's JSON made |
+| `event_does_not_cross` | the shim's, before the instance opens: an event, parked state or answer that is not data (a function, a bigint, a symbol, a class instance, a value that holds itself, an array hole, a non-enumerable own key) | nothing a host sends: the event is data a webhook's or a poll's JSON made |
 | `catalog_does_not_load`, `event_does_not_read`, `instant_does_not_read`, `snapshot_models_do_not_read`, `check_answer_malformed` | `{declined}`: the input or the host's check answer does not read (the catalog snapshot, the event off the wire, `now` as an ISO 8601 instant, `snapshotModels` as a list of texts, the check answer or one of its stamps) | nothing: shim faults in all but name |
 | `source_does_not_parse` | `{declined}`: without `nativeCheck` only, a source this engine's parser refuses and the host's checker passes (with `nativeCheck` the engine's own parse fails the run with MOVENG_PARSE) | the grammar this engine lacks (none is known) |
 
@@ -310,16 +310,16 @@ kept, as for any failure.
 |---|---|---|
 | `this statement` | a statement kind the run has no case for | nothing known: the parser and the checker pass no other kind |
 | `the call '<callee>'`, `this right-hand side` | a bound call of a name that is no built-in, read where only an expression is run; a right-hand side of another kind there | nothing known: the run dispatches every call and right-hand side the checker passes before it reaches here |
-| `reading '<name>' in an expression` | a walk inside an expression rooted at a name bound to something no walk starts from (a node, a callback, a kept walk) | a walk off each such binding where the checker passes one |
+| `reading '<name>' in an expression` | a walk inside an expression rooted at a name bound to something no walk starts from (a node, a kept walk) | a walk off each such binding where the checker passes one |
 | `this reading (<reason>)` | an expression the evaluator could not finish without the run, read where no run is at hand (`EvalError::Fallback`): `an ambient is the run's`, `AI() is the run's`, `a record is the run's`, `<id> is not a built-in this engine runs`, `WITHIN reads the host's clock`, … | nothing known: every evaluation inside a run has the run as its reader |
-| `handing a record held as a value (<kind>) to the host` | a record other than the event, a callback, a shape position or a resource reaching a host request's values | nothing known: a backstop; the checker refuses each route found (MOV_WRITE_FIELD_TYPE, MOV_CALL_ARG_TYPE, MOV_CALL_ARG_MAYBE_RECORD, MOV_GRAPH_ENTRY_RECORD, MOV_GRAPH_SPREAD_RECORD) |
+| `handing a record held as a value (<kind>) to the host` | a record other than the event, a shape position or a resource reaching a host request's values | nothing known: a backstop; the checker refuses each route found (MOV_WRITE_FIELD_TYPE, MOV_CALL_ARG_TYPE, MOV_CALL_ARG_MAYBE_RECORD, MOV_GRAPH_ENTRY_RECORD, MOV_GRAPH_SPREAD_RECORD) |
 | `<at>: parking a record (<kind>) as the data of its binding object` | a park reaching a record in a value no walk of held records finds | nothing known: a backstop |
 
 **Mid-run: a host answer that is not its contract's shape.** A host answer
 this engine reads a member of (`lookup.resolveActingUser`:
 `{principal: {id, display?}, email?}`; `llm.transforms.invoke`: `{text?,
 data?, records?, outcome?}` with every record an object;
-`park.callbacks.calls`: a list; an adapter's `awaitKeys`: one `{key}` or
+an adapter's `awaitKeys`: one `{key}` or
 `{gone: true}` per head; `park.waits.arrivals`: `{gone, arrivals}`, each
 arrival naming its identity; a refetching adapter's
 `readRecord`: an object or null; `files.resolveFileText`'s `unreadable`: one
@@ -347,11 +347,10 @@ or a host holds at run time. Each names its construct:
   on a lazy entry's hop or on a run-built node's edges; naming a deferred
   edge's landing while hopping past it; hopping past a landing that is not
   a record;
-- a block head rooted at a name no head starts from (a value, a callback
-  other than its `called` edge, a handle that bound no record);
-- an `await` or `callback(…)` on a host that serves no park or callback
-  sink, or of an edge the adapter cannot await; a named callback leaving an
-  argument unsupplied;
+- a block head rooted at a name no head starts from (a value, a handle
+  that bound no record);
+- an `await` on a host that serves no park sink, or of an edge the adapter
+  cannot await; a `callback(…)`, retired at 0.13;
 - a movement parameter typed against something that is not an instance;
   passing a value that is not a record as a movement's position argument;
   calling an import with no file resolver;
@@ -663,8 +662,7 @@ its own, its trace spliced in member order, a parked member holding its
 slot; `interpretCollectionOp`, its `onError` and answer shapes). A park
 writes a held record as the TypeScript's `recordValue` descriptor and
 refuses a function (MOVENG_PARK_NONSERIALIZABLE). On the wire a record
-whose binding object is data (the event, a callback, a shape position, a
-resource) crosses to the host as `["x", id, descriptor]` and back as
+whose binding object is data (the event, a shape position, a resource) crosses to the host as `["x", id, descriptor]` and back as
 `["x", id]`, and every object the host sends is data. A request holding any
 other record is never made (`HeldRecord`, per request: "Mid-run: this
 engine's own" above).
@@ -855,8 +853,7 @@ enclosing body. A branch that finishes closes its join through the host
 (`persistBranchExport`, `decrementJoin`, `collectBranchExports`); the last
 one runs the combinator's continuation, and a race's winner cancels its
 losers' parks, inline or once per batch (`input.settle`, run.ts
-`settleRaceFrame`). A fired callback's body runs from its captured state
-(`input.fire`, `fireCallbackBody`).
+`settleRaceFrame`).
 
 **Awaits and arms.** A `parallel` or `race` runs its arms as flows on the
 one executor: each keeps its own trace buffer and its slot in the write
@@ -864,9 +861,7 @@ ledger, spliced and renumbered in arm order when the combinator returns.
 Effects take the in-run locks run.ts takes (a shared lock per type and key
 set, exclusive per record and edge, FIFO in arrival order). An arm that
 parks writes its state and its join; the arms that finish persist their
-exports. A callback mints its row (`park.callbacks.mint`) and binds
-`{kind: 'callback', …}`; awaiting it or an `until` parks as the TypeScript
-does. An await on a record's edge reads the wait the record opened when it
+exports. An `until` parks as the TypeScript does. An await on a record's edge reads the wait the record opened when it
 entered the run (`park.waits`, crate::waits): the mark is taken before the
 record enters (before a write), `awaitKeys` names each record's key, and
 `park.waits.open` opens the wait; at the `await`, a plain one on a listable
@@ -1016,8 +1011,8 @@ when it is listed; `extractionFileChars` is how much of one source file's
 text an extraction prompt takes (extraction.ts `maxFileChars`, the
 deployment's `EXTRACTION_FILE_CHARS`, 50,000 when absent); a date-time
 text with no offset is UTC, so the input names no zone; the engine holds no team (the shim names it on the engine's log lines, as the
-host's own fact); `fire` and `settle`
-run a callback body or settle a deferred race against `resume`'s state;
+host's own fact); `settle` settles a deferred race against `resume`'s
+state;
 `maxCallDepth` is how many named calls deep a run may nest
 (call_depth.ts, the deployment's `MOVEMENT_MAX_CALL_DEPTH`);
 `extractionTiers` is what the deployment buys for each extraction tier

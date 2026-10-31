@@ -345,21 +345,6 @@ impl Checker<'_> {
         }
     }
 
-    /// A movement deferred by name schedules the run a call would: what it
-    /// does is this movement's, and it may not wait.
-    pub fn check_callback_suspends(&mut self, movement: &str, name_span: Span, scope: ScopeId) {
-        let callee = movement.to_string();
-        let crate::scope::Resolution::Found(id) = self.scopes.resolve(scope, &callee) else { return };
-        if self.scopes.symbol(id).kind != crate::scope::SymbolKind::Movement {
-            return;
-        }
-        let suspends = self.movement_suspends(id);
-        self.absorb_suspend(suspends);
-        if suspends {
-            self.refuse_unresumable_wait(&format!("'{movement}', run as a callback"), name_span);
-        }
-    }
-
     /// `refuseUnresumableWait`: a wait where the run cannot come back to it.
     pub fn refuse_unresumable_wait(&mut self, where_: &str, span: Span) {
         self.report(

@@ -186,7 +186,7 @@ The manifest file registers your server with a team:
   "methods": [
     "listEntryPoints", "describe", "resolveEntity", "getFieldValue", "getRelated",
     "iterateRelatedPage", "createRecord", "updateRecord", "deleteRecord",
-    "preprocessInbound", "listEventTypes", "wakeKeys", "resolveAwait", "awaitKeys",
+    "preprocessInbound", "listEventTypes", "awaitKeys",
     "ensureEventSubscription", "removeEventSubscription"
   ]
 }
@@ -277,7 +277,7 @@ Each example shows `params` → `result` (the `result` inside `ok: true`).
   "methods": [
     "listEntryPoints", "describe", "resolveEntity", "getFieldValue", "getRelated",
     "iterateRelatedPage", "createRecord", "updateRecord", "deleteRecord",
-    "preprocessInbound", "listEventTypes", "wakeKeys", "resolveAwait", "awaitKeys",
+    "preprocessInbound", "listEventTypes", "awaitKeys",
     "ensureEventSubscription", "removeEventSubscription"
   ]
 }
@@ -661,9 +661,9 @@ What Listen-Fire does with them:
 ### The key form (before 2.5)
 
 From listen-fire 0.13.0 no run waits by key: a wait reads the arrivals you
-report, `resolveAwait` is never called for one, the keys a delivery's
-`wakeKeys` names wake nothing, and the `wake` door refuses `{ keys }`. The
-form is described here for a module moving off it.
+report. listen-fire calls neither `resolveAwait` nor `wakeKeys`, ignores a
+`checkInbound` acceptance's `wakeKeys`, and its `wake` door refuses
+`{ keys }`. The form is described here for a module moving off it.
 
 #### resolveAwait
 
@@ -887,12 +887,11 @@ If your system sends webhooks, let Listen-Fire subscribe:
    | 401 `{ "error": "signature_invalid" }` | bad or missing signature |
    | 404 `{ "error": "subscription_not_found" }` | unknown or deleted subscription |
    | 503 `{ "error": "arrivals_not_kept", "message" }` | the delivery reports arrivals and Listen-Fire's store cannot keep them yet; nothing was kept: send it again |
-   | 500 | your adapter does not implement `preprocessInbound`; an arrival it reports names no identity; `wakeKeys` failed or its wakes could not be queued (the events are already receipted: send the delivery again); or an internal failure |
+   | 500 | your adapter does not implement `preprocessInbound`; an arrival it reports names no identity; or an internal failure |
 
 3. While your delivery is open, Listen-Fire calls you back:
    `preprocessInbound({ raw })` turns your body into events and the arrivals
-   it reports, `wakeKeys({ raw })` turns it into keys (the key form), and
-   `listEventTypes` types the events. The arrivals are logged before the
+   it reports, and `listEventTypes` types the events. The arrivals are logged before the
    events are kept. A
    single-threaded server must not block on its own delivery.
 
@@ -1105,8 +1104,8 @@ module itself. The manifest says so, and lists `checkInbound`:
 - No `signatureHeaders` and no `intercepts`. `secretIssuedBy` is as above.
 - The door takes `POST` and `GET` for it (only `POST` for a declared scheme).
 - The host hands each request to `checkInbound`, as it arrived, and sends what
-  the module answers. It verifies nothing itself, and calls neither
-  `preprocessInbound` nor `wakeKeys` for it.
+  the module answers. It verifies nothing itself, and does not call
+  `preprocessInbound` for it.
 
 ```json
 {
@@ -1135,7 +1134,7 @@ The answer is one of three:
 
 | `outcome` | Fields | The door answers |
 |---|---|---|
-| `accepted` | `events`, `arrivals?`, `wakeKeys?`, `checkpoint?`, `deliveryId?`, `reply?` | 200 `{ ok, eventsProcessed }` once the arrivals are logged and the events and wakes are queued, as for any delivery, or `reply` (a 2xx `status` with `text`, `html` or `json`) in its place; a non-empty `deliveryId` already kept at this subscription answers 200 `{ ok, duplicate: true, eventsProcessed: 0 }` and queues nothing |
+| `accepted` | `events`, `arrivals?`, `checkpoint?`, `deliveryId?`, `reply?` | 200 `{ ok, eventsProcessed }` once the arrivals are logged and the events are queued, as for any delivery, or `reply` (a 2xx `status` with `text`, `html` or `json`) in its place; a non-empty `deliveryId` already kept at this subscription answers 200 `{ ok, duplicate: true, eventsProcessed: 0 }` and queues nothing |
 | `refused` | `status?` (a 4xx) | `status`, default 401, `{ "error": "signature_invalid" }` |
 | `reply` | `status`, `text?`, `html?` or `json?` | exactly that: `text` as `text/plain`, `html` as `text/html` (a page your module serves at its door), `json` as JSON, none as an empty body; nothing runs |
 
@@ -1665,6 +1664,7 @@ from `apps/cli`.
 
 ## Changes
 
+- **The key form retired** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0). listen-fire no longer calls `resolveAwait` or `wakeKeys`, and ignores a `checkInbound` acceptance's `wakeKeys`: a run waits on the arrivals a module reports (2.5). A module may still implement them; nothing calls them.
 - **Pages, replies on acceptance, the inbound URL and `answerShapeFrom`** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0; additive). A module that checks its own inbound may `reply` with `html` (sent as `text/html`), and its `accepted` answer may carry `reply`, what the door answers once it has kept the request in place of its own acknowledgement ([A module that checks its own inbound](#a-module-that-checks-its-own-inbound)). A request may carry `inbound: { url }`, where the install's inbound requests reach the module ([The envelope](#the-envelope)). A reference may declare `answerShapeFrom`, the write field naming the node that types its landing. Why: `@lf/forms` serves a form at its own door, hands out its link, thanks the person who answered, and types the answer by the node the program wrote. An older host sends no `inbound`, refuses an answer carrying `html` or an acceptance's `reply` as outside `checkInbound`'s shape, and reads no `answerShapeFrom`.
 - **`slack_v0` refuses a replay** (within version 2, no bump; 2026-10-30; listen-fire 0.13.0). A request whose `x-slack-request-timestamp` is more than five minutes from now is refused 401 though its signature is right, as Slack advises ([Declared inbound signatures](#declared-inbound-signatures)). Nothing changes for a module: Slack signs every request with the time it sends it.
 - **Form-encoded deliveries** (within version 2, no bump; 2026-10-30; listen-fire 0.13.0). The host webhook door reads a delivery sent as `application/x-www-form-urlencoded` as well as JSON: its signature is checked over the raw bytes, and `preprocessInbound`'s `raw` is the form's fields ([Limits and timeouts](#limits-and-timeouts)). Why: Slack posts a press on a message's control that way (`payload=<json>`), so `@lf/slack` reports presses as arrivals on the host's own door, verified with Slack's own signature. An older host refuses such a delivery as not JSON.

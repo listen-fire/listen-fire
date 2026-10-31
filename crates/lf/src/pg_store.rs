@@ -3,17 +3,15 @@
 //! creates and migrates (`listen-fire connect @lf/postgres-store`, src/core.rs);
 //! nothing of the hosted product's schema is read or written. The tables and
 //! statements keep the hosted backend's shapes and meaning
-//! (lf-platform's apps/api/src/services/movement_engine/run_host_store.ts,
-//! callback_store.ts and work/store.ts), so the contract suite holds the two
+//! (lf-platform's apps/api/src/services/movement_engine/run_host_store.ts
+//! and work/store.ts), so the contract suite holds the two
 //! to the same cases:
 //!
 //!   parks         lf.parked_run
 //!   joins         lf.join_pending + join_branch_export
-//!   correlations  lf.adapter_await
 //!   leases        the lease columns of lf.trigger_run
 //!   work          lf.work
 //!   sources       lf.park_library_source
-//!   callbacks     lf.callback
 //!   pull cursors  lf.inbound_checkpoint
 //!   receipts      lf.event_receipt
 //!   deliveries    lf.delivery
@@ -47,11 +45,11 @@ use std::task::{Context, Poll, Wake, Waker};
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{Client, Row};
 
-use crate::backend::{CallbackClaim, CallbackRecord, MintCallback, RunHostStore};
+use crate::backend::RunHostStore;
 use crate::json::Js;
 use crate::obj;
 use crate::store::{
-    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind,
+    BranchExport, ClaimDue, ClaimedWork, DeliveryQuery, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind,
     HeldPark, OwedRace, Release, Rerun, Result, RunRow, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, SegmentCommit, StoreError, WORK_KINDS, settle_race_work_key,
     settle_race_work_payload, timer_work_key, timer_work_payload,
 };
@@ -147,31 +145,11 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (7, include_str!("pg_store_schema_7.sql")),
     (8, include_str!("pg_store_schema_8.sql")),
     (9, include_str!("pg_store_schema_9.sql")),
+    (10, include_str!("pg_store_schema_10.sql")),
 ];
 
 /// The advisory lock the migrations run under: "lf-store" as a number.
 const MIGRATION_LOCK: i64 = 0x6c66_2d73_746f_7265;
-
-const CALLBACK_COLUMNS: &str = concat!(
-    "id, team_id::text, run_id::text, address, params::text, state::text, calls::text, single_use, ",
-    iso!("expires_at"),
-    ", status"
-);
-
-fn callback_of(row: &Row) -> Result<CallbackRecord> {
-    Ok(CallbackRecord {
-        id: row.get(0),
-        team_id: row.get(1),
-        run_id: row.get(2),
-        address: row.get(3),
-        params: parse_text(row.get(4))?,
-        state: parse_text(row.get(5))?,
-        calls: parse_text(row.get(6))?,
-        single_use: row.get(7),
-        expires_at: row.get(8),
-        status: row.get(9),
-    })
-}
 
 const RUN_COLUMNS: &str = concat!(
     "id::text, trigger_payload->>'file', trigger_payload->>'movement', status, ",
@@ -439,9 +417,6 @@ impl PgStore {
              where id = $1::text::uuid",
             &[&id, &status, &writes, &error, &at, &returned, &records],
         )?;
-        if status == "success" || status == "failed" {
-            self.revoke_run_callbacks(id)?;
-        }
         Ok(())
     }
 
@@ -450,7 +425,7 @@ impl PgStore {
         let HeldPark { address, state, ref kind } = *park;
         let wake_at = match kind {
             ParkKind::Timer { wake_at } => Some(*wake_at),
-            ParkKind::Await { .. } | ParkKind::Wait { .. } | ParkKind::Limit => None,
+            ParkKind::Wait { .. } | ParkKind::Limit => None,
         };
         self.put_leaf(run_id, address, kind.reason(), wake_at, state, None)?;
         // Whatever parks here now, no wait parked here before is.
@@ -463,7 +438,6 @@ impl PgStore {
         match kind {
             // The leaf is the truth; the work row only says when to look.
             ParkKind::Timer { wake_at } => self.enqueue_row("resume_timer", &timer_work_key(run_id), &timer_work_payload(run_id), Some(wake_at), &self.tenant),
-            ParkKind::Await { team_id, adapter_type, correlation_key } => self.correlate(run_id, team_id, address, adapter_type, correlation_key),
             ParkKind::Wait { wait_id } => {
                 // Takes turns with a log on the wait's record (lf.lock_wait_key).
                 let locked = self.query_opt(
@@ -476,7 +450,7 @@ impl PgStore {
                 self.execute("update lf.wait_row set address = $2::text where id = $1::text::uuid", &[wait_id, &address])?;
                 Ok(())
             }
-            ParkKind::Limit => self.drop_correlation(run_id, address),
+            ParkKind::Limit => Ok(()),
         }
     }
 
@@ -603,7 +577,7 @@ impl RunHostStore for PgStore {
                  where id = $1::text::uuid and status in ('running', 'parked')",
                 &[&id, &message],
             )?;
-            self.revoke_run_callbacks(id)
+            Ok(())
         })
     }
 
@@ -1007,53 +981,6 @@ impl RunHostStore for PgStore {
         })
     }
 
-    // ── Await correlations ──────────────────────────────────────────────────
-
-    fn correlate(&self, run_id: &str, team_id: &str, address: &str, adapter_type: &str, correlation_key: &str) -> Result<()> {
-        self.execute(
-            "insert into lf.adapter_await (adapter_type, correlation_key, run_id, team_id, address)
-             values ($1::text, $2::text, $3::text::uuid, $4::text::uuid, $5::text)
-             on conflict (run_id, address) do update set
-               adapter_type = excluded.adapter_type, correlation_key = excluded.correlation_key, updated_at = now()",
-            &[&adapter_type, &correlation_key, &run_id, &team_id, &address],
-        )?;
-        Ok(())
-    }
-
-    fn correlated(&self, adapter_type: &str, team_id: &str, correlation_key: &str) -> Result<Vec<CorrelatedAwait>> {
-        Ok(self
-            .query(
-                "select run_id::text, team_id::text, address from lf.adapter_await
-                 where adapter_type = $1::text and team_id = $2::text::uuid and correlation_key = $3::text order by created_at",
-                &[&adapter_type, &team_id, &correlation_key],
-            )?
-            .iter()
-            .map(|r| CorrelatedAwait { run_id: r.get(0), team_id: r.get(1), address: r.get(2) })
-            .collect())
-    }
-
-    fn of_run(&self, run_id: &str, adapter_type: &str) -> Result<Vec<(CorrelatedAwait, String)>> {
-        Ok(self
-            .query(
-                "select run_id::text, team_id::text, address, correlation_key from lf.adapter_await
-                 where run_id = $1::text::uuid and adapter_type = $2::text order by address",
-                &[&run_id, &adapter_type],
-            )?
-            .iter()
-            .map(|r| (CorrelatedAwait { run_id: r.get(0), team_id: r.get(1), address: r.get(2) }, r.get(3)))
-            .collect())
-    }
-
-    fn drop_correlation(&self, run_id: &str, address: &str) -> Result<()> {
-        self.execute("delete from lf.adapter_await where run_id = $1::text::uuid and address = $2::text", &[&run_id, &address])?;
-        Ok(())
-    }
-
-    fn drop_run_correlations(&self, run_id: &str) -> Result<()> {
-        self.execute("delete from lf.adapter_await where run_id = $1::text::uuid", &[&run_id])?;
-        Ok(())
-    }
-
     // ── Waits on listenable edges ───────────────────────────────────────────
 
     fn arrival_mark(&self) -> Result<i64> {
@@ -1348,115 +1275,6 @@ impl RunHostStore for PgStore {
         Ok(self
             .query_opt("select source from lf.park_library_source where team_id = $1::text::uuid and hash = $2::text", &[&team_id, &hash])?
             .map(|r| r.get(0)))
-    }
-
-    // ── Callbacks ───────────────────────────────────────────────────────────
-
-    fn mint_callback(&self, input: MintCallback<'_>) -> Result<String> {
-        let id = crate::callbacks::new_callback_id()?;
-        let (params, state) = (input.params.to_json(), input.state.to_json());
-        self.execute(
-            "insert into lf.callback (id, team_id, run_id, address, params, state, calls, single_use, expires_at, status)
-             values ($1::text, $2::text::uuid, $3::text::uuid, $4::text, $5::text::jsonb, $6::text::jsonb, '[]'::jsonb, $7::bool, $8::text::timestamptz, 'live')",
-            &[&id, &input.team_id, &input.run_id, &input.address, &params, &state, &input.single_use, &input.expires_at],
-        )?;
-        Ok(id)
-    }
-
-    fn callback(&self, id: &str) -> Result<Option<CallbackRecord>> {
-        // The prefix guard keeps a foreign payload from ever reaching a query.
-        if !id.starts_with("cb_") {
-            return Ok(None);
-        }
-        self.query_opt(&format!("select {CALLBACK_COLUMNS} from lf.callback where id = $1::text"), &[&id])?.map(|r| callback_of(&r)).transpose()
-    }
-
-    /// The claim is one statement: single-use flips live → fired, a
-    /// repeatable one appends, and its body's work row commits with it. One
-    /// clock decides expiry and the call's instant: the database's.
-    fn record_callback_call(&self, id: &str, values: &Js, body_due_at: &str) -> Result<CallbackClaim> {
-        if !id.starts_with("cb_") {
-            return Ok(CallbackClaim::NotFound);
-        }
-        let values = values.to_json();
-        self.transaction(|| {
-            let claimed = self.query_opt(
-                &format!(
-                    "update lf.callback set
-                       status = case when single_use then 'fired' else status end,
-                       fired_at = case when single_use then now() else fired_at end,
-                       calls = calls || jsonb_build_array(jsonb_build_object('at', {}, 'values', $2::text::jsonb)),
-                       updated_at = now()
-                     where id = $1::text and status = 'live' and (expires_at is null or expires_at > now())
-                     returning {CALLBACK_COLUMNS}",
-                    iso!("now()")
-                ),
-                &[&id, &values],
-            )?;
-            if let Some(row) = claimed {
-                let callback = callback_of(&row)?;
-                let call_index = callback.calls.as_array().map_or(0, |calls| calls.len() as i64) - 1;
-                if call_index < 0 {
-                    return Err(StoreError::Invalid(format!("callback {id} recorded a call its ledger does not hold")));
-                }
-                // `callbackBodyWork`.
-                let payload = Js::Obj(obj! {
-                    "callbackId" => Js::str(id),
-                    "teamId" => Js::str(&callback.team_id),
-                    "callIndex" => Js::Num(call_index.into()),
-                });
-                self.enqueue_row("fire_callback", &format!("fire_callback:{id}:{call_index}"), &payload, Some(body_due_at), &callback.team_id)?;
-                return Ok(CallbackClaim::Recorded { callback, call_index });
-            }
-            let Some(row) = self.query_opt(&format!("select {CALLBACK_COLUMNS}, expires_at <= now() from lf.callback where id = $1::text"), &[&id])? else {
-                return Ok(CallbackClaim::NotFound);
-            };
-            let callback = callback_of(&row)?;
-            // `callbackRefusal` for a new call: revoked or fired is closed; past its window, expired.
-            let expired = row.get::<_, Option<bool>>(10) == Some(true);
-            Ok(if callback.status == "live" && expired { CallbackClaim::Expired(callback) } else { CallbackClaim::Closed(callback) })
-        })
-    }
-
-    fn mark_callback_body_started(&self, id: &str, call_index: i64, fence: Option<&str>) -> Result<bool> {
-        let marked = self.execute(
-            &format!(
-                "update lf.callback c set
-                   calls = jsonb_set(calls, array[$2::int8::text], (calls -> ($2::int8)::int4) || jsonb_build_object('bodyStartedAt', {})),
-                   updated_at = now()
-                 where c.id = $1::text
-                   and ($3::text is null or exists (select 1 from lf.trigger_run r where r.id = c.run_id and r.{LEASED_TO}$3::text))",
-                iso!("now()")
-            ),
-            &[&id, &call_index, &fence],
-        )?;
-        Ok(marked > 0)
-    }
-
-    fn landed_callbacks(&self, ids: &[String]) -> Result<Vec<String>> {
-        let ids: Vec<String> = ids.iter().filter(|id| id.starts_with("cb_")).cloned().collect();
-        if ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let landed: Vec<String> = self
-            .query(
-                "select id from lf.callback
-                 where id = any($1::text[]) and exists (select 1 from jsonb_array_elements(calls) as call where call ? 'bodyStartedAt')",
-                &[&ids],
-            )?
-            .iter()
-            .map(|r| r.get(0))
-            .collect();
-        Ok(ids.into_iter().filter(|id| landed.contains(id)).collect())
-    }
-
-    /// Only ever touches live rows: a fired single-use keeps its `fired`.
-    fn revoke_run_callbacks(&self, run_id: &str) -> Result<()> {
-        self.execute(
-            "update lf.callback set status = 'revoked', revoked_at = now(), updated_at = now() where run_id = $1::text::uuid and status = 'live'",
-            &[&run_id],
-        )?;
-        Ok(())
     }
 
     fn inbound_checkpoint(&self, subscription_id: &str) -> Result<Option<Js>> {

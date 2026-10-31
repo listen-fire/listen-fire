@@ -45,8 +45,6 @@ pub const ADAPTER_METHODS: &[&str] = &[
     "unlinkRecords",
     "ensureEventSubscription",
     "removeEventSubscription",
-    "resolveAwait",
-    "wakeKeys",
     "awaitKeys",
     "readRecord",
     "translateFilter",
@@ -93,7 +91,6 @@ const OPTIONAL_REMOTE_METHODS: &[&str] = &[
     "unlinkRecords",
     "ensureEventSubscription",
     "removeEventSubscription",
-    "wakeKeys",
     "awaitKeys",
 ];
 
@@ -329,7 +326,6 @@ impl<'s> SegmentAdapters<'s> {
     fn has(&self, instance: &Instance, method: &str) -> bool {
         match method {
             "iterateRelatedPage" | "iterateRelated" => self.advertises(instance, "iterateRelated") || self.advertises(instance, "iterateRelatedPage"),
-            "resolveAwait" => self.advertises(instance, "resolveAwait"),
             m if OPTIONAL_REMOTE_METHODS.contains(&m) => self.advertises(instance, m),
             _ => true,
         }
@@ -454,16 +450,6 @@ impl<'s> SegmentAdapters<'s> {
                 let input = self.to_wire_write_input(&plain, args).await?;
                 let result = self.rpc(&instance, method, input).await?;
                 with_association(result, &plain)
-            }
-            "resolveAwait" => {
-                let mut params = obj! {
-                    "recordId" => member("recordId").unwrap_or(Js::Null),
-                    "edge" => member("edge").unwrap_or(Js::Null),
-                };
-                if let Some(head) = member("headData") {
-                    params.insert("headData".into(), head);
-                }
-                self.rpc(&instance, method, Js::Obj(params)).await?
             }
             "ensureEventSubscription" => match self.rpc(&instance, method, plain.clone()).await? {
                 Js::Null => return Ok(None),

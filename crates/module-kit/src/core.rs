@@ -175,23 +175,6 @@ pub struct BranchExport {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Correlated {
-    pub run_id: String,
-    pub team_id: String,
-    pub address: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RunCorrelation {
-    pub run_id: String,
-    pub team_id: String,
-    pub address: String,
-    pub correlation_key: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct Lease {
     pub token: String,
 }
@@ -215,15 +198,12 @@ pub enum ParkKind {
     /// Arms the run's `resume_timer` row at `wake_at` (an earlier due time kept).
     #[serde(rename_all = "camelCase")]
     Timer { wake_at: String },
-    /// Kept with its correlation.
-    #[serde(rename_all = "camelCase")]
-    Await { team_id: String, adapter_type: String, correlation_key: String },
     /// Parks the wait at the address (its leaf's reason is `await`); a run
     /// with no such wait writes nothing. Any park at an address unparks the
     /// run's wait parked there before.
     #[serde(rename_all = "camelCase")]
     Wait { wait_id: String },
-    /// Drops the address's correlation.
+    /// A run paused at a limit.
     Limit,
 }
 
@@ -401,44 +381,6 @@ pub struct DeliveryRow {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct Minted {
-    pub id: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CallbackRow {
-    pub id: String,
-    pub team_id: String,
-    pub run_id: String,
-    pub address: String,
-    pub params: Js,
-    pub state: Js,
-    pub calls: Js,
-    pub single_use: bool,
-    pub expires_at: Option<String>,
-    /// `live`, `fired` or `revoked`.
-    pub status: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum CallbackRecorded {
-    Recorded {
-        callback: CallbackRow,
-        #[serde(rename = "callIndex")]
-        call_index: i64,
-    },
-    NotFound,
-    Closed {
-        callback: CallbackRow,
-    },
-    Expired {
-        callback: CallbackRow,
-    },
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct Checkpoint {
     pub checkpoint: Js,
 }
@@ -452,9 +394,9 @@ pub struct ModuleProcesses {
 }
 
 slot! {
-    /// The store slot: a host's run state (runs, parks, joins, await
-    /// correlations, waits and the arrivals they read, leases, the work
-    /// queue, library sources, callbacks, pull cursors and event receipts). The meaning of each method is the
+    /// The store slot: a host's run state (runs, parks, joins, waits and
+    /// the arrivals they read, leases, the work queue, library sources, pull
+    /// cursors and event receipts). The meaning of each method is the
     /// run host's contract suite's.
     pub trait Store served as StoreModule in slot "store" {
         /// Always the first request.
@@ -476,8 +418,7 @@ slot! {
         /// Runs still `running` whose lease lapsed or was never taken,
         /// started more than `stale_ms` ago; oldest first.
         "runs.lapsed" => fn lapsed_runs(RunsLapsed { stale_ms: i64, limit: i64 }) -> Vec<String>;
-        /// `status`: `completed`, `parked`, `running` or `failed`; an ending
-        /// revokes the run's live callbacks.
+        /// `status`: `completed`, `parked`, `running` or `failed`.
         "runs.settle" => fn settle_run(RunsSettle { run_id: String, status: String, outcome: Js, at: String }) -> ();
         /// A failed run's next attempt, as one write fenced like `parks.commit`:
         /// `None`, and nothing written, when the run's status is not `failed`.
@@ -541,11 +482,6 @@ slot! {
         "joins.frames" => fn frames(JoinsFrames { run_id: String }) -> Vec<String>;
         /// The frames, their exports, and the `settle_race` rows owed at them.
         "joins.deleteFrames" => fn delete_frames(JoinsDeleteFrames { run_id: String, frame_addresses: Vec<String> }) -> ();
-        "correlations.correlate" => fn correlate(CorrelationsCorrelate { run_id: String, team_id: String, address: String, adapter_type: String, correlation_key: String }) -> ();
-        "correlations.correlated" => fn correlated(CorrelationsCorrelated { adapter_type: String, team_id: String, correlation_key: String }) -> Vec<Correlated>;
-        "correlations.ofRun" => fn correlations_of_run(CorrelationsOfRun { run_id: String, adapter_type: String }) -> Vec<RunCorrelation>;
-        "correlations.drop" => fn drop_correlation(CorrelationsDrop { run_id: String, address: String }) -> ();
-        "correlations.dropRun" => fn drop_run_correlations(CorrelationsDropRun { run_id: String }) -> ();
         /// The latest seq logged (store-wide; 0 for none): every `waits.log`
         /// call made after it logs under a greater seq.
         "waits.mark" => fn arrival_mark(WaitsMark {}) -> i64;
@@ -588,13 +524,6 @@ slot! {
         "work.bury" => fn bury_work(WorkBury { id: String, claim: String, reason: String }) -> ();
         "sources.put" => fn put_source(SourcesPut { team_id: String, hash: String, source: String }) -> ();
         "sources.get" => fn source(SourcesGet { team_id: String, hash: String }) -> Option<String>;
-        "callbacks.mint" => fn mint_callback(CallbacksMint { team_id: String, run_id: String, address: String, params: Js, state: Js, single_use: bool, expires_at: Option<String> }) -> Minted;
-        "callbacks.get" => fn callback(CallbacksGet { id: String }) -> Option<CallbackRow>;
-        "callbacks.record" => fn record_callback(CallbacksRecord { id: String, values: Js, body_due_at: String }) -> CallbackRecorded;
-        "callbacks.markBodyStarted" => fn mark_callback_body_started(CallbacksMarkBodyStarted { id: String, call_index: i64, fence: Option<String> }) -> bool;
-        /// Those of `ids` with at least one call whose body started.
-        "callbacks.landed" => fn landed_callbacks(CallbacksLanded { ids: Vec<String> }) -> Vec<String>;
-        "callbacks.revokeRun" => fn revoke_run_callbacks(CallbacksRevokeRun { run_id: String }) -> ();
         "inbound.checkpoint" => fn inbound_checkpoint(InboundCheckpoint { subscription_id: String }) -> Option<Checkpoint>;
         "inbound.saveCheckpoint" => fn save_inbound_checkpoint(InboundSaveCheckpoint { subscription_id: String, checkpoint: Js }) -> ();
         /// One write: the receipt first, then the cursor (absent: left as it

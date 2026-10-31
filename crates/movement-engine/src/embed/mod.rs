@@ -5,7 +5,6 @@
 //! check(source, &catalog)                         -> problems, before anything runs
 //! run(&mut hosts, RunInput).await                  -> Outcome (finished, parked, failed…)
 //! resume(&mut hosts, RunInput, state, wake).await  -> Outcome, when a park is due
-//! fire(&mut hosts, RunInput, state, call).await    -> Outcome, a callback called
 //! ```
 //!
 //! This is the same engine the JSON boundary drives (crate::begin, the WASM
@@ -127,8 +126,6 @@ impl<'h> Hosts<'h> {
                 "park.waits.open",
                 "park.waits.arrivals",
                 "park.waits.note",
-                "park.callbacks.mint",
-                "park.callbacks.calls",
                 "park.sources.save",
                 "park.sources.load",
             ]);
@@ -448,7 +445,7 @@ pub enum Wake {
     /// Its timer came due (`wake_at` passed): a `sleep` is stepped past, an
     /// `until` tests its condition again.
     Timer,
-    /// What it awaited arrived (an adapter's record, a callback's call): the
+    /// What it awaited arrived (an adapter's record): the
     /// awaiting statement is entered again and checks once more.
     Arrival,
 }
@@ -460,26 +457,9 @@ pub async fn resume(hosts: &mut Hosts<'_>, input: &RunInput, state: &ParkedState
     drive(hosts, input, Entry::Resume { state, reenter }).await
 }
 
-/// A callback called: the values the caller supplied for its parameters
-/// (an object), and the call's place on the callback's ledger
-/// ([`Store::callback_calls`]).
-#[derive(Debug, Clone, PartialEq)]
-pub struct CallbackCall {
-    pub values: Data,
-    pub call_index: usize,
-}
-
-/// Run a called callback's body against the state it was minted with
-/// ([`CallbackMint::state`]). The flow awaiting the callback is woken by
-/// [`resume`] with [`Wake::Arrival`], once the call is on the ledger.
-pub async fn fire(hosts: &mut Hosts<'_>, input: &RunInput, state: &ParkedState, call: &CallbackCall) -> Result<Outcome, EmbedError> {
-    drive(hosts, input, Entry::Fire { state, call }).await
-}
-
 enum Entry<'a> {
     Run,
     Resume { state: &'a ParkedState, reenter: bool },
-    Fire { state: &'a ParkedState, call: &'a CallbackCall },
 }
 
 async fn drive(hosts: &mut Hosts<'_>, input: &RunInput, entry: Entry<'_>) -> Result<Outcome, EmbedError> {
@@ -591,10 +571,6 @@ fn input_text(serves: &[&str], input: &RunInput, entry: &Entry<'_>, credential_i
             if *reenter {
                 head["resume"]["reenter"] = json!(true);
             }
-        }
-        Entry::Fire { state, call } => {
-            head["resume"] = json!({ "state": state.0 });
-            head["fire"] = json!({ "values": call.values.to_wire(), "callIndex": call.call_index });
         }
     }
     // The catalog last, as its own text: its maps are read in their order.

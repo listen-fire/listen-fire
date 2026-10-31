@@ -130,10 +130,6 @@ pub struct SegmentInput {
     /// run starts.
     #[serde(default)]
     pub trigger_mark: Option<i64>,
-    /// With `resume`: run a fired callback's body against its captured
-    /// state (`fireCallbackBody`) rather than resume a leaf.
-    #[serde(default)]
-    pub fire: Option<CallbackFire>,
     /// With `resume`: settle a race a batch resume deferred
     /// (`settleRaceFrame`), any completed branch's state as `resume.state`.
     #[serde(default)]
@@ -186,15 +182,6 @@ pub struct SegmentInput {
 /// absent).
 fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Json>, D::Error> {
     Json::deserialize(deserializer).map(Some)
-}
-
-/// A fired callback (`fireCallbackBody`): the call's values on the eval
-/// wire, and its index on the callback's ledger.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CallbackFire {
-    pub values: Json,
-    pub call_index: usize,
 }
 
 /// A deferred race to settle (`settleRaceFrame`).
@@ -483,8 +470,6 @@ pub(crate) struct Run<'a> {
     pub(crate) gates: RefCell<Vec<(String, Rc<crate::flow::Gate>)>>,
     /// Each write's key in program order, as `writes` holds them.
     pub(crate) write_keys: RefCell<Vec<Vec<usize>>>,
-    /// This segment runs a fired callback's body, which cannot suspend.
-    pub(crate) firing_callback: std::cell::Cell<bool>,
     /// The race frames a batch resume completed a branch into, deferred for
     /// the host to settle once the batch is through (`deferredRaceFrames`).
     pub(crate) deferred_race_frames: RefCell<Vec<String>>,
@@ -614,7 +599,6 @@ async fn run(host: &Host, input: &SegmentInput, ledger: &crate::ledger::Ledger) 
         gates: RefCell::default(),
         write_keys: RefCell::default(),
         resolutions: RefCell::default(),
-        firing_callback: std::cell::Cell::new(false),
         deferred_race_frames: RefCell::default(),
         call_stack: RefCell::default(),
         wire,
@@ -850,13 +834,9 @@ impl Run<'_> {
                 // The state as it was stored, keys in their stored order (on
                 // the eval wire, as the event is).
                 let state = env::decode(&resume.state).map_err(|e| Stop::Thrown(Failure::engine("MOVENG_RUNTIME", format!("the parked state does not read: {e}"))))?;
-                let leaf = match (&self.input.fire, &self.input.settle) {
-                    (Some(fire), _) => crate::resume::Leaf::FireCallback {
-                        values: self.wire.decode(&fire.values).map_err(|e| Stop::Thrown(Failure::engine("MOVENG_RUNTIME", format!("the callback's values do not read: {e}"))))?,
-                        call_index: fire.call_index,
-                    },
-                    (None, Some(settle)) => crate::resume::Leaf::SettleRace { frame: settle.frame_address.clone() },
-                    (None, None) => {
+                let leaf = match &self.input.settle {
+                    Some(settle) => crate::resume::Leaf::SettleRace { frame: settle.frame_address.clone() },
+                    None => {
                         let answer = match (&resume.answer, resume.reenter) {
                             (Some(answer), false) => Some(crate::resume::rematerialise_answer(
                                 self.wire.decode(answer).map_err(|e| Stop::Thrown(Failure::engine("MOVENG_RUNTIME", format!("the answer does not read: {e}"))))?,
@@ -1601,9 +1581,8 @@ impl Run<'_> {
                 let bound = self.closure_binding(closure, Some(name), scope, &format!("{path}/value/closure"));
                 scope.declare(name, bound);
             }
-            RValue::Callback { callback } => {
-                let minted = self.mint_callback(callback, scope, at, &format!("{path}/value/callback")).await?;
-                scope.declare(name, minted);
+            RValue::Callback { .. } => {
+                return Err(Stop::Thrown(Failure::engine("MOVENG_RUNTIME", "'callback(…)' is retired — the checker should have caught this".into())));
             }
             _ => {
                 let slot = self.value_slot(value, scope)?;
@@ -1709,7 +1688,6 @@ impl Run<'_> {
             | Binding::Positions(_)
             | Binding::Tuple(_)
             | Binding::Closure(_)
-            | Binding::Callback(_)
             | Binding::ShapePosition(_)
             | Binding::Resource(_)
             | Binding::Shape(_) => true,

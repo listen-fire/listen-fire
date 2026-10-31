@@ -1,7 +1,7 @@
 //! A session — one project opened for running: its secrets, externals,
 //! catalog, files and listens — and the entry points the run commands share:
 //! an event routed to the listens it matches and run, a parked run resumed,
-//! the work queue drained, a callback called and a run cancelled, and the
+//! the work queue drained and a run cancelled, and the
 //! line each run is reported by (`report`).
 
 use std::cell::{Cell, OnceCell, RefCell};
@@ -12,7 +12,6 @@ use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
 
-use crate::callbacks::{CALLBACK_AWAIT_TYPE, CallFor, CallOutcome, queue_body, record_callback_call, refusal, resolvable_awaits};
 use crate::catalog::{ConnectionSchemas, catalog_of};
 use crate::check::{LOCAL_TENANT, check_parsed, describe_external, missing_line};
 use crate::documents::Documents;
@@ -28,7 +27,7 @@ use crate::remote::{Externals, SegmentAdapters};
 use crate::routing::{Arrival, Listen, address_matches_key, event_matches_trigger_scope, routes_by_key, trigger_event_of, unrouted_line, untyped_event_line};
 use crate::run_host::{
     BUSY_RETRY_MS, CANCELLED_BY_OPERATOR, FailedWork, Lease, Settled, StepOutcome, StepRequest, Stepper, WORKER_LOST, after_step, arm_timer_wake,
-    clear_if_quiescent, drain_due_timers, drain_run, fail_lost_runs, fail_run, give_up_work, next_timer_wake, past_cap, run_complete_without, run_quiescent,
+    clear_if_quiescent, drain_due_timers, drain_run, fail_lost_runs, give_up_work, next_timer_wake, past_cap, run_complete_without, run_quiescent,
     settle_if_cancel_requested, with_run_lease, work_failed,
 };
 use crate::secrets::{Secrets, credential_for, imported_credentials, missing_credentials};
@@ -196,8 +195,6 @@ pub struct Session {
     due_offset_ms: i64,
     /// The principal every event acts as (`localIdentity`).
     user: Js,
-    /// Where listen-fire is reached from outside: a callback's url is under it.
-    public_url: String,
     /// The temporary folder an ephemeral session's state lives in.
     ephemeral_dir: Option<std::path::PathBuf>,
     /// The work this session's drains take (`listen-fire drain --kinds`): all of it,
@@ -342,11 +339,6 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     let mut listens = crate::routing::listens_across(&parsed);
     crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
     let user = local_identity(&project.user, |k| std::env::var(k).ok());
-    let public_url = project
-        .public_url
-        .clone()
-        .or_else(|| crate::serve::host_url().map(str::to_string))
-        .unwrap_or_else(|| format!("http://127.0.0.1:{DEFAULT_PORT}"));
     let _holds = hold_all(&running, role.keep());
     let file_set = RefCell::new(Rc::new(FileSet { files, parsed, catalog, listens, running, schemas, errors: Default::default(), _holds }));
     Ok(Session {
@@ -359,7 +351,6 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
         file_set,
         due_offset_ms,
         user,
-        public_url,
         ephemeral_dir,
         pool: Default::default(),
         loop_guard,
@@ -473,8 +464,7 @@ pub struct RunOutcome {
     pub run_id: String,
     pub file: String,
     pub movement: String,
-    /// `fired`, `resumed`, or `called` (a callback's body; `error`: the body
-    /// failed, and the run carries on).
+    /// `fired` or `resumed`.
     pub entry: &'static str,
     /// `completed`, `parked`, `failed` or `leaseLost`.
     pub status: String,
@@ -501,7 +491,7 @@ const LISTED_WRITES: usize = 100;
 
 /// The run's outcome once a segment's writes are added to what its earlier
 /// segments settled with (`before`, this attempt's and any before it: a
-/// resume, a callback's continuation): the run's history counts and lists
+/// resume, a branch's continuation): the run's history counts and lists
 /// every write it made, and keeps what it returned.
 fn with_writes(before: Option<&str>, writes: usize, records: Vec<Js>, returned: Option<Js>) -> Js {
     let before = before.and_then(|text| Js::parse(text.as_bytes()).ok()).unwrap_or(Js::Null);
@@ -514,8 +504,8 @@ fn with_writes(before: Option<&str>, writes: usize, records: Vec<Js>, returned: 
     listed.extend(records);
     listed.truncate(LISTED_WRITES);
     outcome.insert("writeRecords".into(), Js::Arr(listed));
-    // The body returns in one segment; a later one (a callback's body, a
-    // branch the run still waited on) keeps what it returned.
+    // The body returns in one segment; a later one (a branch the run still
+    // waited on) keeps what it returned.
     if let Some(returned) = returned.or_else(|| before.get("returned").cloned()) {
         outcome.insert("returned".into(), returned);
     }
@@ -536,17 +526,6 @@ fn failed_outcome(before: Option<&str>, committed: &[Js], message: &str) -> Js {
     }
     outcome.insert("error".into(), Js::str(message));
     Js::Obj(outcome)
-}
-
-/// Where a segment's end settles its run.
-#[derive(Clone, Copy)]
-enum Settles<'a> {
-    /// A callback's body: the run stands as it is.
-    Nothing,
-    /// The run is completed when nothing of it is left but `completing`,
-    /// the leaf (or the race's frame) the segment stepped; a fresh firing
-    /// steps none. Otherwise it is parked.
-    Run { completing: Option<&'a str> },
 }
 
 /// What a run entry has done so far: its writes, and how many segments ran.
@@ -965,7 +944,7 @@ impl Session {
         completing: Option<&str>,
     ) -> Result<StepOutcome, String> {
         tally.borrow_mut().stepped += 1;
-        let (ran, committed) = self.segment(set, run_id, facts, fence, entry, Settles::Run { completing }).await?;
+        let (ran, committed) = self.segment(set, run_id, facts, fence, entry, completing).await?;
         let ran = match ran {
             Ok(ran) => ran,
             Err(Ended::LeaseLost) => return Ok(StepOutcome::LeaseLost),
@@ -1005,7 +984,9 @@ impl Session {
 
     /// One engine segment of the run, entered as `entry`, under `fence`, and
     /// the record writes the systems took during it, whatever it came to.
-    /// Its end is kept in one write with where it leaves the run (`settles`).
+    /// Its end is kept in one write with where it leaves the run: completed
+    /// when nothing of it is left but `completing`, the leaf (or the race's
+    /// frame) the segment stepped (a fresh firing steps none); else parked.
     async fn segment(
         &self,
         set: &FileSet,
@@ -1013,7 +994,7 @@ impl Session {
         facts: &RunFacts,
         fence: Option<&str>,
         entry: Entry,
-        settles: Settles<'_>,
+        completing: Option<&str>,
     ) -> Result<(Result<Ran, Ended>, Vec<Js>), String> {
         let secrets = self.secrets();
         let externals = self.externals_in(set, &secrets);
@@ -1034,7 +1015,6 @@ impl Session {
             adapters: SegmentAdapters::new(&segment_id, &externals),
             documents: &self.documents,
             user: self.user.clone(),
-            public_url: self.public_url.clone(),
             resumed_leaf,
             resumed_state,
             settling_race,
@@ -1054,7 +1034,7 @@ impl Session {
         let ran = run_segment(&host, input).await;
         self.remember_writes(run_id, &host.adapters.wrote.borrow());
         let committed = host.adapters.committed.take();
-        let ran = self.end_segment(&host, ran, &committed, settles)?;
+        let ran = self.end_segment(&host, ran, &committed, completing)?;
         Ok((ran, committed))
     }
 
@@ -1064,38 +1044,32 @@ impl Session {
     /// arm won and left to the run to settle is owed in that write, and the
     /// run is not completed while it owes one. A segment that fails its run
     /// keeps none of its parks, and owes nothing.
-    fn end_segment(&self, host: &SegmentHost<'_>, ran: Result<Ran, Ended>, committed: &[Js], settles: Settles<'_>) -> Result<Result<Ran, Ended>, String> {
+    fn end_segment(&self, host: &SegmentHost<'_>, ran: Result<Ran, Ended>, committed: &[Js], completing: Option<&str>) -> Result<Result<Ran, Ended>, String> {
         let run_id = host.run_id.as_str();
         let ran = match ran {
             Ok(ran) => ran,
             Err(Ended::LeaseLost) => return Ok(Err(Ended::LeaseLost)),
-            Err(Ended::Failed(message)) => return self.end_failed_segment(host, message, committed, settles),
+            Err(Ended::Failed(message)) => return self.end_failed_segment(host, message, committed),
         };
         let before = || -> Result<Option<String>, String> { Ok(self.store.run(run_id).map_err(|e| e.to_string())?.and_then(|row| row.outcome)) };
-        let settle = match settles {
-            Settles::Nothing => None,
-            Settles::Run { .. } if ran.cancelled => {
-                let reason = self.store.cancel_request(run_id).map_err(|e| e.to_string())?.flatten();
-                host.discard_progress();
-                Some(("failed", failed_outcome(before()?.as_deref(), &[], reason.as_deref().unwrap_or(CANCELLED_BY_OPERATOR))))
-            }
-            Settles::Run { completing } => {
-                let outcome = with_writes(before()?.as_deref(), ran.writes, ran.write_records.clone(), ran.returned.clone());
-                let ends = ran.parked_address.is_none() && !host.holds_progress() && ran.deferred_race_frames.is_empty() && self.nothing_left(run_id, completing)?;
-                Some((if ends { "completed" } else { "parked" }, outcome))
-            }
+        let (status, outcome) = if ran.cancelled {
+            let reason = self.store.cancel_request(run_id).map_err(|e| e.to_string())?.flatten();
+            host.discard_progress();
+            ("failed", failed_outcome(before()?.as_deref(), &[], reason.as_deref().unwrap_or(CANCELLED_BY_OPERATOR)))
+        } else {
+            let outcome = with_writes(before()?.as_deref(), ran.writes, ran.write_records.clone(), ran.returned.clone());
+            let ends = ran.parked_address.is_none() && !host.holds_progress() && ran.deferred_race_frames.is_empty() && self.nothing_left(run_id, completing)?;
+            (if ends { "completed" } else { "parked" }, outcome)
         };
         let at = iso(0);
-        let settle = settle.as_ref().map(|(status, outcome)| RunSettle { status, outcome, at: &at });
+        let settle = Some(RunSettle { status, outcome: &outcome, at: &at });
         let owed_races = if ran.cancelled { &[][..] } else { &ran.deferred_race_frames[..] };
         match commit(host, settle, owed_races) {
             Ok(()) => Ok(Ok(ran)),
             Err(Ended::LeaseLost) => Ok(Err(Ended::LeaseLost)),
             // Refused, or a replay that diverged: nothing was written.
             Err(Ended::Failed(message)) => {
-                if !matches!(settles, Settles::Nothing) {
-                    self.fail_keeping_writes(run_id, &message, committed)?;
-                }
+                self.fail_keeping_writes(run_id, &message, committed)?;
                 Ok(Err(Ended::Failed(message)))
             }
         }
@@ -1104,11 +1078,8 @@ impl Session {
     /// A segment that failed its run: the failure, with the writes it made,
     /// kept in its commit beside the end of the leaf it resumed. A run
     /// already settled stays, as `mark_failed` leaves it.
-    fn end_failed_segment(&self, host: &SegmentHost<'_>, message: String, committed: &[Js], settles: Settles<'_>) -> Result<Result<Ran, Ended>, String> {
+    fn end_failed_segment(&self, host: &SegmentHost<'_>, message: String, committed: &[Js]) -> Result<Result<Ran, Ended>, String> {
         let run_id = host.run_id.as_str();
-        if let Settles::Nothing = settles {
-            return Ok(Err(Ended::Failed(message)));
-        }
         host.discard_progress();
         let row = self.store.run(run_id).map_err(|e| e.to_string())?;
         let Some(row) = row.filter(|row| row.status == "running" || row.status == "parked") else { return Ok(Err(Ended::Failed(message))) };
@@ -1263,7 +1234,7 @@ impl Session {
                     drain_run(&*self.store, run_id, &leaves, None, lease, &stepper).await?
                 }
                 Drain::DueTimers => drain_due_timers(&*self.store, run_id, &self.due_by(), lease, &stepper).await?,
-                Drain::Awaits(extra) => drain_awaits(&*self.store, run_id, extra, lease, &stepper).await?,
+                Drain::Awaits(addresses) => drain_run(&*self.store, run_id, addresses, None, lease, &stepper).await?,
                 Drain::OwedRaces => drain_run(&*self.store, run_id, &[], None, lease, &stepper).await?,
             };
             Ok(Some((*stepper.tally.borrow(), lease_lost, stepper.rehearsed())))
@@ -1376,21 +1347,19 @@ impl Session {
         })
     }
 
-    /// `listen-fire resume` with no run: drain the due work, then step what is due in
-    /// every parked run: its timers that have come, and its awaits that can
-    /// resolve now. A timer not yet due stays parked, so a timeout arm
+    /// `listen-fire resume` with no run: drain the due work (the waits an
+    /// arrival woke among it), then step what is due in every parked run:
+    /// its timers that have come. A timer not yet due stays parked, so a timeout arm
     /// beside an approval never fires early; `listen-fire resume <run>` runs a run's
     /// every leaf out.
     pub async fn resume_all(&self, log: &mut impl Write) -> Result<Vec<RunOutcome>, String> {
         let set = self.file_set();
         let (_, mut outcomes) = self.drain_work_in(&set, WORK_ROWS_PER_DRAIN, log).await?;
         for run_id in self.parked_runs()? {
-            for drain in [Drain::DueTimers, Drain::Awaits(Vec::new())] {
-                match self.drive_parked_run(&set, &run_id, drain).await? {
-                    Parked::Busy => return Err(run_busy(&run_id)),
-                    Parked::NotStepped => {}
-                    Parked::Stepped(outcome) => outcomes.push(*outcome),
-                }
+            match self.drive_parked_run(&set, &run_id, Drain::DueTimers).await? {
+                Parked::Busy => return Err(run_busy(&run_id)),
+                Parked::NotStepped => {}
+                Parked::Stepped(outcome) => outcomes.push(*outcome),
             }
         }
         Ok(outcomes)
@@ -1542,35 +1511,6 @@ impl Session {
                     Parked::Stepped(outcome) => (Next::Done, vec![*outcome]),
                 })
             }
-            // A callback's awaiter, woken by its key (callbacks retire at 0.13).
-            "wake_await" => {
-                let adapter_type = text("adapterType")?;
-                let team = payload.get("teamId").and_then(Js::as_str).unwrap_or(self.store.tenant()).to_string();
-                let key = text("correlationKey")?;
-                let parks = self.store.correlated(&adapter_type, &team, &key).map_err(|e| e.to_string())?;
-                let mut by_run: IndexMap<String, Vec<String>> = IndexMap::new();
-                for park in parks {
-                    by_run.entry(park.run_id).or_default().push(park.address);
-                }
-                let (mut busy, mut outcomes) = (false, Vec::new());
-                for (run_id, addresses) in by_run {
-                    match self.drive_parked_run(set, &run_id, Drain::Awaits(addresses)).await? {
-                        Parked::Busy => busy = true,
-                        Parked::NotStepped => {}
-                        Parked::Stepped(outcome) => outcomes.push(*outcome),
-                    }
-                }
-                Ok((if busy { Next::Busy } else { Next::Done }, outcomes))
-            }
-            "fire_callback" => {
-                let index = payload.get("callIndex").and_then(|n| if let Js::Num(n) = n { n.as_u64() } else { None });
-                let index = index.ok_or("a fire_callback row has no callIndex")? as usize;
-                Ok(match self.run_recorded_body(set, &text("callbackId")?, index).await? {
-                    BodyRun::Ran(outcomes) => (Next::Done, outcomes),
-                    BodyRun::Busy => (Next::Busy, Vec::new()),
-                    BodyRun::Refused => (Next::Done, Vec::new()),
-                })
-            }
             POLL_WORK_KIND => self.poll_row(set, &text("subscription")?).await,
             crate::subscriptions::REFRESH_WORK_KIND => Ok((
                 match crate::subscriptions::refresh_row(self, payload).await? {
@@ -1598,27 +1538,10 @@ enum Next {
 enum Drain {
     EveryParkedLeaf,
     DueTimers,
-    /// The awaits resolvable now: those a woken key names, and those whose
-    /// callback has a landed call.
+    /// The awaits a wake names: arrivals landed on their waits.
     Awaits(Vec<String>),
     /// No leaf: only the races the run owes (as every drain ends).
     OwedRaces,
-}
-
-/// `drainAwaits`: step every currently resolvable await leaf of one run under
-/// the caller's lease, the callback-backed ones (`callbackAwaitKeeper`) and
-/// the `extra` ones the caller already knows are resolvable, each once.
-async fn drain_awaits(store: &dyn RunHostStore, run_id: &str, extra: &[String], lease: &Lease, stepper: &impl Stepper) -> Result<bool, String> {
-    let mut addresses = resolvable_awaits(store, run_id).map_err(|e| e.to_string())?;
-    for address in extra {
-        if !addresses.contains(address) {
-            addresses.push(address.clone());
-        }
-    }
-    if addresses.is_empty() {
-        return Ok(false);
-    }
-    drain_run(store, run_id, &addresses, None, lease, stepper).await
 }
 
 enum Parked {
@@ -2007,185 +1930,6 @@ impl Session {
     }
 }
 
-// ── Callbacks ───────────────────────────────────────────────────────────────
-
-/// How long after a call its durable rows (its body's, its awaiters' wake)
-/// come due. Its body runs at once when the run is free; the rows matter only
-/// if this process dies first, so they wait well past a normal body.
-const CALLBACK_BACKSTOP_MS: i64 = 30_000;
-
-/// What calling a callback came to (`CallOutcome`).
-pub struct Called {
-    pub call: CallOutcome,
-    /// The body waits on its work row, due now, for whichever listen-fire process
-    /// drains next: the run was being stepped elsewhere, or the door only
-    /// records (`listen-fire serve --doors-only`).
-    pub queued: bool,
-    pub outcomes: Vec<RunOutcome>,
-}
-
-/// Whether a recorded call's body ran (`RecordedBodyRun`). `Busy`: another
-/// process holds the run, or the lease went before the body began, so the
-/// body is left to its work row.
-enum BodyRun {
-    Ran(Vec<RunOutcome>),
-    Busy,
-    Refused,
-}
-
-/// What a body segment came to (`CallbackBodyOutcome`): a failed body fails
-/// its segment, never the run.
-enum BodyOutcome {
-    /// With a rehearsal's captured writes.
-    Ran(Option<Vec<Js>>),
-    Failed(String),
-    Cancelled(Option<String>),
-    LeaseLost,
-}
-
-/// What `runCallbackBody` came to under the lease.
-enum UnderLease {
-    /// `stepped`: the awaits the call woke, and a rehearsal's writes they captured.
-    Ran { outcome: BodyOutcome, body: Tally, stepped: Option<(Tally, Option<Vec<Js>>)> },
-    NotStarted,
-    /// Its callback is gone or closed, the call is not there or already
-    /// started, or its run has ended.
-    Refused,
-}
-
-impl Session {
-    /// Call a callback (`callCallback`): validate and record the call (its
-    /// body queued with it), then run the body now under the run's lease and
-    /// wake whatever awaits the callback. The door (`POST /api/cb/<id>`) and
-    /// `listen-fire call` both come here.
-    pub async fn call_callback(&self, id: &str, values: &Obj) -> Result<Called, String> {
-        let backstop = iso(CALLBACK_BACKSTOP_MS);
-        let call = record_callback_call(&*self.store, id, values, &backstop, &backstop).map_err(|e| e.to_string())?;
-        let CallOutcome::Recorded { callback, call_index } = &call else { return Ok(Called { call, queued: false, outcomes: Vec::new() }) };
-        let (callback_id, team_id, call_index) = (callback.id.clone(), callback.team_id.clone(), *call_index);
-        match self.run_recorded_body(&self.file_set(), &callback_id, call_index).await? {
-            BodyRun::Ran(outcomes) => Ok(Called { call, queued: false, outcomes }),
-            BodyRun::Refused => Ok(Called { call, queued: false, outcomes: Vec::new() }),
-            BodyRun::Busy => {
-                // Held elsewhere: its row, due now, runs it once the run is free.
-                queue_body(&*self.store, &callback_id, &team_id, call_index, &iso(0)).map_err(|e| e.to_string())?;
-                Ok(Called { call, queued: true, outcomes: Vec::new() })
-            }
-        }
-    }
-
-    /// Call a callback without running its body (the door under `listen-fire serve
-    /// --doors-only`, on compute frozen once it answers): the call recorded
-    /// with its body's row due now, and the wake slot told, so a worker runs
-    /// the body and wakes the callback's awaits.
-    pub fn queue_callback(&self, id: &str, values: &Obj) -> Result<Called, String> {
-        let call = record_callback_call(&*self.store, id, values, &iso(0), &iso(CALLBACK_BACKSTOP_MS)).map_err(|e| e.to_string())?;
-        let queued = matches!(call, CallOutcome::Recorded { .. });
-        Ok(Called { call, queued, outcomes: Vec::new() })
-    }
-
-    /// Run one recorded call's body under its run's lease, then the awaits
-    /// it resolves (`runRecordedBody`).
-    async fn run_recorded_body(&self, set: &FileSet, callback_id: &str, call_index: usize) -> Result<BodyRun, String> {
-        let store_error = |e: crate::store::StoreError| e.to_string();
-        let Some(callback) = self.store.callback(callback_id).map_err(store_error)? else { return Ok(BodyRun::Refused) };
-        let Some(row) = self.store.run(&callback.run_id).map_err(store_error)? else { return Ok(BodyRun::Refused) };
-        let run_id = row.id.clone();
-        let held = with_run_lease(&*self.store, &run_id, async |lease: &Lease| self.callback_body_under(set, &row, callback_id, call_index, lease).await).await?;
-        let Some(under) = held else { return Ok(BodyRun::Busy) };
-        let (outcome, body, stepped) = match under? {
-            UnderLease::NotStarted => return Ok(BodyRun::Busy),
-            UnderLease::Refused => return Ok(BodyRun::Refused),
-            UnderLease::Ran { outcome, body, stepped } => (outcome, body, stepped),
-        };
-        // One call is one entry into its run: the body and the awaits it
-        // woke are reported together, their writes summed.
-        let (woke, woke_captured) = stepped.filter(|(t, _)| t.stepped > 0).unwrap_or_default();
-        let tally = Tally { writes: body.writes + woke.writes, stepped: body.stepped + woke.stepped };
-        let mut called = self.settled_outcome(&run_id, "called", tally, matches!(outcome, BodyOutcome::LeaseLost))?;
-        match outcome {
-            BodyOutcome::Failed(error) => called.error = Some(format!("the callback's body failed: {error}")),
-            BodyOutcome::Ran(captured) => called.captured = captured.map(|body| body.into_iter().chain(woke_captured.into_iter().flatten()).collect()),
-            BodyOutcome::Cancelled(_) | BodyOutcome::LeaseLost => {}
-        }
-        Ok(BodyRun::Ran(vec![called]))
-    }
-
-    /// `runCallbackBody`: everything that decides whether the body runs is
-    /// read again here, under the lease; the body is marked started before it
-    /// runs (at most once after start, a crash included), and the run's
-    /// awaits on the callback are woken last, so what the body wrote is
-    /// there for the continuation that reads it.
-    async fn callback_body_under(&self, set: &FileSet, row: &crate::store::RunRow, callback_id: &str, call_index: usize, lease: &Lease) -> Result<UnderLease, String> {
-        let store_error = |e: crate::store::StoreError| e.to_string();
-        let fence = Some(lease.token.as_str());
-        let Some(callback) = self.store.callback(callback_id).map_err(store_error)? else { return Ok(UnderLease::Refused) };
-        let Some(call) = crate::callbacks::ledger(&callback).map_err(store_error)?.into_iter().nth(call_index) else { return Ok(UnderLease::Refused) };
-        if refusal(&callback, CallFor::RecordedCall, &iso(0)).is_some() {
-            return Ok(UnderLease::Refused);
-        }
-        if call.body_started_at.is_some() {
-            return Ok(UnderLease::Refused);
-        }
-        let open = self.store.run(&callback.run_id).map_err(store_error)?.is_some_and(|r| r.status == "parked" || r.status == "running");
-        if !open {
-            return Ok(UnderLease::Refused);
-        }
-        if lease.is_lost() || !self.store.mark_callback_body_started(callback_id, call_index as i64, fence).map_err(store_error)? {
-            return Ok(UnderLease::NotStarted);
-        }
-        let mut body = Tally::default();
-        let outcome = self.callback_body_segment(set, row, &callback.state, &call.values, call_index, lease, &mut body).await?;
-        match &outcome {
-            BodyOutcome::LeaseLost => return Ok(UnderLease::Ran { outcome, body, stepped: None }),
-            BodyOutcome::Cancelled(reason) => {
-                fail_run(&*self.store, &callback.run_id, reason.as_deref().unwrap_or(CANCELLED_BY_OPERATOR), fence)?;
-                return Ok(UnderLease::Ran { outcome, body, stepped: None });
-            }
-            BodyOutcome::Ran(_) | BodyOutcome::Failed(_) => {}
-        }
-        let parks: Vec<String> = self
-            .store
-            .correlated(CALLBACK_AWAIT_TYPE, &callback.team_id, &callback.id)
-            .map_err(store_error)?
-            .into_iter()
-            .filter(|p| p.run_id == callback.run_id)
-            .map(|p| p.address)
-            .collect();
-        if parks.is_empty() {
-            return Ok(UnderLease::Ran { outcome, body, stepped: None });
-        }
-        let Some(stepper) = self.parked_stepper(set, &callback.run_id, lease)? else { return Ok(UnderLease::Ran { outcome, body, stepped: None }) };
-        drain_awaits(&*self.store, &callback.run_id, &parks, lease, &stepper).await?;
-        let stepped = *stepper.tally.borrow();
-        Ok(UnderLease::Ran { outcome, body, stepped: Some((stepped, stepper.rehearsed())) })
-    }
-
-    /// A callback's body (`callbackBodySegment`): one engine segment entered
-    /// at the callback, with the call's values.
-    #[allow(clippy::too_many_arguments)] // the file set it runs within, then the body's own inputs
-    async fn callback_body_segment(&self, set: &FileSet, row: &crate::store::RunRow, state: &Js, values: &Obj, call_index: usize, lease: &Lease, tally: &mut Tally) -> Result<BodyOutcome, String> {
-        if !matches!(state.get("version"), Some(Js::Num(_))) {
-            return Ok(BodyOutcome::Failed("the callback holds no state to run its body from".into()));
-        }
-        let facts = RunFacts::of_row(&row.id, &row.input)?;
-        tally.stepped += 1;
-        let entry = Entry::Fire { state: state.clone(), values: values.clone(), call_index };
-        Ok(match self.segment(set, &row.id, &facts, Some(&lease.token), entry, Settles::Nothing).await?.0 {
-            Err(Ended::LeaseLost) => BodyOutcome::LeaseLost,
-            Err(Ended::Failed(message)) => BodyOutcome::Failed(message),
-            Ok(ran) => {
-                tally.writes += ran.writes;
-                if ran.cancelled {
-                    BodyOutcome::Cancelled(self.store.cancel_request(&row.id).map_err(|e| e.to_string())?.flatten())
-                } else {
-                    BodyOutcome::Ran(facts.dry_run.then_some(ran.captured))
-                }
-            }
-        })
-    }
-}
-
 // ── Rerun ───────────────────────────────────────────────────────────────────
 
 /// What `listen-fire runs rerun` came to.
@@ -2288,8 +2032,7 @@ pub fn report(outcomes: &[RunOutcome], returned: Returned, out: &mut impl Write)
     for o in outcomes {
         let entries = if o.trace_entries == 1 { "entry" } else { "entries" };
         let error = o.error.as_ref().map(|e| format!("\n  {e}")).unwrap_or_default();
-        let verb = if o.entry == "called" { "called" } else { "run" };
-        writeln!(out, "{verb} {} {}:{} {} — {} write(s), {} trace {entries}{error}", o.run_id, o.file, o.movement, o.status, o.writes, o.trace_entries).map_err(io)?;
+        writeln!(out, "run {} {}:{} {} — {} write(s), {} trace {entries}{error}", o.run_id, o.file, o.movement, o.status, o.writes, o.trace_entries).map_err(io)?;
         if let (Returned::Shown, Some(value)) = (returned, &o.returned) {
             writeln!(out, "  {}", crate::returned::shown(value)).map_err(io)?;
         }

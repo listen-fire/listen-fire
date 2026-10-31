@@ -11,7 +11,7 @@ use std::rc::Rc;
 use movement_parser::lowering::POSITION_SENTINEL;
 use movement_parser::lowering::expression::{EdgeDirection, EdgeStep, Expression, TraversalStep};
 
-use crate::bindings::{Binding, Callback, Handle, Identity, Landed, Scope, ShapePosition};
+use crate::bindings::{Binding, Handle, Identity, Landed, Scope, ShapePosition};
 use crate::env::Trail;
 use crate::eval::{Evaluated, Prov, field_terminal};
 use crate::executor::join_all;
@@ -330,32 +330,6 @@ impl Run<'_> {
                     let field = direct_field(expr, name, "a shape position")?;
                     Ok(self.shape_position_field(&position, field))
                 }
-                // `cb-[k:Called]->`: the calls so far, read off the ledger,
-                // as a block head over the callback reads them; hops past
-                // them walk on over the records in hand.
-                Binding::Callback(callback) if !steps.is_empty() => {
-                    let Some((TraversalStep::Edge(step), rest)) = steps.split_first() else {
-                        return Err(unsupported(&format!("'{}' hops from a callback ('{name}')", crate::traverse::step_type(&steps[0]))));
-                    };
-                    if step.edge_type_id != crate::awaits::CALLED {
-                        return Err(Failure::unsupported(
-                            &format!("'-[:{}]->' on a callback", step.edge_type_id),
-                            &format!("a callback has one edge, '{}'", crate::awaits::CALLED),
-                        ));
-                    }
-                    let filter = step.expression_filter.as_deref().map(|filter| (filter.clone(), step.alias.clone()));
-                    let called = self.called_landings(&Binding::Callback(callback), filter.as_ref(), scope).await.map_err(crate::write::failure_of)?;
-                    let reached = self.walk_meta(called, rest, name, scope, span).await?;
-                    if let Some((hops, where_)) = exists_terminal(expr, name, true)? {
-                        let found = self.exists(hops, where_, reached, scope, span).await?;
-                        return Ok(Evaluated { value: Js::Bool(found), prov: none() });
-                    }
-                    self.read_landings(expr, reached, name, "a callback's calls").await
-                }
-                Binding::Callback(callback) => {
-                    let field = direct_field(expr, name, "a callback")?;
-                    Ok(Evaluated { value: callback_field(&callback, field), prov: none() })
-                }
                 other => Err(unsupported(&format!("reading '{name}' ({}) in an expression", record::describe(&other)))),
             }
         })
@@ -574,7 +548,6 @@ impl Run<'_> {
             }
             Binding::Resource(resource) => Ok(self.resource_field(resource, field)),
             Binding::ShapePosition(position) => Ok(self.shape_position_field(position, field)),
-            Binding::Callback(callback) => Ok(Evaluated { value: callback_field(callback, field), prov: none() }),
             other => Err(unsupported(&format!("reading '{field}' off {} reached through '{name}'", record::describe(other)))),
         }
     }
@@ -779,11 +752,3 @@ fn resource_origin(resource: &Js, field: Option<&str>) -> Js {
     crate::env::object_of(origin)
 }
 
-/// `readCallbackField`.
-fn callback_field(callback: &Callback, field: &str) -> Js {
-    match field {
-        "id" => callback.callback_id.clone(),
-        "url" => callback.url.clone(),
-        _ => Js::Null,
-    }
-}

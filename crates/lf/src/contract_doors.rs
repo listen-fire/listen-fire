@@ -4,7 +4,7 @@
 //! suite (movement-engine `services/inbound/contract.ts`) holds them to the
 //! cases every host's doors pass (apps/cli inbound_contract.test.ts). The world's providers and installs
 //! become externals and credentials, the suite's adapter reads each delivery
-//! (`{ events?, wake?, checkpoint? }`), and the store calls are observed, and
+//! (`{ events?, checkpoint? }`), and the store calls are observed, and
 //! the suite's faults injected, around listen-fire's own stores over a scratch state
 //! file.
 //!
@@ -33,10 +33,6 @@ struct Faults {
     capture_marked: bool,
     /// Queueing any captured event throws.
     enqueue: bool,
-    /// The adapter's wakeKeys throws.
-    wake_keys: bool,
-    /// Queueing the wakes throws.
-    enqueue_wakes: bool,
 }
 
 #[derive(Default)]
@@ -50,7 +46,6 @@ struct World {
 struct Observations {
     captured: u64,
     enqueued: u64,
-    wakes: Vec<String>,
     checkpoints: Vec<Js>,
     notified: u64,
 }
@@ -159,7 +154,7 @@ impl Bridge {
             installs.push(Credential { name: format!("push-{index}"), external: adapter_type, binding: Binding::Install, fields, origin: Origin::default() });
         }
         let faulted = |name: &str| Js::is_true(world.get("faults").and_then(|f| f.get(name)));
-        let faults = Faults { capture_marked: faulted("captureMarked"), enqueue: faulted("enqueue"), wake_keys: faulted("wakeKeys"), enqueue_wakes: faulted("enqueueWakes") };
+        let faults = Faults { capture_marked: faulted("captureMarked"), enqueue: faulted("enqueue") };
         *self.world.borrow_mut() = World { served, installs, faults };
         *self.seen.borrow_mut() = Observations::default();
         Ok(())
@@ -170,7 +165,6 @@ impl Bridge {
         Js::Obj(obj! {
             "captured" => Js::Num(seen.captured.into()),
             "enqueued" => Js::Num(seen.enqueued.into()),
-            "wakes" => Js::strings(&seen.wakes),
             "checkpoints" => Js::Arr(seen.checkpoints.clone()),
             "notified" => Js::Num(seen.notified.into()),
         })
@@ -215,7 +209,7 @@ impl Observed<'_> {
             store: &self.bridge.store,
             served: self.served.clone(),
             installs: std::borrow::Cow::Borrowed(&self.installs),
-            reader: SuiteReader { wake_keys_fail: self.faults.wake_keys },
+            reader: SuiteReader,
             sink: EventSink::Queue,
             notify: &|| {},
             listens: Vec::new(),
@@ -256,10 +250,6 @@ impl InboundStore for Observed<'_> {
         self.lf().preprocess(source, raw, checkpoint).await
     }
 
-    async fn wake_keys(&self, source: &Source, raw: &Js) -> Result<Vec<String>, String> {
-        self.lf().wake_keys(source, raw).await
-    }
-
     async fn check_inbound(&self, source: &Source, request: &crate::inbound::RawRequest<'_>, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String> {
         self.lf().check_inbound(source, request, secret, checkpoint).await
     }
@@ -274,27 +264,22 @@ impl InboundStore for Observed<'_> {
     }
 
     /// listen-fire keeps a delivery in one write, so the suite's faults land on it
-    /// whole: wakes that cannot be queued keep nothing; receipts that cannot
-    /// be queued are each refused, the rest kept (the suite's per-receipt
+    /// whole: receipts that cannot be queued are each refused, the rest kept (the suite's per-receipt
     /// failure) without the delivery's id, so the sender's retry is kept,
     /// and the delivery fails. A duplicate is observed doing nothing.
     async fn keep(&self, mut kept: Kept<'_>) -> Result<bool, String> {
-        if self.faults.enqueue_wakes && !kept.wake_keys.is_empty() {
-            return Err("wake queue unavailable".into());
-        }
         let refused = self.faults.enqueue && !kept.receipts.is_empty();
         if refused {
             kept.receipts.clear();
             kept.external_id = None;
         }
-        let (checkpoint, receipts, wakes) = (kept.checkpoint.cloned(), kept.receipts.len() as u64, kept.wake_keys.to_vec());
+        let (checkpoint, receipts) = (kept.checkpoint.cloned(), kept.receipts.len() as u64);
         if !self.lf().keep(kept).await? {
             return Ok(false);
         }
         self.note(|seen| {
             seen.checkpoints.extend(checkpoint);
             seen.enqueued += receipts;
-            seen.wakes.extend(wakes);
         });
         if refused {
             return Err("work table unavailable".into());
@@ -336,16 +321,13 @@ impl PushStore for Observed<'_> {
     }
 }
 
-/// The suite's adapter: a delivery's JSON body is `{ events?, wake?,
-/// checkpoint? }`; each event object is one event's payload.
-struct SuiteReader {
-    wake_keys_fail: bool,
-}
+/// The suite's adapter: a delivery's JSON body is `{ events?, checkpoint? }`;
+/// each event object is one event's payload.
+struct SuiteReader;
 
 /// A delivery as the suite's adapter reads it.
 struct SuiteDelivery {
     events: Vec<Js>,
-    wake: Vec<String>,
     checkpoint: Option<Js>,
 }
 
@@ -357,12 +339,7 @@ fn delivery(raw: &Js) -> Result<SuiteDelivery, String> {
         Some(Js::Arr(items)) if items.iter().all(|i| matches!(i, Js::Obj(_))) => items.clone(),
         Some(_) => return Err("events: expected an array of objects".into()),
     };
-    let wake = match raw.get("wake") {
-        None => Vec::new(),
-        Some(Js::Arr(items)) => items.iter().map(|i| i.as_str().map(str::to_string).ok_or("wake: expected an array of strings")).collect::<Result<_, _>>()?,
-        Some(_) => return Err("wake: expected an array of strings".into()),
-    };
-    Ok(SuiteDelivery { events, wake, checkpoint: raw.get("checkpoint").cloned() })
+    Ok(SuiteDelivery { events, checkpoint: raw.get("checkpoint").cloned() })
 }
 
 impl Reader for SuiteReader {
@@ -373,13 +350,6 @@ impl Reader for SuiteReader {
     async fn preprocess(&self, _external: &str, _install: &Credential, raw: &Js, _checkpoint: Option<&Js>) -> Result<Extraction, String> {
         let SuiteDelivery { events, checkpoint, .. } = delivery(raw)?;
         Ok(Extraction { events: events.into_iter().map(|payload| Js::Obj(obj! { "payload" => payload })).collect(), arrivals: Vec::new(), checkpoint })
-    }
-
-    async fn wake_keys(&self, _external: &str, _install: &Credential, raw: &Js) -> Result<Vec<String>, String> {
-        if self.wake_keys_fail {
-            return Err("wake door down".into());
-        }
-        Ok(delivery(raw)?.wake)
     }
 
     async fn check_inbound(&self, _external: &str, _install: &Credential, _request: &Js, _secret: Option<&str>, _checkpoint: Option<&Js>) -> Result<Js, String> {

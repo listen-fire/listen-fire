@@ -35,19 +35,11 @@ When credentials are missing: `{ "error", "missingCredentials": [diagnostic…] 
     "returned": { "value": "Hello, Ada!" } }] }
 ```
 
-- `entry`: `fired`, `resumed` or `called`. `status`: `completed`, `parked`, `failed` or `leaseLost`.
+- `entry`: `fired`, `resumed` or `rerun`. `status`: `completed`, `parked`, `failed` or `leaseLost`.
 - `ok` is false when any run failed. `dryRunWrites` is an array only under `--dry-run`.
 - `redelivered`: lines for listens that had already seen the event's idempotency key.
 - `returned`: what the movement returned, once the run has completed (`null` before then, or when it returned nothing). It is `{ "value" }`; `{ "truncated": true, "bytes", "preview" }` when its JSON is over 64 KiB (`preview` is the start of that JSON); or `{ "unwritable": "<why>" }` for a value with no plain form, such as a function. A file in the value is its reference (`__brand`, `name`, `contentType`, `size`, `source`: its owner and handle), never its bytes.
 - `resume` with nothing parked, or nothing due in what is parked: `runs` is empty.
-
-## `listen-fire call <callback-id> [--body f]`
-
-```json
-{ "ok": true, "callback": "…", "result": "recorded", "message": null, "queued": false, "runs": [<run>] }
-```
-
-`result`: `recorded`, `refused` (`message` says why), `notFound`, `closed` or `expired`. `queued`: another listen-fire process steps the run and runs the body. `runs` as above: one entry for the call (`entry`: `called`), its `writes` the body's and those of the run's continuation it woke.
 
 ## `listen-fire cancel <run-id> [--reason t]`
 
@@ -68,10 +60,10 @@ When credentials are missing: `{ "error", "missingCredentials": [diagnostic…] 
   "cancelRequested": false, "cancelReason": null } }
 ```
 
-- `deliveryId`: the delivery the run came from (`listen-fire deliveries show`), or `null` for a run started by `listen-fire run`, a cron tick, a poll or a callback.
+- `deliveryId`: the delivery the run came from (`listen-fire deliveries show`), or `null` for a run started by `listen-fire run`, a cron tick or a poll.
 - `languageVersion`: the version string the run is pinned to (a store from before pins were versions, holding the integer 5, is read as this release's version).
 - `event`: the event that fired the run. `outcome`: what the store recorded when the run last settled.
-- `writes`: how many writes the run made, over every entry into it (a resume's and a callback continuation's included).
+- `writes`: how many writes the run made, over every entry into it (a resume's included).
 - `writeRecords`: each write, in order, as `{ "adapter", "recordType", "recordId", "action", "committed", "values" }` (`link` too, for a link: `{ "edgeName", "toRecordType", "toExternalId" }`). `action` is `create`, `update`, `attach` (an update that changed nothing), `noop`, `delete`, `link`, `unlink` or `match`; `committed` is false for a rehearsed write. `values` are the fields the write set, a file by its reference; over 2 KiB of JSON they are `{ "truncated": true, "bytes", "preview" }`. The first 100 writes are listed. `null` for a run settled before listen-fire kept them. A failed run lists the writes it made before it failed, the failing step's included.
 - `returned`: what the movement returned, as under `listen-fire run` above. Every run records it, however it was started.
 - `trace` is `null` when the run's store cannot hand entries back (a store module over its wire); `traceEntries` is always the count.

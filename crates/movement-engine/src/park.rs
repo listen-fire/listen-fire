@@ -7,7 +7,7 @@
 //! a resume reads the code the run parked with whatever the team has saved
 //! since.
 //!
-//! - **Park** (any await: `sleep`, `until`, a callback's landing, a
+//! - **Park** (any await: `sleep`, `until`, an edge's arrival, a
 //!   combinator; and a suspension): one state for the whole run, written in
 //!   the order serialize.ts writes it (`ParkWriter` numbers nodes and walks
 //!   across the scope chain, the frames and the journal together): the
@@ -91,8 +91,6 @@ pub(crate) enum Leaf<'a> {
     Timer { presence: bool },
     /// An `await until(…)`'s timer: re-entered to test its condition again.
     Until,
-    /// A callback's await or its captured continuation: nothing between.
-    Plain,
     /// An await on a wait (crate::waits): the values its WHERE captured when
     /// it was first reached, which a re-entry judges arrivals with.
     Await { captured: &'a [Js] },
@@ -124,7 +122,7 @@ fn park_state_in(run: &Run<'_>, address: &str, binding_name: Option<&str>, leaf:
     let mut state = vec![("version", Js::Number(PARK_STATE_VERSION)), ("address", Js::str(address)), ("bindingName", binding_name.map_or(Js::Null, Js::str))];
     match *leaf {
         Leaf::Timer { presence: true } => state.push(("presenceBind", Js::Bool(true))),
-        Leaf::Timer { presence: false } | Leaf::Plain | Leaf::Await { .. } => {}
+        Leaf::Timer { presence: false } | Leaf::Await { .. } => {}
         Leaf::Until => state.push(("until", Js::Bool(true))),
         Leaf::Suspended(journal) => {
             state.push(("suspended", Js::Bool(true)));
@@ -634,8 +632,8 @@ fn serialize_binding(run: &Run<'_>, name: &str, binding: &Binding, park: &mut Pa
             object_of(vec![kind("positions"), ("landings", Js::array(landings))])
         }
         // Data only: the binding object as it stands.
-        Binding::Callback(_) | Binding::ShapePosition(_) | Binding::Resource(_) => {
-            crate::record::data_object(binding).expect("a callback, a shape position and a resource are data")
+        Binding::ShapePosition(_) | Binding::Resource(_) => {
+            crate::record::data_object(binding).expect("a shape position and a resource are data")
         }
         // The extraction ran: its output is data, never run again.
         Binding::Extracted { emission, root, .. } => object_of(vec![
@@ -925,7 +923,7 @@ fn descriptor_refusal(cx: Cx, descriptor: &Js) -> Option<String> {
             (Some(checked), Some(path)) if checked.file(&crate::program::DeclaringFile::Library(path.to_string())).is_none() => Some(NOT_READ.into()),
             _ => None,
         },
-        "event" | "instance" | "handleRef" | "nodeRef" | "extractRoot" | "extractPosition" | "resource" | "value" | "callback" | "shapePosition" | "opaque" => None,
+        "event" | "instance" | "handleRef" | "nodeRef" | "extractRoot" | "extractPosition" | "resource" | "value" | "shapePosition" | "opaque" => None,
         _ => Some("resume_state_does_not_read".into()),
     }
 }
@@ -1015,7 +1013,7 @@ impl Run<'_> {
 
     /// run.ts `canSuspend`: the host's park sink commits suspensions.
     fn can_suspend(&self) -> bool {
-        !self.firing_callback.get() && !self.call_sites.borrow().is_empty() && self.serves("park.sink.commitSuspension")
+        !self.call_sites.borrow().is_empty() && self.serves("park.sink.commitSuspension")
     }
 
     /// `suspendFlow`: the suspended state committed and the flow parked at
@@ -1363,7 +1361,7 @@ fn index_descriptor(descriptor: &Js, park: &mut ParkReader) {
         // descriptor.
         Some(
             "event" | "instance" | "handleRef" | "nodeRef" | "extractRoot" | "extractPosition" | "sourcePosition" | "resource" | "value"
-            | "callback" | "shape" | "localShape" | "movement" | "fileClosure" | "shapePosition" | "opaque",
+            | "shape" | "localShape" | "movement" | "fileClosure" | "shapePosition" | "opaque",
         ) => {}
         other => unreachable_kind("descriptor", other),
     }
@@ -1480,7 +1478,6 @@ mod tests {
             gates: RefCell::default(),
             write_keys: RefCell::default(),
             resolutions: RefCell::default(),
-            firing_callback: std::cell::Cell::new(false),
             deferred_race_frames: RefCell::default(),
             call_stack: RefCell::default(),
             wire: crate::env::Wire::default(),

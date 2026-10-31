@@ -9,14 +9,14 @@
 
 use std::collections::BTreeMap;
 
-use crate::backend::{CallbackClaim, CallbackRecord, MintCallback, RunHostStore};
+use crate::backend::RunHostStore;
 use crate::core::ProcessModule;
 use crate::json::{Js, Obj};
 use crate::obj;
 use crate::slot_client::SlotClient;
 use module_wire::envelope::METHOD_NOT_IMPLEMENTED_CODE;
 use crate::store::{
-    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, OwedRace, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit,
+    BranchExport, ClaimDue, ClaimedWork, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, OwedRace, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit,
     StoreError,
 };
 use crate::store_wire::{Wire, delivery_params, event_run_params, int, num, open_wait_params, opt, park_params, rows, run_start_params, segment_commit_params, to_rows};
@@ -262,25 +262,6 @@ impl RunHostStore for ProcessStore {
         self.unit("joins.deleteFrames", obj! { "runId" => s(run_id), "frameAddresses" => strings(frame_addresses) })
     }
 
-    fn correlate(&self, run_id: &str, team_id: &str, address: &str, adapter_type: &str, correlation_key: &str) -> Result<()> {
-        self.unit(
-            "correlations.correlate",
-            obj! { "runId" => s(run_id), "teamId" => s(team_id), "address" => s(address), "adapterType" => s(adapter_type), "correlationKey" => s(correlation_key) },
-        )
-    }
-    fn correlated(&self, adapter_type: &str, team_id: &str, correlation_key: &str) -> Result<Vec<CorrelatedAwait>> {
-        self.rows("correlations.correlated", obj! { "adapterType" => s(adapter_type), "teamId" => s(team_id), "correlationKey" => s(correlation_key) })
-    }
-    fn of_run(&self, run_id: &str, adapter_type: &str) -> Result<Vec<(CorrelatedAwait, String)>> {
-        self.rows("correlations.ofRun", obj! { "runId" => s(run_id), "adapterType" => s(adapter_type) })
-    }
-    fn drop_correlation(&self, run_id: &str, address: &str) -> Result<()> {
-        self.unit("correlations.drop", obj! { "runId" => s(run_id), "address" => s(address) })
-    }
-    fn drop_run_correlations(&self, run_id: &str) -> Result<()> {
-        self.unit("correlations.dropRun", obj! { "runId" => s(run_id) })
-    }
-
     fn arrival_mark(&self) -> Result<i64> {
         let answer = self.call("waits.mark", obj! {})?;
         int(&answer).ok_or_else(|| self.malformed("waits.mark", &answer))
@@ -379,36 +360,6 @@ impl RunHostStore for ProcessStore {
             Js::Str(source) => Ok(Some(source)),
             other => Err(self.malformed("sources.get", &other)),
         }
-    }
-
-    fn mint_callback(&self, input: MintCallback<'_>) -> Result<String> {
-        let params = obj! {
-            "teamId" => s(input.team_id),
-            "runId" => s(input.run_id),
-            "address" => s(input.address),
-            "params" => input.params.clone(),
-            "state" => input.state.clone(),
-            "singleUse" => Js::Bool(input.single_use),
-            "expiresAt" => opt(input.expires_at),
-        };
-        let answer = self.call("callbacks.mint", params)?;
-        answer.get("id").and_then(Js::as_str).map(str::to_string).ok_or_else(|| self.malformed("callbacks.mint", &answer))
-    }
-    fn callback(&self, id: &str) -> Result<Option<CallbackRecord>> {
-        self.row("callbacks.get", obj! { "id" => s(id) })
-    }
-    fn record_callback_call(&self, id: &str, values: &Js, body_due_at: &str) -> Result<CallbackClaim> {
-        let answer = self.call("callbacks.record", obj! { "id" => s(id), "values" => values.clone(), "bodyDueAt" => s(body_due_at) })?;
-        CallbackClaim::from_wire(&answer).ok_or_else(|| self.malformed("callbacks.record", &answer))
-    }
-    fn mark_callback_body_started(&self, id: &str, call_index: i64, fence: Option<&str>) -> Result<bool> {
-        self.flag("callbacks.markBodyStarted", obj! { "id" => s(id), "callIndex" => Js::Num(call_index.into()), "fence" => opt(fence) })
-    }
-    fn landed_callbacks(&self, ids: &[String]) -> Result<Vec<String>> {
-        self.strings("callbacks.landed", obj! { "ids" => strings(ids) })
-    }
-    fn revoke_run_callbacks(&self, run_id: &str) -> Result<()> {
-        self.unit("callbacks.revokeRun", obj! { "runId" => s(run_id) })
     }
 
     fn inbound_checkpoint(&self, subscription_id: &str) -> Result<Option<Js>> {

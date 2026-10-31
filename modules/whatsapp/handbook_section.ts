@@ -4,11 +4,12 @@
 // contract as every hand-written chapter (consumer-neutral prose, no internal
 // vocabulary, every runnable example backed by a checked probe).
 //
-// In-chat tapping is taught fresh here (WhatsApp never had a bespoke button
-// encoding to retire): a callback id sits comfortably inside a reply button's
-// 256-character id. The platform fact that shapes the rest of the chapter —
-// WhatsApp cannot edit a sent message and has no toast — is taught plainly:
-// the ack a tap gets IS a reply, never a silent edit.
+// Acting on a message is taught as a url button (`cta_url`) that opens a form
+// from the `@lf/forms` adapter, awaited on its Submissions: `callback(…)`
+// retired at 0.13, and a reply button's tap reaches no run until WhatsApp
+// reports its taps as Interactions, in Slack's shape. The platform fact that
+// shapes the rest of the chapter — WhatsApp cannot edit a sent message and
+// has no toast — is taught plainly: the ack an answer gets IS a reply.
 
 import type { HandbookSection } from 'movement-engine/public/handbook';
 
@@ -60,104 +61,73 @@ Up to three reply buttons, each titled in 20 characters or fewer.
 
 ### a-tap-that-acts
 
-A tapped reply button hands its \`id\` straight back, so the id to put there is a callback's — it fits comfortably inside the 256 characters WhatsApp allows. Each button gets its OWN callback, because the body is what the button means:
+A reply button's tap reaches no run yet. For a button that settles something, write a form from the \`@lf/forms\` adapter and send its \`Url\` on a url button (\`cta_url\`): the tap opens the form, and the run waits on what is submitted.
 
 \`\`\`
-q = write questions-[:Check]-> { Prompt: "Send the update?" }
-send = callback({ write q-[:Response]-> { Answer: true } })
-hold = callback({ write q-[:Response]-> { Answer: false } })
+node Decision {
+  Send: <boolean>
+}
+
+form = write forms-[:Forms]-> { Title: "Send the update?", Fields: Decision }
 
 write msg-[:Replies]-> {
   Interactive: {
-    type: "button",
+    type: "cta_url",
     body: { text: "Send the update?" },
-    action: { buttons: [
-      { type: "reply", reply: { id: "\${send.id}", title: "Send" } },
-      { type: "reply", reply: { id: "\${hold.id}", title: "Hold" } }
-    ] }
+    action: { name: "cta_url", parameters: { display_text: "Answer", url: "\${form.Url}" } }
   }
 }
 
-answer = await q-[:Response]->
+answer = await form-[:Submissions]->
 \`\`\`
 
-WhatsApp captures nothing at tap time — a button's id is fixed when the message is sent — so a button always fires a callback that takes no values. A picked date or a typed answer needs a plain reply instead, read off the next inbound message.
+A form also asks for what a button cannot carry, a picked date or a typed answer, since WhatsApp captures nothing at tap time. To give up after a while, race the wait against a \`sleep\`.
 
 ### the-only-feedback-is-a-reply
 
-WhatsApp cannot edit a message it already sent, and there is nothing like a toast either — so the whole of a tap's acknowledgement is a reply, quoting the message the button was on. There is no keyboard to retire: a single-use callback's buttons stay exactly as they were sent, and a second tap on one just gets its own reply saying the request is already closed. Design around that — say what happened in words, not in a message that changes shape.
+WhatsApp cannot edit a message it already sent, and there is nothing like a toast either — so the whole of an answer's acknowledgement is a reply, quoting the message the button was on. The button stays exactly as it was sent, and a second submission of an answered form is turned away by the form itself. Design around that — say what happened in words, not in a message that changes shape.
 
 ### Common mistakes
 
 - **Setting both \`Body\` and \`Interactive\`.** They're mutually exclusive — put the words inside \`interactive.body.text\`.
 - **More than three reply buttons, or a title over 20 characters.** Both are WhatsApp errors at send time.
-- **Expecting a button to capture typed text or a picked date.** WhatsApp buttons carry only the id you wired in. Read anything typed off the next inbound reply.
+- **Expecting a button to capture typed text or a picked date.** WhatsApp buttons carry only what you wired in. Ask for it on the form.
 - **Expecting the message to change, or a toast to appear.** Neither happens — the ack IS the reply that comes back.
 - **Reading \`File\` off a message.** It only ever goes out; what arrived is on \`Attachments\`.
 - **Binding the typing write.** It creates nothing, so there is nothing to name.
 - **Sending to someone who hasn't messaged the number recently.** Free-form sends — Interactive included — only reach people inside the 24-hour service window.`,
   engineClaims: [
     {
-      construct: 'a WhatsApp interactive reply-button send whose button ids carry callback ids, one per answer',
+      construct: 'a WhatsApp url button (cta_url) that opens a form from @lf/forms, the run waiting on its submission',
       status: 'runs',
       probe: `
-import { \`@lf/whatsapp\` as whatsapp, \`@lf/ask\` as ask } from adapters
+import { \`@lf/whatsapp\` as whatsapp, \`@lf/forms\` as forms_module } from adapters
 
 wa = connect whatsapp
-questions = connect ask
+forms = connect forms_module
+
+node Decision {
+  Send: <boolean>
+}
 
 function confirm_send(msg: <wa-[:Message]->>) {
-  q = write questions-[:Check]-> {
-    Prompt: "Send the update?"
-    Detail: "\${msg.Body}"
-  }
-  send = callback({ write q-[:Response]-> { Answer: true } })
-  hold = callback({ write q-[:Response]-> { Answer: false } })
+  form = write forms-[:Forms]-> { Title: "Send the update?", Fields: Decision }
 
   write msg-[:Replies]-> {
     Interactive: {
-      type: "button",
+      type: "cta_url",
       body: { text: "Send the update?" },
-      action: { buttons: [
-        { type: "reply", reply: { id: "\${send.id}", title: "Send" } },
-        { type: "reply", reply: { id: "\${hold.id}", title: "Hold" } }
-      ] }
+      action: { name: "cta_url", parameters: { display_text: "Answer", url: "\${form.Url}" } }
     }
   }
 
-  answer = await q-[:Response]->
-  if (answer.Answer) {
+  answer = await form-[:Submissions]->
+  if (answer.Send) {
     write msg-[:Replies]-> { Body: "Sending now." }
   }
 }
 
 listen to wa {} fire confirm_send
-`,
-    },
-    {
-      construct: 'a WhatsApp interactive reply button that waits on a body-less callback (the minimal confirmation)',
-      status: 'runs',
-      probe: `
-import { \`@lf/whatsapp\` as whatsapp } from adapters
-
-wa = connect whatsapp
-
-function wait_for_go(msg: <wa-[:Message]->>) {
-  go = callback()
-
-  write msg-[:Replies]-> {
-    Interactive: {
-      type: "button",
-      body: { text: "Ready when you are." },
-      action: { buttons: [ { type: "reply", reply: { id: "\${go.id}", title: "Go" } } ] }
-    }
-  }
-
-  tap = await go-[:Called]->
-  write msg-[:Replies]-> { Body: "Off we go (\${tap.At})." }
-}
-
-listen to wa {} fire wait_for_go
 `,
     },
   ],

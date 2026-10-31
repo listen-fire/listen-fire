@@ -124,13 +124,6 @@ fn a_run_is_driven_listed_shown_resumed_and_cancelled() {
 }
 
 #[test]
-fn call_reports_its_result() {
-    let (called, code) = Project::new("call").lf(&["call", "no-such-callback"]);
-    has(&called, &["ok", "callback", "result", "message", "queued", "runs"]);
-    assert_eq!((called["result"].clone(), code), ("notFound".into(), 1));
-}
-
-#[test]
 fn event_and_poll_runs_report_their_outcomes_or_an_error() {
     let project = Project::new("event");
     let event: &Path = &project.0.join("event.json");

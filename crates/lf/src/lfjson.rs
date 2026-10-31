@@ -111,18 +111,6 @@ pub fn exit_of(outcomes: &[RunOutcome]) -> i32 {
     if ok_of(outcomes) { 0 } else { 1 }
 }
 
-/// `call`: `result` is recorded, refused, notFound, closed or expired.
-pub fn call_doc(callback: &str, result: &str, message: Option<&str>, queued: bool, outcomes: &[RunOutcome]) -> Js {
-    Js::Obj(obj! {
-        "ok" => Js::Bool(result == "recorded" && ok_of(outcomes)),
-        "callback" => Js::str(callback),
-        "result" => Js::str(result),
-        "message" => opt(message),
-        "queued" => Js::Bool(queued),
-        "runs" => Js::Arr(outcomes.iter().map(outcome).collect()),
-    })
-}
-
 /// `runs rerun`: the attempt the run ran as, and what it came to.
 pub fn rerun_doc(attempt: i64, outcome: &RunOutcome) -> Js {
     let mut doc = match runs_doc(std::slice::from_ref(outcome), &[]) {

@@ -5,8 +5,6 @@
 //! how a parked run's leaves are stepped (claimed, stepped, finished, with
 //! the races the run owes settled once at the end), and the per-run lease
 //! every entry into a run holds.
-//!
-//! Callback-backed awaits are kept by crate::callbacks, not here.
 
 use std::cell::Cell;
 use std::future::Future;
@@ -14,9 +12,8 @@ use std::future::Future;
 use sha2::{Digest, Sha256};
 
 use crate::json::Js;
-use crate::obj;
 use crate::backend::RunHostStore;
-use crate::store::{ClaimedWork, NewWork, POLL_WORK_KIND, Release, SETTLE_RACE_WORK_KIND, StoreError, iso, timer_work_key, timer_work_payload};
+use crate::store::{ClaimedWork, POLL_WORK_KIND, Release, SETTLE_RACE_WORK_KIND, StoreError, iso, timer_work_key, timer_work_payload};
 
 /// A minute of silence is a dead process, not a slow one (`RUN_LEASE_TTL_MS`).
 pub const RUN_LEASE_TTL_MS: i64 = 60_000;
@@ -181,7 +178,7 @@ pub async fn work_failed(store_: &dyn RunHostStore, claimed: &ClaimedWork, why: 
 /// the row on its next claim, which is past its cap.
 pub async fn give_up_work(store_: &dyn RunHostStore, claimed: &ClaimedWork, why: &str) -> Result<FailedWork> {
     let reason = format!("gave up on its {} work after {} attempts: {why}", claimed.kind, claimed.attempts);
-    let runs = runs_of_work(store_, &claimed.kind, &claimed.payload)?;
+    let runs = runs_of_work(&claimed.kind, &claimed.payload);
     for run_id in &runs {
         let failed = with_run_lease(store_, run_id, async |lease: &Lease| fail_run(store_, run_id, &reason, Some(&lease.token))).await?;
         if failed.is_none() {
@@ -196,30 +193,14 @@ pub async fn give_up_work(store_: &dyn RunHostStore, claimed: &ClaimedWork, why:
     Ok(FailedWork::GaveUp { reason, runs })
 }
 
-/// The runs a work row would have stepped: a timer's run, a callback body's
-/// run, a wait's run, and the runs still parked on a wake's key. An event's
-/// row names none (its run, if it started, is the lost-run sweep's).
-fn runs_of_work(store_: &dyn RunHostStore, kind: &str, payload: &Js) -> Result<Vec<String>> {
-    let text = |k: &str| payload.get(k).and_then(Js::as_str);
-    Ok(match kind {
-        "resume_timer" => text("runId").map(str::to_string).into_iter().collect(),
-        "fire_callback" => match text("callbackId") {
-            Some(id) => store(store_.callback(id))?.map(|c| c.run_id).into_iter().collect(),
-            None => Vec::new(),
-        },
-        "wake_await" if payload.get("waitId").is_some() => text("runId").map(str::to_string).into_iter().collect(),
-        SETTLE_RACE_WORK_KIND => text("runId").map(str::to_string).into_iter().collect(),
-        "wake_await" => match (text("adapterType"), text("correlationKey")) {
-            (Some(adapter_type), Some(key)) => {
-                let team = text("teamId").unwrap_or(store_.tenant());
-                let mut runs: Vec<String> = store(store_.correlated(adapter_type, team, key))?.into_iter().map(|c| c.run_id).collect();
-                runs.dedup();
-                runs
-            }
-            _ => Vec::new(),
-        },
+/// The run a work row would have stepped: a timer's, a wait's or a race's.
+/// An event's row names none (its run, if it started, is the lost-run
+/// sweep's).
+fn runs_of_work(kind: &str, payload: &Js) -> Vec<String> {
+    match kind {
+        "resume_timer" | "wake_await" | SETTLE_RACE_WORK_KIND => payload.get("runId").and_then(Js::as_str).map(str::to_string).into_iter().collect(),
         _ => Vec::new(),
-    })
+    }
 }
 
 // ── Library texts a park pins ───────────────────────────────────────────────
@@ -238,25 +219,6 @@ pub fn arm_timer_wake(store_: &dyn RunHostStore, run_id: &str, wake_at: &str) ->
     store(store_.enqueue("resume_timer", &timer_work_key(run_id), &timer_work_payload(run_id), Some(wake_at), None))?;
     crate::wake::queued("resume_timer", Some(wake_at));
     Ok(())
-}
-
-/// The wake for one adapter identity, never coalesced.
-pub fn queue_await_wake(store_: &dyn RunHostStore, adapter_type: &str, team_id: &str, correlation_key: &str) -> Result<()> {
-    let wake = await_wake_work(adapter_type, team_id, correlation_key);
-    store(store_.enqueue(&wake.kind, &wake.key, &wake.payload, None, wake.team_id.as_deref()))?;
-    crate::wake::queued(&wake.kind, None);
-    Ok(())
-}
-
-/// The work row of `queue_await_wake`, due now.
-pub fn await_wake_work(adapter_type: &str, team_id: &str, correlation_key: &str) -> NewWork {
-    NewWork {
-        kind: "wake_await".into(),
-        key: format!("wake_await:{}", uuid::Uuid::new_v4()),
-        payload: Js::Obj(obj! { "adapterType" => Js::str(adapter_type), "teamId" => Js::str(team_id), "correlationKey" => Js::str(correlation_key) }),
-        due_at: None,
-        team_id: Some(team_id.to_string()),
-    }
 }
 
 // ── Completion ──────────────────────────────────────────────────────────────
@@ -293,12 +255,7 @@ pub fn clear_if_quiescent(store_: &dyn RunHostStore, run_id: &str, fence: Option
 // ── A run that ends without completing ──────────────────────────────────────
 
 pub fn abandon_run(store_: &dyn RunHostStore, run_id: &str, fence: Option<&str>) -> Result<bool> {
-    if !store(store_.drop_run_state(run_id, fence))? {
-        return Ok(false);
-    }
-    store(store_.drop_run_correlations(run_id))?;
-    store(store_.revoke_run_callbacks(run_id))?;
-    Ok(true)
+    store(store_.drop_run_state(run_id, fence))
 }
 
 pub fn fail_run(store_: &dyn RunHostStore, run_id: &str, message: &str, fence: Option<&str>) -> Result<bool> {
@@ -336,9 +293,6 @@ pub fn cancel_subtrees(store_: &dyn RunHostStore, run_id: &str, subtrees: &[Stri
     let doomed: Vec<String> =
         store(store_.leaves(run_id, true, None, None))?.into_iter().map(|l| l.address).filter(|a| in_subtree(a)).collect();
     if !doomed.is_empty() {
-        for address in &doomed {
-            store(store_.drop_correlation(run_id, address))?;
-        }
         store(store_.delete_leaves(run_id, &doomed))?;
     }
     let dead: Vec<String> = store(store_.frames(run_id))?.into_iter().filter(|f| in_subtree(f)).collect();
@@ -426,7 +380,6 @@ pub async fn drain_run(store_: &dyn RunHostStore, run_id: &str, addresses: &[Str
             if lease.is_lost() {
                 return Ok(true);
             }
-            store(store_.drop_correlation(run_id, address))?;
             continue;
         };
         let until = Js::is_true(state.get("until"));
@@ -436,15 +389,6 @@ pub async fn drain_run(store_: &dyn RunHostStore, run_id: &str, addresses: &[Str
             Settled::Continue => {}
             Settled::Done => return Ok(false),
             Settled::LeaseLost => return Ok(true),
-        }
-        let parked_at = match &outcome {
-            StepOutcome::Parked { address } => address.as_deref(),
-            StepOutcome::Completed => None,
-            _ => continue,
-        };
-        // The segment's own commit finished the leaf, unless it parked there again.
-        if parked_at != Some(address.as_str()) {
-            store(store_.drop_correlation(run_id, address))?;
         }
     }
     // Read again before each: settling one race withdraws a race inside

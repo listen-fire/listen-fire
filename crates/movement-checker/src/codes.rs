@@ -178,8 +178,14 @@ pub const CALL_RETURNS_NOTHING: &str = "MOV_CALL_RETURNS_NOTHING";
 pub const BLOCK_RETURNS_NOTHING: &str = "MOV_BLOCK_RETURNS_NOTHING";
 pub const RESERVED_NAME: &str = "MOV_RESERVED_NAME";
 pub const REBOUND_NAME: &str = "MOV_REBOUND_NAME";
+/// `callback(…)`, retired at 0.13: a form from `@lf/forms`, or buttons on a
+/// message, replaces it.
+pub const CALLBACK_RETIRED: &str = "MOV_CALLBACK_RETIRED";
+/// Raised by nothing since 0.13 retired `callback(…)`; the name is never reused.
 pub const CALLBACK_NOT_MOVEMENT: &str = "MOV_CALLBACK_NOT_MOVEMENT";
+/// Raised by nothing since 0.13 retired `callback(…)`; the name is never reused.
 pub const CALLBACK_BAD_CONFIG: &str = "MOV_CALLBACK_BAD_CONFIG";
+/// Raised by nothing since 0.13 retired `callback(…)`; the name is never reused.
 pub const CALLBACK_PARAM_NOT_VALUE: &str = "MOV_CALLBACK_PARAM_NOT_VALUE";
 pub const EXTRACT_CALL_NESTED: &str = "MOV_EXTRACT_CALL_NESTED";
 pub const WRITE_UNKNOWN_ROOT: &str = "MOV_WRITE_UNKNOWN_ROOT";

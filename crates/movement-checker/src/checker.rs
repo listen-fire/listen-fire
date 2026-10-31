@@ -571,7 +571,7 @@ impl<'c> Checker<'c> {
                 self.report_inline_block_retired(inline_block);
             }
             RValue::Callback { callback } => {
-                let params = self.check_callback(callback, scope);
+                let params = self.retire_callback(callback, scope);
                 return Bound { pos: Some(crate::families::listens::callback_type(params)), ..Bound::default() };
             }
             RValue::Closure { closure } => {

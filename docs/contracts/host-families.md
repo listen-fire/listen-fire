@@ -128,7 +128,7 @@ interface PrincipalReference { id: string; display?: string }
 
 ## Entry points
 
-A run is entered one segment at a time. Each entry is one call into the engine with one JSON input, the host beside it; the engine opens one segment for it and closes it as it returns. Four engine calls serve every way in: `runMovement`, `resumeMovement`, `settleRaceFrame` and `fireCallbackBody` (`movement_engine/run.ts`). What follows is each input, and which a run host passes in each situation. (Production's run host is `translation_graph/movement/execute.ts` and the resume drivers beside it.)
+A run is entered one segment at a time. Each entry is one call into the engine with one JSON input, the host beside it; the engine opens one segment for it and closes it as it returns. Three engine calls serve every way in: `runMovement`, `resumeMovement` and `settleRaceFrame` (`movement_engine/run.ts`). What follows is each input, and which a run host passes in each situation. (Production's run host is `translation_graph/movement/execute.ts` and the resume drivers beside it.)
 
 ### The input every entry takes
 
@@ -207,24 +207,10 @@ settleRaceFrame(input: RunInput & {
 - The settlement builds the race's answer from every completed branch's exports (`park.sink.collectBranchExports`), cancels the arms still parked, and runs the continuation after the race statement.
 - Between the arm's segment and the settlement, the race is owed. A host keeps that durably, in the arm's own write, until the settlement's write: a host that crashes in between must still settle it. listen-fire keeps each as a `settle_race` work row (store-slot.md, `parks.commitSegment`), and never completes a run that owes one.
 
-### A callback body
-
-```ts
-fireCallbackBody(input: RunInput & {
-  state: ParkedScopeState;          // the callback's captured continuation, as park.callbacks.mint was given it
-  values: Record<string, unknown>;  // the call's values, validated against the callback's parameters
-  callIndex: number;                // the call's index on the callback's ledger
-})
-```
-
-- `state.address` is the callback expression's address. The body runs in a child of the captured scope, at its own address frame (`callIndex`), so the bodies of a repeatable callback's calls never share a leaf.
-- A body never suspends: one that meets the cost cap fails, as that call's failure only.
-- A body never settles the run. The run's main continuation stays parked; a body that parks gets a leaf of its own. A host wakes the run's awaiters on the callback after the body (production: in the same process, with a queued wake behind it).
-
 ### Operator limit resume
 
 - A run paused at its cost limit is resumed by an operator only. The host lifts the pause first, then resumes each leaf the pause suspended (`commitSuspension`) with `reenter: true`, `limitPaused` absent, `priorSpentMicrodollars` the run's spend, and `capBaselineMicrodollars` the run's spend at this moment, so the cap counts afresh.
-- Any other entry into a run that is paused, except a callback body, passes `limitPaused: true`. A callback body never suspends (see "A callback body"), so it runs whole, pause or not. For the others, the woken branch takes its event (binds the answer, steps past the sleep) and then suspends before its next statement, joining the pause.
+- Any other entry into a run that is paused passes `limitPaused: true`. The woken branch takes its event (binds the answer, steps past the sleep) and then suspends before its next statement, joining the pause.
 
 ### Join closing
 
@@ -253,7 +239,6 @@ Every entry answers the segment's result (`MovementRunResult`, `movement_engine/
 | `park.sink` | `recordJoin`, `commitTimerPark`, `commitAwaitPark`, `decrementJoin`, `persistBranchExport`, `collectBranchExports`, `cancelSubtrees`, `commitSuspension`, `commitLimitPause` | yes: absent, a run that reaches a park fails (a dry run) |
 | `park` | `wake` | no (may throw, if `park.sink` is absent: only an await park asks for a wake) |
 | `park.waits` | `mark`, `open`, `arrivals`, `note` | yes: absent, a run opens no waits, and an `await` on an adapter's edge fails as unsupported |
-| `park.callbacks` | `mint`, `calls` | yes: absent, `callback(…)` fails as unsupported |
 | `park.sources` | `save`, `load` | yes: absent, a park carries each library's text itself |
 | `park.bindings` | `record`, `findBoundCounterpart`, `delete` | no (may throw, if no program binds) |
 | `control.cancel` | `cancelled`, `cancelledNow` | no (answer `false` for a run nothing cancels) |
@@ -268,7 +253,7 @@ Every entry answers the segment's result (`MovementRunResult`, `movement_engine/
 
 ### `segment`
 
-A segment is one entry into the interpreter: a fresh run, a resume, a race settlement, a callback body (see "Entry points"). The engine opens one at each entry point and closes it however the segment ends (completes, parks, throws). The host's half of a segment holds the run and team it is for, what the segment's adapter calls have read (a read memo, so a record read three times is one request), how many third-party calls they have made (an adapter call ceiling supplied by the host), the pin they answer under, and the adapter instances and lock session it holds.
+A segment is one entry into the interpreter: a fresh run, a resume or a race settlement (see "Entry points"). The engine opens one at each entry point and closes it however the segment ends (completes, parks, throws). The host's half of a segment holds the run and team it is for, what the segment's adapter calls have read (a read memo, so a record read three times is one request), how many third-party calls they have made (an adapter call ceiling supplied by the host), the pin they answer under, and the adapter instances and lock session it holds.
 
 #### `segment.open`
 
@@ -339,7 +324,7 @@ type AdapterMethod =
   | 'listEntryPoints' | 'describe' | 'edgesFrom' | 'resolveEntity' | 'getFieldValue' | 'getRelated'
   | 'iterateRelatedPage' | 'preprocessInbound' | 'listEventTypes' | 'createRecord' | 'updateRecord'
   | 'deleteRecord' | 'linkRecords' | 'unlinkRecords' | 'ensureEventSubscription' | 'removeEventSubscription'
-  | 'resolveAwait' | 'wakeKeys' | 'readRecord' | 'translateFilter' | 'getDedupRules'
+  | 'awaitKeys' | 'readRecord' | 'translateFilter' | 'getDedupRules'
   | 'getActorCandidates' | 'extractActor' | 'describeOpaqueId' | 'invokeFieldFunction';
 
 request: { segmentId: string; instance: string; method: AdapterMethod; args: object }
@@ -362,7 +347,7 @@ answer:
   - `adapter_error`: the adapter failed, or the instance does not implement the method, or the segment is not open (the message names it). The engine fails the statement with the message, under the failure's own `name`, with `detail` on the error it raises. The host logs the original failure (class, stack, cause) at warn with the segment and run ids as it classifies it.
   - An adapter call carries no budget, so it is never refused as `budget`; its own priced work is charged as the segment closes.
 - **Persist:** nothing; the host runs the call inside the segment's read memo and ceiling.
-- **Retry:** reads (`describe`, `getFieldValue`, `getRelated`, `iterateRelatedPage`, `readRecord`, `resolveEntity`, `resolveAwait`, …) are idempotent. Writes are not: a host retries a write only where the adapter protocol says the method is idempotent.
+- **Retry:** reads (`describe`, `getFieldValue`, `getRelated`, `iterateRelatedPage`, `readRecord`, `resolveEntity`, `awaitKeys`, …) are idempotent. Writes are not: a host retries a write only where the adapter protocol says the method is idempotent.
 
 ### `llm.client`
 
@@ -501,14 +486,12 @@ answer:  void
 
 ```ts
 request: { segmentId: string; address: string; state: ParkedScopeState; waitId: string }
-       | { segmentId: string; address: string; state: ParkedScopeState; adapterType: string; correlationKey: string }   // a callback's await
 answer:  void
 ```
 
 - **An await on an adapter's edge** names the wait it parks on (`waitId`, from `park.waits.open`). **Persist:** an await park for (run, `address`), and the wait parked there, as one write. An arrival logged on the wait's record afterwards wakes the run, which re-enters the await and reads the wait's arrivals. A park and a log on one record's edge never interleave: either the log sees the park and wakes it, or the engine's read after the park sees the arrival.
 - After this answers, the engine reads the wait's arrivals once more itself and calls `park.wake` when one landed while it parked.
 - **A host may hold its parks to the segment's end**, with its `recordJoin`s, the finish of the leaf it resumed and where the run then stands, and write them as one, so a segment that dies leaves the leaf it resumed to be resumed again. Such a host withdraws a held park that `cancelSubtrees` names, reads each held wait's arrivals in that one write and queues the wake itself when any are unread, so a `park.wake` it was asked in the segment is already covered (listen-fire holds them; docs/contracts/store-slot.md, `parks.commitSegment`).
-- **A callback's await** names the reserved callback identity and the callback's id: the correlation from (`adapterType`, `correlationKey`) to the park, woken by the callback's call. Callbacks retire at 0.13.
 - **Retry:** idempotent on (run, `address`).
 
 #### `park.sink.decrementJoin`
@@ -548,7 +531,7 @@ request: { segmentId: string; subtreeAddresses: string[]; excludeLeaf?: string }
 answer:  void
 ```
 
-- The race cascade: once an arm wins, every park at or below each prefix (except `excludeLeaf`) is withdrawn: its await correlation dropped (a late resolution lands as data), its park deleted, and any join frame inside the subtree cleared.
+- The race cascade: once an arm wins, every park at or below each prefix (except `excludeLeaf`) is withdrawn: its park deleted (a wait parked there is parked no more, so a late arrival wakes nothing), and any join frame inside the subtree cleared.
 - **Retry:** idempotent (a repeat finds nothing).
 
 #### `park.sink.commitSuspension`
@@ -558,7 +541,7 @@ request: { segmentId: string; address: string; state: ParkedScopeState }
 answer:  void
 ```
 
-- An engine-initiated suspension: a flow that met the run's cost cap, or reached a `suspendAt` address. The resume re-enters at the statement and replays the calls it had finished. No correlation, no wake time: resuming the run resumes it.
+- An engine-initiated suspension: a flow that met the run's cost cap, or reached a `suspendAt` address. The resume re-enters at the statement and replays the calls it had finished. No wait, no wake time: resuming the run resumes it.
 - Optional within the family: a sink without it cannot suspend, so a run that meets its cap there fails on the cap instead.
 - **Persist:** the suspension for (run, `address`). **Retry:** idempotent on (run, `address`).
 
@@ -580,13 +563,11 @@ answer:  void
 
 ```ts
 request: { segmentId: string; waitId: string }
-       | { segmentId: string; adapterType: string; correlationKey: string }   // a callback's awaiter
 answer:  void
 ```
 
 - "Resume the run parked on this wait", the segment's run. After an await park is durable, the engine reads the wait's arrivals once more itself, its WHERE included. An arrival logged between the first read and the park woke nothing, because the wait was not parked yet. So when the second read finds one the WHERE takes, or the record gone, the engine asks for the wake. The resume re-enters the await, which judges and notes the arrival.
 - When the second read cannot answer, the engine logs an error naming the wait and leaves the run parked without a wake; an arrival logged later wakes it.
-- A callback's awaiter is woken by its key: "resume whatever is parked on this key", in the segment's team. Callbacks retire at 0.13.
 - **Persist:** a queued wake that outlives the process (production: a `wake_await` work row).
 - **Retry:** idempotent; a duplicate wake resumes nothing twice. A wake that cannot be queued throws; the engine logs it and the park stands.
 
@@ -632,38 +613,6 @@ answer:  { counts: boolean }
 
 - The wait judged an arrival, and whether its WHERE took it. It counts when it matched and the record did not match at its last noted arrival; an arrival noted before counts no more. The engine binds the first that counts.
 - **Persist:** the note, for the life of the wait (the run's waits drop with its state).
-
-### `park.callbacks`
-
-Minting `callback(…)` and reading its call ledger. Separate from `park.sink` on purpose: a park is a leaf the run is waiting on, a callback is not one. An `await cb-[:Called]->` parks through `park.sink.commitAwaitPark` like any await.
-
-#### `park.callbacks.mint`
-
-```ts
-request: {
-  segmentId: string;
-  address: string;
-  params: Array<{ name: string; type: 'text' | 'number' | 'boolean' | 'date' | 'datetime' | 'json' | 'file' }>;
-  state: ParkedScopeState;      // the captured continuation
-  singleUse: boolean;
-  expiresAt?: string;           // ISO 8601; absent: never
-}
-answer: { id: string; url: string }
-```
-
-- **Persist:** the callback (continuation, signature, expiry) under `id`; `url` is where it is fired.
-- **Retry:** not idempotent: each call mints a new callback.
-
-#### `park.callbacks.calls`
-
-```ts
-request: { segmentId: string; callbackId: string }
-answer:  Array<{ at: string; values: Record<string, unknown> }>   // at: ISO 8601, the landing's `At`
-```
-
-- The live ledger: what `cb-[:Called]->` reads and what a re-entered `await cb-[:Called]->` re-checks.
-- A call is in the answer once its body has started. Production runs a call's body under the run's lease and marks it started first, so a segment holding the lease never sees a call whose body has yet to run.
-- **Persist:** nothing. **Retry:** idempotent.
 
 ### `park.sources`
 
@@ -844,7 +793,7 @@ answer:  void
 
 ### `clock`
 
-The engine reads no clock of its own. Every instant it needs that is not the run's firing instant comes from here: a sleep's wake time and an `every` timer's, a callback's expiry, the pin of a segment handed no `firedAt`, the instant a `WITHIN` measures recency from (one `clock.now` request per row the `WITHIN` is evaluated on: a hop filter holding one, over N rows, asks N times), and every measured duration on the trace (a plugin invocation's, a model call's).
+The engine reads no clock of its own. Every instant it needs that is not the run's firing instant comes from here: a sleep's wake time and an `every` timer's, the pin of a segment handed no `firedAt`, the instant a `WITHIN` measures recency from (one `clock.now` request per row the `WITHIN` is evaluated on: a hop filter holding one, over N rows, asks N times), and every measured duration on the trace (a plugin invocation's, a model call's).
 
 #### `clock.now`
 
@@ -853,7 +802,7 @@ request: { segmentId: string }
 answer:  { nowIso: string }   // ISO 8601
 ```
 
-- The engine adds a sleep's duration to the answer for `commitTimerPark`'s `wakeAt`, and a callback's `ttl` for `mint`'s `expiresAt`.
+- The engine adds a sleep's duration to the answer for `commitTimerPark`'s `wakeAt`.
 - A measured duration is the difference of two answers, so each costs two `clock.now` requests: one before the plugin invocation or model call it measures, one after.
 - A host may answer one instant for the whole segment (the test host answers the instant the segment opened at), or the wall clock (production). The engine refuses an answer that names no instant.
 - **Persist:** nothing. **Retry:** idempotent.
@@ -879,10 +828,10 @@ The engine keeps the run's ledger (`movement_engine/run_context.ts`). The budget
 
 ## The Rust engine's requests
 
-The Rust engine (`crates/movement-engine`; the engine for the language of this release, by the run's pin alone) is an engine, not a host: it runs a segment the run host opened (`inRunContext` in `movement_engine/run.ts`), and its shim (`movement_engine/rust_host.ts`) forwards each request it makes to the run's `EngineHost`. Every request that names an `EngineHost` method is that method's request, in the shape above, with the segment's id; the engine's slice reaches `segment` only through the run host, and `adapters.resolve`, `adapters.call`, `llm.client.call`, `llm.extractCall.call` (an extraction call, `extract(…)`, `extractOne(…)`), `llm.transforms.invoke`, `llm.arbitrateEntities`, `files.resolveFileText`, `files.render`, `lookup.resolveActingUser`, `park.sink.*` (a timer, a suspension, an await's park on its wait or a callback's key, a limit pause, and a combinator's join: `recordJoin`, `persistBranchExport`, `decrementJoin`, `collectBranchExports`, `cancelSubtrees`), `park.wake` (an arrival that landed while an await parked, and a callback fired from inside the run), `park.waits.*` (a run's waits, opened where their records enter and read at the `await`), `park.callbacks.mint` and `park.callbacks.calls`, `park.sources.save` and `park.sources.load` (a park's library texts), `control.cancel.*`, `locks.*`, `trace.append`, `clock.now` and `ids.mint` itself. It asks `ids.mint` for an extraction's resources (once per batch, in the tree's order); a callback's id is minted by `park.callbacks.mint`, as the TypeScript engine's is. A wait asks the record's adapter for its key (`awaitKeys`) through `adapters.call`, once per adapter and edge as records enter; a plain `await` on an edge that can also be listed lists it first (`getRelated`). `parallel` and `race` arms run as concurrent flows: their requests are in flight together, interleaved as the TypeScript engine's arms interleave them, and effects take the run's in-run locks in the same order.
+The Rust engine (`crates/movement-engine`; the engine for the language of this release, by the run's pin alone) is an engine, not a host: it runs a segment the run host opened (`inRunContext` in `movement_engine/run.ts`), and its shim (`movement_engine/rust_host.ts`) forwards each request it makes to the run's `EngineHost`. Every request that names an `EngineHost` method is that method's request, in the shape above, with the segment's id; the engine's slice reaches `segment` only through the run host, and `adapters.resolve`, `adapters.call`, `llm.client.call`, `llm.extractCall.call` (an extraction call, `extract(…)`, `extractOne(…)`), `llm.transforms.invoke`, `llm.arbitrateEntities`, `files.resolveFileText`, `files.render`, `lookup.resolveActingUser`, `park.sink.*` (a timer, a suspension, an await's park on its wait, a limit pause, and a combinator's join: `recordJoin`, `persistBranchExport`, `decrementJoin`, `collectBranchExports`, `cancelSubtrees`), `park.wake` (an arrival that landed while an await parked), `park.waits.*` (a run's waits, opened where their records enter and read at the `await`), `park.callbacks.mint` and `park.callbacks.calls`, `park.sources.save` and `park.sources.load` (a park's library texts), `control.cancel.*`, `locks.*`, `trace.append`, `clock.now` and `ids.mint` itself. It asks `ids.mint` for an extraction's resources (once per batch, in the tree's order). A wait asks the record's adapter for its key (`awaitKeys`) through `adapters.call`, once per adapter and edge as records enter; a plain `await` on an edge that can also be listed lists it first (`getRelated`). `parallel` and `race` arms run as concurrent flows: their requests are in flight together, interleaved as the TypeScript engine's arms interleave them, and effects take the run's in-run locks in the same order.
 
 - **What it refuses.** A program reaches the engine only past the checker, the one gate; a program pinned to a release of another compatibility key is refused before anything is asked (`MOVENG_LANGUAGE_VERSION`, naming the pin and the remedy), and a construct the engine has not ported, or a parked state it cannot read, fails the run with `MOVENG_UNSUPPORTED` and a stable reason (`crates/movement-engine/README.md`, "Refusals"). No engine runs it instead.
-- **The values on the eval wire.** `adapters.call`'s `args` and `result`, a park's `state`, a plugin's `config` and `extractedContext`, a file's descriptor, and the answers of `llm.client.call`, `llm.transforms.invoke` and `files.resolveFileText` cross between the engine and its shim on the eval wire (`wire: true`; `crates/movement-engine/src/env.rs`) and reach the host as plain objects. The eval wire carries plain JSON: a list is `["l", items]` and an object `["o", [[key, value]…]]` in its own key order; `undefined`, `NaN`, `±Infinity` and `-0` cross as `null` and a lone surrogate as U+FFFD; nothing crosses by identity (an object reached twice is written twice, a cycle or a function is refused). A value is data or one of the engine's records, and the two never share a form: every object the host sends is data, whatever keys it carries (a `kind` naming an engine binding's included); a record whose binding object is data (the event, a callback) reaches the host as `["x", id, descriptor]`, the host hands it back as `["x", id]`, and no other record crosses. A model reply's `parsedJson` reaches the engine in `JSON.parse`'s key order. A remote host serves the JSON shapes above.
+- **The values on the eval wire.** `adapters.call`'s `args` and `result`, a park's `state`, a plugin's `config` and `extractedContext`, a file's descriptor, and the answers of `llm.client.call`, `llm.transforms.invoke` and `files.resolveFileText` cross between the engine and its shim on the eval wire (`wire: true`; `crates/movement-engine/src/env.rs`) and reach the host as plain objects. The eval wire carries plain JSON: a list is `["l", items]` and an object `["o", [[key, value]…]]` in its own key order; `undefined`, `NaN`, `±Infinity` and `-0` cross as `null` and a lone surrogate as U+FFFD; nothing crosses by identity (an object reached twice is written twice, a cycle or a function is refused). A value is data or one of the engine's records, and the two never share a form: every object the host sends is data, whatever keys it carries (a `kind` naming an engine binding's included); a record whose binding object is data (the event) reaches the host as `["x", id, descriptor]`, the host hands it back as `["x", id]`, and no other record crosses. A model reply's `parsedJson` reaches the engine in `JSON.parse`'s key order. A remote host serves the JSON shapes above.
 - **Positions by handle.** Between the engine and its shim, an `adapters.call` whose argument object leads with a `position` (`getFieldValue`, `getRelated`, `iterateRelatedPage`) names it by `positionRef`, a number per position object of the segment, and carries the position itself (`position`) only the first time. The shim keeps the segment's positions and hands the host `{ position, ...args }`, the very object it registered, so the host sees the method's request in the shape above. A remote host of the Rust engine keeps the same table (`crates/movement-engine/README.md`, "Positions by handle"). The table lives exactly as long as the segment: it starts empty when the segment opens, is dropped when it closes, and is never written into a park; a resumed run's segment numbers its positions from 0 again.
 - **A traversal an expression reads.** A walk a fold, an `EXISTS` or a field read off hops makes (`COUNT(crm-[c:companies]->)`) asks one `adapters.call` `getRelated` per origin record and hop, even of an instance that streams, as the TypeScript engine's expression walk does; a pick (`x = FIRST(…)`) walks as a block head does, `iterateRelatedPage` by page for an instance that streams. An `EXISTS` asks every hop of every subject before it reads its WHERE. A walk down what an extraction yielded, and an `IS` test, ask nothing.
 - **An extraction's requests.** Per through-free region of the tree: the cancel gate, `clock.now`, `llm.client.call`, `clock.now`; a plugin of a `through` stage is one `llm.transforms.invoke` with `clock.now` either side; a source file is one `files.resolveFileText`; the resources without ids are given them in one `ids.mint` (the `from` text, source files and the bundle's files), and every record's fetched files in a second, in the tree's order. Branches the TypeScript engine runs side by side are in flight together, at most four at a time. The engine never validates a reply on the host: an unreadable one is asked again once with the issues named. A plain plugin call outside an extraction is one `llm.transforms.invoke` between two `clock.now`.
@@ -911,8 +860,9 @@ Four requests are the Rust engine's own: they are not `EngineHost` methods, and 
 
 - **Version 2 (0.13, waits on listenable edges).** A change in meaning, so the version moves:
   - **`park.waits`:** new, optional: `mark`, `open`, `arrivals` and `note`. An await on an adapter's edge reads the wait its record opened when it entered the run, not the adapter's `resolveAwait`.
-  - **`park.sink.commitAwaitPark`** takes `waitId` in place of `adapterType` and `correlationKey` for an await on an adapter's edge, and **`park.wake`** takes `waitId`. A callback's await keeps the key form until callbacks retire.
-  - **`adapters.call`** may call `awaitKeys` (adapter protocol 2.5); the engine no longer calls `resolveAwait`.
+  - **`park.sink.commitAwaitPark`** takes `waitId` in place of `adapterType` and `correlationKey` for an await on an adapter's edge, and **`park.wake`** takes `waitId`; neither takes a key any more.
+  - **`adapters.call`** may call `awaitKeys` (adapter protocol 2.5); the engine no longer calls `resolveAwait` or `wakeKeys`.
+  - **`park.callbacks`** is gone, with `fireCallbackBody` and the run input's `fire`: `callback(…)` retired at 0.13 (a form from `@lf/forms`, or buttons on a message, replaces it). The engine refuses a `callback(…)` that reaches it as one the checker should have caught.
   - The run's input takes **`triggerMark`** (the Rust engine's): the arrival log's mark where the delivery that started the run was kept.
   - A version 1 host is refused at `segment.open` (`segment.open carries host families version 1, which this host does not serve (supported: 2)`).
 

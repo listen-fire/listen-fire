@@ -42,45 +42,6 @@ fn an_address_reads_the_event_through_the_hops_alias_from_5() {
 }
 
 #[test]
-fn a_callback_closure_with_parameters_calls_the_function_checked_as_one() {
-    let program = |param: &str| {
-        format!("function book(name: <text>, day: <date>) {{\n  return \"${{name}} ${{day}}\"\n}}\n\nfunction offer() {{\n  pick = callback((day: {param}) => book(\"Acme\", day))\n  return pick.url\n}}")
-    };
-    assert_eq!(errors(&program("<date>")), Vec::<String>::new());
-    let mistyped = errors(&program("<number>"));
-    assert!(mistyped.iter().any(|e| e.starts_with("MOV_CALL_ARG_TYPE")), "{mistyped:?}");
-    let deferred = "function chase(name: <text>) {\n  return name\n}\n\nfunction offer() {\n  again = callback(() => chase(\"Acme\"))\n  return again.url\n}";
-    assert_eq!(errors(deferred), Vec::<String>::new());
-}
-
-#[test]
-fn a_callback_closure_that_leaves_its_function_a_parameter_open_is_an_arity_error_from_5() {
-    let program = |subject: &str, keyword: &str| {
-        format!("{keyword} book(name: <text>, day: <date>) {{\n  return \"${{name}} ${{day}}\"\n}}\n\n{keyword} offer() {{\n  pick = callback({subject})\n  return pick.url\n}}")
-    };
-    let open = errors(&program("() => book(\"Acme\")", "function"));
-    assert_eq!(
-        open,
-        vec!["MOV_CALL_ARITY: 'book' takes 2 arguments, got 1 — a callback's closure is called with nothing, so it passes every argument itself, and what the platform sends when it fires is a parameter the closure declares: callback((d: <date>) => book(…, d))".to_string()]
-    );
-    assert_eq!(errors(&program("book", "function")), Vec::<String>::new(), "a function named bare leaves its parameters to the platform");
-}
-
-#[test]
-fn the_arity_error_carries_the_closure_read_off_the_functions_signature() {
-    let program = |prelude: &str, subject: &str| {
-        format!("function book(name: <text>, day: <date>) {{\n  return \"${{name}} ${{day}}\"\n}}\n\nfunction offer() {{\n{prelude}  pick = callback({subject})\n  return pick.url\n}}")
-    };
-    let fix = |source: &str| {
-        let d = check(source).into_iter().find(|d| d.code == "MOV_CALL_ARITY").expect("an arity error");
-        let fix = d.fix.expect("a fix");
-        (fix["edits"][0]["text"].as_str().unwrap().to_string(), fix.get("safe").is_some())
-    };
-    assert_eq!(fix(&program("", "() => book(\"Acme\")")), ("(day: <date>) => book(\"Acme\", day)".to_string(), false), "never safe: the engines refuse the old form at run time");
-    assert_eq!(fix(&program("  day = \"Acme\"\n", "() => book(day)")), ("(day: <date>) => book(day, day)".to_string(), false));
-}
-
-#[test]
 fn length_and_exists_of_a_list_rewrite_to_count_marked_safe() {
     let source = "movement f(t: <text>) {\n  xs = [t, NULL]\n  n = LENGTH(xs)\n  ok = EXISTS(xs)\n  return n\n}";
     let fixes: Vec<(String, bool)> = check(source)

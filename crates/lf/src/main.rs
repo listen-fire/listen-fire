@@ -11,10 +11,9 @@
 //!   listen-fire runs [show <run-id>]             the runs, most recent first; one run in full
 //!   listen-fire runs rerun <run-id> [--force]    run a failed run again as its next attempt
 //!   listen-fire deliveries [show|replay <id>]    the kept deliveries; one in full; one queued again
-//!   --json                              (check, catalog, run, resume, runs, deliveries, call, cancel, connect, credential list) one JSON document
+//!   --json                              (check, catalog, run, resume, runs, deliveries, cancel, connect, credential list) one JSON document
 //!   listen-fire drain [--until-idle] [--max-seconds N]  a worker over the work queue (scale from zero)
-//!   listen-fire serve [--port N] [--doors-only]  the inbound doors, the callback door and the work drain (--doors-only: no drain)
-//!   listen-fire call <callback-id> [--body <values.json>]
+//!   listen-fire serve [--port N] [--doors-only]  the inbound doors and the work drain (--doors-only: no drain)
 //!   listen-fire cancel <run-id> [--reason <text>]
 //!   listen-fire catalog [--dir <project>]        the catalog snapshot `check` reads, as JSON
 //!   listen-fire lsp [--dir <project>]            the language server, over stdio (src/lsp.rs)
@@ -37,7 +36,7 @@
 //!   listen-fire --contract-secrets-slot [--dir <project>]                 the project's secrets module, served through listen-fire's client of it
 //!   listen-fire --contract-doors                 the inbound doors over HTTP, their world arranged over stdio JSON-RPC
 //!
-//! `run`, `resume`, `runs`, `drain`, `serve`, `call` and `cancel` keep run
+//! `run`, `resume`, `runs`, `drain`, `serve` and `cancel` keep run
 //! state in the store slot's module (lf.yaml `core: { store: … }`, src/core.rs):
 //! @lf/sqlite-store, `.lf/state.db` by default, or @lf/postgres-store, its own
 //! `lf` schema; `--store <spec>` names a SQLite file or `postgres://…` outright.
@@ -54,8 +53,6 @@ mod anthropic;
 mod arrivals;
 mod backend;
 #[cfg(feature = "serve")]
-mod callback_page;
-mod callbacks;
 mod catalog;
 mod check;
 mod completion;
@@ -172,7 +169,7 @@ use std::io::Write;
 pub(crate) use module_wire::{json, obj};
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|deliveries|drain|serve|call|cancel|upgrade|modules|connect|credential|completion> [--dir <project folder>] [--ephemeral] [--store <state.db|postgres://…>] [--team <uuid>]
+const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|deliveries|drain|serve|cancel|upgrade|modules|connect|credential|completion> [--dir <project folder>] [--ephemeral] [--store <state.db|postgres://…>] [--team <uuid>]
        listen-fire run <movement> [--text <text>] [--dry-run]
        listen-fire run --event <file.json> [--dry-run]
        listen-fire run --poll <movement>
@@ -180,7 +177,6 @@ const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|
        listen-fire resume [<run-id>]
        listen-fire drain [--until-idle] [--max-seconds <n>] [--kinds <kind,…>]
        listen-fire serve [--port N] [--doors-only]
-       listen-fire call <callback-id> [--body <values.json>]
        listen-fire cancel <run-id> [--reason <text>]
        listen-fire runs [show <run-id>]
        listen-fire runs rerun <run-id> [--force]
@@ -209,11 +205,10 @@ const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|
   upgrade   rewrite the movement files by the fixes that keep their meaning (--all: every fix offered; --check: print the diff, write nothing)
   runs      the runs in the state file, most recent first (as `listen-fire runs`); `runs show <run-id>`: one run, its event, trace, park and attempts; `runs rerun <run-id>`: run a failed run again as its next attempt, with its own event and the movement as the project holds it now (so a fix to the movement takes effect), from the start; refused unless the run's latest attempt failed, while another listen-fire holds the run, and when the failed attempt already committed writes (they are listed; --force reruns it anyway, making them again)
   deliveries  the deliveries the doors kept (events, not bytes), most recent first, at most 50 (--subscription: one subscription's; --since: received at or after an instant, or <n>h or <n>d ago); `deliveries show <id>`: one, its events and runs; `deliveries replay <id>`: queue its events again as a delivery of its own, for listen-fire serve or listen-fire drain to run against the project as it is now (new runs, whatever its runs came to; a failed run: listen-fire runs rerun <run-id>)
-  --json    check, catalog, run, resume, runs, deliveries, call, cancel, modules, connect, credential list: one JSON document (docs/lf-json.md); a failure is {\"error\": …}
-  drain     fire each cron listen's due tick (once, however many workers drain), then claim due work rows one at a time and run them (a polled listen's row is its next poll, due every interval its source declares); with --until-idle exit once none is due, with --max-seconds stop claiming after n seconds, with --kinds only rows of those kinds (resume_timer, wake_await, fire_event, fire_callback, poll_listen, refresh_subscription, settle_race) and the cron ticks only when it names cron
-  serve     the inbound doors, the callback door and the work queue's drain (as `listen-fire serve`)
-  --doors-only  (serve) only the doors, for compute billed by the request: nothing drains in this process, `/hooks/…` queues its events (answering 202 with the rows queued) and `/api/cb/…` its callback's body (answering 202) instead of running them in the request; workers (`listen-fire drain`) run the work, started by the wake slot's module or a schedule. Also LF_DOORS_ONLY=1
-  call      call a callback, as its url's POST does (the values: a JSON object)
+  --json    check, catalog, run, resume, runs, deliveries, cancel, modules, connect, credential list: one JSON document (docs/lf-json.md); a failure is {\"error\": …}
+  drain     fire each cron listen's due tick (once, however many workers drain), then claim due work rows one at a time and run them (a polled listen's row is its next poll, due every interval its source declares); with --until-idle exit once none is due, with --max-seconds stop claiming after n seconds, with --kinds only rows of those kinds (resume_timer, wake_await, fire_event, poll_listen, refresh_subscription, settle_race) and the cron ticks only when it names cron
+  serve     the inbound doors and the work queue's drain (as `listen-fire serve`)
+  --doors-only  (serve) only the doors, for compute billed by the request: nothing drains in this process, `/hooks/…` queues its events (answering 202 with the rows queued) instead of running them in the request; workers (`listen-fire drain`) run the work, started by the wake slot's module or a schedule. Also LF_DOORS_ONLY=1
   cancel    cancel a run: settled failed now, or at its next statement if another listen-fire is stepping it
   --store   where run state is kept: a SQLite file or a Postgres database (set up by `listen-fire connect @lf/postgres-store`), instead of lf.yaml's `core: { store: … }`
   --team    the tenant (a uuid) of a Postgres store's rows
@@ -592,9 +587,8 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
             listener::run(project, listener::Serving { ephemeral: args.ephemeral, store: &store, port: args.port.as_deref(), doors_only }).await
         }
         "call" => {
-            let project = load()?;
-            let store = store_of(&args, &project)?;
-            serve::call_command(project, &store, serve::CallArgs { id: args.rest.first().map(String::as_str), body: args.body.as_deref(), json: args.json }, &mut out).await
+            eprintln!("{}", serve::CALL_RETIRED);
+            Ok(2)
         }
         "cancel" => {
             let project = load()?;

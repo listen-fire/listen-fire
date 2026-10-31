@@ -180,7 +180,7 @@ pub mod tests {
         let wake = Rc::new(Recording { failing: true, ..Recording::default() });
         install(Some(wake.clone()));
         let store = store();
-        crate::run_host::queue_await_wake(&store, "acme", store.tenant(), "k").unwrap();
+        crate::run_host::arm_timer_wake(&store, "run-1", &iso_at(crate::limiter::now_ms() - 1_000)).unwrap();
         assert_eq!(wake.told.borrow().len(), 1, "the wake was asked");
         let claim = crate::store::ClaimDue { limit: 10, lease_ms: 60_000, due_by: None, kinds: None };
         assert_eq!(RunHostStore::claim_due(&store, &claim).unwrap().len(), 1, "the row is there for a drain");
@@ -193,24 +193,23 @@ pub mod tests {
         let store = store();
         let at = crate::limiter::now_ms() + 3_600_000;
         crate::run_host::arm_timer_wake(&store, "run-1", &iso_at(at)).unwrap();
-        crate::run_host::queue_await_wake(&store, "acme", store.tenant(), "k").unwrap();
-        crate::callbacks::queue_body(&store, "cb-1", store.tenant(), 0, &crate::store::iso(0)).unwrap();
+        crate::run_host::arm_timer_wake(&store, "run-2", &iso_at(crate::limiter::now_ms() - 1_000)).unwrap();
         let told = wake.told.borrow().clone();
-        assert_eq!(told, vec![(When::At(at), "resume_timer".into()), (When::Now, "wake_await".into()), (When::Now, "fire_callback".into())]);
+        assert_eq!(told, vec![(When::At(at), "resume_timer".into()), (When::Now, "resume_timer".into())]);
         install(None);
     }
 
     #[tokio::test]
     async fn a_failed_rows_retry_is_announced_at_its_backoff() {
         let store = store();
-        crate::run_host::queue_await_wake(&store, "acme", store.tenant(), "k").unwrap();
+        crate::run_host::arm_timer_wake(&store, "run-1", &iso_at(crate::limiter::now_ms() - 1_000)).unwrap();
         let wake = recording();
         let claim = crate::store::ClaimDue { limit: 10, lease_ms: 60_000, due_by: None, kinds: None };
         let claimed = RunHostStore::claim_due(&store, &claim).unwrap().remove(0);
         let before = crate::limiter::now_ms();
         crate::run_host::work_failed(&store, &claimed, "the module refused").await.unwrap();
         let told = wake.told.borrow().clone();
-        assert!(matches!(told.as_slice(), [(When::At(at), kind)] if kind == "wake_await" && *at >= before + 30_000), "{told:?}");
+        assert!(matches!(told.as_slice(), [(When::At(at), kind)] if kind == "resume_timer" && *at >= before + 30_000), "{told:?}");
         install(None);
     }
 

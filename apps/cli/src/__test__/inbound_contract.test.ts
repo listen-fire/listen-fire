@@ -13,7 +13,6 @@ import { lfBinary } from './lf_bin';
 const Observations = z.object({
   captured: z.number(),
   enqueued: z.number(),
-  wakes: z.array(z.string()),
   checkpoints: z.array(z.unknown()),
   notified: z.number(),
 });
@@ -30,7 +29,8 @@ async function backendOnLfHost(): Promise<{ backend: DeliveryReceiptContractBack
     },
     async observed() {
       const seen = await bridge.call('doors.observed', {}, Observations);
-      return { ...seen, checkpoints: [...seen.checkpoints] };
+      // listen-fire's doors queue no key wakes since 0.13: a module reports arrivals.
+      return { ...seen, wakes: [], checkpoints: [...seen.checkpoints] };
     },
     async deliveries() {
       return bridge.call('doors.deliveries', {}, Deliveries);
@@ -40,10 +40,19 @@ async function backendOnLfHost(): Promise<{ backend: DeliveryReceiptContractBack
 }
 
 /** listen-fire has no synthetic (test-harness) subscription: every delivery is
- *  verified. Its wake door takes arrivals only: a push naming keys is refused,
- *  naming adapter protocol 2.5 (await_edges.test.ts), where the TypeScript
- *  doors still take keys. */
-const NOT_ON_LF = new Set(['a synthetic subscription skips the signature and drains before the ack', 'wake queues one wake per key: 202 accepted']);
+ *  verified. Since 0.13 it wakes no awaits by key: a module reports arrivals,
+ *  its wake door refuses a push naming keys, naming adapter protocol 2.5
+ *  (await_edges.test.ts), and a delivery's `wakeKeys` are not asked for. The
+ *  TypeScript doors still take keys. */
+const NOT_ON_LF = new Set([
+  'a synthetic subscription skips the signature and drains before the ack',
+  'wake queues one wake per key: 202 accepted',
+  'wake keys are queued whether or not any event came with them',
+  'a receipt that cannot be queued is a 500 so the sender retries; the wakes still go in',
+  'a wake door that fails is a 500 after the events are queued',
+  'wakes that cannot be queued are a 500',
+]);
+const RECEIPTS_NOT_ON_LF = new Set(['a delivery whose wakes failed is kept without its id, so the retry is kept too']);
 
 for (const entry of INBOUND_CONTRACT_CASES) {
   test(`inbound doors contract — listen-fire: ${entry.name}`, { skip: NOT_ON_LF.has(entry.name) }, async () => {
@@ -57,7 +66,7 @@ for (const entry of INBOUND_CONTRACT_CASES) {
 }
 
 for (const entry of DELIVERY_RECEIPT_CONTRACT_CASES) {
-  test(`delivery receipt contract — listen-fire: ${entry.name}`, async () => {
+  test(`delivery receipt contract — listen-fire: ${entry.name}`, { skip: RECEIPTS_NOT_ON_LF.has(entry.name) }, async () => {
     const { backend, stop } = await backendOnLfHost();
     try {
       await entry.run(backend);

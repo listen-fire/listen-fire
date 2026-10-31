@@ -1,5 +1,4 @@
-//! What a flow waits on (run.ts `interpretAwait`), and the callbacks a run
-//! mints.
+//! What a flow waits on (run.ts `interpretAwait`).
 //!
 //! - **`sleep`**: a timer park (crate::park).
 //! - **`until(condition, every)`**: the condition tested now; met, its value
@@ -25,16 +24,10 @@
 //!   5. else the run parks on the wait (`commitAwaitPark`), reads the
 //!      arrivals once more, and is woken (`park.wake`) when one landed while
 //!      it parked. The resume re-enters the await, which judges again.
-//! - **A callback's `Called` edge**: read off the callback's ledger
-//!   (`park.callbacks.calls`), parked under the callback's key; callbacks
-//!   retire at 0.13.
-//! - **`callback(…)`**: minted with the host (`park.callbacks.mint`), its
-//!   captured continuation the park's own state; its body is the callback
-//!   entry's (crate::resume).
 
 use std::rc::Rc;
 
-use movement_parser::ast::{self, AwaitSource, CallbackExpression, CallbackSubject, ParamTypeRef, PathHead, PathRoot, UntilCondition};
+use movement_parser::ast::{self, AwaitSource, PathHead, PathRoot, UntilCondition};
 use movement_parser::lowering::captures::{Scoped as Held, capture, captured_name};
 use movement_parser::lowering::expression::{Expression, TraversalStep};
 use serde_json::Value as Json;
@@ -51,16 +44,8 @@ use crate::run::{Address, Failure, Flow, Quiet, Run, Stop};
 use crate::trace::TraceEntry;
 use crate::waits::{Unwaitable, WaitRef};
 
-/// `CALLBACK_CALLED_EDGE`: a callback's one edge.
-pub(crate) const CALLED: &str = "Called";
-/// `CALLBACK_AWAIT_TYPE`: the reserved identity a callback await parks under.
-const CALLBACK_AWAIT_TYPE: &str = "callback";
-/// `CALLBACK_CALL_AT`: the landing's field holding when the call landed.
-const CALLED_AT: &str = "At";
 /// `UNTIL_DEFAULT_EVERY_MS`: an `until`'s cadence when none is written.
 const UNTIL_EVERY_MS: f64 = 3_600_000.0;
-/// The scalar types a fire-time parameter may declare.
-const CALLBACK_PARAM_TYPES: [&str; 7] = ["text", "number", "boolean", "date", "datetime", "json", "file"];
 
 /// An await over a list of records: it parks on one record's edge, under
 /// one key, and a list has as many as it holds records.
@@ -169,27 +154,20 @@ impl Run<'_> {
 
     // ── An edge awaited ──
 
-    /// The await on an edge: a callback's, or a record's (written or read)
-    /// off the wait it opened. `path` is the await source's AST path.
+    /// The await on a record's edge (written or read), off the wait it
+    /// opened. `path` is the await source's AST path.
     async fn await_edge(&self, head: &PathHead, binding_name: Option<&str>, scope: &Rc<Scope>, at: &Address, path: &str) -> Result<(), Stop> {
         let edge = await_edge_name(&head.hops_raw);
-        let step = crate::traverse::head_step(head).ok();
-        let alias = step.as_ref().and_then(|step| step.alias.clone());
-        let filter = if has_where(&head.hops_raw) { step.and_then(|step| step.expression_filter.map(|f| *f)) } else { None };
-        // The WHERE's alias is the landing it reads (`r.answer` its field).
-        let filter = filter.map(|filter| (filter, alias));
         let root = match &head.root {
             Some(PathRoot::Name { name }) => name.clone(),
             _ => String::new(),
         };
         let bound = scope.resolve(&root);
         match bound {
-            Some(callback @ Binding::Callback(_)) => self.await_callback(&callback, &edge, filter.as_ref(), binding_name, scope, at).await,
             Some(record @ (Binding::Handle(_) | Binding::Event | Binding::Landed(_))) => self.await_wait(head, &root, &record, &edge, binding_name, scope, at, path).await,
             // `c = only(e-[k:Checks]->)`: the one record a value holds is
             // awaited on as that record.
             Some(Binding::Value(value)) if let Some(record) = crate::record::binding_of(&value.value) => match record {
-                Binding::Callback(_) => self.await_callback(&record, &edge, filter.as_ref(), binding_name, scope, at).await,
                 Binding::Positions(_) => Err(over_a_list(&root, &edge)),
                 record @ (Binding::Handle(_) | Binding::Event | Binding::Landed(_)) => self.await_wait(head, &root, &record, &edge, binding_name, scope, at, path).await,
                 other => Err(Stop::Thrown(Failure::unsupported(
@@ -397,241 +375,6 @@ impl Run<'_> {
         }
         Ok(())
     }
-
-    /// `interpretCallbackAwait`: the ledger standing in for `resolveAwait`,
-    /// the callback's id for its key.
-    async fn await_callback(&self, callback: &Binding, edge: &str, filter: Option<&(Expression, Option<String>)>, binding_name: Option<&str>, scope: &Rc<Scope>, at: &Address) -> Result<(), Stop> {
-        if edge != CALLED {
-            return Err(Stop::Thrown(Failure::unsupported(&format!("await '-[:{edge}]->' on a callback"), &format!("a callback has one edge, '{CALLED}'"))));
-        }
-        if !self.serves("park.callbacks.calls") {
-            return Err(Stop::Thrown(Failure::unsupported(
-                &format!("await cb-[:{CALLED}]->"),
-                "this run has no callback sink — a callback needs the durable trigger-run substrate",
-            )));
-        }
-        let id = self.callback_id(callback)?;
-        if let Some(call) = self.first_matching_call(&id, filter, scope).await? {
-            // The resolved shortcut: a fire already landed.
-            if let Some(name) = binding_name {
-                scope.declare(name, called_landing(&call));
-            }
-            return Ok(());
-        }
-        let address = at.encode();
-        if !self.serves("park.sink.commitAwaitPark") {
-            return Err(Stop::Thrown(Failure::unsupported(
-                &format!("await cb-[:{CALLED}]-> (a durable park)"),
-                "this run has no park sink — an await needs the durable trigger-run substrate",
-            )));
-        }
-        let key = env::json_of_js(&id);
-        let state = crate::park::park_state(self, &address, None, Leaf::Plain, scope).await.map_err(Stop::Thrown)?;
-        let request = host::park::commit_callback_await_park(self.segment(), &address, self.encode(&state).map_err(Stop::Thrown)?, CALLBACK_AWAIT_TYPE, &key);
-        self.ask(request).await.map_err(Stop::Thrown)?;
-        let again = self.first_matching_call(&id, filter, scope).await.map(|call| call.is_some());
-        self.wake_if_resolved(CALLBACK_AWAIT_TYPE, &key, again).await?;
-        self.trace(TraceEntry::Gate { outcome: false });
-        Err(Stop::Parked(address))
-    }
-
-    /// A callback binding's `callbackId`.
-    pub(crate) fn callback_id(&self, callback: &Binding) -> Result<Js, Stop> {
-        match callback {
-            Binding::Callback(callback) => Ok(callback.callback_id.clone()),
-            _ => unreachable!("only a callback has calls"),
-        }
-    }
-
-    /// The calls a callback's ledger holds, as the host answers them.
-    pub(crate) async fn callback_calls(&self, id: &Js) -> Result<Vec<Js>, Stop> {
-        let answer = self.ask(host::park::callback_calls(self.segment(), &env::json_of_js(id))).await.map_err(Stop::Thrown)?;
-        let calls = match answer {
-            Some(answer) => self.wire.decode(&answer).map_err(|e| Stop::Thrown(Failure::engine("MOVENG_RUNTIME", format!("park.callbacks.calls answered what does not read: {e}"))))?,
-            None => Js::Undefined,
-        };
-        match calls {
-            Js::Array(list) => Ok(list.items().clone()),
-            other => Err(Stop::Thrown(Failure::host_answer("park.callbacks.calls", "the callback's calls as a list", &other))),
-        }
-    }
-
-    /// `firstMatch`: the first call on the ledger the hop's WHERE takes.
-    async fn first_matching_call(&self, id: &Js, filter: Option<&(Expression, Option<String>)>, scope: &Rc<Scope>) -> Result<Option<Js>, Stop> {
-        for call in self.callback_calls(id).await? {
-            if self.call_matches(&call, filter, scope).await? {
-                return Ok(Some(call));
-            }
-        }
-        Ok(None)
-    }
-
-    /// `callbackCallMatches`: the awaited hop's pure WHERE over one recorded
-    /// call's fields, read directly (no adapter translates them).
-    pub(crate) async fn call_matches(&self, call: &Js, filter: Option<&(Expression, Option<String>)>, scope: &Rc<Scope>) -> Result<bool, Stop> {
-        let Some((filter, alias)) = filter else { return Ok(true) };
-        let landing = called_landing(call);
-        let at = scope.child();
-        if let Some(alias) = alias {
-            at.declare(alias.clone(), landing.clone());
-        }
-        let value = self.evaluate_scoped(filter, &at, None, Some(crate::run::Scoped::Binding(landing))).await?.value;
-        Ok(value.truthy())
-    }
-
-    /// `wakeIfResolvedWhileParking`: the await's whole question asked once
-    /// more now that the park is durable; resolved, the run is woken. A
-    /// re-check that cannot answer leaves the run parked, and a wake that
-    /// cannot be queued leaves the park as durable as before: both logged.
-    /// A re-check that met a limit ends the segment, as a limit anywhere does.
-    async fn wake_if_resolved(&self, adapter_type: &str, key: &Json, resolved: Result<bool, Stop>) -> Result<(), Stop> {
-        let fields = |error: Option<String>| {
-            let mut fields = serde_json::Map::new();
-            fields.insert("adapterType".into(), Json::String(adapter_type.into()));
-            fields.insert("correlationKey".into(), key.clone());
-            if let Some(error) = error {
-                fields.insert("error".into(), Json::String(error));
-            }
-            fields
-        };
-        match resolved {
-            Err(stop @ Stop::Thrown(Failure::Limit(_))) => return Err(stop),
-            Err(stop) => {
-                self.log_with_team("error", "[MovementEngine] await re-check after parking failed; the run stays parked without a wake", fields(Some(stop_message(&stop))), "correlationKey");
-            }
-            Ok(false) => {}
-            Ok(true) => {
-                if let Err(failure) = self.ask(host::park::wake_callback(self.segment(), adapter_type, key)).await {
-                    self.log_with_team("error", "[MovementEngine] await wake after parking could not be queued", fields(Some(failure_message(&failure))), "correlationKey");
-                }
-            }
-        }
-        Ok(())
-    }
-
-    // ── callback(…) ──
-
-    /// `mintCallback`: the capture made — the enclosing scope chain, as a
-    /// park writes it — and the callback minted against this statement's
-    /// address. `path` is the callback expression's AST path.
-    pub(crate) async fn mint_callback(&self, callback: &CallbackExpression, scope: &Rc<Scope>, at: &Address, _path: &str) -> Result<Binding, Stop> {
-        if !self.serves("park.callbacks.mint") {
-            return Err(Stop::Thrown(Failure::unsupported("callback(…)", "this run has no callback sink — a callback needs the durable trigger-run substrate")));
-        }
-        let address = at.encode();
-        let params = self.callback_params(&callback.subject, scope)?;
-        let (single_use, expires_at) = self.callback_config(callback, scope).await?;
-        let state = crate::park::park_state(self, &address, None, Leaf::Plain, scope).await.map_err(Stop::Thrown)?;
-        let params_js = Js::array(params.iter().map(|(name, type_)| env::object_of(vec![("name", Js::str(name.clone())), ("type", Js::str(type_.clone()))])).collect());
-        let request = host::park::mint_callback(self.segment(), &address, env::json_of_js(&params_js), self.encode(&state).map_err(Stop::Thrown)?, single_use, expires_at.as_deref());
-        let minted = self.ask(request).await.map_err(Stop::Thrown)?.unwrap_or(Json::Null);
-        let field = |key: &str| minted.get(key).map_or(Js::Undefined, env::js_of_json);
-        Ok(Binding::Callback(Rc::new(crate::bindings::Callback { callback_id: field("id"), url: field("url"), params: params_js })))
-    }
-
-    /// `callbackParams`: the fire-time signature, in declaration order.
-    fn callback_params(&self, subject: &CallbackSubject, scope: &Rc<Scope>) -> Result<Vec<(String, String)>, Stop> {
-        let declared: Vec<ast::MovementParam> = match subject {
-            CallbackSubject::Inline { closure, .. } => closure.params.clone(),
-            CallbackSubject::Named { movement, args, .. } => {
-                let name = movement.to_string();
-                let Some(Binding::Movement(declared)) = scope.resolve(&name) else {
-                    return Err(Stop::Thrown(Failure::engine(
-                        "MOVENG_RUNTIME",
-                        format!("callback({movement}): '{movement}' is not a movement in scope — the checker should have caught this"),
-                    )));
-                };
-                let (declaration, _) = self.declaration(&declared)?;
-                // `argumentBindings`: a named argument the parameter it names,
-                // a positional one the parameter at its index.
-                let supplied: Vec<String> = args
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(position, arg)| arg.name().map(String::from).or_else(|| declaration.params.get(position).map(|p| p.name.clone())))
-                    .collect();
-                let deferred: Vec<ast::MovementParam> = declaration.params.iter().filter(|p| !supplied.contains(&p.name)).cloned().collect();
-                if !deferred.is_empty() {
-                    let names: Vec<&str> = deferred.iter().map(|p| p.name.as_str()).collect();
-                    return Err(Stop::Thrown(Failure::unsupported(
-                        &format!("callback({movement}(…)) leaving '{}' unsupplied", names.join("', '")),
-                        "a named callback binds no values at fire time yet — supply every argument, or use the inline form (`callback((x: <text>) => { … })`)",
-                    )));
-                }
-                deferred
-            }
-        };
-        declared
-            .iter()
-            .map(|param| match &param.type_ {
-                Some(ParamTypeRef::Name(type_)) if type_.hops_raw.is_none() && type_.position.is_none() && CALLBACK_PARAM_TYPES.contains(&type_.graph.as_str()) => {
-                    Ok((param.name.clone(), type_.graph.clone()))
-                }
-                other => Err(Stop::Thrown(Failure::engine(
-                    "MOVENG_RUNTIME",
-                    format!(
-                        "a callback's parameter '{}' must be a scalar type, got '<{}>' — the checker should have caught this",
-                        param.name,
-                        other.as_ref().map_or_else(|| "?".to_string(), spell_param_type)
-                    ),
-                ))),
-            })
-            .collect()
-    }
-
-    /// `callbackConfig`: `{ once, ttl }`; `once` defaults true.
-    async fn callback_config(&self, callback: &CallbackExpression, scope: &Rc<Scope>) -> Result<(bool, Option<String>), Stop> {
-        let mut single_use = true;
-        let mut expires_at = None;
-        for entry in &callback.config {
-            match entry.name.as_str() {
-                "once" => single_use = !matches!(self.evaluate_slot(&entry.value, scope).await?.value, Js::Bool(false)),
-                "ttl" => {
-                    let raw = crate::js::trim(&entry.value.raw);
-                    let now = self.clock_now().await.map_err(Stop::Thrown)?;
-                    let ms = crate::park::duration_ms(raw).ok_or_else(|| invalid_duration(raw))?;
-                    expires_at = Some(crate::js_date::to_iso_string(now + ms));
-                }
-                other => {
-                    return Err(Stop::Thrown(Failure::engine("MOVENG_RUNTIME", format!("'{other}' is not a callback setting — the checker should have caught this"))));
-                }
-            }
-        }
-        Ok((single_use, expires_at))
-    }
-
-    /// `cb-[c:Called]->`'s landings: the calls so far that its WHERE takes,
-    /// read synchronously off the ledger.
-    pub(crate) async fn called_landings(&self, callback: &Binding, filter: Option<&(Expression, Option<String>)>, scope: &Rc<Scope>) -> Result<Vec<Binding>, Stop> {
-        if !self.serves("park.callbacks.calls") {
-            return Err(Stop::Thrown(Failure::unsupported(&format!("cb-[:{CALLED}]->"), "this run has no callback sink — a callback needs the durable trigger-run substrate")));
-        }
-        let id = self.callback_id(callback)?;
-        let mut landings = Vec::new();
-        for call in self.callback_calls(&id).await? {
-            if self.call_matches(&call, filter, scope).await? {
-                landings.push(called_landing(&call));
-            }
-        }
-        Ok(landings)
-    }
-}
-
-/// `callbackCallBinding`: the `Called` landing — `At` plus one field per
-/// fire-time parameter — an in-memory record of no graph.
-pub(crate) fn called_landing(call: &Js) -> Binding {
-    let mut fields = JsObject::new();
-    fields.set(CALLED_AT.into(), crate::record::get(call, "at").unwrap_or(Js::Undefined));
-    if let Ok(Js::Object(values)) = crate::record::get(call, "values") {
-        for (key, value) in values.entries() {
-            fields.set(key.clone(), value.clone());
-        }
-    }
-    Binding::ShapePosition(Rc::new(crate::bindings::ShapePosition {
-        shape: Js::str("callback"),
-        node: Js::str(CALLED),
-        fields: Js::object(fields),
-        field_provenance: Js::object(JsObject::new()),
-    }))
 }
 
 /// `declareAwaitResult`'s position: the landing's fields inline, read
@@ -763,19 +506,6 @@ fn has_where(hops_raw: &str) -> bool {
     let bytes = upper.as_bytes();
     let word = |i: usize| bytes.get(i).is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
     upper.match_indices("WHERE").any(|(i, _)| (i == 0 || !word(i - 1)) && !word(i + 5))
-}
-
-fn spell_param_type(type_: &ParamTypeRef) -> String {
-    match type_ {
-        ParamTypeRef::Name(type_) => {
-            let mut spelled = type_.graph.clone();
-            if let Some(hops) = &type_.hops_raw {
-                spelled.push_str(hops);
-            }
-            spelled
-        }
-        ParamTypeRef::Value(_) => "a value".to_string(),
-    }
 }
 
 fn invalid_duration(raw: &str) -> Stop {

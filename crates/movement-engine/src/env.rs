@@ -11,8 +11,8 @@
 //!
 //! A value is either data or an engine object (a record), and the two
 //! never share a form: every tag above is data, whatever keys an object
-//! carries. A record whose binding object is data (the event, a callback,
-//! a shape position, a resource) crosses to the host as `["x", id,
+//! carries. A record whose binding object is data (the event, a shape
+//! position, a resource) crosses to the host as `["x", id,
 //! descriptor]`, numbered on the segment's wire, and the host hands it
 //! back as `["x", id]`; any other record crosses as `["x", kind]`, which
 //! the host refuses. Nothing the host sends but `["x", id]` decodes to a
@@ -269,13 +269,13 @@ impl Encoder<'_> {
             Js::Number(n) if !n.is_finite() || (*n == 0.0 && n.is_sign_negative()) => Json::Null,
             Js::Number(n) => json!(n),
             Js::String(s) => wire_text(s.as_str()),
-            // The event and a callback, the records the shim rebuilds, cross
+            // The event, the record the shim rebuilds, crosses
             // tagged, by their number, with their data for the host to build
             // them from; any other never crosses: a request holding one is
             // never made (`HeldRecord`, which names it), and the shim refuses
             // its tag in a result.
             Js::Record(record) => match (record.as_ref(), crate::record::data_object(record)) {
-                (crate::bindings::Binding::Event | crate::bindings::Binding::Callback(_), Some(descriptor)) => {
+                (crate::bindings::Binding::Event, Some(descriptor)) => {
                     let records = match self.records.as_deref_mut() {
                         Some(records) => records,
                         None => &mut self.own_records,
@@ -369,7 +369,7 @@ pub fn json_of_js(value: &Js) -> Json {
 fn json_of_tree(value: &Js) -> Json {
     match value {
         Js::Undefined | Js::Null => Json::Null,
-        // A callback's, a shape position's or a resource's binding object
+        // A shape position's or a resource's binding object
         // is data, written as it is; any other record is read down to its
         // fields wherever one is written out.
         Js::Record(record) => match (record.as_ref(), crate::record::data_object(record)) {

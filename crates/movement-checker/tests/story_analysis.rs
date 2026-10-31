@@ -19,7 +19,6 @@ const FIXTURES: &[(&str, &str)] = &[
     ("calls", include_str!("fixtures/story/calls.mvt")),
     ("reviews", include_str!("fixtures/story/reviews.mvt")),
     ("until", include_str!("fixtures/story/until.mvt")),
-    ("callback", include_str!("fixtures/story/callback.mvt")),
     ("extract", include_str!("fixtures/story/extract.mvt")),
     ("traversal", include_str!("fixtures/story/traversal.mvt")),
     ("exists_where", include_str!("fixtures/story/exists_where.mvt")),

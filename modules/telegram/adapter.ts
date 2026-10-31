@@ -226,20 +226,17 @@ export class TelegramAdapter extends BaseAdapter implements Adapter {
               'Telegram\'s `reply_markup`, exactly as the Bot API spells it — passed ' +
               'through verbatim (no wrapping, no typed shape here; a malformed keyboard ' +
               'surfaces as a loud Telegram error at run time). Usually an inline ' +
-              'keyboard: rows of buttons, each `{ text, url }` (opens a link) or ' +
-              '`{ text, callback_data }` (a tap this bot handles, capped by Telegram at ' +
-              '64 BYTES). To make a tap DO something, mint a callback ' +
-              '(`c = callback({ … })`) and put `"${c.id}"` in `callback_data` — it fits ' +
-              'the 64-byte cap comfortably — one callback per button, since its body is ' +
-              'what that button means. Telegram captures nothing at tap time, so a ' +
-              'callback fired from a keyboard takes no values; anything a person has to ' +
-              'fill in needs a `url` button instead. ' +
+              'keyboard: rows of buttons, each `{ text, url }` (opens a link). To make a ' +
+              'tap DO something, write a form from the `@lf/forms` adapter ' +
+              '(`form = write forms-[:Forms]-> { Title: …, Fields: … }`), put its ' +
+              '`form.Url` on a `url` button, and `await form-[:Submissions]->`: the ' +
+              'form also asks for anything a person has to fill in, which Telegram does ' +
+              'not capture at tap time. A `{ text, callback_data }` button reaches no run. ' +
               'Buttons compose with everything else on the send. ' +
               'Build strings with "${…}" interpolation (never `+`, which is numeric ' +
               'addition). Example:\n' +
               '{ inline_keyboard: [\n' +
-              '  [ { text: "Approve", callback_data: "${approve.id}" },\n' +
-              '    { text: "Decline", callback_data: "${decline.id}" } ],\n' +
+              '  [ { text: "Answer", url: "${form.Url}" } ],\n' +
               '] }',
           },
           { fieldId: 'chat_id', displayName: 'Chat Id', kind: 'string', writable: false, required: true, description: 'The id of the chat the message belongs to — the value to send a reply back to.' },

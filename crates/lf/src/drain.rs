@@ -34,7 +34,7 @@ const IDLE_POLL: Duration = Duration::from_secs(1);
 pub const CRON: &str = "cron";
 
 /// Which work one worker takes: every kind, or a pool's (`--kinds`), so
-/// polls, run steps and callbacks can be drained by separately sized fleets.
+/// polls and run steps can be drained by separately sized fleets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pool {
     /// The work rows' kinds; None: every kind.
@@ -133,6 +133,7 @@ mod tests {
         assert!(Pool::of("poll").unwrap_err().contains("not a kind of work"));
         assert!(Pool::of(",").is_err());
         let all = Pool::default();
-        assert!(all.fires_cron() && all.takes("fire_callback") && all.work_kinds().is_none());
+        assert!(all.fires_cron() && all.takes("wake_await") && all.work_kinds().is_none());
+        assert!(Pool::of("fire_callback").unwrap_err().contains("not a kind of work"), "callbacks retired at 0.13");
     }
 }

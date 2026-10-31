@@ -2096,7 +2096,6 @@ pub fn describe_binding(binding: &Binding) -> String {
         Binding::Closure(_) => "a closure",
         Binding::Extracted { root: true, .. } => "an extract result",
         Binding::Extracted { root: false, .. } => "an extracted entity",
-        Binding::Callback(_) => "a callback",
         Binding::ShapePosition(_) => "an in-memory shape position",
         Binding::Resource(_) => "a resource",
     };

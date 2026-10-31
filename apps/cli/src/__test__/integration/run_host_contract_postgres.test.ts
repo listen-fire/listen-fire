@@ -3,14 +3,13 @@
 // own `lf` schema), driven over its stdio JSON-RPC bridge
 // (`listen-fire --contract-store postgres://… --team <uuid>`) by
 // `RpcStoreBackend`: the same cases the hosted Postgres backend and both
-// SQLite backends are held to, the callback, cancel and delivery receipt
-// cases included.
+// SQLite backends are held to, the cancel and delivery receipt cases
+// included, less those listen-fire no longer serves (run_host_not_on_lf.ts).
 // Every case's rows are one fresh team's, cleared after it.
 
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import {
-  callbackContractCases,
   cancelContractCases,
   deliveryContractCases,
   rerunContractCases,
@@ -22,9 +21,10 @@ import {
 import { RpcStoreBackend } from 'movement-engine/services/run_host/rpc_store';
 import { lfBinary } from '../lf_bin';
 import { freshTeam, POSTGRES_URL } from './pg';
+import { RUN_HOST_CASES_NOT_ON_LF } from '../run_host_not_on_lf';
 
-for (const contractCase of [...runHostContractCases, ...callbackContractCases, ...cancelContractCases]) {
-  test(contractCase.name, async () => {
+for (const contractCase of [...runHostContractCases, ...cancelContractCases]) {
+  test(contractCase.name, { skip: RUN_HOST_CASES_NOT_ON_LF.has(contractCase.name) }, async () => {
     const { team, clear } = freshTeam();
     const backend = new RpcStoreBackend(lfBinary(), ['--contract-store', POSTGRES_URL, '--team', team]);
     const records: RecordsContractBackend = {

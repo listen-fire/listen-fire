@@ -4,11 +4,10 @@
 // contract as every hand-written chapter (consumer-neutral prose, no internal
 // vocabulary, every runnable example backed by a checked probe).
 //
-// In-chat tapping is taught again, around `callback(…)`: a callback id sits
-// comfortably inside `callback_data`'s 64 bytes, which is what the ask `Token`
-// (deleted in callback-primitive layer 3) used to be squeezed for. The
-// `?answer=` link idiom is no longer taught; the door still recognises it while
-// live automations are re-authored.
+// Acting on a message is taught as a `url` button that opens a form from the
+// `@lf/forms` adapter, awaited on its Submissions: `callback(…)` retired at
+// 0.13, and a `callback_data` tap has nothing to hand its payload to until
+// Telegram reports its taps as Interactions, in Slack's shape.
 
 import type { AdapterManifest } from 'movement-engine/public/adapter';
 
@@ -57,100 +56,67 @@ write person-[:Messages]-> {
 
 ### a-tap-that-acts
 
-This is usually the reason to reach for a keyboard. A button either opens a link (\`url\`) or hands a payload back to the bot (\`callback_data\`), and that payload is a callback id — comfortably inside the 64 bytes Telegram allows there. Each button gets its OWN callback, because the body is what the button means:
+This is usually the reason to reach for a keyboard. A button either opens a link (\`url\`) or hands a payload back to the bot (\`callback_data\`). For a button that settles something, write a form from the \`@lf/forms\` adapter and put its \`Url\` on a \`url\` button: the tap opens the form, and the run waits on what is submitted.
 
 \`\`\`
-q = write questions-[:Check]-> { Prompt: "Send the update?" }
-send = callback({ write q-[:Response]-> { Answer: true } })
-hold = callback({ write q-[:Response]-> { Answer: false } })
+node Decision {
+  Send: <boolean>
+}
+
+form = write forms-[:Forms]-> { Title: "Send the update?", Fields: Decision }
 
 write msg-[:Replies]-> {
-  Text: "Send the update? \${q.Url}"
+  Text: "Send the update? \${form.Url}"
   \`Reply Markup\`: {
-    inline_keyboard: [
-      [ { text: "Send", callback_data: "\${send.id}" },
-        { text: "Hold", callback_data: "\${hold.id}" } ]
-    ]
+    inline_keyboard: [ [ { text: "Answer", url: "\${form.Url}" } ] ]
   }
 }
 
-answer = await q-[:Response]->
+answer = await form-[:Submissions]->
 \`\`\`
 
-Put the bare \`Url\` in the message text as well, so the question is still answerable wherever the buttons are not.
-
-Telegram captures nothing at tap time — a keyboard's buttons are fixed when the message is sent — so a Telegram button always fires a callback that takes no values. A picked date or a typed answer needs the question's own page (its \`Url\`, on a \`url\` button), not a keyboard. When a single-use callback is settled the keyboard is retired, since Telegram lets a sent message be edited.
+Put the bare \`Url\` in the message text as well, so the question is still answerable wherever the buttons are not. A form also asks for what a button cannot carry, a picked date or a typed answer, since Telegram captures nothing at tap time. To give up after a while, race the wait against a \`sleep\`.
 
 ### Common mistakes
 
 - **A flat list of buttons.** \`inline_keyboard\` is rows, so every button belongs inside a row list — a flat list is a Telegram error, not a single row.
-- **A button with neither a link nor an id in it.** The keyboard looks right and a tap does nothing. One or the other is the whole mechanism.
+- **A button with no link in it.** The keyboard looks right and a tap does nothing. A \`url\` button opening the form's \`Url\` is the whole mechanism.
 - **Attaching a file to a send.** There is no field for one — put a link in the \`Text\`.
-- **Expecting a keyboard to capture a date or free text.** Telegram buttons carry only what you wired in. Send the link for anything the person has to fill in.
+- **Expecting a keyboard to capture a date or free text.** Telegram buttons carry only what you wired in. Ask for anything the person has to fill in on the form.
 - **Expecting a bad keyboard to fail at save time.** Its contents are passed through untouched; Telegram is the one that validates them, at run time.
 - **Promising every message in a group.** What the bot sees depends on privacy mode and on being addressed, and on the shared bot the sender must have linked first.`,
   engineClaims: [
     {
-      construct: 'a Telegram inline keyboard whose callback_data carries callback ids, one per answer',
+      construct: 'a Telegram url button that opens a form from @lf/forms, the run waiting on its submission',
       status: 'runs',
       probe: `
-import { \`@lf/telegram\` as telegram, \`@lf/ask\` as ask } from adapters
+import { \`@lf/telegram\` as telegram, \`@lf/forms\` as forms_module } from adapters
 import { team_telegram } from credentials
 
 tg = connect telegram using team_telegram
-questions = connect ask
+forms = connect forms_module
+
+node Decision {
+  Send: <boolean>
+}
 
 function confirm_send(msg: <tg-[:Message]->>) {
-  q = write questions-[:Check]-> {
-    Prompt: "Send the update?"
-    Detail: "\${msg.Text}"
-  }
-  send = callback({ write q-[:Response]-> { Answer: true } })
-  hold = callback({ write q-[:Response]-> { Answer: false } })
+  form = write forms-[:Forms]-> { Title: "Send the update?", Fields: Decision }
 
   write msg-[:Replies]-> {
-    Text: "Send the update? \${q.Url}"
+    Text: "Send the update? \${form.Url}"
     \`Reply Markup\`: {
-      inline_keyboard: [
-        [ { text: "Send", callback_data: "\${send.id}" },
-          { text: "Hold", callback_data: "\${hold.id}" } ]
-      ]
+      inline_keyboard: [ [ { text: "Answer", url: "\${form.Url}" } ] ]
     }
   }
 
-  answer = await q-[:Response]->
-  if (answer.Answer) {
+  answer = await form-[:Submissions]->
+  if (answer.Send) {
     write msg-[:Replies]-> { Text: "Sending now." }
   }
 }
 
 listen to tg {} fire confirm_send
-`,
-    },
-    {
-      construct: 'a Telegram keyboard whose button waits on a body-less callback (the minimal confirmation)',
-      status: 'runs',
-      probe: `
-import { \`@lf/telegram\` as telegram } from adapters
-import { team_telegram } from credentials
-
-tg = connect telegram using team_telegram
-
-function wait_for_go(msg: <tg-[:Message]->>) {
-  go = callback()
-
-  write msg-[:Replies]-> {
-    Text: "Ready when you are."
-    \`Reply Markup\`: {
-      inline_keyboard: [ [ { text: "Go", callback_data: "\${go.id}" } ] ]
-    }
-  }
-
-  tap = await go-[:Called]->
-  write msg-[:Replies]-> { Text: "Off we go (\${tap.At})." }
-}
-
-listen to tg {} fire wait_for_go
 `,
     },
   ],

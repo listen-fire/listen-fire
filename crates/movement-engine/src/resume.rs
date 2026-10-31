@@ -26,14 +26,13 @@
 //! and a race arm whose record is gone drops out of its race (the last to
 //! go ends the race's scope).
 //!
-//! Two more entries share the descent: a fired callback's body (the leaf is
-//! its mint; nothing after it runs) and a race settled after a batch resume
+//! One more entry shares the descent: a race settled after a batch resume
 //! (the leaf is the race).
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use movement_parser::ast::{CallbackSubject, CallStatement, CombinatorArms, CombinatorExpression, CombinatorKind, MovementDeclaration, RValue, Statement, TraversalBlock};
+use movement_parser::ast::{CallStatement, CombinatorArms, CombinatorExpression, CombinatorKind, MovementDeclaration, RValue, Statement, TraversalBlock};
 
 use crate::bindings::{Binding, Closure, DeferredWalk, Edge, Handle, InstanceBinding, Landed, Node, Scope};
 use crate::collection::{CollectionRun, OpOrigin};
@@ -50,8 +49,6 @@ use crate::write::WriteRecord;
 pub(crate) enum Leaf {
     /// Bind the answer and step past the leaf, or re-enter it.
     Continue { answer: Option<Binding>, reenter: bool },
-    /// Run a fired callback's body (the leaf is its mint).
-    FireCallback { values: Js, call_index: usize },
     /// Settle a race whose arms completed in a batch (the leaf is the race).
     SettleRace { frame: String },
 }
@@ -174,7 +171,7 @@ pub(crate) fn unparsed_address(state: &Js, leaf: &Leaf) -> Option<Failure> {
 }
 
 impl Run<'_> {
-    /// `resume`, `fireCallback` or `settleRaceFrame`: the state's leaf, by
+    /// `resume` or `settleRaceFrame`: the state's leaf, by
     /// its rule.
     pub(crate) async fn resume_along(&self, movement: &MovementDeclaration, movement_scope: &Rc<Scope>, body_path: &str, state: &Js, leaf: Leaf) -> Result<bool, Stop> {
         let state_address = match &leaf {
@@ -396,12 +393,6 @@ impl Run<'_> {
         }
         park.assert_read().map_err(runtime)?;
         match leaf {
-            Leaf::FireCallback { values, call_index } => {
-                self.firing_callback.set(true);
-                let leaf_statement = statements.get(leaf_index).cloned();
-                // A callback's body is not the movement's: it returns nothing of the run's.
-                self.inside_spine(&spine, self.callback_body(leaf_statement.as_ref(), &leaf_at, &values, call_index)).await.map(|()| false)
-            }
             Leaf::SettleRace { frame } => {
                 let leaf_run = LeafRun::SettleRace { at: leaf_at, frame };
                 self.complete_spine(&spine, 0, &state_address, &leaf_run).await.map(movement_returned)
@@ -524,28 +515,6 @@ impl Run<'_> {
     }
 
     // ── Finishing the spine ──
-
-    /// `insideSpine`: `future` run inside every boundary the descent passed
-    /// — what a leaf that does not finish its spine still needs, so a park
-    /// inside it records them.
-    async fn inside_spine<T>(&self, spine: &[Spine], future: impl std::future::Future<Output = T>) -> T {
-        let mut pushed = 0;
-        for level in spine {
-            let boundary = match level {
-                Spine::Container { arm_boundary, .. } => arm_boundary.clone(),
-                Spine::Call { boundary, .. } | Spine::Member { boundary, .. } => Some(boundary.clone()),
-            };
-            if let Some(boundary) = boundary {
-                self.boundaries.borrow_mut().push(boundary);
-                pushed += 1;
-            }
-        }
-        let outcome = future.await;
-        for _ in 0..pushed {
-            self.boundaries.borrow_mut().pop();
-        }
-        outcome
-    }
 
     /// `completeSpine`: the leaf, then every level from the inside out,
     /// each run within its own boundary so a re-park deeper records how to
@@ -945,49 +914,6 @@ impl Run<'_> {
             .collect())
     }
 
-    // ── A fired callback's body ──
-
-    /// `runCallbackBody`: the body in a child of the captured scope, the
-    /// fire-time values bound, at its own address frame (`… .i <call>`).
-    async fn callback_body(&self, statement: Option<&Statement>, leaf: &Sequence, values: &Js, call_index: usize) -> Result<(), Stop> {
-        let stmt_address = leaf.address.stmt(leaf.index);
-        let Some(Statement::Assign(assign)) = statement else {
-            return Err(runtime(format!(
-                "fireCallback: no callback statement at '{}' — the run's pinned version and the stored entry point disagree",
-                stmt_address.encode()
-            )));
-        };
-        let RValue::Callback { callback } = &assign.value else {
-            return Err(runtime(format!(
-                "fireCallback: no callback statement at '{}' — the run's pinned version and the stored entry point disagree",
-                stmt_address.encode()
-            )));
-        };
-        let frame = stmt_address.iter(call_index);
-        let path = format!("{}/{}/value/callback/subject", leaf.path, leaf.index);
-        match &callback.subject {
-            // The named form defers a whole movement with its fixed
-            // arguments: the ordinary call path.
-            CallbackSubject::Named { movement, args, span, .. } => {
-                let call = CallStatement { callee: movement.clone(), args: args.clone(), expression: None, span: *span };
-                self.call(&call, &leaf.scope, &frame, &path).await?;
-                Ok(())
-            }
-            CallbackSubject::Inline { closure, .. } => {
-                let child = leaf.scope.child();
-                for param in &closure.params {
-                    let value = crate::record::get(values, &param.name).unwrap_or(Js::Undefined);
-                    let value = if value.is_nullish() { Js::Null } else { value };
-                    child.declare(param.name.clone(), Binding::Value(ValueBinding { value, trail: Some(Trail::default()), many: false }));
-                }
-                match self.body(&closure.body, &child, &frame, &format!("{path}/closure/body"), 0).await {
-                    Ok(_) => Ok(()),
-                    Err(stop) => Err(stop),
-                }
-            }
-        }
-    }
-
     // ── Rehydration (serialize.ts `rehydrate`) ──
 
     /// `rehydrateScopeInto`: a scope's bindings declared into `scope`, the
@@ -1131,11 +1057,6 @@ impl Run<'_> {
                     crate::record::bind_value(value, Some(trail.unwrap_or_default()), many)
                 }
                 // Data only: the binding object, as it stood.
-                Some("callback") => Binding::Callback(Rc::new(crate::bindings::Callback {
-                    callback_id: at(descriptor, "callbackId").cloned().unwrap_or(Js::Undefined),
-                    url: at(descriptor, "url").cloned().unwrap_or(Js::Undefined),
-                    params: at(descriptor, "params").cloned().unwrap_or(Js::Undefined),
-                })),
                 Some("shapePosition") => Binding::ShapePosition(Rc::new(crate::bindings::ShapePosition {
                     shape: at(descriptor, "shape").cloned().unwrap_or(Js::Undefined),
                     node: at(descriptor, "node").cloned().unwrap_or(Js::Undefined),

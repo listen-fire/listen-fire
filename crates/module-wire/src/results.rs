@@ -251,22 +251,6 @@ fn result_schema(method: &str) -> Option<S> {
         "ensureEventSubscription" => nullable(obj(vec![opt("externalId", S::Str), opt("secret", S::Str), opt("expiresAt", S::Str)])),
         "refreshEventSubscription" => nullable(obj(vec![opt("expiresAt", S::Str)])),
         "removeEventSubscription" => S::Null,
-        "resolveAwait" => S::Tagged {
-            key: "status",
-            members: vec![
-                ("pending", obj(vec![req("status", S::Literal("pending")), req("correlationKey", S::Str)])),
-                (
-                    "landed",
-                    obj(vec![
-                        req("status", S::Literal("landed")),
-                        req("landings", arr(await_landing())),
-                        req("correlationKey", S::Str),
-                    ]),
-                ),
-                ("empty", obj(vec![req("status", S::Literal("empty"))])),
-            ],
-        },
-        "wakeKeys" => arr(S::Str),
         "awaitKeys" => arr(S::Union(vec![obj(vec![req("key", S::NonEmptyStr)]), obj(vec![req("gone", S::LiteralTrue)])])),
         "checkInbound" => S::Tagged {
             key: "outcome",
@@ -276,7 +260,6 @@ fn result_schema(method: &str) -> Option<S> {
                     obj(vec![
                         req("outcome", S::Literal("accepted")),
                         req("events", arr(discriminable_event())),
-                        opt("wakeKeys", arr(S::Str)),
                         opt("arrivals", arr(arrival())),
                         opt("checkpoint", S::Unknown),
                         opt("deliveryId", S::Str),
@@ -558,6 +541,5 @@ mod tests {
             "Remote adapter \"acme\" returned an unexpected shape from \"getRelated\": received an array (1 item). Invalid input: expected string, received null at 0.position.recordType"
         );
         assert!(check("updateRecord", "a", &js(r#"{"notFound":true}"#)).is_ok());
-        assert!(check("resolveAwait", "a", &js(r#"{"status":"pending"}"#)).is_err());
     }
 }

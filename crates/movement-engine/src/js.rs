@@ -361,7 +361,7 @@ fn write_json(value: &Js, indent: usize, depth: usize, out: &mut String, held: &
     match value {
         Js::Undefined | Js::Null => out.push_str("null"),
         // `JSON.stringify` of the binding object: the event's is
-        // `{kind: 'event'}`, a callback's, a shape position's and a
+        // `{kind: 'event'}`, a shape position's and a
         // resource's their data (`record::data_object`), a block's returned
         // records the list of theirs. Any other's holds what only the
         // TypeScript engine has; the first met is named

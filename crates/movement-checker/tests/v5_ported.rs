@@ -36,12 +36,6 @@ fn binding_a_call_of_a_movement_that_returns_nothing_is_refused() {
 }
 
 #[test]
-fn a_callback_that_reaches_a_wait_through_a_movement_is_refused() {
-    let source = "function waits(n: <number>) {\n  await sleep(1h)\n  return n\n}\nfunction main(e: <number>) {\n  cb = callback(waits)\n}";
-    assert_eq!(codes(&run(source, EMPTY)), ["MOV_WAIT_NOT_RESUMABLE"]);
-}
-
-#[test]
 fn movements_calling_each_other_declare_what_they_return() {
     let source = "function ping(n: <number>) {\n  if (n == 0) {\n    return 0\n  }\n  return pong(n - 1)\n}\nfunction pong(n: <number>): <number> {\n  return ping(n)\n}";
     let found = run(source, EMPTY);

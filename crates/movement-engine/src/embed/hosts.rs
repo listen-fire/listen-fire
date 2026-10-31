@@ -123,16 +123,6 @@ pub struct TimerPark {
     pub wake_at: String,
 }
 
-/// A flow parked on a callback's `Called` edge: woken by the callback's key.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AwaitPark {
-    pub address: String,
-    pub state: ParkedState,
-    /// Who wakes it: the reserved callback identity and the callback's id.
-    pub adapter_type: String,
-    pub correlation_key: serde_json::Value,
-}
-
 /// A flow parked on a wait ([`Store::open_wait`]): an arrival the wait
 /// reads wakes it.
 #[derive(Debug, Clone, PartialEq)]
@@ -176,22 +166,6 @@ pub struct BranchExport {
     pub exports: BranchExports,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct CallbackMint {
-    pub address: String,
-    /// The fire-time parameters, `(name, type)`.
-    pub params: Vec<(String, String)>,
-    pub state: ParkedState,
-    pub single_use: bool,
-    pub expires_at: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct MintedCallback {
-    pub id: String,
-    pub url: String,
-}
-
 /// Where a run's parked flows live, and the run's control: its locks and
 /// its cancel gate. `keeps_parks` false (the default) tells the engine the
 /// host cannot park, and a `sleep` or an `await` fails the run.
@@ -219,9 +193,6 @@ pub trait Store {
     fn commit_timer_park(&mut self, _park: TimerPark) -> HostFuture<()> {
         unserved("park.sink.commitTimerPark")
     }
-    fn commit_await_park(&mut self, _park: AwaitPark) -> HostFuture<()> {
-        unserved("park.sink.commitAwaitPark")
-    }
     fn commit_suspension(&mut self, _address: &str, _state: ParkedState) -> HostFuture<()> {
         unserved("park.sink.commitSuspension")
     }
@@ -241,10 +212,6 @@ pub trait Store {
     /// Every park at or below each prefix withdrawn (a race's losers).
     fn cancel_subtrees(&mut self, _subtree_addresses: &[String], _exclude_leaf: Option<&str>) -> HostFuture<()> {
         unserved("park.sink.cancelSubtrees")
-    }
-    /// "Resume whatever is parked on this key": a callback's awaiter.
-    fn wake(&mut self, _adapter_type: &str, _correlation_key: &serde_json::Value) -> HostFuture<()> {
-        unserved("park.wake")
     }
     /// The arrival log's mark now: every arrival logged after this answer is
     /// above it. The waits family (`park.waits`) is what an `await` on an
@@ -276,13 +243,6 @@ pub trait Store {
     /// "Resume the run parked on this wait": something landed while it parked.
     fn wake_wait(&mut self, _wait_id: &str) -> HostFuture<()> {
         unserved("park.wake")
-    }
-    fn mint_callback(&mut self, _mint: CallbackMint) -> HostFuture<MintedCallback> {
-        unserved("park.callbacks.mint")
-    }
-    /// A callback's call ledger.
-    fn callback_calls(&mut self, _callback_id: &serde_json::Value) -> HostFuture<Data> {
-        unserved("park.callbacks.calls")
     }
     /// A library's text kept once by its content: answered with its hash.
     fn save_source(&mut self, source: &str) -> HostFuture<String>;

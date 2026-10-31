@@ -38,7 +38,6 @@ use crate::inbound::{
 use crate::arrivals::{arrivals_of, log_and_wake};
 use crate::json::Js;
 use crate::obj;
-use crate::run_host::await_wake_work;
 use crate::routing::{Arrival, Listen, event_matches_trigger_scope};
 use crate::runs::{Delivered, Fired, Session};
 use crate::secrets::{Binding, Credential, Credentials, install_of, signer_of};
@@ -118,8 +117,6 @@ pub trait Reader {
     /// Whether the external reads deliveries (`preprocessInbound`).
     fn reads_deliveries(&self, external: &str) -> bool;
     async fn preprocess(&self, external: &str, install: &Credential, raw: &Js, checkpoint: Option<&Js>) -> Result<Extraction, String>;
-    /// The keys a delivery wakes; empty when the external names none.
-    async fn wake_keys(&self, external: &str, install: &Credential, raw: &Js) -> Result<Vec<String>, String>;
     /// The external's own check of a raw request (`checkInbound`): `request`
     /// is the wire's `WireInboundRequest`.
     async fn check_inbound(&self, external: &str, install: &Credential, request: &Js, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String>;
@@ -312,11 +309,6 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         self.reader.preprocess(&source.adapter_type, install, raw, checkpoint).await
     }
 
-    async fn wake_keys(&self, source: &Source, raw: &Js) -> Result<Vec<String>, String> {
-        let install = self.install(&source.install).ok_or_else(|| format!("no install {}", source.install))?;
-        self.reader.wake_keys(&source.adapter_type, install, raw).await
-    }
-
     async fn check_inbound(&self, source: &Source, request: &RawRequest<'_>, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String> {
         let install = self.install(&source.install).ok_or_else(|| format!("no install {}", source.install))?;
         self.reader.check_inbound(&source.adapter_type, install, &request.wire(), secret, checkpoint).await
@@ -354,7 +346,6 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
             }
             EventSink::Inline { .. } => Vec::new(),
         };
-        work.extend(kept.wake_keys.iter().map(|key| await_wake_work(adapter_type, kept.team_id, key)));
         let logged_at = iso(0);
         // A delivery without arrivals asks nothing of a store module written
         // before them; its rows carry the mark taken here.
@@ -526,14 +517,6 @@ impl Reader for SessionReader<'_> {
             arrivals: arrivals_of(&read).map_err(|e| format!("preprocessInbound for adapter {external}: {e}"))?,
             checkpoint: read.get("checkpoint").cloned(),
         })
-    }
-
-    async fn wake_keys(&self, external: &str, install: &Credential, raw: &Js) -> Result<Vec<String>, String> {
-        if !self.lists(external, "wakeKeys") {
-            return Ok(Vec::new());
-        }
-        let read = self.call(external, install, "wakeKeys", serde_json::json!({ "raw": crate::wire::json_of_js(raw) })).await?;
-        Ok(read.as_array().unwrap_or(&[]).iter().filter_map(Js::as_str).map(str::to_string).collect())
     }
 
     async fn check_inbound(&self, external: &str, install: &Credential, request: &Js, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String> {
@@ -1233,9 +1216,6 @@ pub(crate) mod tests {
         }
         async fn preprocess(&self, _: &str, _: &Credential, _: &Js, _: Option<&Js>) -> Result<Extraction, String> {
             Err("no deliveries".into())
-        }
-        async fn wake_keys(&self, _: &str, _: &Credential, _: &Js) -> Result<Vec<String>, String> {
-            Ok(Vec::new())
         }
         async fn check_inbound(&self, _: &str, _: &Credential, _: &Js, _: Option<&str>, _: Option<&Js>) -> Result<Js, String> {
             Err("no deliveries".into())

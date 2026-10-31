@@ -92,7 +92,7 @@ test('a poll pool and a run pool on one store split the work by kind', async () 
     cpSync(dir, runMachine, { recursive: true });
     const pools: Array<[string, string]> = [
       [dir, 'poll_listen'],
-      [runMachine, 'resume_timer,wake_await,fire_event,fire_callback,cron'],
+      [runMachine, 'resume_timer,wake_await,fire_event,cron'],
     ];
     const [pollPool, runPool] = await Promise.all(
       pools.map(([machine, kinds]) =>

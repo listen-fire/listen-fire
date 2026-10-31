@@ -1,12 +1,13 @@
 //! The listening half of `listen-fire serve` (the `serve` cargo feature): the hyper
-//! listener, the inbound doors, the callback door, the models door and the
-//! work queue's drain. A light build leaves it out; `listen-fire call`, `listen-fire cancel`
-//! and `listen-fire run --webhook` (src/serve.rs) need no listener.
+//! listener, the inbound doors, the models door and the work queue's drain. A
+//! light build leaves it out; `listen-fire cancel` and `listen-fire run --webhook`
+//! (src/serve.rs) need no listener. The callback door retired at 0.13: its
+//! path answers that it is gone.
 //!
 //! `--doors-only` (or `LF_DOORS_ONLY=1`) is serve for compute billed by the
 //! request, which is frozen or stopped once a response is sent: nothing
-//! drains in this process, and `/hooks/…` queues its events (and `/api/cb/…`
-//! its callback's body) instead of running them inside the request. Workers (`listen-fire drain`) run the work, started
+//! drains in this process, and `/hooks/…` queues its events instead of
+//! running them inside the request. Workers (`listen-fire drain`) run the work, started
 //! by the wake slot's module (crate::wake) or a schedule.
 
 
@@ -19,7 +20,6 @@ use tokio::net::TcpListener;
 use tokio::sync::{Notify, watch};
 
 use crate::backend::StoreSpec;
-use crate::callbacks::CallOutcome;
 use crate::doors::{EventSink, LfDoors, deliver_inline, hook_target};
 use crate::http::{Request, Response, decode_component};
 use crate::inbound::{Answer, Delivery, DeliverySource, InboundStore, Push, PushStore, TextBody, answer_delivery, answer_push};
@@ -32,7 +32,7 @@ fn deliver_public_redirect(_: &std::path::Path, _: &str) -> (u16, String) {
 }
 use crate::obj;
 use crate::project::Project;
-use crate::runs::{Called, DEFAULT_PORT, Opening, Role, RunOutcome, Session, WORK_ROWS_PER_DRAIN, open_session};
+use crate::runs::{DEFAULT_PORT, Opening, Role, RunOutcome, Session, WORK_ROWS_PER_DRAIN, open_session};
 use crate::serve::{HOST_TOKEN, HOST_URL, MODELS_DOOR_URL, externals_host_url, host_token};
 
 pub const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -312,14 +312,13 @@ async fn route(listening: &Listening, request: Request) -> Result<Response, Stri
     if request.too_large {
         return Ok(Response::json(413, &Js::Obj(obj! { "error" => Js::str("payload_too_large") })));
     }
+    if segments(&request.path, "/api/cb/").is_some() {
+        return Ok(callback_retired());
+    }
     if request.method == "GET" {
         if request.path == PUBLIC_CALLBACK_PATH {
             let (status, text) = deliver_public_redirect(&session.project.lf_dir, &request.query);
             return Ok(Response::text(status, &text));
-        }
-        if let Some([id]) = segments(&request.path, "/api/cb/").as_deref() {
-            let callback = session.store.callback(&decoded(id)?).map_err(|e| e.to_string())?;
-            return Ok(crate::callback_page::get(callback.as_ref()));
         }
         if let Some([id]) = segments(&request.path, "/files/").as_deref() {
             return Ok(match session.documents.exposed(id) {
@@ -339,9 +338,6 @@ async fn route(listening: &Listening, request: Request) -> Result<Response, Stri
         return Ok(not_found());
     }
 
-    if let Some([id]) = segments(&request.path, "/api/cb/").as_deref() {
-        return callback_door(listening, &decoded(id)?, &request).await;
-    }
     match segments(&request.path, "/api/public/adapter/").as_deref() {
         Some([_, "models"]) => return Ok(models_door(session.secrets().credentials(), &request).await),
         Some([_, "ocr"]) => return Ok(ocr_door(&request).await),
@@ -537,43 +533,18 @@ pub async fn only_doors<S: InboundStore + PushStore>(stores: &S, request: Reques
     }
 }
 
-// ── The callback door ───────────────────────────────────────────────────────
+// ── The callback door, retired ──────────────────────────────────────────────
 
-/// `POST /api/cb/<id>`: the call's values are the body's keys (a JSON object,
-/// or the confirm page's form) over the query string's, every key passed raw
-/// (the callback's signature judges them). A browser is answered with a page.
-async fn callback_door(listening: &Listening, id: &str, request: &Request) -> Result<Response, String> {
-    let (session, poke) = (&*listening.session, &*listening.poke);
-    let wants_html = crate::callback_page::prefers_html(&request.headers);
-    let Some(values) = crate::callback_page::call_values(&request.headers, &request.body, &request.query) else {
-        let message = "the body is not a JSON object or a form of values";
-        if wants_html {
-            return Ok(crate::callback_page::answered(400, &CallOutcome::Mismatch(message.into())));
-        }
-        return Ok(Response::json(400, &Js::Obj(obj! { "outcome" => Js::str("mismatch"), "message" => Js::str(message) })));
-    };
-    // Under --doors-only the body is a worker's: the instance is frozen
-    // once this answers, so nothing may run on past the response.
-    let called = if listening.doors_only { session.queue_callback(id, &values)? } else { session.call_callback(id, &values).await? };
-    log_runs(&called.outcomes);
-    let (status, message) = call_answer(&called);
-    // A queued body, and the wake backstop, are drained work.
-    poke.notify_one();
-    if wants_html {
-        return Ok(crate::callback_page::answered(status, &called.call));
-    }
-    Ok(Response::json(status, &Js::Obj(obj! { "outcome" => Js::str(called.call.kind()), "message" => Js::Str(message) })))
-}
-
-/// The door's answer, as the hosted door gives it.
-fn call_answer(called: &Called) -> (u16, String) {
-    match &called.call {
-        CallOutcome::Recorded { .. } => (if called.queued { 202 } else { 200 }, "recorded; the run is carrying on".into()),
-        CallOutcome::NotFound => (404, "no such callback".into()),
-        CallOutcome::Closed => (410, "this callback is closed: it was already used, or its run has finished".into()),
-        CallOutcome::Expired => (410, "this callback has expired".into()),
-        CallOutcome::Mismatch(message) => (400, message.clone()),
-    }
+/// `/api/cb/<id>`, whatever the method: callbacks retired at 0.13, so a link
+/// minted before is gone for good.
+fn callback_retired() -> Response {
+    Response::json(
+        410,
+        &Js::Obj(obj! {
+            "outcome" => Js::str("retired"),
+            "message" => Js::str("callbacks are retired in listen-fire 0.13; this link belonged to a run on an earlier release"),
+        }),
+    )
 }
 
 #[cfg(test)]

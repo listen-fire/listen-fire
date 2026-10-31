@@ -3,14 +3,12 @@ import { acme } from credentials
 
 crm = connect acme_crm using acme
 
-# A company created in the CRM is written, refreshed, then waits on a
-# callback and is refreshed again: under --dry-run, every segment rehearses.
+# A company created in the CRM is written, refreshed, sleeps and is
+# refreshed again: under --dry-run, the sleep is passed and every write rehearses.
 function rehearse(company: <crm-[:Company]->>) {
   co = write crm-[:Company]-> { Name: "Rehearsed" }
   refresh co
-  go = callback({ })
-  write crm-[:Company]-> { Name: "Asked ${go.id}" }
-  await go-[:Called]->
+  await sleep(1s)
   refresh co
   write crm-[:Company]-> { Name: "After ${co.Name}" }
 }

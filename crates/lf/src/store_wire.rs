@@ -2,13 +2,12 @@
 //! written and read in one place: `listen-fire --contract-store` writes them
 //! (crate::contract_store) and listen-fire reads them back from a store module
 //! (crate::store_module). A row's keys are the TypeScript families' names
-//! (`RunHostStore`, `CallbackStore`).
+//! (`RunHostStore`).
 
-use crate::backend::{CallbackClaim, CallbackRecord};
 use crate::json::{Js, Obj};
 use crate::obj;
 use crate::store::{
-    BranchExport, ClaimedWork, CorrelatedAwait, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind, RunRow, RunStart, SegmentCommit,
+    BranchExport, ClaimedWork, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind, RunRow, RunStart, SegmentCommit,
 };
 use crate::waits::{LoggedArrival, NewArrival, OpenWait, WaitArrivals, WaitWake};
 
@@ -169,12 +168,6 @@ pub fn park_params(park: &Park<'_>) -> Obj {
 fn park_kind_params(kind: &ParkKind<'_>) -> Obj {
     match kind {
         ParkKind::Timer { wake_at } => obj! { "kind" => Js::str("timer"), "wakeAt" => Js::str(*wake_at) },
-        ParkKind::Await { team_id, adapter_type, correlation_key } => obj! {
-            "kind" => Js::str("await"),
-            "teamId" => Js::str(*team_id),
-            "adapterType" => Js::str(*adapter_type),
-            "correlationKey" => Js::str(*correlation_key),
-        },
         ParkKind::Wait { wait_id } => obj! { "kind" => Js::str("wait"), "waitId" => Js::str(*wait_id) },
         ParkKind::Limit => obj! { "kind" => Js::str("limit") },
     }
@@ -209,7 +202,6 @@ pub fn park_kind(value: &Js) -> Option<ParkKind<'_>> {
     let field = |key: &str| value.get(key).and_then(Js::as_str);
     Some(match field("kind")? {
         "timer" => ParkKind::Timer { wake_at: field("wakeAt")? },
-        "await" => ParkKind::Await { team_id: field("teamId")?, adapter_type: field("adapterType")?, correlation_key: field("correlationKey")? },
         "wait" => ParkKind::Wait { wait_id: field("waitId")? },
         "limit" => ParkKind::Limit,
         _ => return None,
@@ -404,33 +396,6 @@ impl Wire for WaitWake {
     }
 }
 
-fn correlated_obj(c: &CorrelatedAwait) -> Obj {
-    obj! { "runId" => Js::str(&c.run_id), "teamId" => Js::str(&c.team_id), "address" => Js::str(&c.address) }
-}
-
-impl Wire for CorrelatedAwait {
-    fn to_wire(&self) -> Js {
-        Js::from(correlated_obj(self))
-    }
-
-    fn from_wire(v: &Js) -> Option<Self> {
-        Some(CorrelatedAwait { run_id: text(v, "runId")?, team_id: text(v, "teamId")?, address: text(v, "address")? })
-    }
-}
-
-/// A run's await correlation with its key (`correlations.ofRun`).
-impl Wire for (CorrelatedAwait, String) {
-    fn to_wire(&self) -> Js {
-        let mut row = correlated_obj(&self.0);
-        row.insert("correlationKey".into(), Js::str(&self.1));
-        Js::from(row)
-    }
-
-    fn from_wire(v: &Js) -> Option<Self> {
-        Some((CorrelatedAwait::from_wire(v)?, text(v, "correlationKey")?))
-    }
-}
-
 impl Wire for BranchExport {
     fn to_wire(&self) -> Js {
         Js::from(obj! {
@@ -442,62 +407,6 @@ impl Wire for BranchExport {
 
     fn from_wire(v: &Js) -> Option<Self> {
         Some(BranchExport { branch_address: text(v, "branchAddress")?, branch_index: int(v.get("branchIndex")?)?, exports: v.get("exports")?.clone() })
-    }
-}
-
-impl Wire for CallbackRecord {
-    fn to_wire(&self) -> Js {
-        Js::from(obj! {
-            "id" => Js::str(&self.id),
-            "teamId" => Js::str(&self.team_id),
-            "runId" => Js::str(&self.run_id),
-            "address" => Js::str(&self.address),
-            "params" => self.params.clone(),
-            "state" => self.state.clone(),
-            "calls" => self.calls.clone(),
-            "singleUse" => Js::Bool(self.single_use),
-            "expiresAt" => opt(self.expires_at.as_deref()),
-            "status" => Js::str(&self.status),
-        })
-    }
-
-    fn from_wire(v: &Js) -> Option<Self> {
-        Some(CallbackRecord {
-            id: text(v, "id")?,
-            team_id: text(v, "teamId")?,
-            run_id: text(v, "runId")?,
-            address: text(v, "address")?,
-            params: v.get("params")?.clone(),
-            state: v.get("state")?.clone(),
-            calls: v.get("calls")?.clone(),
-            single_use: matches!(v.get("singleUse")?, Js::Bool(true)),
-            expires_at: opt_text(v, "expiresAt")?,
-            status: text(v, "status")?,
-        })
-    }
-}
-
-impl Wire for CallbackClaim {
-    fn to_wire(&self) -> Js {
-        Js::from(match self {
-            CallbackClaim::Recorded { callback, call_index } => {
-                obj! { "kind" => Js::str("recorded"), "callback" => callback.to_wire(), "callIndex" => Js::Num((*call_index).into()) }
-            }
-            CallbackClaim::NotFound => obj! { "kind" => Js::str("not_found") },
-            CallbackClaim::Closed(callback) => obj! { "kind" => Js::str("closed"), "callback" => callback.to_wire() },
-            CallbackClaim::Expired(callback) => obj! { "kind" => Js::str("expired"), "callback" => callback.to_wire() },
-        })
-    }
-
-    fn from_wire(v: &Js) -> Option<Self> {
-        let callback = || v.get("callback").and_then(CallbackRecord::from_wire);
-        Some(match v.get("kind")?.as_str()? {
-            "recorded" => CallbackClaim::Recorded { callback: callback()?, call_index: int(v.get("callIndex")?)? },
-            "not_found" => CallbackClaim::NotFound,
-            "closed" => CallbackClaim::Closed(callback()?),
-            "expired" => CallbackClaim::Expired(callback()?),
-            _ => return None,
-        })
     }
 }
 
@@ -523,20 +432,6 @@ mod tests {
         let back = RunRow::from_wire(&run.to_wire()).unwrap();
         assert_eq!((back.id, back.status, back.outcome, back.delivery_id, back.finished_at), (run.id, run.status, None, run.delivery_id, run.finished_at));
         assert_eq!((back.attempt, back.attempts), (run.attempt, run.attempts));
-        let callback = CallbackRecord {
-            id: "c".into(),
-            team_id: "t".into(),
-            run_id: "r".into(),
-            address: "a".into(),
-            params: Js::Arr(vec![]),
-            state: Js::Null,
-            calls: Js::Arr(vec![]),
-            single_use: true,
-            expires_at: Some("2026-10-18T00:00:00.000Z".into()),
-            status: "live".into(),
-        };
-        let claim = CallbackClaim::Recorded { callback, call_index: 2 };
-        assert_eq!(CallbackClaim::from_wire(&claim.to_wire()).map(|c| c.to_wire()), Some(claim.to_wire()));
         assert!(LeafRow::from_wire(&Js::str("not a row")).is_none());
     }
 
@@ -548,7 +443,6 @@ mod tests {
         assert_eq!(NewWork::from_wire(&work.to_wire()).map(|w| w.to_wire()), Some(work.to_wire()));
         let kinds = [
             ParkKind::Timer { wake_at: "2026-10-20T00:00:00.000Z" },
-            ParkKind::Await { team_id: "t", adapter_type: "mail", correlation_key: "k" },
             ParkKind::Wait { wait_id: "w" },
             ParkKind::Limit,
         ];

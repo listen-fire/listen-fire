@@ -38,7 +38,7 @@ export function freshTeam(): { team: string; clear(): void } {
   return {
     team,
     clear() {
-      // The run's live state and callbacks go with its trigger_run row (ON DELETE CASCADE).
+      // The run's live state goes with its trigger_run row (ON DELETE CASCADE).
       psql(`delete from lf.trigger_run where team_id = '${team}';
             delete from lf.work where team_id = '${team}';
             delete from lf.park_library_source where team_id = '${team}';

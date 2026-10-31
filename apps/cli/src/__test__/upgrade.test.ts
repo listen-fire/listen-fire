@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { lf, project } from './example';
 
@@ -125,4 +125,59 @@ test('listen-fire upgrade lists a wait whose run value is now captured, and stil
   const checked = lf(dir, 'check');
   assert.equal(checked.code, 0, checked.out);
   assert.doesNotMatch(checked.out, /MOV_AWAIT_VALUE_CAPTURED/);
+});
+
+// An existing 0.12 program upgraded to 0.13: `await first(x)` is rewritten
+// to `await x`; a `callback(…)` has no rewrite, so it is listed by file and
+// line and holds the pin until the author replaces it; a wait whose WHERE
+// reads a run record's field is listed as a warning and holds nothing.
+const WAITS_012 = `import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+function welcome(company: <crm-[:Company]->>) {
+  c = await first(company-[x:Comments WHERE x.Text == company.Name]->)
+}
+
+listen to crm { events: ["company.created"] } fire welcome
+`;
+
+const CALLBACK_012 = `import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+function ask(company: <crm-[:Company]->>) {
+  go = callback({ })
+  write crm-[:Company]-> { Name: "Asked \${go.url}" }
+}
+`;
+
+test('listen-fire upgrade on a 0.12 project with waits and callbacks', () => {
+  const dir = project();
+  pinned(dir, '0.12.13');
+  const waits = join(dir, 'movements', 'companies.mvt');
+  const asks = join(dir, 'movements', 'asks.mvt');
+  writeFileSync(waits, WAITS_012);
+  writeFileSync(asks, CALLBACK_012);
+
+  const held = lf(dir, 'upgrade');
+  assert.equal(held.code, 1, held.out);
+  assert.equal(readFileSync(waits, 'utf8'), WAITS_012.replace('await first(company-[x:Comments WHERE x.Text == company.Name]->)', 'await company-[x:Comments WHERE x.Text == company.Name]->'));
+  assert.match(held.out, /^movements\/asks\.mvt:7:8 error MOV_CALLBACK_RETIRED 'callback\(…\)' is retired in 0\.13\. For a form a person opens, connect `@lf\/forms`/m);
+  assert.match(held.out, /^movements\/companies\.mvt:7:\d+ warning MOV_AWAIT_VALUE_CAPTURED 'company\.Name' in this wait's WHERE is read once/m);
+  assert.match(held.out, /engine: left at 0\.12\.13 until the 1 remaining diagnostic\(s\) are fixed/);
+  assert.match(held.out, /2 file\(s\), 1 rewritten, 1 left to change by hand/);
+  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.12\.13$/m);
+
+  rmSync(asks);
+  const moved = lf(dir, 'upgrade');
+  assert.equal(moved.code, 0, moved.out);
+  assert.match(moved.out, /lf\.yaml: engine: 0\.13\.0 \(was 0\.12\.13\)/);
+  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.13\.0$/m);
+
+  const again = lf(dir, 'upgrade', '--check');
+  assert.equal(again.code, 0, again.out);
+  assert.match(again.out, /1 file\(s\), 0 would be rewritten, 0 left to change by hand/);
 });

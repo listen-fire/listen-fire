@@ -3,31 +3,28 @@
 //! `/api/public/webhook-sync/<provider>/<install>` is verified and read by
 //! its external and its events queued, `/hooks/<external>/<install>` being
 //! listen-fire's older name for the same door; an external's pushes arrive at
-//! `/api/public/adapter/<external>/{emit,wake}` and are queued; a callback's
-//! call arrives at `/api/cb/<id>` (its url) and runs its body; a provider's
+//! `/api/public/adapter/<external>/{emit,wake}` and are queued; a provider's
 //! OAuth redirect for `listen-fire credential add --public` arrives at GET
 //! `/oauth/callback`; an exposed file is fetched at GET `/files/<id>`. Due
-//! work — an emitted event, a parked run's timer, a queued await wake, a
-//! call's body — is drained on a tick, and at once when a door queues some.
+//! work — an emitted event, a parked run's timer, a queued await wake — is
+//! drained on a tick, and at once when a door queues some.
 //!
 //! The server listens before the session opens, so the externals the session
-//! starts are told where to push (LF_HOST_URL). Also here: `listen-fire call`,
-//! `listen-fire cancel` and `listen-fire run --webhook`, the other ways in.
+//! starts are told where to push (LF_HOST_URL). Also here: `listen-fire cancel`
+//! and `listen-fire run --webhook`, the other ways in, and the word
+//! `listen-fire call` is retired with.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use crate::backend::{StoreSpec, open_store};
-use crate::callbacks::CallOutcome;
 use crate::doors::Webhook;
-use crate::json::{Js, Obj};
-use crate::project::Project;
-use crate::runs::{Cancelled, Fired, Opening, Returned, Role, Session, cancel_run, open_session, report};
+use crate::runs::{Cancelled, Fired, Session, cancel_run};
 
 
 /// Where this process serves, once `serve` listens: every external started
-/// after it is told (LF_HOST_URL), and a callback's url falls back to it.
+/// after it is told (LF_HOST_URL).
 pub(crate) static HOST_URL: OnceLock<String> = OnceLock::new();
 
 pub fn host_url() -> Option<&'static str> {
@@ -52,71 +49,10 @@ pub fn externals_host_url() -> Option<&'static str> {
     host_url().or_else(|| MODELS_DOOR_URL.get().map(String::as_str))
 }
 
-// ── The other ways in: listen-fire call, listen-fire cancel, listen-fire run --webhook ─────────────────
+/// `listen-fire call`, retired with callbacks at 0.13.
+pub const CALL_RETIRED: &str = "listen-fire call is retired in 0.13: a run waits on a form from the @lf/forms adapter, answered by opening or posting to its Url";
 
-/// What `listen-fire call` was given.
-pub struct CallArgs<'a> {
-    pub id: Option<&'a str>,
-    pub body: Option<&'a Path>,
-    pub json: bool,
-}
-
-/// `listen-fire call <callback-id> [--body <values.json>]`.
-pub async fn call_command(project: Project, store: &StoreSpec, args: CallArgs<'_>, out: &mut impl Write) -> Result<i32, String> {
-    let io = |e: std::io::Error| e.to_string();
-    let CallArgs { id, body, json } = args;
-    let Some(id) = id else {
-        eprintln!("listen-fire call needs a callback id");
-        return Ok(2);
-    };
-    let supplied = match body {
-        None => Js::Obj(Obj::new()),
-        Some(path) => Js::parse(&std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?)?,
-    };
-    let Js::Obj(values) = supplied else {
-        eprintln!("listen-fire call --body: the file must hold a JSON object of values");
-        return Ok(2);
-    };
-    let session = open_session(project, &Opening { ephemeral: false, store, role: Role::Command }).await?;
-    let called = session.call_callback(id, &values).await?;
-    if json {
-        let (result, message) = match &called.call {
-            CallOutcome::Recorded { .. } => ("recorded", None),
-            CallOutcome::Mismatch(message) => ("refused", Some(message.as_str())),
-            CallOutcome::NotFound => ("notFound", None),
-            CallOutcome::Closed => ("closed", None),
-            CallOutcome::Expired => ("expired", None),
-        };
-        let code = if result == "recorded" { crate::lfjson::exit_of(&called.outcomes) } else { 1 };
-        return crate::lfjson::emit(out, &crate::lfjson::call_doc(id, result, message, called.queued, &called.outcomes), code);
-    }
-    match &called.call {
-        CallOutcome::Recorded { .. } => {
-            if called.queued {
-                writeln!(out, "callback {id}: recorded; its run is being stepped by another listen-fire process, which runs the body next").map_err(io)?;
-            } else {
-                writeln!(out, "callback {id}: recorded").map_err(io)?;
-            }
-            if called.outcomes.is_empty() { Ok(0) } else { report(&called.outcomes, Returned::Shown, out) }
-        }
-        CallOutcome::Mismatch(message) => {
-            writeln!(out, "callback {id}: refused — {message}").map_err(io)?;
-            Ok(1)
-        }
-        CallOutcome::NotFound => {
-            writeln!(out, "callback {id}: no such callback").map_err(io)?;
-            Ok(1)
-        }
-        CallOutcome::Closed => {
-            writeln!(out, "callback {id}: closed — it was already used, or its run has finished").map_err(io)?;
-            Ok(1)
-        }
-        CallOutcome::Expired => {
-            writeln!(out, "callback {id}: expired").map_err(io)?;
-            Ok(1)
-        }
-    }
-}
+// ── The other ways in: listen-fire cancel, listen-fire run --webhook ─────────────────
 
 /// `listen-fire cancel <run-id> [--reason <text>]`. Settling a run starts no segment:
 /// no externals, just the store.

@@ -60,11 +60,8 @@ pub enum Binding {
     /// program holds it, the scope it was written in captured flat, and from
     /// version 3 the name its body may call it by.
     Closure(Rc<Closure>),
-    /// A minted callback (`kind: 'callback'`): the id and URL the host
-    /// minted it under, and its fire-time parameters.
-    Callback(Rc<Callback>),
-    /// An in-memory record of no graph (`kind: 'shapePosition'`): a fired
-    /// callback's `Called` landing.
+    /// An in-memory record of no graph (`kind: 'shapePosition'`): a write
+    /// to a declared shape.
     ShapePosition(Rc<ShapePosition>),
     /// A file an extraction read (`kind: 'resource'`), its descriptor as a
     /// park holds it.
@@ -102,14 +99,6 @@ impl ShapeBinding {
     pub fn body_scope(&self) -> Option<Rc<Scope>> {
         self.declared_in.as_ref().and_then(std::rc::Weak::upgrade)
     }
-}
-
-/// `{kind: 'callback', callbackId, url, params}`.
-#[derive(Debug)]
-pub struct Callback {
-    pub callback_id: Js,
-    pub url: Js,
-    pub params: Js,
 }
 
 /// `{kind: 'shapePosition', shape, node, fields, fieldProvenance}`.
@@ -204,7 +193,6 @@ impl Binding {
             (Binding::LazyWalk(a), Binding::LazyWalk(b)) => Rc::ptr_eq(a, b),
             (Binding::Tuple(a), Binding::Tuple(b)) => Rc::ptr_eq(a, b),
             (Binding::Closure(a), Binding::Closure(b)) => Rc::ptr_eq(a, b),
-            (Binding::Callback(a), Binding::Callback(b)) => Rc::ptr_eq(a, b),
             (Binding::ShapePosition(a), Binding::ShapePosition(b)) => Rc::ptr_eq(a, b),
             (Binding::Resource(a), Binding::Resource(b)) => Rc::ptr_eq(a, b),
             // A block's returned records are one object only as the record

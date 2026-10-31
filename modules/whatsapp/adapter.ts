@@ -304,9 +304,8 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
           { fieldId: 'data', displayName: 'File', kind: 'file', writable: true, readable: false, required: false, description: 'A file to send (image / PDF / audio / video, routed by content type). At least one of Body / File. Send-side only: a received message\'s media is on its Attachments edge — read `msg-[:Attachments]->.File`.' },
           // Send-side only, same reasoning as `File`: WhatsApp attaches an
           // interactive reply to nothing on the way in (a tap arrives as its
-          // own message, handled by the callback door before it ever reaches
-          // this adapter), so declaring it readable would leak an
-          // always-null property.
+          // own message), so declaring it readable would leak an always-null
+          // property.
           {
             fieldId: 'interactive',
             displayName: 'Interactive',
@@ -323,20 +322,17 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
               'surfaces as a loud WhatsApp error at run time, not at save time). Sending ' +
               'this REPLACES a plain-text send: the interactive type carries its own ' +
               '`body.text`, so the message\'s words go inside `interactive.body.text`, ' +
-              'never in `Body` on the same send. Usually reply buttons: up to 3, each ' +
-              '`{ type: "reply", reply: { id, title } }` (`title` capped at 20 characters). ' +
-              'To make a tap DO something, mint a callback (`c = callback({ … })`) and put ' +
-              '`"${c.id}"` in `reply.id` — WhatsApp allows up to 256 characters there, ' +
-              'roomy for it — one callback per button, since its body is what that button ' +
-              'means. WhatsApp captures nothing at tap time, so a callback fired from a ' +
-              'button takes no values; anything a person has to fill in needs a plain-text ' +
-              'reply instead. Build strings with "${…}" interpolation (never `+`, which is ' +
-              'numeric addition). Example:\n' +
-              '{ type: "button",\n' +
+              'never in `Body` on the same send. Reply buttons: up to 3, each ' +
+              '`{ type: "reply", reply: { id, title } }` (`title` capped at 20 characters); ' +
+              'a reply button\'s tap reaches no run. To make a tap DO something, write a ' +
+              'form from the `@lf/forms` adapter (`form = write forms-[:Forms]-> { Title: …, ' +
+              'Fields: … }`), send its `form.Url` on a url button (`type: "cta_url"`), and ' +
+              '`await form-[:Submissions]->`: the form also asks for anything a person has to ' +
+              'fill in, which WhatsApp does not capture at tap time. Build strings with ' +
+              '"${…}" interpolation (never `+`, which is numeric addition). Example:\n' +
+              '{ type: "cta_url",\n' +
               '  body: { text: "Ship the release?" },\n' +
-              '  action: { buttons: [\n' +
-              '    { type: "reply", reply: { id: "${approve.id}", title: "Approve" } },\n' +
-              '    { type: "reply", reply: { id: "${reject.id}", title: "Reject" } } ] } }',
+              '  action: { name: "cta_url", parameters: { display_text: "Answer", url: "${form.Url}" } } }',
           },
           { fieldId: 'waId', displayName: 'WhatsApp Id', kind: 'string', writable: false, required: false, description: 'The sender\'s WhatsApp account id.' },
           { fieldId: 'profileName', displayName: 'Profile Name', kind: 'string', writable: false, required: false, description: 'The sender\'s WhatsApp profile display name.' },

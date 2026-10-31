@@ -147,12 +147,17 @@ function writeMovement(dir: string, source: string): void {
 test('nothing in the engine or checker names forms', () => {
   const named = /@lf\/forms|["'`](forms|form)["'`]|["'`:](Forms|Form|Submissions|Submission)["'`\]]|-\[:?\w*:(Forms|Submissions)/;
   // Where the word means something else: a Unicode normalization form, and
-  // the form a built-in's call is written in. Each is still there.
+  // the form a built-in's call is written in. And where a retired construct's
+  // text names its replacement (callbacks, 0.13): words to a person, never a
+  // rule. Each is still there.
   const unrelated: Array<{ file: string; line: string }> = [
     { file: 'movement-engine/src/env_services.rs', line: '"form": form' },
     { file: 'movement-engine/src/env_services.rs', line: 'text("form")' },
     { file: 'movement-engine/src/extract/call.rs', line: 'shape.set("form", Js::str("call"))' },
     { file: 'movement-checker/src/families/calls.rs', line: "/// A built-in's `form`: how a call of it is read." },
+    { file: 'movement-checker/src/families/listens.rs', line: "\"'callback(…)' is retired in 0.13. For a form a person opens, connect `@lf/forms`" },
+    { file: 'movement-checker/src/codes.rs', line: '/// `callback(…)`, retired at 0.13: a form from `@lf/forms`, or buttons on a' },
+    { file: 'lf/src/serve.rs', line: 'a run waits on a form from the @lf/forms adapter' },
   ];
   const excused = new Set<(typeof unrelated)[number]>();
   const read: string[] = [];

@@ -39,7 +39,6 @@ pub fn kind_of(binding: &Binding) -> String {
         Binding::Closure(_) => "closure",
         Binding::Extracted { root: true, .. } => "extractRoot",
         Binding::Extracted { root: false, .. } => "extractPosition",
-        Binding::Callback(_) => "callback",
         Binding::ShapePosition(_) => "shapePosition",
         Binding::Resource(_) => "resource",
     };
@@ -70,7 +69,6 @@ pub fn describe_kind(kind: &str) -> String {
         "shapePosition" => "an in-memory shape position",
         "nodePosition" => "a synthesised node",
         "lazyWalk" => "a deferred traversal",
-        "callback" => "a callback",
         "plugin" => "a plugin",
         "opaque" => "an import",
         other => return other.to_string(),
@@ -94,16 +92,14 @@ pub fn held(binding: Binding) -> Js {
 }
 
 /// The binding object a record IS to the TypeScript engine, for the kinds
-/// whose object holds data only (the event, a callback, a shape position, a
-/// resource): what a JSON writer prints, and, for the event and a callback,
-/// the descriptor a host is handed (`["x", id, descriptor]` on the
+/// whose object holds data only (the event, a shape position, a resource):
+/// what a JSON writer prints, and, for the event, the descriptor a host is handed (`["x", id, descriptor]` on the
 /// segment's wire). None for a kind whose
 /// object holds what only an engine has (a read seam, a schema, code).
 pub fn data_object(binding: &Binding) -> Option<Js> {
     let kind = ("kind", Js::str(kind_of(binding)));
     Some(crate::env::object_of(match binding {
         Binding::Event => vec![kind],
-        Binding::Callback(callback) => vec![kind, ("callbackId", callback.callback_id.clone()), ("url", callback.url.clone()), ("params", callback.params.clone())],
         Binding::ShapePosition(position) => vec![
             kind,
             ("shape", position.shape.clone()),
@@ -202,7 +198,6 @@ pub fn is_position(binding: &Binding) -> bool {
         | Binding::Positions(_)
         | Binding::Node(_)
         | Binding::LazyWalk(_)
-        | Binding::Callback(_)
         | Binding::ShapePosition(_)
         | Binding::Resource(_) => true,
         Binding::Instance(_) | Binding::Value(_) | Binding::Shape(_) | Binding::Movement(_) | Binding::Plugin(_) | Binding::Opaque { .. } | Binding::Tuple(_) | Binding::Closure(_) => false,
@@ -214,7 +209,7 @@ pub fn is_position(binding: &Binding) -> bool {
 /// which hands the (truthy) binding back.
 pub fn is_one_record(binding: &Binding) -> bool {
     match binding {
-        Binding::Handle(_) | Binding::Extracted { .. } | Binding::Landed(_) | Binding::Node(_) | Binding::Callback(_) | Binding::ShapePosition(_) | Binding::Resource(_) => true,
+        Binding::Handle(_) | Binding::Extracted { .. } | Binding::Landed(_) | Binding::Node(_) | Binding::ShapePosition(_) | Binding::Resource(_) => true,
         Binding::Event | Binding::Instance(_) | Binding::Positions(_) | Binding::Value(_) | Binding::Shape(_) | Binding::Movement(_) | Binding::LazyWalk(_)
         | Binding::Plugin(_) | Binding::Opaque { .. } | Binding::Tuple(_) | Binding::Closure(_) => false,
     }
@@ -235,9 +230,6 @@ pub fn own_property(binding: &Binding, key: &str) -> Result<Js, EvalError> {
         ))
     };
     match (binding, key) {
-        (Binding::Callback(callback), "callbackId") => Ok(callback.callback_id.clone()),
-        (Binding::Callback(callback), "url") => Ok(callback.url.clone()),
-        (Binding::Callback(callback), "params") => Ok(callback.params.clone()),
         (Binding::ShapePosition(position), "shape") => Ok(position.shape.clone()),
         (Binding::ShapePosition(position), "node") => Ok(position.node.clone()),
         (Binding::ShapePosition(position), "fields") => Ok(position.fields.clone()),
@@ -439,10 +431,6 @@ pub fn fields_of(binding: &Binding) -> Result<JsObject, EvalError> {
         | Binding::Tuple(_)
         | Binding::Closure(_) => {
             return Err(unsupported(&format!("reading every field of {}", describe(binding)), None));
-        }
-        Binding::Callback(callback) => {
-            fields.set("id".into(), callback.callback_id.clone());
-            fields.set("url".into(), callback.url.clone());
         }
         Binding::ShapePosition(position) => spread(&mut fields, &position.fields),
         Binding::Resource(resource) => spread(&mut fields, &get(resource, "data").unwrap_or(Js::Undefined)),

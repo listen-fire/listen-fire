@@ -25,7 +25,6 @@ pub enum Family {
     ParkSink,
     Park,
     ParkWaits,
-    ParkCallbacks,
     ParkSources,
     ControlCancel,
     Locks,
@@ -49,7 +48,6 @@ const FAMILIES: &[Family] = &[
     Family::ParkSink,
     Family::Park,
     Family::ParkWaits,
-    Family::ParkCallbacks,
     Family::ParkSources,
     Family::ControlCancel,
     Family::Locks,
@@ -75,7 +73,6 @@ impl Family {
             Family::ParkSink => "park.sink",
             Family::Park => "park",
             Family::ParkWaits => "park.waits",
-            Family::ParkCallbacks => "park.callbacks",
             Family::ParkSources => "park.sources",
             Family::ControlCancel => "control.cancel",
             Family::Locks => "locks",
@@ -110,7 +107,6 @@ impl Request {
     pub fn is_read(&self) -> bool {
         match self.family {
             Family::Check | Family::Clock | Family::ControlCancel | Family::Lookup => true,
-            Family::ParkCallbacks => self.method == "calls",
             Family::ParkWaits => matches!(self.method.as_str(), "mark" | "arrivals"),
             Family::ParkSources => self.method == "load",
             Family::ParkSink => self.method == "collectBranchExports",
@@ -126,8 +122,6 @@ impl Request {
                         | "getRelated"
                         | "iterateRelatedPage"
                         | "listEventTypes"
-                        | "resolveAwait"
-                        | "wakeKeys"
                         | "awaitKeys"
                         | "readRecord"
                         | "translateFilter"
@@ -410,17 +404,6 @@ pub mod park {
         }
     }
 
-    /// A callback's await park: the leaf's state and the key a wake names it
-    /// by, the reserved callback identity and the callback's id. Callbacks
-    /// retire at 0.13 with the rest of their family.
-    pub fn commit_callback_await_park(segment: &str, address: &str, state: Json, adapter_type: &str, correlation_key: &Json) -> Request {
-        Request {
-            family: Family::ParkSink,
-            method: "commitAwaitPark".into(),
-            args: in_segment(segment, json!({ "address": address, "state": state, "adapterType": adapter_type, "correlationKey": correlation_key, "wire": true })),
-        }
-    }
-
     /// A join frame's pending count: how many of its children parked.
     pub fn record_join(segment: &str, frame_address: &str, parked_children: usize) -> Request {
         Request {
@@ -478,11 +461,6 @@ pub mod park {
         Request { family: Family::Park, method: "wake".into(), args: in_segment(segment, json!({ "waitId": wait_id })) }
     }
 
-    /// "Resume whatever is parked on this key": a callback's awaiter.
-    pub fn wake_callback(segment: &str, adapter_type: &str, correlation_key: &Json) -> Request {
-        Request { family: Family::Park, method: "wake".into(), args: in_segment(segment, json!({ "adapterType": adapter_type, "correlationKey": correlation_key })) }
-    }
-
     /// The arrival log's mark now (`park.waits.mark`), answered `{mark}`:
     /// every arrival logged after it is above it. Taken before a record
     /// enters the run, so what arrives while it enters still counts.
@@ -517,17 +495,6 @@ pub mod park {
         Request { family: Family::ParkWaits, method: "note".into(), args: in_segment(segment, args) }
     }
 
-    /// A callback minted: its address, fire-time parameters, captured state
-    /// (on the eval wire), whether it fires once, and when it expires;
-    /// answered `{id, url}`.
-    pub fn mint_callback(segment: &str, address: &str, params: Json, state: Json, single_use: bool, expires_at: Option<&str>) -> Request {
-        let mut args = json!({ "address": address, "params": params, "state": state, "singleUse": single_use, "wire": true });
-        if let Some(at) = expires_at {
-            args["expiresAt"] = json!(at);
-        }
-        Request { family: Family::ParkCallbacks, method: "mint".into(), args: in_segment(segment, args) }
-    }
-
     /// A library's text kept once, by its content (`park.sources`): a
     /// park names it by the hash this answers (`{hash}`) where it would
     /// carry the text.
@@ -538,11 +505,6 @@ pub mod park {
     /// The text a park named by its hash, answered `{source}`.
     pub fn load_source(segment: &str, hash: &str) -> Request {
         Request { family: Family::ParkSources, method: "load".into(), args: in_segment(segment, json!({ "hash": hash })) }
-    }
-
-    /// A callback's call ledger, answered on the eval wire.
-    pub fn callback_calls(segment: &str, callback_id: &Json) -> Request {
-        Request { family: Family::ParkCallbacks, method: "calls".into(), args: in_segment(segment, json!({ "callbackId": callback_id, "wire": true })) }
     }
 
     /// The run is pausing at its cost cap: what it spent against the cap.

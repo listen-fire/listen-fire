@@ -340,17 +340,12 @@ impl WireWorld {
 
 // ── the stores ──
 
-/// Parks, joins and callbacks in memory.
+/// Parks, joins and waits in memory.
 #[derive(Default)]
 pub(super) struct Parks {
     pub(super) timers: Vec<TimerPark>,
-    awaits: Vec<AwaitPark>,
-    mints: Vec<CallbackMint>,
-    /// Each callback's ledger of calls, as `{at, values}`.
-    calls: Vec<Data>,
     joins: Vec<(String, i64)>,
     exports: Vec<(String, BranchExport)>,
-    wakes: Vec<(String, serde_json::Value)>,
     /// Library texts a park names by hash, the hash being the index.
     sources: Vec<String>,
     /// The arrival log, its seq the index plus one.
@@ -413,10 +408,6 @@ impl Store for Parks {
         self.timers.push(park);
         ready(Ok(()))
     }
-    fn commit_await_park(&mut self, park: AwaitPark) -> HostFuture<()> {
-        self.awaits.push(park);
-        ready(Ok(()))
-    }
     fn record_join(&mut self, frame: &str, parked_children: i64) -> HostFuture<()> {
         // A frame parked again (an op whose resume parks more members) is
         // recorded afresh, as a store keeps one row per frame.
@@ -443,20 +434,8 @@ impl Store for Parks {
         ready(Ok(self.exports.iter().filter(|(f, _)| f == frame).map(|(_, e)| e.clone()).collect()))
     }
     fn cancel_subtrees(&mut self, prefixes: &[String], exclude: Option<&str>) -> HostFuture<()> {
-        self.awaits.retain(|a| Some(a.address.as_str()) == exclude || !prefixes.iter().any(|p| a.address.starts_with(p.as_str())));
         self.wait_parks.retain(|a| Some(a.address.as_str()) == exclude || !prefixes.iter().any(|p| a.address.starts_with(p.as_str())));
         ready(Ok(()))
-    }
-    fn wake(&mut self, adapter_type: &str, key: &serde_json::Value) -> HostFuture<()> {
-        self.wakes.push((adapter_type.into(), key.clone()));
-        ready(Ok(()))
-    }
-    fn mint_callback(&mut self, mint: CallbackMint) -> HostFuture<MintedCallback> {
-        self.mints.push(mint);
-        ready(Ok(MintedCallback { id: "cb1".into(), url: "https://example.test/cb/cb1".into() }))
-    }
-    fn callback_calls(&mut self, _callback_id: &serde_json::Value) -> HostFuture<Data> {
-        ready(Ok(Data::List(self.calls.clone())))
     }
     fn wait_mark(&mut self) -> HostFuture<i64> {
         ready(Ok(self.log.len() as i64))
@@ -910,7 +889,7 @@ fn an_await_on_an_adapter_record_parks_and_resumes_when_the_reply_arrives() {
     let (mut world, mut parks) = (World::default(), Parks::default());
     let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
     assert!(matches!(&parked, Outcome::Parked(ran) if ran.parked_address.is_some()), "{parked:?}");
-    assert!(world.notes.is_empty() && parks.timers.is_empty() && parks.awaits.is_empty());
+    assert!(world.notes.is_empty() && parks.timers.is_empty());
     let [park] = parks.wait_parks.as_slice() else { panic!("{:?}", parks.wait_parks) };
     let [wait] = parks.waits.as_slice() else { panic!("one wait") };
     assert_eq!((park.wait_id.as_str(), wait.edge.as_str()), ("w1", "Reply"));
@@ -1229,55 +1208,6 @@ fn two_plain_awaits_on_one_edge_share_its_wait_and_bind_the_same_first_member() 
     finished(block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))));
     assert_eq!(titles(&world), vec!["First+First"]);
     assert_eq!(parks.waits.len(), 1);
-}
-
-const CALLBACK: &str = "  approve = callback((who: <text>) => { write game-[:notes]-> { Title: \"approved by ${who}\" } })\n  tap = await approve-[:Called]->\n  write game-[:notes]-> { Title: \"tapped by ${tap.who} at ${tap.At}\" }\n";
-
-#[test]
-fn a_callback_is_minted_fired_and_its_awaiter_resumed() {
-    let source = movement("", CALLBACK);
-    assert_eq!(errors(&source), vec![]);
-    let (mut world, mut parks) = (World::default(), Parks::default());
-    let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
-    assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
-    let [mint] = parks.mints.as_slice() else { panic!("{:?}", parks.mints) };
-    assert_eq!(mint.params, vec![("who".to_string(), "text".to_string())]);
-    assert!(mint.single_use);
-    let [park] = parks.awaits.as_slice() else { panic!("{:?}", parks.awaits) };
-    assert_eq!((park.adapter_type.as_str(), park.correlation_key.clone()), ("callback", json!("cb1")));
-
-    // Someone calls it: the call lands on the ledger, its body runs, and the awaiter is woken.
-    let call = CallbackCall { values: Data::map([("who", Data::text("Bo"))]), call_index: 0 };
-    parks.calls.push(Data::map([("at", Data::text("2026-03-12T12:05:00.000Z")), ("values", call.values.clone())]));
-    let (mint_state, await_state) = (mint.state.clone(), park.state.clone());
-    let calls_before_fire = world.calls.len();
-    let fired = block_on(fire(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &mint_state, &call)).unwrap();
-    assert!(matches!(fired, Outcome::Finished(_)), "{fired:?}");
-    assert_eq!(titles(&world), vec!["approved by Bo"]);
-    let calls_before_resume = world.calls.len();
-    let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &await_state, Wake::Arrival)).unwrap();
-    assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
-    assert_eq!(titles(&world), vec!["approved by Bo", "tapped by Bo at 2026-03-12T12:05:00.000Z"]);
-
-    // The JSON route, the same three segments.
-    let ledger = json!(["l", [wire(json!({ "at": "2026-03-12T12:05:00.000Z", "values": { "who": "Bo" } }))]]);
-    let (mut served, mut store) = (World::default(), Parks::default());
-    let mut json = Wire::new(WireWorld::default(), |label, _| match label {
-        "park.callbacks.mint" => Some(json!({ "id": "cb1", "url": "https://example.test/cb/cb1" })),
-        "park.callbacks.calls" => Some(l(vec![])),
-        "park.sink.commitAwaitPark" => Some(Json::Null),
-        _ => None,
-    });
-    let through_json = json.drive(&input(&source), Entry::Run, &mut Hosts::new().adapters(&mut served).store(&mut store));
-    assert_eq!(parked, through_json);
-    let minted = json.args_of("park.callbacks.mint");
-    assert_eq!((minted[0]["state"].clone(), minted[0]["params"].clone()), (mint_state.0.clone(), json!([{ "name": "who", "type": "text" }])));
-    let mut json = Wire::new(WireWorld { calls: calls_before_fire, ..WireWorld::default() }, |_, _| None);
-    let through_json = json.drive(&input(&source), Entry::Fire { state: &mint_state, call: &call }, &mut Hosts::new().adapters(&mut served).store(&mut store));
-    assert_eq!(fired, through_json);
-    let mut json = Wire::new(WireWorld { calls: calls_before_resume, ..WireWorld::default() }, |label, _| (label == "park.callbacks.calls").then(|| ledger.clone()));
-    let through_json = json.drive(&input(&source), Entry::Resume { state: &await_state, reenter: true }, &mut Hosts::new().adapters(&mut served).store(&mut store));
-    assert_eq!(resumed, through_json);
 }
 
 const JOIN: &str = "  r = all(\n    () => {\n      t = write game-[:tickets]-> { Subject: monster.Name }\n      x = await t-[:Reply]->\n      return coalesce(x.Body, \"\")\n    },\n    () => { return \"fast\" },\n  )\n  write game-[:notes]-> { Title: \"${r[0]}+${r[1]}\" }\n";

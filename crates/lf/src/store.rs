@@ -45,15 +45,6 @@ create table if not exists leaf (
   state text not null,
   primary key (run_id, address)
 );
-create table if not exists await_correlation (
-  run_id text not null,
-  team_id text not null,
-  address text not null,
-  adapter_type text not null,
-  correlation_key text not null,
-  primary key (run_id, address)
-);
-create index if not exists await_correlation_key on await_correlation (team_id, adapter_type, correlation_key);
 create table if not exists join_frame (
   run_id text not null,
   frame_address text not null,
@@ -88,22 +79,6 @@ create table if not exists park_library_source (
   source text not null,
   primary key (team_id, hash)
 );
-create table if not exists callback (
-  id text primary key,
-  team_id text not null,
-  run_id text not null,
-  address text not null,
-  params text not null,
-  state text not null,
-  calls text not null,
-  single_use integer not null,
-  expires_at text,
-  status text not null,
-  created_at text not null,
-  fired_at text,
-  revoked_at text
-);
-create index if not exists callback_run on callback (run_id);
 create table if not exists inbound_checkpoint (
   subscription_id text primary key,
   checkpoint text not null
@@ -187,7 +162,7 @@ pub const CORE_PARK_REASONS: &[&str] = &["timer", "await", "limit"];
 /// A polled listen's row in the work queue: its next poll.
 pub const POLL_WORK_KIND: &str = "poll_listen";
 /// The work kinds listen-fire queues.
-pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", "fire_callback", "poll_listen", "refresh_subscription", SETTLE_RACE_WORK_KIND];
+pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", "poll_listen", "refresh_subscription", SETTLE_RACE_WORK_KIND];
 /// A race a resumed arm won and left to its run to settle (crate::run_host):
 /// the row is what the run owes until the commit of the step that settles
 /// the race deletes it.
@@ -478,12 +453,10 @@ pub enum ParkKind<'a> {
     /// Woken by the run's `resume_timer` row, armed at `wake_at` (an earlier
     /// due time it already has is kept).
     Timer { wake_at: &'a str },
-    /// Woken by a wake of its correlation, kept with it.
-    Await { team_id: &'a str, adapter_type: &'a str, correlation_key: &'a str },
     /// Woken when an arrival is logged on its wait's record (crate::waits),
     /// which it parks at its address.
     Wait { wait_id: &'a str },
-    /// Paused at a run limit: a correlation the address had is dropped.
+    /// Paused at a run limit.
     Limit,
 }
 
@@ -491,7 +464,7 @@ impl ParkKind<'_> {
     pub fn reason(&self) -> &'static str {
         match self {
             ParkKind::Timer { .. } => "timer",
-            ParkKind::Await { .. } | ParkKind::Wait { .. } => "await",
+            ParkKind::Wait { .. } => "await",
             ParkKind::Limit => "limit",
         }
     }
@@ -601,12 +574,6 @@ pub struct DeliveryQuery<'a> {
     pub limit: i64,
 }
 
-pub struct CorrelatedAwait {
-    pub run_id: String,
-    pub team_id: String,
-    pub address: String,
-}
-
 pub struct BranchExport {
     pub branch_address: String,
     pub branch_index: i64,
@@ -678,6 +645,9 @@ impl Store {
             }
         }
         db.execute_batch("create index if not exists run_delivery on run (delivery_id)")?;
+        // Callbacks and the waits keyed by a correlation retired at 0.13: a
+        // run parked on one cannot resume on this release.
+        db.execute_batch("drop table if exists callback; drop table if exists await_correlation;")?;
         // Added to a state file written before the cost cap kept run spend.
         for column in SPEND_COLUMNS {
             if !columns.iter().any(|c| c == column) {
@@ -768,8 +738,7 @@ impl Store {
         Ok(statement.query_map(params![now, iso(-stale_ms), limit], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// Record where the run stands. A run that ends, however it ends, revokes
-    /// its live callbacks: a callback is something the run can still react to.
+    /// Record where the run stands.
     pub fn settle_run(&self, id: &str, status: &str, outcome: &Js, at: &str) -> Result<()> {
         self.transaction(|db| Self::settle_run_in(db, id, &RunSettle { status, outcome, at }))
     }
@@ -781,9 +750,6 @@ impl Store {
             "update run set status = ?, outcome = ?, finished_at = ? where id = ?",
             params![status, text_of(outcome), ended.then_some(at), id],
         )?;
-        if ended {
-            Self::revoke_callbacks(db, id)?;
-        }
         Ok(())
     }
 
@@ -806,7 +772,7 @@ impl Store {
                  where id = ? and status in ('running', 'parked')",
                 params![message, iso(0), id],
             )?;
-            Self::revoke_callbacks(db, id)
+            Ok(())
         })
     }
 
@@ -830,13 +796,13 @@ impl Store {
         })
     }
 
-    /// The run is over: its live callbacks close (`callbacks.revokeRun`).
-    pub fn revoke_run_callbacks(&self, run_id: &str) -> Result<()> {
-        Self::revoke_callbacks(&self.db, run_id)
-    }
-
-    fn revoke_callbacks(db: &Connection, run_id: &str) -> Result<()> {
-        db.execute("update callback set status = 'revoked', revoked_at = ? where run_id = ? and status = 'live'", params![iso(0), run_id])?;
+    /// An operator asks to cancel the run (`requestCancel`): the first
+    /// request's reason stands, and a run already over takes none.
+    pub fn request_cancel(&self, run_id: &str, reason: Option<&str>) -> Result<()> {
+        self.db.execute(
+            "update run set cancel_requested_at = ?, cancel_reason = ? where id = ? and cancel_requested_at is null and status in ('running', 'parked')",
+            params![iso(0), reason, run_id],
+        )?;
         Ok(())
     }
 
@@ -973,7 +939,7 @@ impl Store {
         let HeldPark { address, state, ref kind } = *park;
         let wake_at = match kind {
             ParkKind::Timer { wake_at } => Some(*wake_at),
-            ParkKind::Await { .. } | ParkKind::Wait { .. } | ParkKind::Limit => None,
+            ParkKind::Wait { .. } | ParkKind::Limit => None,
         };
         Self::put_leaf_in(db, run_id, address, kind.reason(), wake_at, state)?;
         Self::unpark_waits_in(db, run_id, address)?;
@@ -981,9 +947,8 @@ impl Store {
         match kind {
             // The leaf is the truth; the work row only says when to look.
             ParkKind::Timer { wake_at } => Self::enqueue_in(db, "resume_timer", &timer_work_key(run_id), &timer_work_payload(run_id), Some(wake_at)),
-            ParkKind::Await { team_id, adapter_type, correlation_key } => Self::correlate_in(db, run_id, team_id, address, adapter_type, correlation_key),
             ParkKind::Wait { wait_id } => Self::park_wait_in(db, run_id, address, wait_id),
-            ParkKind::Limit => Self::drop_correlation_in(db, run_id, address),
+            ParkKind::Limit => Ok(()),
         }
     }
 
@@ -1160,55 +1125,6 @@ impl Store {
             .iter()
             .map(|payload| OwedRace::of_payload(&parse_text(payload)?).ok_or_else(|| StoreError::Invalid(format!("a {SETTLE_RACE_WORK_KIND} row of run {run_id} that is not one: {payload}"))))
             .collect()
-    }
-
-    // ── Correlations ────────────────────────────────────────────────────────
-
-    pub fn correlate(&self, run_id: &str, team_id: &str, address: &str, adapter_type: &str, correlation_key: &str) -> Result<()> {
-        Self::correlate_in(&self.db, run_id, team_id, address, adapter_type, correlation_key)
-    }
-
-    fn correlate_in(db: &Connection, run_id: &str, team_id: &str, address: &str, adapter_type: &str, correlation_key: &str) -> Result<()> {
-        db.execute(
-            "insert into await_correlation (run_id, team_id, address, adapter_type, correlation_key) values (?, ?, ?, ?, ?)
-             on conflict (run_id, address) do update set
-               team_id = excluded.team_id, adapter_type = excluded.adapter_type, correlation_key = excluded.correlation_key",
-            params![run_id, team_id, address, adapter_type, correlation_key],
-        )?;
-        Ok(())
-    }
-
-    pub fn correlated(&self, adapter_type: &str, team_id: &str, correlation_key: &str) -> Result<Vec<CorrelatedAwait>> {
-        let mut statement = self.db.prepare(
-            "select run_id, team_id, address from await_correlation where team_id = ? and adapter_type = ? and correlation_key = ? order by run_id, address",
-        )?;
-        Ok(statement
-            .query_map(params![team_id, adapter_type, correlation_key], |r| Ok(CorrelatedAwait { run_id: r.get(0)?, team_id: r.get(1)?, address: r.get(2)? }))?
-            .collect::<rusqlite::Result<Vec<_>>>()?)
-    }
-
-    pub fn of_run(&self, run_id: &str, adapter_type: &str) -> Result<Vec<(CorrelatedAwait, String)>> {
-        let mut statement =
-            self.db.prepare("select run_id, team_id, address, correlation_key from await_correlation where run_id = ? and adapter_type = ? order by address")?;
-        Ok(statement
-            .query_map(params![run_id, adapter_type], |r| {
-                Ok((CorrelatedAwait { run_id: r.get(0)?, team_id: r.get(1)?, address: r.get(2)? }, r.get(3)?))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?)
-    }
-
-    pub fn drop_correlation(&self, run_id: &str, address: &str) -> Result<()> {
-        Self::drop_correlation_in(&self.db, run_id, address)
-    }
-
-    fn drop_correlation_in(db: &Connection, run_id: &str, address: &str) -> Result<()> {
-        db.execute("delete from await_correlation where run_id = ? and address = ?", params![run_id, address])?;
-        Ok(())
-    }
-
-    pub fn drop_run_correlations(&self, run_id: &str) -> Result<()> {
-        self.db.execute("delete from await_correlation where run_id = ?", params![run_id])?;
-        Ok(())
     }
 
     // ── The run lease ───────────────────────────────────────────────────────
@@ -1626,14 +1542,15 @@ mod tests {
         assert_eq!(keys, ["p1", "p2"]);
         let rest: Vec<String> = store.claim_due(&claim(10, 60_000)).unwrap().into_iter().map(|w| w.key).collect();
         assert_eq!(rest, ["t1", "e1"]);
-        let unknown = [String::from("resume_callback")];
+        let unknown = [String::from("fire_callback")];
         assert!(matches!(store.claim_due(&ClaimDue { kinds: Some(&unknown), ..claim(10, 60_000) }), Err(StoreError::Invalid(_))));
     }
 
     #[test]
     fn a_kind_lf_does_not_drain_is_refused_at_the_queue() {
         let (store, _) = state_file();
-        assert!(matches!(store.enqueue("resume_callback", "k", &no_payload(), None), Err(StoreError::Invalid(_))));
+        // A callback's body is no work since callbacks retired at 0.13.
+        assert!(matches!(store.enqueue("fire_callback", "k", &no_payload(), None), Err(StoreError::Invalid(_))));
     }
 
     #[test]
@@ -1696,26 +1613,17 @@ mod tests {
     }
 
     #[test]
-    fn an_await_park_is_kept_with_its_correlation_and_a_limit_park_with_its_drop() {
+    fn a_limit_park_is_undone_whole_when_its_last_write_fails() {
         let (store, _) = state_file();
         let fence = running(&store, "run-1");
-        let kind = ParkKind::Await { team_id: "local", adapter_type: "mail", correlation_key: "thread-1" };
-        let park = Park { run_id: "run-1", address: "s1", state: &no_payload(), fence: Some(&fence), kind };
-        failing(&store, "no_correlation", "before insert on await_correlation");
-        assert!(store.commit_park(&park).is_err());
-        assert!(store.leaves("run-1", false, None, None).unwrap().is_empty());
-        unfail(&store, "no_correlation");
-        store.commit_park(&park).unwrap();
-        assert_eq!(store.correlated("mail", "local", "thread-1").unwrap()[0].address, "s1");
-        // The run's status is the last write: failing it undoes the leaf and the drop.
         let limit = Park { run_id: "run-1", address: "s1", state: &no_payload(), fence: Some(&fence), kind: ParkKind::Limit };
+        // The run's status is the last write: failing it undoes the leaf.
         failing(&store, "no_status", "before update of status on run");
         assert!(store.commit_park(&limit).is_err());
-        assert_eq!(store.leaves("run-1", false, None, None).unwrap()[0].reason, "await");
-        assert_eq!(store.correlated("mail", "local", "thread-1").unwrap().len(), 1);
+        assert!(store.leaves("run-1", false, None, None).unwrap().is_empty());
         unfail(&store, "no_status");
         store.commit_park(&limit).unwrap();
-        assert!(store.correlated("mail", "local", "thread-1").unwrap().is_empty());
+        assert_eq!(store.leaves("run-1", false, None, None).unwrap()[0].reason, "limit");
     }
 
     #[test]

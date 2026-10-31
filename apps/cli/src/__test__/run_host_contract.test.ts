@@ -1,8 +1,8 @@
 // The run host's contract suite (packages/movement-engine/services/run_host/
 // contract.ts) against listen-fire's SQLite backend, driven over its stdio JSON-RPC
 // bridge (`listen-fire --contract-store`) by `RpcStoreBackend`: the same cases the
-// hosted Postgres backend is held to (the live state families, the callbacks
-// and the cancel cases), one fresh state file per case. Then the same cases
+// hosted Postgres backend is held to (the live state families and the cancel
+// cases, less those listen-fire no longer serves: run_host_not_on_lf.ts), one fresh state file per case. Then the same cases
 // through a third-party store module filling a project's store slot
 // (`listen-fire --contract-store-slot`): listen-fire drives the module over the store wire,
 // and the module (store_module/forward.mjs) forwards to `listen-fire --contract-store`.
@@ -14,7 +14,6 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  callbackContractCases,
   cancelContractCases,
   deliveryContractCases,
   rerunContractCases,
@@ -28,6 +27,7 @@ import { RpcStoreBackend } from 'movement-engine/services/run_host/rpc_store';
 const LOCAL_TENANT = 'local';
 import { lfBinary } from './lf_bin';
 import { withStoreModule } from './store_module/project';
+import { RUN_HOST_CASES_NOT_ON_LF } from './run_host_not_on_lf';
 
 /** A project whose store slot a store module fills, its state in `path`. */
 function storeModuleProject(path: string): string {
@@ -43,8 +43,8 @@ const bridges = [
 ];
 
 for (const bridge of bridges)
-for (const contractCase of [...runHostContractCases, ...callbackContractCases, ...cancelContractCases]) {
-  test(`${bridge.over}: ${contractCase.name}`, async () => {
+for (const contractCase of [...runHostContractCases, ...cancelContractCases]) {
+  test(`${bridge.over}: ${contractCase.name}`, { skip: RUN_HOST_CASES_NOT_ON_LF.has(contractCase.name) }, async () => {
     const path = join(mkdtempSync(join(tmpdir(), 'lf-contract-')), 'state.db');
     const backend = new RpcStoreBackend(lfBinary(), bridge.args(path));
     const records: RecordsContractBackend = {

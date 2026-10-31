@@ -1,7 +1,7 @@
 //! The values a host is handed and answers with: the eval wire
 //! (crate::env) read into a Rust type, so a host never sees the wire's tags.
 //! Lossless both ways: an object keeps its key order, and the two engine
-//! objects that cross (a file, the event or a callback record) come back as
+//! objects that cross (a file, the event's record) come back as
 //! the handles they went out as.
 
 use serde_json::{Value as Json, json};
@@ -18,7 +18,7 @@ pub enum Data {
     Map(Vec<(String, Data)>),
     /// A file the engine holds, by the id the host's file table gave it.
     File(FileRef),
-    /// The event or a callback, handed out by the engine: give it back as
+    /// The event, handed out by the engine: give it back as
     /// is and the engine reads it as the record again.
     Record(RecordRef),
 }

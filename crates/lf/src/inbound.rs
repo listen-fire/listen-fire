@@ -6,14 +6,14 @@
 //!
 //! The webhook door: intercepts → subscription → provider check → signature
 //! → preprocessInbound → capture an event's receipt → advance the pull cursor
-//! → log the arrivals the delivery reports → queue a work row per receipt and
-//! per await wake → ack. Capture, queue, then ack: the sender's 200 means
+//! → log the arrivals the delivery reports, waking the waits they answer →
+//! queue a work row per receipt → ack. Capture, queue, then ack: the sender's 200 means
 //! every receipt, arrival and wake is kept.
 //! A delivery the provider names (a declared header, or the module's check)
 //! is kept once per subscription: its redelivery is acked as a duplicate.
 //! A module that checks its own inbound (`scheme: module`) is handed the raw
-//! request (`checkInbound`) in place of the signature, `preprocessInbound`
-//! and `wakeKeys`, and may answer a reply to send as it is (a handshake);
+//! request (`checkInbound`) in place of the signature and
+//! `preprocessInbound`, and may answer a reply to send as it is (a handshake);
 //! only its door takes a method other than POST.
 
 use hmac::{Hmac, KeyInit, Mac};
@@ -448,12 +448,10 @@ pub trait InboundStore {
     /// The module's own check of a request (`checkInbound`), its answer
     /// validated as the wire's.
     async fn check_inbound(&self, source: &Source, request: &RawRequest<'_>, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String>;
-    /// The correlation keys a delivery wakes; empty when the adapter names none.
-    async fn wake_keys(&self, source: &Source, raw: &Js) -> Result<Vec<String>, String>;
     /// An event's receipt: what `keep` later queues.
     async fn capture(&self, event: &Js, source: &Source) -> Result<Js, String>;
     /// What the delivery leaves, kept as one: the delivery's receipt, its
-    /// pull cursor, its receipts queued and its wakes. False, and nothing
+    /// pull cursor, its receipts queued and its arrivals logged. False, and nothing
     /// kept, for a duplicate: its external id was kept at its subscription
     /// before. A failure is the sender's to retry, whole.
     async fn keep(&self, kept: Kept<'_>) -> Result<bool, String>;
@@ -479,7 +477,6 @@ pub struct Kept<'a> {
     pub receipts: Vec<Js>,
     pub source: &'a Source,
     pub team_id: &'a str,
-    pub wake_keys: &'a [String],
     /// Logged, each parked wait on their records woken.
     pub arrivals: &'a [NewArrival],
     /// The provider's id for the delivery: a second one under it, at the
@@ -601,7 +598,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
     }
     let Some(source) = store.source_for(&subscription).await? else { return refused(Refusal::UnknownProvider) };
 
-    let (extraction, wakes, external_id, reply) = if source.declaration.scheme == Scheme::Module {
+    let (extraction, external_id, reply) = if source.declaration.scheme == Scheme::Module {
         let request = RawRequest { method: delivery.method, path: delivery.path, query: delivery.query, headers: delivery.headers, body: delivery.raw_body };
         let secret = is_usable_secret(&source.secret).then_some(source.secret.as_str());
         let answer = store.check_inbound(&source, &request, secret, subscription.checkpoint.as_ref()).await?;
@@ -614,11 +611,10 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
             }
             _ => {
                 let events = answer.get("events").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default();
-                let keys = answer.get("wakeKeys").and_then(Js::as_array).unwrap_or(&[]).iter().filter_map(Js::as_str).map(str::to_string).collect::<Vec<_>>();
                 let external_id = answer.get("deliveryId").and_then(Js::as_str).filter(|id| !id.is_empty()).map(str::to_string);
                 let arrivals = arrivals_of(&answer).map_err(|e| format!("checkInbound for adapter {}: {e}", source.adapter_type))?;
                 let reply = answer.get("reply").map(module_reply);
-                (Extraction { events, arrivals, checkpoint: answer.get("checkpoint").cloned() }, Wakes::Known(keys), external_id, reply)
+                (Extraction { events, arrivals, checkpoint: answer.get("checkpoint").cloned() }, external_id, reply)
             }
         }
     } else {
@@ -639,7 +635,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
             eprintln!("[webhook] adapter for provider {} has no preprocessInbound — delivery dropped", subscription.provider_key);
             return refused(Refusal::CannotPreprocess);
         }
-        (store.preprocess(&source, &body, subscription.checkpoint.as_ref()).await?, Wakes::Read(body), external_id, None)
+        (store.preprocess(&source, &body, subscription.checkpoint.as_ref()).await?, external_id, None)
     };
 
     if let Some(message) = store.refuse_events(&source, &extraction.events) {
@@ -664,13 +660,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
         }
     }
 
-    // The wakes are independent of the events, read after the capture, so a
-    // failing wake door never costs the delivery its receipts.
-    let wakes = match wakes {
-        Wakes::Known(keys) => Ok(keys),
-        Wakes::Read(body) => store.wake_keys(&source, &body).await,
-    };
-    if extraction.events.is_empty() && extraction.arrivals.is_empty() && wakes.as_ref().is_ok_and(Vec::is_empty) {
+    if extraction.events.is_empty() && extraction.arrivals.is_empty() {
         return Ok(Ok(Received::Kept(0, reply)));
     }
     // The pull cursor rides on "receipted", not "run", and is kept with the
@@ -682,20 +672,13 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
         receipts: captured,
         source: &source,
         team_id: &subscription.team_id,
-        wake_keys: wakes.as_deref().unwrap_or(&[]),
-        // Kept without its id, the delivery's retry is a delivery of its
-        // own: its arrivals are left for the retry to log, once.
-        arrivals: if wakes.is_ok() { &extraction.arrivals[..] } else { &[] },
-        // A delivery whose wakes failed is answered 500 and sent again: kept
-        // without its id, so the retry is kept rather than a duplicate.
-        external_id: external_id.as_deref().filter(|_| wakes.is_ok()),
+        arrivals: &extraction.arrivals,
+        external_id: external_id.as_deref(),
         door: delivery.source,
     };
     if !store.keep(kept).await? {
         return Ok(Ok(Received::Duplicate));
     }
-    // The events are in; a failing wake door is still the sender's to retry.
-    wakes.map_err(|error| format!("wakeKeys failed for adapter {}: {error}", source.adapter_type))?;
     Ok(Ok(Received::Kept(events_processed, reply)))
 }
 
@@ -720,12 +703,6 @@ fn delivery_body(raw_body: &[u8], headers: &[(String, String)]) -> Result<Js, St
         }
     }
     Ok(Js::Obj(fields))
-}
-
-/// A delivery's wakes: named by the module's check, or read off the body.
-enum Wakes {
-    Known(Vec<String>),
-    Read(Js),
 }
 
 fn status_of(value: Option<&Js>) -> Option<u16> {
@@ -1032,15 +1009,13 @@ mod tests {
         answer: Js,
         seen: std::cell::RefCell<Vec<String>>,
         queued: std::cell::Cell<usize>,
-        wakes: std::cell::RefCell<Vec<String>>,
         /// The identities of the arrivals kept.
         arrived: std::cell::RefCell<Vec<String>>,
         /// Each kept delivery's external id; one kept before is a duplicate.
         kept: std::cell::RefCell<Vec<Option<String>>>,
         /// Signed by the protocol's own scheme instead, read by
-        /// `preprocessInbound` (its body's `arrivals`), named by `x-id`,
-        /// its `wakeKeys` failing while this is set.
-        signed_wakes_failing: Option<std::cell::Cell<bool>>,
+        /// `preprocessInbound` (its body's `arrivals`), named by `x-id`.
+        signed: bool,
         /// Why its store would drop a delivery's arrivals, when it would.
         unkept: std::cell::RefCell<Option<String>>,
     }
@@ -1051,16 +1026,15 @@ mod tests {
                 answer: Js::parse(answer.as_bytes()).unwrap(),
                 seen: Default::default(),
                 queued: Default::default(),
-                wakes: Default::default(),
                 arrived: Default::default(),
                 kept: Default::default(),
-                signed_wakes_failing: None,
+                signed: false,
                 unkept: Default::default(),
             }
         }
 
-        fn signed(wakes_failing: bool) -> ModuleChecked {
-            ModuleChecked { signed_wakes_failing: Some(std::cell::Cell::new(wakes_failing)), ..ModuleChecked::answering("null") }
+        fn signed() -> ModuleChecked {
+            ModuleChecked { signed: true, ..ModuleChecked::answering("null") }
         }
     }
 
@@ -1078,15 +1052,15 @@ mod tests {
             Vec::new()
         }
         async fn source_for(&self, _subscription: &Subscription) -> Result<Option<Source>, String> {
-            let declared: &[u8] = match self.signed_wakes_failing {
-                None => br#"{"providerKey":"mail","scheme":"module"}"#,
-                Some(_) => br#"{"providerKey":"mail","scheme":"remote","signatureHeaders":["x-listen-fire-signature"],"deliveryId":{"header":"x-id"}}"#,
+            let declared: &[u8] = match self.signed {
+                false => br#"{"providerKey":"mail","scheme":"module"}"#,
+                true => br#"{"providerKey":"mail","scheme":"remote","signatureHeaders":["x-listen-fire-signature"],"deliveryId":{"header":"x-id"}}"#,
             };
             let declaration = Declaration::read(&Js::parse(declared).unwrap())?;
             Ok(Some(Source { declaration, secret: "key".into(), adapter_type: "mail".into(), install: "inst".into() }))
         }
         fn reads_deliveries(&self, _source: &Source) -> bool {
-            self.signed_wakes_failing.is_some()
+            self.signed
         }
         async fn preprocess(&self, _source: &Source, raw: &Js, _checkpoint: Option<&Js>) -> Result<Extraction, String> {
             self.seen.borrow_mut().push(raw.to_json());
@@ -1095,13 +1069,6 @@ mod tests {
         async fn check_inbound(&self, _source: &Source, request: &RawRequest<'_>, secret: Option<&str>, _checkpoint: Option<&Js>) -> Result<Js, String> {
             self.seen.borrow_mut().push(format!("{} {} {}", request.wire().to_json(), secret.unwrap_or("-"), request.method));
             Ok(self.answer.clone())
-        }
-        async fn wake_keys(&self, _source: &Source, _raw: &Js) -> Result<Vec<String>, String> {
-            match &self.signed_wakes_failing {
-                Some(failing) if failing.get() => Err("wake door down".into()),
-                Some(_) => Ok(Vec::new()),
-                None => Err("never called for a module that checks its own inbound".into()),
-            }
         }
         async fn capture(&self, event: &Js, _source: &Source) -> Result<Js, String> {
             Ok(event.clone())
@@ -1113,7 +1080,6 @@ mod tests {
             }
             self.kept.borrow_mut().push(external_id);
             self.queued.set(self.queued.get() + kept.receipts.len());
-            self.wakes.borrow_mut().extend(kept.wake_keys.iter().cloned());
             self.arrived.borrow_mut().extend(kept.arrivals.iter().map(|a| a.identity.clone().unwrap_or_else(|| format!("gone {}", a.key))));
             Ok(true)
         }
@@ -1126,11 +1092,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_module_that_checks_its_own_inbound_is_handed_the_raw_request() {
-        let store = ModuleChecked::answering(r#"{"outcome":"accepted","events":[{"payload":{"n":1}}],"wakeKeys":["k1"]}"#);
+        let store = ModuleChecked::answering(r#"{"outcome":"accepted","events":[{"payload":{"n":1}}]}"#);
         let headers = headers(&[("Content-Type", "application/x-www-form-urlencoded")]);
         let answer = answer_delivery(&store, delivery("POST", b"a=b", &headers)).await;
         assert_eq!((answer.status, answer.body.to_json()), (200, r#"{"ok":true,"eventsProcessed":1}"#.to_string()));
-        assert_eq!((store.queued.get(), store.wakes.borrow().clone()), (1, vec!["k1".to_string()]));
+        assert_eq!(store.queued.get(), 1);
         assert_eq!(
             store.seen.borrow()[0],
             r#"{"method":"POST","path":"/api/public/webhook-sync/mail/inst","query":"a=1","headers":{"content-type":"application/x-www-form-urlencoded"},"body":"YT1i"} key POST"#
@@ -1155,7 +1121,7 @@ mod tests {
     /// fields; one without that content type is still JSON, refused when not.
     #[tokio::test]
     async fn a_form_encoded_delivery_is_read_as_its_fields() {
-        let store = ModuleChecked::signed(false);
+        let store = ModuleChecked::signed();
         let body = b"payload=%7B%22type%22%3A%22block_actions%22%7D&tag=a&tag=b+c";
         let signature = to_hex(&hmac_sha256(b"key", body));
         let form = headers(&[("x-listen-fire-signature", &signature), ("content-type", "application/x-www-form-urlencoded; charset=utf-8")]);
@@ -1163,21 +1129,6 @@ mod tests {
         assert_eq!(store.seen.borrow().clone(), [r#"{"payload":"{\"type\":\"block_actions\"}","tag":["a","b c"]}"#]);
         let unsaid = headers(&[("x-listen-fire-signature", &signature)]);
         assert_eq!(answer_delivery(&store, delivery("POST", body, &unsaid)).await.status, 500, "a body that says nothing of its form is read as JSON");
-    }
-
-    /// A delivery whose wakes failed is kept without its id and answered
-    /// 500: its arrivals are left for the retry, so they are logged once.
-    #[tokio::test]
-    async fn a_delivery_whose_wakes_failed_leaves_its_arrivals_to_the_retry() {
-        let store = ModuleChecked::signed(true);
-        let body = br#"{"arrivals":[{"edge":"Comments","key":"thread:c1","identity":"k1","landing":{"fields":{}}}]}"#;
-        let headers = headers(&[("x-listen-fire-signature", &to_hex(&hmac_sha256(b"key", body))), ("x-id", "d-1")]);
-        assert_eq!(answer_delivery(&store, delivery("POST", body, &headers)).await.status, 500);
-        assert!(store.arrived.borrow().is_empty(), "nothing logged by the failed attempt");
-        store.signed_wakes_failing.as_ref().unwrap().set(false);
-        assert_eq!(answer_delivery(&store, delivery("POST", body, &headers)).await.status, 200);
-        assert_eq!(store.arrived.borrow().clone(), ["k1"], "the retry logs them once");
-        assert_eq!(store.kept.borrow().clone(), [None, Some("d-1".to_string())]);
     }
 
     /// A store that would drop a delivery's arrivals refuses the delivery

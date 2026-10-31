@@ -10,18 +10,15 @@
 //! A method is `<family>.<method>` as `RunHostStore` names it
 //! (`parks.putLeaf`, `work.claimDue`, …), its params the TypeScript method's
 //! one input object, its result the TypeScript method's answer (`null` for
-//! none). The callback family is `callbacks.<method>` as `CallbackStore`
-//! names it, and the run records `records.<method>` as `RunRecords` does.
+//! none). The run records are `records.<method>` as `RunRecords` names them.
 //! `runs.start` adds a run row, the contract's `newRun`; `runs.requestCancel`,
 //! `runs.status` and `runs.complete` are the records backend's
 //! `requestCancel`, `runStatus` and `completeRun`. A fenced write
 //! refused because the lease is gone answers the error code
 //! `run_lease_lost` (`data: { runId }`), which the client rethrows as the
 //! core's `RunLeaseLost`. Requests are answered one at a time.
-//! The callback family and the run records (`callbacks.*`, `runs.*`) are
-//! crate::callbacks's.
 
-use crate::backend::{MintCallback, RunHostStore, StoreSpec, open_store};
+use crate::backend::{RunHostStore, StoreSpec, open_store};
 use crate::json::Js;
 use crate::obj;
 use crate::slot_server::{Listen, Refusal};
@@ -33,11 +30,9 @@ use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait};
 pub const STORE_METHODS: &[&str] = &[
     "store.open", "runs.start", "runs.requestCancel", "runs.status", "runs.complete", "runs.settle", "runs.markParked", "runs.get",
     "runs.list", "runs.appendTrace", "runs.traceLength", "runs.spent", "runs.addSpend", "runs.resetSpendBaseline", "records.cancelRequest",
-    "records.markFailed", "records.closeRun", "callbacks.mint", "callbacks.get", "callbacks.record", "callbacks.markBodyStarted",
-    "callbacks.landed", "callbacks.revokeRun", "parks.putLeaf", "parks.claimLeaf", "parks.finishLeaf", "parks.leaves", "parks.deleteLeaves", "parks.commitSegment", "parks.owedRaces",
+    "records.markFailed", "parks.putLeaf", "parks.claimLeaf", "parks.finishLeaf", "parks.leaves", "parks.deleteLeaves", "parks.commitSegment", "parks.owedRaces",
     "joins.recordJoin", "joins.decrementJoin", "joins.persistBranchExport", "joins.collectBranchExports", "joins.hasPendingJoins",
-    "joins.frames", "joins.deleteFrames", "correlations.correlate", "correlations.correlated", "correlations.ofRun", "correlations.drop",
-    "correlations.dropRun", "leases.claim", "leases.renew", "leases.release", "leases.dropRunState", "work.enqueue", "work.claimDue",
+    "joins.frames", "joins.deleteFrames", "leases.claim", "leases.renew", "leases.release", "leases.dropRunState", "work.enqueue", "work.claimDue",
     "work.complete", "work.release", "sources.put", "sources.get", "inbound.checkpoint", "inbound.saveCheckpoint", "processes.list",
     "processes.swap", "events.claim", "events.startRun", "runs.lapsed", "parks.commit", "work.bury", "inbound.keepDelivery",
     "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries", "inbound.forgetDeliveryId", "work.enqueueIfAbsent",
@@ -227,33 +222,6 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
             store.mark_failed(p.str("runId")?, p.str("message")?)?;
             none
         }
-        "records.closeRun" => {
-            store.revoke_run_callbacks(p.str("runId")?)?;
-            none
-        }
-
-        "callbacks.mint" => {
-            let (params, state) = (p.value("params"), p.value("state"));
-            let id = store.mint_callback(MintCallback {
-                team_id: p.str("teamId")?,
-                run_id: p.str("runId")?,
-                address: p.str("address")?,
-                params: &params,
-                state: &state,
-                single_use: p.flag("singleUse"),
-                expires_at: p.opt_str("expiresAt")?,
-            })?;
-            Ok(Js::from(obj! { "id" => Js::str(id) }))
-        }
-        "callbacks.get" => Ok(store.callback(p.str("id")?)?.as_ref().map(Wire::to_wire).unwrap_or(Js::Null)),
-        "callbacks.record" => Ok(store.record_callback_call(p.str("id")?, &p.value("values"), p.str("bodyDueAt")?)?.to_wire()),
-        "callbacks.markBodyStarted" => Ok(Js::Bool(store.mark_callback_body_started(p.str("id")?, p.int("callIndex")?, p.opt_str("fence")?)?)),
-        "callbacks.landed" => Ok(Js::strings(store.landed_callbacks(&p.strings("ids")?)?)),
-        "callbacks.revokeRun" => {
-            store.revoke_run_callbacks(p.str("runId")?)?;
-            none
-        }
-
         "parks.putLeaf" => {
             store.put_leaf(p.str("runId")?, p.str("address")?, p.str("reason")?, p.opt_str("wakeAt")?, &p.value("state"), p.opt_str("fence")?)?;
             none
@@ -343,21 +311,6 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
         "joins.frames" => Ok(Js::strings(store.frames(p.str("runId")?)?)),
         "joins.deleteFrames" => {
             store.delete_frames(p.str("runId")?, &p.strings("frameAddresses")?)?;
-            none
-        }
-
-        "correlations.correlate" => {
-            store.correlate(p.str("runId")?, p.str("teamId")?, p.str("address")?, p.str("adapterType")?, p.str("correlationKey")?)?;
-            none
-        }
-        "correlations.correlated" => Ok(to_rows(&store.correlated(p.str("adapterType")?, p.str("teamId")?, p.str("correlationKey")?)?)),
-        "correlations.ofRun" => Ok(to_rows(&store.of_run(p.str("runId")?, p.str("adapterType")?)?)),
-        "correlations.drop" => {
-            store.drop_correlation(p.str("runId")?, p.str("address")?)?;
-            none
-        }
-        "correlations.dropRun" => {
-            store.drop_run_correlations(p.str("runId")?)?;
             none
         }
 

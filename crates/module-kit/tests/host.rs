@@ -15,7 +15,7 @@ struct Tiny;
 
 impl Adapter for Tiny {
     fn manifest(&self) -> AdapterManifest {
-        AdapterManifest::new("tiny").optional(["wakeKeys"])
+        AdapterManifest::new("tiny").optional(["translateFilter"])
     }
 
     async fn list_entry_points(&self, ctx: &Ctx) -> Answer<Vec<EntryPoint>> {
@@ -145,7 +145,7 @@ async fn over_tcp_each_module_answers_at_its_own_path() {
             let (status, body) = post(tcp().await, "/tiny", Some("sesame"), &call("manifest", "{}")).await;
             assert_eq!(status, 200);
             assert!(body.starts_with(r#"{"ok":true,"result":{"protocolVersion":2,"protocolMinor":0,"kind":"adapter","adapterType":"tiny","#), "{body}");
-            assert!(body.contains(r#""wakeKeys"]"#), "{body}");
+            assert!(body.contains(r#""translateFilter"]"#), "{body}");
             let (_, body) = post(tcp().await, "/watcher", Some("sesame"), &call("manifest", "{}")).await;
             // Offering a `.watch` (2.1) asks nothing of an older host: it states 0.
             assert!(body.starts_with(r#"{"ok":true,"result":{"protocolVersion":2,"protocolMinor":0,"kind":"adapter","adapterType":"watcher","#), "{body}");
@@ -159,7 +159,7 @@ async fn over_tcp_each_module_answers_at_its_own_path() {
                 r#"{"ok":true,"result":[{"typeId":"Thing","displayName":"Thing","writable":false,"readable":true}],"cost":[{"microdollars":1500.0,"label":"lookup"}]}"#
             );
 
-            let (_, body) = post(tcp().await, "/tiny", Some("sesame"), &call("wakeKeys", r#"{"raw":{}}"#)).await;
+            let (_, body) = post(tcp().await, "/tiny", Some("sesame"), &call("translateFilter", r#"{"raw":{}}"#)).await;
             assert_eq!(body, r#"{"ok":true,"result":["p-"]}"#, "settings ride every request");
 
             let (_, body) = post(tcp().await, "/tiny", Some("sesame"), &call("poll", "{}")).await;

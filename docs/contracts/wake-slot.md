@@ -41,7 +41,7 @@ The store slot's envelope ([store-slot.md](store-slot.md#the-envelope)): adapter
 - **Answer once the wake is arranged, not once the work ran.** listen-fire waits for the answer before it goes on (the request that queued the work waits too), so a module hands the wake to its queue and answers.
 - **`wake.now`**: start a worker soon. listen-fire may say it many times in a row, and while a worker is already draining. A module may start one worker for several.
 - **`wake.at`**: start a worker at `at`, never before. An `at` already past is `wake.now`.
-- **`kind`** is the work row's kind: `fire_event`, `wake_await`, `resume_timer`, `fire_callback`, `poll_listen`, `refresh_subscription` or `settle_race`. A module may start a worker for that kind's pool (`listen-fire drain --kinds <kind>`), or ignore it.
+- **`kind`** is the work row's kind: `fire_event`, `wake_await`, `resume_timer`, `poll_listen`, `refresh_subscription` or `settle_race`. A module may start a worker for that kind's pool (`listen-fire drain --kinds <kind>`), or ignore it.
 - **A refusal**: `bad_request` for an `at` that is not an instant, or a request without its `kind`.
 - **"Start a worker"** means run `listen-fire drain --until-idle` against the same store (a job, a container, a function). It claims every due row, so it needs nothing from the wake but the start.
 
@@ -50,10 +50,9 @@ The store slot's envelope ([store-slot.md](store-slot.md#the-envelope)): adapter
 After every work row listen-fire writes or puts back with a due time, once the write is in the store, so the worker a wake starts finds the row. A row written inside one of the store's composite calls (a park with its timer row, a delivery's cursor with its rows) is announced after that call commits, never before:
 
 - a delivery's or a push's event queued (`fire_event`, now): `/hooks/…` under `listen-fire serve --doors-only`, and the webhook and push doors
-- a wake for parked awaits queued (`wake_await`, now)
+- a wake for a parked await queued (`wake_await`, now): an arrival logged on its wait
 - a timer park (`resume_timer`, at its due time)
 - a race a resumed arm won and left to its run to settle (`settle_race`, now)
-- a callback's call (`fire_callback` at its backstop, and now when its run is busy or under `listen-fire serve --doors-only`; `wake_await` at its backstop)
 - a polled listen's first poll (`poll_listen`, now) and each next one (at the next interval)
 - a webhook the source lets lapse (`refresh_subscription`): when `listen-fire serve` registers it, at its refresh time (a day before it expires), and after each refresh, at the next one
 - a row put back for a retry (its kind, at the retry time): its backoff after a failure, or a short wait while its run is held elsewhere
