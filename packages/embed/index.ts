@@ -64,6 +64,8 @@ import {
   type RunHost,
   type RunHostStore,
   type RunHostWorkKind,
+  type RunRowStore,
+  type RunSettle,
   type StepLeaf,
   type WaitWake,
 } from 'movement-engine/public/run-host';
@@ -91,7 +93,9 @@ export interface StoredConnection {
   credentialRef?: string;
 }
 
-/** A run kept between its segments: what it is re-entered with. */
+/** A run kept between its segments: what it is re-entered with. Where it
+ *  stands is its run row in the run host's store (`RunRowStore.runStatus`),
+ *  written in the same write as the park or the step's end that moves it. */
 export interface EmbeddedRun {
   runId: string;
   tenant: string;
@@ -99,8 +103,11 @@ export interface EmbeddedRun {
   movement: string;
   input: Omit<RunInput, 'runId'>;
   spentMicrodollars: number;
-  status: 'running' | 'parked' | 'completed' | 'failed';
 }
+
+/** Where a run stands, as its run row says. */
+export type EmbeddedRunStatus = 'running' | 'parked' | 'completed' | 'failed';
+const RUN_STATUSES: readonly EmbeddedRunStatus[] = ['running', 'parked', 'completed', 'failed'];
 
 /** Where an embedded host keeps what outlives one call. Over a database, each
  *  family is a table; `runHost` must pass the store contract suite
@@ -120,8 +127,9 @@ export interface EmbeddedHostStore {
     get(runId: string): Promise<EmbeddedRun | null>;
   };
   /** Parked leaves, joins, timers, waits and the arrivals they read, run
-   *  leases, queued work, pinned texts. */
-  runHost: RunHostStore;
+   *  leases, queued work, pinned texts, and each run's row: a park marks its
+   *  run parked, and the step that ends a run settles it, in the same write. */
+  runHost: RunHostStore & RunRowStore;
 }
 
 /** A secrets backend a connect can store a new credential in. */
@@ -226,13 +234,30 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
   const manualUnit = modules.has(MANUAL) ? undefined : manualAdapter();
   const loaded = new Map<string, { module: AdapterModuleDefinition; instance: InProcessAdapterModule }>();
   const catalogs = new Map<string, Promise<CatalogSnapshot>>();
+  /** Where the run stands, or null for a run the host never started. */
+  const statusOf = async (runId: string): Promise<EmbeddedRunStatus | null> => {
+    const status = await store.runHost.runStatus({ runId });
+    if (status === null) return null;
+    return RUN_STATUSES.find((known) => known === status) ?? fail(`run ${runId} has status ${JSON.stringify(status)}, which this host never writes`);
+  };
+
+  /** Settle a run outside a step's end: its first segment's end, or a
+   *  failure the drain's rules record. A run already settled stays so. */
+  const settleRun = async (run: EmbeddedRun, settle: RunSettle): Promise<void> => {
+    const status = await statusOf(run.runId);
+    if (status !== 'running' && status !== 'parked') return;
+    await store.runHost.parks.commitSegment({ runId: run.runId, teamId: run.tenant, resumed: null, joins: [], parks: [], settle });
+  };
+
+  const settled = (status: 'completed' | 'failed', outcome: EmbeddedRunOutcome['outcome']): RunSettle => ({ status, outcome, at: now().toISOString() });
+
   const runHost: RunHost = {
     store: store.runHost,
     runs: {
       cancelRequest: async () => null,
-      markFailed: async ({ runId }) => {
+      markFailed: async ({ runId, message }) => {
         const run = await store.runs.get(runId);
-        if (run !== null && run.status !== 'failed') await store.runs.put({ ...run, status: 'failed' });
+        if (run !== null) await settleRun(run, settled('failed', { ok: false, error: message }));
       },
     },
   };
@@ -332,13 +357,8 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
       teamId: run.tenant,
       ...(resume !== undefined ? { fence: resume.fence } : {}),
       ...(resume?.leaf !== undefined ? { resumed: resume.leaf } : {}),
-      records: {
-        ensureRun: async () => {},
-        markParked: async () => {
-          run.status = 'parked';
-          await store.runs.put(run);
-        },
-      },
+      // The park's own write marks the run parked (`parks.commit`).
+      records: { ensureRun: async () => {}, markParked: async () => {} },
     });
     return inProcessHost({
       ...options.engine,
@@ -362,10 +382,7 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
     return { ...namesOf(run), outcome: { ok: true, writes: result.writes, spentMicrodollars: run.spentMicrodollars, parked: result.parked === true } };
   };
 
-  const failureOf = (run: EmbeddedRun, error: string): EmbeddedRunOutcome => {
-    run.status = 'failed';
-    return { ...namesOf(run), outcome: { ok: false, error } };
-  };
+  const failureOf = (run: EmbeddedRun, error: string): EmbeddedRunOutcome => ({ ...namesOf(run), outcome: { ok: false, error } });
 
   const fire = async (tenant: string, program: SavedProgram, listener: FileListener, delivery: Delivery): Promise<EmbeddedRunOutcome> => {
     const connections = await store.connections.list(tenant);
@@ -401,32 +418,32 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
         ...(maxSegmentSeconds !== undefined ? { maxSegmentSeconds } : {}),
       },
       spentMicrodollars: 0,
-      status: 'running',
     };
     await store.runs.put(run);
+    await store.runHost.startRun({ runId: run.runId });
     let outcome: EmbeddedRunOutcome;
+    let parked = false;
     try {
       const result = await runMovement({ ...run.input, runId: run.runId, host: hostFor(run) });
-      run.status = result.parked === true ? 'parked' : 'completed';
+      parked = result.parked === true;
       outcome = outcomeOf(run, result);
     } catch (error) {
       outcome = failureOf(run, messageOf(error));
     }
     await store.runs.put(run);
+    // A run that parked was marked so by its park's write.
+    if (!parked) await settleRun(run, settled(outcome.outcome.ok ? 'completed' : 'failed', outcome.outcome));
     return outcome;
   };
 
   /** One parked run's step: a segment re-entered from its leaf (or a race
    *  settled), its cost counted on from what the run spent before. A step
-   *  that ends its run does not mark it completed: the drain writes the
-   *  step's end after it, under the lease, and a lease lost there writes
-   *  nothing, leaving the leaf parked for the run's next holder. So the run
-   *  is marked completed by `drained`, once the drain that ran its steps
-   *  wrote every step's end. */
-  const stepperFor = (run: EmbeddedRun, fence: string, stepped: EmbeddedRunOutcome[]): RunStepper => {
-    let endsRun = false;
-    const step: StepLeaf = async (request, settle) => {
-      endsRun = false;
+   *  that ends its run answers the run's settle, which the drain writes in
+   *  the step's end, under the lease: a lease lost there writes neither,
+   *  leaving the leaf parked for the run's next holder. A step that fails
+   *  records the failure itself, and the drain tears the run down. */
+  const stepperFor = (run: EmbeddedRun, fence: string, stepped: EmbeddedRunOutcome[]): StepLeaf => {
+    return async (request, settle) => {
       const host = hostFor(run, { fence, ...(request.kind === 'leaf' ? { leaf: request.address } : {}) });
       const input = { ...run.input, runId: run.runId, priorSpentMicrodollars: run.spentMicrodollars, state: request.state, host };
       try {
@@ -434,39 +451,35 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
           request.kind === 'leaf'
             ? await resumeMovement({ ...input, ...(request.reenter ? { reenter: true } : {}), deferRaceSettlement: request.deferRaceSettlement })
             : await settleRaceFrame({ ...input, frameAddress: request.frameAddress });
-        stepped.push(outcomeOf(run, result));
-        const deferredRaceFrames = result.deferredRaceFrames ?? [];
-        // A race the segment left its run to settle is owed: the run goes on.
-        endsRun = result.parked !== true && deferredRaceFrames.length === 0 && (await settle.runComplete());
+        const outcome = outcomeOf(run, result);
+        stepped.push(outcome);
         await store.runs.put(run);
-        return result.parked === true ? { kind: 'parked', parkedAddress: result.parkedAddress, deferredRaceFrames } : { kind: 'completed', deferredRaceFrames };
+        const deferredRaceFrames = result.deferredRaceFrames ?? [];
+        if (result.parked === true) return { kind: 'parked', parkedAddress: result.parkedAddress, deferredRaceFrames };
+        // A race the segment left its run to settle is owed: the run goes on.
+        const endsRun = deferredRaceFrames.length === 0 && (await settle.runComplete());
+        return { kind: 'completed', deferredRaceFrames, ...(endsRun ? { settle: settled('completed', outcome.outcome) } : {}) };
       } catch (error) {
         const message = messageOf(error);
-        stepped.push(failureOf(run, message));
+        const failure = failureOf(run, message);
+        stepped.push(failure);
         await store.runs.put(run);
+        await settleRun(run, settled('failed', failure.outcome));
         return { kind: 'failed', error: message };
       }
     };
-    return {
-      step,
-      drained: async () => {
-        if (!endsRun) return;
-        run.status = 'completed';
-        await store.runs.put(run);
-      },
-    };
   };
 
-  /** The run's stepper under `lease`, the run read again under it, only
-   *  while it is parked, as listen-fire's parked stepper. One that ended
-   *  (completed or failed since its row was queued, or no longer kept) steps
-   *  nothing. One still `running` is busy, its row retried: its first
-   *  segment wrote a park and has not yet marked the run parked (that is a
-   *  second write here, where listen-fire's park marks it in the same one). */
-  const parkedStepper = async (runId: string, lease: HeldRunLease, stepped: EmbeddedRunOutcome[]): Promise<RunStepper | 'busy' | 'ended'> => {
+  /** The run's step under `lease`, the run read again under it, only while
+   *  it is parked, as listen-fire's parked stepper. One that ended (completed
+   *  or failed since its row was queued, or no longer kept) steps nothing.
+   *  One still `running` is busy, its row retried; no row should name one,
+   *  since a park marks its run parked in its own write. */
+  const parkedStepper = async (runId: string, lease: HeldRunLease, stepped: EmbeddedRunOutcome[]): Promise<StepLeaf | 'busy' | 'ended'> => {
     const run = await store.runs.get(runId);
-    if (run === null) return 'ended';
-    switch (run.status) {
+    const status = await statusOf(runId);
+    if (run === null || status === null) return 'ended';
+    switch (status) {
       case 'parked':
         return stepperFor(run, lease.token, stepped);
       case 'running':
@@ -475,7 +488,7 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
       case 'failed':
         return 'ended';
       default: {
-        const unreachable: never = run.status;
+        const unreachable: never = status;
         throw new Error(`unhandled run status ${JSON.stringify(unreachable)}`);
       }
     }
@@ -508,46 +521,54 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
     const leases = store.runHost.leases;
     switch (row.kind) {
       case WAKE_AWAIT_WORK_KIND: {
-        const found: Array<RunStepper | 'busy' | 'ended'> = [];
+        let runBusy = false;
         const { busy } = await wakeWait(runHost, {
           wake: row.wake,
           teamId,
           stepper: async ({ lease }) => {
-            const stepper = await parkedStepper(runId, lease, stepped);
-            found.push(stepper);
-            return typeof stepper === 'string' ? null : stepper.step;
+            const step = await parkedStepper(runId, lease, stepped);
+            runBusy = step === 'busy';
+            return typeof step === 'string' ? null : step;
           },
         });
-        if (busy || found.includes('busy')) return 'busy';
-        for (const stepper of found) if (typeof stepper !== 'string') await stepper.drained();
-        return 'done';
+        return busy || runBusy ? 'busy' : 'done';
       }
       case RESUME_TIMER_WORK_KIND: {
         const held = await withRunLease(leases, runId, async (lease) => {
-          const stepper = await parkedStepper(runId, lease, stepped);
-          if (typeof stepper === 'string') return stepper === 'busy' ? 'busy' : 'done';
-          const drained = await drainDueTimers(runHost, { runId, teamId, dueBy, lease, step: stepper.step });
-          if (drained === 'done') await stepper.drained();
-          return drained;
+          const step = await parkedStepper(runId, lease, stepped);
+          return typeof step === 'string' ? step : drainDueTimers(runHost, { runId, teamId, dueBy, lease, step });
         });
-        if (held.kind === 'busy' || held.value !== 'done') return 'busy';
-        // The run's one timer row, re-armed while it is claimed, outlives the
-        // completion that follows, due at the run's next timer.
-        const next = await nextTimerWake(runHost, { runId });
-        if (next !== null) await armTimerWake(store.runHost, { runId, teamId, wakeAt: next });
-        return 'done';
+        if (held.kind === 'busy') return 'busy';
+        switch (held.value) {
+          case 'busy':
+          case 'leaseLost':
+            return 'busy';
+          // A run that ended has nothing to wake: a timer leaf it left behind
+          // is never armed again.
+          case 'ended':
+            return 'done';
+          case 'done': {
+            // The run's one timer row, re-armed while it is claimed, outlives
+            // the completion that follows, due at the run's next timer.
+            const next = await nextTimerWake(runHost, { runId });
+            if (next !== null) await armTimerWake(store.runHost, { runId, teamId, wakeAt: next });
+            return 'done';
+          }
+          default: {
+            const unreachable: never = held.value;
+            throw new Error(`unhandled timer drain ${JSON.stringify(unreachable)}`);
+          }
+        }
       }
       case SETTLE_RACE_WORK_KIND: {
         // A race an arm won and left its run to settle, its drain died
         // before it did: the run's races are settled, and nothing else.
         const held = await withRunLease(leases, runId, async (lease) => {
-          const stepper = await parkedStepper(runId, lease, stepped);
-          if (typeof stepper === 'string') return stepper === 'busy' ? 'busy' : 'done';
-          const drained = await drainOwedRaces(runHost, { runId, teamId, lease, step: stepper.step });
-          if (drained === 'done') await stepper.drained();
-          return drained;
+          const step = await parkedStepper(runId, lease, stepped);
+          return typeof step === 'string' ? step : drainOwedRaces(runHost, { runId, teamId, lease, step });
         });
-        return held.kind === 'busy' || held.value !== 'done' ? 'busy' : 'done';
+        if (held.kind === 'busy') return 'busy';
+        return held.value === 'busy' || held.value === 'leaseLost' ? 'busy' : 'done';
       }
       default: {
         const unreachable: never = row;
@@ -576,12 +597,15 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
         const row = await rowRun(claimed);
         // A run the host no longer keeps has nothing to step.
         if (row === null) await work.complete(claimed);
-        else if (input.tenant !== undefined && row.run.tenant !== input.tenant) await work.release(claimed);
+        else if (input.tenant !== undefined && row.run.tenant !== input.tenant) await work.release({ ...claimed, why: 'busy' });
         // Another process holds the run: its row goes back for later.
-        else if ((await stepRow(row, input.dueBy, stepped)) === 'busy') await work.release(claimed);
+        else if ((await stepRow(row, input.dueBy, stepped)) === 'busy') await work.release({ ...claimed, why: 'busy' });
         else await work.complete(claimed);
       } catch (error) {
-        for (const unstepped of claims.slice(index + 1)) await work.release(unstepped);
+        // Never stepped, so no attempt of theirs (`busy`). Best effort: a
+        // release that fails leaves its row leased until its lease lapses,
+        // and the error thrown is still the one that stopped the step.
+        for (const unstepped of claims.slice(index + 1)) await work.release({ ...unstepped, why: 'busy' }).catch(() => {});
         throw error;
       }
     }
@@ -659,13 +683,6 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
 
     tick: (at = now()) => stepWork({ dueBy: at.toISOString() }),
   };
-}
-
-/** A parked run's step for the drains, and what follows a drain that wrote
- *  every step's end: the run marked completed when its last step ended it. */
-interface RunStepper {
-  step: StepLeaf;
-  drained(): Promise<void>;
 }
 
 /** A due run host row, and the run it steps. */

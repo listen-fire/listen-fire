@@ -25,7 +25,7 @@ import {
   settleIfCancelRequested,
   type RunHost,
 } from './rules';
-import type { OwedRace, WaitWake } from './store';
+import type { OwedRace, RunSettle, WaitWake } from './store';
 
 /** One segment the drain asks the product to run. */
 export type StepRequest =
@@ -50,15 +50,19 @@ export type StepOutcome =
   /** It parked again: at the same address (an await re-armed without
    *  resolving), or further on. */
   | { kind: 'parked'; parkedAddress: string | undefined; deferredRaceFrames: readonly string[] }
-  | { kind: 'completed'; deferredRaceFrames: readonly string[] };
+  /** It completed. `settle`, given by a step that ended its run, is the
+   *  run's settle: the drain writes it in the step's end, so the run is never
+   *  left parked with nothing left to wake it. */
+  | { kind: 'completed'; deferredRaceFrames: readonly string[]; settle?: RunSettle };
 
 /**
  * Run one segment. When it completes, the product asks `runComplete()`
  * whether the run as a whole is now complete (the core's rule: no join
- * waiting, no other leaf parked, no other race owed) and records the run
- * completed, or still parked, accordingly. A segment that left races to
- * settle (`deferredRaceFrames`) never completes its run: the drain owes them
- * in the step's end and settles them after.
+ * waiting, no other leaf parked, no other race owed) and, when it is, answers
+ * the run's settle with its outcome, which the drain writes in the step's end
+ * (`parks.commitSegment`). A segment that left races to settle
+ * (`deferredRaceFrames`) never completes its run: the drain owes them in the
+ * step's end and settles them after.
  */
 export type StepLeaf = (request: StepRequest, settle: { runComplete(): Promise<boolean> }) => Promise<StepOutcome>;
 
@@ -119,7 +123,7 @@ export async function drainRun(
     // The leaf's end: its claimed row goes (one the step parked again, an
     // await re-armed without resolving, stays), the notes its segment made
     // are kept, and each race its arm won is owed, in one write.
-    const ended = await endStep(host, { runId, teamId, ...fence, resumed: address, owedRaces: owed(outcome.deferredRaceFrames, state) });
+    const ended = await endStep(host, { runId, teamId, ...fence, resumed: address, owedRaces: owed(outcome.deferredRaceFrames, state), settle: settleOf(outcome) });
     if (!ended) return 'leaseLost';
     if (input.until !== undefined && (await input.until())) break;
   }
@@ -141,7 +145,15 @@ export async function drainRun(
     const settled = await afterStep(host, { runId, ...fence, outcome });
     if (settled !== 'continue') return settled;
     if (outcome.kind !== 'parked' && outcome.kind !== 'completed') continue;
-    const ended = await endStep(host, { runId, teamId, ...fence, resumed: null, settledRace: race.frameAddress, owedRaces: owed(outcome.deferredRaceFrames, state) });
+    const ended = await endStep(host, {
+      runId,
+      teamId,
+      ...fence,
+      resumed: null,
+      settledRace: race.frameAddress,
+      owedRaces: owed(outcome.deferredRaceFrames, state),
+      settle: settleOf(outcome),
+    });
     if (!ended) return 'leaseLost';
   }
 
@@ -163,15 +175,20 @@ function owed(frames: readonly string[], state: ParkedScopeState): OwedRace[] {
   return frames.map((frameAddress) => ({ frameAddress, state }));
 }
 
+function settleOf(outcome: Extract<StepOutcome, { kind: 'parked' | 'completed' }>): RunSettle | null {
+  return outcome.kind === 'completed' ? (outcome.settle ?? null) : null;
+}
+
 /** A step's end, in one fenced write (`parks.commitSegment`): the leaf it
  *  resumed finished, the race it settled discharged, the races it owes
- *  queued. False when the lease was lost, and nothing was written. */
+ *  queued, and the run settled when the step ended it. False when the lease
+ *  was lost, and nothing was written. */
 async function endStep(
   host: RunHost,
-  input: { runId: string; teamId: string; fence?: string; resumed: string | null; owedRaces: OwedRace[]; settledRace?: string },
+  input: { runId: string; teamId: string; fence?: string; resumed: string | null; owedRaces: OwedRace[]; settledRace?: string; settle: RunSettle | null },
 ): Promise<boolean> {
   try {
-    await host.store.parks.commitSegment({ ...input, joins: [], parks: [], settle: null, settledRace: input.settledRace ?? null });
+    await host.store.parks.commitSegment({ ...input, joins: [], parks: [], settledRace: input.settledRace ?? null });
     return true;
   } catch (error) {
     if (error instanceof RunLeaseLost) return false;

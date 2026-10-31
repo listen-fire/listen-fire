@@ -630,6 +630,12 @@ impl Session {
         iso(self.due_offset_ms)
     }
 
+    /// Judge what is due `ms` ahead of now, as `LF_CLOCK_AHEAD_MS` does.
+    #[cfg(test)]
+    pub(crate) fn judge_due_ahead(&mut self, ms: i64) {
+        self.due_offset_ms = ms;
+    }
+
     /// Now, as this session judges what is due (`LF_CLOCK_AHEAD_MS` on).
     pub fn now_ms(&self) -> i64 {
         crate::limiter::now_ms() + self.due_offset_ms
@@ -1214,8 +1220,7 @@ impl Session {
     }
 
     /// Step a parked run's leaves through one of the core's drains, under the
-    /// run's lease. Ok(None) when the run is not parked or none of its leaves
-    /// was stepped; Err(busy) when another process holds it.
+    /// run's lease (see `Parked`).
     async fn drive_parked_run(&self, set: &FileSet, run_id: &str, drain: Drain) -> Result<Parked, String> {
         if self.store.run(run_id).map_err(|e| e.to_string())?.is_none() {
             return Err(format!("no run {run_id}"));
@@ -1243,11 +1248,11 @@ impl Session {
         let Some(held) = held else { return Ok(Parked::Busy) };
         let Some((tally, lease_lost, captured)) = held? else { return Ok(Parked::NotStepped) };
         if tally.stepped == 0 {
-            return Ok(Parked::NotStepped);
+            return Ok(if lease_lost { Parked::LeaseLost(None) } else { Parked::NotStepped });
         }
-        let mut outcome = self.settled_outcome(run_id, "resumed", tally, lease_lost)?;
+        let mut outcome = Box::new(self.settled_outcome(run_id, "resumed", tally, lease_lost)?);
         outcome.captured = captured;
-        Ok(Parked::Stepped(Box::new(outcome)))
+        Ok(if lease_lost { Parked::LeaseLost(Some(outcome)) } else { Parked::Stepped(outcome) })
     }
 
     /// A parked run's step for the core's drains, under the lease. None when
@@ -1268,9 +1273,9 @@ impl Session {
             return Err(format!("run {run_id} is {}, not parked", row.status));
         }
         match self.drive_parked_run(&self.file_set(), run_id, Drain::EveryParkedLeaf).await? {
-            Parked::Busy => Err(run_busy(run_id)),
+            Parked::Busy | Parked::LeaseLost(None) => Err(run_busy(run_id)),
             Parked::NotStepped => Err(format!("run {run_id} is parked but has no parked leaf")),
-            Parked::Stepped(outcome) => Ok(*outcome),
+            Parked::Stepped(outcome) | Parked::LeaseLost(Some(outcome)) => Ok(*outcome),
         }
     }
 
@@ -1358,8 +1363,8 @@ impl Session {
         for run_id in self.parked_runs()? {
             match self.drive_parked_run(&set, &run_id, Drain::DueTimers).await? {
                 Parked::Busy => return Err(run_busy(&run_id)),
-                Parked::NotStepped => {}
-                Parked::Stepped(outcome) => outcomes.push(*outcome),
+                Parked::NotStepped | Parked::LeaseLost(None) => {}
+                Parked::Stepped(outcome) | Parked::LeaseLost(Some(outcome)) => outcomes.push(*outcome),
             }
         }
         Ok(outcomes)
@@ -1477,11 +1482,7 @@ impl Session {
                 if self.store.run(&run_id).map_err(|e| e.to_string())?.is_none() {
                     return Ok((Next::Done, Vec::new()));
                 }
-                Ok(match self.drive_parked_run(set, &run_id, Drain::DueTimers).await? {
-                    Parked::Busy => (Next::Busy, Vec::new()),
-                    Parked::NotStepped => (Next::Done, Vec::new()),
-                    Parked::Stepped(outcome) => (Next::Done, vec![*outcome]),
-                })
+                Ok(self.drive_parked_run(set, &run_id, Drain::DueTimers).await?.row_next())
             }
             // A wait an arrival answered: its run re-enters the await parked
             // at the wait's address, which reads the arrival.
@@ -1490,11 +1491,7 @@ impl Session {
                 if self.store.run(&run_id).map_err(|e| e.to_string())?.is_none() {
                     return Ok((Next::Done, Vec::new()));
                 }
-                Ok(match self.drive_parked_run(set, &run_id, Drain::Awaits(vec![text("address")?])).await? {
-                    Parked::Busy => (Next::Busy, Vec::new()),
-                    Parked::NotStepped => (Next::Done, Vec::new()),
-                    Parked::Stepped(outcome) => (Next::Done, vec![*outcome]),
-                })
+                Ok(self.drive_parked_run(set, &run_id, Drain::Awaits(vec![text("address")?])).await?.row_next())
             }
             // A race an arm won and left to its run to settle: the run is
             // driven with nothing to resume, so its drain settles what the
@@ -1505,11 +1502,7 @@ impl Session {
                 if self.store.run(&run_id).map_err(|e| e.to_string())?.is_none() {
                     return Ok((Next::Done, Vec::new()));
                 }
-                Ok(match self.drive_parked_run(set, &run_id, Drain::OwedRaces).await? {
-                    Parked::Busy => (Next::Busy, Vec::new()),
-                    Parked::NotStepped => (Next::Done, Vec::new()),
-                    Parked::Stepped(outcome) => (Next::Done, vec![*outcome]),
-                })
+                Ok(self.drive_parked_run(set, &run_id, Drain::OwedRaces).await?.row_next())
             }
             POLL_WORK_KIND => self.poll_row(set, &text("subscription")?).await,
             crate::subscriptions::REFRESH_WORK_KIND => Ok((
@@ -1528,7 +1521,8 @@ impl Session {
 enum Next {
     /// Deleted (unless something re-armed it meanwhile).
     Done,
-    /// Its run was held elsewhere: tried again shortly.
+    /// Its run was held elsewhere, or taken over while its drain ran: tried
+    /// again shortly.
     Busy,
     /// Kept, due again then (a polled listen's next poll).
     DueAt(String),
@@ -1544,10 +1538,32 @@ enum Drain {
     OwedRaces,
 }
 
+/// What driving a parked run came to.
 enum Parked {
+    /// Another process held the run's lease.
     Busy,
+    /// The run was not parked, or none of its leaves was stepped.
     NotStepped,
     Stepped(Box<RunOutcome>),
+    /// The run's lease went to another process inside the drain, with what
+    /// was stepped before it went. That holder's lease claim parked the leaf
+    /// this drain claimed again, and nothing else will wake it.
+    LeaseLost(Option<Box<RunOutcome>>),
+}
+
+impl Parked {
+    /// What becomes of the work row that drove the run. A row whose drain
+    /// lost the lease is released, not completed: completing it would leave
+    /// the leaf parked again with no row to wake it (and, for a
+    /// `settle_race` row, would delete the race the run owes).
+    fn row_next(self) -> (Next, Vec<RunOutcome>) {
+        match self {
+            Parked::Busy | Parked::LeaseLost(None) => (Next::Busy, Vec::new()),
+            Parked::LeaseLost(Some(outcome)) => (Next::Busy, vec![*outcome]),
+            Parked::NotStepped => (Next::Done, Vec::new()),
+            Parked::Stepped(outcome) => (Next::Done, vec![*outcome]),
+        }
+    }
 }
 
 fn run_busy(run_id: &str) -> String {

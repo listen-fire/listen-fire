@@ -276,7 +276,7 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
     expect(settled).toMatchObject({ runId: fired.runId, outcome: { ok: true, parked: false } });
     expect(written).toEqual([{ tenant: 'acme', book: 'acme-north', Title: 'Re lunch?/-' }]);
     expect(await owedRaces({ runId: fired.runId })).toEqual([]);
-    expect(await store.runs.get(fired.runId)).toMatchObject({ status: 'completed' });
+    expect(await store.runHost.runStatus({ runId: fired.runId })).toBe('completed');
     // The losing arm's sleep went with the race: its wake steps nothing.
     expect(await host.tick(new Date(Date.now() + 2 * 3_600_000))).toEqual([]);
   });
@@ -308,7 +308,7 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
     takeOver = true;
     await host.arrive('acme', { adapterType: 'notes', arrivals: [comment] });
     expect(theirs).toBeDefined();
-    expect(await store.runs.get(fired.runId)).toMatchObject({ status: 'parked' });
+    expect(await store.runHost.runStatus({ runId: fired.runId })).toBe('parked');
     expect((await parks.leaves({ runId: fired.runId, parkedOnly: true })).length).toBe(1);
     // Its wake went back due: held by the other process, it is busy again.
     expect(await host.tick()).toEqual([]);
@@ -323,7 +323,7 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
       { tenant: 'acme', book: 'acme-north', Title: 'Re lunch?' },
       { tenant: 'acme', book: 'acme-north', Title: 'Re lunch?' },
     ]);
-    expect(await store.runs.get(fired.runId)).toMatchObject({ status: 'completed' });
+    expect(await store.runHost.runStatus({ runId: fired.runId })).toBe('completed');
     expect(await parks.leaves({ runId: fired.runId })).toEqual([]);
   });
 
@@ -336,15 +336,83 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
     await host.save('acme', { name: 'reply', source: copier('north', 'Re', 'said = await note-[:Comments]->\n  ').replace('${note.Title}', '${said.Body}') });
     const [fired] = await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
     // The run failed meanwhile, before its leaves were torn down.
-    const run = await store.runs.get(fired.runId);
-    if (run !== null) await store.runs.put({ ...run, status: 'failed' });
+    await store.runHost.parks.commitSegment({ runId: fired.runId, teamId: 'acme', resumed: null, joins: [], parks: [], settle: { status: 'failed', outcome: null, at: new Date().toISOString() } });
 
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
     expect(await host.arrive('acme', { adapterType: 'notes', arrivals: [comment] })).toEqual([]);
     expect(written).toEqual([]);
-    expect(await store.runs.get(fired.runId)).toMatchObject({ status: 'failed' });
+    expect(await store.runHost.runStatus({ runId: fired.runId })).toBe('failed');
     expect((await store.runHost.parks.leaves({ runId: fired.runId, parkedOnly: true })).length).toBe(1);
     expect(await store.runHost.work.claimDue({ limit: 10, leaseMs: 60_000 })).toEqual([]);
+  });
+
+  it("settles a run in its step's end: a process that dies right after that write leaves the run completed, not parked with nothing to wake it", async () => {
+    const store = memoryEmbeddedHostStore();
+    const { parks } = store.runHost;
+    const commitSegment = parks.commitSegment;
+    let dies = false;
+    parks.commitSegment = async (input) => {
+      const wakes = await commitSegment(input);
+      if (dies && input.resumed !== null) {
+        dies = false;
+        throw new Error('the process died');
+      }
+      return wakes;
+    };
+    const written: Written[] = [];
+    const notes = notesModule(written, new Map());
+    const host = createEmbeddedHost({ modules: [notes], store, moduleHost: () => ({ validateResults: true }) });
+    await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
+    await host.save('acme', { name: 'reply', source: copier('north', 'Re', 'said = await note-[:Comments]->\n  ').replace('${note.Title}', '${said.Body}') });
+    const [fired] = await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    expect(await store.runHost.runStatus({ runId: fired.runId })).toBe('parked');
+
+    const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
+    dies = true;
+    await expect(host.arrive('acme', { adapterType: 'notes', arrivals: [comment] })).rejects.toThrow('the process died');
+    expect(written).toEqual([{ tenant: 'acme', book: 'acme-north', Title: 'Re lunch?' }]);
+    expect(await store.runHost.runStatus({ runId: fired.runId })).toBe('completed');
+    expect(await parks.leaves({ runId: fired.runId })).toEqual([]);
+  });
+
+  it('steps nothing for a timer row of a run that ended, and never arms it again', async () => {
+    let now = new Date('2026-10-27T09:00:00.000Z');
+    const store = memoryEmbeddedHostStore({ now: () => now.getTime() });
+    const written: Written[] = [];
+    const notes = notesModule(written, new Map());
+    const host = createEmbeddedHost({ modules: [notes], store, now: () => now, moduleHost: () => ({ validateResults: true }) });
+    await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
+    await host.save('acme', { name: 'later', source: copier('north', 'Later', 'await sleep(1h)\n  ') });
+    const [fired] = await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    // The run failed meanwhile, before its timer leaf was torn down.
+    await store.runHost.parks.commitSegment({ runId: fired.runId, teamId: 'acme', resumed: null, joins: [], parks: [], settle: { status: 'failed', outcome: null, at: now.toISOString() } });
+
+    now = new Date('2026-10-27T10:00:01.000Z');
+    expect(await host.tick()).toEqual([]);
+    expect(written).toEqual([]);
+    expect(await store.runHost.runStatus({ runId: fired.runId })).toBe('failed');
+    expect((await store.runHost.parks.leaves({ runId: fired.runId, parkedOnly: true })).length).toBe(1);
+    expect(await store.runHost.work.claimDue({ limit: 10, leaseMs: 60_000, dueBy: '2026-10-30T00:00:00.000Z' })).toEqual([]);
+  });
+
+  it('a row that throws is the error thrown, though a release after it fails; the rows after it go back as never attempted', async () => {
+    let now = new Date('2026-10-27T09:00:00.000Z');
+    const store = memoryEmbeddedHostStore({ now: () => now.getTime() });
+    const released: Array<{ kind: string; why: string | undefined }> = [];
+    store.runHost.work.release = async (work) => {
+      released.push({ kind: work.kind, why: work.why });
+      throw new Error('the store is down');
+    };
+    const notes = notesModule([], new Map());
+    const host = createEmbeddedHost({ modules: [notes], store, now: () => now, moduleHost: () => ({ validateResults: true }) });
+    await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
+    await host.save('acme', { name: 'later', source: copier('north', 'Later', 'await sleep(1h)\n  ') });
+    await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    await store.runHost.work.enqueue({ kind: 'wake_await', key: 'wake_await:malformed', payload: {}, dueAt: '2026-10-27T09:30:00.000Z' });
+
+    now = new Date('2026-10-27T10:00:01.000Z');
+    await expect(host.tick()).rejects.toThrow('names no wait');
+    expect(released).toEqual([{ kind: 'resume_timer', why: 'busy' }]);
   });
 
   it('a row that throws stays leased; the rows claimed after it go back due at once', async () => {

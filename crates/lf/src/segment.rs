@@ -409,6 +409,33 @@ thread_local! {
     /// The n-th segment from now to make its commit dies right after it
     /// (0: none): what the commit wrote stands, and nothing after it runs.
     pub(crate) static DIES_AFTER_COMMIT: Cell<u32> = const { Cell::new(0) };
+    /// Armed, the next segment to reach its commit finds its run taken over
+    /// just before it, as another process would take it: its lease released
+    /// and claimed again under another token (kept here, for the test to
+    /// release). The fenced commit then writes nothing.
+    pub(crate) static TAKEN_OVER_BEFORE_COMMIT: RefCell<TakeOver> = const { RefCell::new(TakeOver::No) };
+}
+
+#[cfg(test)]
+#[derive(Debug, PartialEq)]
+pub(crate) enum TakeOver {
+    No,
+    Armed,
+    /// The other process's lease token.
+    Took(String),
+}
+
+#[cfg(test)]
+fn take_over_if_armed(host: &SegmentHost<'_>) {
+    TAKEN_OVER_BEFORE_COMMIT.with(|taken| {
+        if *taken.borrow() != TakeOver::Armed {
+            return;
+        }
+        let fence = host.fence.as_deref().expect("a segment that is taken over holds the run's lease");
+        host.store.release_lease(&host.run_id, fence).unwrap();
+        let theirs = host.store.claim_lease(&host.run_id, crate::run_host::RUN_LEASE_TTL_MS).unwrap().expect("the released lease is free");
+        *taken.borrow_mut() = TakeOver::Took(theirs);
+    });
 }
 
 /// The segment's held writes and where they leave the run (`settle`), kept
@@ -424,6 +451,8 @@ pub fn commit(host: &SegmentHost<'_>, settle: Option<RunSettle<'_>>, owed_races:
     if DIES_BEFORE_COMMIT.with(|dies| dies.replace(false)) {
         return Err(Ended::LeaseLost);
     }
+    #[cfg(test)]
+    take_over_if_armed(host);
     write_commit(host, settle, owed_races)?;
     #[cfg(test)]
     if DIES_AFTER_COMMIT.with(|dies| dies.get() > 0 && dies.replace(dies.get() - 1) == 1) {

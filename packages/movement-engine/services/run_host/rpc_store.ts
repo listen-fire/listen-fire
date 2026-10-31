@@ -17,7 +17,7 @@ import { RUN_LEASE_LOST_CODE } from 'engine-contracts/slots';
 import { RunLeaseLost } from '../movement_engine/errors';
 import { SlotClient, SlotRefused, startModule, type SlotAddress } from 'module-runtime/module_wire/wire';
 import type { RunRecords } from './rules';
-import type { ClaimedWork, NewArrival, ParkKind, RunHostStore, RunRowStore } from './store';
+import type { ClaimedWork, NewArrival, ParkKind, RunHostStore, RunRowStore, WorkRelease } from './store';
 
 const Nothing = z.null();
 const Leaf = z.object({
@@ -146,8 +146,15 @@ const Run: z.ZodType<RunRow> = z.object({
 });
 
 /** The work claim the server reads: no more than it needs, whatever the caller spreads in. */
-function claimOf(work: ClaimedWork & { dueAt?: string }): Record<string, unknown> {
-  return { id: work.id, kind: work.kind, key: work.key, claim: work.claim, ...(work.dueAt !== undefined ? { dueAt: work.dueAt } : {}) };
+function claimOf(work: ClaimedWork & { dueAt?: string; why?: WorkRelease }): Record<string, unknown> {
+  return {
+    id: work.id,
+    kind: work.kind,
+    key: work.key,
+    claim: work.claim,
+    ...(work.dueAt !== undefined ? { dueAt: work.dueAt } : {}),
+    ...(work.why !== undefined ? { why: work.why } : {}),
+  };
 }
 
 export class RpcStoreBackend {

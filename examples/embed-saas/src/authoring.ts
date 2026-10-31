@@ -83,7 +83,8 @@ export class Programs {
   }
 }
 
-/** What each run came to, beside the run the embedded host keeps. */
+/** What each run came to, beside the run the embedded host keeps; where
+ *  each stands is its run row in the host's store (`statusOf`). */
 export class Runs {
   private readonly runs = new Map<string, EmbeddedRun>();
   private readonly outcomes = new Map<string, EmbeddedRunOutcome['outcome']>();
@@ -91,7 +92,10 @@ export class Runs {
   /** A retry's run, by the tenant and the id its caller gave the request. */
   readonly byRequest = new Map<string, string>();
 
-  constructor(private readonly now: () => Date) {}
+  constructor(
+    private readonly now: () => Date,
+    private readonly statusOf: (runId: string) => Promise<string | null>,
+  ) {}
 
   put(run: EmbeddedRun): void {
     if (!this.runs.has(run.runId)) this.startedAt.set(run.runId, this.now().toISOString());
@@ -114,9 +118,9 @@ export class Runs {
     return [...this.runs.values()].filter((r) => r.tenant === tenant && r.program === program).reverse();
   }
 
-  trace(run: EmbeddedRun): RunTrace {
+  async trace(run: EmbeddedRun): Promise<RunTrace> {
     const outcome = this.outcomes.get(run.runId);
-    const status: RunStatus = run.status === 'completed' ? 'success' : run.status;
+    const status = runStatusOf(await this.statusOf(run.runId));
     const writes = outcome?.ok === true ? outcome.writes.map(toJson) : [];
     return {
       runId: run.runId,
@@ -132,6 +136,23 @@ export class Runs {
   }
 }
 
+/** A run row's status as the authoring tools say it: none yet is running. */
+function runStatusOf(status: string | null): RunStatus {
+  switch (status) {
+    case null:
+    case 'running':
+      return 'running';
+    case 'parked':
+      return 'parked';
+    case 'completed':
+      return 'success';
+    case 'failed':
+      return 'failed';
+    default:
+      throw new Error(`a run row with status ${JSON.stringify(status)}, which the embedded host never writes`);
+  }
+}
+
 function toJson(value: unknown): JsonValue {
   const round: JsonValue = JSON.parse(JSON.stringify(value ?? null));
   return round;
@@ -141,8 +162,8 @@ function toJson(value: unknown): JsonValue {
  *  authoring tools read them. */
 export function authoringStore(now: () => Date) {
   const programs = new Programs(now);
-  const runs = new Runs(now);
   const base = memoryEmbeddedHostStore({ now: () => now().getTime() });
+  const runs = new Runs(now, (runId) => base.runHost.runStatus({ runId }));
   const store: EmbeddedHostStore = {
     ...base,
     programs: {
@@ -164,8 +185,8 @@ export function authoringTenant(input: {
 }): TenantHost {
   const { tenant, host, store, programs, runs } = input;
   const requestKey = (requestId: string) => `${encodeURIComponent(tenant)}/${requestId}`;
-  const view = (run: EmbeddedRun) => {
-    const { event: _event, writes: _writes, decisions: _decisions, errors: _errors, ...rest } = runs.trace(run);
+  const view = async (run: EmbeddedRun) => {
+    const { event: _event, writes: _writes, decisions: _decisions, errors: _errors, ...rest } = await runs.trace(run);
     return rest;
   };
   const programStore: ProgramStore = {
@@ -178,19 +199,19 @@ export function authoringTenant(input: {
     async start({ program, text, files, requestId }) {
       const replayed = requestId !== undefined ? runs.byRequest.get(requestKey(requestId)) : undefined;
       const known = replayed !== undefined ? runs.get(replayed) : null;
-      if (known !== null) return { ok: true, runId: known.runId, status: view(known).status };
+      if (known !== null) return { ok: true, runId: known.runId, status: (await view(known)).status };
       if (files !== undefined && files.length > 0) return { ok: false, error: 'this product keeps no files: run it on text' };
       const [first] = runs.record(await host.run(tenant, { program: program.name, ...(text !== undefined ? { text } : {}) }));
       if (first === undefined) return { ok: false, error: `'${program.name}' declares no \`listen to manual\`, so it cannot be run on demand` };
       if (requestId !== undefined) runs.byRequest.set(requestKey(requestId), first.runId);
       const run = runs.get(first.runId);
-      return { ok: true, runId: first.runId, status: run === null ? 'running' : view(run).status };
+      return { ok: true, runId: first.runId, status: run === null ? 'running' : (await view(run)).status };
     },
     status: async (runId) => {
       const run = runs.get(runId);
       return run === null || run.tenant !== tenant ? null : view(run);
     },
-    list: async (program, { limit }) => runs.of(tenant, program.name).slice(0, limit).map(view),
+    list: async (program, { limit }) => Promise.all(runs.of(tenant, program.name).slice(0, limit).map(view)),
     trace: async (runId) => {
       const run = runs.get(runId);
       return run === null || run.tenant !== tenant ? null : runs.trace(run);

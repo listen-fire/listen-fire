@@ -81,7 +81,7 @@ export interface ParkStore {
     resumed: string | null;
     joins: ReadonlyArray<{ frameAddress: string; pending: number }>;
     parks: ReadonlyArray<{ address: string; state?: unknown; park: ParkKind }>;
-    settle: { status: string; outcome: unknown; at: string } | null;
+    settle: RunSettle | null;
     owedRaces?: readonly OwedRace[];
     settledRace?: string | null;
   }): Promise<WaitWake[]>;
@@ -251,6 +251,9 @@ export function settleRaceWorkKey(runId: string, frameAddress: string): string {
   return `${SETTLE_RACE_WORK_KIND}:${runId}:${frameAddress}`;
 }
 
+/** Why a claimed row goes back unfinished (`WorkQueue.release`). */
+export type WorkRelease = 'failed' | 'busy' | 'rescheduled';
+
 /** A claimed work row: what to do, and the claim to finish it under. */
 export interface ClaimedWork {
   id: string;
@@ -281,8 +284,12 @@ export interface WorkQueue {
   /** Done: delete the row, unless it was re-armed since the claim (it stays,
    *  unleased, due at its new time). A stale claim changes nothing. */
   complete(work: ClaimedWork): Promise<void>;
-  /** Unlease it for a retry, due at `dueAt` unless re-armed since the claim. */
-  release(work: ClaimedWork & { dueAt?: string }): Promise<void>;
+  /** Unlease it for a retry, due at `dueAt` unless re-armed since the claim.
+   *  `why` is the store slot's (`work.release`): `failed` (the default) counts
+   *  the claim as one of the row's attempts, `busy` gives it back (its run was
+   *  held elsewhere, or it was never stepped), `rescheduled` starts the
+   *  attempts over. A store that keeps no attempts ignores it. */
+  release(work: ClaimedWork & { dueAt?: string; why?: WorkRelease }): Promise<void>;
 }
 
 /** Every family a run host's backend serves. */
@@ -293,6 +300,14 @@ export interface RunHostStore {
   leases: RunLeaseStore;
   work: WorkQueue;
   sources: SourceStore;
+}
+
+/** Where a write leaves its run (`runs.settle`, and `parks.commitSegment`'s
+ *  `settle`): its status, what it came to, and when. */
+export interface RunSettle {
+  status: string;
+  outcome: unknown;
+  at: string;
 }
 
 /** A race a step's resumed arm won and left its run to settle, from the

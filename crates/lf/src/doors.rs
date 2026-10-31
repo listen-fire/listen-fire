@@ -1705,6 +1705,128 @@ pub(crate) mod tests {
         });
     }
 
+    /// The next segment to reach its commit is taken over by another
+    /// process just before it (crate::segment::TAKEN_OVER_BEFORE_COMMIT).
+    fn take_over_the_next_commit() {
+        crate::segment::TAKEN_OVER_BEFORE_COMMIT.with(|taken| *taken.borrow_mut() = crate::segment::TakeOver::Armed);
+    }
+
+    /// The other process's lease token, once a segment was taken over.
+    fn taken_over() -> String {
+        crate::segment::TAKEN_OVER_BEFORE_COMMIT.with(|taken| match taken.replace(crate::segment::TakeOver::No) {
+            crate::segment::TakeOver::Took(token) => token,
+            other => panic!("no segment was taken over: {other:?}"),
+        })
+    }
+
+    /// One drain pass: how many rows it claimed, and the statuses of the
+    /// runs they stepped.
+    async fn one_pass(session: &Session) -> (usize, Vec<String>) {
+        let (claimed, outcomes) = session.drain_work(10, &mut Vec::new()).await.unwrap();
+        (claimed, outcomes.into_iter().map(|o| o.status).collect())
+    }
+
+    /// Every work row queued, however far off it is due (each one claimed).
+    fn every_queued_kind(session: &Session) -> Vec<String> {
+        let far = iso(30 * 86_400_000);
+        let all = crate::store::ClaimDue { limit: 100, lease_ms: 60_000, due_by: Some(&far), kinds: None };
+        session.store.claim_due(&all).unwrap().into_iter().map(|row| row.kind).collect()
+    }
+
+    /// After a drain lost the run's lease to `theirs`: while that holder
+    /// keeps the run, the run's `rows` are busy (claimed, nothing stepped);
+    /// once it lets go, their retry drains the run.
+    async fn retried_after(session: &mut Session, run: &str, theirs: &str, ahead_ms: i64, rows: usize) {
+        session.judge_due_ahead(ahead_ms);
+        assert_eq!(one_pass(session).await, (rows, Vec::new()), "the rows were kept, and are busy while the other process holds the run");
+        session.store.release_lease(run, theirs).unwrap();
+        drained(session).await;
+    }
+
+    /// The step a comment's wake runs is taken over just before its commit,
+    /// which writes nothing: the wake is released, not completed. The other
+    /// holder's lease claim parked the leaf again, and the wake's retry
+    /// steps it on once that holder lets go.
+    #[test]
+    fn a_wake_whose_step_lost_the_runs_lease_is_kept_and_its_retry_completes_the_run() {
+        let project = InboxProject::with(AWAITS_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        in_local(async {
+            let mut session = project.session().await;
+            let (run, leaf) = parked_with_a_comment(&session).await;
+            take_over_the_next_commit();
+            assert_eq!(one_pass(&session).await, (1, vec!["leaseLost".to_string()]));
+            let theirs = taken_over();
+            assert_eq!(session.store.run(&run).unwrap().unwrap().status, "parked");
+            assert_eq!(the_run(&session).1, [(leaf.clone(), "await".to_string(), "parked".to_string())], "the other holder's claim parked the leaf again");
+
+            retried_after(&mut session, &run, &theirs, 2 * crate::run_host::BUSY_RETRY_MS, 1).await;
+            let row = session.store.run(&run).unwrap().unwrap();
+            assert_eq!(row.status, "completed", "{:?}", row.outcome);
+            assert!(row.outcome.as_deref().unwrap_or_default().contains(r#""hi""#), "{:?}", row.outcome);
+            assert_eq!(the_run(&session).1, []);
+            assert_eq!(every_queued_kind(&session), Vec::<String>::new());
+        });
+    }
+
+    /// As above, for a run's timer row: the slept leaf's step is taken over,
+    /// and the row is kept for its retry.
+    #[test]
+    fn a_timer_whose_step_lost_the_runs_lease_is_kept_and_its_retry_completes_the_run() {
+        let movement = AWAITS_A_COMMENT.replace("c = await new note-[:Comments]->\n  return c.Text", "await sleep(1h)\n  return \"woke\"");
+        let project = InboxProject::with(&movement, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        in_local(async {
+            let mut session = project.session().await;
+            hook(&session, NOTE, "d-1").await;
+            let (run, leaves) = the_run(&session);
+            assert_eq!(leaves.iter().map(|(_, reason, _)| reason.as_str()).collect::<Vec<_>>(), ["timer"]);
+            session.judge_due_ahead(2 * 3_600_000);
+            take_over_the_next_commit();
+            assert_eq!(one_pass(&session).await, (1, vec!["leaseLost".to_string()]));
+            let theirs = taken_over();
+            assert_eq!(session.store.run(&run).unwrap().unwrap().status, "parked");
+            assert_eq!(the_run(&session).1, leaves, "the other holder's claim parked the leaf again");
+
+            retried_after(&mut session, &run, &theirs, 2 * 3_600_000, 1).await;
+            let row = session.store.run(&run).unwrap().unwrap();
+            assert_eq!(row.status, "completed", "{:?}", row.outcome);
+            assert!(row.outcome.as_deref().unwrap_or_default().contains("woke"), "{:?}", row.outcome);
+            assert_eq!(the_run(&session).1, []);
+            assert_eq!(every_queued_kind(&session), Vec::<String>::new());
+        });
+    }
+
+    /// As above, for a race the run owes: the step that settles it is taken
+    /// over, and its `settle_race` row (the race itself) is kept, still owed.
+    #[test]
+    fn an_owed_race_whose_settling_step_lost_the_runs_lease_stays_owed_and_its_retry_settles_it() {
+        let project = InboxProject::with(RACES_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        in_local(async {
+            let mut session = project.session().await;
+            hook(&session, NOTE, "d-1").await;
+            let (run, _) = the_run(&session);
+            let comment = NewArrival { edge: "Comments".into(), key: "thread:n-1".into(), identity: Some("k1".into()), version: None, landing: Some(Js::parse(br#"{"fields":{"Text":"hi"}}"#).unwrap()), gone: false };
+            session.store.log_arrivals(LOCAL_TENANT, "inbox", &[comment], &iso(0)).unwrap();
+            crate::segment::DIES_AFTER_COMMIT.with(|dies| dies.set(1));
+            drained_wakes_only(&mut session).await;
+            let frames = session.store.frames(&run).unwrap();
+            assert_eq!(owed(&session, &run), frames, "the race is owed");
+
+            take_over_the_next_commit();
+            assert_eq!(one_pass(&session).await, (1, vec!["leaseLost".to_string()]));
+            let theirs = taken_over();
+            assert_eq!(session.store.run(&run).unwrap().unwrap().status, "parked");
+            assert_eq!(owed(&session, &run), frames, "the race is still owed");
+
+            // The race's row, and the comment's wake: its step died after its
+            // commit, so its row was kept too.
+            retried_after(&mut session, &run, &theirs, 2 * crate::run_host::BUSY_RETRY_MS, 2).await;
+            let row = session.store.run(&run).unwrap().unwrap();
+            assert_eq!(row.status, "completed", "{:?}", row.outcome);
+            assert!(row.outcome.as_deref().unwrap_or_default().contains("hi/-"), "{:?}", row.outcome);
+            assert_eq!(owed(&session, &run), Vec::<String>::new());
+        });
+    }
+
     #[test]
     fn a_checkpoint_round_trips_and_null_reads_as_none() {
         let dir = std::env::temp_dir().join(format!("lf-doors-{}", uuid::Uuid::new_v4()));
