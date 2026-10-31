@@ -201,6 +201,7 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
 
 #### Fixed
 
+- A module with no install (no `module:`-only entry and no hand-written one) no longer signs its calls, or answers its door, with the secret of a user's credential for it. `listen-fire` took the first entry naming the module when it had no install, which could be a person's own credential.
 - `listen-fire connect` printed "installed <module> as externals/<name>" before the setup had written anything, so a setup that then failed (a missing answer) had said "installed" and removed the folder. It says so once the entry is written.
 - `listen-fire check` with a credential Airtable refuses (a placeholder token) fails at once, where it hung for over two minutes saying nothing: `@lf/airtable` retried the refusal as if it were transient (its own changelog has the rest).
 - A credential a module says the provider refused (`credential_refused`) whose refresh then fails is reported with both: what the module said and why the refresh failed (`credential "my_airtable" was refused — module "airtable" says: … — and refreshing it failed: the credential holds no refresh_token`), where only the refresh's failure was. A `check` that cannot read an external's schema names the external and the credential.

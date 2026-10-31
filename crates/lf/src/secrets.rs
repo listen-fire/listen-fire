@@ -318,10 +318,11 @@ pub fn signer_of<'a>(credentials: &'a Credentials, external: &str, credential: O
 }
 
 /// The install of `external` (secrets.ts `installOf`): its `module:`-only
-/// entry, else the first hand-written one, else the first.
+/// entry, else the first hand-written one. Never a user credential of the
+/// module: its fields are that credential's, and its secret is no install's.
 pub fn install_of<'a>(credentials: &'a [Credential], external: &str) -> Option<&'a Credential> {
-    let all: Vec<&Credential> = credentials.iter().filter(|c| c.external == external).collect();
-    all.iter().find(|c| c.binding == Binding::Install).or_else(|| all.iter().find(|c| c.binding == Binding::Legacy)).or(all.first()).copied()
+    let of = |binding: Binding| credentials.iter().find(|c| c.external == external && c.binding == binding);
+    of(Binding::Install).or_else(|| of(Binding::Legacy))
 }
 
 pub struct MissingCredential {
@@ -457,7 +458,7 @@ pub fn missing_credentials(files: &[Rc<Parsed>], secrets: &Secrets) -> Vec<Missi
 
 #[cfg(test)]
 mod tests {
-    use super::{Binding, Construction, Credential, Credentials, Origin, apply_environment, imported_credentials, parse_entry};
+    use super::{Binding, Construction, Credential, Credentials, Origin, apply_environment, imported_credentials, install_of, parse_entry};
 
     #[test]
     fn a_construction_with_arguments_beyond_its_credential_is_collected_with_its_alias_resolved() {
@@ -543,6 +544,23 @@ mod tests {
             let refused = apply_environment(&mut Vec::new(), &env(&[(malformed, "x")])).unwrap_err();
             assert!(refused.contains("expected LF_SECRET__<CREDENTIAL>__<FIELD>"), "{malformed}: {refused}");
         }
+    }
+
+    #[test]
+    fn a_user_credential_of_a_module_is_never_its_install() {
+        let entry = |name: &str, external: &str, binding: Binding| Credential {
+            name: name.into(),
+            external: external.into(),
+            binding,
+            fields: [("secret".to_string(), name.to_string())].into_iter().collect(),
+            origin: Origin::default(),
+        };
+        let users = vec![entry("alice", "slack", Binding::Credential("workspace".into())), entry("other", "github", Binding::Install)];
+        assert!(install_of(&users, "slack").is_none(), "alice's credential supplies no install's secret");
+        let with_install = vec![users[0].clone(), entry("app", "slack", Binding::Install)];
+        assert_eq!(install_of(&with_install, "slack").map(|c| c.name.as_str()), Some("app"));
+        let with_legacy = vec![users[0].clone(), entry("hand", "slack", Binding::Legacy)];
+        assert_eq!(install_of(&with_legacy, "slack").map(|c| c.name.as_str()), Some("hand"));
     }
 
     #[test]
