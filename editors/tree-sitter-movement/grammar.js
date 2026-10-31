@@ -306,7 +306,8 @@ module.exports = grammar({
         ),
       ),
 
-    await_expression: ($) => prec.right(PREC.prefix, seq('await', $._expression)),
+    // `await new x-[:E]->` waits only for a record that arrives from now.
+    await_expression: ($) => prec.right(PREC.prefix, seq('await', optional('new'), $._expression)),
 
     node_literal: ($) => seq('node', $.record),
 

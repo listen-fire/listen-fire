@@ -69,6 +69,8 @@ jobs:
         run: corepack pnpm --filter './modules/gmail' test
       - name: slack tests
         run: corepack pnpm --filter './modules/slack' test
+      - name: forms tests
+        run: corepack pnpm --filter './modules/forms' test
       - name: affinity tests
         run: corepack pnpm --filter './modules/affinity' test
       - name: wake-cloud-tasks tests
