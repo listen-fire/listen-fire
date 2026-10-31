@@ -247,9 +247,9 @@ The manifest file registers your server with a team:
   owned scalar takes. A connection positioned at a member (an Airtable `base`)
   stands on the hops its position keys map to. A path naming an edge you do
   not describe, a key mapped past the path, an `eq`/`in` key with no `field`,
-  or an `absent` the key cannot compare (on a `type` key, several values on an
-  `eq` key, a value its `values` do not spell) is refused when the module is
-  described. A listen with a key you do not map is left for its author.
+  `lowercase: true` on a `type` key, or an `absent` the key cannot compare (on a
+  `type` key, several values on an `eq` key, a value its `values` do not spell)
+  is refused when the module is described. A listen with a key you do not map is left for its author.
 - Optional fields: `handbookSection` (`{ title, content }`, prose the authoring
   handbook shows about your system), `vocabulary` (an icon and event phrasing),
   `webhookEventTypeId`.
@@ -655,6 +655,10 @@ overrides; you state it because Listen-Fire has none of its own.
   name, outermost first (`["Bases", "Tables"]` on a table's `Changes`): a
   filter on one of them is judged against the record the arrival carries.
 - `attributes` — `true` if an arrival names the record it is about.
+- `addressed` — `true` if each arrival is sent to an address its sender chose
+  (an inbox's plus-suffix). An arrival that no listen's `WHERE` takes is then
+  a misdirected message, and the host says so at its default log level; on an
+  edge that does not declare it, that line is said only under `LF_LOG=debug`.
 - `cheapToList` — `true` if listing the edge's members is cheap enough to do
   on a schedule (a base's tables; never every message in a workspace), so a
   filter on it as an earlier hop can be re-resolved. Such an edge says how a

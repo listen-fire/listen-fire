@@ -931,8 +931,16 @@ impl Session {
                 }
             }
             // A poll's row was judged when the poll minted its runs.
+            // Said at the default level only on an edge whose sender chose
+            // the address (mail to a key no listen names); on any other, a
+            // busy edge's every delivery no listen takes would flood the output.
             if !taken && misfit_lines.is_empty() && !skipped.is_empty() && !matches!(judged_by, JudgedBy::Minted(_)) {
-                fired.redelivered.push(unmatched_line(adapter, arrival, &skipped));
+                let line = unmatched_line(adapter, arrival, &skipped);
+                if skipped.iter().any(|listen| crate::edge_polls::addressed(set, listen)) {
+                    fired.redelivered.push(line);
+                } else {
+                    crate::log::debug(|| line);
+                }
             }
             if taken {
                 for line in misfit_lines {

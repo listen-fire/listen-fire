@@ -519,6 +519,11 @@ export interface EdgeListening {
   carries?: string[];
   /** An arrival names the record it is about. */
   attributes?: boolean;
+  /** Each arrival is sent to an address its sender chose (mail's plus-suffix),
+   *  so one that no listen's WHERE takes is a misdirected message the host
+   *  says so at its default level; on any other edge that is said only under
+   *  `LF_LOG=debug`. */
+  addressed?: boolean;
   /** Listing it is cheap enough to re-list on a schedule (a base's tables;
    *  never every message in a workspace), so a filter on it as an earlier
    *  hop can be re-resolved. */

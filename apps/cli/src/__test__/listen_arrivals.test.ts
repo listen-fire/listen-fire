@@ -105,7 +105,8 @@ test('a pushed arrival fires a listen on the edge it landed on, its parameter bo
     await until(() => companies(dir).includes('Welcome Heron'), 'Heron welcomed');
     await sleep(500);
     assert.equal(runsOf(dir).length, 2, serving.lines.join('\n'));
-    assert.deepEqual(serving.lines.filter((line) => /does not match the WHERE/.test(line)), []);
+    // Nor that no listen on a busy edge takes it: only an addressed edge (the inbox) says so by default.
+    assert.deepEqual(serving.lines.filter((line) => /does not match the WHERE|matches the WHERE of no listen/.test(line)), []);
   } finally {
     await serving.stop();
   }
@@ -135,6 +136,7 @@ test('an arrival the WHERE does not match runs nothing and, under LF_LOG=debug, 
     const { post } = crmOf(dir, serving);
     await post('/dev/companies', { Name: 'Ignored' });
     await serving.waitFor(/companies:welcome: the arrival company-1 on Company does not match the WHERE of hop 1: nothing is owed, and it runs nothing/);
+    await serving.waitFor(/the arrival company-1 on Company matches the WHERE of no listen on it: it runs nothing/);
     // Long enough for a run to have started, had one been fired.
     await sleep(1500);
     assert.deepEqual(runsOf(dir), []);

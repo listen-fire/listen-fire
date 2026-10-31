@@ -320,6 +320,7 @@ const INTROSPECTIONS: Record<string, unknown> = {
         boundedBy: ['Schedule'],
         delivery: 'polled',
         pollEverySeconds: 60,
+        addressed: true,
         // No root descriptor here: the entry says what its collection takes.
         capability: { filter: 'native', supportsLimit: false },
       }),
@@ -375,7 +376,7 @@ const EXERCISES: Record<string, { members: string[]; notes: number }> = {
   },
   'a walked instance: a root descriptor, reached types, a scoped describe': { members: ['capability', 'edgesCarryProperties', 'undescribed'], notes: 1 },
   'a listening adapter: a listenable root, what edges say of their arrivals, owned scalars': {
-    members: ['readable', 'listenable', 'capability', 'identity', 'cursor', 'bounded', 'boundedBy', 'delivery', 'pollEverySeconds', 'carries', 'attributes', 'cheapToList', 'parentChanges', 'relistEverySeconds', 'owner', 'allowPattern'],
+    members: ['readable', 'listenable', 'capability', 'identity', 'cursor', 'bounded', 'boundedBy', 'delivery', 'pollEverySeconds', 'carries', 'attributes', 'addressed', 'cheapToList', 'parentChanges', 'relistEverySeconds', 'owner', 'allowPattern'],
     notes: 0,
   },
   'one readable entry and no event edge: the event position by the heuristic': { members: ['eventPosition'], notes: 0 },

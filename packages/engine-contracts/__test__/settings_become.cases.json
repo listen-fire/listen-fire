@@ -77,6 +77,16 @@
       "name": "an absent value its values do not spell",
       "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "events": { "hop": 0, "field": "Reason", "op": "in", "absent": ["mention", "assign"], "values": { "mention": "mentioned" } } } },
       "refusal": "'listenSettingsBecome' gives 'events' the absent value \"assign\", which its values do not spell"
+    },
+    {
+      "name": "lowercase on a key that compares a field",
+      "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "key": { "hop": 0, "field": "Reason", "op": "eq", "lowercase": true } } },
+      "refusal": null
+    },
+    {
+      "name": "lowercase on a type key",
+      "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "kind": { "hop": 0, "op": "type", "lowercase": true } } },
+      "refusal": "'listenSettingsBecome' gives 'kind' 'lowercase: true', but a 'type' key compares no text"
     }
   ],
   "manifestReads": {

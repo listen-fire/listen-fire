@@ -907,6 +907,10 @@ const listeningDeclarationShape = {
   carries: z.array(z.string()).optional(),
   /** An arrival names the record it is about. */
   attributes: z.boolean().optional(),
+  /** Each arrival is sent to an address its sender chose (mail's
+   *  plus-suffix): one no listen's WHERE takes is told at the default log
+   *  level, on any other edge only under `LF_LOG=debug`. */
+  addressed: z.boolean().optional(),
   /** Listing it is cheap enough to re-list on a schedule (a base's tables;
    *  never every message in a workspace). Such a hop declares how a listen
    *  learns its members changed: `parentChanges` or `relistEverySeconds`. */
@@ -1875,7 +1879,7 @@ function absentRefusal(name: string, key: KeyBecomes): string | undefined {
  * The refusal of a module's `listenSettingsBecome` that cannot be the
  * traversal it says (crates/lf schema.rs `unreadable_settings_become` says the
  * same): an alias count that is not one per edge, a key mapped past the path
- * or compared on no field, an `absent` its key cannot compare, a path that starts at no root collection, or an
+ * or compared on no field, a `lowercase` on a key that compares no text, an `absent` its key cannot compare, a path that starts at no root collection, or an
  * edge its type before it does not have. A connection positioned at a member
  * stands on the path's first hops, so the path is read from its first edge
  * that is a root collection here. A type nobody described is not judged.
@@ -1892,6 +1896,7 @@ export function unreadableSettingsBecome(
   for (const [name, key] of Object.entries(become.keys)) {
     if (key.hop >= path.length) return `'listenSettingsBecome' maps '${name}' to hop ${key.hop}, past the last of its ${path.length} edges`;
     if (key.op !== 'type' && key.field === undefined) return `'listenSettingsBecome' maps '${name}' by '${key.op}' but names no field to compare`;
+    if (key.lowercase === true && key.op === 'type') return `'listenSettingsBecome' gives '${name}' 'lowercase: true', but a 'type' key compares no text`;
     const absent = absentRefusal(name, key);
     if (absent !== undefined) return absent;
   }

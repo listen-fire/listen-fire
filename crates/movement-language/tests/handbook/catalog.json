@@ -81,7 +81,8 @@
               "boundedBy": [
                 "Key"
               ],
-              "delivery": "connection"
+              "delivery": "connection",
+              "addressed": true
             }
           },
           "writableRoots": {}

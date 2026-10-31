@@ -112,6 +112,9 @@ export class EmailAdapter extends BaseAdapter implements Adapter {
         listenable: true,
         bounded: false,
         boundedBy: [EMAIL_KEY_FIELD],
+        // Mail is sent to a key its sender chose: one no listen names is a
+        // misdirected message, said so rather than dropped silently.
+        addressed: true,
         delivery: 'connection',
         capability: { filter: 'native', supportsLimit: false },
       },

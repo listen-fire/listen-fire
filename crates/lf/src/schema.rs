@@ -267,8 +267,8 @@ const EDGE_TRUE_FLAGS: &[&str] = &["ephemeral"];
 
 /// What a reference or a listenable entry says of its arrivals and of being
 /// listed under a listen, passed through as declared, in this order.
-const LISTENING: [&str; 12] =
-    ["cursor", "identity", "version", "bounded", "boundedBy", "delivery", "pollEverySeconds", "carries", "attributes", "cheapToList", "parentChanges", "relistEverySeconds"];
+const LISTENING: [&str; 13] =
+    ["cursor", "identity", "version", "bounded", "boundedBy", "delivery", "pollEverySeconds", "carries", "attributes", "addressed", "cheapToList", "parentChanges", "relistEverySeconds"];
 
 fn pass_listening(declared: &Js, onto: &mut Obj) {
     for passed in LISTENING {
@@ -912,7 +912,7 @@ fn absent_refusal(name: &str, key: &movement_parser::catalog::types::KeyBecomes)
 /// The refusal of a module's `listenSettingsBecome` that cannot be the
 /// traversal it says (engine-contracts `unreadableSettingsBecome` says the
 /// same): an alias count that is not one per edge, a key mapped past the path
-/// or compared on no field, an `absent` its key cannot compare, a path that starts at no root collection, or an
+/// or compared on no field, a `lowercase` on a key that compares no text, an `absent` its key cannot compare, a path that starts at no root collection, or an
 /// edge its type before it does not have. A connection positioned at a member
 /// stands on the path's first hops, so the path is read from its first edge
 /// that is a root collection here. A type nobody described is not judged.
@@ -932,6 +932,9 @@ pub fn unreadable_settings_become(become_: &SettingsBecome, entries: &[Js], desc
                 KeyOp::Type => "type",
             };
             return Some(format!("'listenSettingsBecome' maps '{name}' by '{op}' but names no field to compare"));
+        }
+        if key.lowercase == Some(true) && key.op == KeyOp::Type {
+            return Some(format!("'listenSettingsBecome' gives '{name}' 'lowercase: true', but a 'type' key compares no text"));
         }
         if let Some(refusal) = absent_refusal(name, key) {
             return Some(refusal);

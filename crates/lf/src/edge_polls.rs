@@ -216,6 +216,13 @@ fn declared_hop(set: &FileSet, listen: &Listen, hop: &movement_parser::listen_pl
     Some(Declared { delivery, poll_every_seconds, cursorless: matches!(edge.get("cursor"), Some(Js::Bool(false))) })
 }
 
+/// Whether the module declares the listen's last edge `addressed`: each
+/// arrival is sent to an address its sender chose (mail's plus-suffix).
+pub fn addressed(set: &FileSet, listen: &Listen) -> bool {
+    let Some(last) = listen.plan.as_ref().and_then(|plan| plan.hops.last()) else { return false };
+    hop_schema(set, listen, last).is_some_and(|edge| Js::is_true(edge.get("addressed")))
+}
+
 /// What the module declares of one hop of the listen's traversal, as the
 /// set's catalog has it: the instance schema its credential names, else any
 /// of its module's that declares the edge.

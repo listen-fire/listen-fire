@@ -361,6 +361,12 @@ pub struct EdgeSchema {
     /// An arrival names the record it is about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attributes: Option<bool>,
+    /// Each arrival is sent to an address its sender chose (mail's
+    /// plus-suffix), so one that no listen's WHERE takes is a misdirected
+    /// message the host says so at its default level; on any other edge
+    /// that is said only under `LF_LOG=debug`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addressed: Option<bool>,
     /// Listing it is cheap enough to re-list on a schedule (a base's
     /// tables; never every message in a workspace), so a filter on it as an
     /// earlier hop can be re-resolved.
@@ -563,6 +569,12 @@ pub struct CollectionSchema {
     /// An arrival names the record it is about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attributes: Option<bool>,
+    /// Each arrival is sent to an address its sender chose (mail's
+    /// plus-suffix), so one that no listen's WHERE takes is a misdirected
+    /// message the host says so at its default level; on any other edge
+    /// that is said only under `LF_LOG=debug`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addressed: Option<bool>,
     /// Listing it is cheap enough to re-list on a schedule (a base's
     /// tables; never every message in a workspace), so a filter on it as an
     /// earlier hop can be re-resolved.
