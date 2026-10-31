@@ -4,7 +4,7 @@
 //! the work queue drained and a run cancelled, and the
 //! line each run is reported by (`report`).
 
-use std::cell::{Cell, OnceCell, RefCell};
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::rc::Rc;
@@ -69,8 +69,6 @@ pub struct FileSet {
     pub listens: Vec<Listen>,
     pub running: Vec<Rc<RunningExternal>>,
     schemas: IndexMap<String, ConnectionSchemas>,
-    /// Each file's count of check errors against this set's catalog, by name.
-    errors: OnceCell<BTreeMap<String, usize>>,
     /// The set's claims on its externals' processes: a worker's keep them
     /// up for as long as the set is held, and a process no set holds stops.
     _holds: Vec<Hold>,
@@ -178,12 +176,23 @@ impl Role {
 }
 
 /// How a session is opened: where its run state is kept (an ephemeral
-/// session keeps its own in a temporary state file instead), and its role.
+/// session keeps its own in a temporary state file instead), its role, and
+/// whether it routes what arrives to the listens.
 pub struct Opening<'s> {
     pub ephemeral: bool,
     pub store: &'s StoreSpec,
     pub role: Role,
+    /// It hands deliveries and arrivals to the listens that take them
+    /// (`serve`, `drain`, `run --webhook`, `resume` of every due run): a
+    /// project that does not check is refused, never served in part. One
+    /// that runs a named function or run (`run <function>`, `run --event`,
+    /// `resume <run>`) opens a project with check errors, its listens as
+    /// read.
+    pub routes_listens: bool,
 }
+
+/// The line that closes a refusal of files that do not check.
+const RUN_CHECK: &str = "run `listen-fire check`, and fix its errors: listen-fire serves a project only once it checks";
 
 pub struct Session {
     pub project: Project,
@@ -281,7 +290,7 @@ fn watch_pause_of(raw: Option<&str>) -> Result<Duration, String> {
 }
 
 pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Session, String> {
-    let Opening { ephemeral, store, role } = *opening;
+    let Opening { ephemeral, store, role, routes_listens } = *opening;
     let env: Vec<(String, String)> = std::env::vars().collect();
     let secrets = Secrets::open(&project, &env)?;
     let credentials = secrets.credentials();
@@ -343,12 +352,18 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     let files = scan_movements(&project)?;
     let parsed = Parsed::each(&files, &parsed);
     let catalog = catalog_of(&running, &schemas, credentials, &files);
-    // A listen on a traversal the check plans nothing for would never fire: refused, never served silent.
-    let mut listens = crate::routing::listens_across(&parsed, &catalog).map_err(|lines| lines.join("\n"))?;
+    let crate::routing::Listens { mut listens, unwatched } = crate::routing::listens_across(&parsed, &catalog);
+    if routes_listens {
+        let mut why = not_checking(&files, &parsed, &catalog, unwatched)?;
+        if !why.is_empty() {
+            why.push(RUN_CHECK.to_string());
+            return Err(why.join("\n"));
+        }
+    }
     crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
     let user = local_identity(&project.user, |k| std::env::var(k).ok());
     let _holds = hold_all(&running, role.keep());
-    let file_set = RefCell::new(Rc::new(FileSet { files, parsed, catalog, listens, running, schemas, errors: Default::default(), _holds }));
+    let file_set = RefCell::new(Rc::new(FileSet { files, parsed, catalog, listens, running, schemas, _holds }));
     Ok(Session {
         project,
         role,
@@ -1709,6 +1724,18 @@ fn error_diagnostics(files: &[MovementFile], parsed: &[Rc<Parsed>], catalog: &Js
     files.iter().zip(parsed).map(|(file, parsed)| Ok(check_parsed(file, &parsed.program, &catalog)?.into_iter().filter(|d| d.severity == "error").collect())).collect()
 }
 
+/// Why a set does not check: each of its files' check errors, as `listen-fire
+/// check` prints it, then each listen that would never fire
+/// (crate::routing::Listens::unwatched). Empty for a set that checks.
+fn not_checking(files: &[MovementFile], parsed: &[Rc<Parsed>], catalog: &Js, unwatched: Vec<String>) -> Result<Vec<String>, String> {
+    let mut why = Vec::new();
+    for (file, errors) in files.iter().zip(error_diagnostics(files, parsed, catalog)?) {
+        why.extend(errors.iter().map(|d| crate::check::diagnostic_line(&file.path, d)));
+    }
+    why.extend(unwatched);
+    Ok(why)
+}
+
 /// Each file's count of check errors against the set's own catalog, by name.
 fn file_errors(set: &FileSet) -> Result<BTreeMap<String, usize>, String> {
     let diagnostics = error_diagnostics(&set.files, &set.parsed, &set.catalog)?;
@@ -1844,9 +1871,9 @@ impl Session {
     /// A listing taken: a `read` only for a file whose listed version moved.
     /// A changed set is taken whole or not at all: imports link across
     /// files, so a partly taken set may be one that never existed together.
-    /// One that does not check (a file has more errors than it had) keeps
-    /// the running set, said once; work begun before a swap finishes on the
-    /// files it began with.
+    /// One that does not check (any check error, or a listen that would
+    /// never fire) keeps the running set, said once; work begun before a
+    /// swap finishes on the files it began with.
     async fn take_listing(&self, listed: Vec<Listed>, store: &dyn MovementsStore, log: &mut impl Write) -> Result<(), String> {
         let set = self.file_set();
         let changes = listing_changes(&set.files, &listed);
@@ -1949,32 +1976,14 @@ impl Session {
         }
 
         let catalog = catalog_of(&running, &schemas, credentials, &files);
-        let baseline = match set.errors.get() {
-            Some(counts) => counts.clone(),
-            None => {
-                let counts = file_errors(&set)?;
-                let _ = set.errors.set(counts.clone());
-                counts
-            }
-        };
-        let (mut counts, mut rose) = (BTreeMap::new(), Vec::new());
-        for (file, errors) in files.iter().zip(error_diagnostics(&files, &parsed, &catalog)?) {
-            if errors.len() > baseline.get(&file.name).copied().unwrap_or(0) {
-                rose.extend(errors.iter().map(|d| format!("{}:{}:{} {} {} {}", file.path.display(), d.line, d.column, d.severity, d.code, d.message)));
-            }
-            counts.insert(file.name.clone(), errors.len());
+        let crate::routing::Listens { mut listens, unwatched } = crate::routing::listens_across(&parsed, &catalog);
+        let why = not_checking(&files, &parsed, &catalog, unwatched)?;
+        if !why.is_empty() {
+            return self.refuse(log, pairs, why);
         }
-        if !rose.is_empty() {
-            return self.refuse(log, pairs, rose);
-        }
-
-        let mut listens = match crate::routing::listens_across(&parsed, &catalog) {
-            Ok(listens) => listens,
-            Err(unwatched) => return self.refuse(log, pairs, unwatched),
-        };
         crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
         let _holds = hold_all(&running, self.role.keep());
-        let taken = Rc::new(FileSet { files, parsed, catalog, listens, running, schemas, errors: OnceCell::from(counts), _holds });
+        let taken = Rc::new(FileSet { files, parsed, catalog, listens, running, schemas, _holds });
         self.file_set.replace(taken.clone());
         self.refused.replace(None);
         drop(starting);
@@ -2013,6 +2022,7 @@ impl Session {
         for line in why {
             let _ = writeln!(log, "{line}");
         }
+        let _ = writeln!(log, "{RUN_CHECK}");
         Ok(())
     }
 }
@@ -2212,7 +2222,7 @@ mod tests {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         tokio::task::LocalSet::new().block_on(&runtime, async {
             let project = crate::project::load_project(&root).unwrap();
-            let session = open_session(project, &Opening { ephemeral: false, store: &StoreSpec::Sqlite(root.join(".lf/state.db")), role: Role::Command }).await.unwrap();
+            let session = open_session(project, &Opening { ephemeral: false, store: &StoreSpec::Sqlite(root.join(".lf/state.db")), role: Role::Command, routes_listens: false }).await.unwrap();
             let event = crate::units::manual_event(&iso(0), &session.user, None);
             let row = |delivery_id: Option<&str>| {
                 let mut payload = obj! { "external" => Js::str(crate::units::MANUAL), "event" => event.clone() };
@@ -2466,7 +2476,7 @@ mod tests {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         tokio::task::LocalSet::new().block_on(&runtime, async {
             let project = crate::project::load_project(root).unwrap();
-            let mut session = open_session(project, &Opening { ephemeral: false, store: &StoreSpec::Sqlite(root.join(".lf/state.db")), role }).await.unwrap();
+            let mut session = open_session(project, &Opening { ephemeral: false, store: &StoreSpec::Sqlite(root.join(".lf/state.db")), role, routes_listens: false }).await.unwrap();
             body(&mut session).await;
         });
         std::fs::remove_dir_all(root).ok();
@@ -2489,7 +2499,7 @@ mod tests {
         tokio::task::LocalSet::new().block_on(&runtime, async {
             let project = crate::project::load_project(&root).unwrap();
             let opened = Instant::now();
-            let session = open_session(project, &Opening { ephemeral: false, store: &StoreSpec::Sqlite(root.join(".lf/state.db")), role: Role::Drain }).await.unwrap();
+            let session = open_session(project, &Opening { ephemeral: false, store: &StoreSpec::Sqlite(root.join(".lf/state.db")), role: Role::Drain, routes_listens: false }).await.unwrap();
             let took = opened.elapsed();
             // One after another, three one-second starts take three seconds and more.
             assert!(took < Duration::from_millis(2500), "the three modules started together, in {took:?}");
@@ -2568,21 +2578,64 @@ mod tests {
         });
     }
 
+    /// A session over `root`, opened as `role`, routing the listens or not.
+    async fn open_at(root: &std::path::Path, role: Role, routes_listens: bool) -> Result<Session, String> {
+        let project = crate::project::load_project(root).unwrap();
+        open_session(project, &Opening { ephemeral: false, store: &StoreSpec::Sqlite(root.join(".lf/state.db")), role, routes_listens }).await
+    }
+
+    /// `body` on one thread, as listen-fire serve runs a session; `root` removed after.
+    fn on_one_thread(root: &std::path::Path, body: impl AsyncFnOnce()) {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        tokio::task::LocalSet::new().block_on(&runtime, body());
+        std::fs::remove_dir_all(root).ok();
+    }
+
     #[test]
-    fn a_reload_whose_listen_on_a_traversal_does_not_check_is_refused_and_the_running_listens_kept() {
+    fn a_reload_whose_listen_on_a_traversal_does_not_check_is_refused_naming_it_and_the_running_listens_kept() {
         let root = acme_project(&["acme_i"], "0");
-        // Two check errors the open does not refuse, so a reload whose only
-        // error is the new listen's raises no file's count: the listen itself refuses it.
-        let erring = acme_movement("acme_i").replace("${company.Name}", "${company.Nope} ${company.Nada}");
-        put(&root, "acme_i.mvt", &erring);
-        with_session_as(&root.clone(), Role::Command, async |session| {
+        on_one_thread(&root.clone(), async || {
+            let session = open_at(&root, Role::Serve, true).await.unwrap();
             put(&root, "acme_i.mvt", &format!("{}listen to crm-[c:Company WHERE c.Bogus == \"x\"]-> fire welcome\n", acme_movement("acme_i")));
-            let log = refreshed(session).await;
-            assert!(log.starts_with("movements: kept the files listen-fire has; the new ones do not check:\n"), "{log}");
-            assert!(log.contains("acme_i.mvt:11:1 the listen that fires welcome does not check, so nothing would fire it: run `listen-fire check`"), "{log}");
+            let log = refreshed(&session).await;
+            let lines: Vec<&str> = log.lines().collect();
+            assert_eq!(lines[0], "movements: kept the files listen-fire has; the new ones do not check:", "{log}");
+            assert!(lines[1].contains("acme_i.mvt:11:11 error MOV_UNKNOWN_PROPERTY "), "the check's own error first: {log}");
+            assert!(lines.iter().any(|l| l.ends_with("/acme_i.mvt:11:1 the listen that fires welcome does not check, so nothing would fire it")), "{log}");
+            assert_eq!(lines.last(), Some(&RUN_CHECK), "{log}");
             let kept = session.file_set();
             let served: Vec<(&str, bool)> = kept.listens.iter().map(|l| (l.file.as_str(), l.plan.is_some())).collect();
             assert_eq!(served, [("acme_i", false), ("hello", false)], "the running set's listens, in the settings form, are still served");
+        });
+    }
+
+    #[test]
+    fn a_session_that_routes_refuses_a_project_with_a_check_error_and_one_that_runs_a_function_opens_it() {
+        let broken = "function other(run: <manual-[:Invocation]->>) {\n  return nowhere.Name\n}\nlisten to manual fire other\n";
+        let root = refresh_project(&[("hello.mvt", MANUAL_V1), ("broken.mvt", broken)]);
+        on_one_thread(&root.clone(), async || {
+            let refused = open_at(&root, Role::Serve, true).await.err().expect("serving a project that does not check is refused");
+            let lines: Vec<&str> = refused.lines().collect();
+            assert!(lines.len() >= 2 && lines[..lines.len() - 1].iter().all(|l| l.contains("broken.mvt:2:") && l.contains(" error ")), "{refused}");
+            assert_eq!(lines.last(), Some(&RUN_CHECK), "{refused}");
+            assert!(open_at(&root, Role::Drain, true).await.is_err(), "nor is draining it");
+            let session = open_at(&root, Role::Command, false).await.unwrap();
+            assert_eq!(returns(&session, "hello").await, "v1", "a run of a function that checks");
+        });
+    }
+
+    #[test]
+    fn a_run_of_a_function_keeps_the_settings_listens_of_a_project_whose_listen_on_a_traversal_does_not_check() {
+        let watching = "function tick(run: <manual-[:Invocation]->>) {\n  return \"ticked\"\n}\nlisten to manual fire tick\nlisten to crm-[:Company]-> fire tick\n";
+        let root = refresh_project(&[("hello.mvt", MANUAL_V1), ("watching.mvt", watching)]);
+        on_one_thread(&root.clone(), async || {
+            let refused = open_at(&root, Role::Serve, true).await.err().expect("serving it is refused");
+            assert!(refused.lines().any(|l| l.ends_with("/watching.mvt:5:1 the listen that fires tick does not check, so nothing would fire it")), "{refused}");
+            let session = open_at(&root, Role::Command, false).await.unwrap();
+            assert_eq!(returns(&session, "hello").await, "v1", "a function of another file runs");
+            let set = session.file_set();
+            let read: Vec<(&str, &str, bool)> = set.listens.iter().map(|l| (l.file.as_str(), l.movement_name.as_str(), l.plan.is_some())).collect();
+            assert_eq!(read, [("hello", "hello", false), ("watching", "tick", false)], "the file's listen in the settings form is read beside the one that does not check");
         });
     }
 
@@ -2612,9 +2665,9 @@ mod tests {
         tokio::task::LocalSet::new().block_on(&runtime, async {
             let project = crate::project::load_project(&root).unwrap();
             let opened = Instant::now();
-            let session = open_session(project, &Opening { ephemeral: false, store: &StoreSpec::Sqlite(root.join(".lf/state.db")), role: Role::Command }).await.unwrap();
+            let session = open_session(project, &Opening { ephemeral: false, store: &StoreSpec::Sqlite(root.join(".lf/state.db")), role: Role::Command, routes_listens: false }).await.unwrap();
             eprintln!("open: {:?}", opened.elapsed());
-            // Warm: the first refresh counts each file's errors.
+            // Warm: the first refresh, untimed.
             put(&root, "m000.mvt", &synthetic_movement("m000", "warm"));
             assert_eq!(refreshed(&session).await, "movements: m000.mvt changed\n");
             let mut took = Vec::new();
@@ -2679,7 +2732,7 @@ mod tests {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         tokio::task::LocalSet::new().block_on(&runtime, async {
             let project = crate::project::load_project(root).unwrap();
-            let mut session = open_session(project, &Opening { ephemeral: false, store: &StoreSpec::Sqlite(root.join(".lf/state.db")), role: Role::Command }).await.unwrap();
+            let mut session = open_session(project, &Opening { ephemeral: false, store: &StoreSpec::Sqlite(root.join(".lf/state.db")), role: Role::Command, routes_listens: false }).await.unwrap();
             body(&mut session).await;
         });
         std::fs::remove_dir_all(root).ok();
@@ -2799,7 +2852,8 @@ mod tests {
             put(&root, "lib/greet.mvt", "export function greet(name: <number>) {\n  return \"Hello, ${name}!\"\n}\n");
             let log = refreshed(session).await;
             assert!(log.starts_with("movements: kept the files listen-fire has; the new ones do not check:\n"), "{log}");
-            assert!(log.lines().skip(1).all(|l| l.contains("hello.mvt:")), "the importer it breaks is named: {log}");
+            let named: Vec<&str> = log.lines().skip(1).filter(|l| *l != RUN_CHECK).collect();
+            assert!(!named.is_empty() && named.iter().all(|l| l.contains("hello.mvt:")), "the importer it breaks is named: {log}");
             assert_eq!(returns(session, "hello").await, "Hello, v4!", "the set that checked runs on");
         });
     }

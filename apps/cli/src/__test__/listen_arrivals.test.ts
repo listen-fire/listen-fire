@@ -186,12 +186,65 @@ test('two listens in one file firing one function each run once for an arrival b
   }
 });
 
+/** The line every refusal of a project that does not check ends with. */
+const RUN_CHECK = /^run `listen-fire check`, and fix its errors: listen-fire serves a project only once it checks$/m;
+
 test('serve refuses a project whose listen on a traversal does not check, naming it', async () => {
   const dir = project('listen_arrivals');
   withUnlistenableComments(dir);
   const file = join(dir, 'movements/companies.mvt');
   writeFileSync(file, readFileSync(file, 'utf8') + ON_COMMENTS);
-  await assert.rejects(served(dir), /companies\.mvt:\d+:1 the listen that fires note does not check, so nothing would fire it: run `listen-fire check`/);
+  const refused = await served(dir).then(
+    () => assert.fail('served'),
+    (error: Error) => error.message,
+  );
+  assert.match(refused, /companies\.mvt:\d+:\d+ error MOV_LISTEN_EDGE_NOT_LISTENABLE /);
+  assert.match(refused, /companies\.mvt:\d+:1 the listen that fires note does not check, so nothing would fire it$/m);
+  assert.match(refused, RUN_CHECK);
+});
+
+/** A function whose body reads a name nothing binds: an ordinary check error, in no listen. */
+const BROKEN = 'function broken(run: <manual-[:Invocation]->>) {\n  return nowhere.Name\n}\n\nlisten to manual fire broken\n';
+
+test('a project with a check error in a function is not served, drained or handed a webhook, and says to run check', async () => {
+  const dir = project();
+  writeFileSync(join(dir, 'movements/broken.mvt'), BROKEN);
+  const refused = await served(dir).then(
+    () => assert.fail('served'),
+    (error: Error) => error.message,
+  );
+  assert.match(refused, /broken\.mvt:2:\d+ error MOV_\w+ /);
+  assert.match(refused, RUN_CHECK);
+  for (const args of [['drain', '--until-idle'], ['run', '--webhook', 'acme_crm', '--body', 'events/webhook_body.json'], ['resume']]) {
+    const command = lf(dir, ...args);
+    assert.notEqual(command.code, 0, `${args.join(' ')}: ${command.out}`);
+    assert.match(command.out, /broken\.mvt:2:\d+ error MOV_\w+ /, args.join(' '));
+    assert.match(command.out, RUN_CHECK, args.join(' '));
+  }
+  assert.deepEqual(companies(dir), [], 'nothing ran');
+});
+
+test('a run of a function, an event or a named run opens a project whose listen on a traversal does not check', () => {
+  const dir = project();
+  withUnlistenableComments(dir);
+  writeFileSync(join(dir, 'movements/notes.mvt'), `import { acme_crm } from adapters\nimport { acme } from credentials\n\ncrm = connect acme_crm using acme\n${ON_COMMENTS}`);
+  writeFileSync(join(dir, 'movements/hello.mvt'), 'function hello(run: <manual-[:Invocation]->>) {\n  return "hi"\n}\n\nlisten to manual fire hello\n');
+  const hello = lf(dir, 'run', 'hello');
+  assert.equal(hello.code, 0, hello.out);
+  assert.match(hello.out, /hello:hello completed/);
+  // The other file's listen in the settings form is read: the event fires it.
+  const run = lf(dir, 'run', '--event', 'events/company_created.json');
+  assert.equal(run.code, 0, run.out);
+  assert.match(run.out, /companies:welcome parked — 1 write\(s\)/);
+  assert.deepEqual(companies(dir), ['Welcome Vireo Robotics']);
+  const runId = /^run (\S+) /m.exec(run.out)?.[1] ?? assert.fail(run.out);
+  const resumed = lf(dir, 'resume', runId);
+  assert.equal(resumed.code, 0, resumed.out);
+  assert.match(resumed.out, /companies:welcome completed/);
+  // Resuming every due run routes the queued deliveries too: refused.
+  const every = lf(dir, 'resume');
+  assert.notEqual(every.code, 0, every.out);
+  assert.match(every.out, /notes\.mvt:\d+:1 the listen that fires note does not check, so nothing would fire it$/m);
 });
 
 test('an edit that adds a listen on a traversal that does not check is refused, and the running files keep serving', async () => {
@@ -203,6 +256,8 @@ test('an edit that adds a listen on a traversal that does not check is refused, 
     writeFileSync(file, readFileSync(file, 'utf8') + ON_COMMENTS);
     await serving.waitFor(/kept the files listen-fire has; the new ones do not check/);
     await serving.waitFor(/MOV_LISTEN_EDGE_NOT_LISTENABLE/);
+    await serving.waitFor(/companies\.mvt:\d+:1 the listen that fires note does not check, so nothing would fire it$/);
+    await serving.waitFor(RUN_CHECK);
     const { post } = crmOf(dir, serving);
     await post('/dev/companies', { Name: 'Osprey' });
     await serving.waitFor(/run .* companies:welcome completed/);

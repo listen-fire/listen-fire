@@ -369,6 +369,11 @@ fn is_type_descriptor(descriptor: &Js) -> bool {
         && descriptor.get("deletable").is_none_or(|d| matches!(d, Js::Bool(_)))
 }
 
+/// A diagnostic of the file at `path`, as `check` prints it.
+pub fn diagnostic_line(path: &std::path::Path, d: &FileDiagnostic) -> String {
+    format!("{}:{}:{} {} {} {}", path.display(), d.line, d.column, d.severity, d.code, d.message)
+}
+
 /// A missing credential, as `check` words it.
 pub fn missing_line(m: &MissingCredential) -> String {
     format!("{}:{}:{} error MISSING_CREDENTIAL {}", m.file.display(), m.line, m.column, m.message)
@@ -397,7 +402,7 @@ pub async fn run(project: &Project, json: bool, out: &mut impl Write) -> Result<
         errors += diagnostics.iter().filter(|d| d.severity == "error").count();
         if !json {
             for d in &diagnostics {
-                writeln!(out, "{}:{}:{} {} {} {}", file.path.display(), d.line, d.column, d.severity, d.code, d.message).map_err(|e| e.to_string())?;
+                writeln!(out, "{}", diagnostic_line(&file.path, d)).map_err(|e| e.to_string())?;
             }
         }
         checked.push((file.path.clone(), diagnostics));

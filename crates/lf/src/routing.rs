@@ -416,32 +416,39 @@ fn external_js(value: &Json) -> Js {
 /// The construction argument `connect … using X` writes the credential to.
 const CREDENTIAL_ARG: &str = "credentials";
 
+/// The listens of a set of files, and a line for each one written there
+/// that would never fire.
+#[derive(Debug, Default)]
+pub struct Listens {
+    pub listens: Vec<Listen>,
+    /// Each listen that would never fire, named where it is written: a
+    /// listen on a traversal the checker plans nothing for (it does not
+    /// check, or the catalog does not load), or a listen on a connection the
+    /// file does not make. A session that routes refuses the set for them;
+    /// one that only runs a function reads the listens it has.
+    pub unwatched: Vec<String>,
+}
+
 /// `collectListens`: the listens of every file that parses. A payload node
 /// the listen's file imports from another file is read from that file, the
 /// way the checker links it, so the listens of a set depend on the whole set
 /// and not on one file's text. A listen on a traversal is read from the
-/// checker's plan of it against `catalog`. One the checker plans none for
-/// (it does not check, or the catalog does not load) would never fire: the
-/// set is refused, a line naming each such listen.
-pub fn listens_across(parsed: &[Rc<crate::sources::Parsed>], catalog: &Js) -> Result<Vec<Listen>, Vec<String>> {
+/// checker's plan of it against `catalog`; a file with one the checker plans
+/// none for still has its other listens read.
+pub fn listens_across(parsed: &[Rc<crate::sources::Parsed>], catalog: &Js) -> Listens {
     let programs: Vec<(&crate::sources::Parsed, &movement_parser::ast::Program)> = parsed.iter().filter_map(|p| p.program.as_ref().ok().map(|program| (&**p, program))).collect();
     let scopes: HashMap<String, FileScope<'_>> = programs.iter().map(|(file, program)| (file.name.clone(), FileScope::of(program))).collect();
     let mut snapshot = None;
-    let (mut listens, mut unwatched) = (Vec::new(), Vec::new());
+    let mut read = Listens::default();
     for (file, program) in &programs {
-        let plans = match program.statements.iter().any(|s| matches!(s, Statement::Listen(listen) if listen.path.is_some())) {
+        let (plans, unplanned) = match program.statements.iter().any(|s| matches!(s, Statement::Listen(listen) if listen.path.is_some())) {
             true => plans_of(file, program, snapshot.get_or_insert_with(|| catalog_snapshot(catalog)).as_ref()),
-            false => Ok(Vec::new()),
+            false => (Vec::new(), Vec::new()),
         };
-        match plans {
-            Ok(plans) => listens.extend(listens_of(&file.name, program, &scopes, plans)),
-            Err(lines) => unwatched.extend(lines),
-        }
+        read.unwatched.extend(unplanned);
+        listens_of(file, program, &scopes, plans, &mut read);
     }
-    match unwatched.is_empty() {
-        true => Ok(listens),
-        false => Err(unwatched),
-    }
+    read
 }
 
 /// The catalog as the checker reads it, or why it does not load.
@@ -449,72 +456,104 @@ fn catalog_snapshot(catalog: &Js) -> Result<CatalogSnapshot, String> {
     CatalogSnapshot::load(&movement_parser::util::form::read_json_text(&catalog.to_json())).map_err(|e| e.to_string())
 }
 
+/// Where a listen is written, as a line about it begins.
+fn listen_at(file: &crate::sources::Parsed, at: movement_parser::ast::Loc) -> String {
+    format!("{}:{}:{}", file.path.display(), at.line, at.col)
+}
+
 /// How the checker plans each `listen to <traversal>` of `file`, in source
-/// order; or a line for each it plans none for, naming where it is written.
-fn plans_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Program, catalog: Result<&CatalogSnapshot, &String>) -> Result<Vec<ListenPlan>, Vec<String>> {
+/// order, and a line for each it plans none for, naming where it is written.
+fn plans_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Program, catalog: Result<&CatalogSnapshot, &String>) -> (Vec<ListenPlan>, Vec<String>) {
     let traversals = || {
         program.statements.iter().filter_map(|s| match s {
             Statement::Listen(listen) if listen.path.is_some() => Some(listen),
             _ => None,
         })
     };
-    let unwatched = |listen: &movement_parser::ast::ListenDeclaration, why: &str| {
-        let at = listen.span.start;
-        format!("{}:{}:{} the listen that fires {} {why}, so nothing would fire it: run `listen-fire check`", file.path.display(), at.line, at.col, listen.movement)
+    let unwatched = |at: movement_parser::ast::Span, why: &str| {
+        let fires = traversals().find(|listen| listen.span == at).map_or_else(|| "a listen".to_string(), |listen| format!("the listen that fires {}", listen.movement));
+        format!("{} {fires} {why}, so nothing would fire it", listen_at(file, at.start))
     };
     let catalog = match catalog {
         Ok(catalog) => catalog,
-        Err(why) => return Err(traversals().map(|listen| unwatched(listen, &format!("is not planned, as the catalog does not load ({why})"))).collect()),
+        Err(why) => return (Vec::new(), traversals().map(|listen| unwatched(listen.span, &format!("is not planned, as the catalog does not load ({why})"))).collect()),
     };
+    // The file's own parse is checked: lf parses with every slot marked for
+    // the eager export (`ExprSlot::eager`), which the checker never reads.
     let options = movement_checker::CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     let answer = movement_checker::answer::check_answer(program, catalog, options);
-    match answer.unwatched.is_empty() {
-        true => Ok(answer.listens),
-        false => Err(traversals().filter(|listen| answer.unwatched.contains(&listen.span)).map(|listen| unwatched(listen, "does not check")).collect()),
-    }
+    (answer.listens, answer.unwatched.iter().map(|at| unwatched(*at, "does not check")).collect())
 }
 
-fn listens_of(file: &str, program: &movement_parser::ast::Program, scopes: &HashMap<String, FileScope<'_>>, plans: Vec<ListenPlan>) -> Vec<Listen> {
-    let mut listens = Vec::new();
-    let mut originals: HashMap<String, String> = HashMap::new();
-    // Each instance's adapter, credential and other arguments, by the instance's name.
-    let mut constructions: HashMap<String, (String, Option<String>, Vec<(String, String)>)> = HashMap::new();
-    let mut declared = Vec::new();
-    let scope = &scopes[file];
+/// Each instance's adapter, credential and other arguments, by the
+/// instance's name: the connections `program` makes itself. A file cannot
+/// export a connection, so a listen's instance is one of these or a host unit.
+fn constructions_of(program: &movement_parser::ast::Program) -> HashMap<String, (String, Option<String>, Vec<(String, String)>)> {
+    let originals = import_originals(program);
+    let mut constructions = HashMap::new();
     for statement in &program.statements {
-        match statement {
-            Statement::Import(import) => {
-                for name in &import.names {
-                    if let Some(alias) = &name.alias {
-                        originals.insert(alias.clone(), name.name.clone());
-                    }
-                }
-            }
-            Statement::Assign(assign) => {
-                if let RValue::Construct { construct } = &assign.value {
-                    let adapter = originals.get(&construct.callee).cloned().unwrap_or_else(|| construct.callee.clone());
-                    let credential = construct
-                        .args
-                        .iter()
-                        .find(|a| a.name == CREDENTIAL_ARG)
-                        .and_then(|a| movement_parser::catalog::helpers::unwrap_credential_arg(&a.value.raw));
-                    let mut args: Vec<(String, String)> =
-                        construct.args.iter().filter(|a| a.name != CREDENTIAL_ARG).map(|a| (a.name.clone(), a.value.raw.clone())).collect();
-                    args.sort();
-                    constructions.insert(assign.name.clone(), (adapter, credential, args));
-                }
-            }
-            // A listen on a traversal is read from its plan, below.
-            Statement::Listen(listen) if listen.path.is_some() => {}
-            Statement::Listen(listen) => declared.push(listen),
-            _ => {}
+        if let Statement::Assign(assign) = statement
+            && let RValue::Construct { construct } = &assign.value
+        {
+            let adapter = originals.get(&construct.callee).cloned().unwrap_or_else(|| construct.callee.clone());
+            let credential = construct
+                .args
+                .iter()
+                .find(|a| a.name == CREDENTIAL_ARG)
+                .and_then(|a| movement_parser::catalog::helpers::unwrap_credential_arg(&a.value.raw))
+                .map(|local| originals.get(&local).cloned().unwrap_or(local));
+            let mut args: Vec<(String, String)> = construct.args.iter().filter(|a| a.name != CREDENTIAL_ARG).map(|a| (a.name.clone(), a.value.raw.clone())).collect();
+            args.sort();
+            constructions.insert(assign.name.clone(), (adapter, credential, args));
         }
     }
-    for listen in declared {
+    constructions
+}
+
+/// Each name `program` imports under an alias, to the name it imports.
+fn import_originals(program: &movement_parser::ast::Program) -> HashMap<String, String> {
+    let mut originals = HashMap::new();
+    for statement in &program.statements {
+        if let Statement::Import(import) = statement {
+            for name in &import.names {
+                if let Some(alias) = &name.alias {
+                    originals.insert(alias.clone(), name.name.clone());
+                }
+            }
+        }
+    }
+    originals
+}
+
+/// The listens of one file into `read`: each in the settings form, then each
+/// of `plans`. One whose instance is neither a connection the file makes nor
+/// a host unit is named in `read.unwatched` instead.
+fn listens_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Program, scopes: &HashMap<String, FileScope<'_>>, plans: Vec<ListenPlan>, read: &mut Listens) {
+    let constructions = constructions_of(program);
+    let scope = &scopes[&file.name];
+    let connection = |instance: &str, at: movement_parser::ast::Loc, fires: &str| {
         // A unit the file does not bind itself is the host's own.
-        let unit = movement_parser::version::RUN_HOST_UNITS.iter().find(|u| **u == listen.instance).map(|u| u.to_string());
-        let Some((adapter, credential, args)) = constructions.get(&listen.instance).cloned().or(unit.map(|u| (u, None, Vec::new()))) else { continue };
-        let credential = credential.map(|local| originals.get(&local).cloned().unwrap_or(local));
+        let unit = movement_parser::version::RUN_HOST_UNITS.iter().find(|u| **u == instance).map(|u| (u.to_string(), None, Vec::new()));
+        constructions.get(instance).cloned().or(unit).ok_or_else(|| {
+            let why = match scope.imports.contains_key(instance) {
+                true => "is imported from another file, which cannot make a connection",
+                false => "is no connection this file makes",
+            };
+            format!("{} the listen that fires {fires} is on `{instance}`, which {why}, so nothing would fire it", listen_at(file, at))
+        })
+    };
+    let declared = program.statements.iter().filter_map(|s| match s {
+        Statement::Listen(listen) if listen.path.is_none() => Some(listen),
+        _ => None,
+    });
+    for listen in declared {
+        let (adapter, credential, args) = match connection(&listen.instance, listen.span.start, &listen.movement) {
+            Ok(made) => made,
+            Err(line) => {
+                read.unwatched.push(line);
+                continue;
+            }
+        };
         let mut config = Obj::new();
         for arg in &listen.config {
             config.insert(arg.name.clone(), config_value_of(arg));
@@ -522,8 +561,8 @@ fn listens_of(file: &str, program: &movement_parser::ast::Program, scopes: &Hash
         // The checker takes a type only for a key of the `type` format: a
         // node the program declares.
         let payload = listen.config.iter().filter(|a| a.is_type == Some(true)).find_map(|a| DeclaredPayload::of(&a.value.raw, scope, scopes));
-        listens.push(Listen {
-            file: file.to_string(),
+        read.listens.push(Listen {
+            file: file.name.clone(),
             adapter,
             config,
             movement_name: listen.movement.clone(),
@@ -535,21 +574,29 @@ fn listens_of(file: &str, program: &movement_parser::ast::Program, scopes: &Hash
         });
     }
     for plan in plans {
-        let unit = movement_parser::version::RUN_HOST_UNITS.iter().find(|u| **u == plan.connection).map(|u| (u.to_string(), None, Vec::new()));
-        let Some((adapter, credential, args)) = constructions.get(&plan.connection).cloned().or(unit) else { continue };
-        listens.push(Listen {
-            file: file.to_string(),
+        let written = program.statements.iter().find_map(|s| match s {
+            Statement::Listen(listen) if listen.path.is_some() && listen.instance == plan.connection && listen.movement == plan.movement => Some(listen.span.start),
+            _ => None,
+        });
+        let (adapter, credential, args) = match connection(&plan.connection, written.unwrap_or(movement_parser::ast::Loc { line: 1, col: 1 }), &plan.movement) {
+            Ok(made) => made,
+            Err(line) => {
+                read.unwatched.push(line);
+                continue;
+            }
+        };
+        read.listens.push(Listen {
+            file: file.name.clone(),
             adapter,
             config: Obj::new(),
             movement_name: plan.movement.clone(),
-            credential: credential.map(|local| originals.get(&local).cloned().unwrap_or(local)),
+            credential,
             payload: None,
             args,
             address: Ok(BTreeMap::new()),
             plan: Some(plan),
         });
     }
-    listens
 }
 
 /// A record's fields as the judge reads them.
@@ -775,7 +822,7 @@ mod tests {
 
     /// Every listen across the files.
     fn collect_listens(files: &[MovementFile]) -> Vec<Listen> {
-        listens_across(&Parsed::each(files, &[]), &Js::Null).unwrap()
+        listens_across(&Parsed::each(files, &[]), &Js::Null).listens
     }
 
     fn js(text: &str) -> Js {
@@ -807,7 +854,9 @@ mod tests {
 
     fn crm_listens() -> Vec<Listen> {
         let files = vec![MovementFile { name: "crm".into(), path: PathBuf::from("crm.mvt"), source: CRM_LISTENS.into(), version: None }];
-        listens_across(&Parsed::each(&files, &[]), &js(CRM_CATALOG)).unwrap()
+        let read = listens_across(&Parsed::each(&files, &[]), &js(CRM_CATALOG));
+        assert_eq!(read.unwatched, Vec::<String>::new());
+        read.listens
     }
 
     /// An arrival of a company on the CRM's root edge, its fields as given.
@@ -840,25 +889,48 @@ mod tests {
         // Two listens in one file firing one function on two paths are two listens.
         let twice = CRM_LISTENS.replace("listen to crm-[:Company]-> fire note", "listen to crm-[c:Company WHERE c.Name != \"Other\"]-> fire welcome");
         let files = vec![MovementFile { name: "crm".into(), path: PathBuf::from("crm.mvt"), source: twice, version: None }];
-        let listens = listens_across(&Parsed::each(&files, &[]), &js(CRM_CATALOG)).unwrap();
+        let listens = listens_across(&Parsed::each(&files, &[]), &js(CRM_CATALOG)).listens;
         let welcomes: Vec<String> = listens.iter().filter(|l| l.plan.is_some() && l.movement_name == "welcome").map(Listen::pipeline).collect();
         assert_eq!(welcomes.len(), 2);
         assert_ne!(welcomes[0], welcomes[1]);
     }
 
     #[test]
-    fn a_listen_on_a_traversal_the_check_plans_nothing_for_refuses_the_set_naming_where_it_is_written() {
+    fn a_listen_on_a_traversal_the_check_plans_nothing_for_is_named_where_it_is_written_and_the_files_other_listens_read() {
         // Without a catalog the checker plans nothing.
         let files = vec![MovementFile { name: "crm".into(), path: PathBuf::from("crm.mvt"), source: CRM_LISTENS.into(), version: None }];
-        let refused = listens_across(&Parsed::each(&files, &[]), &Js::Null).unwrap_err();
-        assert_eq!(refused.len(), 3, "{refused:?}");
-        assert!(refused[0].starts_with("crm.mvt:18:1 the listen that fires welcome is not planned, as the catalog does not load ("), "{refused:?}");
-        assert!(refused[0].ends_with(", so nothing would fire it: run `listen-fire check`"), "{refused:?}");
+        let read = listens_across(&Parsed::each(&files, &[]), &Js::Null);
+        assert_eq!(read.unwatched.len(), 3, "{:?}", read.unwatched);
+        assert!(read.unwatched[0].starts_with("crm.mvt:18:1 the listen that fires welcome is not planned, as the catalog does not load ("), "{:?}", read.unwatched);
+        assert!(read.unwatched[0].ends_with(", so nothing would fire it"), "{:?}", read.unwatched);
+        let settings: Vec<(&str, bool)> = read.listens.iter().map(|l| (l.movement_name.as_str(), l.plan.is_some())).collect();
+        assert_eq!(settings, [("welcome", false)], "the listen in the settings form is still read");
         // One the check refuses: its WHERE reads a field companies do not have.
         let bogus = CRM_LISTENS.replace("listen to crm-[:Company]-> fire note", "listen to crm-[c:Company WHERE c.Bogus == \"x\"]-> fire note");
         let files = vec![MovementFile { name: "crm".into(), path: PathBuf::from("crm.mvt"), source: bogus, version: None }];
-        let refused = listens_across(&Parsed::each(&files, &[]), &js(CRM_CATALOG)).unwrap_err();
-        assert_eq!(refused, ["crm.mvt:19:1 the listen that fires note does not check, so nothing would fire it: run `listen-fire check`"]);
+        let read = listens_across(&Parsed::each(&files, &[]), &js(CRM_CATALOG));
+        assert_eq!(read.unwatched, ["crm.mvt:19:1 the listen that fires note does not check, so nothing would fire it"]);
+        let kept: Vec<(&str, bool)> = read.listens.iter().map(|l| (l.movement_name.as_str(), l.plan.is_some())).collect();
+        assert_eq!(kept, [("welcome", false), ("welcome", true), ("answer", true)], "the file's other listens are read");
+    }
+
+    #[test]
+    fn a_listen_on_a_connection_imported_from_another_file_is_named_in_either_form() {
+        // The checker refuses both (a file exports no connection: MOV_IMPORT_NOT_EXPORTED, MOV_LISTEN_NOT_INSTANCE).
+        let connections = "import { acme_crm as crm_kind } from adapters\nimport { acme } from credentials\n\ncrm = connect crm_kind using acme\n";
+        let listening = "import { crm } from \"connections\"\n\nfunction welcome(c: <crm-[:Company]->>) {\n  return c.Name\n}\n\nlisten to crm { events: [\"company.created\"] } fire welcome\nlisten to manual fire welcome\n";
+        let file = |name: &str, source: &str| MovementFile { name: name.into(), path: PathBuf::from(format!("{name}.mvt")), source: source.into(), version: None };
+        let read = listens_across(&Parsed::each(&[file("connections", connections), file("welcome", listening)], &[]), &Js::Null);
+        assert_eq!(read.unwatched, ["welcome.mvt:7:1 the listen that fires welcome is on `crm`, which is imported from another file, which cannot make a connection, so nothing would fire it"]);
+        assert_eq!(read.listens.iter().map(|l| l.adapter.as_str()).collect::<Vec<_>>(), ["manual"], "the file's listen on a host unit is read");
+        // On a traversal, the checker plans nothing for it.
+        let traversal = listening.replace("listen to crm { events: [\"company.created\"] } fire welcome", "listen to crm-[:Company]-> fire welcome");
+        let mut catalog = js(CRM_CATALOG);
+        if let Js::Obj(top) = &mut catalog {
+            top.insert("files".into(), js(&format!(r#"{{"connections":{{"source":{}}}}}"#, Js::str(connections).to_json())));
+        }
+        let read = listens_across(&Parsed::each(&[file("connections", connections), file("welcome", &traversal)], &[]), &catalog);
+        assert_eq!(read.unwatched, ["welcome.mvt:7:1 the listen that fires welcome does not check, so nothing would fire it"]);
     }
 
     #[test]

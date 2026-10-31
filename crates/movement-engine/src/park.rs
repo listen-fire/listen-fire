@@ -1428,90 +1428,34 @@ mod tests {
     /// position: the position, and the graph it was read from by name.
     #[test]
     fn a_picked_record_parks_as_the_typescript_writes_it() {
-        let input: crate::run::SegmentInput = serde_json::from_value(serde_json::json!({
-            "source": "function m(msg: <inbox-[:message]->>) {\n  x = 1\n}", "languageVersion": movement_parser::version::LANGUAGE_VERSION, "event": null,
-            "segmentId": "g1", "serves": [], "now": "2026-03-12T12:00:00.000Z",
-            "catalog": { "adapters": {}, "credentials": {}, "plugins": {} },
-        }))
-        .unwrap();
-        let ledger = crate::ledger::Ledger::new(&input.spend);
-        let host = crate::executor::Host::default();
-        let root = crate::program::parse(&input.source).unwrap();
-        let checked = crate::program::join_check(root, &serde_json::json!({ "diagnostics": [], "stamps": [] })).unwrap();
-        let run = Run {
-            host: &host,
-            input: &input,
-            ledger: &ledger,
-            event: Js::Undefined,
-            now_ms: 0.0,
-            catalog: movement_parser::catalog::types::CatalogSnapshot::load(input.catalog.get()).unwrap(),
-            checked,
-            import_originals: RefCell::default(),
-            source: RefCell::default(),
-            source_instance: RefCell::default(),
-            acting_user: RefCell::default(),
-            actor: RefCell::default(),
-            origins: RefCell::default(),
-            misses: RefCell::default(),
-            trace: crate::trace::FlowTrace::default(),
-            movement_name: RefCell::default(),
-            writes: RefCell::default(),
-            targets: RefCell::default(),
-            mutation_context: RefCell::new(Js::Undefined),
-            limit_paused: std::cell::Cell::new(false),
-            pending_suspensions: RefCell::default(),
-            source_reads: RefCell::default(),
-            positions: RefCell::default(),
-            extraction_sites: RefCell::default(),
-            reply_digests: std::cell::Cell::new(0),
-            extract_calls: Default::default(),
-            unfetched_files: RefCell::default(),
-            log_lines: RefCell::default(),
-            file_scope: RefCell::default(),
-            library_scopes: RefCell::default(),
-            call_sites: RefCell::default(),
-            slot_paths: RefCell::default(),
-            boundaries: RefCell::default(),
-            write_order: RefCell::default(),
-            held_locks: RefCell::default(),
-            forked: std::cell::Cell::new(false),
-            gates: RefCell::default(),
-            write_keys: RefCell::default(),
-            resolutions: RefCell::default(),
-            deferred_race_frames: RefCell::default(),
-            call_stack: RefCell::default(),
-            wire: crate::env::Wire::default(),
-            stored_sources: RefCell::default(),
-            meter: Default::default(),
-            event_waits: RefCell::default(),
-            reentered_await: RefCell::default(),
-        };
-        let read = Rc::new(crate::traverse::Read {
-            instance: crate::host::Instance { id: "i1".into(), methods: Rc::new(Vec::new()) },
-            adapter_type: "graph".into(),
-            graph: Rc::new(InstanceBinding { name: "kg".into(), adapter_slug: "kg".into(), credential_name: None, construction_config: Vec::new(), schema: None }),
-            start_surface_type: None,
-            incoming: false,
-            edge_properties: false,
-            streams: false,
-            raw: false,
-        });
-        let scope = Scope::root();
-        scope.declare("c", Binding::Landed(Rc::new(crate::bindings::Landed::new(Js::Undefined, None, read))));
-        // A host that serves no source store is asked nothing: the writers
-        // are ready at once.
-        fn ready<T>(future: impl std::future::Future<Output = T>) -> T {
-            let mut future = std::pin::pin!(future);
-            match future.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
-                std::task::Poll::Ready(value) => value,
-                std::task::Poll::Pending => panic!("a park asked its host"),
+        crate::run::with_bare_run("function m(msg: <inbox-[:message]->>) {\n  x = 1\n}", |run| {
+            let read = Rc::new(crate::traverse::Read {
+                instance: crate::host::Instance { id: "i1".into(), methods: Rc::new(Vec::new()) },
+                adapter_type: "graph".into(),
+                graph: Rc::new(InstanceBinding { name: "kg".into(), adapter_slug: "kg".into(), credential_name: None, construction_config: Vec::new(), schema: None }),
+                start_surface_type: None,
+                incoming: false,
+                edge_properties: false,
+                streams: false,
+                raw: false,
+            });
+            let scope = Scope::root();
+            scope.declare("c", Binding::Landed(Rc::new(crate::bindings::Landed::new(Js::Undefined, None, read))));
+            // A host that serves no source store is asked nothing: the writers
+            // are ready at once.
+            fn ready<T>(future: impl std::future::Future<Output = T>) -> T {
+                let mut future = std::pin::pin!(future);
+                match future.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
+                    std::task::Poll::Ready(value) => value,
+                    std::task::Poll::Pending => panic!("a park asked its host"),
+                }
             }
-        }
-        for state in [ready(parked_state(&run, "s0", None, &scope)), ready(suspended_state(&run, "s0", &scope))] {
-            let state = crate::env::encode_plain(&state.expect("a picked record parks"));
-            let text = state.to_string();
-            assert!(text.contains(r#"[["kind","sourcePosition"],["read",["o",[["instanceName","kg"],["instance",["o",[["name","kg"],["adapterSlug","kg"]]]]]]]"#), "{text}");
-        }
+            for state in [ready(parked_state(run, "s0", None, &scope)), ready(suspended_state(run, "s0", &scope))] {
+                let state = crate::env::encode_plain(&state.expect("a picked record parks"));
+                let text = state.to_string();
+                assert!(text.contains(r#"[["kind","sourcePosition"],["read",["o",[["instanceName","kg"],["instance",["o",[["name","kg"],["adapterSlug","kg"]]]]]]]"#), "{text}");
+            }
+        });
     }
 
     #[test]

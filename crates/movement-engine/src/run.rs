@@ -2879,6 +2879,44 @@ mod tests {
         }
     }
 
+    /// A run an arrival fired binds its parameter to the landing: one naming
+    /// no record is read through the adapter itself (the raw read), as a
+    /// wait's is; one naming its record through the source's graph.
+    #[test]
+    fn a_fired_landing_naming_no_record_is_read_through_the_adapter_itself() {
+        let raw_of = |landing: Js| {
+            with_bare_run("function m(c: <crm-[:Company]->>) {\n  x = 1\n}", |run| {
+                let read = Rc::new(crate::traverse::Read {
+                    instance: host::Instance { id: "i1".into(), methods: Rc::new(Vec::new()) },
+                    adapter_type: "acme_crm".into(),
+                    graph: Rc::new(InstanceBinding { name: "crm".into(), adapter_slug: "acme_crm".into(), credential_name: None, construction_config: Vec::new(), schema: None }),
+                    start_surface_type: None,
+                    incoming: false,
+                    edge_properties: false,
+                    streams: false,
+                    raw: false,
+                });
+                *run.source.borrow_mut() = Some(Rc::new(Source {
+                    instance: read.instance.clone(),
+                    adapter_type: "acme_crm".into(),
+                    instance_name: "crm".into(),
+                    position: Position::unstable("acme_crm", None, Js::Undefined),
+                    surface: Js::Undefined,
+                    read,
+                    address: None,
+                }));
+                run.event = env::object_of(vec![("triggerType", Js::str("arrival")), ("arrival", env::object_of(vec![("edge", Js::str("Company")), ("landing", landing)]))]);
+                match run.trigger_binding() {
+                    Binding::Landed(landed) => landed.read.raw,
+                    _ => panic!("an arrival binds its landing"),
+                }
+            })
+        };
+        let fields = || env::object_of(vec![("id", Js::str("company-9")), ("Name", Js::str("Kestrel"))]);
+        assert!(raw_of(env::object_of(vec![("recordType", Js::str("Company")), ("fields", fields())])), "no recordId: the adapter itself");
+        assert!(!raw_of(env::object_of(vec![("recordId", Js::str("company-9")), ("recordType", Js::str("Company")), ("fields", fields())])), "a recordId: the source's graph");
+    }
+
     /// The pinned instant with no offset is UTC, whatever zone the host
     /// names (the run reads no zone of its own): 00:30 on 15 July is
     /// the 15th.
@@ -3739,4 +3777,70 @@ mod tests {
         };
         assert_eq!(event_address_key(&pinned), r#"["Record Change",[["base","app1"],["table","tblDeals"]]]"#);
     }
+}
+
+/// A run of `source` with no event, its check clean and its catalog empty,
+/// handed to `body` before anything is seeded: what a test of one of its
+/// steps starts from.
+#[cfg(test)]
+pub(crate) fn with_bare_run<T>(source: &str, body: impl FnOnce(&mut Run<'_>) -> T) -> T {
+    let input: SegmentInput = serde_json::from_value(serde_json::json!({
+        "source": source, "languageVersion": movement_parser::version::LANGUAGE_VERSION, "event": null,
+        "segmentId": "g1", "serves": [], "now": "2026-03-12T12:00:00.000Z",
+        "catalog": { "adapters": {}, "credentials": {}, "plugins": {} },
+    }))
+    .unwrap();
+    let ledger = crate::ledger::Ledger::new(&input.spend);
+    let host = crate::executor::Host::default();
+    let root = crate::program::parse(&input.source).unwrap();
+    let checked = crate::program::join_check(root, &serde_json::json!({ "diagnostics": [], "stamps": [] })).unwrap();
+    let mut run = Run {
+        host: &host,
+        input: &input,
+        ledger: &ledger,
+        event: Js::Undefined,
+        now_ms: 0.0,
+        catalog: movement_parser::catalog::types::CatalogSnapshot::load(input.catalog.get()).unwrap(),
+        checked,
+        import_originals: RefCell::default(),
+        source: RefCell::default(),
+        source_instance: RefCell::default(),
+        acting_user: RefCell::default(),
+        actor: RefCell::default(),
+        origins: RefCell::default(),
+        misses: RefCell::default(),
+        trace: crate::trace::FlowTrace::default(),
+        movement_name: RefCell::default(),
+        writes: RefCell::default(),
+        targets: RefCell::default(),
+        mutation_context: RefCell::new(Js::Undefined),
+        limit_paused: std::cell::Cell::new(false),
+        pending_suspensions: RefCell::default(),
+        source_reads: RefCell::default(),
+        positions: RefCell::default(),
+        extraction_sites: RefCell::default(),
+        reply_digests: std::cell::Cell::new(0),
+        extract_calls: Default::default(),
+        unfetched_files: RefCell::default(),
+        log_lines: RefCell::default(),
+        file_scope: RefCell::default(),
+        library_scopes: RefCell::default(),
+        call_sites: RefCell::default(),
+        slot_paths: RefCell::default(),
+        boundaries: RefCell::default(),
+        write_order: RefCell::default(),
+        held_locks: RefCell::default(),
+        forked: std::cell::Cell::new(false),
+        gates: RefCell::default(),
+        write_keys: RefCell::default(),
+        resolutions: RefCell::default(),
+        deferred_race_frames: RefCell::default(),
+        call_stack: RefCell::default(),
+        wire: crate::env::Wire::default(),
+        stored_sources: RefCell::default(),
+        meter: Default::default(),
+        event_waits: RefCell::default(),
+        reentered_await: RefCell::default(),
+    };
+    body(&mut run)
 }

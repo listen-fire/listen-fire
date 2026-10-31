@@ -148,7 +148,7 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
             route(&listening, request).await.unwrap_or_else(|message| Response::json(500, &Js::Obj(obj! { "error" => Js::Str(message) })))
         }
     }));
-    let session = open_session(project, &Opening { ephemeral, store, role }).await?;
+    let session = open_session(project, &Opening { ephemeral, store, role, routes_listens: true }).await?;
     // Before the doors answer, so a delivery is verified by the secret the
     // source issued. A refresh registers again what its listens move.
     for line in crate::subscriptions::reconcile(&session).await {

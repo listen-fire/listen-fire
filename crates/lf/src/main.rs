@@ -471,14 +471,14 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
             if let (Some(external), Some(body)) = (&args.webhook, &args.body) {
                 let project = load()?;
                 let store = store_of(&args, &project)?;
-                let session = runs::open_session(project, &runs::Opening { ephemeral: args.ephemeral, store: &store, role: runs::Role::Command }).await?;
+                let session = runs::open_session(project, &runs::Opening { ephemeral: args.ephemeral, store: &store, role: runs::Role::Command, routes_listens: true }).await?;
                 let delivery = serve::WebhookFile { external, install: args.install.as_deref(), body, headers: &args.headers };
                 return report_fired(&serve::receive_webhook(&session, delivery).await?, args.json, &mut out);
             }
             if let Some(movement) = &args.poll {
                 let project = load()?;
                 let store = store_of(&args, &project)?;
-                let session = runs::open_session(project, &runs::Opening { ephemeral: args.ephemeral, store: &store, role: runs::Role::Command }).await?;
+                let session = runs::open_session(project, &runs::Opening { ephemeral: args.ephemeral, store: &store, role: runs::Role::Command, routes_listens: false }).await?;
                 return report_fired(&session.run_poll(movement).await?, args.json, &mut out);
             }
             let Some(event_file) = &args.event else {
@@ -488,7 +488,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
                 };
                 let project = load()?;
                 let store = store_of(&args, &project)?;
-                let session = runs::open_session(project, &runs::Opening { ephemeral: args.ephemeral, store: &store, role: runs::Role::Command }).await?;
+                let session = runs::open_session(project, &runs::Opening { ephemeral: args.ephemeral, store: &store, role: runs::Role::Command, routes_listens: false }).await?;
                 return report_fired(&session.run_manual(movement, args.text.as_deref(), args.dry_run).await?, args.json, &mut out);
             };
             let project = load()?;
@@ -497,14 +497,15 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
                 eprintln!("listen-fire: --ephemeral keeps its run state in a temporary file; it does not take a Postgres --store");
                 return Ok(2);
             }
-            let session = runs::open_session(project, &runs::Opening { ephemeral: args.ephemeral, store: &store, role: runs::Role::Command }).await?;
+            let session = runs::open_session(project, &runs::Opening { ephemeral: args.ephemeral, store: &store, role: runs::Role::Command, routes_listens: false }).await?;
             let (external, event) = runs::read_event_file(event_file)?;
             report_fired(&session.fire_event(&external, &event, args.dry_run, runs::Delivered::default()).await?, args.json, &mut out)
         }
         "resume" => {
             let project = load()?;
             let store = store_of(&args, &project)?;
-            let session = runs::open_session(project, &runs::Opening { ephemeral: false, store: &store, role: runs::Role::Command }).await?;
+            // Resuming every due run drains the queued deliveries too, so it routes them.
+            let session = runs::open_session(project, &runs::Opening { ephemeral: false, store: &store, role: runs::Role::Command, routes_listens: args.rest.is_empty() }).await?;
             let outcomes = match args.rest.first() {
                 Some(run_id) => vec![session.resume_run(run_id).await?],
                 // A work row that fails is retried later, unlogged.
@@ -528,7 +529,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
             };
             let project = load()?;
             let store = store_of(&args, &project)?;
-            let session = runs::open_session(project, &runs::Opening { ephemeral: false, store: &store, role: runs::Role::Command }).await?;
+            let session = runs::open_session(project, &runs::Opening { ephemeral: false, store: &store, role: runs::Role::Command, routes_listens: false }).await?;
             report_rerun(run_id, session.rerun(run_id, args.force).await?, args.json, &mut out)
         }
         "runs" => {
@@ -576,7 +577,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
                 let env: Vec<(String, String)> = std::env::vars().collect();
                 movements_slot::require_watch(&project, &env, "listen-fire drain")?;
             }
-            let mut session = runs::open_session(project, &runs::Opening { ephemeral: false, store: &store, role: runs::Role::Drain }).await?;
+            let mut session = runs::open_session(project, &runs::Opening { ephemeral: false, store: &store, role: runs::Role::Drain, routes_listens: true }).await?;
             session.pool = pool;
             drain::drain(&session, &drain::DrainOptions { until_idle: args.until_idle, max_seconds: args.max_seconds }, &mut out).await
         }

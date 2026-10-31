@@ -1076,7 +1076,7 @@ pub(crate) mod tests {
 
         pub(crate) async fn session(&self) -> Session {
             let project = crate::project::load_project(&self.root).unwrap();
-            crate::runs::open_session(project, &crate::runs::Opening { ephemeral: false, store: &StoreSpec::Sqlite(self.root.join(".lf/state.db")), role: crate::runs::Role::Serve }).await.unwrap()
+            crate::runs::open_session(project, &crate::runs::Opening { ephemeral: false, store: &StoreSpec::Sqlite(self.root.join(".lf/state.db")), role: crate::runs::Role::Serve, routes_listens: false }).await.unwrap()
         }
     }
 
