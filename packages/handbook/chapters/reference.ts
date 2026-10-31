@@ -41,7 +41,7 @@ inc = (v: <number>) => v + 1                   # an expression body; a closure b
 
 \`=\` binds a name (instance, handle, extract graph, a bound block, a call's value, a closure, a plain value). Statements run top-to-bottom; a handle must be written before it is read. A function may call itself, declaring what it returns (\`f(n: <number>): <number>\`). A listened automation takes exactly one parameter; a library automation takes any number.
 
-\`return\` is the one way a value leaves a body — an automation's, a block's, or a closure's — and a \`return\` inside an \`if\` arm belongs to the body around it. A body with no \`return\` hands nothing back, so it runs as a statement and cannot be bound. A closure is a value but not data: keep it in a variable, hand it to \`callback\`, \`until\`, \`race\` or \`all\`, or pass it to a parameter whose type is a closure type (\`<(c: <Company>) => <text>>\`) — never in a list, under a key or in a field.
+\`return\` is the one way a value leaves a body — an automation's, a block's, or a closure's — and a \`return\` inside an \`if\` arm belongs to the body around it. A body with no \`return\` hands nothing back, so it runs as a statement and cannot be bound. A closure is a value but not data: keep it in a variable, hand it to \`until\`, \`race\` or \`all\`, or pass it to a parameter whose type is a closure type (\`<(c: <Company>) => <text>>\`) — never in a list, under a key or in a field.
 
 ### types-and-brackets
 
@@ -180,44 +180,43 @@ Connect the instance first, then listen to *it*. The \`as\` alias goes right aft
 
 ### reviews
 
-Connect with \`connect ask\`, **write** a question along a family edge (the record mints a readable \`Url\`), deliver the \`Url\`, then **await** its \`Response\`. Families: **Check** (approve/decline → boolean), **Provide** (supply a value — set \`Answer Type\`), **Choose** (one of \`Options\` — buttons), **Select** (a subset of \`Options\` — checklist), **Review** (acknowledge and move on), **Form** (collect named values — literal \`Fields\` type the answer). Every family takes \`Prompt\`, optional \`Detail\`.
+A run waits on what arrives on an edge of a record it holds: write the record, then \`await\` the edge, in a \`race\` with a \`sleep\`.
 
 \`\`\`
-asks = connect ask
-q = write asks-[:Check]-> { Prompt: "Pursue this?" }
-ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
-if (ops == null) { fail("no #ops channel") }
-write ops-[:Messages]-> { Message: "Decide: \${q.Url}" }    # deliver the link
-answer = await q-[:Response]->                       # park until answered
-if (answer.Answer) { … }
+msg = write ops-[:Messages]-> {
+  Message: "Pursue this?"
+  Buttons: [{ Text: "Pursue", Value: "pursue" }, { Text: "Pass", Value: "pass" }]
+}
 
-# Timeout / escalation are COMPOSED from race + sleep (no fallback clause):
 r = race(
-  () => { a = await q-[:Response]->
-          return a.Answer },
-  () => { await sleep(2d) },          # the default when nobody answers in time
+  () => {
+    press = await msg-[:Interactions]->        # one press
+    return only(press-[:Actions]->).Value      # "pursue" | "pass", from the Buttons written
+  },
+  () => {
+    reply = await new msg-[:Replies]->         # only a reply arriving from now
+    return reply.Message
+  },
+  () => { await sleep(2d) },                   # the default when nobody answers in time
 )
-if (r[0] == null) { … }             # nobody answered — the safe default path
-if (r[0] == true) { … }             # approved
+if (r[0] == "pursue") { … }
+if (r[0] == null && r[1] == null) { … }        # nobody answered: the safe default path
 
-r2 = all(f, () => { … }) # all at once, every slot filled
-\`\`\`
-
-The answer is readable only **after** \`await q-[:Response]->\`. Durations: \`30s\` \`90m\` \`4h\` \`1d\` \`1h30m\`. Interpolate \${q.Url} into the delivery message or nobody can answer. \`Response\` is an ordinary writable edge, so anything that can write can answer it — including an in-chat button: mint a \`callback\` per answer and carry its \`id\` on the control (which field on a control holds it is that system's own, and its chapter names it); see \`in-chat-answers\` in the reviews chapter for the full shape. An \`await\` on its own waits forever — race it against \`sleep\` for an unattended run.
-
-\`await\` marks the wait itself — \`await q-[:Response]->\`, \`await sleep(2d)\` — and \`race(…)\` only says how several waits combine (the first one), so it is written without \`await\`: its arms wait, and the run parks where they do. An arm is a **function**, passed as an argument — \`() => { … }\` in place, or the name of one declared elsewhere — taking no parameters and capturing everything in scope where it is written. The value is a receipt of one slot per arm in the order written, read as \`r[<index>]\` and holding what that arm \`return\`ed: only the arm that settled first has its slot filled, so a null test on a slot is the branch (arms settling in the same moment all land, and arms still parked are dropped where they stand — what they had already done stays done). To wait for **every** one, use \`all\`: \`r = all(f, g)\` runs them at once, needs no \`await\` (an arm that waits parks the run), and \`r[i]\` is what function \`i\` returned, every slot filled. \`all(f, g, { concurrency: 1, onError: "warn" })\` takes \`map\`'s settings: how many run at once, and whether a failing arm leaves its slot null instead of failing the run. A function that hands nothing back has an always-null slot either way.
-
-\`\`\`
-cb = callback({ … })                      # id + url; one use, dies with the run
-cb = callback({ … }, { once: false, ttl: 2d })          # repeatable / time-bounded
-cb = callback((day: <date>) => { … })     # a value supplied when someone acts
-cb = callback(() => \`Chase\`(company))         # defer a call
-await cb-[:Called]->               # wait for it (landing: At + one field per parameter)
-
+form = write forms-[:Forms]-> { Title: "Approve?", Fields: Refund }   # form.Url; its Submissions answer, typed by Refund
+q = write asks-[:Check]-> { Prompt: "Pursue this?" }                 # q.Url; its Response answers, Answer a boolean
+both = all(f, g)                                                     # all at once, every slot filled
 await until(() => { refresh co; return co.Stage == "Won" }, { every: 1h })   # re-check a condition on a cadence
 \`\`\`
 
-\`cb.id\` goes in a control's payload; \`cb.url\` is the link form (its page confirms before it acts). \`until\` re-checks its condition every \`every:\` (1m floor) and resumes when it holds; the condition is a closure or a plain boolean expression, reads only, and takes no parameters. \`refresh <handle>\` re-reads a written record so the next check sees it as it is now. Neither a callback's body nor an \`until\` condition may wait, directly or through a function it calls: a run cannot be resumed there (\`MOV_WAIT_NOT_RESUMABLE\`). Do the waiting in the automation itself, outside both.
+- \`await x-[:E]->\` takes the first match already on the edge, in the order its system keeps, or else the first to arrive. \`await new x-[:E]->\` takes only one arriving after \`x\` entered the run.
+- Only an edge its system announces can be awaited. The head is a bound name, and the wait takes one hop off it.
+- What \`await\` binds is always there. A record deleted while the run waits ends the wait's scope instead: the code after it runs zero times.
+- A \`WHERE\` that reads a record the run holds reads it once, when the wait is reached.
+- Durations: \`30s\` \`90m\` \`4h\` \`1d\` \`1h30m\`.
+
+\`await\` marks the wait itself — \`await msg-[:Interactions]->\`, \`await sleep(2d)\` — and \`race(…)\` only says how several waits combine (the first one), so it is written without \`await\`: its arms wait, and the run parks where they do. An arm is a **function**, passed as an argument — \`() => { … }\` in place, or the name of one declared elsewhere — taking no parameters and capturing everything in scope where it is written. The value is a receipt of one slot per arm in the order written, read as \`r[<index>]\` and holding what that arm \`return\`ed: only the arm that settled first has its slot filled, so a null test on a slot is the branch (arms settling in the same moment all land, and arms still parked are dropped where they stand — what they had already done stays done). To wait for **every** one, use \`all\`: \`r = all(f, g)\` runs them at once, needs no \`await\` (an arm that waits parks the run), and \`r[i]\` is what function \`i\` returned, every slot filled. \`all(f, g, { concurrency: 1, onError: "warn" })\` takes \`map\`'s settings: how many run at once, and whether a failing arm leaves its slot null instead of failing the run. A function that hands nothing back has an always-null slot either way.
+
+\`until\` re-checks its condition every \`every:\` (1m floor) and resumes when it holds; the condition is a closure or a plain boolean expression, reads only, and takes no parameters. \`refresh <handle>\` re-reads a written record so the next check sees it as it is now. An \`until\` condition may not wait, directly or through a function it calls: a run cannot be resumed there (\`MOV_WAIT_NOT_RESUMABLE\`). Do the waiting in the automation itself.
 
 ### extraction
 
@@ -249,13 +248,14 @@ Content is a list (shared content first, record-specific content last, so repeat
 - **Reaching for a loop.** Enumeration is a traversal-headed block, not a loop.
 - **Using an alias outside its block.** \`return\` what the rest of the automation needs from the block.
 - **Listening to an adapter type instead of an instance.** Connect first; listen to the instance.
-- **Reading a review's answer before it exists.** The answer binds only after \`await q-[:Response]->\`, and once resolved.
+- **Reading an answer before it arrives.** An answer binds only after the \`await\` on its edge (\`press = await msg-[:Interactions]->\`).
+- **Guarding what an \`await\` bound.** It is always there, so an \`if (x == null)\` after it never runs; a deleted record ends the wait's scope instead.
 - **Running several functions at once.** \`race(f, g)\` takes the first to finish and \`all(f, g)\` every one. The arms are the call's arguments, with no \`await\` in front: the wait is the \`await\` inside an arm. An arm is \`() => { … }\` or the name of a declaration; a plain value or a bare block is refused when you save.
-- **Leaving an unattended review with no timeout.** An \`await\` on its own waits forever; race it against \`() => { await sleep(2d) }\` so a default takes over when time runs out.
+- **Leaving a wait with no timeout.** An \`await\` on a person or a system waits forever when nothing comes; race it against \`() => { await sleep(2d) }\` so a default takes over when time runs out.
 - **Expecting one extraction per piece from a list.** \`extract(pieces, Shape)\` reads them all as a single job; \`map(pieces, (p) => extract([p], Shape))\` is the per-piece form.
 - **Verifying from the target system only.** The run record shows what was sent and why; read provenance before editing the automation.
 - **Using a maybe-absent value unguarded.** A write/traversal target, a link end, a dot-plane field read, or an ordered comparison off a \`first\`/\`List.last\`/\`List.min\`/\`List.max\`/\`xs[n]\` result or a named \`match\` is refused until narrowed — guard with \`if (x == null) { fail(…) }\` (or an \`else\` arm), \`x != null\`, or \`?:\` on the write field.
 - **Binding a field just to test it.** \`x.Field != null\` reads the field directly; no intermediate binding.
-- **Keeping a closure as data.** A closure lives in a variable or a parameter, or is passed as an argument where it is written (\`map(xs, (x) => …)\`, \`all(f, g)\`, a callback's subject). In a list, under a key, in a field or as what a \`map\` returns it is refused when you save.
+- **Keeping a closure as data.** A closure lives in a variable or a parameter, or is passed as an argument where it is written (\`map(xs, (x) => …)\`, \`all(f, g)\`). In a list, under a key, in a field or as what a \`map\` returns it is refused when you save.
 - **Calling something that may not be a function.** A name is called when its type shows it is a closure (\`g = label\` then \`g()\`, a closure-typed parameter); a value that may be something else is refused when you save.`,
 };

@@ -79,7 +79,7 @@ export const CONTROL_FORMS: readonly ControlForm[] = [
     signature: 'race(() => { … }, …) → receipt; r[i] is arm i\'s returned value, null unless it settled first',
     purpose: 'wait for whichever of several things happens first, such as an answer or a timeout',
     example: {
-      body: 'q = write asks-[:Check]-> { Prompt: "Log ${m.Subject}?" }\nr = race(\n  () => {\n    a = await q-[:Response]->\n    return a.Answer\n  },\n  () => { await sleep(2d) },\n)\napproved = r[0] == true',
+      body: 'ops = only(chat-[c:Channels WHERE c.Name == "ops"]->)\nif (ops == null) { fail("no #ops channel") }\nmsg = write ops-[:Messages]-> {\n  Message: "Log ${m.Subject}?"\n  Buttons: [{ Text: "Log", Value: "log" }, { Text: "Skip", Value: "skip" }]\n}\nr = race(\n  () => {\n    press = await msg-[:Interactions]->\n    return only(press-[:Actions]->).Value\n  },\n  () => { await sleep(2d) },\n)\napproved = r[0] == "log"',
     },
     anchor: 'front#runs',
   },
@@ -98,9 +98,18 @@ export const CONTROL_FORMS: readonly ControlForm[] = [
     purpose: 'get typed answers from a person at a link, and wait for what they submit',
     example: {
       program:
-        'import { `@lf/forms` as forms_module } from adapters\nforms = connect forms_module\nnode Decision {\n  Pursue: <boolean>\n}\nfunction `Ask`(m: <inbox-[:Email]->>) {\n  form = write forms-[:Forms]-> { Title: "Pursue ${m.Subject}?", Fields: Decision }\n  ops = only(chat-[c:Channels WHERE c.Name == "ops"]->)\n  if (ops == null) { fail("no #ops channel") }\n  write ops-[:Messages]-> { Message: "Answer at ${form.Url}" }\n  answer = await form-[:Submissions]->\n  if (answer.Pursue) { write crm-[:Companies]-> { unique by (Name), Name: m.Subject } }\n}',
+        'import { `@lf/forms` as forms_module } from adapters\nforms = connect forms_module\nnode Decision {\n  Pursue: <boolean>\n}\nfunction `Ask`(m: <inbox-[:Email]->>) {\n  form = write forms-[:Forms]-> { Title: "Pursue ${m.Subject}?", Fields: Decision }\n  ops = only(chat-[c:Channels WHERE c.Name == "ops"]->)\n  if (ops == null) { fail("no #ops channel") }\n  write ops-[:Messages]-> { Message: "Answer at ${form.Url}" }\n  r = race(\n    () => {\n      answer = await form-[:Submissions]->\n      return answer.Pursue\n    },\n    () => { await sleep(2d) },\n  )\n  if (r[0] == true) { write crm-[:Companies]-> { unique by (Name), Name: m.Subject } }\n}',
     },
-    anchor: 'reviews#in-chat-answers',
+    anchor: 'reviews#host-links',
+  },
+  {
+    name: 'await',
+    signature: 'x = await rec-[:Edge]-> (one already there, or the first to arrive)  |  x = await new rec-[:Edge]-> (only one arriving from now)',
+    purpose: 'wait for one record on an edge its system announces: a press on a button, a reply in a thread, a form\'s answer',
+    example: {
+      body: 'ops = only(chat-[c:Channels WHERE c.Name == "ops"]->)\nif (ops == null) { fail("no #ops channel") }\nmsg = write ops-[:Messages]-> { Message: "Who can take ${m.Subject}?" }\nr = race(\n  () => {\n    reply = await msg-[:Replies]->\n    return reply.Message\n  },\n  () => { await sleep(1d) },\n)\ntaker = coalesce(r[0], "nobody")',
+    },
+    anchor: 'reviews#await-and-await-new',
   },
   {
     name: 'until',

@@ -76,7 +76,7 @@ A relationship either hands its records back in an order that means something or
 - \`count\`, \`List.sum\`, \`List.avg\`, \`List.min\`, \`List.max\` and \`List.from\` give the same answer whatever the order, so they read either.
 - \`LIMIT n\` with no \`ORDER BY\` means *some n of them*, and is refused for the same reason — except over a relationship ordered by nature, where "the latest twenty" is exactly what it says.
 
-Which relationships are ordered is the source's own fact, and each one says: chat messages and thread replies by time, a curated list's entries by when they were added, a document's sections and an email's attachments by their place in it, answers and callback fires by when they landed.
+Which relationships are ordered is the source's own fact, and each one says: chat messages and thread replies by time, a curated list's entries by when they were added, a document's sections and an email's attachments by their place in it, answers to a question by when they landed.
 
 ### what-a-source-can-filter
 

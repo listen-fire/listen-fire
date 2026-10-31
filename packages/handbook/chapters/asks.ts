@@ -2,26 +2,137 @@ import type { Chapter } from '../types';
 
 export const asks: Chapter = {
   id: 'reviews',
-  title: 'Reviews — pausing for a human decision',
-  content: `## Reviews — pausing for a human decision
+  title: 'Reviews — waiting on a person or a system',
+  content: `## Reviews — waiting on a person or a system
 
-Pause a run for a person's judgement: **write** a question, deliver the link it mints, then **await** the answer. The run stops, the person decides, and the run resumes exactly where it left off with every handle and binding it had — minutes or days later, holding nothing open in the meantime.
+A run can wait for something outside it: a press on a button, a form someone fills in, a reply in a thread, a question answered. Each answer **arrives on an edge** of a record the run holds — a message's \`Interactions\`, a form's \`Submissions\`, a thread's \`Replies\`. Write the record, then \`await\` that edge: the run parks, holding nothing open, and resumes where it left off with the answer bound and every other binding it had — minutes or days later.
 
 Reach for one only when a *judgement* is genuinely needed. A value you can compute, extract, or default with a \`?:\` set-if-empty field is not one.
 
-### how-it-works
+### waiting-on-a-person
 
 \`\`\`
-asks = connect ask
+msg = write deals-[:Messages]-> {
+  Message: "New company: \${\`Company Name\`}. Pursue it?"
+  Buttons: [{ Text: "Pursue", Value: "pursue" }, { Text: "Pass", Value: "pass" }]
+}
 
-q = write asks-[:Check]-> { Prompt: "Pursue this company?" }
+r = race(
+  () => {
+    press = await msg-[:Interactions]->
+    return only(press-[:Actions]->).Value
+  },
+  () => { await sleep(2d) },
+)
+
+if (r[0] == "pursue") {
+  write crm-[:Companies]-> { unique by (FUZZY Name), Name: \`Company Name\` }
+}
+if (r[0] == null) {
+  write msg-[:Replies]-> { Message: "Nobody decided in time — holding." }
+}
 \`\`\`
 
-- The **family** edge (\`Check\` here) is the kind of question, and it fixes the type of the answer.
-- \`q.Url\` is the link a person opens — the only delivery affordance. Nothing is sent for you; you interpolate that \`Url\` into a message yourself.
-- \`await q-[:Response]->\` is the only way to read the answer. A read without \`await\` finds nothing until someone answers; \`await\` holds the run until there *is* something to read.
+- The write that puts the question makes the record the answer lands on. There is nothing else to mint: no id, no address.
+- \`await\` takes one hop off one record and binds one record: what arrived.
+- The wait opens just before the write runs, so an answer that comes while the write is still finishing counts.
+- **Give every wait a timeout.** Put it in a \`race\` with a \`sleep\`, as here. An answer that never comes otherwise leaves the run parked for good.
+- What \`await\` binds is always there, so nothing after it needs a \`== null\` test (a record deleted while the run waits: \`deleted-records\`).
+- Only an edge whose system announces what arrives on it can be awaited: a message's \`Interactions\` and \`Replies\`, a form's \`Submissions\`, a question's \`Response\`. Each system's chapter says which of its edges announce. Awaiting any other edge is refused when you save, with the read or the \`await until\` to write instead.
 
-### the-families
+### await-and-await-new
+
+- \`await x-[:Replies]->\` takes the first match already on the edge, in the order the system keeps it, or else the first to arrive.
+- \`await new x-[:Replies]->\` takes only the first to arrive after \`x\` entered the run: when it was written (just before the write), read, or handed in as a parameter.
+- On an edge that only announces — a press, a form's answer — the two are the same: nothing is there before it arrives.
+- On an edge whose system keeps no order, plain \`await\` is refused when you save, because there is no "first already there": write \`await new\`.
+- A \`WHERE\` on the hop says which arrival counts.
+- The head is a name bound to one record, and the wait takes one hop off it. To wait at the end of a longer walk, bind the record the last hop leaves from, then await its edge.
+
+\`\`\`
+thread = only(ops-[m:Messages WHERE m.Message == go.Text]->)
+if (thread == null) { fail("no message \\"\${go.Text}\\" in #ops") }
+write thread-[:Replies]-> { Message: "Any update on this?" }
+
+r = race(
+  () => {
+    reply = await new thread-[x:Replies WHERE x.User == thread.User]->
+    return reply.Message
+  },
+  () => { await sleep(1d) },
+)
+\`\`\`
+
+\`new\` skips the replies already in the thread, and the \`WHERE\` takes only its author's, so the nudge the run just posted never answers it.
+
+### buttons
+
+Buttons are a field of the message the run writes. A press arrives on the message's \`Interactions\`.
+
+\`\`\`
+msg = write approvals-[:Messages]-> {
+  Message: "Approve the expense?"
+  Buttons: [{ Text: "Approve", Value: "approve" }, { Text: "Reject", Value: "reject" }]
+}
+
+r = race(
+  () => {
+    press = await msg-[:Interactions]->
+    return only(press-[:Actions]->).Value
+  },
+  () => { await sleep(1d) },
+)
+
+if (r[0] == "approve") { … }
+\`\`\`
+
+- A press is an \`Interaction\`: when it happened (\`At\`), the controls used (\`Actions\`, each with the \`Value\` and \`Text\` it was written with), and who pressed (\`By\`).
+- \`Value\` is one of the values the buttons were written with, so \`r[0] == "aprove"\` is refused when you save, with a did-you-mean.
+- A value built at run time leaves \`Value\` plain text, with a warning naming the button.
+- Which systems carry buttons, and their limits, is in each system's chapter (\`system:slack\`).
+
+### host-links
+
+A link a person opens to answer is a form from \`@lf/forms\`. Reach for one when the person is outside every system the automation uses, or when the answer has several typed fields. Its fields are a \`node\` you declare, and the answer is typed by it.
+
+\`\`\`
+import { \`@lf/forms\` as forms_module } from adapters
+
+forms = connect forms_module
+
+node Refund {
+  Approve: <boolean>
+  Note: <text | null>
+}
+
+function \`Refund Check\`(go: <runs-[:Invocation]->>) {
+  form = write forms-[:Forms]-> { Title: "Approve the refund for \${go.Text}?", Fields: Refund }
+  write ops-[:Messages]-> { Message: "Approve or decline: \${form.Url}" }
+
+  r = race(
+    () => {
+      answer = await form-[:Submissions]->
+      if (answer.Approve) {
+        write ops-[:Messages]-> { Message: "Refund approved. \${coalesce(answer.Note, "")}" }
+      }
+      return answer.Approve
+    },
+    () => { await sleep(2d) },
+  )
+  if (r[0] == null) { fail("nobody answered the refund form in two days") }
+}
+\`\`\`
+
+- \`form.Url\` is the link. Send it wherever the person will see it: a channel, an email, a text message.
+- The link is served at the host's public address (under \`listen-fire\`, \`lf.yaml\`'s \`publicUrl\`). A browser gets the form; a program fetching it as JSON gets the fields it must send.
+- \`answer.Approve\` is a boolean and \`answer.Note\` is text or null, because \`Fields\` named \`Refund\`. Reading a field the node does not declare is refused when you save.
+- \`Fields\` names a declared \`node\`: a record built in place is refused.
+- A form takes one answer; a different second one is turned away. It never expires, so the race's \`sleep\` is its deadline.
+- A form is written, never listed: only the run that wrote it holds the link.
+
+### questions
+
+A question gives what buttons and a form do not: a page that renders the right control for whoever opens it, and an entry in that person's queue of things to decide. Connect with \`asks = connect ask\` and write one along a **family** edge, which is the kind of question and fixes the type of the answer.
 
 Every family takes \`Prompt\` (the question) and an optional \`Detail\` (a longer explanation shown under it), plus the parameters below.
 
@@ -29,103 +140,103 @@ Every family takes \`Prompt\` (the question) and an optional \`Detail\` (a longe
 - **Provide** — supply one value. \`Answer Type\` (required) is \`"text"\`, \`"number"\`, \`"date"\`, or \`"boolean"\`; \`Answer\` is that type.
 - **Choose** — pick ONE. \`Options\` (required, at least one) is the set; \`Answer\` is the option they chose.
 - **Select** — pick a SUBSET. \`Options\` (required) again; \`Answer\` is the list they ticked, possibly empty.
-- **Review** — an acknowledgement. Nothing to fill in and nothing extra to supply: the person confirms they have read the \`Detail\`, and \`Answer\` carries no value. Await it and carry on.
-- **Form** — collect several named fields at once. \`Fields\` (required) names them; name them literally and each becomes a field of the answer you read like any record's, \`a.Budget\`, every one text.
-
-Spell a parameter out as a literal and the answer narrows while you write it: a \`Choose\` over \`["ship", "hold"]\` answers one of exactly those two, and comparing it to anything else is caught then and there; \`Answer Type: "number"\` answers a number. Build the options at run time instead and the answer is plain text — still correct, just unnarrowed. A literal \`Fields\` narrows the same way, into one field per name.
+- **Review** — an acknowledgement. Nothing to fill in: the person confirms they have read the \`Detail\`, and \`Answer\` carries no value.
+- **Form** — collect several named fields at once. \`Fields\` (required) names them; name them literally and each becomes a field of the answer, \`a.Budget\`, every one text.
 
 \`\`\`
-q = write asks-[:Form]-> {
-  Prompt: "Fill in the missing details"
-  Fields: ["Company", "Contact", "Budget"]
-}
-
-a = await q-[:Response]->
-write company-[:Notes]-> {
-  Title:   "Intake details"
-  Payload: a.Budget
-}
-\`\`\`
-
-Build those names at run time and there is nothing to read a field off — the editor warns you on save, and the answer stays \`a.Answer\`, one **structured** value carrying them all. A structured value is opaque. Pass it on into a structured field, but you cannot pick a piece out of it, compare it, or branch on it.
-
-So when you need a value to *act* on — a name to look up, a number to write into a typed field — reach for \`Provide\`, \`Choose\`, \`Select\`, or a \`Form\` whose \`Fields\` you spelled out.
-
-### delivering-and-awaiting
-
-\`\`\`
-q = write asks-[:Check]-> { Prompt: "Pursue this company?" }
-
-deals = only(chat-[ch:Channels WHERE ch.Name == "deals"]->)
-if (deals == null) { fail("no #deals channel") }
-write deals-[:Messages]-> { Message: "New company — pursue it? \${q.Url}" }
-
-answer = await q-[:Response]->
-if (answer.Answer) {
-  write crm-[:Companies]-> { unique by (FUZZY Name), Name: \`Company Name\` }
-}
-\`\`\`
-
-- Deliver the \`Url\` wherever the person is — a channel post as here, an email, a text message. Whoever opens it gets the control the family calls for; nothing renders that control into the delivery for you.
-- An \`await\` on its own waits indefinitely. For anything unattended, give it a deadline (below).
-- When the run was started from a chat interface, an undelivered question is **relayed**: the run pauses, the person is shown the question, and their decision is what answers it — never the assistant's own judgement.
-
-### the-pick-idiom
-
-Letting a person pick a **live record** — one company out of the several you found — needs no special family. Compose it: offer the names, then filter the graph on the answer.
-
-\`\`\`
-found = crm-[c:Companies WHERE c.Categories == "Lead"]-> {
-  return c.Name
-}
-
-q = write asks-[:Choose]-> {
-  Prompt: "Which company did they mean?"
-  Options: found
-}
-
-a = await q-[:Response]->
-pick = only(crm-[co:Companies WHERE co.Name == a.Answer]->)
-if (pick == null) { fail("no company named \${a.Answer}") }
-write pick-[:Notes]-> { Title: "Chosen", Content: "Picked from \${count(found)} candidates." }
-\`\`\`
-
-Options gathered at run time are ordinary — the answer is plain text rather than one of a known set, which is what it honestly is. The answer names the record; the lookup after it keys on that name.
-
-### timeout-and-escalation
-
-Give an unattended question a deadline by racing the wait for it against a \`sleep\` and proceeding with whichever settles first. There is no \`fallback\` clause — a deadline, a reminder, and an escalation are all **composed** from those two pieces:
-
-\`\`\`
-deals = only(chat-[ch:Channels WHERE ch.Name == "deals"]->)
-if (deals == null) { fail("no #deals channel") }
+q = write asks-[:Choose]-> { Prompt: "What next?", Options: ["pursue", "hold", "pass"] }
+write ops-[:Messages]-> { Message: "What next? \${q.Url}" }
 
 r = race(
   () => {
     a = await q-[:Response]->
     return a.Answer
   },
+  () => { await sleep(2d) },
+)
+
+if (r[0] == "pursue") { … }
+\`\`\`
+
+- \`q.Url\` is the page. Nothing is sent for you: interpolate it into a message yourself.
+- Spell a parameter out as a literal and the answer narrows: a \`Choose\` over \`["pursue", "hold", "pass"]\` answers one of exactly those, and comparing it to anything else is refused when you save. \`Answer Type: "number"\` answers a number. A literal \`Fields\` narrows into one field per name.
+- Options built at run time give plain text: still correct, just unnarrowed. \`Fields\` built at run time leave one opaque value, \`a.Answer\`, which you can pass on into a structured field but not pick apart, compare or branch on. To act on a value, write \`Provide\`, \`Choose\`, \`Select\`, or a \`Form\` whose \`Fields\` are spelled out.
+- When the run was started from a chat interface, a question nobody was sent is **relayed**: the person in the chat is shown it, and their decision is what answers it — never the assistant's own judgement.
+
+### the-pick-idiom
+
+Letting a person pick a **live record** — one company out of several you found — needs no special family. Offer the names, then filter the graph on the answer.
+
+\`\`\`
+found = crm-[c:Companies WHERE c.Categories == "Lead"]-> {
+  return c.Name
+}
+
+q = write asks-[:Choose]-> { Prompt: "Which company did they mean?", Options: found }
+write ops-[:Messages]-> { Message: "Which one? \${q.Url}" }
+
+r = race(
+  () => {
+    a = await q-[:Response]->
+    return a.Answer
+  },
+  () => { await sleep(1d) },
+)
+
+name = r[0]
+if (name == null) { fail("nobody picked a company") }
+pick = only(crm-[co:Companies WHERE co.Name == name]->)
+if (pick == null) { fail("no company named \${name}") }
+write pick-[:Notes]-> { Title: "Chosen", Content: "Picked from \${count(found)} candidates." }
+\`\`\`
+
+The answer names the record; the lookup after it keys on that name.
+
+### deleted-records
+
+When the record a wait hangs off is deleted — the message, the form, the question — the wait settles empty: what follows the \`await\` in its scope runs zero times, and the scope around it goes on.
+
+- In a \`race\` arm, the arm drops out and the race goes on with its other arms, so the \`sleep\` settles it.
+- In an \`all\` arm, its slot is null.
+- In a \`map\` member, that member's answer is null and the others go on.
+- In a block, that record's iteration ends; in a function, its body ends; at the top of the automation, the run completes.
+
+So what \`await\` binds is always there where you read it.
+
+### captured-values
+
+A wait's \`WHERE\` that reads a record the run holds — \`thread.User\` in \`await new thread-[x:Replies WHERE x.User == thread.User]->\` — reads it once, when the wait is reached, and keeps that value while the run waits, as a closure keeps what it closed over. A change to that record while the run waits does not change which arrival counts.
+
+- What the \`WHERE\` reads from a system, such as a walk off a connection, is read at every check.
+- To follow a value that may change while the run waits, test it after the wait against the record re-read with \`refresh\`.
+
+### timeout-and-escalation
+
+A deadline, a reminder and an escalation are all **composed** from \`race\` and \`sleep\`:
+
+\`\`\`
+r = race(
+  () => {
+    press = await msg-[:Interactions]->
+    return only(press-[:Actions]->).Value
+  },
   () => {
     await sleep(6h)
-    write deals-[:Messages]-> { Message: "Still waiting: \${q.Url}" }
+    write msg-[:Replies]-> { Message: "Still waiting on this one." }
     await sleep(2d)
   },
 )
 
-decision = r[0]
-if (decision == null) {
+if (r[0] == null) {
   write deals-[:Messages]-> { Message: "Nobody decided in time — holding." }
-}
-if (decision == true) {
-  write crm-[:Companies]-> { unique by (FUZZY Name), Name: \`Company Name\` }
 }
 \`\`\`
 
-- \`await\` marks where the run itself waits: on the answer (\`await q-[:Response]->\`) and on the clock (\`await sleep(2d)\`), inside the arms. \`race\` says only how several waits **combine** — it settles on the first of them. It does not wait for anything on its own, so it is written without \`await\`.
+- \`await\` marks where the run itself waits: on the answer (\`await msg-[:Interactions]->\`) and on the clock (\`await sleep(2d)\`), inside the arms. \`race\` says only how several waits **combine** — it settles on the first of them — so it is written without \`await\`.
 - Each arm is a **function**, passed as an argument: \`() => { … }\` written where it stands, or the name of one declared elsewhere. An arm takes no parameters — it already sees everything in scope where you wrote it — and it starts the moment the combinator does.
 - The value is a **receipt**: one slot per arm, in the order written, holding whatever that arm \`return\`ed. \`r[0]\` reads the first arm's slot, \`r[1]\` the second. An arm that hands nothing back has an always-null slot.
-- Under \`race\`, only the arm that settled first has its slot filled and every other slot is null — so **a null test on a slot is the branch**, as \`decision == null\` is here. Arms still parked when one settles are dropped where they stand: their waiting stops, and whatever they had already done stays done. Arms that settle in the same moment all land.
-- To wait for **every** one instead, use \`all\` (below): every one runs to the end and every slot is filled.
+- Under \`race\`, only the arm that settled first has its slot filled and every other slot is null — so **a null test on a slot is the branch**. Arms still parked when one settles are dropped where they stand: their waiting stops, and whatever they had already done stays done. Arms that settle in the same moment all land.
+- To wait for **every** one instead, use \`all\` (\`several-at-once\`): every one runs to the end and every slot is filled.
 - Arms run at once. Arms writing the same \`unique by\` key take turns, so the record is made once.
 - Durations are bare unit-suffixed literals: \`30s\`, \`90m\`, \`6h\`, \`2d\`, \`1h30m\`.
 - To wait on a *condition* instead — "until this record is marked done" — hand \`until\` the condition and the cadence to re-check it on:
@@ -137,153 +248,73 @@ if (decision == true) {
   }, { every: 1h })
   \`\`\`
 
-  \`(…) => { … }\` is a **closure**: a body written where it stands and run later, holding everything in scope at the point you wrote it. The run resumes the moment the closure returns true. \`refresh\` re-reads a handle so each check sees the record as it is now; a condition that needs no refresh can be a plain boolean expression instead (\`await until(count(q-[:Response]->) >= 3, { every: 10m })\`). A condition takes no parameters and may only read — a write or an \`await\` inside one is refused, as is a cadence under a minute.
+  \`(…) => { … }\` is a **closure**: a body written where it stands and run later, holding everything in scope at the point you wrote it. The run resumes the moment the closure returns true. \`refresh\` re-reads a handle so each check sees the record as it is now; a condition that needs no refresh can be a plain boolean expression instead. A condition takes no parameters and may only read — a write or an \`await\` inside one is refused, as is a cadence under a minute.
 
-- Which of the two you write is the relationship's to decide, and you are told when you save. Where the system announces what landed — a question's \`Response\`, a chat thread's \`Replies\`, a callback's \`Called\` — \`await\` on the edge is the form: the run sleeps and is woken the moment it arrives, so there is no cadence to name. Where nothing announces it, \`await\` is refused and \`until\` with an \`every:\` is the form, because someone has to say how often to look. Polling something that does announce still works, and is flagged: it just waits longer than it needs to.
+- Which of the two you write is the edge's to decide, and you are told when you save. Where the system announces what lands — a press, a reply, a form's answer — \`await\` the edge: the run sleeps and is woken the moment it arrives. Where nothing announces it, \`until\` with an \`every:\` is the form, because someone has to say how often to look.
 
 ### several-at-once
 
-Put one decision in front of several places at once by minting **one** callback, delivering it everywhere, then awaiting it once: whoever taps first settles it, wherever they were. A button in a channel people already read is the lightest way to put a decision in front of them, so that is what each channel gets:
+Put one decision in several places by writing the message in each, and give each its own arm. An arm is written where you know the place, so it can hand that back along with the answer:
 
 \`\`\`
-approve = callback({ })
-
-chat-[ch:Channels WHERE ch.Topic == "approvals"]-> {
-  write ch-[:Messages]-> {
-    Message: "Approve this?"
-    Blocks: [ … ]              # one control carrying "\${approve.id}"
-  }
+dealflow = write \`Deals Channel\`-[:Messages]-> {
+  Message: "Approve this?"
+  Buttons: [{ Text: "Approve", Value: "approve" }]
+}
+board = write \`Board Channel\`-[:Messages]-> {
+  Message: "Approve this?"
+  Buttons: [{ Text: "Approve", Value: "approve" }]
 }
 
 r = race(
   () => {
-    tap = await approve-[:Called]->
-    return tap.At
+    press = await dealflow-[:Interactions]->
+    return { channel: "deals", at: press.At }
+  },
+  () => {
+    press = await board-[:Interactions]->
+    return { channel: "board", at: press.At }
   },
   () => { await sleep(1d) },
 )
 
-if (r[0] == null) { … }      # nobody tapped inside the day
-\`\`\`
-
-One callback in several places settles on the first tap but says nothing about **where** it came from — every place carried the same control, so there is nothing to tell them apart. When that matters, give each place its own callback and its own arm. An arm is written where you already know the place, so it can hand that back along with the answer:
-
-\`\`\`
-deals = callback({ })
-board = callback({ })
-
-\`Deals Channel\` = only(chat-[ch:Channels WHERE ch.Name == "deals"]->)
-if (\`Deals Channel\` == null) { fail("no #deals channel") }
-\`Board Channel\` = only(chat-[b:Channels WHERE b.Name == "board"]->)
-if (\`Board Channel\` == null) { fail("no #board channel") }
-
-write \`Deals Channel\`-[:Messages]-> { Message: "Approve this?", Blocks: [ … ] }   # carries "\${deals.id}"
-write \`Board Channel\`-[:Messages]-> { Message: "Approve this?", Blocks: [ … ] }   # carries "\${board.id}"
-
-r = race(
-  () => {
-    tap = await deals-[:Called]->
-    return { channel: "deals", at: tap.At }
-  },
-  () => {
-    tap = await board-[:Called]->
-    return { channel: "board", at: tap.At }
-  },
-)
-
-answered = r[0]
+answered = coalesce(r[0], r[1])
 if (answered != null) {
-  general = only(chat-[g:Channels WHERE g.Name == "general"]->)
-  if (general == null) { fail("no #general channel") }
   write general-[:Messages]-> { Message: "approved in #\${answered.channel} at \${answered.at}" }
 }
 \`\`\`
 
-- The slot already says which arm settled — \`r[0]\` is the first one written. Handing the identity back is for when it has to travel further: into a message, a write field, a comparison later on.
+- Whoever presses first settles it, wherever they were.
 - Return a dict to hand back more than one thing at once; its entries read by name afterwards (\`answered.channel\`).
 
-Wait on **different** things at once by giving each its own function, and take every answer rather than the first with \`all\`, which runs them at once:
+Wait on **different** things and take every answer with \`all\`, which runs them at once. Put the \`all\` in a race with a \`sleep\`, so one answer that never comes cannot hold the run for good:
 
 \`\`\`
-r = all(
+r = race(
   () => {
-    b = await budget-[:Response]->
-    return b.Answer
+    both = all(
+      () => {
+        b = await budget-[:Response]->
+        return b.Answer
+      },
+      () => {
+        l = await legal-[:Response]->
+        return l.Answer
+      },
+    )
+    return both[0] && both[1]
   },
-  () => {
-    l = await legal-[:Response]->
-    return l.Answer
-  },
+  () => { await sleep(3d) },
 )
 
-if (r[0] && r[1]) { … }
+if (r[0] == true) { … }
 \`\`\`
 
-- Which field on a control carries the \`id\` is that system's own business, and its chapter says. Reach for a written question instead when you need what one gives you — a page, and an entry in somebody's queue (see \`when-a-question-and-when-a-callback\`).
-- Nothing \`all\` runs is dropped, so every slot is filled and none of them needs a null test. There is no \`await\` in front: a function that waits parks the run, and \`all\` finishes when every one has.
+- Nothing \`all\` runs is dropped, so every slot is filled. There is no \`await\` in front: a function that waits parks the run, and \`all\` finishes when every one has.
 
-### in-chat-answers
+### how-long-a-wait-lives
 
-\`Response\` is an ordinary writable edge, so anything that can write can answer — a button included. Mint a **callback** per answer and give each control the callback's \`id\`; a tap then resolves the question in place, with no page hop.
-
-\`\`\`
-q   = write asks-[:Check]-> { Prompt: "Pursue this company?" }
-yes = callback({ write q-[:Response]-> { Answer: true } })
-no  = callback({ write q-[:Response]-> { Answer: false } })
-\`\`\`
-
-The controls carry \`"\${yes.id}"\` and \`"\${no.id}"\` — which field on a control holds it is that system's own business, and its chapter says. Keep \`q.Url\` in the message text as well, so anyone who cannot tap can still respond.
-
-### a-callback-as-a-link
-
-A callback also has a \`url\` — the same block of work reached the other way. The \`id\` is what a control carries; the \`url\` is what you hand out where there are no controls: an email, a text message, a system whose messages are plain prose.
-
-Opening that url does **not** act. It shows a page saying what is about to happen and waits for the person to confirm, so a client that fetches links in the background, or a scanner following every link in a message, can never decide on someone's behalf.
-
-### how-often-a-callback-can-be-used
-
-A callback is used **once** by default: the first person to act settles it, and anyone arriving after is told it is closed. A second argument changes that:
-
-\`\`\`
-nudge = callback({ … }, { once: false })
-today = callback({ … }, { ttl: 4h })
-\`\`\`
-
-\`once: false\` makes it repeatable — every use runs the block again. \`ttl\` stops it working after that long. Both are bounded by the run that minted it, which is the shorter leash: a \`ttl\` longer than the run's own life changes nothing.
-
-### a-value-supplied-when-someone-acts
-
-Some controls have nothing to pre-wire, because what the person supplies does not exist until they act — a date picker, a text box. Write the deferred work as a **closure** — \`(<parameters>) => { … }\`, a body run later that holds everything in scope where you wrote it — and the supplied value arrives bound to the parameter's name:
-
-\`\`\`
-booked = callback((day: <date>) => {
-  write ch-[:Messages]-> { Message: "Booked for \${day}." }
-})
-\`\`\`
-
-A parameter is a plain **value** the other side hands back — \`<text>\`, \`<number>\`, \`<boolean>\`, \`<date>\`, \`<datetime>\`, \`<json>\`, \`<file>\`. It can never be a record position: nothing out there can hand back a row from a connected system, so that is refused while you write it. Anything already known when the control goes out is not a parameter — put it in the body, which captures everything in scope.
-
-The same values come back on the \`Called\` landing, one field per parameter, alongside \`At\`.
-
-### deferring-work-by-name
-
-A callback's closure can call a NAMED function, fixing the arguments now:
-
-\`\`\`
-function \`Chase\`(c: <crm-[:Companies]->>) {
-  write c-[:Notes]-> { Title: "Chased", Content: "Nudged again." }
-}
-
-again = callback(() => \`Chase\`(company), { once: false })
-\`\`\`
-
-Whatever the closure takes as a parameter is what the acting side fills in: \`callback((day: <date>) => \`Book\`(company, day))\`.
-
-### when-a-question-and-when-a-callback
-
-A callback on its own is the lighter thing: \`go = callback({ })\` with \`await go-[:Called]->\` holds the run until somebody presses a button — no page, no queue entry, nothing to open. Write a question when you need what a question gives you: a page rendering the right control for whoever opens the link, wherever they are, and an entry in that person's queue of things to decide — a task directed at somebody. For a decision already in front of the right people in a channel, a callback is enough.
-
-Either way, what a person can act on lives **only as long as the run waiting for it**. When the run ends the buttons stop working and the link stops accepting, and a late tap is told it is closed. Neither is a standing endpoint: something that must react at any time, forever, is an automation that LISTENS.`,
+What a person can act on lives as long as its system keeps it: a message's buttons, a form's link. The run waits only while it is parked on them: once its race settles or the run ends, a later press or answer wakes nothing. Something that must react at any time, forever, is an automation that LISTENS.`,
   engineClaims: [
     {
       construct: 'write an ask along a Check family edge, deliver its Url, and await its Response inside a race arm; the timeout is a null test on the slot',
@@ -372,7 +403,113 @@ listen to runs {} fire \`First Approval Wins\`
 `,
     },
     {
-      construct: 'a race arm handing back WHICH place answered — a dict built in the arm that knows it',
+      construct: 'buttons whose press carries the Value it was written with, narrowed to those values and compared after the race',
+      status: 'runs',
+      probe: `
+import { \`@lf/slack\` as slack, \`@lf/attio\` as attio, \`@lf/manual\` as manual } from adapters
+import { team_workspace, acme_main } from credentials
+
+team = connect slack using team_workspace
+crm  = connect attio using acme_main
+runs = connect manual
+
+function \`Pursue Or Pass\`(go: <runs-[:Invocation]->>) {
+  deals = only(team-[ch:Channels WHERE ch.Name == "deals"]->)
+  if (deals == null) { fail("no #deals channel") }
+  msg = write deals-[:Messages]-> {
+    Message: "New company: \${go.Text}. Pursue it?"
+    Buttons: [{ Text: "Pursue", Value: "pursue" }, { Text: "Pass", Value: "pass" }]
+  }
+
+  r = race(
+    () => {
+      press = await msg-[:Interactions]->
+      return only(press-[:Actions]->).Value
+    },
+    () => {
+      await sleep(6h)
+      write msg-[:Replies]-> { Message: "Still waiting on this one." }
+      await sleep(2d)
+    },
+  )
+
+  if (r[0] == "pursue") {
+    write crm-[:Companies]-> { unique by (FUZZY Name), Name: go.Text }
+  }
+  if (r[0] == null) {
+    write msg-[:Replies]-> { Message: "Nobody decided in time — holding." }
+  }
+}
+
+listen to runs {} fire \`Pursue Or Pass\`
+`,
+    },
+    {
+      construct: 'await on an edge that is also listed (a thread\'s Replies): the first reply already there, or the next, raced against a sleep',
+      status: 'runs',
+      probe: `
+import { \`@lf/slack\` as slack, \`@lf/manual\` as manual } from adapters
+import { team_workspace } from credentials
+
+team = connect slack using team_workspace
+runs = connect manual
+
+function \`Who Takes It\`(go: <runs-[:Invocation]->>) {
+  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
+  if (ops == null) { fail("no #ops channel") }
+  msg = write ops-[:Messages]-> { Message: "Who can take \${go.Text}? Reply in the thread." }
+
+  r = race(
+    () => {
+      reply = await msg-[:Replies]->
+      return reply.Message
+    },
+    () => { await sleep(1d) },
+  )
+
+  if (r[0] == null) {
+    write ops-[:Messages]-> { Message: "Nobody picked up \${go.Text}." }
+  }
+}
+
+listen to runs {} fire \`Who Takes It\`
+`,
+    },
+    {
+      construct: 'await new on a thread\'s Replies, its WHERE reading a record the run holds — only an answer from the author, after the run read the message',
+      status: 'runs',
+      probe: `
+import { \`@lf/slack\` as slack, \`@lf/manual\` as manual } from adapters
+import { team_workspace } from credentials
+
+team = connect slack using team_workspace
+runs = connect manual
+
+function \`Chase The Author\`(go: <runs-[:Invocation]->>) {
+  ops = only(team-[ch:Channels WHERE ch.Name == "ops"]->)
+  if (ops == null) { fail("no #ops channel") }
+  thread = only(ops-[m:Messages WHERE m.Message == go.Text]->)
+  if (thread == null) { fail("no message \\"\${go.Text}\\" in #ops") }
+  write thread-[:Replies]-> { Message: "Any update on this?" }
+
+  r = race(
+    () => {
+      reply = await new thread-[x:Replies WHERE x.User == thread.User]->
+      return reply.Message
+    },
+    () => { await sleep(1d) },
+  )
+
+  if (r[0] != null) {
+    write ops-[:Messages]-> { Message: "Update: \${r[0]}" }
+  }
+}
+
+listen to runs {} fire \`Chase The Author\`
+`,
+    },
+    {
+      construct: 'a race arm handing back WHICH place answered — a dict built in the arm that knows it, the first answered slot taken with coalesce',
       status: 'runs',
       probe: `
 import { \`@lf/slack\` as slack, \`@lf/manual\` as manual } from adapters
@@ -405,9 +542,10 @@ function \`Which Place Answered\`(go: <runs-[:Invocation]->>) {
       press = await portfolio-[:Interactions]->
       return { channel: "portfolio", at: press.At }
     },
+    () => { await sleep(1d) },
   )
 
-  answered = r[0]
+  answered = coalesce(r[0], r[1])
   if (answered != null) {
     general = only(team-[g:Channels WHERE g.Name == "general"]->)
     if (general == null) { fail("no #general channel") }
@@ -421,7 +559,7 @@ listen to runs {} fire \`Which Place Answered\`
 `,
     },
     {
-      construct: 'all over two awaiting closures, run at once — every slot filled, both answers combined',
+      construct: 'all over two awaiting closures, run at once inside a race with a sleep — every slot filled, both answers combined',
       status: 'runs',
       probe: `
 import { \`@lf/slack\` as slack, \`@lf/ask\` as ask, \`@lf/manual\` as manual } from adapters
@@ -441,18 +579,24 @@ function \`Both Must Agree\`(go: <runs-[:Invocation]->>) {
     Message: "Budget: \${budget.Url}\\nLegal: \${legal.Url}"
   }
 
-  r = all(
+  r = race(
     () => {
-      b = await budget-[:Response]->
-      return b.Answer
+      both = all(
+        () => {
+          b = await budget-[:Response]->
+          return b.Answer
+        },
+        () => {
+          l = await legal-[:Response]->
+          return l.Answer
+        },
+      )
+      return both[0] && both[1]
     },
-    () => {
-      l = await legal-[:Response]->
-      return l.Answer
-    },
+    () => { await sleep(3d) },
   )
 
-  if (r[0] && r[1]) {
+  if (r[0] == true) {
     general = only(team-[g:Channels WHERE g.Name == "general"]->)
     if (general == null) { fail("no #general channel") }
     write general-[:Messages]-> { Message: "Both approved: \${go.Text}." }
@@ -724,9 +868,18 @@ function \`Pick The Company\`(go: <runs-[:Invocation]->>) {
   if (ops == null) { fail("no #ops channel") }
   write ops-[:Messages]-> { Message: "Which one? \${q.Url}" }
 
-  a = await q-[:Response]->
-  pick = only(crm-[co:Companies WHERE co.Name == a.Answer]->)
-  if (pick == null) { fail("no company named \${a.Answer}") }
+  r = race(
+    () => {
+      a = await q-[:Response]->
+      return a.Answer
+    },
+    () => { await sleep(1d) },
+  )
+
+  name = r[0]
+  if (name == null) { fail("nobody picked a company") }
+  pick = only(crm-[co:Companies WHERE co.Name == name]->)
+  if (pick == null) { fail("no company named \${name}") }
   write pick-[:Notes]-> {
     Title:   "Chosen"
     Content: go.Text
@@ -737,7 +890,7 @@ listen to runs {} fire \`Pick The Company\`
 `,
     },
     {
-      construct: 'a form handed out as a link (Url), its submission awaited',
+      construct: 'a host link: a form from @lf/forms, its Url sent, its typed submission raced against a sleep',
       status: 'runs',
       probe: `
 import { \`@lf/slack\` as slack, \`@lf/forms\` as forms_module, \`@lf/manual\` as manual } from adapters
@@ -759,10 +912,17 @@ function \`Decide By Link\`(go: <runs-[:Invocation]->>) {
   form = write forms-[:Forms]-> { Title: "Pursue this company?", Fields: Decision }
   write ops-[:Messages]-> { Message: "Pursue it? Answer here: \${form.Url}" }
 
-  answer = await form-[:Submissions]->
-  if (answer.Pursue) {
-    write ops-[:Messages]-> { Message: "Pursuing. \${coalesce(answer.Note, "")}" }
-  }
+  r = race(
+    () => {
+      answer = await form-[:Submissions]->
+      if (answer.Pursue) {
+        write ops-[:Messages]-> { Message: "Pursuing. \${coalesce(answer.Note, "")}" }
+      }
+      return answer.Pursue
+    },
+    () => { await sleep(2d) },
+  )
+  if (r[0] == null) { fail("nobody answered the form in two days") }
 }
 
 listen to runs {} fire \`Decide By Link\`

@@ -76,7 +76,11 @@ impl Address {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Kind {
-    /// The instance itself (`<inst>`).
+    /// The instance itself (`<inst>`): the "event is a meta edge you cannot
+    /// traverse" model, superseded by "an arrival is an edge a module declares
+    /// listenable" (packages/movement-lang/CLAUDE.md). Waits already traverse
+    /// listenable edges; this kind stays only until standing listens move onto
+    /// them too, so do not build on it.
     Meta,
     Position,
     Union { variants: Vec<String> },

@@ -115,7 +115,16 @@ we nearly rebuilt it:
 `plans/2026-07-10-adapter-entry-positions/` is the current authority on
 type-space: describe is a walk (`2_type_space.md`), narrowing is traversal
 (`4_polymorphic_edges.md`), **the path is the address** (`5_paths_as_addresses.md`),
-promises belong to EDGES not nodes (`7_readable_means_readable.md`), and an event
-is a meta edge you cannot traverse (`8_event_edges.md`). Later layers supersede
-earlier ones; several sections are explicitly retracted — read to the end before
-building.
+promises belong to EDGES not nodes (`7_readable_means_readable.md`). Later layers
+supersede earlier ones; several sections are explicitly retracted — read to the end
+before building.
+
+**An arrival is an edge.** A module declares each edge iterable (it can list
+what is there), listenable (it announces what arrives), or both; a wait
+(`await x-[:E]->`, `await new x-[:E]->`) traverses a listenable edge and pulls
+one record. This replaces, on purpose, the earlier principle that an event is a
+meta edge you cannot traverse (`8_event_edges.md`), and the checker's meta event
+kind that models it is superseded with it: don't "correct" code back towards it.
+Standing listens move onto the same edges in a later release; until then
+`listen to` keeps its own form. Decision record:
+`plans/events-as-edges-2026-10-29/DESIGN.md` ("Why").

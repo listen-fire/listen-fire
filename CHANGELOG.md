@@ -22,7 +22,12 @@ named in [`RELEASING.md`](RELEASING.md).
 
 ### 0.13.0
 
-The next release opens a new compatibility key. It reads pins of `0.13.x` only: a project or an automation pinned to `0.12.x` is refused by name ("validate it under 0.13.0 and upgrade it"), and `listen-fire upgrade` moves its pin to `0.13.0`. A change in this release that alters what a construct means says so in its own entry and in a checker diagnostic under a `0.13` pin.
+A new compatibility key: waiting becomes a traversal, and callbacks retire.
+
+- **What changed.** An answer from outside arrives on an edge its module declares `listenable`: a press on a message's `Interactions`, a form's answer on its `Submissions`, a reply on a thread's `Replies`. A run waits for one with `await x-[:E]->`, or `await new x-[:E]->` for one that arrives from now. `callback(…)` is retired for buttons on a message and forms from the new `@lf/forms`; `await first(x)` is written `await x`; a wait's `WHERE` keeps the values it read from the run.
+- **Why.** A callback was a second way for a run to wait, outside the graph, with its own ids, URLs and host machinery. As edges, answers get what every traversal gets: typed fields, a checked `WHERE`, and the checker's diagnostics.
+- **Which pins it reads.** `0.13.x` only. A project or an automation pinned to `0.12.x` is refused by name ("validate it under 0.13.0 and upgrade it"). A change that alters what a construct means says so in its own entry below and in a checker diagnostic under a `0.13` pin.
+- **To upgrade.** Replace each `callback(…)` by hand (`MOV_CALLBACK_RETIRED` names the replacement). Then run `listen-fire upgrade`: it respells `await first(…)`, lists each wait whose `WHERE` now captures a value, and moves the pin to `0.13.0` once every file checks clean. Let runs parked under 0.12 finish first: a 0.13 engine cannot resume them. Store modules and embedders: see "Removed" and the store slot's new `waits.*` and `parks.commitSegment`. The guide is [docs/language/migrating-to-0.13.md](docs/language/migrating-to-0.13.md).
 
 #### Changed
 
@@ -43,7 +48,7 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
   - Reading an edge that can only announce, outside a wait, is refused as before (`MOV_AWAIT_REQUIRED`); its message now shows the wait to write.
   - A name called `new` is still a root: `await new-[:Notes]->` waits on the record `new` holds.
   - Why: a wait is one record off a listenable edge, so the bare traversal says it; `first(…)` said it twice.
-- The handbook and the Slack, Telegram and WhatsApp module sections write their waits as `await x-[:E]->`, in place of `await first(x-[:E]->)`.
+- The handbook teaches waiting as traversal. Its reviews chapter covers waiting on a person, `await` and `await new`, buttons, form links (`host-links`), a deleted record ending a wait, and captured values; every wait it shows on a person or a system sits in a `race` with a `sleep`, and its tests hold that. The Slack, Telegram and WhatsApp module sections write their waits as `await x-[:E]->`. A chapter that teaches `callback(…)` or `await first(…)` breaks the handbook's prose contract.
 - A wait's `WHERE` reads a field of a record from the run (`founder.Email` in `await m-[x:Replies WHERE x.From == founder.Email]->`) once, when the wait is reached. Under a 0.12 pin it was read again at every check, so a change to that record while the run waited changed what the wait accepted.
   - What the `WHERE` reads from a system, such as a walk off a connection, is still read at every check.
   - `listen-fire upgrade` from a 0.12 pin lists each such wait as a warning (`MOV_AWAIT_VALUE_CAPTURED`), naming the fields read.
@@ -71,7 +76,6 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
   - Embedders: the host families contract moves to version 2. A new optional family, `park.waits` (`mark`, `open`, `arrivals`, `note`), serves the waits; `park.sink.commitAwaitPark` and `park.wake` name the wait (`waitId`). A Rust embedding's `Store` gains the six wait methods, and `RunInput.trigger_mark`. See `docs/contracts/host-families.md` and `docs/embedding.md`.
   - The `wake` door refuses `{ keys }` (400, naming adapter protocol 2.5 and `arrivals`): a module reports what arrived instead. `resolveAwait` and `wakeKeys` are no longer called for a wait.
   - The acme example's CRM lists a company's comments oldest first, announces approvals on a company (`Approvals`, which only announces), and reports a deleted company's edges as gone.
-  - A wait whose `WHERE` reads a field of a record the run holds (`r.Body == founder.Email`) is now stamped like any other: before this, the check lost the awaited edge and the run failed at the wait.
   - Why: the module only reports what happened; `listen-fire` keeps what each run has waited for since its record entered, so an answer is never lost between a write and the wait that reads it.
 
 #### Added
@@ -102,7 +106,6 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
   - It reports what lands there as arrivals, each naming its edge, its record's key, its identity and its landing: beside the events `preprocessInbound` answers for a delivery, on `checkInbound`'s `accepted` (`accepted(events, { arrivals })` in the module kit), or pushed to the `wake` door as `{ arrivals }`.
   - `listen-fire` logs each one and queues a wake for each run waiting on that record's edge. A delivery's arrivals are logged in the same write as its receipt, so a redelivery logs and wakes nothing again; its events carry the log's mark after them, so a run the delivery starts never waits for the delivery's own arrivals.
   - An arrival without an identity is refused, naming it: `arrival 0 on 'Comments' has no identity` (400 at the `wake` door; the delivery's failure otherwise).
-  - The `wake` door took `{ keys }` beside arrivals for a while; it now refuses them (see "Changed").
   - The acme example's CRM answers `awaitKeys`, pushes each comment as an arrival, and reports the comments a webhook delivery carries, each by its id.
   - Why: a waiting run reads the arrivals logged since it began waiting, so one that lands during the write that caused it is never lost, and whether it matches is decided by `listen-fire`, not the module. See `docs/contracts/adapter-protocol.md` ("Waiting on your system").
 - `@lf/slack`: a message can carry buttons, and a run waits on the message for a press.
@@ -132,9 +135,11 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
   - Why: an answer that comes back through no system the program uses needs somewhere to be given, and a module serves it as any module serves its door.
 - A module that checks its own inbound requests may answer a page (`reply(status, { html })`, sent as `text/html`), and may name what the door answers once it keeps an accepted request (`accepted(events, { arrivals, reply })`), in place of the door's own acknowledgement.
 - `listen-fire` sends each call to a module that takes inbound requests the URL they reach it at (`inbound: { url }` on the request, module-kit's `ctx.config.inboundUrl`): the install's door under lf.yaml's `publicUrl`, else under `listen-fire serve`'s own address. A module hands out links to itself with it.
-- A write of a type a program can only write (a writable root the module does not let it read) opens the waits on edges awaited off it, as a write of a readable type does. Before, the check placed no wait there and the run failed at the `await`.
 - A module's acceptance's `reply` is refused by `listen-fire` unless its status is a success (200–299), as the adapter protocol and the TypeScript client say.
 - A module `listen-fire` starts keeps its `ctx.kv` in its own folder (`.lf/externals/<name>/`) unless its install names another `MODULE_STATE_DIR`. Before, `ctx.kv` refused unless the install named one.
+- `listen-fire modules` lists every module this `listen-fire` can install, the bundled `@lf/*` ones, with a line on what each is and which the project has installed. A bare `listen-fire connect` prints the same list; it listed only the slot modules and what the project already held.
+- `listen-fire modules show <module>` summarises one module in a screenful, read from the module itself: the record types it reads with their fields and edges, whether it writes (`@lf/stripe` is read-only) and what, the events a `listen` can name, its credential and settings, and the `connect` flags it needs. It needs no credential. A module whose schema comes from the connected account says so instead of describing: its manifest now says `introspectedSchema` (an optional field of the adapter protocol's manifest, set by Airtable, Attio, Affinity and Google Sheets). `--json` gives the same facts.
+- `listen-fire connect <module> --yes` asks nothing. Each answer comes from a flag (`--setting <name>=<value>`, `--server-secret`, `--webhook-secret`, `--client-id`, `--client-secret`, `--redirect-port`) or from its default, and a webhook secret is generated and said to be. When an answer has neither, the command names every flag it needs and writes nothing. Before, `--yes` still asked: with no terminal it hung for input or failed with "the input ended before every question was answered", and left no external behind. Without `--yes`, questions are still asked, and input that ends names the flag that would have answered.
 
 #### Removed
 
@@ -176,26 +181,20 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
 - The Telegram and WhatsApp handbook sections, and their `Reply Markup` and `Interactive` field descriptions, teach a url button that opens a form from `@lf/forms`, in place of a callback id on the button.
   - A `callback_data` or reply button's tap reaches no run until those modules report taps as `Interactions`, as Slack does.
 
-### Added
+#### Checks
 
-- `listen-fire modules` lists every module this `listen-fire` can install, the bundled `@lf/*` ones, with a line on what each is and which the project has installed. A bare `listen-fire connect` prints the same list; it listed only the slot modules and what the project already held.
-- `listen-fire modules show <module>` summarises one module in a screenful, read from the module itself: the record types it reads with their fields and edges, whether it writes (`@lf/stripe` is read-only) and what, the events a `listen` can name, its credential and settings, and the `connect` flags it needs. It needs no credential. A module whose schema comes from the connected account says so instead of describing: its manifest now says `introspectedSchema` (an optional field of the adapter protocol's manifest, set by Airtable, Attio, Affinity and Google Sheets). `--json` gives the same facts.
-- `listen-fire connect <module> --yes` asks nothing. Each answer comes from a flag (`--setting <name>=<value>`, `--server-secret`, `--webhook-secret`, `--client-id`, `--client-secret`, `--redirect-port`) or from its default, and a webhook secret is generated and said to be. When an answer has neither, the command names every flag it needs and writes nothing. Before, `--yes` still asked: with no terminal it hung for input or failed with "the input ended before every question was answered", and left no external behind. Without `--yes`, questions are still asked, and input that ends names the flag that would have answered.
-
-### Checks
-
-- A dot read off a record reads one field, whole; anything past it is refused, where it checked clean and then failed the run with `MOVENG_UNSUPPORTED` ("this read shape … is not supported"). Refused for every 0.12 pin, since no such read could ever run:
+- A dot read off a record reads one field, whole; anything past it is refused, where it checked clean and then failed the run with `MOVENG_UNSUPPORTED` ("this read shape … is not supported"). Refused, since no such read could ever run:
   - a name the record lacks, read on past (`n.subject.title`): `MOV_UNKNOWN_PROPERTY`, naming the record's fields and its edges;
   - a text, number or true/false field read on past (`n.Title.length`): `MOV_TEXT_HAS_NO_FIELDS`;
   - any other field read on past (`c.Metadata.crm_id`): the new `MOV_READ_THROUGH_FIELD`, whose remedy is to bind the field first (`metadata = c.Metadata`, then `metadata.crm_id`), which runs.
 - An edge read as a field (`n.Repository`) says it is an edge and shows the walk (`n-[:Repository]->`, or `n-[:Repository]->.Name` for `n.Repository.Name`). A field a record lacks (`MOV_UNKNOWN_PROPERTY`) now lists the record's edges after its fields.
-- A text in a list an enum is tested against (`n.Reason IN ["review_request", "mention"]`, or `List.includes([…], n.Reason)`), in a body or in a WHERE inside a parameter's type, is held to the enum as `==` holds one: `MOV_ENUM_UNKNOWN_VALUE`, with a did-you-mean. A warning for every 0.12 pin, since the list's other values still match and a saved movement runs as written; it waits for the next compatibility key (0.13) to refuse.
+- A text in a list an enum is tested against (`n.Reason IN ["review_request", "mention"]`, or `List.includes([…], n.Reason)`), in a body or in a WHERE inside a parameter's type, is held to the enum as `==` holds one: `MOV_ENUM_UNKNOWN_VALUE`, with a did-you-mean. A warning, since the list's other values still match and a program runs as written; refusing it is left to a later compatibility key.
 - A statement word bound as a name (`link = …`, `write = …`, `delete = …`) is refused as "'link' is reserved; pick another name". It was refused before as a malformed statement, naming the arrow it expected.
-- A type's address that names no position in the graph is refused where it is written (`MOV_UNKNOWN_POSITION`), saying what was looked for. Against a base with no table "Expenses", `<finance-[e:`Record Change` WHERE e.table == "Expenses"]->>` says `'finance' (base "Finance") has no table "Expenses"`. It checked clean and left the parameter untyped, so a misspelled field read off the event's record (`expense.Amout`) went unchecked too. Refused for every 0.12 pin, as the 0.12.10 refusals were: a listen on a table that does not exist never fires, so no released program with such an address ran correctly.
+- A type's address that names no position in the graph is refused where it is written (`MOV_UNKNOWN_POSITION`), saying what was looked for. Against a base with no table "Expenses", `<finance-[e:`Record Change` WHERE e.table == "Expenses"]->>` says `'finance' (base "Finance") has no table "Expenses"`. It checked clean and left the parameter untyped, so a misspelled field read off the event's record (`expense.Amout`) went unchecked too. Refused: a listen on a table that does not exist never fires, so no released program with such an address ran correctly.
 - A parameter type whose hop onto records carries a `WHERE` (`<crm-[c:Companies WHERE c.Stage == "Open"]->>`) is typed as those records, since a `WHERE` picks records and does not change what they are. It was untyped, and a read of a field the records lack went unchecked.
 - A hop whose `WHERE` the connection's members answer, and that selects none of them, is refused where it is written (`MOV_UNKNOWN_POSITION`), naming the members there are with a did-you-mean: `pipeline-[b:Base WHERE b.Name == "Pipeline Trackr"]->` says `'pipeline' has no Base whose Name is "Pipeline Trackr" — it has: "Pipeline Tracker", "Ops" — did you mean 'Pipeline Tracker'?`. Only `listen-fire check` publishes what such a hop selects (a catalog's `unselected`); a catalog without it checks as before.
 
-### Fixed
+#### Fixed
 
 - `listen-fire connect` printed "installed <module> as externals/<name>" before the setup had written anything, so a setup that then failed (a missing answer) had said "installed" and removed the folder. It says so once the entry is written.
 - `listen-fire check` with a credential Airtable refuses (a placeholder token) fails at once, where it hung for over two minutes saying nothing: `@lf/airtable` retried the refusal as if it were transient (its own changelog has the rest).
@@ -263,7 +262,7 @@ A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.
 
 ## [0.12.10] - 2026-10-27
 
-A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Two new checks are warnings for every 0.12 pin and wait for the next compatibility key (0.13) to refuse: a value handed to a plugin outside the type it declares, and a plugin value outside its declared type at run time. The new refusals reject only text no released program could run correctly, or keys new in this release.
+A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Two new checks are warnings for every 0.12 pin, left for a later compatibility key to refuse (0.13.0 keeps them warnings): a value handed to a plugin outside the type it declares, and a plugin value outside its declared type at run time. The new refusals reject only text no released program could run correctly, or keys new in this release.
 
 ### Connectors
 

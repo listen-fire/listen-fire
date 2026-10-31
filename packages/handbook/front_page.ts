@@ -39,13 +39,12 @@ export function exampleText(example: FrontExample): string {
   return example.file;
 }
 
-const PRELUDE = `import { \`@lf/email\` as email, \`@lf/attio\` as attio, \`@lf/slack\` as slack, \`@lf/ask\` as ask } from adapters
+const PRELUDE = `import { \`@lf/email\` as email, \`@lf/attio\` as attio, \`@lf/slack\` as slack } from adapters
 import { acme, team_chat } from credentials
 
 inbox = connect email
 crm   = connect attio using acme
 chat  = connect slack using team_chat
-asks  = connect ask
 `;
 
 /** Where a TypeScript habit is wrong here. Each claim was tried against the
@@ -113,7 +112,7 @@ export const TS_EXCEPT: readonly FrontEntry[] = [
   {
     anchor: 'await',
     title: 'Await',
-    text: '`await` starts a statement, never inside an expression: `a = await q-[:Response]->`, then use `a`.',
+    text: '`await` starts a statement, never inside an expression: `press = await msg-[:Interactions]->`.',
   },
 ];
 
@@ -151,9 +150,9 @@ export const CONCEPTS: readonly FrontEntry[] = [
   {
     anchor: 'runs',
     title: 'Runs: effects, waiting, cost',
-    text: 'A run parks at an `await` (an approval, `sleep`) and resumes when it settles; `race` and `all` combine waits. It pauses at its cost cap.',
+    text: 'A run parks at each `await` until it settles; `race` and `all` combine waits. It pauses at its cost cap.',
     example: {
-      body: 'q = write asks-[:Check]-> { Prompt: "Log ${m.Subject}?" }\nr = race(\n  () => {\n    a = await q-[:Response]->\n    return a.Answer\n  },\n  () => { await sleep(2d) },\n)\napproved = r[0] == true',
+      program: 'function `Confirm`(msg: <chat-[:Message]->>) {\n  q = write msg-[:Replies]-> { Message: "Log?", Buttons: [{ Text: "Log", Value: "log" }] }\n  r = race(\n    () => {\n      press = await q-[:Interactions]->\n      return press.At\n    },\n    () => { await sleep(2d) },\n  )\n}',
     },
   },
 ];

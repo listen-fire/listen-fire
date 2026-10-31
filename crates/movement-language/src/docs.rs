@@ -100,7 +100,7 @@ const KINDS: [SymbolKind; 11] = [
 pub fn builtin_page(name: &str) -> (&'static str, String) {
     match name {
         "fail" => ("branching", "guard-with-error".into()),
-        "callback" => ("asks", "a-callback-as-a-link".into()),
+        "callback" => ("asks", "waiting-on-a-person".into()),
         _ => ("builtins", builtin_anchor(name)),
     }
 }

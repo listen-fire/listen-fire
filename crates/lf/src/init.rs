@@ -32,8 +32,8 @@ listen to manual fire hello
 const PROJECT_TAIL: &str = "# Who events act as on this machine (@user_name, @user_email). Defaults to the OS user;
 # LF_USER and LF_USER_EMAIL override.
 # user: { name: Your Name, email: you@example.com }
-# Where this listen-fire is reached from outside; a callback's url is under it. Defaults to
-# where `listen-fire serve` listens.
+# Where this listen-fire is reached from outside; a form's link and a webhook's door are under
+# it. Defaults to where `listen-fire serve` listens.
 # publicUrl: https://lf.example.com
 ";
 

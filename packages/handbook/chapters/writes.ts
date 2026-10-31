@@ -162,6 +162,17 @@ write msg-[:Replies]-> { Message: "Got it — taking a look now." }
 
 A reply hangs under the message that fired the automation, or one an earlier write sent back. What a system calls its message field, and which further edges it offers, is in that system's own chapter.
 
+A message that wants an answer says so in its own fields: \`Buttons\` put a choice on it, and the record the write returns is where a press lands.
+
+\`\`\`
+msg = write deals-[:Messages]-> {
+  Message: "Pursue Acme?"
+  Buttons: [{ Text: "Pursue", Value: "pursue" }, { Text: "Pass", Value: "pass" }]
+}
+\`\`\`
+
+The run waits for the press on \`msg-[:Interactions]->\` (reviews chapter, \`buttons\`). A link a person opens to answer is a record you write too: a form from \`@lf/forms\`, whose \`Url\` you put in the message (reviews chapter, \`host-links\`).
+
 ### multi-parent-writes
 
 Some records sit at the convergence of *several* parents, none primary. Write the record once, with a **tuple of paths**:

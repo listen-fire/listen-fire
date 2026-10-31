@@ -49,3 +49,4 @@ Movements pinned to the integer versions of earlier releases (1 to 4) are the pl
 ## Changes
 
 - **0.12** (this rewrite): the language version is the toolchain release; a pin is a semver, read by its compatibility key. The integer versions and their names (version 5, "Dancing Wren", is the 0.12 line) retire, and so does `MOV_LANGUAGE_VERSION_DEPRECATED`.
+- **0.13**: a wait is a traversal of an edge its module declares listenable. Refused under a 0.13 pin: `callback(…)` (`MOV_CALLBACK_RETIRED`, replaced by hand with buttons on a message or a form from `@lf/forms`) and `await first(x)` (`MOV_V5_SPELLING`, a safe fix to `await x`). Changed meaning: a wait's `WHERE` reads the run's records once, when the wait is reached (`MOV_AWAIT_VALUE_CAPTURED`, a warning on the upgrade that does not hold the pin). A run parked under 0.12 is refused on resume (park state 3). Guide: [`migrating-to-0.13.md`](../language/migrating-to-0.13.md).

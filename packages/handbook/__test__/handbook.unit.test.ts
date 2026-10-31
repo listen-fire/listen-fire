@@ -1,10 +1,10 @@
-import { LANGUAGE_VERSION, checkSourceInRust } from 'movement-lang';
+import { AWAIT_ARRIVALS_WORD, LANGUAGE_VERSION, checkSourceInRust } from 'movement-lang';
 
 import type { ChapterId } from '../types';
 
 import { proseViolations } from '../prose_rules';
 import { chapterRoute } from 'engine-contracts/handbook_section';
-import { CORE_CHAPTERS, INTENT_INDEX, getCoreChapter, renderCoreIndex } from '../index';
+import { CONTROL_FORMS, CORE_CHAPTERS, INTENT_INDEX, exampleText, frontEntries, getCoreChapter, renderCoreIndex } from '../index';
 import { HANDBOOK_CATALOG } from '../testing';
 
 // The hand-written chapters. The sections a host adds are held to the same
@@ -154,6 +154,99 @@ describe('movement_handbook referential integrity', () => {
     const prose = everything.replace(/```[\s\S]*?```/g, '').replace(/`[^`]*`/g, '');
     expect(prose).not.toMatch(/\bmovements?\b/i);
     expect(prose).not.toMatch(/\basks?\b/i);
+  });
+});
+
+// ── Waits ──────────────────────────────────────────────────────────────────
+//
+// A wait on a person or an outside system that nothing bounds leaves its run
+// suspended for good when the answer never comes, so every example the
+// handbook SHOWS — a chapter's code, the front page's, the language search's —
+// puts such a wait in a `race` with a `sleep`.
+
+/** Every example a reader is shown, with where it is shown. */
+function shownExamples(): Array<{ chapter: string; code: string }> {
+  const fenced = coreChapters.flatMap((c) =>
+    [...c.content.matchAll(/```\n([\s\S]*?)```/g)].map((m) => ({ chapter: c.id, code: m[1] })),
+  );
+  const front = frontEntries().flatMap((e) => (e.example ? [{ chapter: `front#${e.anchor}`, code: exampleText(e.example) }] : []));
+  const search = CONTROL_FORMS.map((f) => ({ chapter: `language search: ${f.name}`, code: exampleText(f.example) }));
+  return [...fenced, ...front, ...search];
+}
+
+/** Where `code` awaits a traversal (`await x-[…]->`, `await new x-[…]->`) — a wait on what a system announces. */
+function awaitTraversals(code: string): number[] {
+  const word = AWAIT_ARRIVALS_WORD;
+  return [...code.matchAll(new RegExp(`\\bawait\\s+(?:${word}\\s+)?(?:\`[^\`\\n]+\`|[A-Za-z_]\\w*)\\s*-\\[`, 'g'))].map((m) => m.index ?? 0);
+}
+
+/** The index of the `)` closing the `(` at `open`, skipping strings. */
+function closing(code: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < code.length; i++) {
+    const c = code[i];
+    if (c === '"') {
+      i++;
+      while (i < code.length && code[i] !== '"') i += code[i] === '\\' ? 2 : 1;
+    } else if (c === '(') depth++;
+    else if (c === ')' && --depth === 0) return i;
+  }
+  return code.length;
+}
+
+/** Whether the wait at `at` sits inside a `race(…)` one of whose arms sleeps. */
+function insideRaceWithSleep(code: string, at: number): boolean {
+  return [...code.matchAll(/\brace\(/g)].some((m) => {
+    const open = (m.index ?? 0) + 'race'.length;
+    const close = closing(code, open);
+    return open < at && at < close && /\bawait\s+sleep\(/.test(code.slice(open, close));
+  });
+}
+
+describe('waits in the handbook', () => {
+  it('every wait on a person or an outside system in an example sits in a race with a sleep', () => {
+    const unbounded: string[] = [];
+    let waits = 0;
+    for (const { chapter, code } of shownExamples()) {
+      for (const at of awaitTraversals(code)) {
+        waits++;
+        if (!insideRaceWithSleep(code, at)) {
+          const line = code.slice(0, at).split('\n').length;
+          unbounded.push(`${chapter}, line ${line} of its example: ${code.split('\n')[line - 1].trim()}`);
+        }
+      }
+    }
+    expect(waits).toBeGreaterThan(5);
+    expect(unbounded).toEqual([]);
+  });
+
+  it('no chapter teaches callback(…) or await first', () => {
+    for (const c of coreChapters) expect(c.content).not.toMatch(/callback\(|await first\(/);
+    for (const { code } of shownExamples()) expect(code).not.toMatch(/callback\(|await first\(/);
+  });
+
+  it('the reviews chapter has the sections the diagnostics point to', () => {
+    for (const s of ['waiting-on-a-person', 'await-and-await-new', 'buttons', 'host-links', 'captured-values']) {
+      expect(getCoreChapter('reviews', s).ok).toBe(true);
+    }
+  });
+
+  // The word for "only what arrives from now" is a placeholder the parser
+  // owns; the docs build evaluates a chapter as a template literal in an
+  // empty scope, so the chapter spells the word out and this holds the two
+  // together.
+  it("the reviews chapter spells the arrivals-only wait with the parser's word", () => {
+    const r = getCoreChapter('reviews', 'await-and-await-new');
+    expect(r.ok && r.content).toContain(`await ${AWAIT_ARRIVALS_WORD} `);
+  });
+
+  it('a wait raced against a sleep is found, and one outside any race is not', () => {
+    const raced = 'r = race(\n  () => {\n    a = await msg-[:Replies]->\n    return a\n  },\n  () => { await sleep(1d) },\n)';
+    expect(awaitTraversals(raced).map((at) => insideRaceWithSleep(raced, at))).toEqual([true]);
+    const bare = 'a = await msg-[:Replies]->\nr = race(() => { await sleep(1d) })';
+    expect(awaitTraversals(bare).map((at) => insideRaceWithSleep(bare, at))).toEqual([false]);
+    const unslept = 'r = race(\n  () => { a = await msg-[:Replies]-> },\n  () => { b = await new msg-[:Replies]-> },\n)';
+    expect(awaitTraversals(unslept).map((at) => insideRaceWithSleep(unslept, at))).toEqual([false, false]);
   });
 });
 

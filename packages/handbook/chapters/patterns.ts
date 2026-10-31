@@ -181,8 +181,14 @@ q = write asks-[:Check]-> {
   Detail: "Review the extracted records before they're written."
 }
 
-answer = await q-[:Response]->
-if (answer.Answer) {
+r = race(
+  () => {
+    answer = await q-[:Response]->
+    return answer.Answer
+  },
+  () => { await sleep(1d) },
+)
+if (r[0] == true) {
   map(found, (c) => { … })
 }
 \`\`\`
@@ -344,7 +350,7 @@ function \`Extract And Connect\`(msg: <inbox-[:Email]->>) {
 `,
     },
     {
-      construct: 'human-reviewed-intake (manual text/files → extract → write a Check question, await its Response, gate the linked writes on the approval)',
+      construct: 'human-reviewed-intake (manual text/files → extract → write a Check question, race its Response against a sleep, gate the linked writes on the approval)',
       status: 'runs',
       probe: `
 import { \`@lf/manual\` as manual, \`@lf/attio\` as attio, \`@lf/ask\` as ask } from adapters
@@ -371,8 +377,14 @@ function \`Review And Import\`(go: <runs-[:Invocation]->>) {
     Detail: "Review the extracted records before they're written."
   }
 
-  answer = await q-[:Response]->
-  if (answer.Answer) {
+  r = race(
+    () => {
+      answer = await q-[:Response]->
+      return answer.Answer
+    },
+    () => { await sleep(1d) },
+  )
+  if (r[0] == true) {
     map(found, (c) => {
       company = write crm-[:Companies]-> {
         unique by (FUZZY Name)
