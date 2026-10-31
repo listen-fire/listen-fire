@@ -2234,6 +2234,82 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// A run an arrival on `crm`'s root `Company` fired, its landing named
+    /// `Name: "Osprey Ltd"`, writing `body`; the crm reads a record back as
+    /// `current` answers. Its `done`, and every adapter method it called.
+    fn landed_write(body: &str, current: Json) -> (Json, Vec<String>) {
+        let source = format!("import {{ crm }} from adapters\n\ncrm0 = connect crm\n\nfunction sync(c: <crm0-[:Company]->>) {{\n{body}}}\n\nlisten to crm0-[:Company]-> fire sync\n");
+        let catalog = json!({ "adapters": { "crm": { "constructionArgs": [], "schemas": { "": {
+            "positions": { "Company": { "properties": { "id": "text", "Name": "text" }, "edges": {} } },
+            "collections": { "Company": { "target": "Company" } },
+            "writableRoots": {},
+        } } } }, "credentials": {}, "plugins": {} });
+        let landing = crate::env::object_of(vec![
+            ("recordId", Js::str("company-1")),
+            ("recordType", Js::str("Company")),
+            ("fields", crate::env::object_of(vec![("id", Js::str("company-1")), ("Name", Js::str("Osprey Ltd"))])),
+        ]);
+        let arrival = crate::env::object_of(vec![("adapterType", Js::str("crm")), ("edge", Js::str("Company")), ("landing", landing)]);
+        let event = crate::env::object_of(vec![("pipelineInputId", Js::str("p")), ("adapterType", Js::str("crm")), ("triggerType", Js::str("arrival")), ("arrival", arrival)]);
+        let input = json!({
+            "entry": "segment", "source": source, "languageVersion": movement_parser::version::LANGUAGE_VERSION, "segmentId": "g1", "serves": [],
+            "now": "2026-10-31T12:00:00.000Z", "movementName": "sync", "event": crate::env::encode_plain(&event), "catalog": catalog,
+        });
+        let called = std::cell::RefCell::new(Vec::new());
+        let serve = |request: &crate::executor::PendingRequest| match (request.family, request.method.as_str()) {
+            ("check", "program") => json!({ "value": { "diagnostics": [], "stamps": [] } }),
+            ("adapters", "resolve") => json!({ "value": { "instance": "i1", "adapterType": "crm", "methods": ["describe", "readRecord", "updateRecord", "getFieldValue"] } }),
+            ("control.cancel", _) => json!({ "value": false }),
+            ("locks", "acquire") => json!({ "value": { "token": "k1" } }),
+            ("locks", "release") | ("trace", "append") => json!({}),
+            ("adapters", "call") => {
+                let method = request.args["method"].as_str().unwrap().to_string();
+                called.borrow_mut().push(method.clone());
+                let result = match method.as_str() {
+                    "describe" => json!({ "typeId": "Company", "displayName": "Company", "fields": [
+                        { "fieldId": "id", "displayName": "id", "kind": "string", "writable": false, "required": false },
+                        { "fieldId": "Name", "displayName": "Name", "kind": "string", "writable": true, "required": true },
+                    ], "references": [] }),
+                    "readRecord" => current.clone(),
+                    "updateRecord" => json!({ "adapterType": "crm", "externalId": "company-1", "recordType": "Company", "data": { "Name": "changed" } }),
+                    other => panic!("unexpected adapter method {other}"),
+                };
+                json!({ "value": { "result": crate::env::encode_plain(&crate::env::js_of_json(&result)) } })
+            }
+            other => panic!("unexpected {other:?}"),
+        };
+        let mut segment = crate::begin(&input.to_string()).unwrap();
+        let mut step = segment.start().unwrap();
+        let mut outstanding = std::collections::VecDeque::new();
+        let done = loop {
+            match step {
+                crate::executor::Step::Done(done) => break done,
+                crate::executor::Step::Pending(pending) => {
+                    outstanding.extend(pending);
+                    let request = outstanding.pop_front().expect("a request to answer");
+                    let answer = crate::read_answer(&serve(&request).to_string()).unwrap();
+                    step = segment.answer(request.id, answer).unwrap();
+                }
+            }
+        };
+        (done, called.into_inner())
+    }
+
+    /// The loop breaker's other half: a write that would change nothing is
+    /// never sent, so a two-way sync's echo writes nothing and its chain
+    /// ends. The record is read back first (the module lists `readRecord`),
+    /// and the write is settled `noop`.
+    #[test]
+    fn an_update_whose_fields_match_is_not_sent() {
+        let (done, called) = landed_write("  write c { Name: \"Osprey Ltd\" }\n", json!({ "id": "company-1", "Name": "Osprey Ltd" }));
+        assert_eq!(called, ["describe", "readRecord"], "{done}");
+        let Ok(Js::Array(writes)) = crate::env::decode(&done["result"]["writes"]) else { panic!("its writes: {done}") };
+        let outcomes: Vec<String> = writes.items().iter().map(|w| unique::get(w, "outcome").to_js_string()).collect();
+        assert_eq!(outcomes, ["noop"], "{done}");
+        let (done, called) = landed_write("  write c { Name: \"Osprey Ltd\" }\n", json!({ "id": "company-1", "Name": "Osprey" }));
+        assert_eq!(called, ["describe", "readRecord", "updateRecord"], "a field that differs is sent: {done}");
+    }
+
     #[test]
     fn the_judge_picks_only_by_a_non_negative_integer_index() {
         assert_eq!(judged_index(&json!({ "index": 1 })), Some(1));

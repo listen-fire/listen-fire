@@ -1,0 +1,12 @@
+import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+# A two-way sync: each company the CRM reports carries the name the other
+# side holds for it. Its own write comes back as an arrival, and fires it again.
+function sync(c: <crm-[:Company]->>) {
+  write c { Name: "Osprey Ltd" }
+}
+
+listen to crm-[c:Company]-> fire sync

@@ -98,6 +98,7 @@ mod limiter;
 mod limiter_module;
 mod limits_door;
 mod loop_guard;
+mod loop_breaker;
 #[cfg(feature = "anthropic")]
 mod llm_calls;
 #[cfg(feature = "serve")]

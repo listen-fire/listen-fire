@@ -52,6 +52,10 @@ export type Arrival =
       /** The module applied the listen's taken filter before reporting it
        *  (a filtered poll or subscription): the host does not judge it again (2.6). */
       takenApplied?: boolean;
+      /** When it happened at its provider (an ISO instant), where the
+       *  provider says: a host measures from it whether a run's write caused
+       *  it, however late a poll finds it (2.6). */
+      occurredAt?: string;
     }
   | { edge: string; key: string; gone: true };
 

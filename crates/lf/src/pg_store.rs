@@ -49,6 +49,7 @@ use tokio_postgres::{Client, Row};
 
 use crate::backend::RunHostStore;
 use crate::json::Js;
+use crate::loop_breaker::{Deepest, LedgerRecord, LedgerWrite};
 use crate::obj;
 use crate::resolve::{ListenState, Resolution};
 use crate::store::{
@@ -152,6 +153,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (11, include_str!("pg_store_schema_11.sql")),
     (12, include_str!("pg_store_schema_12.sql")),
     (13, include_str!("pg_store_schema_13.sql")),
+    (14, include_str!("pg_store_schema_14.sql")),
 ];
 
 /// The advisory lock the migrations run under: "lf-store" as a number.
@@ -1499,6 +1501,28 @@ impl RunHostStore for PgStore {
             &[&self.tenant, &pipeline, &fresh, &paused],
         )?;
         Ok(())
+    }
+
+    fn ledger_write(&self, write: &LedgerWrite, forget_before: &str) -> Result<()> {
+        let depth = i32::try_from(write.depth).map_err(|_| StoreError::Invalid(format!("a chain depth past {}", i32::MAX)))?;
+        self.transaction(|| {
+            self.execute("delete from lf.write_ledger where team_id = $1::text::uuid and at < $2::text::timestamptz", &[&self.tenant, &forget_before])?;
+            self.execute(
+                "insert into lf.write_ledger (team_id, adapter, record_type, external_id, run_id, depth, at)
+                 values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::int4, $7::text::timestamptz)",
+                &[&self.tenant, &write.adapter, &write.record_type, &write.external_id, &write.run_id, &depth, &write.at],
+            )?;
+            Ok(())
+        })
+    }
+    fn deepest_write(&self, record: &LedgerRecord<'_>, since: &str) -> Result<Option<Deepest>> {
+        let row = self.query_opt(
+            "select run_id, depth from lf.write_ledger
+             where team_id = $1::text::uuid and adapter = $2::text and record_type = $3::text and external_id = $4::text and at >= $5::text::timestamptz
+             order by depth desc, at desc limit 1",
+            &[&self.tenant, &record.adapter, &record.record_type, &record.external_id, &since],
+        )?;
+        Ok(row.map(|r| Deepest { run_id: r.get(0), depth: r.get::<_, i32>(1).max(0) as u32 }))
     }
 
     /// The receipt first: a duplicate (its external id kept at its

@@ -53,7 +53,7 @@ When credentials are missing: `{ "error", "missingCredentials": [diagnostic…] 
 
 ```json
 { "run": { "runId", "file", "movement", "status", "startedAt", "finishedAt", "deliveryId", "firedAt", "languageVersion",
-  "event": {…}, "writes": 0, "writeRecords": [ … ], "error": null, "returned": { "value": … }, "outcome": {…},
+  "event": {…}, "chain": [ "…" ], "writes": 0, "writeRecords": [ … ], "error": null, "returned": { "value": … }, "outcome": {…},
   "costMicrodollars": 0.0, "traceEntries": 0, "trace": [ … ],
   "parked": [{ "address": "…", "reason": "timer", "wakeAt": "…" }],
   "stranded": [{ "waitId": "…", "adapterType": "slack", "edge": "Interactions", "key": "C1:…", "at": "…", "says": "waiting on Interactions of slack C1:… — its record was deleted, so nothing will arrive; a race with a sleep is the way out" }],
@@ -64,6 +64,7 @@ When credentials are missing: `{ "error", "missingCredentials": [diagnostic…] 
 - `deliveryId`: the delivery the run came from (`listen-fire deliveries show`), or `null` for a run started by `listen-fire run`, a cron tick or a poll.
 - `languageVersion`: the version string the run is pinned to (a store from before pins were versions, holding the integer 5, is read as this release's version).
 - `event`: the event that fired the run. `outcome`: what the store recorded when the run last settled.
+- `chain`: the runs whose writes caused the arrival that fired this run, oldest first, each run's write causing the next's arrival; empty for a run nothing a run wrote caused. A chain longer than `lf.yaml`'s `loopDepth` (default 10) pauses the listen that would continue it (`LISTEN_LOOP`, `listen-fire listens`).
 - `writes`: how many writes the run made, over every entry into it (a resume's included).
 - `writeRecords`: each write, in order, as `{ "adapter", "recordType", "recordId", "action", "committed", "values" }` (`link` too, for a link: `{ "edgeName", "toRecordType", "toExternalId" }`). `action` is `create`, `update`, `attach` (an update that changed nothing), `noop`, `delete`, `link`, `unlink` or `match`; `committed` is false for a rehearsed write. `values` are the fields the write set, a file by its reference; over 2 KiB of JSON they are `{ "truncated": true, "bytes", "preview" }`. The first 100 writes are listed. `null` for a run settled before listen-fire kept them. A failed run lists the writes it made before it failed, the failing step's included.
 - `returned`: what the movement returned, as under `listen-fire run` above. Every run records it, however it was started.

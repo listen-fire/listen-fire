@@ -89,6 +89,16 @@ create table if not exists listen_state (
   lease_token text,
   lease_until text
 );
+create table if not exists write_ledger (
+  adapter text not null,
+  record_type text not null,
+  external_id text not null,
+  run_id text not null,
+  depth integer not null,
+  at text not null
+);
+create index if not exists write_ledger_record on write_ledger (adapter, record_type, external_id, at);
+create index if not exists write_ledger_at on write_ledger (at);
 create table if not exists module_processes (
   id integer primary key check (id = 1),
   processes text not null,

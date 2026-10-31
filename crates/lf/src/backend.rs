@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::json::Js;
+use crate::loop_breaker::{Deepest, LedgerRecord, LedgerWrite};
 #[cfg(feature = "postgres")]
 use crate::pg_store::PgStore;
 use crate::core;
@@ -308,6 +309,14 @@ pub trait RunHostStore {
     fn save_listen_resolution(&self, pipeline: &str, token: &str, resolution: &Resolution) -> Result<bool>;
     /// Why the listen is paused (None: it is not), its resolution as it is.
     fn set_listen_paused(&self, pipeline: &str, paused: Option<&str>) -> Result<()>;
+
+    // ── The write ledger (crate::loop_breaker) ──────────────────────────────
+    /// Keep a run's record write (`writes.record`), and forget every write
+    /// made before `forget_before`.
+    fn ledger_write(&self, write: &LedgerWrite, forget_before: &str) -> Result<()>;
+    /// The deepest write of `record` made at or after `since`, the latest of
+    /// those as deep (`writes.depth`).
+    fn deepest_write(&self, record: &LedgerRecord<'_>, since: &str) -> Result<Option<Deepest>>;
     /// What one inbound delivery leaves, as one write: its receipt, its pull
     /// cursor (when it moved), its arrivals and its work rows (its events,
     /// its wakes). A crash never leaves a cursor past events its receipt does
@@ -558,6 +567,12 @@ impl RunHostStore for Store {
     fn set_listen_paused(&self, pipeline: &str, paused: Option<&str>) -> Result<()> {
         Store::set_listen_paused(self, pipeline, paused)
     }
+    fn ledger_write(&self, write: &LedgerWrite, forget_before: &str) -> Result<()> {
+        Store::ledger_write(self, write, forget_before)
+    }
+    fn deepest_write(&self, record: &LedgerRecord<'_>, since: &str) -> Result<Option<Deepest>> {
+        Store::deepest_write(self, record, since)
+    }
     fn keep_delivery(
         &self,
         subscription_id: &str,
@@ -654,6 +669,48 @@ mod tests {
             keys.sort();
             keys
         }, "one read for many; one with nothing kept is absent");
+    }
+
+    /// The write ledger answers the deepest write of a record since an
+    /// instant (the latest of those as deep), per record, on every store;
+    /// a write is forgotten once a later one is kept past it.
+    fn the_write_ledger_answers_the_deepest_write_since(store: &dyn RunHostStore) {
+        let company = format!("company-{}", uuid::Uuid::new_v4());
+        let record = LedgerRecord { adapter: "acme_crm", record_type: "Company", external_id: &company };
+        let keep = |run: &str, depth: u32, at: &str, forget_before: &str| {
+            let write = LedgerWrite { adapter: "acme_crm".into(), record_type: "Company".into(), external_id: company.clone(), run_id: run.into(), depth, at: at.into() };
+            store.ledger_write(&write, forget_before).unwrap();
+        };
+        let long_ago = "2026-10-31T09:00:00.000Z";
+        assert_eq!(store.deepest_write(&record, long_ago).unwrap(), None);
+        keep("a1", 0, "2026-10-31T10:00:00.000Z", long_ago);
+        keep("b1", 1, "2026-10-31T10:00:01.000Z", long_ago);
+        keep("b0", 1, "2026-10-31T10:00:00.500Z", long_ago);
+        keep("c0", 0, "2026-10-31T10:00:02.000Z", long_ago);
+        assert_eq!(store.deepest_write(&record, long_ago).unwrap(), Some(Deepest { run_id: "b1".into(), depth: 1 }), "the deepest, the latest of those");
+        assert_eq!(store.deepest_write(&record, "2026-10-31T10:00:01.500Z").unwrap(), Some(Deepest { run_id: "c0".into(), depth: 0 }), "only since");
+        assert_eq!(store.deepest_write(&record, "2026-10-31T11:00:00+01:00").unwrap(), Some(Deepest { run_id: "b1".into(), depth: 1 }), "an instant in another form");
+        let other = LedgerRecord { external_id: "another", ..record };
+        assert_eq!(store.deepest_write(&other, long_ago).unwrap(), None, "per record");
+        keep("d0", 0, "2026-10-31T10:05:00.000Z", "2026-10-31T10:00:01.500Z");
+        assert_eq!(store.deepest_write(&record, long_ago).unwrap(), Some(Deepest { run_id: "d0".into(), depth: 0 }), "the earlier writes forgotten but the last kept before");
+    }
+
+    #[test]
+    fn the_write_ledger_is_kept_in_the_state_file() {
+        let dir = std::env::temp_dir().join(format!("lf-backend-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        the_write_ledger_answers_the_deepest_write_since(&Store::open(&dir.join("state.db")).unwrap());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Over Postgres when LF_TEST_PG names a database to set up and write into.
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn the_write_ledger_is_kept_over_postgres() {
+        let Some(url) = std::env::var("LF_TEST_PG").ok().filter(|u| !u.is_empty()) else { return };
+        PgStore::migrate(&url).unwrap();
+        the_write_ledger_answers_the_deepest_write_since(&PgStore::connect(&url, POSTGRES_TENANT).unwrap());
     }
 
     #[test]

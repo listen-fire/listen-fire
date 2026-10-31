@@ -61,6 +61,14 @@ struct ProjectFile {
     /// suspended.
     #[serde(rename = "listenScopeLimit")]
     listen_scope_limit: Option<serde_yaml::Value>,
+    /// How soon after a run's write an arrival on the record it wrote
+    /// counts as caused by it (crate::loop_breaker): a duration.
+    #[serde(rename = "loopWindow")]
+    loop_window: Option<serde_yaml::Value>,
+    /// The most runs one chain of writes and arrivals may be before the
+    /// listen that would start the next is paused.
+    #[serde(rename = "loopDepth")]
+    loop_depth: Option<serde_yaml::Value>,
 }
 
 /// The most records a listen's earlier hops may match when lf.yaml says
@@ -74,6 +82,32 @@ fn listen_scope_limit_of(value: Option<&serde_yaml::Value>, at: &str) -> Result<
         .filter(|limit| *limit >= 1)
         .and_then(|limit| usize::try_from(limit).ok())
         .ok_or_else(|| format!("{at}: listenScopeLimit: a whole number, at least 1, of the records a listen's earlier hops may match (default {DEFAULT_LISTEN_SCOPE_LIMIT})"))
+}
+
+/// How soon after a run's write an arrival counts as caused by it when
+/// lf.yaml says nothing (`loopWindow`): later than this it is more likely a
+/// person acted than a slow loopback.
+pub const DEFAULT_LOOP_WINDOW_MS: i64 = 20_000;
+
+/// The most runs one chain of writes and arrivals may be when lf.yaml says
+/// nothing (`loopDepth`).
+pub const DEFAULT_LOOP_DEPTH: usize = 10;
+
+fn loop_window_of(value: Option<&serde_yaml::Value>, at: &str) -> Result<i64, String> {
+    let Some(value) = value else { return Ok(DEFAULT_LOOP_WINDOW_MS) };
+    let ms = value.as_str().and_then(movement_engine::park::duration_ms).filter(|ms| ms.is_finite() && *ms >= 1.0);
+    ms.map(|ms| ms as i64).ok_or_else(|| {
+        format!("{at}: loopWindow: a duration, such as 20s: how soon after a run's write an arrival on the record it wrote counts as caused by it (default 20s)")
+    })
+}
+
+fn loop_depth_of(value: Option<&serde_yaml::Value>, at: &str) -> Result<usize, String> {
+    let Some(value) = value else { return Ok(DEFAULT_LOOP_DEPTH) };
+    value
+        .as_u64()
+        .filter(|depth| *depth >= 1)
+        .and_then(|depth| usize::try_from(depth).ok())
+        .ok_or_else(|| format!("{at}: loopDepth: a whole number, at least 1, of the runs one chain of writes and arrivals may be before its listen is paused (default {DEFAULT_LOOP_DEPTH})"))
 }
 
 #[derive(Deserialize)]
@@ -187,6 +221,12 @@ pub struct Project {
     /// is a repeat for that long. A module it does not name keeps the window
     /// it declares (crate::externals::resend_window_ms).
     pub resend_window: std::collections::BTreeMap<String, i64>,
+    /// How soon, in milliseconds, after a run's write an arrival on the
+    /// record it wrote counts as caused by it (lf.yaml's `loopWindow`).
+    pub loop_window_ms: i64,
+    /// The most runs one chain of writes and arrivals may be (lf.yaml's
+    /// `loopDepth`): the listen that would start the next is paused.
+    pub loop_depth: usize,
 }
 
 /// `maxRunCostUsd` as the platform reads `MOVEMENT_MAX_RUN_COST_USD`
@@ -298,6 +338,8 @@ fn load_pinned(from: &Path, older_key_loads: bool) -> Result<Project, String> {
     let resolve_every = resolve_every_of(&file.resolve_every, "lf.yaml")?;
     let listen_scope_limit = listen_scope_limit_of(file.listen_scope_limit.as_ref(), "lf.yaml")?;
     let resend_window = resend_window_of(&file.resend_window, "lf.yaml")?;
+    let loop_window_ms = loop_window_of(file.loop_window.as_ref(), "lf.yaml")?;
+    let loop_depth = loop_depth_of(file.loop_depth.as_ref(), "lf.yaml")?;
     if file.store.is_some() {
         return Err(format!(
             "{}: store: run state is kept by the store module now: `core: {{ store: \"@lf/postgres-store\" }}` (or @lf/sqlite-store, the default), set up with `listen-fire connect @lf/postgres-store`",
@@ -335,6 +377,8 @@ fn load_pinned(from: &Path, older_key_loads: bool) -> Result<Project, String> {
         resolve_every,
         resend_window,
         listen_scope_limit,
+        loop_window_ms,
+        loop_depth,
         root: dir,
     })
 }
@@ -428,6 +472,29 @@ mod tests {
             assert_eq!(
                 listen_scope_limit_of(Some(&value(bad)), "lf.yaml"),
                 Err("lf.yaml: listenScopeLimit: a whole number, at least 1, of the records a listen's earlier hops may match (default 500)".to_string()),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_loop_window_is_a_duration_and_the_loop_depth_a_positive_number() {
+        let value = |text: &str| serde_yaml::from_str::<serde_yaml::Value>(text).unwrap();
+        assert_eq!(loop_window_of(None, "lf.yaml"), Ok(20_000));
+        assert_eq!(loop_window_of(Some(&value("1m")), "lf.yaml"), Ok(60_000));
+        for bad in ["soon", "20", "0s"] {
+            assert_eq!(
+                loop_window_of(Some(&value(bad)), "lf.yaml"),
+                Err("lf.yaml: loopWindow: a duration, such as 20s: how soon after a run's write an arrival on the record it wrote counts as caused by it (default 20s)".to_string()),
+                "{bad}"
+            );
+        }
+        assert_eq!(loop_depth_of(None, "lf.yaml"), Ok(10));
+        assert_eq!(loop_depth_of(Some(&value("3")), "lf.yaml"), Ok(3));
+        for bad in ["0", "-1", "many", "2.5"] {
+            assert_eq!(
+                loop_depth_of(Some(&value(bad)), "lf.yaml"),
+                Err("lf.yaml: loopDepth: a whole number, at least 1, of the runs one chain of writes and arrivals may be before its listen is paused (default 10)".to_string()),
                 "{bad}"
             );
         }

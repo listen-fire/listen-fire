@@ -34,6 +34,9 @@ pub struct ArrivalIn {
     pub not_for: Option<String>,
     /// Its module applied the listen's taken filter before reporting it.
     pub taken_applied: bool,
+    /// When it happened at its provider, as its module says (an ISO
+    /// instant): what the loop breaker measures from (crate::loop_breaker).
+    pub occurred_at: Option<String>,
 }
 
 impl ArrivalIn {
@@ -71,6 +74,7 @@ impl ArrivalIn {
         if self.taken_applied {
             out.insert("takenApplied".into(), Js::Bool(true));
         }
+        text(&mut out, "occurredAt", &self.occurred_at);
         Js::Obj(out)
     }
 }
@@ -106,7 +110,7 @@ fn arrival_of(index: usize, item: &Js) -> Result<ArrivalIn, String> {
     let named = |key: &str| item.get(key).and_then(Js::as_str).filter(|text| !text.is_empty()).map(str::to_string);
     let edge = named("edge").ok_or_else(|| format!("arrival {index} names no edge"))?;
     let key = named("key");
-    let bare = ArrivalIn { edge, key, identity: None, version: None, landing: None, gone: false, parents: Vec::new(), about: None, not_for: None, taken_applied: false };
+    let bare = ArrivalIn { edge, key, identity: None, version: None, landing: None, gone: false, parents: Vec::new(), about: None, not_for: None, taken_applied: false, occurred_at: None };
     if Js::is_true(item.get("gone")) {
         if bare.key.is_none() {
             return Err(format!("arrival {index} on '{}' is gone but names no key", bare.edge));
@@ -128,6 +132,11 @@ fn arrival_of(index: usize, item: &Js) -> Result<ArrivalIn, String> {
         Some(_) => return Err(format!("arrival {index} on '{edge}': its parents are not a list")),
     };
     let not_for = named("notFor");
+    let occurred_at = match item.get("occurredAt") {
+        None => None,
+        Some(Js::Str(at)) if crate::units::ms_of(at).is_some() => Some(at.clone()),
+        Some(_) => return Err(format!("arrival {index} on '{edge}': its occurredAt is not an ISO instant")),
+    };
     Ok(ArrivalIn {
         identity: Some(identity),
         version,
@@ -136,6 +145,7 @@ fn arrival_of(index: usize, item: &Js) -> Result<ArrivalIn, String> {
         about: item.get("about").cloned(),
         not_for,
         taken_applied: Js::is_true(item.get("takenApplied")),
+        occurred_at,
         ..bare
     })
 }
@@ -172,7 +182,7 @@ mod tests {
             r#"{"arrivals":[{"edge":"Comments","key":"thread:c1","identity":"k1","version":"2","landing":{"fields":{"Text":"hi"}}},{"edge":"Comments","key":"thread:c2","gone":true}]}"#,
         ))
         .unwrap();
-        let bare = ArrivalIn { edge: "Comments".into(), key: None, identity: None, version: None, landing: None, gone: false, parents: Vec::new(), about: None, not_for: None, taken_applied: false };
+        let bare = ArrivalIn { edge: "Comments".into(), key: None, identity: None, version: None, landing: None, gone: false, parents: Vec::new(), about: None, not_for: None, taken_applied: false, occurred_at: None };
         assert_eq!(
             read,
             vec![
@@ -185,10 +195,11 @@ mod tests {
 
     #[test]
     fn an_arrival_on_a_root_edge_names_no_key_and_is_not_logged_for_waits() {
-        let text = r#"{"edge":"Company","identity":"company-1","landing":{"recordId":"company-1","fields":{"id":"company-1","Name":"Osprey"}},"parents":[null],"about":{"recordType":"Company","externalId":"company-1"},"notFor":"listen:a:b","takenApplied":true}"#;
+        let text = r#"{"edge":"Company","identity":"company-1","landing":{"recordId":"company-1","fields":{"id":"company-1","Name":"Osprey"}},"parents":[null],"about":{"recordType":"Company","externalId":"company-1"},"notFor":"listen:a:b","takenApplied":true,"occurredAt":"2026-10-31T10:00:00Z"}"#;
         let read = arrivals_of(&js(&format!(r#"{{"arrivals":[{text}]}}"#))).unwrap();
         assert_eq!(read[0].key, None);
         assert_eq!((read[0].not_for.as_deref(), read[0].taken_applied, read[0].parents.len()), (Some("listen:a:b"), true, 1));
+        assert_eq!(read[0].occurred_at.as_deref(), Some("2026-10-31T10:00:00Z"));
         assert_eq!(read[0].to_js().to_json(), text, "it is written back as it was read");
         assert_eq!(logged(&read), vec![]);
         assert_eq!(arrival_receipt_key("Company", None, "company-1", None), "Company::company-1:");
@@ -203,6 +214,10 @@ mod tests {
         assert_eq!(refused(r#"{"key":"thread:c1","identity":"k1"}"#), "arrival 0 names no edge");
         assert_eq!(refused(r#"{"edge":"Comments","gone":true}"#), "arrival 0 on 'Comments' is gone but names no key");
         assert_eq!(refused(r#"{"edge":"Comments","key":"thread:c1","identity":"k1"}"#), "arrival 0 on 'Comments' has no landing with fields");
+        assert_eq!(
+            refused(r#"{"edge":"Comments","key":"thread:c1","identity":"k1","landing":{"fields":{}},"occurredAt":"yesterday"}"#),
+            "arrival 0 on 'Comments': its occurredAt is not an ISO instant"
+        );
         assert_eq!(refused(r#"{"edge":"Company","identity":"k1","landing":{"fields":{}},"parents":{}}"#), "arrival 0 on 'Company': its parents are not a list");
         assert_eq!(arrivals_of(&js(r#"{"arrivals":{}}"#)).unwrap_err(), "arrivals: expected an array");
     }

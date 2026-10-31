@@ -405,6 +405,34 @@ impl RunHostStore for ProcessStore {
     fn set_listen_paused(&self, pipeline: &str, paused: Option<&str>) -> Result<()> {
         self.unit("listens.setPaused", obj! { "pipeline" => s(pipeline), "paused" => paused.map(Js::str).unwrap_or(Js::Null) })
     }
+    fn ledger_write(&self, write: &crate::loop_breaker::LedgerWrite, forget_before: &str) -> Result<()> {
+        self.unit(
+            "writes.record",
+            obj! {
+                "adapter" => s(&write.adapter),
+                "recordType" => s(&write.record_type),
+                "externalId" => s(&write.external_id),
+                "runId" => s(&write.run_id),
+                "depth" => Js::Num(write.depth.into()),
+                "at" => s(&write.at),
+                "forgetBefore" => s(forget_before),
+            },
+        )
+    }
+    fn deepest_write(&self, record: &crate::loop_breaker::LedgerRecord<'_>, since: &str) -> Result<Option<crate::loop_breaker::Deepest>> {
+        let params = obj! { "adapter" => s(record.adapter), "recordType" => s(record.record_type), "externalId" => s(record.external_id), "since" => s(since) };
+        match self.call("writes.depth", params)? {
+            Js::Null => Ok(None),
+            answer => {
+                let run_id = answer.get("runId").and_then(Js::as_str);
+                let depth = answer.get("depth").and_then(int).and_then(|d| u32::try_from(d).ok());
+                match (run_id, depth) {
+                    (Some(run_id), Some(depth)) => Ok(Some(crate::loop_breaker::Deepest { run_id: run_id.to_string(), depth })),
+                    _ => Err(self.malformed("writes.depth", &answer)),
+                }
+            }
+        }
+    }
     fn keep_delivery(
         &self,
         subscription_id: &str,

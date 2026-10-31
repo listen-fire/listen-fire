@@ -932,6 +932,8 @@ mod tests {
             poll_every: Default::default(),
             resolve_every: Default::default(),
             listen_scope_limit: crate::project::DEFAULT_LISTEN_SCOPE_LIMIT,
+            loop_window_ms: crate::project::DEFAULT_LOOP_WINDOW_MS,
+            loop_depth: crate::project::DEFAULT_LOOP_DEPTH,
             resend_window: Default::default(),
         }
     }

@@ -92,7 +92,7 @@ test('a listen with a filter on a board watches the boards that match, re-resolv
   assert.deepEqual(polledBoards(dir), ['b1'], 'only the board that matches is polled');
   assert.match(
     listensLine(dir),
-    /^notes:a — f-\[b:Boards WHERE b\.Name == "Ops"\]->-\[n:Notes\]-> — resolved, arrival — watching 1 Board, resolved \d+s ago — ok; can't be protected from loops: feed names no record its arrivals are about$/,
+    /^notes:a — f-\[b:Boards WHERE b\.Name == "Ops"\]->-\[n:Notes\]-> — resolved, arrival — watching 1 Board, resolved \d+s ago — ok; can't be protected from loops: its arrivals name no record they are about, and no write to feed makes what they land on; a write to feed that changes nothing is still sent \(it lists no readRecord\), so a two-way sync's echo runs again$/,
   );
   boards(dir, [
     { id: 'b1', name: 'Ops' },
@@ -154,7 +154,7 @@ test('a listen whose filter matches more boards than the limit is suspended by n
   const limit = 'LISTEN_SCOPE_LIMIT: notes:a matched more Boards than its limit of 1; it is suspended until its filter matches fewer';
   const opened = lfAt(dir, ['drain', '--until-idle']);
   assert.ok(opened.out.includes(`listen-fire: ${limit}`), opened.out);
-  assert.ok(listensLine(dir).endsWith(` — watching 0 Boards, resolved ${/resolved (\d+s ago)/.exec(listensLine(dir))?.[1]} — ${limit}; can't be protected from loops: feed names no record its arrivals are about`), listensLine(dir));
+  assert.ok(listensLine(dir).endsWith(` — watching 0 Boards, resolved ${/resolved (\d+s ago)/.exec(listensLine(dir))?.[1]} — ${limit}; can't be protected from loops: its arrivals name no record they are about, and no write to feed makes what they land on; a write to feed that changes nothing is still sent (it lists no readRecord), so a two-way sync's echo runs again`), listensLine(dir));
   lfAt(dir, ['drain', '--until-idle'], 61_000);
   assert.deepEqual(polledBoards(dir), [], 'a suspended listen is polled nowhere');
   // Renamed down to one: watched again from its next listing.

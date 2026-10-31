@@ -4,7 +4,9 @@ Part of [the adapter protocol](adapter-protocol.md), version 2 (an addition with
 
 A movement that writes to a source it listens to hears its own write come back: Attio sends `record.updated` for the update a run just made, a poll returns the row a run just changed. A loop guard module tells that echo from a real change, so the echo runs nothing.
 
-**The slot is empty by default.** With no guard in `core:`, neither listen-fire nor the platform suppresses anything, and the echo runs the movement again. listen-fire ships one, `@lf/fingerprint-guard`; the platform's own opt-in, the listen flag `suppress_self`, is unchanged and separate. A guard whose memory is elsewhere (Redis, a database) is a third-party module listen-fire starts (or reaches at its URL) and calls over adapter protocol 2.
+**The slot is empty by default.** With no guard in `core:`, nothing is suppressed, and the echo runs the movement again. listen-fire ships one, `@lf/fingerprint-guard`. A guard whose memory is elsewhere (Redis, a database) is a third-party module listen-fire starts (or reaches at its URL) and calls over adapter protocol 2.
+
+The guard is operator configuration, not language: the listen flag `suppress_self` is gone from 0.13 (`listen to <traversal> fire f` takes no settings). Whatever the guard says, listen-fire's loop breaker caps every chain of writes and arrivals: an arrival on a record a run wrote within `lf.yaml`'s `loopWindow` (default 20s) continues that run's chain, and the listen whose arrival would make a chain longer than `loopDepth` (default 10) runs is paused, `LISTEN_LOOP`, until `listen-fire listens resume` ([the store's write ledger](store-slot.md), `writes.record`). A write that would change nothing is never sent where the module lists `readRecord`, so a two-way sync's echo writes nothing and its chain ends.
 
 ## Using one
 
@@ -40,5 +42,6 @@ The store slot's envelope ([store-slot.md](store-slot.md#the-envelope)): adapter
 
 ## Changes
 
+- **2026-10-31** (listen-fire 0.13.0): `suppress_self` is gone from the language; the guard is unchanged. listen-fire's loop breaker caps every chain of writes and arrivals, guard or none.
 - **2026-10-19** (within adapter protocol 2): the methods ride adapter protocol 2's HTTP; the stdin/stdout JSON-RPC wire is retired.
 - **2026-10-18** (within adapter protocol 2): the loop guard slot, its wire, and process modules filling it.

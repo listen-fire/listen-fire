@@ -3,14 +3,21 @@
 // fake_crm_adapter.ts) as a plain process, so it shows an external can be any
 // program that answers the protocol over HTTP.
 //
-// One record type, `Company { id, Name, Description }`, and two events a
+// Two record types, `Company { id, Name, Description }` and `Note { Id, Text,
+// Company }` (a note about a company, by its id), and two events a
 // listen may choose, `company.created` and `company.updated`; a webhook
 // delivers created companies as `{ companies: [{ id, Name }] }`. Companies are
 // a listenable root too (adapter protocol 2.6): each one created is reported
 // as an arrival on `Company`, named by its id, beside its `company.created`
 // event, so `listen to crm-[c:Company WHERE …]-> fire f` hears it. (The event
-// goes when the settings form of listen does.) A movement can wait on two
-// edges of a company (adapter protocol 2.5):
+// goes when the settings form of listen does.) Notes are a listenable root as
+// well, each arrival naming the company it is `about` (`attributes`). The CRM
+// reads a record back (`readRecord`), so a write that would change nothing is
+// never sent. Once `/dev/echo-writes` turns it on, the CRM reports each
+// write it takes as an arrival, as a hosted CRM's webhook would: a company
+// written arrives on `Company`, a note on `Note`, each stamped with when it
+// happened (`occurredAt`). A movement can wait on two edges of a company
+// (adapter protocol 2.5):
 //
 // - its comment thread (`Comments`, to `Comment { Id, Text }`), which can be
 //   listed too, oldest first: `await company-[:Comments]->` takes the first
@@ -41,6 +48,7 @@ const statePath = process.env.ACME_CRM_STATE;
 const hostUrl = process.env.LF_HOST_URL;
 
 const COMPANY = 'Company';
+const NOTE = 'Note';
 const COMMENT = 'Comment';
 const COMMENTS_EDGE = 'Comments';
 const APPROVAL = 'Approval';
@@ -50,7 +58,7 @@ const COMPANY_UPDATED = 'company.updated';
 
 function readState() {
   const state = statePath && existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : {};
-  return { companies: state.companies ?? [], comments: state.comments ?? [], approvals: state.approvals ?? [] };
+  return { companies: state.companies ?? [], comments: state.comments ?? [], approvals: state.approvals ?? [], notes: state.notes ?? [], writes: state.writes ?? [] };
 }
 
 const threadKey = (company) => `thread:${company}`;
@@ -67,6 +75,17 @@ function companyArrival(company) {
     edge: COMPANY,
     identity: company.id,
     landing: { recordId: company.id, recordType: COMPANY, fields: { id: company.id, Name: company.Name } },
+  };
+}
+
+/** A note as an arrival on the CRM's root `Note` edge, about its company. */
+function noteArrival(note, occurredAt) {
+  return {
+    edge: NOTE,
+    identity: note.id,
+    landing: { recordId: note.id, recordType: NOTE, fields: { Id: note.id, Text: note.Text, Company: note.Company } },
+    about: { recordType: COMPANY, externalId: note.Company },
+    occurredAt,
   };
 }
 
@@ -107,6 +126,9 @@ const COMPANY_DESCRIPTOR = {
     { fieldId: 'Name', displayName: 'Name', kind: 'string', writable: true, required: true },
     { fieldId: 'Description', displayName: 'Description', kind: 'string', writable: true, required: false },
     { fieldId: 'Report', displayName: 'Report', kind: 'file', writable: true, required: false },
+    // How many times the company was written since it was created: an echo
+    // of each write is an arrival of its own.
+    { fieldId: 'Version', displayName: 'Version', kind: 'string', writable: false, required: false },
   ],
   references: [
     {
@@ -136,6 +158,19 @@ const COMPANY_DESCRIPTOR = {
       identity: 'id',
     },
   ],
+};
+
+const NOTE_DESCRIPTOR = {
+  typeId: NOTE,
+  displayName: NOTE,
+  fields: [
+    // The CRM's id for the note: what names one arrival on `Note`.
+    { fieldId: 'Id', displayName: 'Id', kind: 'string', writable: false, required: false },
+    { fieldId: 'Text', displayName: 'Text', kind: 'string', writable: true, required: true },
+    // The id of the company the note is about.
+    { fieldId: 'Company', displayName: 'Company', kind: 'string', writable: true, required: true },
+  ],
+  references: [],
 };
 
 const APPROVAL_DESCRIPTOR = {
@@ -192,15 +227,29 @@ const METHODS = {
       // Each company created arrives on the root `Company`, at the connection's door.
       listenable: true,
       identity: 'id',
+      version: 'Version',
       delivery: 'connection',
       fires: true,
       description: 'A company. A listen is delivered each one somebody creates in the CRM.',
+    },
+    {
+      typeId: NOTE,
+      displayName: NOTE,
+      scope: 'self-configured',
+      writable: true,
+      readable: false,
+      // Each note written arrives on the root `Note`, naming the company it is about.
+      listenable: true,
+      identity: 'Id',
+      delivery: 'connection',
+      attributes: true,
+      description: 'A note about a company. A listen is delivered each one written, about its company.',
     },
     // Reached only along a company's edges; published so they are named.
     { typeId: COMMENT, displayName: COMMENT, scope: 'self-configured', writable: false, readable: false },
     { typeId: APPROVAL, displayName: APPROVAL, scope: 'self-configured', writable: false, readable: false },
   ],
-  describe: ({ typeId }) => ({ [COMPANY]: COMPANY_DESCRIPTOR, [COMMENT]: COMMENT_DESCRIPTOR, [APPROVAL]: APPROVAL_DESCRIPTOR })[typeId] ?? null,
+  describe: ({ typeId }) => ({ [COMPANY]: COMPANY_DESCRIPTOR, [NOTE]: NOTE_DESCRIPTOR, [COMMENT]: COMMENT_DESCRIPTOR, [APPROVAL]: APPROVAL_DESCRIPTOR })[typeId] ?? null,
   resolveEntity: () => ({ candidates: [] }),
   getFieldValue: ({ position, fieldId }) => {
     const data = position?.identity?.data;
@@ -217,9 +266,19 @@ const METHODS = {
   createRecord: async ({ recordType, fields: written }) => {
     const fields = await withFileContents(written);
     const state = readState();
+    if (recordType === NOTE) {
+      const note = { id: `note-${state.notes.length + 1}`, Text: fields.Text, Company: fields.Company };
+      state.notes.push(note);
+      state.writes.push({ method: 'createRecord', recordType, externalId: note.id });
+      writeState(state);
+      echo(() => noteArrival(note, new Date().toISOString()));
+      return { adapterType: 'acme_crm', externalId: note.id, recordType, data: { Id: note.id, Text: note.Text, Company: note.Company } };
+    }
     const externalId = `company-${state.companies.length + 1}`;
     state.companies.push({ externalId, fields });
+    state.writes.push({ method: 'createRecord', recordType, externalId });
     writeState(state);
+    echo(() => companyEcho(externalId, fields, 0));
     // A comment armed for the next write lands on the company while the
     // write is still in flight: reported before this call answers.
     if (commentOnNextWrite !== undefined) {
@@ -234,8 +293,21 @@ const METHODS = {
     const existing = state.companies.find((c) => c.externalId === externalId);
     if (!existing) return { notFound: true };
     existing.fields = { ...existing.fields, ...fields };
+    state.writes.push({ method: 'updateRecord', recordType, externalId });
     writeState(state);
+    const version = state.writes.filter((w) => w.method === 'updateRecord' && w.externalId === externalId).length;
+    echo(() => companyEcho(externalId, existing.fields, version));
     return { adapterType: 'acme_crm', externalId, recordType, data: { ...existing.fields } };
+  },
+  // A record as it stands, so the host sends no write that changes nothing.
+  readRecord: ({ recordType, externalId }) => {
+    const state = readState();
+    if (recordType === NOTE) {
+      const note = state.notes.find((n) => n.id === externalId);
+      return note ? { Id: note.id, Text: note.Text, Company: note.Company } : null;
+    }
+    const company = state.companies.find((c) => c.externalId === externalId && !c.deleted);
+    return company ? { id: company.externalId, ...company.fields } : null;
   },
   // A delivery's companies are its events, and arrivals on `Company`; its
   // comments, arrivals on their threads: only those it carries, each named by
@@ -263,6 +335,27 @@ const METHODS = {
 
 // The comment `/dev/comment-on-next-write` armed for the next company written.
 let commentOnNextWrite;
+
+// Whether each write the CRM takes is reported back as an arrival
+// (`/dev/echo-writes`): off unless a test turns it on.
+let echoWrites = false;
+
+/** A company written, as the arrival its echo reports: its version is how
+ *  many times it was updated since it was created. */
+function companyEcho(id, fields, version) {
+  const arrival = companyArrival({ id, Name: fields.Name });
+  return { ...arrival, version: String(version), landing: { ...arrival.landing, fields: { ...arrival.landing.fields, Version: String(version) } }, occurredAt: new Date().toISOString() };
+}
+
+/** Report `arrival()` once the write that made it has been answered, as a
+ *  hosted CRM's webhook follows the write, when echoes are on. */
+function echo(arrival) {
+  if (!echoWrites) return;
+  const reported = arrival();
+  setImmediate(() => {
+    push('wake', { arrivals: [reported] }).catch((error) => process.stderr.write(`acme_crm: echoing a write: ${error?.message ?? error}\n`));
+  });
+}
 
 /** A comment on `company`'s thread, kept and reported as its arrival. */
 async function addComment(company, text) {
@@ -306,6 +399,12 @@ const DEV_ROUTES = {
   '/dev/comments': async (body) => {
     if (typeof body?.company !== 'string' || typeof body?.text !== 'string') return [400, { error: 'expected { company, text }' }];
     return [200, await addComment(body.company, body.text)];
+  },
+  // Each write the CRM takes from now is reported back as an arrival.
+  '/dev/echo-writes': async (body) => {
+    if (typeof body?.on !== 'boolean') return [400, { error: 'expected { on }' }];
+    echoWrites = body.on;
+    return [200, { echoWrites }];
   },
   // The next company written gets this comment while its write is in flight.
   '/dev/comment-on-next-write': async (body) => {

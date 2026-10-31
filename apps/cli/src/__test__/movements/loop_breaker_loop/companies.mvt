@@ -1,0 +1,17 @@
+import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+# Two programs that feed each other: a company gets a note, and a note gets a
+# company named after it, one name longer each time round.
+function note_it(c: <crm-[:Company]->>) {
+  write crm-[:Note]-> { Text: c.Name, Company: c.id }
+}
+
+function bump(n: <crm-[:Note]->>) {
+  write crm-[:Company]-> { Name: "${n.Text}+" }
+}
+
+listen to crm-[c:Company]-> fire note_it
+listen to crm-[n:Note]-> fire bump

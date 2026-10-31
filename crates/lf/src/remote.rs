@@ -207,6 +207,9 @@ pub struct SegmentAdapters<'s> {
     /// (`{ adapter, recordType, recordId, action, committed }`): what a
     /// segment that then failed had already done.
     pub committed: RefCell<Vec<Js>>,
+    /// Where each record created, updated or deleted is kept for the loop
+    /// breaker (crate::loop_breaker); None for a walk, which writes nothing.
+    pub ledger: Option<crate::loop_breaker::Ledger<'s>>,
 }
 
 impl<'s> SegmentAdapters<'s> {
@@ -226,6 +229,7 @@ impl<'s> SegmentAdapters<'s> {
             captured: RefCell::new(Vec::new()),
             wrote: RefCell::new(Vec::new()),
             committed: RefCell::new(Vec::new()),
+            ledger: None,
         }
     }
 
@@ -419,6 +423,7 @@ impl<'s> SegmentAdapters<'s> {
         }
         let plain = args.js();
         let member = |key: &str| plain.get(key).cloned();
+        let sent_at = crate::store::iso(0);
         let answer = match method {
             "listEntryPoints" | "listEventTypes" => self.rpc(&instance, method, Js::Obj(Obj::new())).await?,
             "describe" => self.describe(&instance, member("typeId").as_ref().and_then(Js::as_str).unwrap_or_default()).await?,
@@ -462,6 +467,7 @@ impl<'s> SegmentAdapters<'s> {
             _ => self.rpc(&instance, method, plain.clone()).await?,
         };
         if matches!(method, "createRecord" | "updateRecord" | "deleteRecord") {
+            self.note_sent(&adapter_type, &plain, &answer, &sent_at);
             self.note_write(&instance, &plain, &answer).await;
         }
         if let Some(action) = committed_action(method)
@@ -477,6 +483,21 @@ impl<'s> SegmentAdapters<'s> {
             }));
         }
         Ok(Some(answer))
+    }
+
+    /// A record write the system took, kept in the write ledger
+    /// (crate::loop_breaker) with when it was sent, before this segment
+    /// yields to anything an echo of it could reach.
+    fn note_sent(&self, adapter: &str, plain: &Js, answer: &Js, at: &str) {
+        let Some(ledger) = &self.ledger else { return };
+        if answer.get("notFound").is_some() {
+            return;
+        }
+        let record_type = plain.get("recordType").and_then(Js::as_str);
+        let external_id = answer.get("externalId").or_else(|| plain.get("externalId")).and_then(Js::as_str);
+        if let (Some(record_type), Some(external_id)) = (record_type, external_id) {
+            ledger.keep(crate::loop_breaker::LedgerRecord { adapter, record_type, external_id }, at);
+        }
     }
 
     /// A record write to a source that can echo it back (it sends webhooks

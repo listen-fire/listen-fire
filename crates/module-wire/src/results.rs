@@ -211,8 +211,8 @@ fn await_landing() -> S {
 
 /// `WireArrival`: an arrival names its identity; a gone one names none. From
 /// 2.6 one on a root edge names no key, and one may carry its parents, what
-/// it is about, the listen it is not for and whether its module took the
-/// listen's filter.
+/// it is about, the listen it is not for, whether its module took the
+/// listen's filter and when it happened at its provider.
 fn arrival() -> S {
     S::Union(vec![
         obj(vec![
@@ -225,6 +225,7 @@ fn arrival() -> S {
             opt("about", obj(vec![req("recordType", S::NonEmptyStr), req("externalId", S::NonEmptyStr)])),
             opt("notFor", S::NonEmptyStr),
             opt("takenApplied", S::Bool),
+            opt("occurredAt", S::NonEmptyStr),
         ]),
         obj(vec![req("edge", S::NonEmptyStr), req("key", S::NonEmptyStr), req("gone", S::LiteralTrue)]),
     ])
@@ -540,10 +541,10 @@ mod tests {
 
     #[test]
     fn a_2_6_arrival_on_a_root_edge_names_no_key_and_may_carry_its_parents_and_its_listen() {
-        let root = r#"{"edge":"Company","identity":"company-1","landing":{"recordId":"company-1","fields":{"id":"company-1","Name":"Osprey"}},"parents":[{"fields":{"Name":"Base"}},null],"about":{"recordType":"Company","externalId":"company-1"},"notFor":"listen:watch:on_failure","takenApplied":true}"#;
+        let root = r#"{"edge":"Company","identity":"company-1","landing":{"recordId":"company-1","fields":{"id":"company-1","Name":"Osprey"}},"parents":[{"fields":{"Name":"Base"}},null],"about":{"recordType":"Company","externalId":"company-1"},"notFor":"listen:watch:on_failure","takenApplied":true,"occurredAt":"2026-10-31T10:00:00Z"}"#;
         let read = check("preprocessInbound", "acme", &js(&format!(r#"{{"events":[],"arrivals":[{root}]}}"#))).unwrap();
         assert_eq!(read.get("arrivals").map(Js::to_json), Some(format!("[{root}]")));
-        for wrong in [r#""notFor":"""#, r#""takenApplied":"yes""#, r#""about":{"recordType":"Company"}"#, r#""parents":[1]"#] {
+        for wrong in [r#""notFor":"""#, r#""takenApplied":"yes""#, r#""about":{"recordType":"Company"}"#, r#""parents":[1]"#, r#""occurredAt":"""#] {
             let arrival = format!(r#"{{"edge":"Company","identity":"c1","landing":{{"fields":{{}}}},{wrong}}}"#);
             assert!(check("preprocessInbound", "acme", &js(&format!(r#"{{"events":[],"arrivals":[{arrival}]}}"#))).is_err(), "{wrong}");
         }

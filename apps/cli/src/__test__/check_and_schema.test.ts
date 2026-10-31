@@ -128,7 +128,7 @@ test('listen-fire check and catalog: what a module declares about listening reac
   assert.equal(acme.resendWindowSeconds, 259200);
   const schema = Object.values(acme.schemas)[0];
   assert.ok(schema !== undefined);
-  assert.deepEqual(schema.collections.Company, { target: 'Company', readable: false, listenable: true, identity: 'Name', delivery: 'polled', pollEverySeconds: 60 });
+  assert.deepEqual(schema.collections.Company, { target: 'Company', readable: false, listenable: true, identity: 'Name', version: 'Version', delivery: 'polled', pollEverySeconds: 60 });
   const company = JSON.stringify(schema.positions.Company);
   assert.ok(company.includes('"delivery":"connection","carries":["Company"],"attributes":true'), company);
   assert.ok(company.includes('"Schedule":{"kind":"owned","name":"Cron","owner":"acme_crm"}'), company);

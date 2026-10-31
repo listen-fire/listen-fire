@@ -474,6 +474,15 @@ pub struct ListenState {
     pub paused: Option<String>,
 }
 
+/// The deepest write of a record within the loop window (`writes.depth`):
+/// the run that made it and its place in its chain.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeepestWrite {
+    pub run_id: String,
+    pub depth: u32,
+}
+
 /// The module processes the hosts on this store started, at the version a
 /// `processes.swap` writes over (0: never written).
 #[derive(Debug, Clone, Serialize)]
@@ -680,6 +689,22 @@ slot! {
         "listens.saveResolution" => fn save_listen_resolution(ListensSaveResolution { pipeline: String, token: String, resolution: ListenResolution }) -> bool;
         /// Why the listen is paused (`None`: it is not), its resolution as it is.
         "listens.setPaused" => fn set_listen_paused(ListensSetPaused { pipeline: String, #[serde(default)] paused: Option<String> }) -> ();
+        /// Keep a run's record write in the write ledger, with the run's
+        /// place in its chain of writes and arrivals (`depth`, 0 for a run
+        /// nothing in the ledger caused) and when it was sent (`at`), and
+        /// forget every write made before `forget_before`, as one write.
+        "writes.record" => fn record_write(WritesRecord {
+            adapter: String,
+            record_type: String,
+            external_id: String,
+            run_id: String,
+            depth: u32,
+            at: String,
+            forget_before: String,
+        }) -> ();
+        /// The deepest write of the record made at or after `since`, the
+        /// latest of those as deep; `None` for none.
+        "writes.depth" => fn deepest_write(WritesDepth { adapter: String, record_type: String, external_id: String, since: String }) -> Option<DeepestWrite>;
         /// One write: the receipt first, then the cursor (absent: left as it
         /// is), the arrivals and the work rows. A duplicate
         /// (`delivery.external_id` kept at this subscription before) writes

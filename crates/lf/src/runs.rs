@@ -38,7 +38,7 @@ use crate::movements_slot::{Change, ChangeKind, Listed, MovementsStore, Watched,
 use crate::sources::{MOVEMENT_EXTENSION, MovementFile, Parsed, scan_movements};
 use crate::backend::{RunHostStore, StoreSpec, open_store};
 use crate::edge_polls::EDGE_POLL_WORK_KIND;
-use crate::store::{ClaimDue, DeliverySource, NewDelivery, NewWork, POLL_WORK_KIND, Release, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, iso};
+use crate::store::{ClaimDue, DeliverySource, NewDelivery, NewWork, POLL_WORK_KIND, Release, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, iso, iso_at};
 use module_wire::results as wire_results;
 
 /// How many files' parses a session's runs keep (movement_engine::program::keep_parses):
@@ -443,6 +443,9 @@ fn cron_subscription(file: &str, listen: &Listen) -> Option<String> {
 pub struct CameIn<'a> {
     pub delivery_id: Option<&'a str>,
     pub trigger_mark: Option<i64>,
+    /// The runs whose writes caused it, oldest first (crate::loop_breaker):
+    /// none for one nothing in the write ledger caused.
+    pub chain: &'a [String],
 }
 
 /// The delivery an event came in, as its runs and its routing read it.
@@ -470,7 +473,7 @@ pub struct Delivered<'a> {
 impl<'a> Delivered<'a> {
     /// What a run it starts names of it.
     pub fn came_in(&self) -> CameIn<'a> {
-        CameIn { delivery_id: self.id, trigger_mark: self.arrival_mark }
+        CameIn { delivery_id: self.id, trigger_mark: self.arrival_mark, chain: &[] }
     }
 
     /// What a kept event or a queued `fire_event` row says it came for,
@@ -677,6 +680,9 @@ struct RunFacts {
     /// (`arrivalMark`): its first segment's trigger record entered there.
     /// Never kept: only the first segment reads it.
     trigger_mark: Option<i64>,
+    /// The runs before it in its chain of writes and arrivals, oldest first
+    /// (crate::loop_breaker): its writes are kept at this depth.
+    chain: Vec<String>,
 }
 
 impl RunFacts {
@@ -690,6 +696,9 @@ impl RunFacts {
         };
         if self.dry_run {
             facts.insert("dryRun".into(), Js::Bool(true));
+        }
+        if !self.chain.is_empty() {
+            facts.insert("chain".into(), Js::strings(self.chain.clone()));
         }
         Js::Obj(facts)
     }
@@ -726,6 +735,7 @@ impl RunFacts {
             fired_at: text("firedAt")?,
             dry_run: facts.get("dryRun") == Some(&Js::Bool(true)),
             trigger_mark: None,
+            chain: crate::loop_breaker::chain_in(&facts),
         })
     }
 }
@@ -827,6 +837,7 @@ impl Session {
             JudgedBy::Minted(shared) => minted.contains(listen.pipeline().as_str()) && shared.is_none_or(|shared| shared.fires.iter().any(|i| std::ptr::eq(listen, &set.listens[*i]))),
         };
         let mut started = BTreeSet::new();
+        let mut paused: HashMap<String, bool> = HashMap::new();
         for arrival in arrivals.iter().filter(|a| !a.gone) {
             let identity = arrival.identity.as_deref().unwrap_or_default();
             for listen in set.listens.iter().filter(|l| l.is_on(adapter, &arrival.edge) && fires(l)) {
@@ -857,10 +868,33 @@ impl Session {
                     }
                 }
                 let pipeline = listen.pipeline();
+                // Read once per listen and delivery: a pause this delivery
+                // makes is noted below.
+                let is_paused = match paused.get(&pipeline) {
+                    Some(known) => *known,
+                    None => {
+                        let known = self.store.listen_state(&pipeline).map_err(|e| e.to_string())?.is_some_and(|state| state.paused.is_some());
+                        paused.insert(pipeline.clone(), known);
+                        known
+                    }
+                };
+                if is_paused {
+                    fired.redelivered.push(format!("{named}: the arrival {identity} on {} runs nothing, {}", arrival.edge, crate::loop_breaker::HELD));
+                    continue;
+                }
+                let chain = self.chain_before(adapter, listen, arrival);
+                if chain.len() >= self.project.loop_depth {
+                    let line = crate::loop_breaker::loop_line(&named, &chain);
+                    self.store.set_listen_paused(&pipeline, Some(&line)).map_err(|e| e.to_string())?;
+                    paused.insert(pipeline, true);
+                    fired.redelivered.push(line);
+                    continue;
+                }
                 let receipt = arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), identity, arrival.version.as_deref());
                 let trigger = arrival_trigger_of(&pipeline, adapter, arrival, &iso(0));
                 let run_id = delivered.minted_run(&pipeline, &receipt).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-                match self.run_listen(set, &run_id, listen, trigger, false, Some((pipeline.as_str(), receipt.as_str())), delivered.came_in()).await? {
+                let came_in = CameIn { chain: &chain, ..delivered.came_in() };
+                match self.run_listen(set, &run_id, listen, trigger, false, Some((pipeline.as_str(), receipt.as_str())), came_in).await? {
                     Some(outcome) => {
                         started.insert(run_id);
                         fired.outcomes.push(outcome);
@@ -897,6 +931,23 @@ impl Session {
             }
         }
         Ok(fired)
+    }
+
+    /// The runs whose writes caused `arrival`, oldest first, as the write
+    /// ledger has them (crate::loop_breaker): the chain the run it fires
+    /// continues. One the ledger cannot answer starts a chain of its own,
+    /// which is said.
+    fn chain_before(&self, adapter: &str, listen: &Listen, arrival: &ArrivalIn) -> Vec<String> {
+        let landing_type = listen.plan.as_ref().and_then(|plan| plan.hops.last()).map(|hop| hop.to.as_str()).unwrap_or_default();
+        let records = crate::loop_breaker::records_of(adapter, arrival, landing_type);
+        if records.is_empty() {
+            return Vec::new();
+        }
+        let since = iso_at(crate::loop_breaker::since_of(arrival, self.project.loop_window_ms, crate::limiter::now_ms()));
+        crate::loop_breaker::chain_of(&*self.store, &records, &since).unwrap_or_else(|message| {
+            eprintln!("listen-fire: what caused the arrival on {} for {}:{}: {message} (its run starts a chain of its own)", arrival.edge, listen.file, listen.movement_name);
+            Vec::new()
+        })
     }
 
     /// Watch each listen on the heads the store keeps for it now
@@ -1390,6 +1441,7 @@ impl Session {
             fired_at: fired_at.clone(),
             dry_run,
             trigger_mark: came_in.trigger_mark,
+            chain: came_in.chain.to_vec(),
         };
         let input = facts.to_js().to_json();
         let start = RunStart { id: run_id, file: &file.name, movement: &facts.movement_name, started_at: &fired_at, input: &input, delivery_id: came_in.delivery_id };
@@ -1502,12 +1554,19 @@ impl Session {
             Entry::Settle { frame_address, .. } => Some(frame_address.clone()),
             _ => None,
         };
+        let mut adapters = SegmentAdapters::new(&segment_id, &externals);
+        adapters.ledger = Some(crate::loop_breaker::Ledger {
+            store: &*self.store,
+            run_id: run_id.to_string(),
+            depth: u32::try_from(facts.chain.len()).unwrap_or(u32::MAX),
+            forget_before: iso(-crate::loop_breaker::kept_ms(&self.project, set)),
+        });
         let host = SegmentHost::new(SegmentHostParts {
             segment_id: segment_id.clone(),
             run_id: run_id.to_string(),
             fence: fence.map(str::to_string),
             store: &*self.store,
-            adapters: SegmentAdapters::new(&segment_id, &externals),
+            adapters,
             documents: &self.documents,
             user: self.user.clone(),
             resumed_leaf,
@@ -1875,6 +1934,7 @@ impl Session {
             fired_at: iso(0),
             dry_run: first.get("dryRun") == Some(&Js::Bool(true)),
             trigger_mark: None,
+            chain: crate::loop_breaker::chain_in(&first),
         })
     }
 

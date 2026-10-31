@@ -233,6 +233,7 @@ pub fn run_show_doc(store: &dyn RunHostStore, run_id: &str) -> Result<Js, String
     shown.insert("firedAt".into(), facts.get("firedAt").cloned().unwrap_or(Js::Null));
     shown.insert("languageVersion".into(), facts.get("languageVersion").cloned().unwrap_or(Js::Null));
     shown.insert("event".into(), facts.get("event").cloned().unwrap_or(Js::Null));
+    shown.insert("chain".into(), Js::strings(crate::loop_breaker::chain_in(&facts)));
     shown.insert("writes".into(), outcome.get("writes").cloned().unwrap_or(Js::Null));
     shown.insert("writeRecords".into(), outcome.get("writeRecords").cloned().unwrap_or(Js::Null));
     shown.insert("error".into(), outcome.get("error").cloned().unwrap_or(Js::Null));

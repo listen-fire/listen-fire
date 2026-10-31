@@ -95,11 +95,15 @@ fn line(set: &FileSet, listen: &Listen, state: Option<&ListenState>, cadence: Ca
     };
     let standing: Vec<String> = state.into_iter().flat_map(|s| [s.resolution.failure.clone(), s.paused.as_ref().map(|p| format!("paused: {p}"))]).flatten().collect();
     let standing = if standing.is_empty() { "ok".to_string() } else { standing.join("; ") };
-    let unprotected = match about_declared(set, listen) {
+    let unprotected = match attributable(set, listen) {
         true => String::new(),
-        false => format!("; can't be protected from loops: {} names no record its arrivals are about", listen.adapter),
+        false => format!("; can't be protected from loops: its arrivals name no record they are about, and no write to {} makes what they land on", listen.adapter),
     };
-    format!("{}:{}{alias} — {path} — {} — {watching} — {standing}{unprotected}", listen.file, listen.movement_name, judged.join(", "))
+    let resent = match reads_back(set, &listen.adapter) {
+        Some(true) | None => String::new(),
+        Some(false) => format!("; a write to {} that changes nothing is still sent (it lists no readRecord), so a two-way sync's echo runs again", listen.adapter),
+    };
+    format!("{}:{}{alias} — {path} — {} — {watching} — {standing}{unprotected}{resent}", listen.file, listen.movement_name, judged.join(", "))
 }
 
 /// The listen's traversal as its plan holds it, each hop's WHERE whole
@@ -113,11 +117,27 @@ fn path_of(plan: &ListenPlan) -> String {
     format!("{}{}", spell_name(&plan.connection), hops.collect::<String>())
 }
 
-/// Whether the listened edge's arrivals name the record they are about
-/// (`attributes: true`).
-fn about_declared(set: &FileSet, listen: &Listen) -> bool {
-    let last = listen.plan.as_ref().and_then(|plan| plan.hops.last());
-    last.and_then(|hop| crate::edge_polls::hop_schema(set, listen, hop)).is_some_and(|edge| Js::is_true(edge.get("attributes")))
+/// Whether the loop breaker can match the listen's arrivals to the writes
+/// that caused them (crate::loop_breaker): its edge declares `attributes`
+/// (each names the record it is about), or what it lands on is a record a
+/// write to its module makes.
+fn attributable(set: &FileSet, listen: &Listen) -> bool {
+    let Some(last) = listen.plan.as_ref().and_then(|plan| plan.hops.last()) else { return false };
+    if crate::edge_polls::hop_schema(set, listen, last).is_some_and(|edge| Js::is_true(edge.get("attributes"))) {
+        return true;
+    }
+    let schemas = set.catalog.get("adapters").and_then(|a| a.get(&listen.adapter)).and_then(|a| a.get("schemas"));
+    let Some(Js::Obj(schemas)) = schemas else { return false };
+    let written = |schema: &Js| ["writableRoots", "createShapes"].iter().any(|key| schema.get(key).and_then(|types| types.get(&last.to)).is_some());
+    schemas.values().any(written)
+}
+
+/// Whether the module reads a record back (`readRecord`), so the engine
+/// sends no write that would change nothing; None for one listen-fire
+/// builds in (cron, manual), which nothing writes to.
+fn reads_back(set: &FileSet, adapter: &str) -> Option<bool> {
+    let running = set.running.iter().find(|r| !r.is_plugin() && r.external.manifest.name == adapter)?;
+    Some(running.methods.iter().any(|m| m == "readRecord"))
 }
 
 /// How long ago `at` was, as a person reads it.

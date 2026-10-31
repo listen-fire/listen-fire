@@ -33,7 +33,7 @@ pub const STORE_METHODS: &[&str] = &[
     "records.markFailed", "parks.putLeaf", "parks.claimLeaf", "parks.finishLeaf", "parks.leaves", "parks.deleteLeaves", "parks.commitSegment", "parks.owedRaces",
     "joins.recordJoin", "joins.decrementJoin", "joins.persistBranchExport", "joins.collectBranchExports", "joins.hasPendingJoins",
     "joins.frames", "joins.deleteFrames", "leases.claim", "leases.renew", "leases.release", "leases.dropRunState", "work.enqueue", "work.claimDue",
-    "work.complete", "work.release", "sources.put", "sources.get", "inbound.checkpoint", "inbound.saveCheckpoint", "listens.states", "listens.claimResolve", "listens.saveResolution", "listens.setPaused", "processes.list",
+    "work.complete", "work.release", "sources.put", "sources.get", "inbound.checkpoint", "inbound.saveCheckpoint", "listens.states", "listens.claimResolve", "listens.saveResolution", "listens.setPaused", "writes.record", "writes.depth", "processes.list",
     "processes.swap", "events.claim", "events.startRun", "runs.lapsed", "parks.commit", "work.bury", "inbound.keepDelivery",
     "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries", "inbound.forgetDeliveryId", "work.enqueueIfAbsent", "work.completeKey",
     "runs.rerun", "waits.mark", "waits.log", "waits.open", "waits.arrivals", "waits.note", "waits.sweep", "waits.stranded",
@@ -479,6 +479,24 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
             none
         }
 
+        "writes.record" => {
+            let depth = u32::try_from(p.int("depth")?).map_err(|_| Failure::Params("depth: expected a whole number, at least 0".into()))?;
+            let write = crate::loop_breaker::LedgerWrite {
+                adapter: p.str("adapter")?.to_string(),
+                record_type: p.str("recordType")?.to_string(),
+                external_id: p.str("externalId")?.to_string(),
+                run_id: p.str("runId")?.to_string(),
+                depth,
+                at: p.str("at")?.to_string(),
+            };
+            store.ledger_write(&write, p.str("forgetBefore")?)?;
+            none
+        }
+        "writes.depth" => {
+            let record = crate::loop_breaker::LedgerRecord { adapter: p.str("adapter")?, record_type: p.str("recordType")?, external_id: p.str("externalId")? };
+            Ok(store.deepest_write(&record, p.str("since")?)?.map(|d| Js::Obj(obj! { "runId" => Js::Str(d.run_id), "depth" => Js::Num(d.depth.into()) })).unwrap_or(Js::Null))
+        }
+
         "processes.list" => {
             let list = store.module_processes()?;
             Ok(Js::from(obj! { "processes" => list.processes, "version" => Js::Num(list.version.into()) }))
@@ -528,6 +546,35 @@ mod tests {
         assert_eq!(call(&store, "waits.mark", obj! {}).to_json(), "1", "logged once");
         let plain = obj! { "subscriptionId" => Js::str("sub"), "delivery" => Js::from(obj! { "id" => Js::str("33333333-3333-4333-8333-333333333333"), "receivedAt" => Js::str(iso(0)), "source" => Js::str("webhook"), "inline" => Js::Bool(false), "events" => Js::Arr(vec![]) }), "work" => Js::Arr(vec![]) };
         assert_eq!(call(&store, "inbound.keepDelivery", plain).to_json(), r#"{"kept":true,"arrivalMark":1}"#);
+    }
+
+    /// The write ledger as a store module's client sends it: the deepest
+    /// write of a record since an instant, and none past what it forgot.
+    #[test]
+    fn the_write_ledger_crosses_the_store_wire() {
+        let store = state_file();
+        let record = |run: &str, depth: i64, at: &str, forget_before: &str| {
+            obj! {
+                "adapter" => Js::str("acme_crm"),
+                "recordType" => Js::str("Company"),
+                "externalId" => Js::str("company-1"),
+                "runId" => Js::str(run),
+                "depth" => Js::Num(depth.into()),
+                "at" => Js::str(at),
+                "forgetBefore" => Js::str(forget_before),
+            }
+        };
+        let depth = |since: &str| {
+            call(&store, "writes.depth", obj! { "adapter" => Js::str("acme_crm"), "recordType" => Js::str("Company"), "externalId" => Js::str("company-1"), "since" => Js::str(since) })
+        };
+        assert_eq!(call(&store, "writes.record", record("r1", 0, "2026-10-31T10:00:00.000Z", "2026-10-31T09:00:00.000Z")), Js::Null);
+        assert_eq!(call(&store, "writes.record", record("r2", 1, "2026-10-31T10:00:05.000Z", "2026-10-31T09:00:00.000Z")), Js::Null);
+        assert_eq!(depth("2026-10-31T09:59:50.000Z"), Js::from(obj! { "runId" => Js::str("r2"), "depth" => Js::Num(1.into()) }));
+        assert_eq!(depth("2026-10-31T10:00:06.000Z"), Js::Null, "nothing written since");
+        let refused = answer(&store, "writes.record", &Js::from(record("r3", -1, "2026-10-31T10:00:06.000Z", "2026-10-31T09:00:00.000Z"))).err().unwrap();
+        assert_eq!(refused.message, "writes.record: depth: expected a whole number, at least 0");
+        call(&store, "writes.record", record("r3", 0, "2026-10-31T10:01:00.000Z", "2026-10-31T10:00:30.000Z"));
+        assert_eq!(depth("2026-10-31T09:59:50.000Z"), Js::from(obj! { "runId" => Js::str("r3"), "depth" => Js::Num(0.into()) }), "the earlier writes are forgotten");
     }
 
     /// The composite writes as a store module's client sends them
@@ -659,6 +706,8 @@ mod tests {
             "waits.note",
             "waits.sweep",
             "waits.stranded",
+            "writes.record",
+            "writes.depth",
         ] {
             assert!(STORE_METHODS.contains(&method), "{method}");
         }

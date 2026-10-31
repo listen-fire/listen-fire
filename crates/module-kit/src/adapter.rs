@@ -7,8 +7,9 @@
 //! `awaitKeys` and reports what lands on them as `arrivals` beside the events
 //! of the delivery it reads (adapter protocol 2.5). From 2.6 an arrival on a
 //! root edge names no key, and one may carry the records of earlier hops it
-//! declares (`parents`), the record it is `about`, the listen it is `notFor`
-//! and whether it applied the listen's filter (`takenApplied`); a module
+//! declares (`parents`), the record it is `about`, the listen it is `notFor`,
+//! whether it applied the listen's filter (`takenApplied`) and when it
+//! happened at its provider (`occurredAt`); a module
 //! that reports one states `protocolMinor: 6`.
 
 use std::future::Future;

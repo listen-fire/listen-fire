@@ -1216,8 +1216,8 @@ export const WireAwaitKey = z.union([z.object({ key: z.string().min(1) }), z.obj
 /** One arrival a module reports: on a delivery's acceptance, or at the
  *  `wake` door. An arrival names its identity; a gone one names none. From
  *  2.6 an arrival on a root edge names no key, and one may carry its parents,
- *  what it is about, the listen it is not for and whether its module took
- *  the listen's filter (`arrivals.ts`). */
+ *  what it is about, the listen it is not for, whether its module took the
+ *  listen's filter and when it happened at its provider (`arrivals.ts`). */
 export const WireArrival = z.union([
   z.object({
     edge: z.string().min(1),
@@ -1229,6 +1229,7 @@ export const WireArrival = z.union([
     about: z.object({ recordType: z.string().min(1), externalId: z.string().min(1) }).optional(),
     notFor: z.string().min(1).optional(),
     takenApplied: z.boolean().optional(),
+    occurredAt: z.string().min(1).optional(),
   }),
   z.object({ edge: z.string().min(1), key: z.string().min(1), gone: z.literal(true) }),
 ]);
