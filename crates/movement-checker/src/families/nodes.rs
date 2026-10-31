@@ -841,6 +841,7 @@ impl Checker<'_> {
         let (landed, diagnostics) = {
             let env = self.typing_env(scope);
             let mut typing = crate::types::Typing::new(&env, type_.span);
+            typing.address = true;
             let landed = typing.walk_steps(Some(start), &steps, false);
             (landed, std::mem::take(&mut typing.diagnostics))
         };

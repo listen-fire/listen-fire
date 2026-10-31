@@ -162,7 +162,7 @@ impl Checker<'_> {
                 let ty = Typing::new(&env, slot.span).infer(&lowered)?;
                 match strip_absent(&ty) {
                     Ty::List { .. } | Ty::Tuple { .. } => Some(ValueKind::List),
-                    Ty::Text | Ty::Enum { .. } => Some(ValueKind::Text),
+                    Ty::Text | Ty::Owned(_) | Ty::Enum { .. } => Some(ValueKind::Text),
                     _ => None,
                 }
             };

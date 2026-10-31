@@ -326,7 +326,7 @@ pub fn param_accepts(param: ParamType, ty: &Ty) -> bool {
         Ty::MaybeAbsent(of) => param_accepts(param, of),
         Ty::Absent | Ty::Never => true,
         Ty::Union(members) => members.iter().all(|m| param_accepts(param, m)),
-        Ty::Text | Ty::Enum { .. } => matches!(param, T::Scalar | T::Text | T::Temporal | T::TextOrList),
+        Ty::Text | Ty::Owned(_) | Ty::Enum { .. } => matches!(param, T::Scalar | T::Text | T::Temporal | T::TextOrList),
         Ty::Number => matches!(param, T::Scalar | T::Number),
         Ty::Boolean => param == T::Scalar,
         Ty::Date | Ty::Datetime => matches!(param, T::Scalar | T::Temporal),

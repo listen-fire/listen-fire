@@ -10,6 +10,8 @@
 //! - MOV_ARTIFICIAL_EDGE_UNKNOWN
 //! - MOV_AWAIT_IMPURE_WHERE
 //! - MOV_AWAIT_REQUIRED
+//! - MOV_COLLECTION_NOT_READABLE
+//! - MOV_FILTER_NOT_TAKEN (filter_split's)
 //! - MOV_HEAD_NOT_A_POSITION
 //! - MOV_HOP_CONFIG_UNREAD
 //! - MOV_HOP_FILTER_ENGINE
@@ -30,6 +32,7 @@
 //! - MOV_TRANSFORM_HOP_RETIRED
 //! - MOV_TRAVERSE_UNKNOWN_EDGE
 //! - MOV_EVENT_UNDESCRIBED
+//! - MOV_UNBOUNDED_EDGE (filter_split's)
 //! - MOV_UNDESCRIBED_POSITION
 //! - MOV_UNKNOWN_POSITION
 //! - MOV_UNKNOWN_PROPERTY
@@ -37,7 +40,7 @@
 //! - MOV_WALK_ROOTLESS
 
 use movement_parser::ast::{PathHead, PathRoot};
-use movement_parser::catalog::types::{EdgeCapability, EdgeSchema, PositionSchema, PushMode};
+use movement_parser::catalog::types::{CollectionSchema, EdgeCapability, EdgeSchema, PositionSchema, PushMode};
 use movement_parser::lowering::expression::{EdgeStep, Expression, FilterOperator, ListElement, OrderDirection, StaticValue, TraversalStep};
 
 use movement_parser::surface::phrase::spell_word;
@@ -80,15 +83,26 @@ fn report_step(typing: &mut Typing, from: &Position, edge: &str, filter: Option<
     match from {
         // The typing walks each record it may be (`stepEveryMember`).
         Position::OneOf(_) => {}
-        Position::Meta { instance } => {
-            if !instance.schema.collections.contains_key(edge) {
+        Position::Meta { instance } => match instance.schema.collections.get(edge) {
+            None => {
                 let available: Vec<&str> = instance.schema.collections.keys().map(String::as_str).collect();
                 typing.report(
                     codes::TRAVERSE_UNKNOWN_EDGE,
                     format!("'{}' has no collection '{edge}'{}", instance.name, it_has(&available)),
                 );
             }
-        }
+            Some(collection) if collection_refused(typing, collection) => {
+                let module = instance.adapter.as_deref().unwrap_or(&instance.name);
+                let message = match (instance.schema.writable_roots.contains_key(&collection.target), collection.listenable == Some(true)) {
+                    (true, false) => format!("can be written to but not read: the {module} module lists nothing along it"),
+                    (false, true) => format!("can be listened to but not read: the {module} module only announces what arrives on it"),
+                    (true, true) => format!("can be written to and listened to but not read: the {module} module lists nothing along it"),
+                    (false, false) => format!("can't be read: the {module} module lists nothing along it"),
+                };
+                typing.report(codes::COLLECTION_NOT_READABLE, format!("'-[:{edge}]->' off {} {message}", instance.name));
+            }
+            Some(_) => {}
+        },
         Position::Position(_) | Position::Handle(_) => {
             let schema = match (position_schema_of_ref(from), from) {
                 (Some(schema), _) => schema.into_owned(),
@@ -232,6 +246,12 @@ pub fn describe_edge_owner(from: &Position) -> String {
         Position::MaybeEmpty(of) => describe_edge_owner(of),
         _ => describe_position(from),
     }
+}
+
+/// A read along a root collection its module only writes to or announces
+/// on: a wait on one it announces on is no read.
+fn collection_refused(typing: &Typing, collection: &CollectionSchema) -> bool {
+    collection.readable == Some(false) && !typing.address && !(typing.awaited && collection.listenable == Some(true))
 }
 
 /// `edgeIsReadable`: an edge reads unless it says it does not.
@@ -613,8 +633,11 @@ pub fn observe_hop(typing: &mut Typing, from: Option<&Position>, step: &EdgeStep
     let Some(from) = from else { return };
     check_pins(typing, step, target);
     let edge = step.edge_type_id.as_str();
-    let Some(capability) = edge_capability_for(from, edge) else { return };
     let target_schema = target.and_then(position_schema_of_ref).map(|s| s.into_owned());
+    if !split_hop_where(typing, from, step, target_schema.as_ref()) {
+        return;
+    }
+    let Some(capability) = edge_capability_for(from, edge) else { return };
     let root = matches!(from, Position::Meta { .. });
     if let Some(filter) = step.expression_filter.as_deref() {
         gate_filter(typing, &capability, filter, edge, target_schema.as_ref(), root);
@@ -702,6 +725,59 @@ fn and_list(items: &[String]) -> String {
         [] => String::new(),
         [only] => only.clone(),
         [init @ .., last] => format!("{} and {last}", init.join(", ")),
+    }
+}
+
+/// Splits the hop's WHERE into what the edge's module takes and what is
+/// checked here (filter_split), and reports a WHERE that cannot be split:
+/// no traversal, a read or a wait, ranges over an unbounded edge. False
+/// when the hop is refused, here or as it was stepped.
+fn split_hop_where(typing: &mut Typing, from: &Position, step: &EdgeStep, target: Option<&PositionSchema>) -> bool {
+    use crate::families::filter_split::{EdgeView, split_hop};
+    if typing.address {
+        return true;
+    }
+    let edge = step.edge_type_id.as_str();
+    enum Declared {
+        Collection(CollectionSchema),
+        Edge(EdgeSchema),
+    }
+    let (declared, instance) = match from {
+        Position::Meta { instance } => match instance.schema.collections.get(edge) {
+            Some(collection) if collection_refused(typing, collection) => return false,
+            Some(collection) => (Declared::Collection(collection.clone()), instance.clone()),
+            None => return true,
+        },
+        Position::Position(p) => match position_schema_of_ref(from).and_then(|s| s.edges.get(edge).cloned()) {
+            Some(schema) => (Declared::Edge(schema), p.instance.clone()),
+            None => return true,
+        },
+        Position::Handle(h) => match position_schema_of_ref(from).and_then(|s| s.edges.get(edge).cloned()) {
+            Some(schema) => (Declared::Edge(schema), h.instance.clone()),
+            None => return true,
+        },
+        _ => return true,
+    };
+    let module = instance.adapter.as_deref().unwrap_or(&instance.name);
+    let view = match &declared {
+        Declared::Collection(schema) => EdgeView::of_collection(edge, module, schema),
+        Declared::Edge(schema) => EdgeView::of_edge(edge, module, schema),
+    };
+    let landing;
+    let target = match target {
+        Some(target) => target,
+        None => {
+            let Ok(empty) = serde_json::from_value::<PositionSchema>(serde_json::json!({ "properties": {}, "edges": {} })) else { return true };
+            landing = empty;
+            &landing
+        }
+    };
+    match split_hop(step.expression_filter.as_deref(), step.alias.as_deref(), &view, target) {
+        Ok(_) => true,
+        Err(untaken) => {
+            typing.report(untaken.code(), untaken.message(&view, step.alias.as_deref()));
+            false
+        }
     }
 }
 

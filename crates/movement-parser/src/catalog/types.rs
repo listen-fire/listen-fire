@@ -163,7 +163,7 @@ pub enum Composite {
     Owned {
         name: String,
         owner: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "allowPattern", default, skip_serializing_if = "Option::is_none")]
         allow_pattern: Option<String>,
     },
     /// `position` is the typing layer's `PositionTypeRef`, which this crate

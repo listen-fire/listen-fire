@@ -108,6 +108,10 @@ pub struct Typing<'a> {
     pub locals: IndexMap<String, Option<Position>>,
     /// The walk being typed is awaited (`await x-[:E]->`).
     pub awaited: bool,
+    /// The walk being typed is an address that types what lands (a declared
+    /// edge's `<crm-[:Company]->>`): nothing is traversed, so what a
+    /// traversal must not do is not asked of it.
+    pub address: bool,
     /// The name a walk starts at, while its first edge is stepped (`msg` in
     /// `msg-[:Interactions]->`): set by whoever knows it, before `walk_steps`.
     pub step_root: Option<String>,
@@ -152,6 +156,7 @@ impl<'a> Typing<'a> {
             span,
             locals: IndexMap::new(),
             awaited: false,
+            address: false,
             step_root: None,
             last_edge_schema: None,
             last_landings: Vec::new(),
@@ -736,7 +741,7 @@ impl<'a> Typing<'a> {
             _ => None,
         };
         let scalar = field.as_ref().and_then(|ty| match strip_absent(ty) {
-            Ty::Text | Ty::Enum { .. } => Some(FieldlessScalar::Text),
+            Ty::Text | Ty::Owned(_) | Ty::Enum { .. } => Some(FieldlessScalar::Text),
             Ty::Number => Some(FieldlessScalar::Number),
             Ty::Boolean => Some(FieldlessScalar::Boolean),
             _ => None,
@@ -760,7 +765,7 @@ impl<'a> Typing<'a> {
         }
         let held = self.scalar_type(root)?;
         let scalar = match strip_absent(&held) {
-            Ty::Text | Ty::Enum { .. } => FieldlessScalar::Text,
+            Ty::Text | Ty::Owned(_) | Ty::Enum { .. } => FieldlessScalar::Text,
             Ty::Number => FieldlessScalar::Number,
             Ty::Boolean => FieldlessScalar::Boolean,
             _ => return None,

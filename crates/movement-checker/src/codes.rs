@@ -246,6 +246,16 @@ pub const META_UNKNOWN_KEY: &str = "MOV_META_UNKNOWN_KEY";
 pub const HOP_FILTER_UNSUPPORTED: &str = "MOV_HOP_FILTER_UNSUPPORTED";
 pub const HOP_FILTER_RESIDUAL: &str = "MOV_HOP_FILTER_RESIDUAL";
 pub const HOP_FILTER_ENGINE: &str = "MOV_HOP_FILTER_ENGINE";
+/// A traversal over an edge its module declares unbounded, with no filter
+/// the module takes that bounds it.
+pub const UNBOUNDED_EDGE: &str = "MOV_UNBOUNDED_EDGE";
+/// A part of a hop's WHERE only the module can evaluate, which it cannot
+/// take as written.
+pub const FILTER_NOT_TAKEN: &str = "MOV_FILTER_NOT_TAKEN";
+/// A literal its owned scalar's module would refuse.
+pub const OWNED_VALUE_INVALID: &str = "MOV_OWNED_VALUE_INVALID";
+/// A read along a root collection its module only writes to or announces on.
+pub const COLLECTION_NOT_READABLE: &str = "MOV_COLLECTION_NOT_READABLE";
 pub const HOP_ORDER_UNSUPPORTED: &str = "MOV_HOP_ORDER_UNSUPPORTED";
 pub const HOP_ORDER_ENGINE: &str = "MOV_HOP_ORDER_ENGINE";
 pub const HOP_LIMIT_UNSUPPORTED: &str = "MOV_HOP_LIMIT_UNSUPPORTED";

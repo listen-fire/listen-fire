@@ -18,6 +18,7 @@
 //! - MOV_MAP_SPREAD_NOT_KEYED
 //! - MOV_ORDER_KEY_IMPURE
 //! - MOV_ORDER_KEY_MULTI
+//! - MOV_OWNED_VALUE_INVALID
 //! - MOV_PRESENCE_TEST_CONSTANT
 //! - MOV_PRESENCE_TEST_ON_TEXT
 //! - MOV_SORT_KEY_ON_SCALAR
@@ -533,6 +534,51 @@ fn check_compare_operands(typing: &mut Typing, op: FilterOperator, left: &Expres
             check_enum_literal_operand(typing, right, r, l);
         }
     }
+    check_owned_literal_operand(typing, left, r);
+    check_owned_literal_operand(typing, right, l);
+}
+
+/// A text literal compared with an owned scalar, alone or in a list written
+/// in place (`t.Schedule IN ["0 9 * * 1"]`), is one its owner would take.
+fn check_owned_literal_operand(typing: &mut Typing, operand: &Expression, other: Option<&Ty>) {
+    let Some(other) = other.map(unwrap_list) else { return };
+    let Ty::Owned(owned) = strip_absent(&other) else { return };
+    let literals: Vec<&String> = match operand {
+        Expression::Static { value: StaticValue::String(literal) } => vec![literal],
+        Expression::List { elements } => elements
+            .iter()
+            .filter_map(|element| match element {
+                ListElement::Expression(Expression::Static { value: StaticValue::String(literal) }) => Some(literal),
+                _ => None,
+            })
+            .collect(),
+        _ => return,
+    };
+    for literal in literals {
+        if let Some(message) = owned_value_error(literal, owned, &|zone| typing.env.is_zone(zone)) {
+            typing.report(codes::OWNED_VALUE_INVALID, message);
+        }
+    }
+}
+
+/// Why `literal` is not a value of `owned`, as its owner would say: a `Cron`
+/// is a five-field schedule, a `Zone` a time zone the host knows, and any
+/// other what the owner's allow pattern matches. `None` when it is one, or
+/// when nothing here can tell (`is_zone` answers `None` without a zone
+/// database).
+pub fn owned_value_error(literal: &str, owned: &crate::types::field::OwnedScalar, is_zone: &dyn Fn(&str) -> Option<bool>) -> Option<String> {
+    struct Known(bool);
+    impl crate::host::ZoneLookup for Known {
+        fn is_zone(&self, _zone: &str) -> bool {
+            self.0
+        }
+    }
+    let reason = match owned.name.as_str() {
+        "Cron" => crate::cron::cron_schedule_error(literal),
+        "Zone" => is_zone(literal).and_then(|known| crate::host::time_zone_error(&Known(known), literal)),
+        _ => owned.allow_pattern.as_deref().filter(|pattern| pattern_matches(pattern, literal) == Some(false)).map(|pattern| format!("it does not match {pattern}")),
+    }?;
+    Some(format!("\"{literal}\" is not a {}: {reason}", owned.name))
 }
 
 /// `checkComparable`: `overlap` for equality and membership, otherwise every
@@ -923,8 +969,8 @@ pub fn require_dict_key(typing: &mut Typing, ty: Option<&Ty>, where_: &str) {
     let Some(ty) = ty else { return };
     let key = strip_absent(ty);
     match key {
-        Ty::Text | Ty::Enum { .. } => return,
-        Ty::Union(members) if members.iter().all(|m| matches!(m, Ty::Text | Ty::Enum { .. })) => return,
+        Ty::Text | Ty::Owned(_) | Ty::Enum { .. } => return,
+        Ty::Union(members) if members.iter().all(|m| matches!(m, Ty::Text | Ty::Owned(_) | Ty::Enum { .. })) => return,
         _ => {}
     }
     let repair = if matches!(key, Ty::Date | Ty::Datetime) {
@@ -1089,7 +1135,7 @@ fn impure_key_call(expr: &Expression) -> Option<&'static str> {
 }
 
 /// `subExpressions`: every expression written inside one.
-fn sub_expressions(expr: &Expression) -> Vec<&Expression> {
+pub(crate) fn sub_expressions(expr: &Expression) -> Vec<&Expression> {
     use movement_parser::lowering::expression::{ListElement, ObjectMember, TraversalStep};
     match expr {
         Expression::Traverse { steps, expression, .. } => {
@@ -1205,7 +1251,7 @@ pub fn is_keyed_value(ty: &Ty) -> bool {
 /// `isPlainValue`: no fields to key on, an order of its own.
 pub fn is_plain_value(ty: &Ty) -> bool {
     match strip_absent(ty) {
-        Ty::Text | Ty::Number | Ty::Boolean | Ty::Date | Ty::Datetime | Ty::Enum { .. } => true,
+        Ty::Text | Ty::Owned(_) | Ty::Number | Ty::Boolean | Ty::Date | Ty::Datetime | Ty::Enum { .. } => true,
         Ty::Union(members) => members.iter().all(is_plain_value),
         _ => false,
     }
@@ -1260,19 +1306,25 @@ fn edit_distance(a: &[u16], b: &[u16]) -> usize {
 
 // ── Allow patterns ──
 
-/// One element of an id pattern: a set of characters and how often it repeats.
+/// One element of an id pattern, and how often it repeats.
 struct Atom {
-    chars: Vec<(char, char)>,
-    negated: bool,
-    any: bool,
+    kind: AtomKind,
     min: usize,
     max: usize,
 }
 
+enum AtomKind {
+    /// A set of characters (`any`: every character but a line break).
+    Set { chars: Vec<(char, char)>, negated: bool, any: bool },
+    /// `( … )`, matched as a whole.
+    Group(Vec<Atom>),
+}
+
 /// `new RegExp(pattern).test(text)` for the patterns an adapter writes for
 /// id-shaped values: anchors, literals, `.`, character classes with ranges,
-/// and the quantifiers `? * + {n} {n,} {n,m}`. `None` for anything beyond
-/// that, which the TypeScript's unparseable pattern also answers with silence.
+/// groups without alternation, and the quantifiers `? * + {n} {n,} {n,m}`.
+/// `None` for anything beyond that, which the TypeScript's unparseable
+/// pattern also answers with silence.
 fn pattern_matches(pattern: &str, text: &str) -> Option<bool> {
     let p: Vec<char> = pattern.chars().collect();
     let (mut i, mut anchored_start, mut anchored_end) = (0, false, false);
@@ -1285,11 +1337,23 @@ fn pattern_matches(pattern: &str, text: &str) -> Option<bool> {
         anchored_end = true;
         end -= 1;
     }
+    let atoms = parse_atoms(&p, &mut i, end, false)?;
+    if i != end {
+        return None;
+    }
+    let t: Vec<char> = text.chars().collect();
+    let starts: Vec<usize> = if anchored_start { vec![0] } else { (0..=t.len()).collect() };
+    Some(starts.into_iter().any(|start| match_sequence(&atoms, &t, start, &|at| !anchored_end || at == t.len())))
+}
+
+/// The atoms of `p` from `i` up to `end`, or up to the `)` that closes a
+/// group when `in_group`.
+fn parse_atoms(p: &[char], i: &mut usize, end: usize, in_group: bool) -> Option<Vec<Atom>> {
     let mut atoms: Vec<Atom> = Vec::new();
-    while i < end {
-        let mut atom = match p[i] {
+    while *i < end {
+        let kind = match p[*i] {
             '[' => {
-                let mut j = i + 1;
+                let mut j = *i + 1;
                 let negated = p.get(j) == Some(&'^');
                 if negated {
                     j += 1;
@@ -1315,35 +1379,49 @@ fn pattern_matches(pattern: &str, text: &str) -> Option<bool> {
                 if j >= end {
                     return None;
                 }
-                i = j + 1;
-                Atom { chars, negated, any: false, min: 1, max: 1 }
+                *i = j + 1;
+                AtomKind::Set { chars, negated, any: false }
             }
             '.' => {
-                i += 1;
-                Atom { chars: Vec::new(), negated: false, any: true, min: 1, max: 1 }
+                *i += 1;
+                AtomKind::Set { chars: Vec::new(), negated: false, any: true }
             }
             '\\' => {
-                let c = *p.get(i + 1)?;
+                let c = *p.get(*i + 1)?;
                 if c.is_ascii_alphanumeric() {
                     return None;
                 }
-                i += 2;
-                Atom { chars: vec![(c, c)], negated: false, any: false, min: 1, max: 1 }
+                *i += 2;
+                AtomKind::Set { chars: vec![(c, c)], negated: false, any: false }
             }
-            '(' | ')' | '|' | '*' | '+' | '?' | '{' | '^' | '$' => return None,
+            '(' => {
+                // `(?:`, `(?=` and the like are beyond this reading.
+                if p.get(*i + 1) == Some(&'?') {
+                    return None;
+                }
+                *i += 1;
+                let inner = parse_atoms(p, i, end, true)?;
+                if p.get(*i) != Some(&')') || *i >= end {
+                    return None;
+                }
+                *i += 1;
+                AtomKind::Group(inner)
+            }
+            ')' if in_group => return Some(atoms),
+            ')' | '|' | '*' | '+' | '?' | '{' | '^' | '$' => return None,
             c => {
-                i += 1;
-                Atom { chars: vec![(c, c)], negated: false, any: false, min: 1, max: 1 }
+                *i += 1;
+                AtomKind::Set { chars: vec![(c, c)], negated: false, any: false }
             }
         };
-        match p.get(i).filter(|_| i < end) {
-            Some('?') => (atom.min, atom.max, i) = (0, 1, i + 1),
-            Some('*') => (atom.min, atom.max, i) = (0, usize::MAX, i + 1),
-            Some('+') => (atom.min, atom.max, i) = (1, usize::MAX, i + 1),
+        let (min, max) = match p.get(*i).filter(|_| *i < end) {
+            Some('?') => (0, 1),
+            Some('*') => (0, usize::MAX),
+            Some('+') => (1, usize::MAX),
             Some('{') => {
-                let close = (i..end).find(|k| p[*k] == '}')?;
-                let inner: String = p[i + 1..close].iter().collect();
-                let (lo, hi) = match inner.split_once(',') {
+                let close = (*i..end).find(|k| p[*k] == '}')?;
+                let inner: String = p[*i + 1..close].iter().collect();
+                let bounds = match inner.split_once(',') {
                     None => {
                         let n = inner.parse().ok()?;
                         (n, n)
@@ -1351,36 +1429,43 @@ fn pattern_matches(pattern: &str, text: &str) -> Option<bool> {
                     Some((lo, "")) => (lo.parse().ok()?, usize::MAX),
                     Some((lo, hi)) => (lo.parse().ok()?, hi.parse().ok()?),
                 };
-                (atom.min, atom.max, i) = (lo, hi, close + 1);
+                *i = close;
+                bounds
             }
-            _ => {}
-        }
-        atoms.push(atom);
-    }
-    let t: Vec<char> = text.chars().collect();
-    fn accepts(atom: &Atom, c: char) -> bool {
-        if atom.any {
-            return c != '\n';
-        }
-        atom.chars.iter().any(|(lo, hi)| *lo <= c && c <= *hi) != atom.negated
-    }
-    fn matches_at(atoms: &[Atom], t: &[char], at: usize, anchored_end: bool) -> bool {
-        let Some((atom, rest)) = atoms.split_first() else { return !anchored_end || at == t.len() };
-        let mut count = 0;
-        while count < atom.min {
-            if at + count >= t.len() || !accepts(atom, t[at + count]) {
-                return false;
+            _ => {
+                atoms.push(Atom { kind, min: 1, max: 1 });
+                continue;
             }
-            count += 1;
-        }
-        let mut most = count;
-        while most < atom.max && at + most < t.len() && accepts(atom, t[at + most]) {
-            most += 1;
-        }
-        (count..=most).rev().any(|n| matches_at(rest, t, at + n, anchored_end))
+        };
+        *i += 1;
+        atoms.push(Atom { kind, min, max });
     }
-    let starts: Vec<usize> = if anchored_start { vec![0] } else { (0..=t.len()).collect() };
-    Some(starts.into_iter().any(|start| matches_at(&atoms, &t, start, anchored_end)))
+    (!in_group).then_some(atoms)
+}
+
+/// Whether `atoms` match `t` from `at` with `then` accepting where they end,
+/// each atom taking as many repeats as it can first.
+fn match_sequence(atoms: &[Atom], t: &[char], at: usize, then: &dyn Fn(usize) -> bool) -> bool {
+    let Some((atom, rest)) = atoms.split_first() else { return then(at) };
+    match_repeats(atom, 0, t, at, &|next| match_sequence(rest, t, next, then))
+}
+
+fn match_repeats(atom: &Atom, done: usize, t: &[char], at: usize, then: &dyn Fn(usize) -> bool) -> bool {
+    // A repeat that consumes nothing only counts toward the minimum, so a
+    // group that can match empty cannot repeat for ever.
+    let more = done < atom.max && match_once(atom, t, at, &|next| (next != at || done < atom.min) && match_repeats(atom, done + 1, t, next, then));
+    more || (done >= atom.min && then(at))
+}
+
+fn match_once(atom: &Atom, t: &[char], at: usize, then: &dyn Fn(usize) -> bool) -> bool {
+    match &atom.kind {
+        AtomKind::Set { chars, negated, any } => {
+            let Some(c) = t.get(at) else { return false };
+            let accepted = if *any { *c != '\n' } else { chars.iter().any(|(lo, hi)| lo <= c && c <= hi) != *negated };
+            accepted && then(at + 1)
+        }
+        AtomKind::Group(inner) => match_sequence(inner, t, at, then),
+    }
 }
 
 // ── Event addresses ──

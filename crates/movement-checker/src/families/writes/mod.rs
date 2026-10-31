@@ -1245,12 +1245,22 @@ impl Checker<'_> {
 
     /// `reportFieldValueType`: a value the field's type does not take.
     /// `checkEnumLiteralWrite`: a string literal written into an enum field is
-    /// one of its options, and so is each literal element of a list written
+    /// one of its options (into an owned field, one its owner would take), and so is each literal element of a list written
     /// into a list of enum. A value that is not a literal is unknown at author
     /// time, which is a reason for silence only while some value could still
     /// be right — so an empty domain is refused whatever is written.
     fn check_enum_literal_write(&mut self, value: &movement_parser::ast::ExprSlot, target: Option<&Ty>, subject: &str) {
         let found: Vec<_> = match target.map(strip_absent) {
+            Some(Ty::Owned(owned)) => {
+                let zones = self.zones;
+                let Some(message) = static_string_literal_of(value).and_then(|literal| {
+                    crate::families::values::owned_value_error(&literal, owned, &|zone| Some(zones.is_zone(zone)))
+                }) else {
+                    return;
+                };
+                self.report(codes::OWNED_VALUE_INVALID, message, value.span);
+                return;
+            }
             Some(target @ Ty::Enum { .. }) => crate::families::values::check_enum_domain(target, subject)
                 .or_else(|| static_string_literal_of(value).and_then(|literal| crate::families::values::check_enum_literal(&literal, target)))
                 .into_iter()

@@ -34,6 +34,10 @@ pub enum Ty {
     /// `shape` is a literal's keys, in JavaScript's key order.
     Dict { of: Rc<Ty>, shape: Option<Rc<JsMap<Option<Ty>>>> },
     Enum { options: Vec<String>, open: Option<OpenEnum> },
+    /// A named scalar only its owner (the module that declared it) can
+    /// evaluate: a cron schedule, a mailbox key. It is held as text; what
+    /// the owner says of its values is checked where a literal is written.
+    Owned(Rc<OwnedScalar>),
     /// `T | absent`. Build with `maybe_absent`, which never nests.
     MaybeAbsent(Rc<Ty>),
     /// Build only with `value_union`, which keeps the member set canonical.
@@ -46,6 +50,13 @@ pub enum Ty {
 pub struct TupleRest {
     pub at: usize,
     pub of: Option<Rc<Ty>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedScalar {
+    pub name: String,
+    pub owner: String,
+    pub allow_pattern: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -97,9 +108,9 @@ impl Ty {
                 Composite::Union { of } => value_union(&of.iter().map(Ty::from_schema).collect::<Vec<_>>()).unwrap_or(Ty::Json),
                 // A schema never declares a record (catalog.ts); one carried here names no position.
                 Composite::Record { .. } => Ty::Record(None),
-                // An owned scalar is a text its owner parses; the checker
-                // reads it as text until it validates the owner's values.
-                Composite::Owned { .. } => Ty::Text,
+                Composite::Owned { name, owner, allow_pattern } => {
+                    Ty::Owned(Rc::new(OwnedScalar { name: name.clone(), owner: owner.clone(), allow_pattern: allow_pattern.clone() }))
+                }
             },
         }
     }
@@ -134,6 +145,9 @@ impl Ty {
                 options: options.clone(),
                 open: open.as_ref().map(|o| movement_parser::catalog::types::OpenEnum { allow_pattern: o.allow_pattern.clone() }),
             },
+            Ty::Owned(owned) => {
+                Composite::Owned { name: owned.name.clone(), owner: owned.owner.clone(), allow_pattern: owned.allow_pattern.clone() }
+            }
             Ty::MaybeAbsent(of) => Composite::MaybeAbsent { of: Box::new(of.to_schema()) },
             Ty::Union(of) => Composite::Union { of: of.iter().map(Ty::to_schema).collect() },
             Ty::Record(_) => Composite::Record { position: None },
@@ -258,6 +272,7 @@ impl Parts {
     fn structure_of(&mut self, ty: &Ty) -> Result<String, TooLarge> {
         Ok(match ty {
             Ty::Text => "text".to_string(),
+            Ty::Owned(owned) => format!("owned({}:{})", owned.owner, owned.name),
             Ty::Number => "number".to_string(),
             Ty::Boolean => "boolean".to_string(),
             Ty::Date => "date".to_string(),
@@ -561,7 +576,7 @@ fn member_absorbs(wide: &Ty, narrow: &Ty) -> bool {
     }
     match wide {
         Ty::Json => is_data_shaped(narrow),
-        Ty::Text => is_enum(Some(narrow)),
+        Ty::Text => is_enum(Some(narrow)) || matches!(narrow, Ty::Owned(_)),
         _ => false,
     }
 }
@@ -802,7 +817,7 @@ fn member_base_kind(ty: &Ty) -> BaseKind {
     match unwrap_list(ty) {
         Ty::Record(_) => BaseKind::Record,
         Ty::Tuple { .. } | Ty::Dict { .. } | Ty::Union(_) => BaseKind::Json,
-        Ty::Enum { .. } | Ty::MaybeAbsent(_) | Ty::List { .. } | Ty::Text => BaseKind::Text,
+        Ty::Enum { .. } | Ty::MaybeAbsent(_) | Ty::List { .. } | Ty::Text | Ty::Owned(_) => BaseKind::Text,
         Ty::Number => BaseKind::Number,
         Ty::Boolean => BaseKind::Boolean,
         Ty::Date => BaseKind::Date,
@@ -819,7 +834,7 @@ pub fn holds_one_value(ty: &Ty) -> bool {
     match strip_absent(ty) {
         Ty::List { .. } | Ty::Tuple { .. } | Ty::Json => false,
         Ty::Union(members) => members.iter().all(holds_one_value),
-        Ty::Text | Ty::Number | Ty::Boolean | Ty::Date | Ty::Datetime | Ty::File | Ty::Absent | Ty::Never | Ty::Dict { .. } | Ty::Enum { .. } | Ty::Record(_) | Ty::MaybeAbsent(_) => true,
+        Ty::Text | Ty::Owned(_) | Ty::Number | Ty::Boolean | Ty::Date | Ty::Datetime | Ty::File | Ty::Absent | Ty::Never | Ty::Dict { .. } | Ty::Enum { .. } | Ty::Record(_) | Ty::MaybeAbsent(_) => true,
     }
 }
 
@@ -844,7 +859,7 @@ pub enum ComparisonCategory {
 pub fn comparison_category(ty: &Ty) -> ComparisonCategory {
     match strip_absent(ty) {
         Ty::Record(_) => ComparisonCategory::Record,
-        Ty::Enum { .. } | Ty::Text => ComparisonCategory::Textual,
+        Ty::Enum { .. } | Ty::Text | Ty::Owned(_) => ComparisonCategory::Textual,
         Ty::List { .. } | Ty::Tuple { .. } | Ty::Dict { .. } | Ty::MaybeAbsent(_) | Ty::File => ComparisonCategory::Structural,
         Ty::Date | Ty::Datetime => ComparisonCategory::Temporal,
         Ty::Number => ComparisonCategory::Numeric,
@@ -1210,6 +1225,7 @@ fn equals_node(left: &Ty, right: &Ty, known: &mut HashMap<(NodeKey, NodeKey), bo
         | (Ty::File, Ty::File)
         | (Ty::Json, Ty::Json)
         | (Ty::Absent, Ty::Absent) => true,
+        (Ty::Owned(l), Ty::Owned(r)) => l == r,
         (Ty::List { of: l, .. }, Ty::List { of: r, .. }) => equals_in(l, r, known),
         (Ty::Tuple { of: l, rest: lr }, Ty::Tuple { of: r, rest: rr }) => {
             fn slots(of: &[Option<Ty>]) -> Vec<Option<&Ty>> {
@@ -1352,8 +1368,16 @@ pub fn field_assignable(source: &Ty, target: &Ty) -> bool {
     if base_kind(source) == Some(BaseKind::Record) || base_kind(target) == Some(BaseKind::Record) {
         return false;
     }
-    if matches!(target, Ty::Text) && (matches!(source, Ty::Text) || is_enum(Some(source))) {
+    if matches!(target, Ty::Text) && (matches!(source, Ty::Text | Ty::Owned(_)) || is_enum(Some(source))) {
         return true;
+    }
+    // Text may be one of the owner's values: a literal is checked where it
+    // is written (MOV_OWNED_VALUE_INVALID), anything else by the owner.
+    if let Ty::Owned(owned) = target {
+        return match source {
+            Ty::Owned(other) => owned == other,
+            _ => matches!(source, Ty::Text),
+        };
     }
     if is_enum(Some(target)) {
         return false;
@@ -1408,6 +1432,7 @@ pub fn describe_field_type(ty: &Ty) -> String {
         Ty::Absent => "null".to_string(),
         Ty::Never => "never".to_string(),
         Ty::Text => "text".to_string(),
+        Ty::Owned(owned) => owned.name.clone(),
         Ty::Number => "number".to_string(),
         Ty::Boolean => "boolean".to_string(),
         Ty::Date => "date".to_string(),
