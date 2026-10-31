@@ -349,7 +349,8 @@ pub struct DeliveryArrivals {
 
 /// `inbound.keepDelivery`'s answer: `false` for a duplicate, which wrote
 /// nothing. When the call carried `arrivals`, `wakes` is the `wake_await`
-/// rows it queued, one per wait they answer (an empty list for none).
+/// rows it queued, one per wait they answer (an empty list for none): the
+/// rows its `waits.log` queued, never a second set.
 #[derive(Debug, Clone, Serialize)]
 pub struct Kept {
     pub kept: bool,
@@ -485,8 +486,12 @@ slot! {
         /// The latest seq logged (store-wide; 0 for none): every `waits.log`
         /// call made after it logs under a greater seq.
         "waits.mark" => fn arrival_mark(WaitsMark {}) -> i64;
-        /// Log the arrivals in order, as one write: the parked waits on their
-        /// records, one wake each (a wait is parked while its leaf is kept).
+        /// Log the arrivals in order and queue a `wake_await` row per parked
+        /// wait on their records, as one write: a crash leaves both or
+        /// neither. Each row is `{ kind: "wake_await", key:
+        /// "wake_await:<unique>", payload: { waitId, runId, address }, teamId }`,
+        /// due now, one per wait however many of the arrivals answer it; the
+        /// answer is those waits (a wait is parked while its leaf is kept).
         /// Never interleaved with a `Wait` park on the same record's edge. A
         /// repeat (an identity and version its record's edge logged within
         /// the retention) is skipped and wakes nothing; an arrival without an
@@ -530,10 +535,12 @@ slot! {
         /// is), the arrivals and the work rows. A duplicate
         /// (`delivery.external_id` kept at this subscription before) writes
         /// nothing and answers `kept: false`. With `arrivals`: they are
-        /// logged as `waits.log` logs them; each `fire_event` row's payload
-        /// gains `arrivalMark`, `waits.mark` after them; and a row
-        /// `{ kind: "wake_await", key: "wake_await:<unique>", payload: { waitId }, teamId }`
-        /// is queued per wait they answer, and answered as `wakes`.
+        /// logged as `waits.log` logs them, with the `wake_await` row it
+        /// queues per wait they answer; each `fire_event` row's payload
+        /// gains `arrivalMark`, `waits.mark` after them; and those wake rows
+        /// are answered as `wakes`. A `keep_delivery` that logs through the
+        /// store's own `log_arrivals` has queued them already: it must not
+        /// queue them a second time, or each wait wakes twice.
         "inbound.keepDelivery" => fn keep_delivery(InboundKeepDelivery {
             subscription_id: String,
             #[serde(default, deserialize_with = "present")]

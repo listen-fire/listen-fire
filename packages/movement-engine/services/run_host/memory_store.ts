@@ -463,13 +463,14 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
         work.set(key, { id: randomUUID(), kind, key, payload: stored(payload), dueAt: dueAt !== undefined ? Date.parse(dueAt) : now(), teamId, claim: undefined, leasedUntil: 0, armed: 0, armedAtClaim: 0 });
         return true;
       },
-      async claimDue({ limit, leaseMs, dueBy, kinds }) {
+      async claimDue({ limit, leaseMs, dueBy, kinds, teamId }) {
         const by = dueBy !== undefined ? Date.parse(dueBy) : now();
         const claimed: ClaimedWork[] = [];
         for (const row of [...work.values()].sort((a, b) => a.dueAt - b.dueAt)) {
           if (claimed.length >= limit) break;
           if (row.dueAt > by || (row.claim !== undefined && row.leasedUntil > now())) continue;
           if (kinds !== undefined && !kinds.includes(row.kind)) continue;
+          if (teamId !== undefined && row.teamId !== teamId) continue;
           row.claim = randomUUID();
           row.leasedUntil = now() + leaseMs;
           row.armedAtClaim = row.armed;

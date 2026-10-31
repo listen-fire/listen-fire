@@ -271,8 +271,13 @@ export interface WorkQueue {
    *  moves the due time of a row another worker holds. */
   enqueueIfAbsent(input: { kind: string; key: string; payload: unknown; dueAt?: string; teamId?: string }): Promise<boolean>;
   /** Lease up to `limit` rows due by `dueBy`, unleased or with a lapsed lease;
-   *  only rows of `kinds` when it is given (a drain pool's), else every kind. */
-  claimDue(input: { limit: number; leaseMs: number; dueBy?: string; kinds?: readonly string[] }): Promise<ClaimedWork[]>;
+   *  only rows of `kinds` when it is given (a drain pool's), else every kind;
+   *  and only rows queued under `teamId` when it is given, so another team's
+   *  rows never count against the limit. A store that serves one tenant (a
+   *  store module over the wire) keeps no row's team, and claims its own rows
+   *  whatever `teamId` names: a caller that must step one team's rows only
+   *  checks each claimed row's run as well. */
+  claimDue(input: { limit: number; leaseMs: number; dueBy?: string; kinds?: readonly string[]; teamId?: string }): Promise<ClaimedWork[]>;
   /** Done: delete the row, unless it was re-armed since the claim (it stays,
    *  unleased, due at its new time). A stale claim changes nothing. */
   complete(work: ClaimedWork): Promise<void>;

@@ -111,7 +111,7 @@ pub struct DeliveryArrivals<'a> {
 /// The work rows a kept delivery's arrivals change and add: each
 /// `fire_event` row carries `mark` as its `arrivalMark` (a run it starts reads
 /// its waits' arrivals after it), and each wait a logged arrival answers gets
-/// a `wake_await { waitId }` row.
+/// a `wake_await { waitId, runId, address }` row (`wake_row`).
 pub fn delivery_rows(work: &[NewWork], mark: i64, team_id: &str, wakes: &[WaitWake]) -> (Vec<NewWork>, Vec<NewWork>) {
     let marked = work
         .iter()
@@ -437,6 +437,11 @@ mod tests {
             }
             opt_text(step, "identity").map(str::to_string)
         }
+
+        /// The step's list `key` of `{ run, wait, address }`.
+        fn wakes(&mut self, step: &Js, key: &str) -> Vec<WaitWake> {
+            list(step, key).iter().map(|w| WaitWake { run_id: self.id(text(w, "run")), wait_id: self.wait(text(w, "wait")), address: text(w, "address").into() }).collect()
+        }
     }
 
     fn text<'a>(step: &'a Js, key: &str) -> &'a str {
@@ -455,7 +460,15 @@ mod tests {
         step.get(key).and_then(Js::as_array).unwrap_or_else(|| panic!("{key} in {}", step.to_json()))
     }
 
-    fn run_case(store: &dyn RunHostStore, case: &Js) {
+    /// Claims the due `wake_await` rows of a team as its drain claims them.
+    type ClaimWakes<'a> = &'a dyn Fn(&str) -> Vec<crate::store::ClaimedWork>;
+
+    fn wake_rows_due() -> crate::store::ClaimDue<'static> {
+        static KINDS: std::sync::LazyLock<[String; 1]> = std::sync::LazyLock::new(|| ["wake_await".to_string()]);
+        crate::store::ClaimDue { limit: 1000, lease_ms: 60_000, due_by: None, kinds: Some(KINDS.as_slice()) }
+    }
+
+    fn run_case(store: &dyn RunHostStore, case: &Js, claim_wakes: ClaimWakes<'_>) {
         let name = text(case, "case");
         let mut names = Names::default();
         let steps = list(case, "steps");
@@ -490,13 +503,20 @@ mod tests {
                         .collect();
                     let logged_at = iso(step.get("at").and_then(int).unwrap_or(0));
                     let mut wakes = store.log_arrivals(&team, adapter, &arrivals, &logged_at).unwrap();
-                    let mut expected: Vec<WaitWake> = list(step, "wakes")
-                        .iter()
-                        .map(|w| WaitWake { run_id: names.id(text(w, "run")), wait_id: names.wait(text(w, "wait")), address: text(w, "address").into() })
-                        .collect();
+                    let mut expected = names.wakes(step, "wakes");
                     wakes.sort();
                     expected.sort();
                     assert_eq!(wakes, expected, "{at}: the wakes");
+                    if step.get("queued").is_some() {
+                        let mut queued: Vec<WaitWake> = claim_wakes(&team)
+                            .iter()
+                            .map(|row| WaitWake { run_id: text(&row.payload, "runId").into(), wait_id: text(&row.payload, "waitId").into(), address: text(&row.payload, "address").into() })
+                            .collect();
+                        let mut expected = names.wakes(step, "queued");
+                        queued.sort();
+                        expected.sort();
+                        assert_eq!(queued, expected, "{at}: the wake rows queued");
+                    }
                 }
                 "open" => {
                     let since = names.marks[text(step, "since")];
@@ -592,10 +612,7 @@ mod tests {
                         Err(StoreError::LeaseLost { .. }) if flag(step, "leaseLost") => {}
                         Err(_) if flag(step, "refused") => {}
                         Ok(mut wakes) if !flag(step, "leaseLost") && !flag(step, "refused") => {
-                            let mut expected: Vec<WaitWake> = list(step, "wakes")
-                                .iter()
-                                .map(|w| WaitWake { run_id: names.id(text(w, "run")), wait_id: names.wait(text(w, "wait")), address: text(w, "address").into() })
-                                .collect();
+                            let mut expected = names.wakes(step, "wakes");
                             wakes.sort();
                             expected.sort();
                             assert_eq!(wakes, expected, "{at}: the wakes");
@@ -650,7 +667,9 @@ mod tests {
 
     fn over_a_state_file(test: &str) {
         let case = cases().into_iter().find(|c| test_name(text(c, "case")) == test).unwrap_or_else(|| panic!("no case for {test}"));
-        run_case(&state_file(), &case);
+        let store = state_file();
+        // The state file has one tenant: its drain claims every team's rows.
+        run_case(&store, &case, &|_team| store.claim_due(&wake_rows_due()).unwrap());
     }
 
     macro_rules! store_cases {
@@ -705,8 +724,11 @@ mod tests {
         let Some(url) = std::env::var("LF_TEST_PG").ok().filter(|u| !u.is_empty()) else { return };
         crate::pg_store::PgStore::migrate(&url).unwrap();
         let store = crate::pg_store::PgStore::connect(&url, crate::backend::POSTGRES_TENANT).unwrap();
+        // A Postgres store claims only its own tenant's rows: a case's team
+        // (a fresh uuid) is claimed by a store of that tenant.
+        let claim_wakes = |team: &str| crate::pg_store::PgStore::connect(&url, team).unwrap().claim_due(&wake_rows_due()).unwrap();
         for case in cases() {
-            run_case(&store, &case);
+            run_case(&store, &case, &claim_wakes);
         }
         a_kept_delivery_logs_its_arrivals_once(&store);
     }

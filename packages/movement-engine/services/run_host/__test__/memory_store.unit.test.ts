@@ -34,3 +34,15 @@ describe('memoryRunHostStore keeps waits as every store does', () => {
     expect(cases.map((c) => c.name)).toEqual(named);
   });
 });
+
+// Its own, not the contract's: a store that serves one tenant (listen-fire's,
+// a store module over the wire) keeps no row's team to claim by.
+describe('memoryRunHostStore keeps each row under its team', () => {
+  it("a claim naming a team leases only that team's rows; another team's stay due", async () => {
+    const store = memoryRunHostStore();
+    await store.work.enqueue({ kind: 'wake_await', key: 'acme-wake', payload: {}, teamId: 'acme' });
+    await store.work.enqueue({ kind: 'wake_await', key: 'globex-wake', payload: {}, teamId: 'globex' });
+    expect((await store.work.claimDue({ limit: 1, leaseMs: 60_000, teamId: 'globex' })).map((row) => row.key)).toEqual(['globex-wake']);
+    expect((await store.work.claimDue({ limit: 10, leaseMs: 60_000 })).map((row) => row.key)).toEqual(['acme-wake']);
+  });
+});

@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { RunLeaseLost } from '../movement_engine/errors';
+import { WAKE_AWAIT_WORK_KIND } from './store';
 import type { ListedArrival, NewArrival, ParkKind, RunHostStore, RunRowStore, WaitWake } from './store';
 
 export interface StoreWaitsBackend {
@@ -98,8 +99,9 @@ class Names {
     return optionalText(step, 'identity');
   }
 
-  wakes(step: unknown): WaitWake[] {
-    return items(step, 'wakes').map((w) => ({ runId: this.id(text(w, 'run')), waitId: this.wait(text(w, 'wait')), address: text(w, 'address') }));
+  /** The step's list `key` of `{ run, wait, address }`. */
+  wakes(step: unknown, key: 'wakes' | 'queued' = 'wakes'): WaitWake[] {
+    return items(step, key).map((w) => ({ runId: this.id(text(w, 'run')), waitId: this.wait(text(w, 'wait')), address: text(w, 'address') }));
   }
 }
 
@@ -135,6 +137,11 @@ async function runCase({ store, runRows }: StoreWaitsBackend, steps: readonly St
         }));
         const wakes = await store.waits.log({ teamId, adapterType, arrivals, at: fromNow(step.at) });
         assert.deepEqual(wakes.sort(byWait), names.wakes(step).sort(byWait), `${at}: the wakes`);
+        if (step.queued !== undefined) {
+          const rows = await store.work.claimDue({ limit: 1000, leaseMs: 60_000, kinds: [WAKE_AWAIT_WORK_KIND] });
+          const queued = rows.map(({ payload }) => ({ runId: text(payload, 'runId'), waitId: text(payload, 'waitId'), address: text(payload, 'address') }));
+          assert.deepEqual(queued.sort(byWait), names.wakes(step, 'queued').sort(byWait), `${at}: the wake rows queued`);
+        }
         break;
       }
       case 'open': {

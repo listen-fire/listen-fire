@@ -353,7 +353,8 @@ export class RpcStoreBackend {
           await call('work.enqueue', input, Nothing);
         },
         enqueueIfAbsent: (input) => call('work.enqueueIfAbsent', input, z.boolean()),
-        claimDue: (input) => call('work.claimDue', input, z.array(Work)),
+        // A store module serves one tenant: every row it claims is its own.
+        claimDue: ({ limit, leaseMs, dueBy, kinds }) => call('work.claimDue', { limit, leaseMs, dueBy, kinds }, z.array(Work)),
         complete: async (work) => {
           await call('work.complete', claimOf(work), Nothing);
         },

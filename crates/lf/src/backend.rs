@@ -264,7 +264,7 @@ pub trait RunHostStore {
     /// With `arrivals`, they are logged after the receipt, each `fire_event`
     /// row's payload carries `arrivalMark`, the mark after them (the delivery
     /// started its runs: they do not wait for its own arrivals), and a
-    /// `wake_await { waitId }` row is queued per wait they answer
+    /// `wake_await { waitId, runId, address }` row is queued per wait they answer, once
     /// (crate::waits::delivery_rows); those wake rows are the answer.
     ///
     /// None, and nothing written, for a duplicate: a delivery whose external

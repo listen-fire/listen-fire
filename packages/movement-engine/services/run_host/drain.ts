@@ -227,8 +227,11 @@ export type StepperFor = (input: { runId: string; lease: HeldRunLease }) => Prom
  * A wake on one wait (a `wake_await` row): under the run's lease (and inside
  * `around`, the product's in-process slot, when it has one), re-enter the
  * await parked at the wake's address, which reads the wait's arrivals. A run
- * held elsewhere is `busy`, and its wake retries; a leaf no longer parked
- * there (drained by another wake, withdrawn by a race) steps nothing.
+ * held elsewhere is `busy`, and its wake retries: held before the drain began,
+ * or taken over while it ran (its lease lost, so the leaf it claimed goes back
+ * to parked for the next holder, which this wake must still reach). A leaf no
+ * longer parked there (drained by another wake, withdrawn by a race) steps
+ * nothing.
  */
 export async function wakeWait(
   host: RunHost,
@@ -255,7 +258,7 @@ export async function wakeWait(
       },
       input.lease,
     );
-    busy = drained.kind === 'busy';
+    busy = drained.kind === 'busy' || drained.value === 'leaseLost';
   });
   return { busy };
 }

@@ -713,6 +713,47 @@ export const runHostContractCases: ContractCase[] = [
     },
   },
   {
+    name: 'wake: a woken await whose step lost the run\'s lease is busy, so its wake retries; the next holder finds the leaf parked again, and the retry steps it',
+    async run(backend) {
+      const { store, newRun, teamId } = backend;
+      const { host } = hostOf(backend);
+      const key = uniqueKey('thread');
+      const runId = await newRun();
+      await parkOnWait(backend, runId, 's0', key);
+      const [wake] = await comment(backend, key);
+      assert.ok(wake);
+      // Another process takes the run over while the step runs: the step's
+      // end, fenced by the lease it lost, writes nothing.
+      let theirs: string | undefined;
+      const takenOver = await wakeWait(host, {
+        wake,
+        teamId,
+        stepper: async ({ lease }) => async () => {
+          await store.leases.release({ runId, token: lease.token });
+          theirs = (await store.leases.claim({ runId, ttlMs: 60_000 }))?.token;
+          return { kind: 'completed', deferredRaceFrames: [] };
+        },
+      });
+      assert.equal(takenOver.busy, true, 'the wake is not done: its row retries');
+      assert.ok(theirs);
+      assert.deepEqual(await parkedAddresses(store, runId), ['s0'], 'the leaf went back to parked when the run was taken over');
+      await store.leases.release({ runId, token: theirs });
+
+      const stepped: string[] = [];
+      const retried = await wakeWait(host, {
+        wake,
+        teamId,
+        stepper: async () => async (req) => {
+          if (req.kind === 'leaf') stepped.push(req.address);
+          return { kind: 'completed', deferredRaceFrames: [] };
+        },
+      });
+      assert.equal(retried.busy, false);
+      assert.deepEqual(stepped, ['s0']);
+      assert.deepEqual(await store.parks.leaves({ runId }), []);
+    },
+  },
+  {
     name: "park host: an await parks its leaf on its wait in one write; a timer arms its run's wake; a suspension at the await's address unparks its wait",
     async run(backend) {
       const { store, newRun, teamId } = backend;

@@ -281,6 +281,91 @@ listen to book { events: ["${NOTE_CREATED}"] } fire seen
     expect(await host.tick(new Date(Date.now() + 2 * 3_600_000))).toEqual([]);
   });
 
+  it("leaves a run parked when its step's last write finds the lease lost: the wake retries, and the run completes under its next holder", async () => {
+    const store = memoryEmbeddedHostStore();
+    const { leases, parks } = store.runHost;
+    const commitSegment = parks.commitSegment;
+    // Another process takes the run over just before the step's end is
+    // written: the write, fenced by the lease the step lost, writes nothing.
+    let takeOver = false;
+    let theirs: string | undefined;
+    parks.commitSegment = async (input) => {
+      if (takeOver && input.resumed !== null && input.fence !== undefined) {
+        takeOver = false;
+        await leases.release({ runId: input.runId, token: input.fence });
+        theirs = (await leases.claim({ runId: input.runId, ttlMs: 60_000 }))?.token;
+      }
+      return commitSegment(input);
+    };
+    const written: Written[] = [];
+    const notes = notesModule(written, new Map());
+    const host = createEmbeddedHost({ modules: [notes], store, moduleHost: () => ({ validateResults: true }) });
+    await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
+    await host.save('acme', { name: 'reply', source: copier('north', 'Re', 'said = await note-[:Comments]->\n  ').replace('${note.Title}', '${said.Body}') });
+    const [fired] = await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
+
+    takeOver = true;
+    await host.arrive('acme', { adapterType: 'notes', arrivals: [comment] });
+    expect(theirs).toBeDefined();
+    expect(await store.runs.get(fired.runId)).toMatchObject({ status: 'parked' });
+    expect((await parks.leaves({ runId: fired.runId, parkedOnly: true })).length).toBe(1);
+    // Its wake went back due: held by the other process, it is busy again.
+    expect(await host.tick()).toEqual([]);
+    if (theirs !== undefined) await leases.release({ runId: fired.runId, token: theirs });
+
+    // The segment whose end was never written runs again under the next
+    // holder, and that end completes the run.
+    const [stepped, ...more] = await host.tick();
+    expect(more).toEqual([]);
+    expect(stepped).toMatchObject({ runId: fired.runId, outcome: { ok: true, parked: false } });
+    expect(written).toEqual([
+      { tenant: 'acme', book: 'acme-north', Title: 'Re lunch?' },
+      { tenant: 'acme', book: 'acme-north', Title: 'Re lunch?' },
+    ]);
+    expect(await store.runs.get(fired.runId)).toMatchObject({ status: 'completed' });
+    expect(await parks.leaves({ runId: fired.runId })).toEqual([]);
+  });
+
+  it('steps no run that is no longer parked: its row goes, and the run is left as it is', async () => {
+    const store = memoryEmbeddedHostStore();
+    const written: Written[] = [];
+    const notes = notesModule(written, new Map());
+    const host = createEmbeddedHost({ modules: [notes], store, moduleHost: () => ({ validateResults: true }) });
+    await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
+    await host.save('acme', { name: 'reply', source: copier('north', 'Re', 'said = await note-[:Comments]->\n  ').replace('${note.Title}', '${said.Body}') });
+    const [fired] = await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    // The run failed meanwhile, before its leaves were torn down.
+    const run = await store.runs.get(fired.runId);
+    if (run !== null) await store.runs.put({ ...run, status: 'failed' });
+
+    const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
+    expect(await host.arrive('acme', { adapterType: 'notes', arrivals: [comment] })).toEqual([]);
+    expect(written).toEqual([]);
+    expect(await store.runs.get(fired.runId)).toMatchObject({ status: 'failed' });
+    expect((await store.runHost.parks.leaves({ runId: fired.runId, parkedOnly: true })).length).toBe(1);
+    expect(await store.runHost.work.claimDue({ limit: 10, leaseMs: 60_000 })).toEqual([]);
+  });
+
+  it('a row that throws stays leased; the rows claimed after it go back due at once', async () => {
+    let now = new Date('2026-10-27T09:00:00.000Z');
+    const store = memoryEmbeddedHostStore({ now: () => now.getTime() });
+    const written: Written[] = [];
+    const notes = notesModule(written, new Map());
+    const host = createEmbeddedHost({ modules: [notes], store, now: () => now, moduleHost: () => ({ validateResults: true }) });
+    await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
+    await host.save('acme', { name: 'later', source: copier('north', 'Later', 'await sleep(1h)\n  ') });
+    await host.dispatch('acme', { adapterType: 'notes', event: noteCreated('one') });
+    // A wake whose payload names no wait, due before the run's timer.
+    await store.runHost.work.enqueue({ kind: 'wake_await', key: 'wake_await:malformed', payload: {}, dueAt: '2026-10-27T09:30:00.000Z' });
+
+    now = new Date('2026-10-27T10:00:01.000Z');
+    await expect(host.tick()).rejects.toThrow('names no wait');
+    expect(written).toEqual([]);
+    const due = await store.runHost.work.claimDue({ limit: 10, leaseMs: 60_000 });
+    expect(due.map((row) => row.kind)).toEqual(['resume_timer']);
+  });
+
   it("rebuilds a tenant's catalog when it reconnects, or when its schema changes", async () => {
     const { host, notes, schemas } = setup();
     const tagged = (connection: string) => copier(connection, 'T').replace('{ Title:', '{ Tag: "x", Title:');
