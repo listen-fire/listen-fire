@@ -2,13 +2,16 @@
 // arrivals are logged and its runs' trigger waits opened from the mark
 // before them, so a later item of the same delivery answers a run's
 // `await new` and the trigger never answers its own; its listens run each
-// arrival once, however often it is delivered.
+// arrival once, however often it is delivered. Each run it starts is a
+// row kept with it: one that does not start inside the call is started by a
+// later tick.
 
 import { BASE_RUNTIME_CAPABILITIES, type Arrival } from 'engine-contracts';
 import { defineModule } from 'module-kit';
 import type { Adapter } from 'movement-engine/public/adapter';
+import { RUN_LEASE_TTL_MS } from 'movement-engine/public/run-host';
 
-import { createEmbeddedHost, memoryEmbeddedHostStore } from '..';
+import { createEmbeddedHost, memoryEmbeddedHostStore, type EmbeddedHostStore } from '..';
 
 /** A chat: its messages, a listenable root, and each message's replies,
  *  listenable too, a reply a message of the same thread. A thread is waited
@@ -175,5 +178,98 @@ describe('a delivery', () => {
     expect(await host.dispatch('acme', { adapterType: 'chat', id: 'evt-1', arrivals: [message('m4', 'hey')] })).toEqual([]);
     expect(posted).toEqual(['Re hey', 'Re hey']);
     expect(warned).toEqual(['delivery evt-1 was kept before: it runs nothing']);
+  });
+
+  describe('whose run does not start inside the call', () => {
+    /** The echo program over a store whose next write of `fault` fails, on a
+     *  clock the test moves. */
+    async function faulty() {
+      const posted: string[] = [];
+      const warned: string[] = [];
+      const chat = chatModule(posted);
+      let clock = Date.parse('2026-10-31T09:00:00.000Z');
+      const inner = memoryEmbeddedHostStore({ now: () => clock });
+      const faults = { receipt: 0, record: 0 };
+      const store: EmbeddedHostStore = {
+        ...inner,
+        runs: {
+          ...inner.runs,
+          put: async (run) => {
+            if (faults.record > 0 && faults.record-- > 0) throw new Error('the store went away');
+            await inner.runs.put(run);
+          },
+        },
+        runHost: {
+          ...inner.runHost,
+          startArrivalRun: async (start) => {
+            if (faults.receipt > 0 && faults.receipt-- > 0) throw new Error('the store went away');
+            return inner.runHost.startArrivalRun(start);
+          },
+        },
+      };
+      const host = createEmbeddedHost({ modules: [chat], store, now: () => new Date(clock), log: { warn: (line) => void warned.push(line) } });
+      await host.connect('acme', { name: 'team', module: chat, credential: { workspace: 'acme' } });
+      const source = answering('room-[:Messages]->', 'room-[:Messages]->').replace('next = await new m-[:Replies]->\n  ', '').replace('next.Text', 'm.Text');
+      expect(await host.save('acme', { name: 'echo', source })).toEqual({ saved: true, listens: 1 });
+      const later = (ms: number): Date => {
+        clock += ms;
+        return new Date(clock);
+      };
+      return { host, posted, warned, faults, later };
+    }
+
+    it('is started by a tick once a run lease has passed, and a retry under its id runs nothing twice', async () => {
+      const { host, posted, warned, faults, later } = await faulty();
+      faults.receipt = 1;
+
+      await expect(host.dispatch('acme', { adapterType: 'chat', id: 'evt-1', arrivals: [message('m1', 'hi')] })).rejects.toThrow(
+        /1 run\(s\) of the delivery did not start: echo, the arrival m1 on Messages: the store went away: `tick` starts each once a run lease has passed/,
+      );
+      expect(posted).toEqual([]);
+      // Its row is the dispatch's for a run lease.
+      expect(await host.tick(later(1000))).toEqual([]);
+
+      // The sender sends it again under its id: kept, and run.
+      const [retried, ...none] = await host.dispatch('acme', { adapterType: 'chat', id: 'evt-1', arrivals: [message('m1', 'hi')] });
+      expect(none).toEqual([]);
+      expect(retried.outcome).toMatchObject({ ok: true });
+      expect(posted).toEqual(['Re hi']);
+
+      // The first row starts nothing: its listen has run the arrival.
+      expect(await host.tick(later(RUN_LEASE_TTL_MS))).toEqual([]);
+      expect(posted).toEqual(['Re hi']);
+      expect(warned).toEqual(['echo:answer has run the arrival m1 on Messages before: this delivery runs nothing']);
+    });
+
+    it('a tick starts with no retry of the delivery', async () => {
+      const { host, posted, faults, later } = await faulty();
+      faults.receipt = 1;
+      await expect(host.dispatch('acme', { adapterType: 'chat', arrivals: [message('m1', 'hi')] })).rejects.toThrow(/did not start/);
+
+      const [started, ...none] = await host.tick(later(RUN_LEASE_TTL_MS + 1));
+      expect(none).toEqual([]);
+      expect(started).toMatchObject({ program: 'echo', movement: 'answer', outcome: { ok: true } });
+      expect(posted).toEqual(['Re hi']);
+      expect(await host.tick(later(RUN_LEASE_TTL_MS + 1))).toEqual([]);
+    });
+
+    it('is never stranded by a crash between its receipt and its record: the row starts the run its receipt names', async () => {
+      const { host, posted, warned, faults, later } = await faulty();
+      faults.record = 1;
+      await expect(host.dispatch('acme', { adapterType: 'chat', id: 'evt-1', arrivals: [message('m1', 'hi')] })).rejects.toThrow(/did not start/);
+      expect(posted).toEqual([]);
+
+      // A retry of the delivery is kept, and its run refused: the arrival's
+      // receipt is the first row's run's.
+      expect(await host.dispatch('acme', { adapterType: 'chat', id: 'evt-1', arrivals: [message('m1', 'hi')] })).toEqual([]);
+      expect(warned).toEqual(['echo:answer has run the arrival m1 on Messages before: this delivery runs nothing']);
+
+      const [started, ...none] = await host.tick(later(RUN_LEASE_TTL_MS + 1));
+      expect(none).toEqual([]);
+      expect(started.outcome).toMatchObject({ ok: true });
+      expect(posted).toEqual(['Re hi']);
+      expect(await host.tick(later(RUN_LEASE_TTL_MS + 1))).toEqual([]);
+      expect(posted).toEqual(['Re hi']);
+    });
   });
 });

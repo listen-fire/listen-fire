@@ -14,7 +14,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 
-import { listenPlanSchema, tenantIdOf, type Arrival, type AwaitHead, type ListenPlan, type RunInput, type SegmentLimits } from 'engine-contracts';
+import { WireArrival, listenPlanSchema, tenantIdOf, type Arrival, type AwaitHead, type ListenPlan, type RunInput, type SegmentLimits } from 'engine-contracts';
 import {
   adapterInProcess,
   inProcessValidationDefault,
@@ -57,6 +57,7 @@ import {
 } from 'movement-engine/public/movement-engine';
 import {
   DEFAULT_RESEND_WINDOW_MS,
+  FIRE_EVENT_WORK_KIND,
   RESUME_TIMER_WORK_KIND,
   RUN_HOST_WORK_KINDS,
   RUN_LEASE_TTL_MS,
@@ -82,6 +83,7 @@ import {
   type DeliverySource,
   type DeliveryWait,
   type HeldRunLease,
+  type NewWorkRow,
   type RunHost,
   type RunHostStore,
   type RunHostWorkKind,
@@ -153,10 +155,13 @@ export interface EmbeddedHostStore {
   /** Parked leaves, joins, timers, waits and the arrivals they read, run
    *  leases, queued work, pinned texts, and each run's row: a park marks its
    *  run parked, and the step that ends a run settles it, in the same write.
-   *  A delivery is kept in one write (`keepDelivery`), and a run an arrival
-   *  starts takes its receipt in the write that starts it
-   *  (`startArrivalRun`). */
-  runHost: RunHostStore & RunRowStore & ArrivalRunStore & Pick<DeliveryRowStore, 'keepDelivery'>;
+   *  A delivery is kept in one write (`keepDelivery`), with a `fire_event`
+   *  row per run it starts; a run takes its receipt in the write that starts
+   *  it (`startArrivalRun`), and its row is done once it ran (`completeKey`).
+   *  A delivery whose runs did not all start inside `dispatch` has its
+   *  provider id forgotten (`forgetDeliveryId`), so its sender's retry is
+   *  kept again. */
+  runHost: RunHostStore & RunRowStore & ArrivalRunStore & Pick<DeliveryRowStore, 'keepDelivery' | 'completeKey' | 'forgetDeliveryId'>;
 }
 
 /** A secrets backend a connect can store a new credential in. */
@@ -252,16 +257,21 @@ export interface EmbeddedHost {
    *  listen on its edge took it; a listen this host does not fire as
    *  written; and a program it cannot read, which the others' listens do
    *  not wait on. An arrival no run awaits yet is kept for an hour (the
-   *  module's `resendWindowSeconds`), for a run that starts waiting on it. */
+   *  module's `resendWindowSeconds`), for a run that starts waiting on it.
+   *  Each run it starts is a row kept in that write: one that does not start
+   *  here (a store write failed) makes `dispatch` throw, naming it, and
+   *  `tick` starts it once a run lease has passed; the delivery's `id` is
+   *  forgotten, so its sender's retry is kept again. */
   dispatch(tenant: string, delivery: Delivery): Promise<EmbeddedRunOutcome[]>;
   /** Run one program now: an Invocation lands on the manual unit's
    *  `Invocations`, `text` its `Text` (listen-fire's `listen-fire run <movement> --text`),
    *  and every listen of the program on it that fires runs. None, when the
    *  program is not saved or declares no such listen. */
   run(tenant: string, request: { program: string; text?: string }): Promise<EmbeddedRunOutcome[]>;
-  /** Step on every run whose timer is due by `now`, every run woken by an
-   *  arrival, and every run that owes a race an earlier step left unsettled:
-   *  one outcome per segment. First it forgets the arrivals logged more than
+  /** Start every run a delivery queued that its `dispatch` did not (once a
+   *  run lease has passed since it), and step on every run whose timer is
+   *  due by `now`, every run woken by an arrival, and every run that owes a
+   *  race an earlier step left unsettled: one outcome per segment. First it forgets the arrivals logged more than
    *  an hour before `now` that no run awaits. */
   tick(now?: Date): Promise<EmbeddedRunOutcome[]>;
 }
@@ -493,8 +503,9 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
    *  fired function awaits off its parameter, keyed by the module's
    *  `awaitKeys`, asked once per edge and connection for every trigger on
    *  it. A wait on the trigger's own edge and record has the trigger noted on
-   *  it, so the run is never answered by the arrival that started it. */
-  const deliveryWaitsOf = async (tenant: string, delivery: Delivery, minted: readonly MintedRun[], fireKey: string): Promise<DeliveryWait[]> => {
+   *  it, so the run is never answered by the arrival that started it. Each
+   *  is live while the run's `fire_event` row is queued. */
+  const deliveryWaitsOf = async (tenant: string, delivery: Delivery, minted: readonly MintedRun[]): Promise<DeliveryWait[]> => {
     const asked = new Map<string, { connection: string | undefined; edge: string; heads: number[]; runs: MintedRun[] }>();
     for (const run of minted) {
       if (triggerHeadOf(run.arrival) === undefined) continue;
@@ -522,19 +533,45 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
         const key = 'gone' in one ? null : one.key;
         const { arrival } = run;
         const own = key !== null && edge === arrival.edge && key === arrival.key;
-        waits.push({ runId: run.runId, edge, key, fireKey, ...(own ? { preNoted: { identity: arrival.identity, version: arrival.version ?? null } } : {}) });
+        waits.push({ runId: run.runId, edge, key, fireKey: fireKeyOf(run.runId), ...(own ? { preNoted: { identity: arrival.identity, version: arrival.version ?? null } } : {}) });
       }
     }
     return waits;
   };
 
-  /** Start `minted` from the delivery kept at `triggerMark`, taking its
-   *  receipt in the same write; null, and nothing run, when its listen has
-   *  run its arrival before. */
-  const fire = async (tenant: string, minted: MintedRun, triggerMark: number): Promise<EmbeddedRunOutcome | null> => {
-    const { saved: program, listen, arrival, runId } = minted;
+  /** The listen a queued run runs, as its tenant's programs hold it now:
+   *  null once its program is gone, no longer reads, or no longer holds that
+   *  listen as it was when the delivery judged the arrival. */
+  const queuedListen = async (fire: FireRow): Promise<{ saved: SavedProgram; listen: PlannedListen } | null> => {
+    const saved = (await store.programs.list(fire.tenant)).find((program) => program.name === fire.program);
+    if (saved === undefined) return null;
+    const { reading } = readingOf(saved);
+    const listen = reading.readable ? reading.listens.find((one) => one.pipeline === fire.pipeline && one.refused === undefined) : undefined;
+    return listen === undefined ? null : { saved, listen };
+  };
+
+  /** The run a delivery queued as its `fire_event` row `fire`, started from
+   *  the mark before the delivery's arrivals, under its receipt: the
+   *  receipt and the run row are one write, then the run's record; null,
+   *  and nothing run, when its listen has run the arrival before. A retry of
+   *  the row whose own run took the receipt starts it only when its record
+   *  was never kept (its process died between the two writes): any other
+   *  is in hand already. Throws, its row left for a later `tick`, when a
+   *  write fails. */
+  const startQueued = async (fire: FireRow): Promise<EmbeddedRunOutcome | null> => {
+    const { tenant, runId, arrival } = fire;
+    const found = await queuedListen(fire);
+    if (found === null) {
+      if ((await statusOf(runId)) === null) {
+        log.warn(`${fire.program}: the listen that took the arrival ${arrival.identity} on ${arrival.edge} changed before its run started: it runs nothing`);
+        await store.runHost.leases.dropRunState({ runId });
+      }
+      return null;
+    }
+    const { saved: program, listen } = found;
     const connections = await store.connections.list(tenant);
     const firedAt = now();
+    const firedAtIso = firedAt.toISOString();
     const triggerEvent = arrivalTriggerOf({ pipelineInputId: listen.pipeline, adapterType: listen.plan.adapter, arrival, now: firedAt });
     const { costCapMicrodollars, maxSegmentSeconds, ...segmentLimits } = limits;
     const run: EmbeddedRun = {
@@ -547,18 +584,39 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
         languageVersion: program.languageVersion,
         movementName: listen.plan.movement,
         event: triggerEvent,
-        firedAt: firedAt.toISOString(),
+        firedAt: firedAtIso,
         teamId: tenantIdOf(tenant),
         catalog: await catalog(tenant),
         credentialIds: Object.fromEntries(connections.flatMap(({ name, credentialRef }) => (credentialRef !== undefined ? [[name, credentialRef]] : []))),
         limits: segmentLimits,
-        triggerMark,
+        triggerMark: fire.arrivalMark,
         ...(costCapMicrodollars !== undefined ? { costCapMicrodollars } : {}),
         ...(maxSegmentSeconds !== undefined ? { maxSegmentSeconds } : {}),
       },
       spentMicrodollars: 0,
     };
-    if (!(await store.runHost.startArrivalRun({ teamId: tenant, listen: listen.pipeline, key: minted.receipt, runId }))) return null;
+    // The run's facts as listen-fire's run row keeps them: what it fired with.
+    const facts = { source: program.source, languageVersion: program.languageVersion, event: triggerEvent, movementName: listen.plan.movement, firedAt: firedAtIso, triggerMark: fire.arrivalMark };
+    const started = await store.runHost.startArrivalRun({
+      teamId: tenant,
+      listen: listen.pipeline,
+      key: fire.receipt,
+      runId,
+      file: program.name,
+      movement: listen.plan.movement,
+      startedAt: firedAtIso,
+      input: JSON.stringify(facts),
+      deliveryId: fire.deliveryId,
+    });
+    if (!started) {
+      if ((await statusOf(runId)) === null) {
+        log.warn(`${program.name}:${listen.plan.movement} has run the arrival ${arrival.identity} on ${arrival.edge} before: this delivery runs nothing`);
+        // The waits the delivery opened for a run that never starts go.
+        await store.runHost.leases.dropRunState({ runId });
+        return null;
+      }
+      if ((await store.runs.get(runId)) !== null) return null;
+    }
     await store.runs.put(run);
     let outcome: EmbeddedRunOutcome;
     let parked = false;
@@ -580,9 +638,13 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
    * listen-fire's door takes it. Each arrival is judged against every listen
    * on its edge (`listenFires`), and a run minted for each it fires, in the
    * order the arrivals came. Then one write keeps the delivery: its arrivals
-   * logged, and the waits its runs open on their triggers, from the mark
-   * before them. Each minted run then starts, under its receipt, from that
-   * mark; then the runs the arrivals woke step on. What runs nothing is said
+   * logged, a `fire_event` row per minted run, and the waits its runs open
+   * on their triggers, from the mark before them, each live while its run's
+   * row is queued. Each row is then run here (`startQueued`) and done; one
+   * that fails stays, due a run lease after the delivery, for `tick` to
+   * start, and the delivery's provider id is forgotten so its sender's
+   * retry is kept again (listen-fire's door answers 500 there). Then the runs
+   * the arrivals woke step on. What runs nothing is said
    * once per delivery: an undecided verdict; an arrival that fits no node
    * the listens on its edge state; a listen this host does not fire as
    * written; a program it cannot read. A step's mark is held throughout, so
@@ -652,12 +714,24 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
       }
 
       const receipt = randomUUID();
-      const waits = await deliveryWaitsOf(tenant, delivery, minted, receipt);
+      const waits = await deliveryWaitsOf(tenant, delivery, minted);
+      // The rows this call runs itself: a drain takes one only once the call
+      // has had a run lease to, so only one that failed or whose process died.
+      const dueAt = new Date(at.getTime() + RUN_LEASE_TTL_MS).toISOString();
+      const fires = minted.map((run): Omit<FireRow, 'arrivalMark'> => ({
+        tenant,
+        program: run.saved.name,
+        pipeline: run.listen.pipeline,
+        arrival: run.arrival,
+        runId: run.runId,
+        receipt: run.receipt,
+        deliveryId: receipt,
+      }));
       const resendSeconds = modules.get(delivery.adapterType)?.manifest.resendWindowSeconds;
       const kept = await store.runHost.keepDelivery({
         subscriptionId: JSON.stringify([tenant, delivery.adapterType, delivery.connection ?? null]),
         delivery: { id: receipt, externalId: delivery.id ?? null, receivedAt: at.toISOString(), source, inline: true, events: [] },
-        work: [],
+        work: fires.map((fire): NewWorkRow => ({ kind: FIRE_EVENT_WORK_KIND, key: fireKeyOf(fire.runId), payload: fire, dueAt, teamId: tenant })),
         arrivals: {
           teamId: tenant,
           adapterType: delivery.adapterType,
@@ -673,18 +747,29 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
       }
       for (const line of lines) log.warn(line);
       const outcomes: EmbeddedRunOutcome[] = [];
-      for (const run of minted) {
-        const outcome = await fire(tenant, run, kept.arrivalMark);
-        if (outcome !== null) {
-          outcomes.push(outcome);
+      const failures: string[] = [];
+      for (const fire of fires) {
+        const key = fireKeyOf(fire.runId);
+        try {
+          const outcome = await startQueued({ ...fire, arrivalMark: kept.arrivalMark });
+          if (outcome !== null) outcomes.push(outcome);
+        } catch (error) {
+          failures.push(`${fire.program}, the arrival ${fire.arrival.identity} on ${fire.arrival.edge}: ${messageOf(error)}`);
           continue;
         }
-        log.warn(`${run.saved.name}:${run.listen.plan.movement} has run the arrival ${run.arrival.identity} on ${run.arrival.edge} before: this delivery runs nothing`);
-        // The waits the delivery opened for a run that never starts go.
-        await store.runHost.leases.dropRunState({ runId: run.runId });
+        // A row left undone is run again by a tick, which starts nothing twice.
+        await store.runHost.completeKey({ key }).catch((error: unknown) => log.warn(`the row of run ${fire.runId} was not completed (${messageOf(error)}): a tick runs it again, and it starts nothing twice`));
       }
       outcomes.push(...(await stepWork({ dueBy: now().toISOString(), kinds: [WAKE_AWAIT_WORK_KIND], tenant })));
-      return outcomes;
+      if (failures.length === 0) return outcomes;
+      const failed = `${failures.length} run(s) of the delivery did not start: ${failures.join('; ')}: \`tick\` starts each once a run lease has passed`;
+      // The sender's retry under the same id is kept, not taken for this one.
+      if (delivery.id !== undefined) {
+        await store.runHost.forgetDeliveryId({ id: receipt }).catch((error: unknown) => {
+          throw new Error(`${failed}; its delivery id was not forgotten: ${messageOf(error)}`);
+        });
+      }
+      throw new Error(failed);
     });
 
   /** One parked run's step: a segment re-entered from its leaf (or a race
@@ -746,10 +831,13 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
     }
   };
 
-  /** The run a claimed row steps, by its kind: a wake names its wait, a
-   *  timer's or a race's row names only its run. Null for a run the host no
-   *  longer keeps. */
+  /** The run a claimed row steps, by its kind: a delivery's row names the
+   *  run it starts, a wake names its wait, a timer's or a race's row names
+   *  only its run. Null for a run the host no longer keeps. */
   const rowRun = async (claimed: ClaimedWork): Promise<DueRow | null> => {
+    if (claimed.kind === FIRE_EVENT_WORK_KIND) {
+      return { kind: FIRE_EVENT_WORK_KIND, fire: fireRowOf(claimed.payload) ?? fail(`a ${claimed.kind} row whose payload names no run: ${JSON.stringify(claimed.payload)}`) };
+    }
     const kind = runHostWorkKindOf(claimed.kind) ?? fail(`claimed a work row of kind ${claimed.kind}, which this host never queues`);
     if (kind === WAKE_AWAIT_WORK_KIND) {
       const wake = waitWakeOf(claimed.payload) ?? fail(`a ${kind} row whose payload names no wait: ${JSON.stringify(claimed.payload)}`);
@@ -769,6 +857,11 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
    *  only this row's retry steps it on), or the run is not yet marked
    *  parked. */
   const stepRow = async (row: DueRow, dueBy: string, stepped: EmbeddedRunOutcome[]): Promise<'done' | 'busy'> => {
+    if (row.kind === FIRE_EVENT_WORK_KIND) {
+      const outcome = await startQueued(row.fire);
+      if (outcome !== null) stepped.push(outcome);
+      return 'done';
+    }
     const { runId, tenant: teamId } = row.run;
     const leases = store.runHost.leases;
     switch (row.kind) {
@@ -829,19 +922,19 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
     }
   };
 
-  /** Every due row of the run host's `kinds` (absent: all of them) stepped
-   *  once; given `tenant`, only that tenant's runs' rows (claimed by its team
+  /** Every due row of `kinds` (absent: the run host's and the runs a
+   *  delivery queued) stepped once; given `tenant`, only that tenant's runs' rows (claimed by its team
    *  where the store keeps rows' teams; any other tenant's row claimed is
    *  left due for a later step). A row that throws stays leased, retried once
    *  its lease lapses; the rows claimed after it go back due at once. */
-  const stepWork = async (input: { dueBy: string; kinds?: readonly RunHostWorkKind[]; tenant?: string }): Promise<EmbeddedRunOutcome[]> => {
+  const stepWork = async (input: { dueBy: string; kinds?: readonly EmbeddedWorkKind[]; tenant?: string }): Promise<EmbeddedRunOutcome[]> => {
     const work = store.runHost.work;
     const stepped: EmbeddedRunOutcome[] = [];
     const claims = await work.claimDue({
       limit: 100,
       leaseMs: RUN_LEASE_TTL_MS,
       dueBy: input.dueBy,
-      kinds: input.kinds ?? RUN_HOST_WORK_KINDS,
+      kinds: input.kinds ?? [...RUN_HOST_WORK_KINDS, FIRE_EVENT_WORK_KIND],
       ...(input.tenant !== undefined ? { teamId: input.tenant } : {}),
     });
     for (const [index, claimed] of claims.entries()) {
@@ -849,7 +942,7 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
         const row = await rowRun(claimed);
         // A run the host no longer keeps has nothing to step.
         if (row === null) await work.complete(claimed);
-        else if (input.tenant !== undefined && row.run.tenant !== input.tenant) await work.release({ ...claimed, why: 'busy' });
+        else if (input.tenant !== undefined && tenantOf(row) !== input.tenant) await work.release({ ...claimed, why: 'busy' });
         // Another process holds the run: its row goes back for later.
         else if ((await stepRow(row, input.dueBy, stepped)) === 'busy') await work.release({ ...claimed, why: 'busy' });
         else await work.complete(claimed);
@@ -1039,10 +1132,53 @@ function unfiredHere(plan: ListenPlan): string[] {
   ];
 }
 
-/** A due run host row, and the run it steps. */
+/** The work this host queues: the run host's, and the runs a delivery queued. */
+type EmbeddedWorkKind = RunHostWorkKind | typeof FIRE_EVENT_WORK_KIND;
+
+/** A due row, and the run it steps or starts. */
 type DueRow =
+  | { kind: typeof FIRE_EVENT_WORK_KIND; fire: FireRow }
   | { kind: typeof WAKE_AWAIT_WORK_KIND; run: EmbeddedRun; wake: WaitWake }
   | { kind: typeof RESUME_TIMER_WORK_KIND | typeof SETTLE_RACE_WORK_KIND; run: EmbeddedRun };
+
+function tenantOf(row: DueRow): string {
+  return row.kind === FIRE_EVENT_WORK_KIND ? row.fire.tenant : row.run.tenant;
+}
+
+/** A run a delivery queued (its `fire_event` row's payload): the listen of
+ *  the tenant's program it runs (by its pipeline), the arrival that fired it,
+ *  the run's id and the arrival's receipt, the kept delivery, and the mark
+ *  before the delivery's arrivals, which the store adds as it keeps the row. */
+interface FireRow {
+  tenant: string;
+  program: string;
+  pipeline: string;
+  arrival: Exclude<Arrival, { gone: true }>;
+  runId: string;
+  receipt: string;
+  deliveryId: string;
+  arrivalMark: number;
+}
+
+/** The `fire_event` row of the run `runId`. */
+function fireKeyOf(runId: string): string {
+  return `${FIRE_EVENT_WORK_KIND}:${runId}`;
+}
+
+/** A `fire_event` row's payload as this host queued it, or null. */
+function fireRowOf(payload: unknown): FireRow | null {
+  if (typeof payload !== 'object' || payload === null) return null;
+  const text = (key: string): string | null => {
+    const value: unknown = Reflect.get(payload, key);
+    return typeof value === 'string' ? value : null;
+  };
+  const [tenant, program, pipeline, runId, receipt, deliveryId] = ['tenant', 'program', 'pipeline', 'runId', 'receipt', 'deliveryId'].map(text);
+  const arrivalMark: unknown = Reflect.get(payload, 'arrivalMark');
+  const arrival = WireArrival.safeParse(Reflect.get(payload, 'arrival'));
+  if (tenant === null || program === null || pipeline === null || runId === null || receipt === null || deliveryId === null) return null;
+  if (typeof arrivalMark !== 'number' || !arrival.success || 'gone' in arrival.data) return null;
+  return { tenant, program, pipeline, arrival: arrival.data, runId, receipt, deliveryId, arrivalMark };
+}
 
 function fail(message: string): never {
   throw new Error(message);
