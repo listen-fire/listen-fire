@@ -7,6 +7,7 @@ export {
   MovementParserNotReady,
   assertParserReady,
   callJudgeArrival,
+  callLandingMisfits,
   callListenIdentity,
   initEngine,
   initParser,

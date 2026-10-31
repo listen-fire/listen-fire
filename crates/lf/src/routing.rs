@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 use movement_engine::listen_judge::{PlanArrival, Verdict, judge_arrival};
-use movement_parser::ast::{ImportSource, NamedArg, RValue, ShapeDeclaration, ShapeNode, Statement};
+use movement_engine::listen_landing::{DeclaredPayload, FileScope};
+use movement_parser::ast::{NamedArg, RValue, Statement};
 use movement_parser::catalog::types::CatalogSnapshot;
 use movement_parser::listen_plan::ListenPlan;
 use movement_parser::util::form::external_text;
@@ -148,14 +149,14 @@ impl Listen {
     /// it is (`-[:Requests]-><Payment>`), one line each; empty when it fits,
     /// or the listen states none.
     pub fn misfits(&self, arrival: &ArrivalIn) -> Vec<String> {
-        let fields = arrival.landing.as_ref().and_then(|landing| landing.get("fields")).unwrap_or(&Js::Null);
-        self.payload.as_ref().map(|declared| declared.misfits(fields)).unwrap_or_default()
+        let Some(declared) = &self.payload else { return Vec::new() };
+        declared.misfits(&arrival.landing.as_ref().and_then(|landing| landing.get("fields")).map_or(Json::Null, json_of))
     }
 
     /// Whether an event's payload fits the node the listen declares; a
     /// listen that declares none takes any.
     pub fn takes(&self, event: &Js) -> bool {
-        self.payload.as_ref().is_none_or(|declared| declared.misfits(event.get("payload").unwrap_or(&Js::Null)).is_empty())
+        self.payload.as_ref().is_none_or(|declared| declared.misfits(&event.get("payload").map_or(Json::Null, json_of)).is_empty())
     }
 
     /// Whether an event delivered for `credential` through the webhook
@@ -203,188 +204,6 @@ pub fn subscription_key(scope: &Scope) -> String {
             .collect()
     };
     scope.iter().map(|(_, value)| escaped(value)).collect::<Vec<_>>().join(".")
-}
-
-/// A listen's declared payload: the node, as listen-fire checks a body against it
-/// before any run. The checker has typed the movement against the same node,
-/// so a payload that fits is what the movement reads.
-#[derive(Debug, Clone)]
-pub struct DeclaredPayload {
-    pub name: String,
-    node: PayloadNode,
-}
-
-#[derive(Debug, Clone)]
-struct PayloadNode {
-    fields: Vec<PayloadField>,
-    /// A nested node: the key holds an object, or a list of them.
-    children: Vec<(String, PayloadNode)>,
-}
-
-#[derive(Debug, Clone)]
-struct PayloadField {
-    name: String,
-    kind: ValueKind,
-    nullable: bool,
-}
-
-/// What JSON a declared field's type takes.
-#[derive(Debug, Clone)]
-enum ValueKind {
-    Text,
-    Number,
-    Boolean,
-    /// One of a declared `type`'s values.
-    OneOf(Vec<String>),
-    /// `json`, a file, or a type listen-fire does not read the JSON of: any value.
-    Any,
-}
-
-impl ValueKind {
-    fn of(written: &str, enums: &HashMap<String, Vec<String>>) -> ValueKind {
-        match written.trim() {
-            "text" | "date" | "datetime" => ValueKind::Text,
-            "number" => ValueKind::Number,
-            "boolean" => ValueKind::Boolean,
-            other => enums.get(other.trim_matches('`')).map_or(ValueKind::Any, |options| ValueKind::OneOf(options.clone())),
-        }
-    }
-
-    fn describe(&self) -> String {
-        match self {
-            ValueKind::Text => "text".into(),
-            ValueKind::Number => "a number".into(),
-            ValueKind::Boolean => "a boolean".into(),
-            ValueKind::OneOf(options) => format!("one of {}", options.iter().map(|o| format!("\"{o}\"")).collect::<Vec<_>>().join(", ")),
-            ValueKind::Any => "any value".into(),
-        }
-    }
-
-    fn fits(&self, value: &Js) -> bool {
-        match (self, value) {
-            (ValueKind::Any, _) => true,
-            (ValueKind::Text, Js::Str(_)) | (ValueKind::Number, Js::Num(_)) | (ValueKind::Boolean, Js::Bool(_)) => true,
-            (ValueKind::OneOf(options), Js::Str(s)) => options.contains(s),
-            _ => false,
-        }
-    }
-}
-
-/// What a JSON value is, as a misfit names it.
-fn json_kind(value: &Js) -> &'static str {
-    match value {
-        Js::Str(_) => "text",
-        Js::Num(_) => "a number",
-        Js::Bool(_) => "a boolean",
-        Js::Arr(_) => "a list",
-        Js::Obj(_) => "an object",
-        _ => "null",
-    }
-}
-
-impl PayloadNode {
-    fn of(node: &ShapeNode, base: Option<PayloadNode>, enums: &HashMap<String, Vec<String>>) -> PayloadNode {
-        let mut out = base.unwrap_or(PayloadNode { fields: Vec::new(), children: Vec::new() });
-        for field in &node.fields {
-            out.fields.retain(|f| f.name != field.name);
-            out.fields.push(PayloadField { name: field.name.clone(), kind: ValueKind::of(&field.type_, enums), nullable: field.nullable == Some(true) });
-        }
-        for child in &node.children {
-            out.children.retain(|(name, _)| *name != child.name);
-            out.children.push((child.name.clone(), PayloadNode::of(child, None, enums)));
-        }
-        out
-    }
-
-    fn misfits(&self, value: &Js, path: &str, out: &mut Vec<String>) {
-        let Js::Obj(object) = value else {
-            out.push(format!("{} is {}, not an object", if path.is_empty() { "the body" } else { path }, json_kind(value)));
-            return;
-        };
-        let at = |name: &str| if path.is_empty() { format!("`{name}`") } else { format!("`{path}.{name}`") };
-        for field in &self.fields {
-            match object.get(&field.name) {
-                None | Some(Js::Null) if field.nullable => {}
-                None | Some(Js::Null) => out.push(format!("{} is missing ({})", at(&field.name), field.kind.describe())),
-                Some(found) if !field.kind.fits(found) => out.push(format!("{} is {}, not {}", at(&field.name), json_kind(found), field.kind.describe())),
-                Some(_) => {}
-            }
-        }
-        for (name, child) in &self.children {
-            let inner = if path.is_empty() { name.clone() } else { format!("{path}.{name}") };
-            match object.get(name) {
-                None | Some(Js::Null) => {}
-                Some(Js::Arr(items)) => items.iter().for_each(|item| child.misfits(item, &inner, out)),
-                Some(found) => child.misfits(found, &inner, out),
-            }
-        }
-    }
-}
-
-/// What one file declares for reading a payload node: its nodes, its enums,
-/// and the names it imports from other files (local name to file and exported
-/// name), as the checker's linker resolves them.
-struct FileScope<'a> {
-    shapes: HashMap<String, &'a ShapeDeclaration>,
-    enums: HashMap<String, Vec<String>>,
-    imports: HashMap<String, (String, String)>,
-}
-
-impl<'a> FileScope<'a> {
-    fn of(program: &'a movement_parser::ast::Program) -> FileScope<'a> {
-        let mut scope = FileScope { shapes: HashMap::new(), enums: HashMap::new(), imports: HashMap::new() };
-        for statement in &program.statements {
-            match statement {
-                Statement::Shape(shape) => {
-                    scope.shapes.insert(shape.name.clone(), shape);
-                }
-                Statement::Type(declaration) => {
-                    scope.enums.insert(declaration.name.clone(), declaration.options.clone());
-                }
-                Statement::Import(import) => {
-                    if let ImportSource::File { path } = &import.source {
-                        for name in &import.names {
-                            scope.imports.insert(name.alias.clone().unwrap_or_else(|| name.name.clone()), (path.clone(), name.name.clone()));
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        scope
-    }
-
-    /// The node `name` as this file means it, and the file that declares it:
-    /// its own, or the one it imports it from (through any chain of imports).
-    fn shape<'s>(&'s self, name: &str, scopes: &'s HashMap<String, FileScope<'a>>, hops: usize) -> Option<(&'a ShapeDeclaration, &'s FileScope<'a>)> {
-        if let Some(shape) = self.shapes.get(name) {
-            return Some((shape, self));
-        }
-        let (path, exported) = self.imports.get(name).filter(|_| hops < 16)?;
-        scopes.get(path)?.shape(exported, scopes, hops + 1)
-    }
-}
-
-impl DeclaredPayload {
-    /// The node `name` as `scope` means it, a base it extends folded in. None
-    /// when no such node is declared or imported (the checker refuses that
-    /// listen).
-    fn of(name: &str, scope: &FileScope<'_>, scopes: &HashMap<String, FileScope<'_>>) -> Option<DeclaredPayload> {
-        fn node(name: &str, scope: &FileScope<'_>, scopes: &HashMap<String, FileScope<'_>>, depth: usize) -> Option<PayloadNode> {
-            let (shape, owner) = scope.shape(name, scopes, 0)?;
-            let base = shape.extends.as_ref().filter(|_| depth < 16).and_then(|b| node(&b.name, owner, scopes, depth + 1));
-            Some(PayloadNode::of(&shape.root, base, &owner.enums))
-        }
-        let name = name.trim().trim_matches('`');
-        Some(DeclaredPayload { name: name.to_string(), node: node(name, scope, scopes, 0)? })
-    }
-
-    /// What of `payload` does not fit the node, one line each; empty when it fits.
-    pub fn misfits(&self, payload: &Js) -> Vec<String> {
-        let mut out = Vec::new();
-        self.node.misfits(payload, "", &mut out);
-        out
-    }
 }
 
 /// `configValueOf`: a listen config value, statically evaluated; anything
@@ -573,7 +392,7 @@ fn listens_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Pro
         // A unit the file does not bind itself is the host's own.
         let unit = movement_parser::version::RUN_HOST_UNITS.iter().find(|u| **u == instance).map(|u| (u.to_string(), None, Vec::new()));
         constructions.get(instance).cloned().or(unit).ok_or_else(|| {
-            let why = match scope.imports.contains_key(instance) {
+            let why = match scope.imports(instance) {
                 true => "is imported from another file, which cannot make a connection",
                 false => "is no connection this file makes",
             };
@@ -1153,18 +972,9 @@ mod tests {
         let event = |payload: &str| js(&format!(r#"{{"payload":{payload}}}"#));
         let fits = event(r#"{"id":"pay_1","amount":12,"currency":"usd","meta":{"x":[1]},"card":{"last4":"4242"},"extra":true}"#);
         assert!(paid.takes(&fits) && any.takes(&fits));
-        let misfits = |payload: &str| paid.payload.as_ref().unwrap().misfits(&js(payload));
-        assert_eq!(
-            misfits(r#"{"amount":"12","currency":"gbp","card":{"last4":4242}}"#),
-            [
-                "`id` is missing (text)",
-                "`amount` is text, not a number",
-                "`currency` is text, not one of \"usd\", \"eur\"",
-                "`meta` is missing (any value)",
-                "`card.last4` is a number, not text",
-            ]
-        );
-        assert_eq!(misfits(r#"[1]"#), ["the body is a list, not an object"]);
+        // The lines themselves are the engine's (movement_engine::listen_landing,
+        // held to conformance/listen-landings.json).
+        assert!(!paid.takes(&event(r#"[1]"#)));
         assert!(!paid.takes(&event(r#"{"id":"pay_1"}"#)) && any.takes(&event(r#"{"id":"pay_1"}"#)));
     }
 
@@ -1178,12 +988,8 @@ mod tests {
         assert_eq!(paid.payload.as_ref().map(|p| p.name.as_str()), Some("Paid"));
         let event = |payload: &str| js(&format!(r#"{{"payload":{payload}}}"#));
         assert!(paid.takes(&event(r#"{"id":"p","amount":1,"currency":"usd"}"#)));
-        assert_eq!(
-            paid.payload.as_ref().unwrap().misfits(&js(r#"{"amount":"1","currency":"gbp"}"#)),
-            ["`id` is missing (text)", "`amount` is text, not a number", "`currency` is text, not one of \"usd\", \"eur\""],
-            "the imported node's base and enum come from its own file"
-        );
-        assert!(!paid.takes(&event(r#"{"id":"p"}"#)));
+        assert!(!paid.takes(&event(r#"{"id":"p","amount":1,"currency":"gbp"}"#)), "the imported node's enum comes from its own file");
+        assert!(!paid.takes(&event(r#"{"amount":1,"currency":"usd"}"#)), "the imported node's base comes from its own file");
     }
 
     #[test]

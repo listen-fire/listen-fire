@@ -1044,7 +1044,7 @@ impl Session {
             set.listens.iter().filter(|l| l.plan.is_none() && l.adapter == external && event_matches_trigger_scope(event, &l.config, arrival) && to(l)).collect();
         let (reached, misfit): (Vec<&Listen>, Vec<&Listen>) = heard.into_iter().partition(|l| l.takes(event));
         for listen in misfit {
-            let declared = listen.payload.as_ref().map(|p| (p.name.as_str(), p.misfits(event.get("payload").unwrap_or(&Js::Null)).join("; "))).unwrap_or_default();
+            let declared = listen.payload.as_ref().map(|p| (p.name.as_str(), p.misfits(&event.get("payload").map_or(serde_json::Value::Null, crate::wire::json_of_js)).join("; "))).unwrap_or_default();
             fired.redelivered.push(format!("{}:{} declares the payload {}, which this event does not fit ({}): it runs nothing", listen.file, listen.movement_name, declared.0, declared.1));
         }
         for listen in reached {

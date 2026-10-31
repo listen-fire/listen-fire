@@ -1,7 +1,8 @@
 // The embedded host's listens are the check's plans: an arrival a module
 // reports runs every saved listen on its edge whose judge fires it, a manual
-// run is an Invocation arriving, and a listen this host would not fire as it
-// is written is refused at save, by name.
+// run is an Invocation arriving, an arrival that does not fit the node a
+// listen states its landing is runs nothing, and a listen this host would not
+// fire as it is written is refused at save, by name.
 
 import { BASE_RUNTIME_CAPABILITIES, type Arrival } from 'engine-contracts';
 import { defineModule, type ModuleContext } from 'module-kit';
@@ -84,6 +85,45 @@ function crmModule(written: string[], options: { carried: boolean }) {
       introspectedSchema: true,
     },
     credentials: [{ name: 'crm', kind: 'static', fields: [{ name: 'space' }] }],
+    create,
+  });
+}
+
+/** A webhook door: one untyped edge, `Requests`, each body arriving on it
+ *  as its fields. A listen states what the body is. */
+function hookModule() {
+  const create = (): Adapter => ({
+    adapterType: 'hook',
+    supportedTriggers: ['webhook'],
+    runtimeCapabilities: () => BASE_RUNTIME_CAPABILITIES,
+    listEntryPoints: async () => [{ typeId: 'Request', displayName: 'Request', collectionName: 'Requests', readable: false, writable: false, listenable: true, delivery: 'connection' }],
+    describe: async () => null,
+    resolveEntity: async () => ({ candidates: [] }),
+    getFieldValue: async () => null,
+    getRelated: async () => [],
+    createRecord: async () => {
+      throw new Error('not used');
+    },
+    updateRecord: async () => {
+      throw new Error('not used');
+    },
+    deleteRecord: async () => {
+      throw new Error('not used');
+    },
+  });
+  return defineModule({
+    kind: 'adapter',
+    name: '@test/hook',
+    manifest: {
+      adapterType: 'hook',
+      displayName: 'Hook',
+      description: 'A webhook door.',
+      supportedTriggers: ['webhook'],
+      methods: ['listEntryPoints', 'describe', 'resolveEntity', 'getFieldValue', 'getRelated'],
+      declaredCredentials: ['hook'],
+      introspectedSchema: true,
+    },
+    credentials: [{ name: 'hook', kind: 'static', fields: [{ name: 'secret' }] }],
     create,
   });
 }
@@ -199,6 +239,59 @@ describe("the embedded host's listens", () => {
     written.length = 0;
     expect(await host.dispatch('acme', { adapterType: 'crm', arrivals: [company('Acme', { notFor })] })).toHaveLength(1);
     expect(written).toEqual(['acme: Seen Acme']);
+  });
+
+  it('an arrival that fits the node a listen states its landing is runs it; one that fits no listen runs nothing, said by each', async () => {
+    const written: string[] = [];
+    const warned: string[] = [];
+    const crm = crmModule(written, { carried: true });
+    const hook = hookModule();
+    const host = createEmbeddedHost({ modules: [crm, hook], store: memoryEmbeddedHostStore(), log: { warn: (message) => void warned.push(message) }, moduleHost: () => ({ validateResults: true }) });
+    await host.connect('acme', { name: 'north', module: crm, credential: { space: 'north' } });
+    await host.connect('acme', { name: 'door', module: hook, credential: { secret: 's' } });
+    const source = `import { crm, hook } from adapters
+import { north, door } from credentials
+
+app = connect crm using north
+stripe = connect hook using door
+
+node Payment {
+  id: <text>
+  amount: <number>
+}
+
+node Refund {
+  id: <text>
+  reason: <text>
+}
+
+function paid(p: <Payment>) {
+  write app-[:Companies]-> { Name: "Paid \${p.id}" }
+}
+
+function refunded(r: <Refund>) {
+  write app-[:Companies]-> { Name: "Refunded \${r.id}" }
+}
+
+listen to stripe-[:Requests]-><Payment> fire paid
+listen to stripe-[:Requests]-><Refund> fire refunded
+`;
+    expect(await host.save('acme', { name: 'hooks', source })).toEqual({ saved: true, listens: 2 });
+    const request = (identity: string, fields: Record<string, unknown>): Arrival => ({ edge: 'Requests', identity, landing: { recordType: 'Request', fields } });
+
+    const fired = await host.dispatch('acme', { adapterType: 'hook', connection: 'door', arrivals: [request('evt_1', { id: 'pay_1', amount: 12 })] });
+
+    expect(fired.map(({ movement, outcome }) => ({ movement, ok: outcome.ok }))).toEqual([{ movement: 'paid', ok: true }]);
+    expect(written).toEqual(['acme: Paid pay_1']);
+    // The Refund listen's misfit is not said: a listen on the edge took the arrival.
+    expect(warned).toEqual([]);
+
+    expect(await host.dispatch('acme', { adapterType: 'hook', connection: 'door', arrivals: [request('evt_2', { id: 'pay_2', amount: 'twelve' })] })).toEqual([]);
+    expect(written).toEqual(['acme: Paid pay_1']);
+    expect(warned).toEqual([
+      'hooks:paid: the arrival evt_2 on Requests is not a Payment (`amount` is text, not a number): it runs nothing',
+      'hooks:refunded: the arrival evt_2 on Requests is not a Refund (`reason` is missing (text)): it runs nothing',
+    ]);
   });
 
   it('refuses a listen whose earlier hop only listen-fire lists, and one in the retired settings form, naming each', async () => {

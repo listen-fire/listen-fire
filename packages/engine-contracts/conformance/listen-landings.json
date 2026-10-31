@@ -1,0 +1,98 @@
+{
+  "about": "Whether what landed fits the node a listen states it is (`listen to hook-[:Requests]-><Payment> fire f`): a host checks each arrival that fires such a listen against the node, and one that does not fit runs nothing, the lines naming what does not fit. `source` names the program, `node` the type the listen states, `landing` the record's fields; `named` is the node's name as the lines name it, and `misfits` the lines, in the node's field order (its base's first), nested nodes after the fields, an empty list when it fits. A field the node marks `| null` may be absent; an enum takes only its values; `json` takes any value; a nested node is checked when present, each item of a list of them. Held by listen-fire's Rust (crates/movement-engine/src/listen_landing.rs) and the engine's TypeScript (landingMisfits, through the wasm).",
+  "sources": {
+    "payments": "import { webhook } from adapters\nimport { StripeHook } from credentials\n\nstripe = connect webhook using StripeHook\n\ntype Currency = <\"usd\" | \"eur\">\n\nnode Charge {\n  id: <text>\n}\n\nnode Payment extends Charge {\n  amount: <number>\n  currency: <Currency>\n  note: <text | null>\n  meta: <json>\n  node card {\n    last4: <text>\n  }\n  node lines {\n    sku: <text>\n  }\n}\n\nnode `Odd Name` {\n  ok: <boolean>\n}\n\nfunction paid(p: <Payment>) {\n}\n\nlisten to stripe-[:Requests]-><Payment> fire paid\n"
+  },
+  "cases": [
+    {
+      "case": "a landing that has every field fits, extra fields and all",
+      "source": "payments",
+      "node": "Payment",
+      "landing": {
+        "id": "pay_1",
+        "amount": 12,
+        "currency": "usd",
+        "meta": {
+          "x": [
+            1
+          ]
+        },
+        "card": {
+          "last4": "4242"
+        },
+        "extra": true
+      },
+      "named": "Payment",
+      "misfits": []
+    },
+    {
+      "case": "each field that is missing or of another kind is named, its base's first, nested ones by their path",
+      "source": "payments",
+      "node": "Payment",
+      "landing": {
+        "amount": "12",
+        "currency": "gbp",
+        "card": {
+          "last4": 4242
+        }
+      },
+      "named": "Payment",
+      "misfits": [
+        "`id` is missing (text)",
+        "`amount` is text, not a number",
+        "`currency` is text, not one of \"usd\", \"eur\"",
+        "`meta` is missing (any value)",
+        "`card.last4` is a number, not text"
+      ]
+    },
+    {
+      "case": "a nullable field may be null, and each item of a nested list is checked",
+      "source": "payments",
+      "node": "Payment",
+      "landing": {
+        "id": "pay_2",
+        "amount": 1,
+        "currency": "eur",
+        "note": null,
+        "meta": null,
+        "lines": [
+          {
+            "sku": "a"
+          },
+          {
+            "sku": 2
+          }
+        ]
+      },
+      "named": "Payment",
+      "misfits": [
+        "`meta` is missing (any value)",
+        "`lines.sku` is a number, not text"
+      ]
+    },
+    {
+      "case": "a landing that is not an object is said whole",
+      "source": "payments",
+      "node": "Payment",
+      "landing": [
+        1
+      ],
+      "named": "Payment",
+      "misfits": [
+        "the body is a list, not an object"
+      ]
+    },
+    {
+      "case": "a node named in backticks is named without them",
+      "source": "payments",
+      "node": "`Odd Name`",
+      "landing": {
+        "ok": "yes"
+      },
+      "named": "Odd Name",
+      "misfits": [
+        "`ok` is text, not a boolean"
+      ]
+    }
+  ]
+}

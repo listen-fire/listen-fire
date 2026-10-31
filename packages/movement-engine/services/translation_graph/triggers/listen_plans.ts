@@ -1,16 +1,18 @@
 // A program's standing listens, as its check answers them (one plan per
-// `listen to <traversal> fire f`), whether an arrival fires one, and the
-// pipeline each is named by. The judge and a plan's identity are the
-// engine's own (crates/movement-engine/src/listen_judge.rs,
+// `listen to <traversal> fire f`), whether an arrival fires one, whether what
+// landed fits the node a listen states it is, and the pipeline each is named
+// by. The judge, the landing check and a plan's identity are the engine's
+// own (crates/movement-engine/src/listen_judge.rs, listen_landing.rs,
 // crates/movement-parser/src/listen_plan.rs), reached through the wasm, so
 // this host and listen-fire decide every arrival alike
-// (engine-contracts/conformance/listen-arrivals.json) and name every listen
-// alike (conformance/listen-pipelines.json).
+// (engine-contracts/conformance/listen-arrivals.json, listen-landings.json)
+// and name every listen alike (conformance/listen-pipelines.json).
 
 import { createHash } from 'node:crypto';
 
 import { listenPlanSchema, verdictSchema } from 'engine-contracts';
-import { callJudgeArrival, callListenIdentity } from 'movement-lang';
+import { callJudgeArrival, callLandingMisfits, callListenIdentity } from 'movement-lang';
+import { z } from 'zod';
 
 import type { Arrival, ListenPlan, PlanArrival, TriggerEvent, Verdict } from 'engine-contracts';
 import type { Program } from 'movement-lang';
@@ -31,6 +33,19 @@ export function judgeArrival(plan: ListenPlan, arrival: PlanArrival, nowMs: numb
   const reply = callJudgeArrival(JSON.stringify({ plan, arrival, nowMs }));
   if (!reply.ok) throw new Error(`the listen judge refused its input: ${JSON.stringify(reply.json)}`);
   return verdictSchema.parse(reply.json);
+}
+
+const landingMisfitsSchema = z.object({ node: z.string(), misfits: z.array(z.string()) }).strict();
+
+/** What of `landing` (an arrival's record's fields) does not fit `node`,
+ *  the node a listen states its landing is (`-[:Requests]-><Payment>`), as
+ *  the single file `source` declares it: the node's name as the lines name
+ *  it, and one line per misfit, none when it fits. An arrival that misfits
+ *  runs nothing, as listen-fire has it. */
+export function landingMisfits(input: { source: string; node: string; landing: unknown }): z.infer<typeof landingMisfitsSchema> {
+  const reply = callLandingMisfits(JSON.stringify(input));
+  if (!reply.ok) throw new Error(`the landing check refused its input: ${JSON.stringify(reply.json)}`);
+  return landingMisfitsSchema.parse(reply.json);
 }
 
 /** What makes two listens one (`ListenPlan::identity`): the plan, its hops'

@@ -75,7 +75,8 @@ type CheckerFunction =
   | 'language_query'
   | 'story_analysis'
   | 'judge_arrival'
-  | 'listen_identity';
+  | 'listen_identity'
+  | 'landing_misfits';
 
 interface ParserExports extends BufferExports {
   call(fn: WasmFunction, args: number[]): number;
@@ -313,6 +314,19 @@ export function callJudgeArrival(inputJson: string): { ok: boolean; json: unknow
  */
 export function callListenIdentity(planJson: string): { ok: boolean; json: unknown } {
   return callChecker('listen_identity', [planJson], []);
+}
+
+/**
+ * What of an arrival's landing does not fit the node a listen states it is
+ * (crates/movement-engine/src/abi.rs `landing_misfits`): `{source, node,
+ * landing}` as JSON, and the reply — `{node, misfits}`, the misfits empty
+ * when it fits — or `{error}` for an input that does not read, a source that
+ * does not parse, or one that declares no such node.
+ *
+ * @internal Used by the engine's landing check (movement-engine triggers/listen_plans.ts).
+ */
+export function callLandingMisfits(inputJson: string): { ok: boolean; json: unknown } {
+  return callChecker('landing_misfits', [inputJson], []);
 }
 
 function callChecker(fn: CheckerFunction, inputs: string[], extra: number[]): { ok: boolean; json: unknown } {
@@ -579,6 +593,7 @@ function readExports(raw: Record<string, unknown>): ParserExports {
     'story_analysis',
     'judge_arrival',
     'listen_identity',
+    'landing_misfits',
   ] as const) {
     if (typeof raw[fn] !== 'function') continue;
     const call = exported(fn);

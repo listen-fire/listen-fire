@@ -5,7 +5,8 @@
 // programs that it fires (`dispatch`) and wakes the runs awaiting it
 // (`arrive`), and `tick` steps on the runs that parked on a timer once it is
 // due. Every rule is the engine's own: the checker, the plan it answers for
-// each listen, the judge of an arrival (`listenFires`), the park sink, the
+// each listen, the judge of an arrival (`listenFires`), the check of what
+// landed against the node a listen states it is (`landingMisfits`), the park sink, the
 // waits and the drains. The embedder supplies its modules, a
 // store, and what arrives; the engine's public parts this is built from serve a
 // host that needs another shape (docs/embedding.md). Its own package, outside
@@ -29,7 +30,7 @@ import {
 import { buildCatalogSnapshot, type CatalogAdapterInput } from 'movement-engine/public/catalog';
 import { MovementEngineError, inProcessHost, introspectAdapter, type InProcessHostOptions } from 'movement-engine/public/embed';
 import type { EngineHost } from 'movement-engine/public/host';
-import { arrivalTriggerOf, listenFires, listenPlansOf, plannedListensOf, type PlannedListen } from 'movement-engine/public/inbound';
+import { arrivalTriggerOf, landingMisfits, listenFires, listenPlansOf, plannedListensOf, type PlannedListen } from 'movement-engine/public/inbound';
 import {
   ENGINE_VERSION,
   checkAnswerInRust,
@@ -206,12 +207,14 @@ export interface EmbeddedHost {
   /** Check a program against the tenant's catalog; save it if clean. A
    *  listen this host would not fire as written is refused by name: one in
    *  the retired settings form, one whose earlier hop only listen-fire
-   *  lists, one that states the node its landing is. */
+   *  lists. */
   save(tenant: string, program: { name: string; source: string }): Promise<SaveAnswer>;
   /** Run every listen of the tenant's programs on whose last edge an
    *  arrival of `delivery` landed, on the connection it came for, that the
    *  listen's judge fires, one outcome each. One the judge cannot decide
-   *  runs nothing, said once per delivery (`log`). Runs awaiting what
+   *  runs nothing, said once per delivery (`log`). So does an arrival that
+   *  does not fit the node a listen states its landing is
+   *  (`-[:Requests]-><Payment>`), said when no listen on its edge took it. Runs awaiting what
    *  arrived are woken by `arrive`, not here. */
   dispatch(tenant: string, delivery: Delivery): Promise<EmbeddedRunOutcome[]>;
   /** Run one program now: an Invocation lands on the manual unit's
@@ -450,7 +453,9 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
   /** Each arrival of `delivery` judged against every listen of `programs`
    *  on its edge (`listenFires`), and each listen it fires run, in the order
    *  the arrivals came. An Undecided verdict runs nothing, its reason said
-   *  once per delivery. */
+   *  once per delivery. An arrival that does not fit the node a listen states
+   *  its landing is runs nothing either; what does not fit is said only when
+   *  no listen on its edge took the arrival, as listen-fire has it. */
   const fireArrivals = async (tenant: string, programs: readonly SavedProgram[], delivery: Delivery): Promise<EmbeddedRunOutcome[]> => {
     const listening = programs.map((program) => ({
       program,
@@ -462,19 +467,36 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
     const outcomes: EmbeddedRunOutcome[] = [];
     for (const arrival of delivery.arrivals) {
       if ('gone' in arrival) continue;
+      // Whether a listen on the edge took it (an undecided one counts), and
+      // what was said of the listens it does not fit.
+      let taken = false;
+      const misfitLines: string[] = [];
       for (const { program, listens } of listening) {
         for (const listen of listens) {
           const verdict = listenFires(listen, arrival, delivered, nowMs);
           if (verdict === null || 'skips' in verdict) continue;
+          const named = `${program.name}:${listen.plan.movement}`;
           if ('undecided' in verdict) {
-            const line = `${program.name}:${listen.plan.movement}: an arrival on ${arrival.edge} cannot be judged (${verdict.undecided}): it runs nothing`;
+            taken = true;
+            const line = `${named}: an arrival on ${arrival.edge} cannot be judged (${verdict.undecided}): it runs nothing`;
             if (!said.has(line)) log.warn(line);
             said.add(line);
             continue;
           }
+          if (listen.plan.landing !== undefined) {
+            const { node, misfits } = landingMisfits({ source: program.source, node: listen.plan.landing, landing: arrival.landing.fields });
+            if (misfits.length > 0) {
+              misfitLines.push(`${named}: the arrival ${arrival.identity} on ${arrival.edge} is not a ${node} (${misfits.join('; ')}): it runs nothing`);
+              continue;
+            }
+          }
+          taken = true;
           outcomes.push(await fire(tenant, program, listen, arrival));
         }
       }
+      // listen-fire says these at debug when another listen took the arrival;
+      // this host's log has no debug.
+      if (!taken) for (const line of misfitLines) log.warn(line);
     }
     return outcomes;
   };
@@ -730,20 +752,12 @@ const SETTINGS_RETIRED = 'MOV_LISTEN_SETTINGS_RETIRED';
 /** Why this host would not fire `plan` as it is written, if it would not.
  *  listen-fire alone lists the members of an earlier hop whose WHERE an
  *  arrival cannot be judged by (a `resolved` hop): judged here with that hop
- *  unjudged, it would fire under every member. And listen-fire alone checks
- *  an arrival against the node a listen states its landing is. */
+ *  unjudged, it would fire under every member. */
 function unfiredHere(plan: ListenPlan): string[] {
-  const named = `the listen that fires ${plan.movement}`;
   const resolved = plan.hops.filter((hop) => hop.judged === 'resolved').map((hop) => hop.edge);
+  if (resolved.length === 0) return [];
   return [
-    ...(resolved.length > 0
-      ? [
-          `${named} filters ${resolved.map((edge) => `\`${edge}\``).join(', ')} by a WHERE its module's arrivals do not carry the record for: only listen-fire lists those members to judge it, and this host would fire under every one. Filter that hop on the landing's fields instead, or run the listen on listen-fire`,
-        ]
-      : []),
-    ...(plan.landing !== undefined
-      ? [`${named} states its landing is a ${plan.landing}: this host does not check an arrival against the node a listen states, so it would run one that does not fit`]
-      : []),
+    `the listen that fires ${plan.movement} filters ${resolved.map((edge) => `\`${edge}\``).join(', ')} by a WHERE its module's arrivals do not carry the record for: only listen-fire lists those members to judge it, and this host would fire under every one. Filter that hop on the landing's fields instead, or run the listen on listen-fire`,
   ];
 }
 

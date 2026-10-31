@@ -564,7 +564,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
             let payload = event.get("payload").unwrap_or(&Js::Null);
             for listen in reached {
                 let Some(declared) = &listen.payload else { continue };
-                lines.push(format!("{}, as the listen firing {}:{} declares it: {}", declared.name, listen.file, listen.movement_name, declared.misfits(payload).join("; ")));
+                lines.push(format!("{}, as the listen firing {}:{} declares it: {}", declared.name, listen.file, listen.movement_name, declared.misfits(&crate::wire::json_of_js(payload)).join("; ")));
             }
         }
         (!lines.is_empty()).then(|| format!("the body does not fit what the listens on {} declare — {}", source.install, lines.join(" | ")))

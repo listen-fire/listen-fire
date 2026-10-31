@@ -331,6 +331,42 @@ fn identity_json(plan: &str) -> Result<serde_json::Value, serde_json::Value> {
     Ok(json!({ "identity": plan.identity() }))
 }
 
+/// `landing_misfits({source, node, landing})`: what of an arrival's landing
+/// (its record's fields) does not fit the node `node` the listen states it is,
+/// as `source` declares it (crate::listen_landing) — `{"node": "…",
+/// "misfits": ["…"]}`, empty when it fits — and 0; `{error}` and 1 for an
+/// input that does not read, a source that does not parse or one that
+/// declares no such node. A host runs nothing for an arrival that misfits,
+/// as listen-fire does (crates/lf/src/runs.rs `fire_arrivals_to`).
+///
+/// # Safety
+/// The input range must be readable; the out slots writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn landing_misfits(input_ptr: *const u8, input_len: u32, out_ptr_ptr: *mut usize, out_len_ptr: *mut usize) -> u32 {
+    install_panic_hook();
+    let (status, answer) = match unsafe { utf8(input_ptr, input_len, "the input") }.and_then(misfits_json) {
+        Ok(misfits) => (OK, misfits),
+        Err(error) => (ERROR, json!({ "error": error })),
+    };
+    unsafe { write_out(to_sorted_json(&answer), out_ptr_ptr, out_len_ptr) };
+    status
+}
+
+fn misfits_json(input: &str) -> Result<serde_json::Value, serde_json::Value> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Landing {
+        source: String,
+        node: String,
+        landing: serde_json::Value,
+    }
+    let landing: Landing =
+        serde_json::from_str(input).map_err(|e| json!({ "message": format!("landing_misfits's input is not a source, a node and a landing: {e}") }))?;
+    let (declared, misfits) =
+        crate::listen_landing::landing_misfits(&landing.source, &landing.node, &landing.landing).map_err(|message| json!({ "message": format!("landing_misfits: {message}") }))?;
+    Ok(json!({ "node": declared.name, "misfits": misfits }))
+}
+
 fn judgement_json(input: &str) -> Result<serde_json::Value, serde_json::Value> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -511,6 +547,26 @@ mod tests {
         let (status, answer) = identify(r#"{"movement":"f"}"#);
         assert_eq!(status, ERROR);
         assert!(answer["error"]["message"].as_str().unwrap().starts_with("listen_identity's input is not a plan: "), "{answer}");
+    }
+
+    #[test]
+    fn the_misfits_of_a_landing_are_the_lines_listen_fire_says_and_an_input_that_does_not_read_is_refused() {
+        let misfits = |text: &str| {
+            let (ptr, len) = input(text);
+            let (mut out_ptr, mut out_len) = (0usize, 0usize);
+            let status = unsafe { landing_misfits(ptr, len, &mut out_ptr, &mut out_len) };
+            unsafe { dealloc(ptr, len) };
+            (status, output(out_ptr, out_len))
+        };
+        let source = "node Payment {\n  amount: <number>\n}\n";
+        let asking = |landing: Json| json!({ "source": source, "node": "Payment", "landing": landing }).to_string();
+        assert_eq!(misfits(&asking(json!({ "amount": 1 }))), (OK, json!({ "node": "Payment", "misfits": [] })));
+        assert_eq!(misfits(&asking(json!({ "amount": "1" }))), (OK, json!({ "node": "Payment", "misfits": ["`amount` is text, not a number"] })));
+        let (status, answer) = misfits(r#"{"source":""}"#);
+        assert_eq!(status, ERROR);
+        assert!(answer["error"]["message"].as_str().unwrap().starts_with("landing_misfits's input is not a source, a node and a landing: "), "{answer}");
+        let (status, answer) = misfits(&json!({ "source": source, "node": "Refund", "landing": {} }).to_string());
+        assert_eq!((status, answer), (ERROR, json!({ "error": { "message": "landing_misfits: the source declares no node Refund" } })));
     }
 
     #[test]
