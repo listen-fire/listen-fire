@@ -169,6 +169,7 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
 - The engine package's host (`@listen-fire/engine`, `@listen-fire/engine-contracts`) moves to host families version 2, as the Rust embed did.
   - `EngineHost.park.waits` (`mark`, `open`, `arrivals`, `note`) serves a run's waits, and the in-process host passes the waits it is given to the engine. `park.sink.commitAwaitPark` and `park.wake` take a `waitId`. `RunInput.triggerMark` names the arrival log's mark where the delivery that started the run was kept.
   - Gone: `park.callbacks`, `fireCallbackBody`, `CallbackBodyInput` and a host recording's `callbackBody` entry (the recording format is version 3; a version 2 recording still reads unless it records a callback body, which is refused by name); an adapter's `awaitable` capability (`resolveAwait`) and `wakeKeys`, and the remote adapter's forwarding of both. A remote module that offers `awaitKeys` is asked it.
+  - The story analysis's body kinds no longer list `callback` (docs/contracts/story-analysis.md).
   - The inbound doors (`answerDelivery`, `answerWake`) hand what a delivery says arrived to the store's `logArrivals`, in place of `enqueueWakes` by key. A delivery's arrivals are logged only once all its receipts are queued: a receipt that cannot be queued fails the delivery (500) with no arrival logged, as `listen-fire` keeps both in one write. The `wake` door takes `{ arrivals }` and refuses `{ keys }` (400, naming adapter protocol 2.5 and `arrivals`), as `listen-fire`'s does. A module's acceptance that names a `reply` is answered with it once the delivery is kept, in place of the door's acknowledgement.
   - Why: a host built on the engine package serves the same contract as `listen-fire`, so a run waits on arrivals there too.
 - The engine package's run host (`@listen-fire/engine`'s `public/run-host`) waits on arrivals, as `listen-fire`'s does, and keeps no correlations or callbacks.
@@ -185,6 +186,7 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
 
 #### Checks
 
+- Two checks stay warnings in 0.13.0, where earlier notes said this compatibility key would refuse them: a value handed to a plugin outside the type it declares (`MOV_CALL_ARG_TYPE`, as 0.12.10 said), and a text in a list an enum is tested against with `IN` (`MOV_ENUM_UNKNOWN_VALUE`, below). Refusing them is left to a later compatibility key.
 - A dot read off a record reads one field, whole; anything past it is refused, where it checked clean and then failed the run with `MOVENG_UNSUPPORTED` ("this read shape … is not supported"). Refused, since no such read could ever run:
   - a name the record lacks, read on past (`n.subject.title`): `MOV_UNKNOWN_PROPERTY`, naming the record's fields and its edges;
   - a text, number or true/false field read on past (`n.Title.length`): `MOV_TEXT_HAS_NO_FIELDS`;
@@ -265,7 +267,7 @@ A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.
 
 ## [0.12.10] - 2026-10-27
 
-A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Two new checks are warnings for every 0.12 pin, left for a later compatibility key to refuse (0.13.0 keeps them warnings): a value handed to a plugin outside the type it declares, and a plugin value outside its declared type at run time. The new refusals reject only text no released program could run correctly, or keys new in this release.
+A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Two new checks are warnings for every 0.12 pin and wait for the next compatibility key (0.13) to refuse: a value handed to a plugin outside the type it declares, and a plugin value outside its declared type at run time. The new refusals reject only text no released program could run correctly, or keys new in this release.
 
 ### Connectors
 
