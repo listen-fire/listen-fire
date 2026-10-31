@@ -64,6 +64,7 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
     - A wait whose record is deleted never resolves, on every module: many systems cannot say a record went, so none is relied on to. What follows the `await` never runs, and the run stays parked. A `race` arm on such a wait never settles, as a promise that never resolves loses a race, so a `sleep` beside it takes the race.
     - The same holds when the record is deleted before the wait opens, and in an `all` arm or a `map` member, whose combinator or op then never finishes.
     - Store modules: a gone arrival wakes no wait. `waits.log` answers no wait for it, and `parks.commitSegment` queues no wake for a wait whose record is gone (docs/contracts/store-slot.md).
+    - The wait is marked stranded, and `listen-fire runs` shows it (below, under Added). A record already gone when its wait would open gets a wait all the same, opened without a key, so the run parks on it and is shown stranded the same way.
     - Why: before, the wait settled empty and the code after it was skipped, which only modules that report deletion could do; a program then behaved one way on one module and another way on the next.
   - So what an `await` binds is never absent where it is read: the check types it present, and a walk off it needs no `if (x == null)` guard. Before, such an edge's `await` was typed maybe absent, and an unguarded walk was refused (`MOV_ABSENT_REQUIRED`) though the guard could never run.
   - What a function that awaits a record answers a combinator, a collection op or its caller is what it returns: an `all` slot, a `map` member and a call's result are typed present, as for a function that does not wait.
@@ -83,6 +84,11 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
 
 #### Added
 
+- A run parked on a record that was deleted says so. The store marks such a wait stranded and keeps it parked (docs/contracts/stranded-waits.md).
+  - `listen-fire runs` lists the run `parked (stranded)`; `--json` gives each run `stranded`.
+  - `listen-fire runs show` lists each stranded wait under `stranded`, saying what it waits on: `waiting on Interactions of slack C1:… — its record was deleted, so nothing will arrive; a race with a sleep is the way out`.
+  - Why: from 0.13 such a wait never resolves, so a run stuck on one would otherwise look like any parked run.
+  - Store modules: `waits.log` answers `{ wakes, stranded }`, and `waits.stranded` reads one run's stranded waits or every run's a page at a time (the feed `@lf/system` will read). `waits.open` takes a `null` key for a record already gone; `waits.arrivals` answers no `gone`. `@lf/postgres-store` gains migration 11; the SQLite state file rebuilds its wait rows once. The engine's `park.waits.open` takes `gone: true` in place of a key, and park state 3 holds a wait id for every edge (docs/contracts/store-slot.md, host-families.md).
 - A module can declare that a field of what lands on an edge takes the text literals the write wrote at a path, with `literalsFrom` on the edge's reference: `[{ "at": ["Actions", "Value"], "from": "Buttons[].Value" }]`.
   - After `msg = write ch-[:Messages]-> { …, Buttons: [{ Text: "Pursue", Value: "pursue" }, { Text: "Pass", Value: "pass" }] }` and `i = await msg-[:Interactions]->`, the `Value` of each action `i` carries is `"pursue" | "pass"`.
   - Comparing it against a value no button offered is refused (`MOV_ENUM_UNKNOWN_VALUE`, with a did-you-mean).

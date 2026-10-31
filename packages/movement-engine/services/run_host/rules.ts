@@ -100,14 +100,15 @@ export function newArrivalsOf(arrivals: readonly Arrival[]): NewArrival[] {
  * Log what arrived on an adapter's listenable edges for a team, and queue a
  * wake for each wait parked on their records: one write (`waits.log`), so a
  * crash leaves both or neither, and a sender's retry of arrivals that were
- * not kept logs them again. Answers the wakes queued.
+ * not kept logs them again. Answers the wakes queued. A deleted record wakes
+ * nothing: its parked waits are stranded (`waits.stranded`).
  */
 export async function logArrivals(
   store: RunHostStore,
   input: { teamId: string; adapterType: string; arrivals: readonly Arrival[]; at?: string },
 ): Promise<WaitWake[]> {
   const at = input.at ?? new Date().toISOString();
-  return store.waits.log({ teamId: input.teamId, adapterType: input.adapterType, arrivals: newArrivalsOf(input.arrivals), at });
+  return (await store.waits.log({ teamId: input.teamId, adapterType: input.adapterType, arrivals: newArrivalsOf(input.arrivals), at })).wakes;
 }
 
 /** How long an arrival no live wait reads is kept: a repeat within it is a
@@ -341,10 +342,10 @@ export function runParkHost(
   };
   const waits: HostWaits = {
     mark: async () => ({ mark: await store.waits.mark() }),
-    open: ({ adapterType, edge, key, since }) => store.waits.open({ runId, teamId, adapterType, edge, key, since }),
+    open: (input) => store.waits.open({ runId, teamId, adapterType: input.adapterType, edge: input.edge, key: 'key' in input ? input.key : null, since: input.since }),
     arrivals: async ({ waitId }) => {
-      const { gone, arrivals } = await store.waits.arrivals({ waitId });
-      return { gone, arrivals: arrivals.map(loggedArrival) };
+      const { arrivals } = await store.waits.arrivals({ waitId });
+      return { arrivals: arrivals.map(loggedArrival) };
     },
     note: async ({ waitId, identity, version, matched }) => ({
       counts: await store.waits.note({

@@ -649,8 +649,8 @@ impl Store {
             let (work, wakes) = match arrivals {
                 None => (work.to_vec(), Vec::new()),
                 Some(a) => {
-                    let wakes = Store::log_arrivals_in(db, a.team_id, a.adapter_type, a.arrivals, a.at)?;
-                    delivery_rows(work, Store::arrival_mark_in(db)?, a.team_id, &wakes)
+                    let logged = Store::log_arrivals_in(db, a.team_id, a.adapter_type, a.arrivals, a.at)?;
+                    delivery_rows(work, Store::arrival_mark_in(db)?, a.team_id, &logged.wakes)
                 }
             };
             for row in work.iter().chain(&wakes) {
@@ -863,8 +863,12 @@ pub(crate) mod tests {
                         if let Some(landing) = self.on_await_keys.lock().unwrap().take() {
                             landing();
                         }
+                        // A note whose id starts `gone-` was deleted before its wait opened.
                         let heads = params.get("heads").and_then(Js::as_array).unwrap_or(&[]).to_vec();
-                        let keys = heads.iter().map(|head| Js::Obj(obj! { "key" => Js::str(format!("thread:{}", head.get("recordId").and_then(Js::as_str).unwrap_or_default())) }));
+                        let keys = heads.iter().map(|head| match head.get("recordId").and_then(Js::as_str).unwrap_or_default() {
+                            id if id.starts_with("gone-") => Js::Obj(obj! { "gone" => Js::Bool(true) }),
+                            id => Js::Obj(obj! { "key" => Js::str(format!("thread:{id}")) }),
+                        });
                         Ok(Js::Arr(keys.collect()))
                     }
                     "listEventTypes" if self.down.load(Ordering::SeqCst) => Err(ModuleError::bad_request("the inbox is down")),
@@ -1234,7 +1238,7 @@ pub(crate) mod tests {
         use crate::store::{Park, ParkKind, RunStart};
         store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
         let since = store.arrival_mark().unwrap();
-        let open = crate::waits::OpenWait { run_id: "run-1", team_id: LOCAL_TENANT, adapter_type: "acme", edge: "Comments", key, since };
+        let open = crate::waits::OpenWait { run_id: "run-1", team_id: LOCAL_TENANT, adapter_type: "acme", edge: "Comments", key: Some(key), since };
         let wait = store.open_wait(&open).unwrap();
         store.commit_park(&Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
         wait
@@ -1318,7 +1322,7 @@ pub(crate) mod tests {
             let session = project.session().await;
             use crate::store::RunStart;
             session.store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
-            let open = crate::waits::OpenWait { run_id: "run-1", team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key: "thread:n-0", since: 0 };
+            let open = crate::waits::OpenWait { run_id: "run-1", team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key: Some("thread:n-0"), since: 0 };
             let wait = session.store.open_wait(&open).unwrap();
             assert_eq!(queue_delivery(&session, br#"{"notes":[],"comments":[{"note":"n-0","id":"k1","Text":"hi"}]}"#, "d-1").await.status, 200);
             let landed = session.store.wait_arrivals(&wait).unwrap().arrivals;
@@ -1374,11 +1378,34 @@ pub(crate) mod tests {
         });
     }
 
+    /// A note deleted before its run's wait opens (`awaitKeys` answers
+    /// `gone`): the wait opens without a key, the run parks on it, and the
+    /// store says it is stranded there.
+    #[test]
+    fn a_wait_on_a_record_already_gone_parks_its_run_stranded() {
+        let project = InboxProject::with(AWAITS_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        in_local(async {
+            let session = project.session().await;
+            let (answer, fired) = hook(&session, br#"{"notes":[{"id":"gone-1","Title":"one"}]}"#, "d-1").await;
+            assert_eq!(answer.status, 200, "{}", answer.body.to_json());
+            let [outcome] = fired.outcomes.as_slice() else { panic!("{:?}", fired.outcomes.len()) };
+            assert_eq!(outcome.status, "parked", "{:?}", outcome.error);
+            let stranded = session.store.stranded_waits(&crate::waits::StrandedOf::Run(&outcome.run_id)).unwrap();
+            let shown: Vec<(&str, &str, Option<&str>, bool)> = stranded.iter().map(|w| (w.adapter_type.as_str(), w.edge.as_str(), w.key.as_deref(), w.parked)).collect();
+            assert_eq!(shown, [("inbox", "Comments", None, true)]);
+            let run = session.store.run(&outcome.run_id).unwrap().unwrap();
+            assert!(crate::lfjson::is_stranded(&*session.store, &run).unwrap());
+            let shown = crate::lfjson::run_show_doc(&*session.store, &outcome.run_id).unwrap();
+            let says: Vec<&str> = shown.get("run").and_then(|r| r.get("stranded")).and_then(Js::as_array).unwrap().iter().filter_map(|w| w.get("says").and_then(Js::as_str)).collect();
+            assert_eq!(says, ["waiting on Comments of inbox — its record was deleted before the wait opened, so nothing will arrive; a race with a sleep is the way out"]);
+        });
+    }
+
     /// Run `run`'s wait on `key`'s `Comments` from `since`, parked at `s1`.
     fn park_wait(store: &dyn RunHostStore, run: &str, key: &str, since: i64) -> String {
         use crate::store::{Park, ParkKind, RunStart};
         store.start_run(&RunStart { id: run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
-        let wait = store.open_wait(&crate::waits::OpenWait { run_id: run, team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key, since }).unwrap();
+        let wait = store.open_wait(&crate::waits::OpenWait { run_id: run, team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key: Some(key), since }).unwrap();
         store.commit_park(&Park { run_id: run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
         wait
     }
@@ -1432,7 +1459,7 @@ pub(crate) mod tests {
     fn wake_the_comment_wait(session: &Session, run: &str, address: &str) {
         let wait = session
             .store
-            .open_wait(&crate::waits::OpenWait { run_id: run, team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key: "thread:n-1", since: 0 })
+            .open_wait(&crate::waits::OpenWait { run_id: run, team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key: Some("thread:n-1"), since: 0 })
             .unwrap();
         let row = crate::waits::wake_row(LOCAL_TENANT, &crate::waits::WaitWake { run_id: run.into(), wait_id: wait, address: address.into() });
         session.store.enqueue(&row.kind, &row.key, &row.payload, None, row.team_id.as_deref()).unwrap();
@@ -1458,7 +1485,7 @@ pub(crate) mod tests {
             let arm = leaves[0].0.clone();
 
             let comment = NewArrival { edge: "Comments".into(), key: "thread:n-1".into(), identity: Some("k1".into()), version: None, landing: Some(Js::parse(br#"{"fields":{"Text":"hi"}}"#).unwrap()), gone: false };
-            let wakes = session.store.log_arrivals(LOCAL_TENANT, "inbox", &[comment], &iso(0)).unwrap();
+            let wakes = session.store.log_arrivals(LOCAL_TENANT, "inbox", &[comment], &iso(0)).unwrap().wakes;
             assert_eq!(wakes.len(), 1);
             crate::segment::DIES_BEFORE_COMMIT.with(|dies| dies.set(true));
             drained(&session).await;
@@ -1485,7 +1512,7 @@ pub(crate) mod tests {
         assert_eq!(leaves.len(), 1, "{leaves:?}");
         let leaf = leaves[0].0.clone();
         let comment = NewArrival { edge: "Comments".into(), key: "thread:n-1".into(), identity: Some("k1".into()), version: None, landing: Some(Js::parse(br#"{"fields":{"Text":"hi"}}"#).unwrap()), gone: false };
-        assert_eq!(session.store.log_arrivals(LOCAL_TENANT, "inbox", &[comment], &iso(0)).unwrap().len(), 1);
+        assert_eq!(session.store.log_arrivals(LOCAL_TENANT, "inbox", &[comment], &iso(0)).unwrap().wakes.len(), 1);
         (run, leaf)
     }
 

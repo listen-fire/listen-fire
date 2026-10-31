@@ -64,7 +64,7 @@ const server = createServer(async (req, res) => {
   // Asked before anything else, so answered before the store is open.
   if (store === undefined && envelope.method === 'manifest') {
     // The methods listen-fire reads a store's manifest for, of those it serves.
-    const methods = ['store.open', 'waits.mark', 'waits.log', 'waits.open', 'waits.arrivals', 'waits.note', 'waits.sweep'].filter((m) => !without.includes(m));
+    const methods = ['store.open', 'waits.mark', 'waits.log', 'waits.open', 'waits.arrivals', 'waits.note', 'waits.sweep', 'waits.stranded'].filter((m) => !without.includes(m));
     return reply(200, { ok: true, result: { protocolVersion: 2, name: 'acme_store', kind: 'core', slot: 'store', methods } });
   }
   if (without.includes(envelope.method)) {

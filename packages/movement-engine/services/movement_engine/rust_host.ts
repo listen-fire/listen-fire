@@ -500,20 +500,22 @@ const ROUTES: Record<string, Route> = {
     return waits.mark({ segmentId: segmentOf(request) });
   },
   /** A wait on `edge` of the record the adapter keys `key`, reading what
-   *  arrived after `since`: `{waitId}`. */
+   *  arrived after `since`: `{waitId}`. `gone: true` instead of a key: the
+   *  adapter said the record is gone, so nothing will arrive on the wait. */
   async 'park.waits.open'(request, { host }) {
     const waits = host.park.waits;
     if (waits === undefined) throw notServed('park.waits.open');
-    return waits.open({
+    const opened = {
       adapterType: string(request.adapterType, 'park.waits.open adapterType'),
       edge: string(request.edge, 'park.waits.open edge'),
-      key: string(request.key, 'park.waits.open key'),
       since: integer(request.since, 'park.waits.open since'),
       segmentId: segmentOf(request),
-    });
+    };
+    if (request.gone === true && request.key === undefined) return waits.open({ ...opened, gone: true });
+    return waits.open({ ...opened, key: string(request.key, 'park.waits.open key') });
   },
-  /** What a wait has yet to judge, in log order, and whether its record
-   *  went: on the eval wire, its landings data as an adapter's answer is. */
+  /** What a wait has yet to judge, in log order: on the eval wire, its
+   *  landings data as an adapter's answer is. */
   async 'park.waits.arrivals'(request, { host, wire }) {
     const waits = host.park.waits;
     if (waits === undefined) throw notServed('park.waits.arrivals');

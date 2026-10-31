@@ -910,6 +910,17 @@ fn text<'a>(args: &'a Json, name: &str, label: &str) -> Result<&'a str, Fault> {
     args.get(name).and_then(Json::as_str).ok_or_else(|| Fault(format!("{label} {name} must be a string")))
 }
 
+/// `park.waits.open`'s record: its `key`, or `gone: true` for a record the
+/// module said was already gone (None).
+fn wait_key(args: &Json) -> Result<Option<&str>, Fault> {
+    const LABEL: &str = "park.waits.open";
+    match (args.get("key"), args.get("gone")) {
+        (Some(Json::String(key)), None) => Ok(Some(key)),
+        (None, Some(Json::Bool(true))) => Ok(None),
+        _ => Err(Fault(format!("{LABEL} names its record's key, or gone: true for a record already gone"))),
+    }
+}
+
 fn failure(message: impl Into<String>) -> HostFailure {
     HostFailure { message: message.into(), name: None, lease_lost: false }
 }
@@ -1077,7 +1088,7 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
                 team_id: store.tenant(),
                 adapter_type: text(args, "adapterType", LABEL)?,
                 edge: text(args, "edge", LABEL)?,
-                key: text(args, "key", LABEL)?,
+                key: wait_key(args)?,
                 since,
             };
             store.open_wait(&wait).map(|id| Some(json!({ "waitId": id }))).map_err(store_failure)

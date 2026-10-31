@@ -24,7 +24,7 @@ use crate::obj;
 use crate::slot_server::{Listen, Refusal};
 use crate::store::{ClaimDue, DeliveryQuery, HeldJoin, HeldPark, HeldRace, NewWork, Park, Release, Rerun, RunSettle, RunStart, SegmentCommit, StoreError, iso};
 use crate::store_wire::{Wire, new_delivery, num, opt, park_kind, rows, to_rows};
-use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait};
+use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait, StrandedAfter, StrandedOf};
 
 /// The store slot's methods (docs/contracts/store-slot.md), as its manifest lists them.
 pub const STORE_METHODS: &[&str] = &[
@@ -36,7 +36,7 @@ pub const STORE_METHODS: &[&str] = &[
     "work.complete", "work.release", "sources.put", "sources.get", "inbound.checkpoint", "inbound.saveCheckpoint", "processes.list",
     "processes.swap", "events.claim", "events.startRun", "runs.lapsed", "parks.commit", "work.bury", "inbound.keepDelivery",
     "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries", "inbound.forgetDeliveryId", "work.enqueueIfAbsent",
-    "runs.rerun", "waits.mark", "waits.log", "waits.open", "waits.arrivals", "waits.note", "waits.sweep",
+    "runs.rerun", "waits.mark", "waits.log", "waits.open", "waits.arrivals", "waits.note", "waits.sweep", "waits.stranded",
 ];
 
 pub async fn serve(spec: &StoreSpec, listen: Listen) -> Result<(), String> {
@@ -318,7 +318,7 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
         "waits.log" => {
             let arrivals: Vec<NewArrival> =
                 rows(&p.value("arrivals")).ok_or_else(|| Failure::Params("arrivals: expected a list of { edge, key, identity, version, landing, gone }".into()))?;
-            Ok(to_rows(&store.log_arrivals(p.str("teamId")?, p.str("adapterType")?, &arrivals, p.str("at")?)?))
+            Ok(store.log_arrivals(p.str("teamId")?, p.str("adapterType")?, &arrivals, p.str("at")?)?.to_wire())
         }
         "waits.open" => {
             let wait = OpenWait {
@@ -326,12 +326,29 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
                 team_id: p.str("teamId")?,
                 adapter_type: p.str("adapterType")?,
                 edge: p.str("edge")?,
-                key: p.str("key")?,
+                key: p.opt_str("key")?,
                 since: p.int("since")?,
             };
             Ok(Js::from(obj! { "waitId" => Js::str(store.open_wait(&wait)?) }))
         }
         "waits.arrivals" => Ok(store.wait_arrivals(p.str("waitId")?)?.to_wire()),
+        "waits.stranded" => {
+            let after = p.value("after");
+            let of = match p.opt_str("runId")? {
+                Some(run_id) => StrandedOf::Run(run_id),
+                None => {
+                    let after = match &after {
+                        Js::Null => None,
+                        after => Some(StrandedAfter {
+                            at: after.get("at").and_then(Js::as_str).ok_or_else(|| Failure::Params("after.at: expected a string".into()))?,
+                            wait_id: after.get("waitId").and_then(Js::as_str).ok_or_else(|| Failure::Params("after.waitId: expected a string".into()))?,
+                        }),
+                    };
+                    StrandedOf::Page { after, limit: p.int("limit")? }
+                }
+            };
+            Ok(to_rows(&store.stranded_waits(&of)?))
+        }
         "waits.note" => {
             let noted = Noted {
                 wait_id: p.str("waitId")?,
@@ -561,17 +578,18 @@ mod tests {
             let params = obj! { "teamId" => Js::str("t"), "adapterType" => Js::str("acme"), "arrivals" => to_rows(&[arrival(identity)]), "at" => Js::str(iso(0)) };
             call(&store, "waits.log", params)
         };
-        assert_eq!(log("k1"), Js::Arr(vec![]));
-        let wait = OpenWait { run_id: "run-1", team_id: "t", adapter_type: "acme", edge: "Comments", key: "thread:c1", since: int(&mark).unwrap() };
+        let logged = |wakes: Vec<Js>| Js::from(obj! { "wakes" => Js::Arr(wakes), "stranded" => Js::Arr(vec![]) });
+        assert_eq!(log("k1"), logged(vec![]));
+        let wait = OpenWait { run_id: "run-1", team_id: "t", adapter_type: "acme", edge: "Comments", key: Some("thread:c1"), since: int(&mark).unwrap() };
         let opened = call(&store, "waits.open", open_wait_params(&wait));
         let wait_id = opened.get("waitId").and_then(Js::as_str).unwrap().to_string();
         let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait_id } };
         call(&store, "parks.commit", park_params(&park));
         let wake = obj! { "runId" => Js::str("run-1"), "waitId" => Js::str(&wait_id), "address" => Js::str("s1") };
-        assert_eq!(log("k2"), Js::Arr(vec![Js::from(wake)]));
+        assert_eq!(log("k2"), logged(vec![Js::from(wake)]));
         let read = call(&store, "waits.arrivals", obj! { "waitId" => Js::str(&wait_id) });
         let arrivals = WaitArrivals::from_wire(&read).unwrap();
-        assert_eq!((arrivals.gone, arrivals.arrivals.iter().map(|a| a.identity.as_str()).collect::<Vec<_>>()), (false, vec!["k1", "k2"]));
+        assert_eq!(arrivals.arrivals.iter().map(|a| a.identity.as_str()).collect::<Vec<_>>(), ["k1", "k2"]);
         assert_eq!(arrivals.arrivals[0].landing, Js::from(obj! { "Body" => Js::str("lunch?") }));
         let note = |identity: &str| obj! { "waitId" => Js::str(&wait_id), "identity" => Js::str(identity), "version" => Js::str("1"), "matched" => Js::Bool(true) };
         assert_eq!(call(&store, "waits.note", note("k1")), Js::Bool(true));
@@ -600,6 +618,7 @@ mod tests {
             "waits.arrivals",
             "waits.note",
             "waits.sweep",
+            "waits.stranded",
         ] {
             assert!(STORE_METHODS.contains(&method), "{method}");
         }

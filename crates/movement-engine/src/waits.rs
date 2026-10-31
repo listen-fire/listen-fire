@@ -35,19 +35,11 @@ use crate::run::{Failure, Run, Stop};
 use crate::traverse::Read;
 use crate::unique::get;
 
-/// A wait on one edge of one record.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum WaitRef {
-    /// The host's wait row.
-    Open(String),
-    /// The adapter said the record is gone when the wait would have opened:
-    /// there is no wait row, nothing arrives, and an `await` on it parks
-    /// with nothing that can wake it.
-    Gone,
-}
-
-/// A record's waits, by edge.
-pub(crate) type Waits = BTreeMap<String, WaitRef>;
+/// A record's waits, by edge: the host's wait row for each. A record the
+/// adapter said was gone when its wait opened has a wait all the same, one
+/// opened without a key: nothing arrives on it, and an `await` on it parks
+/// where nothing can wake it (the host strands it).
+pub(crate) type Waits = BTreeMap<String, String>;
 
 /// Where an entry's waits open from: the edges stamped there, and the mark
 /// taken before the record entered.
@@ -124,7 +116,7 @@ impl Run<'_> {
         }
     }
 
-    fn keep_wait(&self, holder: &Holder, edge: &str, wait: WaitRef) {
+    fn keep_wait(&self, holder: &Holder, edge: &str, wait: String) {
         let mut waits = match holder {
             Holder::Handle(handle) => handle.waits.borrow_mut(),
             Holder::Landed(landed) => landed.waits.borrow_mut(),
@@ -252,10 +244,7 @@ impl Run<'_> {
         for (_, edge, heads) in groups {
             let keys = self.await_keys(&edge, &heads).await?;
             for (head, key) in heads.into_iter().zip(keys) {
-                let wait = match key {
-                    Some(key) => WaitRef::Open(self.open_wait(&head.adapter_type, &edge, &key, since).await?),
-                    None => WaitRef::Gone,
-                };
+                let wait = self.open_wait(&head.adapter_type, &edge, key.as_deref(), since).await?;
                 self.keep_wait(&head.holder, &edge, wait);
             }
         }
@@ -361,7 +350,8 @@ impl Run<'_> {
             .collect()
     }
 
-    async fn open_wait(&self, adapter_type: &str, edge: &str, key: &str, since: i64) -> Result<String, Failure> {
+    /// The wait's id; `key` None for a record already gone.
+    async fn open_wait(&self, adapter_type: &str, edge: &str, key: Option<&str>, since: i64) -> Result<String, Failure> {
         let answer = self.ask(host::park::open_wait(self.segment(), adapter_type, edge, key, since)).await?;
         answer
             .as_ref()
@@ -406,15 +396,11 @@ impl Run<'_> {
     }
 
     /// The waits a park writes beside a record (and the run's for its
-    /// trigger): by edge, its wait's id or `{gone: true}`.
+    /// trigger): by edge, its wait's id.
     pub(crate) fn waits_js(waits: &Waits) -> Js {
         let mut object = JsObject::new();
         for (edge, wait) in waits {
-            let value = match wait {
-                WaitRef::Open(id) => Js::str(id.clone()),
-                WaitRef::Gone => crate::env::object_of(vec![("gone", Js::Bool(true))]),
-            };
-            object.set(edge.clone(), value);
+            object.set(edge.clone(), Js::str(wait.clone()));
         }
         Js::object(object)
     }
@@ -428,8 +414,7 @@ pub(crate) fn waits_of_js(written: &Js) -> Option<Waits> {
         .entries()
         .iter()
         .map(|(edge, wait)| match wait {
-            Js::String(id) => Some((edge.clone(), WaitRef::Open(id.to_string()))),
-            other if matches!(get(other, "gone"), Js::Bool(true)) => Some((edge.clone(), WaitRef::Gone)),
+            Js::String(id) => Some((edge.clone(), id.to_string())),
             _ => None,
         })
         .collect()

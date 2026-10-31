@@ -47,7 +47,7 @@ When credentials are missing: `{ "error", "missingCredentials": [diagnostic…] 
 
 ## `listen-fire runs --json`
 
-`{ "runs": [{ "runId", "file", "movement", "status", "startedAt", "finishedAt", "attempt" }] }`, most recent first (50). `finishedAt` is when the run completed or failed, `null` while it runs or is parked. `status`, `startedAt` and `finishedAt` are the latest attempt's; `attempt` is its number, 1 unless the run was rerun.
+`{ "runs": [{ "runId", "file", "movement", "status", "startedAt", "finishedAt", "attempt", "stranded" }] }`, most recent first (50). `finishedAt` is when the run completed or failed, `null` while it runs or is parked. `status`, `startedAt` and `finishedAt` are the latest attempt's; `attempt` is its number, 1 unless the run was rerun. `stranded` is true for a parked run waiting on a record that was deleted ([stranded waits](contracts/stranded-waits.md)); without `--json` its status reads `parked (stranded)`.
 
 ## `listen-fire runs show <run-id> --json`
 
@@ -56,6 +56,7 @@ When credentials are missing: `{ "error", "missingCredentials": [diagnostic…] 
   "event": {…}, "writes": 0, "writeRecords": [ … ], "error": null, "returned": { "value": … }, "outcome": {…},
   "costMicrodollars": 0.0, "traceEntries": 0, "trace": [ … ],
   "parked": [{ "address": "…", "reason": "timer", "wakeAt": "…" }],
+  "stranded": [{ "waitId": "…", "adapterType": "slack", "edge": "Interactions", "key": "C1:…", "at": "…", "says": "waiting on Interactions of slack C1:… — its record was deleted, so nothing will arrive; a race with a sleep is the way out" }],
   "attempt": 1, "attempts": [{ "attempt": 1, "status", "startedAt", "finishedAt", "writes", "writeRecords", "error" }],
   "cancelRequested": false, "cancelReason": null } }
 ```
@@ -68,6 +69,7 @@ When credentials are missing: `{ "error", "missingCredentials": [diagnostic…] 
 - `returned`: what the movement returned, as under `listen-fire run` above. Every run records it, however it was started.
 - `trace` is `null` when the run's store cannot hand entries back (a store module over its wire); `traceEntries` is always the count.
 - `parked`: what the run waits on now; empty unless `status` is `parked`.
+- `stranded`: each wait the run is parked on whose record was deleted, so nothing will arrive on it; empty unless `status` is `parked`. `key` is `null` for a record already gone when the wait opened. `at`: when the store found the wait parked on a deleted record ([stranded waits](contracts/stranded-waits.md)).
 - `attempts`: every attempt of the run, oldest first, the latest (the run's own `status`, `writes`, `error`) last. A run that was never rerun has one.
 - `listen-fire runs show <id>` without `--json` prints the same document, indented.
 

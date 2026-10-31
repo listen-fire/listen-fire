@@ -121,18 +121,6 @@ create table if not exists arrival (
 );
 create index if not exists arrival_key on arrival (team_id, adapter_type, edge, key, seq);
 create index if not exists arrival_logged on arrival (logged_at);
-create table if not exists wait_row (
-  id text primary key,
-  run_id text not null,
-  team_id text not null,
-  adapter_type text not null,
-  edge text not null,
-  key text not null,
-  since integer not null,
-  address text
-);
-create unique index if not exists wait_row_edge on wait_row (run_id, team_id, adapter_type, edge, key);
-create index if not exists wait_row_key on wait_row (team_id, adapter_type, edge, key);
 create table if not exists wait_seen (
   id integer primary key autoincrement,
   wait_id text not null,
@@ -169,6 +157,26 @@ pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", "p
 pub const SETTLE_RACE_WORK_KIND: &str = "settle_race";
 
 /// Columns a state file written by an earlier listen-fire lacks, added on open.
+/// A run's waits (crate::waits). `key` is null for a wait opened on a record
+/// already gone; `stranded_at` is when the wait was found parked on a
+/// deleted record.
+const WAIT_ROW: &str = "
+create table if not exists wait_row (
+  id text primary key,
+  run_id text not null,
+  team_id text not null,
+  adapter_type text not null,
+  edge text not null,
+  key text,
+  since integer not null,
+  address text,
+  stranded_at text
+);
+create unique index if not exists wait_row_edge on wait_row (run_id, team_id, adapter_type, edge, key);
+create index if not exists wait_row_key on wait_row (team_id, adapter_type, edge, key);
+create index if not exists wait_row_stranded on wait_row (stranded_at, id) where stranded_at is not null;
+";
+
 const ADDED_RUN_COLUMNS: &[&str] = &["cancel_requested_at", "cancel_reason", "delivery_id"];
 /// Added to a state file written before a failed run could be run again.
 const ATTEMPT_COLUMNS: &[(&str, &str)] = &[("attempt", "integer not null default 1"), ("attempts", "text not null default '[]'")];
@@ -645,6 +653,7 @@ impl Store {
             }
         }
         db.execute_batch("create index if not exists run_delivery on run (delivery_id)")?;
+        Self::open_wait_rows(&db)?;
         // Callbacks and the waits keyed by a correlation retired at 0.13: a
         // run parked on one cannot resume on this release, and the work rows
         // that would have woken it (a callback's firing, a wake by key
@@ -670,6 +679,29 @@ impl Store {
             }
         }
         Ok(Store { db })
+    }
+
+    /// The wait rows, rebuilt from a state file written before a wait could
+    /// be stranded or keyless (SQLite cannot drop a column's `not null`).
+    fn open_wait_rows(db: &Connection) -> Result<()> {
+        let columns = db
+            .prepare("select name from pragma_table_info('wait_row')")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if columns.is_empty() || columns.iter().any(|c| c == "stranded_at") {
+            return Ok(db.execute_batch(WAIT_ROW)?);
+        }
+        db.execute_batch(&format!(
+            "begin immediate;
+             drop index wait_row_edge; drop index wait_row_key;
+             alter table wait_row rename to wait_row_before;
+             {WAIT_ROW}
+             insert into wait_row (id, run_id, team_id, adapter_type, edge, key, since, address)
+               select id, run_id, team_id, adapter_type, edge, key, since, address from wait_row_before;
+             drop table wait_row_before;
+             commit;"
+        ))?;
+        Ok(())
     }
 
     /// One write transaction, taken before its first read.

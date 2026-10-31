@@ -470,17 +470,19 @@ pub mod park {
 
     /// A wait opened on `edge` of the record the adapter keys `key`,
     /// reading the arrivals logged after `since`; answered `{waitId}`. A run
-    /// that already waits there keeps that wait and its mark.
-    pub fn open_wait(segment: &str, adapter_type: &str, edge: &str, key: &str, since: i64) -> Request {
-        Request {
-            family: Family::ParkWaits,
-            method: "open".into(),
-            args: in_segment(segment, json!({ "adapterType": adapter_type, "edge": edge, "key": key, "since": since })),
-        }
+    /// that already waits there keeps that wait and its mark. `key` None:
+    /// the adapter said the record is gone (`gone: true`), so nothing can
+    /// arrive on the wait, and a park on it is stranded.
+    pub fn open_wait(segment: &str, adapter_type: &str, edge: &str, key: Option<&str>, since: i64) -> Request {
+        let args = match key {
+            Some(key) => json!({ "adapterType": adapter_type, "edge": edge, "key": key, "since": since }),
+            None => json!({ "adapterType": adapter_type, "edge": edge, "gone": true, "since": since }),
+        };
+        Request { family: Family::ParkWaits, method: "open".into(), args: in_segment(segment, args) }
     }
 
     /// What a wait has yet to judge, in log order, answered on the eval wire
-    /// `{gone, arrivals: [{seq, identity, version?, landing}]}`.
+    /// `{arrivals: [{seq, identity, version?, landing}]}`.
     pub fn wait_arrivals(segment: &str, wait_id: &str) -> Request {
         Request { family: Family::ParkWaits, method: "arrivals".into(), args: in_segment(segment, json!({ "waitId": wait_id, "wire": true })) }
     }

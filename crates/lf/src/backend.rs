@@ -27,7 +27,7 @@ use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, OwedRace, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit,
     Store,
 };
-use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait, WaitArrivals, WaitWake};
+use crate::waits::{DeliveryArrivals, Logged, NewArrival, Noted, OpenWait, Stranded, StrandedOf, WaitArrivals, WaitWake};
 
 /// The tenant a SQLite state file's rows belong to (`LOCAL_TENANT`).
 pub const SQLITE_TENANT: &str = "local";
@@ -209,17 +209,22 @@ pub trait RunHostStore {
     fn arrival_mark(&self) -> Result<i64>;
     /// Log the arrivals, in order, and queue a `wake_await` row for each
     /// wait parked on their records, as one write: the waits it woke (one
-    /// each). It never interleaves with a wait's park on the same record's
-    /// edge, so a run that reads its wait's arrivals after parking misses
-    /// none.
-    fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>>;
+    /// each). A gone arrival wakes none: it strands each wait parked on its
+    /// record not stranded already, and those are the answer's `stranded`.
+    /// It never interleaves with a wait's park on the same record's edge, so
+    /// a run that reads its wait's arrivals after parking misses none.
+    fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Logged>;
     /// The wait's id; a run that already waits on this edge of this record
-    /// keeps that wait and its mark.
+    /// keeps that wait and its mark. Without a key (the record already
+    /// gone), always a new wait, stranded when it parks.
     fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String>;
     /// The arrivals logged after the wait's mark on its record's edge that it
     /// has not noted, the first of each identity and version only, in log
-    /// order; and whether the record is gone.
+    /// order.
     fn wait_arrivals(&self, wait_id: &str) -> Result<WaitArrivals>;
+    /// The stranded waits `of` names (docs/contracts/stranded-waits.md),
+    /// oldest stranded first.
+    fn stranded_waits(&self, of: &StrandedOf<'_>) -> Result<Vec<Stranded>>;
     /// Note the arrival judged, and whether its record matched: whether it
     /// counts (it matched, and did not at the identity's last noted arrival).
     /// A note naming a leaf is kept with that leaf's end (`Noted::leaf`).
@@ -423,7 +428,7 @@ impl RunHostStore for Store {
     fn arrival_mark(&self) -> Result<i64> {
         Store::arrival_mark(self)
     }
-    fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {
+    fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Logged> {
         Store::log_arrivals(self, team_id, adapter_type, arrivals, at)
     }
     fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {
@@ -431,6 +436,9 @@ impl RunHostStore for Store {
     }
     fn wait_arrivals(&self, wait_id: &str) -> Result<WaitArrivals> {
         Store::wait_arrivals(self, wait_id)
+    }
+    fn stranded_waits(&self, of: &StrandedOf<'_>) -> Result<Vec<Stranded>> {
+        Store::stranded_waits(self, of)
     }
     fn note_arrival(&self, noted: &Noted<'_>) -> Result<bool> {
         Store::note_arrival(self, noted)

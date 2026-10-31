@@ -600,7 +600,8 @@ A reference that still declares `awaitable` or `watchable` (retired in 0.13)
 is refused when `listen-fire` describes your adapter, naming `listenable`.
 One that declares `resolvesEmpty` (retired in 0.13) is refused too: a record
 that goes (a [gone arrival](#reporting-arrivals)) leaves the wait waiting on
-every edge, so there is nothing to declare.
+every edge, so there is nothing to declare. The host marks such a wait
+stranded and shows it ([stranded waits](stranded-waits.md)).
 
 ### awaitKeys
 
@@ -618,6 +619,8 @@ every edge, so there is nothing to declare.
 - `key` is what your arrivals on that record's edge will name. Compute it
   from the heads alone: no call to your system.
 - `{ "gone": true }` says the record is gone and nothing more arrives on it.
+  The run's wait on it opens without a key, and an `await` on it parks
+  stranded ([stranded waits](stranded-waits.md)).
 
 ### Reporting arrivals
 

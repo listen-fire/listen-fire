@@ -15,7 +15,7 @@ import { dirname, join } from 'node:path';
 
 import { RunLeaseLost } from '../movement_engine/errors';
 import { WAKE_AWAIT_WORK_KIND } from './store';
-import type { ListedArrival, NewArrival, ParkKind, RunHostStore, RunRowStore, WaitWake } from './store';
+import type { ListedArrival, NewArrival, ParkKind, RunHostStore, RunRowStore, StrandedWait, WaitWake } from './store';
 
 export interface StoreWaitsBackend {
   store: RunHostStore;
@@ -99,6 +99,19 @@ class Names {
     return optionalText(step, 'identity');
   }
 
+  /** The case's name for an id it made: a wait's or a run's. */
+  nameOf(id: string): string {
+    for (const named of [this.waits, this.ids]) for (const [name, made] of named) if (made === id) return name;
+    return id;
+  }
+
+  /** A stranded wait as a case writes it: by its wait's and (`withRun`)
+   *  its run's names, its keys in that order. */
+  stranded(wait: StrandedWait, withRun: boolean): Record<string, unknown> {
+    const shown: Record<string, unknown> = { wait: this.nameOf(wait.waitId), edge: wait.edge, key: wait.key, parked: wait.parked };
+    return withRun ? { ...shown, run: this.nameOf(wait.runId) } : shown;
+  }
+
   /** The step's list `key` of `{ run, wait, address }`. */
   wakes(step: unknown, key: 'wakes' | 'queued' = 'wakes'): WaitWake[] {
     return items(step, key).map((w) => ({ runId: this.id(text(w, 'run')), waitId: this.wait(text(w, 'wait')), address: text(w, 'address') }));
@@ -135,8 +148,10 @@ async function runCase({ store, runRows }: StoreWaitsBackend, steps: readonly St
           landing: field(a, 'landing') ?? null,
           gone: field(a, 'gone') === true,
         }));
-        const wakes = await store.waits.log({ teamId, adapterType, arrivals, at: fromNow(step.at) });
+        const { wakes, stranded } = await store.waits.log({ teamId, adapterType, arrivals, at: fromNow(step.at) });
         assert.deepEqual(wakes.sort(byWait), names.wakes(step).sort(byWait), `${at}: the wakes`);
+        const strands = Array.isArray(step.stranded) ? texts(step, 'stranded').map((name) => names.wait(name)) : [];
+        assert.deepEqual(stranded.map((wait) => wait.waitId).sort(), strands.sort(), `${at}: the waits stranded`);
         if (step.queued !== undefined) {
           const rows = await store.work.claimDue({ limit: 1000, leaseMs: 60_000, kinds: [WAKE_AWAIT_WORK_KIND] });
           const queued = rows.map(({ payload }) => ({ runId: text(payload, 'runId'), waitId: text(payload, 'waitId'), address: text(payload, 'address') }));
@@ -146,7 +161,7 @@ async function runCase({ store, runRows }: StoreWaitsBackend, steps: readonly St
       }
       case 'open': {
         const since = names.marks.get(text(step, 'since')) ?? assert.fail(`no mark named ${text(step, 'since')}`);
-        const { waitId } = await store.waits.open({ runId: runId(), teamId, adapterType, edge: text(step, 'edge'), key: text(step, 'key'), since });
+        const { waitId } = await store.waits.open({ runId: runId(), teamId, adapterType, edge: text(step, 'edge'), key: optionalText(step, 'key'), since });
         const same = optionalText(step, 'same');
         if (same !== null) assert.equal(waitId, names.wait(same), `${at}: the same wait`);
         else assert.ok(![...names.waits.values()].includes(waitId), `${at}: a new wait`);
@@ -155,7 +170,6 @@ async function runCase({ store, runRows }: StoreWaitsBackend, steps: readonly St
       }
       case 'arrivals': {
         const got = await store.waits.arrivals({ waitId: names.wait(text(step, 'wait')) });
-        assert.equal(got.gone, step.gone === true, `${at}: gone`);
         const expected = items(step, 'arrivals');
         assert.equal(got.arrivals.length, expected.length, `${at}: ${JSON.stringify(got.arrivals)}`);
         got.arrivals.forEach((arrival, i) => {
@@ -247,6 +261,32 @@ async function runCase({ store, runRows }: StoreWaitsBackend, steps: readonly St
       case 'sweep':
         await store.waits.sweep({ before: fromNow(step.before), limit: 1000 });
         break;
+      case 'stranded': {
+        const got = (await store.waits.stranded({ runId: runId() })).map((wait) => names.stranded(wait, false));
+        const expected = items(step, 'waits').map((want) => ({ wait: field(want, 'wait'), edge: field(want, 'edge'), key: field(want, 'key'), parked: field(want, 'parked') }));
+        assert.deepEqual(got, expected, `${at}: the run's stranded waits`);
+        break;
+      }
+      case 'everyStranded': {
+        const limit = Number(step.limit);
+        const every: StrandedWait[] = [];
+        for (;;) {
+          const last = every.at(-1);
+          const page = await store.waits.stranded(last === undefined ? { limit } : { after: { at: last.at, waitId: last.waitId }, limit });
+          assert.ok(page.length <= limit, `${at}: a page of at most ${limit}`);
+          if (page.length === 0) break;
+          every.push(...page);
+        }
+        every.forEach((wait, i) => {
+          const before = every[i - 1];
+          if (before !== undefined) assert.ok(before.at < wait.at || (before.at === wait.at && before.waitId < wait.waitId), `${at}: oldest stranded first`);
+        });
+        const named = new Set(names.waits.values());
+        const got = every.filter((wait) => named.has(wait.waitId)).map((wait) => names.stranded(wait, true));
+        const expected = items(step, 'waits').map((want) => ({ wait: field(want, 'wait'), edge: field(want, 'edge'), key: field(want, 'key'), parked: field(want, 'parked'), run: field(want, 'run') }));
+        assert.deepEqual(got, expected, `${at}: every run's stranded waits`);
+        break;
+      }
       default:
         assert.fail(`${at}: no step ${action}`);
     }

@@ -133,12 +133,14 @@ pub struct WaitPark {
 }
 
 /// A wait to open: this run waits on `edge` of the record its adapter keys
-/// `key`, reading what arrives after the mark `since`.
+/// `key`, reading what arrives after the mark `since`. `key` None: the
+/// adapter said the record is gone, so nothing will arrive on the wait,
+/// and a flow parked on it is stranded.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpenWait {
     pub adapter_type: String,
     pub edge: String,
-    pub key: String,
+    pub key: Option<String>,
     pub since: i64,
 }
 
@@ -152,10 +154,9 @@ pub struct LoggedArrival {
     pub landing: Data,
 }
 
-/// What a wait has yet to judge, in log order, and whether its record went.
+/// What a wait has yet to judge, in log order.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct WaitArrivals {
-    pub gone: bool,
     pub arrivals: Vec<LoggedArrival>,
 }
 

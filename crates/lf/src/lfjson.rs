@@ -13,6 +13,7 @@ use crate::runs::{Fired, RerunRefused, RunOutcome};
 use crate::secrets::MissingCredential;
 use crate::store::{DeliveryRow, RunRow};
 use crate::store_wire::Wire;
+use crate::waits::{Stranded, StrandedOf};
 
 /// Write the document as one line, and pass the exit code through.
 pub fn emit(out: &mut impl Write, doc: &Js, code: i32) -> Result<i32, String> {
@@ -182,8 +183,40 @@ fn attempts(run: &RunRow) -> Js {
     Js::Arr(run.attempts.iter().chain(std::iter::once(&latest)).map(shown).collect())
 }
 
-pub fn runs_list_doc(rows: &[RunRow]) -> Js {
-    Js::Obj(obj! { "runs" => Js::Arr(rows.iter().map(|r| Js::Obj(row_summary(r))).collect()) })
+/// `runs`: each run, `stranded` when it is parked on a wait whose record
+/// was deleted.
+pub fn runs_list_doc(store: &dyn RunHostStore, rows: &[RunRow]) -> Result<Js, String> {
+    let shown = rows
+        .iter()
+        .map(|run| {
+            let mut shown = row_summary(run);
+            shown.insert("stranded".into(), Js::Bool(is_stranded(store, run)?));
+            Ok(Js::Obj(shown))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(Js::Obj(obj! { "runs" => Js::Arr(shown) }))
+}
+
+/// The run's waits whose record was deleted and that are still parked:
+/// what it waits on in vain (docs/contracts/stranded-waits.md).
+fn stranded_now(store: &dyn RunHostStore, run_id: &str) -> Result<Vec<Stranded>, String> {
+    let stranded = store.stranded_waits(&StrandedOf::Run(run_id)).map_err(|e| e.to_string())?;
+    Ok(stranded.into_iter().filter(|wait| wait.parked).collect())
+}
+
+/// Whether the run is parked on a wait whose record was deleted, so `runs`
+/// says `parked (stranded)`.
+pub fn is_stranded(store: &dyn RunHostStore, run: &RunRow) -> Result<bool, String> {
+    Ok(run.status == "parked" && !stranded_now(store, &run.id)?.is_empty())
+}
+
+/// One stranded wait, as `runs show` says it.
+fn stranded_says(wait: &Stranded) -> String {
+    let (edge, adapter) = (&wait.edge, &wait.adapter_type);
+    match &wait.key {
+        Some(key) => format!("waiting on {edge} of {adapter} {key} — its record was deleted, so nothing will arrive; a race with a sleep is the way out"),
+        None => format!("waiting on {edge} of {adapter} — its record was deleted before the wait opened, so nothing will arrive; a race with a sleep is the way out"),
+    }
 }
 
 /// One run: its status, event, trace, write count, cost and what it is parked on.
@@ -214,6 +247,25 @@ pub fn run_show_doc(store: &dyn RunHostStore, run_id: &str) -> Result<Js, String
             parked
                 .iter()
                 .map(|leaf| Js::Obj(obj! { "address" => Js::str(&leaf.address), "reason" => Js::str(&leaf.reason), "wakeAt" => opt(leaf.wake_at.as_deref()) }))
+                .collect(),
+        ),
+    );
+    let stranded = if run.status == "parked" { stranded_now(store, run_id)? } else { Vec::new() };
+    shown.insert(
+        "stranded".into(),
+        Js::Arr(
+            stranded
+                .iter()
+                .map(|wait| {
+                    Js::Obj(obj! {
+                        "waitId" => Js::str(&wait.wait_id),
+                        "adapterType" => Js::str(&wait.adapter_type),
+                        "edge" => Js::str(&wait.edge),
+                        "key" => opt(wait.key.as_deref()),
+                        "at" => Js::str(&wait.at),
+                        "says" => Js::str(stranded_says(wait)),
+                    })
+                })
                 .collect(),
         ),
     );

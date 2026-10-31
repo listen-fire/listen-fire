@@ -30,6 +30,15 @@ const Claimed = z.object({ reason: z.string(), state: z.unknown().optional() }).
 const Work = z.object({ id: z.string(), kind: z.string(), key: z.string(), payload: z.unknown().optional(), claim: z.string() });
 const Wake = z.object({ runId: z.string(), waitId: z.string(), address: z.string() });
 const Listed = z.object({ seq: z.number(), identity: z.string(), version: z.string().nullable(), landing: z.unknown() });
+const Stranded = z.object({
+  waitId: z.string(),
+  runId: z.string(),
+  adapterType: z.string(),
+  edge: z.string(),
+  key: z.string().nullable(),
+  at: z.string(),
+  parked: z.boolean(),
+});
 
 /** A park as the wire carries it: every member said. */
 function parkOf(park: ParkKind): Record<string, unknown> {
@@ -341,9 +350,10 @@ export class RpcStoreBackend {
       },
       waits: {
         mark: () => call('waits.mark', {}, z.number()),
-        log: (input) => call('waits.log', { ...input, arrivals: input.arrivals.map(arrivalOf) }, z.array(Wake)),
+        log: (input) => call('waits.log', { ...input, arrivals: input.arrivals.map(arrivalOf) }, z.object({ wakes: z.array(Wake), stranded: z.array(Stranded) })),
         open: (input) => call('waits.open', input, z.object({ waitId: z.string() })),
-        arrivals: (input) => call('waits.arrivals', input, z.object({ gone: z.boolean(), arrivals: z.array(Listed) })),
+        arrivals: (input) => call('waits.arrivals', input, z.object({ arrivals: z.array(Listed) })),
+        stranded: (of) => call('waits.stranded', of, z.array(Stranded)),
         note: (input) => call('waits.note', input, z.boolean()),
         sweep: (input) => call('waits.sweep', input, z.number()),
       },

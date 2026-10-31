@@ -280,9 +280,39 @@ pub struct LoggedArrival {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WaitArrivals {
-    /// A gone arrival was logged on the wait's record after its mark.
-    pub gone: bool,
     pub arrivals: Vec<LoggedArrival>,
+}
+
+/// A wait whose record went while it was parked on it (`waits.stranded`,
+/// docs/contracts/stranded-waits.md).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Stranded {
+    pub wait_id: String,
+    pub run_id: String,
+    pub adapter_type: String,
+    pub edge: String,
+    /// `None` for a wait opened on a record already gone.
+    pub key: Option<String>,
+    /// When the store found the wait parked on a deleted record.
+    pub at: String,
+    /// Whether the wait's leaf is still parked.
+    pub parked: bool,
+}
+
+/// `waits.log`'s answer: the waits it answered and the waits it stranded.
+#[derive(Debug, Clone, Serialize)]
+pub struct Logged {
+    pub wakes: Vec<WaitWake>,
+    pub stranded: Vec<Stranded>,
+}
+
+/// Where a page of `waits.stranded` left off: its last wait.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StrandedAfter {
+    pub at: String,
+    pub wait_id: String,
 }
 
 /// What a `work.release` says of the claim.
@@ -444,6 +474,8 @@ slot! {
         "parks.leaves" => fn leaves(ParksLeaves { run_id: String, parked_only: bool, reason: Option<String>, due_by: Option<String> }) -> Vec<LeafRow>;
         "parks.deleteLeaves" => fn delete_leaves(ParksDeleteLeaves { run_id: String, addresses: Vec<String> }) -> ();
         /// One fenced write: the leaf, its kind's row, the run marked parked.
+        /// A `Wait` park on a record already gone (a gone arrival logged
+        /// after the wait's `since`, or no key) strands the wait, now.
         "parks.commit" => fn commit_park(ParksCommit { run_id: String, address: String, state: Js, fence: Option<String>, park: ParkKind }) -> ();
         /// A segment's held writes as one fenced write: `joins` recorded as
         /// `joins.recordJoin` records them, `parks` committed in order as
@@ -458,7 +490,8 @@ slot! {
         /// In the same write, each wait parked whose arrivals are unread
         /// (`waits.arrivals` lists some) gets a `wake_await { waitId,
         /// runId, address }` row under `team_id` (a deleted record wakes
-        /// nothing: its waits keep waiting);
+        /// nothing: its waits keep waiting, stranded as `parks.commit`
+        /// strands them);
         /// those wakes are the answer.
         "parks.commitSegment" => fn commit_segment(ParksCommitSegment {
             run_id: String,
@@ -496,13 +529,17 @@ slot! {
         /// Never interleaved with a `Wait` park on the same record's edge. A
         /// repeat (an identity and version its record's edge logged within
         /// the retention) is skipped and wakes nothing; an arrival without an
-        /// identity is never one. A gone arrival (its record deleted) is
-        /// logged but wakes nothing, and is not in the answer: a wait whose
+        /// identity is never one. The answer is `{ wakes, stranded }`. A gone
+        /// arrival (its record deleted) is logged but wakes nothing: it
+        /// strands each wait parked on its record not stranded already
+        /// (`stranded_at` = `at`), and those are `stranded`. A wait whose
         /// record is deleted keeps waiting.
-        "waits.log" => fn log_arrivals(WaitsLog { team_id: String, adapter_type: String, arrivals: Vec<NewArrival>, at: String }) -> Vec<WaitWake>;
+        "waits.log" => fn log_arrivals(WaitsLog { team_id: String, adapter_type: String, arrivals: Vec<NewArrival>, at: String }) -> Logged;
         /// A run that already waits on this edge of this record keeps that
-        /// wait, and its `since`.
-        "waits.open" => fn open_wait(WaitsOpen { run_id: String, team_id: String, adapter_type: String, edge: String, key: String, since: i64 }) -> OpenedWait;
+        /// wait, and its `since`. No `key`: the record was already gone, so
+        /// it is always a new wait, nothing arrives on it, and a park on it
+        /// strands it.
+        "waits.open" => fn open_wait(WaitsOpen { run_id: String, team_id: String, adapter_type: String, edge: String, #[serde(default)] key: Option<String>, since: i64 }) -> OpenedWait;
         /// The arrivals logged after the wait's `since` on its record's edge
         /// that it has not noted, the first of each identity and version
         /// only, in log order.
@@ -513,6 +550,21 @@ slot! {
         /// Forget at most `limit` arrivals logged before `before` that no
         /// wait reads; how many went.
         "waits.sweep" => fn sweep_arrivals(WaitsSweep { before: String, limit: i64 }) -> i64;
+        /// The stranded waits, oldest stranded first (ties by wait id): the
+        /// run's, given `run_id`; else every run's, at most `limit`, after
+        /// the wait `after` names. A wait is stranded when it is parked on a
+        /// record already gone: by a gone arrival `waits.log` logs while it
+        /// is parked, or as `parks.commit` (or `parks.commitSegment`) parks
+        /// it on a record with a gone arrival after its `since`, or with no
+        /// key. It stays stranded while its run's rows are kept.
+        "waits.stranded" => fn stranded_waits(WaitsStranded {
+            #[serde(default)]
+            run_id: Option<String>,
+            #[serde(default)]
+            after: Option<StrandedAfter>,
+            #[serde(default)]
+            limit: Option<i64>,
+        }) -> Vec<Stranded>;
         /// `None` while another holds it.
         "leases.claim" => fn claim_lease(LeasesClaim { run_id: String, ttl_ms: i64 }) -> Option<Lease>;
         "leases.renew" => fn renew_lease(LeasesRenew { run_id: String, token: String, ttl_ms: i64 }) -> bool;

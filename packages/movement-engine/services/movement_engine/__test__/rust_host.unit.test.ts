@@ -18,7 +18,7 @@ import { TEAM, hostWith, inSegment, request, scriptedEngine } from './scripted_e
 
 type Waits = NonNullable<EngineHost['park']['waits']>;
 
-type Logged = { gone: boolean; arrivals: LoggedArrival[] };
+type Logged = { arrivals: LoggedArrival[] };
 
 /** A host's waits that record each request and answer from `arrivals`, or
  *  from what it says at each reading. */
@@ -28,7 +28,11 @@ function recordingWaits(arrivals: Logged | (() => Logged)): { waits: Waits; aske
     asked,
     waits: {
       mark: async (input) => (asked.push(['mark', input]), { mark: 41 }),
-      open: async (input) => (asked.push(['open', input]), { waitId: input.key === 'thread:c1' ? 'wait-1' : `wait:${input.key}` }),
+      open: async (input) => {
+        asked.push(['open', input]);
+        const key = 'key' in input ? input.key : 'gone';
+        return { waitId: key === 'thread:c1' ? 'wait-1' : `wait:${key}` };
+      },
       arrivals: async (input) => (asked.push(['arrivals', input]), typeof arrivals === 'function' ? arrivals() : arrivals),
       note: async (input) => (asked.push(['note', input]), { counts: input.matched }),
     },
@@ -60,7 +64,7 @@ function inOrder(labels: string[], wanted: string[]): string[] {
 
 describe("the shim's park.waits routes", () => {
   it('forwards park.waits.open with {segmentId, adapterType, edge, key, since} and answers {waitId}', async () => {
-    const { waits, asked } = recordingWaits({ gone: false, arrivals: [] });
+    const { waits, asked } = recordingWaits({ arrivals: [] });
     const served = await hostWith({ park: { waits } });
     const segmentId = served.context.segmentId;
     const { engine, answers } = scriptedEngine((seen) =>
@@ -73,9 +77,23 @@ describe("the shim's park.waits routes", () => {
     expect(answers).toEqual([{ id: 1, answer: { value: { waitId: 'wait-1' } } }]);
   });
 
+  it('forwards park.waits.open of a record already gone as {gone: true}, with no key', async () => {
+    const { waits, asked } = recordingWaits({ arrivals: [] });
+    const served = await hostWith({ park: { waits } });
+    const segmentId = served.context.segmentId;
+    const { engine, answers } = scriptedEngine((seen) =>
+      seen.length === 0
+        ? { pending: [request(1, 'park.waits', 'open', inSegment(segmentId, { adapterType: 'acme', edge: 'Comments', gone: true, since: 41 }))] }
+        : { done: { ok: true } },
+    );
+    await driveEngine(engine, {}, served);
+    expect(asked).toEqual([['open', { segmentId, adapterType: 'acme', edge: 'Comments', gone: true, since: 41 }]]);
+    expect(answers).toEqual([{ id: 1, answer: { value: { waitId: 'wait:gone' } } }]);
+  });
+
   it("answers the mark, the wait's arrivals on the eval wire, and whether a noted arrival counts", async () => {
     const landed: LoggedArrival = { seq: 42, identity: 'k1', version: null, landing: { recordId: 'k1', recordType: 'Comment', fields: { Text: 'hi' } } };
-    const { waits, asked } = recordingWaits({ gone: false, arrivals: [landed] });
+    const { waits, asked } = recordingWaits({ arrivals: [landed] });
     const served = await hostWith({ park: { waits } });
     const segmentId = served.context.segmentId;
     const { engine, answers } = scriptedEngine((seen) =>
@@ -99,14 +117,14 @@ describe("the shim's park.waits routes", () => {
     ]);
     expect([...answers].sort((a, b) => a.id - b.id)).toEqual([
       { id: 1, answer: { value: { mark: 41 } } },
-      { id: 2, answer: { value: new WireOut().value({ gone: false, arrivals: [landed] }) } },
+      { id: 2, answer: { value: new WireOut().value({ arrivals: [landed] }) } },
       { id: 3, answer: { value: { counts: true } } },
     ]);
   });
 
   it('reads `since` as any integer, as the Rust host does, and refuses one that is not', async () => {
     const opened = async (since: unknown) => {
-      const { waits, asked } = recordingWaits({ gone: false, arrivals: [] });
+      const { waits, asked } = recordingWaits({ arrivals: [] });
       const served = await hostWith({ park: { waits } });
       const segmentId = served.context.segmentId;
       const { engine } = scriptedEngine((seen) =>
@@ -212,7 +230,7 @@ describe('an await on a listenable edge, run in the Rust engine through the shim
   it("opens the wait as the record enters, reads its arrivals at the await, and binds the one that counts", async () => {
     const { adapter, reads } = quietChat();
     const arrived: LoggedArrival = { seq: 42, identity: '1.5', landing: { recordId: 'r-1', recordType: 'Message', fields: { Text: 'hi', Timestamp: '1.5' } } };
-    const { waits, asked } = recordingWaits({ gone: false, arrivals: [arrived] });
+    const { waits, asked } = recordingWaits({ arrivals: [arrived] });
     const park = makeFakeParkSink();
     const result = await runMovement({
       source,
@@ -243,7 +261,7 @@ describe('an await on a listenable edge, run in the Rust engine through the shim
 
   it('parks on the wait when nothing has arrived, and asks no wake when nothing arrived while it parked', async () => {
     const { adapter } = quietChat();
-    const { waits } = recordingWaits({ gone: false, arrivals: [] });
+    const { waits } = recordingWaits({ arrivals: [] });
     const park = makeFakeParkSink();
     const wakes: QueuedWake[] = [];
     const result = await runMovement({
@@ -263,7 +281,7 @@ describe('an await on a listenable edge, run in the Rust engine through the shim
     const arrived: LoggedArrival = { seq: 43, identity: '1.5', landing: { recordId: 'r-1', recordType: 'Message', fields: { Text: 'hi', Timestamp: '1.5' } } };
     const park = makeFakeParkSink();
     // Nothing at the await's first reading; the reply lands as the run parks.
-    const { waits, asked } = recordingWaits(() => ({ gone: false, arrivals: park.awaitParks.length > 0 ? [arrived] : [] }));
+    const { waits, asked } = recordingWaits(() => ({ arrivals: park.awaitParks.length > 0 ? [arrived] : [] }));
     const wakes: QueuedWake[] = [];
     const result = await runMovement({
       source,

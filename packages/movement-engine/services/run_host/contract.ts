@@ -111,12 +111,13 @@ async function parkOnWait(backend: ContractBackend, runId: string, address: stri
 /** A comment arrives on `key`: the waits parked on it, by address. */
 async function comment(backend: ContractBackend, key: string): Promise<WaitWake[]> {
   const identity = uniqueKey('comment');
-  return backend.store.waits.log({
+  const logged = await backend.store.waits.log({
     teamId: backend.teamId,
     adapterType: 'acme',
     arrivals: [{ edge: 'Comments', key, identity, version: null, landing: { fields: { Body: 'hi' } }, gone: false }],
     at: new Date().toISOString(),
   });
+  return logged.wakes;
 }
 
 /** A step scripted per leaf address (or race frame): what it does and what it

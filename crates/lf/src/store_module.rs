@@ -19,8 +19,8 @@ use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, OwedRace, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit,
     StoreError,
 };
-use crate::store_wire::{Wire, delivery_params, event_run_params, int, num, open_wait_params, opt, park_params, rows, run_start_params, segment_commit_params, to_rows};
-use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait, WaitArrivals, WaitWake};
+use crate::store_wire::{Wire, delivery_params, event_run_params, int, num, open_wait_params, opt, park_params, rows, run_start_params, segment_commit_params, stranded_params, to_rows};
+use crate::waits::{DeliveryArrivals, Logged, NewArrival, Noted, OpenWait, Stranded, StrandedOf, WaitArrivals, WaitWake};
 
 /// The error code a fenced write answers when the run's lease is gone
 /// (`RunLeaseLost`), its `data` `{ runId }`.
@@ -266,8 +266,9 @@ impl RunHostStore for ProcessStore {
         let answer = self.call("waits.mark", obj! {})?;
         int(&answer).ok_or_else(|| self.malformed("waits.mark", &answer))
     }
-    fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {
-        self.rows("waits.log", obj! { "teamId" => s(team_id), "adapterType" => s(adapter_type), "arrivals" => to_rows(arrivals), "at" => s(at) })
+    fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Logged> {
+        let answer = self.call("waits.log", obj! { "teamId" => s(team_id), "adapterType" => s(adapter_type), "arrivals" => to_rows(arrivals), "at" => s(at) })?;
+        Logged::from_wire(&answer).ok_or_else(|| self.malformed("waits.log", &answer))
     }
     fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {
         let answer = self.call("waits.open", open_wait_params(wait))?;
@@ -276,6 +277,15 @@ impl RunHostStore for ProcessStore {
     fn wait_arrivals(&self, wait_id: &str) -> Result<WaitArrivals> {
         let answer = self.call("waits.arrivals", obj! { "waitId" => s(wait_id) })?;
         WaitArrivals::from_wire(&answer).ok_or_else(|| self.malformed("waits.arrivals", &answer))
+    }
+    fn stranded_waits(&self, of: &StrandedOf<'_>) -> Result<Vec<Stranded>> {
+        const METHOD: &str = "waits.stranded";
+        // A module written before waits keeps none, so none is stranded.
+        match self.client.call(METHOD, stranded_params(of)) {
+            Ok(answer) => rows(&answer).ok_or_else(|| self.malformed(METHOD, &answer)),
+            Err(error) if error.code == METHOD_NOT_IMPLEMENTED_CODE => Ok(Vec::new()),
+            Err(error) => Err(self.refused(METHOD, error)),
+        }
     }
     fn note_arrival(&self, noted: &Noted<'_>) -> Result<bool> {
         let mut params = obj! { "waitId" => s(noted.wait_id), "identity" => s(noted.identity), "version" => opt(noted.version), "matched" => Js::Bool(noted.matched) };

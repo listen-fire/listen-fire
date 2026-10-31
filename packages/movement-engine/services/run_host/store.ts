@@ -45,7 +45,9 @@ export interface ParkStore {
    * Park a leaf and what wakes it, in one fenced write: the leaf (as
    * `putLeaf`, the kind its reason; a wait's reason is `await`); a timer's
    * run row armed at `wakeAt` (as `armTimerWake`); a wait's wait parked at
-   * `address` (a wait the run does not have writes nothing, and fails). Any
+   * `address` (a wait the run does not have writes nothing, and fails),
+   * stranded as it parks when its record is already gone (a gone arrival
+   * logged after its `since`, or no key; `waits.stranded`). Any
    * kind unparks the run's wait parked at `address` before, and keeps the
    * run's wait notes that name `address` as their `leaf`. A wait's park never
    * interleaves with a `waits.log` on its record's edge: either the log sees
@@ -157,6 +159,26 @@ export interface WaitWake {
   address: string;
 }
 
+/** A wait whose record went while it was parked on it (`waits.stranded`,
+ *  docs/contracts/stranded-waits.md): nothing will arrive, so it never
+ *  resolves. */
+export interface StrandedWait {
+  waitId: string;
+  runId: string;
+  adapterType: string;
+  edge: string;
+  /** Null for a wait opened on a record already gone. */
+  key: string | null;
+  /** When the store found it parked on a deleted record (ISO 8601). */
+  at: string;
+  /** Whether its leaf is still parked: a race's other arm may have won. */
+  parked: boolean;
+}
+
+/** Which stranded waits `waits.stranded` answers: one run's, or every
+ *  run's a page at a time, after the last wait of the page before. */
+export type StrandedOf = { runId: string } | { after?: { at: string; waitId: string }; limit: number };
+
 /**
  * A run's waits on listenable edges and the log of arrivals they read
  * (docs/contracts/store-slot.md, `waits.*`; the cases every store is held to
@@ -170,20 +192,29 @@ export interface WaitStore {
    * Log each arrival at `at`, in order, under a seq above every seq before
    * it, and queue a `wake_await` row (payload a `WaitWake`, team `teamId`)
    * for each wait parked on their records, in one write: a crash leaves
-   * both or neither. Answers those waits (one each). A repeat (an identity
-   * and version its team, adapter, edge and record already logged within
-   * the hour) is skipped and answers nothing; an arrival without an
+   * both or neither. Answers those waits (one each) as `wakes`. A gone
+   * arrival wakes none: it strands each wait parked on its record not
+   * stranded already, at `at`, and those are `stranded`. A repeat (an
+   * identity and version its team, adapter, edge and record already logged
+   * within the hour) is skipped and answers nothing; an arrival without an
    * identity is never a repeat.
    */
-  log(input: { teamId: string; adapterType: string; arrivals: readonly NewArrival[]; at: string }): Promise<WaitWake[]>;
+  log(input: { teamId: string; adapterType: string; arrivals: readonly NewArrival[]; at: string }): Promise<{ wakes: WaitWake[]; stranded: StrandedWait[] }>;
   /** The run waits on this edge of this record, reading what is logged after
-   *  `since`. A run that already waits on it keeps that wait, and its `since`. */
-  open(input: { runId: string; teamId: string; adapterType: string; edge: string; key: string; since: number }): Promise<{ waitId: string }>;
+   *  `since`. A run that already waits on it keeps that wait, and its `since`.
+   *  A null `key`: the record was already gone, so it is always a new wait,
+   *  nothing arrives on it, and a park on it strands it. */
+  open(input: { runId: string; teamId: string; adapterType: string; edge: string; key: string | null; since: number }): Promise<{ waitId: string }>;
   /** What the wait has yet to note, in seq order, the first of each identity
-   *  and version only (one without an identity reads as `#` and its seq); and
-   *  `gone` when a gone arrival was logged there after `since`. An unknown
-   *  wait fails. */
-  arrivals(input: { waitId: string }): Promise<{ gone: boolean; arrivals: ListedArrival[] }>;
+   *  and version only (one without an identity reads as `#` and its seq). An
+   *  unknown wait fails. */
+  arrivals(input: { waitId: string }): Promise<{ arrivals: ListedArrival[] }>;
+  /** The stranded waits `of` names, oldest stranded first (ties by wait id).
+   *  A wait is stranded when it is parked on a record already gone: by a
+   *  gone arrival logged while it is parked, or as a park parks it on a
+   *  record with a gone arrival after its `since`, or with no key. It stays
+   *  stranded while its run's rows are kept. */
+  stranded(of: StrandedOf): Promise<StrandedWait[]>;
   /**
    * Note the wait judged an arrival, and whether its record matched: whether
    * it counts (it matched, and its identity did not match at its last noted

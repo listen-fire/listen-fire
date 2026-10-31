@@ -9,7 +9,7 @@ use crate::obj;
 use crate::store::{
     BranchExport, ClaimedWork, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind, RunRow, RunStart, SegmentCommit,
 };
-use crate::waits::{LoggedArrival, NewArrival, OpenWait, WaitArrivals, WaitWake};
+use crate::waits::{Logged, LoggedArrival, NewArrival, OpenWait, Stranded, StrandedAfter, StrandedOf, WaitArrivals, WaitWake};
 
 /// A row as the store wire carries it.
 pub trait Wire: Sized {
@@ -345,8 +345,22 @@ pub fn open_wait_params(wait: &OpenWait<'_>) -> Obj {
         "teamId" => Js::str(wait.team_id),
         "adapterType" => Js::str(wait.adapter_type),
         "edge" => Js::str(wait.edge),
-        "key" => Js::str(wait.key),
+        "key" => opt(wait.key),
         "since" => Js::Num(wait.since.into()),
+    }
+}
+
+/// `waits.stranded`'s params: `{ runId }`, or `{ after?, limit }`.
+pub fn stranded_params(of: &StrandedOf<'_>) -> Obj {
+    match *of {
+        StrandedOf::Run(run_id) => obj! { "runId" => Js::str(run_id) },
+        StrandedOf::Page { after, limit } => {
+            let mut params = obj! { "limit" => Js::Num(limit.into()) };
+            if let Some(StrandedAfter { at, wait_id }) = after {
+                params.insert("after".into(), Js::from(obj! { "at" => Js::str(at), "waitId" => Js::str(wait_id) }));
+            }
+            params
+        }
     }
 }
 
@@ -372,17 +386,51 @@ impl Wire for LoggedArrival {
 
 impl Wire for WaitArrivals {
     fn to_wire(&self) -> Js {
-        Js::from(obj! { "gone" => Js::Bool(self.gone), "arrivals" => to_rows(&self.arrivals) })
+        Js::from(obj! { "arrivals" => to_rows(&self.arrivals) })
     }
 
     fn from_wire(v: &Js) -> Option<Self> {
-        Some(WaitArrivals {
-            gone: match v.get("gone")? {
-                Js::Bool(gone) => *gone,
+        Some(WaitArrivals { arrivals: rows(v.get("arrivals")?)? })
+    }
+}
+
+impl Wire for Stranded {
+    fn to_wire(&self) -> Js {
+        Js::from(obj! {
+            "waitId" => Js::str(&self.wait_id),
+            "runId" => Js::str(&self.run_id),
+            "adapterType" => Js::str(&self.adapter_type),
+            "edge" => Js::str(&self.edge),
+            "key" => opt(self.key.as_deref()),
+            "at" => Js::str(&self.at),
+            "parked" => Js::Bool(self.parked),
+        })
+    }
+
+    fn from_wire(v: &Js) -> Option<Self> {
+        Some(Stranded {
+            wait_id: text(v, "waitId")?,
+            run_id: text(v, "runId")?,
+            adapter_type: text(v, "adapterType")?,
+            edge: text(v, "edge")?,
+            key: opt_text(v, "key")?,
+            at: text(v, "at")?,
+            parked: match v.get("parked")? {
+                Js::Bool(parked) => *parked,
                 _ => return None,
             },
-            arrivals: rows(v.get("arrivals")?)?,
         })
+    }
+}
+
+/// `waits.log`'s answer: `{ wakes, stranded }`.
+impl Wire for Logged {
+    fn to_wire(&self) -> Js {
+        Js::from(obj! { "wakes" => to_rows(&self.wakes), "stranded" => to_rows(&self.stranded) })
+    }
+
+    fn from_wire(v: &Js) -> Option<Self> {
+        Some(Logged { wakes: rows(v.get("wakes")?)?, stranded: rows(v.get("stranded")?)? })
     }
 }
 
@@ -471,10 +519,13 @@ mod tests {
         assert_eq!(NewArrival::from_wire(&landed.to_wire()), Some(landed.clone()));
         let gone = NewArrival { identity: None, landing: None, gone: true, ..landed };
         assert_eq!(NewArrival::from_wire(&gone.to_wire()), Some(gone));
-        let arrivals = WaitArrivals { gone: false, arrivals: vec![LoggedArrival { seq: 7, identity: "k1".into(), version: Some("2".into()), landing: Js::str("x") }] };
+        let arrivals = WaitArrivals { arrivals: vec![LoggedArrival { seq: 7, identity: "k1".into(), version: Some("2".into()), landing: Js::str("x") }] };
         assert_eq!(WaitArrivals::from_wire(&arrivals.to_wire()), Some(arrivals));
         let wake = WaitWake { run_id: "r".into(), wait_id: "w".into(), address: "s1".into() };
-        assert_eq!(WaitWake::from_wire(&wake.to_wire()), Some(wake));
+        assert_eq!(WaitWake::from_wire(&wake.to_wire()), Some(wake.clone()));
+        let stranded = Stranded { wait_id: "w".into(), run_id: "r".into(), adapter_type: "acme".into(), edge: "Comments".into(), key: None, at: "2026-10-31T00:00:00.000Z".into(), parked: true };
+        let logged = Logged { wakes: vec![wake], stranded: vec![stranded] };
+        assert_eq!(Logged::from_wire(&logged.to_wire()), Some(logged));
         assert_eq!(park_kind(&Js::from(obj! { "kind" => Js::str("wait"), "waitId" => Js::str("w") })).map(|k| k.reason()), Some("await"));
     }
 }

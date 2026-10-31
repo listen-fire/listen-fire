@@ -567,7 +567,7 @@ request: { segmentId: string; waitId: string }
 answer:  void
 ```
 
-- "Resume the run parked on this wait", the segment's run. After an await park is durable, the engine reads the wait's arrivals once more itself, its WHERE included. An arrival logged between the first read and the park woke nothing, because the wait was not parked yet. So when the second read finds one the WHERE takes, or the record gone, the engine asks for the wake. The resume re-enters the await, which judges and notes the arrival.
+- "Resume the run parked on this wait", the segment's run. After an await park is durable, the engine reads the wait's arrivals once more itself, its WHERE included. An arrival logged between the first read and the park woke nothing, because the wait was not parked yet. So when the second read finds one the WHERE takes, the engine asks for the wake. A record deleted meanwhile asks none: the wait keeps waiting. The resume re-enters the await, which judges and notes the arrival.
 - When the second read cannot answer, the engine logs an error naming the wait and leaves the run parked without a wake; an arrival logged later wakes it.
 - **Persist:** a queued wake that outlives the process (production: a `wake_await` work row).
 - **Retry:** idempotent; a duplicate wake resumes nothing twice. A wake that cannot be queued throws; the engine logs it and the park stands.
@@ -588,21 +588,22 @@ answer:  { mark: number }   // an integer
 #### `park.waits.open`
 
 ```ts
-request: { segmentId: string; adapterType: string; edge: string; key: string; since: number }
+request: { segmentId: string; adapterType: string; edge: string; since: number } & ({ key: string } | { gone: true })
 answer:  { waitId: string }
 ```
 
 - **Persist:** the segment's run waits on `edge` of the record the module keys `key`, reading the arrivals logged after `since`.
+- **`gone: true` instead of a key:** the module's `awaitKeys` answered the record gone. The wait opens all the same, without a key: nothing can arrive on it, so an `await` on it parks for good, and the host marks that park stranded ([stranded-waits.md](stranded-waits.md)). It is always a new wait.
 - **Retry:** a run that already waits on this edge of this record keeps that wait and its first mark: the same `waitId` answers.
 
 #### `park.waits.arrivals`
 
 ```ts
 request: { segmentId: string; waitId: string; wire: true }
-answer:  { gone: boolean; arrivals: Array<{ seq: number; identity: string; version?: string | null; landing: { recordId?: string; recordType?: string; fields: object } | null }> }   // on the eval wire
+answer:  { arrivals: Array<{ seq: number; identity: string; version?: string | null; landing: { recordId?: string; recordType?: string; fields: object } | null }> }   // on the eval wire
 ```
 
-- The arrivals after the wait's mark it has not noted, in log order, the first of each identity and version only. `gone`: the module reported the record gone after the mark.
+- The arrivals after the wait's mark it has not noted, in log order, the first of each identity and version only. A record reported gone is no arrival: its wait keeps waiting.
 - An unknown wait throws.
 
 #### `park.waits.note`
@@ -860,7 +861,7 @@ Four requests are the Rust engine's own: they are not `EngineHost` methods, and 
 ## Changes
 
 - **Version 2 (0.13, waits on listenable edges).** A change in meaning, so the version moves:
-  - **`park.waits`:** new, optional: `mark`, `open`, `arrivals` and `note`. An await on an adapter's edge reads the wait its record opened when it entered the run, not the adapter's `resolveAwait`.
+  - **`park.waits`:** new, optional: `mark`, `open`, `arrivals` and `note`. An await on an adapter's edge reads the wait its record opened when it entered the run, not the adapter's `resolveAwait`. `open` takes `gone: true` in place of a key for a record already gone; `arrivals` answers no `gone` (a deleted record leaves its wait waiting, [stranded-waits.md](stranded-waits.md)).
   - **`park.sink.commitAwaitPark`** takes `waitId` in place of `adapterType` and `correlationKey` for an await on an adapter's edge, and **`park.wake`** takes `waitId`; neither takes a key any more.
   - **`adapters.call`** may call `awaitKeys` (adapter protocol 2.5); the engine no longer calls `resolveAwait` or `wakeKeys`.
   - **`park.callbacks`** is gone, with `fireCallbackBody` and the run input's `fire`: `callback(…)` retired at 0.13 (a form from `@lf/forms`, or buttons on a message, replaces it). The engine refuses a `callback(…)` that reaches it as one the checker should have caught.

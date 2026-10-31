@@ -234,10 +234,12 @@ export interface HostWaits {
   /** The arrival log's mark now: every arrival logged after it is above it. */
   mark(): Promise<{ mark: number }>;
   /** The segment's run waits on `edge` of the record the module keys `key`,
-   *  reading what arrived after `since`; a wait already there is kept. */
-  open(input: { adapterType: string; edge: string; key: string; since: number }): Promise<{ waitId: string }>;
-  /** What the wait has yet to judge, in log order, and whether its record went. */
-  arrivals(input: { waitId: string }): Promise<{ gone: boolean; arrivals: LoggedArrival[] }>;
+   *  reading what arrived after `since`; a wait already there is kept.
+   *  `gone: true` instead of a key: the module said the record is gone, so
+   *  nothing arrives on the wait, and the host strands a park on it. */
+  open(input: { adapterType: string; edge: string; since: number } & ({ key: string } | { gone: true })): Promise<{ waitId: string }>;
+  /** What the wait has yet to judge, in log order. */
+  arrivals(input: { waitId: string }): Promise<{ arrivals: LoggedArrival[] }>;
   /** The wait judged an arrival: whether it counts. */
   note(input: { waitId: string; identity: string; version?: string; matched: boolean }): Promise<{ counts: boolean }>;
 }

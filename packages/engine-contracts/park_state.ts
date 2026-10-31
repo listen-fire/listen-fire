@@ -463,8 +463,8 @@ export interface ParkedScopeState<C extends ParkedCode = CodeAsTree> {
   eventWaits?: C extends CodeByPlace ? ParkedWaits : never;
 }
 
-/** Version 3: a record's waits, by edge: the wait's id, or the record is gone. */
-export type ParkedWaits = Record<string, string | { gone: true }>;
+/** Version 3: a record's waits, by edge: the wait's id. */
+export type ParkedWaits = Record<string, string>;
 
 /** A state of either version, as a host holds it. */
 export type AnyParkedScopeState = ParkedScopeState<CodeAsTree> | ParkedScopeState<CodeByPlace>;

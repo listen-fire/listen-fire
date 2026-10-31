@@ -2,7 +2,9 @@
 // on every module, so the run stays parked, and a `race` with a `sleep` is
 // the way out. The acme external reports a deleted company as gone on its
 // edges; Slack reports a deleted message the same way. Neither answers the
-// wait, wakes the run, or ends it.
+// wait, wakes the run, or ends it. The store strands the wait, and
+// `listen-fire runs` says so while the run is parked on it
+// (docs/contracts/stranded-waits.md).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -33,6 +35,25 @@ const wakeRows = (dir: string) => row<{ n: number }>(dir, "select count(*) as n 
 /** The arrivals logged as their record deleted. */
 const goneArrivals = (dir: string) => row<{ n: number }>(dir, 'select count(*) as n from arrival where gone = 1').n;
 
+/** The id of the one run of `movement`. */
+const runIdOf = (dir: string, movement: string) => row<{ id: string }>(dir, 'select id from run where movement = ?', movement).id;
+
+/** `listen-fire runs`' line for the run. */
+function runsLine(dir: string, runId: string): string {
+  const listed = lfSync(dir, 'runs');
+  assert.equal(listed.code, 0, listed.out);
+  const line = listed.out.split('\n').find((l) => l.startsWith(`${runId} `));
+  assert.ok(line !== undefined, listed.out);
+  return line;
+}
+
+/** What `listen-fire runs show` says of the run's stranded waits. */
+function strandedSays(dir: string, runId: string): string[] {
+  const shown = lfSync(dir, 'runs', 'show', runId);
+  assert.equal(shown.code, 0, shown.out);
+  return (JSON.parse(shown.out) as { run: { stranded: Array<{ says: string }> } }).run.stranded.map((s) => s.says);
+}
+
 test("a deleted company leaves its wait parked; the race's sleep wins", async () => {
   const dir = project('deleted_heads');
   const before = await served(dir);
@@ -52,6 +73,11 @@ test("a deleted company leaves its wait parked; the race's sleep wins", async ()
     assert.ok(goneArrivals(dir) >= 1, 'the deletion was logged');
     assert.equal(wakeRows(dir), 0, 'the deletion woke nothing');
     assert.equal(runStatus(dir, 'decide'), 'parked');
+    const runId = runIdOf(dir, 'decide');
+    assert.match(runsLine(dir, runId), / decide:decide parked \(stranded\)$/);
+    const [says, ...more] = strandedSays(dir, runId);
+    assert.deepEqual(more, []);
+    assert.match(says ?? '', /^waiting on Approvals of acme_crm \S+ — its record was deleted, so nothing will arrive; a race with a sleep is the way out$/);
   } finally {
     await before.stop();
   }
@@ -61,9 +87,12 @@ test("a deleted company leaves its wait parked; the race's sleep wins", async ()
     await after.waitFor(/resumed .* decide:decide completed/);
     assert.equal(after.lines.filter((line) => /decide:decide failed/.test(line)).length, 0, after.lines.join('\n'));
     assert.deepEqual(companies(dir), ['Osprey', 'Decide Osprey', 'Timed out']);
-    const runId = row<{ id: string }>(dir, "select id from run where movement = 'decide'").id;
+    const runId = runIdOf(dir, 'decide');
     const shown = JSON.parse(lfSync(dir, 'runs', 'show', runId, '--json').out) as { run: { writeRecords: Array<{ values: { Name: string } }> } };
     assert.deepEqual(shown.run.writeRecords.map((w) => w.values.Name), ['Decide Osprey', 'Timed out']);
+    // The sleep won: the run waits on nothing, so nothing is stranded.
+    assert.match(runsLine(dir, runId), / decide:decide completed$/);
+    assert.deepEqual(strandedSays(dir, runId), []);
   } finally {
     await after.stop();
   }
@@ -84,7 +113,7 @@ function decide(run: <manual-[:Invocation]->>) {
 listen to manual fire decide
 `;
 
-test('a deleted Slack message leaves its Interactions wait parked and the run parked', async () => {
+test('listen-fire runs says a wait is stranded when its message is deleted', async () => {
   const world = await slackWorld(PRESS);
   const serving = await served(world.dir);
   try {
@@ -105,6 +134,11 @@ test('a deleted Slack message leaves its Interactions wait parked and the run pa
     assert.equal(runStatus(world.dir, 'decide'), 'parked');
     // The write after the wait never ran.
     assert.deepEqual((await botMessages(world.channels)).map((m) => m.text), ['Pursue?']);
+    const runId = runIdOf(world.dir, 'decide');
+    assert.match(runsLine(world.dir, runId), / slack:decide parked \(stranded\)$/);
+    assert.deepEqual(strandedSays(world.dir, runId), [
+      `waiting on Interactions of slack ${posted.channel}:${posted.ts} — its record was deleted, so nothing will arrive; a race with a sleep is the way out`,
+    ]);
   } finally {
     await serving.stop();
     await world.close();

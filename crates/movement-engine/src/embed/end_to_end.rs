@@ -367,13 +367,21 @@ struct Logged {
     gone: bool,
 }
 
-/// A wait, and what it has noted: (identity, matched).
+/// A wait, and what it has noted: (identity, matched). `key` None: opened
+/// on a record already gone.
 struct Wait {
     id: String,
     edge: String,
-    key: String,
+    key: Option<String>,
     since: i64,
     noted: Vec<(String, bool)>,
+}
+
+impl Wait {
+    /// The key of a wait opened on a record that was there.
+    fn key(&self) -> &str {
+        self.key.as_deref().unwrap_or_else(|| panic!("wait {} opened on a record already gone", self.id))
+    }
 }
 
 impl Parks {
@@ -392,7 +400,7 @@ impl Parks {
     /// The wait open on `edge`, as `(id, key)`.
     fn wait_on(&self, edge: &str) -> (String, String) {
         let wait = self.waits.iter().find(|w| w.edge == edge).unwrap_or_else(|| panic!("no wait on {edge}: {:?}", self.waits.iter().map(|w| (&w.edge, &w.key)).collect::<Vec<_>>()));
-        (wait.id.clone(), wait.key.clone())
+        (wait.id.clone(), wait.key().to_string())
     }
 
     fn the_wait(&self, wait_id: &str) -> HostResult<&Wait> {
@@ -442,24 +450,24 @@ impl Store for Parks {
     }
     fn open_wait(&mut self, wait: OpenWait) -> HostFuture<String> {
         assert_eq!(wait.adapter_type, "world");
-        if let Some(open) = self.waits.iter().find(|w| w.edge == wait.edge && w.key == wait.key) {
+        if let Some(open) = self.waits.iter().find(|w| w.edge == wait.edge && w.key.is_some() && w.key == wait.key) {
             return ready(Ok(open.id.clone()));
         }
         let id = format!("w{}", self.waits.len() + 1);
-        for (identity, body) in std::mem::take(&mut self.landing_as_it_opens) {
-            self.arrives(&wait.edge, &wait.key, &identity, &body);
+        if let Some(key) = &wait.key {
+            for (identity, body) in std::mem::take(&mut self.landing_as_it_opens) {
+                self.arrives(&wait.edge, key, &identity, &body);
+            }
         }
         self.waits.push(Wait { id: id.clone(), edge: wait.edge, key: wait.key, since: wait.since, noted: Vec::new() });
         ready(Ok(id))
     }
     fn wait_arrivals(&mut self, wait_id: &str) -> HostFuture<WaitArrivals> {
         ready(self.the_wait(wait_id).map(|wait| {
-            let after = self.log.iter().enumerate().skip(wait.since as usize).filter(|(_, a)| a.edge == wait.edge && a.key == wait.key);
+            let after = self.log.iter().enumerate().skip(wait.since as usize).filter(|(_, a)| a.edge == wait.edge && wait.key.as_deref() == Some(a.key.as_str()));
             let mut read = WaitArrivals::default();
             for (index, arrival) in after {
-                if arrival.gone {
-                    read.gone = true;
-                } else if !wait.noted.iter().any(|(identity, _)| *identity == arrival.identity) && !read.arrivals.iter().any(|a| a.identity == arrival.identity) {
+                if !arrival.gone && !wait.noted.iter().any(|(identity, _)| *identity == arrival.identity) && !read.arrivals.iter().any(|a| a.identity == arrival.identity) {
                     read.arrivals.push(LoggedArrival { seq: index as i64 + 1, identity: arrival.identity.clone(), version: None, landing: arrival.landing.clone() });
                 }
             }
@@ -874,7 +882,7 @@ fn wait_answers(arrivals: Vec<(&'static str, &'static str)>) -> impl FnMut(&str,
                     ])
                 })
                 .collect();
-            Some(o(vec![("gone", json!(false)), ("arrivals", l(listed))]))
+            Some(o(vec![("arrivals", l(listed))]))
         }
         "park.waits.note" => Some(json!({ "counts": true })),
         "park.sink.commitAwaitPark" => Some(Json::Null),
@@ -893,10 +901,10 @@ fn an_await_on_an_adapter_record_parks_and_resumes_when_the_reply_arrives() {
     let [park] = parks.wait_parks.as_slice() else { panic!("{:?}", parks.wait_parks) };
     let [wait] = parks.waits.as_slice() else { panic!("one wait") };
     assert_eq!((park.wait_id.as_str(), wait.edge.as_str()), ("w1", "Reply"));
-    assert!(wait.key.starts_with("ticket:ticket-"), "{}", wait.key);
+    assert!(wait.key().starts_with("ticket:ticket-"), "{}", wait.key());
 
     // The reply arrives; the awaiting statement is entered again.
-    let key = wait.key.clone();
+    let key = wait.key().to_string();
     parks.reply_arrives(&key, "reply-1", "Thanks");
     let park = parks.wait_parks.remove(0);
     let calls_before_resume = world.calls.len();
@@ -1022,7 +1030,7 @@ fn a_captured_value_is_parked_and_used_on_resume_though_the_record_changed() {
     let park = parks.wait_parks.remove(0);
     // The slayer read when the wait was reached was Ada; the record says Bob now.
     world.fields_now.push(("Slayer".into(), "Bob".into()));
-    let key = parks.waits[0].key.clone();
+    let key = parks.waits[0].key().to_string();
     parks.reply_arrives(&key, "reply-1", "Bob");
     parks.reply_arrives(&key, "reply-2", "Ada");
     let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &park.state, Wake::Arrival)).unwrap();
@@ -1033,8 +1041,8 @@ fn a_captured_value_is_parked_and_used_on_resume_though_the_record_changed() {
 
 /// A record deleted while the run waits on it leaves the wait waiting:
 /// nothing after the `await` runs, and the run stays parked. Gone before
-/// its wait opened (`awaitKeys` answers `gone`), there is no wait row to
-/// park on, and nothing can wake the run.
+/// its wait opened (`awaitKeys` answers `gone`), its wait opens without a
+/// key, so the host can say the run is stranded on it, and nothing wakes it.
 #[test]
 fn a_deleted_record_leaves_its_wait_and_the_run_parked() {
     let body = "  t = write game-[:tickets]-> { Subject: monster.Name }
@@ -1047,7 +1055,9 @@ fn a_deleted_record_leaves_its_wait_and_the_run_parked() {
     world.gone.push("*".into());
     let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
     assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
-    assert!(parks.waits.is_empty() && parks.wait_parks.is_empty() && parks.wait_wakes.is_empty());
+    assert_eq!(parks.waits.iter().map(|w| (w.edge.as_str(), w.key.as_deref())).collect::<Vec<_>>(), [("Reply", None)]);
+    assert_eq!(parks.wait_parks.iter().map(|p| p.wait_id.as_str()).collect::<Vec<_>>(), [parks.waits[0].id.as_str()]);
+    assert!(parks.wait_wakes.is_empty(), "{:?}", parks.wait_wakes);
     assert_eq!(titles(&world), Vec::<&str>::new());
 
     // Deleted while the run waits: the gone arrival is no answer, so the
@@ -1056,7 +1066,7 @@ fn a_deleted_record_leaves_its_wait_and_the_run_parked() {
     let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
     assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
     let park = parks.wait_parks.remove(0);
-    let key = parks.waits[0].key.clone();
+    let key = parks.waits[0].key().to_string();
     parks.log.push(Logged { edge: "Reply".into(), key, identity: String::new(), landing: Data::Null, gone: true });
     let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &park.state, Wake::Arrival)).unwrap();
     assert!(matches!(resumed, Outcome::Parked(_)), "{resumed:?}");
@@ -1229,7 +1239,7 @@ fn a_join_with_a_parked_arm_closes_when_the_arm_resumes() {
     assert_eq!(parks.exports.len(), 1, "the arm that finished left its export: {:?}", parks.exports.iter().map(|(f, e)| (f, e.branch_index)).collect::<Vec<_>>());
     let [park] = parks.wait_parks.as_slice() else { panic!("{:?}", parks.wait_parks) };
     let state = park.state.clone();
-    let key = parks.waits[0].key.clone();
+    let key = parks.waits[0].key().to_string();
     parks.reply_arrives(&key, "reply-1", "Thanks");
     let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &state, Wake::Arrival)).unwrap();
     assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
@@ -1244,7 +1254,7 @@ fn lair_world() -> World {
 /// The state of the park waiting on `note`'s comments, taken off the parks.
 fn parked_on_note(parks: &mut Parks, note: &str) -> ParkedState {
     let key = format!("ticket:{note}");
-    let wait = parks.waits.iter().find(|w| w.key == key).unwrap_or_else(|| panic!("no wait on {key}")).id.clone();
+    let wait = parks.waits.iter().find(|w| w.key.as_deref() == Some(key.as_str())).unwrap_or_else(|| panic!("no wait on {key}")).id.clone();
     let at = parks.wait_parks.iter().position(|p| p.wait_id == wait).unwrap_or_else(|| panic!("nothing parked on {key}"));
     parks.wait_parks.remove(at).state
 }
@@ -1261,7 +1271,7 @@ fn a_member_a_resumed_map_starts_waits_from_the_mark_the_op_took_before_its_firs
     let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
     assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
     // One member at a time: only the first has started.
-    assert_eq!(parks.waits.iter().map(|w| w.key.as_str()).collect::<Vec<_>>(), ["ticket:note-0"]);
+    assert_eq!(parks.waits.iter().map(Wait::key).collect::<Vec<_>>(), ["ticket:note-0"]);
     let mark = parks.waits[0].since;
     parks.arrives("Comments", "ticket:note-2", "comment-2", "two");
     parks.arrives("Comments", "ticket:note-0", "comment-0", "zero");
@@ -1273,7 +1283,7 @@ fn a_member_a_resumed_map_starts_waits_from_the_mark_the_op_took_before_its_firs
     let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &state, Wake::Arrival)).unwrap();
     assert!(matches!(resumed, Outcome::Finished(_)), "the third member took the comment logged before it started: {resumed:?}");
     assert_eq!(titles(&world), vec!["comment zero", "comment one", "comment two"]);
-    let third = parks.waits.iter().find(|w| w.key == "ticket:note-2").unwrap();
+    let third = parks.waits.iter().find(|w| w.key.as_deref() == Some("ticket:note-2")).unwrap();
     assert_eq!(third.since, mark, "every member waits from the op's one mark");
 }
 
@@ -1296,7 +1306,8 @@ fn a_deleted_record_in_a_map_member_leaves_the_map_parked() {
     world.gone.push("note-1".into());
     let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
     assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
-    assert_eq!(parks.wait_parks.len(), 2, "the members on note-0 and note-2 wait on rows; note-1's has none");
+    assert_eq!(parks.wait_parks.len(), 3, "every member waits on a row, note-1's opened without a key");
+    assert_eq!(parks.waits.iter().filter(|w| w.key.is_none()).count(), 1, "note-1's");
     assert_eq!(parks.joins.last().map(|(_, pending)| *pending), Some(3), "every member is pending, note-1's too");
     parks.arrives("Comments", "ticket:note-0", "comment-0", "zero");
     parks.log.push(Logged { edge: "Comments".into(), key: "ticket:note-2".into(), identity: String::new(), landing: Data::Null, gone: true });
@@ -1340,7 +1351,9 @@ fn a_race_arm_whose_record_is_deleted_loses_to_the_sleep() {
     world.gone.push("*".into());
     let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
     assert!(matches!(parked, Outcome::Parked(_)), "the race waits on its sleep: {parked:?}");
-    assert!(world.notes.is_empty() && parks.wait_parks.is_empty());
+    assert!(world.notes.is_empty());
+    assert_eq!(parks.waits.iter().map(|w| w.key.as_deref()).collect::<Vec<_>>(), [None], "the arm's wait opened without a key");
+    assert_eq!(parks.wait_parks.len(), 1, "the arm parks on it");
     let timer = parks.timers.remove(0);
     let resumed = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &timer.state, Wake::Timer)).unwrap();
     assert!(matches!(resumed, Outcome::Finished(_)), "{resumed:?}");
@@ -1349,7 +1362,7 @@ fn a_race_arm_whose_record_is_deleted_loses_to_the_sleep() {
     let (mut world, mut parks) = (World::default(), Parks::default());
     let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
     assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
-    let key = parks.waits[0].key.clone();
+    let key = parks.waits[0].key().to_string();
     parks.log.push(Logged { edge: "Reply".into(), key, identity: String::new(), landing: Data::Null, gone: true });
     let arm = parks.wait_parks.remove(0);
     let again = block_on(resume(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source), &arm.state, Wake::Arrival)).unwrap();
@@ -1390,14 +1403,15 @@ fn a_race_every_arm_of_which_waits_on_a_deleted_record_stays_parked() {
     world.gone.push("*".into());
     let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
     assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
-    assert!(parks.wait_parks.is_empty());
+    assert_eq!(parks.waits.iter().map(|w| w.key.as_deref()).collect::<Vec<_>>(), [None], "the ticket's one wait opened without a key");
+    assert_eq!(parks.wait_parks.len(), 2, "both arms park on it");
     assert_eq!(titles(&world), Vec::<&str>::new());
 
     let (mut world, mut parks) = (World::default(), Parks::default());
     let parked = block_on(run(&mut Hosts::new().adapters(&mut world).store(&mut parks), &input(&source))).unwrap();
     assert!(matches!(parked, Outcome::Parked(_)), "{parked:?}");
     assert_eq!(parks.wait_parks.len(), 2, "both arms wait on the ticket's one wait");
-    let key = parks.waits[0].key.clone();
+    let key = parks.waits[0].key().to_string();
     parks.log.push(Logged { edge: "Reply".into(), key, identity: String::new(), landing: Data::Null, gone: true });
     for _ in 0..2 {
         let arm = parks.wait_parks.remove(0);

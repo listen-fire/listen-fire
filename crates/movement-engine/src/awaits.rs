@@ -41,7 +41,7 @@ use crate::park::Leaf;
 use crate::program::Stamp;
 use crate::run::{Address, Failure, Flow, Run, Stop};
 use crate::trace::TraceEntry;
-use crate::waits::{Unwaitable, WaitRef};
+use crate::waits::Unwaitable;
 
 /// `UNTIL_DEFAULT_EVERY_MS`: an `until`'s cadence when none is written.
 const UNTIL_EVERY_MS: f64 = 3_600_000.0;
@@ -215,12 +215,7 @@ impl Run<'_> {
         let address = at.encode();
         let reentered = self.reentered_at(&address);
         let wait_id = match self.waits_of(&waited.holder).get(edge).cloned() {
-            Some(WaitRef::Open(id)) => id,
-            // Nothing will arrive, so nothing can wake the await.
-            Some(WaitRef::Gone) => {
-                self.trace(TraceEntry::Gate { outcome: false });
-                return Err(Stop::Parked(address));
-            }
+            Some(id) => id,
             None if !self.serves("park.waits.open") => {
                 return Err(Stop::Thrown(Failure::unsupported("await (a wait)", "this run has no wait sink — an await needs the durable trigger-run substrate")));
             }

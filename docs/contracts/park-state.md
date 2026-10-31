@@ -35,7 +35,7 @@ interface ParkedScopeState {
   eventWaits?: ParkedWaits;          // version 3: the trigger's record's waits
 }
 
-type ParkedWaits = Record<string, string | { gone: true }>;   // version 3: by edge, the wait's id, or the record is gone
+type ParkedWaits = Record<string, string>;   // version 3: by edge, the wait's id (a record already gone has one opened without a key)
 
 type ParkedLibrary =                 // version 2
   | { path: string; source: string } // its text, where the host keeps no source store

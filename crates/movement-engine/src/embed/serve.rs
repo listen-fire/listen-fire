@@ -362,7 +362,12 @@ impl Session {
             "park.waits.mark" => then(store(hosts, label)?.wait_mark(), |mark| Ok(Some(json!({ "mark": mark })))),
             "park.waits.open" => {
                 let since = args.get("since").and_then(Json::as_i64).ok_or_else(|| HostFailure::new(format!("{label}: since is an integer")))?;
-                let wait = OpenWait { adapter_type: text(args, "adapterType", label)?.into(), edge: text(args, "edge", label)?.into(), key: text(args, "key", label)?.into(), since };
+                let key = match (args.get("key"), args.get("gone")) {
+                    (Some(Json::String(key)), None) => Some(key.clone()),
+                    (None, Some(Json::Bool(true))) => None,
+                    _ => return Err(HostFailure::new(format!("{label}: names its record's key, or gone: true for a record already gone"))),
+                };
+                let wait = OpenWait { adapter_type: text(args, "adapterType", label)?.into(), edge: text(args, "edge", label)?.into(), key, since };
                 then(store(hosts, label)?.open_wait(wait), |id| Ok(Some(json!({ "waitId": id }))))
             }
             "park.waits.arrivals" => then(store(hosts, label)?.wait_arrivals(text(args, "waitId", label)?), |read| {
@@ -378,7 +383,7 @@ impl Session {
                         json!(["o", members])
                     })
                     .collect::<Vec<_>>();
-                Ok(Some(json!(["o", [["gone", read.gone], ["arrivals", ["l", arrivals]]]])))
+                Ok(Some(json!(["o", [["arrivals", ["l", arrivals]]]])))
             }),
             "park.waits.note" => {
                 let matched = args.get("matched").and_then(Json::as_bool).ok_or_else(|| HostFailure::new(format!("{label}: matched is a boolean")))?;

@@ -1,5 +1,5 @@
 {
-  "about": "The store's waits family: the arrival log, wait rows and their newly-matches bits (docs/contracts/store-slot.md, `waits.*`). Held by listen-fire's stores: crates/lf/src/waits.rs runs every case over the SQLite state file, and over Postgres when LF_TEST_PG names one; apps/cli/src/__test__/store_slot.test.ts runs every case over the store slot's wire. Each case runs on an empty store. A run or team name stands for a fresh id (a uuid) per case; every run named is started before the first step. `team` defaults to \"t\" and `adapter` to \"acme\". Marks and waits are named by `as` and referred to by that name. `at` and `before` are milliseconds from now. Steps: `mark` (waits.mark, kept as `as`); `log` (waits.log of `arrivals`, logged `at`; an arrival whose identity and version its record's edge already logged within the retention is not logged again, and one without an identity is never a repeat; `wakes` the parked waits it answers, in any order; an arrival's `identityIsSeqOf` names a listed arrival whose seq, as bare text, is its identity; `queued`, when given, the `wake_await` rows due after the log, each `{ run, wait, address }` as its payload's `runId`, `waitId` and `address`, in any order: the log queues one per wait it answers, in its own write, and none twice. They are claimed as the step's team's drain claims them (work.claimDue of that kind, leasing them), so a later `queued` lists only the rows queued since); `open` (waits.open since the mark `since`, kept as `as`; `same` names an earlier wait it must be); `arrivals` (waits.arrivals: `gone`, and `arrivals` in log order, each checked on the keys it gives, and kept by the name its `as` gives); `note` (waits.note, answering `counts`; `identityOf` names a listed arrival whose identity it notes, `identityIsSeqOf` one whose seq, as bare text, is the identity); `note` may name the `leaf` its segment resumed; `park` (parks.commit with `{ kind: \"wait\", waitId }` at `address`); `commitSegment` (parks.commitSegment of the run: `resumed`, `joins` (none when absent) as `{ frame, pending }`, and `parks`, each at its `address` on the wait its `wait` names or, with `wakeAt` (milliseconds from now), a timer; `fence` names a lease; `settle`, when given, is the status the run is settled to in the same write, with an empty outcome; `owes` the frames of the races it owes (`owedRaces`, each with a null state); `settles` the frame of the race it settled (`settledRace`); `wakes` the wakes it answers, in any order; `refused`: the store fails it, `leaseLost`: the lease is lost, and either way nothing is written); `owed` (parks.owedRaces of the run, answering the frames of `races`, oldest first); `status` (runs.get of the run, answering a row of that `status`); `pendingJoins` (joins.hasPendingJoins of the run, answering `pending`); `claim` (parks.claimLeaf of the leaf at `address`, which must be parked); `finish` (parks.finishLeaf of the leaf at `address`, no fence); `lapse` (leases.claim of the run, as a process does after the one resuming its leaf died: a leaf left resuming is parked again); `deleteLeaves` (parks.deleteLeaves); `deleteFrames` (joins.deleteFrames of `frames`); `drop` (leases.dropRunState); `sweep` (waits.sweep of what was logged before `before`, at most 1000).",
+  "about": "The store's waits family: the arrival log, wait rows and their newly-matches bits (docs/contracts/store-slot.md, `waits.*`). Held by listen-fire's stores: crates/lf/src/waits.rs runs every case over the SQLite state file, and over Postgres when LF_TEST_PG names one; apps/cli/src/__test__/store_slot.test.ts runs every case over the store slot's wire. Each case runs on an empty store. A run or team name stands for a fresh id (a uuid) per case; every run named is started before the first step. `team` defaults to \"t\" and `adapter` to \"acme\". Marks and waits are named by `as` and referred to by that name. `at` and `before` are milliseconds from now. Steps: `mark` (waits.mark, kept as `as`); `log` (waits.log of `arrivals`, logged `at`; an arrival whose identity and version its record's edge already logged within the retention is not logged again, and one without an identity is never a repeat; `wakes` the parked waits it answers, in any order; an arrival's `identityIsSeqOf` names a listed arrival whose seq, as bare text, is its identity; `queued`, when given, the `wake_await` rows due after the log, each `{ run, wait, address }` as its payload's `runId`, `waitId` and `address`, in any order: the log queues one per wait it answers, in its own write, and none twice. They are claimed as the step's team's drain claims them (work.claimDue of that kind, leasing them), so a later `queued` lists only the rows queued since; `stranded` the waits it strands, by name, in any order, none when absent: a gone arrival strands each wait parked on its record that is not stranded already); `open` (waits.open since the mark `since`, kept as `as`; `same` names an earlier wait it must be; without a `key`, a wait on a record already gone, which is always a new wait); `arrivals` (waits.arrivals: `arrivals` in log order, each checked on the keys it gives, and kept by the name its `as` gives); `note` (waits.note, answering `counts`; `identityOf` names a listed arrival whose identity it notes, `identityIsSeqOf` one whose seq, as bare text, is the identity); `note` may name the `leaf` its segment resumed; `park` (parks.commit with `{ kind: \"wait\", waitId }` at `address`); `commitSegment` (parks.commitSegment of the run: `resumed`, `joins` (none when absent) as `{ frame, pending }`, and `parks`, each at its `address` on the wait its `wait` names or, with `wakeAt` (milliseconds from now), a timer; `fence` names a lease; `settle`, when given, is the status the run is settled to in the same write, with an empty outcome; `owes` the frames of the races it owes (`owedRaces`, each with a null state); `settles` the frame of the race it settled (`settledRace`); `wakes` the wakes it answers, in any order; `refused`: the store fails it, `leaseLost`: the lease is lost, and either way nothing is written); `owed` (parks.owedRaces of the run, answering the frames of `races`, oldest first); `status` (runs.get of the run, answering a row of that `status`); `pendingJoins` (joins.hasPendingJoins of the run, answering `pending`); `claim` (parks.claimLeaf of the leaf at `address`, which must be parked); `finish` (parks.finishLeaf of the leaf at `address`, no fence); `lapse` (leases.claim of the run, as a process does after the one resuming its leaf died: a leaf left resuming is parked again); `deleteLeaves` (parks.deleteLeaves); `deleteFrames` (joins.deleteFrames of `frames`); `drop` (leases.dropRunState); `sweep` (waits.sweep of what was logged before `before`, at most 1000); `stranded` (waits.stranded of the run: `waits`, oldest stranded first, each `{ wait, edge, key, parked }`, `key` null for a wait opened without one, `parked` whether its leaf is still parked); `everyStranded` (waits.stranded across runs, `limit` per page, each page after the last wait of the page before, until a page is empty: the waits this case named, in the order listed, each `{ wait, run, edge, key, parked }`; waits it did not name are passed over, as a store the cases share keeps others).",
   "cases": [
     {
       "case": "an arrival logged before its wait opens counts when the mark precedes it",
@@ -7,7 +7,7 @@
         { "do": "mark", "as": "m" },
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1", "landing": { "Body": "lunch?" } }], "wakes": [] },
         { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "k1", "version": null, "landing": { "Body": "lunch?" } }] }
+        { "do": "arrivals", "wait": "w", "arrivals": [{ "identity": "k1", "version": null, "landing": { "Body": "lunch?" } }] }
       ]
     },
     {
@@ -16,7 +16,7 @@
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1" }], "wakes": [] },
         { "do": "mark", "as": "m" },
         { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
+        { "do": "arrivals", "wait": "w", "arrivals": [] }
       ]
     },
     {
@@ -34,7 +34,7 @@
         },
         { "do": "log", "adapter": "other", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "other-adapter" }], "wakes": [] },
         { "do": "log", "team": "u", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "other-team" }], "wakes": [] },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
+        { "do": "arrivals", "wait": "w", "arrivals": [] }
       ]
     },
     {
@@ -50,12 +50,12 @@
           ],
           "wakes": []
         },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "k1", "version": null, "landing": { "n": 1 } }] },
+        { "do": "arrivals", "wait": "w", "arrivals": [{ "identity": "k1", "version": null, "landing": { "n": 1 } }] },
         { "do": "note", "wait": "w", "identity": "k1", "version": null, "matched": true, "counts": true },
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1" }], "wakes": [] },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] },
+        { "do": "arrivals", "wait": "w", "arrivals": [] },
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1", "version": "2" }], "wakes": [] },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "k1", "version": "2" }] }
+        { "do": "arrivals", "wait": "w", "arrivals": [{ "identity": "k1", "version": "2" }] }
       ]
     },
     {
@@ -71,7 +71,7 @@
           ],
           "wakes": []
         },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "version": null, "landing": { "n": 1 } }, { "version": null, "landing": { "n": 1 } }] }
+        { "do": "arrivals", "wait": "w", "arrivals": [{ "version": null, "landing": { "n": 1 } }, { "version": null, "landing": { "n": 1 } }] }
       ]
     },
     {
@@ -80,12 +80,12 @@
         { "do": "mark", "as": "m" },
         { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "landing": { "n": 1 } }], "wakes": [] },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "as": "bare", "version": null }] },
+        { "do": "arrivals", "wait": "w", "arrivals": [{ "as": "bare", "version": null }] },
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identityIsSeqOf": "bare", "landing": { "n": 2 } }], "wakes": [] },
         { "do": "note", "wait": "w", "identityIsSeqOf": "bare", "version": null, "matched": true, "counts": true },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "landing": { "n": 1 } }] },
+        { "do": "arrivals", "wait": "w", "arrivals": [{ "landing": { "n": 1 } }] },
         { "do": "note", "wait": "w", "identityOf": "bare", "version": null, "matched": true, "counts": true },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
+        { "do": "arrivals", "wait": "w", "arrivals": [] }
       ]
     },
     {
@@ -116,7 +116,7 @@
           "wakes": []
         },
         { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": false, "counts": false },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "k1", "version": "2" }] }
+        { "do": "arrivals", "wait": "w", "arrivals": [{ "identity": "k1", "version": "2" }] }
       ]
     },
     {
@@ -132,18 +132,74 @@
           ],
           "wakes": []
         },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "zeta" }, { "identity": "alpha" }] }
+        { "do": "arrivals", "wait": "w", "arrivals": [{ "identity": "zeta" }, { "identity": "alpha" }] }
       ]
     },
     {
-      "case": "a gone arrival marks the wait gone",
+      "case": "a gone arrival strands the parked waits on its record, once, and wakes none",
       "steps": [
         { "do": "mark", "as": "m" },
         { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
-        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c2", "gone": true }], "wakes": [] },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] },
-        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "gone": true }], "wakes": [] },
-        { "do": "arrivals", "wait": "w", "gone": true, "arrivals": [] }
+        { "do": "open", "as": "unparked", "run": "run-2", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        { "do": "open", "as": "elsewhere", "run": "run-3", "edge": "Comments", "key": "thread:c2", "since": "m" },
+        { "do": "park", "run": "run-1", "wait": "w", "address": "s1" },
+        { "do": "park", "run": "run-3", "wait": "elsewhere", "address": "s1" },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "gone": true }], "wakes": [], "stranded": ["w"], "queued": [] },
+        { "do": "arrivals", "wait": "w", "arrivals": [] },
+        { "do": "stranded", "run": "run-1", "waits": [{ "wait": "w", "edge": "Comments", "key": "thread:c1", "parked": true }] },
+        { "do": "stranded", "run": "run-2", "waits": [] },
+        { "do": "stranded", "run": "run-3", "waits": [] },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "gone": true }], "wakes": [], "stranded": [] }
+      ]
+    },
+    {
+      "case": "a wait parked after its record went is stranded as it parks",
+      "steps": [
+        { "do": "mark", "as": "m" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        { "do": "open", "as": "before", "run": "run-2", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "gone": true }], "wakes": [], "stranded": [] },
+        { "do": "mark", "as": "after" },
+        { "do": "open", "as": "later", "run": "run-3", "edge": "Comments", "key": "thread:c1", "since": "after" },
+        { "do": "stranded", "run": "run-1", "waits": [] },
+        { "do": "park", "run": "run-1", "wait": "w", "address": "s1" },
+        { "do": "commitSegment", "run": "run-2", "parks": [{ "address": "s1", "wait": "before" }], "wakes": [] },
+        { "do": "park", "run": "run-3", "wait": "later", "address": "s1" },
+        { "do": "stranded", "run": "run-1", "waits": [{ "wait": "w", "edge": "Comments", "key": "thread:c1", "parked": true }] },
+        { "do": "stranded", "run": "run-2", "waits": [{ "wait": "before", "edge": "Comments", "key": "thread:c1", "parked": true }] },
+        { "do": "stranded", "run": "run-3", "waits": [] }
+      ]
+    },
+    {
+      "case": "a wait opened on a record already gone has no key, nothing wakes it, and it is stranded as it parks",
+      "steps": [
+        { "do": "mark", "as": "m" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "since": "m" },
+        { "do": "open", "as": "other", "run": "run-1", "edge": "Comments", "since": "m" },
+        { "do": "stranded", "run": "run-1", "waits": [] },
+        { "do": "park", "run": "run-1", "wait": "w", "address": "s1" },
+        { "do": "stranded", "run": "run-1", "waits": [{ "wait": "w", "edge": "Comments", "key": null, "parked": true }] },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1" }], "wakes": [], "stranded": [], "queued": [] },
+        { "do": "arrivals", "wait": "w", "arrivals": [] }
+      ]
+    },
+    {
+      "case": "every run's stranded waits, page by page in the order they were stranded, a wait no longer parked among them",
+      "steps": [
+        { "do": "mark", "as": "m" },
+        { "do": "open", "as": "a", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        { "do": "open", "as": "b", "run": "run-2", "edge": "Comments", "key": "thread:c2", "since": "m" },
+        { "do": "open", "as": "c", "run": "run-3", "edge": "Comments", "key": "thread:c3", "since": "m" },
+        { "do": "park", "run": "run-1", "wait": "a", "address": "s1" },
+        { "do": "park", "run": "run-2", "wait": "b", "address": "s1" },
+        { "do": "park", "run": "run-3", "wait": "c", "address": "s1" },
+        { "do": "log", "at": -2000, "arrivals": [{ "edge": "Comments", "key": "thread:c2", "gone": true }], "wakes": [], "stranded": ["b"] },
+        { "do": "log", "at": -1000, "arrivals": [{ "edge": "Comments", "key": "thread:c1", "gone": true }], "wakes": [], "stranded": ["a"] },
+        { "do": "deleteLeaves", "run": "run-2", "addresses": ["s1"] },
+        { "do": "stranded", "run": "run-2", "waits": [{ "wait": "b", "edge": "Comments", "key": "thread:c2", "parked": false }] },
+        { "do": "everyStranded", "limit": 1, "waits": [{ "wait": "b", "run": "run-2", "edge": "Comments", "key": "thread:c2", "parked": false }, { "wait": "a", "run": "run-1", "edge": "Comments", "key": "thread:c1", "parked": true }] },
+        { "do": "drop", "run": "run-1" },
+        { "do": "everyStranded", "limit": 10, "waits": [{ "wait": "b", "run": "run-2", "edge": "Comments", "key": "thread:c2", "parked": false }] }
       ]
     },
     {
@@ -165,7 +221,7 @@
           "queued": [{ "run": "run-1", "wait": "parked", "address": "s1" }]
         },
         { "do": "log", "adapter": "other", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k3" }], "wakes": [], "queued": [] },
-        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "gone": true }], "wakes": [], "queued": [] },
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "gone": true }], "wakes": [], "stranded": ["parked"], "queued": [] },
         { "do": "deleteLeaves", "run": "run-1", "addresses": ["s1"] },
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k4" }], "wakes": [], "queued": [] }
       ]
@@ -190,9 +246,9 @@
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1" }], "wakes": [] },
         { "do": "mark", "as": "m2" },
         { "do": "open", "as": "again", "same": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m2" },
-        { "do": "arrivals", "wait": "again", "gone": false, "arrivals": [{ "identity": "k1" }] },
+        { "do": "arrivals", "wait": "again", "arrivals": [{ "identity": "k1" }] },
         { "do": "open", "as": "other-run", "run": "run-2", "edge": "Comments", "key": "thread:c1", "since": "m2" },
-        { "do": "arrivals", "wait": "other-run", "gone": false, "arrivals": [] }
+        { "do": "arrivals", "wait": "other-run", "arrivals": [] }
       ]
     },
     {
@@ -212,14 +268,14 @@
         },
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c2", "identity": "recent" }], "wakes": [] },
         { "do": "sweep", "before": -3600000 },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "read" }] },
+        { "do": "arrivals", "wait": "w", "arrivals": [{ "identity": "read" }] },
         { "do": "open", "as": "c2", "run": "run-2", "edge": "Comments", "key": "thread:c2", "since": "m" },
-        { "do": "arrivals", "wait": "c2", "gone": false, "arrivals": [{ "identity": "recent" }] },
+        { "do": "arrivals", "wait": "c2", "arrivals": [{ "identity": "recent" }] },
         { "do": "drop", "run": "run-1" },
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "after" }], "wakes": [] },
         { "do": "sweep", "before": -3600000 },
         { "do": "open", "as": "c1", "run": "run-2", "edge": "Comments", "key": "thread:c1", "since": "m" },
-        { "do": "arrivals", "wait": "c1", "gone": false, "arrivals": [{ "identity": "after" }] }
+        { "do": "arrivals", "wait": "c1", "arrivals": [{ "identity": "after" }] }
       ]
     },
     {
@@ -241,7 +297,7 @@
         { "do": "open", "as": "later", "run": "run-2", "edge": "Comments", "key": "thread:c1", "since": "m1" },
         { "do": "park", "run": "run-2", "wait": "later", "address": "s1" },
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1", "version": "1" }], "wakes": [], "queued": [] },
-        { "do": "arrivals", "wait": "later", "gone": false, "arrivals": [] },
+        { "do": "arrivals", "wait": "later", "arrivals": [] },
         {
           "do": "log",
           "arrivals": [
@@ -257,7 +313,7 @@
             { "run": "run-2", "wait": "later", "address": "s1" }
           ]
         },
-        { "do": "arrivals", "wait": "later", "gone": false, "arrivals": [{ "identity": "k1", "version": "2" }, {}] }
+        { "do": "arrivals", "wait": "later", "arrivals": [{ "identity": "k1", "version": "2" }, {}] }
       ]
     },
     {
@@ -269,15 +325,15 @@
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "identity": "k1", "version": "1" }], "wakes": [{ "run": "run-1", "wait": "w", "address": "s1" }] },
         { "do": "claim", "run": "run-1", "address": "s1" },
         { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": true, "counts": true, "leaf": "s1" },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] },
+        { "do": "arrivals", "wait": "w", "arrivals": [] },
         { "do": "lapse", "run": "run-1" },
         { "do": "claim", "run": "run-1", "address": "s1" },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "k1", "version": "1" }] },
+        { "do": "arrivals", "wait": "w", "arrivals": [{ "identity": "k1", "version": "1" }] },
         { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": true, "counts": true, "leaf": "s1" },
         { "do": "finish", "run": "run-1", "address": "s1" },
         { "do": "park", "run": "run-1", "wait": "w", "address": "s1" },
         { "do": "claim", "run": "run-1", "address": "s1" },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
+        { "do": "arrivals", "wait": "w", "arrivals": [] }
       ]
     },
     {
@@ -291,7 +347,7 @@
         { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": false, "counts": false, "leaf": "s1" },
         { "do": "park", "run": "run-1", "wait": "w", "address": "s1" },
         { "do": "claim", "run": "run-1", "address": "s1" },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
+        { "do": "arrivals", "wait": "w", "arrivals": [] }
       ]
     },
     {
@@ -308,7 +364,7 @@
         { "do": "lapse", "run": "run-1" },
         { "do": "claim", "run": "run-1", "address": "s1", "parked": false },
         { "do": "claim", "run": "run-1", "address": "s2" },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
+        { "do": "arrivals", "wait": "w", "arrivals": [] }
       ]
     },
     {
@@ -323,10 +379,10 @@
         { "do": "lease", "run": "run-1", "as": "new" },
         { "do": "claim", "run": "run-1", "address": "s1" },
         { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": true, "leaf": "s1", "fence": "old", "leaseLost": true },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "k1", "version": "1" }] },
+        { "do": "arrivals", "wait": "w", "arrivals": [{ "identity": "k1", "version": "1" }] },
         { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": true, "counts": true, "leaf": "s1", "fence": "new" },
         { "do": "finish", "run": "run-1", "address": "s1" },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
+        { "do": "arrivals", "wait": "w", "arrivals": [] }
       ]
     },
     {
@@ -352,7 +408,7 @@
         { "do": "lease", "run": "run-1", "as": "dead", "ttlMs": -1000 },
         { "do": "claim", "run": "run-1", "address": "s3.b0.s0", "parked": false },
         { "do": "claim", "run": "run-1", "address": "s1" },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "k1", "version": "1" }] },
+        { "do": "arrivals", "wait": "w", "arrivals": [{ "identity": "k1", "version": "1" }] },
         { "do": "lease", "run": "run-1", "as": "live" },
         { "do": "claim", "run": "run-1", "address": "s1" },
         { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": true, "counts": true, "leaf": "s1" },
@@ -377,7 +433,7 @@
         },
         { "do": "pendingJoins", "run": "run-1", "pending": true },
         { "do": "claim", "run": "run-1", "address": "s1", "parked": false },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] },
+        { "do": "arrivals", "wait": "w", "arrivals": [] },
         { "do": "log", "arrivals": [{ "edge": "Approvals", "key": "approvals:c1", "identity": "a1" }], "wakes": [{ "run": "run-1", "wait": "next", "address": "s3.b0.s0" }] },
         { "do": "claim", "run": "run-1", "address": "s3.b0.s0" },
         { "do": "claim", "run": "run-1", "address": "s3.b1.s0" }
@@ -398,12 +454,12 @@
         { "do": "commitSegment", "run": "run-1", "fence": "dead", "resumed": "s1", "parks": [], "settle": "completed", "leaseLost": true },
         { "do": "status", "run": "run-1", "status": "parked" },
         { "do": "claim", "run": "run-1", "address": "s1" },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [{ "identity": "k1", "version": "1" }] },
+        { "do": "arrivals", "wait": "w", "arrivals": [{ "identity": "k1", "version": "1" }] },
         { "do": "note", "wait": "w", "identity": "k1", "version": "1", "matched": true, "counts": true, "leaf": "s1", "fence": "live" },
         { "do": "commitSegment", "run": "run-1", "fence": "live", "resumed": "s1", "parks": [], "settle": "completed", "wakes": [] },
         { "do": "status", "run": "run-1", "status": "completed" },
         { "do": "claim", "run": "run-1", "address": "s1", "parked": false },
-        { "do": "arrivals", "wait": "w", "gone": false, "arrivals": [] }
+        { "do": "arrivals", "wait": "w", "arrivals": [] }
       ]
     },
     {
@@ -430,7 +486,8 @@
           "parks": [{ "address": "s1", "wait": "unread" }, { "address": "s2", "wait": "judged" }, { "address": "s3", "wait": "gone" }, { "address": "s4", "wait": "quiet" }],
           "wakes": [{ "run": "run-1", "wait": "unread", "address": "s1" }]
         },
-        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c4", "identity": "k4" }], "wakes": [{ "run": "run-1", "wait": "quiet", "address": "s4" }] }
+        { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c4", "identity": "k4" }], "wakes": [{ "run": "run-1", "wait": "quiet", "address": "s4" }] },
+        { "do": "stranded", "run": "run-1", "waits": [{ "wait": "gone", "edge": "Comments", "key": "thread:c3", "parked": true }] }
       ]
     },
     {

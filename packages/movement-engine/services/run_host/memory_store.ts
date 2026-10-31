@@ -29,6 +29,7 @@ import {
   type ParkKind,
   type RunHostStore,
   type RunRowStore,
+  type StrandedWait,
   type WaitWake,
 } from './store';
 import { ARRIVAL_RETENTION_MS } from './rules';
@@ -85,10 +86,13 @@ interface WaitRow {
   teamId: string;
   adapterType: string;
   edge: string;
-  key: string;
+  /** Null for a wait opened on a record already gone. */
+  key: string | null;
   since: number;
   /** Where the wait is parked; null while it is not. */
   address: string | null;
+  /** When it was found parked on a deleted record (ms); null while it was not. */
+  strandedAt: number | null;
 }
 
 interface Note {
@@ -199,7 +203,10 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
         return;
       case 'wait': {
         const wait = waits.get(park.waitId);
-        if (wait !== undefined) wait.address = address;
+        if (wait === undefined) return;
+        wait.address = address;
+        // Parked on a record already gone, it is stranded as it parks.
+        if (wait.strandedAt === null && (wait.key === null || log.some((row) => row.gone && onWaitsRecord(wait, row)))) wait.strandedAt = now();
         return;
       }
       case 'limit':
@@ -217,7 +224,7 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
   };
   const onWaitsRecord = (wait: WaitRow, row: LogRow): boolean =>
     row.teamId === wait.teamId && row.adapterType === wait.adapterType && row.edge === wait.edge && row.key === wait.key && row.seq > wait.since;
-  const waitArrivals = (waitId: string): { gone: boolean; arrivals: ListedArrival[] } => {
+  const waitArrivals = (waitId: string): { arrivals: ListedArrival[] } => {
     const wait = requireWait(waitId);
     const logged = log.filter((row) => onWaitsRecord(wait, row));
     const arrivals: ListedArrival[] = [];
@@ -230,8 +237,19 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
       if (logged.some((b) => !b.gone && b.seq < row.seq && b.identity !== null && b.identity === row.identity && b.version === row.version)) continue;
       arrivals.push({ seq: row.seq, identity, version: row.version, landing: row.landing === null ? null : read(row.landing) });
     }
-    return { gone: logged.some((row) => row.gone), arrivals };
+    return { arrivals };
   };
+  /** Whether the wait's leaf is still parked where the wait is. */
+  const parkedNow = (wait: WaitRow): boolean => wait.address !== null && leaves.get(wait.runId)?.has(wait.address) === true;
+  const strandedOf = (wait: WaitRow & { strandedAt: number }): StrandedWait => ({
+    waitId: wait.id,
+    runId: wait.runId,
+    adapterType: wait.adapterType,
+    edge: wait.edge,
+    key: wait.key,
+    at: new Date(wait.strandedAt).toISOString(),
+    parked: parkedNow(wait),
+  });
   const dropOwedRace = (runId: string, frameAddress: string): void => {
     work.delete(settleRaceWorkKey(runId, frameAddress));
   };
@@ -372,16 +390,25 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
         const loggedAt = Date.parse(at);
         const retained = now() - ARRIVAL_RETENTION_MS;
         const wakes: WaitWake[] = [];
+        const stranded: StrandedWait[] = [];
         for (const arrival of arrivals) {
           const { edge, key, identity, version } = arrival;
-          const sameRecord = (row: { teamId: string; adapterType: string; edge: string; key: string }): boolean =>
+          const sameRecord = (row: { teamId: string; adapterType: string; edge: string; key: string | null }): boolean =>
             row.teamId === teamId && row.adapterType === adapterType && row.edge === edge && row.key === key;
           // A sender's retry: its identity and version already logged there.
           if (identity !== null && log.some((row) => sameRecord(row) && row.identity === identity && row.version === version && row.loggedAt > retained)) continue;
           lastSeq += 1;
           log.push({ seq: lastSeq, teamId, adapterType, edge, key, identity, version, landing: arrival.landing === null ? null : stored(arrival.landing), gone: arrival.gone, loggedAt });
-          // A deleted record answers no wait: its waits keep waiting.
-          if (arrival.gone) continue;
+          // A deleted record answers no wait: the waits parked on it are
+          // stranded, once, and keep waiting.
+          if (arrival.gone) {
+            for (const wait of waits.values()) {
+              if (!sameRecord(wait) || wait.strandedAt !== null || !parkedNow(wait)) continue;
+              wait.strandedAt = loggedAt;
+              stranded.push(strandedOf({ ...wait, strandedAt: loggedAt }));
+            }
+            continue;
+          }
           for (const wait of waits.values()) {
             if (!sameRecord(wait) || wait.address === null) continue;
             // A wait whose park has finished needs no wake: its leaf is gone.
@@ -390,15 +417,24 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
           }
         }
         for (const wake of wakes) queueWake(teamId, wake);
-        return wakes;
+        return { wakes, stranded };
       },
       async open({ runId, teamId, adapterType, edge, key, since }) {
         for (const wait of waits.values()) {
-          if (wait.runId === runId && wait.teamId === teamId && wait.adapterType === adapterType && wait.edge === edge && wait.key === key) return { waitId: wait.id };
+          if (key !== null && wait.runId === runId && wait.teamId === teamId && wait.adapterType === adapterType && wait.edge === edge && wait.key === key) return { waitId: wait.id };
         }
         const id = randomUUID();
-        waits.set(id, { id, runId, teamId, adapterType, edge, key, since, address: null });
+        waits.set(id, { id, runId, teamId, adapterType, edge, key, since, address: null, strandedAt: null });
         return { waitId: id };
+      },
+      async stranded(of) {
+        const every = [...waits.values()]
+          .flatMap((wait) => (wait.strandedAt === null ? [] : [strandedOf({ ...wait, strandedAt: wait.strandedAt })]))
+          .sort((a, b) => (a.at === b.at ? (a.waitId < b.waitId ? -1 : 1) : a.at < b.at ? -1 : 1));
+        if ('runId' in of) return every.filter((wait) => wait.runId === of.runId);
+        const { after } = of;
+        const later = after === undefined ? every : every.filter((wait) => wait.at > after.at || (wait.at === after.at && wait.waitId > after.waitId));
+        return later.slice(0, of.limit);
       },
       async arrivals({ waitId }) {
         return waitArrivals(waitId);

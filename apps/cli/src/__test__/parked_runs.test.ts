@@ -88,8 +88,9 @@ test('listen-fire run --dry-run rehearses an await on an edge: it opens no wait,
 test('listen-fire cancel: a parked run is settled failed with the reason, and its wait goes with it', () => {
   const dir = project('approvals');
   const runId = runIdOf(lf(dir, 'run', '--event', 'events/company_created.json').out, 'approvals:decide');
-  const waits = () => stateOf(dir, (db) => (db.prepare('select count(*) as n from wait_row where run_id = ?').get(runId) as { n: number }).n);
-  assert.equal(waits(), 1, 'the run waits on its decision');
+  const waits = (where = '') => stateOf(dir, (db) => (db.prepare(`select count(*) as n from wait_row where run_id = ? ${where}`).get(runId) as { n: number }).n);
+  // Its trigger company, which the CRM does not hold, opened a wait too, without a key; the run never parks on it.
+  assert.equal(waits('and address is not null'), 1, 'the run waits on its decision');
   const cancelled = lf(dir, 'cancel', runId, '--reason', 'no longer needed');
   assert.equal(cancelled.code, 0, cancelled.out);
   assert.match(cancelled.out, new RegExp(`run ${runId} cancelled`));

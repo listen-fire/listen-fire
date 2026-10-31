@@ -881,8 +881,10 @@ arrival is no answer, and the engine does not read it. So what follows the
 `await` never runs, and the run stays parked, unless a `race` arm beside it
 settles (a `sleep`), as a promise that never resolves loses a race. A record
 the adapter already calls gone when the wait would open (an `awaitKeys`
-answer of `{gone: true}`) has no wait row: the `await` parks with nothing
-that can wake it. A quiet end (find-on-missing) inside a resumed branch ends
+answer of `{gone: true}`) opens its wait without a key (`park.waits.open
+{gone: true}`): nothing can arrive on it, so the `await` parks on it and
+nothing wakes it, and the host can say the run is stranded there
+(docs/contracts/stranded-waits.md). A quiet end (find-on-missing) inside a resumed branch ends
 it the same way as it would have before it parked. A function's or a closure's
 parameter takes its mark before the call reads its arguments (a `map`'s,
 before the op reads its members; a parked op keeps that mark at its frame,

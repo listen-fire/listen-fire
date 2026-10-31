@@ -545,11 +545,12 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
             }
             let rows = store.runs(50).map_err(|e| e.to_string())?;
             if args.json {
-                return lfjson::emit(&mut out, &lfjson::runs_list_doc(&rows), 0);
+                return lfjson::emit(&mut out, &lfjson::runs_list_doc(&*store, &rows)?, 0);
             }
             for run in rows {
                 let attempt = if run.attempt > 1 { format!(" (attempt {})", run.attempt) } else { String::new() };
-                writeln!(out, "{} {} {}:{} {}{attempt}", run.id, run.started_at, run.file, run.movement, run.status).map_err(|e| e.to_string())?;
+                let stranded = if lfjson::is_stranded(&*store, &run)? { " (stranded)" } else { "" };
+                writeln!(out, "{} {} {}:{} {}{stranded}{attempt}", run.id, run.started_at, run.file, run.movement, run.status).map_err(|e| e.to_string())?;
             }
             Ok(0)
         }

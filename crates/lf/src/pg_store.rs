@@ -53,7 +53,7 @@ use crate::store::{
     HeldPark, OwedRace, Release, Rerun, Result, RunRow, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, SegmentCommit, StoreError, WORK_KINDS, settle_race_work_key,
     settle_race_work_payload, timer_work_key, timer_work_payload,
 };
-use crate::waits::{DeliveryArrivals, LoggedArrival, NewArrival, Noted, OpenWait, WaitArrivals, WaitWake, delivery_rows, landing_of};
+use crate::waits::{DeliveryArrivals, Logged, LoggedArrival, NewArrival, Noted, OpenWait, Stranded, StrandedAfter, StrandedOf, WaitArrivals, WaitWake, delivery_rows, landing_of};
 
 type Params<'a> = [&'a (dyn ToSql + Sync)];
 
@@ -146,6 +146,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (8, include_str!("pg_store_schema_8.sql")),
     (9, include_str!("pg_store_schema_9.sql")),
     (10, include_str!("pg_store_schema_10.sql")),
+    (11, include_str!("pg_store_schema_11.sql")),
 ];
 
 /// The advisory lock the migrations run under: "lf-store" as a number.
@@ -327,7 +328,7 @@ impl PgStore {
 
     /// `waits.log` inside a transaction the caller holds (`log_arrivals`'s,
     /// or a delivery's keep).
-    fn log_arrivals_unwrapped(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {
+    fn log_arrivals_unwrapped(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Logged> {
         // Each record's edge locked once, in one order, so two logs never
         // wait on each other; a park there waits for this log to commit.
         let mut keys: Vec<(&str, &str)> = arrivals.iter().map(|a| (a.edge.as_str(), a.key.as_str())).collect();
@@ -339,7 +340,7 @@ impl PgStore {
         // A repeat: its identity and version already logged on its record's
         // edge within the retention (a sender's retry).
         let since = crate::store::iso(-crate::waits::ARRIVAL_RETENTION_MS);
-        let mut wakes: Vec<WaitWake> = Vec::new();
+        let mut answer = Logged::default();
         for arrival in arrivals {
             if arrival.identity.is_some()
                 && self
@@ -359,8 +360,26 @@ impl PgStore {
                  values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text::json, $8::bool, $9::text::timestamptz)",
                 &[&team_id, &adapter_type, &arrival.edge, &arrival.key, &arrival.identity, &arrival.version, &landing, &arrival.gone, &at],
             )?;
-            // A deleted record answers no wait: its waits keep waiting.
+            // A deleted record answers no wait: the waits parked on it are
+            // stranded, once, and keep waiting.
             if arrival.gone {
+                let stranded = self.query(
+                    "update lf.wait_row w set stranded_at = $5::text::timestamptz
+                     where w.team_id = $1::text::uuid and w.adapter_type = $2::text and w.edge = $3::text and w.key = $4::text
+                       and w.stranded_at is null and w.address is not null
+                       and exists (select 1 from lf.parked_run p where p.run_id = w.run_id and p.address = w.address)
+                     returning w.id::text, w.run_id::text, w.adapter_type, w.edge, w.key",
+                    &[&team_id, &adapter_type, &arrival.edge, &arrival.key, &at],
+                )?;
+                answer.stranded.extend(stranded.iter().map(|r| Stranded {
+                    wait_id: r.get(0),
+                    run_id: r.get(1),
+                    adapter_type: r.get(2),
+                    edge: r.get(3),
+                    key: r.get(4),
+                    at: at.to_string(),
+                    parked: true,
+                }));
                 continue;
             }
             // A wait whose park has finished needs no wake: its leaf is gone.
@@ -373,12 +392,13 @@ impl PgStore {
             )?;
             for row in answered {
                 let wake = WaitWake { run_id: row.get(0), wait_id: row.get(1), address: row.get(2) };
-                if !wakes.iter().any(|w| w.wait_id == wake.wait_id) {
-                    wakes.push(wake);
+                if !answer.wakes.iter().any(|w| w.wait_id == wake.wait_id) {
+                    answer.wakes.push(wake);
                 }
             }
         }
-        Ok(wakes)
+        answer.stranded.sort();
+        Ok(answer)
     }
 
     /// Why a fenced write wrote nothing (`notWritten`).
@@ -452,6 +472,15 @@ impl PgStore {
                     return Err(StoreError::Invalid(format!("run {run_id} has no wait {wait_id}")));
                 }
                 self.execute("update lf.wait_row set address = $2::text where id = $1::text::uuid", &[wait_id, &address])?;
+                // Parked on a record already gone (a gone arrival logged
+                // after its mark, or no key), it is stranded as it parks.
+                self.execute(
+                    "update lf.wait_row w set stranded_at = date_trunc('milliseconds', now())
+                     where w.id = $1::text::uuid and w.stranded_at is null
+                       and (w.key is null or exists (select 1 from lf.arrival a
+                         where a.team_id = w.team_id and a.adapter_type = w.adapter_type and a.edge = w.edge and a.key = w.key and a.seq > w.since and a.gone))",
+                    &[wait_id],
+                )?;
                 Ok(())
             }
             ParkKind::Limit => Ok(()),
@@ -997,18 +1026,26 @@ impl RunHostStore for PgStore {
         Ok(self.query_opt("select coalesce(max(seq), 0) from lf.arrival", &[])?.map(|r| r.get(0)).unwrap_or(0))
     }
 
-    fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {
+    fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Logged> {
         self.transaction(|| {
-            let wakes = self.log_arrivals_unwrapped(team_id, adapter_type, arrivals, at)?;
-            for row in crate::waits::wake_rows(team_id, &wakes) {
+            let logged = self.log_arrivals_unwrapped(team_id, adapter_type, arrivals, at)?;
+            for row in crate::waits::wake_rows(team_id, &logged.wakes) {
                 self.enqueue_row(&row.kind, &row.key, &row.payload, row.due_at.as_deref(), team_id)?;
             }
-            Ok(wakes)
+            Ok(logged)
         })
     }
 
     fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {
         let OpenWait { run_id, team_id, adapter_type, edge, key, since } = *wait;
+        let Some(key) = key else {
+            let row = self.query_opt(
+                "insert into lf.wait_row (run_id, team_id, adapter_type, edge, key, since)
+                 values ($1::text::uuid, $2::text::uuid, $3::text, $4::text, null, $5::int8) returning id::text",
+                &[&run_id, &team_id, &adapter_type, &edge, &since],
+            )?;
+            return row.map(|r| r.get(0)).ok_or_else(|| StoreError::Invalid(format!("run {run_id}'s wait on {edge} was not kept")));
+        };
         self.transaction(|| {
             self.execute(
                 "insert into lf.wait_row (run_id, team_id, adapter_type, edge, key, since)
@@ -1025,13 +1062,12 @@ impl RunHostStore for PgStore {
         })
     }
 
-    /// One statement, so `gone` and the arrivals are read at one instant.
+    /// One statement, so the wait's existence and its arrivals are read at
+    /// one instant.
     fn wait_arrivals(&self, wait_id: &str) -> Result<WaitArrivals> {
         let rows = self.query(
-            "select g.gone, a.seq, a.identity, a.version, a.landing
+            "select w.id, a.seq, a.identity, a.version, a.landing
              from lf.wait_row w
-             cross join lateral (select exists (select 1 from lf.arrival a
-               where a.team_id = w.team_id and a.adapter_type = w.adapter_type and a.edge = w.edge and a.key = w.key and a.seq > w.since and a.gone) as gone) g
              left join lateral (
                select a.seq, coalesce(a.identity, '#' || a.seq::text) as identity, a.version, a.landing::text as landing
                from lf.arrival a
@@ -1046,13 +1082,37 @@ impl RunHostStore for PgStore {
              order by a.seq",
             &[&wait_id],
         )?;
-        let gone: bool = rows.first().map(|r| r.get(0)).ok_or_else(|| StoreError::Invalid(format!("no wait {wait_id}")))?;
+        if rows.is_empty() {
+            return Err(StoreError::Invalid(format!("no wait {wait_id}")));
+        }
         let arrivals = rows
             .iter()
             .filter_map(|r| r.get::<_, Option<i64>>(1).map(|seq| (seq, r)))
             .map(|(seq, r)| Ok(LoggedArrival { seq, identity: r.get(2), version: r.get(3), landing: landing_of(r.get::<_, Option<&str>>(4))? }))
             .collect::<Result<Vec<_>>>()?;
-        Ok(WaitArrivals { gone, arrivals })
+        Ok(WaitArrivals { arrivals })
+    }
+
+    fn stranded_waits(&self, of: &StrandedOf<'_>) -> Result<Vec<Stranded>> {
+        const COLUMNS: &str = concat!(
+            "select w.id::text, w.run_id::text, w.adapter_type, w.edge, w.key, ",
+            iso!("w.stranded_at"),
+            ", w.address is not null and exists (select 1 from lf.parked_run p where p.run_id = w.run_id and p.address = w.address)
+             from lf.wait_row w join lf.trigger_run r on r.id = w.run_id
+             where w.stranded_at is not null and r.team_id = $1::text::uuid"
+        );
+        let rows = match *of {
+            StrandedOf::Run(run_id) => self.query(&format!("{COLUMNS} and w.run_id = $2::text::uuid order by w.stranded_at, w.id"), &[&self.tenant, &run_id])?,
+            StrandedOf::Page { after: None, limit } => self.query(&format!("{COLUMNS} order by w.stranded_at, w.id limit $2::int8"), &[&self.tenant, &limit])?,
+            StrandedOf::Page { after: Some(StrandedAfter { at, wait_id }), limit } => self.query(
+                &format!("{COLUMNS} and (w.stranded_at, w.id) > ($2::text::timestamptz, $3::text::uuid) order by w.stranded_at, w.id limit $4::int8"),
+                &[&self.tenant, &at, &wait_id, &limit],
+            )?,
+        };
+        Ok(rows
+            .iter()
+            .map(|r| Stranded { wait_id: r.get(0), run_id: r.get(1), adapter_type: r.get(2), edge: r.get(3), key: r.get(4), at: r.get(5), parked: r.get(6) })
+            .collect())
     }
 
     fn note_arrival(&self, noted: &Noted<'_>) -> Result<bool> {
@@ -1350,8 +1410,8 @@ impl RunHostStore for PgStore {
             let (work, wakes) = match arrivals {
                 None => (work.to_vec(), Vec::new()),
                 Some(a) => {
-                    let wakes = self.log_arrivals_unwrapped(a.team_id, a.adapter_type, a.arrivals, a.at)?;
-                    delivery_rows(work, self.arrival_mark()?, a.team_id, &wakes)
+                    let logged = self.log_arrivals_unwrapped(a.team_id, a.adapter_type, a.arrivals, a.at)?;
+                    delivery_rows(work, self.arrival_mark()?, a.team_id, &logged.wakes)
                 }
             };
             for row in work.iter().chain(&wakes) {

@@ -12,7 +12,8 @@
 //!   counts once. Per identity it keeps whether the record matched last time:
 //!   an arrival counts when the record newly matches.
 //! - Logging answers the waits parked on the arrival's record, so the host
-//!   can wake their runs. A log and a park on one record's edge never
+//!   can wake their runs. A gone arrival (its record deleted) wakes none: it
+//!   strands them, and they stay parked (docs/contracts/stranded-waits.md). A log and a park on one record's edge never
 //!   interleave (the state file has one writer at a time; Postgres takes a
 //!   lock on the record's edge), so a run that reads its wait's arrivals
 //!   after parking misses none: either the log saw the park and answers it,
@@ -71,7 +72,9 @@ pub struct OpenWait<'a> {
     pub team_id: &'a str,
     pub adapter_type: &'a str,
     pub edge: &'a str,
-    pub key: &'a str,
+    /// None: the record was gone when the wait opened (an `awaitKeys`
+    /// answer of `{gone: true}`), so nothing can arrive on it.
+    pub key: Option<&'a str>,
     pub since: i64,
 }
 
@@ -87,8 +90,6 @@ pub struct LoggedArrival {
 /// What a wait has yet to judge, in log order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WaitArrivals {
-    /// A gone arrival was logged on the wait's record after its mark.
-    pub gone: bool,
     pub arrivals: Vec<LoggedArrival>,
 }
 
@@ -98,6 +99,47 @@ pub struct WaitWake {
     pub run_id: String,
     pub wait_id: String,
     pub address: String,
+}
+
+/// A wait whose record went while it was parked on it (`waits.stranded`):
+/// nothing will arrive, so it never resolves, and its run stays parked
+/// unless something else in it moves.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Stranded {
+    pub wait_id: String,
+    pub run_id: String,
+    pub adapter_type: String,
+    pub edge: String,
+    /// None for a wait opened on a record already gone.
+    pub key: Option<String>,
+    /// When the store found it parked on a deleted record.
+    pub at: String,
+    /// Whether its leaf is still parked: a race's other arm may have won.
+    pub parked: bool,
+}
+
+/// What a `waits.log` did: the waits it answered, each now owed a wake, and
+/// the waits it stranded.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Logged {
+    pub wakes: Vec<WaitWake>,
+    pub stranded: Vec<Stranded>,
+}
+
+/// Which stranded waits `waits.stranded` answers, oldest stranded first.
+#[derive(Debug, Clone, Copy)]
+pub enum StrandedOf<'a> {
+    /// The run's.
+    Run(&'a str),
+    /// Every run's, at most `limit`, after the wait `after` names.
+    Page { after: Option<StrandedAfter<'a>>, limit: i64 },
+}
+
+/// Where a page of stranded waits left off: the last wait it answered.
+#[derive(Debug, Clone, Copy)]
+pub struct StrandedAfter<'a> {
+    pub at: &'a str,
+    pub wait_id: &'a str,
 }
 
 /// A delivery's arrivals, logged in the write that keeps it
@@ -158,17 +200,17 @@ impl Store {
 
     /// The arrivals logged and a `wake_await` row queued for each wait they
     /// answer, in one transaction: a crash leaves both or neither.
-    pub fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {
+    pub fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Logged> {
         self.transaction(|db| {
-            let wakes = Self::log_arrivals_in(db, team_id, adapter_type, arrivals, at)?;
-            for row in wake_rows(team_id, &wakes) {
+            let logged = Self::log_arrivals_in(db, team_id, adapter_type, arrivals, at)?;
+            for row in wake_rows(team_id, &logged.wakes) {
                 Self::enqueue_in(db, &row.kind, &row.key, &row.payload, row.due_at.as_deref())?;
             }
-            Ok(wakes)
+            Ok(logged)
         })
     }
 
-    pub(crate) fn log_arrivals_in(db: &Connection, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Vec<WaitWake>> {
+    pub(crate) fn log_arrivals_in(db: &Connection, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Logged> {
         {
             let mut log = db.prepare(
                 "insert into arrival (team_id, adapter_type, edge, key, identity, version, landing, gone, logged_at)
@@ -186,8 +228,16 @@ impl Store {
             let mut logged = db.prepare(
                 "select 1 from arrival where team_id = ? and adapter_type = ? and edge = ? and key = ? and identity = ? and version is ? and logged_at > ?",
             )?;
+            // A deleted record answers no wait: the waits parked on it are
+            // stranded, once, and keep waiting.
+            let mut strand = db.prepare(
+                "update wait_row set stranded_at = ?
+                 where team_id = ? and adapter_type = ? and edge = ? and key = ? and stranded_at is null and address is not null
+                   and exists (select 1 from leaf l where l.run_id = wait_row.run_id and l.address = wait_row.address)
+                 returning id, run_id, adapter_type, edge, key",
+            )?;
             let since = iso(-ARRIVAL_RETENTION_MS);
-            let mut wakes: Vec<WaitWake> = Vec::new();
+            let mut answer = Logged::default();
             for arrival in arrivals {
                 if let Some(identity) = &arrival.identity
                     && logged.exists(params![team_id, adapter_type, arrival.edge, arrival.key, identity, arrival.version, since])?
@@ -206,8 +256,13 @@ impl Store {
                     i64::from(arrival.gone),
                     at
                 ])?;
-                // A deleted record answers no wait: its waits keep waiting.
                 if arrival.gone {
+                    let stranded = strand.query_map(params![at, team_id, adapter_type, arrival.edge, arrival.key], |r| {
+                        Ok(Stranded { wait_id: r.get(0)?, run_id: r.get(1)?, adapter_type: r.get(2)?, edge: r.get(3)?, key: r.get(4)?, at: at.to_string(), parked: true })
+                    })?;
+                    for wait in stranded {
+                        answer.stranded.push(wait?);
+                    }
                     continue;
                 }
                 let answered = parked.query_map(params![team_id, adapter_type, arrival.edge, arrival.key], |r| {
@@ -215,19 +270,29 @@ impl Store {
                 })?;
                 for wake in answered {
                     let wake = wake?;
-                    if !wakes.iter().any(|w| w.wait_id == wake.wait_id) {
-                        wakes.push(wake);
+                    if !answer.wakes.iter().any(|w| w.wait_id == wake.wait_id) {
+                        answer.wakes.push(wake);
                     }
                 }
             }
-            Ok(wakes)
+            answer.stranded.sort();
+            Ok(answer)
         }
     }
 
     /// The wait's id. A run that already waits on this edge of this record
-    /// keeps that wait, and its mark.
+    /// keeps that wait, and its mark. A wait on a record already gone (no
+    /// key) is always a new one.
     pub fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {
         let OpenWait { run_id, team_id, adapter_type, edge, key, since } = *wait;
+        let Some(key) = key else {
+            let id = uuid::Uuid::new_v4().to_string();
+            self.db.execute(
+                "insert into wait_row (id, run_id, team_id, adapter_type, edge, key, since) values (?, ?, ?, ?, ?, null, ?)",
+                params![id, run_id, team_id, adapter_type, edge, since],
+            )?;
+            return Ok(id);
+        };
         self.transaction(|db| {
             db.execute(
                 "insert into wait_row (id, run_id, team_id, adapter_type, edge, key, since) values (?, ?, ?, ?, ?, ?, ?)
@@ -245,19 +310,11 @@ impl Store {
     /// The arrivals after the wait's mark on its record's edge that it has
     /// not noted, the first of each identity and version only.
     pub fn wait_arrivals(&self, wait_id: &str) -> Result<WaitArrivals> {
-        // One transaction, so `gone` and the arrivals are read at one instant.
         self.transaction(|db| Self::wait_arrivals_in(db, wait_id))
     }
 
     pub(crate) fn wait_arrivals_in(db: &Connection, wait_id: &str) -> Result<WaitArrivals> {
         Self::require_wait(db, wait_id)?;
-        let gone = db.query_row(
-            "select exists (select 1 from wait_row w join arrival a
-               on a.team_id = w.team_id and a.adapter_type = w.adapter_type and a.edge = w.edge and a.key = w.key and a.seq > w.since
-               where w.id = ? and a.gone = 1)",
-            params![wait_id],
-            |r| r.get::<_, bool>(0),
-        )?;
         let mut statement = db.prepare(
             "select a.seq, coalesce(a.identity, '#' || a.seq), a.version, a.landing
              from wait_row w join arrival a
@@ -277,7 +334,31 @@ impl Store {
             .into_iter()
             .map(|(seq, identity, version, landing)| Ok(LoggedArrival { seq, identity, version, landing: landing_of(landing.as_deref())? }))
             .collect::<Result<Vec<_>>>()?;
-        Ok(WaitArrivals { gone, arrivals })
+        Ok(WaitArrivals { arrivals })
+    }
+
+    /// The stranded waits `of` names, oldest stranded first (ties by id).
+    pub fn stranded_waits(&self, of: &StrandedOf<'_>) -> Result<Vec<Stranded>> {
+        const COLUMNS: &str = "select w.id, w.run_id, w.adapter_type, w.edge, w.key, w.stranded_at,
+               w.address is not null and exists (select 1 from leaf l where l.run_id = w.run_id and l.address = w.address)
+             from wait_row w where w.stranded_at is not null";
+        let read = |r: &rusqlite::Row<'_>| {
+            Ok(Stranded { wait_id: r.get(0)?, run_id: r.get(1)?, adapter_type: r.get(2)?, edge: r.get(3)?, key: r.get(4)?, at: r.get(5)?, parked: r.get(6)? })
+        };
+        let rows = match *of {
+            StrandedOf::Run(run_id) => {
+                self.db.prepare(&format!("{COLUMNS} and w.run_id = ? order by w.stranded_at, w.id"))?.query_map(params![run_id], read)?.collect::<rusqlite::Result<Vec<_>>>()?
+            }
+            StrandedOf::Page { after: None, limit } => {
+                self.db.prepare(&format!("{COLUMNS} order by w.stranded_at, w.id limit ?"))?.query_map(params![limit], read)?.collect::<rusqlite::Result<Vec<_>>>()?
+            }
+            StrandedOf::Page { after: Some(StrandedAfter { at, wait_id }), limit } => self
+                .db
+                .prepare(&format!("{COLUMNS} and (w.stranded_at, w.id) > (?, ?) order by w.stranded_at, w.id limit ?"))?
+                .query_map(params![at, wait_id, limit], read)?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+        };
+        Ok(rows)
     }
 
     /// Note that the wait judged this arrival, and whether its record
@@ -322,12 +403,21 @@ impl Store {
         Ok(i64::try_from(swept).unwrap_or(i64::MAX))
     }
 
-    /// A wait park's row: the wait is parked at `address`.
+    /// A wait park's row: the wait is parked at `address`. Parked on a
+    /// record already gone (a gone arrival logged after its mark, or no key),
+    /// it is stranded as it parks.
     pub(crate) fn park_wait_in(db: &Connection, run_id: &str, address: &str, wait_id: &str) -> Result<()> {
         let parked = db.execute("update wait_row set address = ? where id = ? and run_id = ?", params![address, wait_id, run_id])?;
         if parked == 0 {
             return Err(StoreError::Invalid(format!("run {run_id} has no wait {wait_id}")));
         }
+        db.execute(
+            "update wait_row set stranded_at = ? where id = ? and stranded_at is null
+               and (key is null or exists (select 1 from arrival a
+                 where a.team_id = wait_row.team_id and a.adapter_type = wait_row.adapter_type and a.edge = wait_row.edge and a.key = wait_row.key
+                   and a.seq > wait_row.since and a.gone = 1))",
+            params![iso(0), wait_id],
+        )?;
         Ok(())
     }
 
@@ -443,6 +533,26 @@ mod tests {
             opt_text(step, "identity").map(str::to_string)
         }
 
+        /// A stranded wait as a case writes it: by its wait's and (`with_run`)
+        /// its run's names.
+        fn stranded(&self, wait: &Stranded, with_run: bool) -> Js {
+            let name = |ids: &HashMap<String, String>, id: &str| ids.iter().find(|(_, v)| v.as_str() == id).map_or_else(|| id.to_string(), |(k, _)| k.clone());
+            let mut shown = obj! { "wait" => Js::str(name(&self.waits, &wait.wait_id)), "edge" => Js::str(&wait.edge), "key" => wait.key.as_deref().map_or(Js::Null, Js::str), "parked" => Js::Bool(wait.parked) };
+            if with_run {
+                shown.insert("run".into(), Js::str(name(&self.ids, &wait.run_id)));
+            }
+            Js::Obj(shown)
+        }
+
+        /// A case's stranded wait, its keys in the order `stranded` writes them.
+        fn named_stranded(&self, want: &Js) -> Js {
+            let mut shown = obj! { "wait" => want.get("wait").cloned().unwrap(), "edge" => want.get("edge").cloned().unwrap(), "key" => want.get("key").cloned().unwrap(), "parked" => want.get("parked").cloned().unwrap() };
+            if let Some(run) = want.get("run") {
+                shown.insert("run".into(), run.clone());
+            }
+            Js::Obj(shown)
+        }
+
         /// The step's list `key` of `{ run, wait, address }`.
         fn wakes(&mut self, step: &Js, key: &str) -> Vec<WaitWake> {
             list(step, key).iter().map(|w| WaitWake { run_id: self.id(text(w, "run")), wait_id: self.wait(text(w, "wait")), address: text(w, "address").into() }).collect()
@@ -507,11 +617,16 @@ mod tests {
                         })
                         .collect();
                     let logged_at = iso(step.get("at").and_then(int).unwrap_or(0));
-                    let mut wakes = store.log_arrivals(&team, adapter, &arrivals, &logged_at).unwrap();
+                    let Logged { mut wakes, stranded } = store.log_arrivals(&team, adapter, &arrivals, &logged_at).unwrap();
                     let mut expected = names.wakes(step, "wakes");
                     wakes.sort();
                     expected.sort();
                     assert_eq!(wakes, expected, "{at}: the wakes");
+                    let mut stranded: Vec<String> = stranded.into_iter().map(|wait| wait.wait_id).collect();
+                    let mut expected: Vec<String> = step.get("stranded").and_then(Js::as_array).unwrap_or_default().iter().map(|w| names.wait(w.as_str().unwrap())).collect();
+                    stranded.sort();
+                    expected.sort();
+                    assert_eq!(stranded, expected, "{at}: the waits stranded");
                     if step.get("queued").is_some() {
                         let mut queued: Vec<WaitWake> = claim_wakes(&team)
                             .iter()
@@ -526,7 +641,7 @@ mod tests {
                 "open" => {
                     let since = names.marks[text(step, "since")];
                     let run = names.id(text(step, "run"));
-                    let wait = OpenWait { run_id: &run, team_id: &team, adapter_type: adapter, edge: text(step, "edge"), key: text(step, "key"), since };
+                    let wait = OpenWait { run_id: &run, team_id: &team, adapter_type: adapter, edge: text(step, "edge"), key: opt_text(step, "key"), since };
                     let id = store.open_wait(&wait).unwrap();
                     if let Some(same) = opt_text(step, "same") {
                         assert_eq!(id, names.wait(same), "{at}: the same wait");
@@ -537,7 +652,6 @@ mod tests {
                 }
                 "arrivals" => {
                     let got = store.wait_arrivals(&names.wait(text(step, "wait"))).unwrap();
-                    assert_eq!(got.gone, flag(step, "gone"), "{at}: gone");
                     let expected = list(step, "arrivals");
                     assert_eq!(got.arrivals.len(), expected.len(), "{at}: {:?}", got.arrivals);
                     assert!(got.arrivals.windows(2).all(|pair| pair[0].seq < pair[1].seq), "{at}: in log order");
@@ -665,6 +779,30 @@ mod tests {
                 "sweep" => {
                     store.sweep_arrivals(&iso(step.get("before").and_then(int).unwrap()), 1000).unwrap();
                 }
+                "stranded" => {
+                    let run = names.id(text(step, "run"));
+                    let got: Vec<Js> = store.stranded_waits(&StrandedOf::Run(&run)).unwrap().iter().map(|wait| names.stranded(wait, false)).collect();
+                    let expected: Vec<Js> = list(step, "waits").iter().map(|want| names.named_stranded(want)).collect();
+                    assert_eq!(got, expected, "{at}: the run's stranded waits");
+                }
+                "everyStranded" => {
+                    let limit = step.get("limit").and_then(int).unwrap();
+                    let mut every: Vec<Stranded> = Vec::new();
+                    loop {
+                        let after = every.last().map(|last| StrandedAfter { at: &last.at, wait_id: &last.wait_id });
+                        let page = store.stranded_waits(&StrandedOf::Page { after, limit }).unwrap();
+                        assert!(page.len() as i64 <= limit, "{at}: a page of at most {limit}");
+                        if page.is_empty() {
+                            break;
+                        }
+                        every.extend(page);
+                    }
+                    assert!(every.windows(2).all(|pair| (&pair[0].at, &pair[0].wait_id) < (&pair[1].at, &pair[1].wait_id)), "{at}: oldest stranded first");
+                    let named: Vec<&String> = names.waits.values().collect();
+                    let got: Vec<Js> = every.iter().filter(|wait| named.contains(&&wait.wait_id)).map(|wait| names.stranded(wait, true)).collect();
+                    let expected: Vec<Js> = list(step, "waits").iter().map(|want| names.named_stranded(want)).collect();
+                    assert_eq!(got, expected, "{at}: every run's stranded waits");
+                }
                 other => panic!("{at}: no step {other}"),
             }
         }
@@ -694,7 +832,10 @@ mod tests {
         newly_matches_counts_once_until_it_stops_matching,
         a_noted_arrival_is_no_longer_listed,
         two_arrivals_on_one_wait_count_in_log_order,
-        a_gone_arrival_marks_the_wait_gone,
+        a_gone_arrival_strands_the_parked_waits_on_its_record_once_and_wakes_none,
+        a_wait_parked_after_its_record_went_is_stranded_as_it_parks,
+        a_wait_opened_on_a_record_already_gone_has_no_key_nothing_wakes_it_and_it_is_stranded_as_it_parks,
+        every_runs_stranded_waits_page_by_page_in_the_order_they_were_stranded_a_wait_no_longer_parked_among_them,
         logging_answers_only_the_parked_waits_on_its_key,
         a_park_at_an_address_leaves_no_other_wait_of_its_run_parked_there,
         opening_a_wait_its_run_already_has_on_that_records_edge_is_the_same_wait_from_its_first_mark,
@@ -747,7 +888,7 @@ mod tests {
         let (run, team, subscription) = (uuid::Uuid::new_v4().to_string(), store.tenant().to_string(), uuid::Uuid::new_v4().to_string());
         let key = format!("thread:{run}");
         store.start_run(&RunStart { id: &run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
-        let wait = store.open_wait(&OpenWait { run_id: &run, team_id: &team, adapter_type: "acme", edge: "Comments", key: &key, since: store.arrival_mark().unwrap() }).unwrap();
+        let wait = store.open_wait(&OpenWait { run_id: &run, team_id: &team, adapter_type: "acme", edge: "Comments", key: Some(&key), since: store.arrival_mark().unwrap() }).unwrap();
         store.commit_park(&Park { run_id: &run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
         let receipt = || NewDelivery {
             id: uuid::Uuid::new_v4().to_string(),
@@ -795,7 +936,7 @@ mod tests {
         let (run, team) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
         store.start_run(&RunStart { id: &run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
         let since = store.arrival_mark().unwrap();
-        let wait = store.open_wait(&OpenWait { run_id: &run, team_id: &team, adapter_type: "acme", edge: "Comments", key: "thread:c1", since }).unwrap();
+        let wait = store.open_wait(&OpenWait { run_id: &run, team_id: &team, adapter_type: "acme", edge: "Comments", key: Some("thread:c1"), since }).unwrap();
         let (locked, held) = std::sync::mpsc::channel();
         let logging = std::thread::spawn({
             let (url, team) = (url.clone(), team.clone());
@@ -820,6 +961,36 @@ mod tests {
         logging.join().unwrap();
         let read: Vec<String> = store.wait_arrivals(&wait).unwrap().arrivals.into_iter().map(|a| a.identity).collect();
         assert_eq!(read, ["k1"]);
+    }
+
+    /// A state file written before a wait could be stranded or keyless:
+    /// its wait rows are kept, and both can be written.
+    #[test]
+    fn a_state_file_written_before_stranded_waits_keeps_its_waits() {
+        let dir = std::env::temp_dir().join(format!("lf-waits-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "create table wait_row (id text primary key, run_id text not null, team_id text not null, adapter_type text not null,
+                   edge text not null, key text not null, since integer not null, address text);
+                 create unique index wait_row_edge on wait_row (run_id, team_id, adapter_type, edge, key);
+                 create index wait_row_key on wait_row (team_id, adapter_type, edge, key);
+                 insert into wait_row values ('w1', 'run-1', 't', 'acme', 'Comments', 'thread:c1', 0, null);",
+            )
+            .unwrap();
+        let store = Store::open(&path).unwrap();
+        store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+        let kept = OpenWait { run_id: "run-1", team_id: "t", adapter_type: "acme", edge: "Comments", key: Some("thread:c1"), since: 5 };
+        assert_eq!(store.open_wait(&kept).unwrap(), "w1");
+        let keyless = store.open_wait(&OpenWait { key: None, ..kept }).unwrap();
+        store.commit_park(&Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &keyless } }).unwrap();
+        let stranded: Vec<String> = store.stranded_waits(&StrandedOf::Run("run-1")).unwrap().into_iter().map(|wait| wait.wait_id).collect();
+        assert_eq!(stranded, [keyless]);
+        // Opened again, it is rebuilt no more.
+        drop(store);
+        assert_eq!(Store::open(&path).unwrap().stranded_waits(&StrandedOf::Run("run-1")).unwrap().len(), 1);
     }
 
     #[test]
