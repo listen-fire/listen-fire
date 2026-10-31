@@ -181,7 +181,7 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
                 landing = Some(format!("<{}>", raw.strip_prefix('<').and_then(|r| r.strip_suffix('>')).unwrap_or(raw)));
             }
             KeyOp::Type => return Err(NoRewrite::Unmapped),
-            KeyOp::Eq | KeyOp::In if key.field.is_none() || arg.is_type == Some(true) => return Err(NoRewrite::Unmapped),
+            KeyOp::Eq | KeyOp::In | KeyOp::Contains if key.field.is_none() || arg.is_type == Some(true) => return Err(NoRewrite::Unmapped),
             KeyOp::Eq => {
                 let Ok(Expression::Static { value: raw }) = expression_of_slot(&arg.value) else { return Err(NoRewrite::Unmapped) };
                 conjuncts[key.hop].push(compare(FilterOperator::Eq, Expression::Static { value: value(&raw)? }));
@@ -200,6 +200,20 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
                 Expression::Static { value: raw } => conjuncts[key.hop].push(compare(FilterOperator::Eq, Expression::Static { value: value(&raw)? })),
                 _ => return Err(NoRewrite::Unmapped),
             },
+            KeyOp::Contains => {
+                let values = match expression_of_slot(&arg.value).map_err(|_| NoRewrite::Unmapped)? {
+                    Expression::List { elements } => elements
+                        .iter()
+                        .map(|e| match e {
+                            ListElement::Expression(Expression::Static { value: raw }) => value(raw),
+                            _ => Err(NoRewrite::Unmapped),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                    Expression::Static { value: raw } => vec![value(&raw)?],
+                    _ => return Err(NoRewrite::Unmapped),
+                };
+                conjuncts[key.hop].push(any_contains(key, values).ok_or(NoRewrite::Unmapped)?);
+            }
         }
     }
     let written = |name: &str| statement.config.iter().any(|a| a.name == name);
@@ -261,6 +275,7 @@ fn absent_comparison(key: &KeyBecomes, meant: &SettingsValue) -> Option<Expressi
             let elements = items.into_iter().map(|v| ListElement::Expression(Expression::Static { value: v })).collect();
             Some(compare_on(key, FilterOperator::In, Expression::List { elements }))
         }
+        (KeyOp::Contains, _, _) => any_contains(key, items),
         _ => None,
     }
 }
@@ -344,6 +359,17 @@ fn mapped(key: &KeyBecomes, raw: &StaticValue) -> Option<StaticValue> {
         StaticValue::String(s) if key.lowercase == Some(true) => StaticValue::String(s.to_lowercase()),
         other => other,
     })
+}
+
+/// `field CONTAINS value` for one value; for several, the OR of them (a
+/// list field holding any of them). None for no value.
+fn any_contains(key: &KeyBecomes, values: Vec<StaticValue>) -> Option<Expression> {
+    let mut each: Vec<Expression> = values.into_iter().map(|value| compare_on(key, FilterOperator::Contains, Expression::Static { value })).collect();
+    match each.len() {
+        0 => None,
+        1 => each.pop(),
+        _ => Some(Expression::Logical { op: LogicalOp::Or, operands: each }),
+    }
 }
 
 fn compare_on(key: &KeyBecomes, op: FilterOperator, right: Expression) -> Expression {

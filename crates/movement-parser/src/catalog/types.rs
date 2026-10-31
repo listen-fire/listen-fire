@@ -822,6 +822,9 @@ pub enum KeyOp {
     Eq,
     /// `field IN [values]`.
     In,
+    /// `field CONTAINS value`, a member of a list field; several values are
+    /// an OR of them (`labels: ["INBOX", "SPAM"]`).
+    Contains,
     /// `payload: <T>`: the landing is typed `<T>`.
     Type,
 }

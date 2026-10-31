@@ -929,6 +929,7 @@ pub fn unreadable_settings_become(become_: &SettingsBecome, entries: &[Js], desc
             let op = match key.op {
                 KeyOp::Eq => "eq",
                 KeyOp::In => "in",
+                KeyOp::Contains => "contains",
                 KeyOp::Type => "type",
             };
             return Some(format!("'listenSettingsBecome' maps '{name}' by '{op}' but names no field to compare"));

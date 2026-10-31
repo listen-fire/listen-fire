@@ -103,6 +103,14 @@ const CATALOG: &str = r#"{"adapters":{
     "schemas":{"":{"positions":{"Ring":{"properties":{"At":"datetime"},"edges":{}}},
       "collections":{"Rings":{"target":"Ring","readable":false,"listenable":true,"delivery":"connection"}},
       "writableRoots":{},"eventPosition":"Ring","eventPositions":[{"position":"Ring"}]}}},
+  "mail":{"canFire":true,"constructionArgs":[],"triggerConfig":["query","labels","every"],
+    "listenSettingsBecome":{"path":["Messages"],"aliases":["m"],"paramFrom":"Message",
+      "keys":{"query":{"hop":0,"field":"Query","op":"eq"},"labels":{"hop":0,"field":"Labels","op":"contains","absent":"INBOX"}}},
+    "schemas":{"":{"positions":{"Message":{"properties":{"Query":{"kind":"owned","name":"GmailQuery","owner":"mail"},"Labels":{"kind":"list","of":"text"},"Subject":"text"},"edges":{},
+        "propertyCapabilities":{"Query":{"filterOperators":["eq"]},"Labels":{"filterOperators":["eq","in","contains"]},"Subject":{"filterOperators":["eq","contains"]}}}},
+      "collections":{"Messages":{"target":"Message","listenable":true,"identity":"Message Id","delivery":"polled","pollEverySeconds":60,"cursor":true,
+        "capability":{"filter":"native","supportsLimit":true}}},
+      "writableRoots":{},"eventPosition":"Message","eventPositions":[{"position":"Message"}]}}},
   "feed":{"canFire":true,"constructionArgs":[],"triggerConfig":["topic"],
     "schemas":{"":{"positions":{"Item":{"properties":{"Topic":"text"},"edges":{}}},
       "collections":{"Items":{"target":"Item","listenable":true,"identity":"Id","delivery":"connection"}},
@@ -120,6 +128,7 @@ const FEED: &str = "import { feed as feed_module } from adapters\nfeed = connect
 const INBOX: &str = "import { inbox as inbox_module } from adapters\ninbox = connect inbox_module\n";
 const MBOX: &str = "import { mbox as mbox_module } from adapters\nmbox = connect mbox_module\n";
 const GHX: &str = "import { ghx as ghx_module } from adapters\nghx = connect ghx_module\n";
+const MAIL: &str = "import { mail as mail_module } from adapters\nmail = connect mail_module\n";
 const BELL: &str = "import { bell as bell_module } from adapters\nbell = connect bell_module\n";
 
 fn checked(source: &str, pin: Option<&str>) -> Vec<Diagnostic> {
@@ -447,4 +456,25 @@ fn a_settings_value_missing_from_an_eq_keys_values_map_has_no_rewrite() {
     assert!(fixed(&mapped, &diagnostics(&mapped)).contains("listen to ghk-[n:Notifications WHERE n.Subject == \"PullRequest\"]-> fire f"));
     let unmapped = at("issue");
     assert!(retired(&diagnostics(&unmapped)).fix.is_none());
+}
+
+#[test]
+fn a_list_key_mapped_by_contains_is_one_contains_or_an_or_of_them_and_leaving_it_out_is_what_it_meant() {
+    let one = format!("{MAIL}function f(m: <mail-[:Message]->>) {{ return 1 }}\nlisten to mail {{ query: \"from:acme\", labels: [\"Deals\"] }} fire f\n");
+    let text = fixed(&one, &diagnostics(&one));
+    assert!(text.contains("listen to mail-[m:Messages WHERE m.Query == \"from:acme\" AND m.Labels CONTAINS \"Deals\"]-> fire f"), "{text}");
+    assert_rechecks_clean(&text);
+
+    let two = format!("{MAIL}function f(m: <mail-[:Message]->>) {{ return 1 }}\nlisten to mail {{ labels: [\"INBOX\", \"SPAM\"] }} fire f\n");
+    let text = fixed(&two, &diagnostics(&two));
+    assert!(text.contains("listen to mail-[m:Messages WHERE m.Labels CONTAINS \"INBOX\" OR m.Labels CONTAINS \"SPAM\"]-> fire f"), "{text}");
+    assert_rechecks_clean(&text);
+
+    let left_out = format!("{MAIL}function f(m: <mail-[:Message]->>) {{ return 1 }}\nlisten to mail {{ query: \"from:acme\", every: 5m }} fire f\n");
+    let d = diagnostics(&left_out);
+    assert!(retired(&d).message.ends_with("(`every` is gone: the module sets the interval; set `pollEvery` for this connection in lf.yaml)"), "{}", retired(&d).message);
+    assert_eq!(retired(&d).fix.as_ref().unwrap().get("safe"), None, "an unsafe fix");
+    let text = fixed(&left_out, &d);
+    assert!(text.contains("listen to mail-[m:Messages WHERE m.Query == \"from:acme\" AND m.Labels CONTAINS \"INBOX\"]-> fire f"), "{text}");
+    assert_rechecks_clean(&text);
 }

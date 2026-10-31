@@ -65,7 +65,7 @@ interface SettingsBecome {
 interface KeyBecomes {
   hop: number;                                    // the index into `path` of the hop it narrows
   field?: string;                                 // the field it compares; absent for `type`
-  op: 'eq' | 'in' | 'type';                       // `field == value`, `field IN [values]`, or the landing's declared type (`payload: <T>`)
+  op: 'eq' | 'in' | 'contains' | 'type';          // `field == value`, `field IN [values]`, `field CONTAINS value` (several: an OR of them), or the landing's declared type (`payload: <T>`)
   values?: Record<string, string>;                // a settings value's spelling as a field value (`"record.created"` → `"created"`)
   absent?: string | string[];                     // what a listen that left the key out meant (`""`: the box itself); its rewrite compares it
   lowercase?: boolean;                            // 0.12 compared the key's values lowercased: the rewrite writes them so

@@ -215,14 +215,15 @@ export interface SettingsBecome {
   keys: Record<string, KeyBecomes>;
 }
 
-/** What one settings key becomes: a comparison on a hop's field (`eq`, `in`),
- *  or the landing's declared type (`type`, `payload: <T>`). */
+/** What one settings key becomes: a comparison on a hop's field (`eq`, `in`,
+ *  `contains`: a member of a list field, several values an OR of them), or
+ *  the landing's declared type (`type`, `payload: <T>`). */
 export interface KeyBecomes {
   /** The index into `path` of the hop it narrows. */
   hop: number;
   /** The field it compares (absent for `type`). */
   field?: string;
-  op: 'eq' | 'in' | 'type';
+  op: 'eq' | 'in' | 'contains' | 'type';
   /** A settings value's spelling as a field value (`"record.created"` →
    *  `"created"`); absent, a value is the field's as written. */
   values?: Record<string, string>;

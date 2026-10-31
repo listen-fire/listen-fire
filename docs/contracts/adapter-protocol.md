@@ -236,7 +236,10 @@ The manifest file registers your server with a team:
   fired function's parameter was typed as (retyped by the landing), and `keys`
   each settings key's hop, field and comparison
   (`{ "events": { "hop": 0, "field": "Reason", "op": "in" } }`, with `values`
-  where a settings value is spelled otherwise on the field). The upgrade turns
+  where a settings value is spelled otherwise on the field). The comparison is
+  `eq`, `in`, `contains` (a member of a list field; several values are an OR
+  of them, `labels: ["INBOX", "SPAM"]` becoming
+  `m.Labels CONTAINS "INBOX" OR m.Labels CONTAINS "SPAM"`) or `type`. The upgrade turns
   that listen into `listen to gh-[n:Notifications WHERE n.Reason IN ["mention"]]->`.
   A key may also say `absent`, what a listen that left it out meant, as a
   settings value (`"absent": ""` for an inbox's own mail, a list for the
