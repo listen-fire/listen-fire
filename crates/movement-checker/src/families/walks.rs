@@ -1183,6 +1183,12 @@ impl crate::checker::Checker<'_> {
     /// head's hops, reporting what the walk reports.
     pub fn walk_head(&mut self, head: &PathHead, scope: ScopeId, awaited: bool) -> Option<HeadWalk> {
         let steps = Self::head_steps(head)?;
+        self.walk_head_steps(head, &steps, scope, awaited)
+    }
+
+    /// `walk_head` over `steps` in place of the hops `head` writes: a listen
+    /// walks its own without what its WHERE refuses on its own account.
+    pub(crate) fn walk_head_steps(&mut self, head: &PathHead, steps: &[TraversalStep], scope: ScopeId, awaited: bool) -> Option<HeadWalk> {
         let start = self.head_root_type(head, scope)?;
         let recorded_start = self.recording().then(|| start.clone());
         let (walk, diagnostics, watchable, landings, observed) = {
@@ -1193,7 +1199,7 @@ impl crate::checker::Checker<'_> {
                 Some(PathRoot::Name { name }) => Some(crate::families::names::spell_name(name)),
                 _ => None,
             };
-            let landed = typing.walk_steps(Some(start.clone()), &steps, awaited);
+            let landed = typing.walk_steps(Some(start.clone()), steps, awaited);
             let last_source = match typing.last_landings.len() {
                 0 | 1 => Some(start),
                 n => typing.last_landings[n - 2].clone(),

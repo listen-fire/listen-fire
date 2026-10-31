@@ -1,6 +1,6 @@
 # The story analysis
 
-Version: 1
+Version: 2
 
 The story analysis is what the check settled about a movement, as data: the scopes it opened, the symbols it bound, the writes and the nodes it saw, the bodies a lane ends in, and what each movement may do. A surface that draws a movement's story reads this instead of walking the syntax tree and resolving names again. It is the check's own walk, so the verdict and the picture come from one call and cannot disagree.
 
@@ -11,8 +11,9 @@ The story analysis is what the check settled about a movement, as data: the scop
 
 ## Versions
 
-- **The version is an integer**, stated at the top of this document, held by `STORY_ANALYSIS_VERSION`, and written as `storyAnalysisVersion` on every analysis. This release reads version 1 only (`SUPPORTED_STORY_ANALYSIS_VERSIONS`; [the index](README.md)).
-- **Refusal:** a reader handed another version refuses it by name and does not read it as version 1.
+- **The version is an integer**, stated at the top of this document, held by `STORY_ANALYSIS_VERSION`, and written as `storyAnalysisVersion` on every analysis. This release writes version 2 and reads versions 1 and 2 (`SUPPORTED_STORY_ANALYSIS_VERSIONS`); version 1 is deprecated (`DEPRECATED_STORY_ANALYSIS_VERSIONS`; [the index](README.md)).
+- **Refusal:** a reader handed another version refuses it by name and does not read it as one it knows.
+- **Version 1** is read as version 2 at the one point they differ: an awaited traversal's `awaitable` is read as `listenable`.
 - **What bumps it:** a change in meaning. A member removed or renamed, a member whose meaning changed, a node kind whose shape changed. A new optional member or a new node kind a reader can skip keeps the version.
 - **A pin this release does not read** is not analysed. The answer is the language version diagnostic alone, with every list empty (the refused shape below).
 
@@ -164,7 +165,7 @@ The check takes no pin; the pin rule is the caller's. A caller handed a pin this
 
 ```ts
 {
-  storyAnalysisVersion: 1,
+  storyAnalysisVersion: 2,
   diagnostics: [/* the language version diagnostic alone */],
   scopes: [], symbols: [], writes: [], nodes: [], bodies: [], shapes: [],
 }
@@ -174,4 +175,4 @@ The check takes no pin; the pin rule is the caller's. A caller handed a pin this
 
 - **Version 1.** The first version: the scopes, symbols, writes, 14 node kinds, bodies and shapes, with `effects` on a movement's symbol.
 - **Version 1, additive: `fieldType` on an extraction field (0.12.4).** Optional and nullable, so a consumer that does not read it is unaffected; the version stays 1.
-- **Version 1, in 0.13.0: an awaited traversal says `listenable`, and a listen its `path`.** An awaited traversal's `awaitable` is renamed `listenable`, the catalog's word for an edge that announces arrivals. A `listen to <traversal>` node carries `path`, the traversal as written; a settings listen has none.
+- **Version 2, in 0.13.0: an awaited traversal says `listenable`, and a listen its `path`.** An awaited traversal's `awaitable` is renamed `listenable`, the catalog's word for an edge that announces arrivals; a renamed member bumps the version. A `listen to <traversal>` node carries `path`, the traversal as written; a settings listen has none. Version 1 is still read, and deprecated.

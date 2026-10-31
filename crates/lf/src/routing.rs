@@ -404,6 +404,10 @@ fn listens_of(file: &str, program: &movement_parser::ast::Program, scopes: &Hash
                     constructions.insert(assign.name.clone(), (adapter, credential, args));
                 }
             }
+            // A listen on a traversal is watched by its plan, which nothing
+            // routes yet; read as a settings listen on its root, it would
+            // fire on everything its connection's module delivers.
+            Statement::Listen(listen) if listen.path.is_some() => {}
             Statement::Listen(listen) => declared.push(listen),
             _ => {}
         }
@@ -648,6 +652,15 @@ mod tests {
         let listen = &listens[0];
         assert_eq!((listen.adapter.as_str(), listen.movement_name.as_str()), ("acme_crm", "welcome"));
         assert_eq!(Js::Obj(listen.config.clone()).to_json(), r#"{"events":["company.created"]}"#);
+    }
+
+    #[test]
+    fn a_listen_on_a_traversal_is_not_routed_as_one_on_its_root() {
+        let source = "import { chat } from adapters\n\nslack = connect chat\n\nfunction count_vote(i: <slack-[:Interaction]->>) {\n  return i\n}\n\nlisten to slack-[:Channels]->-[:Messages]->-[:Interactions]-> fire count_vote\nlisten to slack {} fire count_vote\n";
+        let files = vec![MovementFile { name: "votes".into(), path: PathBuf::from("votes.mvt"), source: source.into(), version: None }];
+        let listens = collect_listens(&files);
+        assert_eq!(listens.len(), 1, "only the settings listen is routed");
+        assert_eq!(Js::Obj(listens[0].config.clone()).to_json(), "{}");
     }
 
     /// The table of cases the engine's TypeScript is held to as well

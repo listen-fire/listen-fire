@@ -6,8 +6,9 @@
 //!   announced, carrying its Channel and Message) → Actions. A Message's
 //!   Reactions are announced and carry nothing.
 //! - `at`: Bases → Tables (both cheap to list) → Changes (only announced,
-//!   pushed per table); a Table's Records (not cheap) → Comments (announced,
-//!   polled). A Change's Replies are announced.
+//!   pushed per table); a Table's Edits (the same, each carrying its Table);
+//!   a Table's Records (not cheap) → Comments (announced, polled), and Notes
+//!   (only announced, pushed per record). A Change's Replies are announced.
 
 use movement_checker::CheckOptions;
 use movement_checker::families::filter_split::spell;
@@ -40,13 +41,15 @@ const CATALOG: &str = r#"{"adapters":{
     "Table":{"properties":{"Name":"text"},
       "edges":{
         "Changes":{"target":"Change","readable":false,"listenable":true,"identity":"Id","delivery":"scope"},
+        "Edits":{"target":"Change","readable":false,"listenable":true,"identity":"Id","delivery":"scope","carries":["Tables"]},
         "Records":{"target":"Record","capability":{"filter":"native","supportsLimit":false}}},
       "propertyCapabilities":{"Name":{"filterOperators":["eq"]}}},
     "Change":{"properties":{"Id":"text","Kind":"text"},
       "edges":{"Replies":{"target":"Reply","readable":false,"listenable":true,"delivery":"scope"}}},
     "Reply":{"properties":{"Text":"text"},"edges":{}},
     "Record":{"properties":{"Stage":"text"},
-      "edges":{"Comments":{"target":"Comment","listenable":true,"delivery":"polled","pollEverySeconds":60}},
+      "edges":{"Comments":{"target":"Comment","listenable":true,"delivery":"polled","pollEverySeconds":60},
+        "Notes":{"target":"Comment","readable":false,"listenable":true,"delivery":"scope"}},
       "propertyCapabilities":{"Stage":{"filterOperators":["eq"]}}},
     "Comment":{"properties":{"Text":"text"},"edges":{}}},
     "collections":{"Bases":{"target":"Base","cheapToList":true,"relistEverySeconds":300,"capability":{"filter":"native","supportsLimit":false}}},
@@ -129,6 +132,16 @@ fn the_plan_judges_carried_hops_on_arrival_and_lists_cheap_ones() {
     // scope: the heads must be listed to subscribe to each.
     assert_eq!(judged(&plans_of("listen to at-[:Bases]->-[:Tables]->-[:Changes]-> fire c\n")[0]), json!(["resolved", "resolved", "arrival"]));
     assert_eq!(judged(&plans_of("listen to chat-[:Channels]->-[:Messages]->-[:Interactions]-> fire f\n")[0]), json!(["none", "none", "arrival"]));
+    // Under a scope, every earlier hop is listed, filtered or not: the host
+    // lists the heads to subscribe, so it judges their filters as it does.
+    // A hop the arrival carries is listed too.
+    let plans = plans_of("listen to at-[:Bases]->-[t:Tables WHERE t.Name == \"Deals\"]->-[:Edits]-> fire c\n");
+    assert_eq!(judged(&plans[0]), json!(["resolved", "resolved", "arrival"]));
+    // And one not cheap to list is listed all the same: the module's scope
+    // promises its heads can be listed.
+    let plans = plans_of("listen to at-[:Bases]->-[:Tables]->-[r:Records WHERE r.Stage == \"Won\"]->-[:Notes]-> fire k\n");
+    assert_eq!(judged(&plans[0]), json!(["resolved", "resolved", "resolved", "arrival"]));
+    assert_eq!(judged(&plans_of("listen to at-[:Bases]->-[:Tables]->-[:Records]->-[:Notes]-> fire k\n")[0]), json!(["resolved", "resolved", "resolved", "arrival"]));
     // Two conjuncts the module takes are joined back by AND; one it does not
     // take is the host's.
     let (plans, codes) = answer_of("listen to at-[b:Bases WHERE b.Name == \"Finance\"]->-[t:Tables WHERE t.Name == \"Expenses\" AND t.Name != \"Old\"]->-[:Changes]-> fire c\n");
@@ -196,6 +209,28 @@ fn a_listen_where_reads_only_its_hops_and_literals() {
         check("listen to chat-[:Channels]->-[:Messages]->-[i:Interactions WHERE AI(\"is it a yes\")]-> fire f\n"),
         ["MOV_LISTEN_IMPURE_WHERE 6:11-6:86 a listen's WHERE reads only its hops and literals — 'ai' is neither"]
     );
+    // A walk is only a run's to take, whatever it starts from: off a hop's
+    // alias, or inside EXISTS. It is refused once, as the listen's.
+    assert_eq!(
+        check("listen to chat-[h:Channels WHERE EXISTS(h-[:Messages]->)]->-[m:Messages]->-[:Interactions]-> fire f\n"),
+        ["MOV_LISTEN_IMPURE_WHERE 6:11-6:93 a listen's WHERE reads only its hops and literals — 'h-[:Messages]->' is neither"]
+    );
+    assert_eq!(
+        check("listen to chat-[:Channels]->-[m:Messages WHERE EXISTS(m-[:Reactions]->)]->-[:Interactions]-> fire f\n"),
+        ["MOV_LISTEN_IMPURE_WHERE 6:11-6:93 a listen's WHERE reads only its hops and literals — 'm-[:Reactions]->' is neither"]
+    );
+    assert_eq!(
+        check("listen to chat-[h:Channels]->-[:Messages]->-[i:Interactions WHERE h-[:Messages]->.Topic == \"x\"]-> fire f\n"),
+        ["MOV_LISTEN_IMPURE_WHERE 6:11-6:98 a listen's WHERE reads only its hops and literals — 'h-[:Messages]->' is neither"]
+    );
+    // What the rest of a WHERE says is still checked.
+    assert_eq!(
+        check("listen to chat-[h:Channels]->-[m:Messages WHERE EXISTS(m-[:Reactions]->) AND m.Nope == \"x\"]->-[:Interactions]-> fire f\n")
+            .iter()
+            .map(|d| d.split(' ').next().unwrap().to_string())
+            .collect::<Vec<_>>(),
+        ["MOV_UNKNOWN_PROPERTY", "MOV_LISTEN_IMPURE_WHERE"]
+    );
     // An earlier hop's alias is one of its hops: the host checks it.
     let plans = plans_of("listen to at-[b:Bases WHERE b.Name == \"Finance\"]->-[t:Tables WHERE t.Name == b.Name]->-[:Changes]-> fire c\n");
     assert_eq!((spell(plans[0].hops[1].checked.as_ref().unwrap(), Some("t")), plans[0].hops[1].taken.is_none()), ("t.Name == b.Name".to_string(), true));
@@ -259,6 +294,21 @@ fn two_listens_with_one_plan_are_one_too_many() {
     assert_eq!(
         check("listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"a\"]->-[:Interactions]-> fire f\nlisten to chat-[:Channels]->-[m:Messages  WHERE  m.Topic == \"a\"]->-[:Interactions]-> fire f\n"),
         ["MOV_LISTEN_DUPLICATE 7:1-7:92 Duplicate listener — an identical 'listen to chat-[:Channels]->-[m:Messages  WHERE  m.Topic == \"a\"]->-[:Interactions]->' already fires 'f'"]
+    );
+    // A hop's alias is the listen's own name for it: spelled otherwise, it
+    // is the same listen.
+    assert_eq!(
+        check("listen to chat-[h:Channels WHERE h.Name == \"x\"]->-[m:Messages WHERE m.Topic == h.Name]->-[:Interactions]-> fire f\nlisten to chat-[c:Channels WHERE c.Name == \"x\"]->-[n:Messages WHERE n.Topic == c.Name]->-[:Interactions]-> fire f\n"),
+        ["MOV_LISTEN_DUPLICATE 7:1-7:114 Duplicate listener — an identical 'listen to chat-[c:Channels WHERE c.Name == \"x\"]->-[n:Messages WHERE n.Topic == c.Name]->-[:Interactions]->' already fires 'f'"]
+    );
+    // The plan keeps the aliases as written.
+    let plans = plans_of("listen to chat-[:Channels]->-[n:Messages WHERE n.Topic == \"a\"]->-[:Interactions]-> fire f\n");
+    assert_eq!(plans[0].hops[1].alias.as_deref(), Some("n"));
+    // A lane's name is not what it listens to, as for the settings form: two
+    // lanes of one function on one plan are one too many.
+    assert_eq!(
+        check("listen as \"A\" to chat-[:Channels]->-[:Messages]->-[:Interactions]-> fire f\nlisten as \"B\" to chat-[:Channels]->-[:Messages]->-[:Interactions]-> fire f\n"),
+        ["MOV_LISTEN_DUPLICATE 7:1-7:75 Duplicate listener — an identical 'listen to chat-[:Channels]->-[:Messages]->-[:Interactions]->' already fires 'f'"]
     );
     // Another filter, or another function, is another listen.
     assert_eq!(

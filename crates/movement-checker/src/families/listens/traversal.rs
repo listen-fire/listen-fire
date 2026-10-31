@@ -9,6 +9,8 @@
 //! MOV_LISTEN_NOT_INSTANCE, MOV_LISTEN_PARAM_MISMATCH,
 //! MOV_LISTEN_DUPLICATE, MOV_LISTEN_ALIAS_DUPLICATE.
 
+use std::collections::HashMap;
+
 use movement_parser::ast::{ListenDeclaration, PathHead, PathRoot};
 use movement_parser::catalog::types::{CollectionSchema, Delivery, EdgeSchema, InstanceSchema, PositionSchema};
 use movement_parser::listen_plan::{HopJudged, ListenPlan, PlanHop};
@@ -99,13 +101,16 @@ impl Checker<'_> {
             Some(Position::Meta { instance }) => Some(instance),
             _ => None,
         };
-        let walk = instance.as_ref().and_then(|_| self.walk_head(path, scope, true));
+        let lowered = Self::head_steps(path).unwrap_or_default();
+        // A walk in a WHERE is refused as the listen's (`foreign_read`), so
+        // the wait's walk does not also judge it as a read or a wait.
+        let without_walks: Vec<TraversalStep> = lowered.iter().cloned().map(without_walks).collect();
+        let walk = instance.as_ref().and_then(|_| self.walk_head_steps(path, &without_walks, scope, true));
         // The walk is a wait's, and a listen's WHERE is refused by its own
-        // code (`foreign_read`), not by the wait's.
+        // code, not by the wait's.
         let walked = self.diagnostics.split_off(before.min(self.diagnostics.len()));
         self.diagnostics.extend(walked.into_iter().filter(|d| d.code != codes::AWAIT_IMPURE_WHERE));
-        let steps: Vec<EdgeStep> = Self::head_steps(path)
-            .unwrap_or_default()
+        let steps: Vec<EdgeStep> = lowered
             .into_iter()
             .filter_map(|step| match step {
                 TraversalStep::Edge(edge) => Some(edge),
@@ -117,8 +122,8 @@ impl Checker<'_> {
             self.check_listen_fires(statement, path, &steps, walk.landed.as_ref(), scope);
         }
         let identity = match &plan {
-            Some(plan) => serde_json::to_string(plan).expect("a plan is always JSON"),
-            None => format!("{}::{}::{}", spell_path_head(path), statement.movement, statement.alias.as_deref().unwrap_or("")),
+            Some(plan) => identity_of(plan),
+            None => format!("{}::{}", spell_path_head(path), statement.movement),
         };
         if !self.listens.identities.insert(format!("path::{identity}")) {
             self.report(
@@ -227,10 +232,14 @@ impl Checker<'_> {
             let edge = hop.step.edge_type_id.as_str();
             let target = schema.positions.get(hop.to).unwrap_or(&NO_LANDING);
             let split = split_hop(hop.step.expression_filter.as_deref(), hop.step.alias.as_deref(), &hop.edge.view(edge, module), target).ok()?;
+            // Under a scope the host lists every head to subscribe to it, so
+            // it judges their filters as it lists them, whatever listing costs.
             let judged = if i == hops.len() - 1 {
                 HopJudged::Arrival
+            } else if scoped {
+                HopJudged::Resolved
             } else if hop.step.expression_filter.is_none() {
-                if scoped { HopJudged::Resolved } else { HopJudged::None }
+                HopJudged::None
             } else if carries.iter().any(|c| c == edge) {
                 HopJudged::Arrival
             } else if hops[..=i].iter().all(|h| h.edge.cheap_to_list()) {
@@ -293,12 +302,10 @@ impl Checker<'_> {
                 variable.then(|| name.clone())
             }
             Expression::AliasRef { name } => (!is_alias(name)).then(|| name.clone()),
+            Expression::Traverse { .. } | Expression::Exists { .. } if walk_in(filter).is_some() => walk_in(filter),
             // `b.Name`: a field of another hop's record.
-            Expression::Traverse { alias_root: Some(root), steps, .. } if is_alias(root) && steps.is_empty() => None,
-            Expression::Traverse { alias_root: Some(root), steps, .. } => Some(match steps.first() {
-                Some(TraversalStep::Edge(step)) => format!("{root}-[:{}]->", step.edge_type_id),
-                _ => root.clone(),
-            }),
+            Expression::Traverse { alias_root: Some(root), .. } if is_alias(root) => None,
+            Expression::Traverse { alias_root: Some(root), .. } => Some(root.clone()),
             Expression::Meta { key } => Some(format!("@{key}")),
             Expression::Llm { .. } => Some("AI".to_string()),
             Expression::Exists { .. } => Some("EXISTS".to_string()),
@@ -397,6 +404,73 @@ fn present(position: &Position) -> &Position {
     match position {
         Position::MaybeEmpty(of) => present(of),
         other => other,
+    }
+}
+
+/// The first walk `expr` takes, as written (`h-[:Messages]->`): a hop off
+/// a record, whatever it starts from, and EXISTS of one. Only a run can
+/// take one.
+fn walk_in(expr: &Expression) -> Option<String> {
+    let spelled = |root: Option<&str>, steps: &[TraversalStep]| {
+        Some(match steps.first()? {
+            TraversalStep::Edge(step) => format!("{}-[:{}]->", root.unwrap_or_default(), step.edge_type_id),
+            _ => spell(expr, None),
+        })
+    };
+    match expr {
+        Expression::Traverse { alias_root, steps, expression } => {
+            spelled(alias_root.as_deref(), steps).or_else(|| match &**expression {
+                // `EXISTS(h-[:E]->)` lowers as EXISTS read off `h`.
+                Expression::Exists { steps, .. } => spelled(alias_root.as_deref(), steps),
+                inner => walk_in(inner),
+            })
+        }
+        Expression::Exists { steps, .. } => spelled(None, steps),
+        other => crate::families::values::sub_expressions(other).into_iter().find_map(walk_in),
+    }
+}
+
+/// `step` with the conjuncts of its WHERE that walk taken out.
+fn without_walks(step: TraversalStep) -> TraversalStep {
+    let TraversalStep::Edge(mut edge) = step else { return step };
+    if let Some(filter) = edge.expression_filter.take() {
+        let kept: Vec<Expression> = crate::types::event_address::conjuncts(&filter).into_iter().filter(|c| walk_in(c).is_none()).cloned().collect();
+        edge.expression_filter = joined(kept).map(Box::new);
+    }
+    TraversalStep::Edge(edge)
+}
+
+/// What makes two listens one: the plan, each hop's alias read as its place
+/// among the hops (`m` and `n` name one hop alike), and without the lane's
+/// name, which names a listen but is not what it listens to, as for the
+/// settings form.
+fn identity_of(plan: &ListenPlan) -> String {
+    let places: HashMap<&str, String> = plan.hops.iter().enumerate().filter_map(|(i, hop)| hop.alias.as_deref().map(|a| (a, format!("#{i}")))).collect();
+    let mut json = serde_json::to_value(ListenPlan { alias: None, ..plan.clone() }).expect("a plan is always JSON");
+    read_aliases_as_places(&mut json, &places);
+    json.to_string()
+}
+
+/// Every hop alias in a plan's JSON, the hops' own and those their WHEREs
+/// read (`aliasRoot`, an `alias_ref`'s `name`), replaced by its place.
+fn read_aliases_as_places(json: &mut serde_json::Value, places: &HashMap<&str, String>) {
+    match json {
+        serde_json::Value::Object(members) => {
+            let alias_ref = members.get("type").and_then(serde_json::Value::as_str) == Some("alias_ref");
+            for (key, value) in members.iter_mut() {
+                let names_alias = key == "alias" || key == "aliasRoot" || (alias_ref && key == "name");
+                match value {
+                    serde_json::Value::String(name) if names_alias => {
+                        if let Some(place) = places.get(name.as_str()) {
+                            *name = place.clone();
+                        }
+                    }
+                    other => read_aliases_as_places(other, places),
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(|item| read_aliases_as_places(item, places)),
+        _ => {}
     }
 }
 

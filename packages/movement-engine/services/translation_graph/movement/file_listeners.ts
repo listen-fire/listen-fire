@@ -100,7 +100,10 @@ export function collectFileListeners(
         ...(credentialName !== null ? { credentialName: original(credentialName) } : {}),
         ...(Object.keys(constructionArgs).length > 0 ? { constructionArgs } : {}),
       });
-    } else if (statement.kind === 'listen') {
+    } else if (statement.kind === 'listen' && statement.path === undefined) {
+      // A listen on a traversal is watched by its plan, which nothing routes
+      // yet; read as a settings listen on its root, it would fire on
+      // everything its connection's module delivers.
       listens.push(statement);
     }
   }

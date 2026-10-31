@@ -20,10 +20,13 @@ import type { Diagnostic } from './diagnostic';
 import { RustCheckRefused, diagnosticOf, type RustCheckOptions } from './rust_checker';
 
 /** The analysis's shape version this binding writes and reads. */
-export const STORY_ANALYSIS_VERSION = 1;
+export const STORY_ANALYSIS_VERSION = 2;
 
 /** Every analysis version this binding reads; any other is refused by name. */
-export const SUPPORTED_STORY_ANALYSIS_VERSIONS: readonly number[] = [STORY_ANALYSIS_VERSION];
+export const SUPPORTED_STORY_ANALYSIS_VERSIONS: readonly number[] = [1, STORY_ANALYSIS_VERSION];
+
+/** Supported analysis versions that will be removed. */
+export const DEPRECATED_STORY_ANALYSIS_VERSIONS: readonly number[] = [1];
 
 export interface StoryAnalysis {
   storyAnalysisVersion: number;
@@ -247,7 +250,7 @@ function analysisOf(json: unknown): StoryAnalysis {
     scopes: scopes.map(each(isScope, 'scope')),
     symbols: symbols.map(each(isSymbol, 'symbol')),
     writes: writes.map(each(isWrite, 'write')),
-    nodes: nodes.map(each(isNode, 'node')),
+    nodes: nodes.map(node => (version === 1 ? nodeOfVersion1(node) : node)).map(each(isNode, 'node')),
     bodies: bodies.map(each(isBody, 'body')),
     shapes: shapes.map(each(isShape, 'shape')),
   };
@@ -317,6 +320,13 @@ function isWrite(value: unknown): value is StoryWrite {
     (value.action === 'create' || value.action === 'update' || value.action === 'find') &&
     Array.isArray(value.parents)
   );
+}
+
+/** Version 1 said an awaited traversal's `listenable` as `awaitable`. */
+function nodeOfVersion1(node: unknown): unknown {
+  if (!isRecord(node) || !isRecord(node.source) || node.source.kind !== 'traversal' || !('awaitable' in node.source)) return node;
+  const { awaitable, ...source } = node.source;
+  return { ...node, source: { ...source, listenable: awaitable } };
 }
 
 function isNode(value: unknown): value is StoryNode {

@@ -10,6 +10,7 @@
 import {
   CATALOG_SNAPSHOT_VERSION,
   DEPRECATED_CATALOG_SNAPSHOT_VERSIONS,
+  DEPRECATED_STORY_ANALYSIS_VERSIONS,
   LANGUAGE_VERSION,
   STORY_ANALYSIS_VERSION,
   SUPPORTED_CATALOG_SNAPSHOT_VERSIONS,
@@ -23,7 +24,7 @@ import { MANIFEST_PROTOCOL_VERSION, PROTOCOL_MINOR } from './protocol';
 export { CATALOG_SNAPSHOT_VERSION, DEPRECATED_CATALOG_SNAPSHOT_VERSIONS, SUPPORTED_CATALOG_SNAPSHOT_VERSIONS };
 
 // The story analysis is the checker's output, so its version lives beside it too.
-export { STORY_ANALYSIS_VERSION, SUPPORTED_STORY_ANALYSIS_VERSIONS };
+export { DEPRECATED_STORY_ANALYSIS_VERSIONS, STORY_ANALYSIS_VERSION, SUPPORTED_STORY_ANALYSIS_VERSIONS };
 
 /** A parked flow's state (docs/contracts/park-state.md). Engine to engine: a
  *  host stores it and hands it back. Version 3 is the Rust engine's from 0.13
@@ -71,7 +72,11 @@ export const CONTRACTS = {
   'adapter-protocol': { current: MANIFEST_PROTOCOL_VERSION, supported: [MANIFEST_PROTOCOL_VERSION], deprecated: [], minor: PROTOCOL_MINOR },
   'system-caller': { current: SYSTEM_CALLER_VERSION, supported: [SYSTEM_CALLER_VERSION], deprecated: [] },
   // The shape of what the check settled, for a surface that draws a movement's story (docs/contracts/story-analysis.md).
-  'story-analysis': { current: STORY_ANALYSIS_VERSION, supported: [...SUPPORTED_STORY_ANALYSIS_VERSIONS], deprecated: [] },
+  'story-analysis': {
+    current: STORY_ANALYSIS_VERSION,
+    supported: [...SUPPORTED_STORY_ANALYSIS_VERSIONS],
+    deprecated: [...DEPRECATED_STORY_ANALYSIS_VERSIONS],
+  },
 } as const satisfies Record<string, ContractStanding>;
 
 /** The language's contract (docs/contracts/language-versions.md) is not an

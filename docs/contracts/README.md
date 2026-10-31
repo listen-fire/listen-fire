@@ -10,7 +10,7 @@ The movement core speaks seven contracts. Six are written down here with an inte
 | adapter-protocol | [adapter-protocol.md](adapter-protocol.md) | 2 | 2 (minors 0–5) | none | `protocolVersion` on every request and the manifest |
 | language-versions | [language-versions.md](language-versions.md) | the release | the release's compatibility key (0.13) | none | `languageVersion` beside every program |
 | system-caller | [system-caller.md](system-caller.md) | 1 | 1 | none | none: an in-process interface |
-| story-analysis | [story-analysis.md](story-analysis.md) | 1 | 1 | none | `storyAnalysisVersion` on the analysis |
+| story-analysis | [story-analysis.md](story-analysis.md) | 2 | 1, 2 | 1 | `storyAnalysisVersion` on the analysis |
 
 - **Not a contract of its own:** [run-limits.md](run-limits.md) says what one segment may consume, and what holds a movement away from the network. [stranded-waits.md](stranded-waits.md) says what a host does with a wait whose record was deleted.
 - **Part of the adapter protocol:** every core slot's methods, carried over the protocol's one transport (within adapter protocol 2): [store-slot.md](store-slot.md), [limiter-slot.md](limiter-slot.md), [loop-guard-slot.md](loop-guard-slot.md), [models-slot.md](models-slot.md), [judge-slot.md](judge-slot.md), [files-slot.md](files-slot.md), [browser-slot.md](browser-slot.md) (also what a module gets from the host's browser), [wake-slot.md](wake-slot.md), [ocr-slot.md](ocr-slot.md) (also what a module gets from the host's OCR) [secrets-slot.md](secrets-slot.md) and [movements-slot.md](movements-slot.md).

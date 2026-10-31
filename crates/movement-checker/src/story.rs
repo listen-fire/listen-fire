@@ -28,7 +28,7 @@ use crate::types::position::{EXTRACT_ROOT_NAME, ExtractNode, Position};
 use crate::{CheckOptions, Diagnostic};
 
 /// The analysis's own version: a reader refuses one it does not know.
-pub const STORY_ANALYSIS_VERSION: u32 = 1;
+pub const STORY_ANALYSIS_VERSION: u32 = 2;
 
 /// What the walk noted, in the order it noted it.
 #[derive(Default)]

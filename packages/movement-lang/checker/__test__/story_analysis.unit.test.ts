@@ -17,6 +17,7 @@ import type { CatalogSnapshot } from '../../service/snapshot';
 import { definitionAt, offsetOf } from '../../service/language_service';
 import { RustCheckRefused, checkSourceInRust } from '../rust_checker';
 import {
+  DEPRECATED_STORY_ANALYSIS_VERSIONS,
   STORY_ANALYSIS_VERSION,
   SUPPORTED_STORY_ANALYSIS_VERSIONS,
   resolveInAnalysis,
@@ -161,11 +162,28 @@ describe('the story analysis over the wasm', () => {
   it('an analysis version the binding does not read is refused by name', () => {
     const asked = jest.spyOn(loader, 'callStoryAnalysis').mockReturnValue({
       ok: true,
-      json: { storyAnalysisVersion: 2, diagnostics: [], scopes: [], symbols: [], writes: [], nodes: [], bodies: [], shapes: [] },
+      json: { storyAnalysisVersion: 3, diagnostics: [], scopes: [], symbols: [], writes: [], nodes: [], bodies: [], shapes: [] },
     });
     try {
       expect(() => storyAnalysisInRust('x = 1\n', SNAPSHOT, OPTIONS)).toThrow(RustCheckRefused);
-      expect(() => storyAnalysisInRust('x = 1\n', SNAPSHOT, OPTIONS)).toThrow(/version 2, which this binding does not read/);
+      expect(() => storyAnalysisInRust('x = 1\n', SNAPSHOT, OPTIONS)).toThrow(/version 3, which this binding does not read \(it reads 1, 2\)/);
+    } finally {
+      asked.mockRestore();
+    }
+  });
+
+  it('a version 1 analysis is still read, its awaited traversal saying `listenable` where it said `awaitable`', () => {
+    expect(DEPRECATED_STORY_ANALYSIS_VERSIONS).toEqual([1]);
+    const span = { start: { line: 1, col: 1 }, end: { line: 1, col: 2 } };
+    const awaited = (source: Record<string, unknown>) => ({ kind: 'await', span, scope: 0, source: { kind: 'traversal', root: 'm', edge: 'Interactions', ...source } });
+    const asked = jest.spyOn(loader, 'callStoryAnalysis').mockReturnValue({
+      ok: true,
+      json: { storyAnalysisVersion: 1, diagnostics: [], scopes: [], symbols: [], writes: [], nodes: [awaited({ awaitable: true }), awaited({})], bodies: [], shapes: [] },
+    });
+    try {
+      const analysis = storyAnalysisInRust('x = 1\n', SNAPSHOT, OPTIONS);
+      expect(analysis.storyAnalysisVersion).toBe(1);
+      expect(analysis.nodes).toEqual([awaited({ listenable: true }), awaited({})]);
     } finally {
       asked.mockRestore();
     }
