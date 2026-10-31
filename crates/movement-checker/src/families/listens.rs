@@ -4,7 +4,8 @@
 //! Codes: MOV_LISTEN_FILE_LEVEL, MOV_LISTEN_NOT_INSTANCE,
 //! MOV_LISTEN_BAD_CONFIG, MOV_LISTEN_DUPLICATE, MOV_LISTEN_ALIAS_DUPLICATE,
 //! MOV_LISTEN_CANNOT_FIRE, MOV_LISTEN_PARAM_MISMATCH,
-//! MOV_LISTEN_SHAPE_MISMATCH, MOV_LISTEN_MISSING, MOV_CALLBACK_RETIRED (and
+//! MOV_LISTEN_SHAPE_MISMATCH, MOV_LISTEN_MISSING, MOV_CALLBACK_RETIRED,
+//! MOV_LISTEN_SETTINGS_RETIRED (settings_become.rs) (and
 //! MOV_ADAPTER_NOT_CONSTRUCTED and MOV_CALL_NOT_MOVEMENT where a listen
 //! raises them).
 //!
@@ -42,6 +43,7 @@ const POLL_INTERVAL_KEY: &str = "pollIntervalSeconds";
 use crate::slots::{expression_of_slot, is_bare_ident};
 
 pub(crate) mod event_types;
+mod settings_become;
 mod traversal;
 mod watched_field;
 
@@ -269,6 +271,7 @@ impl Checker<'_> {
         if let Some(path) = &statement.path {
             return self.check_listen_traversal(statement, path, scope);
         }
+        self.report_settings_retired(statement, scope);
         let instance_id = self.resolve_reference(&statement.instance, statement.span, scope);
         let instance_kind = instance_id.map(|id| self.scopes.symbol(id).kind);
         if let Some(construct) = &statement.construct {

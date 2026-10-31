@@ -20,6 +20,7 @@ import type {
   SourcePosition,
 } from './catalog';
 import type { Expression } from 'movement-lang/expression/types';
+import type { SettingsBecome } from 'movement-lang';
 
 export type { ConfigBlock, TriggerConfigField } from './trigger_config';
 
@@ -322,6 +323,16 @@ export interface AdapterManifest {
    * `listen to timer { schedule: "0 9 * * 1" } fire digest`.
    */
   listenConfig?: readonly ListenConfigKey[];
+  /**
+   * What a 0.12 settings listen on this module becomes as a traversal in 0.13
+   * (`listen to x { events: [...] }` → `listen to x-[n:Notifications WHERE
+   * n.Reason IN [...]]->`): the edges from the connection to the listened
+   * edge, an alias per hop, the 0.12 event position a fired parameter was
+   * typed as, and the hop and field each settings key narrows.
+   * `listen-fire upgrade` rewrites a settings listen by it; a key it does not
+   * map leaves the listen for the author.
+   */
+  listenSettingsBecome?: SettingsBecome;
   /**
    * Plain-language truth about WHAT a listener on this adapter actually fires
    * on — surfaced to the authoring agent via `describeInstance` so it grounds

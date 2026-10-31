@@ -5,8 +5,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { lf, project } from './example';
 
 const OLD = `import { acme_crm } from adapters
@@ -20,7 +20,7 @@ movement welcome(company: <crm-[:Company]->>) {
   await sleep(1h)
 }
 
-listen to crm { events: ["company.created"] } fire welcome
+listen to crm-[:Company]-> fire welcome
 `;
 
 test('listen-fire upgrade --check prints the rewrite; listen-fire upgrade makes it; a second run changes nothing', () => {
@@ -65,9 +65,17 @@ const pinned = (dir: string, engine: string): void => {
   writeFileSync(file, readFileSync(file, 'utf8').replace(/^engine: .*$/m, `engine: ${engine}`));
 };
 
+// A listen written as a traversal: a settings listen on acme, which maps no
+// settings, would hold the pin (the last test here).
+const asTraversal = (dir: string): void => {
+  const file = join(dir, 'movements', 'companies.mvt');
+  writeFileSync(file, readFileSync(file, 'utf8').replace('listen to crm { events: ["company.created"] } fire welcome', 'listen to crm-[:Company]-> fire welcome'));
+};
+
 test('listen-fire upgrade moves an older pin to the current release once the project validates clean', () => {
   const dir = project();
   pinned(dir, '0.11.0');
+  asTraversal(dir);
   assert.match(lf(dir, 'check').out, /does not read/);
 
   const { code, out } = lf(dir, 'upgrade');
@@ -102,7 +110,7 @@ function welcome(company: <crm-[:Company]->>) {
   named = await company-[c:Comments WHERE c.Text == company.Name]->
 }
 
-listen to crm { events: ["company.created"] } fire welcome
+listen to crm-[:Company]-> fire welcome
 `;
 
 test('listen-fire upgrade lists a wait whose run value is now captured, and still moves the pin', () => {
@@ -140,7 +148,7 @@ function welcome(company: <crm-[:Company]->>) {
   c = await first(company-[x:Comments WHERE x.Text == company.Name]->)
 }
 
-listen to crm { events: ["company.created"] } fire welcome
+listen to crm-[:Company]-> fire welcome
 `;
 
 const CALLBACK_012 = `import { acme_crm } from adapters
@@ -196,7 +204,7 @@ function decide(company: <crm-[:Company]->>) {
   write crm-[:Company]-> { Name: "Decided \${a.Decision}" }
 }
 
-listen to crm { events: ["company.created"] } fire decide
+listen to crm-[:Company]-> fire decide
 `;
 
 test('upgrade lists an unraced await as a warning and still moves the pin', () => {
@@ -228,4 +236,63 @@ test('upgrade lists an unraced await as a warning and still moves the pin', () =
   assert.equal(told.code, 0, told.out);
   assert.doesNotMatch(told.out, /MOV_AWAIT_MAY_HANG/);
   assert.match(told.out, /lf\.yaml: engine: 0\.13\.0 \(was 0\.12\.13\)/);
+});
+
+// A 0.12 settings listen on a module that declares what its settings become
+// (alerts_module): the upgrade rewrites the listen into the traversal and the
+// fired function's parameter into the edge it lands on, the project checks
+// clean on 0.13, and a second run changes nothing.
+const ALERTS_012 = `import { alerts } from adapters
+
+gh = connect alerts
+
+# Mentions and assignments, triaged.
+function triage(n: <gh-[:Notification]->>) {
+  return n.Title
+}
+
+listen to gh { events: ["mention", "assign"] } fire triage
+`;
+
+test('listen-fire upgrade rewrites a 0.12 listen and its parameter, and a second run changes nothing', () => {
+  const dir = project();
+  pinned(dir, '0.12.13');
+  const folder = join(dir, 'externals/alerts');
+  mkdirSync(folder);
+  copyFileSync(resolve(__dirname, 'alerts_module/serve.mjs'), join(folder, 'serve.mjs'));
+  writeFileSync(join(folder, 'lf-external.yaml'), 'name: alerts\nkind: adapter\ncommand: [node, serve.mjs]\n');
+  rmSync(join(dir, 'movements', 'companies.mvt'));
+  const file = join(dir, 'movements', 'alerts.mvt');
+  writeFileSync(file, ALERTS_012);
+
+  const upgraded = lf(dir, 'upgrade');
+  assert.equal(upgraded.code, 0, upgraded.out);
+  assert.equal(
+    readFileSync(file, 'utf8'),
+    ALERTS_012.replace('<gh-[:Notification]->>', '<gh-[:Notifications]->>').replace(
+      'listen to gh { events: ["mention", "assign"] } fire triage',
+      'listen to gh-[n:Notifications WHERE n.Reason IN ["mention", "assign"]]-> fire triage',
+    ),
+  );
+  assert.match(upgraded.out, /lf\.yaml: engine: 0\.13\.0 \(was 0\.12\.13\)/);
+
+  const checked = lf(dir, 'check');
+  assert.equal(checked.code, 0, checked.out);
+  assert.doesNotMatch(checked.out, /MOV_LISTEN_SETTINGS_RETIRED/);
+
+  const again = lf(dir, 'upgrade', '--check');
+  assert.equal(again.code, 0, again.out);
+  assert.match(again.out, /1 file\(s\), 0 would be rewritten, 0 left to change by hand/);
+});
+
+test('listen-fire upgrade holds the pin on a settings listen it cannot rewrite, naming the traversal to write', () => {
+  const dir = project();
+  pinned(dir, '0.12.13');
+  const { code, out } = lf(dir, 'upgrade');
+  assert.equal(code, 1, out);
+  assert.match(
+    out,
+    /^movements\/companies\.mvt:13:1 error MOV_LISTEN_SETTINGS_RETIRED `listen to crm \{ … \}` is retired in 0\.13: a listen is a traversal ending on the edge its events arrive on\. Write `listen to crm-\[:…\]-> fire welcome`$/m,
+  );
+  assert.match(out, /engine: left at 0\.12\.13 until the 1 remaining diagnostic\(s\) are fixed/);
 });

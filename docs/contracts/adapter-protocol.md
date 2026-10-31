@@ -228,6 +228,20 @@ The manifest file registers your server with a team:
   that comes after the arrival was swept from the log. It is a default: the
   operator's `lf.yaml` overrides it per module (`resendWindow: { stripe: 7d }`).
   A value that is not a positive whole number is refused.
+- `listenSettingsBecome` (optional): how a 0.12 settings listen on your module
+  (`listen to gh { events: ["mention"] }`) becomes a 0.13 traversal, so
+  `listen-fire upgrade` can rewrite one: `{ path, aliases, paramFrom?, keys }`.
+  `path` is the edges from the connection to the edge its events arrive on
+  (`["Notifications"]`), `aliases` one per edge, `paramFrom` the record type a
+  fired function's parameter was typed as (retyped by the landing), and `keys`
+  each settings key's hop, field and comparison
+  (`{ "events": { "hop": 0, "field": "Reason", "op": "in" } }`, with `values`
+  where a settings value is spelled otherwise on the field). The upgrade turns
+  that listen into `listen to gh-[n:Notifications WHERE n.Reason IN ["mention"]]->`.
+  A connection positioned at a member (an Airtable `base`) stands on the hops
+  its position keys map to. A path naming an edge you do not describe, a key
+  mapped past the path, or an `eq`/`in` key with no `field` is refused when the
+  module is described. A listen with a key you do not map is left for its author.
 - Optional fields: `handbookSection` (`{ title, content }`, prose the authoring
   handbook shows about your system), `vocabulary` (an icon and event phrasing),
   `webhookEventTypeId`.
@@ -1783,7 +1797,7 @@ from `apps/cli`.
 
 ## Changes
 
-- **What a module declares about listening** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0; additive). A listenable reference or entry point may declare `delivery`, `pollEverySeconds`, `bounded`, `boundedBy`, `carries`, `attributes`, `cheapToList`, `parentChanges` and `relistEverySeconds` ([Declaring a listenable edge](#declaring-a-listenable-edge)); an entry point may declare `listenable`, `cursor`, `identity` and `version`, and is then an edge a listen starts at; a field may be of kind `owned`; the manifest may declare `resendWindowSeconds`. Each is refused by name when it cannot mean what it says, a field of kind `owned` that names no scalar included. Why: a standing listen becomes a traversal over the edges a module declares listenable, and the host needs to know how each one's arrivals reach it, what bounds it, and how often to poll or re-list, from the module, since it has no numbers of its own. listen-fire reads them into the catalog; the checker and the hosts act on them in later 0.13 work. An older host ignores them.
+- **What a module declares about listening** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0; additive). A listenable reference or entry point may declare `delivery`, `pollEverySeconds`, `bounded`, `boundedBy`, `carries`, `attributes`, `cheapToList`, `parentChanges` and `relistEverySeconds` ([Declaring a listenable edge](#declaring-a-listenable-edge)); an entry point may declare `listenable`, `cursor`, `identity` and `version`, and is then an edge a listen starts at; a field may be of kind `owned`; the manifest may declare `resendWindowSeconds`, and `listenSettingsBecome`, how its 0.12 settings listens become traversals for `listen-fire upgrade`. Each is refused by name when it cannot mean what it says, a field of kind `owned` that names no scalar included. Why: a standing listen becomes a traversal over the edges a module declares listenable, and the host needs to know how each one's arrivals reach it, what bounds it, and how often to poll or re-list, from the module, since it has no numbers of its own. listen-fire reads them into the catalog; the checker and the hosts act on them in later 0.13 work. An older host ignores them.
 - **`resolvesEmpty` retired** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0). A reference that declares it is refused when listen-fire describes the module, naming it: a record that goes leaves the wait waiting on every edge, so there is nothing to declare.
 - **The key form retired** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0). listen-fire no longer calls `resolveAwait` or `wakeKeys`, and ignores a `checkInbound` acceptance's `wakeKeys`: a run waits on the arrivals a module reports (2.5). A module may still implement them; nothing calls them.
 - **Pages, replies on acceptance, the inbound URL and `answerShapeFrom`** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0; additive). A module that checks its own inbound may `reply` with `html` (sent as `text/html`), and its `accepted` answer may carry `reply`, what the door answers once it has kept the request in place of its own acknowledgement ([A module that checks its own inbound](#a-module-that-checks-its-own-inbound)). A request may carry `inbound: { url }`, where the install's inbound requests reach the module ([The envelope](#the-envelope)). A reference may declare `answerShapeFrom`, the write field naming the node that types its landing. Why: `@lf/forms` serves a form at its own door, hands out its link, thanks the person who answered, and types the answer by the node the program wrote. An older host sends no `inbound`, refuses an answer carrying `html` or an acceptance's `reply` as outside `checkInbound`'s shape, and reads no `answerShapeFrom`.

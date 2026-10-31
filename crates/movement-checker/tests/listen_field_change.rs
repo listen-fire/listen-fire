@@ -15,7 +15,8 @@ fn check(config: &str) -> Vec<Diagnostic> {
     let source = format!(
         "import {{ sheet }} from adapters\ns = connect sheet\nfunction moved(change: <s-[:Change]->>) {{}}\nlisten to s {{ table: \"tblC\", {config} }} fire moved\n"
     );
-    check_source(&source, &catalog, options).unwrap()
+    // The settings form's retirement is listen_settings_retired.rs's to pin.
+    check_source(&source, &catalog, options).unwrap().into_iter().filter(|d| d.code != "MOV_LISTEN_SETTINGS_RETIRED").collect()
 }
 
 fn codes(found: &[Diagnostic]) -> Vec<&str> {
@@ -86,7 +87,8 @@ fn a_value_is_a_literal() {
 fn check_source_text(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
     let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
-    check_source(source, &catalog, options).unwrap()
+    // The settings form's retirement is listen_settings_retired.rs's to pin.
+    check_source(source, &catalog, options).unwrap().into_iter().filter(|d| d.code != "MOV_LISTEN_SETTINGS_RETIRED").collect()
 }
 
 // The event is narrowed only by the address the movement's signature names

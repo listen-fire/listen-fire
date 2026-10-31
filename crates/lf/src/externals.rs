@@ -684,7 +684,7 @@ fn plugins_declaration(raw: &Js, methods: &[String]) -> Result<Option<Js>, Strin
     Ok(Some(declared.clone()))
 }
 
-/// `WireListenDeclarations.parse`: the three declarations, unknown keys stripped.
+/// `WireListenDeclarations.parse`: the declarations, unknown keys stripped.
 fn listen_declarations(raw: &Js) -> Result<Obj, String> {
     let mut out = Obj::new();
     for key in ["subscribableEvents", "defaultSubscribedEvents"] {
@@ -729,7 +729,17 @@ fn listen_declarations(raw: &Js) -> Result<Obj, String> {
         }
         out.insert("listenConfig".into(), Js::Arr(entries));
     }
+    if let Some(value) = raw.get("listenSettingsBecome") {
+        settings_become(value)?;
+        out.insert("listenSettingsBecome".into(), value.clone());
+    }
     Ok(out)
+}
+
+/// A manifest's `listenSettingsBecome`, read as the catalog types it; whether
+/// its path names edges the module describes is judged at describe.
+pub fn settings_become(value: &Js) -> Result<movement_parser::catalog::types::SettingsBecome, String> {
+    serde_json::from_str(&value.to_json()).map_err(|e| format!("listenSettingsBecome: {e}"))
 }
 
 /// A module's own env, with `{lf}` standing for the module's own folder
@@ -1003,6 +1013,16 @@ mod tests {
         assert_eq!(Js::Obj(listen).to_json(), r#"{"listenConfig":[{"key":"table","required":true,"narrows":{"collection":"Table","matchField":"Id"}}]}"#);
         let half = Js::parse(br#"{ "listenConfig": [{ "key": "table", "narrows": { "collection": "Table" } }] }"#).unwrap();
         assert!(listen_declarations(&half).unwrap_err().contains("listenConfig.narrows"));
+    }
+
+    #[test]
+    fn a_settings_mapping_is_kept_as_declared_and_read_by_the_catalog_types() {
+        let declared = r#"{"path":["Notifications"],"aliases":["n"],"paramFrom":"Notification","keys":{"events":{"hop":0,"field":"Reason","op":"in"}}}"#;
+        let raw = Js::parse(format!(r#"{{ "listenSettingsBecome": {declared}, "other": 1 }}"#).as_bytes()).unwrap();
+        let listen = listen_declarations(&raw).unwrap();
+        assert_eq!(Js::Obj(listen).to_json(), format!(r#"{{"listenSettingsBecome":{declared}}}"#));
+        let unknown_op = Js::parse(br#"{ "listenSettingsBecome": { "path": ["N"], "aliases": ["n"], "keys": { "events": { "hop": 0, "field": "Reason", "op": "within" } } } }"#).unwrap();
+        assert!(listen_declarations(&unknown_op).unwrap_err().starts_with("listenSettingsBecome: unknown variant `within`"));
     }
 
     #[test]

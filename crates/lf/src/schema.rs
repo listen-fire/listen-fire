@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use indexmap::{IndexMap, IndexSet};
 use movement_parser::catalog::helpers::{union_display, union_key, union_variants};
+use movement_parser::catalog::types::{KeyOp, SettingsBecome};
 
 use crate::json::{Js, Obj};
 use crate::obj;
@@ -893,6 +894,64 @@ pub fn unreadable_listening(declarant: Declarant, entries: &[Js], descriptors: &
     }
 }
 
+/// The refusal of a module's `listenSettingsBecome` that cannot be the
+/// traversal it says (engine-contracts `unreadableSettingsBecome` says the
+/// same): an alias count that is not one per edge, a key mapped past the path
+/// or compared on no field, a path that starts at no root collection, or an
+/// edge its type before it does not have. A connection positioned at a member
+/// stands on the path's first hops, so the path is read from its first edge
+/// that is a root collection here. A type nobody described is not judged.
+pub fn unreadable_settings_become(become_: &SettingsBecome, entries: &[Js], descriptors: &IndexMap<String, Js>) -> Option<String> {
+    let path = &become_.path;
+    if become_.aliases.len() != path.len() {
+        return Some(format!("'listenSettingsBecome' gives {} aliases for a path of {} edges: give one per edge", become_.aliases.len(), path.len()));
+    }
+    for (name, key) in become_.keys.iter() {
+        if key.hop >= path.len() {
+            return Some(format!("'listenSettingsBecome' maps '{name}' to hop {}, past the last of its {} edges", key.hop, path.len()));
+        }
+        if key.op != KeyOp::Type && key.field.is_none() {
+            let op = match key.op {
+                KeyOp::Eq => "eq",
+                KeyOp::In => "in",
+                KeyOp::Type => "type",
+            };
+            return Some(format!("'listenSettingsBecome' maps '{name}' by '{op}' but names no field to compare"));
+        }
+    }
+    let roots: Vec<&Js> = entries.iter().filter(|e| is_collection(e)).collect();
+    let Some(start) = path.iter().position(|edge| roots.iter().any(|e| collection_name_of(e) == *edge)) else {
+        let named: Vec<String> = roots.iter().map(|e| collection_name_of(e)).collect();
+        return Some(format!(
+            "'listenSettingsBecome' starts nowhere: none of {} is a root collection (the root collections: {})",
+            path.join(", "),
+            if named.is_empty() { "none".to_string() } else { named.join(", ") }
+        ));
+    };
+    let mut at: Vec<String> = roots.iter().filter(|e| collection_name_of(e) == path[start]).map(|e| key(e.get("typeId"))).collect();
+    for hop in start + 1..path.len() {
+        let edge = &path[hop];
+        let described: Vec<&Js> = at.iter().filter_map(|t| descriptors.get(t)).collect();
+        if described.is_empty() {
+            return None;
+        }
+        let references: Vec<&Js> = described.iter().flat_map(|d| items(d.get("references"))).collect();
+        let matched: Vec<&&Js> = references.iter().filter(|r| reference_name(r) == *edge).collect();
+        if matched.is_empty() {
+            let edges: IndexSet<String> = references.iter().map(|r| reference_name(r)).collect();
+            let types: Vec<String> = described.iter().map(|d| format!("'{}'", key(d.get("displayName")))).collect();
+            return Some(format!(
+                "'listenSettingsBecome' names '{edge}' after '{}', which is no edge off {} (its edges: {})",
+                path[hop - 1],
+                types.join(" or "),
+                if edges.is_empty() { "none".to_string() } else { edges.into_iter().collect::<Vec<_>>().join(", ") }
+            ));
+        }
+        at = matched.iter().flat_map(|r| reference_target_type_ids(r)).collect::<IndexSet<_>>().into_iter().collect();
+    }
+    None
+}
+
 /// `carries` names the hops before the declarant, outermost first: read
 /// from the innermost, each must be an edge into the type the one after it
 /// hangs off.
@@ -1429,6 +1488,22 @@ mod tests {
             "'Boards' declares 'parentChanges: pushed' but not 'listenable: true': the module reports its members' changes as arrivals on 'Boards' itself, so it must announce them"
         );
         assert_eq!(ticks_refusal(r#","cheapToList":true,"parentChanges":"pushed""#), None, "a listenable root may");
+    }
+
+    #[test]
+    fn a_listen_settings_mapping_is_judged_by_the_edges_described() {
+        let cases = js(include_str!("../../../packages/engine-contracts/__test__/settings_become.cases.json"));
+        let descriptors: IndexMap<String, Js> = match cases.get("descriptors") {
+            Some(Js::Obj(d)) => d.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            _ => panic!("descriptors"),
+        };
+        assert!(!items(cases.get("cases")).is_empty());
+        for case in items(cases.get("cases")) {
+            let entries = items(cases.get(if Js::is_true(case.get("positioned")) { "positioned" } else { "entries" }));
+            let become_ = crate::externals::settings_become(case.get("become").unwrap()).unwrap();
+            let expected = case.get("refusal").and_then(Js::as_str).map(str::to_string);
+            assert_eq!(unreadable_settings_become(&become_, entries, &descriptors), expected, "{}", key(case.get("name")));
+        }
     }
 
     #[test]

@@ -13,7 +13,8 @@ fn check(config: &str) -> Vec<Diagnostic> {
     let source = format!(
         "import {{ sheet }} from adapters\ns = connect sheet\nfunction moved(change: <s-[:Change]->>) {{}}\nlisten to s {{ table: \"tblC\", {config} }} fire moved\n"
     );
-    check_source(&source, &catalog, options).unwrap()
+    // The settings form's retirement is listen_settings_retired.rs's to pin.
+    check_source(&source, &catalog, options).unwrap().into_iter().filter(|d| d.code != "MOV_LISTEN_SETTINGS_RETIRED").collect()
 }
 
 #[test]

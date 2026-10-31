@@ -413,6 +413,46 @@ mod tests {
         assert!(upgrade_source(source, &catalog, false, LANGUAGE_VERSION).notes.is_empty());
     }
 
+    const GH: &str = r#"{"adapters":{
+      "gh":{"canFire":true,"constructionArgs":[],"triggerConfig":["events","participating"],
+        "listenSettingsBecome":{"path":["Notifications"],"aliases":["n"],"paramFrom":"Notification",
+          "keys":{"events":{"hop":0,"field":"Reason","op":"in"}}},
+        "schemas":{"":{"positions":{"Notification":{"properties":{"Reason":"text"},"edges":{}}},
+          "collections":{"Notifications":{"target":"Notification","listenable":true,"identity":"Id","delivery":"polled","pollEverySeconds":60}},
+          "writableRoots":{},"eventPosition":"Notification","eventPositions":[{"position":"Notification"}]}}}
+    },"credentials":{},"plugins":{}}"#;
+
+    const SETTINGS: &str = "import { gh as gh_module } from adapters\ngh = connect gh_module\nfunction triage(n: <gh-[:Notification]->>) {\n  return n.Reason\n}\n\n# Mentions and assignments.\nlisten to gh { events: [\"mention\", \"assign\"] } fire triage\n";
+
+    #[test]
+    fn a_settings_listen_and_its_parameter_are_rewritten_and_a_second_pass_changes_nothing() {
+        let catalog = CatalogSnapshot::load(GH).unwrap();
+        let upgraded = upgrade_source(SETTINGS, &catalog, false, "0.12.13");
+        assert!(upgraded.remaining.is_empty(), "{:?}", upgraded.remaining);
+        let traversal = "listen to gh-[n:Notifications WHERE n.Reason IN [\"mention\", \"assign\"]]-> fire triage";
+        assert_eq!(
+            upgraded.source,
+            SETTINGS.replace("<gh-[:Notification]->>", "<gh-[:Notifications]->>").replace("listen to gh { events: [\"mention\", \"assign\"] } fire triage", traversal)
+        );
+        assert_eq!(upgrade_source(&upgraded.source, &catalog, false, "0.12.13").source, upgraded.source);
+    }
+
+    #[test]
+    fn a_settings_rewrite_that_changes_meaning_holds_the_pin_until_all() {
+        let catalog = CatalogSnapshot::load(GH).unwrap();
+        let source = SETTINGS.replace("] }", "], suppress_self: true }");
+        let held = upgrade_source(&source, &catalog, false, "0.12.13");
+        assert_eq!(held.source, source);
+        assert_eq!(held.remaining.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["MOV_LISTEN_SETTINGS_RETIRED"]);
+        let all = upgrade_source(&source, &catalog, true, "0.12.13");
+        assert!(all.remaining.is_empty(), "{:?}", all.remaining);
+        assert!(all.source.contains("listen to gh-[n:Notifications WHERE n.Reason IN [\"mention\", \"assign\"]]-> fire triage\n"), "{}", all.source);
+        // A key the module does not map has no rewrite at all: listed, holding the pin.
+        let unmapped = upgrade_source(&SETTINGS.replace("] }", "], participating: true }"), &catalog, true, "0.12.13");
+        assert_eq!(unmapped.remaining.len(), 1, "{:?}", unmapped.remaining);
+        assert!(unmapped.remaining[0].fix.is_none());
+    }
+
     #[test]
     fn an_upgrade_note_with_a_rewrite_stands_and_one_without_is_only_listed() {
         let at = movement_parser::ast::Loc { line: 1, col: 1 };

@@ -26,7 +26,7 @@ use crate::json::Js;
 use crate::project::Project;
 use crate::refinements::{InstanceChain, Refining, refine_instance_schema};
 use crate::protocol::shape_error;
-use crate::schema::{Declarant, describe_external_schema, retired_reference_key, undeclared_arrival_field, unreadable_answer_shape_from, unreadable_listening, unreadable_literals_from, unreadable_owned_field};
+use crate::schema::{Declarant, describe_external_schema, retired_reference_key, undeclared_arrival_field, unreadable_answer_shape_from, unreadable_listening, unreadable_literals_from, unreadable_owned_field, unreadable_settings_become};
 use crate::secrets::{Construction, Credential, Credentials, Imported, MissingCredential, Secrets, imported_credentials, missing_credentials};
 use crate::sources::{MovementFile, Parsed, scan_movements};
 
@@ -345,6 +345,12 @@ pub(crate) async fn describe_as(running: &RunningExternal, credentials: &Credent
         if let Some(refusal) = unreadable_listening(Declarant::Entry(entry), &entry_list, &descriptors) {
             let type_id = entry.get("typeId").and_then(Js::as_str).unwrap_or_default();
             return Err(format!("Remote adapter \"{name}\" lists '{type_id}': {refusal}"));
+        }
+    }
+    if let Some(become_) = running.listen.get("listenSettingsBecome") {
+        let become_ = crate::externals::settings_become(become_).map_err(|e| format!("Remote adapter \"{name}\" declares {e}"))?;
+        if let Some(refusal) = unreadable_settings_become(&become_, &entry_list, &descriptors) {
+            return Err(format!("Remote adapter \"{name}\" declares {refusal}"));
         }
     }
     let schema = describe_external_schema(name, &entry_list, &descriptors);

@@ -4,7 +4,7 @@
 // via read-only adapters (P12).
 
 import { z } from 'zod';
-import type { DeclaredEffectRow, LanguageVersion } from 'movement-lang';
+import type { DeclaredEffectRow, LanguageVersion, SettingsBecome } from 'movement-lang';
 
 import type { UniquenessConstraints } from './uniqueness';
 import type { EphemeralOriginRef, Position, PositionIdentity, SourcePosition } from './position';
@@ -1854,6 +1854,50 @@ function unreadableCarries(
     }
     hangsOff = [...new Set(matched.flatMap((e) => (e.from === undefined ? [] : [e.from])))];
     inner = hop;
+  }
+  return undefined;
+}
+
+/**
+ * The refusal of a module's `listenSettingsBecome` that cannot be the
+ * traversal it says (crates/lf schema.rs `unreadable_settings_become` says the
+ * same): an alias count that is not one per edge, a key mapped past the path
+ * or compared on no field, a path that starts at no root collection, or an
+ * edge its type before it does not have. A connection positioned at a member
+ * stands on the path's first hops, so the path is read from its first edge
+ * that is a root collection here. A type nobody described is not judged.
+ */
+export function unreadableSettingsBecome(
+  become: SettingsBecome,
+  entries: readonly SchemaEntryPoint[],
+  descriptors: ReadonlyMap<string, SchemaTypeDescriptor>,
+): string | undefined {
+  const { path } = become;
+  if (become.aliases.length !== path.length) {
+    return `'listenSettingsBecome' gives ${become.aliases.length} aliases for a path of ${path.length} edges: give one per edge`;
+  }
+  for (const [name, key] of Object.entries(become.keys)) {
+    if (key.hop >= path.length) return `'listenSettingsBecome' maps '${name}' to hop ${key.hop}, past the last of its ${path.length} edges`;
+    if (key.op !== 'type' && key.field === undefined) return `'listenSettingsBecome' maps '${name}' by '${key.op}' but names no field to compare`;
+  }
+  const roots = entries.filter((e) => e.readable || e.writable || e.listenable === true);
+  const start = path.findIndex((edge) => roots.some((e) => collectionNameOf(e) === edge));
+  if (start < 0) {
+    const named = roots.map(collectionNameOf);
+    return `'listenSettingsBecome' starts nowhere: none of ${path.join(', ')} is a root collection (the root collections: ${named.length === 0 ? 'none' : named.join(', ')})`;
+  }
+  let at = roots.filter((e) => collectionNameOf(e) === path[start]).map((e) => e.typeId);
+  for (let hop = start + 1; hop < path.length; hop++) {
+    const edge = path[hop]!;
+    const described = at.flatMap((t) => descriptors.get(t) ?? []);
+    if (described.length === 0) return undefined;
+    const references = described.flatMap((d) => d.references);
+    const matched = references.filter((r) => (r.name ?? r.fieldId) === edge);
+    if (matched.length === 0) {
+      const edges = [...new Set(references.map((r) => r.name ?? r.fieldId))];
+      return `'listenSettingsBecome' names '${edge}' after '${path[hop - 1]}', which is no edge off ${described.map((d) => `'${d.displayName}'`).join(' or ')} (its edges: ${edges.length === 0 ? 'none' : edges.join(', ')})`;
+    }
+    at = [...new Set(matched.flatMap(referenceTargetTypeIds))];
   }
   return undefined;
 }

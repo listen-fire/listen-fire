@@ -90,6 +90,7 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
 
 #### Added
 
+- A module may declare `listenSettingsBecome` in its manifest: how its 0.12 settings listens become traversals (the edges from the connection to the listened edge, an alias per hop, the record type a fired parameter was typed as, and the hop, field and comparison of each settings key). `listen-fire` carries it into the catalog and refuses, when the module is described, a path naming an edge the module does not describe, a key mapped past the path, or a comparison naming no field; an embedder's describe refuses the same in the same words (docs/contracts/adapter-protocol.md).
 - A module declares how each listenable edge is listened to, and `listen-fire` carries it into the catalog (docs/contracts/adapter-protocol.md, "Declaring a listenable edge").
   - `delivery`: pushed to the connection, pushed per scope (a table), or `polled` every `pollEverySeconds`.
   - `bounded: false` with `boundedBy`: an edge that spans more than a listen should range over (every cron schedule, every team's mail), and the fields whose `==` or `IN [ … ]` narrow it.
@@ -296,6 +297,11 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
   - its `WHERE`s read only its own hops and literals (`MOV_LISTEN_IMPURE_WHERE`, naming what else is read: a name the run holds, `AI`, or a walk, inside `EXISTS` or not), since nothing from a run is there to read;
   - a filter on a hop before the last that what arrives does not carry, on a hop not cheap to list, is refused (`MOV_LISTEN_UNWATCHABLE`), with the way out: filter on what arrives, or wait on one record in a run;
   - what lands on its last edge must be assignable to the fired function's parameter, as an argument is to a parameter (`MOV_LISTEN_PARAM_MISMATCH`): a parameter wider than the landing (no filter) is accepted.
+- A settings listen (`listen to gh { events: ["mention"] } fire f`) is retired in 0.13.0 for a traversal ending on the edge its events arrive on (`MOV_LISTEN_SETTINGS_RETIRED`), because a listen's settings were a second, unchecked way to say what a `WHERE` on that edge says.
+  - Where its module declares how its settings map (`listenSettingsBecome`), the diagnostic carries the rewrite: `listen to gh-[n:Notifications WHERE n.Reason IN ["mention"]]-> fire f`, and the fired function's parameter typed as the 0.12 record retyped as the landing (`<gh-[:Notifications]->>`). A hop the connection is positioned on (an Airtable `base`) is left out.
+  - `listen-fire upgrade` from a 0.12 pin applies it. With `suppress_self: true` or `every` the rewrite changes meaning, so it is listed and applied only by `upgrade --all`: a two-way sync's own echo now runs once more and finds nothing to change, and the module sets the poll interval (set `pollEvery` for the connection in lf.yaml).
+  - A key the module does not map, or a value that is not a literal, has no rewrite and holds the pin until the listen is rewritten by hand.
+  - On a `0.13` pin it is a warning while the modules move their listens onto edges; it becomes a refusal before 0.13.0 is released.
 - A `race` or `all` slot holds the record its arm returns, typed as that record: a read of a field it lacks is refused (`MOV_UNKNOWN_PROPERTY`), and a comparison is held to the field's type. The slot was untyped, so `r[0].Missing` and `r[0].Note == 1` checked clean, and failed or misread at run.
 
 #### Fixed

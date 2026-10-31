@@ -733,6 +733,57 @@ pub struct AdapterSpec {
     /// lf.yaml overrides it per connection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resend_window_seconds: Option<u64>,
+    /// What a 0.12 settings listen on this module becomes as a traversal
+    /// (`listenSettingsBecome`): the upgrade's rewrite of
+    /// `listen to x { … }`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listen_settings_become: Option<SettingsBecome>,
+}
+
+/// A module's mapping from its 0.12 listen settings to the traversal a
+/// listen is in 0.13: the path from the connection to the edge its events
+/// arrive on, and the hop and field each settings key narrows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SettingsBecome {
+    /// The edges from the connection's root to the listened edge.
+    pub path: Vec<String>,
+    /// One per hop: the alias its rewritten WHERE reads the hop's record by.
+    pub aliases: Vec<String>,
+    /// The 0.12 event position a fired parameter was typed as: a parameter
+    /// naming it is retyped by the landing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub param_from: Option<String>,
+    /// Each settings key, by name.
+    pub keys: JsMap<KeyBecomes>,
+}
+
+/// What one settings key becomes: a comparison on a hop's field, or the
+/// landing's declared type.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KeyBecomes {
+    /// The index into `path` of the hop it narrows.
+    pub hop: usize,
+    /// The field it compares (absent for `type`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    pub op: KeyOp,
+    /// A settings value's spelling as a field value (`"record.created"` →
+    /// `"created"`); absent, a value is the field's as written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<JsMap<String>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyOp {
+    /// `field == value`.
+    Eq,
+    /// `field IN [values]`.
+    In,
+    /// `payload: <T>`: the landing is typed `<T>`.
+    Type,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

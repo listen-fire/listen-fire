@@ -18,9 +18,11 @@ const BOX: &str = r#"{"adapters":{"box":{"canFire":false,"constructionArgs":[],"
 fn check_with(source: &str, snapshot: &str) -> Vec<String> {
     let catalog = CatalogSnapshot::load(snapshot).unwrap();
     let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    // The settings form's retirement is listen_settings_retired.rs's to pin.
     check_source(source, &catalog, options)
         .unwrap()
         .into_iter()
+        .filter(|d| d.code != "MOV_LISTEN_SETTINGS_RETIRED")
         .map(|d| format!("{} {}:{}-{}:{} {}", d.code, d.span.start.line, d.span.start.col, d.span.end.line, d.span.end.col, d.message))
         .collect()
 }

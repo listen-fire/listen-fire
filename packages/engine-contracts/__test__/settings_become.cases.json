@@ -1,0 +1,62 @@
+{
+  "about": "A module's listenSettingsBecome judged against what it describes, by engine-contracts unreadableSettingsBecome and crates/lf schema.rs unreadable_settings_become, word for word. A base the connection is positioned at stands on the path's first hop.",
+  "entries": [
+    { "typeId": "base", "displayName": "Base", "collectionName": "Bases", "writable": false, "readable": true },
+    { "typeId": "note", "displayName": "Notification", "collectionName": "Notifications", "writable": false, "readable": false, "listenable": true }
+  ],
+  "positioned": [{ "typeId": "table", "displayName": "Table", "collectionName": "Tables", "writable": false, "readable": true }],
+  "descriptors": {
+    "base": { "typeId": "base", "displayName": "Base", "fields": [], "references": [{ "fieldId": "tables", "name": "Tables", "targetTypeId": "table", "cardinality": "many", "direction": "outgoing" }] },
+    "table": { "typeId": "table", "displayName": "Table", "fields": [], "references": [{ "fieldId": "changes", "name": "Changes", "targetTypeId": "change", "cardinality": "many", "direction": "outgoing" }] },
+    "change": { "typeId": "change", "displayName": "Change", "fields": [], "references": [] },
+    "note": { "typeId": "note", "displayName": "Notification", "fields": [], "references": [] }
+  },
+  "cases": [
+    {
+      "name": "a root edge and its key",
+      "become": { "path": ["Notifications"], "aliases": ["n"], "paramFrom": "Notification", "keys": { "events": { "hop": 0, "field": "Reason", "op": "in" } } },
+      "refusal": null
+    },
+    {
+      "name": "a path down two edges",
+      "become": { "path": ["Bases", "Tables", "Changes"], "aliases": ["b", "t", "c"], "keys": { "base": { "hop": 0, "field": "Id", "op": "eq" }, "becomes": { "hop": 2, "field": "New", "op": "eq" } } },
+      "refusal": null
+    },
+    {
+      "name": "a positioned connection starts below its position",
+      "positioned": true,
+      "become": { "path": ["Bases", "Tables", "Changes"], "aliases": ["b", "t", "c"], "keys": { "table": { "hop": 1, "field": "Id", "op": "eq" } } },
+      "refusal": null
+    },
+    {
+      "name": "an alias short",
+      "become": { "path": ["Bases", "Tables"], "aliases": ["b"], "keys": {} },
+      "refusal": "'listenSettingsBecome' gives 1 aliases for a path of 2 edges: give one per edge"
+    },
+    {
+      "name": "a hop past the path",
+      "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "events": { "hop": 1, "field": "Reason", "op": "in" } } },
+      "refusal": "'listenSettingsBecome' maps 'events' to hop 1, past the last of its 1 edges"
+    },
+    {
+      "name": "a comparison on no field",
+      "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "events": { "hop": 0, "op": "in" } } },
+      "refusal": "'listenSettingsBecome' maps 'events' by 'in' but names no field to compare"
+    },
+    {
+      "name": "a type key names no field",
+      "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "payload": { "hop": 0, "op": "type" } } },
+      "refusal": null
+    },
+    {
+      "name": "a path that starts at no root collection",
+      "become": { "path": ["Inbox"], "aliases": ["i"], "keys": {} },
+      "refusal": "'listenSettingsBecome' starts nowhere: none of Inbox is a root collection (the root collections: Bases, Notifications)"
+    },
+    {
+      "name": "an edge its type does not have",
+      "become": { "path": ["Bases", "Sheets", "Changes"], "aliases": ["b", "s", "c"], "keys": {} },
+      "refusal": "'listenSettingsBecome' names 'Sheets' after 'Bases', which is no edge off 'Base' (its edges: Tables)"
+    }
+  ]
+}

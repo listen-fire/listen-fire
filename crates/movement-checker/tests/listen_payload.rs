@@ -13,7 +13,8 @@ const HEAD: &str = "import { webhook, feed } from adapters\nimport { StripeHook 
 fn check(rest: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
     let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
-    check_source(&format!("{HEAD}{rest}"), &catalog, options).unwrap()
+    // The settings form's retirement is listen_settings_retired.rs's to pin.
+    check_source(&format!("{HEAD}{rest}"), &catalog, options).unwrap().into_iter().filter(|d| d.code != "MOV_LISTEN_SETTINGS_RETIRED").collect()
 }
 
 fn codes(found: &[Diagnostic]) -> Vec<&str> {

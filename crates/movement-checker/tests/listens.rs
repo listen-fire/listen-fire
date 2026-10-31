@@ -16,7 +16,8 @@ fn check_feed(listen: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(&snapshot).unwrap();
     let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     let source = format!("import {{ feed }} from adapters\nf = connect feed\nfunction seen(n: <f-[:Note]->>) {{}}\n{listen}");
-    check_source(&source, &catalog, options).unwrap()
+    // The settings form's retirement is listen_settings_retired.rs's to pin.
+    check_source(&source, &catalog, options).unwrap().into_iter().filter(|d| d.code != "MOV_LISTEN_SETTINGS_RETIRED").collect()
 }
 
 #[test]

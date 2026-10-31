@@ -227,6 +227,9 @@ fn adapter_snapshot_of(adapter: AdapterDeclarations) -> Js {
     if let Some(seconds) = adapter.resend_window_seconds {
         snapshot.insert("resendWindowSeconds".into(), Js::Num(seconds.into()));
     }
+    if let Some(become_) = adapter.listen.get("listenSettingsBecome") {
+        snapshot.insert("listenSettingsBecome".into(), become_.clone());
+    }
     snapshot.insert("schemaShape".into(), Js::str("introspected"));
     snapshot.insert("schemas".into(), Js::from(adapter.schemas));
     if !adapter.construction_arg_options.is_empty() {
@@ -306,4 +309,33 @@ fn plugins_of(running: &[Rc<RunningExternal>]) -> Obj {
         }
     }
     plugins
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_modules_settings_mapping_reaches_the_checker_as_the_catalog_types_it() {
+        let declared = r#"{"path":["Bases","Tables","Changes"],"aliases":["b","t","c"],"paramFrom":"Record Change","keys":{"table":{"hop":1,"field":"Id","op":"eq"}}}"#;
+        let listen = match Js::parse(format!(r#"{{"listenSettingsBecome":{declared}}}"#).as_bytes()).unwrap() {
+            Js::Obj(listen) => listen,
+            _ => unreachable!(),
+        };
+        let snapshot = adapter_snapshot_of(AdapterDeclarations {
+            supported_triggers: &[],
+            listen: &listen,
+            construction_args: Vec::new(),
+            declared_credentials: &[],
+            description: None,
+            resend_window_seconds: None,
+            schemas: Obj::new(),
+            construction_arg_options: Obj::new(),
+        });
+        let catalog = format!(r#"{{"adapters":{{"at":{}}},"credentials":{{}},"plugins":{{}}}}"#, snapshot.to_json());
+        let catalog = movement_parser::catalog::types::CatalogSnapshot::load(&catalog).unwrap();
+        let become_ = catalog.adapter("at").and_then(|spec| spec.listen_settings_become.clone()).unwrap();
+        assert_eq!(become_.path, ["Bases", "Tables", "Changes"]);
+        assert_eq!(become_.keys["table"].hop, 1);
+    }
 }

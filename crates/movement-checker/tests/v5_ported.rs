@@ -14,7 +14,8 @@ const EMPTY: &str = r#"{"adapters":{},"credentials":{"crm_cred":{"adapters":["at
 fn run(source: &str, catalog: &str) -> Vec<(String, String)> {
     let catalog = CatalogSnapshot::load(catalog).unwrap();
     let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
-    check_source(source, &catalog, options).unwrap().into_iter().map(|d| (d.code, d.message)).collect()
+    // The settings form's retirement is listen_settings_retired.rs's to pin.
+    check_source(source, &catalog, options).unwrap().into_iter().filter(|d| d.code != "MOV_LISTEN_SETTINGS_RETIRED").map(|d| (d.code, d.message)).collect()
 }
 
 
@@ -233,7 +234,11 @@ impl movement_checker::host::ZoneLookup for OneZone {
 fn a_cron_time_zone_is_the_hosts_to_recognise() {
     let source = "import { cron } from adapters\nt = connect cron\nfunction digest(e: <t-[:Tick]->>) {}\nlisten to t { schedule: \"0 9 * * 1\", timezone: \"Narnia/Cair\" } fire digest";
     let catalog = CatalogSnapshot::load(&cron_catalog()).unwrap();
-    let with = |zones: &dyn movement_checker::host::ZoneLookup| check_source(source, &catalog, CheckOptions { upgrading_from: None, zones }).unwrap();
+    // The settings form's retirement is listen_settings_retired.rs's to pin.
+    let with = |zones: &dyn movement_checker::host::ZoneLookup| {
+        let found = check_source(source, &catalog, CheckOptions { upgrading_from: None, zones }).unwrap();
+        found.into_iter().filter(|d| d.code != "MOV_LISTEN_SETTINGS_RETIRED").collect::<Vec<_>>()
+    };
     let refused = with(&movement_checker::host::native::NativeZones);
     assert_eq!(refused.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["MOV_LISTEN_BAD_CONFIG"]);
     assert!(refused[0].message.starts_with("'Narnia/Cair' is not a recognised IANA time zone"), "{}", refused[0].message);

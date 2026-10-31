@@ -112,6 +112,8 @@ pub const LISTEN_HOP_NOT_ITERABLE: &str = "MOV_LISTEN_HOP_NOT_ITERABLE";
 pub const LISTEN_UNWATCHABLE: &str = "MOV_LISTEN_UNWATCHABLE";
 /// A listen's WHERE reading something other than its hops and literals.
 pub const LISTEN_IMPURE_WHERE: &str = "MOV_LISTEN_IMPURE_WHERE";
+/// A settings listen (`listen to x { … }`), retired in 0.13 for a traversal.
+pub const LISTEN_SETTINGS_RETIRED: &str = "MOV_LISTEN_SETTINGS_RETIRED";
 pub const UNIQUE_NATIVE_REDUNDANT: &str = "MOV_UNIQUE_NATIVE_REDUNDANT";
 pub const UNIQUE_FUZZY_UNSUPPORTED: &str = "MOV_UNIQUE_FUZZY_UNSUPPORTED";
 pub const MATCH_NO_IDENTITY: &str = "MOV_MATCH_NO_IDENTITY";

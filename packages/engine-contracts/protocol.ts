@@ -792,6 +792,24 @@ export const WireListenDeclarations = z.object({
       { message: "a 'field-value' listen key needs exactly one 'field' key to be a value of" },
     )
     .optional(),
+  // What a 0.12 settings listen becomes as a traversal (`SettingsBecome`):
+  // whether its path names edges the module describes is judged at describe.
+  listenSettingsBecome: z
+    .object({
+      path: z.array(z.string().min(1)).min(1),
+      aliases: z.array(z.string().min(1)),
+      paramFrom: z.string().min(1).optional(),
+      keys: z.record(
+        z.string(),
+        z.object({
+          hop: z.number().int().nonnegative(),
+          field: z.string().min(1).optional(),
+          op: z.enum(['eq', 'in', 'type']),
+          values: z.record(z.string(), z.string()).optional(),
+        }),
+      ),
+    })
+    .optional(),
 });
 
 // ── Module declarations (within version 2: all optional) ─────────────────────

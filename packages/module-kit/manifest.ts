@@ -51,6 +51,7 @@ function adapterManifest(definition: AdapterModuleDefinition, instance: AdapterM
           })),
         }
       : {}),
+    ...(manifest.listenSettingsBecome !== undefined ? { listenSettingsBecome: manifest.listenSettingsBecome } : {}),
     ...(manifest.positionArgs !== undefined && manifest.positionArgs.length > 0 ? { positionArgs: manifest.positionArgs.map((arg) => ({ ...arg })) } : {}),
     ...(manifest.subscriptionScopeKeys !== undefined && manifest.subscriptionScopeKeys.length > 0 ? { subscriptionScopeKeys: [...manifest.subscriptionScopeKeys] } : {}),
     ...(manifest.introspectedSchema === true ? { introspectedSchema: true } : {}),

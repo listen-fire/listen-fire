@@ -19,7 +19,8 @@ fn check_with(source: &str, manual: &str, upgrading_from: Option<&str>, files: &
     let snapshot = format!(r#"{{"adapters":{{{manual}}},"credentials":{{}},"plugins":{{}},"files":{files}}}"#);
     let catalog = CatalogSnapshot::load(&snapshot).unwrap();
     let options = CheckOptions { upgrading_from, zones: &movement_checker::host::native::NativeZones };
-    check_source(source, &catalog, options).unwrap()
+    // The settings form's retirement is listen_settings_retired.rs's to pin.
+    check_source(source, &catalog, options).unwrap().into_iter().filter(|d| d.code != "MOV_LISTEN_SETTINGS_RETIRED").collect()
 }
 
 /// Code, severity (`None` is an error) and line.

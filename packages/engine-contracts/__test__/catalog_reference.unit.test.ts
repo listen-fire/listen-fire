@@ -11,9 +11,12 @@ import {
   unreadableListening,
   unreadableLiteralsFrom,
   unreadableOwnedField,
+  unreadableSettingsBecome,
   type SchemaEntryPoint,
 } from '../catalog';
+import type { SettingsBecome } from 'movement-lang';
 import cases from './write_paths.cases.json';
+import settingsBecome from './settings_become.cases.json';
 
 const reference = { fieldId: 'r', name: 'Replies', targetTypeId: 'm', cardinality: 'many', direction: 'outgoing' } as const;
 
@@ -380,4 +383,18 @@ describe('an owned field', () => {
     expect(unreadableOwnedField(asDescribed('owned', { owned: {} }))).toBe(expected);
     expect(unreadableOwnedField(asDescribed('owned', { owned: { name: '' } }))).toBe(expected);
   });
+});
+
+// A module's mapping from its 0.12 listen settings to the traversal, judged
+// at describe in listen-fire's words (crates/lf schema.rs
+// `unreadable_settings_become` reads the same cases).
+describe('a listenSettingsBecome', () => {
+  const descriptors = new Map(Object.entries(settingsBecome.descriptors).map(([typeId, d]) => [typeId, schemaTypeDescriptorSchema.parse(d)]));
+  const entries = (positioned: boolean) => (positioned ? settingsBecome.positioned : settingsBecome.entries).map((e) => schemaEntryPointSchema.parse(e));
+  for (const c of settingsBecome.cases) {
+    it(c.name, () => {
+      const positioned = 'positioned' in c && c.positioned === true;
+      expect(unreadableSettingsBecome(c.become as SettingsBecome, entries(positioned), descriptors) ?? null).toBe(c.refusal);
+    });
+  }
 });

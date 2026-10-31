@@ -11,7 +11,8 @@ const CATALOG: &str = r#"{"adapters":{"cron":{"constructionArgs":[],"canFire":tr
 fn check(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
     let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
-    check_source(source, &catalog, options).unwrap()
+    // The settings form's retirement is listen_settings_retired.rs's to pin.
+    check_source(source, &catalog, options).unwrap().into_iter().filter(|d| d.code != "MOV_LISTEN_SETTINGS_RETIRED").collect()
 }
 
 fn codes(found: &[Diagnostic]) -> Vec<&str> {
