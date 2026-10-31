@@ -1,6 +1,6 @@
 // Granola's names and the shapes that cross its seams: the adapter type, the
-// type ids and display names positions carry, the event tag, the poll
-// checkpoint and the note payload a polled event carries. Data and types only.
+// type ids and display names positions carry, the poll cursor and the note
+// payload an arrival carries. Data and types only.
 
 export const GRANOLA_ADAPTER_TYPE = 'granola';
 /** A meeting note — the entry-point source type a movement listens to. */
@@ -13,11 +13,13 @@ export const GRANOLA_ATTENDEE_TYPE_ID = 'granola:attendee';
 export const GRANOLA_ATTENDEE_DISPLAY_NAME = 'Attendee';
 /** The note→attendee reference (natural name authors write after `-[:`). */
 export const GRANOLA_ATTENDEES_FIELD = 'attendees';
-/** The discriminator `tag` every polled note event carries. */
-export const GRANOLA_NOTE_EVENT_TAG = 'granola:note';
-/** The event kind every polled note event is labelled with (`eventType`):
- *  Granola has one kind, so a listen chooses none. */
-export const GRANOLA_NOTE_EVENT = 'note';
+/** How often the host polls `Meetings` unless lf.yaml's `pollEvery` says
+ *  otherwise. */
+export const GRANOLA_POLL_EVERY_SECONDS = 300;
+/** The folders a note is in, by name, lowercased: what a listen narrows by
+ *  (`n.Folders CONTAINS "deals"`), as 0.12 compared a folder without case. */
+export const GRANOLA_FOLDERS_FIELD = 'Folders';
+export const GRANOLA_FOLDERS_FIELD_ID = 'folders';
 
 /** The meta-root node a movement obtains by constructing the adapter
  *  (`granola(credentials:)`) — a single, contentless "Granola Meetings"
@@ -51,6 +53,8 @@ export interface GranolaNotePayload {
   scheduled_end?: string;
   organizer_email?: string;
   folder_names?: string;
+  /** The folder names, lowercased. */
+  folders: string[];
   note_owner_email: string;
   note_owner_name?: string;
   created_at: string;

@@ -74,7 +74,7 @@ async function runOne(mode: Mode): Promise<Record<string, number>> {
   const subjectFor = (apiKey: string) => {
     if (kit === undefined) {
       const client = new granola.GranolaClient({ apiKey, baseUrl: fake.url, fetch, log: quiet });
-      return { adapter: new granola.GranolaAdapter(async () => client), poll: (input: { config: unknown; checkpoint?: unknown }) => granola.pollGranola(client, input) };
+      return { adapter: new granola.GranolaAdapter(async () => client), poll: (input: { edge: string; cursor?: unknown }) => granola.pollGranola(client, input) };
     }
     // As the platform's secrets family answers: the same fields until they change.
     const fields = { apiKey, baseUrl: fake.url };
@@ -86,7 +86,7 @@ async function runOne(mode: Mode): Promise<Record<string, number>> {
       kv: kit.refusingKv('none'),
       validateResults: mode === 'validated',
     });
-    return { adapter: loaded.adapter, poll: (input: { config: unknown; checkpoint?: unknown }) => loaded.poll!(input) };
+    return { adapter: loaded.adapter, poll: (input: { edge: string; cursor?: unknown }) => loaded.poll!(input) };
   };
   // Boot: the code loaded and the first adapter constructed.
   subjectFor('boot');
@@ -109,7 +109,7 @@ async function runOne(mode: Mode): Promise<Record<string, number>> {
     await adapter.getFieldValue({ position: note, fieldId: 'Title' });
     await adapter.getRelated({ position: note, fieldId: 'Attendees', direction: 'outgoing' });
     await adapter.getRelated({ position: meta, fieldId: 'Meetings', direction: 'outgoing', limit: 2 });
-    await poll({ config: {}, checkpoint: { updatedAfter: '2026-06-03T12:00:00.000Z' } });
+    await poll({ edge: 'Meetings', cursor: { updatedAfter: '2026-06-03T12:00:00.000Z' } });
     if (round >= WARMUP) {
       samples.push(Number(process.hrtime.bigint() - start) / 1e6);
       const cpu = process.cpuUsage(cpuStart);

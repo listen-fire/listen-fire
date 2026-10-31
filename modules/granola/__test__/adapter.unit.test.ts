@@ -354,64 +354,58 @@ describe('GranolaAdapter — meetings meta-collection', () => {
 // ── PollSource: getEvents ───────────────────────────────────────────────────
 
 describe('pollGranola', () => {
-  function source(notes: GranolaNote[]) {
-    return { getEvents: (input: { config: unknown; checkpoint?: unknown }) => pollGranola(fakeClient(notes), input) };
-  }
+  const poll = (notes: GranolaNote[], input: { filter?: unknown; cursor?: unknown }) => pollGranola(fakeClient(notes), { edge: 'Meetings', ...input });
+  const SINCE = { updatedAfter: '2026-06-19T00:00:00.000Z' };
+  const ids = (answer: Awaited<ReturnType<typeof pollGranola>>) => answer.arrivals.map((a) => ('identity' in a ? a.identity : ''));
 
-  it('first poll sets the checkpoint and emits nothing (no backfill)', async () => {
+  it('first poll sets the cursor and delivers nothing (no backfill)', async () => {
     const older = note({ id: 'a', updated_at: '2026-06-19T08:00:00.000Z' });
     const newer = note({ id: 'b', updated_at: '2026-06-19T11:00:00.000Z' });
-    // No checkpoint = first sight of this trigger: start watching from now, don't
-    // replay the archive. The checkpoint is set (to ~now) so the next poll is
-    // incremental; nothing is emitted this time.
-    const { events, checkpoint } = await source([newer, older]).getEvents({ config: {} });
+    // No cursor = first sight of this edge: start watching from now, don't
+    // replay the archive.
+    const { arrivals, cursor } = await poll([newer, older], {});
 
-    expect(events).toEqual([]);
-    expect((checkpoint as { updatedAfter: string }).updatedAfter).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(arrivals).toEqual([]);
+    expect((cursor as { updatedAfter: string }).updatedAfter).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
-  it('a subsequent poll emits one tagged event per note, oldest first, and advances the checkpoint', async () => {
+  it('a later poll delivers each note on Meetings, oldest first, versioned by its update, and advances the cursor', async () => {
     const older = note({ id: 'a', updated_at: '2026-06-19T08:00:00.000Z' });
     const newer = note({ id: 'b', updated_at: '2026-06-19T11:00:00.000Z' });
-    // A checkpoint already exists (not the first poll) — this is where meetings
-    // are emitted.
-    const { events, checkpoint } = await source([newer, older]).getEvents({
-      checkpoint: { updatedAfter: '2026-06-19T00:00:00.000Z' },
-      config: {},
+    const answer = await poll([newer, older], { cursor: SINCE });
+
+    expect(ids(answer)).toEqual(['a', 'b']);
+    expect(answer.arrivals[0]).toMatchObject({
+      edge: 'Meetings',
+      version: '2026-06-19T08:00:00.000Z',
+      occurredAt: '2026-06-19T08:00:00.000Z',
+      takenApplied: true,
+      landing: { recordId: 'a', recordType: 'Meeting Note', fields: expect.objectContaining({ 'Granola Note ID': 'a', granola_note_id: 'a' }) },
     });
-
-    expect(events.map((e) => e.externalId)).toEqual(['a', 'b']); // oldest first
-    expect(events.every((e) => e.tag === 'granola:note')).toBe(true);
-    expect(events.every((e) => e.eventType === 'note')).toBe(true);
-    expect((checkpoint as { updatedAfter: string }).updatedAfter).toBe('2026-06-19T11:00:00.000Z');
+    expect((answer.cursor as { updatedAfter: string }).updatedAfter).toBe('2026-06-19T11:00:00.000Z');
   });
 
-  it('only lists notes updated since the checkpoint', async () => {
+  it('only lists notes updated since the cursor', async () => {
     const stale = note({ id: 'a', updated_at: '2026-06-19T08:00:00.000Z' });
     const fresh = note({ id: 'b', updated_at: '2026-06-19T11:00:00.000Z' });
-    const { events } = await source([stale, fresh]).getEvents({
-      checkpoint: { updatedAfter: '2026-06-19T10:00:00.000Z' },
-      config: {},
-    });
-    expect(events.map((e) => e.externalId)).toEqual(['b']);
+    expect(ids(await poll([stale, fresh], { cursor: { updatedAfter: '2026-06-19T10:00:00.000Z' } }))).toEqual(['b']);
   });
 
-  it('filters by folder (a listen option)', async () => {
+  it('applies a Folders CONTAINS it takes, against the folder names lowercased', async () => {
     const inFolder = note({ id: 'a', folder_membership: [{ id: 'f', name: 'Dealflow' }] });
     const outFolder = note({ id: 'b', folder_membership: [{ id: 'g', name: 'Personal' }] });
-    const { events } = await source([inFolder, outFolder]).getEvents({
-      checkpoint: { updatedAfter: '2026-06-19T00:00:00.000Z' },
-      config: { folder: 'dealflow' },
-    });
-    expect(events.map((e) => e.externalId)).toEqual(['a']);
+    const filter = { type: 'compare', op: 'contains', left: { type: 'property', propertyTypeId: 'Folders', fieldOnly: true }, right: { type: 'static', value: 'dealflow' } };
+    const answer = await poll([inFolder, outFolder], { filter, cursor: SINCE });
+    expect(ids(answer)).toEqual(['a']);
+    expect(answer.arrivals[0]).toMatchObject({ landing: { fields: expect.objectContaining({ Folders: ['dealflow'] }) } });
   });
 
   it('skips notes with neither summary nor transcript', async () => {
     const empty = note({ id: 'a', summary_text: '', summary_markdown: null, transcript: null });
-    const { events } = await source([empty]).getEvents({
-      checkpoint: { updatedAfter: '2026-06-19T00:00:00.000Z' },
-      config: {},
-    });
-    expect(events).toHaveLength(0);
+    expect((await poll([empty], { cursor: SINCE })).arrivals).toHaveLength(0);
+  });
+
+  it('refuses an edge it does not have, by name', async () => {
+    await expect(pollGranola(fakeClient([]), { edge: 'Notes', cursor: SINCE })).rejects.toThrow('@lf/granola: no edge Notes to poll (its listenable edge is Meetings)');
   });
 });

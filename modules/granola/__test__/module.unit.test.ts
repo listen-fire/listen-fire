@@ -1,10 +1,10 @@
 // The module's seams with its host: how the context's credential becomes a
 // client, and what the module declares.
 
-import { emptyOcrSlot, type CredentialFields, type ModuleContext } from 'module-kit';
+import { emptyOcrSlot, refusingRecords, type CredentialFields, type ModuleContext } from 'module-kit';
 import { emptyBrowserSlot } from 'movement-engine/public/browser';
 
-import { granolaClientFrom, granolaModule, GRANOLA_POLL_INTERVAL_SECONDS } from '../index';
+import { granolaClientFrom, granolaModule, GRANOLA_POLL_EVERY_SECONDS } from '../index';
 
 function contextOver(fields: () => CredentialFields, config: { baseUrlOverride?: string } = {}): ModuleContext {
   const refuse = (): never => {
@@ -25,6 +25,7 @@ function contextOver(fields: () => CredentialFields, config: { baseUrlOverride?:
     identities: { list: refuse, find: refuse },
     browser: emptyBrowserSlot('none'),
     ocr: emptyOcrSlot('none'),
+    records: refusingRecords('none'),
     config: { tenant: 'team-1', constructionArgs: {}, ...config },
   };
   return Object.assign(ctx, { requests });
@@ -63,8 +64,8 @@ describe('granolaClientFrom', () => {
 describe('granolaModule', () => {
   it('declares an API key credential and a five-minute poll', () => {
     expect(granolaModule.credentials[0]?.fields.map((f) => f.name)).toEqual(['apiKey', 'baseUrl']);
-    expect(granolaModule.poll).toEqual({ intervalSeconds: GRANOLA_POLL_INTERVAL_SECONDS });
-    expect(GRANOLA_POLL_INTERVAL_SECONDS).toBe(300);
+    expect(granolaModule.poll).toEqual({ intervalSeconds: GRANOLA_POLL_EVERY_SECONDS });
+    expect(GRANOLA_POLL_EVERY_SECONDS).toBe(300);
   });
 
   it('is a polled source with no inbound', () => {

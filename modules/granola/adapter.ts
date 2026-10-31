@@ -9,12 +9,11 @@ import type {
   ActorIdentity,
   Adapter,
   EdgesFromResult,
-  EventType,
   GetFieldValueInput,
   GetRelatedInput,
   RelatedResult,
 } from 'movement-engine/public/adapter';
-import type { SchemaEntryPoint, SchemaTypeDescriptor, SourcePosition } from 'movement-engine/public/catalog';
+import type { SchemaEntryPoint, SchemaFieldDescriptor, SchemaTypeDescriptor, SourcePosition } from 'movement-engine/public/catalog';
 import type { Expression } from 'engine-contracts/expression/expression';
 import type { TriggerEvent } from 'engine-contracts';
 
@@ -34,7 +33,9 @@ import {
   GRANOLA_ATTENDEE_TYPE_ID,
   GRANOLA_ATTENDEE_DISPLAY_NAME,
   GRANOLA_MEETINGS_COLLECTION,
-  GRANOLA_NOTE_EVENT_TAG,
+  GRANOLA_FOLDERS_FIELD,
+  GRANOLA_FOLDERS_FIELD_ID,
+  GRANOLA_POLL_EVERY_SECONDS,
   GRANOLA_NOTE_TYPE_ID,
   GRANOLA_NOTE_DISPLAY_NAME,
   GRANOLA_WORKSPACE_TYPE_ID,
@@ -102,28 +103,15 @@ export class GranolaAdapter extends BaseAdapter implements Adapter {
         // note type. The collection still yields `Meeting Note` positions —
         // the engine restamps each landed record to this entry's displayName.
         collectionName: GRANOLA_MEETINGS_COLLECTION,
-      },
-      // The EVENT edge onto the SAME node the readable collection lands on
-      // (adapters/CLAUDE.md rule 9 — two edges, two promises, one node). The
-      // poll source has always delivered these: `GranolaPollSource.getEvents`
-      // emits one `granola:note`-tagged event per new-or-updated note and
-      // `listEventTypes` discriminates it to this type. Only the DECLARATION
-      // was missing, so the projection fell back to its single-readable
-      // heuristic and `eventPositions` stayed empty — a real promise the
-      // surface did not make. Declaring it is behaviour-preserving for the
-      // seed: the fires edge lands straight on the record (rule 1's collapse),
-      // the address pins nothing, so `eventAddressKey` is the bare node name
-      // and the seed stays the same stable `Meeting Note` position it already
-      // was — now typed by a declared event edge rather than a guess.
-      {
-        typeId: GRANOLA_NOTE_TYPE_ID,
-        displayName: GRANOLA_NOTE_DISPLAY_NAME,
-        writable: false,
-        readable: false,
-        fires: true,
-        description:
-          'Delivered when a meeting note is new or has changed since the last ' +
-          'poll. The note itself — read its summary, transcript and attendees.',
+        // One edge, two promises: past notes can be read, and each note new
+        // or changed since the last poll arrives on it.
+        listenable: true,
+        capability: { filter: 'native', supportsLimit: true },
+        delivery: 'polled',
+        pollEverySeconds: GRANOLA_POLL_EVERY_SECONDS,
+        cursor: true,
+        identity: 'Granola Note ID',
+        version: 'Updated At',
       },
       // A CHILD type: an attendee is reached through its meeting
       // (`note-[:Attendees]->`), never enumerated from the root — `getRelated`
@@ -142,18 +130,14 @@ export class GranolaAdapter extends BaseAdapter implements Adapter {
     ];
   }
 
-  /**
-   * Granola is the case adapters/CLAUDE.md rule 9 describes: a readable
-   * collection AND a fires edge landing on the SAME node. Both are real
-   * promises — you can pull in past notes, and you can be told about a new
-   * one — so they are two edges, not a conflict.
-   */
+  /** The workspace: `Meetings` is read for past notes and listened to for
+   *  new or changed ones — one edge, two promises. */
   private static readonly ROOT: SchemaTypeDescriptor = {
     typeId: META_RECORD_TYPE,
     displayName: 'Granola Meetings',
     description:
-      'The Granola workspace. Walk `Meetings` to pull in PAST meeting notes; ' +
-      'listen on `Meeting Note` to be told about new or changed ones.',
+      'The Granola workspace. Walk `Meetings` to pull in PAST meeting notes, or ' +
+      'listen on it to be told about new or changed ones.',
     fields: [],
     references: [
       {
@@ -170,16 +154,7 @@ export class GranolaAdapter extends BaseAdapter implements Adapter {
         // The client sorts the fetched archive by `updated_at`, newest first
         // (`client.ts` `listMeetingsSince`), and the hop returns that array.
         sequenced: 'chronological',
-      },
-      {
-        fieldId: `fires:${GRANOLA_NOTE_TYPE_ID}`,
-        targetTypeId: GRANOLA_NOTE_TYPE_ID,
-        cardinality: 'one',
-        direction: 'outgoing',
-        name: GRANOLA_NOTE_DISPLAY_NAME,
-        fires: true,
-        readable: false,
-        description: 'A meeting note being created or changed — what a listen delivers.',
+        listenable: true,
       },
     ],
   };
@@ -229,20 +204,7 @@ export class GranolaAdapter extends BaseAdapter implements Adapter {
         typeId: GRANOLA_NOTE_TYPE_ID,
         displayName: GRANOLA_NOTE_DISPLAY_NAME,
         description: 'A Granola meeting note — summary, transcript, attendees.',
-        fields: [
-          { fieldId: 'title', displayName: 'Title', kind: 'string', writable: false, required: true, description: 'The note title (or the calendar event title).' },
-          { fieldId: 'summary', displayName: 'Summary', kind: 'string', writable: false, required: false, description: 'The meeting summary (markdown when available).' },
-          { fieldId: 'transcript_text', displayName: 'Transcript', kind: 'string', writable: false, required: false, description: 'The full meeting transcript (`[You]/[Speaker]: …` lines), when the note has one.' },
-          { fieldId: 'scheduled_start', displayName: 'Meeting Start', kind: 'date', writable: false, required: false, description: 'When the meeting was scheduled to start.' },
-          { fieldId: 'scheduled_end', displayName: 'Meeting End', kind: 'date', writable: false, required: false, description: 'When the meeting was scheduled to end.' },
-          { fieldId: 'organizer_email', displayName: 'Organizer Email', kind: 'string', writable: false, required: false, description: 'The meeting organizer.' },
-          { fieldId: 'folder_names', displayName: 'Folder Names', kind: 'string', writable: false, required: false, description: 'The Granola folders this note belongs to.' },
-          { fieldId: 'note_owner_email', displayName: 'Note Owner Email', kind: 'string', writable: false, required: true, description: 'The Granola user who owns the note.' },
-          { fieldId: 'note_owner_name', displayName: 'Note Owner Name', kind: 'string', writable: false, required: false },
-          { fieldId: 'created_at', displayName: 'Created At', kind: 'date', writable: false, required: true },
-          { fieldId: 'updated_at', displayName: 'Updated At', kind: 'date', writable: false, required: true },
-          { fieldId: 'granola_note_id', displayName: 'Granola Note ID', kind: 'string', writable: false, required: true, description: 'The stable Granola note id.' },
-        ],
+        fields: NOTE_FIELDS,
         references: [
           {
             fieldId: GRANOLA_ATTENDEES_FIELD,
@@ -376,19 +338,6 @@ export class GranolaAdapter extends BaseAdapter implements Adapter {
     };
   }
 
-  // ── 5. Event typing ────────────────────────────────────────────────────
-
-  async listEventTypes(): Promise<EventType[]> {
-    // Every polled note carries the `granola:note` tag (set by the PollSource),
-    // so discrimination is by tag → the typed `granola:note` root position.
-    return [
-      {
-        tag: GRANOLA_NOTE_EVENT_TAG,
-        positionType: GRANOLA_NOTE_TYPE_ID,
-        match: { path: 'granola_note_id', equals: [] },
-      },
-    ];
-  }
 }
 
 /**
@@ -424,4 +373,27 @@ function pushDownUpdatedAfter(where: Expression | undefined): string | undefined
   };
   visit(where);
   return bound;
+}
+
+/** A meeting note's fields, as `describe` publishes them. */
+const NOTE_FIELDS: SchemaFieldDescriptor[] = [
+  { fieldId: 'title', displayName: 'Title', kind: 'string', writable: false, required: true, description: 'The note title (or the calendar event title).' },
+  { fieldId: 'summary', displayName: 'Summary', kind: 'string', writable: false, required: false, description: 'The meeting summary (markdown when available).' },
+  { fieldId: 'transcript_text', displayName: 'Transcript', kind: 'string', writable: false, required: false, description: 'The full meeting transcript (`[You]/[Speaker]: …` lines), when the note has one.' },
+  { fieldId: 'scheduled_start', displayName: 'Meeting Start', kind: 'date', writable: false, required: false, description: 'When the meeting was scheduled to start.' },
+  { fieldId: 'scheduled_end', displayName: 'Meeting End', kind: 'date', writable: false, required: false, description: 'When the meeting was scheduled to end.' },
+  { fieldId: 'organizer_email', displayName: 'Organizer Email', kind: 'string', writable: false, required: false, description: 'The meeting organizer.' },
+  { fieldId: 'folder_names', displayName: 'Folder Names', kind: 'string', writable: false, required: false, description: 'The Granola folders this note belongs to.' },
+  { fieldId: GRANOLA_FOLDERS_FIELD_ID, displayName: GRANOLA_FOLDERS_FIELD, kind: 'string', cardinality: 'many', writable: false, required: false, capability: { filterOperators: ['contains'] }, description: 'The folders this note is in, by name, lowercased: `n.Folders CONTAINS "deals"`.' },
+  { fieldId: 'note_owner_email', displayName: 'Note Owner Email', kind: 'string', writable: false, required: true, description: 'The Granola user who owns the note.' },
+  { fieldId: 'note_owner_name', displayName: 'Note Owner Name', kind: 'string', writable: false, required: false },
+  { fieldId: 'created_at', displayName: 'Created At', kind: 'date', writable: false, required: true },
+  { fieldId: 'updated_at', displayName: 'Updated At', kind: 'date', writable: false, required: true },
+  { fieldId: 'granola_note_id', displayName: 'Granola Note ID', kind: 'string', writable: false, required: true, description: 'The stable Granola note id.' },
+];
+
+/** A note's fields by the names a program reads them by, as an arrival's
+ *  landing carries them for the host to judge a listen's WHERE. */
+export function noteFields(record: object): Record<string, unknown> {
+  return Object.fromEntries(NOTE_FIELDS.filter((f) => Reflect.has(record, f.fieldId)).map((f) => [f.displayName, Reflect.get(record, f.fieldId)]));
 }

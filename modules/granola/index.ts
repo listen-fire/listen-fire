@@ -4,12 +4,13 @@
 // read by the next one. `ctx.config.baseUrlOverride` (the dev loop's fake)
 // wins over the credential's own base URL.
 
-import { defineModule, type CredentialFields, type ModuleContext } from 'module-kit';
+import { defineModule, type CredentialFields, type ModuleContext, type PollEdgeInput, type PollInput } from 'module-kit';
 
 import { GranolaClient, granolaCredsParser } from './api_client';
 import { GranolaAdapter, type GranolaClientSource } from './adapter';
 import { GRANOLA_MANIFEST } from './manifest';
-import { GRANOLA_POLL_INTERVAL_SECONDS, pollGranola } from './poll';
+import { pollGranola } from './poll';
+import { GRANOLA_POLL_EVERY_SECONDS } from './types';
 
 /** The client the context's credential reaches Granola with. */
 export function granolaClientFrom(ctx: ModuleContext): GranolaClientSource {
@@ -50,11 +51,18 @@ export const granolaModule = defineModule({
       ],
     },
   ],
-  poll: { intervalSeconds: GRANOLA_POLL_INTERVAL_SECONDS },
+  // Adapter protocol 2.6: `Meetings` is a listenable edge, polled.
+  protocolMinor: 6,
+  poll: { intervalSeconds: GRANOLA_POLL_EVERY_SECONDS },
   create: (ctx) => {
     const client = granolaClientFrom(ctx);
     return Object.assign(new GranolaAdapter(client), {
-      poll: async (input: Parameters<typeof pollGranola>[1]) => pollGranola(await client(), input),
+      poll: async (input: PollInput | PollEdgeInput) => {
+        if (!('edge' in input)) {
+          throw new Error('@lf/granola is listened to on its Meetings edge: `listen to granola-[n:Meetings]-> fire f` (`listen-fire upgrade` rewrites a 0.12 listen)');
+        }
+        return pollGranola(await client(), input);
+      },
     });
   },
 });

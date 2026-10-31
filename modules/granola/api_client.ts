@@ -173,6 +173,7 @@ export function normalizeNote(note: GranolaNote): GranolaNotePayload {
     ...(note.calendar_event ? { scheduled_end: note.calendar_event.scheduled_end_time } : {}),
     ...(note.calendar_event ? { organizer_email: note.calendar_event.organiser } : {}),
     ...(folderNames ? { folder_names: folderNames } : {}),
+    folders: note.folder_membership.map((f) => f.name.toLowerCase()),
     note_owner_email: note.owner.email,
     ...(note.owner.name ? { note_owner_name: note.owner.name } : {}),
     created_at: note.created_at,

@@ -4,15 +4,11 @@
 
 import type { AdapterManifest } from 'movement-engine/public/adapter';
 
-import { GRANOLA_ADAPTER_TYPE } from './types';
+import { GRANOLA_ADAPTER_TYPE, GRANOLA_FOLDERS_FIELD, GRANOLA_MEETINGS_COLLECTION, GRANOLA_NOTE_DISPLAY_NAME } from './types';
 
 /**
- * Static manifest. Source-only, polled. `requiredCredentialType: GRANOLA` (an
- * API key). `listenConfig` declares the two `listen` options (P4): an optional
- * folder filter and an optional poll-interval override (seconds) — strong
- * defaults apply when omitted. No `subscribableEvents` / `ensureEventSubscription`:
- * Granola has no external subscription; the poll-source worker scans its trigger
- * rows directly.
+ * Static manifest. Source-only, polled: `Meetings` is a listenable edge a
+ * listen narrows by `Folders`. `requiredCredentialType: GRANOLA` (an API key).
  */
 export const GRANOLA_MANIFEST: AdapterManifest = {
   adapterType: GRANOLA_ADAPTER_TYPE,
@@ -24,19 +20,25 @@ export const GRANOLA_MANIFEST: AdapterManifest = {
     'attendees into your CRM, file the summary, share takeaways.',
   triggerExpectation:
     'Fires once per meeting note that is new or has changed since the last ' +
-    'poll, for notes the connected Granola account can see. Notes with neither ' +
-    'a summary nor a transcript are skipped. A folder filter (a `listen` option) ' +
-    'narrows it to notes in named folders.',
+    'poll (every five minutes; lf.yaml `pollEvery` changes it), for notes the ' +
+    'connected Granola account can see: `listen to granola-[n:Meetings]-> fire f`. ' +
+    'Notes with neither a summary nor a transcript are skipped. ' +
+    '`n.Folders CONTAINS "deals"` narrows it to notes in a folder (lowercased).',
   supportedTriggers: ['poll'],
   methods: [
     'listEntryPoints', 'describe', 'getFieldValue', 'getRelated',
     'getActorCandidates', 'extractActor',
   ],
   requiredCredentialType: 'GRANOLA',
-  listenConfig: [
-    { key: 'folder', required: false },
-    { key: 'pollIntervalSeconds', required: false },
-  ],
+  // A 0.12 `listen to granola { folder: "Deals" }` is
+  // `listen to granola-[n:Meetings WHERE n.Folders CONTAINS "deals"]->`
+  // (`listen-fire upgrade`); 0.12 compared a folder without case.
+  listenSettingsBecome: {
+    path: [GRANOLA_MEETINGS_COLLECTION],
+    aliases: ['n'],
+    paramFrom: GRANOLA_NOTE_DISPLAY_NAME,
+    keys: { folder: { hop: 0, field: GRANOLA_FOLDERS_FIELD, op: 'contains', lowercase: true } },
+  },
   triggerKinds: ['GRANOLA'],
   vocabulary: {
     // Path data must OPEN with a moveto — a `d` starting on a bare coordinate

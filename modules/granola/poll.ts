@@ -1,79 +1,63 @@
-// Granola's poll — the solicited event seam (Granola is a polled source).
-// The host calls it this often per listen: it pulls notes updated since the
-// persisted checkpoint, emits one event per note (tagged `granola:note`), and
-// returns the new high-water checkpoint. Shares the API client with the
-// read-side adapter.
+// Granola's poll of `Meetings` (adapter protocol 2.6): Granola has no
+// webhook, so the host polls the edge once for every listen sharing a
+// connection and a taken filter. Each note new or changed since the
+// high-water `updated_at` arrives once, versioned by that `updated_at`; a
+// note with neither a summary nor a transcript is not one yet. The module
+// applies the taken filter itself over the note it fetched, so every arrival
+// says `takenApplied`.
 
-import type { DiscriminableEvent } from 'movement-engine/public/adapter';
-import type { PollAnswer, PollInput } from 'module-kit';
+import { holds, takenComparisons, type PollEdgeAnswer, type PollEdgeInput } from 'module-kit';
 
 import { noteHasContent, normalizeNote, type GranolaClient } from './api_client';
-import { GRANOLA_NOTE_EVENT, GRANOLA_NOTE_EVENT_TAG, type GranolaCheckpoint } from './types';
+import { noteFields } from './adapter';
+import { GRANOLA_MEETINGS_COLLECTION, GRANOLA_NOTE_DISPLAY_NAME, type GranolaCheckpoint } from './types';
 
-/** Granola's default cadence — overridable per automation via the `listen`
- *  option `pollIntervalSeconds`. */
-export const GRANOLA_POLL_INTERVAL_SECONDS = 300;
+/** An arrival that landed (the gone kind is never a poll's). */
+type Arrival = Extract<PollEdgeAnswer['arrivals'][number], { landing: unknown }>;
 
-interface GranolaPollConfig {
-  folder?: string | string[];
-}
-
-/** The folder names a `listen` filter restricts to (lowercased), or [] for none. */
-function folderFilter(config: unknown): string[] {
-  const folder = (config as GranolaPollConfig | null | undefined)?.folder;
-  const list = typeof folder === 'string' ? [folder] : Array.isArray(folder) ? folder : [];
-  return list.filter((f): f is string => typeof f === 'string').map((f) => f.toLowerCase());
-}
-
-function parseCheckpoint(checkpoint: unknown): GranolaCheckpoint | undefined {
-  const updatedAfter = (checkpoint as GranolaCheckpoint | null | undefined)?.updatedAfter;
+function parseCheckpoint(cursor: unknown): GranolaCheckpoint | undefined {
+  if (typeof cursor !== 'object' || cursor === null) return undefined;
+  const updatedAfter: unknown = Reflect.get(cursor, 'updatedAfter');
   return typeof updatedAfter === 'string' ? { updatedAfter } : undefined;
 }
 
-export async function pollGranola(client: GranolaClient, input: PollInput): Promise<PollAnswer> {
-  const checkpoint = parseCheckpoint(input.checkpoint);
-  const folders = folderFilter(input.config);
+export async function pollGranola(client: GranolaClient, input: PollEdgeInput): Promise<PollEdgeAnswer> {
+  if (input.edge !== GRANOLA_MEETINGS_COLLECTION) {
+    throw new Error(`@lf/granola: no edge ${input.edge} to poll (its listenable edge is ${GRANOLA_MEETINGS_COLLECTION})`);
+  }
+  const checkpoint = parseCheckpoint(input.cursor);
+  const taken = takenComparisons(input.filter);
 
-  // First poll: just set the checkpoint to now and emit nothing. A live
-  // trigger watches for meetings from go-live onward — it never backfills the
-  // whole archive (which would flood the movement on connect). Subsequent
-  // polls fetch only notes updated after this mark. Historical meetings stay
-  // reachable on demand via the meta-root `Meetings` collection.
+  // First poll: set the mark to now and deliver nothing. A live listen hears
+  // meetings from go-live onward — it never backfills the whole archive
+  // (which would flood the movement on connect). Past meetings stay
+  // reachable by walking `Meetings`.
   if (checkpoint === undefined) {
-    return { events: [], checkpoint: { updatedAfter: new Date().toISOString() } };
+    return { arrivals: [], cursor: { updatedAfter: new Date().toISOString() } };
   }
 
   const summaries = await client.listAllNotes(checkpoint.updatedAfter);
-  const events: DiscriminableEvent[] = [];
-  let maxUpdatedAt = checkpoint?.updatedAfter ?? '';
-
+  const arrivals: Arrival[] = [];
+  let maxUpdatedAt = checkpoint.updatedAfter;
   for (const summary of summaries) {
-    // Advance the high-water mark for every note seen (even filtered ones) so
-    // the checkpoint moves forward and we don't re-list them next poll.
+    // The mark moves over every note seen, delivered or not, so none is
+    // listed again next poll.
     if (summary.updated_at > maxUpdatedAt) maxUpdatedAt = summary.updated_at;
-
     const note = await client.getNote(summary.id);
-
-    if (folders.length > 0) {
-      const noteFolders = note.folder_membership.map((f) => f.name.toLowerCase());
-      if (!folders.some((f) => noteFolders.includes(f))) continue;
-    }
     if (!noteHasContent(note)) continue;
-
-    events.push({
-      payload: normalizeNote(note),
-      externalId: note.id,
-      tag: GRANOLA_NOTE_EVENT_TAG,
-      eventType: GRANOLA_NOTE_EVENT,
+    const record = normalizeNote(note);
+    const fields: Record<string, unknown> = { ...record, ...noteFields(record) };
+    if (!(taken ?? []).every((comparison) => holds(fields[comparison.field], comparison))) continue;
+    arrivals.push({
+      edge: GRANOLA_MEETINGS_COLLECTION,
+      identity: note.id,
+      version: note.updated_at,
+      landing: { recordId: note.id, recordType: GRANOLA_NOTE_DISPLAY_NAME, fields },
       occurredAt: note.updated_at,
+      ...(taken !== undefined ? { takenApplied: true } : {}),
     });
   }
-
-  // Oldest first — a movement processes meetings in the order they happened.
-  events.sort((a, b) => (a.occurredAt ?? '').localeCompare(b.occurredAt ?? ''));
-
-  const next: GranolaCheckpoint = {
-    updatedAfter: maxUpdatedAt || (checkpoint?.updatedAfter ?? ''),
-  };
-  return { events, checkpoint: next };
+  // Oldest first — a movement handles meetings in the order they changed.
+  arrivals.sort((a, b) => (a.occurredAt ?? '').localeCompare(b.occurredAt ?? ''));
+  return { arrivals, cursor: { updatedAfter: maxUpdatedAt } };
 }
