@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 use crate::json::Js;
 use crate::loop_breaker::{Deepest, LedgerRecord, LedgerWrite};
+use crate::records_door::{FailedPage, ReleaseAfter, SeenRelease};
 #[cfg(feature = "postgres")]
 use crate::pg_store::PgStore;
 use crate::core;
@@ -322,6 +323,15 @@ pub trait RunHostStore {
     /// The deepest write of `record` made at or after `since`, the latest of
     /// those as deep (`writes.depth`).
     fn deepest_write(&self, record: &LedgerRecord<'_>, since: &str) -> Result<Option<Deepest>>;
+
+    // ── What the records door reads (crate::records_door) ───────────────────
+    /// The failed runs `page` names, oldest failure first, ties by id (`runs.failed`).
+    fn failed_runs(&self, page: &FailedPage<'_>) -> Result<Vec<RunRow>>;
+    /// Keep `version` as a release the store was opened under, at `at`,
+    /// unless it was before: whether it is new (`releases.note`).
+    fn note_release(&self, version: &str, at: &str) -> Result<bool>;
+    /// The releases kept after `after`, oldest first, ties by version (`releases.list`).
+    fn releases(&self, after: Option<&ReleaseAfter<'_>>, limit: i64) -> Result<Vec<SeenRelease>>;
     /// What one inbound delivery leaves, as one write: its receipt, its pull
     /// cursor (when it moved), its arrivals and its work rows (its events,
     /// its wakes). A crash never leaves a cursor past events its receipt does
@@ -580,6 +590,15 @@ impl RunHostStore for Store {
     }
     fn deepest_write(&self, record: &LedgerRecord<'_>, since: &str) -> Result<Option<Deepest>> {
         Store::deepest_write(self, record, since)
+    }
+    fn failed_runs(&self, page: &FailedPage<'_>) -> Result<Vec<RunRow>> {
+        Store::failed_runs(self, page)
+    }
+    fn note_release(&self, version: &str, at: &str) -> Result<bool> {
+        Store::note_release(self, version, at)
+    }
+    fn releases(&self, after: Option<&ReleaseAfter<'_>>, limit: i64) -> Result<Vec<SeenRelease>> {
+        Store::releases(self, after, limit)
     }
     fn keep_delivery(
         &self,

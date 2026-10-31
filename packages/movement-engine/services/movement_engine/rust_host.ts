@@ -509,6 +509,7 @@ const ROUTES: Record<string, Route> = {
       adapterType: string(request.adapterType, 'park.waits.open adapterType'),
       edge: string(request.edge, 'park.waits.open edge'),
       since: integer(request.since, 'park.waits.open since'),
+      ...(request.recordId !== undefined ? { recordId: string(request.recordId, 'park.waits.open recordId') } : {}),
       segmentId: segmentOf(request),
     };
     if (request.gone === undefined) return waits.open({ ...opened, key: string(request.key, 'park.waits.open key') });

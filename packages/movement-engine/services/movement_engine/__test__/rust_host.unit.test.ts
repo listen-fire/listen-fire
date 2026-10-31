@@ -266,7 +266,7 @@ describe('an await on a listenable edge, run in the Rust engine through the shim
     expect(asked).toEqual(
       expect.arrayContaining([
         ['mark', { segmentId }],
-        ['open', { segmentId, adapterType: 'chat', edge: 'Replies', key: 'thread:m-1', since: 41 }],
+        ['open', { segmentId, adapterType: 'chat', edge: 'Replies', key: 'thread:m-1', recordId: 'm-1', since: 41 }],
         ['arrivals', { segmentId, waitId: 'wait:thread:m-1' }],
         ['note', { segmentId, waitId: 'wait:thread:m-1', identity: '1.5', matched: true }],
       ]),

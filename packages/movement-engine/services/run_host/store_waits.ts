@@ -110,7 +110,7 @@ class Names {
   /** A stranded wait as a case writes it: by its wait's and (`withRun`)
    *  its run's names, its keys in that order. */
   stranded(wait: StrandedWait, withRun: boolean): Record<string, unknown> {
-    const shown: Record<string, unknown> = { wait: this.nameOf(wait.waitId), edge: wait.edge, key: wait.key, parked: wait.parked };
+    const shown: Record<string, unknown> = { wait: this.nameOf(wait.waitId), edge: wait.edge, key: wait.key, recordId: wait.recordId, parked: wait.parked };
     return withRun ? { ...shown, run: this.nameOf(wait.runId) } : shown;
   }
 
@@ -118,6 +118,19 @@ class Names {
   wakes(step: unknown, key: 'wakes' | 'queued' = 'wakes'): WaitWake[] {
     return items(step, key).map((w) => ({ runId: this.id(text(w, 'run')), waitId: this.wait(text(w, 'wait')), address: text(w, 'address') }));
   }
+}
+
+/** A case's stranded wait, its keys in the order `stranded` writes them. */
+function namedStranded(want: unknown): Record<string, unknown> {
+  const shown = { wait: field(want, 'wait'), edge: field(want, 'edge'), key: field(want, 'key'), recordId: field(want, 'recordId') ?? null, parked: field(want, 'parked') };
+  const run = field(want, 'run');
+  return run === undefined ? shown : { ...shown, run };
+}
+
+/** An open step's `recordId`, when it names one. */
+function recordIdOf(step: unknown): { recordId?: string } {
+  const recordId = optionalText(step, 'recordId');
+  return recordId === null ? {} : { recordId };
 }
 
 const fromNow = (ms: unknown): string => new Date(Date.now() + (typeof ms === 'number' ? ms : 0)).toISOString();
@@ -174,7 +187,7 @@ async function runCase({ store, runRows, deliveries }: StoreWaitsBackend, steps:
       }
       case 'open': {
         const since = names.marks.get(text(step, 'since')) ?? assert.fail(`no mark named ${text(step, 'since')}`);
-        const { waitId } = await store.waits.open({ runId: runId(), teamId, adapterType, edge: text(step, 'edge'), key: optionalText(step, 'key'), since });
+        const { waitId } = await store.waits.open({ runId: runId(), teamId, adapterType, edge: text(step, 'edge'), key: optionalText(step, 'key'), ...recordIdOf(step), since });
         const same = optionalText(step, 'same');
         if (same !== null) assert.equal(waitId, names.wait(same), `${at}: the same wait`);
         else assert.ok(![...names.waits.values()].includes(waitId), `${at}: a new wait`);
@@ -329,7 +342,7 @@ async function runCase({ store, runRows, deliveries }: StoreWaitsBackend, steps:
       }
       case 'stranded': {
         const got = (await store.waits.stranded({ runId: runId() })).map((wait) => names.stranded(wait, false));
-        const expected = items(step, 'waits').map((want) => ({ wait: field(want, 'wait'), edge: field(want, 'edge'), key: field(want, 'key'), parked: field(want, 'parked') }));
+        const expected = items(step, 'waits').map(namedStranded);
         assert.deepEqual(got, expected, `${at}: the run's stranded waits`);
         break;
       }
@@ -349,7 +362,7 @@ async function runCase({ store, runRows, deliveries }: StoreWaitsBackend, steps:
         });
         const named = new Set(names.waits.values());
         const got = every.filter((wait) => named.has(wait.waitId)).map((wait) => names.stranded(wait, true));
-        const expected = items(step, 'waits').map((want) => ({ wait: field(want, 'wait'), edge: field(want, 'edge'), key: field(want, 'key'), parked: field(want, 'parked'), run: field(want, 'run') }));
+        const expected = items(step, 'waits').map(namedStranded);
         assert.deepEqual(got, expected, `${at}: every run's stranded waits`);
         break;
       }

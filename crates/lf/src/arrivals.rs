@@ -229,7 +229,7 @@ mod tests {
         let store = Store::open(&dir.join("state.db")).unwrap();
         store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
         let since = store.arrival_mark().unwrap();
-        let wait = store.open_wait(&OpenWait { run_id: "run-1", team_id: "t", adapter_type: "acme", edge: "Comments", key: Some("thread:c1"), since }).unwrap();
+        let wait = store.open_wait(&OpenWait { run_id: "run-1", team_id: "t", adapter_type: "acme", edge: "Comments", key: Some("thread:c1"), record_id: None, since }).unwrap();
         store.commit_park(&Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
 
         let arrivals = arrivals_of(&js(r#"{"arrivals":[{"edge":"Comments","key":"thread:c1","identity":"k1","landing":{"fields":{"Text":"hi"}}},{"edge":"Comments","key":"thread:c9","identity":"k2","landing":{"fields":{}}}]}"#)).unwrap();

@@ -473,10 +473,10 @@ pub mod park {
     /// that already waits there keeps that wait and its mark. `key` None:
     /// the adapter said the record is gone (`gone: true`), so nothing can
     /// arrive on the wait, and a park on it is stranded.
-    pub fn open_wait(segment: &str, adapter_type: &str, edge: &str, key: Option<&str>, since: i64) -> Request {
+    pub fn open_wait(segment: &str, adapter_type: &str, edge: &str, key: Option<&str>, record_id: &str, since: i64) -> Request {
         let args = match key {
-            Some(key) => json!({ "adapterType": adapter_type, "edge": edge, "key": key, "since": since }),
-            None => json!({ "adapterType": adapter_type, "edge": edge, "gone": true, "since": since }),
+            Some(key) => json!({ "adapterType": adapter_type, "edge": edge, "key": key, "recordId": record_id, "since": since }),
+            None => json!({ "adapterType": adapter_type, "edge": edge, "gone": true, "recordId": record_id, "since": since }),
         };
         Request { family: Family::ParkWaits, method: "open".into(), args: in_segment(segment, args) }
     }

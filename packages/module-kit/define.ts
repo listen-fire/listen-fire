@@ -113,6 +113,13 @@ export interface ModuleOcr {
   read(input: ModuleOcrRead): Promise<{ text: string; pages: number }>;
 }
 
+/** The host's facts about its own runs and waits, read at its records door
+ *  (docs/contracts/system-events.md): `read('records.failedRuns', { … })`.
+ *  The door names its methods and the rows each answers; check them. */
+export interface ModuleRecords {
+  read(method: string, params?: Record<string, unknown>): Promise<unknown>;
+}
+
 /** Someone who linked their account on the provider to a user of the host
  *  (the platform's Telegram `/start` handshake): the provider's id for them,
  *  the host user's email as linked, and when. */
@@ -197,6 +204,8 @@ export interface ModuleContext {
   /** The host's OCR slot. Refuses by name, saying the slot is empty, on a
    *  host whose slot nothing fills. */
   ocr: ModuleOcr;
+  /** The host's records door. Refuses by name on a host that serves none. */
+  records: ModuleRecords;
   config: ModuleConfig;
 }
 

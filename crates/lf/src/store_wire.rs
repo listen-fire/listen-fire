@@ -372,6 +372,7 @@ pub fn open_wait_params(wait: &OpenWait<'_>) -> Obj {
         "adapterType" => Js::str(wait.adapter_type),
         "edge" => Js::str(wait.edge),
         "key" => opt(wait.key),
+        "recordId" => opt(wait.record_id),
         "since" => Js::Num(wait.since.into()),
     }
 }
@@ -428,6 +429,7 @@ impl Wire for Stranded {
             "adapterType" => Js::str(&self.adapter_type),
             "edge" => Js::str(&self.edge),
             "key" => opt(self.key.as_deref()),
+            "recordId" => opt(self.record_id.as_deref()),
             "at" => Js::str(&self.at),
             "parked" => Js::Bool(self.parked),
         })
@@ -440,6 +442,7 @@ impl Wire for Stranded {
             adapter_type: text(v, "adapterType")?,
             edge: text(v, "edge")?,
             key: opt_text(v, "key")?,
+            record_id: opt_text(v, "recordId")?,
             at: text(v, "at")?,
             parked: match v.get("parked")? {
                 Js::Bool(parked) => *parked,
@@ -549,7 +552,7 @@ mod tests {
         assert_eq!(WaitArrivals::from_wire(&arrivals.to_wire()), Some(arrivals));
         let wake = WaitWake { run_id: "r".into(), wait_id: "w".into(), address: "s1".into() };
         assert_eq!(WaitWake::from_wire(&wake.to_wire()), Some(wake.clone()));
-        let stranded = Stranded { wait_id: "w".into(), run_id: "r".into(), adapter_type: "acme".into(), edge: "Comments".into(), key: None, at: "2026-10-31T00:00:00.000Z".into(), parked: true };
+        let stranded = Stranded { wait_id: "w".into(), run_id: "r".into(), adapter_type: "acme".into(), edge: "Comments".into(), key: None, record_id: Some("m-1".into()), at: "2026-10-31T00:00:00.000Z".into(), parked: true };
         let logged = Logged { wakes: vec![wake], stranded: vec![stranded] };
         assert_eq!(Logged::from_wire(&logged.to_wire()), Some(logged));
         assert_eq!(park_kind(&Js::from(obj! { "kind" => Js::str("wait"), "waitId" => Js::str("w") })).map(|k| k.reason()), Some("await"));

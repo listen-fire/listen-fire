@@ -1524,6 +1524,13 @@ page = web.fetchUrl(u)
   - A host that loads modules in process (the platform) or an embedder that
     hands no door is unchanged: `ctx.fetch` is then the plain fetch, and the
     host counts calls as before.
+- **The records door.** A module listen-fire started may read the host's facts
+  about its own runs, waits and releases at
+  `POST {host}/api/public/adapter/{module}/records`, under the host token, as
+  `ctx.records.read(method, params)` (module-kit). It names no event kind;
+  `@lf/system` turns its facts into events. Its methods and rows are
+  [system-events.md](system-events.md)'s. A host that serves none refuses a
+  read by name.
 - **Throttle.** An answer (on success or failure) may carry `retryAfter`, in
   seconds: the provider asked for quiet. The host sends no further call as
   that credential (or install, without one) until then.

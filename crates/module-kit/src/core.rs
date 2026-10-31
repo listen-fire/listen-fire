@@ -294,6 +294,8 @@ pub struct Stranded {
     pub edge: String,
     /// `None` for a wait opened on a record already gone.
     pub key: Option<String>,
+    /// The record waited on, by its id, when `waits.open` named it.
+    pub record_id: Option<String>,
     /// When the store found the wait parked on a deleted record.
     pub at: String,
     /// Whether the wait's leaf is still parked.
@@ -313,6 +315,28 @@ pub struct Logged {
 pub struct StrandedAfter {
     pub at: String,
     pub wait_id: String,
+}
+
+/// Where a page of `runs.failed` left off: its last run.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedAfter {
+    pub at: String,
+    pub run_id: String,
+}
+
+/// Where a page of `releases.list` left off: its last release.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReleaseAfter {
+    pub at: String,
+    pub version: String,
+}
+
+/// A release the store was opened under, and when it first was (`releases.list`).
+#[derive(Debug, Clone, Serialize)]
+pub struct SeenRelease {
+    pub version: String,
+    pub at: String,
 }
 
 /// What a `work.release` says of the claim.
@@ -617,7 +641,9 @@ slot! {
         /// nothing arrives on it and a park on it strands it; a run that
         /// already waits on this edge of a record already gone keeps that
         /// wait.
-        "waits.open" => fn open_wait(WaitsOpen { run_id: String, team_id: String, adapter_type: String, edge: String, #[serde(default)] key: Option<String>, since: i64 }) -> OpenedWait;
+        /// `record_id`: the record waited on, by its id, kept for
+        /// `waits.stranded` to answer.
+        "waits.open" => fn open_wait(WaitsOpen { run_id: String, team_id: String, adapter_type: String, edge: String, #[serde(default)] key: Option<String>, #[serde(default)] record_id: Option<String>, since: i64 }) -> OpenedWait;
         /// The arrivals logged after the wait's `since` on its record's edge
         /// that it has not noted, the first of each identity and version
         /// only, in log order.
@@ -711,6 +737,17 @@ slot! {
         /// The deepest write of the record made at or after `since`, the
         /// latest of those as deep; `None` for none.
         "writes.depth" => fn deepest_write(WritesDepth { adapter: String, record_type: String, external_id: String, since: String }) -> Option<DeepestWrite>;
+        /// The failed runs, oldest failure first (ties by id): failed at or
+        /// before `until`, after the run `after` names, at most `limit`.
+        /// Read by the host's records door; a store that keeps none may
+        /// answer `method_not_implemented`.
+        "runs.failed" => fn failed_runs(RunsFailed { #[serde(default)] after: Option<FailedAfter>, until: String, limit: i64 }) -> Vec<RunRow>;
+        /// Keep `version` as a release the store was opened under, at `at`,
+        /// unless it was before: whether it is new.
+        "releases.note" => fn note_release(ReleasesNote { version: String, at: String }) -> bool;
+        /// The releases kept, oldest first (ties by version), after the one
+        /// `after` names, at most `limit`.
+        "releases.list" => fn releases(ReleasesList { #[serde(default)] after: Option<ReleaseAfter>, limit: i64 }) -> Vec<SeenRelease>;
         /// One write: the receipt first, then the cursor (absent: left as it
         /// is), the arrivals and the work rows. A duplicate
         /// (`delivery.external_id` kept at this subscription before) writes

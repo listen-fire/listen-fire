@@ -358,6 +358,12 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     // Before any module starts: what an earlier listen-fire left running is
     // stopped, and what this one starts is listed in the store.
     crate::module_hosts::track_in(store.clone());
+    // What the records door reads; a worker or a server keeps the release it
+    // opens the store under, once per release (`records.releases`).
+    crate::records_door::install(store.clone());
+    if !matches!(role, Role::Command) {
+        crate::records_door::note_release(&*store, &iso(0))?;
+    }
     // The files slot's module: @lf/local-files (crate::core), or one reached over the wire.
     let documents = Documents::with_module(&project.lf_dir, crate::remote_slots::files(&project, credentials)?);
     // The slots' modules the role starts now, with the externals: a

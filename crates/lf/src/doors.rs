@@ -1624,7 +1624,7 @@ pub(crate) mod tests {
         use crate::store::{Park, ParkKind, RunStart};
         store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
         let since = store.arrival_mark().unwrap();
-        let open = crate::waits::OpenWait { run_id: "run-1", team_id: LOCAL_TENANT, adapter_type: "acme", edge: "Comments", key: Some(key), since };
+        let open = crate::waits::OpenWait { run_id: "run-1", team_id: LOCAL_TENANT, adapter_type: "acme", edge: "Comments", key: Some(key), record_id: None, since };
         let wait = store.open_wait(&open).unwrap();
         store.commit_park(&Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
         wait
@@ -1771,7 +1771,7 @@ pub(crate) mod tests {
             let session = project.session().await;
             use crate::store::RunStart;
             session.store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
-            let open = crate::waits::OpenWait { run_id: "run-1", team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key: Some("thread:n-0"), since: 0 };
+            let open = crate::waits::OpenWait { run_id: "run-1", team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key: Some("thread:n-0"), record_id: None, since: 0 };
             let wait = session.store.open_wait(&open).unwrap();
             assert_eq!(queue_delivery(&session, br#"{"notes":[],"comments":[{"note":"n-0","id":"k1","Text":"hi"}]}"#, "d-1").await.status, 200);
             let landed = session.store.wait_arrivals(&wait).unwrap().arrivals;
@@ -1856,7 +1856,7 @@ pub(crate) mod tests {
     fn park_wait(store: &dyn RunHostStore, run: &str, key: &str, since: i64) -> String {
         use crate::store::{Park, ParkKind, RunStart};
         store.start_run(&RunStart { id: run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
-        let wait = store.open_wait(&crate::waits::OpenWait { run_id: run, team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key: Some(key), since }).unwrap();
+        let wait = store.open_wait(&crate::waits::OpenWait { run_id: run, team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key: Some(key), record_id: None, since }).unwrap();
         store.commit_park(&Park { run_id: run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
         wait
     }
@@ -1910,7 +1910,7 @@ pub(crate) mod tests {
     fn wake_the_comment_wait(session: &Session, run: &str, address: &str) {
         let wait = session
             .store
-            .open_wait(&crate::waits::OpenWait { run_id: run, team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key: Some("thread:n-1"), since: 0 })
+            .open_wait(&crate::waits::OpenWait { run_id: run, team_id: LOCAL_TENANT, adapter_type: "inbox", edge: "Comments", key: Some("thread:n-1"), record_id: None, since: 0 })
             .unwrap();
         let row = crate::waits::wake_row(LOCAL_TENANT, &crate::waits::WaitWake { run_id: run.into(), wait_id: wait, address: address.into() });
         session.store.enqueue(&row.kind, &row.key, &row.payload, None, row.team_id.as_deref()).unwrap();

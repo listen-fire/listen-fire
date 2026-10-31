@@ -37,6 +37,7 @@ pub const STORE_METHODS: &[&str] = &[
     "processes.swap", "events.claim", "events.startRun", "runs.lapsed", "parks.commit", "work.bury", "inbound.keepDelivery",
     "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries", "inbound.forgetDeliveryId", "work.enqueueIfAbsent", "work.completeKey",
     "runs.rerun", "waits.mark", "waits.log", "waits.open", "waits.arrivals", "waits.note", "waits.sweep", "waits.stranded",
+    "runs.failed", "releases.note", "releases.list",
 ];
 
 pub async fn serve(spec: &StoreSpec, listen: Listen) -> Result<(), String> {
@@ -335,6 +336,7 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
                 adapter_type: p.str("adapterType")?,
                 edge: p.str("edge")?,
                 key: p.opt_str("key")?,
+                record_id: p.opt_str("recordId")?,
                 since: p.int("since")?,
             };
             Ok(Js::from(obj! { "waitId" => Js::str(store.open_wait(&wait)?) }))
@@ -499,6 +501,33 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
         "writes.depth" => {
             let record = crate::loop_breaker::LedgerRecord { adapter: p.str("adapter")?, record_type: p.str("recordType")?, external_id: p.str("externalId")? };
             Ok(store.deepest_write(&record, p.str("since")?)?.map(|d| Js::Obj(obj! { "runId" => Js::Str(d.run_id), "depth" => Js::Num(d.depth.into()) })).unwrap_or(Js::Null))
+        }
+
+        "runs.failed" => {
+            let after = match p.value("after") {
+                Js::Null => None,
+                after => Some((after.get("at").and_then(Js::as_str).map(str::to_string), after.get("runId").and_then(Js::as_str).map(str::to_string))),
+            };
+            let after = match &after {
+                None => None,
+                Some((Some(at), Some(run_id))) => Some(crate::records_door::RunAfter { at, run_id }),
+                Some(_) => return Err(Failure::Params("after: expected { at, runId }".into())),
+            };
+            Ok(to_rows(&store.failed_runs(&crate::records_door::FailedPage { after, until: p.str("until")?, limit: p.int("limit")? })?))
+        }
+        "releases.note" => Ok(Js::Bool(store.note_release(p.str("version")?, p.str("at")?)?)),
+        "releases.list" => {
+            let after = match p.value("after") {
+                Js::Null => None,
+                after => Some((after.get("at").and_then(Js::as_str).map(str::to_string), after.get("version").and_then(Js::as_str).map(str::to_string))),
+            };
+            let after = match &after {
+                None => None,
+                Some((Some(at), Some(version))) => Some(crate::records_door::ReleaseAfter { at, version }),
+                Some(_) => return Err(Failure::Params("after: expected { at, version }".into())),
+            };
+            let rows = store.releases(after.as_ref(), p.int("limit")?)?;
+            Ok(Js::Arr(rows.into_iter().map(|r| Js::Obj(obj! { "version" => Js::Str(r.version), "at" => Js::Str(r.at) })).collect()))
         }
 
         "processes.list" => {
@@ -670,7 +699,7 @@ mod tests {
         };
         let logged = |wakes: Vec<Js>| Js::from(obj! { "wakes" => Js::Arr(wakes), "stranded" => Js::Arr(vec![]) });
         assert_eq!(log("k1"), logged(vec![]));
-        let wait = OpenWait { run_id: "run-1", team_id: "t", adapter_type: "acme", edge: "Comments", key: Some("thread:c1"), since: int(&mark).unwrap() };
+        let wait = OpenWait { run_id: "run-1", team_id: "t", adapter_type: "acme", edge: "Comments", key: Some("thread:c1"), record_id: None, since: int(&mark).unwrap() };
         let opened = call(&store, "waits.open", open_wait_params(&wait));
         let wait_id = opened.get("waitId").and_then(Js::as_str).unwrap().to_string();
         let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait_id } };

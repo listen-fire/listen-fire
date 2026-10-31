@@ -367,7 +367,8 @@ impl Session {
                     (None, Some(Json::Bool(true))) => None,
                     _ => return Err(HostFailure::new(format!("{label}: names its record's key, or gone: true for a record already gone"))),
                 };
-                let wait = OpenWait { adapter_type: text(args, "adapterType", label)?.into(), edge: text(args, "edge", label)?.into(), key, since };
+                let record_id = args.get("recordId").and_then(Json::as_str).map(str::to_string);
+                let wait = OpenWait { adapter_type: text(args, "adapterType", label)?.into(), edge: text(args, "edge", label)?.into(), key, record_id, since };
                 then(store(hosts, label)?.open_wait(wait), |id| Ok(Some(json!({ "waitId": id }))))
             }
             "park.waits.arrivals" => then(store(hosts, label)?.wait_arrivals(text(args, "waitId", label)?), |read| {

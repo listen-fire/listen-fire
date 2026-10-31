@@ -75,6 +75,7 @@ pub async fn open_models_door(credentials: &crate::secrets::Credentials) -> Resu
                 match segments(&request.path, "/api/public/adapter/").as_deref() {
                     Some([_, "models"]) => return models_door(&credentials, &request).await,
                     Some([_, "ocr"]) => return ocr_door(&request).await,
+                    Some([_, crate::records_door::DOOR_VERB]) => return records_door(&request),
                     Some([module, crate::limits_door::DOOR_VERB]) => return limits_door(module, &request),
                     _ => {}
                 }
@@ -410,6 +411,7 @@ async fn route(listening: &Listening, request: Request) -> Result<Response, Stri
     match segments(&request.path, "/api/public/adapter/").as_deref() {
         Some([_, "models"]) => return Ok(models_door(session.secrets().credentials(), &request).await),
         Some([_, "ocr"]) => return Ok(ocr_door(&request).await),
+        Some([_, crate::records_door::DOOR_VERB]) => return Ok(records_door(&request)),
         _ => {}
     }
 
@@ -514,6 +516,22 @@ async fn ocr_door(request: &Request) -> Response {
         Err(e) => return Response::json(400, &Js::Obj(obj! { "error" => Js::str("bad_request"), "message" => Js::Str(e) })),
     };
     let (status, answer) = crate::ocr::door(crate::ocr::module().as_deref(), &body).await;
+    Response::json(status, &answer)
+}
+
+/// The records door: facts about this host's runs and waits, read by a
+/// module this process started (it holds LF_HOST_TOKEN): crate::records_door.
+fn records_door(request: &Request) -> Response {
+    let presented = request.headers.iter().find(|(k, _)| k == "authorization").map(|(_, v)| v.as_str());
+    let expected = host_token().map(|t| format!("Bearer {t}"));
+    if expected.is_none() || presented != expected.as_deref() {
+        return Response::json(401, &Js::Obj(obj! { "error" => Js::str("unauthorized") }));
+    }
+    let body = match Js::parse(&request.body) {
+        Ok(body) => body,
+        Err(e) => return Response::json(400, &Js::Obj(obj! { "error" => Js::str("bad_request"), "message" => Js::Str(e) })),
+    };
+    let (status, answer) = crate::records_door::answer(&body);
     Response::json(status, &answer)
 }
 

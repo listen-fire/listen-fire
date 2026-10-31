@@ -79,6 +79,15 @@ impl ProcessStore {
         }
     }
 
+    /// `rows`, none from a module written before the method was the store's.
+    fn read_or_none<T: Wire>(&self, method: &str, params: Obj) -> Result<Vec<T>> {
+        match self.client.call(method, params) {
+            Ok(answer) => rows(&answer).ok_or_else(|| self.malformed(method, &answer)),
+            Err(error) if error.code == METHOD_NOT_IMPLEMENTED_CODE => Ok(Vec::new()),
+            Err(error) => Err(self.refused(method, error)),
+        }
+    }
+
     fn rows<T: Wire>(&self, method: &str, params: Obj) -> Result<Vec<T>> {
         let answer = self.call(method, params)?;
         rows(&answer).ok_or_else(|| self.malformed(method, &answer))
@@ -435,6 +444,42 @@ impl RunHostStore for ProcessStore {
                 }
             }
         }
+    }
+    fn failed_runs(&self, page: &crate::records_door::FailedPage<'_>) -> Result<Vec<RunRow>> {
+        let mut params = obj! { "until" => s(page.until), "limit" => Js::Num(page.limit.into()) };
+        if let Some(after) = &page.after {
+            params.insert("after".into(), Js::Obj(obj! { "at" => s(after.at), "runId" => s(after.run_id) }));
+        }
+        self.read_or_none("runs.failed", params)
+    }
+    fn note_release(&self, version: &str, at: &str) -> Result<bool> {
+        const METHOD: &str = "releases.note";
+        // A module written before releases were kept keeps none.
+        match self.client.call(METHOD, obj! { "version" => s(version), "at" => s(at) }) {
+            Ok(Js::Bool(new)) => Ok(new),
+            Ok(answer) => Err(self.malformed(METHOD, &answer)),
+            Err(error) if error.code == METHOD_NOT_IMPLEMENTED_CODE => Ok(false),
+            Err(error) => Err(self.refused(METHOD, error)),
+        }
+    }
+    fn releases(&self, after: Option<&crate::records_door::ReleaseAfter<'_>>, limit: i64) -> Result<Vec<crate::records_door::SeenRelease>> {
+        let mut params = obj! { "limit" => Js::Num(limit.into()) };
+        if let Some(after) = after {
+            params.insert("after".into(), Js::Obj(obj! { "at" => s(after.at), "version" => s(after.version) }));
+        }
+        const METHOD: &str = "releases.list";
+        let answer = match self.client.call(METHOD, params) {
+            Ok(answer) => answer,
+            Err(error) if error.code == METHOD_NOT_IMPLEMENTED_CODE => return Ok(Vec::new()),
+            Err(error) => return Err(self.refused(METHOD, error)),
+        };
+        let rows = answer.as_array().ok_or_else(|| self.malformed(METHOD, &answer))?;
+        rows.iter()
+            .map(|row| match (row.get("version").and_then(Js::as_str), row.get("at").and_then(Js::as_str)) {
+                (Some(version), Some(at)) => Ok(crate::records_door::SeenRelease { version: version.into(), at: at.into() }),
+                _ => Err(self.malformed("releases.list", row)),
+            })
+            .collect()
     }
     fn keep_delivery(
         &self,

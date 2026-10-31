@@ -1130,6 +1130,7 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
                 adapter_type: text(args, "adapterType", LABEL)?,
                 edge: text(args, "edge", LABEL)?,
                 key: wait_key(args)?,
+                record_id: args.get("recordId").and_then(Json::as_str),
                 since,
             };
             store.open_wait(&wait).map(|id| Some(json!({ "waitId": id }))).map_err(store_failure)

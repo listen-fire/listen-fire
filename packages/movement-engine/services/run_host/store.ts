@@ -170,6 +170,8 @@ export interface StrandedWait {
   edge: string;
   /** Null for a wait opened on a record already gone. */
   key: string | null;
+  /** The record waited on, by its id; null when the wait was opened naming none. */
+  recordId: string | null;
   /** When the store found it parked on a deleted record (ISO 8601). */
   at: string;
   /** Whether its leaf is still parked: a race's other arm may have won. */
@@ -209,8 +211,9 @@ export interface WaitStore {
    *  `since`. A run that already waits on it keeps that wait, and its `since`.
    *  A null `key`: the record was already gone, so nothing arrives on it and
    *  a park on it strands it; a run that already waits on this edge of a
-   *  record already gone keeps that wait. */
-  open(input: { runId: string; teamId: string; adapterType: string; edge: string; key: string | null; since: number }): Promise<{ waitId: string }>;
+   *  record already gone keeps that wait. `recordId`: the record waited on,
+   *  kept for `stranded` to answer. */
+  open(input: { runId: string; teamId: string; adapterType: string; edge: string; key: string | null; recordId?: string; since: number }): Promise<{ waitId: string }>;
   /** What the wait has yet to note, in seq order, the first of each identity
    *  and version only (one without an identity reads as `#` and its seq). An
    *  unknown wait fails. */

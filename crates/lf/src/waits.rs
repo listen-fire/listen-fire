@@ -82,6 +82,9 @@ pub struct OpenWait<'a> {
     /// None: the record was gone when the wait opened (an `awaitKeys`
     /// answer of `{gone: true}`), so nothing can arrive on it.
     pub key: Option<&'a str>,
+    /// The record waited on, by its id (None from an engine that names
+    /// none): what a stranded wait says it lost.
+    pub record_id: Option<&'a str>,
     pub since: i64,
 }
 
@@ -119,6 +122,8 @@ pub struct Stranded {
     pub edge: String,
     /// None for a wait opened on a record already gone.
     pub key: Option<String>,
+    /// The record waited on, by its id, when the wait was opened naming it.
+    pub record_id: Option<String>,
     /// When the store found it parked on a deleted record.
     pub at: String,
     /// Whether its leaf is still parked: a race's other arm may have won.
@@ -299,7 +304,7 @@ impl Store {
                 "update wait_row set stranded_at = ?
                  where team_id = ? and adapter_type = ? and edge = ? and key = ? and stranded_at is null and address is not null
                    and exists (select 1 from leaf l where l.run_id = wait_row.run_id and l.address = wait_row.address)
-                 returning id, run_id, adapter_type, edge, key",
+                 returning id, run_id, adapter_type, edge, key, record_id",
             )?;
             // The newest report on a record wins: one after a gone one says
             // the record is back (or never went), so its waits are not
@@ -331,7 +336,7 @@ impl Store {
                 ])?;
                 if arrival.gone {
                     let stranded = strand.query_map(params![at, team_id, adapter_type, arrival.edge, arrival.key], |r| {
-                        Ok(Stranded { wait_id: r.get(0)?, run_id: r.get(1)?, adapter_type: r.get(2)?, edge: r.get(3)?, key: r.get(4)?, at: at.to_string(), parked: true })
+                        Ok(Stranded { wait_id: r.get(0)?, run_id: r.get(1)?, adapter_type: r.get(2)?, edge: r.get(3)?, key: r.get(4)?, record_id: r.get(5)?, at: at.to_string(), parked: true })
                     })?;
                     for wait in stranded {
                         answer.stranded.push(wait?);
@@ -359,11 +364,11 @@ impl Store {
     /// keeps that wait, and its mark; likewise one that already waits on
     /// this edge of a record already gone (no key).
     pub fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {
-        let OpenWait { run_id, team_id, adapter_type, edge, key, since } = *wait;
+        let OpenWait { run_id, team_id, adapter_type, edge, key, record_id, since } = *wait;
         self.transaction(|db| {
             db.execute(
-                "insert into wait_row (id, run_id, team_id, adapter_type, edge, key, since) values (?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
-                params![uuid::Uuid::new_v4().to_string(), run_id, team_id, adapter_type, edge, key, since],
+                "insert into wait_row (id, run_id, team_id, adapter_type, edge, key, record_id, since) values (?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
+                params![uuid::Uuid::new_v4().to_string(), run_id, team_id, adapter_type, edge, key, record_id, since],
             )?;
             Ok(db.query_row(
                 "select id from wait_row where run_id = ? and team_id = ? and adapter_type = ? and edge = ? and key is ?",
@@ -405,11 +410,11 @@ impl Store {
 
     /// The stranded waits `of` names, oldest stranded first (ties by id).
     pub fn stranded_waits(&self, of: &StrandedOf<'_>) -> Result<Vec<Stranded>> {
-        const COLUMNS: &str = "select w.id, w.run_id, w.adapter_type, w.edge, w.key, w.stranded_at,
+        const COLUMNS: &str = "select w.id, w.run_id, w.adapter_type, w.edge, w.key, w.stranded_at, w.record_id,
                w.address is not null and exists (select 1 from leaf l where l.run_id = w.run_id and l.address = w.address)
              from wait_row w where w.stranded_at is not null";
         let read = |r: &rusqlite::Row<'_>| {
-            Ok(Stranded { wait_id: r.get(0)?, run_id: r.get(1)?, adapter_type: r.get(2)?, edge: r.get(3)?, key: r.get(4)?, at: r.get(5)?, parked: r.get(6)? })
+            Ok(Stranded { wait_id: r.get(0)?, run_id: r.get(1)?, adapter_type: r.get(2)?, edge: r.get(3)?, key: r.get(4)?, at: r.get(5)?, record_id: r.get(6)?, parked: r.get(7)? })
         };
         let rows = match *of {
             StrandedOf::Run(run_id) => {
@@ -655,7 +660,7 @@ mod tests {
         /// its run's names.
         fn stranded(&self, wait: &Stranded, with_run: bool) -> Js {
             let name = |ids: &HashMap<String, String>, id: &str| ids.iter().find(|(_, v)| v.as_str() == id).map_or_else(|| id.to_string(), |(k, _)| k.clone());
-            let mut shown = obj! { "wait" => Js::str(name(&self.waits, &wait.wait_id)), "edge" => Js::str(&wait.edge), "key" => wait.key.as_deref().map_or(Js::Null, Js::str), "parked" => Js::Bool(wait.parked) };
+            let mut shown = obj! { "wait" => Js::str(name(&self.waits, &wait.wait_id)), "edge" => Js::str(&wait.edge), "key" => wait.key.as_deref().map_or(Js::Null, Js::str), "recordId" => wait.record_id.as_deref().map_or(Js::Null, Js::str), "parked" => Js::Bool(wait.parked) };
             if with_run {
                 shown.insert("run".into(), Js::str(name(&self.ids, &wait.run_id)));
             }
@@ -664,7 +669,7 @@ mod tests {
 
         /// A case's stranded wait, its keys in the order `stranded` writes them.
         fn named_stranded(&self, want: &Js) -> Js {
-            let mut shown = obj! { "wait" => want.get("wait").cloned().unwrap(), "edge" => want.get("edge").cloned().unwrap(), "key" => want.get("key").cloned().unwrap(), "parked" => want.get("parked").cloned().unwrap() };
+            let mut shown = obj! { "wait" => want.get("wait").cloned().unwrap(), "edge" => want.get("edge").cloned().unwrap(), "key" => want.get("key").cloned().unwrap(), "recordId" => want.get("recordId").cloned().unwrap_or(Js::Null), "parked" => want.get("parked").cloned().unwrap() };
             if let Some(run) = want.get("run") {
                 shown.insert("run".into(), run.clone());
             }
@@ -777,7 +782,7 @@ mod tests {
                 "open" => {
                     let since = names.marks[text(step, "since")];
                     let run = names.id(text(step, "run"));
-                    let wait = OpenWait { run_id: &run, team_id: &team, adapter_type: adapter, edge: text(step, "edge"), key: opt_text(step, "key"), since };
+                    let wait = OpenWait { run_id: &run, team_id: &team, adapter_type: adapter, edge: text(step, "edge"), key: opt_text(step, "key"), record_id: opt_text(step, "recordId"), since };
                     let id = store.open_wait(&wait).unwrap();
                     if let Some(same) = opt_text(step, "same") {
                         assert_eq!(id, names.wait(same), "{at}: the same wait");
@@ -950,7 +955,7 @@ mod tests {
                     let kept = store.keep_delivery(&names.id("subscription"), None, &receipt, std::slice::from_ref(&fire), Some(&log), &waits).unwrap().expect("kept");
                     assert_eq!(kept.arrival_mark, names.marks[text(step, "arrivalMark")], "{at}: the mark before its arrivals");
                     for (wait, want) in waits.iter().zip(list(step, "waits")) {
-                        let opened = OpenWait { run_id: &wait.run_id, team_id: &team, adapter_type: adapter, edge: &wait.edge, key: wait.key.as_deref(), since: 0 };
+                        let opened = OpenWait { run_id: &wait.run_id, team_id: &team, adapter_type: adapter, edge: &wait.edge, key: wait.key.as_deref(), record_id: None, since: 0 };
                         names.waits.insert(text(want, "as").into(), wait_of(store, &opened));
                     }
                 }
@@ -1025,7 +1030,7 @@ mod tests {
         newly_matches_counts_once_until_it_stops_matching,
         a_noted_arrival_is_no_longer_listed,
         two_arrivals_on_one_wait_count_in_log_order,
-        a_gone_arrival_strands_the_parked_waits_on_its_record_once_and_wakes_none,
+        a_gone_arrival_strands_the_parked_waits_on_its_record_once_and_wakes_none_each_names_the_record_it_waited_on,
         a_wait_parked_after_its_record_went_is_stranded_as_it_parks,
         a_wait_opened_on_a_record_already_gone_has_no_key_is_one_per_run_and_edge_nothing_wakes_it_and_it_is_stranded_as_it_parks,
         a_later_arrival_on_a_stranded_waits_record_wakes_the_parked_waits_on_it_and_strands_none_of_its_waits_any_more,
@@ -1121,7 +1126,7 @@ mod tests {
         let (run, team, subscription) = (uuid::Uuid::new_v4().to_string(), store.tenant().to_string(), uuid::Uuid::new_v4().to_string());
         let key = format!("thread:{run}");
         store.start_run(&RunStart { id: &run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
-        let wait = store.open_wait(&OpenWait { run_id: &run, team_id: &team, adapter_type: "acme", edge: "Comments", key: Some(&key), since: store.arrival_mark().unwrap() }).unwrap();
+        let wait = store.open_wait(&OpenWait { run_id: &run, team_id: &team, adapter_type: "acme", edge: "Comments", key: Some(&key), record_id: None, since: store.arrival_mark().unwrap() }).unwrap();
         store.commit_park(&Park { run_id: &run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
         let receipt = || NewDelivery {
             id: uuid::Uuid::new_v4().to_string(),
@@ -1171,7 +1176,7 @@ mod tests {
         let (run, team) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
         store.start_run(&RunStart { id: &run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
         let since = store.arrival_mark().unwrap();
-        let wait = store.open_wait(&OpenWait { run_id: &run, team_id: &team, adapter_type: "acme", edge: "Comments", key: Some("thread:c1"), since }).unwrap();
+        let wait = store.open_wait(&OpenWait { run_id: &run, team_id: &team, adapter_type: "acme", edge: "Comments", key: Some("thread:c1"), record_id: None, since }).unwrap();
         let (locked, held) = std::sync::mpsc::channel();
         let logging = std::thread::spawn({
             let (url, team) = (url.clone(), team.clone());
@@ -1217,7 +1222,7 @@ mod tests {
             .unwrap();
         let store = Store::open(&path).unwrap();
         store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
-        let kept = OpenWait { run_id: "run-1", team_id: "t", adapter_type: "acme", edge: "Comments", key: Some("thread:c1"), since: 5 };
+        let kept = OpenWait { run_id: "run-1", team_id: "t", adapter_type: "acme", edge: "Comments", key: Some("thread:c1"), record_id: None, since: 5 };
         assert_eq!(store.open_wait(&kept).unwrap(), "w1");
         let keyless = store.open_wait(&OpenWait { key: None, ..kept }).unwrap();
         store.commit_park(&Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &keyless } }).unwrap();
@@ -1282,7 +1287,7 @@ mod tests {
         let store = state_file();
         let wait_on = |run: &str, key: &str| {
             store.start_run(&RunStart { id: run, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
-            let wait = store.open_wait(&OpenWait { run_id: run, team_id: "t", adapter_type: "acme", edge: "Comments", key: Some(key), since: 0 }).unwrap();
+            let wait = store.open_wait(&OpenWait { run_id: run, team_id: "t", adapter_type: "acme", edge: "Comments", key: Some(key), record_id: None, since: 0 }).unwrap();
             store.commit_park(&Park { run_id: run, address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
             wait
         };

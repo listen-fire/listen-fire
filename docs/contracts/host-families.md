@@ -588,11 +588,11 @@ answer:  { mark: number }   // an integer
 #### `park.waits.open`
 
 ```ts
-request: { segmentId: string; adapterType: string; edge: string; since: number } & ({ key: string } | { gone: true })
+request: { segmentId: string; adapterType: string; edge: string; since: number; recordId?: string } & ({ key: string } | { gone: true })
 answer:  { waitId: string }
 ```
 
-- **Persist:** the segment's run waits on `edge` of the record the module keys `key`, reading the arrivals logged after `since`.
+- **Persist:** the segment's run waits on `edge` of the record the module keys `key`, reading the arrivals logged after `since`. `recordId` is the record's id, kept with the wait so a stranded wait names the record it lost ([system-events.md](system-events.md)); this engine always sends it.
 - **`gone: true` instead of a key:** the module's `awaitKeys` answered the record gone. The wait opens all the same, without a key: nothing can arrive on it, so an `await` on it parks for good, and the host marks that park stranded ([stranded-waits.md](stranded-waits.md)). A run that already waits on this edge of a record already gone keeps that wait, as it keeps a wait on a record.
 - **Retry:** a run that already waits on this edge of this record keeps that wait and its first mark: the same `waitId` answers.
 
@@ -861,7 +861,7 @@ Four requests are the Rust engine's own: they are not `EngineHost` methods, and 
 ## Changes
 
 - **Version 2 (0.13, waits on listenable edges).** A change in meaning, so the version moves:
-  - **`park.waits`:** new, optional: `mark`, `open`, `arrivals` and `note`. An await on an adapter's edge reads the wait its record opened when it entered the run, not the adapter's `resolveAwait`. `open` takes `gone: true` in place of a key for a record already gone; `arrivals` answers no `gone` (a deleted record leaves its wait waiting, [stranded-waits.md](stranded-waits.md)).
+  - **`park.waits`:** new, optional: `mark`, `open`, `arrivals` and `note`. An await on an adapter's edge reads the wait its record opened when it entered the run, not the adapter's `resolveAwait`. `open` takes `gone: true` in place of a key for a record already gone, and the record's `recordId`; `arrivals` answers no `gone` (a deleted record leaves its wait waiting, [stranded-waits.md](stranded-waits.md)).
   - **`park.sink.commitAwaitPark`** takes `waitId` in place of `adapterType` and `correlationKey` for an await on an adapter's edge, and **`park.wake`** takes `waitId`; neither takes a key any more.
   - **`adapters.call`** may call `awaitKeys` (adapter protocol 2.5); the engine no longer calls `resolveAwait` or `wakeKeys`.
   - **`park.callbacks`** is gone, with `fireCallbackBody` and the run input's `fire`: `callback(…)` retired at 0.13 (a form from `@lf/forms`, or buttons on a message, replaces it). The engine refuses a `callback(…)` that reaches it as one the checker should have caught.

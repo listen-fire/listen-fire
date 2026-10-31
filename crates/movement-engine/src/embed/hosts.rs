@@ -141,6 +141,9 @@ pub struct OpenWait {
     pub adapter_type: String,
     pub edge: String,
     pub key: Option<String>,
+    /// The record waited on, as the engine reads its id; None from an
+    /// engine that names none.
+    pub record_id: Option<String>,
     pub since: i64,
 }
 

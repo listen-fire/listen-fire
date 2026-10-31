@@ -41,6 +41,8 @@ const Stranded = z.object({
   adapterType: z.string(),
   edge: z.string(),
   key: z.string().nullable(),
+  /** A store written before waits named their record answers none. */
+  recordId: z.string().nullable().default(null),
   at: z.string(),
   parked: z.boolean(),
 });

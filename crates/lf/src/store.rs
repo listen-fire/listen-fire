@@ -99,6 +99,12 @@ create table if not exists write_ledger (
 );
 create index if not exists write_ledger_record on write_ledger (adapter, record_type, external_id, at);
 create index if not exists write_ledger_at on write_ledger (at);
+create table if not exists release_seen (
+  version text primary key,
+  seen_at text not null
+);
+create index if not exists release_seen_at on release_seen (seen_at, version);
+create index if not exists run_failed on run (finished_at, id) where status = 'failed';
 create table if not exists module_processes (
   id integer primary key check (id = 1),
   processes text not null,
@@ -185,7 +191,8 @@ pub const SETTLE_RACE_WORK_KIND: &str = "settle_race";
 
 /// A run's waits (crate::waits). `key` is null for a wait opened on a record
 /// already gone, one per run and edge as a keyed wait is one per record;
-/// `stranded_at` is when the wait was found parked on a deleted record.
+/// `stranded_at` is when the wait was found parked on a deleted record;
+/// `record_id` the record it waits on, as the engine named it.
 const WAIT_ROW: &str = "
 create table if not exists wait_row (
   id text primary key,
@@ -197,7 +204,8 @@ create table if not exists wait_row (
   since integer not null,
   address text,
   stranded_at text,
-  fire_key text
+  fire_key text,
+  record_id text
 );
 create unique index if not exists wait_row_edge on wait_row (run_id, team_id, adapter_type, edge, key);
 create unique index if not exists wait_row_keyless on wait_row (run_id, team_id, adapter_type, edge) where key is null;
@@ -268,9 +276,9 @@ pub struct RunRow {
     pub attempts: Vec<Js>,
 }
 
-const RUN_COLUMNS: &str = "id, file, movement, status, started_at, input, outcome, delivery_id, finished_at, attempt, attempts";
+pub(crate) const RUN_COLUMNS: &str = "id, file, movement, status, started_at, input, outcome, delivery_id, finished_at, attempt, attempts";
 
-fn run_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RunRow> {
+pub(crate) fn run_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RunRow> {
     Ok(RunRow {
         id: r.get(0)?,
         file: r.get(1)?,
@@ -631,6 +639,9 @@ pub fn iso(offset_ms: i64) -> String {
 }
 
 /// The instant `at` (epoch milliseconds), as `iso` writes it.
+/// The earliest instant, in `iso`'s form: a horizon that forgets nothing.
+pub const EPOCH: &str = "1970-01-01T00:00:00.000Z";
+
 pub fn iso_at(at: i64) -> String {
     let ts = jiff::Timestamp::from_millisecond(at).expect("an instant within range");
     format!("{}.{:03}Z", ts.strftime("%Y-%m-%dT%H:%M:%S"), at.rem_euclid(1000))
@@ -733,10 +744,13 @@ impl Store {
                 .prepare("select name from pragma_table_info('wait_row')")?
                 .query_map([], |r| r.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
-            if columns.iter().any(|c| c == "stranded_at") && !columns.iter().any(|c| c == "fire_key") {
-                return Ok(db.execute_batch("alter table wait_row add column fire_key text")?);
-            }
             if columns.is_empty() || columns.iter().any(|c| c == "stranded_at") {
+                // Columns added since a wait could be stranded.
+                for column in ["fire_key", "record_id"] {
+                    if !columns.is_empty() && !columns.iter().any(|c| c == column) {
+                        db.execute_batch(&format!("alter table wait_row add column {column} text"))?;
+                    }
+                }
                 return Ok(db.execute_batch(WAIT_ROW)?);
             }
             Ok(db.execute_batch(&format!(

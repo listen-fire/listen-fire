@@ -136,17 +136,17 @@
       ]
     },
     {
-      "case": "a gone arrival strands the parked waits on its record, once, and wakes none",
+      "case": "a gone arrival strands the parked waits on its record, once, and wakes none; each names the record it waited on",
       "steps": [
         { "do": "mark", "as": "m" },
-        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "since": "m" },
-        { "do": "open", "as": "unparked", "run": "run-2", "edge": "Comments", "key": "thread:c1", "since": "m" },
+        { "do": "open", "as": "w", "run": "run-1", "edge": "Comments", "key": "thread:c1", "recordId": "msg-1", "since": "m" },
+        { "do": "open", "as": "unparked", "run": "run-2", "edge": "Comments", "key": "thread:c1", "recordId": "msg-1", "since": "m" },
         { "do": "open", "as": "elsewhere", "run": "run-3", "edge": "Comments", "key": "thread:c2", "since": "m" },
         { "do": "park", "run": "run-1", "wait": "w", "address": "s1" },
         { "do": "park", "run": "run-3", "wait": "elsewhere", "address": "s1" },
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "gone": true }], "wakes": [], "stranded": ["w"], "queued": [] },
         { "do": "arrivals", "wait": "w", "arrivals": [] },
-        { "do": "stranded", "run": "run-1", "waits": [{ "wait": "w", "edge": "Comments", "key": "thread:c1", "parked": true }] },
+        { "do": "stranded", "run": "run-1", "waits": [{ "wait": "w", "edge": "Comments", "key": "thread:c1", "recordId": "msg-1", "parked": true }] },
         { "do": "stranded", "run": "run-2", "waits": [] },
         { "do": "stranded", "run": "run-3", "waits": [] },
         { "do": "log", "arrivals": [{ "edge": "Comments", "key": "thread:c1", "gone": true }], "wakes": [], "stranded": [] }

@@ -50,6 +50,7 @@ use tokio_postgres::{Client, Row};
 use crate::backend::RunHostStore;
 use crate::json::Js;
 use crate::loop_breaker::{Deepest, LedgerRecord, LedgerWrite};
+use crate::records_door::{FailedPage, ReleaseAfter, SeenRelease};
 use crate::obj;
 use crate::resolve::{ListenState, Resolution};
 use crate::store::{
@@ -154,6 +155,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (12, include_str!("pg_store_schema_12.sql")),
     (13, include_str!("pg_store_schema_13.sql")),
     (14, include_str!("pg_store_schema_14.sql")),
+    (15, include_str!("pg_store_schema_15.sql")),
 ];
 
 /// The advisory lock the migrations run under: "lf-store" as a number.
@@ -402,7 +404,7 @@ impl PgStore {
                          where w.team_id = $1::text::uuid and w.adapter_type = $2::text and w.edge = $3::text and w.key = $4::text
                            and w.stranded_at is null and w.address is not null
                            and exists (select 1 from lf.parked_run p where p.run_id = w.run_id and p.address = w.address)
-                         returning w.id::text, w.run_id::text, w.adapter_type, w.edge, w.key, ",
+                         returning w.id::text, w.run_id::text, w.adapter_type, w.edge, w.key, w.record_id, ",
                         iso!("w.stranded_at")
                     ),
                     &[&team_id, &adapter_type, &arrival.edge, &arrival.key, &at],
@@ -413,7 +415,8 @@ impl PgStore {
                     adapter_type: r.get(2),
                     edge: r.get(3),
                     key: r.get(4),
-                    at: r.get(5),
+                    record_id: r.get(5),
+                    at: r.get(6),
                     parked: true,
                 }));
                 continue;
@@ -1088,13 +1091,13 @@ impl RunHostStore for PgStore {
     /// record already gone) one per run and edge: an open of either again
     /// is the first.
     fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {
-        let OpenWait { run_id, team_id, adapter_type, edge, key, since } = *wait;
+        let OpenWait { run_id, team_id, adapter_type, edge, key, record_id, since } = *wait;
         self.transaction(|| {
             self.execute(
-                "insert into lf.wait_row (run_id, team_id, adapter_type, edge, key, since)
-                 values ($1::text::uuid, $2::text::uuid, $3::text, $4::text, $5::text, $6::int8)
+                "insert into lf.wait_row (run_id, team_id, adapter_type, edge, key, since, record_id)
+                 values ($1::text::uuid, $2::text::uuid, $3::text, $4::text, $5::text, $6::int8, $7::text)
                  on conflict do nothing",
-                &[&run_id, &team_id, &adapter_type, &edge, &key, &since],
+                &[&run_id, &team_id, &adapter_type, &edge, &key, &since, &record_id],
             )?;
             let row = self.query_opt(
                 "select id::text from lf.wait_row
@@ -1140,7 +1143,7 @@ impl RunHostStore for PgStore {
         const COLUMNS: &str = concat!(
             "select w.id::text, w.run_id::text, w.adapter_type, w.edge, w.key, ",
             iso!("w.stranded_at"),
-            ", w.address is not null and exists (select 1 from lf.parked_run p where p.run_id = w.run_id and p.address = w.address)
+            ", w.record_id, w.address is not null and exists (select 1 from lf.parked_run p where p.run_id = w.run_id and p.address = w.address)
              from lf.wait_row w join lf.trigger_run r on r.id = w.run_id
              where w.stranded_at is not null and r.team_id = $1::text::uuid"
         );
@@ -1154,7 +1157,7 @@ impl RunHostStore for PgStore {
         };
         Ok(rows
             .iter()
-            .map(|r| Stranded { wait_id: r.get(0), run_id: r.get(1), adapter_type: r.get(2), edge: r.get(3), key: r.get(4), at: r.get(5), parked: r.get(6) })
+            .map(|r| Stranded { wait_id: r.get(0), run_id: r.get(1), adapter_type: r.get(2), edge: r.get(3), key: r.get(4), at: r.get(5), record_id: r.get(6), parked: r.get(7) })
             .collect())
     }
 
@@ -1533,6 +1536,42 @@ impl RunHostStore for PgStore {
             &[&self.tenant, &record.adapter, &record.record_type, &record.external_id, &since],
         )?;
         Ok(row.map(|r| Deepest { run_id: r.get(0), depth: r.get::<_, i32>(1).max(0) as u32 }))
+    }
+
+    fn failed_runs(&self, page: &FailedPage<'_>) -> Result<Vec<RunRow>> {
+        const FAILED: &str = "from lf.trigger_run where team_id = $1::text::uuid and trigger_payload ? 'facts' and status = 'failed' and failed_at <= $2::text::timestamptz";
+        let rows = match &page.after {
+            None => self.query(&format!("select {RUN_COLUMNS} {FAILED} order by failed_at, id limit $3::int8"), &[&self.tenant, &page.until, &page.limit])?,
+            Some(after) => {
+                // A run id that is no uuid sorts before every one: the page starts at its instant.
+                let id = uuid::Uuid::parse_str(after.run_id).map_or_else(|_| uuid::Uuid::nil().to_string(), |id| id.to_string());
+                self.query(
+                    &format!("select {RUN_COLUMNS} {FAILED} and (failed_at, id) > ($3::text::timestamptz, $4::text::uuid) order by failed_at, id limit $5::int8"),
+                    &[&self.tenant, &page.until, &after.at, &id, &page.limit],
+                )?
+            }
+        };
+        rows.iter().map(run_of).collect()
+    }
+
+    fn note_release(&self, version: &str, at: &str) -> Result<bool> {
+        let kept = self.execute(
+            "insert into lf.release_seen (team_id, version, seen_at) values ($1::text::uuid, $2::text, date_trunc('milliseconds', $3::text::timestamptz)) on conflict do nothing",
+            &[&self.tenant, &version, &at],
+        )?;
+        Ok(kept == 1)
+    }
+
+    fn releases(&self, after: Option<&ReleaseAfter<'_>>, limit: i64) -> Result<Vec<SeenRelease>> {
+        const COLUMNS: &str = concat!("select version, ", iso!("seen_at"), " from lf.release_seen where team_id = $1::text::uuid");
+        let rows = match after {
+            None => self.query(&format!("{COLUMNS} order by seen_at, version limit $2::int8"), &[&self.tenant, &limit])?,
+            Some(after) => self.query(
+                &format!("{COLUMNS} and (seen_at, version) > ($2::text::timestamptz, $3::text) order by seen_at, version limit $4::int8"),
+                &[&self.tenant, &after.at, &after.version, &limit],
+            )?,
+        };
+        Ok(rows.iter().map(|r| SeenRelease { version: r.get(0), at: r.get(1) }).collect())
     }
 
     /// The receipt first: a duplicate (its external id kept at its

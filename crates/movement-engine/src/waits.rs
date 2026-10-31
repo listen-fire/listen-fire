@@ -244,7 +244,7 @@ impl Run<'_> {
         for (_, edge, heads) in groups {
             let keys = self.await_keys(&edge, &heads).await?;
             for (head, key) in heads.into_iter().zip(keys) {
-                let wait = self.open_wait(&head.adapter_type, &edge, key.as_deref(), since).await?;
+                let wait = self.open_wait(&head.adapter_type, &edge, key.as_deref(), &head.record_id, since).await?;
                 self.keep_wait(&head.holder, &edge, wait);
             }
         }
@@ -350,9 +350,10 @@ impl Run<'_> {
             .collect()
     }
 
-    /// The wait's id; `key` None for a record already gone.
-    async fn open_wait(&self, adapter_type: &str, edge: &str, key: Option<&str>, since: i64) -> Result<String, Failure> {
-        let answer = self.ask(host::park::open_wait(self.segment(), adapter_type, edge, key, since)).await?;
+    /// The wait's id; `key` None for a record already gone. `record_id` is
+    /// kept with the wait so a host can say which record a stranded wait lost.
+    async fn open_wait(&self, adapter_type: &str, edge: &str, key: Option<&str>, record_id: &str, since: i64) -> Result<String, Failure> {
+        let answer = self.ask(host::park::open_wait(self.segment(), adapter_type, edge, key, record_id, since)).await?;
         answer
             .as_ref()
             .and_then(|a| a.get("waitId"))

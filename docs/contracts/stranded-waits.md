@@ -50,7 +50,7 @@ A store module that does not serve `waits.stranded` (`method_not_implemented`) r
 
 ## The event
 
-The records door exposes stranded waits to modules: `records.strandedWaits` reads `waits.stranded({ after, limit })`. `@lf/system` turns each into one `Wait Lost Its Record` event, never to the stranded run's own listen: its fields and delivery are the system events' contract, `docs/contracts/system-events.md` (written with `@lf/system`). Its 0.13 listen:
+The records door exposes stranded waits to modules: `records.strandedWaits` reads `waits.stranded({ after, limit })`. `@lf/system` turns each into one `Wait Lost Its Record` event, never to the stranded run's own listen: its fields and delivery are the system events' contract, [system-events.md](system-events.md). The event's `Record Id` is the wait's `recordId` (`waits.open`). Its 0.13 listen:
 
 ```
 listen to sys-[e:Events WHERE e.Kind == "Wait Lost Its Record"]-> fire report

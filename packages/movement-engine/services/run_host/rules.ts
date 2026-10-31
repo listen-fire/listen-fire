@@ -381,7 +381,7 @@ export function runParkHost(
   };
   const waits: HostWaits = {
     mark: async () => ({ mark: await store.waits.mark() }),
-    open: (input) => store.waits.open({ runId, teamId, adapterType: input.adapterType, edge: input.edge, key: 'key' in input ? input.key : null, since: input.since }),
+    open: (input) => store.waits.open({ runId, teamId, adapterType: input.adapterType, edge: input.edge, key: 'key' in input ? input.key : null, ...(input.recordId !== undefined ? { recordId: input.recordId } : {}), since: input.since }),
     arrivals: async ({ waitId }) => {
       const { arrivals } = await store.waits.arrivals({ waitId });
       return { arrivals: arrivals.map(loggedArrival) };

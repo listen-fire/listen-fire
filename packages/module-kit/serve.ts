@@ -11,9 +11,10 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { resolve as resolvePath } from 'node:path';
 
-import { moduleSlug, type ModuleDefinition, type ModuleLog, type ModuleModels, type ModuleOcr, type ModuleSpend } from './define';
+import { moduleSlug, type ModuleDefinition, type ModuleLog, type ModuleModels, type ModuleOcr, type ModuleRecords, type ModuleSpend } from './define';
 import { hostModels } from './host_models';
 import { hostOcr } from './host_ocr';
+import { hostRecords, refusingRecords } from './host_records';
 
 import { fileKv } from './file_kv';
 import { emptyOcrSlot, refusingFiles, refusingKv, refusingModels } from './in_process';
@@ -68,6 +69,8 @@ export interface ServeModuleOptions {
   /** OCR to lend the module (an embedder's), or the host's OCR door
    *  (`hostOcr`). Absent: the OCR slot is empty, and a read is refused by name. */
   ocr?: ModuleOcr | ((spend: ModuleSpend) => ModuleOcr);
+  /** The host's records door (`hostRecords`). Absent: a read is refused by name. */
+  records?: ModuleRecords;
 }
 
 export async function serveModule(options: ServeModuleOptions): Promise<ServedModules> {
@@ -183,6 +186,7 @@ function moduleHandler(options: Omit<ServeModuleOptions, 'port' | 'host' | 'sock
       options.browser ??
       emptyBrowserSlot(`module ${definition.name} is served by the serve-module command line, which lends no browser (the platform's api image fills the slot with Chromium)`),
     ocr: options.ocr ?? emptyOcrSlot(`module ${definition.name} is served by the serve-module command line with no host to ask (LF_HOST_URL), so no OCR is lent`),
+    records: options.records ?? refusingRecords(`module ${definition.name} is served by the serve-module command line with no host to ask (LF_HOST_URL), so it reads no records`),
     ...(options.baseUrlOverride !== undefined ? { baseUrlOverride: options.baseUrlOverride } : {}),
     ...(options.constructionArgs !== undefined ? { constructionArgs: options.constructionArgs } : {}),
     publicUrl,
@@ -256,9 +260,9 @@ function moduleOptionsOf(definition: ModuleDefinition, env: Readonly<Record<stri
 }
 
 /** The host's doors a module asks through: its models and its OCR. */
-function hostDoors(base: string, token: string | undefined): Pick<ServeModuleOptions, 'models' | 'ocr'> {
+function hostDoors(base: string, token: string | undefined): Pick<ServeModuleOptions, 'models' | 'ocr' | 'records'> {
   const headers: Record<string, string> = token !== undefined ? { authorization: `Bearer ${token}` } : {};
-  return { models: hostModels({ url: `${base}/models`, headers }), ocr: hostOcr({ url: `${base}/ocr`, headers }) };
+  return { models: hostModels({ url: `${base}/models`, headers }), ocr: hostOcr({ url: `${base}/ocr`, headers }), records: hostRecords({ url: `${base}/records`, headers }) };
 }
 
 /** `MODULE_MOUNTS`: a JSON array of `{ path, module, cwd?, env? }` — each

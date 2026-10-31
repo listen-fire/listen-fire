@@ -36,7 +36,7 @@ function installed(dir: string): string[] {
   return readdirSync(join(dir, 'externals')).sort();
 }
 
-const BUNDLED = ['affinity', 'airtable', 'attio', 'dealroom', 'dropbox', 'email', 'evertrace', 'github', 'gmail', 'google-drive', 'google-sheets', 'granola', 'jev', 'mcp', 'pdf', 'slack', 'stripe', 'telegram', 'web', 'webhook', 'whatsapp'];
+const BUNDLED = ['affinity', 'airtable', 'attio', 'dealroom', 'dropbox', 'email', 'evertrace', 'github', 'gmail', 'google-drive', 'google-sheets', 'granola', 'jev', 'mcp', 'pdf', 'slack', 'stripe', 'system', 'telegram', 'web', 'webhook', 'whatsapp'];
 
 // ── the list ─────────────────────────────────────────────────────────────────
 

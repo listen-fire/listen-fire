@@ -106,6 +106,8 @@ interface WaitRow {
   edge: string;
   /** Null for a wait opened on a record already gone. */
   key: string | null;
+  /** The record waited on; null when the wait was opened naming none. */
+  recordId: string | null;
   since: number;
   /** Where the wait is parked; null while it is not. */
   address: string | null;
@@ -275,6 +277,7 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
     adapterType: wait.adapterType,
     edge: wait.edge,
     key: wait.key,
+    recordId: wait.recordId,
     at: new Date(wait.strandedAt).toISOString(),
     parked: parkedNow(wait),
   });
@@ -345,13 +348,13 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
     return { wakes, stranded };
   };
   /** The run's wait on this edge of this record: the one it has, or a new one. */
-  const openWait = (input: { runId: string; teamId: string; adapterType: string; edge: string; key: string | null; since: number; fireKey: string | null }): string => {
+  const openWait = (input: { runId: string; teamId: string; adapterType: string; edge: string; key: string | null; recordId?: string; since: number; fireKey: string | null }): string => {
     const { runId, teamId, adapterType, edge, key, since, fireKey } = input;
     for (const wait of waits.values()) {
       if (wait.runId === runId && wait.teamId === teamId && wait.adapterType === adapterType && wait.edge === edge && wait.key === key) return wait.id;
     }
     const id = randomUUID();
-    waits.set(id, { id, runId, teamId, adapterType, edge, key, since, address: null, strandedAt: null, fireKey });
+    waits.set(id, { id, runId, teamId, adapterType, edge, key, recordId: input.recordId ?? null, since, address: null, strandedAt: null, fireKey });
     return id;
   };
   /** A wait a delivery opens for a run it queues; its trigger's own arrival
@@ -504,8 +507,8 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
       async log(input) {
         return logArrivals(input);
       },
-      async open({ runId, teamId, adapterType, edge, key, since }) {
-        return { waitId: openWait({ runId, teamId, adapterType, edge, key, since, fireKey: null }) };
+      async open({ runId, teamId, adapterType, edge, key, recordId, since }) {
+        return { waitId: openWait({ runId, teamId, adapterType, edge, key, ...(recordId !== undefined ? { recordId } : {}), since, fireKey: null }) };
       },
       async stranded(of) {
         const every = [...waits.values()]

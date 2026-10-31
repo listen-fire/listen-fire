@@ -24,6 +24,7 @@ import type {
   ModuleLog,
   ModuleModels,
   ModuleOcr,
+  ModuleRecords,
   PluginAnswer,
   PluginInvocation,
   PluginModuleDefinition,
@@ -33,6 +34,7 @@ import type {
   PollInput,
 } from './define';
 
+import { refusingRecords } from './host_records';
 import { moduleManifest, type LoadedModule } from './manifest';
 
 /** What a host hands a module it loads in process. */
@@ -54,6 +56,8 @@ export interface ModuleHost {
   browser?: BrowserSlot;
   /** Default: the empty slot, refused by name (a host with no OCR). */
   ocr?: ModuleOcr;
+  /** Default: refused by name (a host that serves no records door). */
+  records?: ModuleRecords;
   baseUrlOverride?: string;
   constructionArgs?: Readonly<Record<string, string>>;
   credentialRef?: string;
@@ -87,6 +91,7 @@ export function moduleContext(host: ModuleHost): ModuleContext {
     identities: host.identities ?? refusingIdentities('this host keeps no linked identities'),
     browser: host.browser ?? emptyBrowserSlot('this host has no browser to lend its modules'),
     ocr: host.ocr ?? emptyOcrSlot('this host has no OCR to lend its modules'),
+    records: host.records ?? refusingRecords('this host serves no records door to its modules'),
     config: {
       tenant: host.tenant,
       ...(host.baseUrlOverride !== undefined ? { baseUrlOverride: host.baseUrlOverride } : {}),

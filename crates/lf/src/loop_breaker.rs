@@ -85,6 +85,14 @@ pub struct Deepest {
     pub depth: u32,
 }
 
+/// The ledger's name for listen-fire itself, under which it keeps facts
+/// about its own records (crate::records_door): no module's adapter type
+/// is empty.
+pub const HOST: &str = "";
+/// The host's own record of a run, by its id: what a module reporting a
+/// fact about a run says its arrival is `about`.
+pub const HOST_RUN: &str = "Run";
+
 /// What a delivery says of an arrival a paused listen does not run.
 pub const HELD: &str = "held: the listen is paused (LISTEN_LOOP)";
 
@@ -100,13 +108,16 @@ pub fn chain_in(facts: &Js) -> Vec<String> {
 /// The records an arrival is matched to writes by: the record it is about,
 /// where its edge declares `attributes`, and its landing (by the landing's
 /// `recordType`, else `landing_type`, the type the listened edge lands on).
+/// An arrival about a `Run` is matched to the host's own facts about that
+/// run too (crate::records_door): a fact about a run is that run's write.
 pub fn records_of<'a>(adapter: &'a str, arrival: &'a ArrivalIn, landing_type: &'a str) -> Vec<LedgerRecord<'a>> {
     let about = arrival.about.as_ref().and_then(|about| Some((about.get("recordType")?.as_str()?, about.get("externalId")?.as_str()?)));
     let landing = arrival.landing.as_ref().and_then(|landing| {
         let record_type = landing.get("recordType").and_then(Js::as_str).unwrap_or(landing_type);
         Some((record_type, landing.get("recordId")?.as_str()?))
     });
-    about.into_iter().chain(landing).map(|(record_type, external_id)| LedgerRecord { adapter, record_type, external_id }).collect()
+    let host = about.filter(|(record_type, _)| *record_type == HOST_RUN).map(|(record_type, external_id)| LedgerRecord { adapter: HOST, record_type, external_id });
+    about.into_iter().chain(landing).map(|(record_type, external_id)| LedgerRecord { adapter, record_type, external_id }).chain(host).collect()
 }
 
 /// The earliest write that can have caused `arrival` (epoch ms): `window_ms`
