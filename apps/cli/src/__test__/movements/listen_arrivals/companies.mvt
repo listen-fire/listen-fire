@@ -1,0 +1,11 @@
+import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+# Each company created in the CRM is welcomed, unless it is called "Ignored".
+function welcome(c: <crm-[:Company]->>) {
+  write crm-[:Company]-> { Name: "Welcome ${c.Name}" }
+}
+
+listen to crm-[c:Company WHERE c.Name != "Ignored"]-> fire welcome

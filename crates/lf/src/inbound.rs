@@ -23,7 +23,7 @@ use crate::arrivals::arrivals_of;
 use crate::http::header;
 use crate::json::Js;
 use crate::obj;
-use crate::waits::NewArrival;
+use crate::arrivals::ArrivalIn;
 pub use crate::store::DeliverySource;
 
 /// The placeholder a subscription holds until its registration returns a
@@ -407,7 +407,7 @@ pub struct Source {
 pub struct Extraction {
     pub events: Vec<Js>,
     /// What the delivery says landed on listenable edges.
-    pub arrivals: Vec<NewArrival>,
+    pub arrivals: Vec<ArrivalIn>,
     pub checkpoint: Option<Js>,
 }
 
@@ -477,8 +477,9 @@ pub struct Kept<'a> {
     pub receipts: Vec<Js>,
     pub source: &'a Source,
     pub team_id: &'a str,
-    /// Logged, each parked wait on their records woken.
-    pub arrivals: &'a [NewArrival],
+    /// Logged when they name their record, each parked wait on it woken;
+    /// judged against the listens on their edges when something landed.
+    pub arrivals: &'a [ArrivalIn],
     /// The provider's id for the delivery: a second one under it, at the
     /// same subscription, is a duplicate.
     pub external_id: Option<&'a str>,
@@ -643,7 +644,8 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
         return refused(Refusal::PayloadMismatch(message));
     }
 
-    if !extraction.arrivals.is_empty()
+    // An arrival on a root edge names no record, and no wait reads it.
+    if extraction.arrivals.iter().any(|arrival| arrival.key.is_some())
         && let Some(why) = store.arrivals_unkept().await?
     {
         eprintln!("Webhook delivery for subscription {} not kept: {why}", delivery.subscription_id);
@@ -749,8 +751,10 @@ pub trait PushStore {
     /// The batch's receipts kept and queued as one delivery. False, and
     /// nothing queued, for a duplicate: its external id was kept before.
     async fn enqueue_pushed(&self, caller: &PushCaller, captured: Vec<Js>, external_id: Option<&str>) -> Result<bool, String>;
-    /// The arrivals logged, and a wake queued per wait parked on their records.
-    async fn log_pushed_arrivals(&self, adapter_type: &str, team_id: &str, arrivals: &[NewArrival]) -> Result<(), String>;
+    /// The arrivals that name their record logged, and a wake queued per wait
+    /// parked on their records; those that landed judged against the
+    /// listens on their edges, for the connection that pushed them.
+    async fn log_pushed_arrivals(&self, caller: &PushCaller, arrivals: &[ArrivalIn]) -> Result<(), String>;
     fn notify_pushed(&self);
 }
 
@@ -820,7 +824,7 @@ fn emit_body(body: Option<&Js>) -> Result<(Vec<Js>, Option<String>), (String, St
 
 /// What one push to the wake door wakes.
 struct Woken {
-    arrivals: Vec<NewArrival>,
+    arrivals: Vec<ArrivalIn>,
 }
 
 /// What the wake door says to a push naming keys: adapter protocol 2.5
@@ -887,7 +891,7 @@ async fn emit<S: PushStore>(store: &S, caller: &PushCaller, events: Vec<Js>, del
 /// Arrivals are logged, each waking the waits parked on its record; one no
 /// wait reads is kept for a wait opened later. `accepted` counts them.
 async fn wake<S: PushStore>(store: &S, caller: &PushCaller, woken: &Woken) -> Result<Answer, String> {
-    store.log_pushed_arrivals(&caller.adapter_type, &caller.team_id, &woken.arrivals).await?;
+    store.log_pushed_arrivals(caller, &woken.arrivals).await?;
     store.notify_pushed();
     Ok(Answer::of(202, Js::Obj(obj! { "accepted" => Js::Num((woken.arrivals.len() as u64).into()) })))
 }
@@ -1080,7 +1084,7 @@ mod tests {
             }
             self.kept.borrow_mut().push(external_id);
             self.queued.set(self.queued.get() + kept.receipts.len());
-            self.arrived.borrow_mut().extend(kept.arrivals.iter().map(|a| a.identity.clone().unwrap_or_else(|| format!("gone {}", a.key))));
+            self.arrived.borrow_mut().extend(kept.arrivals.iter().map(|a| a.identity.clone().unwrap_or_else(|| format!("gone {}", a.key.as_deref().unwrap_or_default()))));
             Ok(true)
         }
         fn notify(&self) {}

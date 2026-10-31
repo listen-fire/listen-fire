@@ -35,7 +35,7 @@ use crate::inbound::{
     Answer, Declaration, Delivery, Extraction, InboundStore, Intercept, Kept, PushAuth, PushCaller, PushStore, RawRequest, Scheme, Source, Subscription, answer_delivery,
     same_secret,
 };
-use crate::arrivals::{arrivals_of, log_and_wake};
+use crate::arrivals::{ArrivalIn, arrivals_of, log_and_wake, logged};
 use crate::json::Js;
 use crate::obj;
 use crate::routing::{Arrival, Listen, event_matches_trigger_scope};
@@ -44,7 +44,7 @@ use crate::secrets::{Binding, Credential, Credentials, install_of, signer_of};
 use crate::subscriptions::{has_scoped, scoped_secret};
 use crate::backend::RunHostStore;
 use crate::store::{DeliverySource, NewDelivery, NewWork, Store, StoreError, iso};
-use crate::waits::{DeliveryArrivals, NewArrival, delivery_rows};
+use crate::waits::{DeliveryArrivals, delivery_rows};
 
 /// The field of an install's credential that holds the webhook secret when
 /// the external declares `inbound` and `lf-external.yaml` names none.
@@ -183,9 +183,10 @@ impl<R: Reader> LfDoors<'_, R> {
     }
 
     /// Under the inline sink, a kept delivery's events, each run now under
-    /// its receipt. One event's failure never stops the next; any failure is
+    /// its receipt, then what `landed` for its connection's traversal
+    /// listens. One event's failure never stops the next; any failure is
     /// the delivery's, answered 500 for its sender to send again.
-    async fn run_inline(&self, receipt: &NewDelivery) -> Result<(), String> {
+    async fn run_inline(&self, receipt: &NewDelivery, landed: Option<(&str, Delivered<'_>, &[ArrivalIn])>) -> Result<(), String> {
         let EventSink::Inline { session, fired } = &self.sink else { return Ok(()) };
         // Taken once the receipt (and its arrivals) is kept: a run the
         // delivery starts never waits for the delivery's own arrivals.
@@ -203,6 +204,23 @@ impl<R: Reader> LfDoors<'_, R> {
                 }
                 Err(error) => {
                     eprintln!("Webhook event processing failed: {error}");
+                    failures.push(error);
+                }
+            }
+        }
+        // What landed is judged once the events have run, as its row is
+        // drained after theirs.
+        if let Some((external, came_for, arrivals)) = landed {
+            let delivered = Delivered { id: Some(&receipt.id), arrival_mark: Some(mark), ..came_for };
+            match session.fire_arrivals(external, arrivals, delivered).await {
+                Ok(one) => {
+                    for line in &one.redelivered {
+                        eprintln!("listen-fire: {line}");
+                    }
+                    fired.borrow_mut().outcomes.extend(one.outcomes);
+                }
+                Err(error) => {
+                    eprintln!("Webhook arrivals processing failed: {error}");
                     failures.push(error);
                 }
             }
@@ -243,6 +261,16 @@ impl<R: Reader> LfDoors<'_, R> {
             }
         }
         Ok(())
+    }
+
+    /// The arrivals of `arrivals` that landed on an edge a listen of the
+    /// connection they came for is on: what is judged against those listens.
+    fn landed_for_listens(&self, adapter_type: &str, credential: Option<&str>, arrivals: &[ArrivalIn]) -> Vec<ArrivalIn> {
+        arrivals
+            .iter()
+            .filter(|arrival| !arrival.gone && self.listens.iter().any(|l| l.is_on(adapter_type, &arrival.edge) && l.hears(credential)))
+            .cloned()
+            .collect()
     }
 }
 
@@ -340,16 +368,23 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
             replay_of: None,
             events: kept.receipts.iter().map(|event| kept_event(adapter_type, event.clone(), came_for)).collect(),
         };
+        let landed = self.landed_for_listens(adapter_type, came_for.credential, kept.arrivals);
         let mut work: Vec<NewWork> = match &self.sink {
             EventSink::Queue | EventSink::Listed(_) => {
-                kept.receipts.iter().map(|event| fire_event_work(adapter_type, event.clone(), Delivered { id: Some(&receipt.id), ..came_for })).collect()
+                let delivered = Delivered { id: Some(&receipt.id), ..came_for };
+                let mut rows: Vec<NewWork> = kept.receipts.iter().map(|event| fire_event_work(adapter_type, event.clone(), delivered)).collect();
+                if !landed.is_empty() {
+                    rows.push(fire_arrivals_work(adapter_type, &landed, delivered));
+                }
+                rows
             }
             EventSink::Inline { .. } => Vec::new(),
         };
         let logged_at = iso(0);
-        // A delivery without arrivals asks nothing of a store module written
-        // before them; its rows carry the mark taken here.
-        let arrivals = match kept.arrivals {
+        let logged = logged(kept.arrivals);
+        // A delivery without arrivals for the waits asks nothing of a store
+        // module written before them; its rows carry the mark taken here.
+        let arrivals = match logged.as_slice() {
             [] => {
                 self.mark_fire_rows(&mut work)?;
                 None
@@ -365,7 +400,8 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         work.extend(wakes);
         crate::wake::queued_rows(&work);
         self.list(&work);
-        self.run_inline(&receipt).await?;
+        let landed = (!landed.is_empty()).then_some((adapter_type.as_str(), came_for, landed.as_slice()));
+        self.run_inline(&receipt, landed).await?;
         Ok(true)
     }
 
@@ -377,7 +413,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         let mut lines = Vec::new();
         for event in events {
             let reached: Vec<&Listen> =
-                self.listens.iter().filter(|l| l.adapter == source.adapter_type && l.hears(credential) && event_matches_trigger_scope(event, &l.config, Arrival::Pushed)).collect();
+                self.listens.iter().filter(|l| l.plan.is_none() && l.adapter == source.adapter_type && l.hears(credential) && event_matches_trigger_scope(event, &l.config, Arrival::Pushed)).collect();
             if reached.is_empty() || reached.iter().any(|l| l.takes(event)) {
                 continue;
             }
@@ -452,8 +488,21 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
         Ok(true)
     }
 
-    async fn log_pushed_arrivals(&self, adapter_type: &str, team_id: &str, arrivals: &[NewArrival]) -> Result<(), String> {
-        log_and_wake(self.store, team_id, adapter_type, arrivals).map(|_| ())
+    /// What landed is judged by a `fire_event` row of its own, queued after
+    /// the log so a run it starts reads its waits from past these arrivals.
+    async fn log_pushed_arrivals(&self, caller: &PushCaller, arrivals: &[ArrivalIn]) -> Result<(), String> {
+        log_and_wake(self.store, &caller.team_id, &caller.adapter_type, &logged(arrivals))?;
+        let credential = self.install(&caller.subscription_id).filter(|c| c.binding != Binding::Install).map(|c| c.name.as_str());
+        let landed = self.landed_for_listens(&caller.adapter_type, credential, arrivals);
+        if landed.is_empty() {
+            return Ok(());
+        }
+        let mark = self.store.arrival_mark().map_err(|e| e.to_string())?;
+        let row = fire_arrivals_work(&caller.adapter_type, &landed, Delivered { credential, arrival_mark: Some(mark), ..Delivered::default() });
+        self.store.enqueue(&row.kind, &row.key, &row.payload, None, None).map_err(|e| e.to_string())?;
+        crate::wake::queued_rows(std::slice::from_ref(&row));
+        self.list(std::slice::from_ref(&row));
+        Ok(())
     }
 
     fn notify_pushed(&self) {
@@ -589,7 +638,17 @@ fn kept_event(external: &str, event: Js, came_for: Delivered<'_>) -> Js {
 /// connection and subscription it came for take it (a row with neither, as
 /// every row queued before rows named them, reaches every listen).
 pub fn fire_event_work(external: &str, event: Js, delivered: Delivered<'_>) -> NewWork {
-    let mut payload = obj! { "external" => Js::str(external), "event" => event };
+    fire_work(obj! { "external" => Js::str(external), "event" => event }, delivered)
+}
+
+/// A delivery's arrivals' `fire_event` row, for the drain: each judged then
+/// against the listens on its edge (Session::fire_arrivals), as the event
+/// rows of the same delivery are routed to the listens they reach.
+pub fn fire_arrivals_work(external: &str, arrivals: &[ArrivalIn], delivered: Delivered<'_>) -> NewWork {
+    fire_work(obj! { "external" => Js::str(external), "arrivals" => Js::Arr(arrivals.iter().map(ArrivalIn::to_js).collect()) }, delivered)
+}
+
+fn fire_work(mut payload: crate::json::Obj, delivered: Delivered<'_>) -> NewWork {
     if let Some(id) = delivered.id {
         payload.insert("deliveryId".into(), Js::str(id));
     }
@@ -726,6 +785,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::backend::StoreSpec;
     use crate::store::DeliveryQuery;
+    use crate::waits::NewArrival;
 
     const SECRET: &str = "s3cret";
 

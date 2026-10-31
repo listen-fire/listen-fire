@@ -489,10 +489,18 @@ impl Scan<'_> {
                     }
                 }
                 Statement::Error(error) => self.visit_slot(&error.message, &scope),
+                // A listen on a traversal walks its hops as an await does:
+                // a WHERE that picks one member of an earlier hop narrows
+                // what the later hops land on. A listen in the settings
+                // form walks nothing.
+                Statement::Listen(listen) => {
+                    if let Some(path) = &listen.path {
+                        self.visit_landing(path, &scope);
+                    }
+                }
                 Statement::Import(_)
                 | Statement::Shape(_)
                 | Statement::Type(_)
-                | Statement::Listen(_)
                 | Statement::Unlink(_)
                 | Statement::Delete(_)
                 | Statement::Refresh(_) => {}
@@ -1012,5 +1020,23 @@ mod tests {
                 chain(&["Companies"], Some("Spreadsheet")),
             ]
         );
+    }
+
+    #[test]
+    fn a_listen_on_a_traversal_walks_its_hops_and_one_in_the_settings_form_walks_none() {
+        let source = "import { sheets } from adapters\ns = connect sheets\n\nfunction f(c: <s-[:Company]->>) {\n  return c\n}\n\nlisten to s-[x:Spreadsheet WHERE x.Title == \"A\"]->-[:Companies]-> fire f\nlisten to s { events: [\"row.created\"] } fire f\n";
+        let found: Vec<Vec<String>> = chains(source)
+            .into_iter()
+            .map(|c| {
+                c.steps
+                    .iter()
+                    .map(|s| match s {
+                        TraversalStep::Edge(edge) => format!("{}{}", edge.edge_type_id, if edge.expression_filter.is_some() { "?" } else { "" }),
+                        _ => "·".into(),
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(found, [vec!["Spreadsheet?".to_string(), "Companies".to_string()]]);
     }
 }

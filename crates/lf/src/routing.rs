@@ -9,10 +9,14 @@ use std::collections::{BTreeMap, HashMap};
 
 use std::rc::Rc;
 
+use movement_engine::listen_judge::{PlanArrival, Verdict, judge_arrival};
 use movement_parser::ast::{ImportSource, NamedArg, RValue, ShapeDeclaration, ShapeNode, Statement};
+use movement_parser::catalog::types::CatalogSnapshot;
+use movement_parser::listen_plan::ListenPlan;
 use movement_parser::util::form::external_text;
 use serde_json::Value as Json;
 
+use crate::arrivals::ArrivalIn;
 use crate::json::{Js, Obj};
 use crate::wire::js_of_json;
 
@@ -42,6 +46,11 @@ pub struct Listen {
     /// `resolved_address`; `listen_narrowing::resolve_listen_addresses`), or
     /// why they could not be. Empty until resolved.
     pub address: Result<BTreeMap<String, String>, String>,
+    /// How a listen on a traversal (`listen to crm-[c:Company WHERE …]->`)
+    /// is watched, as the checker planned it: arrivals on its last edge fire
+    /// it, never events. None for a listen in the settings form, which
+    /// events fire and arrivals never do.
+    pub plan: Option<ListenPlan>,
 }
 
 impl Listen {
@@ -77,6 +86,38 @@ impl Listen {
             (Some(own), Some(delivered)) => own == delivered,
             _ => true,
         }
+    }
+
+    /// Whether it is a listen on a traversal of `adapter` whose last edge is `edge`.
+    pub fn is_on(&self, adapter: &str, edge: &str) -> bool {
+        self.adapter == adapter && self.plan.as_ref().and_then(|plan| plan.hops.last()).is_some_and(|hop| hop.edge == edge)
+    }
+
+    /// Whether `arrival`, delivered for `credential`, fires this listen at
+    /// `now_ms`: it landed on the listen's last edge, from its connection,
+    /// is not marked for another listen's sake (`notFor` this one's
+    /// pipeline), and the judge finds every filter it can read holds. A
+    /// listen in the settings form, or an arrival of another edge, another
+    /// connection or one that went, skips at the last hop.
+    pub fn fires(&self, arrival: &ArrivalIn, credential: Option<&str>, now_ms: f64) -> Verdict {
+        let Some(plan) = &self.plan else { return Verdict::Skips { hop: 0 } };
+        let last = plan.hops.len().saturating_sub(1);
+        let landing = arrival.landing.as_ref().and_then(|landing| landing.get("fields"));
+        let (true, false, Some(landing)) = (self.hears(credential), arrival.not_for.as_deref() == Some(self.pipeline().as_str()), landing) else {
+            return Verdict::Skips { hop: last };
+        };
+        let fields_of = |record: &Js| match record.get("fields") {
+            Some(fields) => json_of(fields),
+            None => Json::Null,
+        };
+        let planned = PlanArrival {
+            edge: arrival.edge.clone(),
+            key: arrival.key.clone(),
+            landing: json_of(landing),
+            parents: arrival.parents.iter().map(fields_of).collect(),
+            taken_applied: arrival.taken_applied,
+        };
+        judge_arrival(plan, &planned, now_ms)
     }
 
     /// Whether an event's payload fits the node the listen declares; a
@@ -367,14 +408,41 @@ const CREDENTIAL_ARG: &str = "credentials";
 /// `collectListens`: the listens of every file that parses. A payload node
 /// the listen's file imports from another file is read from that file, the
 /// way the checker links it, so the listens of a set depend on the whole set
-/// and not on one file's text.
-pub fn listens_across(parsed: &[Rc<crate::sources::Parsed>]) -> Vec<Listen> {
-    let programs: Vec<(&str, &movement_parser::ast::Program)> = parsed.iter().filter_map(|p| p.program.as_ref().ok().map(|program| (p.name.as_str(), program))).collect();
-    let scopes: HashMap<String, FileScope<'_>> = programs.iter().map(|(name, program)| (name.to_string(), FileScope::of(program))).collect();
-    programs.iter().flat_map(|(name, program)| listens_of(name, program, &scopes)).collect()
+/// and not on one file's text. A listen on a traversal is read from the
+/// checker's plan of it against `catalog`: one the checker refuses has none,
+/// and fires nothing (`listen-fire check` names why).
+pub fn listens_across(parsed: &[Rc<crate::sources::Parsed>], catalog: &Js) -> Vec<Listen> {
+    let programs: Vec<(&crate::sources::Parsed, &movement_parser::ast::Program)> = parsed.iter().filter_map(|p| p.program.as_ref().ok().map(|program| (&**p, program))).collect();
+    let scopes: HashMap<String, FileScope<'_>> = programs.iter().map(|(file, program)| (file.name.clone(), FileScope::of(program))).collect();
+    let mut snapshot = None;
+    programs
+        .iter()
+        .flat_map(|(file, program)| {
+            let plans = match program.statements.iter().any(|s| matches!(s, Statement::Listen(listen) if listen.path.is_some())) {
+                true => plans_of(file.source(), snapshot.get_or_insert_with(|| catalog_snapshot(catalog)).as_ref()),
+                false => Vec::new(),
+            };
+            listens_of(&file.name, program, &scopes, plans)
+        })
+        .collect()
 }
 
-fn listens_of(file: &str, program: &movement_parser::ast::Program, scopes: &HashMap<String, FileScope<'_>>) -> Vec<Listen> {
+/// The catalog as the checker reads it; None when it does not load (each
+/// check of the set says so).
+fn catalog_snapshot(catalog: &Js) -> Option<CatalogSnapshot> {
+    CatalogSnapshot::load(&movement_parser::util::form::read_json_text(&catalog.to_json())).ok()
+}
+
+/// How the checker plans each `listen to <traversal>` of the file `source`,
+/// in source order.
+fn plans_of(source: &str, catalog: Option<&CatalogSnapshot>) -> Vec<ListenPlan> {
+    let Some(catalog) = catalog else { return Vec::new() };
+    let Ok(program) = movement_parser::stmt::parse_program(&movement_parser::util::form::form_of_text(source), false) else { return Vec::new() };
+    let options = movement_checker::CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    movement_checker::answer::check_answer(&program, catalog, options).listens
+}
+
+fn listens_of(file: &str, program: &movement_parser::ast::Program, scopes: &HashMap<String, FileScope<'_>>, plans: Vec<ListenPlan>) -> Vec<Listen> {
     let mut listens = Vec::new();
     let mut originals: HashMap<String, String> = HashMap::new();
     // Each instance's adapter, credential and other arguments, by the instance's name.
@@ -404,9 +472,7 @@ fn listens_of(file: &str, program: &movement_parser::ast::Program, scopes: &Hash
                     constructions.insert(assign.name.clone(), (adapter, credential, args));
                 }
             }
-            // A listen on a traversal is watched by its plan, which nothing
-            // routes yet; read as a settings listen on its root, it would
-            // fire on everything its connection's module delivers.
+            // A listen on a traversal is read from its plan, below.
             Statement::Listen(listen) if listen.path.is_some() => {}
             Statement::Listen(listen) => declared.push(listen),
             _ => {}
@@ -433,9 +499,30 @@ fn listens_of(file: &str, program: &movement_parser::ast::Program, scopes: &Hash
             payload,
             args,
             address: Ok(BTreeMap::new()),
+            plan: None,
+        });
+    }
+    for plan in plans {
+        let unit = movement_parser::version::RUN_HOST_UNITS.iter().find(|u| **u == plan.connection).map(|u| (u.to_string(), None, Vec::new()));
+        let Some((adapter, credential, args)) = constructions.get(&plan.connection).cloned().or(unit) else { continue };
+        listens.push(Listen {
+            file: file.to_string(),
+            adapter,
+            config: Obj::new(),
+            movement_name: plan.movement.clone(),
+            credential: credential.map(|local| originals.get(&local).cloned().unwrap_or(local)),
+            payload: None,
+            args,
+            address: Ok(BTreeMap::new()),
+            plan: Some(plan),
         });
     }
     listens
+}
+
+/// A record's fields as the judge reads them.
+fn json_of(value: &Js) -> Json {
+    serde_json::from_str(&value.to_json()).unwrap_or(Json::Null)
 }
 
 /// `eventConfigList`.
@@ -591,6 +678,26 @@ pub fn untyped_event_line(external: &str, event: &Js, event_types: &[Js]) -> Opt
     ))
 }
 
+/// The arrival a listen on a traversal fires on, as its run is handed it:
+/// the engine binds the fired function's parameter to `arrival.landing`, as
+/// a wait binds what lands on its edge.
+pub fn arrival_trigger_of(pipeline_input_id: &str, adapter_type: &str, arrival: &ArrivalIn, now: &str) -> Js {
+    let mut landed = Obj::new();
+    landed.insert("adapterType".into(), Js::str(adapter_type));
+    landed.insert("edge".into(), Js::str(&arrival.edge));
+    landed.insert("landing".into(), arrival.landing.clone().unwrap_or(Js::Null));
+    if !arrival.parents.is_empty() {
+        landed.insert("parents".into(), Js::Arr(arrival.parents.clone()));
+    }
+    let mut out = Obj::new();
+    out.insert("pipelineInputId".into(), Js::str(pipeline_input_id));
+    out.insert("adapterType".into(), Js::str(adapter_type));
+    out.insert("triggerType".into(), Js::str("arrival"));
+    out.insert("arrival".into(), Js::Obj(landed));
+    out.insert("occurredAt".into(), Js::str(now));
+    Js::Obj(out)
+}
+
 /// `triggerEventOf`: the event as a run is handed it.
 pub fn trigger_event_of(pipeline_input_id: &str, adapter_type: &str, event: &Js, event_types: &[Js], now: &str) -> Js {
     let root_record_type =
@@ -636,7 +743,7 @@ mod tests {
 
     /// Every listen across the files.
     fn collect_listens(files: &[MovementFile]) -> Vec<Listen> {
-        listens_across(&Parsed::each(files, &[]))
+        listens_across(&Parsed::each(files, &[]), &Js::Null)
     }
 
     fn js(text: &str) -> Js {
@@ -654,13 +761,73 @@ mod tests {
         assert_eq!(Js::Obj(listen.config.clone()).to_json(), r#"{"events":["company.created"]}"#);
     }
 
+    /// A CRM whose companies are a listenable root, delivered to the
+    /// connection; a company's comments a listenable edge.
+    const CRM_CATALOG: &str = r#"{"adapters":{"acme_crm":{"canFire":true,"constructionArgs":[],"schemas":{"":{"positions":{
+      "Company":{"properties":{"id":"text","Name":"text"},"edges":{"Comments":{"target":"Comment","listenable":true,"identity":"Id","delivery":"connection"}}},
+      "Comment":{"properties":{"Id":"text","Text":"text"},"edges":{}}},
+      "collections":{"Company":{"target":"Company","listenable":true,"identity":"id","delivery":"connection"}},
+      "writableRoots":{}}}}},"credentials":{},"plugins":{}}"#;
+
+    /// Two listens on the CRM's companies, one on its comments, and one in
+    /// the settings form, in a file `crm`.
+    const CRM_LISTENS: &str = "import { acme_crm as crm_kind } from adapters\nimport { acme } from credentials\n\ncrm = connect crm_kind using acme\n\nfunction welcome(c: <crm-[:Company]->>) {\n  return c.Name\n}\n\nfunction note(c: <crm-[:Company]->>) {\n  return c.Name\n}\n\nfunction answer(k: <crm-[:Comment]->>) {\n  return k.Text\n}\n\nlisten to crm-[c:Company WHERE c.Name != \"Ignored\"]-> fire welcome\nlisten to crm-[:Company]-> fire note\nlisten to crm-[:Company]->-[:Comments]-> fire answer\nlisten to crm { events: [\"company.created\"] } fire welcome\n";
+
+    fn crm_listens() -> Vec<Listen> {
+        let files = vec![MovementFile { name: "crm".into(), path: PathBuf::from("crm.mvt"), source: CRM_LISTENS.into(), version: None }];
+        listens_across(&Parsed::each(&files, &[]), &js(CRM_CATALOG))
+    }
+
+    /// An arrival of a company on the CRM's root edge, its fields as given.
+    fn company(fields: &str) -> ArrivalIn {
+        let text = format!(r#"{{"arrivals":[{{"edge":"Company","identity":"company-1","landing":{{"recordId":"company-1","fields":{fields}}}}}]}}"#);
+        crate::arrivals::arrivals_of(&js(&text)).unwrap().remove(0)
+    }
+
     #[test]
-    fn a_listen_on_a_traversal_is_not_routed_as_one_on_its_root() {
-        let source = "import { chat } from adapters\n\nslack = connect chat\n\nfunction count_vote(i: <slack-[:Interaction]->>) {\n  return i\n}\n\nlisten to slack-[:Channels]->-[:Messages]->-[:Interactions]-> fire count_vote\nlisten to slack {} fire count_vote\n";
-        let files = vec![MovementFile { name: "votes".into(), path: PathBuf::from("votes.mvt"), source: source.into(), version: None }];
-        let listens = collect_listens(&files);
-        assert_eq!(listens.len(), 1, "only the settings listen is routed");
-        assert_eq!(Js::Obj(listens[0].config.clone()).to_json(), "{}");
+    fn a_listen_on_a_traversal_is_read_from_its_plan_beside_the_settings_listens() {
+        let listens = crm_listens();
+        let read: Vec<(&str, Option<&str>, Option<&str>, bool)> =
+            listens.iter().map(|l| (l.movement_name.as_str(), l.credential.as_deref(), l.plan.as_ref().and_then(|p| p.hops.last()).map(|h| h.edge.as_str()), l.config.is_empty())).collect();
+        assert_eq!(
+            read,
+            [("welcome", Some("acme"), None, false), ("welcome", Some("acme"), Some("Company"), true), ("note", Some("acme"), Some("Company"), true), ("answer", Some("acme"), Some("Comments"), true)]
+        );
+        assert_eq!((listens[1].pipeline(), listens[1].adapter.as_str()), ("listen:crm:welcome".to_string(), "acme_crm"));
+        assert!(listens[1].is_on("acme_crm", "Company") && !listens[1].is_on("acme_crm", "Comments") && !listens[0].is_on("acme_crm", "Company"));
+        // Without a catalog the checker plans nothing, and nothing fires a
+        // listen on a traversal as if it were one in the settings form.
+        let files = vec![MovementFile { name: "crm".into(), path: PathBuf::from("crm.mvt"), source: CRM_LISTENS.into(), version: None }];
+        assert_eq!(listens_across(&Parsed::each(&files, &[]), &Js::Null).len(), 1);
+    }
+
+    #[test]
+    fn a_listen_on_a_traversal_fires_on_an_arrival_its_where_takes_and_skips_one_it_does_not() {
+        let listens = crm_listens();
+        let welcome = &listens[1];
+        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Osprey"}"#), Some("acme"), 0.0), Verdict::Fires);
+        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Ignored"}"#), Some("acme"), 0.0), Verdict::Skips { hop: 0 });
+        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Osprey"}"#), Some("another"), 0.0), Verdict::Skips { hop: 0 }, "another connection's");
+        assert_eq!(listens[0].fires(&company(r#"{"Name":"Osprey"}"#), Some("acme"), 0.0), Verdict::Skips { hop: 0 }, "a settings listen takes events, never arrivals");
+    }
+
+    #[test]
+    fn an_arrival_marked_not_for_a_listen_runs_every_other_listen_on_its_edge_and_not_that_one() {
+        let listens = crm_listens();
+        let mut arrival = company(r#"{"id":"company-1","Name":"Osprey"}"#);
+        arrival.not_for = Some("listen:crm:note".into());
+        let on_edge: Vec<(&str, Verdict)> =
+            listens.iter().filter(|l| l.is_on("acme_crm", "Company")).map(|l| (l.movement_name.as_str(), l.fires(&arrival, Some("acme"), 0.0))).collect();
+        assert_eq!(on_edge, [("welcome", Verdict::Fires), ("note", Verdict::Skips { hop: 0 })]);
+    }
+
+    #[test]
+    fn an_arrival_is_handed_to_its_run_as_the_landing_it_carries() {
+        let arrival = company(r#"{"id":"company-1","Name":"Osprey"}"#);
+        assert_eq!(
+            arrival_trigger_of("listen:crm:welcome", "acme_crm", &arrival, "2026-10-31T00:00:00.000Z").to_json(),
+            r#"{"pipelineInputId":"listen:crm:welcome","adapterType":"acme_crm","triggerType":"arrival","arrival":{"adapterType":"acme_crm","edge":"Company","landing":{"recordId":"company-1","fields":{"id":"company-1","Name":"Osprey"}}},"occurredAt":"2026-10-31T00:00:00.000Z"}"#
+        );
     }
 
     /// The table of cases the engine's TypeScript is held to as well
@@ -680,6 +847,7 @@ mod tests {
                 payload: None,
                 args: Vec::new(),
                 address: Ok(BTreeMap::new()),
+                plan: None,
             };
             assert_eq!(listen.hears(case["delivery"].as_str()), case["hears"].as_bool().unwrap(), "{}", case["case"]);
         }
@@ -702,7 +870,7 @@ mod tests {
 
     #[test]
     fn a_delivery_through_a_subscription_reaches_only_the_listens_of_its_scope() {
-        let mut listen = Listen { file: "f".into(), adapter: "airtable".into(), config: Obj::new(), movement_name: "m".into(), credential: Some("acme".into()), args: vec![], payload: None, address: Ok(BTreeMap::new()) };
+        let mut listen = Listen { file: "f".into(), adapter: "airtable".into(), config: Obj::new(), movement_name: "m".into(), credential: Some("acme".into()), args: vec![], payload: None, address: Ok(BTreeMap::new()), plan: None };
         listen.config.insert("base".into(), Js::str("appH"));
         listen.config.insert("table".into(), Js::str("tblC"));
         let keys = ["base".to_string(), "table".to_string()];

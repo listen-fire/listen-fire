@@ -1,5 +1,5 @@
-// Arrivals (adapter protocol 2.5): what lands on a listenable edge, reported
-// by the module that owns it. The host keeps the waiting state: a log of
+// Arrivals (adapter protocol 2.5; 2.6 for root edges, carried parents and
+// listens): what lands on a listenable edge, reported by the module that owns it. The host keeps the waiting state: a log of
 // arrivals per record's edge, and a wait per run that reads it. The module
 // answers two things only. Which key names the edge of each record a run
 // waits on (`awaitKeys`), and, with each inbound delivery it reads, what
@@ -30,7 +30,28 @@ export interface AwaitLanding {
  *  of its version field. A gone arrival says the record went: nothing more
  *  arrives on its edges. */
 export type Arrival =
-  | { edge: string; key: string; identity: string; version?: string; landing: AwaitLanding }
+  | {
+      edge: string;
+      /** The record whose edge it landed on; absent on one of the
+       *  connection's root edges (2.6), which no wait is on. */
+      key?: string;
+      identity: string;
+      version?: string;
+      landing: AwaitLanding;
+      /** The records it carries from the earlier hops the edge declares
+       *  (`carries`), in that order; null for one it cannot carry (2.6). */
+      parents?: (AwaitLanding | null)[];
+      /** The record the arrival is about, when that is not its landing: a
+       *  change to a row names the row (2.6). */
+      about?: { recordType: string; externalId: string };
+      /** The listen it must not run, by its pipeline (`listen:<file>:<movement>`
+       *  on listen-fire): its own failure, reported to the listens on the
+       *  edge it failed on (2.6). */
+      notFor?: string;
+      /** The module applied the listen's taken filter before reporting it
+       *  (a filtered poll or subscription): the host does not judge it again (2.6). */
+      takenApplied?: boolean;
+    }
   | { edge: string; key: string; gone: true };
 
 export interface ArrivalsCapability {

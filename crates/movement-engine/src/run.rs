@@ -977,7 +977,7 @@ impl Run<'_> {
         *self.file_scope.borrow_mut() = Some(file.clone());
         self.call_stack.borrow_mut().push(movement.name.clone());
         let movement_scope = file.child();
-        movement_scope.declare(param.name.clone(), Binding::Event);
+        movement_scope.declare(param.name.clone(), self.trigger_binding());
         Ok((movement, index, movement_scope))
     }
 
@@ -1247,6 +1247,17 @@ impl Run<'_> {
             address,
         }));
         Ok(())
+    }
+
+    /// What the dispatched movement's parameter binds: the event, or for a
+    /// run an arrival fired (`trigger.arrival`, a listen on a traversal) its
+    /// landing, bound as a wait binds what lands on its edge.
+    fn trigger_binding(&self) -> Binding {
+        let source = self.source.borrow().clone().expect("the trigger is seeded before its parameter is bound");
+        match event_get(&self.event, "arrival") {
+            arrival @ Js::Object(_) => crate::awaits::landing_binding(&source.adapter_type, &event_get(&arrival, "landing"), &source.read, &source.read),
+            _ => Binding::Event,
+        }
     }
 
     /// `naturalRootTypeName`: the discriminated root's machine type id named
@@ -2741,6 +2752,18 @@ fn seed_event_position(
             }
             Ok(Position::unstable(&adapter_type, surface_type.or_else(|| event_text(event, "rootRecordType")), payload))
         }
+        // A listen on a traversal fired by an arrival: the record that landed.
+        Some("arrival") => {
+            let landing = event_get(&event_get(event, "arrival"), "landing");
+            let record_type = match event_get(&landing, "recordType") {
+                Js::String(record_type) => Some(record_type.into_string()),
+                _ => surface_type,
+            };
+            match event_get(&landing, "recordId") {
+                Js::String(id) if !id.is_empty() => Ok(Position::stable(&adapter_type, record_type, id.into_string(), event_get(&landing, "fields"))),
+                _ => Ok(Position::unstable(&adapter_type, record_type, event_get(&landing, "fields"))),
+            }
+        }
         Some("snapshot") => Ok(Position::unstable(source_adapter_slug, Some("meta".into()), Js::Undefined)),
         Some("mutation") => match event_get(event, "recordId") {
             id if id.truthy() => Ok(Position::stable(source_adapter_slug, surface_type, id.to_js_string(), Js::Undefined)),
@@ -2751,7 +2774,7 @@ fn seed_event_position(
         },
         other => Err(Failure::unsupported(
             &format!("'{}' trigger events", other.unwrap_or("undefined")),
-            "the movement engine seeds webhook, poll, snapshot, and mutation events",
+            "the movement engine seeds webhook, poll, arrival, snapshot, and mutation events",
         )),
     }
 }

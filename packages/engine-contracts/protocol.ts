@@ -37,7 +37,7 @@ export const MANIFEST_PROTOCOL_VERSION = 2;
 
 /** The highest minor of version 2 this release speaks: a host reads 2.0 to
  *  2.`PROTOCOL_MINOR` (docs/contracts/adapter-protocol.md "Minors of version 2"). */
-export const PROTOCOL_MINOR = 5;
+export const PROTOCOL_MINOR = 6;
 
 /** The method that names a minor's feature, by name or by its ending
  *  (`<slot>.watch`). Data, so the Rust twin (module-wire
@@ -335,13 +335,17 @@ export const WireExternalRecordRef = z.object({
   data: z.record(z.string(), z.unknown()),
 });
 
+/** A record that landed on a listen's edge, as a fired run's event carries it
+ *  (the same shape as an arrival's `WireAwaitLanding`, below). */
+const WireTriggerLanding = z.object({ recordId: z.string().optional(), recordType: z.string().optional(), fields: z.record(z.string(), z.unknown()) });
+
 /** Mirror of `TriggerEvent` (triggers/types). `payload` is opaque. */
 export const WireTriggerEvent = z.object({
   pipelineInputId: z.string(),
   adapterType: z.string(),
   objectType: z.string().optional(),
   triggerEntryId: z.string().optional(),
-  triggerType: z.enum(['snapshot', 'poll', 'changes-feed', 'webhook', 'mutation', 'extraction']),
+  triggerType: z.enum(['snapshot', 'poll', 'changes-feed', 'webhook', 'mutation', 'extraction', 'arrival']),
   payload: z.unknown().optional(),
   changeType: z.enum(['create', 'update', 'delete']).optional(),
   actor: WireActor.optional(),
@@ -354,6 +358,10 @@ export const WireTriggerEvent = z.object({
   /** The source's own id for the occurrence, carried from the event that
    *  made this one (`WireDiscriminableEvent.idempotencyKey`). */
   idempotencyKey: z.string().optional(),
+  /** What fired a listen on a traversal (`triggerType: 'arrival'`, 2.6). */
+  arrival: z
+    .object({ adapterType: z.string(), edge: z.string(), landing: WireTriggerLanding, parents: z.array(WireTriggerLanding.nullable()).optional() })
+    .optional(),
 });
 export type WireTriggerEventShape = z.infer<typeof WireTriggerEvent>;
 
@@ -1188,7 +1196,7 @@ export const AdapterEmitBody = z.object({
   events: z.array(WireDiscriminableEvent).min(1).max(ADAPTER_DOOR_MAX_BATCH),
 });
 
-// ── Arrivals (adapter protocol 2.5; `arrivals.ts`) ───────────────────────────
+// ── Arrivals (adapter protocol 2.5 and 2.6; `arrivals.ts`) ──────────────────────
 
 /** One landing along a listenable edge: its fields, read back through the
  *  module's own `getFieldValue` for `recordType`. */
@@ -1206,14 +1214,21 @@ export const WireAwaitHead = z.object({
 export const WireAwaitKey = z.union([z.object({ key: z.string().min(1) }), z.object({ gone: z.literal(true) })]);
 
 /** One arrival a module reports: on a delivery's acceptance, or at the
- *  `wake` door. An arrival names its identity; a gone one names none. */
+ *  `wake` door. An arrival names its identity; a gone one names none. From
+ *  2.6 an arrival on a root edge names no key, and one may carry its parents,
+ *  what it is about, the listen it is not for and whether its module took
+ *  the listen's filter (`arrivals.ts`). */
 export const WireArrival = z.union([
   z.object({
     edge: z.string().min(1),
-    key: z.string().min(1),
+    key: z.string().min(1).optional(),
     identity: z.string().min(1),
     version: z.string().optional(),
     landing: WireAwaitLanding,
+    parents: z.array(WireAwaitLanding.nullable()).optional(),
+    about: z.object({ recordType: z.string().min(1), externalId: z.string().min(1) }).optional(),
+    notFor: z.string().min(1).optional(),
+    takenApplied: z.boolean().optional(),
   }),
   z.object({ edge: z.string().min(1), key: z.string().min(1), gone: z.literal(true) }),
 ]);

@@ -178,7 +178,8 @@ pub async fn resolve_listen_address<W: Walk>(
 /// `resolved_address`. A listen that names every scope key, or whose
 /// connection names no position, is left as it is.
 pub async fn resolve_listen_addresses(listens: &mut [Listen], running: &[Rc<RunningExternal>], credentials: &Credentials) {
-    for listen in listens.iter_mut() {
+    // A listen on a traversal names its scope in its own hops.
+    for listen in listens.iter_mut().filter(|listen| listen.plan.is_none()) {
         let Some(external) = running.iter().find(|r| r.external.manifest.name == listen.adapter && !r.is_plugin()) else { continue };
         let keys = external.subscription_scope_keys();
         if keys.iter().all(|k| listen.config.get(k).and_then(Js::as_str).is_some_and(|v| !v.is_empty())) {

@@ -77,7 +77,8 @@ export function inboundRequest(input: WireCheckInboundInputShape): InboundReques
 }
 
 /** From the provider: its events, and what it says landed on listenable
- *  edges (`arrivals`, adapter protocol 2.5). */
+ *  edges (`arrivals`, adapter protocol 2.5; from 2.6 one on a root edge names
+ *  no key, and one may carry its parents, `about`, `notFor` and `takenApplied`). */
 export function accepted(
   events: DiscriminableEvent[],
   more: {

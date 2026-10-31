@@ -186,7 +186,9 @@ fn wanted(set: &FileSet, running: &RunningExternal, credentials: &Credentials) -
     let scope_keys = running.subscription_scope_keys();
     let mut wanted: BTreeMap<Channel, Want> = BTreeMap::new();
     let mut notes = Vec::new();
-    for listen in set.listens.iter().filter(|l| l.adapter == *name) {
+    // A listen on a traversal is fired by the arrivals its connection
+    // delivers to its own door; it registers no webhook of its own.
+    for listen in set.listens.iter().filter(|l| l.adapter == *name && l.plan.is_none()) {
         let scope = match listen.scope(&scope_keys) {
             Ok(scope) => scope,
             Err(_) if let Err(why) = &listen.address => {

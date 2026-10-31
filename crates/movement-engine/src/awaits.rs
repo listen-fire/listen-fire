@@ -392,6 +392,14 @@ struct Judge<'j> {
 /// listing would have landed it, so a walk, a write or an `await` off it
 /// reaches it whichever way it was bound.
 fn arrival_landing(judge: &Judge<'_>, landing: &Js) -> Binding {
+    landing_binding(judge.adapter_type, landing, judge.read, judge.raw)
+}
+
+/// A landing (`{recordId?, recordType?, fields}`) as the record it binds: one
+/// naming its record read through `read`, the graph it lands in; one naming
+/// none read through `raw`, the adapter itself. A wait binds what lands on
+/// its edge so, and a run fired by an arrival its parameter.
+pub(crate) fn landing_binding(adapter_type: &str, landing: &Js, read: &Rc<crate::traverse::Read>, raw: &Rc<crate::traverse::Read>) -> Binding {
     let fields = match crate::unique::get(landing, "fields") {
         fields @ Js::Object(_) => fields,
         _ => Js::object(JsObject::new()),
@@ -402,10 +410,10 @@ fn arrival_landing(judge: &Judge<'_>, landing: &Js) -> Binding {
     };
     match crate::unique::get(landing, "recordId") {
         Js::String(record_id) if !record_id.is_empty() => {
-            let position = crate::traverse::stable_position(Js::str(judge.adapter_type), record_type.unwrap_or_else(|| Js::str("Response")), Js::String(record_id), fields);
-            Binding::Landed(Rc::new(crate::bindings::Landed::new(position, None, judge.read.clone())))
+            let position = crate::traverse::stable_position(Js::str(adapter_type), record_type.unwrap_or_else(|| Js::str("Response")), Js::String(record_id), fields);
+            Binding::Landed(Rc::new(crate::bindings::Landed::new(position, None, read.clone())))
         }
-        _ => awaited_landing(judge.adapter_type, judge.raw, &fields, record_type),
+        _ => awaited_landing(adapter_type, raw, &fields, record_type),
     }
 }
 

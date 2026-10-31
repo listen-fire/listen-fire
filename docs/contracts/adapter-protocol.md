@@ -1,7 +1,7 @@
 # The adapter protocol
 
 Version: 2
-Minor: 5
+Minor: 6
 
 A remote adapter connects a system you run to Listen-Fire. It is an HTTP
 server you host, in any language. Listen-Fire calls it to learn your data
@@ -120,7 +120,7 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
   - A method you offer never raises it, whatever minor introduced the method: a host calls only the methods it speaks, so an older host leaves a newer one alone and your module works there as before.
   - So rebuilding a module with a newer kit, or offering a newer method, never makes an older host refuse it.
   - An absent `protocolMinor` is unstated, read as 2.0. Every module published up to 0.12.5 states none.
-- **What a host refuses, by name.** `listen-fire` and the engine speak 2.0 to 2.5. They refuse a manifest that states another major (newer or older), or a minor above 5. `listen-fire` reads a core module's manifest before any other method it asks of it: as `listen-fire drain` opens, for the modules it starts then, and at the first call otherwise. The text names the module, its package and version when the host finds them, what it speaks and what the host speaks, and what to upgrade. Installing probes your server the same way: Listen-Fire calls `manifest` with the secret and refuses it outside that range.
+- **What a host refuses, by name.** `listen-fire` and the engine speak 2.0 to 2.6. They refuse a manifest that states another major (newer or older), or a minor above 6. `listen-fire` reads a core module's manifest before any other method it asks of it: as `listen-fire drain` opens, for the modules it starts then, and at the first call otherwise. The text names the module, its package and version when the host finds them, what it speaks and what the host speaks, and what to upgrade. Installing probes your server the same way: Listen-Fire calls `manifest` with the secret and refuses it outside that range.
 - **The floor stays 2.0 within the major.** A host reads every minor from 2.0 up, so a module that predates a feature still loads. A method a host needs a module to have is checked by name where it is needed, never by the stated minor, and the refusal names the minor that introduced it: `listen-fire serve` refuses a movements module that does not answer `movements.watch` (adapter protocol 2.1), and arming a polled listen fails on a store module that does not answer `work.enqueueIfAbsent` (adapter protocol 2.2).
 - **An addition that names nothing in the manifest keeps the minor.** A new optional field or declaration is learned from the manifest, never from the version: a method is called only when it is listed in `methods`, and a declaration (`credentials`, `inbound`, `poll`, `periodic`) is acted on only when it is present. An older server sends neither and is unchanged; an older host ignores both.
 - An install made before its secret is supplied stores the version the manifest file claims. The probe runs when the secret is linked.
@@ -136,6 +136,7 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
 | 2.3 | a host behaviour: a polled source labels each poll event with its kind, `eventType`, and a host delivers an unlabelled one to the listen that polled it, with a notice ([Polled sources](#polled-sources-and-periodic-tasks)). An older host routes a labelled event correctly, so no module needs to state 2.3 | listen-fire 0.12.8 |
 | 2.4 | `refreshEventSubscription` ([Event subscriptions that expire](#event-subscriptions-that-expire)) | listen-fire 0.12.10 |
 | 2.5 | `awaitKeys`, arrivals on a delivery's reading, the `wake` door's arrivals, the store slot's `waits.*` (`waits.log` names it) ([Waiting on your system](#waiting-on-your-system-awaits)) | listen-fire 0.13.0 |
+| 2.6 | arrivals for listens ([Reporting arrivals](#reporting-arrivals)): one on a root edge names no `key`, and one may carry `parents`, `about`, `notFor` and `takenApplied`; a host fires the listens on the edge it landed on. A module that reports a root arrival states 2.6, since an older host refuses it | listen-fire 0.13.0 |
 
 A module offering one of these methods states no minor for it. Until 0.12.9 the kits stamped a module with the minor of the methods it offered; from 0.12.10 they stamp only what its author declares.
 
@@ -688,6 +689,33 @@ One arrival names the edge, the key of the record it landed on, its identity
 
 A record that went is a gone arrival: `{ "edge": "Comments", "key": "thread:company-1", "gone": true }`.
 
+From adapter protocol 2.6 an arrival may say more, for the listens on its edge
+(`listen to crm-[c:Company WHERE c.Name != "Ignored"]-> fire welcome`):
+
+- **No `key` on a root edge.** An arrival on one of the connection's root
+  edges (an entry point declaring `listenable`) lands on no record's edge, so
+  it names no key. No wait reads it; the listens on that edge do. A gone
+  arrival always names its key.
+- **`parents`**: the records of the earlier hops the edge declares it
+  `carries`, outermost first, each a landing or `null` for one it cannot
+  carry. A listen's filter on an earlier hop is judged against them.
+- **`about`**: `{ "recordType", "externalId" }`, the record the arrival is
+  about when that is not its landing (a change to a row names the row).
+- **`notFor`**: the listen it must not run, by its pipeline
+  (`listen:<file>:<movement>` on `listen-fire`): a listen's own failure,
+  reported to the listens on the edge it failed on, never reaches it.
+- **`takenApplied`**: `true` when your module applied the listen's filter
+  before reporting it (a filtered poll or subscription). Absent, the host
+  judges the whole filter itself.
+
+```json
+{ "edge": "Company", "identity": "company-1",
+  "landing": { "recordId": "company-1", "recordType": "Company", "fields": { "id": "company-1", "Name": "Osprey" } } }
+```
+
+A module that reports a root arrival states `protocolMinor: 6`: a host
+speaking 2.5 refuses an arrival with no key.
+
 Report them in one of three places:
 
 - `arrivals` beside the events `preprocessInbound` answers for a delivery to
@@ -709,6 +737,12 @@ What Listen-Fire does with them:
 - Each run waiting on the record's edge is woken. It reads the arrivals
   logged since it began waiting, judges each once by identity and version,
   and resumes with the first that passes the automation's `WHERE`.
+- Each arrival that landed is judged against every listen on its edge that
+  hears the connection it came for. A listen its filter takes runs, its
+  parameter bound to the landing; the same arrival (edge, key, identity and
+  version) delivered again runs it once. One its filter refuses runs nothing,
+  and Listen-Fire says so; one it cannot judge runs nothing either, and its
+  reason is said once per delivery.
 - An arrival without an identity is refused, naming its place and edge
   (`arrival 0 on 'Comments' has no identity`): at the `wake` door with 400,
   on a delivery as your adapter's failure (500).
@@ -1652,6 +1686,7 @@ from `apps/cli`.
 - **Pages, replies on acceptance, the inbound URL and `answerShapeFrom`** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0; additive). A module that checks its own inbound may `reply` with `html` (sent as `text/html`), and its `accepted` answer may carry `reply`, what the door answers once it has kept the request in place of its own acknowledgement ([A module that checks its own inbound](#a-module-that-checks-its-own-inbound)). A request may carry `inbound: { url }`, where the install's inbound requests reach the module ([The envelope](#the-envelope)). A reference may declare `answerShapeFrom`, the write field naming the node that types its landing. Why: `@lf/forms` serves a form at its own door, hands out its link, thanks the person who answered, and types the answer by the node the program wrote. An older host sends no `inbound`, refuses an answer carrying `html` or an acceptance's `reply` as outside `checkInbound`'s shape, and reads no `answerShapeFrom`.
 - **`slack_v0` refuses a replay** (within version 2, no bump; 2026-10-30; listen-fire 0.13.0). A request whose `x-slack-request-timestamp` is more than five minutes from now is refused 401 though its signature is right, as Slack advises ([Declared inbound signatures](#declared-inbound-signatures)). Nothing changes for a module: Slack signs every request with the time it sends it.
 - **Form-encoded deliveries** (within version 2, no bump; 2026-10-30; listen-fire 0.13.0). The host webhook door reads a delivery sent as `application/x-www-form-urlencoded` as well as JSON: its signature is checked over the raw bytes, and `preprocessInbound`'s `raw` is the form's fields ([Limits and timeouts](#limits-and-timeouts)). Why: Slack posts a press on a message's control that way (`payload=<json>`), so `@lf/slack` reports presses as arrivals on the host's own door, verified with Slack's own signature. An older host refuses such a delivery as not JSON.
+- **Adapter protocol 2.6: arrivals for listens** (within version 2; listen-fire 0.13.0). An arrival on a root edge names no `key`, and an arrival may carry `parents` (the records of the earlier hops its edge `carries`), `about`, `notFor` and `takenApplied` ([Reporting arrivals](#reporting-arrivals)). Listen-Fire judges each arrival that landed against the listens on its edge (`listen to <traversal> fire f`) and runs each one it fires, its parameter bound to the landing, once per arrival. Why: a listen is a traversal, fired by what lands on its last edge, not by a module's settings. A module reporting a root arrival states `protocolMinor: 6`; an older host refuses an arrival with no key.
 - **Adapter protocol 2.5: arrivals** (within version 2; listen-fire 0.13.0). A module with listenable edges names the key each record's edge is waited on under (`awaitKeys`, a new optional method), and reports what lands there as arrivals: `arrivals` beside the events `preprocessInbound` answers, on `checkInbound`'s `accepted`, or pushed to the `wake` door as `{ arrivals }` ([Waiting on your system](#waiting-on-your-system-awaits)). Listen-Fire logs every arrival and keeps each run's wait itself (the store slot's `waits.*`, [store-slot.md](store-slot.md)). An arrival names its identity; one without is refused by name. Why: a run waiting on an edge reads what arrived since it began waiting, so an arrival during the write that caused it is never lost, and Listen-Fire, not the module, decides whether an arrival matches. Offering `awaitKeys` states no minor. From listen-fire 0.13.0 a wait reads arrivals only: `resolveAwait` is not called for it, `wakeKeys` wakes nothing, and the `wake` door refuses `{ keys }` (400, naming adapter protocol 2.5 and `arrivals`).
 - **Adapter protocol 2.4: subscriptions that expire** (within version 2; 2026-10-27; listen-fire 0.12.10). `ensureEventSubscription` may answer `expiresAt`, and a new optional method, `refreshEventSubscription`, extends a subscription before it lapses ([Event subscriptions that expire](#event-subscriptions-that-expire)). Offering the method states no minor: a `listen-fire` up to 0.12.9 reads a module that lists it and never calls it, so its webhooks lapse there as before. `@lf/airtable` lists it. With this change the kits stop raising a module's stated minor for the methods it offers (`.watch`, `work.enqueueIfAbsent`, `refreshEventSubscription`): it is what the author declares, else 0.
 - **`narrows` on a listen config key** (within version 2, no bump; 2026-10-27; additive). A `listenConfig` entry may say which hop of an event's address it is ([The manifest and installing](#the-manifest-and-installing)). `listen-fire` narrows a signature's event to the node the address walks to, as the hosted product does. An older host ignores the field; a module that declares none is unchanged.

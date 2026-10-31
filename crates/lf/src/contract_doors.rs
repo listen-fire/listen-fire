@@ -20,14 +20,13 @@ use std::rc::Rc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
-use crate::arrivals::arrivals_of;
+use crate::arrivals::{ArrivalIn, arrivals_of};
 use crate::doors::{EventSink, InboundSetup, LfDoors, Reader, Served};
 use crate::inbound::{Declaration, Extraction, InboundStore, Kept, PushAuth, PushCaller, PushStore, Source, Subscription};
 use crate::json::Js;
 use crate::obj;
 use crate::secrets::{Binding, Credential, Origin};
 use crate::store::{DeliveryQuery, Store};
-use crate::waits::NewArrival;
 
 #[derive(Default, Clone, Copy)]
 struct Faults {
@@ -300,7 +299,7 @@ impl InboundStore for Observed<'_> {
             return Err("arrival log unavailable".into());
         }
         let (checkpoint, receipts) = (kept.checkpoint.cloned(), kept.receipts.len() as u64);
-        let arrivals: Vec<Js> = kept.arrivals.iter().map(suite_arrival).collect();
+        let arrivals: Vec<Js> = kept.arrivals.iter().map(ArrivalIn::to_js).collect();
         if !self.lf().keep(kept).await? {
             return Ok(false);
         }
@@ -337,36 +336,18 @@ impl PushStore for Observed<'_> {
         Ok(true)
     }
 
-    async fn log_pushed_arrivals(&self, adapter_type: &str, team_id: &str, arrivals: &[NewArrival]) -> Result<(), String> {
+    async fn log_pushed_arrivals(&self, caller: &PushCaller, arrivals: &[ArrivalIn]) -> Result<(), String> {
         if self.faults.log_arrivals {
             return Err("arrival log unavailable".into());
         }
-        self.lf().log_pushed_arrivals(adapter_type, team_id, arrivals).await?;
-        self.note(|seen| seen.arrivals.extend(arrivals.iter().map(suite_arrival)));
+        self.lf().log_pushed_arrivals(caller, arrivals).await?;
+        self.note(|seen| seen.arrivals.extend(arrivals.iter().map(ArrivalIn::to_js)));
         Ok(())
     }
 
     fn notify_pushed(&self) {
         self.note(|seen| seen.notified += 1);
     }
-}
-
-/// An arrival as the suite reported it (engine-contracts' `Arrival`): what
-/// it does not name is absent.
-fn suite_arrival(arrival: &NewArrival) -> Js {
-    let mut wire = obj! { "edge" => Js::str(&arrival.edge), "key" => Js::str(&arrival.key) };
-    if arrival.gone {
-        wire.insert("gone".into(), Js::Bool(true));
-    }
-    for (name, value) in [("identity", &arrival.identity), ("version", &arrival.version)] {
-        if let Some(value) = value {
-            wire.insert(name.into(), Js::str(value));
-        }
-    }
-    if let Some(landing) = &arrival.landing {
-        wire.insert("landing".into(), landing.clone());
-    }
-    Js::Obj(wire)
 }
 
 /// The suite's adapter: a delivery's JSON body is
@@ -377,7 +358,7 @@ struct SuiteReader;
 /// A delivery as the suite's adapter reads it.
 struct SuiteDelivery {
     events: Vec<Js>,
-    arrivals: Vec<NewArrival>,
+    arrivals: Vec<ArrivalIn>,
     checkpoint: Option<Js>,
 }
 

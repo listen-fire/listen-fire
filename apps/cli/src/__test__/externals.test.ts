@@ -80,7 +80,7 @@ test('listen-fire check refuses an external stating a newer protocol minor, nami
   assert.equal(check.code, 1, check.out);
   assert.match(
     check.out,
-    /external "acme_crm" \(@acme\/crm 9\.9\.9\) speaks adapter protocol 2\.99; this listen-fire \(\d+\.\d+\.\d+[^)]*\) speaks 2\.0–2\.5\. Upgrade listen-fire to a release that speaks 2\.99 \(the protocol's Changes list names it\), or use a @acme\/crm that speaks 2\.5 or lower\./,
+    /external "acme_crm" \(@acme\/crm 9\.9\.9\) speaks adapter protocol 2\.99; this listen-fire \(\d+\.\d+\.\d+[^)]*\) speaks 2\.0–2\.6\. Upgrade listen-fire to a release that speaks 2\.99 \(the protocol's Changes list names it\), or use a @acme\/crm that speaks 2\.6 or lower\./,
   );
 });
 

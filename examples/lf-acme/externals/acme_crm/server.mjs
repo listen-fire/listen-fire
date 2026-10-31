@@ -3,10 +3,14 @@
 // fake_crm_adapter.ts) as a plain process, so it shows an external can be any
 // program that answers the protocol over HTTP.
 //
-// One record type, `Company { Name, Description }`, and two events a listen
-// may choose, `company.created` and `company.updated`; a webhook delivers
-// created companies as `{ companies: [{ id, Name }] }`. A movement can wait on
-// two edges of a company (adapter protocol 2.5):
+// One record type, `Company { id, Name, Description }`, and two events a
+// listen may choose, `company.created` and `company.updated`; a webhook
+// delivers created companies as `{ companies: [{ id, Name }] }`. Companies are
+// a listenable root too (adapter protocol 2.6): each one created is reported
+// as an arrival on `Company`, named by its id, beside its `company.created`
+// event, so `listen to crm-[c:Company WHERE …]-> fire f` hears it. (The event
+// goes when the settings form of listen does.) A movement can wait on two
+// edges of a company (adapter protocol 2.5):
 //
 // - its comment thread (`Comments`, to `Comment { Id, Text }`), which can be
 //   listed too, oldest first: `await company-[:Comments]->` takes the first
@@ -56,6 +60,16 @@ const EDGE_KEYS = { [COMMENTS_EDGE]: threadKey, [APPROVALS_EDGE]: approvalsKey }
 /** A company the CRM holds and has not deleted. */
 const holds = (state, company) => state.companies.some((c) => c.externalId === company && !c.deleted);
 
+/** A company as an arrival on the CRM's root `Company` edge: it names no
+ *  key, since no record's edge it lands on (adapter protocol 2.6). */
+function companyArrival(company) {
+  return {
+    edge: COMPANY,
+    identity: company.id,
+    landing: { recordId: company.id, recordType: COMPANY, fields: { id: company.id, Name: company.Name } },
+  };
+}
+
 /** A comment as the record it is: what the thread lists and what arrives. */
 const commentLanding = (comment) => ({ recordId: comment.id, recordType: COMMENT, fields: { Id: comment.id, Text: comment.Text } });
 
@@ -88,6 +102,8 @@ const COMPANY_DESCRIPTOR = {
   displayName: COMPANY,
   deletable: true,
   fields: [
+    // The CRM's id for the company: what names one arrival on `Company`.
+    { fieldId: 'id', displayName: 'id', kind: 'string', writable: false, required: false },
     { fieldId: 'Name', displayName: 'Name', kind: 'string', writable: true, required: true },
     { fieldId: 'Description', displayName: 'Description', kind: 'string', writable: true, required: false },
     { fieldId: 'Report', displayName: 'Report', kind: 'file', writable: true, required: false },
@@ -157,6 +173,8 @@ function companyCreatedEvent(company) {
 const METHODS = {
   manifest: () => ({
     protocolVersion: 2,
+    // Arrivals on a root edge name no key: a host must speak 2.6 to read them.
+    protocolMinor: 6,
     adapterType: 'acme_crm',
     supportedTriggers: ['webhook'],
     // What a listen on this CRM may say: `events: [...]` from this list.
@@ -171,6 +189,10 @@ const METHODS = {
       scope: 'self-configured',
       writable: true,
       readable: false,
+      // Each company created arrives on the root `Company`, at the connection's door.
+      listenable: true,
+      identity: 'id',
+      delivery: 'connection',
       fires: true,
       description: 'A company. A listen is delivered each one somebody creates in the CRM.',
     },
@@ -215,11 +237,15 @@ const METHODS = {
     writeState(state);
     return { adapterType: 'acme_crm', externalId, recordType, data: { ...existing.fields } };
   },
-  // A delivery's companies are its events; its comments, the arrivals it
-  // reports: only those it carries, each named by its own id.
+  // A delivery's companies are its events, and arrivals on `Company`; its
+  // comments, arrivals on their threads: only those it carries, each named by
+  // its own id.
   preprocessInbound: ({ raw }) => ({
     events: (raw?.companies ?? []).map(companyCreatedEvent),
-    arrivals: (raw?.comments ?? []).map(({ id, thread, text }) => commentArrival({ id, thread, Text: text })),
+    arrivals: [
+      ...(raw?.companies ?? []).map(companyArrival),
+      ...(raw?.comments ?? []).map(({ id, thread, text }) => commentArrival({ id, thread, Text: text })),
+    ],
   }),
   listEventTypes: () => [
     { tag: COMPANY_CREATED, positionType: COMPANY },
@@ -272,8 +298,10 @@ const DEV_ROUTES = {
     const externalId = `company-${state.companies.length + 1}`;
     state.companies.push({ externalId, fields: { Name: body.Name } });
     writeState(state);
-    const pushed = await push('emit', { events: [companyCreatedEvent({ id: externalId, Name: body.Name })] });
-    return [200, { id: externalId, pushed }];
+    const company = { id: externalId, Name: body.Name };
+    const pushed = await push('emit', { events: [companyCreatedEvent(company)] });
+    const arrived = await push('wake', { arrivals: [companyArrival(company)] });
+    return [200, { id: externalId, pushed, arrived }];
   },
   '/dev/comments': async (body) => {
     if (typeof body?.company !== 'string' || typeof body?.text !== 'string') return [400, { error: 'expected { company, text }' }];

@@ -24,7 +24,9 @@ use crate::obj;
 use crate::project::Project;
 use movement_parser::version::{LANGUAGE_VERSION, Standing, standing};
 use crate::remote::{Externals, SegmentAdapters};
-use crate::routing::{Arrival, Listen, address_matches_key, event_matches_trigger_scope, routes_by_key, trigger_event_of, unrouted_line, untyped_event_line};
+use crate::arrivals::{ArrivalIn, arrival_receipt_key};
+use crate::routing::{Arrival, Listen, address_matches_key, arrival_trigger_of, event_matches_trigger_scope, routes_by_key, trigger_event_of, unrouted_line, untyped_event_line};
+use movement_engine::listen_judge::Verdict;
 use crate::run_host::{
     BUSY_RETRY_MS, CANCELLED_BY_OPERATOR, FailedWork, Lease, Settled, StepOutcome, StepRequest, Stepper, WORKER_LOST, after_step, arm_timer_wake,
     clear_if_quiescent, drain_due_timers, drain_run, fail_lost_runs, give_up_work, next_timer_wake, past_cap, run_complete_without, run_quiescent,
@@ -109,7 +111,7 @@ impl FileSet {
     /// The listens on a polled source (its manifest declares `poll`), each
     /// with its source and the subscription its checkpoint is kept under.
     fn polled_listens(&self) -> impl Iterator<Item = (&Listen, &RunningExternal, String)> {
-        self.listens.iter().filter_map(|listen| {
+        self.listens.iter().filter(|listen| listen.plan.is_none()).filter_map(|listen| {
             let running = self.running.iter().find(|r| !r.is_plugin() && r.external.manifest.name == listen.adapter && r.poll_interval_seconds.is_some())?;
             let file = self.file(&listen.file);
             let config = Js::Obj(listen.config.clone()).to_json();
@@ -341,7 +343,7 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     let files = scan_movements(&project)?;
     let parsed = Parsed::each(&files, &parsed);
     let catalog = catalog_of(&running, &schemas, credentials, &files);
-    let mut listens = crate::routing::listens_across(&parsed);
+    let mut listens = crate::routing::listens_across(&parsed, &catalog);
     crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
     let user = local_identity(&project.user, |k| std::env::var(k).ok());
     let _holds = hold_all(&running, role.keep());
@@ -657,6 +659,50 @@ impl Session {
         self.fire_to(&set, external, event, Arrival::Pushed, dry_run, delivered.came_in(), |l| delivered.reaches(l, &scope_keys)).await
     }
 
+    /// Judge each arrival that landed against every listen on its edge that
+    /// hears the connection it came for (Listen::fires), and run each listen
+    /// it fires with its landing as the parameter. The same arrival delivered
+    /// again runs a listen once (its receipt, `arrival_receipt_key`). An
+    /// arrival a listen's filter refuses runs nothing, said once per listen;
+    /// one the judge cannot decide runs nothing either, its reason said once
+    /// per delivery.
+    pub async fn fire_arrivals(&self, adapter: &str, arrivals: &[ArrivalIn], delivered: Delivered<'_>) -> Result<Fired, String> {
+        let set = self.file_set();
+        let mut fired = Fired::default();
+        let now_ms = self.now_ms() as f64;
+        for arrival in arrivals.iter().filter(|a| !a.gone) {
+            let identity = arrival.identity.as_deref().unwrap_or_default();
+            for listen in set.listens.iter().filter(|l| l.is_on(adapter, &arrival.edge) && l.hears(delivered.credential)) {
+                let file = set.file(&listen.file);
+                let named = format!("{}:{}", file.name, listen.movement_name);
+                match listen.fires(arrival, delivered.credential, now_ms) {
+                    Verdict::Fires => {}
+                    Verdict::Skips { .. } if arrival.not_for.as_deref() == Some(listen.pipeline().as_str()) => continue,
+                    Verdict::Skips { hop } => {
+                        fired.redelivered.push(format!("{named}: the arrival {identity} on {} does not match the WHERE of hop {}: nothing is owed, and it runs nothing", arrival.edge, hop + 1));
+                        continue;
+                    }
+                    Verdict::Undecided { reason } => {
+                        let line = format!("{named}: an arrival on {} cannot be judged ({reason}): it runs nothing", arrival.edge);
+                        if !fired.redelivered.contains(&line) {
+                            fired.redelivered.push(line);
+                        }
+                        continue;
+                    }
+                }
+                let pipeline = listen.pipeline();
+                let receipt = arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), identity, arrival.version.as_deref());
+                let trigger = arrival_trigger_of(&pipeline, adapter, arrival, &iso(0));
+                let run_id = uuid::Uuid::new_v4().to_string();
+                match self.run_listen(&set, &run_id, listen, trigger, false, Some((pipeline.as_str(), receipt.as_str())), delivered.came_in()).await? {
+                    Some(outcome) => fired.outcomes.push(outcome),
+                    None => fired.redelivered.push(format!("{named} has run the arrival {identity} on {} before: this delivery runs nothing", arrival.edge)),
+                }
+            }
+        }
+        Ok(fired)
+    }
+
     /// `fire_event`, to the listens `to` keeps of those the event reaches.
     #[allow(clippy::too_many_arguments)] // the file set, the event and how it came, then the firing's own options
     async fn fire_to(
@@ -675,7 +721,10 @@ impl Session {
         let mut fired = Fired::default();
         let keyed = set.running.iter().any(|r| r.external.manifest.name == external && routes_by_key(&r.listen));
         let routed = |l: &Listen| !keyed || address_matches_key(event, &l.config);
-        let heard: Vec<&Listen> = set.listens.iter().filter(|l| l.adapter == external && event_matches_trigger_scope(event, &l.config, arrival) && routed(l) && to(l)).collect();
+        // An event reaches the listens in the settings form; a listen on a
+        // traversal is fired by arrivals alone (`fire_arrivals`).
+        let heard: Vec<&Listen> =
+            set.listens.iter().filter(|l| l.plan.is_none() && l.adapter == external && event_matches_trigger_scope(event, &l.config, arrival) && routed(l) && to(l)).collect();
         let (reached, misfit): (Vec<&Listen>, Vec<&Listen>) = heard.into_iter().partition(|l| l.takes(event));
         for listen in misfit {
             let declared = listen.payload.as_ref().map(|p| (p.name.as_str(), p.misfits(event.get("payload").unwrap_or(&Js::Null)).join("; "))).unwrap_or_default();
@@ -720,7 +769,7 @@ impl Session {
     /// `listen-fire run <movement>`: one invocation on the manual unit, to the listens
     /// that fire `movement` (`listen to manual fire <movement>`).
     pub async fn run_manual(&self, movement: &str, text: Option<&str>, dry_run: bool) -> Result<Fired, String> {
-        let manual = |l: &Listen| l.adapter == crate::units::MANUAL && l.movement_name == movement;
+        let manual = |l: &Listen| l.plan.is_none() && l.adapter == crate::units::MANUAL && l.movement_name == movement;
         let set = self.file_set();
         if !set.listens.iter().any(manual) {
             return Err(format!("no listen fires '{movement}' on manual: add `listen to manual fire {movement}` to run it with `listen-fire run {movement}`"));
@@ -1462,6 +1511,16 @@ impl Session {
     async fn do_work(&self, set: &FileSet, kind: &str, payload: &Js) -> Result<(Next, Vec<RunOutcome>), String> {
         let text = |k: &str| payload.get(k).and_then(Js::as_str).map(str::to_string).ok_or_else(|| format!("a {kind} row has no {k}"));
         match kind {
+            "fire_event" if payload.get("arrivals").is_some() => {
+                let external = text("external")?;
+                let arrivals = crate::arrivals::arrivals_of(payload).map_err(|e| format!("a fire_event row's {e}"))?;
+                let delivery_id = payload.get("deliveryId").and_then(Js::as_str);
+                let fired = self.fire_arrivals(&external, &arrivals, Delivered::of_row(payload, delivery_id)).await?;
+                for line in &fired.redelivered {
+                    eprintln!("listen-fire: {line}");
+                }
+                Ok((Next::Done, fired.outcomes))
+            }
             "fire_event" => {
                 let event = payload.get("event").cloned().ok_or("a fire_event row has no event")?;
                 let external = text("external")?;
@@ -1905,7 +1964,7 @@ impl Session {
             return self.refuse(log, pairs, rose);
         }
 
-        let mut listens = crate::routing::listens_across(&parsed);
+        let mut listens = crate::routing::listens_across(&parsed, &catalog);
         crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
         let _holds = hold_all(&running, self.role.keep());
         let taken = Rc::new(FileSet { files, parsed, catalog, listens, running, schemas, errors: OnceCell::from(counts), _holds });
@@ -2174,7 +2233,7 @@ mod tests {
     }
 
     fn polled(config: Obj) -> Listen {
-        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None, args: Vec::new(), payload: None, address: Ok(Default::default()) }
+        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None, args: Vec::new(), payload: None, address: Ok(Default::default()), plan: None }
     }
 
     #[test]

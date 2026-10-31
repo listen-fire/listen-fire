@@ -87,13 +87,15 @@ export function waitWakeOf(payload: unknown): WaitWake | null {
   return typeof runId === 'string' && typeof waitId === 'string' && typeof address === 'string' ? { runId, waitId, address } : null;
 }
 
-/** What a module reported, as the log keeps it. */
+/** What a module reported, as the log keeps it: each arrival that names the
+ *  record it landed on. One on a root edge (adapter protocol 2.6) names none,
+ *  and no wait reads it. */
 export function newArrivalsOf(arrivals: readonly Arrival[]): NewArrival[] {
-  return arrivals.map((arrival) =>
-    'gone' in arrival
-      ? { edge: arrival.edge, key: arrival.key, identity: null, version: null, landing: null, gone: true }
-      : { edge: arrival.edge, key: arrival.key, identity: arrival.identity, version: arrival.version ?? null, landing: arrival.landing, gone: false },
-  );
+  return arrivals.flatMap((arrival): NewArrival[] => {
+    if ('gone' in arrival) return [{ edge: arrival.edge, key: arrival.key, identity: null, version: null, landing: null, gone: true }];
+    if (arrival.key === undefined) return [];
+    return [{ edge: arrival.edge, key: arrival.key, identity: arrival.identity, version: arrival.version ?? null, landing: arrival.landing, gone: false }];
+  });
 }
 
 /**

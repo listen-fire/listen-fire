@@ -28,6 +28,14 @@ export const triggerTypeSchema = z.enum([
 
 export type TriggerType = z.infer<typeof triggerTypeSchema>;
 
+/** What fired a run: one of the trigger types a source names, or an arrival
+ *  on a listen's last edge, which fired a listen on a traversal. */
+export const firedTriggerTypeSchema = z.union([triggerTypeSchema, z.literal('arrival')]);
+
+/** The record that landed on a listen's last edge, and the records it
+ *  carries from earlier hops (adapter protocol 2.6). */
+const firedLandingSchema = z.object({ recordId: z.string().optional(), recordType: z.string().optional(), fields: z.record(z.string(), z.unknown()) });
+
 /** The source system's identifier for the record an inbound event is about. */
 export const inboundRecordRefSchema = z.object({
   adapterType: z.string(),
@@ -42,7 +50,7 @@ export const triggerEventSchema = z.object({
   adapterType: z.string(),
   objectType: z.string().optional(),
   triggerEntryId: z.string().optional(),
-  triggerType: triggerTypeSchema,
+  triggerType: firedTriggerTypeSchema,
   payload: z.unknown().optional(),
   changeType: z.enum(['create', 'update', 'delete']).optional(),
   actor: actorSchema.optional(),
@@ -70,6 +78,13 @@ export const triggerEventSchema = z.object({
    */
   idempotencyKey: z.string().optional(),
   occurredAt: z.string().datetime().optional(),
+  /**
+   * What fired a listen on a traversal (`triggerType: 'arrival'`): the record
+   * that landed on its last edge, which the fired function's parameter binds
+   * as a wait binds what lands on its edge, and the records it carries from
+   * earlier hops (adapter protocol 2.6).
+   */
+  arrival: z.object({ adapterType: z.string(), edge: z.string(), landing: firedLandingSchema, parents: z.array(firedLandingSchema.nullable()).optional() }).optional(),
 });
 
 export type TriggerEvent = z.infer<typeof triggerEventSchema>;

@@ -7,7 +7,7 @@ use crate::json::Js;
 pub const PROTOCOL_VERSION: &str = "2";
 /// The highest minor of version 2 this kit knows (`PROTOCOL_MINOR`): a module
 /// states the minor its manifest uses, from 0 to this.
-pub const PROTOCOL_MINOR: u64 = 5;
+pub const PROTOCOL_MINOR: u64 = 6;
 
 /// The method that names a minor's feature (`ProtocolMinorUse`), by name or by
 /// its ending.
