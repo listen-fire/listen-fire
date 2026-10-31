@@ -375,17 +375,54 @@ pub struct DeliveryArrivals {
     pub adapter_type: String,
     pub arrivals: Vec<NewArrival>,
     pub at: String,
+    /// The module's re-send window, as `waits.log` takes it.
+    pub resend_window_ms: i64,
+}
+
+/// A wait a kept delivery opens for a run it queued, before the run exists
+/// (`inbound.keepDelivery`'s `waits`): reading from the mark before the
+/// delivery's arrivals, live while the `fire_event` row `fire_key` is queued
+/// or the run exists. `pre_noted` is the run's trigger, noted on it as
+/// judged and not matching.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryWait {
+    pub run_id: String,
+    pub edge: String,
+    #[serde(default)]
+    pub key: Option<String>,
+    pub fire_key: String,
+    #[serde(default)]
+    pub pre_noted: Option<PreNoted>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PreNoted {
+    pub identity: String,
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 /// `inbound.keepDelivery`'s answer: `false` for a duplicate, which wrote
-/// nothing. When the call carried `arrivals`, `wakes` is the `wake_await`
-/// rows it queued, one per wait they answer (an empty list for none): the
-/// rows its `waits.log` queued, never a second set.
+/// nothing. When kept, `arrival_mark` is the mark before its arrivals (the
+/// `arrivalMark` its `fire_event` rows carry). When the call carried
+/// `arrivals`, `wakes` is the `wake_await` rows it queued, one per wait they
+/// answer (an empty list for none): the rows its `waits.log` queued, never a
+/// second set.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Kept {
     pub kept: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wakes: Option<Vec<NewWork>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arrival_mark: Option<i64>,
+}
+
+/// `waits.sweep`'s answer: how many arrivals went.
+#[derive(Debug, Clone, Serialize)]
+pub struct Swept {
+    pub swept: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -538,7 +575,11 @@ slot! {
         /// every wait on its record (the newest report wins) and wakes the
         /// parked ones. `stranded` is the waits the log left stranded. A
         /// wait whose record is deleted keeps waiting.
-        "waits.log" => fn log_arrivals(WaitsLog { team_id: String, adapter_type: String, arrivals: Vec<NewArrival>, at: String }) -> Logged;
+        /// An arrival whose identity and version its record's edge logged
+        /// within the module's re-send window (`resend_window_ms` after
+        /// that log) is a repeat and is not logged again, even after the
+        /// sweep forgot its entry: keep identities apart from entries.
+        "waits.log" => fn log_arrivals(WaitsLog { team_id: String, adapter_type: String, arrivals: Vec<NewArrival>, at: String, resend_window_ms: i64 }) -> Logged;
         /// A run that already waits on this edge of this record keeps that
         /// wait, and its `since`. No `key`: the record was already gone, so
         /// nothing arrives on it and a park on it strands it; a run that
@@ -552,9 +593,15 @@ slot! {
         /// Whether the arrival counts: it matched, and its identity did not
         /// at its last noted arrival. A noted arrival counts no more.
         "waits.note" => fn note_arrival(WaitsNote { wait_id: String, identity: String, version: Option<String>, matched: bool, leaf: Option<String>, fence: Option<String> }) -> bool;
-        /// Forget at most `limit` arrivals logged before `before` that no
-        /// wait reads; how many went.
-        "waits.sweep" => fn sweep_arrivals(WaitsSweep { before: String, limit: i64 }) -> i64;
+        /// Forget at most `limit` arrivals that no live wait on their
+        /// record's edge reads with a `since` below them and that are at or
+        /// below the floor: the lowest mark an unexpired run lease took when
+        /// it was claimed (`leases.claim` keeps `waits.mark` then), else the
+        /// latest seq. A wait is live while its run exists, or one
+        /// `inbound.keepDelivery` opened while its `fire_event` row is
+        /// queued (not buried). Forget too the identities past their
+        /// re-send window. How many arrivals went.
+        "waits.sweep" => fn sweep_arrivals(WaitsSweep { limit: i64 }) -> Swept;
         /// The stranded waits, oldest stranded first (ties by wait id): the
         /// run's, given `run_id`; else every run's, at most `limit`, after
         /// the wait `after` names. A wait is stranded when it is parked on a
@@ -572,6 +619,8 @@ slot! {
             limit: Option<i64>,
         }) -> Vec<Stranded>;
         /// `None` while another holds it.
+        /// Keeps `waits.mark` now as the lease's mark: the sweep's floor
+        /// while the lease holds.
         "leases.claim" => fn claim_lease(LeasesClaim { run_id: String, ttl_ms: i64 }) -> Option<Lease>;
         "leases.renew" => fn renew_lease(LeasesRenew { run_id: String, token: String, ttl_ms: i64 }) -> bool;
         "leases.release" => fn release_lease(LeasesRelease { run_id: String, token: String }) -> ();
@@ -597,9 +646,13 @@ slot! {
         /// (`delivery.external_id` kept at this subscription before) writes
         /// nothing and answers `kept: false`. With `arrivals`: they are
         /// logged as `waits.log` logs them, with the `wake_await` row it
-        /// queues per wait they answer; each `fire_event` row's payload
-        /// gains `arrivalMark`, `waits.mark` after them; and those wake rows
-        /// are answered as `wakes`. A `keep_delivery` that logs through the
+        /// queues per wait they answer, after `waits` open, each from
+        /// `waits.mark` before the arrivals (its `pre_noted` trigger noted on
+        /// it); each `fire_event` row's payload gains `arrivalMark`, that
+        /// mark; and those wake rows are answered as `wakes`. The mark is
+        /// answered as `arrival_mark`. A `fire_event` row this write queued
+        /// that is buried (`work.bury`) takes with it the waits it opened
+        /// for runs that never started. A `keep_delivery` that logs through the
         /// store's own `log_arrivals` has queued them already: it must not
         /// queue them a second time, or each wait wakes twice.
         "inbound.keepDelivery" => fn keep_delivery(InboundKeepDelivery {
@@ -610,6 +663,8 @@ slot! {
             work: Vec<NewWork>,
             #[serde(default)]
             arrivals: Option<DeliveryArrivals>,
+            #[serde(default)]
+            waits: Vec<DeliveryWait>,
         }) -> Kept;
         /// Clear a kept delivery's `external_id`, its receipt kept: its
         /// events failed inside the request, so the sender's retry under

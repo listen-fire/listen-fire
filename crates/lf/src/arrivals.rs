@@ -9,8 +9,7 @@
 use crate::backend::RunHostStore;
 use crate::json::{Js, Obj};
 use crate::obj;
-use crate::store::iso;
-use crate::waits::NewArrival;
+use crate::waits::{DeliveryArrivals, NewArrival};
 
 /// One arrival as its module reported it.
 #[derive(Debug, Clone, PartialEq)]
@@ -145,11 +144,11 @@ fn arrival_of(index: usize, item: &Js) -> Result<ArrivalIn, String> {
 /// parked on a record they landed on, in the log's one write: how many wakes
 /// were queued. (A delivery's arrivals are logged in the write that keeps
 /// it.)
-pub fn log_and_wake(store: &dyn RunHostStore, team_id: &str, adapter_type: &str, arrivals: &[NewArrival]) -> Result<usize, String> {
-    if arrivals.is_empty() {
+pub fn log_and_wake(store: &dyn RunHostStore, log: &DeliveryArrivals<'_>) -> Result<usize, String> {
+    if log.arrivals.is_empty() {
         return Ok(0);
     }
-    let wakes = store.log_arrivals(team_id, adapter_type, arrivals, &iso(0)).map_err(|e| e.to_string())?.wakes;
+    let wakes = store.log_arrivals(log).map_err(|e| e.to_string())?.wakes;
     for _ in &wakes {
         crate::wake::queued("wake_await", None);
     }
@@ -158,6 +157,7 @@ pub fn log_and_wake(store: &dyn RunHostStore, team_id: &str, adapter_type: &str,
 
 #[cfg(test)]
 mod tests {
+    use crate::store::iso;
     use super::*;
     use crate::store::{ClaimDue, Park, ParkKind, RunStart, Store};
     use crate::waits::OpenWait;
@@ -218,7 +218,9 @@ mod tests {
         store.commit_park(&Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: &wait } }).unwrap();
 
         let arrivals = arrivals_of(&js(r#"{"arrivals":[{"edge":"Comments","key":"thread:c1","identity":"k1","landing":{"fields":{"Text":"hi"}}},{"edge":"Comments","key":"thread:c9","identity":"k2","landing":{"fields":{}}}]}"#)).unwrap();
-        assert_eq!(log_and_wake(&store, "t", "acme", &logged(&arrivals)).unwrap(), 1);
+        let (logged, at) = (logged(&arrivals), iso(0));
+        let log = DeliveryArrivals { team_id: "t", adapter_type: "acme", arrivals: &logged, at: &at, resend_window_ms: crate::externals::DEFAULT_RESEND_WINDOW_MS };
+        assert_eq!(log_and_wake(&store, &log).unwrap(), 1);
         let rows = store.claim_due(&ClaimDue { limit: 10, lease_ms: 60_000, due_by: None, kinds: None }).unwrap();
         let rows: Vec<(String, String)> = rows.into_iter().map(|r| (r.kind, r.payload.to_json())).collect();
         assert_eq!(rows, [("wake_await".to_string(), format!(r#"{{"waitId":"{wait}","runId":"run-1","address":"s1"}}"#))]);

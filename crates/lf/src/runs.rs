@@ -39,7 +39,6 @@ use crate::sources::{MOVEMENT_EXTENSION, MovementFile, Parsed, scan_movements};
 use crate::backend::{RunHostStore, StoreSpec, open_store};
 use crate::edge_polls::EDGE_POLL_WORK_KIND;
 use crate::store::{ClaimDue, POLL_WORK_KIND, Release, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, iso};
-use crate::waits::ARRIVAL_RETENTION_MS;
 use module_wire::results as wire_results;
 
 /// How many files' parses a session's runs keep (movement_engine::program::keep_parses):
@@ -458,9 +457,14 @@ pub struct Delivered<'a> {
     /// (crate::routing::subscription_key); None for a credential's own door,
     /// which the credential alone narrows.
     pub subscription: Option<&'a str>,
-    /// The arrival log's mark after the delivery's own arrivals were logged
-    /// (`arrivalMark`): a run it starts reads its trigger's waits from there.
+    /// The arrival log's mark before the delivery's own arrivals were
+    /// logged (`arrivalMark`): a run it starts reads its trigger's waits from
+    /// there, its trigger's own arrival noted on them as it was kept.
     pub arrival_mark: Option<i64>,
+    /// The runs the delivery's arrivals fire, minted as it was kept, each
+    /// `{ pipeline, receipt, runId }` (`runs`): their waits on their
+    /// triggers were opened then, under these ids.
+    pub minted: Option<&'a Js>,
 }
 
 impl<'a> Delivered<'a> {
@@ -478,7 +482,20 @@ impl<'a> Delivered<'a> {
             Some(Js::Num(mark)) => mark.as_i64(),
             _ => None,
         };
-        Delivered { id, credential: text("credential"), subscription: text("subscription"), arrival_mark }
+        Delivered { id, credential: text("credential"), subscription: text("subscription"), arrival_mark, minted: row.get("runs") }
+    }
+
+    /// The run minted for `pipeline` to run the arrival `receipt`, when the
+    /// delivery minted one.
+    pub fn minted_run(&self, pipeline: &str, receipt: &str) -> Option<String> {
+        self.minted?.as_array()?.iter().find_map(|run| {
+            (run.get("pipeline").and_then(Js::as_str) == Some(pipeline) && run.get("receipt").and_then(Js::as_str) == Some(receipt)).then(|| run.get("runId").and_then(Js::as_str).map(str::to_string))?
+        })
+    }
+
+    /// Every run the delivery minted, by id.
+    pub fn minted_runs(&self) -> Vec<String> {
+        self.minted.and_then(Js::as_array).unwrap_or_default().iter().filter_map(|run| run.get("runId").and_then(Js::as_str).map(str::to_string)).collect()
     }
 
     /// Its connection and subscription, written into a kept event or a row.
@@ -764,6 +781,7 @@ impl Session {
             JudgedBy::Every => true,
             JudgedBy::Sharing(shared) => shared.fires.iter().any(|i| std::ptr::eq(listen, &set.listens[*i])),
         };
+        let mut started = BTreeSet::new();
         for arrival in arrivals.iter().filter(|a| !a.gone) {
             let identity = arrival.identity.as_deref().unwrap_or_default();
             for listen in set.listens.iter().filter(|l| l.is_on(adapter, &arrival.edge) && fires(l)) {
@@ -796,12 +814,21 @@ impl Session {
                 let pipeline = listen.pipeline();
                 let receipt = arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), identity, arrival.version.as_deref());
                 let trigger = arrival_trigger_of(&pipeline, adapter, arrival, &iso(0));
-                let run_id = uuid::Uuid::new_v4().to_string();
+                let run_id = delivered.minted_run(&pipeline, &receipt).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 match self.run_listen(set, &run_id, listen, trigger, false, Some((pipeline.as_str(), receipt.as_str())), delivered.came_in()).await? {
-                    Some(outcome) => fired.outcomes.push(outcome),
+                    Some(outcome) => {
+                        started.insert(run_id);
+                        fired.outcomes.push(outcome);
+                    }
                     None => fired.redelivered.push(format!("{named} has run the arrival {identity} on {} before: this delivery runs nothing", arrival.edge)),
                 }
             }
+        }
+        // A run the delivery minted that did not start here (its listen no
+        // longer fires the arrival, or ran it before) never will: the waits
+        // opened for it as the delivery was kept go.
+        for run_id in delivered.minted_runs().into_iter().filter(|id| !started.contains(id)) {
+            self.store.drop_run_state(&run_id, None).map_err(|e| e.to_string())?;
         }
         // A module that reports its parents' changes reports them as
         // arrivals on the parents' own edge: the listens filtering that
@@ -1111,7 +1138,10 @@ impl Session {
                 self.note_seen_arrivals(set, &key.adapter, &arrivals, key.credential.as_deref(), &shared.fires)?;
             }
         } else {
-            crate::arrivals::log_and_wake(&*self.store, LOCAL_TENANT, &key.adapter, &crate::arrivals::logged(&arrivals))?;
+            let (logged, at) = (crate::arrivals::logged(&arrivals), iso(0));
+            let resend_window_ms = crate::externals::resend_window_ms(&self.project, &key.adapter, &running.manifest_answer);
+            let log = crate::waits::DeliveryArrivals { team_id: LOCAL_TENANT, adapter_type: &key.adapter, arrivals: &logged, at: &at, resend_window_ms };
+            crate::arrivals::log_and_wake(&*self.store, &log)?;
             let mark = self.store.arrival_mark().map_err(|e| e.to_string())?;
             let delivered = Delivered { credential: key.credential.as_deref(), arrival_mark: Some(mark), ..Delivered::default() };
             fired = self.fire_arrivals_to(set, &key.adapter, &arrivals, delivered, JudgedBy::Sharing(shared)).await?;
@@ -1850,7 +1880,7 @@ impl Session {
         }
         let retain_ms = i64::from(self.project.delivery_retain_days) * 86_400_000;
         self.store.sweep_deliveries(&iso(-retain_ms), WORK_ROWS_PER_DRAIN).map_err(|e| e.to_string())?;
-        self.store.sweep_arrivals(&iso(-ARRIVAL_RETENTION_MS), WORK_ROWS_PER_DRAIN).map_err(|e| e.to_string())?;
+        self.store.sweep_arrivals(WORK_ROWS_PER_DRAIN).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -2589,7 +2619,7 @@ mod tests {
     }
 
     fn polled(config: Obj) -> Listen {
-        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None, args: Vec::new(), payload: None, address: Ok(Default::default()), plan: None }
+        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None, args: Vec::new(), payload: None, address: Ok(Default::default()), plan: None , trigger_awaits: Vec::new()}
     }
 
     #[test]

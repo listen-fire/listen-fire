@@ -4,7 +4,14 @@
 //! file's implementation of that family.
 //!
 //! - Every arrival a module reports is logged under a store-wide increasing
-//!   seq, kept ARRIVAL_RETENTION_MS, and longer while a live wait reads it.
+//!   seq. The sweep (`sweep_arrivals`) forgets it once no live wait on its
+//!   record's edge reads it and it is at or below the floor: the lowest mark
+//!   a running step took when it claimed its run's lease, else the latest
+//!   seq. Its identity outlives it for the module's re-send window, so a
+//!   provider's re-send after the sweep is still a repeat.
+//! - A wait is live while its run exists, or, for one a delivery opened for
+//!   the run it queued (`DeliveryWait`), while that run's `fire_event` row
+//!   is queued.
 //! - A wait is one row: this run waits on this edge of this record. It reads
 //!   the arrivals logged after its mark, a seq taken before the write that may
 //!   cause them, so an arrival logged during the write still counts.
@@ -29,9 +36,6 @@ use crate::obj;
 use crate::store::{NewWork, Store, StoreError, canonical_iso, iso};
 
 type Result<T> = std::result::Result<T, StoreError>;
-
-/// How long an arrival no live wait reads is kept.
-pub const ARRIVAL_RETENTION_MS: i64 = 3_600_000;
 
 /// One arrival a module reported on an edge of a record.
 #[derive(Debug, Clone, PartialEq)]
@@ -146,19 +150,59 @@ pub struct StrandedAfter<'a> {
     pub wait_id: &'a str,
 }
 
-/// A delivery's arrivals, logged in the write that keeps it
+/// Arrivals to log (`waits.log`), and in a kept delivery
 /// (`inbound.keepDelivery`'s `arrivals`), so a redelivery logs nothing again.
 pub struct DeliveryArrivals<'a> {
     pub team_id: &'a str,
     pub adapter_type: &'a str,
     pub arrivals: &'a [NewArrival],
     pub at: &'a str,
+    /// The module's re-send window: an identity logged is a repeat for this
+    /// long after `at`, whether or not its entry was swept.
+    pub resend_window_ms: i64,
+}
+
+/// A wait a kept delivery opens for a run it queued, before the run exists,
+/// so a reply that lands while the run waits in the queue still counts
+/// (`inbound.keepDelivery`'s `waits`). It reads the arrivals after the mark
+/// taken before the delivery's own, and is live while the run's
+/// `fire_event` row (`fire_key`) is queued or the run exists.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeliveryWait {
+    pub run_id: String,
+    pub edge: String,
+    /// None: the record was gone when the delivery was kept.
+    pub key: Option<String>,
+    /// The run's trigger is this arrival of the delivery, on this wait's
+    /// edge and record: noted as judged (not matching), so the run's own
+    /// trigger never answers its wait.
+    pub pre_noted: Option<PreNoted>,
+    /// The key of the `fire_event` row, among the delivery's work, that
+    /// queues the run.
+    pub fire_key: String,
+}
+
+/// What keeping a delivery wrote (`inbound.keepDelivery`'s answer): the
+/// `wake_await` rows its arrivals queued, and the mark before its arrivals,
+/// which its `fire_event` rows carry as `arrivalMark`.
+#[derive(Debug, Clone)]
+pub struct KeptDelivery {
+    pub wakes: Vec<NewWork>,
+    pub arrival_mark: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreNoted {
+    pub identity: String,
+    pub version: Option<String>,
 }
 
 /// The work rows a kept delivery's arrivals change and add: each
-/// `fire_event` row carries `mark` as its `arrivalMark` (a run it starts reads
-/// its waits' arrivals after it), and each wait a logged arrival answers gets
-/// a `wake_await { waitId, runId, address }` row (`wake_row`).
+/// `fire_event` row carries `mark`, the mark before the delivery's own
+/// arrivals, as its `arrivalMark` (a run it starts reads its waits'
+/// arrivals after it; its trigger's own arrival is noted on them), and each
+/// wait a logged arrival answers gets a `wake_await { waitId, runId,
+/// address }` row (`wake_row`).
 pub fn delivery_rows(work: &[NewWork], mark: i64, team_id: &str, wakes: &[WaitWake]) -> (Vec<NewWork>, Vec<NewWork>) {
     let marked = work
         .iter()
@@ -204,18 +248,20 @@ impl Store {
 
     /// The arrivals logged and a `wake_await` row queued for each wait they
     /// answer, in one transaction: a crash leaves both or neither.
-    pub fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Logged> {
+    pub fn log_arrivals(&self, log: &DeliveryArrivals<'_>) -> Result<Logged> {
         self.transaction(|db| {
-            let logged = Self::log_arrivals_in(db, team_id, adapter_type, arrivals, at)?;
-            for row in wake_rows(team_id, &logged.wakes) {
+            let logged = Self::log_arrivals_in(db, log)?;
+            for row in wake_rows(log.team_id, &logged.wakes) {
                 Self::enqueue_in(db, &row.kind, &row.key, &row.payload, row.due_at.as_deref())?;
             }
             Ok(logged)
         })
     }
 
-    pub(crate) fn log_arrivals_in(db: &Connection, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Logged> {
+    pub(crate) fn log_arrivals_in(db: &Connection, log: &DeliveryArrivals<'_>) -> Result<Logged> {
+        let DeliveryArrivals { team_id, adapter_type, arrivals, at, resend_window_ms } = *log;
         let at = &canonical_iso(at)?;
+        let kept_until = &iso_after(at, resend_window_ms)?;
         {
             let mut log = db.prepare(
                 "insert into arrival (team_id, adapter_type, edge, key, identity, version, landing, gone, logged_at)
@@ -229,9 +275,13 @@ impl Store {
                  order by w.run_id, w.id",
             )?;
             // A repeat: its identity and version already logged on its
-            // record's edge within the retention (a sender's retry).
+            // record's edge within the module's re-send window (a sender's
+            // retry), even if the sweep forgot its entry since.
             let mut logged = db.prepare(
-                "select 1 from arrival where team_id = ? and adapter_type = ? and edge = ? and key = ? and identity = ? and version is ? and logged_at > ?",
+                "select 1 from arrival_identity where team_id = ? and adapter_type = ? and edge = ? and key = ? and identity = ? and version is ? and kept_until > ?",
+            )?;
+            let mut identify = db.prepare(
+                "insert into arrival_identity (team_id, adapter_type, edge, key, identity, version, kept_until) values (?, ?, ?, ?, ?, ?, ?)",
             )?;
             // A deleted record answers no wait: the waits parked on it are
             // stranded, once, and keep waiting.
@@ -249,13 +299,13 @@ impl Store {
                  where team_id = ? and adapter_type = ? and edge = ? and key = ? and stranded_at is not null
                  returning id",
             )?;
-            let since = iso(-ARRIVAL_RETENTION_MS);
             let mut answer = Logged::default();
             for arrival in arrivals {
-                if let Some(identity) = &arrival.identity
-                    && logged.exists(params![team_id, adapter_type, arrival.edge, arrival.key, identity, arrival.version, since])?
-                {
-                    continue;
+                if let Some(identity) = &arrival.identity {
+                    if logged.exists(params![team_id, adapter_type, arrival.edge, arrival.key, identity, arrival.version, at])? {
+                        continue;
+                    }
+                    identify.execute(params![team_id, adapter_type, arrival.edge, arrival.key, identity, arrival.version, kept_until])?;
                 }
                 let landing = arrival.landing.as_ref().map(Js::to_json);
                 log.execute(params![
@@ -394,19 +444,56 @@ impl Store {
         })
     }
 
-    /// Forget at most `limit` arrivals logged before `before` that no wait
-    /// reads: how many went.
-    pub fn sweep_arrivals(&self, before: &str, limit: i64) -> Result<i64> {
-        let swept = self.db.execute(
-            "delete from arrival where seq in (
-               select a.seq from arrival a
-               where a.logged_at < ?1
-                 and not exists (select 1 from wait_row w
-                   where w.team_id = a.team_id and w.adapter_type = a.adapter_type and w.edge = a.edge and w.key = a.key and w.since < a.seq)
-               order by a.seq limit ?2)",
-            params![before, limit],
-        )?;
-        Ok(i64::try_from(swept).unwrap_or(i64::MAX))
+    /// Forget at most `limit` arrivals no live wait on their record's edge
+    /// reads that are at or below the floor, and at most `limit` identities
+    /// past their re-send window: how many arrivals went.
+    pub fn sweep_arrivals(&self, limit: i64) -> Result<i64> {
+        self.transaction(|db| {
+            let now = iso(0);
+            let swept = db.execute(
+                &format!(
+                    "delete from arrival where seq in (
+                       select a.seq from arrival a
+                       where a.seq <= ({FLOOR})
+                         and not exists (select 1 from wait_row w
+                           where w.team_id = a.team_id and w.adapter_type = a.adapter_type and w.edge = a.edge and w.key = a.key and w.since < a.seq
+                             and ({LIVE}))
+                       order by a.seq limit ?2)"
+                ),
+                params![now, limit],
+            )?;
+            db.execute("delete from arrival_identity where rowid in (select rowid from arrival_identity where kept_until < ?1 limit ?2)", params![now, limit])?;
+            Ok(i64::try_from(swept).unwrap_or(i64::MAX))
+        })
+    }
+
+    /// The waits a delivery opened for the runs it queued (`DeliveryWait`),
+    /// in its write: each reads from `since`, and a pre-noted one has its
+    /// run's trigger noted as judged.
+    pub(crate) fn open_delivery_waits_in(db: &Connection, team_id: &str, adapter_type: &str, waits: &[DeliveryWait], since: i64) -> Result<()> {
+        for wait in waits {
+            db.execute(
+                "insert into wait_row (id, run_id, team_id, adapter_type, edge, key, since, fire_key) values (?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
+                params![uuid::Uuid::new_v4().to_string(), wait.run_id, team_id, adapter_type, wait.edge, wait.key, since, wait.fire_key],
+            )?;
+            if let Some(PreNoted { identity, version }) = &wait.pre_noted {
+                db.execute(
+                    "insert into wait_seen (wait_id, identity, version, matched, leaf)
+                       select id, ?, ?, 0, null from wait_row where run_id = ? and team_id = ? and adapter_type = ? and edge = ? and key is ?",
+                    params![identity, version, wait.run_id, team_id, adapter_type, wait.edge, wait.key],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The waits a delivery opened for runs its `fire_event` row `fire_key`
+    /// queued that never started, dropped as the row is buried.
+    pub(crate) fn drop_unstarted_waits_in(db: &Connection, fire_key: &str) -> Result<()> {
+        const UNSTARTED: &str = "select id from wait_row w where w.fire_key = ?1 and not exists (select 1 from run r where r.id = w.run_id)";
+        db.execute(&format!("delete from wait_seen where wait_id in ({UNSTARTED})"), params![fire_key])?;
+        db.execute(&format!("delete from wait_row where id in ({UNSTARTED})"), params![fire_key])?;
+        Ok(())
     }
 
     /// A wait park's row: the wait is parked at `address`. Parked on a
@@ -461,6 +548,21 @@ impl Store {
             None => Err(StoreError::Invalid(format!("no wait {wait_id}"))),
         }
     }
+}
+
+/// The sweep's floor, `?1` being now: the lowest mark an unexpired run
+/// lease took, else the latest seq. A running step took its marks after its
+/// lease's, so what arrives while it runs is above it.
+const FLOOR: &str = "select coalesce((select min(lease_mark) from run where lease_until > ?1 and lease_mark is not null), (select coalesce(max(seq), 0) from arrival))";
+
+/// Whether the wait `w` is live: its run exists, or the `fire_event` row
+/// that queues it (a wait a delivery opened) is there, not buried.
+const LIVE: &str = "exists (select 1 from run r where r.id = w.run_id) or exists (select 1 from work q where q.key = w.fire_key and q.dead_at is null)";
+
+/// The instant `ms` after `at`, as `iso` writes it.
+fn iso_after(at: &str, ms: i64) -> Result<String> {
+    let at: jiff::Timestamp = at.parse().map_err(|e| StoreError::Invalid(format!("{at} is not an instant: {e}")))?;
+    Ok(crate::store::iso_at(at.as_millisecond().saturating_add(ms)))
 }
 
 pub(crate) fn landing_of(text: Option<&str>) -> Result<Js> {
@@ -581,21 +683,48 @@ mod tests {
         step.get(key).and_then(Js::as_array).unwrap_or_else(|| panic!("{key} in {}", step.to_json()))
     }
 
-    /// Claims the due `wake_await` rows of a team as its drain claims them.
-    type ClaimWakes<'a> = &'a dyn Fn(&str) -> Vec<crate::store::ClaimedWork>;
+    /// Claims the due rows of a kind of a team as its drain claims them.
+    type ClaimRows<'a> = &'a dyn Fn(&str, &str) -> Vec<crate::store::ClaimedWork>;
 
-    fn wake_rows_due() -> crate::store::ClaimDue<'static> {
-        static KINDS: std::sync::LazyLock<[String; 1]> = std::sync::LazyLock::new(|| ["wake_await".to_string()]);
-        crate::store::ClaimDue { limit: 1000, lease_ms: 60_000, due_by: None, kinds: Some(KINDS.as_slice()) }
+    fn rows_due(kind: &str) -> crate::store::ClaimDue<'static> {
+        let kinds: &'static [String] = Box::leak(Box::new([kind.to_string()]));
+        crate::store::ClaimDue { limit: 1000, lease_ms: 60_000, due_by: None, kinds: Some(kinds) }
     }
 
-    fn run_case(store: &dyn RunHostStore, case: &Js, claim_wakes: ClaimWakes<'_>) {
+    /// A step's arrival.
+    fn new_arrival(names: &Names, a: &Js) -> NewArrival {
+        NewArrival {
+            edge: text(a, "edge").into(),
+            key: text(a, "key").into(),
+            identity: names.identity(a),
+            version: opt_text(a, "version").map(str::to_string),
+            landing: a.get("landing").cloned(),
+            gone: flag(a, "gone"),
+        }
+    }
+
+    /// A step's re-send window: the hour a module that declares none has,
+    /// when the step gives none.
+    fn resend_window_of(step: &Js) -> i64 {
+        step.get("resendWindowMs").and_then(int).unwrap_or(crate::externals::DEFAULT_RESEND_WINDOW_MS)
+    }
+
+    /// The id of the wait `opened` names, as the run's own open would find it.
+    fn wait_of(store: &dyn RunHostStore, opened: &OpenWait<'_>) -> String {
+        store.open_wait(opened).unwrap()
+    }
+
+    fn run_case(store: &dyn RunHostStore, case: &Js, claim_rows: ClaimRows<'_>) {
+        let claim_wakes = |team: &str| claim_rows(team, "wake_await");
         let name = text(case, "case");
         let mut names = Names::default();
         let steps = list(case, "steps");
+        // A run a delivery minted is started only by a `start` step, as the
+        // drain starts it.
+        let unstarted: Vec<&str> = case.get("unstarted").and_then(Js::as_array).unwrap_or_default().iter().filter_map(Js::as_str).collect();
         for step in steps {
             if let Some(run) = opt_text(step, "run") {
-                if names.ids.contains_key(run) {
+                if names.ids.contains_key(run) || unstarted.contains(&run) {
                     continue;
                 }
                 let id = names.id(run);
@@ -611,19 +740,10 @@ mod tests {
                     names.marks.insert(text(step, "as").into(), store.arrival_mark().unwrap());
                 }
                 "log" => {
-                    let arrivals: Vec<NewArrival> = list(step, "arrivals")
-                        .iter()
-                        .map(|a| NewArrival {
-                            edge: text(a, "edge").into(),
-                            key: text(a, "key").into(),
-                            identity: names.identity(a),
-                            version: opt_text(a, "version").map(str::to_string),
-                            landing: a.get("landing").cloned(),
-                            gone: flag(a, "gone"),
-                        })
-                        .collect();
+                    let arrivals: Vec<NewArrival> = list(step, "arrivals").iter().map(|a| new_arrival(&names, a)).collect();
                     let logged_at = iso(step.get("at").and_then(int).unwrap_or(0));
-                    let Logged { mut wakes, stranded } = store.log_arrivals(&team, adapter, &arrivals, &logged_at).unwrap();
+                    let log = DeliveryArrivals { team_id: &team, adapter_type: adapter, arrivals: &arrivals, at: &logged_at, resend_window_ms: resend_window_of(step) };
+                    let Logged { mut wakes, stranded } = store.log_arrivals(&log).unwrap();
                     let mut expected = names.wakes(step, "wakes");
                     wakes.sort();
                     expected.sort();
@@ -783,7 +903,54 @@ mod tests {
                     assert!(store.drop_run_state(&names.id(text(step, "run")), None).unwrap(), "{at}: dropped");
                 }
                 "sweep" => {
-                    store.sweep_arrivals(&iso(step.get("before").and_then(int).unwrap()), 1000).unwrap();
+                    let swept = store.sweep_arrivals(step.get("limit").and_then(int).unwrap()).unwrap();
+                    assert_eq!(swept, step.get("expect").and_then(int).unwrap(), "{at}: how many the sweep forgot");
+                }
+                "keepDelivery" => {
+                    let arrivals: Vec<NewArrival> = list(step, "arrivals").iter().map(|a| new_arrival(&names, a)).collect();
+                    let fire = NewWork {
+                        kind: "fire_event".into(),
+                        key: format!("fire_event:{}", names.id(text(step, "fire"))),
+                        payload: Js::Obj(Obj::new()),
+                        due_at: None,
+                        team_id: Some(team.clone()),
+                    };
+                    let waits: Vec<DeliveryWait> = list(step, "waits")
+                        .iter()
+                        .map(|w| DeliveryWait {
+                            run_id: names.id(text(w, "run")),
+                            edge: text(w, "edge").into(),
+                            key: opt_text(w, "key").map(str::to_string),
+                            pre_noted: w.get("preNoted").map(|n| PreNoted { identity: text(n, "identity").into(), version: opt_text(n, "version").map(str::to_string) }),
+                            fire_key: fire.key.clone(),
+                        })
+                        .collect();
+                    let receipt = crate::store::NewDelivery {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        external_id: None,
+                        received_at: iso(0),
+                        source: crate::store::DeliverySource::Webhook,
+                        inline: false,
+                        replay_of: None,
+                        events: vec![],
+                    };
+                    let now = iso(0);
+                    let log = DeliveryArrivals { team_id: &team, adapter_type: adapter, arrivals: &arrivals, at: &now, resend_window_ms: resend_window_of(step) };
+                    let kept = store.keep_delivery(&names.id("subscription"), None, &receipt, std::slice::from_ref(&fire), Some(&log), &waits).unwrap().expect("kept");
+                    assert_eq!(kept.arrival_mark, names.marks[text(step, "arrivalMark")], "{at}: the mark before its arrivals");
+                    for (wait, want) in waits.iter().zip(list(step, "waits")) {
+                        let opened = OpenWait { run_id: &wait.run_id, team_id: &team, adapter_type: adapter, edge: &wait.edge, key: wait.key.as_deref(), since: 0 };
+                        names.waits.insert(text(want, "as").into(), wait_of(store, &opened));
+                    }
+                }
+                "start" => {
+                    let id = names.id(text(step, "minted"));
+                    store.start_run(&RunStart { id: &id, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
+                }
+                "bury" => {
+                    let key = format!("fire_event:{}", names.id(text(step, "fire")));
+                    let row = claim_rows(&team, "fire_event").into_iter().find(|row| row.key == key).unwrap_or_else(|| panic!("{at}: {key} is not queued"));
+                    store.bury_work(&row.id, &row.claim, "gave up").unwrap();
                 }
                 "stranded" => {
                     let run = names.id(text(step, "run"));
@@ -818,7 +985,7 @@ mod tests {
         let case = cases().into_iter().find(|c| test_name(text(c, "case")) == test).unwrap_or_else(|| panic!("no case for {test}"));
         let store = state_file();
         // The state file has one tenant: its drain claims every team's rows.
-        run_case(&store, &case, &|_team| store.claim_due(&wake_rows_due()).unwrap());
+        run_case(&store, &case, &|_team, kind| store.claim_due(&rows_due(kind)).unwrap());
     }
 
     macro_rules! store_cases {
@@ -859,6 +1026,9 @@ mod tests {
         a_segments_commit_settles_its_run_in_the_same_write_or_leaves_the_leaf_it_resumed_to_be_resumed_again,
         a_segments_commit_wakes_each_wait_it_parks_whose_arrivals_are_unread_and_none_whose_record_is_gone,
         a_race_a_segment_owes_is_kept_in_its_commit_until_the_commit_that_settles_it_and_goes_with_its_frame,
+        an_arrival_resent_after_its_entry_was_swept_is_a_repeat_within_the_modules_window,
+        a_running_steps_mark_keeps_arrivals_above_it_from_the_sweep,
+        a_wait_opened_at_delivery_keeps_arrivals_until_its_run_ends_or_its_fire_row_is_buried,
     }
 
     #[test]
@@ -882,9 +1052,15 @@ mod tests {
         let store = crate::pg_store::PgStore::connect(&url, crate::backend::POSTGRES_TENANT).unwrap();
         // A Postgres store claims only its own tenant's rows: a case's team
         // (a fresh uuid) is claimed by a store of that tenant.
-        let claim_wakes = |team: &str| crate::pg_store::PgStore::connect(&url, team).unwrap().claim_due(&wake_rows_due()).unwrap();
+        let claim_rows = |team: &str, kind: &str| crate::pg_store::PgStore::connect(&url, team).unwrap().claim_due(&rows_due(kind)).unwrap();
+        let client = crate::pg_store::connect_client(&url).unwrap();
         for case in cases() {
-            run_case(&store, &case, &claim_wakes);
+            // The cases share the database: what an earlier case left
+            // sweepable goes, and its leases lapse, so a case's sweep counts
+            // its own arrivals under its own floor.
+            crate::pg_store::block_on(client.execute("update lf.trigger_run set lease_until = now() - interval '1 millisecond' where lease_until > now()", &[])).unwrap();
+            while store.sweep_arrivals(10_000).unwrap() > 0 {}
+            run_case(&store, &case, &claim_rows);
         }
         a_kept_delivery_logs_its_arrivals_once(&store);
     }
@@ -911,18 +1087,20 @@ mod tests {
         };
         let fire = NewWork { kind: "fire_event".into(), key: format!("fire_event:{run}"), payload: Js::Obj(obj! { "external" => Js::str("acme") }), due_at: None, team_id: Some(team.clone()) };
         let arrival = NewArrival { edge: "Comments".into(), key: key.clone(), identity: Some("k1".into()), version: None, landing: Some(Js::Null), gone: false };
-        let logged = DeliveryArrivals { team_id: &team, adapter_type: "acme", arrivals: std::slice::from_ref(&arrival), at: &iso(0) };
-        let wakes = store.keep_delivery(&subscription, None, &receipt(), std::slice::from_ref(&fire), Some(&logged)).unwrap().expect("kept");
-        let mark = store.arrival_mark().unwrap();
+        let (now, before) = (iso(0), store.arrival_mark().unwrap());
+        let logged = DeliveryArrivals { team_id: &team, adapter_type: "acme", arrivals: std::slice::from_ref(&arrival), at: &now, resend_window_ms: crate::externals::DEFAULT_RESEND_WINDOW_MS };
+        let kept = store.keep_delivery(&subscription, None, &receipt(), std::slice::from_ref(&fire), Some(&logged), &[]).unwrap().expect("kept");
+        let (wakes, mark) = (kept.wakes, store.arrival_mark().unwrap());
+        assert_eq!(kept.arrival_mark, before, "the mark before the delivery's own arrival");
         assert_eq!(wakes.iter().map(|w| (w.kind.as_str(), w.payload.to_json())).collect::<Vec<_>>(), [("wake_await", format!(r#"{{"waitId":"{wait}","runId":"{run}","address":"s1"}}"#))]);
         assert_eq!(store.wait_arrivals(&wait).unwrap().arrivals.len(), 1);
         let due = crate::store::ClaimDue { limit: 1000, lease_ms: 60_000, due_by: None, kinds: None };
         let rows = store.claim_due(&due).unwrap();
         let fired = rows.iter().find(|r| r.key == fire.key).expect("the fire row");
-        assert_eq!(fired.payload.get("arrivalMark"), Some(&Js::Num(mark.into())), "the mark after the delivery's own arrival");
+        assert_eq!(fired.payload.get("arrivalMark"), Some(&Js::Num(before.into())), "the mark before the delivery's own arrival");
         assert!(rows.iter().any(|r| r.kind == "wake_await" && r.payload.get("waitId") == Some(&Js::str(&wait))));
 
-        assert!(store.keep_delivery(&subscription, None, &receipt(), &[], Some(&logged)).unwrap().is_none(), "a duplicate");
+        assert!(store.keep_delivery(&subscription, None, &receipt(), &[], Some(&logged), &[]).unwrap().is_none(), "a duplicate");
         assert_eq!(store.arrival_mark().unwrap(), mark, "a duplicate logs nothing");
     }
 
@@ -1064,15 +1242,15 @@ mod tests {
         let (early, late) = (wait_on("run-1", "thread:c1"), wait_on("run-2", "thread:c2"));
         let gone = |key: &str| NewArrival { edge: "Comments".into(), key: key.into(), identity: None, version: None, landing: None, gone: true };
         // 10:00 in UTC, written at an offset: as text it sorts after 10:30Z.
-        let logged = store.log_arrivals("t", "acme", &[gone("thread:c1")], "2026-10-31T11:00:00+01:00").unwrap();
+        let logged = store.log_arrivals(&DeliveryArrivals { team_id: "t", adapter_type: "acme", arrivals: &[gone("thread:c1")], at: "2026-10-31T11:00:00+01:00", resend_window_ms: crate::externals::DEFAULT_RESEND_WINDOW_MS }).unwrap();
         assert_eq!(logged.stranded.iter().map(|w| w.at.as_str()).collect::<Vec<_>>(), ["2026-10-31T10:00:00.000Z"]);
-        store.log_arrivals("t", "acme", &[gone("thread:c2")], "2026-10-31T10:30:00Z").unwrap();
+        store.log_arrivals(&DeliveryArrivals { team_id: "t", adapter_type: "acme", arrivals: &[gone("thread:c2")], at: "2026-10-31T10:30:00Z", resend_window_ms: crate::externals::DEFAULT_RESEND_WINDOW_MS }).unwrap();
         let page = |after: Option<StrandedAfter<'_>>| store.stranded_waits(&StrandedOf::Page { after, limit: 1 }).unwrap();
         let first = page(None);
         assert_eq!((first[0].wait_id.as_str(), first[0].at.as_str()), (early.as_str(), "2026-10-31T10:00:00.000Z"));
         let second = page(Some(StrandedAfter { at: "2026-10-31T11:00:00+01:00", wait_id: &early }));
         assert_eq!((second[0].wait_id.as_str(), second[0].at.as_str()), (late.as_str(), "2026-10-31T10:30:00.000Z"));
-        assert!(matches!(store.log_arrivals("t", "acme", &[gone("thread:c1")], "yesterday"), Err(StoreError::Invalid(_))));
+        assert!(matches!(store.log_arrivals(&DeliveryArrivals { team_id: "t", adapter_type: "acme", arrivals: &[gone("thread:c1")], at: "yesterday", resend_window_ms: crate::externals::DEFAULT_RESEND_WINDOW_MS }), Err(StoreError::Invalid(_))));
     }
 
     #[test]
@@ -1080,9 +1258,9 @@ mod tests {
         let store = state_file();
         store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
         let arrival = |key: &str| NewArrival { edge: "Comments".into(), key: key.into(), identity: Some("k".into()), version: None, landing: None, gone: false };
-        store.log_arrivals("t", "acme", &[arrival("a"), arrival("b"), arrival("c")], &iso(-2 * ARRIVAL_RETENTION_MS)).unwrap();
-        assert_eq!(store.sweep_arrivals(&iso(-ARRIVAL_RETENTION_MS), 2).unwrap(), 2);
-        assert_eq!(store.sweep_arrivals(&iso(-ARRIVAL_RETENTION_MS), 2).unwrap(), 1);
+        store.log_now("t", "acme", &[arrival("a"), arrival("b"), arrival("c")]).unwrap();
+        assert_eq!(store.sweep_arrivals(2).unwrap(), 2);
+        assert_eq!(store.sweep_arrivals(2).unwrap(), 1);
         let park = Park { run_id: "run-1", address: "s1", state: &Js::Null, fence: None, kind: ParkKind::Wait { wait_id: "no-such-wait" } };
         assert!(matches!(store.commit_park(&park), Err(StoreError::Invalid(_))));
         assert!(store.leaves("run-1", false, None, None).unwrap().is_empty());

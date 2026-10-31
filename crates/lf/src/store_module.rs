@@ -20,7 +20,7 @@ use crate::store::{
     StoreError,
 };
 use crate::store_wire::{Wire, delivery_params, event_run_params, int, num, open_wait_params, opt, park_params, rows, run_start_params, segment_commit_params, stranded_params, to_rows};
-use crate::waits::{DeliveryArrivals, Logged, NewArrival, Noted, OpenWait, Stranded, StrandedOf, WaitArrivals, WaitWake};
+use crate::waits::{DeliveryArrivals, DeliveryWait, KeptDelivery, Logged, Noted, OpenWait, Stranded, StrandedOf, WaitArrivals, WaitWake};
 
 /// The error code a fenced write answers when the run's lease is gone
 /// (`RunLeaseLost`), its `data` `{ runId }`.
@@ -266,8 +266,8 @@ impl RunHostStore for ProcessStore {
         let answer = self.call("waits.mark", obj! {})?;
         int(&answer).ok_or_else(|| self.malformed("waits.mark", &answer))
     }
-    fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Logged> {
-        let answer = self.call("waits.log", obj! { "teamId" => s(team_id), "adapterType" => s(adapter_type), "arrivals" => to_rows(arrivals), "at" => s(at) })?;
+    fn log_arrivals(&self, log: &DeliveryArrivals<'_>) -> Result<Logged> {
+        let answer = self.call("waits.log", arrivals_params(log))?;
         Logged::from_wire(&answer).ok_or_else(|| self.malformed("waits.log", &answer))
     }
     fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {
@@ -297,12 +297,12 @@ impl RunHostStore for ProcessStore {
         }
         self.flag("waits.note", params)
     }
-    fn sweep_arrivals(&self, before: &str, limit: i64) -> Result<i64> {
+    fn sweep_arrivals(&self, limit: i64) -> Result<i64> {
         const METHOD: &str = "waits.sweep";
         // A module written before waits logs no arrivals, so it has none to
         // forget: every drain sweeps, and such a module still drains.
-        match self.client.call(METHOD, obj! { "before" => s(before), "limit" => Js::Num(limit.into()) }) {
-            Ok(answer) => int(&answer).ok_or_else(|| self.malformed(METHOD, &answer)),
+        match self.client.call(METHOD, obj! { "limit" => Js::Num(limit.into()) }) {
+            Ok(answer) => answer.get("swept").and_then(int).ok_or_else(|| self.malformed(METHOD, &answer)),
             Err(error) if error.code == METHOD_NOT_IMPLEMENTED_CODE => Ok(0),
             Err(error) => Err(self.refused(METHOD, error)),
         }
@@ -405,29 +405,33 @@ impl RunHostStore for ProcessStore {
         delivery: &NewDelivery,
         work: &[NewWork],
         arrivals: Option<&DeliveryArrivals<'_>>,
-    ) -> Result<Option<Vec<NewWork>>> {
+        waits: &[DeliveryWait],
+    ) -> Result<Option<KeptDelivery>> {
         let mut params = obj! { "subscriptionId" => s(subscription_id), "delivery" => Js::from(delivery_params(delivery)), "work" => to_rows(work) };
+        if !waits.is_empty() {
+            params.insert("waits".into(), to_rows(waits));
+        }
         // Absent, not null: a null cursor is one to keep.
         if let Some(checkpoint) = checkpoint {
             params.insert("checkpoint".into(), checkpoint.clone());
         }
         if let Some(a) = arrivals {
-            params.insert(
-                "arrivals".into(),
-                Js::from(obj! { "teamId" => s(a.team_id), "adapterType" => s(a.adapter_type), "arrivals" => to_rows(a.arrivals), "at" => s(a.at) }),
-            );
+            params.insert("arrivals".into(), Js::from(arrivals_params(a)));
         }
         // A module answering `null`, as one written before the receipt did,
         // is not taken to have kept it.
         let answer = self.call("inbound.keepDelivery", params)?;
-        match answer.get("kept") {
-            Some(Js::Bool(false)) => Ok(None),
-            Some(Js::Bool(true)) if arrivals.is_none() => Ok(Some(Vec::new())),
-            // A module written before arrivals answers no `wakes`: it did not log them.
-            Some(Js::Bool(true)) => match answer.get("wakes").and_then(rows::<NewWork>) {
-                Some(wakes) => Ok(Some(wakes)),
-                None => Err(StoreError::Backend(format!(
-                    "{}: kept a delivery without logging its arrivals: it answers inbound.keepDelivery with no `wakes` (adapter protocol 2.5)",
+        let mark = answer.get("arrivalMark").and_then(int);
+        match (answer.get("kept"), arrivals) {
+            (Some(Js::Bool(false)), _) => Ok(None),
+            // Without arrivals the mark is the latest seq however it is read.
+            (Some(Js::Bool(true)), None) => Ok(Some(KeptDelivery { wakes: Vec::new(), arrival_mark: mark.map_or_else(|| self.arrival_mark(), Ok)? })),
+            // A module written before arrivals answers no `wakes`: it did not
+            // log them; one written before 0.13 answers no mark before them.
+            (Some(Js::Bool(true)), Some(_)) => match (answer.get("wakes").and_then(rows::<NewWork>), mark) {
+                (Some(wakes), Some(arrival_mark)) => Ok(Some(KeptDelivery { wakes, arrival_mark })),
+                _ => Err(StoreError::Backend(format!(
+                    "{}: kept a delivery without logging its arrivals as language 0.13 does: it answers inbound.keepDelivery without `wakes` or `arrivalMark`",
                     self.client.label
                 ))),
             },
@@ -474,5 +478,16 @@ impl RunHostStore for ProcessStore {
 
     fn claim_event(&self, listen: &str, key: &str) -> Result<bool> {
         self.flag("events.claim", obj! { "listen" => s(listen), "key" => s(key) })
+    }
+}
+
+/// `waits.log`'s params, and `inbound.keepDelivery`'s `arrivals`.
+fn arrivals_params(log: &DeliveryArrivals<'_>) -> Obj {
+    obj! {
+        "teamId" => Js::str(log.team_id),
+        "adapterType" => Js::str(log.adapter_type),
+        "arrivals" => to_rows(log.arrivals),
+        "at" => Js::str(log.at),
+        "resendWindowMs" => Js::Num(log.resend_window_ms.into()),
     }
 }

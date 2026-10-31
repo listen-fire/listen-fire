@@ -142,6 +142,7 @@ impl Bridge {
                 external: key,
                 inbound: Some(InboundSetup { declaration, secret_field: crate::doors::DEFAULT_WEBHOOK_SECRET_FIELD.into() }),
                 push_field: None,
+                resend_window_ms: crate::externals::DEFAULT_RESEND_WINDOW_MS,
             });
         }
         let mut installs = Vec::new();
@@ -158,7 +159,7 @@ impl Bridge {
         for (index, install) in list(world, "pushInstalls")?.iter().enumerate() {
             let adapter_type = text(install, "adapterType")?.to_string();
             if !served.iter().any(|s| s.external == adapter_type) {
-                served.push(Served { external: adapter_type.clone(), inbound: None, push_field: Some("token".into()) });
+                served.push(Served { external: adapter_type.clone(), inbound: None, push_field: Some("token".into()), resend_window_ms: crate::externals::DEFAULT_RESEND_WINDOW_MS });
             }
             let fields = BTreeMap::from([("token".to_string(), text(install, "credential")?.to_string())]);
             installs.push(Credential { name: format!("push-{index}"), external: adapter_type, binding: Binding::Install, fields, origin: Origin::default() });
@@ -374,6 +375,11 @@ fn delivery(raw: &Js) -> Result<SuiteDelivery, String> {
 }
 
 impl Reader for SuiteReader {
+    /// The suite's adapters are judged without waits.
+    async fn await_keys(&self, _: &str, _: &Credential, _: &str, _: Js) -> Result<Option<Js>, String> {
+        Ok(None)
+    }
+
     fn reads_deliveries(&self, _external: &str) -> bool {
         true
     }

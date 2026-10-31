@@ -6,10 +6,17 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { join, resolve } from 'node:path';
 import { companies, externalPort, lf, project, served, type Served } from './example';
+
+// A workspace-built listen-fire finds its bundled modules beside its own
+// (canonical) path; a worktree's listen-fire may be the main checkout's, so the
+// modules and serve-module this tree holds are named.
+const REPO = resolve(__dirname, '../../../..');
+process.env.LF_MODULES_DIR ??= join(REPO, 'modules');
+process.env.LF_SERVE_MODULE ??= join(REPO, 'apps/cli/node_modules/.bin/serve-module');
 
 /** The CRM's dev routes and the host's door, for one serving project. */
 function crmOf(dir: string, serving: Served) {
@@ -182,4 +189,56 @@ test('a rehearsal opens no wait and binds the empty landing', () => {
   assert.match(run.out, /await:discuss completed/);
   assert.doesNotMatch(run.out, /parked/);
   assert.deepEqual(companies(dir), []);
+});
+
+/** A push to the host's wake door, as the CRM makes one. */
+async function wake(serving: Served, body: unknown) {
+  const response = await fetch(`http://127.0.0.1:${serving.port}/api/public/adapter/acme_crm/wake`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer dev-acme-token' },
+    body: JSON.stringify(body),
+  });
+  assert.equal(response.status, 202, await response.clone().text());
+}
+
+test('a reply logged while the run sat in the queue is taken by its await new', async () => {
+  const dir = project('await_delivered');
+  // The doors keep the company's arrival and queue its run; nothing drains.
+  const doors = await served(dir, ['--doors-only']);
+  try {
+    const { post } = crmOf(dir, doors);
+    await post('/dev/companies', { Name: 'Osprey' });
+    await post('/dev/comments', { company: 'company-1', text: 'while queued' });
+    assert.equal(arrivalsOn(dir, 'thread:company-1'), 1, 'the reply was logged');
+  } finally {
+    await doors.stop();
+  }
+  const drained = lf(dir, 'drain', '--until-idle');
+  assert.equal(drained.code, 0, drained.out);
+  assert.match(drained.out, /companies:discuss completed/);
+  assert.doesNotMatch(drained.out, /parked/);
+  assert.deepEqual(companies(dir), ['Osprey', 'Answered while queued']);
+});
+
+test("a batched delivery's later item answers the run its earlier item started; the trigger itself does not", async () => {
+  const dir = project('await_delivered');
+  const serving = await served(dir);
+  try {
+    const { post } = crmOf(dir, serving);
+    // The CRM holds company-1; created as "Quiet", it starts nothing.
+    await post('/dev/companies', { Name: 'Quiet' });
+    // One push: company-1 arriving under a name that starts a run, then a
+    // comment on it.
+    await wake(serving, {
+      arrivals: [
+        { edge: 'Company', identity: 'company-1', landing: { recordId: 'company-1', recordType: 'Company', fields: { id: 'company-1', Name: 'Batched' } } },
+        { edge: 'Comments', key: 'thread:company-1', identity: 'comment-9', landing: { recordId: 'comment-9', fields: { Id: 'comment-9', Text: 'same push' } } },
+      ],
+    });
+    await serving.waitFor(/run .* companies:discuss completed/);
+    assert.equal(count(serving, /companies:discuss parked/), 0, serving.lines.join('\n'));
+    assert.deepEqual(companies(dir), ['Quiet', 'Answered same push']);
+  } finally {
+    await serving.stop();
+  }
 });

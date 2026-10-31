@@ -621,6 +621,19 @@ impl WireManifest {
     }
 }
 
+/// How long a module's provider may re-send an arrival when the module
+/// declares no `resendWindowSeconds` and lf.yaml names no `resendWindow`.
+pub const DEFAULT_RESEND_WINDOW_MS: i64 = 3_600_000;
+
+/// How long the module `name`'s provider may re-send an arrival, in
+/// milliseconds: lf.yaml's `resendWindow` for it, else what its manifest
+/// declares, else DEFAULT_RESEND_WINDOW_MS.
+pub fn resend_window_ms(project: &crate::project::Project, name: &str, manifest: &Js) -> i64 {
+    project.resend_window.get(name).copied().unwrap_or_else(|| {
+        resend_window_seconds(manifest).and_then(|seconds| i64::try_from(seconds.saturating_mul(1000)).ok()).unwrap_or(DEFAULT_RESEND_WINDOW_MS)
+    })
+}
+
 /// How long the module says a provider may re-send an arrival: a positive
 /// whole number of seconds, or none.
 pub fn resend_window_seconds(manifest: &Js) -> Option<u64> {
@@ -905,6 +918,7 @@ mod tests {
             poll_every: Default::default(),
             resolve_every: Default::default(),
             listen_scope_limit: crate::project::DEFAULT_LISTEN_SCOPE_LIMIT,
+            resend_window: Default::default(),
         }
     }
 

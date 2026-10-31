@@ -51,6 +51,12 @@ pub struct Listen {
     /// it, never events. None for a listen in the settings form, which
     /// events fire and arrivals never do.
     pub plan: Option<ListenPlan>,
+    /// The edges its fired function waits on off its parameter, as the
+    /// checker stamps them (`opensWaits` on the parameter): a delivery that
+    /// fires it opens its run's waits on them as it is kept, so what lands
+    /// while the run sits in the queue still counts. Empty for a listen in
+    /// the settings form.
+    pub trigger_awaits: Vec<String>,
 }
 
 impl Listen {
@@ -470,7 +476,7 @@ fn listen_at(file: &crate::sources::Parsed, at: movement_parser::ast::Loc) -> St
 
 /// How the checker plans each `listen to <traversal>` of `file`, in source
 /// order, and a line for each it plans none for, naming where it is written.
-fn plans_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Program, catalog: Result<&CatalogSnapshot, &String>) -> (Vec<ListenPlan>, Vec<String>) {
+fn plans_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Program, catalog: Result<&CatalogSnapshot, &String>) -> (Vec<(ListenPlan, Vec<String>)>, Vec<String>) {
     let traversals = || {
         program.statements.iter().filter_map(|s| match s {
             Statement::Listen(listen) if listen.path.is_some() => Some(listen),
@@ -489,7 +495,24 @@ fn plans_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Progr
     // the eager export (`ExprSlot::eager`), which the checker never reads.
     let options = movement_checker::CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     let answer = movement_checker::answer::check_answer(program, catalog, options);
-    (answer.listens, answer.unwatched.iter().map(|at| unwatched(*at, "does not check")).collect())
+    let planned = answer.listens.into_iter().map(|plan| {
+        let awaits = trigger_awaits_of(program, &answer.stamps, &plan.movement);
+        (plan, awaits)
+    });
+    (planned.collect(), answer.unwatched.iter().map(|at| unwatched(*at, "does not check")).collect())
+}
+
+/// The edges the check stamps as opening waits on the parameter of the
+/// function `movement` declared in `program`, where a run of it enters its
+/// trigger (`/statements/<index>/params/0`).
+fn trigger_awaits_of(program: &movement_parser::ast::Program, stamps: &[serde_json::Value], movement: &str) -> Vec<String> {
+    let Some(index) = program.statements.iter().position(|s| matches!(s, Statement::Movement(declared) if declared.name == movement)) else { return Vec::new() };
+    let path = format!("/statements/{index}/params/0");
+    stamps
+        .iter()
+        .filter(|stamp| stamp.get("file").is_none() && stamp.get("path").and_then(serde_json::Value::as_str) == Some(path.as_str()))
+        .find_map(|stamp| stamp.get("opensWaits")?.as_array().map(|edges| edges.iter().filter_map(|e| e.as_str().map(str::to_string)).collect()))
+        .unwrap_or_default()
 }
 
 /// Each instance's adapter, credential and other arguments, by the
@@ -535,7 +558,7 @@ fn import_originals(program: &movement_parser::ast::Program) -> HashMap<String, 
 /// The listens of one file into `read`: each in the settings form, then each
 /// of `plans`. One whose instance is neither a connection the file makes nor
 /// a host unit is named in `read.unwatched` instead.
-fn listens_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Program, scopes: &HashMap<String, FileScope<'_>>, plans: Vec<ListenPlan>, read: &mut Listens) {
+fn listens_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Program, scopes: &HashMap<String, FileScope<'_>>, plans: Vec<(ListenPlan, Vec<String>)>, read: &mut Listens) {
     let constructions = constructions_of(program);
     let scope = &scopes[&file.name];
     let connection = |instance: &str, at: movement_parser::ast::Loc, fires: &str| {
@@ -578,9 +601,10 @@ fn listens_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Pro
             args,
             address: Ok(BTreeMap::new()),
             plan: None,
+            trigger_awaits: Vec::new(),
         });
     }
-    for plan in plans {
+    for (plan, trigger_awaits) in plans {
         let written = program.statements.iter().find_map(|s| match s {
             Statement::Listen(listen) if listen.path.is_some() && listen.instance == plan.connection && listen.movement == plan.movement => Some(listen.span.start),
             _ => None,
@@ -602,6 +626,7 @@ fn listens_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Pro
             args,
             address: Ok(BTreeMap::new()),
             plan: Some(plan),
+            trigger_awaits,
         });
     }
 }
@@ -993,7 +1018,7 @@ mod tests {
                 payload: None,
                 args: Vec::new(),
                 address: Ok(BTreeMap::new()),
-                plan: None,
+                plan: None, trigger_awaits: Vec::new(),
             };
             assert_eq!(listen.hears(case["delivery"].as_str()), case["hears"].as_bool().unwrap(), "{}", case["case"]);
         }
@@ -1016,7 +1041,7 @@ mod tests {
 
     #[test]
     fn a_delivery_through_a_subscription_reaches_only_the_listens_of_its_scope() {
-        let mut listen = Listen { file: "f".into(), adapter: "airtable".into(), config: Obj::new(), movement_name: "m".into(), credential: Some("acme".into()), args: vec![], payload: None, address: Ok(BTreeMap::new()), plan: None };
+        let mut listen = Listen { file: "f".into(), adapter: "airtable".into(), config: Obj::new(), movement_name: "m".into(), credential: Some("acme".into()), args: vec![], payload: None, address: Ok(BTreeMap::new()), plan: None , trigger_awaits: Vec::new()};
         listen.config.insert("base".into(), Js::str("appH"));
         listen.config.insert("table".into(), Js::str("tblC"));
         let keys = ["base".to_string(), "table".to_string()];

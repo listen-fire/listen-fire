@@ -1,0 +1,15 @@
+import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+# Each company that arrives waits for the first comment on it after the
+# delivery that brought it: one that lands while the run sits in the queue,
+# or later in the same delivery, is its answer. A company called "Quiet"
+# starts nothing.
+function discuss(c: <crm-[:Company]->>) {
+  reply = await new c-[:Comments]->
+  write crm-[:Company]-> { Name: "Answered ${reply.Text}" }
+}
+
+listen to crm-[c:Company WHERE c.Name != "Quiet"]-> fire discuss

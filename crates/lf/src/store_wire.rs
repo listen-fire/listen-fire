@@ -9,7 +9,7 @@ use crate::obj;
 use crate::store::{
     BranchExport, ClaimedWork, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind, RunRow, RunStart, SegmentCommit,
 };
-use crate::waits::{Logged, LoggedArrival, NewArrival, OpenWait, Stranded, StrandedAfter, StrandedOf, WaitArrivals, WaitWake};
+use crate::waits::{DeliveryWait, Logged, LoggedArrival, NewArrival, OpenWait, PreNoted, Stranded, StrandedAfter, StrandedOf, WaitArrivals, WaitWake};
 
 /// A row as the store wire carries it.
 pub trait Wire: Sized {
@@ -335,6 +335,32 @@ impl Wire for NewArrival {
                 Some(_) => return None,
             },
         })
+    }
+}
+
+/// `inbound.keepDelivery`'s `waits`: `{ runId, edge, key, fireKey,
+/// preNoted? }`, `key` null for a record already gone, `preNoted` the run's
+/// trigger `{ identity, version }`.
+impl Wire for DeliveryWait {
+    fn to_wire(&self) -> Js {
+        let mut wait = obj! {
+            "runId" => Js::str(&self.run_id),
+            "edge" => Js::str(&self.edge),
+            "key" => opt(self.key.as_deref()),
+            "fireKey" => Js::str(&self.fire_key),
+        };
+        if let Some(noted) = &self.pre_noted {
+            wait.insert("preNoted".into(), Js::from(obj! { "identity" => Js::str(&noted.identity), "version" => opt(noted.version.as_deref()) }));
+        }
+        Js::from(wait)
+    }
+
+    fn from_wire(v: &Js) -> Option<Self> {
+        let pre_noted = match v.get("preNoted") {
+            None | Some(Js::Null) => None,
+            Some(noted) => Some(PreNoted { identity: text(noted, "identity")?, version: opt_text(noted, "version")? }),
+        };
+        Some(DeliveryWait { run_id: text(v, "runId")?, edge: text(v, "edge")?, key: opt_text(v, "key")?, pre_noted, fire_key: text(v, "fireKey")? })
     }
 }
 

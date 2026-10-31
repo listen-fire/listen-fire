@@ -53,6 +53,10 @@ struct ProjectFile {
     /// that names none): each a duration, over what the hops declare.
     #[serde(rename = "resolveEvery", default)]
     resolve_every: std::collections::BTreeMap<String, serde_yaml::Value>,
+    /// How long each module's provider may re-send an arrival, by the
+    /// module: each a duration, over what the module declares.
+    #[serde(rename = "resendWindow", default)]
+    resend_window: std::collections::BTreeMap<String, serde_yaml::Value>,
     /// The most records a listen's earlier hops may match before it is
     /// suspended.
     #[serde(rename = "listenScopeLimit")]
@@ -94,6 +98,11 @@ fn retain_days_of(value: Option<&serde_yaml::Value>, at: &str) -> Result<u32, St
 /// duration is refused, naming its key.
 fn poll_every_of(declared: &std::collections::BTreeMap<String, serde_yaml::Value>, at: &str) -> Result<std::collections::BTreeMap<String, i64>, String> {
     durations_of(declared, &format!("{at}: pollEvery"), "how often that connection's polled edges are polled")
+}
+
+/// `resendWindow`, as `pollEvery` is read.
+fn resend_window_of(declared: &std::collections::BTreeMap<String, serde_yaml::Value>, at: &str) -> Result<std::collections::BTreeMap<String, i64>, String> {
+    durations_of(declared, &format!("{at}: resendWindow"), "how long that module's provider may re-send an arrival")
 }
 
 /// `resolveEvery`, as `pollEvery` is read.
@@ -173,6 +182,11 @@ pub struct Project {
     /// The most records a listen's earlier hops may match
     /// (`listenScopeLimit`): over it the listen is suspended.
     pub listen_scope_limit: usize,
+    /// How long, in milliseconds, each module's provider may re-send an
+    /// arrival (lf.yaml's `resendWindow`), by the module: an identity logged
+    /// is a repeat for that long. A module it does not name keeps the window
+    /// it declares (crate::externals::resend_window_ms).
+    pub resend_window: std::collections::BTreeMap<String, i64>,
 }
 
 /// `maxRunCostUsd` as the platform reads `MOVEMENT_MAX_RUN_COST_USD`
@@ -283,6 +297,7 @@ fn load_pinned(from: &Path, older_key_loads: bool) -> Result<Project, String> {
     let poll_every = poll_every_of(&file.poll_every, "lf.yaml")?;
     let resolve_every = resolve_every_of(&file.resolve_every, "lf.yaml")?;
     let listen_scope_limit = listen_scope_limit_of(file.listen_scope_limit.as_ref(), "lf.yaml")?;
+    let resend_window = resend_window_of(&file.resend_window, "lf.yaml")?;
     if file.store.is_some() {
         return Err(format!(
             "{}: store: run state is kept by the store module now: `core: {{ store: \"@lf/postgres-store\" }}` (or @lf/sqlite-store, the default), set up with `listen-fire connect @lf/postgres-store`",
@@ -318,6 +333,7 @@ fn load_pinned(from: &Path, older_key_loads: bool) -> Result<Project, String> {
         delivery_retain_days,
         poll_every,
         resolve_every,
+        resend_window,
         listen_scope_limit,
         root: dir,
     })

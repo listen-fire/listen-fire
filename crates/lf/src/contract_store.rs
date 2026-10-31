@@ -24,7 +24,7 @@ use crate::obj;
 use crate::slot_server::{Listen, Refusal};
 use crate::store::{ClaimDue, DeliveryQuery, HeldJoin, HeldPark, HeldRace, NewWork, Park, Release, Rerun, RunSettle, RunStart, SegmentCommit, StoreError, iso};
 use crate::store_wire::{Wire, new_delivery, num, opt, park_kind, rows, to_rows};
-use crate::waits::{DeliveryArrivals, NewArrival, Noted, OpenWait, StrandedAfter, StrandedOf};
+use crate::waits::{DeliveryArrivals, DeliveryWait, NewArrival, Noted, OpenWait, StrandedAfter, StrandedOf};
 
 /// The store slot's methods (docs/contracts/store-slot.md), as its manifest lists them.
 pub const STORE_METHODS: &[&str] = &[
@@ -318,7 +318,8 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
         "waits.log" => {
             let arrivals: Vec<NewArrival> =
                 rows(&p.value("arrivals")).ok_or_else(|| Failure::Params("arrivals: expected a list of { edge, key, identity, version, landing, gone }".into()))?;
-            Ok(store.log_arrivals(p.str("teamId")?, p.str("adapterType")?, &arrivals, p.str("at")?)?.to_wire())
+            let log = DeliveryArrivals { team_id: p.str("teamId")?, adapter_type: p.str("adapterType")?, arrivals: &arrivals, at: p.str("at")?, resend_window_ms: p.int("resendWindowMs")? };
+            Ok(store.log_arrivals(&log)?.to_wire())
         }
         "waits.open" => {
             let wait = OpenWait {
@@ -360,7 +361,7 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
             };
             Ok(Js::Bool(store.note_arrival(&noted)?))
         }
-        "waits.sweep" => Ok(Js::Num(store.sweep_arrivals(p.str("before")?, p.int("limit")?)?.into())),
+        "waits.sweep" => Ok(Js::from(obj! { "swept" => Js::Num(store.sweep_arrivals(p.int("limit")?)?.into()) })),
 
         "leases.claim" => Ok(match store.claim_lease(p.str("runId")?, p.int("ttlMs")?)? {
             None => Js::Null,
@@ -416,14 +417,27 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
                     let text = |key: &str| given.get(key).and_then(Js::as_str).ok_or_else(|| Failure::Params(format!("arrivals.{key}: expected a text")));
                     let list: Vec<NewArrival> = rows(given.get("arrivals").unwrap_or(&Js::Null))
                         .ok_or_else(|| Failure::Params("arrivals.arrivals: expected a list of { edge, key, identity, version, landing, gone }".into()))?;
-                    Some((text("teamId")?.to_string(), text("adapterType")?.to_string(), list, text("at")?.to_string()))
+                    let window = given.get("resendWindowMs").and_then(crate::store_wire::int).ok_or_else(|| Failure::Params("arrivals.resendWindowMs: expected a whole number".into()))?;
+                    Some((text("teamId")?.to_string(), text("adapterType")?.to_string(), list, text("at")?.to_string(), window))
                 }
             };
-            let logged = arrivals.as_ref().map(|(team_id, adapter_type, arrivals, at)| DeliveryArrivals { team_id, adapter_type, arrivals, at });
-            let kept = store.keep_delivery(p.str("subscriptionId")?, p.0.get("checkpoint"), &delivery, &work, logged.as_ref())?;
-            let mut answer = obj! { "kept" => Js::Bool(kept.is_some()) };
-            if let (Some(wakes), Some(_)) = (&kept, &logged) {
-                answer.insert("wakes".into(), to_rows(wakes));
+            let logged = arrivals.as_ref().map(|(team_id, adapter_type, arrivals, at, resend_window_ms)| DeliveryArrivals {
+                team_id,
+                adapter_type,
+                arrivals,
+                at,
+                resend_window_ms: *resend_window_ms,
+            });
+            let waits: Vec<DeliveryWait> = match p.0.get("waits") {
+                None => Vec::new(),
+                Some(given) => rows(given).ok_or_else(|| Failure::Params("waits: expected a list of { runId, edge, key, fireKey, preNoted? }".into()))?,
+            };
+            let Some(kept) = store.keep_delivery(p.str("subscriptionId")?, p.0.get("checkpoint"), &delivery, &work, logged.as_ref(), &waits)? else {
+                return Ok(Js::from(obj! { "kept" => Js::Bool(false) }));
+            };
+            let mut answer = obj! { "kept" => Js::Bool(true), "arrivalMark" => Js::Num(kept.arrival_mark.into()) };
+            if logged.is_some() {
+                answer.insert("wakes".into(), to_rows(&kept.wakes));
             }
             Ok(Js::from(answer))
         }
@@ -498,13 +512,14 @@ mod tests {
             "adapterType" => Js::str("acme"),
             "arrivals" => Js::parse(br#"[{"edge":"Comments","key":"thread:c1","identity":"k1","version":null,"landing":null,"gone":false}]"#).unwrap(),
             "at" => Js::str(iso(0)),
+            "resendWindowMs" => Js::Num(3_600_000.into()),
         });
         let params = |id: &str| obj! { "subscriptionId" => Js::str("sub"), "delivery" => Js::from(receipt(id)), "work" => Js::Arr(vec![]), "arrivals" => arrivals.clone() };
-        assert_eq!(call(&store, "inbound.keepDelivery", params("11111111-1111-4111-8111-111111111111")).to_json(), r#"{"kept":true,"wakes":[]}"#);
+        assert_eq!(call(&store, "inbound.keepDelivery", params("11111111-1111-4111-8111-111111111111")).to_json(), r#"{"kept":true,"arrivalMark":0,"wakes":[]}"#);
         assert_eq!(call(&store, "inbound.keepDelivery", params("22222222-2222-4222-8222-222222222222")).to_json(), r#"{"kept":false}"#);
         assert_eq!(call(&store, "waits.mark", obj! {}).to_json(), "1", "logged once");
         let plain = obj! { "subscriptionId" => Js::str("sub"), "delivery" => Js::from(obj! { "id" => Js::str("33333333-3333-4333-8333-333333333333"), "receivedAt" => Js::str(iso(0)), "source" => Js::str("webhook"), "inline" => Js::Bool(false), "events" => Js::Arr(vec![]) }), "work" => Js::Arr(vec![]) };
-        assert_eq!(call(&store, "inbound.keepDelivery", plain).to_json(), r#"{"kept":true}"#);
+        assert_eq!(call(&store, "inbound.keepDelivery", plain).to_json(), r#"{"kept":true,"arrivalMark":1}"#);
     }
 
     /// The composite writes as a store module's client sends them
@@ -546,13 +561,14 @@ mod tests {
             };
             call(&store, "inbound.keepDelivery", params)
         };
-        assert_eq!(keep("c", &receipt, std::slice::from_ref(&work)), Js::from(obj! { "kept" => Js::Bool(true) }));
+        let kept = Js::from(obj! { "kept" => Js::Bool(true), "arrivalMark" => Js::Num(0.into()) });
+        assert_eq!(keep("c", &receipt, std::slice::from_ref(&work)), kept);
         let again = NewDelivery { id: uuid::Uuid::new_v4().to_string(), ..receipt.clone() };
         let other_row = NewWork { key: "w2".into(), ..work.clone() };
         assert_eq!(keep("c2", &again, &[other_row]), Js::from(obj! { "kept" => Js::Bool(false) }), "a redelivery under the same external id");
         assert_eq!(store.inbound_checkpoint("sub").unwrap(), Some(Js::str("c")));
         let unnamed = NewDelivery { id: uuid::Uuid::new_v4().to_string(), external_id: Some("x-2".into()), ..receipt.clone() };
-        assert_eq!(keep("c", &unnamed, &[]), Js::from(obj! { "kept" => Js::Bool(true) }));
+        assert_eq!(keep("c", &unnamed, &[]), kept);
         assert_eq!(call(&store, "inbound.forgetDeliveryId", obj! { "id" => Js::str(&unnamed.id) }), Js::Null);
         assert_eq!(store.delivery(&unnamed.id).unwrap().unwrap().external_id, None, "a failed inline delivery's retry is its own");
         let kept = call(&store, "inbound.delivery", obj! { "id" => Js::str(&receipt.id) });
@@ -590,7 +606,7 @@ mod tests {
             gone: false,
         };
         let log = |identity: &str| {
-            let params = obj! { "teamId" => Js::str("t"), "adapterType" => Js::str("acme"), "arrivals" => to_rows(&[arrival(identity)]), "at" => Js::str(iso(0)) };
+            let params = obj! { "teamId" => Js::str("t"), "adapterType" => Js::str("acme"), "arrivals" => to_rows(&[arrival(identity)]), "at" => Js::str(iso(0)), "resendWindowMs" => Js::Num(3_600_000.into()) };
             call(&store, "waits.log", params)
         };
         let logged = |wakes: Vec<Js>| Js::from(obj! { "wakes" => Js::Arr(wakes), "stranded" => Js::Arr(vec![]) });
@@ -611,7 +627,7 @@ mod tests {
         assert_eq!(call(&store, "waits.note", note("k1")), Js::Bool(false));
         let read = WaitArrivals::from_wire(&call(&store, "waits.arrivals", obj! { "waitId" => Js::str(&wait_id) })).unwrap();
         assert_eq!(read.arrivals.iter().map(|a| a.identity.as_str()).collect::<Vec<_>>(), ["k2"]);
-        assert_eq!(call(&store, "waits.sweep", obj! { "before" => Js::str(iso(0)), "limit" => Js::Num(10.into()) }), Js::Num(0.into()), "the wait reads both");
+        assert_eq!(call(&store, "waits.sweep", obj! { "limit" => Js::Num(10.into()) }), Js::from(obj! { "swept" => Js::Num(0.into()) }), "the wait reads both");
     }
 
     #[test]

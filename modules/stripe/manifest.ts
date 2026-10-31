@@ -79,6 +79,8 @@ export const STRIPE_MANIFEST: AdapterManifest = {
     'its endpoint is subscribed to; a retry of the same event runs nothing. An event of a type ' +
     'this module does not type is answered 200 and runs nothing.',
   supportedTriggers: ['webhook'],
+  // Stripe re-sends an undelivered event for up to three days.
+  resendWindowSeconds: 259_200,
   methods: ['listEntryPoints', 'describe', 'edgesFrom', 'getFieldValue', 'getRelated', 'listEventTypes', 'checkInbound'],
   requiredCredentialType: 'STRIPE',
   subscribableEvents: [...STRIPE_EVENT_TYPES],

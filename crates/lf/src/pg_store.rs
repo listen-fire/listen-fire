@@ -56,7 +56,7 @@ use crate::store::{
     HeldPark, OwedRace, Release, Rerun, Result, RunRow, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, SegmentCommit, StoreError, WORK_KINDS, settle_race_work_key,
     settle_race_work_payload, timer_work_key, timer_work_payload,
 };
-use crate::waits::{DeliveryArrivals, Logged, LoggedArrival, NewArrival, Noted, OpenWait, Stranded, StrandedAfter, StrandedOf, WaitArrivals, WaitWake, delivery_rows, landing_of};
+use crate::waits::{DeliveryArrivals, DeliveryWait, KeptDelivery, Logged, LoggedArrival, Noted, OpenWait, Stranded, StrandedAfter, StrandedOf, WaitArrivals, WaitWake, delivery_rows, landing_of};
 
 type Params<'a> = [&'a (dyn ToSql + Sync)];
 
@@ -151,6 +151,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (10, include_str!("pg_store_schema_10.sql")),
     (11, include_str!("pg_store_schema_11.sql")),
     (12, include_str!("pg_store_schema_12.sql")),
+    (13, include_str!("pg_store_schema_13.sql")),
 ];
 
 /// The advisory lock the migrations run under: "lf-store" as a number.
@@ -330,9 +331,31 @@ impl PgStore {
         }
     }
 
+    /// The waits a delivery opened for the runs it queued, in its write
+    /// (crate::waits::DeliveryWait).
+    fn open_delivery_waits(&self, team_id: &str, adapter_type: &str, waits: &[DeliveryWait], since: i64) -> Result<()> {
+        for wait in waits {
+            let opened = self.query_opt(
+                "insert into lf.wait_row (run_id, team_id, adapter_type, edge, key, since, fire_key)
+                 values ($1::text::uuid, $2::text::uuid, $3::text, $4::text, $5::text, $6::int8, $7::text)
+                 on conflict do nothing returning id::text",
+                &[&wait.run_id, &team_id, &adapter_type, &wait.edge, &wait.key, &since, &wait.fire_key],
+            )?;
+            if let (Some(row), Some(noted)) = (opened, &wait.pre_noted) {
+                let wait_id: String = row.get(0);
+                self.execute(
+                    "insert into lf.wait_seen (wait_id, identity, version, matched, leaf) values ($1::text::uuid, $2::text, $3::text, false, null)",
+                    &[&wait_id, &noted.identity, &noted.version],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     /// `waits.log` inside a transaction the caller holds (`log_arrivals`'s,
     /// or a delivery's keep).
-    fn log_arrivals_unwrapped(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Logged> {
+    fn log_arrivals_unwrapped(&self, log: &DeliveryArrivals<'_>) -> Result<Logged> {
+        let DeliveryArrivals { team_id, adapter_type, arrivals, at, resend_window_ms } = *log;
         // Each record's edge locked once, in one order, so two logs never
         // wait on each other; a park there waits for this log to commit.
         let mut keys: Vec<(&str, &str)> = arrivals.iter().map(|a| (a.edge.as_str(), a.key.as_str())).collect();
@@ -342,21 +365,25 @@ impl PgStore {
             self.execute("select lf.lock_wait_key($1::text::uuid, $2::text, $3::text, $4::text)", &[&team_id, &adapter_type, &edge, &key])?;
         }
         // A repeat: its identity and version already logged on its record's
-        // edge within the retention (a sender's retry).
-        let since = crate::store::iso(-crate::waits::ARRIVAL_RETENTION_MS);
+        // edge within the module's re-send window (a sender's retry), even if
+        // the sweep forgot its entry since.
         let mut answer = Logged::default();
         for arrival in arrivals {
-            if arrival.identity.is_some()
-                && self
-                    .query_opt(
-                        "select 1 from lf.arrival
-                         where team_id = $1::text::uuid and adapter_type = $2::text and edge = $3::text and key = $4::text
-                           and identity = $5::text and version is not distinct from $6::text and logged_at > $7::text::timestamptz",
-                        &[&team_id, &adapter_type, &arrival.edge, &arrival.key, &arrival.identity, &arrival.version, &since],
-                    )?
-                    .is_some()
-            {
-                continue;
+            if arrival.identity.is_some() {
+                let repeat = self.query_opt(
+                    "select 1 from lf.arrival_identity
+                     where team_id = $1::text::uuid and adapter_type = $2::text and edge = $3::text and key = $4::text
+                       and identity = $5::text and version is not distinct from $6::text and kept_until > $7::text::timestamptz",
+                    &[&team_id, &adapter_type, &arrival.edge, &arrival.key, &arrival.identity, &arrival.version, &at],
+                )?;
+                if repeat.is_some() {
+                    continue;
+                }
+                self.execute(
+                    "insert into lf.arrival_identity (team_id, adapter_type, edge, key, identity, version, kept_until)
+                     values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text::timestamptz + $8::int8 * interval '1 millisecond')",
+                    &[&team_id, &adapter_type, &arrival.edge, &arrival.key, &arrival.identity, &arrival.version, &at, &resend_window_ms],
+                )?;
             }
             let landing = arrival.landing.as_ref().map(Js::to_json);
             self.execute(
@@ -1045,11 +1072,11 @@ impl RunHostStore for PgStore {
         Ok(self.query_opt("select coalesce(max(seq), 0) from lf.arrival", &[])?.map(|r| r.get(0)).unwrap_or(0))
     }
 
-    fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Logged> {
+    fn log_arrivals(&self, log: &DeliveryArrivals<'_>) -> Result<Logged> {
         self.transaction(|| {
-            let logged = self.log_arrivals_unwrapped(team_id, adapter_type, arrivals, at)?;
-            for row in crate::waits::wake_rows(team_id, &logged.wakes) {
-                self.enqueue_row(&row.kind, &row.key, &row.payload, row.due_at.as_deref(), team_id)?;
+            let logged = self.log_arrivals_unwrapped(log)?;
+            for row in crate::waits::wake_rows(log.team_id, &logged.wakes) {
+                self.enqueue_row(&row.kind, &row.key, &row.payload, row.due_at.as_deref(), log.team_id)?;
             }
             Ok(logged)
         })
@@ -1169,18 +1196,32 @@ impl RunHostStore for PgStore {
         })
     }
 
-    fn sweep_arrivals(&self, before: &str, limit: i64) -> Result<i64> {
-        let swept = self.execute(
-            "delete from lf.arrival where seq in (
-               select a.seq from lf.arrival a
-               where a.logged_at < $1::text::timestamptz
-                 and not exists (select 1 from lf.wait_row w
-                   where w.team_id = a.team_id and w.adapter_type = a.adapter_type and w.edge = a.edge and w.key = a.key and w.since < a.seq)
-               order by a.seq limit $2::int8)",
-            &[&before, &limit],
-        )?;
-        Ok(i64::try_from(swept).unwrap_or(i64::MAX))
+    /// The floor: the lowest mark an unexpired run lease took, else the
+    /// latest seq. A wait is live while its run exists, or while the
+    /// `fire_event` row that queues it (a wait a delivery opened) is there,
+    /// not buried.
+    fn sweep_arrivals(&self, limit: i64) -> Result<i64> {
+        self.transaction(|| {
+            let swept = self.execute(
+                "delete from lf.arrival where seq in (
+                   select a.seq from lf.arrival a
+                   where a.seq <= coalesce((select min(lease_mark) from lf.trigger_run where lease_until > now() and lease_mark is not null),
+                                           (select coalesce(max(seq), 0) from lf.arrival))
+                     and not exists (select 1 from lf.wait_row w
+                       where w.team_id = a.team_id and w.adapter_type = a.adapter_type and w.edge = a.edge and w.key = a.key and w.since < a.seq
+                         and (exists (select 1 from lf.trigger_run r where r.id = w.run_id)
+                              or exists (select 1 from lf.work q where q.key = w.fire_key and q.dead_at is null)))
+                   order by a.seq limit $1::int8)",
+                &[&limit],
+            )?;
+            self.execute(
+                "delete from lf.arrival_identity where ctid in (select ctid from lf.arrival_identity where kept_until < now() limit $1::int8)",
+                &[&limit],
+            )?;
+            Ok(i64::try_from(swept).unwrap_or(i64::MAX))
+        })
     }
+
 
     // ── The run lease ───────────────────────────────────────────────────────
 
@@ -1191,7 +1232,8 @@ impl RunHostStore for PgStore {
         let claimed = self.query_opt(
             "with claimed as (
                update lf.trigger_run
-               set lease_owner = $2::text, lease_until = now() + $3::int8 * interval '1 millisecond', lease_token = $4::text::uuid
+               set lease_owner = $2::text, lease_until = now() + $3::int8 * interval '1 millisecond', lease_token = $4::text::uuid,
+                   lease_mark = (select coalesce(max(seq), 0) from lf.arrival)
                where id = $1::text::uuid and (lease_until is null or lease_until < now())
                returning id
              ), returned as (
@@ -1342,11 +1384,20 @@ impl RunHostStore for PgStore {
         let (token, version) = work_claim(claim)?;
         let held = "id = $1::text::uuid and lease_token::text = $2::text";
         self.transaction(|| {
-            self.execute(
-                &format!("update lf.work set dead_at = now(), dead_reason = $4::text where {held} and updated_at = $3::text::timestamptz"),
+            let buried = self.query_opt(
+                &format!("update lf.work set dead_at = now(), dead_reason = $4::text where {held} and updated_at = $3::text::timestamptz returning key"),
                 &[&id, &token, &version, &reason],
             )?;
             self.execute(&format!("update lf.work set lease_owner = null, lease_until = null, lease_token = null where {held}"), &[&id, &token])?;
+            // The waits a delivery opened for runs this row queued that never
+            // started go with it.
+            if let Some(row) = buried {
+                let key: String = row.get(0);
+                self.execute(
+                    "delete from lf.wait_row w where w.fire_key = $1::text and not exists (select 1 from lf.trigger_run r where r.id = w.run_id)",
+                    &[&key],
+                )?;
+            }
             Ok(())
         })
     }
@@ -1441,7 +1492,8 @@ impl RunHostStore for PgStore {
         delivery: &NewDelivery,
         work: &[NewWork],
         arrivals: Option<&DeliveryArrivals<'_>>,
-    ) -> Result<Option<Vec<NewWork>>> {
+        waits: &[DeliveryWait],
+    ) -> Result<Option<KeptDelivery>> {
         let events = Js::Arr(delivery.events.clone()).to_json();
         let event_count = i64::try_from(delivery.events.len()).unwrap_or(i64::MAX);
         self.transaction(|| {
@@ -1468,17 +1520,19 @@ impl RunHostStore for PgStore {
             if let Some(checkpoint) = checkpoint {
                 self.save_inbound_checkpoint(subscription_id, checkpoint)?;
             }
+            let mark = self.arrival_mark()?;
             let (work, wakes) = match arrivals {
                 None => (work.to_vec(), Vec::new()),
                 Some(a) => {
-                    let logged = self.log_arrivals_unwrapped(a.team_id, a.adapter_type, a.arrivals, a.at)?;
-                    delivery_rows(work, self.arrival_mark()?, a.team_id, &logged.wakes)
+                    self.open_delivery_waits(a.team_id, a.adapter_type, waits, mark)?;
+                    let logged = self.log_arrivals_unwrapped(a)?;
+                    delivery_rows(work, mark, a.team_id, &logged.wakes)
                 }
             };
             for row in work.iter().chain(&wakes) {
                 self.enqueue_row(&row.kind, &row.key, &row.payload, row.due_at.as_deref(), row.team_id.as_deref().unwrap_or(&self.tenant))?;
             }
-            Ok(Some(wakes))
+            Ok(Some(KeptDelivery { wakes, arrival_mark: mark }))
         })
     }
 

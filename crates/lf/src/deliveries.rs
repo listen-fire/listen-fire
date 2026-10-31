@@ -111,7 +111,7 @@ fn replay(store: &dyn RunHostStore, original: &DeliveryRow) -> Result<(String, u
         replay_of: Some(original.id.clone()),
         events,
     };
-    if store.keep_delivery(&original.subscription_id, None, &replayed, &work, None).map_err(|e| e.to_string())?.is_none() {
+    if store.keep_delivery(&original.subscription_id, None, &replayed, &work, None, &[]).map_err(|e| e.to_string())?.is_none() {
         return Err(format!("delivery {new_id} was not kept: the store took it for a duplicate"));
     }
     crate::wake::queued_rows(&work);
@@ -149,9 +149,9 @@ mod tests {
         let store = Store::open(&dir.join("state.db")).unwrap();
         let event = Js::Obj(crate::obj! { "external" => Js::str("inbox"), "event" => Js::Obj(crate::obj! { "type" => Js::str("note.created") }) });
         let original = NewDelivery { id: "d-1".into(), external_id: None, received_at: iso(0), source: DeliverySource::Webhook, inline: true, replay_of: None, events: vec![event] };
-        assert!(store.keep_delivery("inbox", None, &original, &[], None).unwrap().is_some());
+        assert!(store.keep_delivery("inbox", None, &original, &[], None, &[]).unwrap().is_some());
         let arrival = crate::waits::NewArrival { edge: "Comments".into(), key: "thread:n-1".into(), identity: Some("k1".into()), version: None, landing: None, gone: false };
-        store.log_arrivals(crate::check::LOCAL_TENANT, "inbox", &[arrival], &iso(0)).unwrap();
+        store.log_now(crate::check::LOCAL_TENANT, "inbox", &[arrival]).unwrap();
         let mark = store.arrival_mark().unwrap();
         assert_eq!(mark, 1);
         let kept = RunHostStore::delivery(&store, "d-1").unwrap().unwrap();

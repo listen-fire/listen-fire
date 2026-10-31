@@ -29,7 +29,7 @@ use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, OwedRace, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit,
     Store,
 };
-use crate::waits::{DeliveryArrivals, Logged, NewArrival, Noted, OpenWait, Stranded, StrandedOf, WaitArrivals, WaitWake};
+use crate::waits::{DeliveryArrivals, DeliveryWait, KeptDelivery, Logged, Noted, OpenWait, Stranded, StrandedOf, WaitArrivals, WaitWake};
 
 /// The tenant a SQLite state file's rows belong to (`LOCAL_TENANT`).
 pub const SQLITE_TENANT: &str = "local";
@@ -217,7 +217,16 @@ pub trait RunHostStore {
     /// `stranded` is the waits the log left stranded.
     /// It never interleaves with a wait's park on the same record's edge, so
     /// a run that reads its wait's arrivals after parking misses none.
-    fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Logged>;
+    /// An arrival whose identity and version its record's edge logged
+    /// within the module's re-send window (`resend_window_ms` after that
+    /// log) is a repeat: not logged again, even after the sweep forgot it.
+    fn log_arrivals(&self, log: &DeliveryArrivals<'_>) -> Result<Logged>;
+    /// `log_arrivals` now, under the default re-send window.
+    #[cfg(test)]
+    fn log_now(&self, team_id: &str, adapter_type: &str, arrivals: &[crate::waits::NewArrival]) -> Result<Logged> {
+        let at = crate::store::iso(0);
+        self.log_arrivals(&DeliveryArrivals { team_id, adapter_type, arrivals, at: &at, resend_window_ms: crate::externals::DEFAULT_RESEND_WINDOW_MS })
+    }
     /// The wait's id; a run that already waits on this edge of this record
     /// keeps that wait and its mark. Without a key (the record already
     /// gone), stranded when it parks; a run that already waits on this edge
@@ -234,11 +243,17 @@ pub trait RunHostStore {
     /// counts (it matched, and did not at the identity's last noted arrival).
     /// A note naming a leaf is kept with that leaf's end (`Noted::leaf`).
     fn note_arrival(&self, noted: &Noted<'_>) -> Result<bool>;
-    /// Forget at most `limit` arrivals logged before `before` that no wait
-    /// reads: how many went.
-    fn sweep_arrivals(&self, before: &str, limit: i64) -> Result<i64>;
+    /// Forget at most `limit` arrivals that no live wait on their record's
+    /// edge reads with a mark below them and that are at or below the floor
+    /// (the lowest mark an unexpired run lease took, else the latest seq),
+    /// and the identities past their re-send window: how many arrivals went.
+    /// A wait is live while its run exists, or one a delivery opened while
+    /// its run's `fire_event` row is queued.
+    fn sweep_arrivals(&self, limit: i64) -> Result<i64>;
 
     // ── The run lease ───────────────────────────────────────────────────────
+    /// The lease's token, or None while another holds it. It keeps the
+    /// arrival mark now (`arrival_mark`): the sweep's floor while it holds.
     fn claim_lease(&self, run_id: &str, ttl_ms: i64) -> Result<Option<String>>;
     fn renew_lease(&self, run_id: &str, token: &str, ttl_ms: i64) -> Result<bool>;
     fn release_lease(&self, run_id: &str, token: &str) -> Result<()>;
@@ -289,11 +304,13 @@ pub trait RunHostStore {
     /// its wakes). A crash never leaves a cursor past events its receipt does
     /// not hold.
     ///
-    /// With `arrivals`, they are logged after the receipt, each `fire_event`
-    /// row's payload carries `arrivalMark`, the mark after them (the delivery
-    /// started its runs: they do not wait for its own arrivals), and a
-    /// `wake_await { waitId, runId, address }` row is queued per wait they answer, once
-    /// (crate::waits::delivery_rows); those wake rows are the answer.
+    /// With `arrivals`, `waits` open first, for the runs the delivery's
+    /// `fire_event` rows queue, reading from the mark before the arrivals
+    /// (crate::waits::DeliveryWait); the arrivals are logged after the
+    /// receipt; each `fire_event` row's payload carries `arrivalMark`, that
+    /// mark; and a `wake_await { waitId, runId, address }` row is queued per
+    /// wait they answer, once (crate::waits::delivery_rows). The answer holds
+    /// those wake rows and the mark.
     ///
     /// None, and nothing written, for a duplicate: a delivery whose external
     /// id was kept at its subscription before (a redelivery, even one whose
@@ -305,7 +322,8 @@ pub trait RunHostStore {
         delivery: &NewDelivery,
         work: &[NewWork],
         arrivals: Option<&DeliveryArrivals<'_>>,
-    ) -> Result<Option<Vec<NewWork>>>;
+        waits: &[DeliveryWait],
+    ) -> Result<Option<KeptDelivery>>;
     /// Why a delivery's arrivals cannot be kept with it in this store (its
     /// module serves no `waits.log`); None when they can. Asked before a
     /// delivery that reports arrivals writes anything, so a store that would
@@ -451,8 +469,8 @@ impl RunHostStore for Store {
     fn arrival_mark(&self) -> Result<i64> {
         Store::arrival_mark(self)
     }
-    fn log_arrivals(&self, team_id: &str, adapter_type: &str, arrivals: &[NewArrival], at: &str) -> Result<Logged> {
-        Store::log_arrivals(self, team_id, adapter_type, arrivals, at)
+    fn log_arrivals(&self, log: &DeliveryArrivals<'_>) -> Result<Logged> {
+        Store::log_arrivals(self, log)
     }
     fn open_wait(&self, wait: &OpenWait<'_>) -> Result<String> {
         Store::open_wait(self, wait)
@@ -466,8 +484,8 @@ impl RunHostStore for Store {
     fn note_arrival(&self, noted: &Noted<'_>) -> Result<bool> {
         Store::note_arrival(self, noted)
     }
-    fn sweep_arrivals(&self, before: &str, limit: i64) -> Result<i64> {
-        Store::sweep_arrivals(self, before, limit)
+    fn sweep_arrivals(&self, limit: i64) -> Result<i64> {
+        Store::sweep_arrivals(self, limit)
     }
 
     fn claim_lease(&self, run_id: &str, ttl_ms: i64) -> Result<Option<String>> {
@@ -535,8 +553,9 @@ impl RunHostStore for Store {
         delivery: &NewDelivery,
         work: &[NewWork],
         arrivals: Option<&DeliveryArrivals<'_>>,
-    ) -> Result<Option<Vec<NewWork>>> {
-        Store::keep_delivery(self, subscription_id, checkpoint, delivery, work, arrivals)
+        waits: &[DeliveryWait],
+    ) -> Result<Option<KeptDelivery>> {
+        Store::keep_delivery(self, subscription_id, checkpoint, delivery, work, arrivals, waits)
     }
     fn forget_delivery_id(&self, id: &str) -> Result<()> {
         Store::forget_delivery_id(self, id)

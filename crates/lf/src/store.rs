@@ -127,6 +127,17 @@ create table if not exists arrival (
 );
 create index if not exists arrival_key on arrival (team_id, adapter_type, edge, key, seq);
 create index if not exists arrival_logged on arrival (logged_at);
+create table if not exists arrival_identity (
+  team_id text not null,
+  adapter_type text not null,
+  edge text not null,
+  key text not null,
+  identity text not null,
+  version text,
+  kept_until text not null
+);
+create index if not exists arrival_identity_of on arrival_identity (team_id, adapter_type, edge, key, identity);
+create index if not exists arrival_identity_until on arrival_identity (kept_until);
 create table if not exists wait_seen (
   id integer primary key autoincrement,
   wait_id text not null,
@@ -175,7 +186,8 @@ create table if not exists wait_row (
   key text,
   since integer not null,
   address text,
-  stranded_at text
+  stranded_at text,
+  fire_key text
 );
 create unique index if not exists wait_row_edge on wait_row (run_id, team_id, adapter_type, edge, key);
 create unique index if not exists wait_row_keyless on wait_row (run_id, team_id, adapter_type, edge) where key is null;
@@ -187,6 +199,9 @@ create index if not exists wait_row_stranded on wait_row (stranded_at, id) where
 const ADDED_RUN_COLUMNS: &[&str] = &["cancel_requested_at", "cancel_reason", "delivery_id"];
 /// Added to a state file written before a failed run could be run again.
 const ATTEMPT_COLUMNS: &[(&str, &str)] = &[("attempt", "integer not null default 1"), ("attempts", "text not null default '[]'")];
+/// Added to a state file written before a run's lease kept the arrival
+/// mark its step took (the sweep's floor).
+const LEASE_COLUMNS: &[(&str, &str)] = &[("lease_mark", "integer")];
 const ADDED_WORK_COLUMNS: &[(&str, &str)] = &[("attempts", "integer not null default 0"), ("dead_at", "text"), ("dead_reason", "text")];
 
 #[derive(Debug)]
@@ -661,7 +676,7 @@ impl Store {
                 db.execute_batch(&format!("alter table run add column {column} text"))?;
             }
         }
-        for (column, declared) in ATTEMPT_COLUMNS {
+        for (column, declared) in ATTEMPT_COLUMNS.iter().chain(LEASE_COLUMNS) {
             if !columns.iter().any(|c| c == column) {
                 db.execute_batch(&format!("alter table run add column {column} {declared}"))?;
             }
@@ -703,6 +718,9 @@ impl Store {
                 .prepare("select name from pragma_table_info('wait_row')")?
                 .query_map([], |r| r.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
+            if columns.iter().any(|c| c == "stranded_at") && !columns.iter().any(|c| c == "fire_key") {
+                return Ok(db.execute_batch("alter table wait_row add column fire_key text")?);
+            }
             if columns.is_empty() || columns.iter().any(|c| c == "stranded_at") {
                 return Ok(db.execute_batch(WAIT_ROW)?);
             }
@@ -1193,8 +1211,10 @@ impl Store {
     pub fn claim_lease(&self, run_id: &str, ttl_ms: i64) -> Result<Option<String>> {
         let token = uuid();
         self.transaction(|db| {
+            // The step's mark: the sweep keeps what arrives above it while
+            // the lease holds.
             let claimed = db.execute(
-                "update run set lease_token = ?, lease_until = ? where id = ? and (lease_until is null or lease_until < ?)",
+                "update run set lease_token = ?, lease_until = ?, lease_mark = (select coalesce(max(seq), 0) from arrival) where id = ? and (lease_until is null or lease_until < ?)",
                 params![token, iso(ttl_ms), run_id, iso(0)],
             )?;
             if claimed == 0 {
@@ -1342,11 +1362,15 @@ impl Store {
         let (lease_token, version) = work_claim(claim)?;
         let id = work_id(id)?;
         self.transaction(|db| {
-            db.execute(
+            let buried = db.execute(
                 "update work set dead_at = ?, dead_reason = ? where id = ? and lease_token = ? and version = ?",
                 params![iso(0), reason, id, lease_token, version],
             )?;
             db.execute("update work set lease_token = null, lease_until = null where id = ? and lease_token = ?", params![id, lease_token])?;
+            if buried > 0 {
+                let key: String = db.query_row("select key from work where id = ?", params![id], |r| r.get(0))?;
+                Self::drop_unstarted_waits_in(db, &key)?;
+            }
             Ok(())
         })
     }
@@ -1756,15 +1780,15 @@ mod tests {
         let first = delivery(None);
         // Before: the cursor moved past events that were then never queued.
         failing(&store, "no_work", "before insert on work");
-        assert!(store.keep_delivery("sub", Some(&cursor), &first, &work, None).is_err());
+        assert!(store.keep_delivery("sub", Some(&cursor), &first, &work, None, &[]).is_err());
         assert_eq!(store.inbound_checkpoint("sub").unwrap(), None);
         assert!(store.delivery(&first.id).unwrap().is_none(), "its receipt went with the failed write");
         unfail(&store, "no_work");
-        assert!(store.keep_delivery("sub", Some(&cursor), &first, &work, None).unwrap().is_some());
+        assert!(store.keep_delivery("sub", Some(&cursor), &first, &work, None, &[]).unwrap().is_some());
         assert_eq!(store.inbound_checkpoint("sub").unwrap(), Some(cursor));
         assert_eq!(work_keys(&store), ["fire_event:1", "fire_event:2"]);
         // No cursor: the saved one stays.
-        assert!(store.keep_delivery("sub", None, &delivery(None), &[fire_row("fire_event:3")], None).unwrap().is_some());
+        assert!(store.keep_delivery("sub", None, &delivery(None), &[fire_row("fire_event:3")], None, &[]).unwrap().is_some());
         assert_eq!(store.inbound_checkpoint("sub").unwrap(), Some(Js::str("c-2")));
     }
 
@@ -1772,17 +1796,17 @@ mod tests {
     fn a_duplicate_on_a_second_connection_is_kept_out() {
         let (store, path) = state_file();
         let other = Store::open(&path).unwrap();
-        assert!(store.keep_delivery("sub", Some(&Js::str("c-1")), &delivery(Some("d-1")), &[fire_row("fire_event:1")], None).unwrap().is_some());
+        assert!(store.keep_delivery("sub", Some(&Js::str("c-1")), &delivery(Some("d-1")), &[fire_row("fire_event:1")], None, &[]).unwrap().is_some());
         // The first's work is still queued: the redelivery is kept out by the write, not the drain.
-        assert!(!other.keep_delivery("sub", Some(&Js::str("c-2")), &delivery(Some("d-1")), &[fire_row("fire_event:2")], None).unwrap().is_some());
+        assert!(!other.keep_delivery("sub", Some(&Js::str("c-2")), &delivery(Some("d-1")), &[fire_row("fire_event:2")], None, &[]).unwrap().is_some());
         assert_eq!(store.inbound_checkpoint("sub").unwrap(), Some(Js::str("c-1")));
         assert_eq!(work_keys(&store), ["fire_event:1"]);
         let all = DeliveryQuery { subscription_id: None, since: None, limit: 10 };
         assert_eq!(store.deliveries(&all).unwrap().len(), 1);
         // Another subscription's, or none, is its own.
-        assert!(other.keep_delivery("other", None, &delivery(Some("d-1")), &[], None).unwrap().is_some());
-        assert!(other.keep_delivery("sub", None, &delivery(None), &[], None).unwrap().is_some());
-        assert!(other.keep_delivery("sub", None, &delivery(None), &[], None).unwrap().is_some());
+        assert!(other.keep_delivery("other", None, &delivery(Some("d-1")), &[], None, &[]).unwrap().is_some());
+        assert!(other.keep_delivery("sub", None, &delivery(None), &[], None, &[]).unwrap().is_some());
+        assert!(other.keep_delivery("sub", None, &delivery(None), &[], None, &[]).unwrap().is_some());
         assert_eq!(store.deliveries(&all).unwrap().len(), 4);
     }
 
@@ -1790,12 +1814,12 @@ mod tests {
     fn a_forgotten_delivery_id_lets_the_retry_in() {
         let (store, _) = state_file();
         let first = delivery(Some("d-1"));
-        assert!(store.keep_delivery("sub", None, &first, &[], None).unwrap().is_some());
+        assert!(store.keep_delivery("sub", None, &first, &[], None, &[]).unwrap().is_some());
         store.forget_delivery_id(&first.id).unwrap();
         let kept = store.delivery(&first.id).unwrap().unwrap();
         assert_eq!((kept.external_id, kept.event_count), (None, 1), "the receipt stays, without its id");
-        assert!(store.keep_delivery("sub", None, &delivery(Some("d-1")), &[], None).unwrap().is_some(), "the retry is its own");
-        assert!(!store.keep_delivery("sub", None, &delivery(Some("d-1")), &[], None).unwrap().is_some(), "and its id is kept");
+        assert!(store.keep_delivery("sub", None, &delivery(Some("d-1")), &[], None, &[]).unwrap().is_some(), "the retry is its own");
+        assert!(!store.keep_delivery("sub", None, &delivery(Some("d-1")), &[], None, &[]).unwrap().is_some(), "and its id is kept");
     }
 
     #[test]
@@ -1803,7 +1827,7 @@ mod tests {
         let (store, _) = state_file();
         let old = |store: &Store| {
             let kept = NewDelivery { received_at: iso(-30 * 86_400_000), ..delivery(None) };
-            store.keep_delivery("sub", None, &kept, &[], None).unwrap();
+            store.keep_delivery("sub", None, &kept, &[], None, &[]).unwrap();
             kept.id
         };
         let start = |id: &str, delivery_id: &str| {
@@ -1816,7 +1840,7 @@ mod tests {
         let payload = Js::Obj(crate::obj! { "deliveryId" => Js::str(&queued) });
         store.enqueue("fire_event", "fire_event:q", &payload, None).unwrap();
         let fresh = delivery(None);
-        store.keep_delivery("sub", None, &fresh, &[], None).unwrap();
+        store.keep_delivery("sub", None, &fresh, &[], None, &[]).unwrap();
         assert_eq!(store.sweep_deliveries(&iso(-14 * 86_400_000), 100).unwrap(), 1);
         assert!(store.delivery(&settled).unwrap().is_none());
         for kept in [&running, &queued, &fresh.id] {
@@ -1841,7 +1865,7 @@ mod tests {
         let store = Store::open(&path).unwrap();
         assert_eq!(store.run("old").unwrap().unwrap().delivery_id, None);
         let first = delivery(None);
-        store.keep_delivery("sub", None, &first, &[], None).unwrap();
+        store.keep_delivery("sub", None, &first, &[], None, &[]).unwrap();
         store.start_run(&RunStart { id: "new", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: Some(&first.id) }).unwrap();
         assert_eq!(store.run("new").unwrap().unwrap().delivery_id.as_deref(), Some(first.id.as_str()));
         let runs: Vec<String> = store.delivery(&first.id).unwrap().unwrap().runs.into_iter().map(|r| r.id).collect();
