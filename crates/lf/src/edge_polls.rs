@@ -137,9 +137,8 @@ fn digest_of(key: &PollKey) -> String {
     Sha256::digest(key.to_js().to_json().as_bytes()).iter().take(8).map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// A listen's scopes as the session opened: the whole connection for one
-/// with no hop the host resolves. One with such hops is resolved as the
-/// session opens (crate::runs `FileSet::heads`).
+/// Whether the listen has a hop the host resolves (crate::resolve): it is
+/// watched under the heads that hop lands on, not the whole connection.
 pub fn resolves(listen: &Listen) -> bool {
     listen.plan.as_ref().is_some_and(|plan| plan.hops.iter().any(|hop| hop.judged == HopJudged::Resolved))
 }
@@ -159,20 +158,27 @@ pub struct Declared {
 /// module's that declares the edge.
 pub fn declared(set: &FileSet, listen: &Listen) -> Option<Declared> {
     let last = listen.plan.as_ref()?.hops.last()?;
-    let schemas = set.catalog.get("adapters")?.get(&listen.adapter)?.get("schemas")?;
-    let Js::Obj(schemas) = schemas else { return None };
-    let own = listen.credential.as_deref().unwrap_or_default();
-    let edge_in = |schema: &Js| match last.from.as_str() {
-        "" => schema.get("collections")?.get(&last.edge).cloned(),
-        from => schema.get("positions")?.get(from)?.get("edges")?.get(&last.edge).cloned(),
-    };
-    let edge = schemas.get(own).and_then(edge_in).or_else(|| schemas.values().find_map(edge_in))?;
+    let edge = hop_schema(set, listen, last)?;
     let delivery = edge.get("delivery").and_then(Js::as_str).and_then(|d| serde_json::from_value(serde_json::Value::String(d.to_string())).ok());
     let poll_every_seconds = match edge.get("pollEverySeconds") {
         Some(Js::Num(n)) => n.as_u64(),
         _ => None,
     };
     Some(Declared { delivery, poll_every_seconds, cursorless: matches!(edge.get("cursor"), Some(Js::Bool(false))) })
+}
+
+/// What the module declares of one hop of the listen's traversal, as the
+/// set's catalog has it: the instance schema its credential names, else any
+/// of its module's that declares the edge.
+pub fn hop_schema(set: &FileSet, listen: &Listen, hop: &movement_parser::listen_plan::PlanHop) -> Option<Js> {
+    let schemas = set.catalog.get("adapters")?.get(&listen.adapter)?.get("schemas")?;
+    let Js::Obj(schemas) = schemas else { return None };
+    let own = listen.credential.as_deref().unwrap_or_default();
+    let edge_in = |schema: &Js| match hop.from.as_str() {
+        "" => schema.get("collections")?.get(&hop.edge).cloned(),
+        from => schema.get("positions")?.get(from)?.get("edges")?.get(&hop.edge).cloned(),
+    };
+    schemas.get(own).and_then(edge_in).or_else(|| schemas.values().find_map(edge_in))
 }
 
 /// The poll keys of the listens on polled edges, each with its listens.
@@ -198,22 +204,6 @@ fn keys_delivered(set: &FileSet, deliveries: &[Delivery]) -> BTreeMap<PollKey, V
     let mut keys = poll_keys(set, &|listen| set.heads(listen));
     keys.retain(|_, listens| listens.first().and_then(|first| declared(set, &set.listens[*first])).and_then(|d| d.delivery).is_some_and(|d| deliveries.contains(&d)));
     keys
-}
-
-/// A line for each listen on a traversal with an earlier hop the host
-/// resolves whose heads were never resolved: such a listen has no key, so
-/// nothing polls or subscribes for it. Said rather than left silent until
-/// listen-fire re-resolves those hops.
-pub fn unresolved(set: &FileSet) -> Vec<String> {
-    unresolved_in(&set.listens, &|listen| set.heads(listen))
-}
-
-fn unresolved_in(listens: &[Listen], heads: &dyn Fn(&Listen) -> Vec<Option<String>>) -> Vec<String> {
-    listens
-        .iter()
-        .filter(|listen| resolves(listen) && heads(listen).is_empty())
-        .map(|listen| format!("warning: {}:{} is not watched: its traversal has an earlier hop listen-fire must resolve to the records it watches, and listen-fire does not resolve such hops yet", listen.file, listen.movement_name))
-        .collect()
 }
 
 /// How often the key's edge is polled, in milliseconds: the operator's
@@ -258,6 +248,7 @@ mod tests {
             args: Vec::new(),
             address: Ok(BTreeMap::new()),
             plan,
+            written: None,
         }
     }
 
@@ -309,22 +300,6 @@ mod tests {
         assert_ne!(poll_subscription(&crm), poll_subscription(&hiring), "each its own cursor");
         assert_ne!(edge_subscription(&crm), edge_subscription(&hiring), "and its own webhook");
         assert_ne!(poll_subscription(&crm), poll_subscription(&key("", None)));
-    }
-
-    #[test]
-    fn a_listen_whose_heads_were_never_resolved_is_said_to_be_unwatched() {
-        let listens = [listen("a", Some("null"), true), listen("b", Some("null"), true), listen("c", Some("null"), false), listen("settings", None, false)];
-        let heads = |l: &Listen| match l.movement_name.as_str() {
-            "b" => vec![Some("board-1".to_string())],
-            "c" | "settings" => vec![None],
-            _ => Vec::new(),
-        };
-        assert_eq!(
-            unresolved_in(&listens, &heads),
-            ["warning: notes:a is not watched: its traversal has an earlier hop listen-fire must resolve to the records it watches, and listen-fire does not resolve such hops yet"],
-            "only the listen with a resolved hop and no heads"
-        );
-        assert!(keys_of(&listens, &|l| Watched { position: String::new(), heads: heads(l) }).values().all(|sharing| !sharing.contains(&0)), "it has no key");
     }
 
     #[test]

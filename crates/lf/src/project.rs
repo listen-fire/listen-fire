@@ -48,6 +48,28 @@ struct ProjectFile {
     /// duration (`30s`, `5m`), over what the edge declares.
     #[serde(rename = "pollEvery", default)]
     poll_every: std::collections::BTreeMap<String, serde_yaml::Value>,
+    /// How often each connection's listens re-list the earlier hops they
+    /// filter, by the credential the connection names (its module, for one
+    /// that names none): each a duration, over what the hops declare.
+    #[serde(rename = "resolveEvery", default)]
+    resolve_every: std::collections::BTreeMap<String, serde_yaml::Value>,
+    /// The most records a listen's earlier hops may match before it is
+    /// suspended.
+    #[serde(rename = "listenScopeLimit")]
+    listen_scope_limit: Option<serde_yaml::Value>,
+}
+
+/// The most records a listen's earlier hops may match when lf.yaml says
+/// nothing (`listenScopeLimit`): one poll or subscription each.
+pub const DEFAULT_LISTEN_SCOPE_LIMIT: usize = 500;
+
+fn listen_scope_limit_of(value: Option<&serde_yaml::Value>, at: &str) -> Result<usize, String> {
+    let Some(value) = value else { return Ok(DEFAULT_LISTEN_SCOPE_LIMIT) };
+    value
+        .as_u64()
+        .filter(|limit| *limit >= 1)
+        .and_then(|limit| usize::try_from(limit).ok())
+        .ok_or_else(|| format!("{at}: listenScopeLimit: a whole number, at least 1, of the records a listen's earlier hops may match (default {DEFAULT_LISTEN_SCOPE_LIMIT})"))
 }
 
 #[derive(Deserialize)]
@@ -71,13 +93,22 @@ fn retain_days_of(value: Option<&serde_yaml::Value>, at: &str) -> Result<u32, St
 /// `pollEvery`, each duration to milliseconds; a value that is no positive
 /// duration is refused, naming its key.
 fn poll_every_of(declared: &std::collections::BTreeMap<String, serde_yaml::Value>, at: &str) -> Result<std::collections::BTreeMap<String, i64>, String> {
+    durations_of(declared, &format!("{at}: pollEvery"), "how often that connection's polled edges are polled")
+}
+
+/// `resolveEvery`, as `pollEvery` is read.
+fn resolve_every_of(declared: &std::collections::BTreeMap<String, serde_yaml::Value>, at: &str) -> Result<std::collections::BTreeMap<String, i64>, String> {
+    durations_of(declared, &format!("{at}: resolveEvery"), "how often that connection's listens re-list the earlier hops they filter")
+}
+
+fn durations_of(declared: &std::collections::BTreeMap<String, serde_yaml::Value>, at: &str, what: &str) -> Result<std::collections::BTreeMap<String, i64>, String> {
     declared
         .iter()
         .map(|(connection, value)| {
             let ms = value.as_str().and_then(movement_engine::park::duration_ms).filter(|ms| ms.is_finite() && *ms >= 1.0);
             match ms {
                 Some(ms) => Ok((connection.clone(), ms as i64)),
-                None => Err(format!("{at}: pollEvery.{connection}: a duration, such as 30s or 5m: how often that connection's polled edges are polled")),
+                None => Err(format!("{at}.{connection}: a duration, such as 30s or 5m: {what}")),
             }
         })
         .collect()
@@ -134,6 +165,14 @@ pub struct Project {
     /// module for one that uses none. A connection it does not name is
     /// polled at the interval its edge declares (crate::edge_polls).
     pub poll_every: std::collections::BTreeMap<String, i64>,
+    /// How often, in milliseconds, each connection's listens re-list the
+    /// earlier hops they filter (lf.yaml's `resolveEvery`), by the
+    /// credential the connection names, or its module. A connection it does
+    /// not name re-lists as its hops declare (crate::resolve).
+    pub resolve_every: std::collections::BTreeMap<String, i64>,
+    /// The most records a listen's earlier hops may match
+    /// (`listenScopeLimit`): over it the listen is suspended.
+    pub listen_scope_limit: usize,
 }
 
 /// `maxRunCostUsd` as the platform reads `MOVEMENT_MAX_RUN_COST_USD`
@@ -242,6 +281,8 @@ fn load_pinned(from: &Path, older_key_loads: bool) -> Result<Project, String> {
     let cost_cap_microdollars = file.max_run_cost_usd.map(|d| cost_cap_of(d, &path.display().to_string())).transpose()?;
     let delivery_retain_days = retain_days_of(file.deliveries.as_ref().and_then(|d| d.retain_days.as_ref()), "lf.yaml")?;
     let poll_every = poll_every_of(&file.poll_every, "lf.yaml")?;
+    let resolve_every = resolve_every_of(&file.resolve_every, "lf.yaml")?;
+    let listen_scope_limit = listen_scope_limit_of(file.listen_scope_limit.as_ref(), "lf.yaml")?;
     if file.store.is_some() {
         return Err(format!(
             "{}: store: run state is kept by the store module now: `core: {{ store: \"@lf/postgres-store\" }}` (or @lf/sqlite-store, the default), set up with `listen-fire connect @lf/postgres-store`",
@@ -276,6 +317,8 @@ fn load_pinned(from: &Path, older_key_loads: bool) -> Result<Project, String> {
         cost_cap_microdollars,
         delivery_retain_days,
         poll_every,
+        resolve_every,
+        listen_scope_limit,
         root: dir,
     })
 }
@@ -349,6 +392,26 @@ mod tests {
             assert_eq!(
                 poll_every_of(&yaml(bad), "lf.yaml"),
                 Err("lf.yaml: pollEvery.feed: a duration, such as 30s or 5m: how often that connection's polled edges are polled".to_string()),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_every_reads_a_duration_per_connection_and_the_scope_limit_a_positive_number() {
+        let yaml = |text: &str| serde_yaml::from_str::<std::collections::BTreeMap<String, serde_yaml::Value>>(text).unwrap();
+        assert_eq!(resolve_every_of(&yaml("feed: 5m"), "lf.yaml"), Ok([("feed".to_string(), 300_000)].into()));
+        assert_eq!(
+            resolve_every_of(&yaml("feed: often"), "lf.yaml"),
+            Err("lf.yaml: resolveEvery.feed: a duration, such as 30s or 5m: how often that connection's listens re-list the earlier hops they filter".to_string())
+        );
+        let value = |text: &str| serde_yaml::from_str::<serde_yaml::Value>(text).unwrap();
+        assert_eq!(listen_scope_limit_of(None, "lf.yaml"), Ok(DEFAULT_LISTEN_SCOPE_LIMIT));
+        assert_eq!(listen_scope_limit_of(Some(&value("1")), "lf.yaml"), Ok(1));
+        for bad in ["0", "-3", "many", "2.5"] {
+            assert_eq!(
+                listen_scope_limit_of(Some(&value(bad)), "lf.yaml"),
+                Err("lf.yaml: listenScopeLimit: a whole number, at least 1, of the records a listen's earlier hops may match (default 500)".to_string()),
                 "{bad}"
             );
         }

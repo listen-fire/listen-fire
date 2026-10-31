@@ -23,6 +23,7 @@ use crate::json::Js;
 use crate::pg_store::PgStore;
 use crate::core;
 use crate::project::Project;
+use crate::resolve::ListenState;
 use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, OwedRace, Park, Release, Rerun, Result, RunRow, RunStart, SegmentCommit,
     Store,
@@ -264,6 +265,12 @@ pub trait RunHostStore {
     /// An install's saved pull cursor (a notify-then-pull source's), or None.
     fn inbound_checkpoint(&self, subscription_id: &str) -> Result<Option<Js>>;
     fn save_inbound_checkpoint(&self, subscription_id: &str, checkpoint: &Js) -> Result<()>;
+
+    // ── Listens' resolved heads ─────────────────────────────────────────────
+    /// What the listen with this pipeline was last resolved to
+    /// (crate::resolve), or None for one never resolved.
+    fn listen_state(&self, pipeline: &str) -> Result<Option<ListenState>>;
+    fn save_listen_state(&self, pipeline: &str, state: &ListenState) -> Result<()>;
     /// What one inbound delivery leaves, as one write: its receipt, its pull
     /// cursor (when it moved), its arrivals and its work rows (its events,
     /// its wakes). A crash never leaves a cursor past events its receipt does
@@ -496,6 +503,12 @@ impl RunHostStore for Store {
     fn save_inbound_checkpoint(&self, subscription_id: &str, checkpoint: &Js) -> Result<()> {
         Store::save_inbound_checkpoint(self, subscription_id, checkpoint)
     }
+    fn listen_state(&self, pipeline: &str) -> Result<Option<ListenState>> {
+        Store::listen_state(self, pipeline)
+    }
+    fn save_listen_state(&self, pipeline: &str, state: &ListenState) -> Result<()> {
+        Store::save_listen_state(self, pipeline, state)
+    }
     fn keep_delivery(
         &self,
         subscription_id: &str,
@@ -554,6 +567,36 @@ mod tests {
         assert_eq!(store.inbound_checkpoint(&subscription).unwrap(), Some(kept));
         store.save_inbound_checkpoint(&subscription, &Js::Null).unwrap();
         assert_eq!(store.inbound_checkpoint(&subscription).unwrap(), None);
+    }
+
+    /// A listen's state is kept whole and replaced whole on every store.
+    fn a_listens_state_is_kept_as_it_was_saved(store: &dyn RunHostStore) {
+        let pipeline = format!("listen:notes:a:{}", uuid::Uuid::new_v4());
+        assert_eq!(store.listen_state(&pipeline).unwrap(), None);
+        let resolved = ListenState { heads: vec!["b1".into(), "b2".into()], resolved_at: "2026-10-31T09:00:00.000Z".into(), failure: None, paused: None };
+        store.save_listen_state(&pipeline, &resolved).unwrap();
+        assert_eq!(store.listen_state(&pipeline).unwrap(), Some(resolved.clone()));
+        let suspended = ListenState { failure: Some("LISTEN_SCOPE_LIMIT: …".into()), paused: Some("LISTEN_LOOP: …".into()), ..resolved };
+        store.save_listen_state(&pipeline, &suspended).unwrap();
+        assert_eq!(store.listen_state(&pipeline).unwrap(), Some(suspended));
+        assert_eq!(store.listen_state("listen:notes:other").unwrap(), None);
+    }
+
+    #[test]
+    fn a_listens_state_is_kept_in_the_state_file() {
+        let dir = std::env::temp_dir().join(format!("lf-backend-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        a_listens_state_is_kept_as_it_was_saved(&Store::open(&dir.join("state.db")).unwrap());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Over Postgres when LF_TEST_PG names a database to set up and write into.
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn a_listens_state_is_kept_over_postgres() {
+        let Some(url) = std::env::var("LF_TEST_PG").ok().filter(|u| !u.is_empty()) else { return };
+        PgStore::migrate(&url).unwrap();
+        a_listens_state_is_kept_as_it_was_saved(&PgStore::connect(&url, POSTGRES_TENANT).unwrap());
     }
 
     #[test]

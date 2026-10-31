@@ -130,13 +130,13 @@ const FAILED_RETRY_CAP_MS: i64 = 3_600_000;
 /// With the backoff that is about three hours of failing: an outage of a
 /// module or a provider is waited out, while a row that can never succeed,
 /// or that kills its worker each time, stops and says why. A polled
-/// listen's row never gives up, nor a shared poll's: its failures are its
-/// source's, and polling again is its schedule (dead, its listens would
-/// never be polled again).
+/// listen's row never gives up, nor a shared poll's, nor a listen's
+/// re-resolution: its failures are its source's, and polling again is its
+/// schedule (dead, its listens would never be polled again).
 pub const MAX_WORK_ATTEMPTS: i64 = 10;
 
 fn gives_up(kind: &str) -> bool {
-    kind != POLL_WORK_KIND && kind != crate::edge_polls::EDGE_POLL_WORK_KIND
+    kind != POLL_WORK_KIND && kind != crate::edge_polls::EDGE_POLL_WORK_KIND && kind != crate::resolve::RESOLVE_WORK_KIND
 }
 
 /// When a row that failed its `attempts`-th attempt is tried again, from now.

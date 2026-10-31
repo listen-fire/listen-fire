@@ -141,6 +141,8 @@ mod returned;
 mod prompt;
 mod protocol;
 mod remote;
+mod listens_cmd;
+mod resolve;
 mod routing;
 mod run_host;
 mod runs;
@@ -205,9 +207,10 @@ const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|
   resume    step every parked leaf of one run now; with no run, drain the due work and what is due in every parked run (a timer not yet come stays parked)
   upgrade   rewrite the movement files by the fixes that keep their meaning (--all: every fix offered; --check: print the diff, write nothing)
   runs      the runs in the state file, most recent first (as `listen-fire runs`); `runs show <run-id>`: one run, its event, trace, park and attempts; `runs rerun <run-id>`: run a failed run again as its next attempt, with its own event and the movement as the project holds it now (so a fix to the movement takes effect), from the start; refused unless the run's latest attempt failed, while another listen-fire holds the run, and when the failed attempt already committed writes (they are listed; --force reruns it anyway, making them again)
+  listens   one line per listen on a traversal: how each hop's filter is honoured (on arrival, or resolved by listing), what it watches and when it last resolved, and whether it is ok, failing (LISTEN_SCOPE_LIMIT, LISTEN_RESOLVE_FAILED) or paused; `listens resume <file>:<movement>`: let a paused listen fire again
   deliveries  the deliveries the doors kept (events, not bytes), most recent first, at most 50 (--subscription: one subscription's; --since: received at or after an instant, or <n>h or <n>d ago); `deliveries show <id>`: one, its events and runs; `deliveries replay <id>`: queue its events again as a delivery of its own, for listen-fire serve or listen-fire drain to run against the project as it is now (new runs, whatever its runs came to; a failed run: listen-fire runs rerun <run-id>)
   --json    check, catalog, run, resume, runs, deliveries, cancel, modules, connect, credential list: one JSON document (docs/lf-json.md); a failure is {\"error\": …}
-  drain     fire each cron listen's due tick (once, however many workers drain), then claim due work rows one at a time and run them (a polled listen's row is its next poll, due every interval its source declares); with --until-idle exit once none is due, with --max-seconds stop claiming after n seconds, with --kinds only rows of those kinds (resume_timer, wake_await, fire_event, poll_listen, poll_edge, refresh_subscription, settle_race) and the cron ticks only when it names cron
+  drain     fire each cron listen's due tick (once, however many workers drain), then claim due work rows one at a time and run them (a polled listen's row is its next poll, due every interval its source declares); with --until-idle exit once none is due, with --max-seconds stop claiming after n seconds, with --kinds only rows of those kinds (resume_timer, wake_await, fire_event, poll_listen, poll_edge, resolve_listen, refresh_subscription, settle_race) and the cron ticks only when it names cron
   serve     the inbound doors and the work queue's drain (as `listen-fire serve`)
   --doors-only  (serve) only the doors, for compute billed by the request: nothing drains in this process, `/hooks/…` queues its events (answering 202 with the rows queued) instead of running them in the request; workers (`listen-fire drain`) run the work, started by the wake slot's module or a schedule. Also LF_DOORS_ONLY=1
   LF_LOG=debug  also say the lines that explain why something ran nothing when nothing went wrong (an arrival a listen's WHERE refuses); unset, they stay unsaid
@@ -558,6 +561,12 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
                 writeln!(out, "{} {} {}:{} {}{stranded}{attempt}", run.id, run.started_at, run.file, run.movement, run.status).map_err(|e| e.to_string())?;
             }
             Ok(0)
+        }
+        "listens" => {
+            let project = load()?;
+            let store = store_of(&args, &project)?;
+            let session = runs::open_session(project, &runs::Opening { ephemeral: false, store: &store, role: runs::Role::Command, routes_listens: false }).await?;
+            listens_cmd::command(&session, &args.rest, &mut out)
         }
         "deliveries" => {
             let project = load()?;

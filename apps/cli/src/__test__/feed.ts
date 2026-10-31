@@ -17,6 +17,16 @@ export interface Note {
   /** How many times it was edited: its `Edited` field, the version of its
    *  arrivals on `Notes` (0 unless it says). */
   edited?: number;
+  /** The board it is pinned to: it arrives on that board's `Notes` too. */
+  board?: string;
+}
+
+/** A board notes are pinned to: a root `Boards` member. */
+export interface Board {
+  id: string;
+  name: string;
+  /** When it last changed: a poll of `Boards` passes it as its cursor. */
+  at?: number;
 }
 
 /** A notes feed, polled: `feed.json` is what the provider holds, `polls.log`
@@ -33,7 +43,11 @@ export interface Note {
  *  `replay` makes it forget the cursor too.
  *  With `nocursor` present `Notes` declares `cursor: false`: every poll lists
  *  all of it. With `takes` present the feed takes `Title ==` on `Notes`: it applies a
- *  filter it is handed and says so (`takenApplied`). */
+ *  filter it is handed and says so (`takenApplied`).
+ *  Its root `Boards` (`boards.json`) is cheap to list, re-listed every 300
+ *  seconds; with `pushedboards` present it is listenable and polled instead,
+ *  and declares `parentChanges: pushed`. A board's `Notes` are polled per
+ *  board, its id the poll's `scope`: the notes pinned to it (`board`). */
 const FEED_MODULE = `const { readFileSync, appendFileSync, existsSync } = require('node:fs');
 const { join } = require('node:path');
 const { defineModule } = require(${JSON.stringify(join(MODULE_KIT, 'define.ts'))});
@@ -50,7 +64,23 @@ const note = {
   ],
   references: [],
 };
+const pushedBoards = existsSync(at('pushedboards'));
+const every = existsSync(at('fast')) ? 1 : 60;
 const notesOf = (since) => JSON.parse(readFileSync(at('feed.json'), 'utf8')).filter((n) => n.at > since);
+const boardsOf = () => (existsSync(at('boards.json')) ? JSON.parse(readFileSync(at('boards.json'), 'utf8')) : []);
+const boardPosition = (b) => ({ adapterType: 'feed', recordType: 'Board', identity: { kind: 'stable', recordId: b.id, data: { Id: b.id, Name: b.name } } });
+// A board's notes are polled per board (\`delivery: polled\`, a poll's \`scope\` the board's id).
+const board = {
+  typeId: 'board',
+  displayName: 'Board',
+  fields: [
+    { fieldId: 'id', displayName: 'Id', kind: 'string', writable: false, required: false },
+    { fieldId: 'name', displayName: 'Name', kind: 'string', writable: false, required: false },
+  ],
+  references: [
+    { fieldId: 'notes', name: 'Notes', targetTypeId: 'note', cardinality: 'many', direction: 'outgoing', readable: false, listenable: true, delivery: 'polled', pollEverySeconds: every, cursor: true, identity: 'Id', version: 'Edited' },
+  ],
+};
 // The one filter the feed takes: Title == a literal; every other one is left to the host.
 const titleIs = (filter) =>
   filter?.type === 'compare' && filter.op === 'eq' && filter.left?.type === 'property' && filter.left.propertyTypeId === 'Title' && filter.right?.type === 'static' ? filter.right.value : undefined;
@@ -59,10 +89,18 @@ const pollEdge = async ({ edge, filter, scope, cursor }) => {
   await new Promise((done) => setTimeout(done, 300));
   const since = existsSync(at('replay')) || typeof cursor !== 'number' ? 0 : cursor;
   const title = takes ? titleIs(filter) : undefined;
-  const notes = notesOf(since).filter((n) => title === undefined || n.title === title);
+  if (edge === 'Boards') {
+    const boards = boardsOf().filter((b) => (b.at ?? 0) > since);
+    return {
+      arrivals: boards.map((b) => ({ edge: 'Boards', identity: b.id, landing: { recordId: b.id, recordType: 'Board', fields: { Id: b.id, Name: b.name } } })),
+      cursor: boardsOf().reduce((high, b) => Math.max(high, b.at ?? 0), since),
+    };
+  }
+  const notes = notesOf(since).filter((n) => (title === undefined || n.title === title) && (scope === undefined || n.board === scope));
   return {
     arrivals: notes.map((n) => ({
       edge: 'Notes',
+      ...(scope === undefined ? {} : { key: scope }),
       identity: n.id,
       version: String(n.edited ?? 0),
       landing: { recordId: n.id, recordType: 'Note', fields: { Id: n.id, Title: n.title, Edited: n.edited ?? 0 } },
@@ -98,16 +136,35 @@ module.exports = defineModule({
         version: 'Edited',
         ...(takes ? { capability: { filter: 'native', supportsLimit: false } } : {}),
       },
+      // Cheap to list: re-listed every 5 minutes, or, with \`pushedboards\`, re-listed on each
+      // arrival on \`Boards\` (polled every \`pollEverySeconds\`).
+      {
+        typeId: 'board',
+        displayName: 'Board',
+        collectionName: 'Boards',
+        readable: true,
+        writable: false,
+        cheapToList: true,
+        ...(pushedBoards
+          ? { parentChanges: 'pushed', listenable: true, delivery: 'polled', pollEverySeconds: every, cursor: true, identity: 'Id' }
+          : { relistEverySeconds: 300 }),
+      },
     ],
-    describe: async (typeId) => (typeId === 'note' || typeId === 'Note' ? note : null),
+    describe: async (typeId) => (typeId === 'note' || typeId === 'Note' ? note : typeId === 'board' || typeId === 'Board' ? board : null),
     resolveEntity: async () => ({ candidates: [] }),
     // A polled event's payload holds its fields by id; a landing's, by name.
     getFieldValue: async ({ position, fieldId }) => {
       const data = position.identity.data ?? {};
-      const name = note.fields.find((f) => f.fieldId === fieldId.toLowerCase())?.displayName;
-      return data[fieldId.toLowerCase()] ?? (name === undefined ? undefined : data[name]) ?? null;
+      const fields = position.recordType === 'Board' || position.recordType === 'board' ? board.fields : note.fields;
+      const name = fields.find((f) => f.fieldId === fieldId.toLowerCase())?.displayName;
+      return data[fieldId] ?? data[fieldId.toLowerCase()] ?? (name === undefined ? undefined : data[name]) ?? null;
     },
-    getRelated: async () => [],
+    // Only the boards are listed: \`boards.log\` counts the lists.
+    getRelated: async ({ fieldId }) => {
+      if (fieldId !== 'Boards') return [];
+      appendFileSync(at('boards.log'), '.\\n');
+      return boardsOf().map((b) => ({ position: boardPosition(b) }));
+    },
     createRecord: async () => { throw new Error('read-only'); },
     updateRecord: async () => { throw new Error('read-only'); },
     deleteRecord: async () => { throw new Error('read-only'); },
@@ -155,6 +212,17 @@ export function withFeed(dir: string, listen = 'listen to f fire seen'): string 
 
 export function feed(dir: string, notes: Note[]): void {
   writeFileSync(join(dir, 'externals/feed/feed.json'), JSON.stringify(notes));
+}
+
+/** What the provider holds of the boards notes are pinned to. */
+export function boards(dir: string, held: Board[]): void {
+  writeFileSync(join(dir, 'externals/feed/boards.json'), JSON.stringify(held));
+}
+
+/** How many times the boards were listed. */
+export function boardLists(dir: string): number {
+  const log = join(dir, 'externals/feed/boards.log');
+  return existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter((l) => l !== '').length : 0;
 }
 
 /** The checkpoint each poll so far was handed. */

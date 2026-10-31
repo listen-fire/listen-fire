@@ -679,6 +679,23 @@ impl Store {
         Self::save_checkpoint_in(&self.db, subscription_id, checkpoint)
     }
 
+    /// What a listen was last resolved to (crate::resolve), or None.
+    pub fn listen_state(&self, pipeline: &str) -> Result<Option<crate::resolve::ListenState>, StoreError> {
+        let text: Option<String> = self.db.query_row("select state from listen_state where pipeline = ?", params![pipeline], |r| r.get(0)).optional()?;
+        text.map(|text| {
+            Js::parse(text.as_bytes()).ok().as_ref().and_then(crate::resolve::ListenState::from_js).ok_or_else(|| StoreError::Invalid(format!("a stored listen's state is not one: {text}")))
+        })
+        .transpose()
+    }
+
+    pub fn save_listen_state(&self, pipeline: &str, state: &crate::resolve::ListenState) -> Result<(), StoreError> {
+        self.db.execute(
+            "insert into listen_state (pipeline, state) values (?, ?) on conflict (pipeline) do update set state = excluded.state",
+            params![pipeline, state.to_js().to_json()],
+        )?;
+        Ok(())
+    }
+
     fn save_checkpoint_in(db: &rusqlite::Connection, subscription_id: &str, checkpoint: &Js) -> Result<(), StoreError> {
         db.execute(
             "insert into inbound_checkpoint (subscription_id, checkpoint) values (?, ?) on conflict (subscription_id) do update set checkpoint = excluded.checkpoint",

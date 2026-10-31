@@ -68,10 +68,10 @@ pub struct FileSet {
     parsed: Vec<Rc<Parsed>>,
     pub catalog: Js,
     pub listens: Vec<Listen>,
-    /// The heads each listen with an earlier hop the host resolves watches,
-    /// by its pipeline, as resolved when the set was read
-    /// (crate::edge_polls::resolve_heads).
-    heads: BTreeMap<String, Vec<String>>,
+    /// The heads each listen with an earlier hop the host resolves watches
+    /// now, by its pipeline (crate::resolve): none for one never resolved,
+    /// or suspended.
+    heads: RefCell<BTreeMap<String, Vec<String>>>,
     pub running: Vec<Rc<RunningExternal>>,
     schemas: IndexMap<String, ConnectionSchemas>,
     /// The set's claims on its externals' processes: a worker's keep them
@@ -118,7 +118,12 @@ impl FileSet {
         if !crate::edge_polls::resolves(listen) {
             return vec![None];
         }
-        self.heads.get(&listen.pipeline()).into_iter().flatten().cloned().map(Some).collect()
+        self.heads.borrow().get(&listen.pipeline()).into_iter().flatten().cloned().map(Some).collect()
+    }
+
+    /// Watch the listen's last edge under `heads` from now (crate::resolve).
+    pub fn watch(&self, listen: &Listen, heads: Vec<String>) {
+        self.heads.borrow_mut().insert(listen.pipeline(), heads);
     }
 
     /// The listens on a polled source (its manifest declares `poll`), each
@@ -378,14 +383,10 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
     let user = local_identity(&project.user, |k| std::env::var(k).ok());
     let _holds = hold_all(&running, role.keep());
-    let file_set = Rc::new(FileSet { files, parsed, catalog, listens, heads: BTreeMap::new(), running, schemas, _holds });
-    if routes_listens {
-        for line in crate::edge_polls::unresolved(&file_set) {
-            eprintln!("listen-fire: {line}");
-        }
-    }
+    let file_set = Rc::new(FileSet { files, parsed, catalog, listens, heads: Default::default(), running, schemas, _holds });
+    let set = file_set.clone();
     let file_set = RefCell::new(file_set);
-    Ok(Session {
+    let session = Session {
         project,
         role,
         store,
@@ -403,7 +404,12 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
         watch_pause,
         refused: Default::default(),
         watch_failed: Default::default(),
-    })
+    };
+    let opening = if routes_listens { crate::resolve::Opening::Routing } else { crate::resolve::Opening::Kept };
+    for line in crate::resolve::open(&session, &set, opening).await? {
+        eprintln!("listen-fire: {line}");
+    }
+    Ok(session)
 }
 
 /// The checkpoint a cron listen's ticks are kept under; None for any other listen.
@@ -726,6 +732,12 @@ impl Session {
             for listen in set.listens.iter().filter(|l| l.is_on(adapter, &arrival.edge) && to(l)) {
                 let file = set.file(&listen.file);
                 let named = format!("{}:{}", file.name, listen.movement_name);
+                // A listen whose earlier hops the host resolves is watched
+                // under its heads alone.
+                if crate::edge_polls::resolves(listen) && !set.heads(listen).contains(&arrival.key) {
+                    crate::log::debug(|| format!("{named}: the arrival {identity} on {} is under no record it watches: it runs nothing", arrival.edge));
+                    continue;
+                }
                 let Some(verdict) = listen.fires(arrival, delivered.credential, now_ms) else { continue };
                 match verdict {
                     Verdict::Fires => {}
@@ -752,6 +764,15 @@ impl Session {
                     Some(outcome) => fired.outcomes.push(outcome),
                     None => fired.redelivered.push(format!("{named} has run the arrival {identity} on {} before: this delivery runs nothing", arrival.edge)),
                 }
+            }
+        }
+        // A module that reports its parents' changes reports them as
+        // arrivals on the parents' own edge: the listens filtering that
+        // edge resolve again.
+        let edges: BTreeSet<&str> = arrivals.iter().map(|a| a.edge.as_str()).collect();
+        for listen in set.listens.iter().filter(|l| l.adapter == adapter) {
+            if crate::resolve::pushed_parents(set, listen).iter().any(|edge| edges.contains(edge.as_str())) {
+                self.re_resolve(set, listen).await?;
             }
         }
         Ok(fired)
@@ -904,6 +925,47 @@ impl Session {
             }
             if self.store.enqueue_if_absent(EDGE_POLL_WORK_KIND, &format!("{EDGE_POLL_WORK_KIND}:{subscription}"), &payload, None, None).map_err(|e| e.to_string())? {
                 crate::wake::queued(EDGE_POLL_WORK_KIND, None);
+            }
+        }
+        Ok(())
+    }
+
+    /// A `resolve_listen` row for each listen re-resolved on a clock
+    /// (crate::resolve::every_ms), first due one interval from now: it was
+    /// resolved as the set opened. A row there already is left as it is.
+    fn arm_resolves(&self, set: &FileSet) -> Result<(), String> {
+        use crate::resolve::RESOLVE_WORK_KIND;
+        for listen in &set.listens {
+            let Some(every) = crate::resolve::every_ms(set, listen, &self.project.resolve_every) else { continue };
+            let key = format!("{RESOLVE_WORK_KIND}:{}", listen.pipeline());
+            let due = iso(self.due_offset_ms + every);
+            if self.store.enqueue_if_absent(RESOLVE_WORK_KIND, &key, &crate::resolve::row_payload(listen), Some(&due), None).map_err(|e| e.to_string())? {
+                crate::wake::queued(RESOLVE_WORK_KIND, Some(&due));
+            }
+        }
+        Ok(())
+    }
+
+    /// A `resolve_listen` row: resolve its listen again, and say when it is
+    /// next due. A row whose listen is gone, or no longer re-resolved on a
+    /// clock, is done.
+    async fn resolve_row(&self, set: &FileSet, pipeline: &str) -> Result<(Next, Vec<RunOutcome>), String> {
+        let Some(listen) = set.listens.iter().find(|l| l.pipeline() == pipeline) else { return Ok((Next::Done, Vec::new())) };
+        let Some(every) = crate::resolve::every_ms(set, listen, &self.project.resolve_every) else { return Ok((Next::Done, Vec::new())) };
+        self.re_resolve(set, listen).await?;
+        Ok((Next::DueAt(iso(self.due_offset_ms + every)), Vec::new()))
+    }
+
+    /// Resolve the listen again (crate::resolve::resolve), say a failure that
+    /// changed, and move the webhooks a server holds with its heads.
+    async fn re_resolve(&self, set: &FileSet, listen: &Listen) -> Result<(), String> {
+        let before = set.heads(listen);
+        if let Some(line) = crate::resolve::resolve(self, set, listen).await? {
+            eprintln!("listen-fire: {line}");
+        }
+        if self.role.registers_webhooks() && set.heads(listen) != before {
+            for line in crate::subscriptions::reconcile(self).await {
+                eprintln!("listen-fire: {line}");
             }
         }
         Ok(())
@@ -1250,6 +1312,7 @@ impl Session {
             resumed_leaf,
             resumed_state,
             settling_race,
+            keeps_trace: true,
         });
         let input = SegmentInput {
             source: &facts.source,
@@ -1262,12 +1325,51 @@ impl Session {
             trigger_mark: facts.trigger_mark,
             entry,
             cost_cap_microdollars: self.project.cost_cap_microdollars,
+            returns_positions: false,
         };
         let ran = run_segment(&host, input).await;
         self.remember_writes(run_id, &host.adapters.wrote.borrow());
         let committed = host.adapters.committed.take();
         let ran = self.end_segment(&host, ran, &committed, completing)?;
         Ok((ran, committed))
+    }
+
+    /// What the function `movement` of `source` returns, read as the records
+    /// a walk landed on (crate::segment::read_positions): run through the
+    /// engine as a run's segment is, against the set's connections, with no
+    /// run row and nothing kept.
+    pub async fn read_positions(&self, set: &FileSet, source: &str, movement: &str) -> Result<Vec<Js>, String> {
+        let secrets = self.secrets();
+        let externals = self.externals_in(set, &secrets);
+        let segment_id = uuid::Uuid::new_v4().to_string();
+        let host = SegmentHost::new(SegmentHostParts {
+            segment_id: segment_id.clone(),
+            run_id: format!("read:{segment_id}"),
+            fence: None,
+            store: &*self.store,
+            adapters: SegmentAdapters::new(&segment_id, &externals),
+            documents: &self.documents,
+            user: self.user.clone(),
+            resumed_leaf: None,
+            resumed_state: None,
+            settling_race: None,
+            keeps_trace: false,
+        });
+        let fired_at = iso(0);
+        let input = SegmentInput {
+            source,
+            language_version: &self.project.language_version,
+            movement_name: movement,
+            event: &Js::Obj(Obj::new()),
+            fired_at: &fired_at,
+            catalog: &set.catalog,
+            dry_run: false,
+            trigger_mark: None,
+            entry: Entry::Run,
+            cost_cap_microdollars: self.project.cost_cap_microdollars,
+            returns_positions: true,
+        };
+        crate::segment::read_positions(&host, input).await
     }
 
     /// The segment's commit, carrying where it leaves the run: a resumed
@@ -1617,6 +1719,9 @@ impl Session {
         if self.pool.takes(EDGE_POLL_WORK_KIND) {
             self.arm_edge_polls(set)?;
         }
+        if self.pool.takes(crate::resolve::RESOLVE_WORK_KIND) {
+            self.arm_resolves(set)?;
+        }
         let due_by = self.due_by();
         let claim = ClaimDue { limit, lease_ms: WORK_LEASE_MS, due_by: Some(&due_by), kinds: self.pool.work_kinds() };
         self.sweep_lost_runs(log).await?;
@@ -1745,6 +1850,7 @@ impl Session {
             }
             POLL_WORK_KIND => self.poll_row(set, &text("subscription")?).await,
             EDGE_POLL_WORK_KIND => self.poll_edge_row(set, &text("subscription")?).await,
+            crate::resolve::RESOLVE_WORK_KIND => self.resolve_row(set, &text("pipeline")?).await,
             crate::subscriptions::REFRESH_WORK_KIND => Ok((
                 match crate::subscriptions::refresh_row(self, payload).await? {
                     Some(at) => Next::DueAt(at),
@@ -2140,9 +2246,8 @@ impl Session {
         }
         crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
         let _holds = hold_all(&running, self.role.keep());
-        let taken = Rc::new(FileSet { files, parsed, catalog, listens, heads: BTreeMap::new(), running, schemas, _holds });
-        let warned = crate::edge_polls::unresolved(&set);
-        for line in crate::edge_polls::unresolved(&taken).into_iter().filter(|line| !warned.contains(line)) {
+        let taken = Rc::new(FileSet { files, parsed, catalog, listens, heads: Default::default(), running, schemas, _holds });
+        for line in crate::resolve::open(self, &taken, crate::resolve::Opening::Reloaded).await? {
             let _ = writeln!(log, "listen-fire: {line}");
         }
         self.file_set.replace(taken.clone());
@@ -2411,7 +2516,7 @@ mod tests {
     }
 
     fn polled(config: Obj) -> Listen {
-        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None, args: Vec::new(), payload: None, address: Ok(Default::default()), plan: None }
+        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None, args: Vec::new(), payload: None, address: Ok(Default::default()), plan: None, written: None }
     }
 
     #[test]

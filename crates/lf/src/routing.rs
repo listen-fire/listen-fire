@@ -51,6 +51,55 @@ pub struct Listen {
     /// it, never events. None for a listen in the settings form, which
     /// events fire and arrivals never do.
     pub plan: Option<ListenPlan>,
+    /// The traversal as its file writes it; None for a listen in the
+    /// settings form.
+    pub written: Option<WrittenPath>,
+}
+
+/// A listen's traversal as its file writes it: its root, spelled as a name,
+/// and each hop with its WHERE (`-[b:Boards WHERE b.Name == "Ops"]->`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WrittenPath {
+    pub root: String,
+    pub hops: Vec<String>,
+}
+
+impl WrittenPath {
+    fn of(path: &movement_parser::ast::PathHead) -> Option<WrittenPath> {
+        let Some(movement_parser::ast::PathRoot::Name { name }) = &path.root else { return None };
+        Some(WrittenPath { root: movement_checker::families::names::spell_name(name), hops: written_hops(&path.hops_raw) })
+    }
+
+    /// The root and the first `n` hops, as one walk is written.
+    pub fn walk(&self, n: usize) -> String {
+        format!("{}{}", self.root, self.hops[..n.min(self.hops.len())].concat())
+    }
+}
+
+/// Each hop of a chain as written (`-[:A]->`, `<-[:B]-`), split where a hop
+/// opens outside every bracket and literal.
+fn written_hops(hops_raw: &str) -> Vec<String> {
+    let chars: Vec<char> = hops_raw.chars().collect();
+    let mut starts = Vec::new();
+    let mut depth = 0i32;
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            quote @ ('"' | '\'' | '`') => {
+                i += 1;
+                while i < chars.len() && chars[i] != quote {
+                    i += if chars[i] == '\\' { 2 } else { 1 };
+                }
+            }
+            '[' | '(' | '{' => depth += 1,
+            ']' | ')' | '}' => depth -= 1,
+            '-' if depth == 0 && chars.get(i + 1) == Some(&'[') => starts.push(if i > 0 && chars[i - 1] == '<' { i - 1 } else { i }),
+            _ => {}
+        }
+        i += 1;
+    }
+    let ends = starts.iter().skip(1).copied().chain(std::iter::once(chars.len()));
+    starts.iter().zip(ends).map(|(start, end)| chars[*start..end].iter().collect::<String>().trim().to_string()).collect()
 }
 
 impl Listen {
@@ -462,8 +511,11 @@ fn listen_at(file: &crate::sources::Parsed, at: movement_parser::ast::Loc) -> St
 }
 
 /// How the checker plans each `listen to <traversal>` of `file`, in source
-/// order, and a line for each it plans none for, naming where it is written.
-fn plans_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Program, catalog: Result<&CatalogSnapshot, &String>) -> (Vec<ListenPlan>, Vec<String>) {
+/// order, each with its traversal as written, and a line for each it plans
+/// none for, naming where it is written.
+type Planned = (ListenPlan, Option<WrittenPath>);
+
+fn plans_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Program, catalog: Result<&CatalogSnapshot, &String>) -> (Vec<Planned>, Vec<String>) {
     let traversals = || {
         program.statements.iter().filter_map(|s| match s {
             Statement::Listen(listen) if listen.path.is_some() => Some(listen),
@@ -482,7 +534,13 @@ fn plans_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Progr
     // the eager export (`ExprSlot::eager`), which the checker never reads.
     let options = movement_checker::CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     let answer = movement_checker::answer::check_answer(program, catalog, options);
-    (answer.listens, answer.unwatched.iter().map(|at| unwatched(*at, "does not check")).collect())
+    // The checker plans the listens it does not leave unwatched, in the
+    // order they are written.
+    let planned: Vec<&movement_parser::ast::ListenDeclaration> = traversals().filter(|listen| !answer.unwatched.contains(&listen.span)).collect();
+    let aligned = planned.len() == answer.listens.len();
+    let written = |i: usize| planned.get(i).filter(|_| aligned).and_then(|listen| listen.path.as_ref()).and_then(WrittenPath::of);
+    let plans = answer.listens.into_iter().enumerate().map(|(i, plan)| (plan, written(i))).collect();
+    (plans, answer.unwatched.iter().map(|at| unwatched(*at, "does not check")).collect())
 }
 
 /// Each instance's adapter, credential and other arguments, by the
@@ -528,7 +586,7 @@ fn import_originals(program: &movement_parser::ast::Program) -> HashMap<String, 
 /// The listens of one file into `read`: each in the settings form, then each
 /// of `plans`. One whose instance is neither a connection the file makes nor
 /// a host unit is named in `read.unwatched` instead.
-fn listens_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Program, scopes: &HashMap<String, FileScope<'_>>, plans: Vec<ListenPlan>, read: &mut Listens) {
+fn listens_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Program, scopes: &HashMap<String, FileScope<'_>>, plans: Vec<Planned>, read: &mut Listens) {
     let constructions = constructions_of(program);
     let scope = &scopes[&file.name];
     let connection = |instance: &str, at: movement_parser::ast::Loc, fires: &str| {
@@ -571,9 +629,10 @@ fn listens_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Pro
             args,
             address: Ok(BTreeMap::new()),
             plan: None,
+            written: None,
         });
     }
-    for plan in plans {
+    for (plan, path) in plans {
         let written = program.statements.iter().find_map(|s| match s {
             Statement::Listen(listen) if listen.path.is_some() && listen.instance == plan.connection && listen.movement == plan.movement => Some(listen.span.start),
             _ => None,
@@ -595,6 +654,7 @@ fn listens_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Pro
             args,
             address: Ok(BTreeMap::new()),
             plan: Some(plan),
+            written: path,
         });
     }
 }
@@ -980,6 +1040,7 @@ mod tests {
                 args: Vec::new(),
                 address: Ok(BTreeMap::new()),
                 plan: None,
+                written: None,
             };
             assert_eq!(listen.hears(case["delivery"].as_str()), case["hears"].as_bool().unwrap(), "{}", case["case"]);
         }
@@ -1002,7 +1063,7 @@ mod tests {
 
     #[test]
     fn a_delivery_through_a_subscription_reaches_only_the_listens_of_its_scope() {
-        let mut listen = Listen { file: "f".into(), adapter: "airtable".into(), config: Obj::new(), movement_name: "m".into(), credential: Some("acme".into()), args: vec![], payload: None, address: Ok(BTreeMap::new()), plan: None };
+        let mut listen = Listen { file: "f".into(), adapter: "airtable".into(), config: Obj::new(), movement_name: "m".into(), credential: Some("acme".into()), args: vec![], payload: None, address: Ok(BTreeMap::new()), plan: None, written: None };
         listen.config.insert("base".into(), Js::str("appH"));
         listen.config.insert("table".into(), Js::str("tblC"));
         let keys = ["base".to_string(), "table".to_string()];

@@ -13,6 +13,7 @@
 //!   work          lf.work
 //!   sources       lf.park_library_source
 //!   pull cursors  lf.inbound_checkpoint
+//!   listens' heads lf.listen_state
 //!   receipts      lf.event_receipt
 //!   deliveries    lf.delivery
 //!   waits         lf.arrival + wait_row + wait_seen
@@ -48,6 +49,7 @@ use tokio_postgres::{Client, Row};
 use crate::backend::RunHostStore;
 use crate::json::Js;
 use crate::obj;
+use crate::resolve::ListenState;
 use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, DeliveryQuery, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind,
     HeldPark, OwedRace, Release, Rerun, Result, RunRow, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, SegmentCommit, StoreError, WORK_KINDS, settle_race_work_key,
@@ -147,6 +149,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (9, include_str!("pg_store_schema_9.sql")),
     (10, include_str!("pg_store_schema_10.sql")),
     (11, include_str!("pg_store_schema_11.sql")),
+    (12, include_str!("pg_store_schema_12.sql")),
 ];
 
 /// The advisory lock the migrations run under: "lf-store" as a number.
@@ -1377,6 +1380,24 @@ impl RunHostStore for PgStore {
             "insert into lf.inbound_checkpoint (team_id, subscription_id, checkpoint) values ($1::text::uuid, $2::text, $3::text::jsonb)
              on conflict (team_id, subscription_id) do update set checkpoint = excluded.checkpoint, updated_at = now()",
             &[&self.tenant, &subscription_id, &text],
+        )?;
+        Ok(())
+    }
+
+    fn listen_state(&self, pipeline: &str) -> Result<Option<ListenState>> {
+        let row = self.query_opt("select state::text from lf.listen_state where team_id = $1::text::uuid and pipeline = $2::text", &[&self.tenant, &pipeline])?;
+        row.map(|r| {
+            let text: String = r.get(0);
+            ListenState::from_js(&parse_text(&text)?).ok_or_else(|| StoreError::Invalid(format!("a stored listen's state is not one: {text}")))
+        })
+        .transpose()
+    }
+    fn save_listen_state(&self, pipeline: &str, state: &ListenState) -> Result<()> {
+        let text = state.to_js().to_json();
+        self.execute(
+            "insert into lf.listen_state (team_id, pipeline, state) values ($1::text::uuid, $2::text, $3::text::jsonb)
+             on conflict (team_id, pipeline) do update set state = excluded.state, updated_at = now()",
+            &[&self.tenant, &pipeline, &text],
         )?;
         Ok(())
     }

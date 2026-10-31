@@ -106,6 +106,9 @@ pub struct SegmentInput<'a> {
     pub entry: Entry,
     /// The run's cost cap in microdollars (lf.yaml's `maxRunCostUsd`); None: no cap.
     pub cost_cap_microdollars: Option<f64>,
+    /// What the movement returns is read as the records a walk landed on,
+    /// each by its position (`read_positions`), not recorded as plain data.
+    pub returns_positions: bool,
 }
 
 /// What a segment that ran came to.
@@ -179,6 +182,9 @@ pub struct SegmentHost<'s> {
     settling_race: Option<String>,
     /// The writes that move the run on, kept in one write at the end.
     held: RefCell<Held>,
+    /// Its trace is kept with its run's; a read with no run row
+    /// (`read_positions`) keeps none.
+    keeps_trace: bool,
 }
 
 /// What a segment holds back until its end (`commit`): its parks, its
@@ -241,6 +247,7 @@ impl<'s> SegmentHost<'s> {
             resumed_state: input.resumed_state,
             settling_race: input.settling_race,
             held: RefCell::new(Held::default()),
+            keeps_trace: input.keeps_trace,
         }
     }
 
@@ -300,6 +307,8 @@ pub struct SegmentHostParts<'s> {
     pub resumed_state: Option<Js>,
     /// The race the segment settles, when it settles one.
     pub settling_race: Option<String>,
+    /// Its trace is kept under `run_id`: false for a read that has no run.
+    pub keeps_trace: bool,
 }
 
 /// A number from the environment, positive and finite, else `default`.
@@ -369,6 +378,9 @@ fn input_text(host: &SegmentHost<'_>, input: &SegmentInput<'_>) -> Result<String
     segment.insert("now".into(), json!(input.fired_at));
     segment.insert("serves".into(), json!(SERVES));
     segment.insert("recordsReturned".into(), json!(true));
+    if input.returns_positions {
+        segment.insert("returnsPositions".into(), json!(true));
+    }
     segment.insert("extractionFileChars".into(), json!(knob("EXTRACTION_FILE_CHARS", 50_000.0)));
     segment.insert("maxCallDepth".into(), json!(max_call_depth()?));
     segment.insert("limits".into(), segment_limits()?);
@@ -397,6 +409,35 @@ pub async fn run_segment(host: &SegmentHost<'_>, input: SegmentInput<'_>) -> Res
     match done {
         Ok(done) => read_result(host, &done),
         Err(Fault(message)) => Err(Ended::Failed(message)),
+    }
+}
+
+/// Run a segment that only reads, with no run row and nothing committed:
+/// what its movement returned, as the records a walk landed on, each its
+/// position (`{adapterType, recordType, identity: {recordId, data}}`). A
+/// movement that writes, parks or fails says why instead.
+pub async fn read_positions(host: &SegmentHost<'_>, input: SegmentInput<'_>) -> Result<Vec<Js>, String> {
+    let input = SegmentInput { returns_positions: true, ..input };
+    let text = input_text(host, &input)?;
+    let wall_clock = segment_wall_clock()?;
+    let done = drive(host, &text, wall_clock).await.map_err(|Fault(message)| message)?;
+    if let Some(error) = done.get("thrown").or_else(|| done.get("failed").and_then(|f| f.get("error"))) {
+        return Err(match failure_of(host, error) {
+            Ended::Failed(message) => message,
+            Ended::LeaseLost => "its lease was lost".to_string(),
+        });
+    }
+    let result = done.get("result").ok_or_else(|| format!("the Rust engine finished with {done}, which this host does not decode"))?;
+    if result.get("parked") == Some(&json!(true)) || host.holds_progress() {
+        return Err("it parked, and a read never waits".into());
+    }
+    if let Some(why) = result.get("returnedUnwritable").and_then(Json::as_str) {
+        return Err(why.to_string());
+    }
+    let returned = result.get("returned").ok_or("it returned nothing")?;
+    match host.wire.borrow_mut().read(returned)?.js() {
+        Js::Arr(positions) => Ok(positions),
+        other => Err(format!("it returned {}, not the positions it landed on", other.to_json())),
     }
 }
 
@@ -1141,6 +1182,9 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
                 if !TRACE_KINDS.contains(&kind) {
                     return Err(Fault(format!("the Rust engine appended a trace entry this host does not know: {kind}")));
                 }
+            }
+            if !host.keeps_trace {
+                return Ok(Ok(None));
             }
             store.append_trace(run_id, &host.segment_id, &entries).map(|()| None).map_err(store_failure)
         }

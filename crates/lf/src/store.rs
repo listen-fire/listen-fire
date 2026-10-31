@@ -83,6 +83,10 @@ create table if not exists inbound_checkpoint (
   subscription_id text primary key,
   checkpoint text not null
 );
+create table if not exists listen_state (
+  pipeline text primary key,
+  state text not null
+);
 create table if not exists module_processes (
   id integer primary key check (id = 1),
   processes text not null,
@@ -150,7 +154,7 @@ pub const CORE_PARK_REASONS: &[&str] = &["timer", "await", "limit"];
 /// A polled listen's row in the work queue: its next poll.
 pub const POLL_WORK_KIND: &str = "poll_listen";
 /// The work kinds listen-fire queues.
-pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", "poll_listen", crate::edge_polls::EDGE_POLL_WORK_KIND, "refresh_subscription", SETTLE_RACE_WORK_KIND];
+pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", "poll_listen", crate::edge_polls::EDGE_POLL_WORK_KIND, crate::resolve::RESOLVE_WORK_KIND, "refresh_subscription", SETTLE_RACE_WORK_KIND];
 /// A race a resumed arm won and left to its run to settle (crate::run_host):
 /// the row is what the run owes until the commit of the step that settles
 /// the race deletes it.

@@ -381,6 +381,15 @@ impl RunHostStore for ProcessStore {
     fn save_inbound_checkpoint(&self, subscription_id: &str, checkpoint: &Js) -> Result<()> {
         self.unit("inbound.saveCheckpoint", obj! { "subscriptionId" => s(subscription_id), "checkpoint" => checkpoint.clone() })
     }
+    fn listen_state(&self, pipeline: &str) -> Result<Option<crate::resolve::ListenState>> {
+        match self.call("listens.state", obj! { "pipeline" => s(pipeline) })? {
+            Js::Null => Ok(None),
+            answer => crate::resolve::ListenState::from_js(&answer).map(Some).ok_or_else(|| self.malformed("listens.state", &answer)),
+        }
+    }
+    fn save_listen_state(&self, pipeline: &str, state: &crate::resolve::ListenState) -> Result<()> {
+        self.unit("listens.saveState", obj! { "pipeline" => s(pipeline), "state" => state.to_js() })
+    }
     fn keep_delivery(
         &self,
         subscription_id: &str,

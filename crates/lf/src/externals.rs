@@ -903,6 +903,8 @@ mod tests {
             cost_cap_microdollars: None,
             delivery_retain_days: crate::project::DEFAULT_DELIVERY_RETAIN_DAYS,
             poll_every: Default::default(),
+            resolve_every: Default::default(),
+            listen_scope_limit: crate::project::DEFAULT_LISTEN_SCOPE_LIMIT,
         }
     }
 
