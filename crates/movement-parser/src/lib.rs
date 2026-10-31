@@ -7,6 +7,7 @@ pub mod ast;
 pub mod catalog;
 pub mod expr;
 pub mod lexer;
+pub mod listen_plan;
 pub mod lowering;
 pub mod scan;
 pub mod stmt;

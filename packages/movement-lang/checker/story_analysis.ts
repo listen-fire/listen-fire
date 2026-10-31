@@ -112,6 +112,8 @@ export type StoryNode = { span: Span; scope: number } & (
       events?: string[];
       narrowing: Record<string, string>;
       eventTypes: Array<{ key: string; display?: string }>;
+      /** `listen to <traversal>`: the traversal as written. */
+      path?: string;
     }
   | { kind: 'link'; from: string; edge: string; to: { kind: 'handle'; name: string } | { kind: 'match'; span: Span } }
   | { kind: 'unlink'; from: string; edge: string; to: { kind: 'handle'; name: string } }
@@ -143,7 +145,7 @@ export interface StoryWalk {
 }
 
 export type StoryAwaitedSource =
-  | { kind: 'traversal'; root?: string; edge?: string; awaitable?: boolean }
+  | { kind: 'traversal'; root?: string; edge?: string; listenable?: boolean }
   | { kind: 'sleep'; duration: string }
   | { kind: 'until'; every?: string };
 

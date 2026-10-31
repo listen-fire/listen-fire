@@ -1,0 +1,78 @@
+// The plan the Rust checker answers for a `listen to <traversal>` is what
+// `listenPlanSchema` reads: the wire, end to end through the wasm.
+import { callCheckAnswer } from 'movement-lang/wasm/loader';
+
+import { listenPlanSchema } from '../listen_plan';
+
+const CATALOG = {
+  adapters: {
+    chat: {
+      canFire: false,
+      constructionArgs: [],
+      schemas: {
+        '': {
+          positions: {
+            Channel: {
+              properties: { Name: 'text' },
+              edges: { Messages: { target: 'Message', listenable: true, delivery: 'connection', carries: ['Channels'], capability: { filter: 'native', supportsLimit: false } } },
+            },
+            Message: {
+              properties: { Topic: 'text' },
+              edges: { Interactions: { target: 'Interaction', readable: false, listenable: true, delivery: 'connection', carries: ['Channels', 'Messages'] } },
+              propertyCapabilities: { Topic: { filterOperators: ['eq'] } },
+            },
+            Interaction: { properties: { Id: 'text', Value: 'text' }, edges: {} },
+          },
+          collections: { Channels: { target: 'Channel' } },
+          writableRoots: {},
+        },
+      },
+    },
+  },
+  credentials: {},
+  plugins: {},
+};
+
+const SOURCE = [
+  'import { chat as chat_module } from adapters; chat = connect chat_module',
+  'function tally(i: <chat-[:Interaction]->>) { return i.Id }',
+  'listen as "Lunch" to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll"]->-[i:Interactions WHERE i.Value != "skip"]-> fire tally',
+  '',
+].join('\n');
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
+}
+
+function answerOf(source: string): Record<string, unknown> {
+  const reply = callCheckAnswer(source, JSON.stringify(CATALOG), {});
+  if (!reply.ok || !isRecord(reply.json)) throw new Error(`no check answer: ${JSON.stringify(reply.json)}`);
+  return reply.json;
+}
+
+describe('a listen plan on the check answer', () => {
+  it('reads as the schema says, hop by hop', () => {
+    const answer = answerOf(SOURCE);
+    expect(answer.diagnostics).toEqual([]);
+    const [plan, ...others] = listenPlanSchema.array().parse(answer.listens);
+    expect(others).toEqual([]);
+    expect(plan).toMatchObject({ movement: 'tally', alias: 'Lunch', connection: 'chat', adapter: 'chat', carries: ['Channels', 'Messages'] });
+    expect(plan?.hops.map((h) => [h.edge, h.from, h.to, h.judged])).toEqual([
+      ['Channels', '', 'Channel', 'none'],
+      ['Messages', 'Channel', 'Message', 'arrival'],
+      ['Interactions', 'Message', 'Interaction', 'arrival'],
+    ]);
+    expect(plan?.hops[1]?.taken).toMatchObject({ type: 'compare', op: 'eq' });
+    expect(plan?.hops[2]?.checked).toMatchObject({ type: 'compare', op: 'neq' });
+  });
+
+  it('is absent from an answer with no listen on a traversal', () => {
+    expect(answerOf('import { chat as chat_module } from adapters; chat = connect chat_module\n')).not.toHaveProperty('listens');
+  });
+
+  it('refuses a plan with a member it does not know', () => {
+    const plan = { movement: 'f', connection: 'c', adapter: 'a', hops: [{ edge: 'E', from: '', to: 'T', judged: 'arrival', extra: 1 }] };
+    expect(listenPlanSchema.safeParse(plan).success).toBe(false);
+    expect(listenPlanSchema.safeParse({ ...plan, hops: [{ edge: 'E', from: '', to: 'T', judged: 'sometimes' }] }).success).toBe(false);
+  });
+});

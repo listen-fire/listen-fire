@@ -317,3 +317,34 @@ fn an_instance_whose_adapter_declares_connect_actions_offers_them_after_a_dot() 
     let (text, pos) = typed(PROGRAM, "  greeting = Text.upper(run.`Text`)\n", "  y = run.");
     assert!(service().complete(&text, pos).iter().all(|i| i.connect_action.is_none()));
 }
+
+/// A listen's hops: Channels are listed only; a Channel's Messages are
+/// listed and announced, its Drafts written only; a Message's Interactions
+/// are announced only.
+const LISTEN_CATALOG: &str = r#"{"adapters":{"chat":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
+  "Channel":{"properties":{"Name":"text"},"edges":{
+    "Drafts":{"target":"Message","readable":false,"writable":true},
+    "Messages":{"target":"Message","listenable":true}}},
+  "Message":{"properties":{"Text":"text"},"edges":{"Interactions":{"target":"Interaction","readable":false,"listenable":true}}},
+  "Interaction":{"properties":{"Id":"text"},"edges":{}}},
+  "collections":{"Channels":{"target":"Channel"}},"writableRoots":{}}}}},"credentials":{},"plugins":{}}"#;
+
+#[test]
+fn a_listen_is_offered_the_edges_it_can_take_those_it_can_end_on_first() {
+    let listen = Service::new(CatalogSnapshot::load(LISTEN_CATALOG).unwrap());
+    let head = "import { chat as chat_module } from adapters\nchat = connect chat_module\n";
+    let at_end = |text: &str| Pos { line: text.matches('\n').count() as u32, character: text.rsplit('\n').next().unwrap().encode_utf16().count() as u32 };
+    let text = format!("{head}listen to chat-[:");
+    assert_eq!(labels(&listen.complete(&text, at_end(&text))), ["Channels"]);
+    let text = format!("{head}listen to chat-[:Channels]->-[:");
+    let items = listen.complete(&text, at_end(&text));
+    assert_eq!(labels(&items), ["Messages"], "a written-only edge is no hop of a listen");
+    assert!(items[0].detail.as_deref().unwrap().contains("a listen can end here"), "{:?}", items[0].detail);
+    let text = format!("{head}listen as \"Presses\" to chat-[:Channels]->-[:Messages]->-[i:");
+    let items = listen.complete(&text, at_end(&text));
+    assert_eq!(labels(&items), ["Interactions"]);
+    assert!(items[0].detail.as_deref().unwrap().contains("only announced: a listen ends here"), "{:?}", items[0].detail);
+    // Outside a listen, a walk is offered every edge, as before.
+    let (text, pos) = typed(&format!("{head}function f(c: <chat-[:Channel]->>) {{\n  return 1\n}}\n"), ">>) {\n", "  x = c-[:");
+    assert_eq!(labels(&listen.complete(&text, pos)), ["Drafts", "Messages"]);
+}

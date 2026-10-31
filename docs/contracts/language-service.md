@@ -20,6 +20,7 @@ Not a versioned contract: an editor speaks LSP, and LSP is the contract. This pa
 | what is in scope | each binding, parameter, function, node, type, import and host unit (`cron`, `manual`) visible here, innermost first, with its type | the check's scopes, cut off at the cursor (a hoisted declaration is seen from anywhere in its list) |
 | what follows `x.` or `` x.` `` | the record's fields with their types | the symbol's record type, through the catalog schema |
 | what follows `-[`, `-[a:` | the edges the walk can take next, and where each lands | the record's (or instance's) edges in the catalog |
+| what follows `-[`, `-[a:` in a `listen to` | the edges a listen can take next: those its module announces arrivals on first (a listen can end there), then those it lists (a listen can pass through); each says which | the record's (or instance's) edges in the catalog, their `listenable` and `readable` |
 | what follows `a.` for a hop alias `a` | the fields where that hop lands | the walk's root type, stepped edge by edge with the checker's `edge_landing` |
 | what follows `<x-[:` in a type | the record types of instance `x` | the instance's schema |
 | a built-in | its current spelling and signature | the spelling table (crates/movement-parser/src/surface/table.rs) and the standard library's signatures |

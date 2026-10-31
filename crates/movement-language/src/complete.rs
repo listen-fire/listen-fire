@@ -63,8 +63,9 @@ enum Context {
     Field { receiver: String, backtick: bool },
     /// `Text.`: a namespace's functions.
     Member { namespace: String },
-    /// `-[`, `-[a:`: an edge off the record `receiver` holds.
-    Edge { receiver: String, backtick: bool },
+    /// `-[`, `-[a:`: an edge off the record `receiver` holds; `listen` when
+    /// the hop is a listen's.
+    Edge { receiver: String, backtick: bool, listen: bool },
     /// `<x-[:`: a record type of instance `x`.
     TypeOf { instance: String },
     /// `connect x using `: a credential for module `x`.
@@ -93,7 +94,7 @@ fn context_of(text: &Text<'_>, pos: Pos) -> (Context, Option<Range>) {
             return (Context::Field { receiver: format!("{above}{receiver}"), backtick: true }, replace);
         }
         if let Some(receiver) = hop_receiver(pre) {
-            return (Context::Edge { receiver: format!("{above}{receiver}"), backtick: true }, replace);
+            return (Context::Edge { receiver: format!("{above}{receiver}"), backtick: true, listen: in_listen(line) }, replace);
         }
         return (brace_context(&everything_before, &text.after(pos)).unwrap_or(Context::Name), replace);
     }
@@ -110,7 +111,7 @@ fn context_of(text: &Text<'_>, pos: Pos) -> (Context, Option<Range>) {
         if let Some(instance) = receiver.trim_end().strip_suffix(trailing_word(receiver.trim_end())).filter(|r| r.ends_with('<')).map(|_| trailing_word(receiver.trim_end()).to_string()) {
             return (Context::TypeOf { instance }, None);
         }
-        return (Context::Edge { receiver: format!("{above}{receiver}"), backtick: false }, None);
+        return (Context::Edge { receiver: format!("{above}{receiver}"), backtick: false, listen: in_listen(line) }, None);
     }
     let words: Vec<&str> = pre.split_whitespace().collect();
     if let [.., connect, module, using] = words.as_slice()
@@ -120,6 +121,11 @@ fn context_of(text: &Text<'_>, pos: Pos) -> (Context, Option<Range>) {
         return (Context::Credential { module: module.to_string() }, None);
     }
     (brace_context(&everything_before, &text.after(pos)).unwrap_or(Context::Name), None)
+}
+
+/// The line is a listen's: `listen to x-[…` or `listen as "…" to x-[…`.
+fn in_listen(line: &str) -> bool {
+    line.trim_start().strip_prefix("listen").is_some_and(|rest| rest.starts_with(char::is_whitespace) && rest.contains(" to "))
 }
 
 /// `pre` ends a hop's opening: `-[` or `-[a:` — the receiver is the text before it.
@@ -200,9 +206,12 @@ fn items_for(service: &Service, source: &str, pos: Pos, context: Context) -> Vec
             items.extend(connect_items(service, analysis, &receiver, at));
             items
         }
-        Context::Edge { receiver, backtick } => {
+        Context::Edge { receiver, backtick, listen } => {
             let Some(analyzed) = service.analyze(source, Some(pos.line)) else { return Vec::new() };
             let Some(position) = walk::receiver(&analyzed.analysis, &receiver, at) else { return Vec::new() };
+            if listen {
+                return listen_edge_items(&position, backtick);
+            }
             walk::edges(&position)
                 .into_iter()
                 .map(|(name, landing)| {
@@ -321,6 +330,27 @@ fn items_for(service: &Service, source: &str, pos: Pos, context: Context) -> Vec
             items
         }
     }
+}
+
+/// A listen's next hop: an edge it can pass through (one its module lists)
+/// or end on (one its module announces arrivals on), those it can end on
+/// first, each saying which it is.
+fn listen_edge_items(position: &movement_checker::types::Position, backtick: bool) -> Vec<Item> {
+    let mut items: Vec<(bool, Item)> = walk::listen_edges(position)
+        .into_iter()
+        .filter(|e| e.readable || e.listenable)
+        .map(|e| {
+            let detail = match (e.readable, e.listenable) {
+                (true, true) => format!("→ {} · a listen can end here, or walk on", e.landing),
+                (false, true) => format!("→ {} · only announced: a listen ends here", e.landing),
+                _ => format!("→ {}", e.landing),
+            };
+            let insert = if backtick { None } else { Some(written_name(&e.name)).filter(|w| *w != e.name) };
+            (e.listenable, Item { insert, ..Item::new(e.name, ItemKind::Edge, Some(detail)) })
+        })
+        .collect();
+    items.sort_by_key(|(listenable, _)| !listenable);
+    items.into_iter().map(|(_, item)| item).collect()
 }
 
 /// The connect actions of the instance `receiver` names, when it is one

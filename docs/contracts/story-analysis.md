@@ -92,7 +92,7 @@ Every node carries `span` and `scope`, and one of 14 kinds:
 type StoryNode = { span: Span; scope: number } & (
   | { kind: 'instance'; name: string; adapterType?: string }
   | { kind: 'listen'; instance: string; adapterType?: string; fires: string; firesMovement: boolean; events?: string[];
-      narrowing: Record<string, string>; eventTypes: Array<{ key: string; display?: string }> }
+      narrowing: Record<string, string>; eventTypes: Array<{ key: string; display?: string }>; path?: string }
   | { kind: 'link'; from: string; edge: string; to: { kind: 'handle'; name: string } | { kind: 'match'; span: Span } }
   | { kind: 'unlink'; from: string; edge: string; to: { kind: 'handle'; name: string } }
   | { kind: 'await'; binding?: string; source: StoryAwaitedSource }
@@ -108,7 +108,7 @@ type StoryNode = { span: Span; scope: number } & (
 );
 
 type StoryAwaitedSource =
-  | { kind: 'traversal'; root?: string; edge?: string; awaitable?: boolean }
+  | { kind: 'traversal'; root?: string; edge?: string; listenable?: boolean }
   | { kind: 'sleep'; duration: string }
   | { kind: 'until'; every?: string };
 
@@ -174,3 +174,4 @@ The check takes no pin; the pin rule is the caller's. A caller handed a pin this
 
 - **Version 1.** The first version: the scopes, symbols, writes, 14 node kinds, bodies and shapes, with `effects` on a movement's symbol.
 - **Version 1, additive: `fieldType` on an extraction field (0.12.4).** Optional and nullable, so a consumer that does not read it is unaffected; the version stays 1.
+- **Version 1, in 0.13.0: an awaited traversal says `listenable`, and a listen its `path`.** An awaited traversal's `awaitable` is renamed `listenable`, the catalog's word for an edge that announces arrivals. A `listen to <traversal>` node carries `path`, the traversal as written; a settings listen has none.

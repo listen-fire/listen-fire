@@ -103,6 +103,15 @@ pub const LISTEN_DUPLICATE: &str = "MOV_LISTEN_DUPLICATE";
 pub const LISTEN_ALIAS_DUPLICATE: &str = "MOV_LISTEN_ALIAS_DUPLICATE";
 pub const LISTEN_BAD_CONFIG: &str = "MOV_LISTEN_BAD_CONFIG";
 pub const LISTEN_MISSING: &str = "MOV_LISTEN_MISSING";
+/// A listen whose last edge its module announces nothing on.
+pub const LISTEN_EDGE_NOT_LISTENABLE: &str = "MOV_LISTEN_EDGE_NOT_LISTENABLE";
+/// A listen passing through an edge its module cannot list.
+pub const LISTEN_HOP_NOT_ITERABLE: &str = "MOV_LISTEN_HOP_NOT_ITERABLE";
+/// A filter on an earlier hop that is neither carried by an arrival nor
+/// cheap to re-check by listing.
+pub const LISTEN_UNWATCHABLE: &str = "MOV_LISTEN_UNWATCHABLE";
+/// A listen's WHERE reading something other than its hops and literals.
+pub const LISTEN_IMPURE_WHERE: &str = "MOV_LISTEN_IMPURE_WHERE";
 pub const UNIQUE_NATIVE_REDUNDANT: &str = "MOV_UNIQUE_NATIVE_REDUNDANT";
 pub const UNIQUE_FUZZY_UNSUPPORTED: &str = "MOV_UNIQUE_FUZZY_UNSUPPORTED";
 pub const MATCH_NO_IDENTITY: &str = "MOV_MATCH_NO_IDENTITY";

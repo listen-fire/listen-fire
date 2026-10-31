@@ -159,7 +159,7 @@ impl Checker<'_> {
     }
 }
 
-/// `checkAnswer`: `{diagnostics, stamps, link?}` for `program`, as the
+/// `checkAnswer`: `{diagnostics, stamps, link?, listens?}` for `program`, as the
 /// TypeScript's check answers the engine. A stamp whose node is not where
 /// the walk recorded it is left out, and named in `unplaced` for a test to
 /// find (never sent).
@@ -188,7 +188,8 @@ pub fn check_answer(program: &Program, catalog: &CatalogSnapshot, options: Check
         }
     }
     let link = link.map(|link| link_json(link, catalog));
-    Answer { diagnostics, stamps, link, unplaced }
+    let listens = checker.listens.take_plans();
+    Answer { diagnostics, stamps, link, listens, unplaced }
 }
 
 /// What `check_answer` answers.
@@ -196,6 +197,8 @@ pub struct Answer {
     pub diagnostics: Vec<Diagnostic>,
     pub stamps: Vec<Json>,
     pub link: Option<Json>,
+    /// How the host watches each `listen to <traversal>`, in source order.
+    pub listens: Vec<movement_parser::listen_plan::ListenPlan>,
     pub unplaced: Vec<String>,
 }
 
@@ -205,6 +208,9 @@ impl Answer {
         let mut answer = json!({ "diagnostics": self.diagnostics, "stamps": self.stamps });
         if let Some(link) = &self.link {
             answer["link"] = link.clone();
+        }
+        if !self.listens.is_empty() {
+            answer["listens"] = serde_json::to_value(&self.listens).expect("a plan is always JSON");
         }
         answer
     }

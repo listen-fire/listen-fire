@@ -1489,6 +1489,9 @@ export interface ListenDeclaration {
    *  named-construction fix. */
   construct?: ConstructionCall;
   config: NamedArg[];
+  /** `listen to x-[:E]-> fire f`: the traversal listened on, rooted at
+   *  `instance`. Absent for the settings form (`listen to x { … }`). */
+  path?: PathHead;
   movement: string;
   span: Span;
 }

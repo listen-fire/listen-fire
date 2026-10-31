@@ -42,6 +42,7 @@ const POLL_INTERVAL_KEY: &str = "pollIntervalSeconds";
 use crate::slots::{expression_of_slot, is_bare_ident};
 
 pub(crate) mod event_types;
+mod traversal;
 mod watched_field;
 
 /// `SUPPRESS_SELF_KEY`: the listen key every listener accepts.
@@ -61,6 +62,8 @@ pub struct ListenState {
     /// Each movement symbol's parameters and the scope it was declared in
     /// (`ScopeSymbol.movement`).
     movements: HashMap<SymbolId, MovementInfo>,
+    /// How the host watches each of the file's clean `listen to <traversal>`.
+    plans: Vec<movement_parser::listen_plan::ListenPlan>,
 }
 
 struct Dispatchable {
@@ -120,6 +123,7 @@ pub struct FileListens {
     identities: HashSet<String>,
     aliases: HashSet<String>,
     dispatchables: Vec<Dispatchable>,
+    plans: Vec<movement_parser::listen_plan::ListenPlan>,
 }
 
 impl ListenState {
@@ -130,6 +134,7 @@ impl ListenState {
             identities: std::mem::take(&mut self.identities),
             aliases: std::mem::take(&mut self.aliases),
             dispatchables: std::mem::take(&mut self.dispatchables),
+            plans: std::mem::take(&mut self.plans),
         }
     }
 
@@ -138,6 +143,12 @@ impl ListenState {
         self.identities = outer.identities;
         self.aliases = outer.aliases;
         self.dispatchables = outer.dispatchables;
+        self.plans = outer.plans;
+    }
+
+    /// The plans of the file's listens on a traversal, in source order.
+    pub fn take_plans(&mut self) -> Vec<movement_parser::listen_plan::ListenPlan> {
+        std::mem::take(&mut self.plans)
     }
 
     /// A movement's parameters and the scope it was declared in.
@@ -243,6 +254,9 @@ impl Checker<'_> {
                 statement.span,
             );
             return;
+        }
+        if let Some(path) = &statement.path {
+            return self.check_listen_traversal(statement, path, scope);
         }
         let instance_id = self.resolve_reference(&statement.instance, statement.span, scope);
         let instance_kind = instance_id.map(|id| self.scopes.symbol(id).kind);
@@ -360,6 +374,7 @@ impl Checker<'_> {
                 events: subscribed.clone(),
                 narrowing: read.pins.clone(),
                 event_types: event_types.iter().flatten().map(|t| (t.key.clone(), t.display.clone())).collect(),
+                path: None,
             };
             self.record_node(statement.span, scope, what);
         }

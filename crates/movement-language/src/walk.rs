@@ -113,6 +113,42 @@ pub fn edges(position: &Position) -> Vec<(String, String)> {
         .collect()
 }
 
+/// One edge a listen may take off a record, or off a connection (its root
+/// collections): whether its module lists it and announces arrivals on it.
+pub struct ListenEdge {
+    pub name: String,
+    pub landing: String,
+    pub readable: bool,
+    pub listenable: bool,
+}
+
+/// The edges off `position` with what a listen needs to know of each.
+pub fn listen_edges(position: &Position) -> Vec<ListenEdge> {
+    let position = strip(position);
+    if let Position::Meta { instance } = position {
+        return instance
+            .schema
+            .collections
+            .iter()
+            .map(|(name, c)| ListenEdge {
+                name: name.clone(),
+                landing: land(position, name).map_or_else(|| c.target.clone(), |p| describe_position(&p)),
+                readable: c.readable != Some(false),
+                listenable: c.listenable == Some(true),
+            })
+            .collect();
+    }
+    edge_schemas(position)
+        .into_iter()
+        .map(|e| ListenEdge {
+            landing: e.landing.as_ref().map_or_else(|| e.schema.target.clone(), describe_position),
+            readable: e.schema.readable != Some(false),
+            listenable: e.schema.listenable == Some(true),
+            name: e.name,
+        })
+        .collect()
+}
+
 /// One edge off a record: its name, what the schema says of it, and where it lands.
 pub struct Edge {
     pub name: String,

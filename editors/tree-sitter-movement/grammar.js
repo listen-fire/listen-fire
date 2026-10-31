@@ -138,9 +138,12 @@ module.exports = grammar({
         'listen',
         optional(seq('as', field('label', $.string))),
         'to',
-        field('channel', $._name),
-        optional(field('arguments', $.arguments)),
-        optional(field('config', $.record)),
+        choice(
+          // `listen to chat-[:Channels]->-[:Messages]-> fire f`: the
+          // traversal a listen is on.
+          field('path', $.walk_expression),
+          seq(field('channel', $._name), optional(field('arguments', $.arguments)), optional(field('config', $.record))),
+        ),
         'fire',
         field('function', $._name),
       ),

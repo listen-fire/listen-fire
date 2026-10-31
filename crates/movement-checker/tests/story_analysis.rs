@@ -226,7 +226,7 @@ fn awaits_and_combinators_record_their_sources_and_arm_scopes() {
     let response = on_line(&a, "await", 22);
     assert_eq!(response["binding"], "a");
     assert_eq!(response["scope"], arms[0]["scope"]);
-    assert_eq!(response["source"], json!({ "kind": "traversal", "root": "q", "edge": "Response", "awaitable": true }));
+    assert_eq!(response["source"], json!({ "kind": "traversal", "root": "q", "edge": "Response", "listenable": true }));
     assert_eq!(on_line(&a, "await", 25)["source"], json!({ "kind": "sleep", "duration": "2d" }));
     let until = analysis("until");
     assert_eq!(on_line(&until, "await", 14)["source"], json!({ "kind": "until", "every": "1h" }));

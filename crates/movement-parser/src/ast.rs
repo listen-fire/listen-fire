@@ -920,6 +920,10 @@ pub struct ListenDeclaration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub construct: Option<ConstructionCall>,
     pub config: Vec<NamedArg>,
+    /// `listen to x-[:E]-> fire f`: the traversal the listen is on, its root
+    /// `instance`. Absent for the settings form (`listen to x { … }`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathHead>,
     pub movement: String,
     pub span: Span,
 }

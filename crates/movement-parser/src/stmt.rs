@@ -4284,6 +4284,18 @@ impl Parser {
         }
         self.expect_word("to", "after 'listen'")?;
         self.skip_inline_ws();
+        if let Some(path) = self.try_parse_listen_path()? {
+            let instance = match &path.root {
+                Some(PathRoot::Name { name }) => name.clone(),
+                _ => String::new(),
+            };
+            self.skip_inline_ws();
+            self.expect_word("fire", &format!("after 'listen to {}{}'", instance, path.hops_raw))?;
+            self.skip_inline_ws();
+            let movement = self.read_name("a movement name after 'fire'")?;
+            self.expect_statement_end()?;
+            return Ok(ListenDeclaration { instance, alias, construct: None, config: Vec::new(), path: Some(path), movement, span: self.span_from(start) });
+        }
         let instance_start = self.pos;
         let instance = self.read_name("an instance name after 'listen to'")?;
         let mut construct = None;
@@ -4394,7 +4406,21 @@ impl Parser {
         self.skip_inline_ws();
         let movement = self.read_name("a movement name after 'fire'")?;
         self.expect_statement_end()?;
-        Ok(ListenDeclaration { instance, alias, construct, config, movement, span: self.span_from(start) })
+        Ok(ListenDeclaration { instance, alias, construct, config, path: None, movement, span: self.span_from(start) })
+    }
+
+    /// `listen to <traversal>`: a head with hops off a name (or off nothing,
+    /// for the checker to refuse). A name with no hop is the settings form,
+    /// with or without its `{ … }`.
+    fn try_parse_listen_path(&mut self) -> SResult<Option<PathHead>> {
+        let start = self.pos;
+        match self.try_parse_path_head()? {
+            Some(head) if !head.hops_raw.is_empty() && !matches!(head.root, Some(PathRoot::Expression { .. })) => Ok(Some(head)),
+            _ => {
+                self.pos = start;
+                Ok(None)
+            }
+        }
     }
 
     // ── extract(content, Shape, config) and extractOne(…) ──
@@ -4942,6 +4968,37 @@ mod tests {
         // A lone `\r` does not start a line.
         let ast = program("x = 1 \r y = 2");
         assert_eq!(ast.pointer("/statements/0/value/expr/raw"), Some(&json!("1 \r y = 2")));
+    }
+
+    #[test]
+    fn a_listen_to_a_traversal_carries_its_path() {
+        let ast = program("listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]-> fire f\n");
+        let listen = &ast["statements"][0];
+        assert_eq!(listen["kind"], json!("listen"));
+        assert_eq!(listen["instance"], json!("chat"));
+        assert_eq!(listen["config"], json!([]));
+        assert_eq!(listen["movement"], json!("f"));
+        assert_eq!(listen["path"]["root"], json!({ "kind": "name", "name": "chat" }));
+        assert_eq!(listen["path"]["hopsRaw"], json!("-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->"));
+        let aliased = program("listen as \"Lunch\" to chat-[:Channels]-> fire f\n");
+        assert_eq!((&aliased["statements"][0]["alias"], &aliased["statements"][0]["path"]["hopsRaw"]), (&json!("Lunch"), &json!("-[:Channels]->")));
+    }
+
+    #[test]
+    fn the_settings_form_has_no_path() {
+        let ast = program("listen to crm { events: [\"company.created\"] } fire f\n");
+        let listen = &ast["statements"][0];
+        assert!(listen.get("path").is_none(), "{listen}");
+        assert_eq!(listen["config"].as_array().map(Vec::len), Some(1));
+        assert_eq!(listen["config"][0]["name"], json!("events"));
+        // A name with neither hop nor settings is the settings form, its record empty.
+        let bare = &program("listen to manual fire f\n")["statements"][0];
+        assert!(bare.get("path").is_none() && bare["config"] == json!([]) && bare["instance"] == json!("manual"), "{bare}");
+    }
+
+    #[test]
+    fn a_listen_path_needs_its_fire() {
+        assert_eq!(error("listen to chat-[:Channels]-> f")["message"], json!("Expected 'fire' after 'listen to chat-[:Channels]->', found 'f'"));
     }
 
     #[test]
