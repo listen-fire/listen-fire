@@ -44,7 +44,7 @@ function ask(run: <manual-[:Invocation]->>) {
 - \`Fields\` names a node the program declares. A submission has its fields, typed as the node says: \`r[0].Approve\` is a boolean.
 - A field may be text, a number, a boolean, a date, a date and time, or one of a set of words. \`<… | null>\` makes it optional.
 - The link answers a browser with the form, and \`Accept: application/json\` with \`{ title, fields }\`, each field's \`type\` and \`required\`. A POST of JSON or a form records the answer.
-- A form takes one answer. A later one is answered 410. A value of the wrong kind is answered 400, naming the field, and records nothing.
+- A form takes one answer. A different later one is answered 410; the same one sent again is the same answer. A value of the wrong kind is answered 400, naming the field, and records nothing.
 - A form never expires. A wait on a person sits in a \`race\` with a \`sleep\`.`;
 
 export const FORMS_MANIFEST: AdapterManifest = {
@@ -54,5 +54,5 @@ export const FORMS_MANIFEST: AdapterManifest = {
     'A form at a link, answered once. A write makes it; the node the write names in Fields says what it asks, and its answer lands on the form’s Submissions, typed by that node.',
   handbookSection: { title: 'Forms', content: HANDBOOK },
   supportedTriggers: [],
-  methods: ['listEntryPoints', 'describe', 'getFieldValue', 'getRelated', 'createRecord', 'checkInbound', 'awaitKeys'],
+  methods: ['listEntryPoints', 'describe', 'getFieldValue', 'createRecord', 'checkInbound', 'awaitKeys'],
 };

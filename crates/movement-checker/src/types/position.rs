@@ -341,7 +341,11 @@ pub struct UnionPosition {
 #[derive(Debug, Clone)]
 pub struct HandlePosition {
     pub instance: InstanceRef,
+    /// The type written, when the program can read it back.
     pub position: Option<String>,
+    /// The type written, whether or not the program can read it back: a
+    /// type it can only write is still a record type, for the waits off it.
+    pub written_type: String,
     pub result_shape: IndexMap<String, Ty>,
     pub edges: Option<JsMap<EdgeSchema>>,
     pub generic_landings: Option<IndexMap<String, String>>,

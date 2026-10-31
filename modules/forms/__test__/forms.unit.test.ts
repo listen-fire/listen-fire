@@ -90,6 +90,10 @@ describe('a form', () => {
     expect(unreadableAnswerShapeFrom(submissions!, form, descriptors)).toBeUndefined();
   });
 
+  it('needs a host that keeps the arrivals an inbound request reports (protocol 2.5)', () => {
+    expect(formsModule.protocolMinor).toBe(5);
+  });
+
   it('is waited on under its id', async () => {
     const forms = new FormsAdapter({ kv: fileKv(mkdtempSync(join(tmpdir(), 'lf-forms-')), 'local'), inboundUrl: DOOR, newId: () => 'f1' });
     expect(await forms.arrivals.awaitKeys({ edge: 'Submissions', heads: [{ recordId: 'f1' }, { recordId: 'f2' }] })).toEqual([{ key: 'f1' }, { key: 'f2' }]);
@@ -129,7 +133,7 @@ describe('its link', () => {
     expect(await adapter.checkInbound!(request(link, { method: 'POST', body: '{"Approve":true}', headers: json }))).toMatchObject({ outcome: 'accepted' });
   });
 
-  it('records one answer as an arrival on Submissions, and answers a second 410', async () => {
+  it('records one answer as an arrival on Submissions, and answers a different one 410', async () => {
     const { adapter, link, id } = await newForm();
     const recorded = await adapter.checkInbound!(request(link, { method: 'POST', body: JSON.stringify({ Approve: true, Note: 'ok' }), headers: json }));
     expect(recorded).toEqual({
@@ -139,9 +143,34 @@ describe('its link', () => {
       deliveryId: id,
       reply: { status: 200, json: { outcome: 'recorded' } },
     });
-    const again = await adapter.checkInbound!(request(link, { method: 'POST', body: JSON.stringify({ Approve: false }), headers: json }));
-    expect(again).toEqual({ outcome: 'reply', status: 410, json: { outcome: 'answered' } });
+    const answered = { outcome: 'reply', status: 410, json: { outcome: 'answered' } };
+    expect(await adapter.checkInbound!(request(link, { method: 'POST', body: JSON.stringify({ Approve: false }), headers: json }))).toEqual(answered);
+    expect(await adapter.checkInbound!(request(link, { method: 'POST', body: JSON.stringify({ Approve: 'yes' }), headers: json }))).toEqual(answered);
     expect(await adapter.checkInbound!(request(link, { headers: { accept: 'application/json' } }))).toMatchObject({ status: 410 });
+  });
+
+  // The host refuses to keep an arrival its store cannot keep (503), and the
+  // sender sends the post again: the form was answered by it, so the same
+  // answer is reported again, under the same identity and delivery id. Had
+  // the host kept the first, its log drops the second as a repeat.
+  it('reports the same answer again when the same post is sent again', async () => {
+    const { adapter, link } = await newForm();
+    const post = () => adapter.checkInbound!(request(link, { method: 'POST', body: JSON.stringify({ Note: 'ok', Approve: true }), headers: json }));
+    const first = await post();
+    expect(first).toMatchObject({ outcome: 'accepted' });
+    expect(await post()).toEqual(first);
+    // The same values from a browser's form are the same answer.
+    const fromBrowser = await adapter.checkInbound!(
+      request(link, { method: 'POST', body: 'Approve=true&Note=ok', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' } }),
+    );
+    expect(fromBrowser).toEqual(first);
+  });
+
+  it('records one of two different answers posted at once', async () => {
+    const { adapter, link } = await newForm();
+    const post = (approve: boolean) => adapter.checkInbound!(request(link, { method: 'POST', body: JSON.stringify({ Approve: approve }), headers: json }));
+    const outcomes = await Promise.all([post(true), post(false)]);
+    expect(outcomes.map((o) => (o.outcome === 'reply' ? o.status : o.outcome)).sort()).toEqual([410, 'accepted']);
   });
 
   it('takes a browser’s form, its values read from their text, and thanks it with a page', async () => {

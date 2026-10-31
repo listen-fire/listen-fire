@@ -13,9 +13,11 @@
 //! name (`same = msg`) holds a record that already entered, so nothing
 //! enters there.
 //!
-//! A record's type is its system's adapter with the position's name: one
-//! type in every file that connects that adapter, so an `await` in a library
-//! stamps the reads of the file that imports it.
+//! A record's type is its system's adapter with the type's name: one type in
+//! every file that connects that adapter, so an `await` in a library stamps
+//! the reads of the file that imports it. A type the program can only write
+//! (a writable root, no position) is a record type too: its write is where it
+//! enters, and its edges are its writable root's.
 //!
 //! Separately, a plain `await` on an edge that can also be listed takes the
 //! first match already there (`listsFirst`); `await new` never does.
@@ -157,7 +159,13 @@ fn awaited_edge<'w>(head: &PathHead, walk: Option<&'w crate::families::walks::He
 fn record_types_declaring(from: &Position, edge: &str) -> Vec<RecordType> {
     let mut found = Vec::new();
     each_record_type(from, &mut |instance, position| {
-        let declares = instance.schema.positions.get(position).and_then(|p| p.edges.get(edge)).is_some_and(|e| e.listenable == Some(true));
+        let schema = &instance.schema;
+        // A type the program can only write declares its edges on its writable root.
+        let declared = match schema.positions.get(position) {
+            Some(p) => p.edges.get(edge),
+            None => schema.writable_roots.get(position).and_then(|root| root.edges.as_ref()).and_then(|edges| edges.get(edge)),
+        };
+        let declares = declared.is_some_and(|e| e.listenable == Some(true));
         if let (true, Some(adapter)) = (declares, &instance.adapter) {
             found.push((adapter.clone(), position.to_string()));
         }
@@ -181,11 +189,7 @@ fn record_types(position: &Position) -> BTreeSet<RecordType> {
 fn each_record_type(position: &Position, found: &mut dyn FnMut(&Instance, &str)) {
     match position {
         Position::Position(record) => found(&record.instance, &record.position),
-        Position::Handle(handle) => {
-            if let Some(position) = &handle.position {
-                found(&handle.instance, position);
-            }
-        }
+        Position::Handle(handle) => found(&handle.instance, &handle.written_type),
         Position::Union(union) => union.variants.iter().for_each(|variant| found(&union.instance, variant)),
         Position::MaybeEmpty(of) => each_record_type(of, found),
         Position::OneOf(members) => members.iter().for_each(|member| each_record_type(member, found)),

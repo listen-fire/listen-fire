@@ -1042,7 +1042,7 @@ mod tests {
         /// its `wakeKeys` failing while this is set.
         signed_wakes_failing: Option<std::cell::Cell<bool>>,
         /// Why its store would drop a delivery's arrivals, when it would.
-        unkept: Option<String>,
+        unkept: std::cell::RefCell<Option<String>>,
     }
 
     impl ModuleChecked {
@@ -1055,7 +1055,7 @@ mod tests {
                 arrived: Default::default(),
                 kept: Default::default(),
                 signed_wakes_failing: None,
-                unkept: None,
+                unkept: Default::default(),
             }
         }
 
@@ -1072,7 +1072,7 @@ mod tests {
             provider_key == "MAIL"
         }
         async fn arrivals_unkept(&self) -> Result<Option<String>, String> {
-            Ok(self.unkept.clone())
+            Ok(self.unkept.borrow().clone())
         }
         fn intercepts(&self, _provider_key: &str) -> Vec<Intercept> {
             Vec::new()
@@ -1185,7 +1185,7 @@ mod tests {
     /// arrivals is kept as ever.
     #[tokio::test]
     async fn a_store_that_cannot_keep_arrivals_refuses_their_delivery_whole() {
-        let unkept = |answer: &str| ModuleChecked { unkept: Some("the store module acme_store does not answer waits.log".into()), ..ModuleChecked::answering(answer) };
+        let unkept = |answer: &str| ModuleChecked { unkept: Some("the store module acme_store does not answer waits.log".to_string()).into(), ..ModuleChecked::answering(answer) };
         let store = unkept(r#"{"outcome":"accepted","events":[{"payload":{"n":1}}],"deliveryId":"m-1","arrivals":[{"edge":"Replies","key":"C1:1","identity":"r1","landing":{"fields":{}}}]}"#);
         let answer = answer_delivery(&store, delivery("POST", b"a=b", &[])).await;
         assert_eq!(
@@ -1231,19 +1231,23 @@ mod tests {
 
     /// A module's acceptance may name what the door answers once the
     /// delivery is kept (a page saying an answer was recorded); a repeat of
-    /// a delivery it names is the door's own duplicate.
+    /// a delivery it names is the door's own duplicate. One the store could
+    /// not keep is refused, and kept when it is sent again.
     #[tokio::test]
     async fn an_acceptance_s_reply_is_answered_once_the_delivery_is_kept() {
         let store = ModuleChecked::answering(
             r#"{"outcome":"accepted","events":[],"deliveryId":"s-1","arrivals":[{"edge":"Responses","key":"s-1","identity":"s-1","landing":{"fields":{}}}],"reply":{"status":200,"json":{"outcome":"recorded"}}}"#,
         );
+        store.unkept.replace(Some("no waits".into()));
+        let refused = answer_delivery(&store, delivery("POST", b"a=b", &[])).await;
+        assert_eq!(refused.status, 503, "not kept: the door's refusal, not the reply");
+        assert_eq!((store.arrived.borrow().len(), store.kept.borrow().len()), (0, 0), "nothing kept, the delivery's id among it");
+        store.unkept.replace(None);
         let answer = answer_delivery(&store, delivery("POST", b"a=b", &[])).await;
         assert_eq!((answer.status, answer.body.to_json(), answer.notify_after), (200, r#"{"outcome":"recorded"}"#.to_string(), true));
         assert_eq!(store.arrived.borrow().clone(), ["s-1"]);
         let again = answer_delivery(&store, delivery("POST", b"a=b", &[])).await;
         assert_eq!(again.body.to_json(), r#"{"ok":true,"duplicate":true,"eventsProcessed":0}"#);
-        let unkept = ModuleChecked { unkept: Some("no waits".into()), ..ModuleChecked::answering(&store.answer.to_json()) };
-        assert_eq!(answer_delivery(&unkept, delivery("POST", b"a=b", &[])).await.status, 503, "not kept: the door's refusal, not the reply");
     }
 
     #[test]

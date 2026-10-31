@@ -5,9 +5,9 @@
 //! them, beside the landing's own. The engine sends the node's fields to the
 //! module as the field's value (the `nodeSchema` stamp). Nothing here knows a
 //! module or a field by name: the edge names the field. Every rule is checked
-//! on two catalog shapes: a form written at a root collection, its answers
-//! named by `Id`; and a survey written off a board, its responses named by
-//! `Respondent`.
+//! on two catalog shapes: a form written at a root collection, a type the
+//! program can only write, its answers named by `Id`; and a survey written
+//! off a board, its responses named by `Respondent`.
 
 use movement_checker::answer::check_answer;
 use movement_checker::{CheckOptions, Severity, check_source};
@@ -17,12 +17,11 @@ use serde_json::{Value as Json, json};
 
 const FORMS: &str = r#"{"adapters":{
   "forms":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
-    "Form":{"properties":{"Url":"text","Title":"text"},"edges":{
-      "Submissions":{"target":"Submission","readable":false,"listenable":true,"identity":"Id","answerShapeFrom":"Fields"}}},
     "Submission":{"properties":{"Id":"text"},"edges":{}}},
     "collections":{"Forms":{"target":"Form"}},
     "writableRoots":{"Form":{"fields":{"Title":"text","Fields":"json"},"requiredFields":["Title","Fields"],
-      "resultShape":{"externalId":"text"}}}}}}
+      "resultShape":{"externalId":"text","Url":"text"},"edges":{
+      "Submissions":{"target":"Submission","readable":false,"listenable":true,"identity":"Id","answerShapeFrom":"Fields"}}}}}}}
 },"credentials":{},"plugins":{}}"#;
 
 const SURVEYS: &str = r#"{"adapters":{
@@ -61,16 +60,23 @@ const SURVEY: Shape = Shape {
 const REFUND: &str = "node Refund {\n  Approve: <boolean>\n  Note: <text | null>\n}";
 
 fn source(shape: &Shape, value: &str, body: &str) -> String {
-    format!("{}{}{body}}}\n", shape.header.replace("NODES", REFUND), shape.write.replace("VALUE", value))
+    source_with(shape, REFUND, value, body)
+}
+
+fn source_with(shape: &Shape, nodes: &str, value: &str, body: &str) -> String {
+    format!("{}{}{body}}}\n", shape.header.replace("NODES", nodes), shape.write.replace("VALUE", value))
 }
 
 /// Every diagnostic but information, as `CODE l:c-l:c message`. The node
 /// declaration takes lines 3-6, so the write is line 8 and the body's first
 /// line is 10.
 fn check(shape: &Shape, value: &str, body: &str) -> Vec<String> {
-    let source = source(shape, value, body);
+    check_source_of(shape, &source(shape, value, body))
+}
+
+fn check_source_of(shape: &Shape, source: &str) -> Vec<String> {
     let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
-    check_source(&source, &CatalogSnapshot::load(shape.catalog).unwrap(), options)
+    check_source(source, &CatalogSnapshot::load(shape.catalog).unwrap(), options)
         .unwrap_or_else(|e| panic!("{source}: {e:?}"))
         .into_iter()
         .filter(|d| d.severity != Some(Severity::Info))
@@ -115,6 +121,29 @@ fn the_field_must_name_a_node() {
         let at = |len: usize| format!("8:{start}-8:{}", start + len);
         assert_eq!(check(shape, "{ Approve: true }", ""), [format!("{} {} {}", "MOV_ANSWER_SHAPE", at(17), &message["MOV_ANSWER_SHAPE ".len()..])], "{f}");
         assert_eq!(check(shape, "name", ""), [format!("{} {} {}", "MOV_ANSWER_SHAPE", at(4), &message["MOV_ANSWER_SHAPE ".len()..])], "{f}");
+    }
+}
+
+#[test]
+fn the_node_cannot_redeclare_a_field_the_landing_has() {
+    // What lands has the landing's fields and the node's: one name for two
+    // fields would be neither (TypeScript makes a clash of types `never`).
+    for (shape, own) in [(&FORM, "Id"), (&SURVEY, "Respondent")] {
+        for declared in ["<number>", "<text>"] {
+            let nodes = format!("node Refund {{\n  Approve: <boolean>\n  {own}: {declared}\n}}");
+            let said = check_source_of(shape, &source_with(shape, &nodes, "Refund", ""));
+            let start = shape.write.find("VALUE").unwrap() + 1;
+            let edge = if own == "Id" { "Submissions" } else { "Responses" };
+            let landing = if own == "Id" { "Submission" } else { "Response" };
+            assert_eq!(
+                said,
+                [format!(
+                    "MOV_ANSWER_SHAPE 8:{start}-8:{} 'Refund' declares '{own}', a field every {landing} landing on '{edge}' has already: rename it in 'Refund'",
+                    start + 6
+                )],
+                "{own} {declared}"
+            );
+        }
     }
 }
 

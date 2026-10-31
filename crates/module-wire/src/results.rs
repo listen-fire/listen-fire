@@ -18,6 +18,8 @@ enum S {
     /// `z.string().min(1)`.
     NonEmptyStr,
     Num,
+    /// `z.number().int().min(min).max(max)`.
+    IntIn(i64, i64),
     Bool,
     Null,
     Literal(&'static str),
@@ -278,7 +280,7 @@ fn result_schema(method: &str) -> Option<S> {
                         opt("arrivals", arr(arrival())),
                         opt("checkpoint", S::Unknown),
                         opt("deliveryId", S::Str),
-                        opt("reply", obj(vec![req("status", S::Num), opt("text", S::Str), opt("html", S::Str), opt("json", S::Unknown)])),
+                        opt("reply", obj(vec![req("status", S::IntIn(200, 299)), opt("text", S::Str), opt("html", S::Str), opt("json", S::Unknown)])),
                     ]),
                 ),
                 ("refused", obj(vec![req("outcome", S::Literal("refused")), opt("status", S::Num)])),
@@ -336,6 +338,22 @@ fn parse(schema: &S, value: Option<&Js>) -> Result<Option<Js>, Issue> {
         },
         S::Num => match value {
             Some(v @ Js::Num(_)) => Ok(Some(v.clone())),
+            _ => Err(expected("number", value)),
+        },
+        S::IntIn(min, max) => match value {
+            Some(v @ Js::Num(n)) => {
+                let n = n.as_f64().unwrap_or(f64::NAN);
+                let issue = |message: String| Err(Issue { message, path: Vec::new() });
+                if n.fract() != 0.0 {
+                    issue("Invalid input: expected int, received number".into())
+                } else if n < *min as f64 {
+                    issue(format!("Too small: expected number to be >={min}"))
+                } else if n > *max as f64 {
+                    issue(format!("Too big: expected number to be <={max}"))
+                } else {
+                    Ok(Some(v.clone()))
+                }
+            }
             _ => Err(expected("number", value)),
         },
         S::Bool => match value {
@@ -476,6 +494,23 @@ mod tests {
         let checked = check("checkInbound", "mail", &js(r#"{"outcome":"accepted","events":[],"deliveryId":"d-1","extra":1}"#)).unwrap();
         assert_eq!(checked.to_json(), r#"{"outcome":"accepted","events":[],"deliveryId":"d-1"}"#);
         assert!(check("checkInbound", "mail", &js(r#"{"outcome":"accepted","events":[],"deliveryId":7}"#)).is_err());
+    }
+
+    #[test]
+    fn an_acceptance_s_reply_is_a_success() {
+        let accepted = |status: &str| check("checkInbound", "mail", &js(&format!(r#"{{"outcome":"accepted","events":[],"reply":{{"status":{status},"json":{{}}}}}}"#)));
+        assert_eq!(accepted("201").unwrap().get("reply").map(Js::to_json), Some(r#"{"status":201,"json":{}}"#.into()));
+        for (status, issue) in [
+            ("199", "Too small: expected number to be >=200"),
+            ("300", "Too big: expected number to be <=299"),
+            ("503", "Too big: expected number to be <=299"),
+            ("200.5", "Invalid input: expected int, received number"),
+            (r#""200""#, "Invalid input: expected number, received string"),
+        ] {
+            assert!(accepted(status).unwrap_err().ends_with(&format!("{issue} at reply.status")), "{status}");
+        }
+        // A module's own reply, which runs nothing, may say anything.
+        assert!(check("checkInbound", "mail", &js(r#"{"outcome":"reply","status":503}"#)).is_ok());
     }
 
     #[test]

@@ -105,6 +105,11 @@ test('a valid post resumes the run with typed values; a second post is answered'
     assert.deepEqual(JSON.parse(recorded.body), { outcome: 'recorded' });
     await serving.waitFor(/resumed .* refund:ask completed/);
     assert.deepEqual(companies(dir).slice(-1), ['Approved true ok']);
+    // The same answer sent again (its sender never heard back) is the same
+    // delivery: the door acknowledges it as a repeat and nothing runs.
+    const repeated = await post(link, JSON.stringify({ Approve: true, Note: 'ok' }));
+    assert.equal(repeated.status, 200, repeated.body);
+    assert.equal(JSON.parse(repeated.body).duplicate, true, repeated.body);
     const again = await post(link, 'Approve=false', 'application/x-www-form-urlencoded');
     assert.equal(again.status, 410, again.body);
     assert.deepEqual(JSON.parse(again.body), { outcome: 'answered' });
@@ -136,20 +141,35 @@ function writeMovement(dir: string, source: string): void {
 }
 
 // Ruling: a form is an ordinary adapter. The engine, the checker, the parser
-// and the host never name it: no `@lf/forms`, and no `Forms`, `Form`,
-// `Submissions` or `Submission` as a type or edge name in their code.
+// and the host never name it: no `@lf/forms`, no `forms` or `form` as a
+// quoted name, and no `Forms`, `Form`, `Submissions` or `Submission` as a type
+// or edge name in their code.
 test('nothing in the engine or checker names forms', () => {
-  const named = /@lf\/forms|["'`:](Forms|Form|Submissions|Submission)["'`\]]|-\[:?\w*:(Forms|Submissions)/;
+  const named = /@lf\/forms|["'`](forms|form)["'`]|["'`:](Forms|Form|Submissions|Submission)["'`\]]|-\[:?\w*:(Forms|Submissions)/;
+  // Where the word means something else: a Unicode normalization form, and
+  // the form a built-in's call is written in. Each is still there.
+  const unrelated: Array<{ file: string; line: string }> = [
+    { file: 'movement-engine/src/env_services.rs', line: '"form": form' },
+    { file: 'movement-engine/src/env_services.rs', line: 'text("form")' },
+    { file: 'movement-engine/src/extract/call.rs', line: 'shape.set("form", Js::str("call"))' },
+    { file: 'movement-checker/src/families/calls.rs', line: "/// A built-in's `form`: how a call of it is read." },
+  ];
+  const excused = new Set<(typeof unrelated)[number]>();
+  const read: string[] = [];
   const found: string[] = [];
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir)) {
       const path = join(dir, entry);
       if (statSync(path).isDirectory()) walk(path);
       else if (path.endsWith('.rs')) {
+        read.push(path);
         readFileSync(path, 'utf8')
           .split('\n')
           .forEach((line, i) => {
-            if (named.test(line)) found.push(`${path}:${i + 1}: ${line.trim()}`);
+            if (!named.test(line)) return;
+            const excuse = unrelated.find((u) => path.endsWith(u.file) && line.includes(u.line));
+            if (excuse) excused.add(excuse);
+            else found.push(`${path}:${i + 1}: ${line.trim()}`);
           });
       }
     }
@@ -159,7 +179,9 @@ test('nothing in the engine or checker names forms', () => {
     const src = join(crates, crate, 'src');
     if (statSync(join(crates, crate)).isDirectory() && readdirSync(join(crates, crate)).includes('src')) walk(src);
   }
-  // The guard reads something: the crates' code is there to read.
-  assert.ok(readFileSync(join(crates, 'movement-checker/src/families/writes/answer_shape.rs'), 'utf8').includes('answer_shape_from'));
+  // The walk read the crates' code, the answer's shape among it.
+  assert.ok(read.includes(join(crates, 'movement-checker/src/families/writes/answer_shape.rs')), `read ${read.length} files`);
+  assert.ok(read.some((path) => path.startsWith(join(crates, 'lf/src'))) && read.some((path) => path.startsWith(join(crates, 'movement-engine/src'))));
   assert.deepEqual(found, []);
+  assert.deepEqual(unrelated.filter((u) => !excused.has(u)), [], 'every excuse is still needed');
 });

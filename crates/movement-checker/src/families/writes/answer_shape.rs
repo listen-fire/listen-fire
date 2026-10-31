@@ -41,6 +41,22 @@ impl Checker<'_> {
                 );
                 continue;
             };
+            // What lands has the landing's fields and the node's: one name
+            // for two fields would be neither.
+            let landing = &edge_schema.target;
+            let own = handle_position.instance.schema.positions.get(landing).map(|p| &p.properties);
+            let clashing: Vec<&String> = node_fields.keys().filter(|name| own.is_some_and(|own| own.contains_key(*name))).collect();
+            let node = field.value.raw.trim();
+            for name in &clashing {
+                self.report(
+                    codes::ANSWER_SHAPE,
+                    format!("'{node}' declares '{name}', a field every {landing} landing on '{edge_name}' has already: rename it in '{node}'"),
+                    field.value.span,
+                );
+            }
+            if !clashing.is_empty() {
+                continue;
+            }
             let entries = answers.entry(edge_name.clone()).or_default();
             entries.extend(node_fields.iter().map(|(name, ty)| (vec![name.clone()], Ty::from_schema(ty))));
             self.stamp(field.value.span, crate::answer::StampKind::NodeSchema(json!({ "fields": node_fields })));

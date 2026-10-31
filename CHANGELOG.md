@@ -118,17 +118,22 @@ The next release opens a new compatibility key. It reads pins of `0.13.x` only: 
 - A module can declare that what lands on an edge is typed by a node the write names, with `answerShapeFrom: "<field>"` on the edge's reference. The field is a writable `json` field of the record the edge hangs off.
   - After `node Refund { Approve: <boolean>, Note: <text | null> }`, `form = write forms-[:Forms]-> { Title: "…", Fields: Refund }` and `s = await form-[:Submissions]->`, `s.Approve` is a boolean and `s.Note` is text or null, beside the landing's own fields. Comparing `s.Note` with a number is refused (`MOV_COMPARE_TYPE_MISMATCH`), and reading a field the node does not declare is refused (`MOV_UNKNOWN_PROPERTY`).
   - The field must name a node declared in the file, or a second name for one: `Fields: { Approve: true }` is refused (`MOV_ANSWER_SHAPE`).
+  - The node cannot declare a field the landing has already: `node Refund { Id: <number> }` against a landing with an `Id` is refused at the write (`MOV_ANSWER_SHAPE`), naming the field.
   - The module receives the node's fields as that field's value, `{ "fields": { "Approve": "boolean", "Note": { "kind": "maybeAbsent", "of": "text" } } }`: the check stamps them on the field's value (`nodeSchema`, a new stamp in `check.program`'s answer, which an embedder passes on as it passes the others).
   - A module's `answerShapeFrom` is refused when its schema is read if it names no field of the type the edge is on, or one that is not a single writable `json` field, or if the edge lands on more than one type.
   - The catalog snapshot carries it on `EdgeSchema` as `answerShapeFrom?`, an optional member.
   - Nothing in the language knows a form: the edge names the field.
 - `@lf/forms`: a form at a link, answered once. `forms = connect forms_module` (no credential), then `form = write forms-[:Forms]-> { Title: "Approve the refund?", Fields: Refund }` makes a form whose fields are the `Refund` node's; `form.Url` is its link, and `await form-[:Submissions]->` waits for its answer, typed by `Refund`.
   - The link is the module's door under `listen-fire serve`, at lf.yaml's `publicUrl` (or `listen-fire serve`'s own address), with an unguessable id. A browser gets the form; `Accept: application/json` gets `{ title, fields }`, each field's `type` and `required`.
-  - A POST of JSON or a form records the answer once (200 `{ "outcome": "recorded" }`). A value of the wrong kind is answered 400 `{ "outcome": "mismatch", "message": "'Approve' must be true or false" }` and records nothing; a second answer is answered 410 `{ "outcome": "answered" }`; a link to no form, 404.
+  - A POST of JSON or a form records the answer once (200 `{ "outcome": "recorded" }`). A value of the wrong kind is answered 400 `{ "outcome": "mismatch", "message": "'Approve' must be true or false" }` and records nothing; a different second answer is answered 410 `{ "outcome": "answered" }`; a link to no form, 404.
+  - The same answer posted again is the same answer: reported again under the same identity. Why: the host refuses to keep an answer its store cannot keep (503), and the sender's retry must not then be told the form was answered.
+  - A form is written, never listed (`Form` is not readable): its link is all that guards it, so only the program that wrote it holds it.
   - A form never expires: a wait on a person sits in a `race` with a `sleep`.
   - Why: an answer that comes back through no system the program uses needs somewhere to be given, and a module serves it as any module serves its door.
 - A module that checks its own inbound requests may answer a page (`reply(status, { html })`, sent as `text/html`), and may name what the door answers once it keeps an accepted request (`accepted(events, { arrivals, reply })`), in place of the door's own acknowledgement.
 - `listen-fire` sends each call to a module that takes inbound requests the URL they reach it at (`inbound: { url }` on the request, module-kit's `ctx.config.inboundUrl`): the install's door under lf.yaml's `publicUrl`, else under `listen-fire serve`'s own address. A module hands out links to itself with it.
+- A write of a type a program can only write (a writable root the module does not let it read) opens the waits on edges awaited off it, as a write of a readable type does. Before, the check placed no wait there and the run failed at the `await`.
+- A module's acceptance's `reply` is refused by `listen-fire` unless its status is a success (200–299), as the adapter protocol and the TypeScript client say.
 - A module `listen-fire` starts keeps its `ctx.kv` in its own folder (`.lf/externals/<name>/`) unless its install names another `MODULE_STATE_DIR`. Before, `ctx.kv` refused unless the install named one.
 
 ### Added

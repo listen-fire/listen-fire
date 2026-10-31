@@ -6,7 +6,9 @@
 //! `await` on an edge that can also be listed reads the listing first
 //! (`listsFirst`). Every rule is checked on two catalog shapes: a chat
 //! (Messages, awaited for their Interactions or Replies) and a CRM (Deals,
-//! awaited for their Notes).
+//! awaited for their Notes); a type a program can only write is checked on
+//! two more (Questions, awaited for their Answers; Invoices, for their
+//! Payments).
 
 use movement_checker::{CheckOptions, Severity};
 use movement_checker::answer::check_answer;
@@ -33,7 +35,18 @@ const CATALOG: &str = r#"{"adapters":{
     "Note":{"properties":{"Body":"text"},"edges":{}},
     "Change":{"properties":{"Field":"text"},"edges":{}}},
     "collections":{"Deals":{"target":"Deal"},"Companies":{"target":"Company"}},"supportsInPlaceUpdate":true,
-    "writableRoots":{"Deal":{"fields":{"Name":"text"},"resultShape":{"externalId":"text"}}}}}}
+    "writableRoots":{"Deal":{"fields":{"Name":"text"},"resultShape":{"externalId":"text"}}}}}},
+  "ask":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
+    "Answer":{"properties":{"Id":"text"},"edges":{}}},
+    "collections":{"Questions":{"target":"Question"}},
+    "writableRoots":{"Question":{"fields":{"Text":"text"},"resultShape":{"externalId":"text"},"edges":{
+      "Answers":{"target":"Answer","readable":false,"listenable":true,"identity":"Id"}}}}}}},
+  "pay":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
+    "Payment":{"properties":{"Reference":"text","Amount":"number"},"edges":{}}},
+    "collections":{"Invoices":{"target":"Invoice"}},
+    "writableRoots":{"Invoice":{"fields":{"Amount":"number"},"resultShape":{"externalId":"text"},"edges":{
+      "Payments":{"target":"Payment","readable":false,"listenable":true,"identity":"Reference"},
+      "Refunds":{"target":"Payment","readable":false,"listenable":true,"identity":"Reference"}}}}}}}
 },"credentials":{},"plugins":{},"files":FILES}"#;
 
 const HEAD: &str = "import { chat as chat_module, crm as crm_module } from adapters\nchat = connect chat_module\ncrm = connect crm_module\n";
@@ -194,4 +207,18 @@ fn a_where_reading_a_record_the_run_holds_still_stamps_its_wait() {
     let (tree, _, found) = stamps(crm, None);
     assert_eq!(opens(&tree, &found, None), pairs(&[("assign d", &["Notes"])]));
     assert_eq!(lists_first(&tree, &found), ["await n"]);
+}
+
+#[test]
+fn a_write_of_a_type_the_program_can_only_write_opens_its_waits() {
+    // Nothing reads a Question back: it is no position, only a writable
+    // root. Its write is still where the record enters the run.
+    let ask = "import { ask as ask_module } from adapters\nask = connect ask_module\nfunction f(ch: <chat-[:Channel]->>) {\n  q = write ask-[:Questions]-> { Text: \"Ship it?\" }\n  a = await q-[:Answers]->\n}\n";
+    let (tree, _, found) = stamps(ask, None);
+    assert_eq!(opens(&tree, &found, None), pairs(&[("write q", &["Answers"])]));
+
+    let pay = "import { pay as pay_module } from adapters\npay = connect pay_module\nfunction g(c: <crm-[:Company]->>) {\n  unawaited = write pay-[:Invoices]-> { Amount: 10 }\n  inv = write pay-[:Invoices]-> { Amount: 100 }\n  p = await new inv-[:Payments]->\n}\n";
+    let (tree, _, found) = stamps(pay, None);
+    // Any Invoice may be awaited for its Payments, so both writes open them.
+    assert_eq!(opens(&tree, &found, None), pairs(&[("write unawaited", &["Payments"]), ("write inv", &["Payments"])]));
 }

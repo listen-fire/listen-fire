@@ -768,6 +768,7 @@ impl Checker<'_> {
         let handle = Position::Handle(HandlePosition {
             instance: instance.clone(),
             position: instance.schema.positions.contains_key(&written).then(|| written.clone()),
+            written_type: written.clone(),
             result_shape: result_shape.into_iter().collect(),
             edges: root.as_ref().and_then(|r| r.edges.clone()),
             generic_landings: None,
@@ -1189,6 +1190,7 @@ impl Checker<'_> {
                 Some(Position::Handle(HandlePosition {
                     instance: p.instance.clone(),
                     position: Some(p.position.clone()),
+                    written_type: p.position.clone(),
                     result_shape: shape,
                     edges: root.and_then(|r| r.edges.clone()),
                     generic_landings: None,
