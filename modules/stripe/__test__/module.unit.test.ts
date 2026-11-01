@@ -95,7 +95,8 @@ describe('stripeModule', () => {
     expect(stripeModule.manifest.supportedTriggers).toEqual(['webhook']);
     expect(stripeModule.manifest.resendWindowSeconds).toBe(259_200);
     expect(stripeModule.manifest.subscribableEvents).toBeUndefined();
-    expect(stripeModule.manifest.methods).toEqual(expect.arrayContaining(['checkInbound', 'getRelated']));
+    expect(stripeModule.manifest.methods).toEqual(expect.arrayContaining(['checkInbound', 'getRelated', 'awaitKeys']));
+    expect(stripeModule.protocolMinor).toBe(6);
     expect(stripeModule.manifest.methods).not.toContain('listEventTypes');
     for (const write of ['createRecord', 'updateRecord', 'deleteRecord']) expect(stripeModule.manifest.methods).not.toContain(write);
   });

@@ -18,7 +18,7 @@ chat = connect slack using team_slack
 `;
 
 export const FAILED_PAYMENT = `${HEADER}
-function \`Payment Failed\`(e: <pay-[:Change]->>) {
+function \`Payment Failed\`(e: <pay-[:InvoiceChange]->>) {
   inv = only(e-[:Invoice]->)
   if (inv == null) { fail("\${e.Type} is not about an invoice") }
   customer = only(inv-[:Customer]->)

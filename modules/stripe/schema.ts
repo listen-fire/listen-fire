@@ -40,10 +40,13 @@ import {
   STRIPE_CUSTOMER_TYPE_ID,
   STRIPE_CHANGES_EDGE,
   STRIPE_CHANGES_EDGE_NAME,
-  STRIPE_CHANGE_DISPLAY_NAME,
-  STRIPE_CHANGE_KINDS,
-  STRIPE_CHANGE_TYPE_ID,
-  STRIPE_EVENT_TYPES,
+  STRIPE_CHANGED_OBJECTS,
+  STRIPE_CHARGE_OBJECT,
+  STRIPE_CUSTOMER_OBJECT,
+  STRIPE_INVOICE_OBJECT,
+  STRIPE_SUBSCRIPTION_OBJECT,
+  kindOf,
+  type StripeChangedObject,
   STRIPE_INVOICES_COLLECTION,
   STRIPE_INVOICES_EDGE,
   STRIPE_INVOICES_EDGE_NAME,
@@ -113,8 +116,8 @@ export function stripeEntryPoints(): SchemaEntryPoint[] {
     { typeId: STRIPE_INVOICE_TYPE_ID, displayName: STRIPE_INVOICE_DISPLAY_NAME, writable: false, readable: true, collectionName: STRIPE_INVOICES_COLLECTION, description: INVOICES_DESCRIPTION },
     { typeId: STRIPE_SUBSCRIPTION_TYPE_ID, displayName: STRIPE_SUBSCRIPTION_DISPLAY_NAME, writable: false, readable: true, collectionName: STRIPE_SUBSCRIPTIONS_COLLECTION, description: SUBSCRIPTIONS_DESCRIPTION },
     { typeId: STRIPE_CHARGE_TYPE_ID, displayName: STRIPE_CHARGE_DISPLAY_NAME, writable: false, readable: true, collectionName: STRIPE_CHARGES_COLLECTION, description: CHARGES_DESCRIPTION },
-    // Reached only along a record's `Changes`; published so it is named.
-    { typeId: STRIPE_CHANGE_TYPE_ID, displayName: STRIPE_CHANGE_DISPLAY_NAME, writable: false, readable: false },
+    // Reached only along a record's `Changes`; published so each is named.
+    ...STRIPE_CHANGED_OBJECTS.map((object) => ({ typeId: object.changeTypeId, displayName: object.changeDisplayName, writable: false, readable: false })),
   ];
 }
 
@@ -138,14 +141,13 @@ export const STRIPE_ROOT: SchemaTypeDescriptor = {
 /**
  * A record's `Changes`: the events Stripe sends about it, pushed to the
  * connection's door (Stripe's endpoint is the connection's, so one endpoint
- * serves every listen). `carried` is the collection the record is listed by:
- * each arrival carries the record as its event had it, so a WHERE on that hop
+ * serves every listen). Each arrival carries the record as its event had it, so a WHERE on that hop
  * is judged on the arrival, with no read.
  */
-function changesEdge(carried: string, what: string): SchemaReferenceDescriptor {
+function changesEdge(object: StripeChangedObject, what: string): SchemaReferenceDescriptor {
   return {
     fieldId: STRIPE_CHANGES_EDGE,
-    targetTypeId: STRIPE_CHANGE_TYPE_ID,
+    targetTypeId: object.changeTypeId,
     cardinality: 'many',
     direction: 'outgoing',
     name: STRIPE_CHANGES_EDGE_NAME,
@@ -154,7 +156,7 @@ function changesEdge(carried: string, what: string): SchemaReferenceDescriptor {
     delivery: 'connection',
     identity: 'Id',
     attributes: true,
-    carries: [carried],
+    carries: [object.collection],
     description: `The events Stripe sends about ${what}, each once, as the endpoint delivers them (\`Kind\` is what happened).`,
   };
 }
@@ -191,60 +193,44 @@ const CHARGES_EDGE: SchemaReferenceDescriptor = {
   capability: NEWEST_FIRST,
 };
 
-const CHANGE_DESCRIPTOR: SchemaTypeDescriptor = {
-  typeId: STRIPE_CHANGE_TYPE_ID,
-  displayName: STRIPE_CHANGE_DISPLAY_NAME,
-  description:
-    'A Stripe event, as a change to the object it is about: what happened (`Kind`, `Type`) and when. Walk ' +
-    '`Invoice`, `Subscription`, `Customer` or `Charge` for the object, as it was when the event happened.',
-  fields: [
-    field('id', 'Id', 'string', { required: true, description: 'The event id (`evt_…`), the same on every retry of the delivery.' }),
-    field('kind', 'Kind', 'enum', {
-      required: true,
-      enumValues: STRIPE_CHANGE_KINDS,
-      description: 'What happened to the object: its event type without the object’s prefix (`payment_failed` for `invoice.payment_failed`, `deleted` for `customer.subscription.deleted`).',
-    }),
-    field('type', 'Type', 'enum', { required: true, enumValues: [...STRIPE_EVENT_TYPES], description: 'What happened: `invoice.payment_failed`, `customer.subscription.deleted`, `customer.created`, …' }),
-    field('created', 'Created', 'date', { required: true }),
-    field('livemode', 'Livemode', 'boolean', { required: true, description: 'True for live mode, false for test mode.' }),
-    field('api_version', 'API Version', 'string', { description: 'The API version the object is shaped by (the endpoint’s).' }),
-    field('previous_attributes', 'Previous Attributes', 'json', { description: 'On an `*.updated` event: the fields that changed, with their values before (Stripe’s units).' }),
-  ],
-  references: [
-    {
-      fieldId: STRIPE_INVOICE_EDGE,
-      targetTypeId: STRIPE_INVOICE_TYPE_ID,
-      cardinality: 'one',
-      direction: 'outgoing',
-      name: STRIPE_INVOICE_EDGE_NAME,
-      description: 'The invoice an `invoice.*` event is about; nothing for another event.',
-    },
-    {
-      fieldId: STRIPE_SUBSCRIPTION_EDGE,
-      targetTypeId: STRIPE_SUBSCRIPTION_TYPE_ID,
-      cardinality: 'one',
-      direction: 'outgoing',
-      name: STRIPE_SUBSCRIPTION_EDGE_NAME,
-      description: 'The subscription a `customer.subscription.*` event is about; nothing for another event.',
-    },
-    {
-      fieldId: STRIPE_CUSTOMER_EDGE,
-      targetTypeId: STRIPE_CUSTOMER_TYPE_ID,
-      cardinality: 'one',
-      direction: 'outgoing',
-      name: STRIPE_CUSTOMER_EDGE_NAME,
-      description: 'The customer a `customer.created`, `.updated` or `.deleted` event is about; nothing for another event (walk its invoice’s, subscription’s or charge’s `Customer`).',
-    },
-    {
-      fieldId: STRIPE_CHARGE_EDGE,
-      targetTypeId: STRIPE_CHARGE_TYPE_ID,
-      cardinality: 'one',
-      direction: 'outgoing',
-      name: STRIPE_CHARGE_EDGE_NAME,
-      description: 'The charge a `charge.*` event (`charge.failed`, `charge.succeeded`, `charge.refunded`, …) is about; nothing for another event (an invoice’s `Charges` are the attempts to pay it).',
-    },
-  ],
-};
+/** An object's change type: one Stripe event about it. `Kind` and `Type`
+ *  are only the object's own, so a WHERE naming another object's kind is
+ *  refused at check. */
+function changeDescriptor(object: StripeChangedObject): SchemaTypeDescriptor {
+  const noun = object.displayName.toLowerCase();
+  const [example] = object.events;
+  return {
+    typeId: object.changeTypeId,
+    displayName: object.changeDisplayName,
+    description:
+      `A Stripe event about ${noun === 'invoice' ? 'an' : 'a'} ${noun}: what happened (\`Kind\`, \`Type\`) and when. Walk ` +
+      `\`${object.edgeName}\` for the ${noun}, as it was when the event happened.`,
+    fields: [
+      field('id', 'Id', 'string', { required: true, description: 'The event id (`evt_…`), the same on every retry of the delivery.' }),
+      field('kind', 'Kind', 'enum', {
+        required: true,
+        enumValues: object.events.map(kindOf),
+        description: `What happened to the ${noun}: its event type without \`${object.prefix}\` (\`${kindOf(example)}\` for \`${example}\`).`,
+      }),
+      field('type', 'Type', 'enum', { required: true, enumValues: [...object.events], description: `What happened, as Stripe names it: \`${example}\`, …` }),
+      field('created', 'Created', 'date', { required: true }),
+      field('livemode', 'Livemode', 'boolean', { required: true, description: 'True for live mode, false for test mode.' }),
+      field('api_version', 'API Version', 'string', { description: 'The API version the object is shaped by (the endpoint’s).' }),
+      field('previous_attributes', 'Previous Attributes', 'json', { description: 'On an `updated` event: the fields that changed, with their values before (Stripe’s units).' }),
+    ],
+    references: [
+      {
+        fieldId: object.edge,
+        targetTypeId: object.typeId,
+        cardinality: 'one',
+        direction: 'outgoing',
+        name: object.edgeName,
+        required: true,
+        description: `The ${noun} the event is about, as the event had it.`,
+      },
+    ],
+  };
+}
 
 const CUSTOMER_DESCRIPTOR: SchemaTypeDescriptor = {
   typeId: STRIPE_CUSTOMER_TYPE_ID,
@@ -265,7 +251,7 @@ const CUSTOMER_DESCRIPTOR: SchemaTypeDescriptor = {
     field('deleted', 'Deleted', 'boolean', { description: 'True on the customer a `customer.deleted` event carries.' }),
   ],
   references: [
-    changesEdge(STRIPE_CUSTOMERS_COLLECTION, 'a customer (`customer.created`, `.updated`, `.deleted`)'),
+    changesEdge(STRIPE_CUSTOMER_OBJECT, 'a customer (`customer.created`, `.updated`, `.deleted`)'),
     { ...INVOICES_EDGE, description: `Its invoices. ${INVOICES_DESCRIPTION}` },
     {
       fieldId: STRIPE_SUBSCRIPTIONS_EDGE,
@@ -313,7 +299,7 @@ const INVOICE_DESCRIPTOR: SchemaTypeDescriptor = {
     field('metadata', 'Metadata', 'json', { description: 'Your own key-value pairs.' }),
   ],
   references: [
-    changesEdge(STRIPE_INVOICES_COLLECTION, 'an invoice (`invoice.payment_failed`, `invoice.paid`, …)'),
+    changesEdge(STRIPE_INVOICE_OBJECT, 'an invoice (`invoice.payment_failed`, `invoice.paid`, …)'),
     CUSTOMER_EDGE,
     {
       fieldId: STRIPE_SUBSCRIPTION_EDGE,
@@ -358,7 +344,7 @@ const SUBSCRIPTION_DESCRIPTOR: SchemaTypeDescriptor = {
     field('metadata', 'Metadata', 'json', { description: 'Your own key-value pairs (`s.Metadata.crm_id`).' }),
   ],
   references: [
-    changesEdge(STRIPE_SUBSCRIPTIONS_COLLECTION, 'a subscription (`customer.subscription.created`, `.deleted`, …)'),
+    changesEdge(STRIPE_SUBSCRIPTION_OBJECT, 'a subscription (`customer.subscription.created`, `.deleted`, …)'),
     CUSTOMER_EDGE,
     { ...INVOICES_EDGE, description: `The invoices it made. ${INVOICES_DESCRIPTION}` },
     {
@@ -412,7 +398,7 @@ const CHARGE_DESCRIPTOR: SchemaTypeDescriptor = {
     field('metadata', 'Metadata', 'json', { description: 'Your own key-value pairs.' }),
   ],
   references: [
-    changesEdge(STRIPE_CHARGES_COLLECTION, 'a charge (`charge.failed`, `charge.succeeded`, `charge.refunded`, …)'),
+    changesEdge(STRIPE_CHARGE_OBJECT, 'a charge (`charge.failed`, `charge.succeeded`, `charge.refunded`, …)'),
     {
       ...CUSTOMER_EDGE,
       required: false,
@@ -432,7 +418,7 @@ const CHARGE_DESCRIPTOR: SchemaTypeDescriptor = {
 };
 
 const DESCRIPTORS: Record<string, SchemaTypeDescriptor> = {
-  [STRIPE_CHANGE_TYPE_ID]: CHANGE_DESCRIPTOR,
+  ...Object.fromEntries(STRIPE_CHANGED_OBJECTS.map((object) => [object.changeTypeId, changeDescriptor(object)])),
   [STRIPE_CUSTOMER_TYPE_ID]: CUSTOMER_DESCRIPTOR,
   [STRIPE_INVOICE_TYPE_ID]: INVOICE_DESCRIPTOR,
   [STRIPE_SUBSCRIPTION_TYPE_ID]: SUBSCRIPTION_DESCRIPTOR,

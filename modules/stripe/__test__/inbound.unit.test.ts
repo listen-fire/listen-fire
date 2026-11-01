@@ -53,7 +53,7 @@ describe('a Stripe delivery', () => {
           about: { recordType: 'Invoice', externalId: 'in_1MtHbELkdIwHu7ixl4OzzPMv' },
           landing: {
             recordId: 'evt_failed_1',
-            recordType: 'Change',
+            recordType: 'InvoiceChange',
             fields: { Id: 'evt_failed_1', Kind: 'payment_failed', Type: 'invoice.payment_failed', id: 'evt_failed_1', kind: 'payment_failed', object: { id: 'in_1MtHbELkdIwHu7ixl4OzzPMv', object: 'invoice' } },
           },
           parents: [{ recordId: 'in_1MtHbELkdIwHu7ixl4OzzPMv', recordType: 'Invoice', fields: { id: 'in_1MtHbELkdIwHu7ixl4OzzPMv', Id: 'in_1MtHbELkdIwHu7ixl4OzzPMv', Status: 'open' } }],

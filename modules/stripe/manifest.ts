@@ -11,7 +11,7 @@ const STRIPE_HANDBOOK_CONTENT = `Stripe as a graph: its events, your customers, 
 ### listening — Stripe's events
 
 \`\`\`
-function \`Payment Failed\`(c: <pay-[:Change]->>) {
+function \`Payment Failed\`(c: <pay-[:InvoiceChange]->>) {
   invoice = only(c-[:Invoice]->)
   owed = Currency.formatFigure(invoice.\`Amount Due\`, invoice.Currency)
   …
@@ -22,7 +22,7 @@ listen to pay-[:Invoices]->-[c:Changes WHERE c.Kind == "payment_failed"]-> fire 
 
 \`listen-fire serve\` prints the connection's URL (\`/hooks/stripe/<credential>\`): add it as the endpoint in Stripe's dashboard, with the events you listen for. A delivery is checked against the endpoint's signing secret; an unsigned, mis-signed or stale one (older than five minutes) runs nothing. Stripe retries a delivery and re-sends an event for up to three days; the same event runs once.
 
-Each event arrives on the \`Changes\` of the object it is about: an invoice's (\`Kind\` \`payment_failed\`, \`paid\`, \`upcoming\`, …), a subscription's (\`created\`, \`updated\`, \`deleted\`, \`trial_will_end\`, …), a customer's (\`created\`, \`updated\`, \`deleted\`) or a charge's (\`succeeded\`, \`failed\`, \`refunded\`, …). \`Kind\` is Stripe's event type without the object's prefix; \`Type\` is the whole of it. A WHERE on the object's hop is judged on the object as the event had it (\`pay-[i:Invoices WHERE i.Currency == "usd"]->-[c:Changes WHERE c.Kind == "paid"]->\`). Walk \`Invoice\`, \`Subscription\`, \`Customer\` or \`Charge\` from a change for its object, as it was when the event happened.
+Each event arrives on the \`Changes\` of the object it is about: an invoice's are \`InvoiceChange\`s (\`Kind\` \`payment_failed\`, \`paid\`, \`upcoming\`, …), a subscription's \`SubscriptionChange\`s (\`created\`, \`updated\`, \`deleted\`, \`trial_will_end\`, …), a customer's \`CustomerChange\`s (\`created\`, \`updated\`, \`deleted\`) and a charge's \`ChargeChange\`s (\`succeeded\`, \`failed\`, \`refunded\`, …). \`Kind\` is Stripe's event type without the object's prefix, and only that object's kinds: \`listen-fire check\` refuses a kind that never arrives there. \`Type\` is the whole of it. A WHERE on the object's hop is judged on the object as the event had it (\`pay-[i:Invoices WHERE i.Currency == "usd"]->-[c:Changes WHERE c.Kind == "paid"]->\`). Walk a change's \`Invoice\`, \`Subscription\`, \`Customer\` or \`Charge\` for its object, as it was when the event happened. A run can wait on a record's next change: \`await new inv-[:Changes]->\`.
 
 ### reading — customers, invoices, subscriptions, charges
 
@@ -79,7 +79,8 @@ export const STRIPE_MANIFEST: AdapterManifest = {
   authoringHints:
     'Listen on a record’s Changes, narrowed by Kind (Stripe’s event type without its object’s prefix): ' +
     'pay-[:Invoices]->-[c:Changes WHERE c.Kind == "payment_failed"]->, pay-[:Charges]->-[c:Changes WHERE ' +
-    'c.Kind == "failed"]->, pay-[:Subscriptions]->-[c:Changes WHERE c.Kind == "deleted"]->. Walk the change’s ' +
+    'c.Kind == "failed"]->, pay-[:Subscriptions]->-[c:Changes WHERE c.Kind == "deleted"]->. An invoice’s Changes ' +
+    'are InvoiceChange (a charge’s ChargeChange, …), each Kind only its object’s. Walk the change’s ' +
     'Invoice, Subscription, Customer or Charge edge for its object — no data.object to dig into. Why a payment failed: an invoice’s Charges (newest first) ' +
     'carry Failure Message, Failure Code and Outcome Seller Message. Sales over a period: the account’s ' +
     'Charges bounded by Created (WITHIN 7d), then Status == "succeeded". Amounts are already in major ' +
@@ -98,7 +99,7 @@ export const STRIPE_MANIFEST: AdapterManifest = {
   // Stripe re-sends an undelivered event for up to three days: a default,
   // lf.yaml's `resendWindow` overrides it.
   resendWindowSeconds: 259_200,
-  methods: ['listEntryPoints', 'describe', 'edgesFrom', 'getFieldValue', 'getRelated', 'checkInbound'],
+  methods: ['listEntryPoints', 'describe', 'edgesFrom', 'getFieldValue', 'getRelated', 'checkInbound', 'awaitKeys'],
   requiredCredentialType: 'STRIPE',
   // Every 0.12 listen names its events and is rewritten by them (`byEvent`).
   // One naming none heard every event, on every object's `Changes`, so it

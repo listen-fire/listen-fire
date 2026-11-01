@@ -29,7 +29,7 @@ cr = connect mcp using crm
 mail = connect gmail using billing_mail
 chat = connect slack using team_slack
 
-function `Payment Failed`(e: <pay-[:Change]->>) {
+function `Payment Failed`(e: <pay-[:InvoiceChange]->>) {
   inv = only(e-[:Invoice]->)
   if (inv == null) { fail("${e.Type} is not about an invoice") }
   c = only(cr-[x:find_customer_by_email WHERE x.email == inv.`Customer Email`]->)
@@ -98,8 +98,8 @@ reason = coalesce(last.`Failure Message`, last.`Outcome Seller Message`)
 | the account | `Invoices` | Invoice | newest first; `Status ==` and `Collection Method ==` reach Stripe |
 | the account | `Subscriptions` | Subscription | every status, canceled included; `Status ==` and `Collection Method ==` reach Stripe |
 | the account | `Charges` | Charge | newest first, failed attempts included; `Created` bounds (`>=`, `<`, `WITHIN 7d`) reach Stripe; `Status` does not |
-| Customer, Invoice, Subscription, Charge | `Changes` | Change | listened to, not listed: the events Stripe delivers about it |
-| Change | `Invoice`, `Subscription`, `Customer`, `Charge` | the object | the one the event is about; nothing along the others |
+| Customer, Invoice, Subscription, Charge | `Changes` | CustomerChange, InvoiceChange, SubscriptionChange, ChargeChange | listened to, not listed: the events Stripe delivers about it; `Kind` is only that object's |
+| InvoiceChange, SubscriptionChange, CustomerChange, ChargeChange | `Invoice`, `Subscription`, `Customer`, `Charge` (one each) | the object | the one the event is about, as the event had it |
 | Invoice | `Customer` | Customer | |
 | Invoice | `Subscription` | Subscription | nothing for a one-off invoice |
 | Subscription | `Customer` | Customer | |

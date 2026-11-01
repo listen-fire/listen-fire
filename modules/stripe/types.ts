@@ -11,10 +11,6 @@ export const STRIPE_ADAPTER_TYPE = 'stripe';
 export const STRIPE_ACCOUNT_TYPE_ID = 'stripe:account';
 export const STRIPE_ACCOUNT_DISPLAY_NAME = 'Stripe';
 
-/** One Stripe event, as a change to the object it is about. */
-export const STRIPE_CHANGE_TYPE_ID = 'stripe:change';
-export const STRIPE_CHANGE_DISPLAY_NAME = 'Change';
-
 export const STRIPE_CUSTOMER_TYPE_ID = 'stripe:customer';
 export const STRIPE_CUSTOMER_DISPLAY_NAME = 'Customer';
 
@@ -126,13 +122,59 @@ export function isStripeEventType(value: unknown): value is StripeEventType {
  *  carry and the collection that lists them: an event's `Kind` is its type
  *  without the prefix (`invoice.payment_failed` is an invoice's
  *  `payment_failed`). */
-export const STRIPE_INVOICE_OBJECT = { kind: 'invoice', typeId: STRIPE_INVOICE_TYPE_ID, prefix: 'invoice.', displayName: STRIPE_INVOICE_DISPLAY_NAME, collection: STRIPE_INVOICES_COLLECTION, events: STRIPE_INVOICE_EVENTS } as const;
-export const STRIPE_CHANGED_OBJECTS = [
-  { kind: 'customer', typeId: STRIPE_CUSTOMER_TYPE_ID, prefix: 'customer.', displayName: STRIPE_CUSTOMER_DISPLAY_NAME, collection: STRIPE_CUSTOMERS_COLLECTION, events: STRIPE_CUSTOMER_EVENTS },
-  { kind: 'subscription', typeId: STRIPE_SUBSCRIPTION_TYPE_ID, prefix: 'customer.subscription.', displayName: STRIPE_SUBSCRIPTION_DISPLAY_NAME, collection: STRIPE_SUBSCRIPTIONS_COLLECTION, events: STRIPE_SUBSCRIPTION_EVENTS },
-  STRIPE_INVOICE_OBJECT,
-  { kind: 'charge', typeId: STRIPE_CHARGE_TYPE_ID, prefix: 'charge.', displayName: STRIPE_CHARGE_DISPLAY_NAME, collection: STRIPE_CHARGES_COLLECTION, events: STRIPE_CHARGE_EVENTS },
-] as const;
+//
+// Each object's events land as its own change type (`InvoiceChange`, …), whose
+// `Kind` is only that object's kinds: a listen comparing an invoice's
+// `Changes` with a charge's kind is refused at check, not left never firing.
+export const STRIPE_INVOICE_OBJECT = {
+  kind: 'invoice',
+  typeId: STRIPE_INVOICE_TYPE_ID,
+  prefix: 'invoice.',
+  displayName: STRIPE_INVOICE_DISPLAY_NAME,
+  collection: STRIPE_INVOICES_COLLECTION,
+  edge: STRIPE_INVOICE_EDGE,
+  edgeName: STRIPE_INVOICE_EDGE_NAME,
+  changeTypeId: 'stripe:invoice_change',
+  changeDisplayName: 'InvoiceChange',
+  events: STRIPE_INVOICE_EVENTS,
+} as const;
+export const STRIPE_CUSTOMER_OBJECT = {
+  kind: 'customer',
+  typeId: STRIPE_CUSTOMER_TYPE_ID,
+  prefix: 'customer.',
+  displayName: STRIPE_CUSTOMER_DISPLAY_NAME,
+  collection: STRIPE_CUSTOMERS_COLLECTION,
+  edge: STRIPE_CUSTOMER_EDGE,
+  edgeName: STRIPE_CUSTOMER_EDGE_NAME,
+  changeTypeId: 'stripe:customer_change',
+  changeDisplayName: 'CustomerChange',
+  events: STRIPE_CUSTOMER_EVENTS,
+} as const;
+export const STRIPE_SUBSCRIPTION_OBJECT = {
+  kind: 'subscription',
+  typeId: STRIPE_SUBSCRIPTION_TYPE_ID,
+  prefix: 'customer.subscription.',
+  displayName: STRIPE_SUBSCRIPTION_DISPLAY_NAME,
+  collection: STRIPE_SUBSCRIPTIONS_COLLECTION,
+  edge: STRIPE_SUBSCRIPTION_EDGE,
+  edgeName: STRIPE_SUBSCRIPTION_EDGE_NAME,
+  changeTypeId: 'stripe:subscription_change',
+  changeDisplayName: 'SubscriptionChange',
+  events: STRIPE_SUBSCRIPTION_EVENTS,
+} as const;
+export const STRIPE_CHARGE_OBJECT = {
+  kind: 'charge',
+  typeId: STRIPE_CHARGE_TYPE_ID,
+  prefix: 'charge.',
+  displayName: STRIPE_CHARGE_DISPLAY_NAME,
+  collection: STRIPE_CHARGES_COLLECTION,
+  edge: STRIPE_CHARGE_EDGE,
+  edgeName: STRIPE_CHARGE_EDGE_NAME,
+  changeTypeId: 'stripe:charge_change',
+  changeDisplayName: 'ChargeChange',
+  events: STRIPE_CHARGE_EVENTS,
+} as const;
+export const STRIPE_CHANGED_OBJECTS = [STRIPE_CUSTOMER_OBJECT, STRIPE_SUBSCRIPTION_OBJECT, STRIPE_INVOICE_OBJECT, STRIPE_CHARGE_OBJECT] as const;
 export type StripeChangedObject = (typeof STRIPE_CHANGED_OBJECTS)[number];
 
 /** The object an event of `type` is about: the one whose events list it (not
@@ -148,8 +190,10 @@ export function kindOf(type: StripeEventType): string {
   return type.slice(changedObjectOf(type).prefix.length);
 }
 
-/** Every `Kind` a change can be, each once. */
-export const STRIPE_CHANGE_KINDS: string[] = [...new Set(STRIPE_EVENT_TYPES.map(kindOf))];
+/** The object whose change type is named `recordType`, if one is. */
+export function changedObjectNamed(recordType: string | null): StripeChangedObject | undefined {
+  return STRIPE_CHANGED_OBJECTS.find((object) => object.changeDisplayName === recordType);
+}
 
 /** An invoice's `status`. */
 export const STRIPE_INVOICE_STATUSES = ['draft', 'open', 'paid', 'uncollectible', 'void'] as const;

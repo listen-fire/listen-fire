@@ -39,7 +39,7 @@ cr = connect mcp using crm
 mail = connect gmail using billing_mail
 chat = connect slack using team_slack
 
-function \`Payment Failed\`(e: <pay-[:Change]->>) {
+function \`Payment Failed\`(e: <pay-[:InvoiceChange]->>) {
   inv = only(e-[:Invoice]->)
   if (inv == null) { fail("\${e.Type} is not about an invoice") }
   c = only(cr-[x:find_customer_by_email WHERE x.email == inv.\`Customer Email\`]->)
@@ -168,7 +168,17 @@ test('listen-fire check types the program against Stripe: a field an invoice lac
     assert.notEqual(wrongType.code, 0, wrongType.out);
     assert.match(wrongType.out, /payment_faild/);
     assert.match(wrongType.out, /payment_failed/, 'the diagnostic names the kind Stripe sends');
-    console.log([wrongField, wrongType].map((c) => c.out.trim()).join('\n---\n'));
+
+    // A kind of another object's change never arrives on an invoice's Changes, nor an event type on a customer's: refused, not left never firing.
+    const listen = 'pay-[:Invoices]->-[c:Changes WHERE c.Kind == "payment_failed"]->';
+    const chargeKind = await checkWith(world.dir, listen, 'pay-[:Invoices]->-[c:Changes WHERE c.Kind == "failed"]->');
+    assert.equal(chargeKind.code, 1, chargeKind.out);
+    assert.match(chargeKind.out, /"failed"/);
+    assert.match(chargeKind.out, /payment_failed/, 'the diagnostic names the kinds an invoice’s Changes have');
+    const onCustomers = await checkWith(world.dir, listen, 'pay-[:Customers]->-[c:Changes WHERE c.Kind == "invoice.paid"]->');
+    assert.equal(onCustomers.code, 1, onCustomers.out);
+    assert.match(onCustomers.out, /invoice\.paid/);
+    console.log([wrongField, wrongType, chargeKind, onCustomers].map((c) => c.out.trim()).join('\n---\n'));
     assert.deepEqual(world.stripe.requests, [], 'checking reads nothing from Stripe');
   } finally {
     await world.close();
@@ -262,13 +272,62 @@ test('a Stripe payment_failed change fires its listen once, and a re-send two da
   }
 });
 
+// A run waits on the invoice its trigger was about: Stripe answers which key
+// an invoice's Changes are waited on under (its id, the key each arrival on
+// them names), so the wait registers and the invoice's next change answers it.
+// The trigger's own arrival, on that edge under that key, does not.
+const CHASE = `import { stripe, gmail } from adapters
+import { stripe_account, billing_mail } from credentials
+
+pay = connect stripe using stripe_account
+mail = connect gmail using billing_mail
+
+function chase(e: <pay-[:InvoiceChange]->>) {
+  inv = only(e-[:Invoice]->)
+  if (inv == null) { fail("no invoice") }
+  next = await new inv-[:Changes]->
+  write mail-[:Messages]-> {
+    To: [inv.\`Customer Email\`]
+    Subject: "\${inv.Number} is \${next.Kind}"
+    Body: "After \${e.Kind}, \${next.Type}."
+  }
+}
+
+listen to pay-[:Invoices]->-[c:Changes WHERE c.Kind == "finalized"]-> fire chase
+`;
+
+test('a run waiting on an invoice’s Changes is answered by the invoice’s next Stripe event, not by the one that started it', async () => {
+  const world = await paymentsWorld();
+  writeFileSync(join(world.dir, 'movements/chase.mvt'), CHASE);
+  const serving = await served(world.dir);
+  try {
+    const url = (await serving.waitFor(/^stripe stripe_account: /)).replace(/^stripe stripe_account: /, '');
+    const invoice = (status: string) => stripeInvoice({ id: 'in_chase', number: 'LL-chase', customer_email: 'diego@alvareztiles.es', status });
+    const finalized = await deliver(url, stripeEvent('invoice.finalized', invoice('open'), { id: 'evt_finalized' }));
+    assert.equal(finalized.status, 202, finalized.body);
+    await serving.waitFor(/run .* chase:chase parked/);
+    assert.deepEqual(await outbox(world.channels), [], 'its own event does not answer the wait');
+
+    const paid = await deliver(url, stripeEvent('invoice.paid', invoice('paid'), { id: 'evt_paid_chase' }));
+    assert.equal(paid.status, 202, paid.body);
+    await serving.waitFor(/resumed .* chase:chase completed/);
+    assert.deepEqual(
+      (await outbox(world.channels)).map((m) => [m.to, m.subject, m.body]),
+      [['diego@alvareztiles.es', 'LL-chase is paid', 'After finalized, invoice.paid.']],
+    );
+  } finally {
+    await serving.stop();
+    await world.close();
+  }
+});
+
 test('upgrade rewrites `listen to pay { events: ["invoice.payment_failed"] }`', async () => {
   const world = await paymentsWorld();
   try {
     const file = join(world.dir, 'movements/hello.mvt');
     const lfYaml = join(world.dir, 'lf.yaml');
     const pinned = () => writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
-    const old = PAYMENTS.replace('<pay-[:Change]->>', '<pay-[:Event]->>').replace(
+    const old = PAYMENTS.replace('<pay-[:InvoiceChange]->>', '<pay-[:Event]->>').replace(
       'listen to pay-[:Invoices]->-[c:Changes WHERE c.Kind == "payment_failed"]-> fire \`Payment Failed\`',
       'listen to pay { events: ["invoice.payment_failed"] } fire \`Payment Failed\`',
     );
@@ -280,7 +339,7 @@ test('upgrade rewrites `listen to pay { events: ["invoice.payment_failed"] }`', 
     assert.equal(
       readFileSync(file, 'utf8'),
       old
-        .replace('<pay-[:Event]->>', '<pay-[:Change]->>')
+        .replace('<pay-[:Event]->>', '<pay-[:InvoiceChange]->>')
         .replace('listen to pay { events: ["invoice.payment_failed"] }', 'listen to pay-[:Invoices]->-[c:Changes WHERE c.Kind IN ["payment_failed"]]->'),
     );
     const checked = await run(world.dir, 'check');

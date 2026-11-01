@@ -5,6 +5,7 @@
 // is `inbound.ts`; the API and the normalisation of Stripe's objects are
 // `api_client.ts`. Nothing is written to Stripe.
 
+import type { ArrivalsCapability, AwaitHead, AwaitKey } from 'engine-contracts';
 import type { Adapter, EdgesFromResult, GetFieldValueInput, GetRelatedInput, InboundCheck, InboundCheckInput, RelatedResult } from 'movement-engine/public/adapter';
 import type { SchemaEntryPoint, SchemaTypeDescriptor, SourcePosition } from 'movement-engine/public/catalog';
 
@@ -33,6 +34,7 @@ import { STRIPE_ACCOUNT_DESCRIPTOR, STRIPE_ROOT, describeStripeType, stripeEntry
 import {
   STRIPE_ACCOUNT_TYPE_ID,
   STRIPE_ADAPTER_TYPE,
+  STRIPE_CHANGES_EDGE_NAME,
   STRIPE_CHARGES_COLLECTION,
   STRIPE_CHARGES_EDGE,
   STRIPE_CHARGE_DISPLAY_NAME,
@@ -40,7 +42,6 @@ import {
   STRIPE_CUSTOMERS_COLLECTION,
   STRIPE_CUSTOMER_DISPLAY_NAME,
   STRIPE_CUSTOMER_EDGE,
-  STRIPE_CHANGE_DISPLAY_NAME,
   STRIPE_INVOICES_COLLECTION,
   STRIPE_INVOICES_EDGE,
   STRIPE_INVOICE_DISPLAY_NAME,
@@ -52,6 +53,7 @@ import {
   STRIPE_SUBSCRIPTION_DISPLAY_NAME,
   STRIPE_SUBSCRIPTION_EDGE,
   STRIPE_SUBSCRIPTION_STATUSES,
+  changedObjectNamed,
 } from './types';
 
 /** Where the adapter gets a credentialed client. */
@@ -71,6 +73,15 @@ export class StripeAdapter extends BaseAdapter implements Adapter {
   ) {
     super();
   }
+
+  /** A record's `Changes` are waited on under its id: the key each arrival
+   *  on them names (an upcoming invoice's stand-in id included). */
+  readonly arrivals: ArrivalsCapability = {
+    awaitKeys: async ({ edge, heads }: { edge: string; heads: AwaitHead[] }): Promise<AwaitKey[]> => {
+      if (edge !== STRIPE_CHANGES_EDGE_NAME) throw new Error(`stripe: '${edge}' is not a listenable edge (only '${STRIPE_CHANGES_EDGE_NAME}')`);
+      return heads.map((head) => ({ key: head.recordId }));
+    },
+  };
 
   // ── 1. Schema introspection ────────────────────────────────────────────
 
@@ -118,7 +129,7 @@ export class StripeAdapter extends BaseAdapter implements Adapter {
     const edgeId = await this.resolveEdgeReadId(input.position.recordType, input.fieldId);
     const held = positionData(input.position);
     const data: StripeObject = isObject(held) ? held : {};
-    if (input.position.recordType === STRIPE_CHANGE_DISPLAY_NAME) return changedObject(data, edgeId);
+    if (changedObjectNamed(input.position.recordType) !== undefined) return changedObject(data, edgeId);
 
     const id = typeof data['id'] === 'string' ? data['id'] : '';
     if (input.position.recordType === STRIPE_CHARGE_DISPLAY_NAME && edgeId === STRIPE_INVOICE_EDGE) return this.chargeInvoice(data);

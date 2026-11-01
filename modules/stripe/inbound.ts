@@ -19,8 +19,6 @@ import { isObject, normalizeCharge, normalizeCustomer, normalizeInvoice, normali
 import { describeStripeType } from './schema';
 import {
   STRIPE_CHANGES_EDGE_NAME,
-  STRIPE_CHANGE_DISPLAY_NAME,
-  STRIPE_CHANGE_TYPE_ID,
   STRIPE_EVENT_TYPES,
   changedObjectOf,
   isStripeEventType,
@@ -112,7 +110,7 @@ export function changeArrival(payload: StripeEventPayload): Arrival {
     edge: STRIPE_CHANGES_EDGE_NAME,
     key: recordId,
     identity: payload.id,
-    landing: { recordId: payload.id, recordType: STRIPE_CHANGE_DISPLAY_NAME, fields: named(STRIPE_CHANGE_TYPE_ID, { ...payload }) },
+    landing: { recordId: payload.id, recordType: changed.changeDisplayName, fields: named(changed.changeTypeId, { ...payload }) },
     parents: [object],
     about: { recordType: changed.displayName, externalId: recordId },
     ...(payload.created !== null ? { occurredAt: payload.created } : {}),
