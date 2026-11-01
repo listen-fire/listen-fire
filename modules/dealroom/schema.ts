@@ -245,7 +245,7 @@ export const DEALROOM_ROOT: SchemaTypeDescriptor = {
  *  Dealroom's search can say whether a round is "in Europe". */
 const OWNED_TERMS_DESCRIPTION = (what: string, term: string) =>
   `The ${what} of the company that raised, by name. Compared with CONTAINS only, and Dealroom judges it: \`CONTAINS\` takes ${term}, ` +
-  'and an OR of CONTAINS takes any of several. Read, it is the company\'s own, plus the terms a walk or listen found the round by.';
+  'and an OR of CONTAINS takes any of several. Read, it is the company\'s own; a round a walk found by a term carries that term too.';
 
 const COMPANY_DESCRIPTOR: SchemaTypeDescriptor = {
   typeId: DEALROOM_COMPANY_TYPE_ID,

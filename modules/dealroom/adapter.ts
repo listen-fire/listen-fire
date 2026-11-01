@@ -200,8 +200,6 @@ function headquarters(data: Record<string, unknown>, part: 'city' | 'country'): 
   return stringAt(objectAt(chosen[part])?.['name']);
 }
 
-/** The cities and countries of a company's locations, by name: the vocabulary
- *  Dealroom's location filter takes. */
 /** A round's own company terms, and the terms a walk found it by. */
 function withMatched(own: unknown, data: Record<string, unknown>, fieldId: string): string[] {
   const matched: unknown = objectAt(data[MATCHED_KEY])?.[fieldId];
@@ -210,6 +208,8 @@ function withMatched(own: unknown, data: Record<string, unknown>, fieldId: strin
   return [...new Set([...names, ...found])];
 }
 
+/** The cities and countries of a company's locations, by name: the vocabulary
+ *  Dealroom's location filter takes. */
 function locationNames(company: Record<string, unknown>): string[] {
   const raw = company['hq_locations'];
   const names = (Array.isArray(raw) ? raw : []).flatMap((entry) => {

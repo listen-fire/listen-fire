@@ -62,11 +62,6 @@ A listen on \`Funding Rounds\` fires once per round Dealroom RECORDED since the 
 
 Universities and alumni, news feeds, traffic and social analytics, the bulk and dump exports, the filter catalogues, the location lookup, the removed-entity and GDPR logs, and the "tell Dealroom about a company it is missing" endpoint are each one endpoint away and not surfaced — say so rather than working around them. Nothing is writable: Dealroom is a database you read.`;
 
-/**
- * Static manifest. A polled source with no write surface at all — Dealroom's
- * only mutating endpoint asks their team to research a company it is missing,
- * which is a support request rather than a record write.
- */
 // A 0.12 `listen to dealroom { rounds, industries, hq_locations }` (its one
 // event, `funding_round`, named or not) is a listen on `Funding Rounds` with
 // that WHERE (`listen-fire upgrade`).
@@ -81,6 +76,11 @@ const FUNDING_ROUNDS_BECOME = {
   },
 };
 
+/**
+ * Static manifest. A polled source with no write surface at all — Dealroom's
+ * only mutating endpoint asks their team to research a company it is missing,
+ * which is a support request rather than a record write.
+ */
 export const DEALROOM_MANIFEST: AdapterManifest = {
   adapterType: DEALROOM_ADAPTER_TYPE,
   displayName: 'Dealroom',

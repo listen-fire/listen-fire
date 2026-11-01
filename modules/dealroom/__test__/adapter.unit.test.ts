@@ -985,21 +985,6 @@ describe('pollDealroom', () => {
     expect((answer.cursor as { createdAfter: number }).createdAfter).toBe(parseDealroomInstant('2026-09-10 10:00:00'));
   });
 
-  it('judges a second comparison on a terms key over the round, since Dealroom ORs a key’s values', async () => {
-    const searchFundingRounds = jest.fn(async (_r: DealroomSearchRequest) =>
-      page([
-        round({ id: 401, created_utc: '2026-09-10 09:00:00', company: company({ industries: ['fintech', 'ai'] }) }),
-        round({ id: 402, created_utc: '2026-09-10 10:00:00', company: company({ industries: ['fintech'] }) }),
-      ]),
-    );
-    const answer = await poll(fakeClient({ searchFundingRounds }), {
-      cursor: { createdAfter: CREATED_MS },
-      filter: conjunction(compare('Company Industries', 'contains', 'fintech'), compare('Company Industries', 'contains', 'ai')),
-    });
-    expect(searchFundingRounds.mock.calls[0][0].must).toEqual({ industries: ['fintech'], created_utc_min: CREATED_UTC });
-    expect(ids(answer)).toEqual(['401']);
-  });
-
   it('leaves a filter it cannot read to the host: nothing sent, nothing claimed applied', async () => {
     const searchFundingRounds = jest.fn(async (_r: DealroomSearchRequest) => page([round({ created_utc: '2026-09-10 09:00:00' })]));
     const unreadable = { type: 'compare', op: 'eq', left: { type: 'property', propertyTypeId: 'Round' }, right: { type: 'property', propertyTypeId: 'Currency' } };
@@ -1013,6 +998,15 @@ describe('pollDealroom', () => {
     const searchFundingRounds = jest.fn(async () => page([round({ created_utc: CREATED_UTC })]));
     const { arrivals } = await poll(fakeClient({ searchFundingRounds }), { cursor: { createdAfter: CREATED_MS } });
     expect(arrivals).toEqual([]);
+  });
+
+  it('refuses two company-term conjuncts on one field, by name, rather than matching nothing', async () => {
+    const searchFundingRounds = jest.fn(async () => page([round()]));
+    const both = conjunction(compare('Company Industries', 'contains', 'fintech'), compare('Company Industries', 'contains', 'ai'));
+    await expect(poll(fakeClient({ searchFundingRounds }), { filter: both, cursor: { createdAfter: CREATED_MS - 1 } })).rejects.toThrow(
+      /Dealroom matches a round's Company Industries by any of its terms, never by all.*listen on Funding Rounds/,
+    );
+    expect(searchFundingRounds).not.toHaveBeenCalled();
   });
 
   it('refuses an edge it does not have, by name', async () => {

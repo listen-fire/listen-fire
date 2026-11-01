@@ -67,10 +67,20 @@ function termsOf(comparison: TakenComparison): string[] | undefined {
   return narrowedTo(comparison);
 }
 
+/** The company term fields, which only Dealroom can judge: a round never
+ *  lists the regions its vocabulary holds, so they are never judged here. */
+const COMPANY_TERM_KEYS: Record<string, string> = {
+  industries: DEALROOM_COMPANY_INDUSTRIES_FIELD,
+  hq_locations: DEALROOM_COMPANY_LOCATIONS_FIELD,
+};
+
 /**
  * What a taken filter splits into: the terms Dealroom judges, and the
  * comparisons judged here over the round. Dealroom ORs the values of one terms
- * key, so a second comparison on a key already sent (an AND) is judged here.
+ * key, so a second comparison on `Round` (an AND) is judged here over the
+ * round's own name. On a company term field that cannot be done, because only
+ * Dealroom knows what a term covers: it fails by name instead of matching
+ * nothing.
  */
 function split(taken: readonly TakenComparison[]): { must: DealroomMustFilters; here: TakenComparison[] } {
   const must: DealroomMustFilters = {};
@@ -78,8 +88,14 @@ function split(taken: readonly TakenComparison[]): { must: DealroomMustFilters; 
   for (const comparison of taken) {
     const key = TERMS_KEY[comparison.field];
     const terms = key === undefined ? undefined : termsOf(comparison);
-    if (key === undefined || terms === undefined || key in must) here.push(comparison);
-    else must[key] = terms;
+    if (key === undefined || terms === undefined) here.push(comparison);
+    else if (key in must) {
+      const field = COMPANY_TERM_KEYS[key];
+      if (field === undefined) here.push(comparison);
+      else {
+        throw new Error(`Dealroom matches a round's ${field} by any of its terms, never by all: write one CONTAINS (or an OR of them) on '${field}' in a listen on ${DEALROOM_FUNDING_ROUNDS_COLLECTION}`);
+      }
+    } else must[key] = terms;
   }
   return { must, here };
 }
