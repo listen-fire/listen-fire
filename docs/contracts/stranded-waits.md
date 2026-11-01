@@ -29,6 +29,8 @@ A module may report a record gone wrongly, or the record may come back. So any a
 
 A wait opened without a key has no record to report again: it stays stranded.
 
+A record that comes back is a new arrival: a new identity, or a new version of the old one. An arrival re-delivered with the identity and version the store logged before the gone report is a provider's retry, not the record coming back, so it is a repeat (`waits.log` skips it) and the wait stays stranded. A module that signals a record's return by sending the very event again does not end the stranding.
+
 ## What the host does
 
 - **The wait stays parked.** A gone arrival wakes nothing and is no answer. What follows the `await` never runs unless the record reports again. A `race` with a `sleep` is the way out.

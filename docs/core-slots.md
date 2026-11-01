@@ -103,18 +103,18 @@ Every movement file listen-fire reads goes through the movements slot. The wire 
 
 ## The loop guard
 
-A movement that writes to the source it listens to hears its own write come back. By default nothing stops that: the echo runs the movement again. Name a guard to stop it:
+A run that writes to the source it listens to hears its own write come back. listen-fire breaks such loops itself, guard or none: an arrival on a record a run wrote at most `loopWindow` before continues that run's chain, and the listen whose arrival would make a chain longer than `loopDepth` runs is paused, by name (`lf.yaml`; the handbook's listeners chapter).
+
+The `loopGuard` slot is still named as before:
 
 ```yaml
 core:
   loopGuard: "@lf/fingerprint-guard"
 ```
 
-- After a run writes a record to a source that sends webhooks or is polled (and can read a record back), the host reads the record back and tells the guard.
-- An event naming a record is asked of the guard; if it is the echo of that movement's own write, none of that movement's listens fire.
-- `@lf/fingerprint-guard` remembers a hash of the record as the write left it for an hour. While the record still hashes the same, the event is the echo. Someone else's edit changes the record, so it runs. Another movement's listens hear the write as usual.
-- Its memory is a file of its own (`.lf/guard.db`), or a Postgres database every worker shares (`url` setting, `lf_guard` schema). It is not in the store slot.
-- The platform's listen flag `suppress_self` is separate and unchanged.
+- listen-fire 0.13 no longer asks the guard whether an event is an echo. The listen flag `suppress_self`, which it served, is gone from the language.
+- The slot's wire is unchanged in 0.13; a later release retires its `guard.isEcho`.
+- `@lf/fingerprint-guard` keeps its memory in a file of its own (`.lf/guard.db`), or a Postgres database every worker shares (`url` setting, `lf_guard` schema). It is not in the store slot.
 - The wire a guard module of your own speaks: [loop-guard-slot.md](contracts/loop-guard-slot.md).
 
 ## The wake

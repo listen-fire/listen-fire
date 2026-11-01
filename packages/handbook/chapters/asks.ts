@@ -93,6 +93,7 @@ if (r[0] == "approve") { … }
 - \`Value\` is one of the values the buttons were written with, so \`r[0] == "aprove"\` is refused when you save, with a did-you-mean.
 - A value built at run time leaves \`Value\` plain text, with a warning naming the path it was written at (\`Buttons[].Value\`).
 - Which systems carry buttons, and their limits, is in each system's chapter (\`system:slack\`).
+- To take every press, from anyone, each in its own run, write the message with a \`Topic\` beside its \`Buttons\` and listen on the presses: \`listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll"]->-[:Interactions]-> fire count_vote\`. The run keeps its tally in a table; \`system:slack\` shows the whole poll.
 
 ### host-links
 
@@ -323,7 +324,7 @@ if (r[0] == true) { … }
 
 ### how-long-a-wait-lives
 
-What a person can act on lives as long as its system keeps it: a message's buttons, a form's link. The run waits only while it is parked on them: once its race settles or the run ends, a later press or answer wakes nothing, though a form answered then still records its answer. Something that must react at any time, forever, is an automation that LISTENS.`,
+What a person can act on lives as long as its system keeps it: a message's buttons, a form's link. The run waits only while it is parked on them: once its race settles or the run ends, a later press or answer wakes nothing, though a form answered then still records its answer. Something that must react at any time, forever, is a listen (\`buttons\`).`,
   engineClaims: [
     {
       construct: 'write an ask along a Check family edge, deliver its Url, and await its Response inside a race arm; the timeout is a null test on the slot',

@@ -5,9 +5,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { fakeAffinity } from './affinity_fixture';
 import { lf, project } from './example';
+import { fakeChannels, gmailProject } from './gmail_fixture';
 import { lf as lfAsked, ok } from './interactive';
 
 const OLD = `import { acme_crm } from adapters
@@ -509,4 +512,194 @@ test('upgrade rewrites an evertrace listen onto the edge its event arrives on, a
   assert.match(held.out, /MOV_LISTEN_SETTINGS_RETIRED .*there is no rewrite: its events arrive on `Signals` and `List Entries`, so write one listen for each/);
   assert.match(held.out, /engine: left at 0\.12\.13/);
   assert.equal(readFileSync(file, 'utf8'), both);
+});
+
+// ── The 0.13 docs' listens ───────────────────────────────────────────────────
+//
+// Every listen the migration guide's "Listens are traversals" shows as a 0.13
+// form, with the parameter it gives the fired function, and every program in
+// that section and in the handbook's listeners chapter, checked by
+// `listen-fire check` against the real module it names: a doc that teaches a
+// listen the checker refuses is caught here, not by a reader.
+
+const REPO = resolve(__dirname, '../../../..');
+const GUIDE = readFileSync(join(REPO, 'docs/language/migrating-to-0.13.md'), 'utf8');
+const LISTENS_SECTION = GUIDE.slice(GUIDE.indexOf('## 8. Listens are traversals'), GUIDE.indexOf('## 9. '));
+const LUNCH_POLL = readFileSync(join(__dirname, 'movements/lunch_poll/lunch_poll.mvt'), 'utf8');
+const PROGRAM_FENCE = /^```\n(import \{[\s\S]*?)^```$/gm;
+
+/** Each connection the guide's listens start at, by the module heading it is
+ *  under: the lines that import and construct it in the probe's project. */
+const CONNECTIONS: Record<string, Record<string, string>> = {
+  cron: { cron: '' },
+  manual: { manual: '' },
+  '@lf/email': { inbox: 'import { `@lf/email` as email } from adapters\n\ninbox = connect email\n' },
+  '@lf/webhook': {
+    hooks: 'import { `@lf/webhook` as webhook } from adapters\nimport { hook_key } from credentials\n\nhooks = connect webhook using hook_key\n\nnode Payment {\n  id: <text>\n  amount: <number>\n}\n',
+  },
+  '@lf/github': { gh: 'import { `@lf/github` as github } from adapters\nimport { gh_key } from credentials\n\ngh = connect github using gh_key\n' },
+  '@lf/gmail': { mail: 'import { `@lf/gmail` as gmail } from adapters\nimport { mail_key } from credentials\n\nmail = connect gmail using mail_key\n' },
+  '@lf/granola': { notes: 'import { `@lf/granola` as granola } from adapters\nimport { notes_key } from credentials\n\nnotes = connect granola using notes_key\n' },
+  '@lf/dealroom': { rounds: 'import { `@lf/dealroom` as dealroom } from adapters\nimport { rounds_key } from credentials\n\nrounds = connect dealroom using rounds_key\n' },
+  '@lf/evertrace': { signals: 'import { `@lf/evertrace` as evertrace } from adapters\nimport { signals_key } from credentials\n\nsignals = connect evertrace using signals_key\n' },
+  '@lf/stripe': { pay: 'import { `@lf/stripe` as stripe } from adapters\nimport { pay_account } from credentials\n\npay = connect stripe using pay_account\n' },
+  '@lf/attio': { crm: 'import { `@lf/attio` as attio } from adapters\nimport { crm_attio } from credentials\n\ncrm = connect attio using crm_attio\n' },
+  '@lf/affinity': { crm: 'import { affinity } from adapters\nimport { crm_affinity } from credentials\n\ncrm = connect affinity using crm_affinity\n' },
+  '@lf/telegram': {
+    tg: 'import { `@lf/telegram` as telegram } from adapters\nimport { tg_bot } from credentials\n\ntg = connect telegram using tg_bot\n',
+    wa: 'import { `@lf/whatsapp` as whatsapp } from adapters\nimport { wa_number } from credentials\n\nwa = connect whatsapp using wa_number\n',
+  },
+  '@lf/airtable': { hiring: 'import { `@lf/airtable` as airtable } from adapters\nimport { team_airtable } from credentials\n\nhiring = connect airtable using team_airtable { base: "Hiring" }\n' },
+  '@lf/slack': { chat: 'import { `@lf/slack` as slack } from adapters\nimport { team_slack } from credentials\n\nchat = connect slack using team_slack\n' },
+  '@lf/system': { sys: 'import { `@lf/system` as system } from adapters\n\nsys = connect system\n' },
+};
+
+interface Example {
+  where: string;
+  source: string;
+}
+
+/** Each listen the section shows with its parameter, as a whole program. */
+function guideListens(): Example[] {
+  const examples: Example[] = [];
+  for (const block of LISTENS_SECTION.split(/^#### /m).slice(1)) {
+    const heading = /^`([^`]+)`/.exec(block)?.[1];
+    assert.ok(heading !== undefined, block.slice(0, 80));
+    const connections = CONNECTIONS[heading];
+    assert.ok(connections !== undefined, `no connection for the guide's ${heading}`);
+    const shown = [...block.matchAll(/(``|`)(listen to .+?)\1, parameter (``|`)(.+?)\3/g)];
+    // Every 0.13 line is one the probe reads: none slips past the pattern.
+    const thirteens = block.split('\n').filter((line) => line.startsWith('- 0.13'));
+    assert.equal(shown.filter((m) => thirteens.some((line) => line.includes(m[0]))).length, thirteens.length, `${heading}: ${thirteens.join('\n')}`);
+    for (const [, , listen, , parameter] of shown) {
+      const instance = /^listen to (\w+)/.exec(listen)?.[1] ?? '';
+      const fired = /fire (\w+)$/.exec(listen)?.[1];
+      assert.ok(connections[instance] !== undefined && fired !== undefined, `${heading}: ${listen}`);
+      examples.push({ where: `${heading}: ${listen}`, source: `${connections[instance]}\nfunction ${fired}(x: ${parameter}) {\n  return "seen"\n}\n\n${listen}\n` });
+    }
+  }
+  return examples;
+}
+
+/** The whole programs the section and the listeners chapter show. */
+function shownPrograms(): Example[] {
+  const chapter: unknown = Reflect.get(require(join(REPO, 'packages/handbook/chapters/listeners.ts')), 'listeners');
+  const content = String(Reflect.get(chapter as object, 'content'));
+  const claims: unknown = Reflect.get(chapter as object, 'engineClaims');
+  const probes = Array.isArray(claims) ? claims.map((claim: unknown) => String(Reflect.get(claim as object, 'probe'))) : [];
+  return [
+    ...[...LISTENS_SECTION.matchAll(PROGRAM_FENCE)].map((m, i) => ({ where: `guide program ${i + 1}`, source: m[1] })),
+    ...[...content.matchAll(PROGRAM_FENCE)].map((m, i) => ({ where: `listeners chapter program ${i + 1}`, source: m[1] })),
+    ...probes.map((probe, i) => ({ where: `listeners chapter probe ${i + 1}`, source: probe.replace(/\bacme\b/g, 'crm_attio') })),
+  ];
+}
+
+/** A project with every module the guide's listens name connected: the ones
+ *  that read their workspace (Slack, Airtable, Attio, Gmail) to fake-channels,
+ *  Affinity to its own fake, the rest with test keys. */
+async function listensProject(fake: { url: string }, affinity: { url: string }): Promise<string> {
+  const F = fake.url;
+  const seeded = await fetch(`${F}/admin/airtable/seed`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      entities: [
+        { entity_type: 'base', id: 'appOFFICE', data: { id: 'appOFFICE', name: 'Office' } },
+        {
+          entity_type: 'table:appOFFICE',
+          id: 'tblLUNCH',
+          data: {
+            id: 'tblLUNCH',
+            name: 'Lunch',
+            primaryFieldId: 'fldPoll',
+            fields: ['Poll', 'Person Id', 'Person', 'Answer'].map((name) => ({ id: `fld${name.replace(' ', '')}`, name, type: 'singleLineText' })),
+          },
+        },
+        { entity_type: 'base', id: 'appHIRE01', data: { id: 'appHIRE01', name: 'Hiring' } },
+        {
+          entity_type: 'table:appHIRE01',
+          id: 'tblCAND01',
+          data: {
+            id: 'tblCAND01',
+            name: 'Candidates',
+            primaryFieldId: 'fldCName',
+            fields: [
+              { id: 'fldCName', name: 'Name', type: 'singleLineText' },
+              { id: 'fldStage', name: 'Stage', type: 'singleSelect', options: { choices: [{ id: 'selApplied', name: 'Applied' }, { id: 'selInterview', name: 'Interview' }] } },
+            ],
+          },
+        },
+      ],
+    }),
+  });
+  assert.equal(seeded.status, 200, await seeded.text());
+
+  const { dir } = await gmailProject(fake as Parameters<typeof gmailProject>[0], 'gmail', 'mail_key');
+  await ok(lfAsked(dir, ['connect', '@lf/email', '--webhook-secret', 'mailgun-signing-key'], { answers: [''] }));
+  await ok(lfAsked(dir, ['connect', '@lf/webhook', '--yes'], { answers: [] }));
+  await ok(lfAsked(dir, ['credential', 'add', '--module', 'webhook', 'hook_key'], { answers: ['none', '', '', '', ''] }));
+  for (const [module, key] of [
+    ['github', 'gh_key'],
+    ['granola', 'notes_key'],
+    ['dealroom', 'rounds_key'],
+    ['evertrace', 'signals_key'],
+  ]) {
+    await ok(lfAsked(dir, ['connect', `@lf/${module}`, '--yes'], { answers: [] }));
+    await ok(lfAsked(dir, ['credential', 'add', '--module', module, key], { answers: ['test-key', ''] }));
+  }
+  await ok(lfAsked(dir, ['connect', '@lf/stripe', '--yes', '--base-url', F], { answers: [] }));
+  await ok(lfAsked(dir, ['credential', 'add', '--module', 'stripe', 'pay_account'], { answers: ['rk_test_docs', 'whsec_docs'] }));
+  await ok(lfAsked(dir, ['connect', '@lf/telegram', '--yes', '--webhook-secret', 'tok'], { answers: [] }));
+  await ok(lfAsked(dir, ['credential', 'add', '--module', 'telegram', 'tg_bot', '--credential', 'telegram'], { answers: ['123:BOT', ''] }));
+  await ok(lfAsked(dir, ['connect', '@lf/whatsapp', '--yes', '--webhook-secret', 'meta-app-secret'], { answers: [] }));
+  await ok(lfAsked(dir, ['credential', 'add', '--module', 'whatsapp', 'wa_number', '--credential', 'whatsapp'], { answers: ['EAAtoken', 'PN-1', '', '', '', ''] }));
+  await ok(lfAsked(dir, ['connect', '@lf/system', '--yes']));
+  await ok(lfAsked(dir, ['connect', '@lf/slack', '--yes', '--webhook-secret', 'slack-signing-secret']));
+  await ok(lfAsked(dir, ['credential', 'add', '--module', '@lf/slack', 'team_slack'], { answers: ['xoxb-test', '', '', `${F}/slack/`] }));
+  await ok(lfAsked(dir, ['connect', '@lf/attio', '--yes']));
+  await ok(lfAsked(dir, ['credential', 'add', '--module', '@lf/attio', 'crm_attio', '--credential', 'attio_token'], { answers: ['attio-test-token', `${F}/attio`] }));
+  await ok(
+    lfAsked(dir, ['connect', '@lf/airtable', '--yes', '--base-url', `${F}/airtable`, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`, '--client-id', 'lf-airtable-app', '--client-secret', 'lf-airtable-secret', '--redirect-port', '8993']),
+  );
+  const adding = lfAsked(dir, ['credential', 'add', '--module', '@lf/airtable', 'team_airtable', '--credential', 'airtable', '--headless'], { answers: ['', ''] });
+  const authorize = (await adding.line(/^\s+http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/)).trim();
+  const location = (await fetch(authorize, { redirect: 'manual' })).headers.get('location');
+  assert.ok(location !== null);
+  await adding.line(/paste the URL your browser was sent back to/);
+  adding.answer(location);
+  await ok(adding);
+  // Affinity installed as its own tests install it: from the module's folder, keyed to its fake.
+  mkdirSync(join(dir, 'externals/affinity'), { recursive: true });
+  writeFileSync(join(dir, 'externals/affinity/lf-external.yaml'), `name: affinity\nkind: adapter\nprotocol: 2\nmodule: ${join(REPO, 'modules/affinity')}\n`);
+  const secrets = join(dir, '.lf/secrets.yaml');
+  writeFileSync(secrets, `${readFileSync(secrets, 'utf8')}crm_affinity:\n  module: affinity\n  credential: affinity\n  apiKey: test-key\n  baseUrl: ${affinity.url}\n`);
+  chmodSync(secrets, 0o600);
+  rmSync(join(dir, 'movements'), { recursive: true, force: true });
+  mkdirSync(join(dir, 'movements'));
+  return dir;
+}
+
+test("migration guide's listen examples check clean", async () => {
+  const listens = guideListens();
+  assert.ok(listens.length >= 24, `${listens.length} listens`);
+  const programs = shownPrograms();
+  // The guide's lunch poll is the checked one, verbatim.
+  assert.ok(programs.some((p) => p.source === LUNCH_POLL), 'the guide shows lunch_poll.mvt verbatim');
+
+  const fake = await fakeChannels();
+  const affinity = await fakeAffinity(mkdtempSync(join(tmpdir(), 'lf-docs-affinity-')));
+  try {
+    const dir = await listensProject(fake, affinity);
+    const file = join(dir, 'movements', 'shown.mvt');
+    const refused: string[] = [];
+    for (const { where, source } of [...listens, ...programs]) {
+      writeFileSync(file, source);
+      const checked = lf(dir, 'check');
+      if (checked.code !== 0) refused.push(`${where}\n${source}\n${checked.out}`);
+    }
+    assert.deepEqual(refused, []);
+  } finally {
+    await affinity.stop();
+    await fake.stop();
+  }
 });

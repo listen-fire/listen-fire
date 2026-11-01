@@ -164,19 +164,19 @@ x = d != null ? "\${d}" : ""                # narrows d present in the true arm 
 Field ?: d                                 # '?:' takes a maybe-absent value, no guard needed
 \`\`\`
 
-\`first\`/\`List.last\`/\`List.min\`/\`List.max\`/\`xs[n]\` over anything that can come up empty, and a named \`match\` that found nothing, type \`T | absent\`. Using such a value where a present one is required — a write or traversal target, a dot-plane field read, an ordered comparison (\`<\` \`<=\` \`>\` \`>=\`) — is refused until narrowed, naming the fix. \`==\`/\`!=\` against \`null\` is the presence test (loose: \`null\` and absent mean the same thing); against any other value a maybe-absent side needs no guard (absent is never equal to a present value), and a condition (\`if\`, \`? :\`, \`&&\`/\`||\`/\`!\`) reads a missing boolean as false. Both sides must still match in kind. \`exists(…)\` takes related records (\`exists(msg-[:Attachments]->)\`) or a value (\`exists(x)\`, \`exists(x.Field)\`: the same test as \`x.Field != null\`); \`x != null\` and \`x == null\` take a bound name or a field read off one, and a proven field proves the record it came off. A field is never read through a value that may be absent — a change's row (\`c.Previous\` is absent on a created row) or a map member: test it first, \`exists(c.Previous) && c.Previous.Stage == "Applied"\`, \`!exists(c.Previous) || c.Previous.Stage != "Interview"\`, or inside \`if (exists(c.Previous)) { … }\`. A WHERE writes them \`AND\`, \`OR\`, \`NOT\`.
+\`first\`/\`List.last\`/\`List.min\`/\`List.max\`/\`xs[n]\` over anything that can come up empty, and a named \`match\` that found nothing, type \`T | absent\`. Using such a value where a present one is required — a write or traversal target, a dot-plane field read, an ordered comparison (\`<\` \`<=\` \`>\` \`>=\`) — is refused until narrowed, naming the fix. \`==\`/\`!=\` against \`null\` is the presence test (loose: \`null\` and absent mean the same thing); against any other value a maybe-absent side needs no guard (absent is never equal to a present value), and a condition (\`if\`, \`? :\`, \`&&\`/\`||\`/\`!\`) reads a missing boolean as false. Both sides must still match in kind. \`exists(…)\` takes related records (\`exists(msg-[:Attachments]->)\`) or a value (\`exists(x)\`, \`exists(x.Field)\`: the same test as \`x.Field != null\`); \`x != null\` and \`x == null\` take a bound name or a field read off one, and a proven field proves the record it came off. A field may hold a record, a value read with \`.\` (\`c.Current.Stage\`): it has fields only, no edges, and the record as it is now is reached by its edge (\`c-[:Record]->\`). A field is never read through a value that may be absent — a change's row (\`c.Previous\` is absent on a created row) or a map member: test it first, \`exists(c.Previous) && c.Previous.Stage == "Applied"\`, \`!exists(c.Previous) || c.Previous.Stage != "Interview"\`, or inside \`if (exists(c.Previous)) { … }\`. A WHERE writes them \`AND\`, \`OR\`, \`NOT\`.
 
 ### listeners
 
 \`\`\`
 listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire intake
-listen as "Nightly digest" to timer { schedule: "0 9 * * 1" } fire \`Weekly Digest\`   # 5-field cron, UTC
+listen as "Nightly digest" to cron-[t:Ticks WHERE t.Schedule == "0 9 * * 1" AND t.Zone == "Europe/London"]-> fire \`Weekly Digest\`
 listen to crm-[:Companies]->-[c:Changes WHERE c.Kind == "created"]-> fire \`On New\`
 listen to crm-[:Companies]->-[c:Changes WHERE c.Kind IN ["created", "updated"]]-> fire mirror
 listen to go-[:Invocations]-> fire \`On Run\`          # manual / on-demand (go = connect manual)
 \`\`\`
 
-Connect the instance first, then listen to *it*. The \`as\` alias goes right after \`listen\`, before \`to\`. A manual run *is* the submit-text/files channel: read \`go.Text\` and traverse \`go-[:Files]->.File\` (both optional). Pausing = commenting the \`listen\` line out. There is no \`run\` statement.
+A listen is a traversal from a connection, ending on an edge its system announces arrivals on; the fired function's parameter is typed by what lands (\`<cron-[:Ticks]->>\`). An edge every team shares (\`Ticks\`, \`Emails\`) needs a \`WHERE\` naming its values. The \`as\` alias goes right after \`listen\`, before \`to\`. A manual run *is* the submit-text/files channel: read \`go.Text\` and traverse \`go-[:Files]->.File\` (both optional). Pausing = commenting the \`listen\` line out. There is no \`run\` statement.
 
 ### reviews
 

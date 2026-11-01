@@ -14,7 +14,7 @@ const RETIRED: &str = "'callback(…)' is retired in 0.13. For a form a person o
 /// The handbook section a refusal points to.
 const SEE: &str = " (see handbook: reviews#waiting-on-a-person)";
 
-const MANY: &str = " Many answers in one run (`once: false`) become a standing `listen` on the message's `Interactions`, one run per answer, keeping its state in a table.";
+const MANY: &str = " Many answers in one run (`once: false`) become a standing listen on the message's `Interactions`, one run per answer: write the message with a `Topic` beside its `Buttons`, and `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"…\"]->-[:Interactions]-> fire f`.";
 
 /// Every diagnostic on `source`, as `"CODE l:c-l:c message"`.
 fn found(source: &str) -> Vec<String> {
