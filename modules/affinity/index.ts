@@ -4,7 +4,9 @@
 // client per key, so the workspace's cached shape is shared by every install
 // on that key. `ctx.config.baseUrlOverride` (the dev loop's fake) wins over
 // the credential's own base URL. Deliveries are signed with the account's
-// webhook signature key; the host refuses one with no key or a bad signature.
+// webhook signature key; the host refuses one with a bad signature, and hands
+// the rest to `preprocessInbound`, whose arrivals land on each changed
+// record's `Changes`.
 
 import { defineModule, type ModuleContext } from 'module-kit';
 
@@ -49,6 +51,10 @@ export const affinityModule = defineModule({
     scheme: 'affinity_hex_or_b64',
     signatureHeaders: ['x-affinity-webhook-signature', 'x-affinity-signature', 'x-signature', 'x-webhook-signature'],
   },
+  // Adapter protocol 2.6: a record's change arrives carrying the record
+  // (`parents`), `about` it and `occurredAt`, and its webhook is registered
+  // for an edge (`ensureEventSubscription({ edge })`).
+  protocolMinor: 6,
   create: (ctx) =>
     new AffinityAdapter({
       tenant: ctx.config.tenant,
@@ -63,10 +69,10 @@ export default affinityModule;
 
 export * from './adapter';
 export * from './api_client';
+export * from './changes';
 export * from './common';
 export * from './employer_association';
 export * from './field_configuration';
-export * from './inbound';
 export * from './manifest';
 export * from './operations';
 export * from './shared';

@@ -2,20 +2,23 @@
 // for Affinity as a write target plus the reads that support it. Affinity has a
 // v3 OUTPUT only (no v3 input), so parity = the target side: organization,
 // person, list-entry, note, and file writes, with org/person reads + identity
-// resolution. Source side (2026-07-05): Affinity pushes full-entity webhook
-// deliveries; `preprocessInbound` maps them to record events (see inbound.ts)
-// and `ensureEventSubscription` auto-registers the webhook on listen.
+// resolution. Source side: Affinity pushes one webhook event per delivery;
+// `preprocessInbound` reports it as the arrival on the changed record's
+// `Changes` (changes.ts), and `ensureEventSubscription` registers the
+// connection's one webhook when a listen on `Changes` goes live.
 //
 // The host supplies the client (from the install's credential), its models and
 // its files; the adapter builds the operations wrapper over them on first use.
 
-import type { ModuleContext, ModuleModels } from 'module-kit';
+import type { EnsureEdgeSubscriptionInput, ModuleContext, ModuleModels, RemoveEdgeSubscriptionInput } from 'module-kit';
+import type { ArrivalsCapability, AwaitHead, AwaitKey } from 'engine-contracts';
 import type {
   Adapter,
   AdapterManifest,
   DeleteInput,
   DeleteResult,
   EdgesFromResult,
+  EventSubscriptionRegistration,
   GetFieldValueInput,
   GetRelatedInput,
   LinkRecordsInput,
@@ -49,7 +52,22 @@ import {
 } from './api_client';
 import { AffinityOperations } from './operations';
 import { AFFINITY_MANIFEST } from './manifest';
-import { parseAffinityEvents } from './inbound';
+import {
+  AFFINITY_CHANGED_ENTITIES,
+  AFFINITY_CHANGES_EDGE,
+  AFFINITY_RECORD_EVENTS,
+  changeableFields,
+  changeEntryPoint,
+  changeFieldOf,
+  changeOf,
+  changesEdge,
+  changeTypeName,
+  describeChange,
+  recordEdgeOf,
+  recordTypeOfChange,
+  type ChangeArrival,
+  type ChangedRecord,
+} from './changes';
 import { singleParentLink } from 'movement-engine/public/adapter';
 import {
   META_RECORD_TYPE,
@@ -162,6 +180,11 @@ const ORGANIZATION_TERM_FIELD_IDS: ReadonlySet<string> = new Set(['name', 'domai
 const PERSON_TERM_FIELD_IDS: ReadonlySet<string> = new Set(['firstName', 'lastName', 'email']);
 
 
+/** Affinity's answer for a record that is not there, as the client reports it. */
+function isNotFound(err: unknown): boolean {
+  return (err instanceof Error ? err.message : String(err)).includes('404');
+}
+
 export class AffinityAdapter extends BaseAdapter {
   readonly adapterType = AFFINITY_ADAPTER_TYPE;
   /** Lists hold their own per-list field surface, fetched list by list.
@@ -169,9 +192,6 @@ export class AffinityAdapter extends BaseAdapter {
   readonly walksContainers = true;
 
   readonly supportedTriggers = AFFINITY_MANIFEST.supportedTriggers;
-
-  /** No synthetic event positions — unstable positions never resolve here. */
-  readonly webhookEventTypeId = undefined;
 
   private apiClient: AffinityAPIClient | null = null;
   private operations: AffinityOperations | null = null;
@@ -185,95 +205,153 @@ export class AffinityAdapter extends BaseAdapter {
 
   // ── Inbound (source side) ────────────────────────────────────────────────
 
-  /** THE raw→events seam: pure mapping of Affinity's `{type, body, sent_at}`
-   *  deliveries (see ./inbound.ts) — no pull needed, Affinity pushes the
-   *  full entity and field_value bodies carry their parent identifiers. */
-  async preprocessInbound(input: {
-    raw: unknown;
-    checkpoint?: unknown;
-  }): Promise<{ events: import('movement-engine/public/adapter').DiscriminableEvent[] }> {
-    // `parseAffinityEvents` is the PURE map (no credential); it types list-entry
-    // events as the generic `List Entry`. But the generic publishes no parent
-    // up-hop (layer 11 — a polymorphic type's surface is the intersection of its
-    // members), so an event must arrive already NARROWED to its per-list type,
-    // which carries the one parent up-hop the list's kind implies. The event
-    // knows its list, so we narrow here at the source (credentialed) rather than
-    // offering a traverse-then-narrow path — one correct way, and cheaper.
-    const parsed = parseAffinityEvents(input.raw);
-    const events = await Promise.all(parsed.map((e) => this.narrowListEntryEvent(e)));
-    return { events };
+  /**
+   * A delivery: one Affinity event (`{ type, body, sent_at }`), the arrival on
+   * the `Changes` of the record it is about (changes.ts), carrying that record
+   * as Affinity holds it now (none for a deleted one). A field value's event
+   * names the field by the name its record publishes it under. An event about
+   * anything else (a note, a reminder, a list) runs nothing.
+   */
+  async preprocessInbound(input: { raw: unknown }): Promise<{ events: []; arrivals: ChangeArrival[] }> {
+    const change = changeOf(input.raw);
+    if (change === null) return { events: [], arrivals: [] };
+    const recordType = await this.recordTypeOf(change.record, change.fieldId);
+    if (recordType === undefined) return { events: [], arrivals: [] };
+    const decoded = await this.structuredIdFor(recordType);
+    const record = change.kind === 'deleted' || decoded === undefined ? null : await this.changedRecordNow(recordType, decoded, change.record.id);
+    const field = change.fieldId === undefined ? undefined : await this.fieldTitle(recordType, change.fieldId);
+    const fields: Record<string, unknown> = {
+      Id: change.identity,
+      Kind: change.kind,
+      Record: change.record.id,
+      ...(field !== undefined ? { Field: field } : {}),
+    };
+    return {
+      events: [],
+      arrivals: [
+        {
+          edge: AFFINITY_CHANGES_EDGE,
+          key: change.record.id,
+          identity: change.identity,
+          landing: { recordId: change.identity, recordType: changeTypeName(recordType), fields },
+          parents: [record === null ? null : { recordId: change.record.id, recordType, fields: record }],
+          about: { recordType, externalId: change.record.id },
+          ...(change.occurredAt !== undefined ? { occurredAt: change.occurredAt } : {}),
+        },
+      ],
+    };
   }
 
-  /** Re-type a generic `List Entry` event to its per-list type (`List Entry —
-   *  <list>`), so its landed position publishes the one correct parent up-hop.
-   *  Non-list-entry events pass through untouched. */
-  private async narrowListEntryEvent(
-    event: import('movement-engine/public/adapter').DiscriminableEvent,
-  ): Promise<import('movement-engine/public/adapter').DiscriminableEvent> {
-    if (event.recordType !== ENTITY_DISPLAY_NAMES['list-entry']) return event;
-    const listId = await this.listIdForEvent(event);
-    if (listId == null) return event;
-    const perListName = (await this.perListNamesByListId()).get(listId);
-    return perListName ? { ...event, recordType: perListName } : event;
+  /** A run waits on a record's `Changes` under its record id: the key each
+   *  arrival on them names. */
+  readonly arrivals: ArrivalsCapability = {
+    awaitKeys: async ({ edge, heads }: { edge: string; heads: AwaitHead[] }): Promise<AwaitKey[]> => {
+      if (edge !== AFFINITY_CHANGES_EDGE) throw new Error(`affinity: '${edge}' is not a listenable edge (only '${AFFINITY_CHANGES_EDGE}')`);
+      return heads.map((head) => ({ key: head.recordId }));
+    },
+  };
+
+  /** The record type a change is about. A list's entry is typed by its list:
+   *  named by a `list_entry` body, else by the field its value sits in (each
+   *  list-scoped field belongs to one list). Undefined for an entry whose list
+   *  the workspace does not list. */
+  private async recordTypeOf(record: ChangedRecord, fieldId: number | undefined): Promise<string | undefined> {
+    if (record.entity !== 'list-entry') return ENTITY_DISPLAY_NAMES[record.entity];
+    const listId = record.listId ?? (fieldId === undefined ? undefined : await this.listOfField(fieldId));
+    return listId === undefined ? undefined : (await this.perListNamesByListId()).get(listId);
   }
 
-  /** The list a `List Entry` event belongs to. `list_entry.*` bodies carry
-   *  `list_id` directly; `field_value.*` bodies carry `field_id` + `entity_type`
-   *  but no `list_id`, so we resolve it through the (warm) field catalog —
-   *  fields are list-scoped. Returns null when the list can't be determined
-   *  (e.g. an opportunity-list field value, or an uncatalogued list). */
-  private async listIdForEvent(
-    event: import('movement-engine/public/adapter').DiscriminableEvent,
-  ): Promise<number | null> {
-    const body = (event.payload ?? {}) as Record<string, unknown>;
-    if (typeof body.list_id === 'number') return body.list_id;
-
-    const fieldId = body.field_id;
-    if (typeof fieldId !== 'number') return null;
-    const catalogType =
-      body.entity_type === AFFINITY_ENTITY_TYPE.ORGANIZATION
-        ? 'ORGANIZATION'
-        : body.entity_type === AFFINITY_ENTITY_TYPE.PERSON
-          ? 'PERSON'
-          : null;
-    if (!catalogType) return null;
-    const fields = await cachedFields({
-      client: await this.getApiClient(),
-      type: catalogType,
-    });
-    return fields.find((f) => f.id === fieldId)?.list_id ?? null;
-  }
-
-  /** Register (or diff-sync) the credential's ONE webhook subscription via
-   *  POST /webhooks — Affinity caps subscriptions at 3 per instance, so every
-   *  listen on this credential shares this registration. No secret comes
-   *  back: Affinity's HMAC key is account-level (the profile API tab), not
-   *  issued per subscription. */
-  async ensureEventSubscription(
-    input: import('movement-engine/public/adapter').EnsureEventSubscriptionInput,
-  ): Promise<import('movement-engine/public/adapter').EventSubscriptionRegistration | undefined> {
+  /** The list a list-scoped field belongs to, from the field catalogs of the
+   *  two kinds of list that have fields of their own. */
+  private async listOfField(fieldId: number): Promise<number | undefined> {
     const client = await this.getApiClient();
-    if (input.current?.externalId !== undefined) {
-      const unchanged =
-        input.current.events.length === input.events.length &&
-        input.current.events.every((e) => input.events.includes(e));
-      if (unchanged) return undefined;
-      await client.updateWebhookSubscription({
-        id: input.current.externalId,
-        subscriptions: input.events,
-      });
-      return { externalId: input.current.externalId };
+    for (const type of ['ORGANIZATION', 'PERSON'] as const) {
+      const listId = (await cachedFields({ client, type })).find((f) => f.id === fieldId)?.list_id;
+      if (listId != null) return listId;
     }
-    const created = await client.createWebhookSubscription({
-      webhookUrl: input.callbackUrl,
-      subscriptions: input.events,
-    });
+    return undefined;
+  }
+
+  /** The name a record type publishes a custom field under, by its Affinity id. */
+  private async fieldTitle(recordType: string, fieldId: number): Promise<string | undefined> {
+    const record = await this.describe(recordType);
+    return record === null ? undefined : changeableFields(record).find((f) => f.fieldId === String(fieldId))?.name;
+  }
+
+  /** The record a change is about, as Affinity holds it now, its fields under
+   *  the names its type publishes; null when it is gone. */
+  private async changedRecordNow(recordType: string, decoded: DecodedTypeId, id: string): Promise<Record<string, unknown> | null> {
+    if (decoded.entity === 'opportunity') {
+      const client = await this.getApiClient();
+      try {
+        const opportunity = await client.getOpportunityById(Number(id));
+        return { Name: opportunity.name ?? null };
+      } catch (err) {
+        if (isNotFound(err)) return null;
+        throw err;
+      }
+    }
+    try {
+      return await this.readRecord({ recordType, externalId: id, fieldIds: [] });
+    } catch (err) {
+      if (isNotFound(err)) return null;
+      throw err;
+    }
+  }
+
+  /** The record a change position names, read from Affinity now: what its
+   *  `Organization` (`List Entry`, …) edge lands on. Nothing for one gone. */
+  private async changedRecordPosition(recordType: string, change: Record<string, unknown>): Promise<RelatedResult[]> {
+    const id = Number(changeFieldOf(change, 'Record'));
+    const decoded = await this.structuredIdFor(recordType);
+    if (!Number.isInteger(id) || decoded === undefined) return [];
+    const client = await this.getApiClient();
+    try {
+      switch (decoded.entity) {
+        case 'organization':
+          return [{ position: await this.orgLanding(id, client) }];
+        case 'person':
+          return [{ position: await this.personLanding(id, client) }];
+        case 'opportunity':
+          return [{ position: await this.opportunityLanding(id, client) }];
+        case 'list-entry': {
+          if (decoded.listId === undefined) return [];
+          const entry = await client.getListEntry({ listId: decoded.listId, listEntryId: id });
+          return [{ position: makeStablePosition({ adapterType: this.adapterType, recordType, recordId: String(entry.id), data: entry }) }];
+        }
+        default:
+          return [];
+      }
+    } catch (err) {
+      if (isNotFound(err)) return [];
+      throw err;
+    }
+  }
+
+  /** The record types whose changes arrive: the three entities, and each
+   *  list's entries. */
+  private async changedRecordTypes(): Promise<string[]> {
+    const lists = [...(await this.perListTypes()).keys()];
+    return [...AFFINITY_CHANGED_ENTITIES.map((entity) => ENTITY_DISPLAY_NAMES[entity]), ...lists];
+  }
+
+  // ── Event subscriptions (the listen-reconciliation seam) ─────────────────
+  // One Affinity webhook serves every listen on a connection's `Changes`: it
+  // takes every record event, and the host judges each arrival by the record
+  // type it landed on. Affinity caps an instance at three webhooks. No secret
+  // comes back: Affinity's signing key is the account's (its API settings),
+  // held in the credential.
+
+  async ensureEventSubscription(input: EnsureEdgeSubscriptionInput): Promise<EventSubscriptionRegistration | undefined> {
+    if (input.edge !== AFFINITY_CHANGES_EDGE) throw new Error(`affinity: '${input.edge}' is not a listenable edge (only '${AFFINITY_CHANGES_EDGE}')`);
+    // The one webhook for this URL is held: it already takes every record event.
+    if (input.current?.externalId !== undefined) return undefined;
+    const client = await this.getApiClient();
+    const created = await client.createWebhookSubscription({ webhookUrl: input.callbackUrl, subscriptions: [...AFFINITY_RECORD_EVENTS] });
     return { externalId: String(created.id) };
   }
 
-  async removeEventSubscription(
-    input: import('movement-engine/public/adapter').RemoveEventSubscriptionInput,
-  ): Promise<void> {
+  async removeEventSubscription(input: RemoveEdgeSubscriptionInput): Promise<void> {
     if (input.externalId === undefined) return;
     const client = await this.getApiClient();
     await client.deleteWebhookSubscription(input.externalId);
@@ -340,7 +418,10 @@ export class AffinityAdapter extends BaseAdapter {
 
   async listEntryPoints(): Promise<SchemaEntryPoint[]> {
     const client = await this.getApiClient();
-    return catalogListEntryPoints({ client, teamId: this.teamId });
+    const entries = await catalogListEntryPoints({ client, teamId: this.teamId });
+    // Each changed record type's change type, which its records' `Changes`
+    // land on: named so the resolver knows it, never listed (changes.ts).
+    return [...entries, ...(await this.changedRecordTypes()).map(changeEntryPoint)];
   }
 
   async describe(typeRef: string): Promise<SchemaTypeDescriptor | null> {
@@ -349,10 +430,19 @@ export class AffinityAdapter extends BaseAdapter {
     // pass-through for a known name. Recover the structured id from that name
     // via the cache; an unknown name (drift / foreign id) → null.
     const name = await this.resolveTypeRef(typeRef);
+    const changed = recordTypeOfChange(name);
+    if (changed !== undefined) {
+      const record = await this.describe(changed);
+      return record === null ? null : describeChange(record);
+    }
     const decoded = await this.structuredIdFor(name);
     if (!decoded) return null;
     const client = await this.getApiClient();
-    return catalogDescribe({ client, teamId: this.teamId, decoded, displayName: name });
+    const descriptor = await catalogDescribe({ client, teamId: this.teamId, decoded, displayName: name });
+    // Organizations, people, opportunities and a list's entries announce
+    // their changes; the generic `List Entry` names no list to be typed by.
+    const announces = (AFFINITY_CHANGED_ENTITIES as readonly string[]).includes(decoded.entity) || (decoded.entity === 'list-entry' && decoded.listId != null);
+    return descriptor !== null && announces ? { ...descriptor, references: [...descriptor.references, changesEdge(name)] } : descriptor;
   }
 
   /**
@@ -636,6 +726,12 @@ export class AffinityAdapter extends BaseAdapter {
     // (7_readable_means_readable.md — every clean adapter orders META first).
     if (position.recordType === META_RECORD_TYPE) {
       return this.listRootCollection(input.fieldId, input.where);
+    }
+    // A change → the record it changed, read from Affinity now.
+    const changed = recordTypeOfChange(position.recordType);
+    if (changed !== undefined) {
+      if (naturalName(input.fieldId) !== recordEdgeOf(changed)) return [];
+      return this.changedRecordPosition(changed, (positionData(position) ?? {}) as Record<string, unknown>);
     }
     if (!isStablePosition(position) || position.recordType === null) {
       throw new Error('AffinityAdapter.getRelated expects a stable Affinity record position with a known type.');
@@ -1638,6 +1734,8 @@ export class AffinityAdapter extends BaseAdapter {
    * name. So built-ins still resolve inline with NO fetch.
    */
   async getFieldValue(input: GetFieldValueInput): Promise<unknown> {
+    // A change (an arrival's landing) holds its fields flat, by their names.
+    if (recordTypeOfChange(input.position.recordType) !== undefined) return changeFieldOf(positionData(input.position), input.fieldId);
     const fieldId = await this.resolveFieldId(input.position, input.fieldId);
     if (!/^\d+$/.test(fieldId)) return super.getFieldValue(input);
 

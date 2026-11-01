@@ -3,9 +3,12 @@
 // Master Deals List and a Portfolio list), read through a hop whose WHERE
 // pins one list. `listen-fire check` types the hop by that list's own columns, and
 // `listen-fire run` returns the Deals entry's `Deal Created` without reading a column
-// off the Portfolio entry.
+// off the Portfolio entry. A listen on the Deals list's entries' `Changes`
+// runs on each change of one column, through the one webhook `listen-fire
+// serve` registers for the connection.
 
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,7 +16,8 @@ import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { test } from 'node:test';
 
-import { lf } from './example';
+import { freePort, until } from './attio_fixture';
+import { lf, served } from './example';
 
 const REPO = resolve(__dirname, '../../../..');
 const AFFINITY = join(REPO, 'modules/affinity');
@@ -78,16 +82,18 @@ function \`Deal Date\` (run: <manual-[:Invocations]->>) {
 listen to manual-[:Invocations]-> fire \`Deal Date\`
 `;
 
-function project(fake: Fake, hopWhere: string): string {
+const SIGNING_KEY = 'affinity-signing-key';
+
+function project(fake: Fake, hopWhere: string, movement = MOVEMENT(hopWhere), lfYaml = ''): string {
   const dir = mkdtempSync(join(tmpdir(), 'lf-affinity-lists-'));
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.13.0\nmovements: movements\nexternals: externals\n');
+  writeFileSync(join(dir, 'lf.yaml'), `engine: 0.13.0\nmovements: movements\nexternals: externals\n${lfYaml}`);
   mkdirSync(join(dir, 'externals/affinity'), { recursive: true });
   writeFileSync(join(dir, 'externals/affinity/lf-external.yaml'), `name: affinity\nkind: adapter\nprotocol: 2\nmodule: ${AFFINITY}\n`);
   mkdirSync(join(dir, '.lf'));
-  writeFileSync(join(dir, '.lf/secrets.yaml'), `Affinity:\n  external: affinity\n  apiKey: test-key\n  baseUrl: ${fake.url}\n`);
+  writeFileSync(join(dir, '.lf/secrets.yaml'), `Affinity:\n  module: affinity\n  credential: affinity\n  apiKey: test-key\n  baseUrl: ${fake.url}\n  webhook_secret: ${SIGNING_KEY}\n`);
   chmodSync(join(dir, '.lf/secrets.yaml'), 0o600);
   mkdirSync(join(dir, 'movements'));
-  writeFileSync(join(dir, 'movements/deal_date.mvt'), MOVEMENT(hopWhere));
+  writeFileSync(join(dir, 'movements/deal_date.mvt'), movement);
   return dir;
 }
 
@@ -123,6 +129,151 @@ test('a List Entries hop with no list pinned still reads only what every list ha
 
     const deals = lf(project(fake, 'le.`listName` != "Portfolio"'), 'check');
     assert.equal(deals.code, 0, deals.out);
+  } finally {
+    await fake.stop();
+  }
+});
+
+// Each Status change of a Deals entry runs `moved`, which answers the column
+// it was told changed and the entry's Status as Affinity holds it now.
+const MOVED = `import { affinity } from adapters
+import { Affinity } from credentials
+
+crm = connect affinity using Affinity
+
+function moved(c: <crm-[:\`List Entry Change — Master Deals List\`]->>) {
+  said = c-[e:\`List Entry\`]-> {
+    return "\${c.Kind} \${c.Field}: \${e.Status}"
+  }
+  return said
+}
+
+listen to crm-[:\`List Entry — Master Deals List\`]->-[c:Changes WHERE c.Field == "Status"]-> fire moved
+`;
+
+/** One Affinity delivery, signed with the account's key as Affinity signs it. */
+async function deliver(url: string, type: string, body: Record<string, unknown>): Promise<{ status: number; text: string }> {
+  const raw = JSON.stringify({ type, body, sent_at: Math.floor(Date.now() / 1000) });
+  const answer = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-affinity-webhook-signature': createHmac('sha256', SIGNING_KEY).update(raw).digest('hex') },
+    body: raw,
+  });
+  return { status: answer.status, text: await answer.text() };
+}
+
+test("a listen on the Deals list's entries runs on each Status change, naming the new status, and on no other change", async () => {
+  const fake = await fakeAffinity(mkdtempSync(join(tmpdir(), 'lf-affinity-fake-')));
+  try {
+    const port = await freePort();
+    const dir = project(fake, '', MOVED, `publicUrl: http://127.0.0.1:${port}\n`);
+    const checked = lf(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+    // A column the Deals list does not have is refused where it is written.
+    writeFileSync(join(dir, 'movements/deal_date.mvt'), MOVED.replace('c.Field == "Status"', 'c.Field == "Stauts"'));
+    const refused = lf(dir, 'check');
+    assert.notEqual(refused.code, 0, refused.out);
+    assert.match(refused.out, /MOV_ENUM_UNKNOWN_VALUE[\s\S]*"Stauts"/);
+    writeFileSync(join(dir, 'movements/deal_date.mvt'), MOVED);
+
+    // The Deals entry of the seeded company, and its Status value.
+    const api = async (path: string, init?: RequestInit) => (await fetch(`${fake.url}${path}`, init)).json() as Promise<unknown>;
+    const { organizations } = (await api('/organizations?term=Veltha')) as { organizations: Array<{ id: number; name: string; list_entries: Array<{ id: number; list_id: number }> }> };
+    const org = organizations.find((o) => o.name === 'Veltha')!;
+    const entry = org.list_entries.find((e) => e.list_id === 10)!;
+    const values = (await api(`/field-values?list_entry_id=${entry.id}`)) as Array<{ id: number; field_id: number; value: unknown }>;
+    const status = values.find((v) => v.field_id === 310)!;
+    const set = (row: { id: number }, value: string) => api(`/field-values/${row.id}`, { method: 'PUT', body: JSON.stringify({ value }) });
+    const changeOf = (row: { id: number; field_id: number }, value: string) => ({ ...row, value, entity_type: 1, entity_id: org.id, list_entry_id: entry.id });
+
+    const serving = await served(dir, ['--port', String(port)]);
+    try {
+      const registered = await serving.waitFor(/registered webhook \S+ for the arrivals on Changes at /);
+      const url = registered.replace(/^.* at /, '');
+      const webhooks = (await api('/webhooks')) as Array<{ webhook_url: string; subscriptions: string[] }>;
+      assert.deepEqual(webhooks.map((w) => w.webhook_url), [url]);
+      assert.ok(webhooks[0]!.subscriptions.includes('field_value.updated'), JSON.stringify(webhooks));
+      const runs = () => serving.lines.filter((l) => /^run \S+ deal_date:moved completed$/.test(l)).length;
+
+      await set(status, 'Diligence');
+      assert.equal((await deliver(url, 'field_value.updated', changeOf(status, 'Diligence'))).status, 200);
+      await until(() => runs() === 1, serving.lines);
+
+      // The same change again, another column of the entry, the company's own
+      // update, and a note: none of them is a Status change of a Deals entry.
+      assert.ok((await deliver(url, 'field_value.updated', changeOf(status, 'Diligence'))).status < 300);
+      const source = values.find((v) => v.field_id === 311)!;
+      await set(source, 'Inbound');
+      await deliver(url, 'field_value.updated', changeOf(source, 'Inbound'));
+      await deliver(url, 'organization.updated', { id: org.id, name: 'Veltha', domain: 'veltha.example' });
+      await deliver(url, 'note.created', { id: 1, content: 'met the founders' });
+      // A forged delivery runs nothing either.
+      const forged = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-affinity-webhook-signature': 'deadbeef' }, body: JSON.stringify({ type: 'field_value.updated', body: changeOf(status, 'Passed') }) });
+      assert.equal(forged.status, 401);
+
+      await set(status, 'Passed');
+      await deliver(url, 'field_value.updated', changeOf(status, 'Passed'));
+      await until(() => runs() === 2, serving.lines);
+      await new Promise((done) => setTimeout(done, 500));
+      assert.equal(runs(), 2, serving.lines.join('\n'));
+    } finally {
+      await serving.stop();
+    }
+    const listed = JSON.parse(lf(dir, 'runs', '--json').out) as { runs: Array<{ runId: string }> };
+    const returned = listed.runs.map((r) => lf(dir, 'runs', 'show', r.runId).out);
+    assert.ok(returned.some((out) => out.includes('updated Status: Diligence')), returned.join('\n'));
+    assert.ok(returned.some((out) => out.includes('updated Status: Passed')), returned.join('\n'));
+  } finally {
+    await fake.stop();
+  }
+});
+
+test('upgrade rewrites a 0.12 listen on an organization’s events onto its Changes, and holds the pin on one it cannot', async () => {
+  const fake = await fakeAffinity(mkdtempSync(join(tmpdir(), 'lf-affinity-fake-')));
+  try {
+    const old = (events: string) => `import { affinity } from adapters
+import { Affinity } from credentials
+
+crm = connect affinity using Affinity
+
+function welcomed(o: <crm-[:Organization]->>) {
+  return "welcome"
+}
+
+listen to crm { events: ${events} } fire welcomed
+`;
+    const dir = project(fake, '', old('["organization.created", "organization.updated"]'));
+    const file = join(dir, 'movements/deal_date.mvt');
+    const lfYaml = join(dir, 'lf.yaml');
+    const pinned = () => writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
+    pinned();
+    const upgraded = lf(dir, 'upgrade');
+    assert.equal(upgraded.code, 0, upgraded.out);
+    assert.equal(
+      readFileSync(file, 'utf8'),
+      old('')
+        .replace('<crm-[:Organization]->>', '<crm-[:OrganizationChange]->>')
+        .replace('listen to crm { events:  }', 'listen to crm-[:Organization]->-[c:Changes WHERE c.Kind IN ["created", "updated"]]->'),
+    );
+    const checked = lf(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+
+    // A field value's event names no one record type; an organization's and
+    // a person's arrive on two edges, as every event a listen naming none
+    // heard does: none has a rewrite, and the pin holds.
+    const noEvents = old('[]').replace('listen to crm { events: [] }', 'listen to crm');
+    for (const [source, said] of [
+      [old('["field_value.updated"]'), /MOV_LISTEN_SETTINGS_RETIRED/],
+      [old('["organization.created", "person.created"]'), /its events arrive on `-\[:Organization\]->-\[:Changes\]->` and `-\[:Person\]->-\[:Changes\]->`, so write one listen for each/],
+      [noEvents, /its events arrive on `-\[:Organization\]->-\[:Changes\]->` and `-\[:Person\]->-\[:Changes\]->` and `-\[:Opportunity\]->-\[:Changes\]->`/],
+    ] as const) {
+      writeFileSync(file, source);
+      pinned();
+      const held = lf(dir, 'upgrade');
+      assert.equal(held.code, 1, held.out);
+      assert.match(held.out, said);
+      assert.equal(readFileSync(file, 'utf8'), source);
+    }
   } finally {
     await fake.stop();
   }

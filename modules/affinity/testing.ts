@@ -70,6 +70,8 @@ interface FakeCalls {
   listOrganisations: Array<{ term?: string }>;
   listPersons: Array<{ term?: string }>;
   deletes: string[];
+  /** Webhooks made (`POST /webhooks`) and deleted, in order. */
+  webhooks: Array<{ made: { webhookUrl: string; subscriptions: string[] } } | { deleted: string }>;
 }
 
 // ── Read-surface fixtures (notes / files / opportunities / reminders /
@@ -272,6 +274,7 @@ export function makeAdapter(input?: {
     listOrganisations: [],
     listPersons: [],
     deletes: [],
+    webhooks: [],
   };
 
   const fakeClient = {
@@ -319,6 +322,13 @@ export function makeAdapter(input?: {
       entity_id: input?.existingListEntry?.entityId ?? 42,
       created_at: '2026-09-01T00:00:00.000Z',
     }),
+    createWebhookSubscription: async (made: { webhookUrl: string; subscriptions: string[] }) => {
+      calls.webhooks.push({ made });
+      return { id: 31, webhook_url: made.webhookUrl, subscriptions: made.subscriptions };
+    },
+    deleteWebhookSubscription: async (id: string) => {
+      calls.webhooks.push({ deleted: id });
+    },
     getOrganisationById: async (id: number) => ({ id, name: 'Acme', domain: 'acme.com', domains: ['acme.com'], person_ids: [] }),
     getPersonById: async (id: number) => ({ id, first_name: 'Jane', last_name: 'Doe', primary_email: 'jane@acme.com', emails: ['jane@acme.com'], organization_ids: input?.personOrgIds ?? [] }),
     updatePerson: async (id: number, payload: { organization_ids?: number[] }) => {

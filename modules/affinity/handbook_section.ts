@@ -52,6 +52,22 @@ d-[o:owners]-> {
 
 Affinity decides who a person is itself, so the \`match\` body is only what it looks them up by: nobody is created, and nothing about the person found is changed. Somebody who cannot be found is absent, so guard the link (\`if (owner != null)\`); walking a list of names then attaches the ones that resolve. \`unlink\` takes one back off; severing what was never there does nothing.
 
+### listening-to-a-list
+
+A list's entries announce their changes on their \`Changes\` edge, so a deal moving stage is a listen on the deal list's entries, narrowed to changes of that one field:
+
+\`\`\`
+function moved(c: <crm-[:\`List Entry Change — Master Deals List\`]->>) {
+  c-[e:\`List Entry\`]-> {
+    return e.Status
+  }
+}
+
+listen to crm-[:\`List Entry — Master Deals List\`]->-[c:Changes WHERE c.Field == "Status"]-> fire moved
+\`\`\`
+
+\`Kind\` says what happened (\`created\`, \`updated\`, \`deleted\`); a field's value set or cleared is \`updated\`, with \`Field\` naming the field the way the list shows it. Organizations, people and opportunities have \`Changes\` too. Walk the change's \`List Entry\` (\`Organization\`, …) for the record as it is now. The same change delivered twice runs once.
+
 ### Common mistakes
 
 - **Writing one block per name.** A name is a value like any other — walk the names you have and \`match\`, guard and \`link\` inside the walk.

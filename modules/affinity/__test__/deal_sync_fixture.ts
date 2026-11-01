@@ -121,6 +121,8 @@ export class FakeAffinity {
   persons = new Map<number, Person>();
   entries = new Map<number, Entry>();
   values = new Map<number, ValueRow>();
+  /** The webhooks registered (`POST /webhooks`), by id. */
+  webhooks = new Map<number, { id: number; webhook_url: string; subscriptions: string[] }>();
   /** Every request on the wire, `METHOD /path?query`. */
   requests: string[] = [];
   private nextId = 5000;
@@ -321,6 +323,16 @@ export class FakeAffinity {
         if (method === 'PUT') row.value = body.value;
         if (method === 'DELETE') this.values.delete(row.id);
         return json(this.rowBody(row));
+      }
+
+      if (path === '/webhooks' && method === 'POST') {
+        const webhook = { id: this.id(), webhook_url: String(body.webhook_url), subscriptions: (body.subscriptions as string[] | undefined) ?? [] };
+        this.webhooks.set(webhook.id, webhook);
+        return json(webhook);
+      }
+      if (path === '/webhooks' && method === 'GET') return json([...this.webhooks.values()]);
+      if ((m = path.match(/^\/webhooks\/(\d+)$/)) && method === 'DELETE') {
+        return json({ success: this.webhooks.delete(Number(m[1])) });
       }
 
       return json({ message: `unhandled ${method} ${path}` }, 404);

@@ -19,7 +19,6 @@ import type { ResolveEntityInput } from 'movement-engine/public/adapter';
 import type { Expression } from 'engine-contracts/expression/expression';
 import type { SourcePosition } from 'movement-engine/public/catalog';
 
-import { AFFINITY_MANIFEST } from '../index';
 import { makeAdapter, testFileStore } from '../testing';
 import { decodedFixedType, listScopedFieldDisplayNames } from '../types';
 import { instanceSchemaFromDescriptors } from 'movement-engine/public/catalog';
@@ -607,64 +606,6 @@ describe('AffinityAdapter.getRelated — list entry → parent record', () => {
         direction: 'outgoing',
       }),
     ).rejects.toThrow(/not a known edge/);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 2b'. preprocessInbound narrows list-entry events to their per-list type
-// (option A) — so the landed event position publishes the one parent up-hop,
-// which the generic `List Entry` (empty intersection, layer 11) cannot.
-// ---------------------------------------------------------------------------
-
-describe('AffinityAdapter.preprocessInbound — list-entry event narrowing', () => {
-  it('narrows a list_entry.* event via the body list_id', async () => {
-    const { adapter } = makeAdapter();
-    const { events } = await adapter.preprocessInbound({
-      raw: {
-        type: 'list_entry.created',
-        body: { id: 13, list_id: 555, entity_id: 42, entity_type: 1, created_at: '2026-07-18T00:00:00Z' },
-      },
-    });
-    expect(events).toHaveLength(1);
-    expect(events[0].recordType).toBe('List Entry — Hot Leads');
-  });
-
-  it('narrows a field_value.* event by resolving field_id → list_id through the field catalog', async () => {
-    const { adapter } = makeAdapter();
-    // Field 103 (`List Score`) is list-scoped to list 555 (Hot Leads); the
-    // field_value body carries no list_id, so it's resolved via the catalog.
-    const { events } = await adapter.preprocessInbound({
-      raw: {
-        type: 'field_value.updated',
-        body: { id: 77, field_id: 103, entity_type: 1, entity_id: 42, list_entry_id: 13, value: 5 },
-      },
-    });
-    expect(events).toHaveLength(1);
-    expect(events[0].recordType).toBe('List Entry — Hot Leads');
-  });
-
-  it('leaves the event on the generic type when the list cannot be determined', async () => {
-    const { adapter } = makeAdapter();
-    // An opportunity-list field value (entity_type 8): the field catalog only
-    // covers org/person, so list_id can't be resolved — a graceful degrade to
-    // the generic type rather than a fabricated narrowing.
-    const { events } = await adapter.preprocessInbound({
-      raw: {
-        type: 'field_value.updated',
-        body: { id: 78, field_id: 900, entity_type: 8, entity_id: 700, list_entry_id: 13, value: 'x' },
-      },
-    });
-    expect(events).toHaveLength(1);
-    expect(events[0].recordType).toBe('List Entry');
-  });
-
-  it('passes a non-list-entry event through untouched', async () => {
-    const { adapter } = makeAdapter();
-    const { events } = await adapter.preprocessInbound({
-      raw: { type: 'organization.updated', body: { id: 7101, name: 'Acme' } },
-    });
-    expect(events).toHaveLength(1);
-    expect(events[0].recordType).toBe('Organization');
   });
 });
 
@@ -2207,8 +2148,6 @@ describe('write org-[:List Entries]-> reaches the checker', () => {
         affinity: {
           constructionArgs: [{ name: 'credentials', kind: 'credential', required: true }],
           canFire: true,
-          triggerConfig: ['events'],
-          triggerConfigOptions: { events: [...(AFFINITY_MANIFEST.subscribableEvents ?? [])] },
           schemas: { affinity_creds: schema },
         },
       },
