@@ -81,7 +81,7 @@ mod held_as_a_value {
         ]
         .into_iter()
         .chain(body.iter().copied())
-        .chain(["}", "listen to runs {} fire recap"])
+        .chain(["}", "listen to runs-[:Invocations]-> fire recap"])
         .collect::<Vec<_>>()
         .join("\n");
         let files = serde_json::json!({ "lib/mk": { "source": LIBRARY } }).to_string();

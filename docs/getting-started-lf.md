@@ -42,16 +42,16 @@ function welcome(company: <crm-[:Company]->>) {
   write crm-[:Company]-> { Name: "Welcome ${company.Name}" }
 }
 
-listen to crm { events: ["company.created"] } fire welcome
+listen to crm-[:Company]-> fire welcome
 ```
 
-A module with no webhooks (Granola, Evertrace, Dealroom, GitHub's notifications) is polled instead: its manifest declares `poll: { intervalSeconds }`, and a listen on it reads like any other (`listen to granola fire summarise`).
+A module with no webhooks (Granola, Evertrace, Dealroom, GitHub's notifications) is polled instead: its listenable edge declares `delivery: polled` and `pollEverySeconds`, and a listen on it reads like any other (`listen to granola-[n:Meetings WHERE n.Folders CONTAINS "deals"]-> fire summarise`).
 
-- A listen can set its own interval, `listen to granola { every: 5m } fire summarise`; without it the module's interval applies.
-- `listen-fire serve` polls each such listen on the module's interval, and runs the listen on each new event.
-- `listen-fire drain` polls every listen that is due. A poll missed while nothing ran is one poll on the next drain.
-- Each listen keeps its own checkpoint, so a poll asks only for what is new since the last one.
-- An event a listen has run before (the same `idempotencyKey`) runs nothing.
+- Listens on one connection and edge with the same `WHERE` share one poll. `pollEvery` in `lf.yaml` overrides a connection's interval; a listen has none of its own.
+- `listen-fire serve` polls each such edge on its interval, and runs the listens on each new arrival. The first poll only arms: what was there before fires nothing.
+- `listen-fire drain` polls every edge that is due. A poll missed while nothing ran is one poll on the next drain.
+- Each poll keeps its own cursor, so it asks only for what is new since the last one.
+- An arrival a listen has run before runs nothing.
 
 `listen-fire check` prints every diagnostic; fix them before running.
 

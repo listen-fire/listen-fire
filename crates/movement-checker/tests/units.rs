@@ -6,20 +6,19 @@
 use movement_checker::{CheckOptions, Diagnostic, check_source};
 use movement_parser::catalog::types::CatalogSnapshot;
 
-const CATALOG: &str = r#"{"adapters":{"cron":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Tick":{"properties":{"Fired at":"date"},"edges":{}}},"collections":{},"writableRoots":{}}}},"manual":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Invocation":{"properties":{"Text":"text"},"edges":{}}},"collections":{},"writableRoots":{}}}}},"credentials":{},"plugins":{}}"#;
+const CATALOG: &str = r#"{"adapters":{"cron":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Tick":{"properties":{"Fired at":"date"},"edges":{}}},"collections":{"Ticks":{"target":"Tick","readable":false,"listenable":true,"delivery":"polled","pollEverySeconds":60}},"writableRoots":{}}}},"manual":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Invocation":{"properties":{"Text":"text"},"edges":{}}},"collections":{"Invocations":{"target":"Invocation","readable":false,"listenable":true,"delivery":"connection"}},"writableRoots":{}}}}},"credentials":{},"plugins":{}}"#;
 
 fn check(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
     let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
-    // The settings form's retirement is listen_settings_retired.rs's to pin.
-    check_source(source, &catalog, options).unwrap().into_iter().filter(|d| d.code != "MOV_LISTEN_SETTINGS_RETIRED").collect()
+    check_source(source, &catalog, options).unwrap()
 }
 
 fn codes(found: &[Diagnostic]) -> Vec<&str> {
     found.iter().map(|d| d.code.as_str()).collect()
 }
 
-const UNITS: &str = "function hello(run: <manual-[:Invocation]->>) {\n  return run.`Text`\n}\nlisten to manual fire hello\nfunction digest(t: <cron-[:Tick]->>) {\n  return t.`Fired at`\n}\nlisten to cron { schedule: \"0 9 * * 1\" } fire digest\n";
+const UNITS: &str = "function hello(run: <manual-[:Invocation]->>) {\n  return run.`Text`\n}\nlisten to manual-[:Invocations]-> fire hello\nfunction digest(t: <cron-[:Tick]->>) {\n  return t.`Fired at`\n}\nlisten to cron-[:Ticks]-> fire digest\n";
 
 #[test]
 fn from_version_5_cron_and_manual_need_no_import() {
@@ -34,7 +33,7 @@ fn a_unit_is_typed_as_its_adapter_describes_it() {
 
 #[test]
 fn a_files_own_import_and_connection_of_a_unit_still_check() {
-    let source = "import { manual } from adapters\nruns = connect manual\nfunction hello(run: <runs-[:Invocation]->>) {\n  return run.`Text`\n}\nlisten to runs fire hello\n";
+    let source = "import { manual } from adapters\nruns = connect manual\nfunction hello(run: <runs-[:Invocation]->>) {\n  return run.`Text`\n}\nlisten to runs-[:Invocations]-> fire hello\n";
     assert_eq!(codes(&check(source)), Vec::<&str>::new());
     let shadowed = "function hello(manual: <number>) {\n  return manual\n}\n";
     assert_eq!(codes(&check(shadowed)), Vec::<&str>::new());

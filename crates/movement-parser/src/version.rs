@@ -90,8 +90,8 @@ pub fn refusal(pin: &str, own: &str) -> Option<String> {
 }
 
 /// The run host's units (Henry 2026-10-16): every file has these names in
-/// scope, each already connected — `listen to manual fire hello`,
-/// `listen to cron { schedule: "0 9 * * 1" } fire digest` — with no import
+/// scope, each already connected — `listen to manual-[:Invocations]-> fire hello`,
+/// `listen to cron-[t:Ticks WHERE t.Schedule == "0 9 * * 1"]-> fire digest` — with no import
 /// and no `connect`. A file's own binding of the name replaces it.
 pub const RUN_HOST_UNITS: &[&str] = &["cron", "manual"];
 

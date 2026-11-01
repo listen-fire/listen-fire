@@ -286,31 +286,11 @@ The manifest file registers your server with a team:
   `webhookEventTypeId`.
 - Optional module declarations: `credentials`, `inbound`, `poll` and
   `periodic` ([Modules](#modules-credentials-signatures-and-schedules)).
-- What a listen on your adapter may say, also optional:
-  - `subscribableEvents`: the values of a listen's `events: [...]`
-    (`listen to crm { events: ["company.created"] } fire welcome`). An event
-    is routed to that listen only when its `eventType` is one of them,
-    pushed or polled.
-  - `defaultSubscribedEvents`: what a listen with no `events` receives
-    (absent means every subscribable event).
-  - `listenConfig`: further keys, as `[{ key, required?, format? }]`, where
-    `format` is `cron`, `timezone`, `fields`, `strings`, `field` or
-    `field-value`. A `field` key is one field of the watched record
-    (`field: "Stage"`). A `field-value` key is a value of that field
-    (`becomes: "Interview"`), checked against the field's type; declare it
-    only beside exactly one `field` key.
-    An entry may also carry `narrows: { collection, matchField }`: the key is
-    one hop of the address an event is narrowed by, in declaration order
-    (Airtable's `base` then `table`). A movement whose signature names the
-    address (`<at-[:`Record Change` WHERE `table` == "tbl…"]->>`) reads the
-    event's edges onto the last hop's `collection` as the node the address
-    walks to. The host walks it with your `edgesFrom`, from the connection's
-    root, choosing at each hop the member of `collection` whose data has
-    `matchField` equal to the value. A connection's entry position consumes
-    the leading hops it pins (`base:` on the connection), so its signatures
-    name only the rest.
-  Declare them and the checker refuses any other key or event. Declare none
-  and a listen's config goes unchecked.
+- What a listen on your adapter may say is the edges you declare listenable
+  ([Declaring a listenable edge](#declaring-a-listenable-edge)). The 0.12
+  declarations `subscribableEvents`, `defaultSubscribedEvents`,
+  `listenConfig` and `subscriptionScopeKeys` are retired in 0.13: a host
+  refuses a manifest that still declares one, naming it.
 
 Install it on the **Adapters** page, pasting the manifest and the secret
 together. An agent can instead give the user a link to enter the secret
@@ -1909,7 +1889,7 @@ from `apps/cli`.
      write crm-[:Company]-> { Name: "Answered ${c.Text}" }
    }
 
-   listen to crm {} fire discuss
+   listen to crm-[:Company]-> fire discuss
    ```
 
    Serve the project and read the port `listen-fire` started the CRM on; the example

@@ -1438,42 +1438,24 @@ export interface MovementDeclaration {
 // ── Listeners ──
 
 /**
- * `listen to inbox { key: "dealflow" } fire dealflow_intake` — a file-level
- * statement declaring that events on a constructed adapter instance fire a
- * movement. Trigger rows are fully DERIVED from these (one per listen); a
- * file with no listens is a library. The config block is the trigger's
- * adapter-specific routing config (e.g. the email plus-address `key`) and
- * may be omitted.
+ * `listen to inbox-[e:Emails WHERE e.Key == "dealflow"]-> fire dealflow_intake`
+ * — a file-level statement declaring that what arrives on an edge fires a
+ * movement. The traversal is rooted at a named instance and ends on an edge
+ * its module declares listenable; the fired movement's parameter is typed by
+ * what lands there (`m: <inbox-[:Emails]->>`). A file with no listens is a
+ * library.
  *
- * A system whose RECORDS change is listened to the same way — the knowledge
- * graph included, which is constructed and named like any other:
+ * `listen` is the ONLY invoker. The run host's units are listened to the
+ * same way: `listen to manual-[:Invocations]-> fire backfill` ("Run now" is
+ * an arrival on it), `listen to cron-[t:Ticks WHERE t.Schedule == "0 9 * * 1"]->
+ * fire digest`.
  *
- *   graph = kg()
- *   listen to graph { type: "Company", events: ["record.created", "record.updated"],
- *                     fields: [Domains] } fire on_company_change
- *
- * Every value here is a plain quoted one: `type` pins which record type is
- * watched, `events` names the uniform `record.*` change kinds, and `fields`
- * narrows updates to ones touching the named properties. What the listen
- * FIRES is the change, not the record — the fired movement's parameter is the
- * event position (`change: <graph-[:`Record Change` WHERE `type` ==
- * "Company"]->>`) and the record is one hop along its `Record` edge.
- *
- * `listen` is the ONLY invoker (the former `run` entry retired when time
- * and manual runs collapsed into adapters). Every channel is constructed
- * EXPLICITLY and named first, then listened to by name: scheduled work
- * constructs a cron instance (`timer = cron()`; `listen to timer { schedule:
- * "0 9 * * 1" } fire digest`), on-demand work a manual one (`go = manual()`;
- * `listen to go {} fire backfill` — "Run now" injects an event on that
- * channel). The fired movement's parameter is typed against the SAME named
- * instance (`go: <go-[:invocation]->>`).
- *
- * An inline construction — `listen to manual() {}` — still parses (the call
- * lands in `construct`) but the checker rejects it: an instance exists only
- * from an explicit `name = adapter()` construction (spec
- * `plans/2026-06-24-required-instantiation/0_spec.md`). `construct` is kept
- * on the node only so the checker can recognise that mistake and guide the
- * fix.
+ * The 0.12 settings form, `listen to x { … } fire f`, still parses (`path`
+ * absent, its keys in `config`) so the checker can refuse it by name
+ * (MOV_LISTEN_SETTINGS_RETIRED) and `listen-fire upgrade` can rewrite it. An
+ * inline construction — `listen to manual() …` — parses too (the call lands
+ * in `construct`) and is refused the same way: an instance exists only from
+ * an explicit `name = adapter()` construction.
  */
 export interface ListenDeclaration {
   kind: 'listen';

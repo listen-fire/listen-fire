@@ -25,7 +25,6 @@ Not a versioned contract: an editor speaks LSP, and LSP is the contract. This pa
 | what follows `<x-[:` in a type | the record types of instance `x` | the instance's schema |
 | a built-in | its current spelling and signature | the spelling table (crates/movement-parser/src/surface/table.rs) and the standard library's signatures |
 | inside `import { … } from adapters` / `plugins` | module tags (`` `@lf/<name>` ``) and plugin names | the catalog's adapters (host units left out), plugin packages and plugins |
-| inside `listen to x { … }` | the listen's settings keys | the source's `triggerConfig` (`every` replaces `pollIntervalSeconds`), and `suppress_self` |
 | after `connect x using` | credential names serving that module | the catalog's credentials, built from listen-fire's secrets bindings (names only, never values) |
 
 ## The LSP methods

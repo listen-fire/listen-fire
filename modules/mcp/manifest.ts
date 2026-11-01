@@ -29,7 +29,7 @@ function triage(company: <crm-[:Company]->>) {
   }
 }
 
-listen to crm { events: ["company.created"] } fire triage
+listen to crm-[:Company]-> fire triage
 \`\`\`
 
 - A read must pin each argument its tool requires with \`==\` in the \`WHERE\` (a literal, or a value already in hand). One left out passes the check and fails the run, naming it. A read answers one record, so it takes no \`LIMIT\`.

@@ -42,14 +42,13 @@ listen to manual-[:Invocations]-> fire backfill
 
 ## Polled sources
 
-A module with no webhooks declares `poll: { intervalSeconds }` in its manifest. The host then polls it for each listen on it:
+A module with no webhooks declares a listenable edge `delivery: polled`, with `pollEverySeconds`. The host then polls the edge, once for every listen on one connection that shares the edge and its `WHERE`:
 
-- `listen-fire serve` polls each listen on the module's interval; `listen-fire drain` polls whatever is due.
+- `listen-fire serve` polls each such edge on its interval; `listen-fire drain` polls whatever is due. `pollEvery` in `lf.yaml` overrides a connection's interval.
 - A poll missed while no worker ran is one poll on the next drain.
-- The store keeps each listen's checkpoint, the module's own bookmark, so the next poll asks for what is new since it.
-- One worker at a time polls a listen, however many drain the store (the poll is a row in the store's work queue, held under its lease).
-- Each event runs the listen as a webhook's event does. An event the listen has run before (the same `idempotencyKey`) runs nothing.
-- A listen sets its own interval with `every: <duration>` (`listen to feed { every: 5m } fire seen`); without it, the module's interval applies. The older spelling, `pollIntervalSeconds: 300`, is refused with the rewrite.
+- The store keeps each poll's cursor, the module's own bookmark, so the next poll asks for what is new since it. The first poll only arms.
+- One worker at a time polls an edge, however many drain the store (the poll is a `poll_edge` row in the store's work queue, held under its lease).
+- Each arrival runs the listens it fits as a webhook's does. An arrival a listen has run before runs nothing.
 - `listen-fire run --poll <movement>` polls now, once.
 
 ## The limiter

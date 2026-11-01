@@ -61,7 +61,7 @@ movement m(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire m`;
+listen to runs-[:Invocations]-> fire m`;
 
   it('captures the whole IF across lines and it parses to a conditional', () => {
     const slots = writeFieldSlots(parseProgram(src));
@@ -81,7 +81,7 @@ ${body}
   }
 }
 
-listen to runs {} fire m`;
+listen to runs-[:Invocations]-> fire m`;
 
   it('allows a newline between a <type> annotation and its description', () => {
     const src = wrap(`    node company: "each company" {

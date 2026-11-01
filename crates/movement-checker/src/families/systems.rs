@@ -256,7 +256,7 @@ impl Checker<'_> {
         let adapter = symbol.imported_name.clone().unwrap_or_else(|| symbol.name.clone());
         let position = type_.position.clone().unwrap_or_else(|| if adapter == "cron" { "tick".into() } else { "invocation".into() });
         let message = format!(
-            "'{}' is an adapter, not an instance — construct an instance and name it first: 'go = {}', then type the parameter against the name ('<go-[:{position}]->>') and listen to it ('listen to go {{}}')",
+            "'{}' is an adapter, not an instance — construct an instance and name it first: 'go = {}', then type the parameter against the name ('<go-[:{position}]->>') and listen to it ('listen to go-[:…]-> fire f')",
             type_.graph,
             self.construction_call(&adapter)
         );

@@ -1036,7 +1036,7 @@ impl Parser {
             "listen" => return Ok(Statement::Listen(self.parse_listen()?)),
             "run" => {
                 return self.fail_at(
-                    "'run' is not a statement — movements are invoked only by listeners. For on-demand runs declare a manual channel: `go = manual()` + `listen to go {} fire <movement>` (\"Run now\" injects an event on that channel); for schedules, `timer = cron()` + `listen to timer { schedule: \"0 9 * * 1\" } fire <movement>`",
+                    "'run' is not a statement — movements are invoked only by listeners. For on-demand runs listen to the manual unit: `listen to manual-[:Invocations]-> fire <movement>` (\"Run now\" is an arrival on it); for schedules, `listen to cron-[t:Ticks WHERE t.Schedule == \"0 9 * * 1\"]-> fire <movement>`",
                     start,
                 );
             }
