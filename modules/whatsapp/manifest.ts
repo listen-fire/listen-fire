@@ -9,11 +9,17 @@
 import type { AdapterManifest } from 'movement-engine/public/adapter';
 
 import { WHATSAPP_HANDBOOK_SECTION } from './handbook_section';
-import { WHATSAPP_ADAPTER_TYPE } from './types';
+import { WHATSAPP_ADAPTER_TYPE, WHATSAPP_ARRIVAL_EDGES, WHATSAPP_LOCATION_DISPLAY_NAME, WHATSAPP_MESSAGE_DISPLAY_NAME, WHATSAPP_REACTION_DISPLAY_NAME } from './types';
+
+/** What a 0.12 listen hearing one kind of inbound record becomes: a listen on
+ *  the root edge it arrives on. It had no settings besides `events`, so no
+ *  key maps. */
+const arrivingOn = (edge: string, alias: string, paramFrom: string) => ({ path: [edge], aliases: [alias], paramFrom, keys: {} });
+const MESSAGES_BECOME = arrivingOn(WHATSAPP_ARRIVAL_EDGES.message, 'm', WHATSAPP_MESSAGE_DISPLAY_NAME);
 
 /**
- * Source and target: a listen receives each message (text and media),
- * reaction and location; a write replies, reacts or shows typing along a
+ * Source and target: a listen on `Messages`, `Reactions` or `Locations`
+ * receives each message (text and media), reaction and location; a write replies, reacts or shows typing along a
  * message's edges. No `requiredCredentialType`: on the platform WhatsApp takes
  * no team credential (its one Meta app sends for every team). No meta root.
  */
@@ -30,23 +36,34 @@ export function whatsappManifest(movementsNumber: string | null): AdapterManifes
       "indicator. Where the number is the project's own (listen-fire), every message sent to it " +
       'reaches its movements; on the shared Listen-Fire number, the sender\'s phone ' +
       'must first be linked to their Listen-Fire account, or their messages are ignored.',
+    authoringHints:
+      'Listen on the edge the record arrives on: Messages, Reactions (somebody reacting to a ' +
+      'message) or Locations, each its own record type. A conversation is the sender\'s number, ' +
+      'so narrow to one by From: wa-[m:Messages WHERE m.From == "447700900001"]->. A message is ' +
+      'the whole record: read m.Body, reply along m-[:Replies]->.',
     supportedTriggers: ['webhook'],
-    // `listen to wa { events: [...] }` — no `events` subscribes to messages
-    // only, so reactions/locations never fire a movement that didn't opt in.
-    subscribableEvents: ['message', 'reaction', 'location'],
-    // A config-less listen receives MESSAGES ONLY (the dispatch gate,
-    // `triggerAcceptsWhatsappKind`) — declared so the checker types it the
-    // same way the runtime delivers it.
-    defaultSubscribedEvents: ['message'],
     methods: [
       'listEntryPoints', 'describe', 'getFieldValue', 'getRelated', 'preprocessInbound',
-      'getActorCandidates', 'extractActor', 'resolveFileRef', 'createRecord', 'listEventTypes',
+      'getActorCandidates', 'extractActor', 'resolveFileRef', 'createRecord',
     ],
+    // A 0.12 `listen to wa { events: [...] }` heard messages when it named no
+    // events, and otherwise the kinds it named; each kind arrives on its own
+    // edge, so one naming two has no rewrite (`listen-fire upgrade`).
+    listenSettingsBecome: {
+      ...MESSAGES_BECOME,
+      byEvent: {
+        message: MESSAGES_BECOME,
+        reaction: arrivingOn(WHATSAPP_ARRIVAL_EDGES.reaction, 'r', WHATSAPP_REACTION_DISPLAY_NAME),
+        location: arrivingOn(WHATSAPP_ARRIVAL_EDGES.location, 'l', WHATSAPP_LOCATION_DISPLAY_NAME),
+      },
+    },
     triggerKinds: ['INBOUND_WHATSAPP', 'TWILIO'],
     triggerExpectation:
-      `Fires when a WhatsApp message arrives at the number` +
+      `A listen on Messages runs when a WhatsApp message arrives at the number` +
       `${movementsNumber ? ` (${movementsNumber})` : ''} — each message (text and media; ` +
-      `voice notes transcribe) is one event. Who reaches the movements depends on whose ` +
+      `voice notes transcribe) once; one on Reactions runs when somebody reacts to a message, ` +
+      `and one on Locations when somebody shares a location (a reaction never runs a listen on ` +
+      `Messages). Who reaches the movements depends on whose ` +
       `number it is. Where the number is the project's own (listen-fire), every message sent to it ` +
       `reaches the listen, from any sender. On the shared Listen-Fire number, common to ` +
       `every Listen-Fire user, routing identifies the sender by their linked phone, so ONLY ` +

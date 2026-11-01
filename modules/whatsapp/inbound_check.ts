@@ -7,16 +7,18 @@
 //   POST a `messages` delivery, signed `x-hub-signature-256: sha256=<hex>`
 //        with the Meta app's secret (the subscription's secret).
 //
-// Meta delivers media by id; where the host reads media by id
-// (`mediaById`), each attachment's handle becomes `meta-media:<id>`, which
-// the adapter downloads with the install's own token.
+// Each message is reported as an arrival on the root edge of its kind
+// (`Messages`, `Reactions`, `Locations`). Meta delivers media by id; where the
+// host reads media by id (`mediaById`), each attachment's handle becomes
+// `meta-media:<id>`, which the adapter downloads with the install's own token.
 
 import { accepted, hmacSha256Hex, inboundRequest, refused, reply, sameText } from 'module-kit';
 
-import type { DiscriminableEvent, InboundCheck, InboundCheckInput } from 'movement-engine/public/adapter';
+import type { Arrival } from 'engine-contracts';
+import type { InboundCheck, InboundCheckInput } from 'movement-engine/public/adapter';
 
 import { META_MEDIA_HANDLE_PREFIX } from './adapter';
-import { whatsappInboundEvents } from './inbound';
+import { whatsappInboundArrivals } from './inbound';
 
 export interface WhatsappInboundSources {
   /** The token Meta's handshake must present; undefined when none is set. */
@@ -25,14 +27,15 @@ export interface WhatsappInboundSources {
   mediaById: boolean;
 }
 
-function withMediaHandles(event: DiscriminableEvent): DiscriminableEvent {
-  const payload = event.payload as { attachments?: unknown } | null;
-  if (payload === null || typeof payload !== 'object' || !Array.isArray(payload.attachments)) return event;
-  const attachments = payload.attachments.map((attachment: unknown) => {
+function withMediaHandles(arrival: Arrival): Arrival {
+  if ('gone' in arrival) return arrival;
+  const { fields } = arrival.landing;
+  if (!Array.isArray(fields.attachments)) return arrival;
+  const attachments = fields.attachments.map((attachment: unknown) => {
     const key = (attachment as { key?: unknown } | null)?.key;
     return typeof key === 'string' && key !== '' ? { ...(attachment as object), key: `${META_MEDIA_HANDLE_PREFIX}${key}` } : attachment;
   });
-  return { ...event, payload: { ...payload, attachments } };
+  return { ...arrival, landing: { ...arrival.landing, fields: { ...fields, attachments } } };
 }
 
 /** One request at WhatsApp's inbound door. */
@@ -53,6 +56,6 @@ export async function checkWhatsappInbound(input: InboundCheckInput, sources: Wh
   const presented = (request.header('x-hub-signature-256') ?? '').replace(/^sha256=/, '');
   if (presented === '' || !sameText(hmacSha256Hex(request.secret, request.bytes), presented.toLowerCase())) return refused(401);
 
-  const events = whatsappInboundEvents(request.json());
-  return accepted(sources.mediaById ? events.map(withMediaHandles) : events);
+  const arrivals = whatsappInboundArrivals(request.json());
+  return accepted([], { arrivals: sources.mediaById ? arrivals.map(withMediaHandles) : arrivals });
 }

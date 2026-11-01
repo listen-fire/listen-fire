@@ -14,11 +14,11 @@ export const WHATSAPP_ADAPTER_TYPE = 'whatsapp';
 /** Top-level type id for a WhatsApp message record. */
 export const WHATSAPP_RECORD_TYPE_ID = 'whatsapp:message';
 
-// ── The event surface ───────────────────────────────────────────────────────
+// ── The arrival surface ─────────────────────────────────────────────────────
 //
-// THE FIRES EDGES LAND STRAIGHT ON THE RECORDS (rule 1, adapters/CLAUDE.md):
-// the message / reaction / location entries each declare `fires` with their
-// own `firesOn` kind. The retired `Message Received` / `Reaction Received` /
+// THE LISTENABLE EDGES LAND STRAIGHT ON THE RECORDS (rule 1, adapters/CLAUDE.md):
+// the message / reaction / location entries are each a root collection a
+// listen starts at. The retired `Message Received` / `Reaction Received` /
 // `Location Received` nodes carried no facts of their own — pure indirection —
 // so a listen delivers the record itself, whole, seeded stable on its wamid.
 
@@ -37,6 +37,23 @@ export const WHATSAPP_EDGE_NAMES = {
   reactions: 'Reactions',
   typing: 'Typing',
 } as const;
+
+/**
+ * The root edges a listen starts at, one per kind of inbound record, each
+ * landing on its own record type (`wa-[m:Messages WHERE m.From == "…"]->`).
+ * `Reactions` is also the name of the write edge off a message; the two hang
+ * off different types, and only the root one is listenable.
+ */
+export const WHATSAPP_ARRIVAL_EDGES = {
+  message: 'Messages',
+  reaction: 'Reactions',
+  location: 'Locations',
+} as const;
+
+/** The natural names of the record types the root edges land on. */
+export const WHATSAPP_MESSAGE_DISPLAY_NAME = 'Message';
+export const WHATSAPP_REACTION_DISPLAY_NAME = 'Reaction';
+export const WHATSAPP_LOCATION_DISPLAY_NAME = 'Location';
 
 /** Type id for the per-attachment record (one position per media item). */
 export const WHATSAPP_ATTACHMENT_TYPE_ID = 'whatsapp:attachment';

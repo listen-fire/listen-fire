@@ -86,16 +86,19 @@ describe('@lf/whatsapp checks its own inbound', () => {
     expect(await unset.checkInbound!(request({ method: 'GET', query: right }))).toEqual({ outcome: 'refused', status: 403 });
   });
 
-  it('accepts a delivery signed with the app secret, one event per message', async () => {
+  it('accepts a delivery signed with the app secret, one arrival per message on Messages', async () => {
     const { adapter } = load();
     const answer = await adapter.checkInbound!(request({ body: DELIVERY, headers: signed(DELIVERY), secret: APP_SECRET }));
     expect(answer.outcome).toBe('accepted');
     if (answer.outcome !== 'accepted') return;
-    expect(answer.events.map((e) => [e.externalId, e.tag])).toEqual([
-      ['wamid.1', 'message'],
-      ['wamid.2', 'message'],
+    expect(answer.events).toEqual([]);
+    const arrivals = answer.arrivals ?? [];
+    expect(arrivals.map((a) => [a.edge, 'identity' in a ? a.identity : undefined])).toEqual([
+      ['Messages', 'wamid.1'],
+      ['Messages', 'wamid.2'],
     ]);
-    expect(answer.events[1]?.payload).toMatchObject({ body: 'a pic', attachments: [{ key: 'meta-media:MEDIA-1', contentType: 'image/jpeg' }] });
+    const media = arrivals[1];
+    expect(media && 'landing' in media ? media.landing.fields : null).toMatchObject({ Body: 'a pic', attachments: [{ key: 'meta-media:MEDIA-1', contentType: 'image/jpeg' }] });
   });
 
   it('refuses a delivery with a bad or missing signature, or with no secret to check it with', async () => {
@@ -120,7 +123,8 @@ describe('@lf/whatsapp checks its own inbound', () => {
     const { adapter, calls } = load(OWN, whatsappModuleWith({}));
     const answer = await adapter.checkInbound!(request({ body: DELIVERY, headers: signed(DELIVERY), secret: APP_SECRET }));
     if (answer.outcome !== 'accepted') throw new Error('expected accepted');
-    expect(answer.events[1]?.payload).toMatchObject({ attachments: [{ key: 'MEDIA-1' }] });
+    const media = answer.arrivals?.[1];
+    expect(media && 'landing' in media ? media.landing.fields : null).toMatchObject({ attachments: [{ key: 'MEDIA-1' }] });
     const ref = { __brand: 'FileRef', name: 'x', source: { kind: 'owned', adapterType: 'whatsapp', handle: 'meta-media:MEDIA-1' } } as FileRef;
     await expect(adapter.resolveFileRef!({ ref })).rejects.toThrow();
     expect(calls).toEqual([]);

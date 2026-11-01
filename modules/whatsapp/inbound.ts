@@ -1,8 +1,8 @@
 // WhatsApp's inbound: Meta's `messages` webhook (an envelope,
 // `entry[].changes[].value.messages[]`, per delivery) flattened into the
 // payload the adapter reads (`from`/`body`/`attachments`, with Twilio-raw
-// tolerance), one event per message, classified into its kind (`message`,
-// `reaction`, `location`). Pure: the platform's doors and every other host
+// tolerance), one arrival per message on the root edge of its kind (`Messages`,
+// `Reactions`, `Locations`). Pure: the platform's doors and every other host
 // parse a delivery here.
 //
 // Media: Meta delivers media by *id*, not a URL, so the parse leaves the id in
@@ -11,13 +11,14 @@
 
 import { z } from 'zod';
 
-import type { DiscriminableEvent } from 'movement-engine/public/adapter';
+import type { Arrival } from 'engine-contracts';
 
 import { normalizeWhatsappPhone } from './phone';
 import {
-  WHATSAPP_RECORD_TYPE_ID,
-  WHATSAPP_INBOUND_REACTION_TYPE,
-  WHATSAPP_INBOUND_LOCATION_TYPE,
+  WHATSAPP_ARRIVAL_EDGES,
+  WHATSAPP_LOCATION_DISPLAY_NAME,
+  WHATSAPP_MESSAGE_DISPLAY_NAME,
+  WHATSAPP_REACTION_DISPLAY_NAME,
   type WhatsappAttachment,
   type WhatsappPayload,
 } from './types';
@@ -126,19 +127,11 @@ export function normalizeMetaMessage(
   };
 }
 
-/** Inbound WhatsApp event kinds — the `listen to wa { events: [...] }`
- *  vocabulary (manifest `subscribableEvents`). A listen with no `events`
- *  subscribes to messages only, so reactions/locations never fire a movement
- *  that didn't opt in. */
-export type WhatsappEventKind = 'message' | 'reaction' | 'location';
+/** The kinds of inbound record, each arriving on an edge of its own. */
+export type WhatsappEventKind = keyof typeof WHATSAPP_ARRIVAL_EDGES;
 
 export interface ClassifiedWhatsappEvent {
   kind: WhatsappEventKind;
-  /** The seeded root position's type — the RECORD the kind's fires edge
-   *  delivers, whole (rule 1's collapse: the field-less event nodes are
-   *  gone, so a listen seeds the message/reaction/location itself, stable
-   *  on its wamid). */
-  rootRecordType: string;
   payload: Record<string, unknown>;
 }
 
@@ -167,7 +160,6 @@ export function classifyMetaMessage(
   if (message.reaction !== undefined) {
     return {
       kind: 'reaction',
-      rootRecordType: WHATSAPP_INBOUND_REACTION_TYPE,
       payload: {
         ...common,
         emoji: message.reaction.emoji ?? '',
@@ -178,7 +170,6 @@ export function classifyMetaMessage(
   if (message.location !== undefined) {
     return {
       kind: 'location',
-      rootRecordType: WHATSAPP_INBOUND_LOCATION_TYPE,
       payload: {
         ...common,
         latitude: message.location.latitude,
@@ -192,33 +183,50 @@ export function classifyMetaMessage(
   if (message.text !== undefined || media !== undefined || message.type === 'text') {
     return {
       kind: 'message',
-      rootRecordType: WHATSAPP_RECORD_TYPE_ID,
       payload: { ...normalizeMetaMessage(message, ctx) },
     };
   }
   return undefined;
 }
 
-/** Whether a whatsapp trigger's listen config subscribes to this kind —
- *  `events` absent ⇒ messages only. */
-export function triggerAcceptsWhatsappKind(config: unknown, kind: WhatsappEventKind): boolean {
-  const events = (config as { events?: unknown } | null | undefined)?.events;
-  const allowed =
-    Array.isArray(events) && events.length > 0
-      ? events.filter((e): e is string => typeof e === 'string')
-      : ['message'];
-  return allowed.includes(kind);
+/** The record type each kind lands on. */
+const LANDS_ON: Record<WhatsappEventKind, string> = {
+  message: WHATSAPP_MESSAGE_DISPLAY_NAME,
+  reaction: WHATSAPP_REACTION_DISPLAY_NAME,
+  location: WHATSAPP_LOCATION_DISPLAY_NAME,
+};
+
+/** Meta stamps a message with Unix seconds; an ISO instant is kept as it is. */
+function instantOf(timestamp: string | undefined): string | undefined {
+  if (timestamp === undefined || timestamp === '') return undefined;
+  const instant = /^\d+$/.test(timestamp) ? new Date(Number(timestamp) * 1000) : new Date(timestamp);
+  return Number.isNaN(instant.getTime()) ? undefined : instant.toISOString();
+}
+
+/** A record's fields under the names the schema gives them, the ones a
+ *  listen's WHERE compares. Absent values are left out. */
+function schemaFields(kind: WhatsappEventKind, payload: Record<string, unknown>): Record<string, unknown> {
+  const named: Record<WhatsappEventKind, Record<string, string>> = {
+    message: { 'Message Id': 'messageId', From: 'from', To: 'to', Body: 'body', 'WhatsApp Id': 'waId', 'Profile Name': 'profileName', Timestamp: 'timestamp' },
+    reaction: { Emoji: 'emoji', 'Reacted Message Id': 'reactedMessageId', 'Message Id': 'messageId', From: 'from', 'Profile Name': 'profileName', Timestamp: 'timestamp' },
+    location: { Latitude: 'latitude', Longitude: 'longitude', Name: 'name', Address: 'address', 'Message Id': 'messageId', From: 'from', 'Profile Name': 'profileName', Timestamp: 'timestamp' },
+  };
+  return Object.fromEntries(Object.entries(named[kind]).flatMap(([field, key]) => (payload[key] === undefined ? [] : [[field, payload[key]]])));
 }
 
 /**
- * One delivery's events, each tagged with its kind: what `preprocessInbound`
- * answers. A kind no listen takes (a contact card, a button tap, a status
- * update) is no event.
+ * One delivery's arrivals, each on the root edge of its kind: a message on
+ * `Messages`, a reaction on `Reactions`, a location on `Locations`. A message
+ * is named by its WhatsApp id, which Meta repeats when it resends a delivery
+ * it saw no 2xx for, so a resend runs a listen once. The chat is the sender's
+ * number (`From`), which a listen's WHERE compares. A reaction is `about` the
+ * message it is on. A kind no edge takes (a contact card, a button tap, a
+ * status update) is no arrival.
  */
-export function whatsappInboundEvents(body: unknown): DiscriminableEvent[] {
+export function whatsappInboundArrivals(body: unknown): Arrival[] {
   const parsed = metaWebhookSchema.safeParse(body);
   if (!parsed.success) return [];
-  const events: DiscriminableEvent[] = [];
+  const arrivals: Arrival[] = [];
   for (const entry of parsed.data.entry ?? []) {
     for (const change of entry.changes ?? []) {
       if (change.field && change.field !== 'messages') continue;
@@ -228,17 +236,19 @@ export function whatsappInboundEvents(body: unknown): DiscriminableEvent[] {
       for (const message of value.messages ?? []) {
         const classified = classifyMetaMessage(message, { businessNumber, profileName });
         if (classified === undefined) continue; // unsupported kind — never an empty-message firing
-        events.push({
-          payload: classified.payload,
-          externalId: message.id,
-          // Meta resends a delivery it saw no 2xx for: the message id lets the host run it once.
-          idempotencyKey: message.id,
-          recordType: classified.rootRecordType,
-          eventType: classified.kind,
-          tag: classified.kind,
+        const { kind, payload } = classified;
+        const occurredAt = instantOf(message.timestamp);
+        arrivals.push({
+          edge: WHATSAPP_ARRIVAL_EDGES[kind],
+          identity: message.id,
+          landing: { recordId: message.id, recordType: LANDS_ON[kind], fields: { ...payload, ...schemaFields(kind, payload) } },
+          ...(kind === 'reaction' && message.reaction !== undefined
+            ? { about: { recordType: WHATSAPP_MESSAGE_DISPLAY_NAME, externalId: message.reaction.message_id } }
+            : {}),
+          ...(occurredAt !== undefined ? { occurredAt } : {}),
         });
       }
     }
   }
-  return events;
+  return arrivals;
 }

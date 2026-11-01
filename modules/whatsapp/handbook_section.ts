@@ -17,7 +17,19 @@ export const WHATSAPP_HANDBOOK_SECTION: HandbookSection = {
   title: 'WhatsApp — the shared number, and a tap that acts',
   content: `## WhatsApp — the shared number, and a tap that acts
 
-A WhatsApp send is always written along an edge off the message that arrived: \`-[:Replies]->\` threads a reply, \`-[:Reactions]->\` adds an emoji, \`-[:Typing]->\` shows the typing indicator. The recipient is never a field — it comes from whatever the write hangs off, and only reaches someone inside Meta's 24-hour service window (they must have messaged the number recently). Three things are worth settling before you build one: what a reply carries, what an interactive send replaces, and what a tap can and can't do here.
+A listen starts at one of the three edges a record arrives on: \`-[:Messages]->\`, \`-[:Reactions]->\` (somebody reacting to a message) or \`-[:Locations]->\` (somebody sharing one), each its own kind of record. A WhatsApp send is always written along an edge off the message that arrived: \`-[:Replies]->\` threads a reply, \`-[:Reactions]->\` adds an emoji, \`-[:Typing]->\` shows the typing indicator. The recipient is never a field — it comes from whatever the write hangs off, and only reaches someone inside Meta's 24-hour service window (they must have messaged the number recently). Four things are worth settling before you build one: what runs when a record arrives, what a reply carries, what an interactive send replaces, and what a tap can and can't do here.
+
+### running-when-a-message-arrives
+
+\`\`\`
+listen to wa-[m:Messages WHERE m.From == "447700900001"]-> fire answer
+
+function answer(m: <wa-[:Messages]->>) {
+  write m-[:Replies]-> { Body: "Got it: \${m.Body}" }
+}
+\`\`\`
+
+A listen on \`Messages\` runs once for each message sent to the number, the message itself as the parameter. A reaction is not a message: it arrives on \`Reactions\` and runs only a listen there (\`wa-[r:Reactions WHERE r.Emoji == "👍"]->\`), with the \`Emoji\`, the \`Reacted Message Id\` it is on and who sent it (an \`Emoji\` of nothing is a reaction taken back). A shared location likewise runs only a listen on \`Locations\`. WhatsApp cannot list conversations, so a listen narrows to one by the sender's number, \`From\`, digits with the country code first and no plus, or takes every sender by leaving the WHERE out.
 
 ### what-a-reply-carries
 
@@ -116,7 +128,7 @@ node Decision {
   Send: <boolean>
 }
 
-function confirm_send(msg: <wa-[:Message]->>) {
+function confirm_send(msg: <wa-[:Messages]->>) {
   form = write forms-[:Forms]-> { Title: "Send the update?", Fields: Decision }
 
   write msg-[:Replies]-> {
@@ -139,7 +151,7 @@ function confirm_send(msg: <wa-[:Message]->>) {
   }
 }
 
-listen to wa {} fire confirm_send
+listen to wa-[:Messages]-> fire confirm_send
 `,
     },
   ],

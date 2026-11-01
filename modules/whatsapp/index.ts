@@ -121,6 +121,9 @@ export function whatsappModuleWith(host: WhatsappHost): AdapterModuleDefinition 
         ],
       },
     ],
+    // Adapter protocol 2.6: a message, reaction or location arrives on a root
+    // edge, which names no record it hangs off (`key`).
+    protocolMinor: 6,
     // Meta's verification GET is a handshake no declared scheme answers. The
     // key deliveries are signed with is the Meta app's secret.
     inbound: { providerKey: 'whatsapp', scheme: 'module' },

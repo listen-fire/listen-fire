@@ -1,6 +1,7 @@
 // WhatsApp adapter — the translation-graph Adapter contract over WhatsApp
-// messages: a listen receives each message (text and media), reaction and
-// location; a write replies, reacts or shows typing along a message's edges.
+// messages: a listen on `Messages`, `Reactions` or `Locations` receives each
+// message (text and media), reaction and location; a write replies, reacts or
+// shows typing along a message's edges.
 // The phone twin of the email adapter: media via the `-[:Attachments]->`
 // edge, a single phone-based originator candidate.
 //
@@ -18,9 +19,7 @@ import type {
   ActorCandidate,
   ActorIdentity,
   Adapter,
-  DiscriminableEvent,
   EdgesFromResult,
-  EventType,
   FileRef,
   FileValue,
   GetRelatedInput,
@@ -35,6 +34,7 @@ import type {
   SchemaTypeDescriptor,
   SourcePosition,
 } from 'movement-engine/public/catalog';
+import type { Arrival } from 'engine-contracts';
 import type { TriggerEvent } from 'movement-engine/public/inbound';
 import type { ModuleLog } from 'module-kit';
 import type { WhatsappCloudClient } from './client';
@@ -46,7 +46,7 @@ import { FileOutsideTeamError } from 'movement-engine/public/files';
 import { META_RECORD_TYPE, makeUnstablePosition, positionData } from 'movement-engine/public/catalog';
 import { uniformWalk } from 'module-kit/adapter/hop';
 import { BaseAdapter } from 'module-kit/adapter/base';
-import { whatsappInboundEvents } from './inbound';
+import { whatsappInboundArrivals } from './inbound';
 import { WHATSAPP_MANIFEST } from './manifest';
 import { normalizeWhatsappPhone } from './phone';
 import {
@@ -55,9 +55,13 @@ import {
   WHATSAPP_ATTACHMENTS_FIELD,
   WHATSAPP_ATTACHMENT_TYPE_ID,
   WHATSAPP_ATTACHMENT_DISPLAY_NAME,
+  WHATSAPP_ARRIVAL_EDGES,
   WHATSAPP_EDGE_NAMES,
   WHATSAPP_INBOUND_REACTION_TYPE,
   WHATSAPP_INBOUND_LOCATION_TYPE,
+  WHATSAPP_LOCATION_DISPLAY_NAME,
+  WHATSAPP_MESSAGE_DISPLAY_NAME,
+  WHATSAPP_REACTION_DISPLAY_NAME,
   WHATSAPP_TYPING_TYPE,
   type WhatsappAttachment,
   type WhatsappPayload,
@@ -113,36 +117,21 @@ export function issuedTwilioMedia(handle: string, account: string | undefined): 
 export class WhatsappAdapter extends BaseAdapter implements Adapter {
 
   /**
-   * THE raw→events seam for a webhook door: Meta's envelope, one event per
-   * message, STAMPED with the parse-time classification as the
-   * discrimination tag (`message`/`reaction`/`location`). The platform's
-   * dedicated Meta door dispatches separately — it already sets
-   * `rootRecordType` from the same classification.
+   * THE raw→arrivals seam for a webhook door: Meta's envelope, one arrival per
+   * message, on the root edge of its kind (`Messages`, `Reactions`,
+   * `Locations`). Each lands a STABLE position keyed by its wamid, which is
+   * what lets replies/reactions/typing anchor off a listen's parameter, and
+   * an arrival on one edge can never be taken by a listen on another: a
+   * reaction is a `Reaction` landing on `Reactions`, never a message. No
+   * filter is taken: the host judges each listen's.
    */
   async preprocessInbound(input: {
     raw: unknown;
     checkpoint?: unknown;
-  }): Promise<{ events: DiscriminableEvent[] }> {
-    return { events: whatsappInboundEvents(input.raw) };
+  }): Promise<{ events: []; arrivals: Arrival[] }> {
+    return { events: [], arrivals: whatsappInboundArrivals(input.raw) };
   }
 
-  /**
-   * WhatsApp's inbound kinds are classified at parse time
-   * (`classifyMetaMessage`) — the normalized payloads carry no literal
-   * discriminator, so the union is TAG-ONLY and `preprocessInbound` stamps
-   * the tag. Each kind discriminates to the RECORD its fires edge delivers
-   * (rule 1's collapse — no event-node indirection), which is what lets the
-   * engine seed a STABLE position (recordId = the wamid) so
-   * replies/reactions/typing anchor off the PARAMETER, and guarantees a
-   * reaction can never mis-discriminate as a message.
-   */
-  async listEventTypes(): Promise<EventType[]> {
-    return [
-      { tag: 'message', positionType: WHATSAPP_RECORD_TYPE_ID },
-      { tag: 'reaction', positionType: WHATSAPP_INBOUND_REACTION_TYPE },
-      { tag: 'location', positionType: WHATSAPP_INBOUND_LOCATION_TYPE },
-    ];
-  }
   readonly adapterType = WHATSAPP_ADAPTER_TYPE;
   readonly supportedTriggers = WHATSAPP_MANIFEST.supportedTriggers;
 
@@ -154,26 +143,24 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
 
   async listEntryPoints(): Promise<SchemaEntryPoint[]> {
     return [
-      // The EVENT edges land STRAIGHT on the records — one per inbound kind
-      // (rule 1, adapters/CLAUDE.md): the retired `Message Received` /
-      // `Reaction Received` / `Location Received` nodes carried no facts of
-      // their own, so a listen delivers the message / reaction / location
-      // itself, whole (seeded stable on its wamid). `readable: false` stays
-      // the honest statement (nobody enumerates the number's traffic — a
-      // fires edge is reachability, never a root read); `firesOn` says which
-      // `events:` value selects each edge. No change-kind axis, so no
-      // `action` field on any of them.
+      // Three root edges a listen starts at, one per kind of inbound record,
+      // each landing STRAIGHT on its record (rule 1, adapters/CLAUDE.md): the
+      // retired `Message Received` / `Reaction Received` / `Location Received`
+      // nodes carried no facts of their own. Nobody can enumerate the number's
+      // traffic, or its conversations (`readable: false`): each is announced,
+      // pushed to the connection's one webhook, and a listen narrows to a
+      // conversation by the sender's number, `From`, on the record itself.
       {
         typeId: WHATSAPP_RECORD_TYPE_ID,
-        displayName: 'Message',
+        displayName: WHATSAPP_MESSAGE_DISPLAY_NAME,
+        collectionName: WHATSAPP_ARRIVAL_EDGES.message,
         // The unified type: the anchor for every write — replies/reactions/
-        // typing are edges off it, never top-level writable roots — and
-        // reached ONLY by arriving (the fires edge): nobody can enumerate
-        // the number's messages, so no root read either.
+        // typing are edges off it, never top-level writable roots.
         writable: false,
         readable: false,
-        fires: true,
-        firesOn: ['message'],
+        listenable: true,
+        delivery: 'connection',
+        identity: 'Message Id',
       },
       {
         typeId: WHATSAPP_ATTACHMENT_TYPE_ID,
@@ -184,23 +171,27 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
       },
       {
         typeId: WHATSAPP_INBOUND_REACTION_TYPE,
-        displayName: 'Reaction',
-        // Arrives on its own fires edge (`events: ["reaction"]`), and is
-        // created along a message's `Reactions` edge — never enumerated
-        // from the root.
+        displayName: WHATSAPP_REACTION_DISPLAY_NAME,
+        collectionName: WHATSAPP_ARRIVAL_EDGES.reaction,
+        // Arrives on `Reactions`, and is created along a message's
+        // `Reactions` edge — never enumerated from the root.
         writable: false,
         readable: false,
-        fires: true,
-        firesOn: ['reaction'],
+        listenable: true,
+        delivery: 'connection',
+        identity: 'Message Id',
+        // A reaction is about the message it is on.
+        attributes: true,
       },
       {
         typeId: WHATSAPP_INBOUND_LOCATION_TYPE,
-        displayName: 'Location',
-        // Arrives on its own fires edge (`events: ["location"]`).
+        displayName: WHATSAPP_LOCATION_DISPLAY_NAME,
+        collectionName: WHATSAPP_ARRIVAL_EDGES.location,
         writable: false,
         readable: false,
-        fires: true,
-        firesOn: ['location'],
+        listenable: true,
+        delivery: 'connection',
+        identity: 'Message Id',
       },
       // The typing ACTION's target type — an action, not a record: never a
       // picker root (not writable) and never a readable position (not
@@ -216,7 +207,7 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
   }
 
   /**
-   * WhatsApp is entered ONLY by being messaged. Three fires edges and no
+   * WhatsApp is entered ONLY by being messaged. Three announced edges and no
    * readable one is the honest statement of what WhatsApp is — you cannot
    * enumerate a conversation you were not part of — not a gap in the graph.
    *
@@ -231,41 +222,38 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
     description:
       'A WhatsApp connection. Nothing here can be listed — there is no call ' +
       'that enumerates conversations — so the way in is somebody messaging ' +
-      'you, which a listen delivers whole.',
+      'you, which a listen on `Messages`, `Reactions` or `Locations` delivers whole.',
     fields: [],
     references: [
       {
         fieldId: WHATSAPP_RECORD_TYPE_ID,
         targetTypeId: WHATSAPP_RECORD_TYPE_ID,
-        cardinality: 'one',
+        cardinality: 'many',
         direction: 'outgoing',
-        name: 'Message',
-        fires: true,
-        firesOn: ['message'],
+        name: WHATSAPP_ARRIVAL_EDGES.message,
+        listenable: true,
         readable: false,
-        description: 'Somebody sending a message — what a listen delivers.',
+        description: 'Each message somebody sends the number — what a listen delivers.',
       },
       {
         fieldId: WHATSAPP_INBOUND_REACTION_TYPE,
         targetTypeId: WHATSAPP_INBOUND_REACTION_TYPE,
-        cardinality: 'one',
+        cardinality: 'many',
         direction: 'outgoing',
-        name: 'Reaction',
-        fires: true,
-        firesOn: ['reaction'],
+        name: WHATSAPP_ARRIVAL_EDGES.reaction,
+        listenable: true,
         readable: false,
-        description: 'Somebody reacting to a message.',
+        description: 'Each reaction somebody adds to a message.',
       },
       {
         fieldId: WHATSAPP_INBOUND_LOCATION_TYPE,
         targetTypeId: WHATSAPP_INBOUND_LOCATION_TYPE,
-        cardinality: 'one',
+        cardinality: 'many',
         direction: 'outgoing',
-        name: 'Location',
-        fires: true,
-        firesOn: ['location'],
+        name: WHATSAPP_ARRIVAL_EDGES.location,
+        listenable: true,
         readable: false,
-        description: 'Somebody sharing their location.',
+        description: 'Each location somebody shares.',
       },
     ],
   };
@@ -288,12 +276,12 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
         typeId: WHATSAPP_RECORD_TYPE_ID,
         displayName: 'Message',
         description:
-          'A single inbound WhatsApp message — what a listen delivers, ' +
-          'whole: read `e.`Body`` straight off the event, reply along its ' +
+          'A single inbound WhatsApp message — what a listen on `Messages` delivers, ' +
+          'whole: read `e.`Body`` straight off the arrival, reply along its ' +
           '`Replies` edge.',
         fields: [
           { fieldId: 'messageId', displayName: 'Message Id', kind: 'string', writable: false, required: true, description: 'The WhatsApp message id — the value a reply or reaction addresses.' },
-          { fieldId: 'from', displayName: 'From', kind: 'string', writable: false, required: true, description: 'The sender\'s phone number.' },
+          { fieldId: 'from', displayName: 'From', kind: 'string', writable: false, required: true, description: 'The sender\'s phone number, digits with the country code first and no plus (`447700900001`): the conversation a message is in, so a listen narrows to one by it.' },
           { fieldId: 'to', displayName: 'To', kind: 'string', writable: false, required: false, description: 'Inbound: the team\'s own WhatsApp business number (the message\'s recipient). On a send: the other party\'s phone number, derived from the message the write is anchored on (an inbound parent\'s From, a sent parent\'s To) — read-only either way.' },
           { fieldId: 'body', displayName: 'Body', kind: 'string', writable: true, required: false, description: 'The message text. Empty for media-only messages. At least one of Body / File on a send (the Body captions the file).' },
           // Send-side only (`readable: false`): outbound media rides the send;
@@ -422,7 +410,7 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
         displayName: 'Reaction',
         description:
           'Someone reacted to a message in the team-number conversation. ' +
-          'Listen with `events: ["reaction"]`. Also the reaction WRITE: ' +
+          'What a listen on `Reactions` delivers. Also the reaction WRITE: ' +
           'created along a message\'s `Reactions` edge.',
         fields: [
           { fieldId: 'emoji', displayName: 'Emoji', kind: 'string', writable: true, required: true, description: 'The reaction emoji. Inbound: empty when the reaction was removed. On a write along msg-[:Reactions]->: the single emoji to react with — required.' },
@@ -440,8 +428,8 @@ export class WhatsappAdapter extends BaseAdapter implements Adapter {
         typeId: WHATSAPP_INBOUND_LOCATION_TYPE,
         displayName: 'Location',
         description:
-          'Someone shared a location with the team number. Listen with ' +
-          '`events: ["location"]`.',
+          'Someone shared a location with the team number. What a listen on ' +
+          '`Locations` delivers.',
         fields: [
           { fieldId: 'latitude', displayName: 'Latitude', kind: 'number', writable: false, required: true },
           { fieldId: 'longitude', displayName: 'Longitude', kind: 'number', writable: false, required: true },
