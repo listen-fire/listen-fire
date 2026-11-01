@@ -81,7 +81,7 @@ test('listen-fire modules show @lf/stripe says what it reads, that it is read-on
   assert.match(shown.out, /^ {4}edges: Customer -> Customer, Subscription -> Subscription\b/m);
   assert.match(shown.out, /^listens: webhook$/m);
   // A listen names a change by its `Kind`: an event's type without its object's prefix.
-  assert.match(shown.out, /^ {2}Change: .*\n {4}fields: .*\bKind enum\([^)]*\bpayment_failed\b/m);
+  assert.match(shown.out, /^ {2}InvoiceChange: .*\n {4}fields: .*\bKind enum\([^)]*\bpayment_failed\b/m);
   assert.doesNotMatch(shown.out, /^writes/m);
   assert.match(shown.out, /^credential: stripe \(fields\): apiKey, webhookSecret\?$/m);
   assert.match(shown.out, /^set up: listen-fire connect @lf\/stripe --yes$/m);
@@ -100,7 +100,7 @@ test('listen-fire modules show @lf/stripe says what it reads, that it is read-on
   assert.equal(json.schema.source, 'module');
   assert.deepEqual(json.records.map((r) => r.name).slice(0, 3), ['Customer', 'Invoice', 'Subscription']);
   assert.ok(json.records.find((r) => r.name === 'Charge')?.fields.some((f) => f.name === 'Failure Code'));
-  assert.ok(json.records.find((r) => r.name === 'Change')?.fields.some((f) => f.name === 'Kind'));
+  assert.ok(json.records.find((r) => r.name === 'InvoiceChange')?.fields.some((f) => f.name === 'Kind'));
 });
 
 test('listen-fire modules show says what a module writes, and that a module with a live schema needs an account', () => {
