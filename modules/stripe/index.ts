@@ -61,6 +61,9 @@ export const stripeModule = defineModule({
   // Stripe issues the signing secret (at the endpoint), so listen-fire connect
   // generates none; the door reads it off the connection's credential.
   inbound: { providerKey: 'stripe', scheme: 'module', secretIssuedBy: 'provider' },
+  // Adapter protocol 2.6: an arrival on an object's `Changes` carries the
+  // object (`parents`), `about` and `occurredAt`, which an older host ignores.
+  protocolMinor: 6,
   create: (ctx) => new StripeAdapter(stripeClientFrom(ctx), stripeDoorFrom(ctx)),
 });
 

@@ -66,7 +66,7 @@ test('listen-fire modules lists every bundled module with what it is, and marks 
 
 // ── the summary of one module ────────────────────────────────────────────────
 
-test('listen-fire modules show @lf/stripe says what it reads, that it is read-only and the events a listen can name, with no credential', () => {
+test('listen-fire modules show @lf/stripe says what it reads, that it is read-only and the kinds of change a listen can name, with no credential', () => {
   const dir = freshProject();
   const shown = lfSync(dir, 'modules', 'show', '@lf/stripe');
   assert.equal(shown.code, 0, shown.out);
@@ -80,13 +80,13 @@ test('listen-fire modules show @lf/stripe says what it reads, that it is read-on
   assert.match(shown.out, /^ {2}Charges -> Charge$/m);
   assert.match(shown.out, /^ {4}edges: Customer -> Customer, Subscription -> Subscription\b/m);
   assert.match(shown.out, /^listens: webhook$/m);
-  assert.match(shown.out, /^ {2}events: .*\binvoice\.payment_failed\b/m);
+  // A listen names a change by its `Kind`: an event's type without its object's prefix.
+  assert.match(shown.out, /^ {2}Change: .*\n {4}fields: .*\bKind enum\([^)]*\bpayment_failed\b/m);
   assert.doesNotMatch(shown.out, /^writes/m);
   assert.match(shown.out, /^credential: stripe \(fields\): apiKey, webhookSecret\?$/m);
   assert.match(shown.out, /^set up: listen-fire connect @lf\/stripe --yes$/m);
   // A charge is where Stripe says why a payment failed: its record carries the failure fields.
   assert.match(shown.out, /^ {2}Charge: .*\n {4}fields: .*\bStatus enum\(succeeded\|pending\|failed\).*\bFailure Code text\b.*\bFailure Message text\b/m);
-  assert.match(shown.out, /^ {2}events: .*\bcharge\.failed\b/m);
 
   assert.deepEqual(installed(dir), [], 'showing a module installs nothing');
   assert.deepEqual(existsSync(join(dir, '.lf/externals/stripe')), false, 'and leaves no state behind');
@@ -95,13 +95,12 @@ test('listen-fire modules show @lf/stripe says what it reads, that it is read-on
     readOnly: boolean;
     schema: { source: string };
     records: Array<{ name: string; fields: Array<{ name: string }> }>;
-    listens: { events: string[] };
   };
   assert.equal(json.readOnly, true);
   assert.equal(json.schema.source, 'module');
   assert.deepEqual(json.records.map((r) => r.name).slice(0, 3), ['Customer', 'Invoice', 'Subscription']);
   assert.ok(json.records.find((r) => r.name === 'Charge')?.fields.some((f) => f.name === 'Failure Code'));
-  assert.ok(json.listens.events.includes('invoice.payment_failed'));
+  assert.ok(json.records.find((r) => r.name === 'Change')?.fields.some((f) => f.name === 'Kind'));
 });
 
 test('listen-fire modules show says what a module writes, and that a module with a live schema needs an account', () => {
@@ -130,6 +129,24 @@ test('listen-fire modules show says what a module writes, and that a module with
   const unknown = lfSync(dir, 'modules', 'show', '@lf/nope');
   assert.equal(unknown.code, 1);
   assert.match(unknown.out, /no module "@lf\/nope" is installed here or bundled with this listen-fire; listen-fire modules lists them/);
+});
+
+// A module whose arrivals carry what adapter protocol 2.6 added (a root
+// arrival with no key, `parents`, `about`, `occurredAt`, `notFor`,
+// `takenApplied`) states minor 6, so a host that speaks less refuses it by
+// name rather than judging its listens without them. Slack's arrivals are
+// keyed and carry none of them.
+const SPEAKS_2_6 = ['dealroom', 'email', 'evertrace', 'github', 'gmail', 'granola', 'stripe', 'system', 'webhook'];
+
+test('listen-fire modules show --json states the protocol minor each bundled module needs: 6 where its arrivals carry what 2.6 added', () => {
+  const dir = freshProject();
+  const minorOf = (module: string): unknown => {
+    const shown = lfSync(dir, 'modules', 'show', `@lf/${module}`, '--json');
+    assert.equal(shown.code, 0, shown.out);
+    return (JSON.parse(shown.out) as { protocolMinor: unknown }).protocolMinor;
+  };
+  for (const module of SPEAKS_2_6) assert.equal(minorOf(module), 6, `@lf/${module} states protocolMinor 6`);
+  assert.equal(minorOf('slack'), 5);
 });
 
 // ── connect without a terminal ───────────────────────────────────────────────

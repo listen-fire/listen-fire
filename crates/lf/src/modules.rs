@@ -105,6 +105,8 @@ struct Summary {
     plugins: Vec<Plugin>,
     /// The flags `connect --yes` cannot do without.
     needs: Vec<String>,
+    /// The adapter protocol minor the module needs its host to speak; none for a slot module.
+    protocol_minor: Option<u64>,
 }
 
 async fn summarize(project: &Project, reference: &str) -> Result<Summary, String> {
@@ -172,6 +174,7 @@ async fn read_module(project: &Project, reference: &str, external: &External, cr
         settings: settings_lines(answer),
         plugins: plugins_of(running),
         needs: needs_of(running),
+        protocol_minor: Some(module_wire::envelope::protocol_minor_of(answer)),
     };
     if summary.kind == "plugin" {
         return Ok(summary);
@@ -227,6 +230,7 @@ fn core_summary(reference: &str, module: &crate::core::CoreModule) -> Summary {
         settings,
         plugins: Vec::new(),
         needs,
+        protocol_minor: None,
     }
 }
 
@@ -576,6 +580,7 @@ impl Summary {
                 "description" => p.description.as_deref().map_or(Js::Null, Js::str),
             })).collect()),
             "connectNeeds" => Js::strings(&self.needs),
+            "protocolMinor" => self.protocol_minor.map_or(Js::Null, |m| Js::Num(m.into())),
         };
         Js::Obj(doc).to_json()
     }
