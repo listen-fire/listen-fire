@@ -290,7 +290,8 @@ fn standing_json(pin: &str) -> serde_json::Value {
 }
 
 /// `judge_arrival({plan, arrival, nowMs})`: whether the arrival fires the
-/// listen (crate::listen_judge) — `{"fires":true}`, `{"skips":n}` or
+/// listen (crate::listen_judge) — `{"fires":true}`, `{"skips":n}` (with
+/// `"reason"` when a record's type, not a filter, skipped it) or
 /// `{"undecided":"…"}` — and 0; `{error}` and 1 for an input that does not
 /// read.
 ///

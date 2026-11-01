@@ -80,4 +80,13 @@ describe('memoryRunHostStore starts a run an arrival fires under its receipt', (
     expect(await keep('d3')).toMatchObject({ kept: true });
     expect(await keep('d4')).toEqual({ kept: false });
   });
+
+  it('keeps a delivery once by its own id, with or without a provider id (store-slot.md inbound.keepDelivery)', async () => {
+    const store = memoryRunHostStore();
+    const keep = (externalId: string | null) =>
+      store.keepDelivery({ subscriptionId: 's', delivery: { id: 'd1', externalId, receivedAt: '2026-10-31T09:00:00.000Z', source: 'emit', inline: true, events: [] }, work: [] });
+    expect(await keep(null)).toMatchObject({ kept: true });
+    expect(await keep(null)).toEqual({ kept: false });
+    expect(await keep('evt-2')).toEqual({ kept: false });
+  });
 });

@@ -978,7 +978,10 @@ mod tests {
                 }
                 "claimRow" => {
                     let key = format!("fire_event:{}", names.id(text(step, "fire")));
-                    assert!(claim_rows(&team, "fire_event").iter().any(|row| row.key == key), "{at}: {key} is not queued");
+                    let row = claim_rows(&team, "fire_event").into_iter().find(|row| row.key == key).unwrap_or_else(|| panic!("{at}: {key} is not queued"));
+                    if let Some(mark) = step.get("arrivalMark").and_then(Js::as_str) {
+                        assert_eq!(row.payload.get("arrivalMark"), Some(&Js::Num(names.marks[mark].into())), "{at}: the row's mark is its delivery's");
+                    }
                 }
                 "completeKey" => {
                     let key = format!("fire_event:{}", names.id(text(step, "fire")));

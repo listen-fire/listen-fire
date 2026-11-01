@@ -332,7 +332,13 @@ async function runCase({ store, runRows, deliveries }: StoreWaitsBackend, steps:
       case 'claimRow': {
         const key = fireKeyOf(names, step);
         const rows = await store.work.claimDue({ limit: 1000, leaseMs: 60_000, kinds: ['fire_event'], teamId });
-        assert.ok(rows.some((claimed) => claimed.key === key), `${at}: ${key} is not queued`);
+        const row = rows.find((claimed) => claimed.key === key) ?? assert.fail(`${at}: ${key} is not queued`);
+        if ('arrivalMark' in step) {
+          const mark = text(step, 'arrivalMark');
+          const payload: unknown = row.payload;
+          const carried: unknown = typeof payload === 'object' && payload !== null ? Reflect.get(payload, 'arrivalMark') : undefined;
+          assert.equal(carried, names.marks.get(mark) ?? assert.fail(`no mark named ${mark}`), `${at}: the row's mark is its delivery's`);
+        }
         break;
       }
       case 'completeKey': {

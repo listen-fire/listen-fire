@@ -163,6 +163,8 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
   /** Kept deliveries by subscription and the provider's id, to keep a
    *  duplicate out; and each subscription's pull cursor. */
   const deliveryIds = new Set<string>();
+  /** Every kept delivery's own id: one is kept once. */
+  const keptIds = new Set<string>();
   /** Each kept delivery's entry in `deliveryIds`, by the delivery's own id. */
   const externalIdOf = new Map<string, string>();
   const checkpoints = new Map<string, string>();
@@ -655,12 +657,14 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
       if (arrivals === undefined && (input.waits?.length ?? 0) > 0) {
         throw new Error('inbound.keepDelivery: `waits` came without `arrivals`; a delivery\'s waits are opened with its arrivals, under their team and adapter');
       }
+      if (keptIds.has(delivery.id)) return { kept: false };
       if (delivery.externalId !== undefined && delivery.externalId !== null) {
         const id = JSON.stringify([subscriptionId, delivery.externalId]);
         if (deliveryIds.has(id)) return { kept: false };
         deliveryIds.add(id);
         externalIdOf.set(delivery.id, id);
       }
+      keptIds.add(delivery.id);
       if ('checkpoint' in input) checkpoints.set(subscriptionId, stored(input.checkpoint));
       const arrivalMark = lastSeq;
       let wakes: WaitWake[] | undefined;

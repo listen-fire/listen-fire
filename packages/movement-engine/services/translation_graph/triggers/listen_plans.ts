@@ -269,7 +269,8 @@ export function triggerAwaitsOf(input: { program: Program; stamps: CheckAnswer['
   if (index === -1) return { own: [], carried: [] };
   const path = `/statements/${index}/params/0`;
   const onParam = input.stamps.filter((stamp) => stamp.file === undefined && stamp.path === path);
-  const own = onParam.flatMap((stamp) => ('opensWaits' in stamp ? [...stamp.opensWaits] : []));
+  // The parameter's one stamp of each, as listen-fire reads them (`trigger_awaits_of`).
+  const own = onParam.flatMap((stamp) => ('opensWaits' in stamp ? [[...stamp.opensWaits]] : []))[0] ?? [];
   const byType = onParam.flatMap((stamp) => ('carriedAwaits' in stamp ? [stamp.carriedAwaits] : []))[0] ?? {};
   const carried = (plan.carries ?? []).map((edge) => {
     const landed = plan.hops.find((hop) => hop.edge === edge)?.to;
