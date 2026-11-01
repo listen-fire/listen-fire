@@ -434,7 +434,9 @@ test('upgrade rewrites a granola listen by its folder lowercased, and holds the 
   assert.equal(upgraded.code, 0, upgraded.out);
   assert.equal(
     readFileSync(file, 'utf8'),
-    old.replace('listen to source { folder: "Deals", every: 10m } fire triage', 'listen to source-[n:Meetings WHERE n.Folders CONTAINS "deals"]-> fire triage'),
+    old
+      .replace('<source-[:Meeting Note]->>', '<source-[:Meetings]->>')
+      .replace('listen to source { folder: "Deals", every: 10m } fire triage', 'listen to source-[n:Meetings WHERE n.Folders CONTAINS "deals"]-> fire triage'),
   );
   assert.equal(lf(dir, 'check').code, 0);
   assert.match(lf(dir, 'upgrade', '--check').out, /1 file\(s\), 0 would be rewritten, 0 left to change by hand/);
@@ -447,15 +449,21 @@ test('upgrade rewrites a dealroom listen: rounds, industries and locations each 
   upgradesTo(
     dir,
     file,
-    old.replace(
-      'listen to source { rounds: ["SERIES A", "SEED"], industries: ["fintech"], hq_locations: ["Germany"] } fire triage',
-      'listen to source-[r:`Funding Rounds` WHERE r.Round IN ["SERIES A", "SEED"] AND r.`Company Industries` CONTAINS "fintech" AND r.`Company Locations` CONTAINS "Germany"]-> fire triage',
-    ),
+    old
+      .replace('<source-[:Funding Round]->>', '<source-[:`Funding Rounds`]->>')
+      .replace(
+        'listen to source { rounds: ["SERIES A", "SEED"], industries: ["fintech"], hq_locations: ["Germany"] } fire triage',
+        'listen to source-[r:`Funding Rounds` WHERE r.Round IN ["SERIES A", "SEED"] AND r.`Company Industries` CONTAINS "fintech" AND r.`Company Locations` CONTAINS "Germany"]-> fire triage',
+      ),
   );
 
-  // A listen that narrowed nothing heard every new round.
+  // A listen that narrowed nothing heard every new round; naming its one
+  // event is the same listen; several terms are Dealroom's to match any of.
+  const retyped = (listen: string) => polled('dealroom', 'dealroom_key', 'Funding Round', listen).replace('<source-[:Funding Round]->>', '<source-[:`Funding Rounds`]->>');
   writeFileSync(file, polled('dealroom', 'dealroom_key', 'Funding Round', 'listen to source {} fire triage'));
-  upgradesTo(dir, file, polled('dealroom', 'dealroom_key', 'Funding Round', 'listen to source-[:`Funding Rounds`]-> fire triage'));
+  upgradesTo(dir, file, retyped('listen to source-[:`Funding Rounds`]-> fire triage'));
+  writeFileSync(file, polled('dealroom', 'dealroom_key', 'Funding Round', 'listen to source { events: ["funding_round"], hq_locations: ["Europe", "US"] } fire triage'));
+  upgradesTo(dir, file, retyped('listen to source-[r:`Funding Rounds` WHERE r.`Company Locations` CONTAINS "Europe" OR r.`Company Locations` CONTAINS "US"]-> fire triage'));
 });
 
 test('upgrade rewrites an evertrace listen onto the edge its event arrives on, and holds the pin on one naming both', async () => {
@@ -479,10 +487,12 @@ test('upgrade rewrites an evertrace listen onto the edge its event arrives on, a
   upgradesTo(
     dir,
     file,
-    entries.replace(
-      'listen to source { events: ["list_entry"], list: "Pipeline" } fire triage',
-      'listen to source-[e:`List Entries` WHERE e.`List Name` == "Pipeline"]-> fire triage',
-    ),
+    entries
+      .replace('<source-[:List Entry]->>', '<source-[:`List Entries`]->>')
+      .replace(
+        'listen to source { events: ["list_entry"], list: "Pipeline" } fire triage',
+        'listen to source-[e:`List Entries` WHERE e.`List Name` == "Pipeline"]-> fire triage',
+      ),
   );
 
   // Both events arrive on two edges: there is no one listen to rewrite it to.
@@ -491,7 +501,7 @@ test('upgrade rewrites an evertrace listen onto the edge its event arrives on, a
   pinned(dir, '0.12.13');
   const held = lf(dir, 'upgrade');
   assert.equal(held.code, 1, held.out);
-  assert.match(held.out, /MOV_LISTEN_SETTINGS_RETIRED .*there is no rewrite: its events arrive on `Signals` and ``List Entries``, so write one listen for each/);
+  assert.match(held.out, /MOV_LISTEN_SETTINGS_RETIRED .*there is no rewrite: its events arrive on `Signals` and `List Entries`, so write one listen for each/);
   assert.match(held.out, /engine: left at 0\.12\.13/);
   assert.equal(readFileSync(file, 'utf8'), both);
 });
