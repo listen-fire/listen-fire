@@ -247,7 +247,8 @@ pub trait RunHostStore {
     fn note_arrival(&self, noted: &Noted<'_>) -> Result<bool>;
     /// Forget at most `limit` arrivals that no live wait on their record's
     /// edge reads with a mark below them and that are at or below the floor
-    /// (the lowest mark an unexpired run lease took, else the latest seq),
+    /// (the lowest mark an unexpired run lease took or a queued `fire_event`
+    /// row carries as its `arrivalMark`, else the latest seq),
     /// and the identities past their re-send window: how many arrivals went.
     /// A wait is live while its run exists, or one a delivery opened while
     /// its run's `fire_event` row is queued. `floor`: a mark the caller's

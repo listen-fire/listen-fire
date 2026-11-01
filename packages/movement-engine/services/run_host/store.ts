@@ -239,8 +239,9 @@ export interface WaitStore {
    * Forget at most `limit` arrivals, and the identities whose re-send window
    * has passed: how many arrivals went. An arrival goes when no live wait on
    * its record's edge reads from below it, and it is at or below the floor:
-   * the lowest mark an unexpired run lease took when it was claimed, else the
-   * latest seq. A wait is live while its run exists, or, one a delivery
+   * the lowest mark an unexpired run lease took when it was claimed or a
+   * queued `fire_event` row carries (`arrivalMark`: its runs have yet to open
+   * the waits not opened at keep), else the latest seq. A wait is live while its run exists, or, one a delivery
    * opened (`keepDelivery`'s `waits`), while its `fire_event` row is queued.
    * `floor`: a mark the caller's own running steps hold in its process
    * rather than by a lease; nothing above it goes either.

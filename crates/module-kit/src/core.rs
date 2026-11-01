@@ -654,8 +654,9 @@ slot! {
         /// Forget at most `limit` arrivals that no live wait on their
         /// record's edge reads with a `since` below them and that are at or
         /// below the floor: the lowest mark an unexpired run lease took when
-        /// it was claimed (`leases.claim` keeps `waits.mark` then), else the
-        /// latest seq. A wait is live while its run exists, or one
+        /// it was claimed (`leases.claim` keeps `waits.mark` then) or a
+        /// queued `fire_event` row carries (`arrivalMark`), else the latest
+        /// seq. A wait is live while its run exists, or one
         /// `inbound.keepDelivery` opened while its `fire_event` row is
         /// queued (not buried). `floor`: a mark the caller's own running
         /// steps hold in its process; nothing above it goes either. Forget

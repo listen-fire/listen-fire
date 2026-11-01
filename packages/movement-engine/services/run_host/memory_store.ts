@@ -382,9 +382,17 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
     const fire = work.get(wait.fireKey);
     return fire !== undefined && !fire.dead;
   };
-  /** The lowest mark an unexpired lease took, else the latest seq. */
+  /** The lowest mark an unexpired lease took or a queued `fire_event` row
+   *  carries (`arrivalMark`), else the latest seq. A queued row's runs have
+   *  yet to open the waits not opened at keep, and read from its mark. */
   const floor = (): number => {
-    const held = [...leases.values()].filter((lease) => lease.until > now()).map((lease) => lease.mark);
+    const leased = [...leases.values()].filter((lease) => lease.until > now()).map((lease) => lease.mark);
+    const queued = [...work.values()].filter((row) => row.kind === 'fire_event' && !row.dead).flatMap((row) => {
+      const payload = read(row.payload);
+      const mark = typeof payload === 'object' && payload !== null && 'arrivalMark' in payload ? payload.arrivalMark : undefined;
+      return typeof mark === 'number' ? [mark] : [];
+    });
+    const held = [...leased, ...queued];
     return held.length > 0 ? Math.min(...held) : lastSeq;
   };
   const dropWaits = (ids: ReadonlySet<string>): void => {

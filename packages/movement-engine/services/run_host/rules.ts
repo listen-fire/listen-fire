@@ -157,7 +157,8 @@ export function heldMarks(): HeldMarks {
 
 /**
  * Forget the arrivals no live wait reads that are at or below the floor
- * (the lowest mark a running step's lease took, else the latest seq, and
+ * (the lowest mark a running step's lease took or a queued `fire_event` row
+ * carries, else the latest seq, and
  * never above the lowest of `held`), and the identities whose re-send window
  * has passed: at most `ARRIVALS_PER_SWEEP`; answers how many arrivals went.
  * A product sweeps on its own schedule, as listen-fire's drain does on each
