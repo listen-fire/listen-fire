@@ -384,8 +384,8 @@ pub fn resolved_at_open_only(session: &Session, set: &FileSet, listen: &Listen) 
 
 /// How long one resolve holds a listen, so two processes never list it at
 /// once: past it, a resolve that has not kept what it listed is taken
-/// over, and keeps nothing.
-const RESOLVE_HOLD_MS: i64 = 60_000;
+/// over, and keeps nothing. A run's lease: the same silence is a dead process.
+const RESOLVE_HOLD_MS: i64 = crate::run_host::RUN_LEASE_TTL_MS;
 
 /// What resolving a listen came to.
 pub enum Resolved {

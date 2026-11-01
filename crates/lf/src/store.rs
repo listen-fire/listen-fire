@@ -227,6 +227,7 @@ create unique index if not exists wait_row_edge on wait_row (run_id, team_id, ad
 create unique index if not exists wait_row_keyless on wait_row (run_id, team_id, adapter_type, edge) where key is null;
 create index if not exists wait_row_key on wait_row (team_id, adapter_type, edge, key);
 create index if not exists wait_row_stranded on wait_row (stranded_at, id) where stranded_at is not null;
+create index if not exists wait_row_fire_key on wait_row (fire_key) where fire_key is not null;
 ";
 
 /// Columns a state file written by an earlier listen-fire lacks, added on open.
@@ -750,7 +751,11 @@ impl Store {
                 db.execute_batch(&format!("alter table run add column {column} {declared}"))?;
             }
         }
-        db.execute_batch("create index if not exists run_delivery on run (delivery_id)")?;
+        // As @lf/postgres-store's migration 13: the leases a sweep's floor reads.
+        db.execute_batch(
+            "create index if not exists run_delivery on run (delivery_id);
+             create index if not exists run_lease_mark on run (lease_until) where lease_mark is not null;",
+        )?;
         Self::open_wait_rows(&db)?;
         Self::open_event_receipts(&db)?;
         // Added to a state file written before a delivery kept its request.

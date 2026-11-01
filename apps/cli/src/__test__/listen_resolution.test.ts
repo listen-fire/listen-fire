@@ -154,7 +154,9 @@ test('a listen whose filter matches more boards than the limit is suspended by n
   const limit = 'LISTEN_SCOPE_LIMIT: notes:a matched more Boards than its limit of 1; it is suspended until its filter matches fewer';
   const opened = lfAt(dir, ['drain', '--until-idle']);
   assert.ok(opened.out.includes(`listen-fire: ${limit}`), opened.out);
-  assert.ok(listensLine(dir).endsWith(` — watching 0 Boards, resolved ${/resolved (\d+s ago)/.exec(listensLine(dir))?.[1]} — ${limit}; can't be protected from loops: its arrivals name no record they are about, and no write to feed makes what they land on; a write to feed that changes nothing is still sent (it lists no readRecord), so a two-way sync's echo runs again`), listensLine(dir));
+  // Read once: a second read may say a second later.
+  const suspended = listensLine(dir);
+  assert.ok(suspended.endsWith(` — watching 0 Boards, resolved ${/resolved (\d+s ago)/.exec(suspended)?.[1]} — ${limit}; can't be protected from loops: its arrivals name no record they are about, and no write to feed makes what they land on; a write to feed that changes nothing is still sent (it lists no readRecord), so a two-way sync's echo runs again`), suspended);
   lfAt(dir, ['drain', '--until-idle'], 61_000);
   assert.deepEqual(polledBoards(dir), [], 'a suspended listen is polled nowhere');
   // Renamed down to one: watched again from its next listing.

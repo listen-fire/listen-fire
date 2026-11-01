@@ -1289,7 +1289,7 @@ mod tests {
             store.db.prepare("select name from pragma_index_list('wait_row')").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
         indexes.retain(|name| !name.starts_with("sqlite_autoindex"));
         indexes.sort();
-        assert_eq!(indexes, ["wait_row_edge", "wait_row_key", "wait_row_keyless", "wait_row_stranded"]);
+        assert_eq!(indexes, ["wait_row_edge", "wait_row_fire_key", "wait_row_key", "wait_row_keyless", "wait_row_stranded"]);
     }
 
     /// A log's `at` in another form than `iso` writes (an offset, no

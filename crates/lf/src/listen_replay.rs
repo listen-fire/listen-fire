@@ -212,6 +212,12 @@ async fn replay_through(session: &Session, set: &FileSet, listen: &Listen, row: 
         writeln!(out, "{named}: delivery {} brought nothing it hears: nothing to replay", row.id).map_err(io)?;
         return Ok(0);
     }
+    // A listen whose earlier hops the host resolves runs only what lands
+    // under the records it watches now: --force cannot run the rest.
+    if crate::edge_polls::resolves(listen) && landed.iter().all(|arrival| !set.heads(listen).contains(&arrival.key)) {
+        writeln!(out, "{named}: delivery {} brought nothing under a record it watches now: nothing to replay", row.id).map_err(io)?;
+        return Ok(0);
+    }
     let replay = Replay { of: &row.id, attempt: next_attempt(session, listen, &landed)?, again: force };
     let minted = doors.mint_runs(adapter, reread.install.as_deref(), credential, &landed).await?;
     let unjudged_in = Delivered { id: Some(&row.id), credential, replay: Some(replay), ..Delivered::default() };

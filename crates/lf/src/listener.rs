@@ -482,7 +482,8 @@ async fn hook_queued(session: &Session, delivery: Delivery<'_>, notify: &dyn Fn(
 async fn models_door(credentials: &crate::secrets::Credentials, request: &Request) -> Response {
     let presented = request.headers.iter().find(|(k, _)| k == "authorization").map(|(_, v)| v.as_str());
     let expected = host_token().map(|t| format!("Bearer {t}"));
-    if expected.is_none() || presented != expected.as_deref() {
+    let held = matches!((presented, &expected), (Some(presented), Some(expected)) if crate::inbound::same_secret(presented, expected));
+    if !held {
         return Response::json(401, &Js::Obj(obj! { "error" => Js::str("unauthorized") }));
     }
     let body = match Js::parse(&request.body) {
