@@ -297,7 +297,3 @@ pub fn delivery_show_doc(row: &DeliveryRow, with_request: bool) -> Js {
     Js::Obj(obj! { "delivery" => shown })
 }
 
-/// `deliveries replay`: the new delivery, the one it replays and the events queued.
-pub fn delivery_replay_doc(new_id: &str, replay_of: &str, queued: usize) -> Js {
-    Js::Obj(obj! { "ok" => Js::Bool(true), "deliveryId" => Js::str(new_id), "replayOf" => Js::str(replay_of), "queued" => num(queued as u64) })
-}

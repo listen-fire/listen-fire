@@ -88,15 +88,11 @@ An unknown run, or a movement that no listen fires now or that does not check, i
 
 ## `listen-fire deliveries --json`
 
-`{ "deliveries": [{ "id", "subscriptionId", "externalId", "receivedAt", "source", "inline", "replayOf", "eventCount", "runs": [{ "id", "status" }] }] }`, most recent first (50). `--subscription <id>` keeps one subscription's; `--since` is an ISO instant, or `<n>h` or `<n>d` before now, and keeps those received at or after it. `source` is `webhook`, `hook`, `emit` or `cli`; `externalId` is the provider's delivery id, or `null`; `inline` is true when the events ran inside the request; `replayOf` names the delivery a replay repeats.
+`{ "deliveries": [{ "id", "subscriptionId", "externalId", "receivedAt", "source", "inline", "replayOf", "eventCount", "runs": [{ "id", "status" }] }] }`, most recent first (50). `--subscription <id>` keeps one subscription's; `--since` is an ISO instant, or `<n>h` or `<n>d` before now, and keeps those received at or after it. `source` is `webhook`, `hook`, `emit` or `cli`; `externalId` is the provider's delivery id, or `null`; `inline` is true when the events ran inside the request; `replayOf` names the delivery a `listens replay` repeats.
 
 ## `listen-fire deliveries show <id> --json`
 
 `{ "delivery": { …the listing's fields, "events": [{ "external", "event" }], "requestKept" } }`. `runs` is empty for a delivery no listen took. `requestKept` says whether it keeps the request it was received as (a replay keeps none; past `deliveries.retainDays` it is forgotten). With `--request` the document also carries `"request": { "method", "path", "query", "headers", "body", "checkpoint"?, "arrivalIds" }` (`body` base64; only the headers its module declares it reads, never a signature; `body` and `query` without the fields its module declares may hold a credential, otherwise as received; `arrivalIds` the arrivals it brought, all a replay judges again), or for a poll's delivery, the page the poll read, `"request": { "adapter", "install"?, "credential"?, "arrivals" }`: it may hold personal data, and is never printed without the flag. Without `--json` it prints the same document, indented. An unknown id is `{"error": "no delivery <id>"}`, exit 1.
-
-## `listen-fire deliveries replay <id> --json`
-
-`{ "ok": true, "deliveryId": "<new id>", "replayOf": "<id>", "queued": 1 }`. Without `--json` it prints `delivery <new> replays <id>: <n> event(s) queued; listen-fire serve or listen-fire drain runs them`. A delivery that kept no events (every delivery of arrivals) is refused, `{"error": "delivery <id> kept no events to queue: …"}`, exit 1: its arrivals are replayed through a listen, `listen-fire listens replay <file>:<movement> --delivery <id>`.
 
 ## `listen-fire modules --json` and `listen-fire connect --json`
 

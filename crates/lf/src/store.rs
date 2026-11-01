@@ -584,7 +584,7 @@ pub enum DeliverySource {
     Hook,
     /// An external's own push (`emit`).
     Emit,
-    /// `listen-fire run --webhook`, or a replay by `listen-fire deliveries replay`.
+    /// `listen-fire run --webhook`, or a replay by `listen-fire listens replay`.
     Cli,
     /// A poll of a listenable edge that fired a listen sharing it: its
     /// arrivals, and the waits of the runs it started, kept in one write.

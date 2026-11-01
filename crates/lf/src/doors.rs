@@ -837,14 +837,6 @@ fn kept_event(external: &str, event: Js, came_for: Delivered<'_>) -> Js {
     Js::Obj(kept)
 }
 
-/// A queued event's `fire_event` row, for the drain: the run it starts
-/// names its delivery (`delivered.id`), and only the listens of the
-/// connection and subscription it came for take it (a row with neither, as
-/// every row queued before rows named them, reaches every listen).
-pub fn fire_event_work(external: &str, event: Js, delivered: Delivered<'_>) -> NewWork {
-    fire_work(obj! { "external" => Js::str(external), "event" => event }, delivered)
-}
-
 /// A delivery's arrivals' `fire_event` row, for the drain: each judged then
 /// against the listens on its edge (Session::fire_arrivals), as the event
 /// rows of the same delivery are routed to the listens they reach. The runs

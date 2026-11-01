@@ -51,10 +51,12 @@ test('listen-fire serve takes a signed webhook twice, runs it once, and its list
   } finally {
     await serving.stop();
   }
-  // Its arrivals are replayed through the listen that holds their receipts.
-  const refused = lf(dir, 'deliveries', 'replay', firstId);
-  assert.notEqual(refused.code, 0, refused.out);
-  assert.match(refused.out, new RegExp(`delivery ${firstId} kept no events to queue: what it brought is replayed through a listen, \`listen-fire listens replay <file>:<movement> --delivery ${firstId}\``));
+  // Its arrivals are replayed through the listen that holds their receipts;
+  // `deliveries replay` is retired and names that command.
+  const retired = lf(dir, 'deliveries', 'replay', firstId);
+  assert.equal(retired.code, 2, retired.out);
+  assert.match(retired.out, /listen-fire deliveries replay is retired: put a kept delivery through a listen again with `listen-fire listens replay <file>:<movement> --delivery <id>`/);
+  assert.equal(deliveriesOf(dir).length, 1, 'the retired command keeps nothing');
   const replayed = lf(dir, 'listens', 'replay', 'companies:welcome', '--delivery', firstId, '--force');
   assert.equal(replayed.code, 0, replayed.out);
   assert.equal(runsOf(dir).length, 2);

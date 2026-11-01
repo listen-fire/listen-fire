@@ -140,8 +140,9 @@ test('two reruns at once: one runs, the other is refused', async () => {
   assert.deepEqual(companies(dir), ['slow Vireo Robotics']);
 });
 
-test('listen-fire deliveries replay points at listen-fire runs rerun for a failed run', () => {
+test('listen-fire deliveries help points at listens replay, and at runs rerun for a failed run', () => {
   const help = lf(rerunProject(FIXED), '--help');
   assert.match(help.out, /listen-fire runs rerun <run-id> \[--force\]/);
-  assert.match(help.out, /a failed run: listen-fire runs rerun/);
+  assert.match(help.out, /put one through a listen again: `listens replay <file>:<movement> --delivery <id>` \(a failed run: listen-fire runs rerun <run-id>\)/);
+  assert.doesNotMatch(help.out, /deliveries replay/);
 });
