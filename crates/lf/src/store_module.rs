@@ -481,6 +481,32 @@ impl RunHostStore for ProcessStore {
             })
             .collect()
     }
+    fn note_unjudged(&self, fact: &crate::records_door::UnjudgedArrival, forget_before: &str) -> Result<bool> {
+        const METHOD: &str = "unjudged.note";
+        let Js::Obj(mut params) = fact.to_js() else { unreachable!("an unjudged arrival is an object") };
+        params.insert("forgetBefore".into(), s(forget_before));
+        // A module written before unjudged arrivals were kept keeps none.
+        match self.client.call(METHOD, params) {
+            Ok(Js::Bool(new)) => Ok(new),
+            Ok(answer) => Err(self.malformed(METHOD, &answer)),
+            Err(error) if error.code == METHOD_NOT_IMPLEMENTED_CODE => Ok(false),
+            Err(error) => Err(self.refused(METHOD, error)),
+        }
+    }
+    fn unjudged_arrivals(&self, after: Option<&crate::records_door::UnjudgedAfter<'_>>, limit: i64) -> Result<Vec<crate::records_door::UnjudgedArrival>> {
+        const METHOD: &str = "unjudged.list";
+        let mut params = obj! { "limit" => Js::Num(limit.into()) };
+        if let Some(after) = after {
+            params.insert("after".into(), Js::Obj(obj! { "at" => s(after.at), "pipeline" => s(after.pipeline), "arrival" => s(after.arrival) }));
+        }
+        let answer = match self.client.call(METHOD, params) {
+            Ok(answer) => answer,
+            Err(error) if error.code == METHOD_NOT_IMPLEMENTED_CODE => return Ok(Vec::new()),
+            Err(error) => return Err(self.refused(METHOD, error)),
+        };
+        let rows = answer.as_array().ok_or_else(|| self.malformed(METHOD, &answer))?;
+        rows.iter().map(|row| crate::records_door::UnjudgedArrival::from_js(row).ok_or_else(|| self.malformed(METHOD, row))).collect()
+    }
     fn keep_delivery(
         &self,
         subscription_id: &str,

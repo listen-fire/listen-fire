@@ -2,7 +2,7 @@
 // its handbook section share (docs/contracts/system-events.md).
 //
 // One edge, `Events`, lands on one record, `Event`; its `Kind` says which of
-// the six things happened. Every event carries the same fields, so a handler
+// the seven things happened. Every event carries the same fields, so a handler
 // written for one kind reads the same way as one written for another, and a
 // listen names the kinds it wants with a WHERE the module takes:
 // `sys-[e:Events WHERE e.Kind IN ["Run Failed", "Wait Lost Its Record"]]->`.
@@ -67,7 +67,14 @@ export const WAIT_LOST_ITS_RECORD: SystemEventKind = {
     'A run waits on a record that was deleted, so nothing will ever arrive on its wait (docs/contracts/stranded-waits.md). `Adapter`, `Edge` and `Record Id` say which wait; a `race` with a `sleep` is the way out. A program is never told about its own listen\'s waits.',
 };
 
-export const SYSTEM_EVENT_KINDS: readonly SystemEventKind[] = [RUN_FAILED, RUN_PAUSED, VALIDATION_ISSUE, DEPRECATED_VERSION, RELEASE_APPLIED, WAIT_LOST_ITS_RECORD];
+export const ARRIVAL_NOT_JUDGED: SystemEventKind = {
+  name: 'Arrival Not Judged',
+  id: 'arrival_not_judged',
+  description:
+    'A listen could not tell whether something that arrived fires it: its WHERE reads a field the module could not read (the provider did not answer a lookup), or a record the arrival does not carry. That listen ran nothing for it; the arrival\'s other listens ran as usual. `Listen`, `Delivery Id` and `Arrival Id` say which listen, which delivery and which arrival. Reported once per listen and arrival. A program is never told about its own listen\'s arrivals.',
+};
+
+export const SYSTEM_EVENT_KINDS: readonly SystemEventKind[] = [RUN_FAILED, RUN_PAUSED, VALIDATION_ISSUE, DEPRECATED_VERSION, RELEASE_APPLIED, WAIT_LOST_ITS_RECORD, ARRIVAL_NOT_JUDGED];
 
 /** What `Kind` an omitted kind means in a 0.12 listen (`listen to sys {}`). */
 export const DEFAULT_KIND = RUN_FAILED;
@@ -89,8 +96,16 @@ export interface SystemEventFields {
   At: string;
   /** For a wait that lost its record: the module its record is in; else empty. */
   Adapter: string;
+  /** For a wait that lost its record, the edge it waits on; for an arrival not judged, the edge it arrived on. */
   Edge: string;
+  /** For a wait that lost its record, the deleted record; for an arrival not judged, the record that landed. */
   'Record Id': string;
+  /** For an arrival not judged: the listen, by its pipeline; else empty. */
+  Listen: string;
+  /** For an arrival not judged: the kept delivery it came in; else empty. */
+  'Delivery Id': string;
+  /** For an arrival not judged: the arrival, as the listen names it (its edge, record, identity and version); else empty. */
+  'Arrival Id': string;
 }
 
 /** The fields' declarations, in the order a handler reads them. */
@@ -105,6 +120,9 @@ export const SYSTEM_EVENT_FIELDS: ReadonlyArray<{ name: keyof SystemEventFields;
   { name: 'Url', kind: 'string', description: 'A link to where a person sees it; empty where the host has no such page.' },
   { name: 'At', kind: 'date', description: 'When it happened (UTC).' },
   { name: 'Adapter', kind: 'string', description: 'For a wait that lost its record: the module its record is in. Empty on every other kind.' },
-  { name: 'Edge', kind: 'string', description: 'For a wait that lost its record: the edge it waits on. Empty on every other kind.' },
-  { name: 'Record Id', kind: 'string', description: 'For a wait that lost its record: the deleted record’s id. Empty on every other kind.' },
+  { name: 'Edge', kind: 'string', description: 'For a wait that lost its record: the edge it waits on. For an arrival not judged: the edge it arrived on. Empty on every other kind.' },
+  { name: 'Record Id', kind: 'string', description: 'For a wait that lost its record: the deleted record’s id. For an arrival not judged: the record that arrived. Empty on every other kind.' },
+  { name: 'Listen', kind: 'string', description: 'For an arrival not judged: the listen that could not judge it, as the host names it. Empty on every other kind.' },
+  { name: 'Delivery Id', kind: 'string', description: 'For an arrival not judged: the delivery it came in, which the host keeps for a while (on listen-fire `deliveries.retainDays`, 14 days by default); empty when the host kept none. Empty on every other kind.' },
+  { name: 'Arrival Id', kind: 'string', description: 'For an arrival not judged: the arrival, as the listen names it (its edge, record, identity and version). Empty on every other kind.' },
 ];

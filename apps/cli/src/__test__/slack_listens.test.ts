@@ -11,6 +11,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 
 import { until } from './attio_fixture';
@@ -257,7 +258,7 @@ test('a message in #deals fires a channel-filtered listen; one in #random does n
   }
 });
 
-test('in a Slack outage a message is still taken: a listen filtering its channel cannot be judged, one that does not runs', async () => {
+test('in a Slack outage a message is still taken: a listen filtering its channel cannot be judged and is noted once, one that does not runs', async () => {
   const world = await slackWorld(`${HEADER}
 function heard(m: <chat-[:Message]->>) {
   return "heard \${m.Message}"
@@ -282,9 +283,20 @@ listen to chat-[:Channels]->-[:Messages]-> fire every
       assert.ok(delivered.status >= 200 && delivered.status < 300, delivered.body);
       assert.ok(Date.now() - started < 3000, `${Date.now() - started}ms`);
       await until(() => completed(serving, 'every') === 1, serving.lines);
-      await serving.waitFor(/slack:heard: an arrival on Messages cannot be judged \(the arrival carries no Channels record, which this listen's filter on it reads\): it runs nothing/);
+      await serving.waitFor(/slack:heard: an arrival on Messages cannot be judged \(slack could not read Name of the Channels record the arrival carries, which this listen's filter reads\): it runs nothing/);
       await new Promise((settle) => setTimeout(settle, 500));
       assert.equal(completed(serving, 'heard'), 0, serving.lines.join('\n'));
+      // Kept once, for the listen that could not judge it (`Arrival Not Judged`), naming the kept delivery.
+      const db = new DatabaseSync(join(world.dir, '.lf', 'state.db'));
+      try {
+        const facts = db.prepare('select pipeline, delivery_id as deliveryId, edge, record_id as recordId from arrival_unjudged').all().map((row) => ({ ...row }));
+        assert.equal(facts.length, 1, JSON.stringify(facts));
+        assert.match(String(facts[0]?.pipeline), /^listen:slack:heard:[0-9a-f]{8}$/);
+        assert.deepEqual([facts[0]?.edge, facts[0]?.recordId], ['Messages', `C0DEALS:${ts}`]);
+        assert.equal(db.prepare('select id from delivery where id = ?').all(String(facts[0]?.deliveryId)).length, 1);
+      } finally {
+        db.close();
+      }
     } finally {
       await serving.stop();
     }

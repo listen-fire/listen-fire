@@ -26,6 +26,13 @@ export interface ReleaseMark {
   version: string;
 }
 
+/** Where a page of unjudged arrivals left off: its last one. */
+export interface UnjudgedMark {
+  at: string;
+  listen: string;
+  arrival: string;
+}
+
 /** The program a run belongs to; null for a run no program owns. */
 export interface Automation {
   id: string;
@@ -63,6 +70,26 @@ export interface StrandedWait {
   at: string;
 }
 
+/** A listen that could not judge an arrival (its WHERE reads what the
+ *  arrival's module could not read), kept once per listen and arrival. */
+export interface UnjudgedArrival {
+  /** The listen, by its pipeline: an event about it is never that listen's. */
+  listen: string;
+  /** The arrival, as the listen names it. */
+  arrival: string;
+  automation: Automation;
+  /** The kept delivery it came in; null when the host kept none. */
+  deliveryId: string | null;
+  edge: string;
+  recordId: string | null;
+  reason: string;
+  /** The run whose write caused the arrival, when one did: the event is
+   *  about it, so a run the event fires continues its chain. */
+  cause: string | null;
+  /** When the host found it could not judge it, ISO 8601. */
+  at: string;
+}
+
 /** A release the host first ran under, and when. */
 export interface Release {
   version: string;
@@ -79,6 +106,8 @@ export interface SystemRecords {
   strandedWaits(input: { after: WaitMark; limit: number }): Promise<StrandedWait[]>;
   /** Releases first run after `after`. */
   releases(input: { after: ReleaseMark; limit: number }): Promise<Release[]>;
+  /** Arrivals a listen could not judge, found after `after`. */
+  unjudgedArrivals(input: { after: UnjudgedMark; limit: number }): Promise<UnjudgedArrival[]>;
   /** The web app's base URL an event's `Url` links into; null where the host has none. */
   webBaseUrl(): Promise<string | null>;
 }
@@ -112,6 +141,19 @@ const DoorWait = z.object({
 
 const DoorRelease = z.object({ version: z.string(), at: z.string() });
 
+const DoorUnjudged = z.object({
+  pipeline: z.string(),
+  arrival: z.string(),
+  file: z.string(),
+  movement: z.string(),
+  deliveryId: z.string().nullable(),
+  edge: z.string(),
+  recordId: z.string().nullable(),
+  reason: z.string(),
+  cause: z.string().nullable(),
+  at: z.string(),
+});
+
 /** listen-fire's facts, read at its records door (`ctx.records`). */
 export function recordsOverHostDoor(ctx: Pick<ModuleContext, 'records'>): SystemRecords {
   const read = async <T>(method: string, params: Record<string, unknown>, rows: z.ZodType<T>): Promise<T[]> => {
@@ -144,6 +186,20 @@ export function recordsOverHostDoor(ctx: Pick<ModuleContext, 'records'>): System
       }));
     },
     releases: (input) => read('records.releases', input, DoorRelease),
+    async unjudgedArrivals(input) {
+      const after = { at: input.after.at, pipeline: input.after.listen, arrival: input.after.arrival };
+      return (await read('records.unjudgedArrivals', { after, limit: input.limit }, DoorUnjudged)).map((row) => ({
+        listen: row.pipeline,
+        arrival: row.arrival,
+        automation: { id: `${row.file}:${row.movement}`, name: row.movement },
+        deliveryId: row.deliveryId,
+        edge: row.edge,
+        recordId: row.recordId,
+        reason: row.reason,
+        cause: row.cause,
+        at: row.at,
+      }));
+    },
     async webBaseUrl() {
       const answer = z.string().nullable().safeParse(await ctx.records.read('records.webBaseUrl'));
       if (!answer.success) throw new Error(`the host's records door answered records.webBaseUrl with what is not a URL or null`);

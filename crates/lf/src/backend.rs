@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use crate::json::Js;
 use crate::loop_breaker::{Deepest, LedgerRecord, LedgerWrite};
-use crate::records_door::{FailedPage, ReleaseAfter, SeenRelease};
+use crate::records_door::{FailedPage, ReleaseAfter, SeenRelease, UnjudgedAfter, UnjudgedArrival};
 #[cfg(feature = "postgres")]
 use crate::pg_store::PgStore;
 use crate::core;
@@ -332,6 +332,13 @@ pub trait RunHostStore {
     fn note_release(&self, version: &str, at: &str) -> Result<bool>;
     /// The releases kept after `after`, oldest first, ties by version (`releases.list`).
     fn releases(&self, after: Option<&ReleaseAfter<'_>>, limit: i64) -> Result<Vec<SeenRelease>>;
+    /// Keep that a listen could not judge an arrival, once per listen and
+    /// arrival (whether it is new), and forget what was kept before
+    /// `forget_before` (`unjudged.note`).
+    fn note_unjudged(&self, fact: &UnjudgedArrival, forget_before: &str) -> Result<bool>;
+    /// The unjudged arrivals kept after `after`, oldest first, ties by
+    /// listen then arrival (`unjudged.list`).
+    fn unjudged_arrivals(&self, after: Option<&UnjudgedAfter<'_>>, limit: i64) -> Result<Vec<UnjudgedArrival>>;
     /// What one inbound delivery leaves, as one write: its receipt, its pull
     /// cursor (when it moved), its arrivals and its work rows (its events,
     /// its wakes). A crash never leaves a cursor past events its receipt does
@@ -599,6 +606,12 @@ impl RunHostStore for Store {
     }
     fn releases(&self, after: Option<&ReleaseAfter<'_>>, limit: i64) -> Result<Vec<SeenRelease>> {
         Store::releases(self, after, limit)
+    }
+    fn note_unjudged(&self, fact: &UnjudgedArrival, forget_before: &str) -> Result<bool> {
+        Store::note_unjudged(self, fact, forget_before)
+    }
+    fn unjudged_arrivals(&self, after: Option<&UnjudgedAfter<'_>>, limit: i64) -> Result<Vec<UnjudgedArrival>> {
+        Store::unjudged_arrivals(self, after, limit)
     }
     fn keep_delivery(
         &self,

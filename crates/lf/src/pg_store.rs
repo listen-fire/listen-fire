@@ -50,7 +50,7 @@ use tokio_postgres::{Client, Row};
 use crate::backend::RunHostStore;
 use crate::json::Js;
 use crate::loop_breaker::{Deepest, LedgerRecord, LedgerWrite};
-use crate::records_door::{FailedPage, ReleaseAfter, SeenRelease};
+use crate::records_door::{FailedPage, ReleaseAfter, SeenRelease, UnjudgedAfter, UnjudgedArrival};
 use crate::obj;
 use crate::resolve::{ListenState, Resolution};
 use crate::store::{
@@ -156,6 +156,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (13, include_str!("pg_store_schema_13.sql")),
     (14, include_str!("pg_store_schema_14.sql")),
     (15, include_str!("pg_store_schema_15.sql")),
+    (16, include_str!("pg_store_schema_16.sql")),
 ];
 
 /// The advisory lock the migrations run under: "lf-store" as a number.
@@ -1582,6 +1583,45 @@ impl RunHostStore for PgStore {
             )?,
         };
         Ok(rows.iter().map(|r| SeenRelease { version: r.get(0), at: r.get(1) }).collect())
+    }
+
+    fn note_unjudged(&self, fact: &UnjudgedArrival, forget_before: &str) -> Result<bool> {
+        self.transaction(|| {
+            self.execute("delete from lf.arrival_unjudged where team_id = $1::text::uuid and noted_at < $2::text::timestamptz", &[&self.tenant, &forget_before])?;
+            let kept = self.execute(
+                "insert into lf.arrival_unjudged (team_id, pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at)
+                 values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text, $10::text, date_trunc('milliseconds', $11::text::timestamptz))
+                 on conflict do nothing",
+                &[&self.tenant, &fact.pipeline, &fact.arrival, &fact.file, &fact.movement, &fact.delivery_id, &fact.edge, &fact.record_id, &fact.reason, &fact.cause, &fact.at],
+            )?;
+            Ok(kept == 1)
+        })
+    }
+
+    fn unjudged_arrivals(&self, after: Option<&UnjudgedAfter<'_>>, limit: i64) -> Result<Vec<UnjudgedArrival>> {
+        const COLUMNS: &str = concat!("select pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, ", iso!("noted_at"), " from lf.arrival_unjudged where team_id = $1::text::uuid");
+        let rows = match after {
+            None => self.query(&format!("{COLUMNS} order by noted_at, pipeline, arrival limit $2::int8"), &[&self.tenant, &limit])?,
+            Some(after) => self.query(
+                &format!("{COLUMNS} and (noted_at, pipeline, arrival) > ($2::text::timestamptz, $3::text, $4::text) order by noted_at, pipeline, arrival limit $5::int8"),
+                &[&self.tenant, &after.at, &after.pipeline, &after.arrival, &limit],
+            )?,
+        };
+        Ok(rows
+            .iter()
+            .map(|r| UnjudgedArrival {
+                pipeline: r.get(0),
+                arrival: r.get(1),
+                file: r.get(2),
+                movement: r.get(3),
+                delivery_id: r.get(4),
+                edge: r.get(5),
+                record_id: r.get(6),
+                reason: r.get(7),
+                cause: r.get(8),
+                at: r.get(9),
+            })
+            .collect())
     }
 
     /// The receipt first: a duplicate (its external id kept at its

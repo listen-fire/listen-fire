@@ -15,7 +15,7 @@ export const SYSTEM_MANIFEST: AdapterManifest = {
     'Every event arrives on `Events`; narrow it by `Kind` (`sys-[e:Events WHERE e.Kind == "Run Failed"]->`). Every event carries `Automation`, `Automation Id`, `Run Id`, `Version`, `Reason`, `Url` and `At`. A program is never told about its own listen’s failures.',
   handbookSection: SYSTEM_HANDBOOK_SECTION,
   triggerExpectation:
-    'Fires on the host’s own events, polled every minute by default: a run of another program ending failed (never a rehearsal), a wait whose record was deleted, a release first run. The first poll sets the mark and emits nothing, so going live never replays past events.',
+    'Fires on the host’s own events, polled every minute by default: a run of another program ending failed (never a rehearsal), a wait whose record was deleted, a listen that could not judge an arrival, a release first run. The first poll sets the mark and emits nothing, so going live never replays past events.',
   supportedTriggers: ['poll'],
   methods: ['listEntryPoints', 'describe', 'getFieldValue'],
   subscribableEvents: SYSTEM_EVENT_KINDS.map((kind) => kind.name),

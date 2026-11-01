@@ -37,7 +37,7 @@ pub const STORE_METHODS: &[&str] = &[
     "processes.swap", "events.claim", "events.startRun", "runs.lapsed", "parks.commit", "work.bury", "inbound.keepDelivery",
     "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries", "inbound.forgetDeliveryId", "work.enqueueIfAbsent", "work.completeKey",
     "runs.rerun", "waits.mark", "waits.log", "waits.open", "waits.arrivals", "waits.note", "waits.sweep", "waits.stranded",
-    "runs.failed", "releases.note", "releases.list",
+    "runs.failed", "releases.note", "releases.list", "unjudged.note", "unjudged.list",
 ];
 
 pub async fn serve(spec: &StoreSpec, listen: Listen) -> Result<(), String> {
@@ -533,6 +533,37 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
             };
             let rows = store.releases(after.as_ref(), p.int("limit")?)?;
             Ok(Js::Arr(rows.into_iter().map(|r| Js::Obj(obj! { "version" => Js::Str(r.version), "at" => Js::Str(r.at) })).collect()))
+        }
+        "unjudged.note" => {
+            let fact = crate::records_door::UnjudgedArrival {
+                pipeline: p.str("pipeline")?.into(),
+                arrival: p.str("arrival")?.into(),
+                file: p.str("file")?.into(),
+                movement: p.str("movement")?.into(),
+                delivery_id: p.opt_str("deliveryId")?.map(str::to_string),
+                edge: p.str("edge")?.into(),
+                record_id: p.opt_str("recordId")?.map(str::to_string),
+                reason: p.str("reason")?.into(),
+                cause: p.opt_str("cause")?.map(str::to_string),
+                at: p.str("at")?.into(),
+            };
+            Ok(Js::Bool(store.note_unjudged(&fact, p.str("forgetBefore")?)?))
+        }
+        "unjudged.list" => {
+            let after = match p.value("after") {
+                Js::Null => None,
+                after => Some((
+                    after.get("at").and_then(Js::as_str).map(str::to_string),
+                    after.get("pipeline").and_then(Js::as_str).map(str::to_string),
+                    after.get("arrival").and_then(Js::as_str).map(str::to_string),
+                )),
+            };
+            let after = match &after {
+                None => None,
+                Some((Some(at), Some(pipeline), Some(arrival))) => Some(crate::records_door::UnjudgedAfter { at, pipeline, arrival }),
+                Some(_) => return Err(Failure::Params("after: expected { at, pipeline, arrival }".into())),
+            };
+            Ok(Js::Arr(store.unjudged_arrivals(after.as_ref(), p.int("limit")?)?.iter().map(crate::records_door::UnjudgedArrival::to_js).collect()))
         }
 
         "processes.list" => {

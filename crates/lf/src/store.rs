@@ -106,6 +106,20 @@ create table if not exists release_seen (
 );
 create index if not exists release_seen_at on release_seen (seen_at, version);
 create index if not exists run_failed on run (finished_at, id) where status = 'failed';
+create table if not exists arrival_unjudged (
+  pipeline text not null,
+  arrival text not null,
+  file text not null,
+  movement text not null,
+  delivery_id text,
+  edge text not null,
+  record_id text,
+  reason text not null,
+  cause text,
+  noted_at text not null,
+  primary key (pipeline, arrival)
+);
+create index if not exists arrival_unjudged_at on arrival_unjudged (noted_at, pipeline, arrival);
 create table if not exists module_processes (
   id integer primary key check (id = 1),
   processes text not null,

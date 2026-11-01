@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The `Store` trait gains `unjudged.note` (`UnjudgedNote { pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, at, forget_before }`, answering whether it is new) and `unjudged.list` (`UnjudgedList { after, limit }`, answering `Vec<UnjudgedArrival>`): each listen that could not judge an arrival, once per listen and arrival, which listen-fire's records door reports as `Arrival Not Judged` (docs/contracts/store-slot.md); listen-fire keeps and reads none from a store that answers `method_not_implemented`.
 - An arrival's landing and parents may name `unknown`, the fields the module could not read: a listen whose filter reads one runs nothing for it and the host reports it (adapter protocol 2.6, additive).
 - `ListenResolution` gains `parents` (by edge, the ids of the records each resolved hop reported per record hangs off; serialised only when there are some, read as none when absent): a store keeps it with the heads (docs/contracts/store-slot.md).
 - The `Store` trait gains what the records door reads (docs/contracts/system-events.md): `runs.failed` (`RunsFailed { after, until, limit }`), `releases.note` (`ReleasesNote { version, at }`) and `releases.list` (`ReleasesList { after, limit }`); listen-fire reads none from a store that answers `method_not_implemented`. `waits.open` takes `record_id`, and `Stranded` carries it.

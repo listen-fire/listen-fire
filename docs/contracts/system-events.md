@@ -23,7 +23,7 @@ Every event carries the same fields:
 | field | what it is |
 |---|---|
 | `Event Id` | names the event: the same on every poll that finds it (the arrival's identity) |
-| `Kind` | which of the six kinds below |
+| `Kind` | which of the seven kinds below |
 | `Automation` | the program the event is about (its movement); empty when it concerns none |
 | `Automation Id` | that program's id (on listen-fire `<file>:<movement>`) |
 | `Run Id` | the run it is about; empty when it concerns none |
@@ -31,7 +31,8 @@ Every event carries the same fields:
 | `Reason` | what happened, in words |
 | `Url` | where a person sees it; empty where the host has no such page |
 | `At` | when it happened (UTC) |
-| `Adapter`, `Edge`, `Record Id` | for `Wait Lost Its Record` only: the module, the edge and the deleted record; empty on every other kind |
+| `Adapter`, `Edge`, `Record Id` | for `Wait Lost Its Record`: the module, the edge and the deleted record. For `Arrival Not Judged`: `Edge` and `Record Id`, the edge it arrived on and the record that landed. Empty on every other kind |
+| `Listen`, `Delivery Id`, `Arrival Id` | for `Arrival Not Judged` only: the listen that could not judge the arrival (its pipeline, on listen-fire `listen:<file>:<movement>:<digest>`), the kept delivery it came in (empty when the host kept none), and the arrival as that listen names it (on listen-fire its edge, record, identity and version). Empty on every other kind |
 
 ## The kinds
 
@@ -40,9 +41,21 @@ Every event carries the same fields:
 | `Run Failed` | a run that ended failed (never a rehearsal) | yes |
 | `Run Paused` | a run paused at its cost limit | never: it fails a run at its cost cap (`maxRunCostUsd`) instead |
 | `Wait Lost Its Record` | a wait parked on a deleted record ([stranded-waits.md](stranded-waits.md)) | yes |
+| `Arrival Not Judged` | a listen that could not tell whether an arrival fires it (below) | yes |
 | `Release Applied` | a release the host first runs under | yes: once per store, when `serve` or `drain` first opens it under a new release |
 | `Validation Issue` | a saved program that does not validate under the running release | never: it refuses to serve a project that does not check |
 | `Deprecated Version` | a saved program pinned to a deprecated language version | never, for the same reason |
+
+## Arrival Not Judged
+
+The host never relies on a provider sending a delivery again: it takes and acknowledges every one. So a listen it cannot judge an arrival for is the host's own failure, reported here, not left to a retry.
+
+- A listen cannot be judged when its filter reads a field the module could not read (`unknown` on the arrival's landing or a parent, [adapter-protocol.md](adapter-protocol.md), Reporting arrivals: Slack's `Mentions App` when `auth.test` fails, a channel's `Name` when `conversations.info` fails), or a record the arrival does not carry, or a record that does not say its record type.
+- It fails for that listen alone: the listen runs nothing for the arrival, and every other listen on it is judged and runs as usual.
+- One event per listen and arrival. A redelivery, a drain running the delivery's row again, or another poll finds the same fact and reports nothing more: the store keeps the fact once per listen and arrival (`unjudged.note`), and its `Event Id` is `arrival_not_judged:<listen>:<arrival>`.
+- `Automation` and `Automation Id` are the listen's program; `Run Id` is empty: no run started.
+- Each is `notFor` the listen that could not judge the arrival, so a listen on `Events` is never told of its own.
+- When a run's write caused the arrival (the loop breaker's ledger, below), the event is `about` that run, so a run it fires continues that run's chain.
 
 ## Never your own
 
@@ -78,20 +91,25 @@ listen-fire hands `@lf/system` its facts at `POST {host}/api/public/adapter/{mod
 | `records.pausedRuns` | as `failedRuns` | always `[]` on listen-fire, which pauses no run |
 | `records.strandedWaits` | `{ after?: { at, waitId }, limit }` | stranded waits, oldest first: `{ waitId, runId, file, movement, listen, adapterType, edge, recordId, parked, at }`, read from the store's `waits.stranded` |
 | `records.releases` | `{ after?: { at, version }, limit }` | releases, oldest first: `{ version, at }`, from the store's `releases.list` |
+| `records.unjudgedArrivals` | `{ after?: { at, pipeline, arrival }, limit }` | listens that could not judge an arrival, oldest first: `{ pipeline, arrival, file, movement, deliveryId, edge, recordId, reason, cause, at }`, from the store's `unjudged.list` |
 | `records.webBaseUrl` | none | `null` on listen-fire, which has no runs page |
 
 - `listen` is the pipeline of the listen whose arrival started the run; `null` for one no listen started.
 - `recordId` is the record the wait waits on, as the engine named it at `park.waits.open`; `null` for a wait opened before waits named their record.
+- For an unjudged arrival: `pipeline` is the listen; `arrival` its receipt key (`<edge>:<key>:<identity>:<version>`, compared, never parsed); `deliveryId` the kept delivery, `null` for none; `recordId` the landing's; `cause` the run whose write caused the arrival, `null` for none; `at` when the host found it could not judge it.
+- What is kept, and for how long. The fact is kept as long as a delivery is (lf.yaml `deliveries.retainDays`, 14 days by default, at least 1): each note forgets the facts older than that. The delivery `Delivery Id` names is kept as long, once its runs have settled and its rows are done (`listen-fire deliveries show <id>`). A delivery keeps its events, but not its raw body or the arrivals read from it: an arrival lives in the waits' log only while a wait may read it, and in its `fire_event` row until the row is done. So the delivery identifies where the arrival came from; it does not hold it to run again.
 - The door keeps every fact about a run it hands out in the write ledger, as above, stamped with when it hands the fact out, not when the fact happened. So the ledger keeps it for as long as it keeps any write (`loopWindow` and the slowest poll), however old the fact is and whatever settle lag the module has.
 - One row stays per run: a fact read again (another listen's poll, a retry) replaces the run's earlier one, and the door forgets what the ledger no longer keeps, so a project whose runs write no records does not grow it for good.
-- The store methods it reads are in [store-slot.md](store-slot.md): `runs.failed`, `releases.note`, `releases.list` and `waits.stranded`.
+- The door keeps the run an unjudged arrival names as its `cause` in the write ledger, as it keeps any run it reports on.
+- The store methods it reads are in [store-slot.md](store-slot.md): `runs.failed`, `releases.note`, `releases.list`, `unjudged.note`, `unjudged.list` and `waits.stranded`.
 
 ## Adopting it elsewhere
 
 A host that keeps its facts in its own tables hands them in with `systemModuleWith((ctx) => records)`, its `SystemRecords` (`records.ts`). lf-platform does this, and:
 
 - moves its module to the one `Events` edge with `Kind` (from one edge per kind);
-- answers `failedRuns`, `pausedRuns`, `strandedWaits`, `releases` and `webBaseUrl` from its tables;
+- answers `failedRuns`, `pausedRuns`, `strandedWaits`, `releases`, `unjudgedArrivals` and `webBaseUrl` from its tables;
+- keeps an unjudged arrival wherever its host judges an arrival undecided (`listenFires` answers `{ undecided }`), once per listen and arrival, with the listen's pipeline, the delivery, the arrival's receipt key, edge, record, reason, the run whose write caused it and the time, as listen-fire's host does;
 - gives its deploy check's `Validation Issue` and `Deprecated Version` a member of `SystemRecords` (the module reads none today: listen-fire has none to give);
 - marks each event `notFor` the failed run's own automation;
 - keeps each failure, pause and stranding in its loop breaker's ledger, as listen-fire's records door does, so a chain of failure handlers is capped.
@@ -99,3 +117,4 @@ A host that keeps its facts in its own tables hands them in with `systemModuleWi
 ## Changes
 
 - 0.13.0: written, with `@lf/system` bundled in listen-fire.
+- 0.13.0 (2026-11-01): `Arrival Not Judged`, with the `Listen`, `Delivery Id` and `Arrival Id` fields and `records.unjudgedArrivals`. Why: the host takes every delivery, so a listen it cannot judge is its own failure, and is made visible rather than left to a provider's retry.

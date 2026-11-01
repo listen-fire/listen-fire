@@ -25,11 +25,12 @@ function report(e: <sys-[:Events]->>) {
 listen to sys-[e:Events WHERE e.Kind == "Run Failed"]-> fire report
 \`\`\`
 
-- Every event carries \`Kind\`, \`Event Id\`, \`Automation\`, \`Automation Id\`, \`Run Id\`, \`Version\`, \`Reason\`, \`Url\` and \`At\`. A wait that lost its record also carries \`Adapter\`, \`Edge\` and \`Record Id\`.
-- Name the kinds a listen wants with \`e.Kind == "…"\` or \`e.Kind IN [...]\`: \`Run Failed\`, \`Run Paused\`, \`Wait Lost Its Record\`, \`Release Applied\`, \`Validation Issue\`, \`Deprecated Version\`.
+- Every event carries \`Kind\`, \`Event Id\`, \`Automation\`, \`Automation Id\`, \`Run Id\`, \`Version\`, \`Reason\`, \`Url\` and \`At\`. A wait that lost its record also carries \`Adapter\`, \`Edge\` and \`Record Id\`; an arrival not judged carries \`Edge\`, \`Record Id\`, \`Listen\`, \`Delivery Id\` and \`Arrival Id\`.
+- Name the kinds a listen wants with \`e.Kind == "…"\` or \`e.Kind IN [...]\`: \`Run Failed\`, \`Run Paused\`, \`Wait Lost Its Record\`, \`Arrival Not Judged\`, \`Release Applied\`, \`Validation Issue\`, \`Deprecated Version\`.
+- \`Arrival Not Judged\`: a listen could not tell whether something that arrived fires it, because its WHERE reads a field the system could not give (a lookup it did not answer). That listen ran nothing; the arrival's other listens ran. It is reported once per listen and arrival.
 - A program is never told about its own listen's failures or waits, and a rehearsal failing is not reported.
 - Events are polled, every minute by default: one arrives a minute or so after it happened. Going live never replays earlier events.
 - A handler that fails on another program's failures, which fails in turn, is a chain the host pauses at its loop depth (\`loopDepth\` in lf.yaml).
 - A wait whose record was deleted never ends: race it with a \`sleep\`, and listen for \`Wait Lost Its Record\` to hear of the ones that were not.
-- listen-fire reports \`Run Failed\`, \`Wait Lost Its Record\` and \`Release Applied\`. It fails a run at its cost cap rather than pausing it, and refuses a program that does not check, so it never reports the other three.`,
+- listen-fire reports \`Run Failed\`, \`Wait Lost Its Record\`, \`Arrival Not Judged\` and \`Release Applied\`. It fails a run at its cost cap rather than pausing it, and refuses a program that does not check, so it never reports the other three.`,
 };

@@ -339,6 +339,33 @@ pub struct SeenRelease {
     pub at: String,
 }
 
+/// Where a page of `unjudged.list` left off: its last unjudged arrival.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UnjudgedAfter {
+    pub at: String,
+    pub pipeline: String,
+    pub arrival: String,
+}
+
+/// A listen that could not judge an arrival (`unjudged.list`): the listen by
+/// its pipeline, the arrival by its receipt key, its file and movement, the
+/// kept delivery it came in, its edge and record, why, the run whose write
+/// caused it, and when.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnjudgedArrival {
+    pub pipeline: String,
+    pub arrival: String,
+    pub file: String,
+    pub movement: String,
+    pub delivery_id: Option<String>,
+    pub edge: String,
+    pub record_id: Option<String>,
+    pub reason: String,
+    pub cause: Option<String>,
+    pub at: String,
+}
+
 /// What a `work.release` says of the claim.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -752,6 +779,29 @@ slot! {
         /// The releases kept, oldest first (ties by version), after the one
         /// `after` names, at most `limit`.
         "releases.list" => fn releases(ReleasesList { #[serde(default)] after: Option<ReleaseAfter>, limit: i64 }) -> Vec<SeenRelease>;
+        /// Keep that a listen could not judge an arrival, unless it was kept
+        /// before for the same `pipeline` and `arrival` (whether it is new),
+        /// and forget what was kept before `forget_before`, as one write. A
+        /// store that keeps none may answer `method_not_implemented`.
+        "unjudged.note" => fn note_unjudged(UnjudgedNote {
+            pipeline: String,
+            arrival: String,
+            file: String,
+            movement: String,
+            #[serde(default)]
+            delivery_id: Option<String>,
+            edge: String,
+            #[serde(default)]
+            record_id: Option<String>,
+            reason: String,
+            #[serde(default)]
+            cause: Option<String>,
+            at: String,
+            forget_before: String,
+        }) -> bool;
+        /// The unjudged arrivals kept, oldest first (ties by pipeline, then
+        /// arrival), after the one `after` names, at most `limit`.
+        "unjudged.list" => fn unjudged_arrivals(UnjudgedList { #[serde(default)] after: Option<UnjudgedAfter>, limit: i64 }) -> Vec<UnjudgedArrival>;
         /// One write: the receipt first, then the cursor (absent: left as it
         /// is), the arrivals and the work rows. A duplicate
         /// (`delivery.external_id` kept at this subscription before) writes

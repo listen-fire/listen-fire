@@ -65,6 +65,82 @@ pub struct ReleaseAfter<'a> {
     pub version: &'a str,
 }
 
+/// A listen that could not judge an arrival (`unjudged.note`): its filter
+/// reads a field the arrival's module could not read, or the arrival lacks a
+/// record the filter reads. Kept once per listen and arrival: a redelivery,
+/// or a drain running its row again, keeps nothing more.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnjudgedArrival {
+    /// The listen, by its pipeline (crate::routing::Listen::pipeline).
+    pub pipeline: String,
+    /// The arrival, as the listen's receipt names it
+    /// (crate::arrivals::arrival_receipt_key): its edge, record, identity and
+    /// version.
+    pub arrival: String,
+    pub file: String,
+    pub movement: String,
+    /// The kept delivery it came in; None for one kept as no delivery.
+    pub delivery_id: Option<String>,
+    pub edge: String,
+    /// The record that landed, when it names one.
+    pub record_id: Option<String>,
+    /// Why the listen could not judge it, as the judge said.
+    pub reason: String,
+    /// The run whose write caused the arrival (crate::loop_breaker), when
+    /// one did: a run fired by the report continues its chain.
+    pub cause: Option<String>,
+    /// When the host found it could not judge it.
+    pub at: String,
+}
+
+/// Where a page of unjudged arrivals left off: its last one.
+pub struct UnjudgedAfter<'a> {
+    pub at: &'a str,
+    pub pipeline: &'a str,
+    pub arrival: &'a str,
+}
+
+impl UnjudgedArrival {
+    /// As the store slot and the records door carry it.
+    pub fn to_js(&self) -> Js {
+        let opt = |value: &Option<String>| value.as_deref().map_or(Js::Null, Js::str);
+        Js::Obj(obj! {
+            "pipeline" => Js::str(&self.pipeline),
+            "arrival" => Js::str(&self.arrival),
+            "file" => Js::str(&self.file),
+            "movement" => Js::str(&self.movement),
+            "deliveryId" => opt(&self.delivery_id),
+            "edge" => Js::str(&self.edge),
+            "recordId" => opt(&self.record_id),
+            "reason" => Js::str(&self.reason),
+            "cause" => opt(&self.cause),
+            "at" => Js::str(&self.at),
+        })
+    }
+
+    /// One read back off the store slot's wire; None when it is not one.
+    pub fn from_js(value: &Js) -> Option<UnjudgedArrival> {
+        let text = |key: &str| value.get(key).and_then(Js::as_str).map(str::to_string);
+        let opt = |key: &str| match value.get(key) {
+            None | Some(Js::Null) => Some(None),
+            Some(Js::Str(text)) => Some(Some(text.to_string())),
+            Some(_) => None,
+        };
+        Some(UnjudgedArrival {
+            pipeline: text("pipeline")?,
+            arrival: text("arrival")?,
+            file: text("file")?,
+            movement: text("movement")?,
+            delivery_id: opt("deliveryId")?,
+            edge: text("edge")?,
+            record_id: opt("recordId")?,
+            reason: text("reason")?,
+            cause: opt("cause")?,
+            at: text("at")?,
+        })
+    }
+}
+
 /// What the door reads and keeps its facts in the ledger by.
 #[derive(Clone)]
 struct Open {
@@ -103,6 +179,7 @@ pub fn answer(body: &Js) -> (u16, Js) {
         Some("records.pausedRuns") => Ok(Js::Arr(Vec::new())),
         Some("records.strandedWaits") => stranded_waits(&*store, kept_ms, &params),
         Some("records.releases") => releases(&*store, &params),
+        Some("records.unjudgedArrivals") => unjudged_arrivals(&*store, kept_ms, &params),
         Some("records.webBaseUrl") => Ok(Js::Null),
         Some(other) => return refuse(400, "bad_request", format!("the records door has no method {other} ({METHODS})")),
         None => return refuse(400, "bad_request", format!("expected `method` ({METHODS})")),
@@ -114,7 +191,7 @@ pub fn answer(body: &Js) -> (u16, Js) {
     }
 }
 
-const METHODS: &str = "records.failedRuns, records.pausedRuns, records.strandedWaits, records.releases, records.webBaseUrl";
+const METHODS: &str = "records.failedRuns, records.pausedRuns, records.strandedWaits, records.releases, records.unjudgedArrivals, records.webBaseUrl";
 
 fn refuse(status: u16, error: &str, message: String) -> (u16, Js) {
     (status, Js::Obj(obj! { "error" => Js::str(error), "message" => Js::Str(message) }))
@@ -232,6 +309,26 @@ fn releases(store: &dyn RunHostStore, params: &Js) -> std::result::Result<Js, Fa
     Ok(Js::Arr(rows.into_iter().map(|r| Js::Obj(obj! { "version" => Js::Str(r.version), "at" => Js::Str(r.at) })).collect()))
 }
 
+/// The listens that could not judge an arrival, oldest first. A run whose
+/// write caused the arrival is kept in the ledger as for any fact about a
+/// run, so a run the report fires continues its chain.
+fn unjudged_arrivals(store: &dyn RunHostStore, kept_ms: i64, params: &Js) -> std::result::Result<Js, Failure> {
+    let after = match params.get("after") {
+        None | Some(Js::Null) => None,
+        Some(after) => Some(UnjudgedAfter { at: text(after, "at")?, pipeline: text(after, "pipeline")?, arrival: text(after, "arrival")? }),
+    };
+    let mut rows = Vec::new();
+    for fact in store.unjudged_arrivals(after.as_ref(), limit_of(params)?)? {
+        if let Some(cause) = &fact.cause
+            && let Some((_, facts)) = facts_of(store, cause)?
+        {
+            keep_in_ledger(store, cause, &facts, kept_ms)?;
+        }
+        rows.push(fact.to_js());
+    }
+    Ok(Js::Arr(rows))
+}
+
 // ── In the state file ───────────────────────────────────────────────────────
 
 impl Store {
@@ -260,6 +357,49 @@ impl Store {
     pub fn note_release(&self, version: &str, at: &str) -> Result<bool> {
         let at = crate::store::canonical_iso(at)?;
         Ok(self.db.execute("insert into release_seen (version, seen_at) values (?, ?) on conflict do nothing", rusqlite::params![version, at])? == 1)
+    }
+
+    /// Keep that a listen could not judge an arrival, unless it was kept
+    /// before (whether it is new), and forget what was kept before
+    /// `forget_before`, as one write.
+    pub fn note_unjudged(&self, fact: &UnjudgedArrival, forget_before: &str) -> Result<bool> {
+        let at = crate::store::canonical_iso(&fact.at)?;
+        let forget_before = crate::store::canonical_iso(forget_before)?;
+        self.transaction(|db| {
+            db.execute("delete from arrival_unjudged where noted_at < ?", rusqlite::params![forget_before])?;
+            Ok(db.execute(
+                "insert into arrival_unjudged (pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
+                rusqlite::params![fact.pipeline, fact.arrival, fact.file, fact.movement, fact.delivery_id, fact.edge, fact.record_id, fact.reason, fact.cause, at],
+            )? == 1)
+        })
+    }
+
+    /// The unjudged arrivals kept after `after`, oldest first (ties by
+    /// listen, then arrival).
+    pub fn unjudged_arrivals(&self, after: Option<&UnjudgedAfter<'_>>, limit: i64) -> Result<Vec<UnjudgedArrival>> {
+        const COLUMNS: &str = "select pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at from arrival_unjudged";
+        let row = |r: &rusqlite::Row<'_>| {
+            Ok(UnjudgedArrival {
+                pipeline: r.get(0)?,
+                arrival: r.get(1)?,
+                file: r.get(2)?,
+                movement: r.get(3)?,
+                delivery_id: r.get(4)?,
+                edge: r.get(5)?,
+                record_id: r.get(6)?,
+                reason: r.get(7)?,
+                cause: r.get(8)?,
+                at: r.get(9)?,
+            })
+        };
+        Ok(match after {
+            None => self.db.prepare(&format!("{COLUMNS} order by noted_at, pipeline, arrival limit ?"))?.query_map(rusqlite::params![limit], row)?.collect::<rusqlite::Result<Vec<_>>>()?,
+            Some(after) => self
+                .db
+                .prepare(&format!("{COLUMNS} where (noted_at, pipeline, arrival) > (?, ?, ?) order by noted_at, pipeline, arrival limit ?"))?
+                .query_map(rusqlite::params![crate::store::canonical_iso(after.at)?, after.pipeline, after.arrival, limit], row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+        })
     }
 
     /// The releases kept after `after`, oldest first (ties by version).
@@ -395,6 +535,60 @@ mod tests {
         let since = iso_at(crate::loop_breaker::since_of(&arrival, 20_000, crate::limiter::now_ms()));
         let chain = crate::loop_breaker::chain_of(&*store, &crate::loop_breaker::records_of("system", &arrival, "Event"), &since).unwrap();
         assert_eq!(chain, ["run-0".to_string(), id], "a failure ten minutes old, read now, is attributed: the chain continues and the cap applies");
+    }
+
+    fn unjudged(pipeline: &str, arrival: &str, at: i64, cause: Option<&str>) -> UnjudgedArrival {
+        UnjudgedArrival {
+            pipeline: pipeline.into(),
+            arrival: arrival.into(),
+            file: "chat".into(),
+            movement: "heard".into(),
+            delivery_id: Some("delivery-1".into()),
+            edge: "Messages".into(),
+            record_id: Some("C1:1700.1".into()),
+            reason: "slack could not read Name of the Channels record the arrival carries, which this listen's filter reads".into(),
+            cause: cause.map(str::to_string),
+            at: iso_at(at),
+        }
+    }
+
+    fn an_unjudged_arrival_is_kept_once_per_listen_and_read_after_a_mark_its_cause_kept_in_the_ledger(store: Rc<dyn RunHostStore>) {
+        install(store.clone(), KEPT_MS);
+        let t0 = t0();
+        let (one, two) = (format!("listen:chat:heard:{t0}"), format!("listen:chat:other:{t0}"));
+        let cause = fail(&*store, r#"{"chain":["run-0"]}"#, t0 - 5000);
+        let first = unjudged(&one, "Messages:C1:C1:1700.1:", t0, Some(&cause));
+        assert!(store.note_unjudged(&first, &iso_at(t0 - 1000)).unwrap());
+        assert!(!store.note_unjudged(&UnjudgedArrival { at: iso_at(t0 + 5), reason: "again".into(), ..first.clone() }, &iso_at(t0 - 1000)).unwrap(), "once per listen and arrival");
+        assert!(store.note_unjudged(&unjudged(&two, "Messages:C1:C1:1700.1:", t0 + 10, None), &iso_at(t0 - 1000)).unwrap(), "another listen's is its own");
+        // Only this case's: a database a case ran over before holds others.
+        let read = |after: Js| -> Vec<Js> {
+            let (status, read) = ask("records.unjudgedArrivals", Js::Obj(obj! { "after" => after, "limit" => Js::Num(10.into()) }));
+            assert_eq!(status, 200, "{}", read.to_json());
+            read.get("result").and_then(Js::as_array).unwrap().iter().filter(|r| r.get("pipeline").and_then(Js::as_str).is_some_and(|p| p.ends_with(&t0.to_string()))).cloned().collect()
+        };
+        let rows = read(Js::Obj(obj! { "at" => Js::Str(iso_at(t0 - 1)), "pipeline" => Js::str(""), "arrival" => Js::str("") }));
+        assert_eq!(rows, [first.to_js(), unjudged(&two, "Messages:C1:C1:1700.1:", t0 + 10, None).to_js()]);
+        let next = read(Js::Obj(obj! { "at" => Js::Str(iso_at(t0)), "pipeline" => Js::str(&one), "arrival" => Js::str("Messages:C1:C1:1700.1:") }));
+        assert_eq!(next.len(), 1);
+        let about = crate::loop_breaker::LedgerRecord { adapter: crate::loop_breaker::HOST, record_type: crate::loop_breaker::HOST_RUN, external_id: &cause };
+        let deepest = store.deepest_write(&about, &iso(-60_000)).unwrap().unwrap();
+        assert_eq!((deepest.run_id.as_str(), deepest.depth), (cause.as_str(), 1), "the run whose write caused the arrival, at its place in its chain");
+        // Kept as long as a delivery is: a later note forgets an older one.
+        assert!(store.note_unjudged(&unjudged(&format!("listen:chat:late:{t0}"), "x", t0 + 20, None), &iso_at(t0 + 15)).unwrap());
+        assert_eq!(read(Js::Null).iter().filter_map(|r| r.get("pipeline").and_then(Js::as_str)).collect::<Vec<_>>(), [format!("listen:chat:late:{t0}")]);
+    }
+
+    #[test]
+    fn unjudged_arrivals_are_kept_in_the_state_file() {
+        an_unjudged_arrival_is_kept_once_per_listen_and_read_after_a_mark_its_cause_kept_in_the_ledger(state_file());
+    }
+
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn unjudged_arrivals_are_kept_over_postgres() {
+        let Some(store) = postgres() else { return };
+        an_unjudged_arrival_is_kept_once_per_listen_and_read_after_a_mark_its_cause_kept_in_the_ledger(store);
     }
 
     #[test]

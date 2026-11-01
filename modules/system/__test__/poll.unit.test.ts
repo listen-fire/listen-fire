@@ -2,7 +2,7 @@
 // arms, what each later poll emits, and what it leaves for the next.
 
 import { DEFAULT_POLL_SETTINGS, pollSystemEvents, type SystemCursor } from '../poll';
-import type { Release, SettledRun, StrandedWait, SystemRecords } from '../records';
+import type { Release, SettledRun, StrandedWait, SystemRecords, UnjudgedArrival } from '../records';
 
 const T0 = Date.parse('2026-10-31T10:00:00.000Z');
 const at = (seconds: number): string => new Date(T0 + seconds * 1000).toISOString();
@@ -13,7 +13,7 @@ function failed(runId: string, seconds: number, listen: string | null = null): S
 }
 
 /** A host's facts, each list kept oldest first, read as a store reads them. */
-function records(facts: { failed?: SettledRun[]; stranded?: StrandedWait[]; releases?: Release[] }): SystemRecords {
+function records(facts: { failed?: SettledRun[]; stranded?: StrandedWait[]; releases?: Release[]; unjudged?: UnjudgedArrival[] }): SystemRecords {
   const after = <T extends { at: string }>(rows: T[] = [], mark: { at: string }, id: (row: T) => string, markId: string) =>
     rows.filter((row) => row.at > mark.at || (row.at === mark.at && id(row) > markId));
   return {
@@ -21,6 +21,7 @@ function records(facts: { failed?: SettledRun[]; stranded?: StrandedWait[]; rele
     pausedRuns: async () => [],
     strandedWaits: async ({ after: mark, limit }) => after(facts.stranded, mark, (w) => w.waitId, mark.waitId).slice(0, limit),
     releases: async ({ after: mark, limit }) => after(facts.releases, mark, (r) => r.version, mark.version).slice(0, limit),
+    unjudgedArrivals: async ({ after: mark, limit }) => after(facts.unjudged, mark, (u) => `${u.listen} ${u.arrival}`, `${mark.listen} ${mark.arrival}`).slice(0, limit),
     webBaseUrl: async () => null,
   };
 }
@@ -63,6 +64,47 @@ describe('pollSystemEvents', () => {
     const [lost] = next.arrivals;
     expect([field(lost, 'Kind'), field(lost, 'Adapter'), field(lost, 'Edge'), field(lost, 'Record Id'), field(lost, 'Automation'), field(lost, 'Run Id')]).toEqual(['Wait Lost Its Record', 'slack', 'Interactions', 'C1:1730.1', 'decide', 'run-1']);
     expect(lost).toMatchObject({ notFor: 'listen:chat:decide:00ff00ff', about: { recordType: 'Run', externalId: 'run-1' } });
+  });
+
+  it('a listen that could not judge an arrival becomes one Arrival Not Judged, named by the listen and the arrival, never told to that listen', async () => {
+    const unjudged: UnjudgedArrival[] = [];
+    const host = records({ unjudged });
+    const kind = { type: 'compare', op: 'eq', left: { type: 'property', propertyTypeId: 'Kind' }, right: { type: 'static', value: 'Arrival Not Judged' } };
+    const first = await pollSystemEvents(host, { edge: 'Events', filter: kind }, SETTINGS, T0);
+    expect((first.cursor as SystemCursor).unjudged).toEqual({ at: at(-10), listen: '', arrival: '' });
+    const heard: UnjudgedArrival = {
+      listen: 'listen:chat:heard:0a1b2c3d',
+      arrival: 'Messages:C1:C1:1700.1:',
+      automation: { id: 'chat:heard', name: 'heard' },
+      deliveryId: 'delivery-1',
+      edge: 'Messages',
+      recordId: 'C1:1700.1',
+      reason: "slack could not read Name of the Channels record the arrival carries, which this listen's filter reads",
+      cause: null,
+      at: at(2),
+    };
+    unjudged.push(heard, { ...heard, listen: 'listen:chat:other:00ff00ff', automation: { id: 'chat:other', name: 'other' }, cause: 'run-7', at: at(3) });
+    const next = await pollSystemEvents(host, { edge: 'Events', filter: kind, cursor: first.cursor }, SETTINGS, T0 + 60_000);
+    expect(next.arrivals).toHaveLength(2);
+    const [one, two] = next.arrivals;
+    expect(one).toMatchObject({ identity: 'arrival_not_judged:listen:chat:heard:0a1b2c3d:Messages:C1:C1:1700.1:', notFor: 'listen:chat:heard:0a1b2c3d', takenApplied: true, occurredAt: at(2) });
+    expect(one).not.toHaveProperty('about');
+    expect(['Kind', 'Automation', 'Automation Id', 'Edge', 'Record Id', 'Listen', 'Delivery Id', 'Arrival Id', 'Run Id'].map((name) => field(one, name))).toEqual([
+      'Arrival Not Judged',
+      'heard',
+      'chat:heard',
+      'Messages',
+      'C1:1700.1',
+      'listen:chat:heard:0a1b2c3d',
+      'delivery-1',
+      'Messages:C1:C1:1700.1:',
+      '',
+    ]);
+    expect(field(one, 'Reason')).toBe(heard.reason);
+    // A run's write that caused the arrival: the event is about that run, so its chain continues.
+    expect(two).toMatchObject({ about: { recordType: 'Run', externalId: 'run-7' }, notFor: 'listen:chat:other:00ff00ff' });
+    const again = await pollSystemEvents(host, { edge: 'Events', filter: kind, cursor: next.cursor }, SETTINGS, T0 + 120_000);
+    expect(again.arrivals).toEqual([]);
   });
 
   it('rows inside the settle window wait for the next poll', async () => {

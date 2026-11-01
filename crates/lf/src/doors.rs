@@ -221,8 +221,9 @@ impl<R: Reader> LfDoors<'_, R> {
     /// has the trigger noted on it, so the run is never answered by the
     /// arrival that started it; any other arrival of the delivery may answer
     /// it. A run judged here that the drain does not start has its waits
-    /// dropped there.
-    pub(crate) async fn mint_runs(&self, adapter_type: &str, install: Option<&str>, credential: Option<&str>, landed: &[ArrivalIn]) -> Result<(Js, Vec<DeliveryWait>), String> {
+    /// dropped there. Each listen that cannot judge an arrival is answered
+    /// too (`Minted::unjudged`), for a caller whose row will not judge it again.
+    pub(crate) async fn mint_runs(&self, adapter_type: &str, install: Option<&str>, credential: Option<&str>, landed: &[ArrivalIn]) -> Result<Minted, String> {
         // Each wait owed: its run, its edge, the connection that asks, its
         // trigger (by index) and the record it is on (a head, by index).
         let mut owed: Vec<(String, &str, Option<&Credential>, usize, usize)> = Vec::new();
@@ -236,12 +237,18 @@ impl<R: Reader> LfDoors<'_, R> {
             }
         };
         let mut minted = Vec::new();
+        let mut unjudged = Vec::new();
         let now_ms = crate::limiter::now_ms() as f64;
         for (index, arrival) in landed.iter().enumerate() {
             let identity = arrival.identity.as_deref().unwrap_or_default();
-            for listen in self.listens.iter().filter(|l| l.is_on(adapter_type, &arrival.edge) && l.hears(credential)) {
-                if !matches!(listen.fires(arrival, credential, now_ms), Some(movement_engine::listen_judge::Verdict::Fires)) {
-                    continue;
+            for (at, listen) in self.listens.iter().enumerate().filter(|(_, l)| l.is_on(adapter_type, &arrival.edge) && l.hears(credential)) {
+                match listen.fires(arrival, credential, now_ms) {
+                    Some(movement_engine::listen_judge::Verdict::Fires) => {}
+                    Some(movement_engine::listen_judge::Verdict::Undecided { reason }) => {
+                        unjudged.push(Unjudged { listen: at, arrival: index, reason });
+                        continue;
+                    }
+                    Some(movement_engine::listen_judge::Verdict::Skips { .. }) | None => continue,
                 }
                 let run_id = uuid::Uuid::new_v4().to_string();
                 let receipt = crate::arrivals::arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), identity, arrival.version.as_deref());
@@ -300,7 +307,7 @@ impl<R: Reader> LfDoors<'_, R> {
             let pre_noted = own.then(|| arrival.identity.clone().map(|identity| PreNoted { identity, version: arrival.version.clone() })).flatten();
             waits.push(DeliveryWait { run_id, edge: edge.to_string(), key, pre_noted, fire_key: String::new() });
         }
-        Ok((Js::Arr(minted), waits))
+        Ok(Minted { runs: Js::Arr(minted), waits, unjudged })
     }
 
     fn setup_of(&self, external: &str) -> Option<&InboundSetup> {
@@ -517,7 +524,9 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         };
         let arrivals = self.under_head(kept.subscription_id, kept.arrivals);
         let landed = self.landed_for_listens(adapter_type, came_for.credential, &arrivals);
-        let (minted, mut waits) = self.mint_runs(adapter_type, Some(&kept.source.install), came_for.credential, &landed).await?;
+        // A listen that cannot judge an arrival is noted as the row runs: it
+        // judges every listen on the arrival's edge again.
+        let Minted { runs: minted, mut waits, .. } = self.mint_runs(adapter_type, Some(&kept.source.install), came_for.credential, &landed).await?;
         let delivered = Delivered { id: Some(&receipt.id), ..came_for };
         let inline = matches!(self.sink, EventSink::Inline { .. });
         // Run inline, the events run inside the request, from the receipt.
@@ -680,7 +689,8 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
             log_and_wake(self.store, &log)?;
             return Ok(());
         }
-        let (minted, mut waits) = self.mint_runs(&caller.adapter_type, Some(&caller.subscription_id), credential, &landed).await?;
+        // A listen that cannot judge an arrival is noted as the row runs.
+        let Minted { runs: minted, mut waits, .. } = self.mint_runs(&caller.adapter_type, Some(&caller.subscription_id), credential, &landed).await?;
         let receipt = NewDelivery { id: uuid::Uuid::new_v4().to_string(), external_id: None, received_at: at.clone(), source: DeliverySource::Emit, inline: false, replay_of: None, events: Vec::new() };
         let row = fire_arrivals_work(&caller.adapter_type, &landed, Delivered { id: Some(&receipt.id), credential, minted: Some(&minted), ..Delivered::default() });
         queued_by(&mut waits, &row.key);
@@ -803,6 +813,23 @@ impl Reader for SessionReader<'_> {
 
 /// A subscription id's credential, and its scoped webhook's key when it
 /// names one (`<credential>/<key>`). A credential's name never holds a `/`.
+/// What `mint_runs` judged of a delivery's arrivals: the runs they fire
+/// (`{ pipeline, receipt, runId }`), the waits those runs open on their
+/// triggers, and each listen that could not judge one.
+pub(crate) struct Minted {
+    pub runs: Js,
+    pub waits: Vec<DeliveryWait>,
+    pub unjudged: Vec<Unjudged>,
+}
+
+/// A listen (`listen`, its place in the doors' listens) that could not
+/// judge the arrival at `arrival`, and why.
+pub(crate) struct Unjudged {
+    pub listen: usize,
+    pub arrival: usize,
+    pub reason: String,
+}
+
 pub fn subscription_of(id: &str) -> (&str, Option<&str>) {
     match id.split_once('/') {
         Some((credential, key)) => (credential, Some(key)),

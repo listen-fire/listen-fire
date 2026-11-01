@@ -18,8 +18,9 @@
 
 import type { PollEdgeAnswer, PollEdgeInput } from 'module-kit';
 
-import type { ReleaseMark, RunMark, SettledRun, StrandedWait, SystemRecords, WaitMark } from './records';
+import type { ReleaseMark, RunMark, SettledRun, StrandedWait, SystemRecords, UnjudgedArrival, UnjudgedMark, WaitMark } from './records';
 import {
+  ARRIVAL_NOT_JUDGED,
   EVENT_TYPE,
   EVENTS_EDGE,
   KIND_FIELD,
@@ -62,6 +63,7 @@ export interface SystemCursor {
   paused?: RunMark;
   stranded?: WaitMark;
   releases?: ReleaseMark;
+  unjudged?: UnjudgedMark;
 }
 
 /** The kinds a taken filter names (`Kind == "…"`, `Kind IN [...]`); undefined
@@ -83,7 +85,20 @@ function cursorOf(cursor: unknown): SystemCursor | undefined {
   return typeof cursor === 'object' && cursor !== null ? (cursor as SystemCursor) : undefined;
 }
 
-const EMPTY_FIELDS = { Automation: '', 'Automation Id': '', 'Run Id': '', Version: '', Reason: '', Url: '', Adapter: '', Edge: '', 'Record Id': '' } as const;
+const EMPTY_FIELDS = {
+  Automation: '',
+  'Automation Id': '',
+  'Run Id': '',
+  Version: '',
+  Reason: '',
+  Url: '',
+  Adapter: '',
+  Edge: '',
+  'Record Id': '',
+  Listen: '',
+  'Delivery Id': '',
+  'Arrival Id': '',
+} as const;
 
 function event(input: { kind: SystemEventKind; id: string; at: string; fields: Partial<SystemEventFields>; run?: string; listen?: string | null; taken: boolean }): Arrival {
   const fields: SystemEventFields = { ...EMPTY_FIELDS, ...input.fields, 'Event Id': input.id, Kind: input.kind.name, At: input.at };
@@ -132,6 +147,28 @@ function waitEvent(wait: StrandedWait, taken: boolean): Arrival {
   });
 }
 
+function unjudgedEvent(unjudged: UnjudgedArrival, taken: boolean): Arrival {
+  return event({
+    kind: ARRIVAL_NOT_JUDGED,
+    // One per listen and arrival, however often it is found.
+    id: `${ARRIVAL_NOT_JUDGED.id}:${unjudged.listen}:${unjudged.arrival}`,
+    at: unjudged.at,
+    fields: {
+      Automation: unjudged.automation.name,
+      'Automation Id': unjudged.automation.id,
+      Reason: unjudged.reason,
+      Edge: unjudged.edge,
+      'Record Id': unjudged.recordId ?? '',
+      Listen: unjudged.listen,
+      'Delivery Id': unjudged.deliveryId ?? '',
+      'Arrival Id': unjudged.arrival,
+    },
+    ...(unjudged.cause !== null ? { run: unjudged.cause } : {}),
+    listen: unjudged.listen,
+    taken,
+  });
+}
+
 /**
  * One poll of `Events` over the host's facts. The first poll (no cursor)
  * sets the marks and emits nothing: going live never replays what happened
@@ -156,6 +193,7 @@ export async function pollSystemEvents(records: SystemRecords, input: PollEdgeIn
   if (asked(RUN_PAUSED)) next.paused ??= { at: until, runId: NIL_ID };
   if (asked(WAIT_LOST_ITS_RECORD)) next.stranded ??= { at: until, waitId: NIL_ID };
   if (asked(RELEASE_APPLIED)) next.releases ??= { at: until, version: '' };
+  if (asked(ARRIVAL_NOT_JUDGED)) next.unjudged ??= { at: until, listen: '', arrival: '' };
   if (previous === undefined) return { arrivals: [], cursor: next };
 
   const arrivals: Arrival[] = [];
@@ -190,6 +228,13 @@ export async function pollSystemEvents(records: SystemRecords, input: PollEdgeIn
     for (const release of settled) {
       arrivals.push(event({ kind: RELEASE_APPLIED, id: `${RELEASE_APPLIED.id}:${release.version}`, at: release.at, fields: { Version: release.version, Reason: `release ${release.version} is running` }, taken: takenApplied }));
     }
+  }
+  if (asked(ARRIVAL_NOT_JUDGED) && previous.unjudged !== undefined) {
+    const unjudged = await records.unjudgedArrivals({ after: previous.unjudged, limit });
+    const settled = unjudged.slice(0, firstPast(unjudged, until));
+    const last = settled.at(-1);
+    if (last !== undefined) next.unjudged = { at: last.at, listen: last.listen, arrival: last.arrival };
+    for (const one of settled) arrivals.push(unjudgedEvent(one, takenApplied));
   }
   return { arrivals, cursor: next };
 }

@@ -901,6 +901,7 @@ impl Session {
                     }
                     Verdict::Undecided { reason } => {
                         taken = true;
+                        self.note_unjudged(set, adapter, listen, arrival, delivered.id, &reason)?;
                         let line = format!("{named}: an arrival on {} cannot be judged ({reason}): it runs nothing", arrival.edge);
                         if !fired.redelivered.contains(&line) {
                             fired.redelivered.push(line);
@@ -1011,6 +1012,31 @@ impl Session {
             }
         }
         Ok(fired)
+    }
+
+    /// Keep that `listen` could not judge `arrival`, delivered in the kept
+    /// delivery `delivery_id` (crate::records_door::UnjudgedArrival), once
+    /// per listen and arrival: the host's own failure, which `@lf/system`
+    /// reports as `Arrival Not Judged`. It fails this listen alone; the
+    /// arrival's other listens are judged as usual. Kept as long as a
+    /// delivery is (`deliveries.retainDays`).
+    pub(crate) fn note_unjudged(&self, set: &FileSet, adapter: &str, listen: &Listen, arrival: &ArrivalIn, delivery_id: Option<&str>, reason: &str) -> Result<(), String> {
+        let identity = arrival.identity.as_deref().unwrap_or_default();
+        let fact = crate::records_door::UnjudgedArrival {
+            pipeline: listen.pipeline(),
+            arrival: arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), identity, arrival.version.as_deref()),
+            file: set.file(&listen.file).name.clone(),
+            movement: listen.movement_name.clone(),
+            delivery_id: delivery_id.map(str::to_string),
+            edge: arrival.edge.clone(),
+            record_id: arrival.landing.as_ref().and_then(|landing| landing.get("recordId")).and_then(Js::as_str).map(str::to_string),
+            reason: reason.to_string(),
+            cause: self.chain_before(adapter, listen, arrival)?.pop(),
+            at: iso(0),
+        };
+        let retain_ms = i64::from(self.project.delivery_retain_days) * 86_400_000;
+        self.store.note_unjudged(&fact, &iso(-retain_ms)).map_err(|e| format!("keeping that {}:{} could not judge an arrival on {}: {e}", fact.file, fact.movement, fact.edge))?;
+        Ok(())
     }
 
     /// The runs whose writes caused `arrival`, oldest first, as the write
@@ -1343,8 +1369,11 @@ impl Session {
                 ..crate::doors::LfDoors::of_session(self, crate::doors::EventSink::Queue, &|| {})
             };
             let landed = doors.landed_for_listens(&key.adapter, came_for.credential, &arrivals);
-            let (minted, mut waits) = doors.mint_runs(&key.adapter, credential.map(|c| c.name.as_str()), came_for.credential, &landed).await?;
-            if minted.as_array().is_some_and(|runs| !runs.is_empty()) {
+            let crate::doors::Minted { runs: minted, mut waits, unjudged } = doors.mint_runs(&key.adapter, credential.map(|c| c.name.as_str()), came_for.credential, &landed).await?;
+            // A page a listen could not judge is kept as a delivery too, so
+            // the fact names one; its row judges only the listens it minted
+            // runs for, so the others are noted here.
+            if minted.as_array().is_some_and(|runs| !runs.is_empty()) || !unjudged.is_empty() {
                 let receipt = NewDelivery { id: uuid::Uuid::new_v4().to_string(), external_id: None, received_at: at.clone(), source: DeliverySource::Poll, inline: false, replay_of: None, events: Vec::new() };
                 let mut row = crate::doors::fire_arrivals_work(&key.adapter, &arrivals, Delivered { id: Some(&receipt.id), minted: Some(&minted), ..came_for });
                 if let Js::Obj(payload) = &mut row.payload {
@@ -1359,6 +1388,9 @@ impl Session {
                     .keep_delivery(subscription, Some(&checkpoint), &receipt, std::slice::from_ref(&row), Some(&log), &waits)
                     .map_err(|e| e.to_string())?
                     .ok_or("a poll's delivery was taken for a duplicate")?;
+                for one in &unjudged {
+                    self.note_unjudged(set, &key.adapter, &doors.listens[one.listen], &landed[one.arrival], Some(&receipt.id), &one.reason)?;
+                }
                 crate::wake::queued_rows(std::slice::from_ref(&row));
                 crate::wake::queued_rows(&kept.wakes);
                 // As the store keeps it, for a caller that runs it.

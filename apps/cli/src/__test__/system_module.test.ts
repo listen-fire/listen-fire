@@ -13,9 +13,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-import { externalPort, lf, lfCommand, project, served } from './example';
+import { until } from './attio_fixture';
+import { externalPort, lf, lfCommand, project, served, type Served } from './example';
 import { lf as lfAsked, ok } from './interactive';
-import { HEADER, botMessages, deliver, eventCallback, parkedRun, slackWorld } from './slack_world';
+import { HEADER, botMessages, deliver, eventCallback, parkedRun, seedSlack, slackWorld } from './slack_world';
 
 const REPO = resolve(__dirname, '../../../..');
 process.env.LF_MODULES_DIR ??= join(REPO, 'modules');
@@ -51,6 +52,9 @@ function drain(dir: string, aheadMs: number): string {
 
 /** What each run of `name` was told, as a drain's output says. */
 const saw = (out: string, name: string): string[] => [...out.matchAll(new RegExp(`MOVENG_ERROR: ${name} saw ([^\\n]+?)(?:\\s*$|\\n)`, 'gm'))].map((said) => said[1]);
+
+/** How many of `serving`'s runs of the Slack movement `fn` completed. */
+const ran = (serving: Served, fn: string) => serving.lines.filter((line) => new RegExp(`^run \\S+ slack:${fn} completed$`).test(line)).length;
 
 function query<T>(dir: string, sql: string): T[] {
   const db = new DatabaseSync(join(dir, '.lf', 'state.db'));
@@ -170,6 +174,64 @@ test("a listen-started run's wait on its own trigger's record names that record 
     assert.ok(line.includes(`lost saw Wait Lost Its Record on acme_crm Comments company-1 in ${wait.run_id}`), line);
   } finally {
     await serving.stop();
+  }
+});
+
+const ASKED = `${HEADER}
+function asked(m: <chat-[:Message]->>) {
+  return "asked \${m.Message}"
+}
+
+function every(m: <chat-[:Message]->>) {
+  return "every \${m.Message}"
+}
+
+listen to chat-[:Channels]->-[m:Messages WHERE m.\`Mentions App\` == true]-> fire asked
+listen to chat-[:Channels]->-[:Messages]-> fire every
+`;
+
+test('in a Slack outage of auth.test the message is taken; the listen reading Mentions App is reported once as Arrival Not Judged, the other runs', async () => {
+  const world = await slackWorld(ASKED);
+  await withSystem(world.dir);
+  writeFileSync(
+    join(world.dir, 'movements/noted.mvt'),
+    `${SYSTEM}\nfunction noted(e: <sys-[:Events]->>) {\n  fail("noted saw \${e.Kind} of \${e.Automation} on \${e.Edge} \${e.\`Record Id\`} listen \${e.Listen} delivery \${e.\`Delivery Id\`} arrival \${e.\`Arrival Id\`}: \${e.Reason}")\n}\nlisten to sys-[e:Events WHERE e.Kind == "Arrival Not Judged"]-> fire noted\n`,
+  );
+  await seedSlack(world.channels, [{ entity_type: 'channel', id: 'C0DEALS', data: { id: 'C0DEALS', name: 'deals', is_private: false, is_member: true } }]);
+  const serving = await served(world.dir);
+  try {
+    await serving.waitFor(/armed; it fires on changes from now/, 20_000);
+    await fetch(`${world.channels.url}/slack/control/outage`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ methods: ['auth.test'] }) });
+    const ts = (Date.now() / 1000).toFixed(6);
+    const message = { type: 'message', channel: 'C0DEALS', user: 'U001', text: 'hi <@UBOT>', ts };
+    const delivered = await deliver(serving, eventCallback(message), 'application/json');
+    assert.ok(delivered.status >= 200 && delivered.status < 300, delivered.body);
+    await until(() => ran(serving, 'every') === 1, serving.lines);
+    const line = await serving.waitFor(/noted saw Arrival Not Judged/, 30_000);
+
+    const facts = query<{ pipeline: string; arrival: string; delivery_id: string; record_id: string; reason: string }>(world.dir, 'select pipeline, arrival, delivery_id, record_id, reason from arrival_unjudged');
+    assert.equal(facts.length, 1, JSON.stringify(facts));
+    const [fact] = facts;
+    assert.match(fact.pipeline, /^listen:slack:asked:[0-9a-f]{8}$/);
+    assert.equal(fact.reason, "slack could not read Mentions App of the arrival on Messages, which this listen's filter reads");
+    const kept = query<{ id: string }>(world.dir, `select id from delivery where id = '${fact.delivery_id}'`);
+    assert.equal(kept.length, 1, 'the delivery it names is kept, for a replay');
+    assert.ok(
+      line.includes(`noted saw Arrival Not Judged of asked on Messages ${fact.record_id} listen ${fact.pipeline} delivery ${fact.delivery_id} arrival ${fact.arrival}: ${fact.reason}`),
+      line,
+    );
+
+    // The same message delivered again (a resend under another event id), and
+    // more polls: still one fact and one event.
+    const again = await deliver(serving, eventCallback(message), 'application/json');
+    assert.ok(again.status >= 200 && again.status < 300, again.body);
+    await new Promise((settle) => setTimeout(settle, 3_500));
+    assert.equal(query(world.dir, 'select 1 from arrival_unjudged').length, 1);
+    assert.equal(serving.lines.filter((said) => said.includes('noted saw Arrival Not Judged')).length, 1, serving.lines.join('\n'));
+    assert.equal(ran(serving, 'asked'), 0, serving.lines.join('\n'));
+  } finally {
+    await serving.stop();
+    await world.close();
   }
 });
 
