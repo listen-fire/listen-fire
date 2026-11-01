@@ -396,3 +396,102 @@ test('upgrade rewrites a webhook listen’s payload as the type stated after its
   upgradesTo(dir, file, payments.replace('listen to stripe { payload: <Payment> } fire paid', 'listen to stripe-[:Requests]-><Payment> fire paid'));
 });
 
+
+/** A polled module installed in a project with a key for it, as a person adds one:
+ *  `listen-fire connect`, then `credential add` answering the API key and no base URL. */
+async function withKey(dir: string, module: string, key: string): Promise<void> {
+  await ok(lfAsked(dir, ['connect', `@lf/${module}`, '--yes'], { answers: [] }));
+  await ok(lfAsked(dir, ['credential', 'add', '--module', module, key], { answers: ['test-key', ''] }));
+}
+
+const polled = (system: string, key: string, parameter: string, listen: string) =>
+  [
+    `import { ${system} } from adapters`,
+    `import { ${key} } from credentials`,
+    '',
+    `source = connect ${system} using ${key}`,
+    '',
+    `function triage(row: <source-[:${parameter}]->>) {`,
+    '  return "seen"',
+    '}',
+    listen,
+    '',
+  ].join('\n');
+
+test('upgrade rewrites a granola listen by its folder lowercased, and holds the pin for an `every` until --all', async () => {
+  const old = polled('granola', 'granola_key', 'Meeting Note', 'listen to source { folder: "Deals", every: 10m } fire triage');
+  const { dir, file } = only012('notes', old);
+  await withKey(dir, 'granola', 'granola_key');
+  pinned(dir, '0.12.13');
+
+  // `every` is gone: the rewrite changes what the listen means, so only --all applies it.
+  const held = lf(dir, 'upgrade');
+  assert.equal(held.code, 1, held.out);
+  assert.match(held.out, /Write `listen to source-\[n:Meetings WHERE n\.Folders CONTAINS "deals"\]-> fire triage` \(`every` is gone: the module sets the interval; set `pollEvery` for this connection in lf\.yaml\)/);
+  assert.equal(readFileSync(file, 'utf8'), old);
+
+  const upgraded = lf(dir, 'upgrade', '--all');
+  assert.equal(upgraded.code, 0, upgraded.out);
+  assert.equal(
+    readFileSync(file, 'utf8'),
+    old.replace('listen to source { folder: "Deals", every: 10m } fire triage', 'listen to source-[n:Meetings WHERE n.Folders CONTAINS "deals"]-> fire triage'),
+  );
+  assert.equal(lf(dir, 'check').code, 0);
+  assert.match(lf(dir, 'upgrade', '--check').out, /1 file\(s\), 0 would be rewritten, 0 left to change by hand/);
+});
+
+test('upgrade rewrites a dealroom listen: rounds, industries and locations each a comparison on the round', async () => {
+  const old = polled('dealroom', 'dealroom_key', 'Funding Round', 'listen to source { rounds: ["SERIES A", "SEED"], industries: ["fintech"], hq_locations: ["Germany"] } fire triage');
+  const { dir, file } = only012('rounds', old);
+  await withKey(dir, 'dealroom', 'dealroom_key');
+  upgradesTo(
+    dir,
+    file,
+    old.replace(
+      'listen to source { rounds: ["SERIES A", "SEED"], industries: ["fintech"], hq_locations: ["Germany"] } fire triage',
+      'listen to source-[r:`Funding Rounds` WHERE r.Round IN ["SERIES A", "SEED"] AND r.`Company Industries` CONTAINS "fintech" AND r.`Company Locations` CONTAINS "Germany"]-> fire triage',
+    ),
+  );
+
+  // A listen that narrowed nothing heard every new round.
+  writeFileSync(file, polled('dealroom', 'dealroom_key', 'Funding Round', 'listen to source {} fire triage'));
+  upgradesTo(dir, file, polled('dealroom', 'dealroom_key', 'Funding Round', 'listen to source-[:`Funding Rounds`]-> fire triage'));
+});
+
+test('upgrade rewrites an evertrace listen onto the edge its event arrives on, and holds the pin on one naming both', async () => {
+  const signals = polled('evertrace', 'evertrace_key', 'Signal', 'listen to source { search: "Stealth in Europe" } fire triage');
+  const { dir, file } = only012('signals', signals);
+  await withKey(dir, 'evertrace', 'evertrace_key');
+  upgradesTo(
+    dir,
+    file,
+    signals
+      .replace('<source-[:Signal]->>', '<source-[:Signals]->>')
+      .replace(
+        'listen to source { search: "Stealth in Europe" } fire triage',
+        'listen to source-[s:Signals WHERE s.`Saved Search` == "Stealth in Europe"]-> fire triage',
+      ),
+  );
+
+  // A list entry is its own edge, with its own landing.
+  const entries = polled('evertrace', 'evertrace_key', 'List Entry', 'listen to source { events: ["list_entry"], list: "Pipeline" } fire triage');
+  writeFileSync(file, entries);
+  upgradesTo(
+    dir,
+    file,
+    entries.replace(
+      'listen to source { events: ["list_entry"], list: "Pipeline" } fire triage',
+      'listen to source-[e:`List Entries` WHERE e.`List Name` == "Pipeline"]-> fire triage',
+    ),
+  );
+
+  // Both events arrive on two edges: there is no one listen to rewrite it to.
+  const both = polled('evertrace', 'evertrace_key', 'Signal', 'listen to source { events: ["signal", "list_entry"] } fire triage');
+  writeFileSync(file, both);
+  pinned(dir, '0.12.13');
+  const held = lf(dir, 'upgrade');
+  assert.equal(held.code, 1, held.out);
+  assert.match(held.out, /MOV_LISTEN_SETTINGS_RETIRED .*there is no rewrite: its events arrive on `Signals` and ``List Entries``, so write one listen for each/);
+  assert.match(held.out, /engine: left at 0\.12\.13/);
+  assert.equal(readFileSync(file, 'utf8'), both);
+});
