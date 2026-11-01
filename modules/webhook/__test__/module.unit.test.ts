@@ -82,6 +82,16 @@ describe('checkInbound', () => {
     }
   });
 
+  it('accepts what it would refuse (unsigned, mis-signed, stale) when the host replays its own capture of it, and only then', async () => {
+    const stale = { 'stripe-signature': stripeSignature('whsec_test', BODY, now() - 3600) };
+    const hmac = load({ scheme: 'hmac-sha256', secret: 's3', header: 'x-sig' });
+    expect(await stripe.checkInbound!({ ...post(BODY, stale), replayed: true })).toMatchObject({ outcome: 'accepted' });
+    expect(await hmac.checkInbound!({ ...post(BODY), replayed: true })).toMatchObject({ outcome: 'accepted' });
+    // A sender cannot say so: the field is the host's call, never the request's.
+    expect(await stripe.checkInbound!(post(BODY, { ...stale, replayed: 'true' }))).toEqual({ outcome: 'refused', status: 401 });
+    expect(await hmac.checkInbound!({ ...post(BODY, { 'x-sig': 'replayed' }), replayed: false })).toEqual({ outcome: 'refused', status: 401 });
+  });
+
   it('answers 400 for a body that is not a JSON object, and 405 for a GET', async () => {
     for (const body of ['not json', '[1,2]']) {
       const answer = await stripe.checkInbound!(post(body, { 'stripe-signature': stripeSignature('whsec_test', body, now()) }));

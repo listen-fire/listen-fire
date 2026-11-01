@@ -128,8 +128,9 @@ pub trait Reader {
     fn reads_deliveries(&self, external: &str) -> bool;
     async fn preprocess(&self, external: &str, install: &Credential, raw: &Js, checkpoint: Option<&Js>) -> Result<Extraction, String>;
     /// The external's own check of a raw request (`checkInbound`): `request`
-    /// is the wire's `WireInboundRequest`.
-    async fn check_inbound(&self, external: &str, install: &Credential, request: &Js, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String>;
+    /// is the wire's `WireInboundRequest`; `replayed` says the host is
+    /// re-running a request it kept (the call's `replayed`, adapter protocol 2.6).
+    async fn check_inbound(&self, external: &str, install: &Credential, request: &Js, replayed: bool, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String>;
     /// The external's `awaitKeys` of `heads` on `edge`: one `{ key }` or
     /// `{ gone: true }` per head, called as `install` (none for a module
     /// that takes no credential). None when it offers no `awaitKeys`: a run
@@ -490,7 +491,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
 
     async fn check_inbound(&self, source: &Source, request: &RawRequest<'_>, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String> {
         let install = self.install(&source.install).ok_or_else(|| format!("no install {}", source.install))?;
-        self.reader.check_inbound(&source.adapter_type, install, &request.wire(), secret, checkpoint).await
+        self.reader.check_inbound(&source.adapter_type, install, &request.wire(), request.replayed, secret, checkpoint).await
     }
 
     // The event itself: the delivery's receipt (`keep`) holds it.
@@ -788,13 +789,18 @@ impl Reader for SessionReader<'_> {
         })
     }
 
-    async fn check_inbound(&self, external: &str, install: &Credential, request: &Js, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String> {
+    async fn check_inbound(&self, external: &str, install: &Credential, request: &Js, replayed: bool, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String> {
         let set = self.session.file_set();
         let running = set.running.iter().find(|r| r.external.manifest.name == external).ok_or_else(|| format!("no external {external}"))?;
         if !running.methods.iter().any(|m| m == "checkInbound") {
             return Err(format!("external \"{external}\" declares that it checks its own inbound but does not list checkInbound"));
         }
         let mut params = serde_json::json!({ "request": crate::wire::json_of_js(request) });
+        // Present only on a replay, and only here: the field is the host's
+        // own, set from `RawRequest::replayed`, never read off a request.
+        if replayed {
+            params["replayed"] = serde_json::Value::Bool(true);
+        }
         if let Some(secret) = secret {
             params["secret"] = serde_json::Value::String(secret.to_string());
         }
@@ -1712,7 +1718,7 @@ pub(crate) mod tests {
         async fn preprocess(&self, _: &str, _: &Credential, _: &Js, _: Option<&Js>) -> Result<Extraction, String> {
             Err("no deliveries".into())
         }
-        async fn check_inbound(&self, _: &str, _: &Credential, _: &Js, _: Option<&str>, _: Option<&Js>) -> Result<Js, String> {
+        async fn check_inbound(&self, _: &str, _: &Credential, _: &Js, _: bool, _: Option<&str>, _: Option<&Js>) -> Result<Js, String> {
             Err("no deliveries".into())
         }
     }
@@ -1773,7 +1779,7 @@ pub(crate) mod tests {
         async fn preprocess(&self, _: &str, _: &Credential, _: &Js, _: Option<&Js>) -> Result<Extraction, String> {
             Ok(Extraction { events: Vec::new(), arrivals: self.0.clone(), checkpoint: None })
         }
-        async fn check_inbound(&self, _: &str, _: &Credential, _: &Js, _: Option<&str>, _: Option<&Js>) -> Result<Js, String> {
+        async fn check_inbound(&self, _: &str, _: &Credential, _: &Js, _: bool, _: Option<&str>, _: Option<&Js>) -> Result<Js, String> {
             Err("checks no inbound".into())
         }
     }

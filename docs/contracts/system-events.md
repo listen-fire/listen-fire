@@ -61,12 +61,13 @@ The host never relies on a provider sending a delivery again: it takes and ackno
 
 Once the provider answers again, `listen-fire listens replay <file>:<movement> --delivery <Delivery Id>` puts the kept delivery through that listen (or `--event <Event Id>`, which names the listen and the delivery itself):
 
-- The delivery's kept request is read again by its module, as it was received: its lookups are made afresh, under the pull cursor it was first read against. Its signature is not checked again: the request is listen-fire's own capture, and a provider's signature is stale minutes later. A module that checks its own requests (`inbound.scheme: module`) checks this one too, and may refuse it.
+- The delivery's kept request is read again by its module, as it was received: its lookups are made afresh, under the pull cursor it was first read against. Its signature is not checked again: the request is listen-fire's own capture, and a provider's signature is stale minutes later. A module that checks its own requests (`inbound.scheme: module`) is told it is a replay (`checkInbound`'s `replayed`, adapter protocol 2.6) and skips its signature and timestamp checks; the host sets that only for a replay, never for a request that arrived. A module older than 2.6 ignores it and may refuse the request.
+- A poll's page made no request. The delivery kept the arrivals the poll read, and those are judged again against the named listen, the module asked nothing. Only a listen that shared the poll takes them, as the module read them for the filters those listens take.
 - What it brings is judged against the named listen alone. Every other listen on the delivery is left as it is, whatever it did.
 - A run it fires goes the way a delivery's run does, in one write: a replay delivery of its own (`replayOf` the one replayed), the run's waits opened with its trigger noted on them, the records its arrival carries handed to it. It runs in the command.
 - The listen's receipt holds: a listen that ran the arrival before runs nothing, and says so. `--force` runs it again, a new run under a receipt of its own.
 - A listen that still cannot judge it is reported again as the next attempt, its `Delivery Id` still the delivery replayed.
-- A delivery received more than `deliveries.retainDays` ago is refused by name, as is one that kept no request (a poll's page; one kept before deliveries kept theirs).
+- A delivery received more than `deliveries.retainDays` ago is refused by name, as is one that kept no request (one kept before deliveries kept theirs).
 
 ## Never your own
 
@@ -122,7 +123,7 @@ A host that keeps its facts in its own tables hands them in with `systemModuleWi
 - answers `failedRuns`, `pausedRuns`, `strandedWaits`, `releases`, `unjudgedArrivals` and `webBaseUrl` from its tables;
 - keeps an unjudged arrival wherever its host judges an arrival undecided (`listenFires` answers `{ undecided }`), once per listen, arrival and attempt, with the listen's pipeline, the delivery, the arrival's receipt key, edge, record, reason, the run whose write caused it, the time and the attempt, as listen-fire's host does;
 - keeps each delivery's request as received (its body, and the headers its module reads; not its signature), for as long as it keeps the delivery, and shows it only to a person who asks;
-- offers a replay of one listen through a kept delivery, as `listen-fire listens replay` does: its module's inbound handling run again on the kept request without verifying it, the arrivals judged by that listen alone through its one write (waits registered with the run, its trigger noted on them), its receipt honoured unless forced, and a listen that still cannot judge it kept as the next attempt;
+- offers a replay of one listen through a kept delivery, as `listen-fire listens replay` does: its module's inbound handling run again on the kept request without verifying it (a module that checks its own requests is told it is a replay: `checkInbound`'s `replayed`), or, for a poll's delivery, the arrivals the poll read judged again with the module asked nothing; the arrivals judged by that listen alone through its one write (waits registered with the run, its trigger noted on them), its receipt honoured unless forced, and a listen that still cannot judge it kept as the next attempt;
 - gives its deploy check's `Validation Issue` and `Deprecated Version` a member of `SystemRecords` (the module reads none today: listen-fire has none to give);
 - marks each event `notFor` the failed run's own automation;
 - keeps each failure, pause and stranding in its loop breaker's ledger, as listen-fire's records door does, so a chain of failure handlers is capped.
@@ -132,3 +133,4 @@ A host that keeps its facts in its own tables hands them in with `systemModuleWi
 - 0.13.0: written, with `@lf/system` bundled in listen-fire.
 - 0.13.0 (2026-11-01): `Arrival Not Judged`, with the `Listen`, `Delivery Id` and `Arrival Id` fields and `records.unjudgedArrivals`. Why: the host takes every delivery, so a listen it cannot judge is its own failure, and is made visible rather than left to a provider's retry.
 - 0.13.0 (2026-11-01, later): a kept delivery keeps its request, and `listen-fire listens replay` puts it through one listen again; each replay that still cannot judge the arrival is an attempt of its own, and the `Event Id` names the attempt (`…:<attempt>`, 0 for the first judging). Why: an event a listen could not judge needs a way back through that listen once the provider recovers.
+- 0.13.0 (2026-11-01, latest): a replay tells a module that checks its own requests it is one (`checkInbound`'s `replayed`, adapter protocol 2.6), so it skips its signature and timestamp checks; a poll's delivery keeps the page it read, and a replay judges those arrivals again, asking the module nothing. Why: a Stripe delivery replayed days later was refused by its five minute window, and a polled listen could not be replayed at all.

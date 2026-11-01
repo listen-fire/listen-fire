@@ -1339,6 +1339,13 @@ export const WireCheckInboundInput = z.object({
   secret: z.string().optional(),
   /** Whatever the previous accepted request returned as `checkpoint`. */
   checkpoint: z.unknown().optional(),
+  /** Adapter protocol 2.6: the host re-runs a request it kept itself
+   *  (`listen-fire listens replay`), not one that arrived. A module that
+   *  verifies its requests (a signature, a timestamp window) skips that
+   *  check; the host vouches for the request. The host sets it from nothing
+   *  a sender controls and never for a request that arrived, so a module
+   *  that reads it from anywhere else (a header, the body) reads a forgery. */
+  replayed: z.boolean().optional(),
 });
 export type WireCheckInboundInputShape = z.infer<typeof WireCheckInboundInput>;
 

@@ -418,6 +418,12 @@ pub struct RawRequest<'a> {
     pub query: &'a str,
     pub headers: &'a [(String, String)],
     pub body: &'a [u8],
+    /// The host is re-running a request it kept itself (`listens replay`),
+    /// not one that arrived: the module skips its own signature and
+    /// timestamp checks (adapter protocol 2.6). Set by `Captured::raw` alone;
+    /// every request received at a door is `false`, whatever it carries, since
+    /// nothing a sender controls reaches this field.
+    pub replayed: bool,
 }
 
 impl RawRequest<'_> {
@@ -476,14 +482,48 @@ impl Captured {
     }
 
     fn raw(&self) -> RawRequest<'_> {
-        RawRequest { method: &self.method, path: &self.path, query: &self.query, headers: &self.headers, body: &self.body }
+        RawRequest { method: &self.method, path: &self.path, query: &self.query, headers: &self.headers, body: &self.body, replayed: true }
+    }
+}
+
+/// A poll's page as its delivery keeps it (NewDelivery::request). A poll
+/// makes no request, so what it keeps is what it read: the page's arrivals
+/// (as the listens sharing the poll were handed them), with the connection
+/// they were read for. A replay judges them again, and asks the module
+/// nothing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Page {
+    pub adapter: String,
+    /// The install the poll was made as.
+    pub install: Option<String>,
+    /// The connection the poll was for (crate::routing::Listen::hears).
+    pub credential: Option<String>,
+    pub arrivals: Vec<ArrivalIn>,
+}
+
+impl Page {
+    pub fn to_js(&self) -> Js {
+        let mut page = obj! { "adapter" => Js::str(&self.adapter) };
+        for (name, value) in [("install", &self.install), ("credential", &self.credential)] {
+            if let Some(value) = value {
+                page.insert(name.into(), Js::str(value));
+            }
+        }
+        page.insert("arrivals".into(), Js::Arr(self.arrivals.iter().map(ArrivalIn::to_js).collect()));
+        Js::Obj(page)
+    }
+
+    /// None when `kept` is not one.
+    pub fn read(kept: &Js) -> Option<Page> {
+        let text = |key: &str| kept.get(key).and_then(Js::as_str).map(str::to_string);
+        Some(Page { adapter: text("adapter")?, install: text("install"), credential: text("credential"), arrivals: arrivals_of(kept).ok()? })
     }
 }
 
 /// A push to a door, as its delivery keeps it: the body alone (its
 /// credential is never kept).
 pub fn captured_push(raw_body: &[u8]) -> Js {
-    RawRequest { method: "POST", path: "", query: "", headers: &[], body: raw_body }.wire()
+    RawRequest { method: "POST", path: "", query: "", headers: &[], body: raw_body, replayed: false }.wire()
 }
 
 /// What a door needs of its host (`InboundStore` with the adapter it opens).
@@ -654,7 +694,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
     }
     let Some(source) = store.source_for(&subscription).await? else { return refused(Refusal::UnknownProvider) };
 
-    let request = RawRequest { method: delivery.method, path: delivery.path, query: delivery.query, headers: delivery.headers, body: delivery.raw_body };
+    let request = RawRequest { method: delivery.method, path: delivery.path, query: delivery.query, headers: delivery.headers, body: delivery.raw_body, replayed: false };
     let kept_request = request.captured(&source.declaration, subscription.checkpoint.as_ref());
     let (extraction, external_id, reply) = if source.declaration.scheme == Scheme::Module {
         let secret = is_usable_secret(&source.secret).then_some(source.secret.as_str());
@@ -744,10 +784,12 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
 /// What a kept delivery's request reads as now: its module's inbound
 /// handling run again on it (`preprocessInbound`, or `checkInbound` for a
 /// module that checks its own requests), under the pull cursor it was read
-/// against, its lookups made afresh. A declared scheme's signature is not
-/// verified again: the request is the host's own capture. A module that
-/// checks its own requests checks this one too, and may refuse it. Nothing
-/// is kept: the cursor its module answers is dropped.
+/// against, its lookups made afresh. Neither a declared scheme's signature
+/// nor a module's own check is run again: the request is the host's own
+/// capture. A module that checks its own requests is told it is a replay
+/// (`RawRequest::replayed`, adapter protocol 2.6) and skips its signature and
+/// timestamp checks; one that ignores it (an older module) may still refuse
+/// the request. Nothing is kept: the cursor its module answers is dropped.
 pub async fn reread_delivery<S: InboundStore>(store: &S, subscription_id: &str, captured: &Captured) -> Result<(Source, Extraction), String> {
     let gone = || format!("the subscription {subscription_id} the delivery came through is no longer served");
     let subscription = store.find_subscription(subscription_id).await?.ok_or_else(gone)?;
@@ -756,7 +798,12 @@ pub async fn reread_delivery<S: InboundStore>(store: &S, subscription_id: &str, 
         let secret = is_usable_secret(&source.secret).then_some(source.secret.as_str());
         let answer = store.check_inbound(&source, &captured.raw(), secret, captured.checkpoint.as_ref()).await?;
         match answer.get("outcome").and_then(Js::as_str) {
-            Some("reply" | "refused") => return Err(format!("{} refused the kept request as it checked it again (its own check of a request runs on a replay)", source.adapter_type)),
+            Some("reply" | "refused") => {
+                return Err(format!(
+                    "{} refused the kept request though it was told it is a replay (adapter protocol 2.6 `replayed`): a module older than 2.6 checks its own signature and timestamp again",
+                    source.adapter_type
+                ));
+            }
             _ => Extraction {
                 events: answer.get("events").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default(),
                 arrivals: arrivals_of(&answer).map_err(|e| format!("checkInbound for adapter {}: {e}", source.adapter_type))?,
@@ -1111,6 +1158,8 @@ mod tests {
     struct ModuleChecked {
         answer: Js,
         seen: std::cell::RefCell<Vec<String>>,
+        /// Whether each request handed to `checkInbound` was said to be a replay.
+        replayed: std::cell::RefCell<Vec<bool>>,
         queued: std::cell::Cell<usize>,
         /// The identities of the arrivals kept.
         arrived: std::cell::RefCell<Vec<String>>,
@@ -1128,6 +1177,7 @@ mod tests {
             ModuleChecked {
                 answer: Js::parse(answer.as_bytes()).unwrap(),
                 seen: Default::default(),
+                replayed: Default::default(),
                 queued: Default::default(),
                 arrived: Default::default(),
                 kept: Default::default(),
@@ -1171,6 +1221,7 @@ mod tests {
         }
         async fn check_inbound(&self, _source: &Source, request: &RawRequest<'_>, secret: Option<&str>, _checkpoint: Option<&Js>) -> Result<Js, String> {
             self.seen.borrow_mut().push(format!("{} {} {}", request.wire().to_json(), secret.unwrap_or("-"), request.method));
+            self.replayed.borrow_mut().push(request.replayed);
             Ok(self.answer.clone())
         }
         async fn capture(&self, event: &Js, _source: &Source) -> Result<Js, String> {
@@ -1204,6 +1255,58 @@ mod tests {
             store.seen.borrow()[0],
             r#"{"method":"POST","path":"/api/public/webhook-sync/mail/inst","query":"a=1","headers":{"content-type":"application/x-www-form-urlencoded"},"body":"YT1i"} key POST"#
         );
+    }
+
+    /// Only the host's own re-run of a kept request says it is a replay. A
+    /// request that arrived is never one, whatever a sender puts in its
+    /// headers, its query or its body: those reach the module inside
+    /// `request`, and the call's `replayed` is built from nothing of it.
+    #[tokio::test]
+    async fn a_request_that_arrived_is_never_said_to_be_a_replay_whatever_it_carries() {
+        let store = ModuleChecked::answering(r#"{"outcome":"accepted","events":[{"payload":{"n":1}}]}"#);
+        let forged = headers(&[("replayed", "true"), ("X-Replayed", "true"), ("content-type", "application/json")]);
+        let body = br#"{"replayed":true,"params":{"replayed":true}}"#;
+        let live = Delivery { query: "replayed=true&request%5Breplayed%5D=true", ..delivery("POST", body, &forged) };
+        assert_eq!(answer_delivery(&store, live).await.status, 200);
+        assert_eq!(store.replayed.borrow().clone(), [false]);
+        // What the sender sent reaches the module as the request, to read as it will.
+        assert!(store.seen.borrow()[0].contains(r#""replayed":"true""#));
+        assert!(store.seen.borrow()[0].contains("replayed=true"));
+    }
+
+    #[tokio::test]
+    async fn a_replay_of_a_kept_request_says_so_to_the_module_that_checks_its_own() {
+        let store = ModuleChecked::answering(r#"{"outcome":"accepted","events":[],"arrivals":[{"edge":"Replies","key":"C1:1","identity":"r1","landing":{"fields":{}}}]}"#);
+        let live = headers(&[("x-signature", "t=1,v1=old")]);
+        let kept = RawRequest { method: "POST", path: "/p", query: "", headers: &live, body: b"{}", replayed: false }.captured(&Declaration::read(&Js::parse(br#"{"providerKey":"mail","scheme":"module"}"#).unwrap()).unwrap(), None);
+        let captured = Captured::read(&kept).unwrap();
+        let (_, extraction) = reread_delivery(&store, "inst", &captured).await.unwrap();
+        assert_eq!(extraction.arrivals.len(), 1);
+        assert_eq!(store.replayed.borrow().clone(), [true]);
+        // The kept request still carries what the module reads, headers whole.
+        assert!(store.seen.borrow()[0].contains(r#""x-signature":"t=1,v1=old""#));
+    }
+
+    #[test]
+    fn a_polls_page_is_kept_as_the_arrivals_it_read_and_reads_back_as_them() {
+        let read = arrivals_of(&Js::parse(br#"{"arrivals":[
+            {"edge":"Notes","key":"b1","identity":"n1","version":"2","landing":{"recordId":"n1","recordType":"Note","fields":{"Id":"n1"},"unknown":["Title"]},"takenApplied":true,"occurredAt":"2026-10-31T10:00:00Z"},
+            {"edge":"Notes","key":"b1","gone":true}
+        ]}"#).unwrap())
+        .unwrap();
+        let page = Page { adapter: "feed".into(), install: Some("feed_key".into()), credential: None, arrivals: read };
+        assert_eq!(Page::read(&page.to_js()), Some(page.clone()));
+        // Not a request: a delivery's request is not a page, nor a page a request.
+        assert_eq!(Captured::read(&page.to_js()).map(|c| c.method), None);
+        assert_eq!(Page::read(&RawRequest { method: "POST", path: "", query: "", headers: &[], body: b"{}", replayed: false }.wire()), None);
+    }
+
+    #[tokio::test]
+    async fn a_replay_a_module_still_refuses_is_reported_by_name() {
+        let store = ModuleChecked::answering(r#"{"outcome":"refused","status":401}"#);
+        let kept = RawRequest { method: "POST", path: "/p", query: "", headers: &[], body: b"{}", replayed: false }.captured(&Declaration::read(&Js::parse(br#"{"providerKey":"mail","scheme":"module"}"#).unwrap()).unwrap(), None);
+        let error = reread_delivery(&store, "inst", &Captured::read(&kept).unwrap()).await.err().unwrap();
+        assert!(error.starts_with("mail refused the kept request though it was told it is a replay"), "{error}");
     }
 
     #[tokio::test]

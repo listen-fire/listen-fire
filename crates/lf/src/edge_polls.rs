@@ -280,6 +280,13 @@ pub fn polled_keys(set: &FileSet) -> BTreeMap<PollKey, Shared> {
     keys_delivered(set, &[Delivery::Polled])
 }
 
+/// The key of the shared poll `subscription` (`poll_subscription`) names,
+/// with the listens a page it read is judged against; None when no listen
+/// shares it any more.
+pub fn sharing_poll(set: &FileSet, subscription: &str) -> Option<(PollKey, Shared)> {
+    polled_keys(set).into_iter().find(|(key, _)| poll_subscription(key) == subscription)
+}
+
 /// The keys of the listens on edges pushed to the connection or per scope,
 /// each with its listens: each is one webhook subscription
 /// (crate::subscriptions).

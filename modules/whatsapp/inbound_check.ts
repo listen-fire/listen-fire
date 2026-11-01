@@ -52,9 +52,12 @@ export async function checkWhatsappInbound(input: InboundCheckInput, sources: Wh
   }
   if (request.method !== 'POST') return refused(405);
 
-  if (request.secret === undefined) return refused(401);
-  const presented = (request.header('x-hub-signature-256') ?? '').replace(/^sha256=/, '');
-  if (presented === '' || !sameText(hmacSha256Hex(request.secret, request.bytes), presented.toLowerCase())) return refused(401);
+  // A replayed request is the host's own capture: the host vouches for it.
+  if (!request.replayed) {
+    if (request.secret === undefined) return refused(401);
+    const presented = (request.header('x-hub-signature-256') ?? '').replace(/^sha256=/, '');
+    if (presented === '' || !sameText(hmacSha256Hex(request.secret, request.bytes), presented.toLowerCase())) return refused(401);
+  }
 
   const arrivals = whatsappInboundArrivals(request.json());
   return accepted([], { arrivals: sources.mediaById ? arrivals.map(withMediaHandles) : arrivals });

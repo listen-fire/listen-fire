@@ -1432,7 +1432,9 @@ impl Session {
             // the fact names one; its row judges only the listens it minted
             // runs for, so the others are noted here.
             if minted.as_array().is_some_and(|runs| !runs.is_empty()) || !unjudged.is_empty() {
-                let receipt = NewDelivery { id: uuid::Uuid::new_v4().to_string(), external_id: None, received_at: at.clone(), source: DeliverySource::Poll, inline: false, replay_of: None, events: Vec::new(), request: None };
+                // A poll makes no request: the page it read is what the delivery keeps, for `listens replay`.
+                let page = crate::inbound::Page { adapter: key.adapter.clone(), install: polled_as.clone(), credential: key.credential.clone(), arrivals: arrivals.clone() };
+                let receipt = NewDelivery { id: uuid::Uuid::new_v4().to_string(), external_id: None, received_at: at.clone(), source: DeliverySource::Poll, inline: false, replay_of: None, events: Vec::new(), request: Some(page.to_js()) };
                 let mut row = crate::doors::fire_arrivals_work(&key.adapter, &arrivals, Delivered { id: Some(&receipt.id), minted: Some(&minted), ..came_for });
                 if let Js::Obj(payload) = &mut row.payload {
                     payload.insert("polled".into(), Js::str(subscription));

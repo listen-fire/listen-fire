@@ -121,6 +121,20 @@ describe('@lf/email checks its own inbound', () => {
     expect(calls).toEqual([]);
   });
 
+  it('accepts a Mailgun post signed with another key, and a Resend notification stale or unsigned, when the host replays its own capture of it, and only then', async () => {
+    const { adapter, calls } = load({ resendApiKey: 're_1' });
+    const mailgun = await adapter.checkInbound!({ ...request({ body: mailgunForm('wrong') }), replayed: true });
+    expect(mailgun).toMatchObject({ outcome: 'accepted', arrivals: [{ edge: 'Emails' }] });
+    const body = JSON.stringify({ type: 'email.received', data: { email_id: 'em_1', from: 'ada@example.com', to: ['in+k@lf.test'] } });
+    const stale = { 'svix-id': 'msg_1', 'svix-timestamp': String(Math.floor(Date.now() / 1000) - 86_400), 'svix-signature': 'v1,not-the-signature' };
+    const resend = await adapter.checkInbound!({ ...request({ body, headers: stale }), replayed: true });
+    expect(resend).toMatchObject({ outcome: 'accepted', arrivals: [{ edge: 'Emails', identity: '<m-1@example.com>' }] });
+    // The message is still fetched afresh: replay skips the check, not the lookup.
+    expect(calls[0]).toBe('https://api.resend.com/emails/receiving/em_1');
+    expect(await adapter.checkInbound!({ ...request({ body: mailgunForm('wrong'), headers: { replayed: 'true' }, secret: MAILGUN_KEY }), replayed: false })).toEqual({ outcome: 'refused', status: 406 });
+    expect(await adapter.checkInbound!(request({ body, headers: stale, secret: RESEND_SECRET }))).toEqual({ outcome: 'refused', status: 406 });
+  });
+
   it('acknowledges a Resend event that is not mail arriving, running nothing', async () => {
     const { adapter } = load({ resendApiKey: 're_1' });
     const body = JSON.stringify({ type: 'email.delivered', data: {} });

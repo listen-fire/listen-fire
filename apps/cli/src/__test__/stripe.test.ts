@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 
 import { served } from './example';
@@ -149,6 +150,14 @@ async function outbox(channels: Fake): Promise<Array<{ to: string; subject: stri
   return (sent as Array<Record<string, unknown>>).map((m) => ({ to: String(m['to']), subject: String(m['subject']), body: String(m['body']) }));
 }
 
+async function eventually(holds: () => Promise<boolean>, ms = 20_000): Promise<void> {
+  const until = Date.now() + ms;
+  while (!(await holds())) {
+    assert.ok(Date.now() < until, 'timed out waiting');
+    await new Promise((done) => setTimeout(done, 100));
+  }
+}
+
 async function slackMessages(channels: Fake): Promise<string[]> {
   const rows = (await (await fetch(`${channels.url}/admin/slack/message/state`)).json()) as Array<{ channel: string; text: string; user: string }>;
   return rows.filter((m) => m.user === 'bot').map((m) => `${m.channel} ${m.text}`);
@@ -237,6 +246,58 @@ test('listen-fire serve runs a signed failed payment once: the monthly customer 
     console.log(runs.out.trim());
   } finally {
     await serving.stop();
+    await world.close();
+  }
+});
+
+// The host keeps the request it received, signature included, for a kept
+// delivery. `listens replay` re-runs it long after Stripe's timestamp window:
+// the host says the request is a replay (adapter protocol 2.6), so the module
+// does not check the signature again. A request that arrives is checked as ever.
+test('listens replay puts a Stripe delivery through its listen days later; a live request past the window, or one that claims to be a replay, is still refused', async () => {
+  const world = await paymentsWorld();
+  const serving = await served(world.dir);
+  const event = paymentFailed('m1', 'diego@alvareztiles.es', 'Diego Alvarez', 4900);
+  const body = JSON.stringify(event);
+  const stale = stripeSignature(SECRET, body, now() - 3 * 86_400);
+  const state = <T>(use: (db: DatabaseSync) => T): T => {
+    const db = new DatabaseSync(join(world.dir, '.lf', 'state.db'));
+    try {
+      return use(db);
+    } finally {
+      db.close();
+    }
+  };
+  try {
+    const url = (await serving.waitFor(/^stripe stripe_account: /)).replace(/^stripe stripe_account: /, '');
+    assert.equal((await deliver(url, event)).status, 202);
+    await eventually(async () => (await outbox(world.channels)).length === 1);
+
+    // Live, the signature of three days ago is refused, whatever the request says of itself.
+    const live = (headers: Record<string, string>, query = '') =>
+      fetch(`${url}${query}`, { method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': stale, ...headers }, body }).then((r) => r.status);
+    assert.equal(await live({}), 401);
+    assert.equal(await live({ replayed: 'true', 'x-replayed': 'true' }, '?replayed=true'), 401);
+    const forged = JSON.stringify({ ...event, replayed: true });
+    const claimed = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(SECRET, forged, now() - 3 * 86_400) }, body: forged });
+    assert.equal(claimed.status, 401);
+  } finally {
+    await serving.stop();
+  }
+  try {
+    // The kept request carries the signature it arrived with; age it past the window.
+    const id = state((db) => String((db.prepare("select id from delivery where external_id = 'evt_m1'").get() as { id: string }).id));
+    state((db) => {
+      const kept = JSON.parse(String((db.prepare('select request from delivery where id = ?').get(id) as { request: string }).request)) as { headers: Record<string, string> };
+      assert.ok(kept.headers['stripe-signature'], 'a module that checks its own requests keeps their headers whole');
+      kept.headers['stripe-signature'] = stale;
+      db.prepare('update delivery set request = ? where id = ?').run(JSON.stringify(kept), id);
+    });
+    const replayed = await run(world.dir, 'listens', 'replay', 'hello:Payment Failed', '--delivery', id, '--force');
+    assert.equal(replayed.code, 0, replayed.out);
+    assert.match(replayed.out, /hello:Payment Failed completed/, replayed.out);
+    assert.deepEqual((await outbox(world.channels)).map((m) => m.to), ['diego@alvareztiles.es', 'diego@alvareztiles.es'], 'the listen ran the delivery again');
+  } finally {
     await world.close();
   }
 });

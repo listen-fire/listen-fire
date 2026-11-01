@@ -92,7 +92,7 @@ An unknown run, or a movement that no listen fires now or that does not check, i
 
 ## `listen-fire deliveries show <id> --json`
 
-`{ "delivery": { …the listing's fields, "events": [{ "external", "event" }], "requestKept" } }`. `runs` is empty for a delivery no listen took. `requestKept` says whether it keeps the request it was received as (a poll's page and a replay keep none; past `deliveries.retainDays` it is forgotten). With `--request` the document also carries `"request": { "method", "path", "query", "headers", "body", "checkpoint"? }` (`body` base64; the headers its module reads, never its signature): it may hold personal data, and is never printed without the flag. Without `--json` it prints the same document, indented. An unknown id is `{"error": "no delivery <id>"}`, exit 1.
+`{ "delivery": { …the listing's fields, "events": [{ "external", "event" }], "requestKept" } }`. `runs` is empty for a delivery no listen took. `requestKept` says whether it keeps the request it was received as (a replay keeps none; past `deliveries.retainDays` it is forgotten). With `--request` the document also carries `"request": { "method", "path", "query", "headers", "body", "checkpoint"? }` (`body` base64; the headers its module reads, never its signature), or for a poll's delivery, the page the poll read, `"request": { "adapter", "install"?, "credential"?, "arrivals" }`: it may hold personal data, and is never printed without the flag. Without `--json` it prints the same document, indented. An unknown id is `{"error": "no delivery <id>"}`, exit 1.
 
 ## `listen-fire deliveries replay <id> --json`
 

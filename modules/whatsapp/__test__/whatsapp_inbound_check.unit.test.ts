@@ -108,6 +108,15 @@ describe('@lf/whatsapp checks its own inbound', () => {
     expect(await adapter.checkInbound!(request({ body: DELIVERY, headers: signed(DELIVERY) }))).toEqual({ outcome: 'refused', status: 401 });
   });
 
+  it('accepts a delivery unsigned, or with no secret to check it with, when the host replays its own capture of it, and only then', async () => {
+    const { adapter } = load();
+    const replayed = await adapter.checkInbound!({ ...request({ body: DELIVERY }), replayed: true });
+    expect(replayed.outcome).toBe('accepted');
+    if (replayed.outcome !== 'accepted') return;
+    expect(replayed.arrivals?.map((a) => ('identity' in a ? a.identity : undefined))).toEqual(['wamid.1', 'wamid.2']);
+    expect(await adapter.checkInbound!({ ...request({ body: DELIVERY, headers: { replayed: 'true' } }), replayed: false })).toEqual({ outcome: 'refused', status: 401 });
+  });
+
   it("reads an inbound media item by Meta's id with the install's own token", async () => {
     const { adapter, calls } = load();
     const ref = { __brand: 'FileRef', name: 'wamid.2', source: { kind: 'owned', adapterType: 'whatsapp', handle: 'meta-media:MEDIA-1' } } as FileRef;

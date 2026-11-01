@@ -5,9 +5,12 @@
 //!
 //! The delivery's kept request is read again by its module's inbound
 //! handling (crate::inbound::reread_delivery: its lookups made afresh, its
-//! signature not verified, since the request is listen-fire's own capture),
-//! and what it reports landed is judged against the named listen alone: the
-//! delivery's other listens are left as they are. A run it fires goes the
+//! signature not verified, since the request is listen-fire's own capture;
+//! a module that checks its own requests is told it is a replay and skips
+//! its check), and what it reports landed is judged against the named listen
+//! alone: the delivery's other listens are left as they are. A poll's page
+//! made no request: it kept the arrivals it read, and those are judged again,
+//! the module asked nothing. A run it fires goes the
 //! way a delivery's does, in one write (a replay delivery of its own, the
 //! run's waits opened with its trigger noted on them, the records the
 //! arrival carries handed to it), and runs here. The listen's receipt holds:
@@ -20,7 +23,7 @@ use std::io::Write;
 use crate::arrivals::{ArrivalIn, arrival_receipt_key};
 use crate::check::LOCAL_TENANT;
 use crate::doors::{EventSink, LfDoors, SessionReader, fire_arrivals_work, queued_by, subscription_of};
-use crate::inbound::Captured;
+use crate::inbound::{Captured, Page};
 use crate::json::Js;
 use crate::records_door::{UnjudgedAfter, UnjudgedArrival, UnjudgedPage};
 use crate::routing::Listen;
@@ -37,6 +40,14 @@ pub struct Asked<'a> {
     pub event: Option<&'a str>,
     /// Run the listen again though it ran the arrival before.
     pub force: bool,
+}
+
+/// What a delivery kept of how it came in (NewDelivery::request).
+enum Capture {
+    /// A request a door received.
+    Request(Captured),
+    /// The arrivals a poll read.
+    Page(Page),
 }
 
 /// What a kept delivery reads as now, for the listens it reaches.
@@ -72,9 +83,12 @@ pub async fn command(session: &Session, asked: &Asked<'_>, out: &mut impl Write)
     let row = session.store.delivery(&delivery_id).map_err(|e| e.to_string())?.ok_or_else(|| {
         format!("no delivery {delivery_id}: deliveries are kept {} days (deliveries.retainDays), and one older is forgotten", session.project.delivery_retain_days)
     })?;
-    let captured = captured_of(session, &row)?;
+    let capture = capture_of(session, &row)?;
+    if let Capture::Page(_) = capture {
+        sharing_the_poll(&set, &mut listens, &row)?;
+    }
     let doors = LfDoors::of_session(session, EventSink::Queue, &|| {});
-    let reread = reread(&doors, &row, &captured).await?;
+    let reread = reread(&doors, &row, capture).await?;
     let mut code = 0;
     for listen in listens {
         code = code.max(replay_through(session, &set, listen, &row, &reread, asked.force, out).await?);
@@ -108,9 +122,25 @@ fn facts_of(session: &Session, pipeline: &str) -> Result<Vec<UnjudgedArrival>, S
     }
 }
 
-/// The delivery's kept request, while it is kept: a delivery received
-/// longer ago than `deliveries.retainDays` is refused, whatever it holds.
-fn captured_of(session: &Session, row: &DeliveryRow) -> Result<Captured, String> {
+/// A poll's page is replayed through the listens that shared the poll: its
+/// module was asked for what the listens sharing it take, so a listen that did
+/// not share it would judge arrivals read for another's filter.
+fn sharing_the_poll(set: &FileSet, listens: &mut Vec<&Listen>, row: &DeliveryRow) -> Result<(), String> {
+    let sharing: Vec<String> = crate::edge_polls::sharing_poll(set, &row.subscription_id).map(|(_, shared)| shared.fires.iter().map(|i| set.listens[*i].pipeline()).collect()).unwrap_or_default();
+    listens.retain(|listen| sharing.contains(&listen.pipeline()));
+    if listens.is_empty() {
+        return Err(format!(
+            "delivery {} is a poll's page, read for the listens that shared that poll: the listen named is not one of them (it may have been edited since, or its connection changed)",
+            row.id
+        ));
+    }
+    Ok(())
+}
+
+/// The delivery's kept request (or, for a poll, the page it read), while it
+/// is kept: a delivery received longer ago than `deliveries.retainDays` is
+/// refused, whatever it holds.
+fn capture_of(session: &Session, row: &DeliveryRow) -> Result<Capture, String> {
     let days = session.project.delivery_retain_days;
     if row.received_at < iso(-i64::from(days) * 86_400_000) {
         return Err(format!(
@@ -119,19 +149,28 @@ fn captured_of(session: &Session, row: &DeliveryRow) -> Result<Captured, String>
         ));
     }
     let Some(request) = &row.request else {
-        return Err(match (row.source, row.replay_of.as_deref()) {
-            (DeliverySource::Poll, _) => format!("delivery {} is a poll's page: no request made it, so there is none to replay (the next poll reads the source again)", row.id),
-            (_, Some(of)) => format!("delivery {} is a replay of {of}: replay {of} itself", row.id),
-            _ => format!("delivery {} kept no request (it was kept by a listen-fire before deliveries kept theirs): it cannot be replayed", row.id),
+        return Err(match row.replay_of.as_deref() {
+            Some(of) => format!("delivery {} is a replay of {of}: replay {of} itself", row.id),
+            None => format!("delivery {} kept no request (it was kept by a listen-fire before deliveries kept theirs): it cannot be replayed", row.id),
         });
     };
-    Captured::read(request).ok_or_else(|| format!("delivery {}'s kept request is not one listen-fire can read", row.id))
+    let unreadable = || format!("delivery {}'s kept request is not one listen-fire can read", row.id);
+    match row.source {
+        DeliverySource::Poll => Page::read(request).map(Capture::Page).ok_or_else(unreadable),
+        _ => Captured::read(request).map(Capture::Request).ok_or_else(unreadable),
+    }
 }
 
-/// The delivery's request read again by its module: a push to the `wake`
-/// door reports the arrivals it pushed; any other delivery is its module's
-/// inbound handling run again.
-async fn reread(doors: &LfDoors<'_, SessionReader<'_>>, row: &DeliveryRow, captured: &Captured) -> Result<Reread, String> {
+/// The delivery's capture read again: a poll's page is the arrivals it read,
+/// judged again with no call to its module; a push to the `wake` door reports
+/// the arrivals it pushed; any other delivery is its module's inbound
+/// handling run again.
+async fn reread(doors: &LfDoors<'_, SessionReader<'_>>, row: &DeliveryRow, capture: Capture) -> Result<Reread, String> {
+    let captured = match capture {
+        Capture::Page(page) => return Ok(Reread { adapter: page.adapter, install: page.install, credential: page.credential, arrivals: page.arrivals }),
+        Capture::Request(captured) => captured,
+    };
+    let captured = &captured;
     if row.source == DeliverySource::Emit {
         let install = doors.install(&row.subscription_id).ok_or_else(|| format!("delivery {} was pushed as {}, which is no longer a credential here", row.id, row.subscription_id))?;
         let credential = (install.binding != crate::secrets::Binding::Install).then(|| install.name.clone());

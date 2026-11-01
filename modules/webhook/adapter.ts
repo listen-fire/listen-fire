@@ -51,7 +51,8 @@ export class WebhookAdapter extends BaseAdapter {
     const request = inboundRequest(input);
     if (request.method !== 'POST') return reply(405, { json: { error: 'method_not_allowed', message: 'a webhook is a POST' } });
     const signing = await this.sources.signing();
-    const verdict = verify(signing, request, this.sources.now());
+    // A replayed request is the host's own capture, signed long ago: the host vouches for it.
+    const verdict = request.replayed ? { ok: true as const } : verify(signing, request, this.sources.now());
     if (!verdict.ok) {
       this.sources.log.warn(`webhook delivery refused: ${verdict.reason}`);
       return refused(401);

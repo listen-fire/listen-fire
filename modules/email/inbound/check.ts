@@ -56,26 +56,32 @@ function checkMailgun(request: InboundRequest): InboundCheck {
   const form = request.form();
   const message = readMailgunMessage(form);
   if (message === null) return refused(406);
-  if (request.secret === undefined) return refused(401);
-  // 406 rather than 401: Mailgun retries hard on anything it reads as
-  // transient, and a bad signature will never become good.
-  if (!mailgunSignatureVerifies(message, request.secret)) return refused(406);
+  // A replayed request is the host's own capture: the host vouches for it.
+  if (!request.replayed) {
+    if (request.secret === undefined) return refused(401);
+    // 406 rather than 401: Mailgun retries hard on anything it reads as
+    // transient, and a bad signature will never become good.
+    if (!mailgunSignatureVerifies(message, request.secret)) return refused(406);
+  }
   return acceptedEmail(normaliseInboundEmailPayload(form), message.token || undefined);
 }
 
 async function checkResend(request: InboundRequest, sources: EmailInboundSources): Promise<InboundCheck> {
-  if (request.secret === undefined) return refused(401);
   const body = request.text();
-  const verdict = verifySvixSignature({
-    secret: request.secret,
-    headers: {
-      id: request.header('svix-id') ?? '',
-      timestamp: request.header('svix-timestamp') ?? '',
-      signature: request.header('svix-signature') ?? '',
-    },
-    body,
-  });
-  if (verdict !== 'verified') return refused(406);
+  // A replayed request is the host's own capture, signed (and stamped) long ago: the host vouches for it.
+  if (!request.replayed) {
+    if (request.secret === undefined) return refused(401);
+    const verdict = verifySvixSignature({
+      secret: request.secret,
+      headers: {
+        id: request.header('svix-id') ?? '',
+        timestamp: request.header('svix-timestamp') ?? '',
+        signature: request.header('svix-signature') ?? '',
+      },
+      body,
+    });
+    if (verdict !== 'verified') return refused(406);
+  }
   // Resend sends its whole event stream to one endpoint: anything that is not
   // mail arriving is acknowledged and ignored.
   const type = (request.json() as { type?: unknown } | undefined)?.type;

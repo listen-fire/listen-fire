@@ -68,15 +68,18 @@ export function eventOf(body: unknown): { ok: true; payload: StripeEventPayload 
 export async function checkStripeDelivery(input: InboundCheckInput, sources: StripeDoorSources): Promise<InboundCheck> {
   const request = inboundRequest(input);
   if (request.method !== 'POST') return reply(405, { json: { error: 'method_not_allowed', message: 'a Stripe webhook is a POST' } });
-  const secret = await sources.webhookSecret();
-  if (secret === undefined) {
-    sources.log.warn('stripe delivery refused: the credential holds no webhookSecret (the endpoint’s whsec_… signing secret); set it with listen-fire credential add --module stripe <name>');
-    return refused(401);
-  }
-  const verdict = verifyStripeSignature(request, { secret, nowSeconds: sources.now() });
-  if (!verdict.ok) {
-    sources.log.warn(`stripe delivery refused: ${verdict.reason}`);
-    return refused(401);
+  // A replayed request is the host's own capture, signed long ago: the host vouches for it.
+  if (!request.replayed) {
+    const secret = await sources.webhookSecret();
+    if (secret === undefined) {
+      sources.log.warn('stripe delivery refused: the credential holds no webhookSecret (the endpoint’s whsec_… signing secret); set it with listen-fire credential add --module stripe <name>');
+      return refused(401);
+    }
+    const verdict = verifyStripeSignature(request, { secret, nowSeconds: sources.now() });
+    if (!verdict.ok) {
+      sources.log.warn(`stripe delivery refused: ${verdict.reason}`);
+      return refused(401);
+    }
   }
   const event = eventOf(request.json());
   if (!event.ok) {

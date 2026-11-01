@@ -52,7 +52,9 @@ export interface Board {
  *  `replay` makes it forget the cursor too.
  *  With `nocursor` present `Notes` declares `cursor: false`: every poll lists
  *  all of it. With `takes` present the feed takes `Title ==` on `Notes`: it applies a
- *  filter it is handed and says so (`takenApplied`).
+ *  filter it is handed and says so (`takenApplied`). With `unreadable` present
+ *  a note's arrival on `Notes` says the feed could not read its `Title`
+ *  (`landing.unknown`), so a listen whose WHERE reads it cannot be judged.
  *  Its root `Boards` (`boards.json`) is cheap to list, re-listed every 300
  *  seconds; with `pushedboards` present it is listenable and polled instead,
  *  and declares `parentChanges: pushed`; with `staticboards` present it is
@@ -77,6 +79,7 @@ const at = (name) => join(__dirname, name);
 const takes = existsSync(at('takes'));
 const siblings = existsSync(at('siblings'));
 const noCursor = existsSync(at('nocursor'));
+const unreadable = existsSync(at('unreadable'));
 const note = {
   typeId: 'note',
   displayName: 'Note',
@@ -149,7 +152,7 @@ const pollEdge = async ({ edge, filter, scope, cursor }) => {
       ...(scope === undefined || keyless ? {} : { key: scope }),
       identity: n.id,
       version: String(n.edited ?? 0),
-      landing: { recordId: n.id, recordType: 'Note', fields: { Id: n.id, Title: n.title, Edited: n.edited ?? 0 } },
+      landing: { recordId: n.id, recordType: 'Note', fields: { Id: n.id, Title: n.title, Edited: n.edited ?? 0 }, ...(unreadable ? { unknown: ['Title'] } : {}) },
       ...(title === undefined ? {} : { takenApplied: true }),
     })), ...comments],
     ...(noCursor ? {} : { cursor: JSON.parse(readFileSync(at('feed.json'), 'utf8')).reduce((high, n) => Math.max(high, n.at), since) }),

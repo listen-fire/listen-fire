@@ -389,7 +389,7 @@ impl Reader for SuiteReader {
         Ok(Extraction { events: events.into_iter().map(|payload| Js::Obj(obj! { "payload" => payload })).collect(), arrivals, checkpoint })
     }
 
-    async fn check_inbound(&self, _external: &str, _install: &Credential, _request: &Js, _secret: Option<&str>, _checkpoint: Option<&Js>) -> Result<Js, String> {
+    async fn check_inbound(&self, _external: &str, _install: &Credential, _request: &Js, _replayed: bool, _secret: Option<&str>, _checkpoint: Option<&Js>) -> Result<Js, String> {
         Err("the suite's adapter checks no inbound of its own".into())
     }
 }

@@ -634,8 +634,8 @@ pub struct NewDelivery {
     /// The request as the door received it (crate::inbound::Captured): its
     /// body and the headers its module's inbound handling reads. Sensitive:
     /// kept while the delivery is (`deliveries.retainDays`), shown only when
-    /// asked for. None for a delivery no request made (a poll's page, a
-    /// replay).
+    /// asked for. A poll's page keeps the arrivals it read instead
+    /// (crate::inbound::Page). None for a delivery no request made (a replay).
     pub request: Option<Js>,
 }
 

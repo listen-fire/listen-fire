@@ -41,6 +41,11 @@ export interface InboundRequest {
   secret: string | undefined;
   /** What the previous accepted request returned as `checkpoint`. */
   checkpoint: unknown;
+  /** The host is re-running a request it kept itself (adapter protocol 2.6),
+   *  so a module that verifies its requests skips the signature and the
+   *  timestamp window: the request is the host's own capture, and its
+   *  signed time is long past. True only when the host's call says so. */
+  replayed: boolean;
 }
 
 function pairs(text: string): Record<string, string> {
@@ -73,6 +78,7 @@ export function inboundRequest(input: WireCheckInboundInputShape): InboundReques
     form: () => pairs(bytes.toString('utf-8')),
     secret: input.secret !== undefined && input.secret.trim() !== '' ? input.secret : undefined,
     checkpoint: input.checkpoint,
+    replayed: input.replayed === true,
   };
 }
 

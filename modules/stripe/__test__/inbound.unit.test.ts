@@ -74,6 +74,31 @@ describe('a Stripe delivery', () => {
     }
   });
 
+  it('is accepted unsigned, stale or on a connection with no signing secret when the host replays its own capture of it', async () => {
+    const replayed = (request: InboundCheckInput): InboundCheckInput => ({ ...request, replayed: true });
+    const hour = 3600;
+    for (const [conn, request] of [
+      [stripe, signed(FAILED, SECRET, now() - hour * 24 * 3)],
+      [stripe, post(FAILED)],
+      [load({ apiKey: 'rk_test_x' }), post(FAILED)],
+    ] as const) {
+      expect(await conn.checkInbound!(replayed(request))).toMatchObject({ outcome: 'accepted', deliveryId: 'evt_failed_1' });
+    }
+  });
+
+  it('is refused whatever a sender puts in the request to say it was replayed: only the host\'s call says so', async () => {
+    const stale = signed(FAILED, SECRET, now() - 600);
+    const forged: InboundCheckInput[] = [
+      { ...stale, request: { ...stale.request, headers: { ...stale.request.headers, replayed: 'true', 'x-replayed': 'true' } } },
+      { ...stale, request: { ...stale.request, query: 'replayed=true' } },
+      { ...stale, request: { ...stale.request, body: Buffer.from(JSON.stringify({ ...JSON.parse(FAILED), replayed: true })).toString('base64') } },
+      { ...stale, replayed: false },
+    ];
+    for (const request of forged) {
+      expect(await stripe.checkInbound!(request)).toEqual({ outcome: 'refused', status: 401 });
+    }
+  });
+
   it('is refused (401) on a connection whose credential holds no signing secret, saying what to set', async () => {
     silent.warn.mockClear();
     expect(await load({ apiKey: 'rk_test_x' }).checkInbound!(signed(FAILED))).toEqual({ outcome: 'refused', status: 401 });

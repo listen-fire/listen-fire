@@ -129,6 +129,60 @@ test('a note edited so that it newly matches fires once; the same version seen t
   assert.equal(edgePolls(dir).length, 3);
 });
 
+test('a polled delivery is replayed through one listen from the page the poll kept, and its module is asked nothing', () => {
+  const B_IS_N3 = 'listen to f-[n:Notes WHERE n.Id == "n3"]-> fire b';
+  const dir = notesProject([A_IS_A, B_IS_N3]);
+  // The feed cannot read a note's Title: `a` reads it and cannot judge; `b` reads Id and fires.
+  writeFileSync(join(dir, 'externals/feed/unreadable'), '');
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  lfAt(dir, ['drain', '--until-idle']);
+  feed(dir, [{ id: 'n3', title: 'a', at: 3 }]);
+  lfAt(dir, ['drain', '--until-idle'], 61_000);
+  assert.deepEqual([runsOf(dir, 'a'), runsOf(dir, 'b')], [0, 1]);
+  const polled = edgePolls(dir).length;
+
+  const db = new DatabaseSync(join(dir, '.lf', 'state.db'));
+  const facts = () => db.prepare('select attempt, delivery_id as deliveryId from arrival_unjudged order by attempt').all().map((row) => ({ ...row }));
+  try {
+    const [first] = facts();
+    assert.ok(first, 'the listen that could not judge the arrival is noted');
+    const deliveryId = String(first.deliveryId);
+
+    // A poll makes no request: the delivery keeps the page the poll read, and prints it only when asked.
+    const shown = JSON.parse(lf(dir, 'deliveries', 'show', deliveryId).out) as { delivery: Record<string, unknown> };
+    assert.equal(shown.delivery.requestKept, true);
+    assert.equal('request' in shown.delivery, false);
+    const page = (JSON.parse(lf(dir, 'deliveries', 'show', deliveryId, '--request').out) as { delivery: { request: { adapter: string; arrivals: Array<{ identity: string }> } } }).delivery.request;
+    assert.equal(page.adapter, 'feed');
+    assert.deepEqual(page.arrivals.map((a) => a.identity), ['n3']);
+
+    // Still unreadable: the page is judged again, a is reported again as attempt 1, and the module is not polled.
+    const still = lfAt(dir, ['listens', 'replay', 'notes:a', '--delivery', deliveryId]);
+    assert.equal(still.code, 0, still.out);
+    assert.match(still.out, /notes:a: the arrival n3 on Notes still cannot be judged \(feed could not read Title of the arrival on Notes, which this listen's filter reads\): reported again, attempt 1/);
+    assert.deepEqual(facts().map((f) => f.attempt), [0, 1]);
+    assert.deepEqual([runsOf(dir, 'a'), runsOf(dir, 'b')], [0, 1]);
+
+    // `a` is edited to read what the feed can: replayed, it runs once, and `b` is not run again.
+    writeFileSync(
+      join(dir, 'movements/notes.mvt'),
+      `import { feed } from adapters\n\nf = connect feed\n\nfunction a(n: <f-[:Notes]->>) {\n  fail("a saw \${n.Title}")\n}\n\nfunction b(n: <f-[:Notes]->>) {\n  fail("b saw \${n.Title}")\n}\n\nlisten to f-[n:Notes WHERE n.Id == "n3"]-> fire a\n${B_IS_N3}\n`,
+    );
+    const replayed = lfAt(dir, ['listens', 'replay', 'notes:a', '--delivery', deliveryId]);
+    assert.deepEqual(saw(replayed.out, 'a'), ['a'], replayed.out);
+    assert.deepEqual([runsOf(dir, 'a'), runsOf(dir, 'b')], [1, 1]);
+
+    // Its receipt holds: again, nothing runs.
+    const again = lfAt(dir, ['listens', 'replay', 'notes:a', '--delivery', deliveryId]);
+    assert.match(again.out, /notes:a: nothing replayed \(--force runs it again\)/);
+    assert.equal(runsOf(dir, 'a'), 1);
+    assert.equal(edgePolls(dir).length, polled, 'no replay asked the feed for anything');
+  } finally {
+    db.close();
+  }
+});
+
 test('the operator\'s pollEvery for a connection is its interval, over the edge\'s', () => {
   const dir = notesProject([A_IS_A]);
   lfAt(dir, ['drain', '--until-idle']);
