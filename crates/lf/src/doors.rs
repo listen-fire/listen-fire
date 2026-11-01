@@ -1181,6 +1181,7 @@ pub(crate) mod tests {
             async fn optional(&self, ctx: &Ctx, method: &str, params: Js) -> Answer<Js> {
                 let token = ctx.credential.as_ref().and_then(|c| c.get("fields")).and_then(|f| f.get("token")).cloned().unwrap_or(Js::Null);
                 match method {
+                    "ensureEventSubscription" if self.down.load(Ordering::SeqCst) => Err(ModuleError::bad_request("the inbox is down")),
                     "ensureEventSubscription" => {
                         // Held already: left as it is.
                         if params.get("current").is_some() {

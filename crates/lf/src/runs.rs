@@ -868,7 +868,16 @@ impl Session {
         let Some(subscription) = through_edge else {
             return self.fire_arrivals_to(&set, adapter, arrivals, delivered, JudgedBy::Every).await;
         };
-        let Some((key, shared)) = crate::edge_polls::sharing_subscription(&set, subscription) else { return Ok(Fired::default()) };
+        let Some((key, shared)) = crate::edge_polls::sharing_subscription(&set, subscription) else {
+            // Its webhook outlived its listens (its removal failed, or is
+            // still to come): said once, as its deliveries run nothing.
+            let line = format!("{adapter}: a delivery reached webhook {subscription}, which no listen shares any more: it runs nothing until the webhook is removed");
+            let mut fired = Fired::default();
+            if self.says_once(&line) {
+                fired.redelivered.push(line);
+            }
+            return Ok(fired);
+        };
         let arrivals = under_scope(arrivals, &key);
         self.fire_arrivals_to(&set, adapter, &arrivals, delivered, JudgedBy::Sharing(&shared)).await
     }
@@ -1102,11 +1111,19 @@ impl Session {
     /// Watch each listen on the heads the store keeps for it now
     /// (crate::resolve::watch_kept): another process may have resolved it.
     /// A server moves its webhooks with them.
+    /// A server also tries again each registration that failed, once its
+    /// backoff passed.
     pub async fn follow_kept_heads(&self, set: &FileSet) -> Result<(), String> {
-        if crate::resolve::watch_kept(self, set)?.moved && self.role.registers_webhooks() {
-            for line in crate::subscriptions::reconcile(self).await {
-                eprintln!("listen-fire: {line}");
-            }
+        let moved = crate::resolve::watch_kept(self, set)?.moved;
+        if !self.role.registers_webhooks() {
+            return Ok(());
+        }
+        let lines = match moved {
+            true => crate::subscriptions::reconcile(self).await,
+            false => crate::subscriptions::retry_failed(self).await,
+        };
+        for line in lines {
+            eprintln!("listen-fire: {line}");
         }
         Ok(())
     }

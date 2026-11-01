@@ -139,7 +139,7 @@ fn gives_up(kind: &str) -> bool {
 }
 
 /// When a row that failed its `attempts`-th attempt is tried again, from now.
-fn failed_retry_ms(attempts: i64) -> i64 {
+pub(crate) fn failed_retry_ms(attempts: i64) -> i64 {
     let doublings = u32::try_from(attempts.clamp(1, 17) - 1).unwrap_or(16);
     FAILED_RETRY_MS.saturating_mul(1 << doublings).min(FAILED_RETRY_CAP_MS)
 }

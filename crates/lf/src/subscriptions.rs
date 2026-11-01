@@ -40,6 +40,9 @@
 //! that scales to zero (its wake slot told when the row is due). A refresh
 //! that fails is said once and tried again; a webhook found lapsed is
 //! registered anew, and its pull cursor starts again with the new webhook.
+//! A refresh of a webhook no listen needs removes it instead. A
+//! registration that fails is tried again on the server's tick, after the
+//! work queue's backoff, until it is registered.
 //!
 //! A listen on a traversal whose last edge the module pushes to the
 //! connection or per scope (`delivery: connection` or `scope`, adapter
@@ -427,18 +430,30 @@ fn registering(set: &FileSet) -> impl Iterator<Item = &RunningExternal> {
     set.running.iter().map(|r| &**r).filter(|r| !r.is_plugin() && r.methods.iter().any(|m| m == "ensureEventSubscription") && inbound_of(r).is_some())
 }
 
-/// The failures a session's registrations last met, by external: a refresh
-/// tries each again, and says one only when its message is new.
+/// The failures a session's registrations last met, by webhook: a refresh
+/// tries each again, and so does the server's tick once its backoff passed
+/// (the work queue's: crate::run_host::failed_retry_ms). One is said only
+/// when its message is new.
 #[derive(Default)]
 pub struct Registrations {
-    failed: RefCell<BTreeMap<String, String>>,
+    failed: RefCell<BTreeMap<String, Failing>>,
+}
+
+struct Failing {
+    line: String,
+    attempts: i64,
+    retry_at_ms: i64,
 }
 
 impl Registrations {
-    /// `line`, unless it is the very failure last said for `name`.
-    fn failure(&self, name: &str, line: String) -> Option<String> {
-        let said = self.failed.borrow_mut().insert(name.to_string(), line.clone());
-        (said.as_ref() != Some(&line)).then_some(line)
+    /// `line`, unless it is the very failure last said for `name`; tried
+    /// again after a backoff that grows with each failure in a row.
+    fn failure(&self, name: &str, line: String, now_ms: i64) -> Option<String> {
+        let mut failed = self.failed.borrow_mut();
+        let attempts = failed.get(name).map_or(1, |f| f.attempts + 1);
+        let retry_at_ms = now_ms + crate::run_host::failed_retry_ms(attempts);
+        let said = failed.insert(name.to_string(), Failing { line: line.clone(), attempts, retry_at_ms });
+        (said.as_ref().map(|f| &f.line) != Some(&line)).then_some(line)
     }
 
     fn success(&self, name: &str) {
@@ -447,6 +462,15 @@ impl Registrations {
 
     fn failing(&self, name: &str) -> bool {
         self.failed.borrow().contains_key(name)
+    }
+
+    /// Whether `name` failed and its backoff has passed.
+    fn due(&self, name: &str, now_ms: i64) -> bool {
+        self.failed.borrow().get(name).is_some_and(|f| f.retry_at_ms <= now_ms)
+    }
+
+    fn any_due(&self, now_ms: i64) -> bool {
+        self.failed.borrow().values().any(|f| f.retry_at_ms <= now_ms)
     }
 }
 
@@ -489,6 +513,26 @@ pub async fn follow_refresh(session: &Session, before: &FileSet, after: &FileSet
     lines
 }
 
+/// The registrations that failed and whose backoff has passed, tried again
+/// (`listen-fire serve`'s tick): a webhook a new head needs is not left
+/// unregistered until the next restart or edit.
+pub async fn retry_failed(session: &Session) -> Vec<String> {
+    let now_ms = session.now_ms();
+    if !session.registrations.any_due(now_ms) {
+        return Vec::new();
+    }
+    let secrets = session.secrets();
+    let credentials = secrets.credentials();
+    let set = session.file_set();
+    let mut webhooks = Vec::new();
+    for running in registering(&set) {
+        webhooks.extend(webhooks_of(&running.external.manifest.name, retired(running, credentials)));
+        webhooks.extend(edge_webhooks(&set, running, credentials).into_values());
+    }
+    webhooks.retain(|w| session.registrations.due(&w.label, now_ms));
+    register(session, webhooks).await
+}
+
 async fn register(session: &Session, webhooks: Vec<Webhook>) -> Vec<String> {
     let mut lines = Vec::new();
     let mut changed = false;
@@ -502,7 +546,7 @@ async fn register(session: &Session, webhooks: Vec<Webhook>) -> Vec<String> {
                     lines.push(format!("{label}: {line}"));
                 }
             }
-            Err(message) => lines.extend(session.registrations.failure(label, format!("{label}: its webhook is not registered — {message}"))),
+            Err(message) => lines.extend(session.registrations.failure(label, format!("{label}: its webhook is not registered — {message}"), session.now_ms())),
         }
     }
     if changed && let Err(message) = session.reload_secrets() {
@@ -718,6 +762,16 @@ async fn refresh_one(session: &Session, external: &str, webhook: &Refreshing<'_>
     let Some(credential) = credentials.iter().find(|c| c.name == webhook.credential) else { return (None, None) };
     let registered = Registered::of(credential, webhook.key, &setup.secret_field);
     let Some(id) = registered.id.clone() else { return (None, None) };
+    // One no listen needs (a webhook for events, retired at 0.13, or an
+    // edge's no listen shares any more, whose removal failed) is removed,
+    // never kept alive.
+    let channel = (Some(webhook.credential.to_string()), webhook.key.to_string());
+    let needed = edge_webhooks(&set, running, credentials).get(&channel).is_some_and(|w| w.needed);
+    if !needed {
+        let unneeded = edge_webhooks(&set, running, credentials).remove(&channel).into_iter().chain(webhooks_of(external, retired(running, credentials)).into_iter().filter(|w| w.credential.as_deref() == Some(webhook.credential) && w.key == webhook.key));
+        let lines = register(session, unneeded.take(1).collect()).await;
+        return (Some(lines.join("\n")).filter(|l| !l.is_empty()), None);
+    }
     let subscribed = registered_channels(credential).into_iter().find(|(k, _)| k == webhook.key).map(|(_, subscribed)| subscribed).unwrap_or(Subscribed::Events(Scope::new()));
     let several = credentials.iter().filter(|c| c.external == external && c.binding != Binding::Install && !registered_channels(c).is_empty()).count() > 1;
     let label = label_of(external, Some(webhook.credential).filter(|_| several), &subscribed, webhook.key);
@@ -732,7 +786,7 @@ async fn refresh_one(session: &Session, external: &str, webhook: &Refreshing<'_>
         }
     };
     let expires = registered.expires.as_deref().and_then(ms_of);
-    let retry = |message: String| (session.registrations.failure(&said_as, message), Some(now_ms + REFRESH_RETRY_MS));
+    let retry = |message: String| (session.registrations.failure(&said_as, message, now_ms), Some(now_ms + REFRESH_RETRY_MS));
     match expires {
         Some(expires) if expires <= now_ms => {
             // Lapsed: the source no longer delivers to it. Registered anew,
@@ -1108,14 +1162,33 @@ mod tests {
     #[test]
     fn a_failure_is_said_once_per_message_and_again_after_a_success() {
         let registrations = Registrations::default();
-        assert_eq!(registrations.failure("attio", "down".into()).as_deref(), Some("down"));
+        assert_eq!(registrations.failure("attio", "down".into(), 0).as_deref(), Some("down"));
         assert!(registrations.failing("attio"), "tried again at the next refresh");
-        assert_eq!(registrations.failure("attio", "down".into()), None, "the same failure again is not said");
-        assert_eq!(registrations.failure("attio", "refused".into()).as_deref(), Some("refused"), "a new message is");
-        assert_eq!(registrations.failure("slack", "down".into()).as_deref(), Some("down"), "each external its own");
+        assert_eq!(registrations.failure("attio", "down".into(), 0), None, "the same failure again is not said");
+        assert_eq!(registrations.failure("attio", "refused".into(), 0).as_deref(), Some("refused"), "a new message is");
+        assert_eq!(registrations.failure("slack", "down".into(), 0).as_deref(), Some("down"), "each external its own");
         registrations.success("attio");
         assert!(!registrations.failing("attio"));
-        assert_eq!(registrations.failure("attio", "refused".into()).as_deref(), Some("refused"), "after a success it is news again");
+        assert_eq!(registrations.failure("attio", "refused".into(), 0).as_deref(), Some("refused"), "after a success it is news again");
+    }
+
+    #[test]
+    fn a_failed_registration_is_due_again_after_a_backoff_that_grows_to_its_cap() {
+        let registrations = Registrations::default();
+        let now = 1_800_000_000_000;
+        registrations.failure("attio", "down".into(), now);
+        let first = crate::run_host::failed_retry_ms(1);
+        assert!(!registrations.due("attio", now + first - 1) && !registrations.any_due(now + first - 1));
+        assert!(registrations.due("attio", now + first) && registrations.any_due(now + first));
+        let later = now + first;
+        registrations.failure("attio", "down".into(), later);
+        assert!(!registrations.due("attio", later + first), "each failure in a row waits longer");
+        assert!(registrations.due("attio", later + crate::run_host::failed_retry_ms(2)));
+        for _ in 0..40 {
+            registrations.failure("attio", "down".into(), later);
+        }
+        assert!(registrations.due("attio", later + crate::run_host::failed_retry_ms(i64::MAX)), "never longer than the cap");
+        assert!(!registrations.due("slack", later), "one never failed is not due");
     }
 
     #[test]
@@ -1140,6 +1213,47 @@ mod tests {
         let due_by = crate::store::iso(at);
         let claim = crate::store::ClaimDue { limit: 10, lease_ms: 1, due_by: Some(&due_by), kinds: Some(&kinds) };
         session.store.claim_due(&claim).unwrap().into_iter().map(|w| w.key).collect()
+    }
+
+    #[test]
+    fn a_registration_that_failed_is_tried_again_on_the_tick_once_its_backoff_passed() {
+        let project = InboxProject::with(&on_notes(&[("a", "x")]), SCOPED_SECRETS, "publicUrl: https://lf.example\n");
+        project.down.store(true, std::sync::atomic::Ordering::SeqCst);
+        in_local(async {
+            let mut session = project.session().await;
+            let lines = reconcile(&session).await;
+            assert!(lines.len() == 1 && lines[0].contains(": its webhook is not registered — "), "{lines:?}");
+            assert_eq!(retry_failed(&session).await, Vec::<String>::new(), "not before its backoff");
+            project.down.store(false, std::sync::atomic::Ordering::SeqCst);
+            session.judge_due_ahead(crate::run_host::failed_retry_ms(1));
+            let lines = retry_failed(&session).await;
+            assert!(lines.len() == 1 && lines[0].contains(": registered webhook wh-1 for the arrivals on Notes at "), "{lines:?}");
+            assert_eq!(retry_failed(&session).await, Vec::<String>::new(), "registered, it is tried no more");
+        });
+    }
+
+    #[test]
+    fn a_webhook_no_listen_shares_is_removed_by_its_refresh_and_a_delivery_to_it_is_said_once() {
+        let project = InboxProject::expiring(&on_notes(&[("a", "x")]), SCOPED_SECRETS, "publicUrl: https://lf.example\n", 7 * DAY_MS);
+        let x = in_local(async {
+            let session = project.session().await;
+            assert_eq!(reconcile(&session).await.len(), 1);
+            edge_webhook_of(&project, "x").0
+        });
+        std::fs::write(project.root.join("movements/noted.mvt"), on_notes(&[("a", "y")])).unwrap();
+        in_local(async {
+            let session = project.session().await;
+            let delivered = || crate::runs::Delivered { subscription: Some(&x), ..Default::default() };
+            let said = session.fire_arrivals("inbox", &[], delivered()).await.unwrap().redelivered;
+            assert_eq!(said, [format!("inbox: a delivery reached webhook {x}, which no listen shares any more: it runs nothing until the webhook is removed")]);
+            assert_eq!(session.fire_arrivals("inbox", &[], delivered()).await.unwrap().redelivered, Vec::<String>::new(), "said once");
+            let (line, next) = refresh_one(&session, "inbox", &Refreshing { credential: "inbox_a", key: &x }, session.now_ms()).await;
+            assert!(line.as_deref().is_some_and(|l| l.ends_with("no listen needs its webhook any more; removed webhook wh-1")), "{line:?}");
+            assert_eq!(next, None, "nothing left to refresh");
+            let made = project.registrations.lock().unwrap();
+            assert!(made.iter().all(|r| r.get("refreshed").is_none()), "never refreshed: {made:?}");
+            assert_eq!(made.last().and_then(|r| r.get("removed")), Some(&Js::str("wh-1")));
+        });
     }
 
     #[test]
