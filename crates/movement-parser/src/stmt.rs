@@ -165,10 +165,21 @@ fn unpinned_hop_name(hop_raw: &str) -> Option<String> {
         i = close + 1;
         name
     } else {
-        let end = ident_end(s, i)?;
-        let name = to_string(&s[i..end]);
-        i = end;
-        name
+        // Read as the expression parser reads a label (expr.rs `read_label`),
+        // so an unquoted one may hold spaces (`-[:Funding Round]->`).
+        let start = i;
+        while let Some(c) = at(i) {
+            if c == unit(']') || c == unit('\n') || c == unit('{') || crate::expr::label_ends_at_clause(&s[i..]) {
+                break;
+            }
+            i += 1;
+        }
+        let label = trim_end(&s[start..i]);
+        if label.is_empty() {
+            return None;
+        }
+        i = start + label.len();
+        to_string(label)
     };
     i = skip_space(i);
     (s.get(i..)? == crate::util::form::units_vec("]->").as_slice()).then_some(name)
@@ -5130,5 +5141,9 @@ mod tests {
         assert_eq!(unpinned_hop_name("-[:company WHERE x]->"), None);
         assert_eq!(unpinned_hop_name("-[:``]->"), None);
         assert_eq!(unpinned_hop_name("-[c company]->"), None);
+        assert_eq!(unpinned_hop_name("-[:Meeting Note]->").as_deref(), Some("Meeting Note"));
+        assert_eq!(unpinned_hop_name("-[ f : Funding Round ]->").as_deref(), Some("Funding Round"));
+        assert_eq!(unpinned_hop_name("-[:List Entry WHERE x]->"), None);
+        assert_eq!(unpinned_hop_name("-[:List Entry ORDER BY x]->"), None);
     }
 }

@@ -1521,7 +1521,7 @@ fn limit_clause(rest: &[u16]) -> Option<(usize, String)> {
 }
 
 /// `/^\s+WHERE\s/i.test(rest) || /^\s+(ORDER\s+BY|LIMIT)\s/i.test(rest)`.
-fn label_ends_at_clause(rest: &[u16]) -> bool {
+pub(crate) fn label_ends_at_clause(rest: &[u16]) -> bool {
     let gap = space_run(rest);
     if gap == 0 {
         return false;
