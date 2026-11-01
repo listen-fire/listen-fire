@@ -105,8 +105,42 @@ fn walk_hops<'a>(steps: &'a [TraversalStep], expression: &'a Expression) -> &'a 
     }
 }
 
+/// The field a read off a value names first (`Stage` in `.Stage` and in
+/// `.Stage.x`); `None` for a walk, a presence test or the record itself.
+fn field_read_name(expr: &Expression) -> Option<&str> {
+    match expr {
+        Expression::Property { property_type_id, .. } | Expression::EdgeProperty { property_type_id, .. }
+            if property_type_id != super::narrowing::POSITION_SENTINEL =>
+        {
+            Some(property_type_id)
+        }
+        Expression::Traverse { alias_root: Some(head), steps, expression } if steps.is_empty() && !matches!(**expression, Expression::Exists { .. }) => Some(head),
+        _ => None,
+    }
+}
+
+/// A map whose member `key`, maybe absent, is proved present.
+pub fn dict_with_member_present(held: &Ty, key: &str) -> Option<Ty> {
+    if is_maybe_absent(Some(held)) {
+        return None;
+    }
+    let Ty::Dict { of, shape: Some(shape) } = held else { return None };
+    let slot = shape.get(key)?.as_ref()?;
+    if !is_maybe_absent(Some(slot)) {
+        return None;
+    }
+    let mut shape = shape.clone();
+    Rc::make_mut(&mut shape).insert(key.to_string(), Some(strip_absent(slot).clone()));
+    Some(Ty::Dict { of: of.clone(), shape: Some(shape) })
+}
+
 fn key(expr: &Expression) -> usize {
     expr as *const Expression as usize
+}
+
+/// The hop whose WHERE is being typed.
+pub struct HopWhere {
+    pub alias: Option<String>,
 }
 
 pub struct Typing<'a> {
@@ -140,6 +174,11 @@ pub struct Typing<'a> {
     /// known not to carry it (reported here as an unknown name, so the
     /// spelling rule that would offer the hop's alias leaves it alone).
     pub bare_walk_names: IndexMap<String, bool>,
+    /// While a hop's WHERE is typed: that hop's alias, if it has one. The
+    /// WHERE reads the hop's record bare (`Previous`) and through the alias
+    /// (`c.Previous.Stage`), so a field proved present one way is present
+    /// the other.
+    pub hop_where: Option<HopWhere>,
     narrowed_scalars: HashMap<String, Ty>,
     narrowed_roots: HashMap<String, Position>,
     read_types: HashMap<usize, Option<Ty>>,
@@ -175,6 +214,7 @@ impl<'a> Typing<'a> {
             diagnostics: Vec::new(),
             write_target: None,
             bare_walk_names: IndexMap::new(),
+            hop_where: None,
             narrowed_scalars: HashMap::new(),
             narrowed_roots: HashMap::new(),
             read_types: HashMap::new(),
@@ -510,8 +550,11 @@ impl<'a> Typing<'a> {
             match proof {
                 PresenceProof::Binding { root } => {
                     let field = narrowed_position.as_ref().and_then(|p| narrow_present(p, root));
-                    if field.is_some() {
-                        narrowed_position = field;
+                    if let Some(present) = field {
+                        if let Some(alias) = self.hop_where.as_ref().and_then(|h| h.alias.clone()) {
+                            self.narrowed_roots.insert(alias, present.clone());
+                        }
+                        narrowed_position = Some(present);
                         continue;
                     }
                     if let Some(current) = self.scalar_type(root) {
@@ -554,18 +597,7 @@ impl<'a> Typing<'a> {
         if self.root_type(name).is_some() {
             return None;
         }
-        let held = self.scalar_type(name)?;
-        if is_maybe_absent(Some(&held)) {
-            return None;
-        }
-        let Ty::Dict { of, shape: Some(shape) } = &held else { return None };
-        let slot = shape.get(key)?.as_ref()?;
-        if !is_maybe_absent(Some(slot)) {
-            return None;
-        }
-        let mut shape = shape.clone();
-        Rc::make_mut(&mut shape).insert(key.to_string(), Some(strip_absent(slot).clone()));
-        Some(Ty::Dict { of: of.clone(), shape: Some(shape) })
+        dict_with_member_present(&self.scalar_type(name)?, key)
     }
 
     fn infer_logical(&mut self, op: LogicalOp, operands: &[Expression], position: Option<&Position>) {
@@ -656,7 +688,9 @@ impl<'a> Typing<'a> {
                         self.locals.insert(alias.clone(), next.clone());
                     }
                     if let Some(filter) = &edge.expression_filter {
+                        let outer = self.hop_where.replace(HopWhere { alias: edge.alias.clone() });
                         self.infer_at(filter, next.as_ref());
+                        self.hop_where = outer;
                     }
                     if let Some(order_by) = edge.cardinality.as_ref().and_then(|c| c.order_by.as_deref()) {
                         let key_ty = self.infer_at(order_by, next.as_ref());
@@ -725,7 +759,7 @@ impl<'a> Typing<'a> {
             return None;
         }
         let held = self.scalar_type(root)?;
-        self.read_dict_member(&held, member, false)
+        self.read_dict_member(&held, member, &crate::families::values::quote_name(root), false)
     }
 
     /// A dot read off a record, `root` (where no hop comes between), that is
@@ -758,7 +792,7 @@ impl<'a> Typing<'a> {
         if holds_record(record, property)
             && let Some(Ty::HeldRecord(fields)) = field.as_ref().map(strip_absent)
         {
-            let held = HeldRead { spelled: format!("'{}'", read.label()), holder: read.root, held: fields };
+            let held = HeldRead { spelled: format!("'{}'", read.label()), subject: read.label(), holder: read.root, held: fields };
             return Some(self.read_off_held(&held, is_maybe_absent(field.as_ref()), past_steps, past));
         }
         let next = match past {
@@ -789,10 +823,23 @@ impl<'a> Typing<'a> {
             crate::families::walks::report_walk_off_held(self, held, hops);
             return None;
         }
-        let fields = if maybe_absent { Position::MaybeEmpty(Box::new(held.held.position.clone())) } else { held.held.position.clone() };
-        match self.read_off_record(None, &fields, past, Some(held)) {
-            Some(read) => read,
-            None => self.infer_at(past, Some(&fields)),
+        if maybe_absent && let Some(field) = field_read_name(past) {
+            crate::families::walks::report_read_through_absent(self, &held.subject, field);
+        }
+        // Read on as the record it is once there, whether or not it was
+        // proved present: a refused read says so once, where it is written.
+        let fields = held.held.position.clone();
+        match (self.read_off_record(None, &fields, past, Some(held)), past) {
+            (Some(read), _) => read,
+            // In a hop's WHERE the name read through the value is spelled
+            // as a bare name; it is the value's field, never a variable.
+            (None, Expression::EdgeProperty { property_type_id, .. }) => {
+                let ty = self.read_property(Some(&fields), property_type_id);
+                self.exact_types.insert(key(past), ty.clone());
+                self.read_types.insert(key(past), ty.clone());
+                ty
+            }
+            (None, _) => self.infer_at(past, Some(&fields)),
         }
     }
 
@@ -844,7 +891,8 @@ impl<'a> Typing<'a> {
         self.report(codes::TEXT_HAS_NO_FIELDS, message);
     }
 
-    fn read_dict_member(&mut self, held: &Ty, member: &Expression, within: bool) -> Option<Option<Ty>> {
+    /// `subject` is the read's text up to the member (`d`, `d.a`).
+    fn read_dict_member(&mut self, held: &Ty, member: &Expression, subject: &str, within: bool) -> Option<Option<Ty>> {
         let Ty::Dict { of, shape } = strip_absent(held) else { return None };
         let (key, member_steps, member_expression) = match member {
             Expression::Property { property_type_id, .. } => (property_type_id.clone(), None, None),
@@ -853,6 +901,9 @@ impl<'a> Typing<'a> {
         };
         if within && shape.as_ref().is_some_and(|s| !s.contains_key(&key)) {
             return None;
+        }
+        if is_maybe_absent(Some(held)) {
+            crate::families::walks::report_read_through_absent(self, subject, &key);
         }
         let known: Option<Ty> = match shape {
             None => Some((**of).clone()),
@@ -867,18 +918,12 @@ impl<'a> Typing<'a> {
                     crate::families::values::unknown_dict_key(self, &key, &keys);
                     None
                 }
-                Some(slot) => {
-                    if is_maybe_absent(Some(held)) {
-                        maybe_absent_opt(slot.clone())
-                    } else {
-                        slot.clone()
-                    }
-                }
+                Some(slot) => slot.clone(),
             },
         };
         let (Some(steps), Some(expression)) = (member_steps, member_expression) else { return Some(ty) };
         if nested && let Some(inner_ty) = &ty {
-            if let Some(inner) = self.read_dict_member(inner_ty, expression, true) {
+            if let Some(inner) = self.read_dict_member(inner_ty, expression, &format!("{subject}.{}", crate::families::values::quote_name(&key)), true) {
                 return Some(inner);
             }
         }
@@ -888,6 +933,14 @@ impl<'a> Typing<'a> {
         {
             crate::families::walks::report_walk_off_value(self, &format!("'{key}'"), inner, hops);
             return Some(None);
+        }
+        let mut ty = ty;
+        if steps.is_empty()
+            && is_maybe_absent(ty.as_ref())
+            && let Some(field) = field_read_name(expression)
+        {
+            crate::families::walks::report_read_through_absent(self, &format!("{subject}.{}", crate::families::values::quote_name(&key)), field);
+            ty = ty.map(|t| strip_absent(&t).clone());
         }
         let record = record_head_position(ty.as_ref());
         let destination = self.walk_steps(record, steps, false);
@@ -936,7 +989,7 @@ impl<'a> Typing<'a> {
                 if let Some(root) = alias_root.as_deref()
                     && let Some((fields, maybe_absent)) = self.held_by_name(root)
                 {
-                    let held = HeldRead { spelled: format!("'{root}'"), holder: None, held: &fields };
+                    let held = HeldRead { spelled: format!("'{root}'"), subject: crate::families::values::quote_name(root), holder: None, held: &fields };
                     return (self.read_off_held(&held, maybe_absent, steps, expression), Vec::new());
                 }
                 if let Some(root) = alias_root.as_deref()

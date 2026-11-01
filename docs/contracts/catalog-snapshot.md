@@ -66,8 +66,8 @@ interface SettingsBecome {
 
 interface FieldChange {
   hop: number;                                    // the index into `path` of the hop whose records hold the rows
-  field: string;                                  // the settings key naming the field: alone, `c.Current.F != c.Previous.F`
-  becomes: string;                                // the settings key naming the value it came to hold: `c.Current.F == v AND c.Previous.F != v`; alone, nothing
+  field: string;                                  // the settings key naming the field: alone, F changed (each row tested present first; adapter-protocol.md)
+  becomes: string;                                // the settings key naming the value it came to hold: `exists(c.Current) AND c.Current.F == v AND (NOT exists(c.Previous) OR c.Previous.F != v)`; alone, nothing
   current: string;                                // the record's field holding the row as the change left it
   previous: string;                               // the record's field holding the row as it was before
 }

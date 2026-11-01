@@ -226,10 +226,11 @@ export interface SettingsBecome {
 
 /** Two settings keys that compare a record's row before and after on one
  *  hop (Airtable's `{ field: "Stage", becomes: "Interview" }`): the field
- *  alone changed (`c.Current.Stage != c.Previous.Stage`); with a value, it
- *  came to hold it (`c.Current.Stage == "Interview" AND c.Previous.Stage !=
- *  "Interview"`). A value with no field compares nothing. The field is the
- *  row's own, by name. */
+ *  alone changed; with a value, it came to hold it (`exists(c.Current) AND
+ *  c.Current.Stage == "Interview" AND (NOT exists(c.Previous) OR
+ *  c.Previous.Stage != "Interview")`), each row tested present before a
+ *  field is read through it. A value with no field compares nothing. The
+ *  field is the row's own, by name. */
 export interface FieldChange {
   /** The index into `path` of the hop whose records hold the rows. */
   hop: number;

@@ -35,7 +35,7 @@ pub enum Shape {
     NullTest,
     /// No current-spelling call: `AT(xs, i)` is `xs[i]`.
     Index,
-    /// `exists` takes a walk; `EXISTS(value)` is `value != null`.
+    /// `exists` takes a walk, a name or a field read off one; `EXISTS(value)` of anything else is `value != null`.
     ExistsWalk,
 }
 

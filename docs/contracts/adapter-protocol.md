@@ -246,9 +246,12 @@ The manifest file registers your server with a team:
   it came to hold, and the record's fields holding the row as the change left
   it and as it was (Airtable's
   `"fieldChange": { "hop": 2, "field": "field", "becomes": "becomes", "current": "Current", "previous": "Previous" }`).
-  A field alone becomes `c.Current.Stage != c.Previous.Stage`; with a value,
-  `c.Current.Stage == "Interview" AND c.Previous.Stage != "Interview"`; a value
-  with no field narrows nothing. Where the host narrowed the path's hops by
+  Each row is tested present before a field is read through it (a created row
+  has no previous). With a value, the rewrite is
+  `exists(c.Current) AND c.Current.Stage == "Interview" AND (NOT exists(c.Previous) OR c.Previous.Stage != "Interview")`.
+  A field alone is the field changed, an absent row's field counting as absent:
+  `(exists(c.Current) AND exists(c.Previous) AND c.Current.Stage != c.Previous.Stage) OR (exists(c.Current) AND NOT exists(c.Previous) AND exists(c.Current.Stage)) OR (NOT exists(c.Current) AND exists(c.Previous) AND exists(c.Previous.Stage))`.
+  A value with no field narrows nothing. Where the host narrowed the path's hops by
   their WHEREs, the field is checked against the narrowed row and the fired
   parameter is retyped to the narrowed landing.
   A key may also say `absent`, what a listen that left it out meant, as a

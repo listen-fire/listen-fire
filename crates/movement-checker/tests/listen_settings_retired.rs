@@ -284,7 +284,7 @@ fn a_hop_the_connection_consumes_is_dropped() {
     assert_eq!(
         text,
         format!(
-            "{HIRING}function moved(c: <hiring-[:`Candidates Change`]->>) {{ return 1 }}\nlisten to hiring-[t:Tables WHERE t.Id == \"tblCAND01\"]->-[c:Changes WHERE c.Current.Stage == \"Interview\" AND c.Previous.Stage != \"Interview\"]-> fire moved\n"
+            "{HIRING}function moved(c: <hiring-[:`Candidates Change`]->>) {{ return 1 }}\nlisten to hiring-[t:Tables WHERE t.Id == \"tblCAND01\"]->-[c:Changes WHERE exists(c.Current) AND c.Current.Stage == \"Interview\" AND (NOT exists(c.Previous) OR c.Previous.Stage != \"Interview\")]-> fire moved\n"
         )
     );
     assert_rechecks_clean(&text);
@@ -292,7 +292,8 @@ fn a_hop_the_connection_consumes_is_dropped() {
 
 /// `field` and `becomes` compare the row before and after the change
 /// (`fieldChange`), as 0.12 did: the field came to hold the value, which a
-/// row created holding it did too (no row before). A list is no value `!=`
+/// row created holding it did too (no row before). Each row is tested
+/// present before a field is read through it. A list is no value `!=`
 /// compares.
 #[test]
 fn a_field_and_the_value_it_becomes_compare_the_row_before_and_after() {
@@ -304,7 +305,7 @@ fn a_field_and_the_value_it_becomes_compare_the_row_before_and_after() {
     assert_eq!(told.fix.as_ref().unwrap()["safe"], true, "{told:?}");
     let text = fixed(&source, &d);
     assert!(
-        text.ends_with("listen to hiring-[t:Tables WHERE t.Id == \"tblCAND01\"]->-[c:Changes WHERE c.Kind IN [\"updated\"] AND c.Current.Stage == \"Interview\" AND c.Previous.Stage != \"Interview\"]-> fire moved\n"),
+        text.ends_with("listen to hiring-[t:Tables WHERE t.Id == \"tblCAND01\"]->-[c:Changes WHERE c.Kind IN [\"updated\"] AND exists(c.Current) AND c.Current.Stage == \"Interview\" AND (NOT exists(c.Previous) OR c.Previous.Stage != \"Interview\")]-> fire moved\n"),
         "{text}"
     );
     assert_rechecks_clean(&text);
@@ -313,7 +314,8 @@ fn a_field_and_the_value_it_becomes_compare_the_row_before_and_after() {
 }
 
 /// Every rewrite keeps 0.12's meaning, so each is safe: a field alone is
-/// the field changed; a value with no field narrows nothing, as in 0.12; one
+/// the field changed, an absent row's field read as absent (a created row
+/// holding it changed it, as a deleted row holding it did); a value with no field narrows nothing, as in 0.12; one
 /// change per row an edit touched is one run per update, as 0.12 ran.
 #[test]
 fn a_field_change_keeps_what_0_12_heard() {
@@ -325,7 +327,7 @@ fn a_field_change_keeps_what_0_12_heard() {
         assert_rechecks_clean(&text);
         text.lines().last().unwrap().to_string()
     };
-    assert_eq!(rewritten(", field: \"Stage\""), "listen to hiring-[t:Tables WHERE t.Id == \"tblCAND01\"]->-[c:Changes WHERE c.Current.Stage != c.Previous.Stage]-> fire moved");
+    assert_eq!(rewritten(", field: \"Stage\""), "listen to hiring-[t:Tables WHERE t.Id == \"tblCAND01\"]->-[c:Changes WHERE (exists(c.Current) AND exists(c.Previous) AND c.Current.Stage != c.Previous.Stage) OR (exists(c.Current) AND NOT exists(c.Previous) AND exists(c.Current.Stage)) OR (NOT exists(c.Current) AND exists(c.Previous) AND exists(c.Previous.Stage))]-> fire moved");
     assert_eq!(rewritten(", becomes: \"Interview\""), "listen to hiring-[t:Tables WHERE t.Id == \"tblCAND01\"]->-[:Changes]-> fire moved");
     assert_eq!(rewritten(""), "listen to hiring-[t:Tables WHERE t.Id == \"tblCAND01\"]->-[:Changes]-> fire moved");
 }

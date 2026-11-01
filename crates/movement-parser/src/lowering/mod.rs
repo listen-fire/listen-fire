@@ -197,6 +197,22 @@ struct Ctx {
 
 const TOP: Ctx = Ctx { edge_props: false };
 
+/// The name a field read (`x.F`, `c.Current.Stage`) starts at.
+fn member_root(e: &MExpr) -> Option<&Name> {
+    match e {
+        MExpr::Member { object, .. } => match object.as_ref() {
+            MExpr::Name { name, .. } => Some(name),
+            inner => member_root(inner),
+        },
+        _ => None,
+    }
+}
+
+/// `read != null`: what `exists(<value>)` asks.
+fn present(read: Expression) -> Expression {
+    Expression::Compare { op: FilterOperator::Neq, left: Box::new(read), right: Box::new(Expression::stat(StaticValue::Null)) }
+}
+
 /// How a name read alone lowers: where it is, and whether it is a hop's
 /// alias read (`MExpr::Name::field`), which is only ever the field.
 #[derive(Clone, Copy)]
@@ -934,7 +950,7 @@ impl Lowering {
         // `EXISTS(…)`, in any letter case, is the quantifier; resolved by
         // name like any other call, unless scoped or quoted.
         if !name.quoted && upper == "EXISTS" && !scoped {
-            return Ok((self.exists(args)?, 0));
+            return Ok((self.exists(args, ctx)?, 0));
         }
 
         // `AGG(<bare walk>).prop` reads a property of the aggregated landing:
@@ -1065,7 +1081,7 @@ impl Lowering {
     /// (that the predicate holds). The interior is read as a slot of its
     /// own, whatever surrounds the call, so a name in its predicate is never
     /// an edge property of an enclosing hop.
-    fn exists(&self, args: &[CallArg]) -> Lowered<Expression> {
+    fn exists(&self, args: &[CallArg], ctx: Ctx) -> Lowered<Expression> {
         let [arg] = args else {
             return refuse("EXISTS(…) expects a traversal path");
         };
@@ -1073,6 +1089,12 @@ impl Lowering {
             MExpr::Where { source, predicate, .. } => (source.as_ref(), Some(predicate.as_ref())),
             walk => (walk, None),
         };
+        // In a hop's WHERE, `exists(c.Previous)` reads the hop's own field
+        // (its alias already dropped): the field's presence, as `c.Previous`
+        // reads it there.
+        if let (MExpr::Name { field: true, .. }, None) = (walk, predicate) {
+            return Ok(present(self.lower(walk, ctx)?));
+        }
         if let Some((root, steps)) = self.walk_steps(walk)? {
             let where_ = match predicate {
                 Some(p) => Some(Box::new(self.lower(p, TOP)?)),
@@ -1084,20 +1106,15 @@ impl Lowering {
                 None => Ok(exists),
             };
         }
-        // `EXISTS(x.Field)` asks a VALUE's presence: `x.Field != null`.
+        // `EXISTS(x.Field)` asks a VALUE's presence: `x.Field != null`, read
+        // as the same read is outside it.
         if predicate.is_some() {
             return refuse("EXISTS(… WHERE …) needs a traversal path — a value has nothing to filter");
         }
-        if let MExpr::Member { object, .. } = walk
-            && let MExpr::Name { name, .. } = object.as_ref()
+        if let Some(name) = member_root(walk)
             && name.text.to_lowercase() != "edge"
         {
-            let read = self.lower(walk, TOP)?;
-            return Ok(Expression::Compare {
-                op: FilterOperator::Neq,
-                left: Box::new(read),
-                right: Box::new(Expression::stat(StaticValue::Null)),
-            });
+            return Ok(present(self.lower(walk, ctx)?));
         }
         refuse("EXISTS(…) expects a traversal path like -[:edge]-> or alias-[:edge]->, or a property read like x.`Field`")
     }

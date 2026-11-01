@@ -142,6 +142,16 @@ fn is_walk(e: &MExpr) -> bool {
     matches!(e, MExpr::Path { .. } | MExpr::Where { .. })
 }
 
+/// A name, or a field read off one (`x`, `x.F`, `c.Current.Stage`): what
+/// `exists(…)` asks the presence of, besides a walk.
+fn is_value_read(e: &MExpr) -> bool {
+    match e {
+        MExpr::Name { .. } => true,
+        MExpr::Member { object, .. } => matches!(object.as_ref(), MExpr::Name { .. } | MExpr::Member { .. }) && is_value_read(object),
+        _ => false,
+    }
+}
+
 fn is_primary(e: &MExpr) -> bool {
     matches!(
         e,
@@ -448,7 +458,7 @@ impl<'s> Canon<'s> {
     fn is_old_shape(&self, row: &Spelling, args: &[CallArg]) -> bool {
         match row.shape {
             Shape::CallbackClosure => args.first().is_some_and(|a| !matches!(a.value, MExpr::Closure { .. })),
-            Shape::ExistsWalk => args.first().is_some_and(|a| !is_walk(&a.value)),
+            Shape::ExistsWalk => args.first().is_some_and(|a| !is_walk(&a.value) && !is_value_read(&a.value)),
             _ => false,
         }
     }
@@ -548,7 +558,7 @@ impl<'s> Canon<'s> {
             Shape::ExistsWalk => match args.first() {
                 Some(arg) if is_walk(&arg.value) => (format!("`{written}` is written `exists`"), Some(rename)),
                 _ => (
-                    "`exists` takes a walk; a value's presence is written `x != null`".into(),
+                    "`exists` takes a walk, a name or a field read off one (`exists(x.F)`); any other value's presence is written `… != null`".into(),
                     Some(Edit { at, text: self.grouped(at, format!("{} != null", a(0))) }),
                 ),
             },

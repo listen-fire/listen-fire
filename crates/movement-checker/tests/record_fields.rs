@@ -7,7 +7,9 @@
 //! would hide a fetch.
 //!
 //! The changes of a table: `Change` holds its row before and after as
-//! `Previous` and `Current` (each maybe absent), typed by the generic `Row`;
+//! `Previous` and `Current` (each maybe absent), typed by the generic `Row`.
+//! A field is never read through a row that may be absent: `exists(row)`
+//! proves it present, as TypeScript's strict null checks have it;
 //! narrowed to the Candidates table by a WHERE the host decided (its
 //! `refinements`), the table's `Changes` land on `Candidates Change`, whose
 //! rows are `Candidates`. `Record` is the live row, an edge.
@@ -84,34 +86,88 @@ fn codes(found: &[(String, String)]) -> Vec<&str> {
     found.iter().map(|(code, _)| code.as_str()).collect()
 }
 
+/// `body` where `c.Current` (or another row) is proved present.
+fn present(row: &str, body: &str) -> Vec<(String, String)> {
+    candidates(&format!("if (exists({row})) {{\n    {body}\n  }}"))
+}
+
 #[test]
 fn a_read_through_a_row_held_inline_is_typed_by_the_rows_type() {
-    assert_eq!(candidates("x = c.Current.Stage"), Vec::<(String, String)>::new());
-    assert_eq!(candidates("x = c.Previous.Name"), Vec::<(String, String)>::new());
+    assert_eq!(present("c.Current", "x = c.Current.Stage"), Vec::<(String, String)>::new());
+    assert_eq!(present("c.Previous", "x = c.Previous.Name"), Vec::<(String, String)>::new());
     // The row's own type: its enum refuses a value it does not hold.
-    assert_eq!(codes(&candidates("x = c.Current.Stage == \"Intervew\"")), ["MOV_ENUM_UNKNOWN_VALUE"]);
+    assert_eq!(codes(&present("c.Current", "x = c.Current.Stage == \"Intervew\"")), ["MOV_ENUM_UNKNOWN_VALUE"]);
 }
 
 #[test]
 fn a_name_the_row_does_not_have_is_refused_naming_its_fields() {
-    let found = candidates("x = c.Current.Stge");
+    let found = present("c.Current", "x = c.Current.Stge");
     assert_eq!(codes(&found), ["MOV_UNKNOWN_PROPERTY"], "{found:#?}");
     assert!(found[0].1.contains("Stge") && found[0].1.contains("Stage"), "{found:#?}");
 }
 
 #[test]
 fn unnarrowed_the_row_is_the_generic_row() {
-    let found = errors_of("function f(c: <at-[:Change]->>) {\n  x = c.Current.Stage\n}\n");
+    let found = errors_of("function f(c: <at-[:Change]->>) {\n  if (exists(c.Current)) {\n    x = c.Current.Stage\n  }\n}\n");
     assert_eq!(codes(&found), ["MOV_UNKNOWN_PROPERTY"], "{found:#?}");
-    assert_eq!(errors_of("function f(c: <at-[:Change]->>) {\n  x = c.Current.Id\n}\n"), Vec::<(String, String)>::new());
+    assert_eq!(errors_of("function f(c: <at-[:Change]->>) {\n  if (exists(c.Current)) {\n    x = c.Current.Id\n  }\n}\n"), Vec::<(String, String)>::new());
 }
 
+/// `Previous` is absent on a created row, `Current` on a deleted one: a
+/// field read through either is refused where it is written, once, with
+/// the tests that prove the row present.
 #[test]
-fn a_row_absent_reads_as_absent() {
-    // `Previous` is absent on a created row, `Current` on a deleted one:
-    // what is read through either may be.
+fn a_field_is_never_read_through_a_row_that_may_be_absent() {
+    let found = candidates("x = c.Previous.Stage");
+    assert_eq!(codes(&found), ["MOV_ABSENT_REQUIRED"], "{found:#?}");
+    for told in ["`exists(c.Previous) && c.Previous.Stage …`", "`!exists(c.Previous) || c.Previous.Stage …`", "`if (exists(c.Previous)) { … }`"] {
+        assert!(found[0].1.contains(told), "{told}: {found:#?}");
+    }
+    // Read on as present once refused: the arithmetic says nothing more.
     assert_eq!(codes(&candidates("x = c.Previous.Score + 1")), ["MOV_ABSENT_REQUIRED"]);
-    assert_eq!(candidates("x = coalesce(c.Previous.Score, 0) + 1"), Vec::<(String, String)>::new());
+    // No fallback reads through it either: the row is tested first.
+    assert_eq!(codes(&candidates("x = coalesce(c.Previous.Score, 0) + 1")), ["MOV_ABSENT_REQUIRED"]);
+    assert_eq!(codes(&candidates("x = c.Previous.Score != null")), ["MOV_ABSENT_REQUIRED"]);
+    // The row itself is read as the value it is, absent or not.
+    assert_eq!(candidates("x = c.Previous == null"), Vec::<(String, String)>::new());
+}
+
+/// `exists(x)` narrows `x` present in the right side of `&&`; `!exists(x)`
+/// in the right side of `||`; either in the arm of an `if` it decides, as
+/// `x != null` always has. The narrowing goes through parentheses, and no
+/// further than the operand it guards.
+#[test]
+fn exists_narrows_a_row_present_where_it_holds() {
+    let clean = Vec::<(String, String)>::new();
+    for body in [
+        "x = exists(c.Previous) && c.Previous.Stage == \"Applied\"",
+        "x = !exists(c.Previous) || c.Previous.Stage != \"Interview\"",
+        "x = exists(c.Current) && (exists(c.Previous) && c.Previous.Stage != c.Current.Stage)",
+        "x = exists(c.Current) && c.Current.Stage == \"Interview\" && (!exists(c.Previous) || c.Previous.Stage != \"Interview\")",
+        "x = exists(c.Previous) ? c.Previous.Score + 1 : 0",
+        "x = c.Previous != null && c.Previous.Score > 1",
+        "if (exists(c.Previous)) {\n    x = c.Previous.Score + 1\n  }",
+        "if (!exists(c.Previous)) {\n    return 0\n  }\n  x = c.Previous.Score + 1",
+        "if (c.Previous != null) {\n    x = c.Previous.Score + 1\n  }",
+        "r = c.Previous\n  if (exists(r)) {\n    x = r.Score + 1\n  }",
+        "r = c.Previous\n  x = exists(r) && r.Stage == \"Applied\"",
+    ] {
+        assert_eq!(candidates(body), clean, "{body}");
+    }
+    for body in [
+        // The wrong connective proves nothing on the right.
+        "x = exists(c.Previous) || c.Previous.Stage == \"Applied\"",
+        "x = !exists(c.Previous) && c.Previous.Stage == \"Applied\"",
+        // The left side is read before any test.
+        "x = c.Previous.Stage == \"Applied\" && exists(c.Previous)",
+        // One row proved is not the other.
+        "x = exists(c.Current) && c.Previous.Stage == \"Applied\"",
+        // An arm's narrowing ends with the arm.
+        "if (exists(c.Previous)) {\n    y = 1\n  }\n  x = c.Previous.Stage",
+        "x = exists(c.Previous) ? 0 : c.Previous.Score",
+    ] {
+        assert_eq!(codes(&candidates(body)), ["MOV_ABSENT_REQUIRED"], "{body}");
+    }
 }
 
 #[test]
@@ -122,9 +178,9 @@ fn read_through_stays_refused_past_any_other_field() {
     assert!(found[0].1.contains("-[:Record]->"), "{found:#?}");
     assert_eq!(codes(&candidates("x = c.Meta.crm_id")), ["MOV_READ_THROUGH_FIELD"]);
     // An edge of the held row is not walked off the value: the live record is `Record`.
-    assert_eq!(codes(&candidates("x = c.Current.Role.Id")), ["MOV_UNKNOWN_PROPERTY"]);
+    assert_eq!(codes(&present("c.Current", "x = c.Current.Role.Id")), ["MOV_UNKNOWN_PROPERTY"]);
     // And a field of the held row is read whole, as any record's is.
-    assert_eq!(codes(&candidates("x = c.Current.Name.first")), ["MOV_TEXT_HAS_NO_FIELDS"]);
+    assert_eq!(codes(&present("c.Current", "x = c.Current.Name.first")), ["MOV_TEXT_HAS_NO_FIELDS"]);
 }
 
 #[test]
@@ -135,15 +191,18 @@ fn the_live_record_is_walked_in_the_function() {
 #[test]
 fn a_listen_judges_the_rows_it_carries_and_never_walks_to_the_live_one() {
     let listen = |where_: &str| errors_of(&format!("function f(c: <at-[:`Candidates Change`]->>) {{\n  return c.Kind\n}}\nlisten to at{NARROWED}-[c:Changes WHERE {where_}]-> fire f\n"));
-    assert_eq!(listen("c.Current.Stage == \"Interview\" AND c.Previous.Stage != \"Interview\""), Vec::<(String, String)>::new());
-    assert_eq!(codes(&listen("c.Current.Stge == \"Interview\"")), ["MOV_UNKNOWN_PROPERTY"]);
+    assert_eq!(
+        listen("exists(c.Current) AND c.Current.Stage == \"Interview\" AND (NOT exists(c.Previous) OR c.Previous.Stage != \"Interview\")"),
+        Vec::<(String, String)>::new()
+    );
+    assert_eq!(codes(&listen("exists(c.Current) AND c.Current.Stge == \"Interview\"")), ["MOV_UNKNOWN_PROPERTY"]);
     let walked = listen("only(c-[:Record]->).Stage == \"Interview\"");
     assert_eq!(codes(&walked), ["MOV_LISTEN_IMPURE_WHERE"], "{walked:#?}");
 }
 
 #[test]
 fn a_listen_on_the_unnarrowed_table_reads_the_generic_row() {
-    let found = errors_of("function f(c: <at-[:Change]->>) {\n  return c.Kind\n}\nlisten to at-[:Tables]->-[c:Changes WHERE c.Current.Stage == \"Interview\"]-> fire f\n");
+    let found = errors_of("function f(c: <at-[:Change]->>) {\n  return c.Kind\n}\nlisten to at-[:Tables]->-[c:Changes WHERE exists(c.Current) AND c.Current.Stage == \"Interview\"]-> fire f\n");
     assert_eq!(codes(&found), ["MOV_UNKNOWN_PROPERTY"], "{found:#?}");
 }
 
@@ -183,13 +242,16 @@ fn a_selected_member_passes_to_a_function_of_its_type() {
 /// never a record a function or a write asks for. The live row is `Record`.
 #[test]
 fn a_held_row_bound_to_a_name_reads_its_fields() {
-    assert_eq!(candidates("r = c.Current\n  x = r.Stage"), Vec::<(String, String)>::new());
-    assert_eq!(codes(&candidates("r = c.Current\n  x = r.Stage == \"Intervew\"")), ["MOV_ENUM_UNKNOWN_VALUE"]);
-    let typo = candidates("r = c.Current\n  x = r.Stge");
+    let held = |body: &str| candidates(&format!("r = c.Current\n  if (exists(r)) {{\n    {body}\n  }}"));
+    assert_eq!(held("x = r.Stage"), Vec::<(String, String)>::new());
+    assert_eq!(codes(&held("x = r.Stage == \"Intervew\"")), ["MOV_ENUM_UNKNOWN_VALUE"]);
+    let typo = held("x = r.Stge");
     assert_eq!(codes(&typo), ["MOV_UNKNOWN_PROPERTY"], "{typo:#?}");
     assert!(typo[0].1.contains("Stage"), "{typo:#?}");
     // Maybe absent through the name, as directly; a guard proves it present.
-    assert_eq!(codes(&candidates("r = c.Previous\n  x = r.Score + 1")), ["MOV_ABSENT_REQUIRED"]);
+    let found = candidates("r = c.Previous\n  x = r.Score + 1");
+    assert_eq!(codes(&found), ["MOV_ABSENT_REQUIRED"]);
+    assert!(found[0].1.contains("`exists(r) && r.Score …`"), "{found:#?}");
     assert_eq!(candidates("r = c.Previous\n  if (r != null) {\n    x = r.Score + 1\n  }"), Vec::<(String, String)>::new());
 }
 
@@ -232,7 +294,7 @@ fn a_maybe_absent_held_row_is_refused_where_a_value_must_be_present() {
 
 #[test]
 fn reading_on_past_a_field_never_points_into_a_walk_off_a_held_row() {
-    let found = candidates("x = c.Current.Role.Id");
+    let found = present("c.Current", "x = c.Current.Role.Id");
     assert_eq!(codes(&found), ["MOV_UNKNOWN_PROPERTY"], "{found:#?}");
     assert!(found[0].1.contains("c-[:Record]->"), "{found:#?}");
     assert!(!found[0].1.contains("Bind the field"), "{found:#?}");
@@ -271,4 +333,40 @@ fn a_walk_off_a_name_that_holds_no_record_is_refused() {
     assert_eq!(codes(&exists), ["MOV_WALK_ROOT_NOT_RECORD"], "{exists:#?}");
     let block = candidates("t = \"x\"\n  t-[:Role]-> {\n    y = 1\n  }");
     assert_eq!(codes(&block), ["MOV_HEAD_NOT_A_POSITION"], "{block:#?}");
+}
+
+/// A listen's WHERE narrows as a function does, in its own spelling: the
+/// row tested by `exists` is present to the right of `AND`, and by `NOT
+/// exists` to the right of `OR`, written through the alias or not.
+#[test]
+fn a_listen_reads_through_a_row_only_once_it_is_tested() {
+    let listen = |where_: &str| errors_of(&format!("function f(c: <at-[:`Candidates Change`]->>) {{\n  return c.Kind\n}}\nlisten to at{NARROWED}-[c:Changes WHERE {where_}]-> fire f\n"));
+    for where_ in [
+        "exists(c.Previous) AND c.Previous.Stage == \"Applied\"",
+        "NOT exists(c.Previous) OR c.Previous.Stage != \"Interview\"",
+        "c.Kind == \"updated\" AND (exists(c.Current) AND (c.Current.Score > 3))",
+        "(exists(c.Current) AND exists(c.Previous) AND c.Current.Stage != c.Previous.Stage) OR (exists(c.Current) AND NOT exists(c.Previous) AND exists(c.Current.Stage))",
+        "c.Previous != null AND c.Previous.Stage == \"Applied\"",
+    ] {
+        assert_eq!(listen(where_), Vec::<(String, String)>::new(), "{where_}");
+    }
+    let found = listen("c.Current.Stage == \"Interview\" AND c.Previous.Stage != \"Interview\"");
+    assert_eq!(codes(&found), ["MOV_ABSENT_REQUIRED", "MOV_ABSENT_REQUIRED"], "{found:#?}");
+    assert!(found[1].1.contains("`exists(c.Previous) AND c.Previous.Stage …`, or `NOT exists(c.Previous) OR c.Previous.Stage …`"), "{found:#?}");
+    for where_ in [
+        "exists(c.Previous) OR c.Previous.Stage == \"Applied\"",
+        "NOT exists(c.Previous) AND c.Previous.Stage == \"Applied\"",
+        "exists(c.Current) AND c.Previous.Stage == \"Applied\"",
+    ] {
+        assert_eq!(codes(&listen(where_)), ["MOV_ABSENT_REQUIRED"], "{where_}");
+    }
+}
+
+/// What a map holds may be absent too: no field is read through it untested.
+#[test]
+fn a_field_is_never_read_through_a_map_member_that_may_be_absent() {
+    let found = candidates("d = { a: c.Previous }\n  x = d.a.Score");
+    assert_eq!(codes(&found), ["MOV_ABSENT_REQUIRED"], "{found:#?}");
+    assert!(found[0].1.contains("'d.a' may be absent"), "{found:#?}");
+    assert_eq!(candidates("d = { a: c.Previous }\n  if (exists(d.a)) {\n    x = d.a.Score\n  }"), Vec::<(String, String)>::new());
 }

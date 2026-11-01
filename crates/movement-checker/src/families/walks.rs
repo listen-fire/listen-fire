@@ -325,6 +325,8 @@ pub fn report_edge_read_as_field(typing: &mut Typing, position: &Position, read:
 /// spells it (`c`), so a refusal can spell the walk to the live record.
 pub struct HeldRead<'a> {
     pub spelled: String,
+    /// The value's code (`c.Previous`, `r`).
+    pub subject: String,
     pub holder: Option<&'a str>,
     pub held: &'a HeldRecord,
 }
@@ -342,6 +344,31 @@ impl HeldRead<'_> {
             (None, _) => format!("walk it off the live record, reached from the record {} was read off", self.spelled),
         }
     }
+}
+
+/// `MOV_ABSENT_REQUIRED`: a field read through a value that may be absent
+/// (`c.Previous.Stage`, where a created row has no previous), as TypeScript
+/// refuses `x.F` where `x` may be undefined. `exists(x)` proves it present in
+/// the right side of an AND, `NOT exists(x)` in the right side of an OR, and
+/// either in the arm of an `if` it decides.
+pub fn report_read_through_absent(typing: &mut Typing, subject: &str, field: &str) {
+    // A nested call's staged value (`r[0]`, `only(…)` read on): a test of
+    // the expression (`r[0] != null`) does not narrow the name it is staged
+    // under, so its read stays typed as it was.
+    if subject.chars().any(|c| crate::families::calls::is_nested_call_name(&c.to_string())) {
+        return;
+    }
+    let read = format!("{subject}.{}", quote_name(field));
+    let message = if typing.hop_where.is_some() {
+        format!(
+            "'{subject}' may be absent, and '{read}' reads through it. Test it first: `exists({subject}) AND {read} …`, or `NOT exists({subject}) OR {read} …`."
+        )
+    } else {
+        format!(
+            "'{subject}' may be absent, and '{read}' reads through it. Test it first: `exists({subject}) && {read} …`, `!exists({subject}) || {read} …`, or read it inside `if (exists({subject})) {{ … }}`."
+        )
+    };
+    typing.report(codes::ABSENT_REQUIRED, message);
 }
 
 /// `MOV_WALK_OFF_HELD_RECORD`: a walk off what a `record` field holds. It
@@ -371,7 +398,7 @@ pub fn report_walk_off_held(typing: &mut Typing, read: &HeldRead, steps: &[Trave
 /// other value has no record to point to.
 pub fn report_walk_off_value(typing: &mut Typing, spelled: &str, ty: &Ty, steps: &[TraversalStep]) {
     if let Some(held) = crate::types::field::held_record_in(ty) {
-        let read = HeldRead { spelled: spelled.to_string(), holder: None, held };
+        let read = HeldRead { spelled: spelled.to_string(), subject: spelled.trim_matches('\'').to_string(), holder: None, held };
         report_walk_off_held(typing, &read, steps);
         return;
     }
@@ -1245,7 +1272,7 @@ impl crate::checker::Checker<'_> {
             PathRoot::Expression { expr } => expr.raw.clone(),
         };
         if let Ty::HeldRecord(fields) = crate::types::field::strip_absent(&value) {
-            let read = HeldRead { spelled: format!("'{spelled}'"), holder: None, held: fields };
+            let read = HeldRead { spelled: format!("'{spelled}'"), subject: spelled.clone(), holder: None, held: fields };
             let message = format!(
                 "'{spelled}' is {}, not the record, and a value has no edges to walk: {}",
                 describe_field_type(&Ty::HeldRecord(fields.clone())),

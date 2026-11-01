@@ -238,6 +238,18 @@ fn a_narrowing_key_does_not_depend_on_how_the_field_read_is_spelled() {
 fn presence_and_walks() {
     same("exists(msg-[:Attachments]->)", "EXISTS(msg-[:Attachments]->)");
     assert_eq!(upgraded("EXISTS(ch.`Topic`)"), "ch.`Topic` != null");
+    // From 0.13 `exists` also takes a name or a field read off one: its presence.
+    for value in ["exists(r)", "exists(c.Previous)"] {
+        assert!(findings(value).is_empty(), "{value}: {:?}", findings(value));
+    }
+    assert_eq!(lowered("exists(c.Previous)"), lowered("c.Previous != null"));
+    // In a hop's WHERE, a field read through the alias is the bare field, as
+    // `c.Previous` itself reads there.
+    let in_where = "at-[c:Changes WHERE exists(c.Previous) AND c.Previous.Stage == \"x\"]->";
+    assert!(findings(in_where).is_empty(), "{:?}", findings(in_where));
+    assert_eq!(lowered(in_where), lowered("at-[c:Changes WHERE c.Previous != null AND c.Previous.Stage == \"x\"]->"));
+    // Anything else is no value read: its presence is written `!= null`.
+    assert_eq!(upgraded("exists(f(x))"), "f(x) != null");
     // Inside walk brackets nothing is respelled: CAPS words, AND, any case.
     let walk = "crm-[c:Companies WHERE c.Categories == \"Customer\" AND LOWER(c.Name) CONTAINS \"x\" ORDER BY c.`Created At` DESC LIMIT 10]->";
     assert!(findings(walk).is_empty(), "{:?}", findings(walk));

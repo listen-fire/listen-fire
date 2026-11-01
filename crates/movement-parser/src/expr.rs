@@ -1657,7 +1657,8 @@ mod tests {
         assert_eq!(tree("where")["kind"], "name");
         assert_eq!(tree("null")["value"], Value::Null);
         assert_eq!(tree("EXISTS(x)")["callee"]["name"]["text"], "EXISTS");
-        assert_eq!(tree("exists(x)")["callee"]["name"]["text"], "exists");
+        assert_eq!(tree("exists(-[:a]->)")["callee"]["name"]["text"], "EXISTS");
+        assert_eq!(tree("exists(x)")["callee"]["name"]["text"], "EXISTS");
         assert_eq!(tree("x EXISTS")["kind"], "exists");
     }
 

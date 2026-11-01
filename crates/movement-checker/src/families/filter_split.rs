@@ -424,6 +424,10 @@ pub fn spell(expr: &Expression, alias: Option<&str>) -> String {
                 .collect();
             format!("[{}]", items.join(", "))
         }
+        // A presence test is spelled as the program asks it: `exists(c.Previous)`.
+        Expression::Compare { op: FilterOperator::Neq, left, right } if is_field_read(left) && matches!(**right, Expression::Static { value: StaticValue::Null }) => {
+            format!("exists({})", spell(left, alias))
+        }
         Expression::Compare { op, left, right } => {
             let word = match op {
                 FilterOperator::Eq => "==",
@@ -453,7 +457,21 @@ pub fn spell(expr: &Expression, alias: Option<&str>) -> String {
                 .collect::<Vec<_>>()
                 .join(word)
         }
-        Expression::Not { expression } => format!("NOT ({})", spell(expression, alias)),
+        Expression::Not { expression } => match &**expression {
+            Expression::Compare { .. } if spell(expression, alias).starts_with("exists(") => format!("NOT {}", spell(expression, alias)),
+            _ => format!("NOT ({})", spell(expression, alias)),
+        },
         _ => "…".to_string(),
+    }
+}
+
+/// A field read (`c.Previous`, `c.Current.Stage`), as `exists(…)` takes one.
+fn is_field_read(expr: &Expression) -> bool {
+    match expr {
+        Expression::Property { property_type_id, .. } | Expression::EdgeProperty { property_type_id, .. } => {
+            property_type_id != crate::types::narrowing::POSITION_SENTINEL
+        }
+        Expression::Traverse { alias_root: Some(_), steps, expression } if steps.is_empty() => is_field_read(expression),
+        _ => false,
     }
 }

@@ -262,28 +262,27 @@ impl Judge<'_> {
         // Each leaf is read by what it is, never by parsing its key back: a
         // hop's alias read off that hop's record, read on through a record a
         // field holds (`c.Current.Stage`); any other name off this hop's.
-        let mut leaves: HashMap<String, Js> = HashMap::new();
-        for leaf in pure_leaf_reads(conjunct).unwrap_or_default() {
-            let value = match leaf {
-                Expression::AliasRef { name } | Expression::Property { property_type_id: name, field_only: false } | Expression::EdgeProperty { property_type_id: name, field_only: false } => {
-                    match alias(name) {
-                        Some(j) => record(j).cloned().unwrap_or(Js::Undefined),
-                        None => field(i, name),
-                    }
-                }
-                Expression::Traverse { alias_root: Some(root), expression, .. } => match (alias(root), held_read(leaf)) {
-                    (Some(j), Some((_, held, members))) => read_on(field(j, held), &members),
-                    (Some(j), None) => match expression.as_ref() {
-                        Expression::Property { property_type_id: name, .. } | Expression::EdgeProperty { property_type_id: name, .. } | Expression::AliasRef { name } => field(j, name),
-                        _ => Js::Undefined,
-                    },
-                    (None, _) => field(i, &leaf_read_key(leaf)),
+        // A leaf is read only when the evaluation reaches it, so the side of
+        // an AND or OR its other side decides (`exists(c.Previous) AND
+        // c.Previous.Stage == …` on a created row) is never read, and cannot
+        // leave the conjunct undecided by what it would have read.
+        let value_of = |leaf: &Expression| match leaf {
+            Expression::AliasRef { name } | Expression::Property { property_type_id: name, field_only: false } | Expression::EdgeProperty { property_type_id: name, field_only: false } => match alias(name) {
+                Some(j) => record(j).cloned().unwrap_or(Js::Undefined),
+                None => field(i, name),
+            },
+            Expression::Traverse { alias_root: Some(root), expression, .. } => match (alias(root), held_read(leaf)) {
+                (Some(j), Some((_, held, members))) => read_on(field(j, held), &members),
+                (Some(j), None) => match expression.as_ref() {
+                    Expression::Property { property_type_id: name, .. } | Expression::EdgeProperty { property_type_id: name, .. } | Expression::AliasRef { name } => field(j, name),
+                    _ => Js::Undefined,
                 },
-                _ => continue,
-            };
-            leaves.insert(leaf_read_key(leaf), value);
-        }
-        let read = |key: &str| leaves.get(key).cloned().unwrap_or(Js::Undefined);
+                (None, _) => field(i, &leaf_read_key(leaf)),
+            },
+            _ => Js::Undefined,
+        };
+        let leaves: HashMap<String, &Expression> = pure_leaf_reads(conjunct).unwrap_or_default().into_iter().map(|leaf| (leaf_read_key(leaf), leaf)).collect();
+        let read = |key: &str| leaves.get(key).map_or(Js::Undefined, |leaf| value_of(leaf));
         let now_ms = self.now_ms;
         let ask: &AskCompare = &|op: FilterOperator, left: Js, right: Js| -> Comparing {
             Box::pin(async move {

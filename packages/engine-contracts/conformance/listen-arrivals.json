@@ -1,5 +1,5 @@
 {
-  "about": "Whether an arrival fires a listen, by its plan's filters. Each plan is the checker's answer for its listen's source against `catalog` (both runners check that it still is). Only hops judged on arrival are judged, each against the record the arrival carries for it: `landing` for the last hop, `parents` (aligned to the plan's `carries`) for earlier ones. Each record states its `recordType`, which must be the record type its hop lands on (`to`): one edge name may hang off several record types (`pay`'s Customer and Invoice each have `Changes`), and a record of another type skips at its hop, the landing judged first; a record that states none is undecided. A hop's checked part is always evaluated; its taken part too, unless `takenApplied` says the module applied it. `now` is the instant WITHIN measures from. The verdict is `{fires: true}`, `{skips: n}` (the hop whose filter fails, outermost 0; with a `reason` when the record carried for that hop is of another record type, so no filter was read), or `{undecided: reason}` (the host logs it and runs nothing). Held by listen-fire's Rust (crates/movement-engine/src/listen_judge.rs, judge_arrival), the engine's TypeScript (judgeArrival, through the wasm) and the hosted product. A read on through a record a field holds (`c.Current.Stage`) reads that field of the landing, then the member of what it holds; a record absent reads its members absent. A record may name the fields its module could not read (`unknown`): a conjunct reading one is undecided, whatever `fields` holds for it, never read as absent; a hop that fails still decides.",
+  "about": "Whether an arrival fires a listen, by its plan's filters. Each plan is the checker's answer for its listen's source against `catalog` (both runners check that it still is). Only hops judged on arrival are judged, each against the record the arrival carries for it: `landing` for the last hop, `parents` (aligned to the plan's `carries`) for earlier ones. Each record states its `recordType`, which must be the record type its hop lands on (`to`): one edge name may hang off several record types (`pay`'s Customer and Invoice each have `Changes`), and a record of another type skips at its hop, the landing judged first; a record that states none is undecided. A hop's checked part is always evaluated; its taken part too, unless `takenApplied` says the module applied it. `now` is the instant WITHIN measures from. The verdict is `{fires: true}`, `{skips: n}` (the hop whose filter fails, outermost 0; with a `reason` when the record carried for that hop is of another record type, so no filter was read), or `{undecided: reason}` (the host logs it and runs nothing). Held by listen-fire's Rust (crates/movement-engine/src/listen_judge.rs, judge_arrival), the engine's TypeScript (judgeArrival, through the wasm) and the hosted product. A read on through a record a field holds (`c.Current.Stage`) reads that field of the landing, then the member of what it holds; a record absent reads its members absent. The checker has the listen test a record present before it reads through it (`exists(c.Current) AND c.Current.Stage == …`), and an operand of AND or OR is read only when the operands before it leave the answer open, so a read the test guards is never read on an absent record. A record may name the fields its module could not read (`unknown`): a conjunct reading one is undecided, whatever `fields` holds for it, never read as absent; a hop that fails still decides.",
   "catalog": {
     "adapters": {
       "chat": {
@@ -1097,7 +1097,7 @@
       }
     },
     "moved": {
-      "source": "import { rows as rows_module } from adapters; rows = connect rows_module\nfunction moved(c: <rows-[:`Candidates Change`]->>) { return c.Current.Stage }\nlisten to rows-[t:Tables WHERE t.Name == \"Candidates\"]->-[c:Changes WHERE c.Current.Stage == \"Interview\" AND c.Previous.Stage != \"Interview\"]-> fire moved\n",
+      "source": "import { rows as rows_module } from adapters; rows = connect rows_module\nfunction moved(c: <rows-[:`Candidates Change`]->>) { return c.Kind }\nlisten to rows-[t:Tables WHERE t.Name == \"Candidates\"]->-[c:Changes WHERE exists(c.Current) AND c.Current.Stage == \"Interview\" AND (NOT exists(c.Previous) OR c.Previous.Stage != \"Interview\")]-> fire moved\n",
       "plan": {
         "adapter": "rows",
         "connection": "rows",
@@ -1129,6 +1129,19 @@
               "operands": [
                 {
                   "left": {
+                    "fieldOnly": true,
+                    "propertyTypeId": "Current",
+                    "type": "edge_property"
+                  },
+                  "op": "neq",
+                  "right": {
+                    "type": "static",
+                    "value": null
+                  },
+                  "type": "compare"
+                },
+                {
+                  "left": {
                     "aliasRoot": "c",
                     "expression": {
                       "aliasRoot": "Current",
@@ -1150,26 +1163,48 @@
                   "type": "compare"
                 },
                 {
-                  "left": {
-                    "aliasRoot": "c",
-                    "expression": {
-                      "aliasRoot": "Previous",
+                  "op": "or",
+                  "operands": [
+                    {
                       "expression": {
-                        "propertyTypeId": "Stage",
-                        "type": "edge_property"
+                        "left": {
+                          "fieldOnly": true,
+                          "propertyTypeId": "Previous",
+                          "type": "edge_property"
+                        },
+                        "op": "neq",
+                        "right": {
+                          "type": "static",
+                          "value": null
+                        },
+                        "type": "compare"
                       },
-                      "steps": [],
-                      "type": "traverse"
+                      "type": "not"
                     },
-                    "steps": [],
-                    "type": "traverse"
-                  },
-                  "op": "neq",
-                  "right": {
-                    "type": "static",
-                    "value": "Interview"
-                  },
-                  "type": "compare"
+                    {
+                      "left": {
+                        "aliasRoot": "c",
+                        "expression": {
+                          "aliasRoot": "Previous",
+                          "expression": {
+                            "propertyTypeId": "Stage",
+                            "type": "edge_property"
+                          },
+                          "steps": [],
+                          "type": "traverse"
+                        },
+                        "steps": [],
+                        "type": "traverse"
+                      },
+                      "op": "neq",
+                      "right": {
+                        "type": "static",
+                        "value": "Interview"
+                      },
+                      "type": "compare"
+                    }
+                  ],
+                  "type": "logical"
                 }
               ],
               "type": "logical"
@@ -1181,6 +1216,227 @@
           }
         ],
         "movement": "moved"
+      }
+    },
+    "restaged": {
+      "source": "import { rows as rows_module } from adapters; rows = connect rows_module\nfunction restaged(c: <rows-[:`Candidates Change`]->>) { return c.Kind }\nlisten to rows-[t:Tables WHERE t.Name == \"Candidates\"]->-[c:Changes WHERE (exists(c.Current) AND exists(c.Previous) AND c.Current.Stage != c.Previous.Stage) OR (exists(c.Current) AND NOT exists(c.Previous) AND exists(c.Current.Stage)) OR (NOT exists(c.Current) AND exists(c.Previous) AND exists(c.Previous.Stage))]-> fire restaged\n",
+      "plan": {
+        "adapter": "rows",
+        "connection": "rows",
+        "hops": [
+          {
+            "alias": "t",
+            "edge": "Tables",
+            "from": "",
+            "judged": "resolved",
+            "taken": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Name",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "Candidates"
+              },
+              "type": "compare"
+            },
+            "to": "Table"
+          },
+          {
+            "alias": "c",
+            "checked": {
+              "op": "or",
+              "operands": [
+                {
+                  "op": "and",
+                  "operands": [
+                    {
+                      "left": {
+                        "fieldOnly": true,
+                        "propertyTypeId": "Current",
+                        "type": "edge_property"
+                      },
+                      "op": "neq",
+                      "right": {
+                        "type": "static",
+                        "value": null
+                      },
+                      "type": "compare"
+                    },
+                    {
+                      "left": {
+                        "fieldOnly": true,
+                        "propertyTypeId": "Previous",
+                        "type": "edge_property"
+                      },
+                      "op": "neq",
+                      "right": {
+                        "type": "static",
+                        "value": null
+                      },
+                      "type": "compare"
+                    },
+                    {
+                      "left": {
+                        "aliasRoot": "c",
+                        "expression": {
+                          "aliasRoot": "Current",
+                          "expression": {
+                            "propertyTypeId": "Stage",
+                            "type": "edge_property"
+                          },
+                          "steps": [],
+                          "type": "traverse"
+                        },
+                        "steps": [],
+                        "type": "traverse"
+                      },
+                      "op": "neq",
+                      "right": {
+                        "aliasRoot": "c",
+                        "expression": {
+                          "aliasRoot": "Previous",
+                          "expression": {
+                            "propertyTypeId": "Stage",
+                            "type": "edge_property"
+                          },
+                          "steps": [],
+                          "type": "traverse"
+                        },
+                        "steps": [],
+                        "type": "traverse"
+                      },
+                      "type": "compare"
+                    }
+                  ],
+                  "type": "logical"
+                },
+                {
+                  "op": "and",
+                  "operands": [
+                    {
+                      "left": {
+                        "fieldOnly": true,
+                        "propertyTypeId": "Current",
+                        "type": "edge_property"
+                      },
+                      "op": "neq",
+                      "right": {
+                        "type": "static",
+                        "value": null
+                      },
+                      "type": "compare"
+                    },
+                    {
+                      "expression": {
+                        "left": {
+                          "fieldOnly": true,
+                          "propertyTypeId": "Previous",
+                          "type": "edge_property"
+                        },
+                        "op": "neq",
+                        "right": {
+                          "type": "static",
+                          "value": null
+                        },
+                        "type": "compare"
+                      },
+                      "type": "not"
+                    },
+                    {
+                      "left": {
+                        "aliasRoot": "c",
+                        "expression": {
+                          "aliasRoot": "Current",
+                          "expression": {
+                            "propertyTypeId": "Stage",
+                            "type": "edge_property"
+                          },
+                          "steps": [],
+                          "type": "traverse"
+                        },
+                        "steps": [],
+                        "type": "traverse"
+                      },
+                      "op": "neq",
+                      "right": {
+                        "type": "static",
+                        "value": null
+                      },
+                      "type": "compare"
+                    }
+                  ],
+                  "type": "logical"
+                },
+                {
+                  "op": "and",
+                  "operands": [
+                    {
+                      "expression": {
+                        "left": {
+                          "fieldOnly": true,
+                          "propertyTypeId": "Current",
+                          "type": "edge_property"
+                        },
+                        "op": "neq",
+                        "right": {
+                          "type": "static",
+                          "value": null
+                        },
+                        "type": "compare"
+                      },
+                      "type": "not"
+                    },
+                    {
+                      "left": {
+                        "fieldOnly": true,
+                        "propertyTypeId": "Previous",
+                        "type": "edge_property"
+                      },
+                      "op": "neq",
+                      "right": {
+                        "type": "static",
+                        "value": null
+                      },
+                      "type": "compare"
+                    },
+                    {
+                      "left": {
+                        "aliasRoot": "c",
+                        "expression": {
+                          "aliasRoot": "Previous",
+                          "expression": {
+                            "propertyTypeId": "Stage",
+                            "type": "edge_property"
+                          },
+                          "steps": [],
+                          "type": "traverse"
+                        },
+                        "steps": [],
+                        "type": "traverse"
+                      },
+                      "op": "neq",
+                      "right": {
+                        "type": "static",
+                        "value": null
+                      },
+                      "type": "compare"
+                    }
+                  ],
+                  "type": "logical"
+                }
+              ],
+              "type": "logical"
+            },
+            "edge": "Changes",
+            "from": "Table",
+            "judged": "arrival",
+            "to": "Change"
+          }
+        ],
+        "movement": "restaged"
       }
     }
   },
@@ -1236,6 +1492,12 @@
     {"case": "a field its module could not read that no filter reads changes nothing", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1"}, "unknown": ["By"]}, "parents": [{"recordType": "Channel", "fields": {"Name": "office"}}, {"recordType": "Message", "fields": {"Topic": "lunch-poll", "Posted At": "2026-10-30T10:00:00Z"}, "unknown": ["Mentions App"]}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
     {"case": "a press whose own value its module could not read is undecided at Interactions", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1"}, "unknown": ["Value"]}, "parents": [{"recordType": "Channel", "fields": {"Name": "office"}}, {"recordType": "Message", "fields": {"Topic": "lunch-poll", "Posted At": "2026-10-30T10:00:00Z"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "chat could not read Value of the arrival on Interactions, which this listen's filter reads"}},
     {"case": "a hop that fails decides over a field its module could not read", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1"}}, "parents": [{"recordType": "Channel", "fields": {"Id": "C1"}, "unknown": ["Name"]}, {"recordType": "Message", "fields": {"Topic": "standup", "Posted At": "2026-10-30T10:00:00Z"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a deleted row (neither row held) does not fire: the listen tests each row before it reads through it", "plan": "moved", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "14:recADA", "Kind": "deleted"}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a field change: a row moved from Applied to Interview changed Stage", "plan": "restaged", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "15:recADA", "Kind": "updated", "Current": {"Id": "recADA", "Name": "Ada", "Stage": "Interview"}, "Previous": {"Id": "recADA", "Name": "Ada", "Stage": "Applied"}}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a field change: a row edited with Stage unchanged did not", "plan": "restaged", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "16:recADA", "Kind": "updated", "Current": {"Id": "recADA", "Name": "Ada L.", "Stage": "Applied"}, "Previous": {"Id": "recADA", "Name": "Ada", "Stage": "Applied"}}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a field change: a row created holding Stage changed it, as in 0.12", "plan": "restaged", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "17:recADA", "Kind": "created", "Current": {"Id": "recADA", "Name": "Ada", "Stage": "Applied"}}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a field change: a row created without Stage did not", "plan": "restaged", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "18:recADA", "Kind": "created", "Current": {"Id": "recADA", "Name": "Ada"}}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a field change: a row deleted (neither row held) did not", "plan": "restaged", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "19:recADA", "Kind": "deleted"}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
     {"case": "a read through a held row its module could not read is undecided", "plan": "moved", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "13:recADA", "Kind": "updated", "Current": {"Id": "recADA", "Name": "Ada", "Stage": "Interview"}}, "unknown": ["Previous"]}}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "rows could not read Previous of the arrival on Changes, which this listen's filter reads"}}
   ]
 }

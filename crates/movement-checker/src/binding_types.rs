@@ -88,6 +88,14 @@ impl Checker<'_> {
                     }
                 }
                 PresenceProof::Field { property, .. } => {
+                    if symbol.types.pos.is_none()
+                        && let Some(map) = symbol.types.field.as_ref().and_then(|f| crate::types::infer::dict_with_member_present(f, property))
+                    {
+                        narrowed.types.field = Some(map);
+                        let narrowed = self.scopes.add_symbol(narrowed);
+                        self.scopes.declare(into, narrowed);
+                        continue;
+                    }
                     let Some(position) = symbol_position(&symbol.types) else { continue };
                     let Some(position) = narrow_present(&position, property) else { continue };
                     narrowed.types.pos = Some(position);

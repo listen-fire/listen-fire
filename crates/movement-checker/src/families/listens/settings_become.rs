@@ -428,11 +428,27 @@ fn field_change(statement: &ListenDeclaration, change: &FieldChange, alias: &str
         }),
     };
     let compare = |op, left, right| Expression::Compare { op, left: Box::new(left), right: Box::new(right) };
+    let null = || Expression::Static { value: StaticValue::Null };
+    // A row is absent on one side of a change (a created row has no
+    // previous), and a field is never read through an absent row: each read
+    // follows the test that its row exists.
+    let exists = |row: &str| compare(FilterOperator::Neq, Expression::EdgeProperty { property_type_id: row.to_string(), field_only: true }, null());
+    let missing = |row: &str| Expression::Not { expression: Box::new(exists(row)) };
+    let and = |operands| Expression::Logical { op: LogicalOp::And, operands };
+    let or = |operands| Expression::Logical { op: LogicalOp::Or, operands };
+    let (current, previous) = (change.current.as_str(), change.previous.as_str());
     let comparisons = match literal(&change.becomes)? {
-        None => vec![compare(FilterOperator::Neq, read(&change.current), read(&change.previous))],
+        // 0.12 compared the field on both sides, an absent row's as absent:
+        // a created row with the field set changed it, as a deleted one did.
+        None => vec![or(vec![
+            and(vec![exists(current), exists(previous), compare(FilterOperator::Neq, read(current), read(previous))]),
+            and(vec![exists(current), missing(previous), compare(FilterOperator::Neq, read(current), null())]),
+            and(vec![missing(current), exists(previous), compare(FilterOperator::Neq, read(previous), null())]),
+        ])],
         Some(value) => vec![
-            compare(FilterOperator::Eq, read(&change.current), Expression::Static { value: value.clone() }),
-            compare(FilterOperator::Neq, read(&change.previous), Expression::Static { value }),
+            exists(current),
+            compare(FilterOperator::Eq, read(current), Expression::Static { value: value.clone() }),
+            or(vec![missing(previous), compare(FilterOperator::Neq, read(previous), Expression::Static { value })]),
         ],
     };
     Ok(Some((field, comparisons)))
