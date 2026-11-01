@@ -1,30 +1,24 @@
 // Airtable TG adapter — implements the translation-graph `Adapter` contract
-// for Airtable as a write target plus the reads that support it (P-parity:
-// Airtable has a v3 OUTPUT only, so parity = the target/write side). The
-// source-trigger side (snapshot/poll) is deferred; the adapter declares no
-// triggers and leaves `webhookEventTypeId` undefined.
+// for Airtable: reads, writes, and the arrivals a listen hears (a table's
+// `Changes`, a base's `Tables`) through Airtable's webhooks.
 //
 // The host supplies the client (from the install's credential) and the files
 // an attachment write exposes.
 
-import type { ModuleFiles } from 'module-kit';
+import type { EnsureEdgeSubscriptionInput, ModuleFiles, RefreshEdgeSubscriptionInput, RemoveEdgeSubscriptionInput } from 'module-kit';
+import type { ArrivalsCapability, AwaitHead, AwaitKey } from 'engine-contracts';
 import type {
   AdapterManifest,
   DeleteInput,
   DeleteResult,
-  DiscriminableEvent,
   EdgesFromResult,
-  EnsureEventSubscriptionInput,
   EventSubscriptionRefresh,
   EventSubscriptionRegistration,
-  EventType,
   GetFieldValueInput,
   GetRelatedInput,
   ParentLink,
   RelatedResult,
   ReadInput,
-  RefreshEventSubscriptionInput,
-  RemoveEventSubscriptionInput,
   ResolveEntityInput,
   ResolveEntityResult,
   UpdateInput,
@@ -45,7 +39,6 @@ import { AIRTABLE_MANIFEST } from './manifest';
 import {
   META_RECORD_TYPE,
   makeStablePosition,
-  makeUnstablePosition,
   positionData,
 } from 'movement-engine/public/catalog';
 import { BaseAdapter } from 'module-kit/adapter/base';
@@ -57,37 +50,39 @@ import {
   type AirtableTableId,
 } from './types';
 import {
+  AIRTABLE_BASES_EDGE,
   allTableEntryPoints,
+  basesEntryPoint,
   basesForWalk,
   entryPointsForBase,
+  listenedEntryPoints,
   resolveBaseId,
   BASE_META_TYPE,
   TABLE_META_TYPE,
-  baseMetaEntryPoint,
   describeBaseMeta,
+  describeChange,
+  describeRow,
   describeTableMeta,
-  describeRecordChange,
-  recordChangeEntryPoint,
   describe as catalogDescribe,
   describeBase,
   describeTableAt,
   cachedTables,
+  invalidateTableCache,
   loadTableCatalog,
+  tablesEntryPoint,
   type TableCatalog,
 } from './schema_catalog';
 import {
-  AIRTABLE_EVENT_OLD_RECORD_EDGE,
-  AIRTABLE_EVENT_OLD_RECORD_EDGE_NAME,
-  AIRTABLE_EVENT_RECORD_EDGE,
-  AIRTABLE_EVENT_RECORD_EDGE_NAME,
-  AIRTABLE_EVENT_TYPE_NAME,
-  AIRTABLE_WEBHOOK_RECORD_TYPE,
-  airtableChangeTypes,
-  airtableEventTypes,
+  AIRTABLE_CHANGE_RECORD_EDGE,
+  AIRTABLE_CHANGE_TYPE,
+  AIRTABLE_CHANGES_EDGE,
+  AIRTABLE_ROW_TYPE,
+  AIRTABLE_TABLES_EDGE,
   airtablePingSchema,
-  airtableScope,
-  eventRecordRef,
-  eventsFromPayload,
+  arrivalsFromPayload,
+  changeDataOf,
+  changesTables,
+  type AirtableArrival,
   type FieldsByTable,
 } from './webhook';
 import {
@@ -112,8 +107,6 @@ export class AirtableAdapter extends BaseAdapter {
 
   readonly supportedTriggers = AIRTABLE_MANIFEST.supportedTriggers;
 
-  /** No synthetic event positions — unstable positions never resolve here. */
-  readonly webhookEventTypeId = undefined;
 
   private apiClient: AirtableAPIClient | null = null;
   private readonly teamId: string;
@@ -205,7 +198,8 @@ export class AirtableAdapter extends BaseAdapter {
     if (baseId) {
       const client = await this.getApiClient();
       return [
-        recordChangeEntryPoint(),
+        tablesEntryPoint(),
+        ...listenedEntryPoints({ positioned: true }),
         ...(await entryPointsForBase({ client, teamId: this.teamId, baseId })),
       ];
     }
@@ -216,7 +210,7 @@ export class AirtableAdapter extends BaseAdapter {
     // Costs NOTHING: both entries are static facts, so the unpositioned root
     // no longer even pays its `listBases` here (the walk pays it, once, when
     // someone follows the edge).
-    return [recordChangeEntryPoint(), baseMetaEntryPoint()];
+    return [basesEntryPoint(), ...listenedEntryPoints({ positioned: false })];
   }
 
   /**
@@ -241,15 +235,10 @@ export class AirtableAdapter extends BaseAdapter {
     const tables = baseId
       ? await entryPointsForBase({ client, teamId: this.teamId, baseId })
       : await allTableEntryPoints({ client, teamId: this.teamId });
-    // The EVENT node rides along. The tables are here because the resolver's
-    // real job is name → field id for reads and writes, which a base cannot
-    // answer (see the note above) — but the event node is a type the engine
-    // ALSO hands this resolver at runtime, when a movement walks the `Record`
-    // edge off a `Record Change` position. Leaving it out meant that edge
-    // resolved to nothing and was reported as workspace DRIFT, which is a lie:
-    // the type is a static fact about the adapter, and describing it costs no
-    // call.
-    return [recordChangeEntryPoint(), ...tables];
+    // The types a listen lands on ride along: the engine hands this resolver
+    // a `Change` when a movement walks its `Record` edge, and a type that is a
+    // static fact about the adapter is never workspace drift.
+    return [...listenedEntryPoints({ positioned: baseId !== undefined }), ...tables];
   }
 
   protected override readonly resolver: ScopedResolver = memoizedResolver({
@@ -268,12 +257,10 @@ export class AirtableAdapter extends BaseAdapter {
     // free, like every unnarrowed meta node: its shape is a fact about the
     // adapter, not the workspace.
     if (typeId === TABLE_META_TYPE) return describeTableMeta();
-    // The event node, by either name — the entry's typeId or its display name.
-    // Costs nothing: an event's shape is a fact about the adapter, not about
-    // the workspace, so there is no call to make.
-    if (typeId === AIRTABLE_WEBHOOK_RECORD_TYPE || typeId === AIRTABLE_EVENT_TYPE_NAME) {
-      return describeRecordChange();
-    }
+    // What a listen lands on costs nothing to describe: a change's shape is a
+    // fact about the adapter, not about the workspace.
+    if (typeId === AIRTABLE_CHANGE_TYPE) return describeChange();
+    if (typeId === AIRTABLE_ROW_TYPE) return describeRow();
     const client = await this.getApiClient();
     return catalogDescribe({ client, teamId: this.teamId, typeId });
   }
@@ -300,15 +287,9 @@ export class AirtableAdapter extends BaseAdapter {
       // Positioned at a base (`base:` arg) — the construction already walked
       // us there, so the root's edges ARE that base's tables. Unpositioned,
       // the root's edges are the bases. Same model, different cursor.
-      //
-      // The EVENT edge rides both, because it belongs to the META node and to
-      // no base: a listen hands you the event, so reaching it must not require
-      // having walked to a container. `listEntryPoints` publishes it on both
-      // branches too — the entry list and the walk are the same node's edges,
-      // and must not disagree.
       const baseId = await this.entryBaseId();
-      const hop = baseId ? await this.baseHop(baseId) : await this.rootHop();
-      return hop ? await this.withTargets(this.withEventEdge(hop)) : hop;
+      const hop = baseId ? await this.baseHop(baseId, { positioned: true }) : await this.rootHop();
+      return this.withTargets(hop);
     }
 
     if (position.recordType === BASE_META_TYPE && position.identity.kind === 'stable') {
@@ -317,7 +298,7 @@ export class AirtableAdapter extends BaseAdapter {
       // write path is the same one the positioned root offers. For an
       // UNPOSITIONED instance this edge is the only place a row create can be
       // authored at all — the root publishes only the read-only `Base`.
-      return this.withTargets(await this.baseHop(position.identity.recordId));
+      return this.withTargets(await this.baseHop(position.identity.recordId, { positioned: false }));
     }
 
     if (position.recordType === TABLE_META_TYPE && position.identity.kind === 'stable') {
@@ -340,10 +321,9 @@ export class AirtableAdapter extends BaseAdapter {
     return null;
   }
 
-  /** The root's edges: the ONE polymorphic `Base` edge, its members riding
-   *  `targetPositions` with the path on to each. The named per-base spellings
-   *  were dropped from the root (entries and walk agree); narrowing selects a
-   *  member and follows its path — same landing, same single fetch. */
+  /** The root's edges: the ONE `Bases` edge, its members riding
+   *  `targetPositions` with the path on to each; narrowing selects a member
+   *  and follows its path — same landing, same single fetch. */
   private async rootHop(): Promise<EdgesFromResult> {
     const client = await this.getApiClient();
     const bases = await basesForWalk({ client, teamId: this.teamId });
@@ -358,8 +338,8 @@ export class AirtableAdapter extends BaseAdapter {
           // and the walk are the same node's edges, and an absent flag here
           // would default to a write claim the entry list denies.
           {
-            fieldId: BASE_META_TYPE,
-            name: BASE_META_TYPE,
+            fieldId: AIRTABLE_BASES_EDGE,
+            name: AIRTABLE_BASES_EDGE,
             targetTypeId: BASE_META_TYPE,
             cardinality: 'many' as const,
             writable: false,
@@ -388,26 +368,15 @@ export class AirtableAdapter extends BaseAdapter {
   }
 
   /**
-   * Add the meta node's EVENT edge to a root hop.
-   *
-   * It carries no `targetPositions` entry, and that is not an omission: a path
-   * is a route to a node that EXISTS, and an event doesn't exist until it
-   * fires. So the event node is reached by naming it (`describe('Record
-   * Change')`, which costs nothing — an event's shape is a fact about the
-   * adapter, not the workspace), never by following a path to an instance.
-   *
-   */
-  /**
    * What each of this hop's edges LANDS ON.
    *
    * Bases and tables are STUBBED: naming one means a `listTables` or a
    * `getTableColumns` against Airtable, and a hop has an edge per container —
    * hydrating would fetch the workspace to answer "what is in here".
    *
-   * The EVENT edge is hydrated, because its descriptor is static (no call) and
-   * its fields — which base, which table, which action — are exactly what an
-   * author needs to write a listener. Stub what is expensive, not everything.
-   *
+   * The meta nodes a listen walks through (`Table`, `Change`) are hydrated:
+   * their descriptors are static (no call). Stub what is expensive, not
+   * everything.
    */
   private async withTargets(hop: EdgesFromResult | null): Promise<EdgesFromResult | null> {
     if (!hop) return null;
@@ -415,55 +384,27 @@ export class AirtableAdapter extends BaseAdapter {
       descriptor: hop.descriptor,
       describe: (typeId) => this.describe(typeId),
       stubTarget: (reference) =>
-        reference.targetTypeId === AIRTABLE_WEBHOOK_RECORD_TYPE
+        reference.targetTypeId === TABLE_META_TYPE || reference.targetTypeId === BASE_META_TYPE
           ? undefined
           : stubTargetOf({ typeId: reference.targetTypeId }),
     });
     return { ...hop, ...(targetNodes !== undefined ? { targetNodes } : {}) };
   }
 
-  private withEventEdge(hop: EdgesFromResult): EdgesFromResult {
-    return {
-      ...hop,
-      descriptor: {
-        ...hop.descriptor,
-        references: [
-          {
-            fieldId: AIRTABLE_WEBHOOK_RECORD_TYPE,
-            name: AIRTABLE_EVENT_TYPE_NAME,
-            targetTypeId: AIRTABLE_WEBHOOK_RECORD_TYPE,
-            cardinality: 'many' as const,
-            // You are TOLD of a change; you cannot list the ones that happened,
-            // and you cannot write one.
-            readable: false,
-            writable: false,
-            // `fires` IS this edge's promise, and it has to be stated HERE.
-            // The entry point declares it (`recordChangeEntryPoint`), but the
-            // walk is a separate statement of the same edge — and read/write
-            // both being false left the walk saying "no promises", i.e. a dead
-            // edge, for the one thing a listener author is looking for.
-            fires: true,
-          },
-          ...hop.descriptor.references,
-        ],
-      },
-    };
-  }
-
   /** One base's edges: its tables, each pathed by `{baseId, tableId}` — the
    *  route a table can't be reached without. Every table edge promises write
    *  (see `describeBase`): creating a row is THE Airtable operation, and it
    *  resolves the table by name however the caller got there. */
-  private async baseHop(baseId: string): Promise<EdgesFromResult | null> {
+  private async baseHop(baseId: string, at: { positioned: boolean }): Promise<EdgesFromResult | null> {
     const client = await this.getApiClient();
-    const descriptor = await describeBase({ client, teamId: this.teamId, baseId });
+    const descriptor = await describeBase({ client, teamId: this.teamId, baseId, positioned: at.positioned });
     if (!descriptor) return null;
     return {
       descriptor,
       targetPositions: Object.fromEntries(
         // `describeBase` keys each table edge by its raw tableId — the fieldId
         // the caller looks the path up under.
-        descriptor.references.map((reference) => [
+        descriptor.references.filter((reference) => reference.fieldId !== AIRTABLE_TABLES_EDGE).map((reference) => [
           reference.fieldId,
           makeStablePosition({
             adapterType: this.adapterType,
@@ -533,99 +474,49 @@ export class AirtableAdapter extends BaseAdapter {
   }
 
   async getRelated(input: GetRelatedInput): Promise<RelatedResult[]> {
-    // The event node's `Record` edge: the row that changed. The event carries
-    // the row's id, its table's name and its changed fields, so hydration is a
-    // MINT and not a fetch — Attio pays an API call here; Airtable's payload
-    // already said everything.
-    //
-    // Two things used to make this branch dead, and the row that fired a
-    // listener was unreachable because of them:
-    //
-    //   - it compared the RAW `input.fieldId`, which arrives as the edge's
-    //     natural name (`Record`) while this dispatches on the id (`record`),
-    //     so the names never met. Every other adapter's getRelated resolves
-    //     first; this one didn't.
-    //   - it required `!isStablePosition`. Event positions are ADDRESSED, and
-    //     therefore stable, since `8_event_edges.md` — the guard encoded the
-    //     pre-address assumption and rejected every real event.
-    //
-    // What identifies an event position is that it CARRIES AN EVENT REF, so ask
-    // that first: it costs nothing, and it scopes the name resolution to
-    // positions whose type genuinely IS the event node. Resolving at the top of
-    // `getRelated` instead would drag every other hop — the meta `Base`
-    // collection especially — through a type-scoped lookup it was never meant
-    // for, and report the miss as drift.
-    const event = eventRecordRef(positionData(input.position));
-    // The edge arrives under EITHER currency: its natural name (`Record`) from
-    // a movement's traversal, or the id (`record`) from a caller that already
-    // resolved. Accept both and never throw for a miss — a position carrying an
-    // event ref is ours, and the honest answer for anything else is an empty
-    // traversal, not drift.
-    const namesEventRecordEdge =
-      input.fieldId === AIRTABLE_EVENT_RECORD_EDGE ||
-      input.fieldId === AIRTABLE_EVENT_RECORD_EDGE_NAME;
-    if (input.direction === 'outgoing' && namesEventRecordEdge) {
-      // Not one of our event positions — yield nothing rather than guess. An
-      // empty traversal is the framework's clean no-op.
-      if (!event) return [];
-      return [
-        {
-          position: makeStablePosition({
-            adapterType: this.adapterType,
-            // The TABLE's name, so field reads resolve against the right table.
-            recordType: event.tableName,
-            recordId: event.record,
-            data: event.fields,
-          }),
-        },
-      ];
+    // A change's `Record` edge: the row it changed, as the change left it. The
+    // change carries the row's id, its table's name and its cells, so
+    // following it is a mint, never a read.
+    const outgoing = input.direction === 'outgoing';
+    if (outgoing && input.fieldId === AIRTABLE_CHANGE_RECORD_EDGE) {
+      const change = changeDataOf(positionData(input.position));
+      if (change !== null) {
+        return [{ position: makeStablePosition({ adapterType: this.adapterType, recordType: change.row.table, recordId: change.row.id, data: change.row.cells }) }];
+      }
     }
 
-    // The event node's `Old Record` edge: the row as it was, minted from the
-    // previous values the event carries. UNSTABLE, unlike `Record`: a past
-    // state of the row cannot be re-read, and stamping it with the live row's
-    // identity would let it pass for the row as it is now.
-    const namesOldRecordEdge =
-      input.fieldId === AIRTABLE_EVENT_OLD_RECORD_EDGE ||
-      input.fieldId === AIRTABLE_EVENT_OLD_RECORD_EDGE_NAME;
-    if (input.direction === 'outgoing' && namesOldRecordEdge) {
-      if (!event) return [];
-      return [
-        {
-          position: makeUnstablePosition({
-            adapterType: this.adapterType,
-            recordType: event.tableName,
-            data: event.previous,
-          }),
-        },
-      ];
-    }
-
-    // The `Base` collection off the meta root — the `base:` entry-position
-    // options. Each base projects as a stable position labelled by its name, so
-    // the catalog can enumerate/validate the `base:` arg (and the author gets a
-    // base picker). Intercept before the table-traversal path, which would
-    // resolve the meta recordType to no ids and degrade to empty.
-    if (
-      input.direction === 'outgoing' &&
-      input.position.recordType === META_RECORD_TYPE &&
-      input.fieldId === BASE_META_TYPE
-    ) {
+    // The root's `Bases`: every base, by `Name` and `Id` (what a listen's
+    // WHERE narrows them by), as the `base:` construction arg's options too.
+    if (outgoing && input.position.recordType === META_RECORD_TYPE && input.fieldId === AIRTABLE_BASES_EDGE) {
       const client = await this.getApiClient();
-      const bases = await client.listBases();
+      const bases = await basesForWalk({ client, teamId: this.teamId });
       return bases.map((b) => ({
-        position: makeStablePosition({
-          adapterType: this.adapterType,
-          recordType: BASE_META_TYPE,
-          recordId: b.id,
-          data: { Name: b.name },
-        }),
+        position: makeStablePosition({ adapterType: this.adapterType, recordType: BASE_META_TYPE, recordId: b.id, data: { Name: b.name, Id: b.id } }),
       }));
     }
+
+    // A base's `Tables` (a positioned root's are its base's): each table by
+    // `Name` and `Id`, carrying its base, the route on to it.
+    const tablesOf =
+      !outgoing || input.fieldId !== AIRTABLE_TABLES_EDGE
+        ? undefined
+        : input.position.recordType === META_RECORD_TYPE
+          ? await this.entryBaseId()
+          : input.position.recordType === BASE_META_TYPE && input.position.identity.kind === 'stable'
+            ? input.position.identity.recordId
+            : undefined;
+    if (tablesOf !== undefined) {
+      const client = await this.getApiClient();
+      const tables = await cachedTables({ client, teamId: this.teamId, baseId: tablesOf });
+      return tables.map((table) => ({
+        position: makeStablePosition({ adapterType: this.adapterType, recordType: TABLE_META_TYPE, recordId: table.id, data: { Name: table.name, Id: table.id, baseId: tablesOf } }),
+      }));
+    }
+
     // A COLLECTION hop — the records in a table, reached from a CONTAINER
     // rather than from a record: the root of a base-positioned instance
     // (`at-[c:`Deals`]->`), or a base you traversed to
-    // (`-[b:Base WHERE `Name` == "CRM"]->-[c:`Deals`]->`). Both surfaces are
+    // (`-[b:Bases WHERE b.Name == "CRM"]->-[c:Deals]->`). Both surfaces are
     // published readable, so both must read; before this the first threw (a
     // meta position isn't a record) and the second silently returned nothing.
     // The container supplies the base, which is what makes the bare table name
@@ -636,7 +527,7 @@ export class AirtableAdapter extends BaseAdapter {
         : input.position.recordType === BASE_META_TYPE && input.position.identity.kind === 'stable'
           ? input.position.identity.recordId
           : undefined;
-    if (input.direction === 'outgoing' && containerBaseId !== undefined) {
+    if (outgoing && containerBaseId !== undefined) {
       const client = await this.getApiClient();
       const tables = await cachedTables({
         client,
@@ -656,7 +547,7 @@ export class AirtableAdapter extends BaseAdapter {
       });
     }
 
-    // The UNPOSITIONED root has exactly one collection — `Base`, handled
+    // The UNPOSITIONED root has exactly one collection — `Bases`, handled
     // above. Anything else off the meta node is unknown: empty, like every
     // other unresolved name (and never the record path, whose fallback would
     // pay a workspace walk to answer nothing).
@@ -767,106 +658,104 @@ export class AirtableAdapter extends BaseAdapter {
     return recordReadRecord({ client, ids, read: input });
   }
 
-  // ── 7. Inbound webhook triggers (notify-then-pull) ───────────────────────
-  // Airtable pings us with only ids (`{ base, webhook }`); the actual changes
-  // are PULLED from the webhook's payload feed. `preprocessInbound` is the I/O
-  // half of the shared inbound seam — drain the feed from the persisted cursor,
-  // split each payload into per-record events, return the advanced cursor as the
-  // checkpoint the handler persists. The registration + signature halves live on
-  // `ensureEventSubscription`/`removeEventSubscription` + the webhook_sync
-  // provider; pure parsing lives in `./webhook`.
+  // ── 7. Arrivals (notify-then-pull) ────────────────────────────────────────
+  // Airtable pings with only ids (`{ base, webhook }`); the changes are PULLED
+  // from the webhook's payload feed, from the cursor the host keeps for the
+  // webhook, and each becomes an arrival (webhook.ts): a row's change on its
+  // table's `Changes`, a table made, renamed or removed on its base's `Tables`.
 
-  async preprocessInbound(input: {
-    raw: unknown;
-    checkpoint?: unknown;
-  }): Promise<{ events: DiscriminableEvent[]; checkpoint?: unknown }> {
+  async preprocessInbound(input: { raw: unknown; checkpoint?: unknown }): Promise<{ events: []; arrivals: AirtableArrival[]; checkpoint?: unknown }> {
     const ping = airtablePingSchema.safeParse(input.raw);
-    if (!ping.success) return { events: [] };
+    if (!ping.success) return { events: [], arrivals: [] };
     const { base, webhook } = ping.data;
     const client = await this.getApiClient();
+    const positioned = (await this.entryBaseId()) === base.id;
 
-    // The base's `fieldId → { name, type }` maps, so changed cell values
-    // (Airtable keys them by field id) become name-keyed record data the
-    // movement reads by natural field name. A metadata failure degrades to
-    // id-keyed data rather than dropping the delivery.
+    // Drain from the persisted cursor (default 1 = from the webhook's start).
+    // The page loop is bounded so a misbehaving feed can't spin forever; the
+    // host keeps the returned cursor only once the arrivals are kept.
+    let cursor = typeof input.checkpoint === 'number' ? input.checkpoint : 1;
+    const payloads = [];
+    const MAX_PAGES = 1000;
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const result = await client.listPayloads({ baseId: base.id, webhookId: webhook.id, cursor });
+      payloads.push(...result.payloads);
+      cursor = result.cursor;
+      if (!result.mightHaveMore) break;
+    }
+    // A table made, renamed or removed: what this module holds of the base's
+    // tables is stale, and a listen narrowed by them lists them again now.
+    if (payloads.some(changesTables)) {
+      invalidateTableCache(this.teamId, base.id);
+      this.tableCatalogCache = undefined;
+    }
+    const context = { baseId: base.id, positioned, ...(await this.fieldsOf(base.id)) };
+    return { events: [], arrivals: payloads.flatMap((payload) => arrivalsFromPayload(payload, context)), checkpoint: cursor };
+  }
+
+  /** The base's `fieldId → { name, type }` maps and table names, so cells
+   *  (keyed by field id) are read by name. A metadata failure leaves them
+   *  keyed by id rather than dropping the delivery. */
+  private async fieldsOf(baseId: string): Promise<{ fieldsByTable: FieldsByTable; tableNamesById: Map<string, string> }> {
     const fieldsByTable: FieldsByTable = new Map();
-    // …and each table's display NAME, off the same metadata — the row position's
-    // type, so the event's `Record` edge names the row without a second lookup.
     const tableNamesById = new Map<string, string>();
     try {
-      const tables = await cachedTables({ client, teamId: this.teamId, baseId: base.id });
-      for (const table of tables) {
+      const client = await this.getApiClient();
+      for (const table of await cachedTables({ client, teamId: this.teamId, baseId })) {
         fieldsByTable.set(table.id, new Map(table.fields.map((f) => [f.id, { name: f.name, type: f.type }])));
         tableNamesById.set(table.id, table.name);
       }
     } catch (err) {
-      logger.warn('[AirtableAdapter.preprocessInbound] table metadata unavailable — emitting id-keyed fields', {
+      logger.warn('[AirtableAdapter.preprocessInbound] table metadata unavailable — reading fields by id', {
         teamId: this.teamId,
-        baseId: base.id,
+        baseId,
         error: err instanceof Error ? err.message : String(err),
       });
     }
+    return { fieldsByTable, tableNamesById };
+  }
 
-    // Drain from the persisted cursor (default 1 = from the webhook's start).
-    // The page loop is bounded so a misbehaving feed can't spin forever; the
-    // handler persists the returned cursor only after the batch dispatches.
-    let cursor = typeof input.checkpoint === 'number' ? input.checkpoint : 1;
-    const events: DiscriminableEvent[] = [];
-    const MAX_PAGES = 1000;
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const result = await client.listPayloads({ baseId: base.id, webhookId: webhook.id, cursor });
-      for (const payload of result.payloads) {
-        events.push(
-          ...eventsFromPayload({ payload, fieldsByTable, baseId: base.id, tableNamesById }),
-        );
+  /** A run waits on a table's `Changes` under the table's id, and on a base's
+   *  `Tables` under the base's: the key each arrival on them names. Airtable's
+   *  ids say what they are (`tbl…`, `app…`), so no two collide. */
+  readonly arrivals: ArrivalsCapability = {
+    awaitKeys: async ({ edge, heads }: { edge: string; heads: AwaitHead[] }): Promise<AwaitKey[]> => {
+      if (edge !== AIRTABLE_CHANGES_EDGE && edge !== AIRTABLE_TABLES_EDGE) {
+        throw new Error(`airtable: '${edge}' is not a listenable edge (only '${AIRTABLE_CHANGES_EDGE}' and '${AIRTABLE_TABLES_EDGE}')`);
       }
-      cursor = result.cursor;
-      if (!result.mightHaveMore) break;
-    }
-    return { events, checkpoint: cursor };
-  }
+      return heads.map((head) => ({ key: head.recordId }));
+    },
+  };
 
-  async listEventTypes(): Promise<EventType[]> {
-    return airtableEventTypes();
-  }
+  // ── Event subscriptions (one webhook per subscription) ────────────────────
+  // A table's `Changes` is a webhook scoped to the table (`recordChangeScope`)
+  // taking every change kind; a base's `Tables` is a webhook on the base
+  // taking its schema (`tableMetadata`). Airtable webhooks belong to a base,
+  // so a table's is registered on the base the table is in.
 
-  // ── Event subscriptions (the listen-reconciliation seam) ─────────────────
-  // REAL provisioning against Airtable's per-base webhook API, scoped to one
-  // table via `recordChangeScope`. Airtable has no PATCH for a webhook's
-  // filters, so a changed event set is a delete-then-recreate (the secret is
-  // re-issued, which is fine — the reconciler persists whatever comes back).
-
-  async ensureEventSubscription(
-    input: EnsureEventSubscriptionInput,
-  ): Promise<EventSubscriptionRegistration | undefined> {
-    const scope = airtableScope(input.scope);
-    if (!scope) return undefined;
+  async ensureEventSubscription(input: EnsureEdgeSubscriptionInput): Promise<EventSubscriptionRegistration | undefined> {
+    const at = await this.webhookScope(input);
     const client = await this.getApiClient();
-    const changeTypes = airtableChangeTypes(input.events);
-
     if (input.current?.externalId !== undefined) {
-      const unchanged =
-        input.current.events.length === input.events.length &&
-        input.current.events.every((e) => input.events.includes(e));
-      if (unchanged && (await this.asksForEveryInclude(client, scope.base, input.current.externalId))) return undefined;
-      // Recreate with the new selection, or the new specification — drop the superseded webhook first so
-      // we don't leak registrations (best-effort; a stale one expires anyway).
-      await client.deleteWebhook({ baseId: scope.base, webhookId: input.current.externalId }).catch((err) => {
+      if (at.tableId === undefined || (await this.asksForEveryInclude(client, at.baseId, input.current.externalId))) return undefined;
+      // Registered before a webhook asked for what it asks for now: drop it
+      // and register anew (best-effort; a stale one expires anyway).
+      await client.deleteWebhook({ baseId: at.baseId, webhookId: input.current.externalId }).catch((err) => {
         logger.warn('[AirtableAdapter] failed to delete superseded webhook before recreate', {
           error: err instanceof Error ? err.message : String(err),
         });
       });
     }
-
     const created = await client.createWebhook({
-      baseId: scope.base,
+      baseId: at.baseId,
       notificationUrl: input.callbackUrl,
-      tableId: scope.table,
-      changeTypes,
+      ...(at.tableId !== undefined
+        ? { tableId: at.tableId, changeTypes: ['add', 'update', 'remove'] }
+        : { dataTypes: ['tableMetadata'] as const, changeTypes: ['add', 'update', 'remove'] }),
     });
-    // macSecretBase64 is issued ONLY here — persist it as the inbound HMAC key.
-    // A webhook lapses 7 days on unless refreshed: the host refreshes it
-    // before `expiresAt`.
+    // macSecretBase64 is issued ONLY here — the host keeps it as the inbound
+    // MAC key. A webhook lapses 7 days on unless refreshed: the host
+    // refreshes it before `expiresAt`.
     return {
       externalId: created.webhookId,
       secret: created.macSecretBase64,
@@ -889,28 +778,65 @@ export class AirtableAdapter extends BaseAdapter {
     }
   }
 
-  async removeEventSubscription(input: RemoveEventSubscriptionInput): Promise<void> {
+  async removeEventSubscription(input: RemoveEdgeSubscriptionInput): Promise<void> {
     if (input.externalId === undefined) return;
-    const scope = airtableScope(input.scope);
-    if (!scope) return;
+    const at = await this.webhookScope(input);
     const client = await this.getApiClient();
-    await client.deleteWebhook({ baseId: scope.base, webhookId: input.externalId });
+    await client.deleteWebhook({ baseId: at.baseId, webhookId: input.externalId });
   }
 
   /**
    * Extend a registered webhook's 7-day expiry. Airtable disables inactive
-   * webhooks after 7 days; an inbound delivery (which pulls payloads) already
-   * extends the window, so only quiet webhooks need this — driven by the
-   * platform's airtable_webhook_refresh worker, and by `listen-fire` before the
-   * `expiresAt` the registration returned (adapter protocol 2.4). Answers
-   * when it now expires.
+   * webhooks after 7 days; a delivery (which pulls payloads) already extends
+   * the window, so only quiet webhooks need this — `listen-fire` refreshes
+   * one before the `expiresAt` its registration returned. Answers when it now
+   * expires.
    */
-  async refreshEventSubscription(input: RefreshEventSubscriptionInput): Promise<EventSubscriptionRefresh | undefined> {
-    const scope = airtableScope(input.scope);
-    if (!scope) return undefined;
+  async refreshEventSubscription(input: RefreshEdgeSubscriptionInput): Promise<EventSubscriptionRefresh | undefined> {
+    const at = await this.webhookScope(input);
     const client = await this.getApiClient();
-    const refreshed = await client.refreshWebhook({ baseId: scope.base, webhookId: input.externalId });
+    const refreshed = await client.refreshWebhook({ baseId: at.baseId, webhookId: input.externalId });
     return refreshed.expirationTime !== undefined ? { expiresAt: refreshed.expirationTime } : {};
+  }
+
+  /**
+   * The base a subscription's webhook belongs to, and for a table's `Changes`
+   * the table: a `Changes` subscription is scoped by its table, a `Tables`
+   * one by its base (or, at a positioned root, the connection's base).
+   */
+  private async webhookScope(input: { edge: string; scope?: string }): Promise<{ baseId: string; tableId?: string }> {
+    if (input.edge === AIRTABLE_CHANGES_EDGE) {
+      if (input.scope === undefined) throw new Error(`airtable: a subscription to '${AIRTABLE_CHANGES_EDGE}' names the table it is for`);
+      return { baseId: await this.baseOfTable(input.scope), tableId: input.scope };
+    }
+    if (input.edge === AIRTABLE_TABLES_EDGE) {
+      const baseId = input.scope ?? (await this.entryBaseId());
+      if (baseId === undefined) throw new Error(`airtable: a subscription to '${AIRTABLE_TABLES_EDGE}' names the base it is for`);
+      return { baseId };
+    }
+    throw new Error(`airtable: '${input.edge}' is not a listenable edge (only '${AIRTABLE_CHANGES_EDGE}' and '${AIRTABLE_TABLES_EDGE}')`);
+  }
+
+  /** The base a table is in: the connection's own when it is positioned,
+   *  else the one whose tables list it. A table made since they were read is
+   *  found by reading them again. */
+  private async baseOfTable(tableId: string): Promise<string> {
+    const positioned = await this.entryBaseId();
+    if (positioned !== undefined) return positioned;
+    const find = async () => {
+      const client = await this.getApiClient();
+      for (const base of await basesForWalk({ client, teamId: this.teamId })) {
+        const tables = await cachedTables({ client, teamId: this.teamId, baseId: base.id });
+        if (tables.some((t) => t.id === tableId)) return base.id;
+      }
+      return undefined;
+    };
+    const found = await find();
+    if (found !== undefined) return found;
+    for (const base of await basesForWalk({ client: await this.getApiClient(), teamId: this.teamId })) invalidateTableCache(this.teamId, base.id);
+    const again = await find();
+    if (again === undefined) throw new Error(`airtable: no base this connection can see holds table ${tableId}`);
+    return again;
   }
 
   // ── Internal: lazy API client construction ──────────────────────────────

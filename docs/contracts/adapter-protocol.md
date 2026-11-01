@@ -681,7 +681,11 @@ overrides; you state it because Listen-Fire has none of its own.
   - `parentChanges: "pushed"` — you report when a member is created, renamed
     or removed, as an arrival on this edge itself (so it must be
     `listenable`), and a listen re-resolves on each such arrival listen-fire
-    receives, never on a clock;
+    receives, never on a clock. listen-fire subscribes to (or polls) the edge
+    for the listen itself; one with `delivery: "scope"` that hangs off a
+    record is subscribed to once per record it hangs off (Airtable's
+    `Tables`: `ensureEventSubscription({ edge: "Tables", scope: <base id> })`,
+    one schema webhook per base);
   - `relistEverySeconds` — how often, in seconds, its members should be re-listed.
     `lf.yaml`'s `resolveEvery` overrides it.
 

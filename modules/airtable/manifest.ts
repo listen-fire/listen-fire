@@ -4,14 +4,15 @@
 
 import type { AdapterManifest } from 'movement-engine/public/adapter';
 
-import { AIRTABLE_ADAPTER_TYPE, BASE_META_TYPE, TABLE_META_TYPE } from './types';
-import { AIRTABLE_SUBSCRIBABLE_EVENTS } from './webhook';
+import { AIRTABLE_HANDBOOK_SECTION } from './handbook_section';
+import { AIRTABLE_BASES_EDGE } from './schema_catalog';
+import { AIRTABLE_ADAPTER_TYPE, BASE_META_TYPE } from './types';
+import { AIRTABLE_CHANGE_KINDS, AIRTABLE_CHANGES_EDGE, AIRTABLE_TABLES_EDGE } from './webhook';
 
 /**
- * Static manifest. A full create/update/delete write surface makes it writable;
- * `webhook` triggers light up the source side — a movement fires when records
- * change in a watched (base, table).
- *
+ * Static manifest. A full create/update/delete write surface makes it
+ * writable; a table's `Changes` and a base's `Tables` are what a listen hears,
+ * through Airtable's webhooks (one per table, one per base).
  */
 export const AIRTABLE_MANIFEST: AdapterManifest = {
   adapterType: AIRTABLE_ADAPTER_TYPE,
@@ -20,28 +21,27 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
   category: 'Spreadsheets',
   description:
     'Airtable. Read your bases, create, update, or delete rows from your ' +
-    'movements, and run movements when records change in a table.',
+    'movements, and run movements when rows change in a table.',
   authoringHints:
     'Each Airtable base holds its own tables, so this connection publishes ' +
-    'ONE `Base` collection, not the tables. Reach a base by narrowing it — ' +
-    '`-[b:Base WHERE `Name` == "Sales CRM"]->` — or describe it by name ' +
-    '(`types: ["Sales CRM"]`); its tables come back as that base\'s edges. To ' +
-    'write to a table, start the instance at its base — ' +
+    'ONE `Bases` collection, not the tables. Reach a base by narrowing it — ' +
+    '`-[b:Bases WHERE b.Name == "Sales CRM"]->` — and its tables come back as that ' +
+    'base\'s edges. To write to a table, start the instance at its base — ' +
     '`airtable(credentials: acme, base: "Sales CRM")` — and the base\'s tables ' +
-    'become the types you name, by their own names (`Companies`) — the base is ' +
-    'already the instance, so it is not repeated in the name. Without `base:` ' +
-    'the instance sits at the whole workspace, where no table is nameable. ' +
-    'One base per instance: to reach a second base, construct a second ' +
-    'instance.',
+    'become the types you name, by their own names (`Companies`). One base per ' +
+    'instance: to reach a second base, construct a second instance. To run on a ' +
+    'table\'s changes, listen on its `Changes`: ' +
+    '`listen to at-[b:Bases WHERE b.Name == "Finance"]->-[t:Tables WHERE t.Name == "Expenses"]->-[c:Changes WHERE c.Kind == "created"]-> fire f`.',
   supportedTriggers: ['webhook'],
   methods: [
     'listEntryPoints', 'describe', 'edgesFrom', 'resolveEntity', 'getFieldValue',
     'getRelated', 'createRecord', 'updateRecord', 'deleteRecord', 'readRecord',
-    'preprocessInbound', 'listEventTypes', 'ensureEventSubscription', 'removeEventSubscription', 'refreshEventSubscription',
+    'preprocessInbound', 'awaitKeys', 'ensureEventSubscription', 'removeEventSubscription', 'refreshEventSubscription',
   ],
   requiredCredentialType: 'AIRTABLE',
   triggerKinds: ['AIRTABLE'],
   introspectedSchema: true,
+  handbookSection: AIRTABLE_HANDBOOK_SECTION,
   vocabulary: {
     icon: {
       d: 'M11.992 1.966c-.434 0-.87.086-1.28.257L1.779 5.917c-.503.208-.49.908.012 1.116l8.982 3.558a3.266 3.266 0 0 0 2.454 0l8.982-3.558c.503-.196.503-.908.012-1.116l-8.957-3.694a3.255 3.255 0 0 0-1.272-.257zM23.4 8.056a.589.589 0 0 0-.222.045l-10.012 3.877a.612.612 0 0 0-.38.564v8.896a.6.6 0 0 0 .821.552L23.62 18.1a.583.583 0 0 0 .38-.551V8.653a.6.6 0 0 0-.6-.596zM.676 8.095a.644.644 0 0 0-.48.19C.086 8.396 0 8.53 0 8.69v8.355c0 .442.515.737.908.54l6.27-3.006.307-.147 2.969-1.436c.466-.22.43-.908-.061-1.092L.883 8.138a.57.57 0 0 0-.207-.044z',
@@ -51,56 +51,36 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
   // The change kinds a `listen to <airtable> { events: [...] }` can subscribe
   // to — projected as the `events` listen-config value vocabulary and folded
   // into the external webhook registration's `changeTypes`.
-  subscribableEvents: [...AIRTABLE_SUBSCRIBABLE_EVENTS],
-  // Airtable webhooks are per-(base, table): two listens on different tables
-  // need distinct registrations, so (base, table) joins (adapter, credential)
-  // as the subscription-channel identity.
-  subscriptionScopeKeys: ['base', 'table'],
   // Entry position: `airtable(credentials: X, base: "MASTER")` starts the
-  // instance AT that base, so its tables are the types a movement names. This
-  // is the auto-traversal that makes a table nameable — omitted, the instance
-  // sits at the workspace root, where the types are the BASES and no table is
-  // nameable (naming a table needs a base: by walking to it, or by this).
-  // Value enum = the base names, drawn from the `Base` collection off the meta
-  // node.
+  // instance AT that base, so its tables are the types a movement names.
+  // Omitted, the instance sits at the workspace root, where the types are the
+  // BASES and no table is nameable by name. Value enum = the base names, drawn
+  // from the `Bases` collection off the meta node.
   positionArgs: [{ name: 'base', optionsFrom: BASE_META_TYPE, label: 'Base' }],
-  // `base` + `table` are required routing config — a listen must name the
-  // watched table; `events` (optional) defaults to all change kinds.
-  //
-  // They are also the ADDRESS of the table the event's `Record` edge lands on.
-  // A listen is shorthand for a WHERE checked against the movement's signature;
-  // the event is narrowed only by the address the SIGNATURE names
-  // (`<hiring-[:\`Record Change\` WHERE \`table\` == "tbl…"]->>`), so a
-  // movement that reads the row's fields, or a listen with `field`, names the
-  // table there too. A two-hop path
-  // (base first, then only THAT base's tables) — never a fanout across bases.
-  // Both match on `Id` because a listen names by id while type-space addresses
-  // by name; `rootHop`/`baseHop` publish `Id` on the members for exactly this.
-  listenConfig: [
-    { key: 'base', required: true, narrows: { collection: BASE_META_TYPE, matchField: 'Id' } },
-    { key: 'table', required: true, narrows: { collection: TABLE_META_TYPE, matchField: 'Id' } },
-    // `field: "Stage"` fires only on a change that touched that field;
-    // `becomes: "Interview"` (with `field`) only when its new value is that
-    // and its previous one was not. Gated by the host's listen scope gate
-    // over the event's `changedFields` and its new and previous values. The
-    // checker holds `field` to the narrowed table's fields and `becomes` to
-    // that field's type (a select's choices), and refuses both when the
-    // movement's signature names no table.
-    { key: 'field', format: 'field' },
-    { key: 'becomes', format: 'field-value' },
-  ],
+  // A 0.12 listen (`{ base, table, events, field, becomes }`) is a listen on
+  // the table's `Changes`: the base and table narrow their hops by `Id`, the
+  // events by `Kind`, the field and the value it becomes by `Field` and `New`.
+  // A connection positioned at the base drops the `Bases` hop.
+  listenSettingsBecome: {
+    path: [AIRTABLE_BASES_EDGE, AIRTABLE_TABLES_EDGE, AIRTABLE_CHANGES_EDGE],
+    aliases: ['b', 't', 'c'],
+    // The 0.12 event a fired parameter was typed as.
+    paramFrom: 'Record Change',
+    keys: {
+      base: { hop: 0, field: 'Id', op: 'eq' },
+      table: { hop: 1, field: 'Id', op: 'eq' },
+      events: { hop: 2, field: 'Kind', op: 'in', values: Object.fromEntries(AIRTABLE_CHANGE_KINDS.map((kind) => [`record.${kind}`, kind])) },
+      field: { hop: 2, field: 'Field', op: 'eq' },
+      becomes: { hop: 2, field: 'New', op: 'eq' },
+    },
+  },
   triggerExpectation:
-    'A listener watches ONE Airtable table — the base + table named on the ' +
-    'listen — with the webhook managed automatically. Airtable notifies that ' +
-    'something changed and Listen-Fire pulls the actual changes, so events arrive ' +
-    'as record created/updated/deleted for that table, usually within ' +
-    'seconds but coalesced by Airtable (rapid edits can land as one batch). ' +
-    'A listen can narrow to one field (`field: "Stage"`) and to the value it ' +
-    'changes to (`becomes: "Interview"`); the movement\'s signature must then name ' +
-    'the table (`<hiring-[:`Record Change` WHERE `table` == "tbl…"]->>`), which also ' +
-    'types the row\'s fields on `Record` and `Old Record`. The event names its changed fields; ' +
-    'its `Record` edge is the whole row as the change left it (its id is `Id`), and its ' +
-    '`Old Record` edge holds the changed fields\' previous values. ' +
-    'Do not promise cross-table or whole-base capture from one listener — ' +
-    'each watched table is its own listen.',
+    'Listen-Fire registers one Airtable webhook per table a listen on its `Changes` watches, and one ' +
+    'per base whose tables the listen narrows by a WHERE (Airtable\'s schema webhook). Airtable notifies ' +
+    'that something changed and Listen-Fire pulls the changes, usually within seconds but coalesced by ' +
+    'Airtable (rapid edits can land as one batch). A change arrives on its table\'s `Changes`: a row ' +
+    'created, a field of it updated (one change per field: `Field` names it, `Old` and `New` what it held) ' +
+    'or deleted; its `Record` is the row as the change left it. A table renamed into or out of a listen\'s ' +
+    'WHERE is watched, or no longer, from the moment Airtable reports the rename; changes it had before ' +
+    'are not replayed.',
 };

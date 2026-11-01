@@ -378,11 +378,12 @@ impl<R: Reader> LfDoors<'_, R> {
     }
 
     /// The arrivals of `arrivals` that landed on an edge a listen of the
-    /// connection they came for is on: what is judged against those listens.
+    /// connection they came for is on, or resolves a hop on: what is judged
+    /// against those listens, or lists their heads again.
     pub(crate) fn landed_for_listens(&self, adapter_type: &str, credential: Option<&str>, arrivals: &[ArrivalIn]) -> Vec<ArrivalIn> {
         arrivals
             .iter()
-            .filter(|arrival| !arrival.gone && self.listens.iter().any(|l| l.is_on(adapter_type, &arrival.edge) && l.hears(credential)))
+            .filter(|arrival| !arrival.gone && self.listens.iter().any(|l| l.hears_of(adapter_type, &arrival.edge) && l.hears(credential)))
             .cloned()
             .collect()
     }

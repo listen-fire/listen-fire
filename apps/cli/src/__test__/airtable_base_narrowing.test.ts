@@ -1,4 +1,4 @@
-// Narrowing an Airtable `Base` by name types it through to that base's tables,
+// Narrowing an Airtable base (`-[b:Bases WHERE …]->`) by name types it through to that base's tables,
 // as the module's authoring hints promise, under `listen-fire check` against the
 // fake Airtable (packages/fake-channels: bases "Pipeline Tracker" and "Ops").
 
@@ -62,7 +62,7 @@ import { my_airtable } from credentials
 pipeline = connect airtable using my_airtable
 
 function track(run: <manual-[:Invocations]->>) {
-  base = only(pipeline-[b:Base WHERE b.Name == "${input.base}"]->)
+  base = only(pipeline-[b:Bases WHERE b.Name == "${input.base}"]->)
   if (base == null) { fail("no base") }
   write base-[:${input.table}]-> { ${input.field}: "Acme Narrowed" }
 }

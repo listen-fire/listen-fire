@@ -152,7 +152,7 @@ export function makeMultiBaseAdapter(input: {
   base?: string;
   /** Rows the collection read lists back. */
   records?: FakeRecord[];
-}): { adapter: AirtableAdapter; listedTableBaseIds: string[] } {
+}): { adapter: AirtableAdapter; listedTableBaseIds: string[]; webhooks: unknown[] } {
   const adapter = new AirtableAdapter({
     tenant: input.teamId,
     client: noClient,
@@ -167,8 +167,13 @@ export function makeMultiBaseAdapter(input: {
       return input.bases.find((b) => b.id === baseId)?.tables ?? [];
     },
     listRecords: async () => input.records ?? [],
+    createWebhook: async (spec: unknown) => {
+      webhooks.push(spec);
+      return { webhookId: `ach${webhooks.length}`, macSecretBase64: 'c2VjcmV0' };
+    },
   };
+  const webhooks: unknown[] = [];
   (adapter as unknown as { getApiClient: () => Promise<typeof fakeClient> }).getApiClient = async () =>
     fakeClient;
-  return { adapter, listedTableBaseIds };
+  return { adapter, listedTableBaseIds, webhooks };
 }

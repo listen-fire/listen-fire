@@ -487,6 +487,10 @@ pub struct ListenResolution {
     pub heads: Vec<String>,
     pub resolved_at: Option<String>,
     pub failure: Option<String>,
+    /// For each resolved hop whose changes are reported per record it hangs
+    /// off, by its edge: those records' ids. Absent: none.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub parents: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// A listen's kept state (`listens.states`): its resolution, why it is

@@ -71,6 +71,10 @@ pub struct FileSet {
     /// now, by its pipeline (crate::resolve): none for one never resolved,
     /// or suspended.
     heads: RefCell<BTreeMap<String, Vec<String>>>,
+    /// The records each listen's hops reported per record hang off, by its
+    /// pipeline and the hop's edge (crate::resolve `Resolution::parents`):
+    /// the edge is watched under each.
+    parents: RefCell<BTreeMap<String, BTreeMap<String, Vec<String>>>>,
     pub running: Vec<Rc<RunningExternal>>,
     schemas: IndexMap<String, ConnectionSchemas>,
     /// The set's claims on its externals' processes: a worker's keep them
@@ -124,6 +128,18 @@ impl FileSet {
     /// whether they are not those it was watched under.
     pub fn watch(&self, listen: &Listen, heads: Vec<String>) -> bool {
         self.heads.borrow_mut().insert(listen.pipeline(), heads.clone()).is_none_or(|before| before != heads)
+    }
+
+    /// The records the listen's hop on `edge` hangs off, which that edge is
+    /// watched under for it (crate::resolve `reported_per_record`).
+    pub fn parents(&self, listen: &Listen, edge: &str) -> Vec<Option<String>> {
+        self.parents.borrow().get(&listen.pipeline()).and_then(|parents| parents.get(edge)).into_iter().flatten().cloned().map(Some).collect()
+    }
+
+    /// Watch the listen's hops reported per record under `parents` from now:
+    /// whether they are not those they were watched under.
+    pub fn watch_parents(&self, listen: &Listen, parents: BTreeMap<String, Vec<String>>) -> bool {
+        self.parents.borrow_mut().insert(listen.pipeline(), parents.clone()).is_none_or(|before| before != parents)
     }
 
     /// The listens on a polled source (its manifest declares `poll`), each
@@ -401,7 +417,7 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
     let user = local_identity(&project.user, |k| std::env::var(k).ok());
     let _holds = hold_all(&running, role.keep());
-    let file_set = Rc::new(FileSet { files, parsed, catalog, listens, heads: Default::default(), running, schemas, _holds });
+    let file_set = Rc::new(FileSet { files, parsed, catalog, listens, heads: Default::default(), parents: Default::default(), running, schemas, _holds });
     let set = file_set.clone();
     // What the records door reads, and keeps its facts in the write ledger for
     // as long as a writer's own are kept.
@@ -2566,7 +2582,7 @@ impl Session {
         }
         crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
         let _holds = hold_all(&running, self.role.keep());
-        let taken = Rc::new(FileSet { files, parsed, catalog, listens, heads: Default::default(), running, schemas, _holds });
+        let taken = Rc::new(FileSet { files, parsed, catalog, listens, heads: Default::default(), parents: Default::default(), running, schemas, _holds });
         for line in crate::resolve::open(self, &taken, crate::resolve::Opening::Reloaded).await? {
             let _ = writeln!(log, "listen-fire: {line}");
         }

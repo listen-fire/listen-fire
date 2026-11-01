@@ -53,11 +53,11 @@ import { my_airtable } from credentials
 
 finance = connect airtable using my_airtable { base: "Finance" }
 
-function review(change: <finance-[e:\`Record Change\` WHERE e.table == "Expenses"]->>) {
+function review(change: <finance-[:Change]->>) {
   return only(change-[:Record]->)
 }
 
-listen to finance { table: "Expenses", events: ["record.created"] } fire review
+listen to finance-[t:Tables WHERE t.Name == "Expenses"]->-[c:Changes WHERE c.Kind == "created"]-> fire review
 `,
     );
 

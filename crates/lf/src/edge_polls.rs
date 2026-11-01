@@ -21,7 +21,9 @@
 //! (`parentChanges: pushed`) is watched for the listen too: listen-fire
 //! polls or subscribes to that hop's edge itself, sharing the key of any
 //! listen on it, and what arrives there fires nothing of the listen's own:
-//! it lists the listen's heads again (crate::resolve).
+//! it lists the listen's heads again (crate::resolve). One its module
+//! reports per record it hangs off (`delivery: scope`: Airtable's `Tables`,
+//! one schema webhook per base) is watched once per such record.
 
 use std::collections::BTreeMap;
 
@@ -112,18 +114,27 @@ pub fn poll_keys(set: &FileSet, heads: &dyn Fn(&Listen) -> Vec<Option<String>>) 
         position: position_of(set, listen),
         heads: heads(listen),
         declared: declared(set, listen),
-        pushed_parents: crate::resolve::pushed_parent_hops(set, listen).into_iter().map(|hop| (hop.edge.clone(), declared_hop(set, listen, hop))).collect(),
+        pushed_parents: crate::resolve::pushed_parent_hops(set, listen)
+            .into_iter()
+            .map(|hop| {
+                let declared = declared_hop(set, listen, hop);
+                let per_record = !hop.from.is_empty() && declared.as_ref().and_then(|d| d.delivery) == Some(Delivery::Scope);
+                let scopes = if per_record { set.parents(listen, &hop.edge) } else { vec![None] };
+                (hop.edge.clone(), declared, scopes)
+            })
+            .collect(),
     })
 }
 
 /// Where one listen's connection reads, the scopes it is watched in, what
 /// its module declares of its last edge, and the edges of its resolved
-/// hops that report their changes, with what is declared of each.
+/// hops that report their changes, with what is declared of each and the
+/// scopes each is watched in.
 struct Watched {
     position: String,
     heads: Vec<Option<String>>,
     declared: Option<Declared>,
-    pushed_parents: Vec<(String, Option<Declared>)>,
+    pushed_parents: Vec<(String, Option<Declared>, Vec<Option<String>>)>,
 }
 
 /// The canonical JSON of the position the listen's connection is in, as its
@@ -152,11 +163,13 @@ fn keys_of(listens: &[Listen], watched: &dyn Fn(&Listen) -> Watched) -> BTreeMap
             shared.declared = declared.clone();
             shared.fires.push(index);
         }
-        for (edge, declared) in pushed_parents {
-            let shared = keys.entry(key(&edge, None, "")).or_default();
-            shared.declared = shared.declared.take().or(declared);
-            if !shared.resolves.contains(&index) {
-                shared.resolves.push(index);
+        for (edge, declared, scopes) in pushed_parents {
+            for scope in scopes {
+                let shared = keys.entry(key(&edge, scope, "")).or_default();
+                shared.declared = shared.declared.take().or(declared.clone());
+                if !shared.resolves.contains(&index) {
+                    shared.resolves.push(index);
+                }
             }
         }
     }
@@ -372,13 +385,32 @@ mod tests {
         let listens = [listen("a", Some("null"), true), listen("b", Some("null"), true)];
         let boards = PollKey { edge: "Boards".into(), ..key("", None) };
         let parents = |l: &Listen| Watched {
-            pushed_parents: if l.movement_name == "a" { vec![("Boards".into(), Some(Declared { delivery: Some(Delivery::Polled), poll_every_seconds: Some(1), cursorless: false }))] } else { Vec::new() },
+            pushed_parents: if l.movement_name == "a" { vec![("Boards".into(), Some(Declared { delivery: Some(Delivery::Polled), poll_every_seconds: Some(1), cursorless: false }), vec![None])] } else { Vec::new() },
             ..watched(vec![Some("board-1".to_string())], Delivery::Polled)
         };
         let keys = keys_of(&listens, &parents);
         assert_eq!(keys[&boards], Shared { declared: Some(Declared { delivery: Some(Delivery::Polled), poll_every_seconds: Some(1), cursorless: false }), fires: Vec::new(), resolves: vec![0] });
         assert_eq!(keys[&key("", Some("board-1"))].fires, vec![0, 1], "its own last edge as before");
         assert!(keys[&key("", Some("board-1"))].resolves.is_empty());
+    }
+
+    /// A resolved hop its module reports per record it hangs off (Airtable's
+    /// `Tables`, one schema webhook per base) is watched once per such
+    /// record, each key re-resolving the listen and firing nothing of it.
+    #[test]
+    fn a_resolved_hop_reported_per_record_is_watched_under_each_record_it_hangs_off() {
+        let listens = [listen("a", Some("null"), true)];
+        let per_base = Some(Declared { delivery: Some(Delivery::Scope), poll_every_seconds: None, cursorless: false });
+        let parents = |_: &Listen| Watched {
+            pushed_parents: vec![("Boards".into(), per_base.clone(), vec![Some("app-1".to_string()), Some("app-2".to_string())])],
+            ..watched(vec![Some("board-1".to_string())], Delivery::Scope)
+        };
+        let keys = keys_of(&listens, &parents);
+        for base in ["app-1", "app-2"] {
+            let boards = PollKey { edge: "Boards".into(), ..key("", Some(base)) };
+            assert_eq!(keys[&boards], Shared { declared: per_base.clone(), fires: Vec::new(), resolves: vec![0] }, "{base}");
+        }
+        assert!(!keys.contains_key(&PollKey { edge: "Boards".into(), ..key("", None) }), "never once for the whole connection");
     }
 
     #[test]

@@ -115,7 +115,8 @@ test('listen-fire modules show says what a module writes, and that a module with
   assert.equal(airtable.code, 0, airtable.out);
   assert.match(airtable.out, /^schema: comes from the connected account/m);
   assert.match(airtable.out, /listen-fire credential add --module airtable <credential>/);
-  assert.match(airtable.out, /^ {2}events: record\.created, record\.updated, record\.deleted$/m);
+  assert.match(airtable.out, /^listens: webhook$/m);
+  assert.doesNotMatch(airtable.out, /^ {2}events: /m, 'its changes arrive on a table\'s Changes, named by Kind, not as events');
   assert.doesNotMatch(airtable.out, /^record types/m, 'a schema it never read is not described');
   assert.equal((JSON.parse(lfSync(dir, 'modules', 'show', '@lf/airtable', '--json').out) as { schema: { source: string } }).schema.source, 'account');
 

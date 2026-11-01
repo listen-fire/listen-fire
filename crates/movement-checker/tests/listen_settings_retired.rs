@@ -246,6 +246,20 @@ fn a_hop_the_connection_consumes_is_dropped() {
 }
 
 #[test]
+fn a_parameter_typed_by_the_event_narrowed_to_its_table_is_retyped_too() {
+    let source = format!(
+        "{HIRING}function moved(c: <hiring-[:`Record Change` WHERE `table` == \"tblCAND01\"]->>) {{ return 1 }}\nlisten to hiring {{ base: \"appHIRE01\", table: \"tblCAND01\" }} fire moved\n"
+    );
+    let d = diagnostics(&source);
+    let text = fixed(&source, &d);
+    assert_eq!(
+        text,
+        format!("{HIRING}function moved(c: <hiring-[:Change]->>) {{ return 1 }}\nlisten to hiring-[t:Tables WHERE t.Id == \"tblCAND01\"]->-[:Changes]-> fire moved\n")
+    );
+    assert_rechecks_clean(&text);
+}
+
+#[test]
 fn an_unpositioned_connection_keeps_every_hop() {
     let source = format!("{AT}function moved(c: <at-[:`Record Change`]->>) {{ return 1 }}\nlisten to at {{ base: \"appHIRE01\", table: \"tblCAND01\" }} fire moved\n");
     let d = diagnostics(&source);

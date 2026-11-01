@@ -176,13 +176,13 @@ fn comments_across_a_table_are_unwatchable() {
 /// where they are reported for the connection. Reported off the connection
 /// itself, or not reported at all, the hop is listed as before.
 #[test]
-fn a_listed_hop_whose_changes_are_reported_per_record_is_unwatchable() {
-    assert_eq!(
-        check("listen to at-[:Bases]->-[v:Views WHERE v.Name == \"Deals\"]->-[:Changes]-> fire c\n"),
-        ["MOV_LISTEN_UNWATCHABLE 6:11-6:73 '-[:Views]->' on at's Base reports its changes only per Base (`parentChanges: pushed` with `delivery: scope`), and listen-fire does not follow changes reported per Base yet, so this listen would never list its Tables again"]
-    );
+fn a_listed_hop_whose_changes_are_reported_per_record_is_planned_as_any_listed_hop() {
+    // listen-fire watches such a hop once per record it hangs off (Airtable's
+    // schema webhook, one per base), so its listen is planned, filtered or not.
+    assert_eq!(check("listen to at-[:Bases]->-[v:Views WHERE v.Name == \"Deals\"]->-[:Changes]-> fire c\n"), Vec::<String>::new());
+    assert_eq!(judged(&plans_of("listen to at-[:Bases]->-[v:Views WHERE v.Name == \"Deals\"]->-[:Changes]-> fire c\n")[0]), json!(["resolved", "resolved", "arrival"]));
     let (plans, codes) = answer_of("listen to at-[:Bases]->-[:Views]->-[:Changes]-> fire c\n");
-    assert_eq!((plans.len(), codes), (0, vec!["MOV_LISTEN_UNWATCHABLE".to_string()]), "listed under a scope, filtered or not");
+    assert_eq!((plans.len(), codes), (1, Vec::<String>::new()), "listed under a scope, filtered or not");
     assert_eq!(judged(&plans_of("listen to at-[:Bases]->-[t:Tables WHERE t.Name == \"Deals\"]->-[:Changes]-> fire c\n")[0]), json!(["resolved", "resolved", "arrival"]));
 }
 

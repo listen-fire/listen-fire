@@ -42,7 +42,7 @@ import {
 } from '../testing';
 import { coerceAirtableValue } from '../record';
 import { makeStablePosition, makeMetaPosition, makeUnstablePosition, positionData } from 'movement-engine/public/catalog';
-import { eventsFromPayload } from '../webhook';
+import { arrivalsFromPayload, changeDataOf, changesTables } from '../webhook';
 import { instanceSchemaFromDescriptors } from 'movement-engine/public/catalog';
 
 
@@ -419,17 +419,16 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
   // Two bases hold different tables, so they are two TYPES, not two instances
   // of one — each gets its own type-edge off the root, and the tables live
   // behind them. plans/2026-07-10-adapter-entry-positions/2_type_space.md.
-  it('unpositioned → the polymorphic `Base` edge, and nothing walked at all', async () => {
+  it('unpositioned → the `Bases` edge, and nothing walked at all', async () => {
     const { adapter, listedTableBaseIds } = makeMultiBaseAdapter({
       teamId: 'team-air-full',
       bases: [crm(), ops()],
     });
     const entries = await adapter.listEntryPoints();
-    // `Record Change` is the EVENT edge — on the meta node, behind no base,
-    // because a listen hands you the event rather than you walking to it.
-    // `Base` is the ONE presentation of the bases: the named per-base edges
-    // were dropped — narrowing (`WHERE `Name` == …`) replaces naming.
-    expect(entries.map((e) => e.displayName)).toEqual(['Record Change', 'Base']);
+    // `Bases` is the ONE presentation of the bases: narrowing (`WHERE b.Name
+    // == …`) replaces naming. A table, its changes and the row a change is
+    // about are named for the resolver, listed by nothing.
+    expect(entries.map((e) => [e.collectionName ?? e.displayName, e.readable])).toEqual([['Bases', true], ['Table', false], ['Change', false], ['Row', false]]);
     // Both entries are static facts, so the unpositioned root walks NOTHING —
     // not even `listBases` (the walk pays that when someone follows the edge).
     expect(listedTableBaseIds).toEqual([]);
@@ -438,30 +437,31 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
   it('a base is readable but never writable — you write a row, not a base', async () => {
     const { adapter } = makeMultiBaseAdapter({ teamId: 'team-air-rw', bases: [crm(), ops()] });
     const entries = await adapter.listEntryPoints();
-    const bases = entries.filter((e) => e.fires !== true);
+    const bases = entries.filter((e) => e.collectionName === 'Bases');
     expect(bases.every((e) => e.readable && !e.writable)).toBe(true);
+    // Listed again on a clock: Airtable reports no base made or renamed.
+    expect(bases[0]).toMatchObject({ cheapToList: true, relistEverySeconds: 3600 });
   });
 
-  // The event edge says two true things at once. You cannot enumerate the
-  // changes that have happened — only be told of one — so the ROOT does not
-  // offer it for reads. Its whole promise is `fires`, and THE EVENT IS JUST A
-  // NODE: the change kind is the node's own `action` enum field, not a
-  // synthesized variant set. plans/2026-07-10-adapter-entry-positions/8_event_edges.md
-  it('the event edge is neither readable nor writable — a listen delivers it', async () => {
+  // A table's changes are announced, never listed: a webhook per table
+  // delivers them, and a base's tables are listed cheaply and their changes
+  // reported by a schema webhook per base, so a listen narrowed by them is
+  // listed again on each.
+  it('a table\'s Changes are only announced, and a base\'s Tables report their own changes', async () => {
     const { adapter } = makeMultiBaseAdapter({ teamId: 'team-air-ev', bases: [crm(), ops()] });
-    const entries = await adapter.listEntryPoints();
-    const event = entries.find((e) => e.displayName === 'Record Change');
-    expect(event).toBeDefined();
-    expect(event?.readable).toBe(false);
-    expect(event?.writable).toBe(false);
-    // The declaration that makes it reachable at all.
-    expect(event?.fires).toBe(true);
-    // The change-kind axis is an ORDINARY FIELD on the node — the `events:`
-    // vocabulary verbatim, one namespace, nothing translated.
-    const described = await adapter.describe('Record Change');
-    const action = described?.fields.find((f) => f.fieldId === 'action');
-    expect(action?.kind).toBe('enum');
-    expect(action?.enumValues).toEqual(['record.created', 'record.updated', 'record.deleted']);
+    const base = await adapter.describe('Base');
+    expect(base?.references.find((r) => r.name === 'Tables')).toMatchObject({
+      targetTypeId: 'Table', readable: true, cheapToList: true, parentChanges: 'pushed', listenable: true, delivery: 'scope', identity: 'Id',
+    });
+    const table = await adapter.describe('Table');
+    expect(table?.fields.map((f) => f.fieldId)).toEqual(['Name', 'Id']);
+    expect(table?.references.find((r) => r.name === 'Changes')).toMatchObject({
+      targetTypeId: 'Change', readable: false, listenable: true, delivery: 'scope', identity: 'Id', attributes: true,
+    });
+    const change = await adapter.describe('Change');
+    expect(change?.fields.map((f) => f.fieldId)).toEqual(['Id', 'Kind', 'Field', 'Old', 'New']);
+    expect(change?.fields.find((f) => f.fieldId === 'Kind')?.enumValues).toEqual(['created', 'updated', 'deleted']);
+    expect(change?.references.map((r) => [r.name, r.targetTypeId])).toEqual([['Record', 'Row']]);
   });
 
   it('positioned at a base → only that base\'s tables, and only that base is walked', async () => {
@@ -471,10 +471,10 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
       base: 'Ops',
     });
     const entries = await adapter.listEntryPoints();
-    // The event edge rides the positioned root too: it belongs to the meta
-    // node and to no base.
-    expect(entries.map((e) => e.displayName)).toEqual(['Record Change', 'Tasks']);
-    expect(entries[1].externalId).toBe('tblTASKS01');
+    // The base's own `Tables`, reported to the connection, beside its tables.
+    expect(entries.map((e) => e.collectionName ?? e.displayName)).toEqual(['Tables', 'Change', 'Row', 'Tasks']);
+    expect(entries[0]).toMatchObject({ readable: true, listenable: true, parentChanges: 'pushed', delivery: 'connection' });
+    expect(entries[3].externalId).toBe('tblTASKS01');
     // The other base's tables were never enumerated — this is the timeout fix.
     expect(listedTableBaseIds).toEqual(['appOPS01']);
   });
@@ -486,7 +486,7 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
       base: '  ops  ',
     });
     const entries = await adapter.listEntryPoints();
-    expect(entries.map((e) => e.displayName)).toEqual(['Record Change', 'Tasks']);
+    expect(entries.map((e) => e.collectionName ?? e.displayName)).toEqual(['Tables', 'Change', 'Row', 'Tasks']);
   });
 
   it('positioned at an UNKNOWN base → falls back to the unpositioned root', async () => {
@@ -500,7 +500,7 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
     // checker warns on the unknown name separately — an introspection miss
     // must not block.)
     const entries = await adapter.listEntryPoints();
-    expect(entries.map((e) => e.displayName)).toEqual(['Record Change', 'Base']);
+    expect(entries.map((e) => e.collectionName ?? e.displayName)).toEqual(['Bases', 'Table', 'Change', 'Row']);
   });
 
   // The drill-down: describe the connection → the bases; follow one → its
@@ -517,9 +517,7 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
 
       // The named per-base edges are gone from the presentation; the members
       // ride `targetPositions` with no reference row each.
-      expect(hop?.descriptor.references.map((r) => r.targetTypeId).sort()).toEqual([
-        'Base', 'airtable:record_change',
-      ]);
+      expect(hop?.descriptor.references.map((r) => [r.name, r.targetTypeId])).toEqual([['Bases', 'Base']]);
       // You traverse a base; you never write one. An absent flag would
       // default to a write claim the entry list denies.
       const baseRef = hop?.descriptor.references.find((r) => r.targetTypeId === 'Base');
@@ -546,7 +544,7 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
       );
 
       expect(hop?.descriptor.displayName).toBe('CRM');
-      expect(hop?.descriptor.references.map((r) => r.targetTypeId)).toEqual(['Deals']);
+      expect(hop?.descriptor.references.map((r) => r.targetTypeId)).toEqual(['Deals', 'Table']);
       // Mid-walk, a table is traversed AND written: `createRecord` resolves
       // the table by its own name, so a walked-to table is exactly as
       // writable as a positioned root's. Unpositioned, this edge is the ONLY
@@ -585,6 +583,9 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
 
       expect(hop?.descriptor.displayName).toBe('Deals');
       expect(hop?.descriptor.fields.length).toBeGreaterThan(0);
+      // Reached as one of a base's `Tables`, it is still a table: a listen
+      // narrowed to it goes on to its `Changes`.
+      expect(hop?.descriptor.references.find((r) => r.name === 'Changes')?.targetTypeId).toBe('Change');
       // Describing this table BY NAME would have walked every base to map the
       // name back to {baseId, tableId}. The path already said.
       expect(listedTableBaseIds).toEqual(['appCRM01']);
@@ -598,11 +599,11 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
       });
       const hop = await adapter.edgesFrom(makeMetaPosition('airtable'));
 
-      // The event edge belongs to the meta node, so it rides the positioned
-      // root as well — and the entry list publishes it there too. Same node,
+      // The base's own `Tables` rides the positioned root, reported to the
+      // connection — and the entry list publishes it there too. Same node,
       // same edges.
-      expect(hop?.descriptor.references.map((r) => r.targetTypeId)).toEqual([
-        'airtable:record_change', 'Tasks',
+      expect(hop?.descriptor.references.map((r) => [r.targetTypeId, r.delivery])).toEqual([
+        ['Tasks', undefined], ['Table', 'connection'],
       ]);
       // A POSITIONED root's tables are its writable roots — the entry list
       // says `writable: true` for the same edges (the write gate), and the
@@ -679,8 +680,8 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
   // plans/2026-07-10-adapter-entry-positions/4_polymorphic_edges.md
   it('the entry list and the walk agree on the root\'s edges AND their promises', async () => {
     const { adapter } = makeMultiBaseAdapter({ teamId: 'team-air-agree', bases: [crm(), ops()] });
-    const entries = (await adapter.listEntryPoints()).map((e) => ({
-      name: e.displayName,
+    const entries = (await adapter.listEntryPoints()).filter((e) => e.readable || e.writable).map((e) => ({
+      name: e.collectionName ?? e.displayName,
       readable: e.readable === true,
       writable: e.writable === true,
     }));
@@ -691,7 +692,7 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
       writable: r.writable === true,
     }));
     expect(walk).toEqual(entries);
-    expect(entries.map((e) => e.name)).toEqual(['Record Change', 'Base']);
+    expect(entries.map((e) => e.name)).toEqual(['Bases']);
   });
 
   it('an unknown name off the UNPOSITIONED root is empty — never a workspace walk', async () => {
@@ -700,7 +701,7 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
       bases: [crm(), ops()],
     });
     // The named per-base edges are gone: `CRM` is not an edge off the root any
-    // more. Narrowing (`-[b:Base WHERE `Name` == "CRM"]->`) is the route.
+    // more. Narrowing (`-[b:Bases WHERE b.Name == "CRM"]->`) is the route.
     const landings = await adapter.getRelated({
       position: makeMetaPosition('airtable'),
       fieldId: 'CRM',
@@ -710,20 +711,20 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
     expect(listedTableBaseIds).toEqual([]);
   });
 
-  it('publishes ONE presentation of a base — the narrowable `Base` edge', async () => {
+  it('publishes ONE presentation of a base — the narrowable `Bases` edge', async () => {
     const { adapter } = makeMultiBaseAdapter({ teamId: 'team-air-both', bases: [crm(), ops()] });
     const entries = await adapter.listEntryPoints();
     // The named spelling was dropped (2026-07-17): it added nothing the
     // narrowable edge doesn't say, and layer 4's steer is that the
     // polymorphic form reads better for containers.
-    expect(entries.map((e) => e.typeId)).toEqual(['airtable:record_change', 'Base']);
-    // Unnarrowed, a Base has its Name and NO tables — which tables exist
-    // depends on which base, and nobody has said yet. The Name field is what
-    // a narrowing predicate reads.
+    expect(entries.filter((e) => e.readable).map((e) => e.typeId)).toEqual(['Base']);
+    // Unnarrowed, a Base has its Name, its Id and its `Tables`, and none by
+    // name — which tables exist depends on which base, and nobody has said
+    // yet. Name and Id are what a narrowing predicate reads.
     const base = await adapter.describe('Base');
-    expect(base?.references).toEqual([]);
-    expect(base?.fields.map((f) => f.fieldId)).toEqual(['Name']);
-    expect(base?.description).toContain('narrow');
+    expect(base?.references.map((r) => r.name)).toEqual(['Tables']);
+    expect(base?.fields.map((f) => f.fieldId)).toEqual(['Name', 'Id']);
+    expect(base?.description).toContain('Narrow');
   });
 
   it('a base is still describable BY NAME — the node narrowing lands on', async () => {
@@ -735,30 +736,15 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
     // label — this is that call, and it must cost ONE base's walk.
     const descriptor = await adapter.describe('CRM');
     expect(descriptor?.displayName).toBe('CRM');
-    expect(descriptor?.references.map((r) => r.name)).toEqual(['Deals']);
+    expect(descriptor?.references.map((r) => r.name)).toEqual(['Deals', 'Tables']);
     expect(listedTableBaseIds).toEqual(['appCRM01']);
   });
 
-  it('the unnarrowed `Table` node is honestly minimal — the event\'s record edge target', async () => {
-    const { adapter } = makeMultiBaseAdapter({ teamId: 'team-air-tablemeta', bases: [crm()] });
-    // Which fields a table has depends on WHICH (base, table) — unnarrowed,
-    // there is nothing true to publish except that fact. "Undescribed" must
-    // mean nobody looked, not that the describe was never written.
-    const table = await adapter.describe('Table');
-    expect(table?.displayName).toBe('Table');
-    expect(table?.fields).toEqual([]);
-    expect(table?.references).toEqual([]);
-    expect(table?.description).toContain('base');
-    // The event node's `record` edge lands exactly there.
-    const event = await adapter.describe('Record Change');
-    expect(event?.references[0]?.targetTypeId).toBe('Table');
-  });
-
-  it('projects the `Base` collection off the meta root, labelled by name (the `base:` value enum)', async () => {
+  it('projects the `Bases` collection off the meta root, labelled by name (the `base:` value enum)', async () => {
     const { adapter } = makeMultiBaseAdapter({ teamId: 'team-air-bases', bases: [crm(), ops()] });
     const results = await adapter.getRelated({
       position: makeMetaPosition('airtable'),
-      fieldId: 'Base',
+      fieldId: 'Bases',
       direction: 'outgoing',
     });
     expect(results.map((r) => r.position.recordType)).toEqual(['Base', 'Base']);
@@ -794,127 +780,134 @@ describe('AirtableAdapter.getRelated', () => {
 // row AS the event, which is why a movement could declare `<at-[:`Deals`]->>` and
 // have nothing check it. The `record` edge is what un-conflates them.
 // plans/2026-07-10-adapter-entry-positions/8_event_edges.md
-describe('the event node → its record', () => {
+describe('a change → its record', () => {
   const crm = () => ({ id: 'appCRM01', name: 'CRM', tables: [dealsTable()] });
-  const ops = () => ({ id: 'appOPS01', name: 'Ops', tables: [tasksTable()] });
-  const eventPosition = (data: unknown) =>
-    makeUnstablePosition({ adapterType: 'airtable', recordType: 'Record Created', data });
-
-  const eventData = {
-    record: 'recNEW01',
-    table: 'tblDEALS01',
-    tableName: 'Deals',
-    base: 'appCRM01',
-    fields: { Name: 'Acme', Stage: 'Seed' },
+  const change = (data: unknown) => makeUnstablePosition({ adapterType: 'airtable', recordType: 'Change', data });
+  const created = {
+    Id: '7:recNEW01:created',
+    Kind: 'created',
+    row: { id: 'recNEW01', table: 'Deals', cells: { Name: 'Acme', Stage: 'Seed' } },
   };
 
-  it('mints the row from the event — a stable position, and NOT a fetch', async () => {
-    const { adapter, listedTableBaseIds } = makeMultiBaseAdapter({
-      teamId: 'team-air-event-rec',
-      bases: [crm(), ops()],
-    });
-
-    const results = await adapter.getRelated({
-      position: eventPosition(eventData),
-      fieldId: 'record',
-      direction: 'outgoing',
-    });
-
+  it('mints the row from the change — a stable position, and NOT a fetch', async () => {
+    const { adapter, listedTableBaseIds } = makeMultiBaseAdapter({ teamId: 'team-air-change-rec', bases: [crm()] });
+    const results = await adapter.getRelated({ position: change(created), fieldId: 'Record', direction: 'outgoing' });
     expect(results).toHaveLength(1);
-    // The TABLE's name types it, so field reads resolve against the right
-    // table — the event said which, so nothing had to be looked up.
+    // The TABLE's name types it, so field reads resolve against the right table.
     expect(results[0].position.recordType).toBe('Deals');
-    expect(results[0].position.identity.kind).toBe('stable');
-    expect(
-      results[0].position.identity.kind === 'stable' && results[0].position.identity.recordId,
-    ).toBe('recNEW01');
+    expect(results[0].position.identity.kind === 'stable' && results[0].position.identity.recordId).toBe('recNEW01');
     expect(positionData(results[0].position)).toEqual({ Name: 'Acme', Stage: 'Seed' });
-    // The whole point: Attio pays an API call here. Airtable's payload already
-    // said everything, so nothing was walked.
+    // Airtable's payload already said everything, so nothing was walked.
     expect(listedTableBaseIds).toEqual([]);
   });
 
-  it('a position that is not one of our events yields nothing, never a guess', async () => {
-    const { adapter } = makeMultiBaseAdapter({ teamId: 'team-air-event-bad', bases: [crm()] });
-    const results = await adapter.getRelated({
-      position: eventPosition({ something: 'else' }),
-      fieldId: 'record',
-      direction: 'outgoing',
-    });
-    expect(results).toEqual([]);
-  });
-
-  it('a delete carries the row identity with no fields — the row is still named', async () => {
-    const { adapter } = makeMultiBaseAdapter({ teamId: 'team-air-event-del', bases: [crm()] });
-    const results = await adapter.getRelated({
-      position: eventPosition({ ...eventData, fields: {} }),
-      fieldId: 'record',
-      direction: 'outgoing',
-    });
-    expect(results).toHaveLength(1);
-    expect(results[0].position.recordType).toBe('Deals');
-    expect(positionData(results[0].position)).toEqual({});
+  it('a deleted row is still named, with no fields', async () => {
+    const { adapter } = makeMultiBaseAdapter({ teamId: 'team-air-change-del', bases: [crm()] });
+    const deleted = { ...created, Id: '8:recNEW01:deleted', Kind: 'deleted', row: { ...created.row, cells: {} } };
+    const results = await adapter.getRelated({ position: change(deleted), fieldId: 'Record', direction: 'outgoing' });
+    expect(results.map((r) => [r.position.recordType, positionData(r.position)])).toEqual([['Deals', {}]]);
   });
 });
 
-// The event's data is the row's IDENTITY plus its changed fields — not the
-// fields at top level. That is what makes the `record` edge free.
-describe('eventsFromPayload — the event node carries the row identity', () => {
-  it('names the base, the table (by id AND name), and the row', () => {
-    const events = eventsFromPayload({
-      baseId: 'appCRM01',
-      tableNamesById: new Map([['tblDEALS01', 'Deals']]),
-      fieldsByTable: new Map([['tblDEALS01', new Map([['fldNAME', { name: 'Name', type: 'singleLineText' }]])]]),
-      payload: {
-        timestamp: '2026-07-17T00:00:00Z',
+// A payload as its arrivals: each row's change on its table's `Changes` (an
+// update one per field it touched), each table made, renamed or removed on
+// its base's `Tables`. A change is named by its transaction and what it
+// touched, so a payload pulled again names the same changes.
+describe('arrivalsFromPayload', () => {
+  const context = (positioned: boolean) => ({
+    baseId: 'appCRM01',
+    positioned,
+    tableNamesById: new Map([['tblDEALS01', 'Deals']]),
+    fieldsByTable: new Map([
+      ['tblDEALS01', new Map([['fldNAME', { name: 'Name', type: 'singleLineText' }], ['fldSTAGE', { name: 'Stage', type: 'singleSelect' }]])],
+    ]),
+  });
+
+  it('a row created, one updated in two fields and one deleted are four changes, each about its row', () => {
+    const arrivals = arrivalsFromPayload(
+      {
+        timestamp: '2026-11-01T09:00:00.000Z',
+        baseTransactionNumber: 7,
         changedTablesById: {
           tblDEALS01: {
             createdRecordsById: { recNEW01: { cellValuesByFieldId: { fldNAME: 'Acme' } } },
+            changedRecordsById: {
+              recOLD01: {
+                current: { cellValuesByFieldId: { fldNAME: 'Beta', fldSTAGE: { id: 'selW', name: 'Won' } } },
+                previous: { cellValuesByFieldId: { fldNAME: 'Alpha', fldSTAGE: { id: 'selS', name: 'Seed' } } },
+                unchanged: { cellValuesByFieldId: {} },
+              },
+            },
+            destroyedRecordIds: ['recGONE'],
           },
         },
-      } as Parameters<typeof eventsFromPayload>[0]['payload'],
-    });
-
-    expect(events).toHaveLength(1);
-    expect(events[0].payload).toEqual({
-      action: 'record.created',
-      record: 'recNEW01',
-      table: 'tblDEALS01',
-      tableName: 'Deals',
-      base: 'appCRM01',
-      fields: { Name: 'Acme' },
-      previous: {},
-      'Changed Fields': ['Name'],
-    });
-    // Unchanged, and load-bearing: the dispatch filter compares `recordType` to
-    // the listen's `table` — it predates the event node and must keep working.
-    expect(events[0].recordType).toBe('tblDEALS01');
-    expect(events[0].externalId).toBe('recNEW01');
-    expect(events[0].tag).toBe('record.created');
-    expect(events[0].changeType).toBe('create');
+      },
+      context(false),
+    );
+    expect(arrivals.map((a) => [a.edge, a.key, a.identity, a.landing.recordType, a.landing.fields.Kind, a.landing.fields.Field, a.landing.fields.Old, a.landing.fields.New])).toEqual([
+      ['Changes', 'tblDEALS01', '7:recNEW01:created', 'Change', 'created', undefined, undefined, undefined],
+      ['Changes', 'tblDEALS01', '7:recOLD01:fldNAME', 'Change', 'updated', 'Name', 'Alpha', 'Beta'],
+      ['Changes', 'tblDEALS01', '7:recOLD01:fldSTAGE', 'Change', 'updated', 'Stage', 'Seed', 'Won'],
+      ['Changes', 'tblDEALS01', '7:recGONE:deleted', 'Change', 'deleted', undefined, undefined, undefined],
+    ]);
+    expect(arrivals.map((a) => a.about)).toEqual([
+      { recordType: 'Deals', externalId: 'recNEW01' },
+      { recordType: 'Deals', externalId: 'recOLD01' },
+      { recordType: 'Deals', externalId: 'recOLD01' },
+      { recordType: 'Deals', externalId: 'recGONE' },
+    ]);
+    expect(arrivals.every((a) => a.occurredAt === '2026-11-01T09:00:00.000Z')).toBe(true);
+    // The row rides the change, as the change left it.
+    expect(changeDataOf(arrivals[1].landing.fields)?.row).toEqual({ id: 'recOLD01', table: 'Deals', cells: { Name: 'Beta', Stage: 'Won' } });
   });
 
-  it('degrades to the bare id when table metadata is unavailable', () => {
-    const events = eventsFromPayload({
-      baseId: 'appCRM01',
-      fieldsByTable: new Map(),
-      payload: {
-        changedTablesById: {
-          tblDEALS01: { destroyedRecordIds: ['recGONE'] },
-        },
-      } as Parameters<typeof eventsFromPayload>[0]['payload'],
-    });
-    expect(events).toHaveLength(1);
-    expect(events[0].payload).toEqual({
-      action: 'record.deleted',
-      record: 'recGONE',
-      table: 'tblDEALS01',
-      tableName: 'tblDEALS01',
-      base: 'appCRM01',
-      fields: {},
-      previous: {},
-      'Changed Fields': [],
-    });
+  it('a table renamed, one made and one removed arrive on the base\'s Tables, under the base unless the connection stands on it', () => {
+    const payload = {
+      baseTransactionNumber: 9,
+      changedTablesById: { tblDEALS01: { changedMetadata: { current: { name: 'Pipeline' }, previous: { name: 'Deals' } } } },
+      createdTablesById: { tblNEW01: { metadata: { name: 'Expenses' } } },
+      destroyedTableIds: ['tblOLD01'],
+    };
+    expect(changesTables(payload)).toBe(true);
+    const walked = arrivalsFromPayload(payload, context(false));
+    expect(walked.map((a) => [a.edge, a.key, a.identity, a.landing.recordType, a.landing.fields])).toEqual([
+      ['Tables', 'appCRM01', '9:tblDEALS01', 'Table', { Id: 'tblDEALS01', Name: 'Pipeline' }],
+      ['Tables', 'appCRM01', '9:tblNEW01', 'Table', { Id: 'tblNEW01', Name: 'Expenses' }],
+      ['Tables', 'appCRM01', '9:tblOLD01', 'Table', { Id: 'tblOLD01' }],
+    ]);
+    expect(arrivalsFromPayload(payload, context(true)).map((a) => a.key)).toEqual([undefined, undefined, undefined]);
+    expect(changesTables({ changedTablesById: { tblDEALS01: { destroyedRecordIds: ['recGONE'] } } })).toBe(false);
+  });
+
+  it('a field with no metadata is named by its id, and the table by its id', () => {
+    const arrivals = arrivalsFromPayload(
+      { baseTransactionNumber: 3, changedTablesById: { tblX: { changedRecordsById: { recA: { current: { cellValuesByFieldId: { fldQ: 1 } } } } } } },
+      context(false),
+    );
+    expect(arrivals.map((a) => [a.landing.fields.Field, a.about])).toEqual([['fldQ', { recordType: 'tblX', externalId: 'recA' }]]);
+  });
+});
+
+describe('waits and subscriptions', () => {
+  const crm = () => ({ id: 'appCRM01', name: 'CRM', tables: [dealsTable()] });
+  const ops = () => ({ id: 'appOPS01', name: 'Ops', tables: [tasksTable()] });
+
+  it('a wait on a table\'s Changes is keyed by the table, on a base\'s Tables by the base; no other edge is waited on', async () => {
+    const { adapter } = makeMultiBaseAdapter({ teamId: 'team-air-keys', bases: [crm()] });
+    expect(await adapter.arrivals.awaitKeys({ edge: 'Changes', heads: [{ recordId: 'tblDEALS01', recordType: 'Table' }] })).toEqual([{ key: 'tblDEALS01' }]);
+    expect(await adapter.arrivals.awaitKeys({ edge: 'Tables', heads: [{ recordId: 'appCRM01', recordType: 'Base' }] })).toEqual([{ key: 'appCRM01' }]);
+    await expect(adapter.arrivals.awaitKeys({ edge: 'Deals', heads: [] })).rejects.toThrow("'Deals' is not a listenable edge");
+  });
+
+  it('a table\'s Changes is registered on the base that holds it, scoped to the table; a base\'s Tables on the base, for its schema', async () => {
+    const { adapter, webhooks } = makeMultiBaseAdapter({ teamId: 'team-air-subs', bases: [crm(), ops()] });
+    await adapter.ensureEventSubscription({ edge: 'Changes', scope: 'tblTASKS01', callbackUrl: 'https://lf.test/a' });
+    await adapter.ensureEventSubscription({ edge: 'Tables', scope: 'appCRM01', callbackUrl: 'https://lf.test/b' });
+    expect(webhooks).toEqual([
+      { baseId: 'appOPS01', notificationUrl: 'https://lf.test/a', tableId: 'tblTASKS01', changeTypes: ['add', 'update', 'remove'] },
+      { baseId: 'appCRM01', notificationUrl: 'https://lf.test/b', dataTypes: ['tableMetadata'], changeTypes: ['add', 'update', 'remove'] },
+    ]);
+    await expect(adapter.ensureEventSubscription({ edge: 'Changes', scope: 'tblNOPE', callbackUrl: 'https://lf.test/c' })).rejects.toThrow('no base this connection can see holds table tblNOPE');
   });
 });
 

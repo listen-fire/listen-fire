@@ -5,6 +5,7 @@
 import type { AdapterManifest } from 'movement-engine/public/adapter';
 
 import { AFFINITY_MANIFEST } from '../../../modules/affinity/manifest';
+import { AIRTABLE_MANIFEST } from '../../../modules/airtable/manifest';
 import { DEALROOM_MANIFEST } from '../../../modules/dealroom/manifest';
 import { EVERTRACE_MANIFEST } from '../../../modules/evertrace/manifest';
 import { FORMS_MANIFEST } from '../../../modules/forms/manifest';
@@ -19,6 +20,7 @@ import { WHATSAPP_MANIFEST } from '../../../modules/whatsapp/manifest';
 
 export const MODULES: Record<string, AdapterManifest> = {
   affinity: AFFINITY_MANIFEST,
+  airtable: AIRTABLE_MANIFEST,
   dealroom: DEALROOM_MANIFEST,
   evertrace: EVERTRACE_MANIFEST,
   forms: FORMS_MANIFEST,

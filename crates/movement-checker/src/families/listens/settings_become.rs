@@ -140,7 +140,12 @@ impl Checker<'_> {
         let info = self.listens.movement_info(id)?;
         let [param] = info.params.as_slice() else { return None };
         let Some(ParamTypeRef::Name(declared)) = &param.type_ else { return None };
-        (declared.graph == statement.instance && declared.position.as_deref() == Some(from)).then_some(declared.span)
+        // Named bare (`<crm-[:Organization]->>`), or as the one edge of an
+        // address its WHERE narrows (Airtable's
+        // ``<hiring-[:`Record Change` WHERE `table` == "tbl…"]->>``).
+        let addressed = || declared.hops_raw.as_deref().and_then(crate::types::event_address::event_address_of_hops).map(|address| address.event);
+        let names = declared.position.as_deref() == Some(from) || addressed().as_deref() == Some(from);
+        (declared.graph == statement.instance && names).then_some(declared.span)
     }
 }
 

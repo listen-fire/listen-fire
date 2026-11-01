@@ -13,7 +13,7 @@ use movement_engine::listen_judge::{ArrivedRecord, PlanArrival, Verdict, judge_a
 use movement_engine::listen_landing::{DeclaredPayload, FileScope};
 use movement_parser::ast::{NamedArg, RValue, Statement};
 use movement_parser::catalog::types::CatalogSnapshot;
-use movement_parser::listen_plan::ListenPlan;
+use movement_parser::listen_plan::{HopJudged, ListenPlan};
 use movement_parser::util::form::external_text;
 use serde_json::Value as Json;
 
@@ -115,6 +115,15 @@ impl Listen {
     /// Whether it is a listen on a traversal of `adapter` whose last edge is `edge`.
     pub fn is_on(&self, adapter: &str, edge: &str) -> bool {
         self.adapter == adapter && self.plan.as_ref().and_then(|plan| plan.hops.last()).is_some_and(|hop| hop.edge == edge)
+    }
+
+    /// Whether an arrival on `edge` of `adapter` is this listen's: it fires on
+    /// it (`is_on`), or `edge` is one of the earlier hops the host resolves,
+    /// whose arrivals (a module reporting its parents' changes) list its
+    /// heads again (crate::resolve).
+    pub fn hears_of(&self, adapter: &str, edge: &str) -> bool {
+        self.is_on(adapter, edge)
+            || (self.adapter == adapter && self.plan.as_ref().is_some_and(|plan| plan.hops.iter().any(|hop| hop.judged == HopJudged::Resolved && hop.edge == edge)))
     }
 
     /// Whether `arrival`, delivered for `credential`, fires this listen at

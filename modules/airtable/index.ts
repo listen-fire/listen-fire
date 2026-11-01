@@ -52,6 +52,9 @@ export const airtableModule = defineModule({
   kind: 'adapter',
   name: '@lf/airtable',
   manifest: AIRTABLE_MANIFEST,
+  // Arrivals name what they are about and when it happened (2.6): an older
+  // host refuses the module rather than misjudge them.
+  protocolMinor: 6,
   credentials: [
     {
       name: 'airtable',
@@ -83,6 +86,7 @@ export const airtableModule = defineModule({
 export default airtableModule;
 
 export * from './adapter';
+export * from './handbook_section';
 export * from './api_client';
 export * from './manifest';
 export * from './oauth';

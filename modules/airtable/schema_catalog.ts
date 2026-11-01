@@ -15,22 +15,22 @@ import type {
 import type { AirtableAPIClient } from './api_client';
 
 import {
+  BASE_META_TYPE,
   LINK_FIELD_TYPE,
   READ_ONLY_FIELD_TYPES,
   RECORD_ID_FIELD,
+  TABLE_META_TYPE,
   type AirtableTableId,
   type AirtableFieldMeta,
   type AirtableTableMeta,
 } from './types';
 import {
-  AIRTABLE_EVENT_CHANGED_FIELDS,
-  AIRTABLE_EVENT_OLD_RECORD_EDGE,
-  AIRTABLE_EVENT_OLD_RECORD_EDGE_NAME,
-  AIRTABLE_EVENT_RECORD_EDGE,
-  AIRTABLE_EVENT_RECORD_EDGE_NAME,
-  AIRTABLE_EVENT_TYPE_NAME,
-  AIRTABLE_SUBSCRIBABLE_EVENTS,
-  AIRTABLE_WEBHOOK_RECORD_TYPE,
+  AIRTABLE_CHANGE_KINDS,
+  AIRTABLE_CHANGE_RECORD_EDGE,
+  AIRTABLE_CHANGE_TYPE,
+  AIRTABLE_CHANGES_EDGE,
+  AIRTABLE_ROW_TYPE,
+  AIRTABLE_TABLES_EDGE,
 } from './webhook';
 
 /**
@@ -283,194 +283,196 @@ function referenceDescriptor(input: {
 // `Base` doubles as the collection the `base:` construction arg draws from: its
 // members are the base NAMES the author picks between (the arg's value enum),
 // materialised through `getRelated` off the meta root (see index.ts).
-import { BASE_META_TYPE, TABLE_META_TYPE } from './types';
-
 export { BASE_META_TYPE, TABLE_META_TYPE };
 
+/** How often a listen narrowed by its bases lists them again when the
+ *  operator says nothing (lf.yaml's `resolveEvery` overrides it): Airtable
+ *  says nothing when a base is made or renamed, and that is rare. */
+export const AIRTABLE_BASES_RELIST_SECONDS = 3600;
+
+/** The edge a workspace's bases hang off the connection by. */
+export const AIRTABLE_BASES_EDGE = 'Bases';
+
 /**
- * The POLYMORPHIC presentation of a base — the ONLY presentation. One `Base`
- * collection whose members you narrow (`-[b:Base WHERE `Name` == "CRM"]->`);
- * the per-base NAMED edges were dropped from the root (ruling 2026-07-17):
- * they added nothing the narrowable edge doesn't say, and the polymorphic
- * form reads better — it survives a rename, and an author meets "the base
- * called CRM" rather than a bare proper noun.
- *
- * Narrowing costs exactly what the named edge cost (layer 4): the members
- * still ride the root hop's `targetPositions`, so selecting one and walking
- * to it is the same single fetch.
- *
+ * The root's `Bases`: every base the connection can see, each a member
+ * narrowed by `Name` or `Id` (`at-[b:Bases WHERE b.Name == "Finance"]->`).
+ * Cheap to list (one call), and listed again on a clock: Airtable reports
+ * no base made or renamed.
  */
-export function baseMetaEntryPoint(): SchemaEntryPoint {
+export function basesEntryPoint(): SchemaEntryPoint {
   return {
     typeId: BASE_META_TYPE,
     displayName: BASE_META_TYPE,
+    collectionName: AIRTABLE_BASES_EDGE,
     // You traverse a base; you never create one from a movement.
     writable: false,
     readable: true,
+    cheapToList: true,
+    relistEverySeconds: AIRTABLE_BASES_RELIST_SECONDS,
   };
 }
 
 /**
- * The `Base` node, UNNARROWED: its own `Name`, and no tables — which tables
- * exist depends on WHICH base, and nobody has said yet. Narrowing (or `base:`)
- * answers with that base's real surface for one call. Exactly Sheets'
- * unnarrowed `Spreadsheet`, for exactly the same reason.
+ * The positioned root's `Tables`: the base's tables, as `Table` records
+ * (`hiring-[t:Tables WHERE t.Name == "Candidates"]->-[:Changes]->`). The base
+ * is the connection's own, so its tables' changes are reported to the
+ * connection: one schema webhook for the base.
+ */
+export function tablesEntryPoint(): SchemaEntryPoint {
+  return {
+    typeId: TABLE_META_TYPE,
+    displayName: TABLE_META_TYPE,
+    collectionName: AIRTABLE_TABLES_EDGE,
+    writable: false,
+    readable: true,
+    ...TABLES_LISTENING,
+    delivery: 'connection',
+  };
+}
+
+/** A type a hop lands on that no root lists: named so the resolver knows it. */
+function namedOnly(typeId: string): SchemaEntryPoint {
+  return { typeId, displayName: typeId, writable: false, readable: false };
+}
+
+/** The types a listen walks through that no root publishes: a table, its
+ *  changes, and the row a change is about. */
+export function listenedEntryPoints(input: { positioned: boolean }): SchemaEntryPoint[] {
+  return [...(input.positioned ? [] : [namedOnly(TABLE_META_TYPE)]), namedOnly(AIRTABLE_CHANGE_TYPE), namedOnly(AIRTABLE_ROW_TYPE)];
+}
+
+/** What a base's `Tables` declares of listening, wherever it is: listed
+ *  cheaply, and its changes (a table made, renamed, removed) reported by
+ *  Airtable's schema webhook, so a listen narrowed by its tables is listed
+ *  again on each, never on a clock. */
+const TABLES_LISTENING = {
+  cheapToList: true,
+  parentChanges: 'pushed',
+  listenable: true,
+  identity: 'Id',
+} as const;
+
+/** The `Tables` edge off a base, one schema webhook per base: per base
+ *  (`scope`) off a base walked to, the connection's own at a positioned root. */
+export function tablesReference(delivery: 'scope' | 'connection' = 'scope'): SchemaReferenceDescriptor {
+  return {
+    fieldId: AIRTABLE_TABLES_EDGE,
+    name: AIRTABLE_TABLES_EDGE,
+    targetTypeId: TABLE_META_TYPE,
+    cardinality: 'many',
+    direction: 'outgoing',
+    readable: true,
+    writable: false,
+    ...TABLES_LISTENING,
+    delivery,
+    description: "The base's tables. A table made, renamed or removed arrives here (Airtable's schema webhook, one per base).",
+  };
+}
+
+const metaField = (fieldId: string, description: string): SchemaFieldDescriptor => ({
+  fieldId,
+  displayName: fieldId,
+  kind: 'string',
+  writable: false,
+  required: false,
+  description,
+});
+
+/**
+ * The `Base` node, UNNARROWED: its own `Name` and `Id`, and its `Tables`.
+ * Which tables it holds by name depends on WHICH base: narrowing answers
+ * with that base's real surface (`describeBase`) for one call.
  */
 export function describeBaseMeta(): SchemaTypeDescriptor {
   return {
     typeId: BASE_META_TYPE,
     displayName: BASE_META_TYPE,
     description:
-      'One of this workspace\'s bases. Which tables it holds depends on WHICH ' +
-      'base — narrow to one (`-[b:Base WHERE `Name` == "CRM"]->`, or the ' +
-      '`base:` construction arg) and its tables become the edges.',
+      "One of this workspace's bases. Narrow to one (`-[b:Bases WHERE b.Name == \"CRM\"]->`, " +
+      'or the `base:` construction arg) and its tables become the edges you write rows along.',
     fields: [
-      // The label a narrowing predicate reads — published on every member the
-      // root hop mints, so `WHERE `Name` == …` always has this to evaluate.
-      { fieldId: 'Name', displayName: 'Name', kind: 'string', writable: false, required: false },
+      // The labels a narrowing predicate reads — published on every member
+      // the root hop mints.
+      metaField('Name', "The base's name."),
+      metaField('Id', "Airtable's id for the base (app…)."),
     ],
-    references: [],
+    references: [tablesReference()],
   };
 }
 
 /**
- * The `Table` node, UNNARROWED — the event's `Record` edge lands here before
- * anything says WHICH table. Honestly minimal: a table's schema varies per
- * (base, table), so the unnarrowed node has no intrinsic fields; the listen's
- * `base:`/`table:` pins (or walking into a base) narrow it to a real table's
- * surface. The unnarrowed `Base`/`Spreadsheet` rule, one level down —
- * "undescribed" must mean nobody looked, not that there was nothing to say.
+ * The `Table` node: a table of a base, by its `Name` and `Id`, and its
+ * `Changes`. Narrowed by a WHERE, it is that table, its rows' fields included.
  */
 export function describeTableMeta(): SchemaTypeDescriptor {
   return {
     typeId: TABLE_META_TYPE,
     displayName: TABLE_META_TYPE,
-    description:
-      'A table in one of this workspace\'s bases. Its fields depend on WHICH ' +
-      '(base, table) — a listen\'s `base:`/`table:` pins narrow it, as does ' +
-      'walking into a base — so the unnarrowed node carries none.',
-    fields: [],
-    references: [],
+    description: "A table in one of this workspace's bases. Listen on its `Changes` for what happens to its rows.",
+    fields: [metaField('Name', "The table's name."), metaField('Id', "Airtable's id for the table (tbl…).")],
+    references: [changesReference()],
   };
 }
 
-/**
- * The EVENT edge off the meta node: `meta -[:Record Change]-> <the event>`.
- *
- * `readable: false`, and that is the honest statement rather than a demotion.
- * `readable` is a promise about THIS edge — "the root offers this as a starting
- * point for reads" — and nothing can enumerate the record changes that have
- * happened. An event is pushed, never pulled. The edge's promise is `fires`: a
- * listen delivers it, which is what `eventPosition` declares.
- *
- * `eventPosition` no longer needs `readable` to be honoured (the projection's
- * gate came off in `a936aa63c`), so this entry can say both true things at once
- * — which it could not before, and which is why every event-typed adapter used
- * to claim a root collection it could not serve.
- *
- */
-export function recordChangeEntryPoint(): SchemaEntryPoint {
+/** A table's `Changes`: pushed to a webhook per table, each change once. */
+export function changesReference(): SchemaReferenceDescriptor {
   return {
-    typeId: AIRTABLE_WEBHOOK_RECORD_TYPE,
-    displayName: AIRTABLE_EVENT_TYPE_NAME,
-    writable: false,
-    // You cannot list the changes that have happened — only be told of one.
+    fieldId: AIRTABLE_CHANGES_EDGE,
+    name: AIRTABLE_CHANGES_EDGE,
+    targetTypeId: AIRTABLE_CHANGE_TYPE,
+    cardinality: 'many',
+    direction: 'outgoing',
+    // You are told of a change; you cannot list the ones that happened.
     readable: false,
-    // The event EDGE marker. THE EVENT IS JUST A NODE: the change-kind axis
-    // is the node's own `action` enum field (describeRecordChange), narrowed
-    // in the address alongside `base`/`table` —
-    // `<at-[:`Record Change` WHERE `action` == "record.created" AND `table` == "tbl…"]->>`.
-    // Named narrowed edges (`Record Created` …) are layer 4's presentation
-    // choice and deliberately NOT declared: polymorphic reads better.
-    fires: true,
+    writable: false,
+    listenable: true,
+    delivery: 'scope',
+    identity: 'Id',
+    attributes: true,
+    description: "What happens to the table's rows, each change once: created, a field updated (`Field` names it), deleted.",
   };
 }
 
-/**
- * The event node: the changed row's identity, and an edge to the row itself.
- *
- * The `Record` edge is the point. The event and the row are DIFFERENT NODES —
- * this adapter used to seed the row AS the event, which is why a movement could
- * declare `` <at-[:`Deals`]->> `` with nothing to check it against. The row is
- * reached, not conflated.
- *
- * `base`/`table` are the raw ids because that is what a `listen` names, so the
- * same values narrow both. The edge is polymorphic — its target is whichever
- * table fired, and which tables exist depends on WHICH base, so it is not
- * enumerated here: the valid `(base, table)` pairs are discovered by traversing
- * from the META node, as a two-hop path.
- *
- */
-export function describeRecordChange(): SchemaTypeDescriptor {
-  const idField = (name: string, description: string) => ({
-    fieldId: name,
-    displayName: name,
-    kind: 'string' as const,
-    writable: false,
-    required: false,
-    description,
-  });
+/** A change to a table's row: what happened (`Kind`), on an update which
+ *  field (`Field`) and what it held before and after (`Old`, `New`), and the
+ *  row as the change left it (`Record`). */
+export function describeChange(): SchemaTypeDescriptor {
+  const value = (fieldId: string, description: string): SchemaFieldDescriptor => ({ fieldId, displayName: fieldId, kind: 'string', writable: false, required: false, description });
   return {
-    typeId: AIRTABLE_WEBHOOK_RECORD_TYPE,
-    displayName: AIRTABLE_EVENT_TYPE_NAME,
+    typeId: AIRTABLE_CHANGE_TYPE,
+    displayName: AIRTABLE_CHANGE_TYPE,
+    description: "A change to a row of an Airtable table: what happened (`Kind`) and, on an update, which field (`Field`). Walk `Record` for the row as the change left it.",
     fields: [
-      // The change-kind axis is an ORDINARY FIELD — an enum of the listen's
-      // `events:` vocabulary (ONE namespace), narrowed in the address exactly
-      // like `base`/`table`: the same values narrow both.
-      {
-        fieldId: 'action',
-        displayName: 'action',
-        kind: 'enum' as const,
-        enumValues: [...AIRTABLE_SUBSCRIBABLE_EVENTS],
-        writable: false,
-        required: false,
-        description: 'Which kind of change this event is — the same values a listen\'s `events:` names.',
-      },
-      idField('base', "The base the change happened in — the id a `listen` names."),
-      idField('table', "The table the change happened in — the id a `listen` names."),
-      idField('record', 'The changed row’s id.'),
-      // Text, not an enum of the table's field names: this node is one node
-      // for every table, and the platform's narrowing retargets the node's
-      // EDGES at the table a listen names, never its fields.
-      {
-        fieldId: AIRTABLE_EVENT_CHANGED_FIELDS,
-        displayName: AIRTABLE_EVENT_CHANGED_FIELDS,
-        kind: 'string' as const,
-        cardinality: 'many' as const,
-        writable: false,
-        required: false,
-        description:
-          'The names of the row’s fields this change touched — every field given for a created row, none for a deleted one.',
-      },
+      { ...metaField('Id', 'Names the change: the same each time Airtable reports it.'), required: true },
+      { fieldId: 'Kind', displayName: 'Kind', kind: 'enum', enumValues: [...AIRTABLE_CHANGE_KINDS], writable: false, required: true, description: 'What happened to the row.' },
+      metaField('Field', 'On an update, the field that changed, by its name (`Stage`). An update of two fields is two changes.'),
+      value('Old', 'On an update, what the field held before, as text (a select by its choice, a number as written).'),
+      value('New', 'On an update, what the field holds now, as text (a select by its choice, a number as written).'),
     ],
     references: [
       {
-        fieldId: AIRTABLE_EVENT_RECORD_EDGE,
-        name: AIRTABLE_EVENT_RECORD_EDGE_NAME,
-        targetTypeId: TABLE_META_TYPE,
-        cardinality: 'one' as const,
-        description: 'The row that changed.',
-        // THE hop from the event to what it is about (D40(b)) — declared, so a
-        // listen's `fields:` names columns of the row rather than properties of
-        // the event node, without anything having to recognise the name `Record`.
-        subject: true,
-        // Reached, never written along: a movement writes to a TABLE, not
-        // through an event.
+        fieldId: AIRTABLE_CHANGE_RECORD_EDGE,
+        name: AIRTABLE_CHANGE_RECORD_EDGE,
+        targetTypeId: AIRTABLE_ROW_TYPE,
+        cardinality: 'one',
+        direction: 'outgoing',
+        // The row rides the change: following the edge reads nothing.
         writable: false,
-      },
-      {
-        fieldId: AIRTABLE_EVENT_OLD_RECORD_EDGE,
-        name: AIRTABLE_EVENT_OLD_RECORD_EDGE_NAME,
-        // The same target as `Record`, so wherever the record edge is typed
-        // as a table, this one is typed as that table too: the previous
-        // `Stage` reads as the `Stage` enum.
-        targetTypeId: TABLE_META_TYPE,
-        cardinality: 'one' as const,
-        description:
-          'The row as it was before this change: the changed fields’ previous values. A field the change did not touch reads as null here, as it does on `Record`.',
-        writable: false,
+        description: 'The row as the change left it: every field, by name.',
       },
     ],
+  };
+}
+
+/** The row a change is about, whichever table it is in: its `Id`. Its cells
+ *  are read by name at run time. */
+export function describeRow(): SchemaTypeDescriptor {
+  return {
+    typeId: AIRTABLE_ROW_TYPE,
+    displayName: AIRTABLE_ROW_TYPE,
+    description: 'A row of the table a change happened in.',
+    fields: [metaField(RECORD_ID_FIELD, "Airtable's id for the row (rec…).")],
+    references: [],
   };
 }
 
@@ -589,6 +591,8 @@ export async function describeBase(input: {
   client: AirtableAPIClient;
   teamId: string;
   baseId: string;
+  /** The connection is positioned at this base: its hop is the root's. */
+  positioned?: boolean;
 }): Promise<SchemaTypeDescriptor | null> {
   const baseNames = await cachedBases({ client: input.client, teamId: input.teamId });
   const baseName = baseNames.get(input.baseId);
@@ -602,13 +606,18 @@ export async function describeBase(input: {
     typeId: baseName,
     displayName: baseName,
     fields: [],
-    references: tables.map((table) => ({
-      fieldId: table.id,
-      name: table.name,
-      targetTypeId: table.name,
-      cardinality: 'many' as const,
-      writable: true,
-    })),
+    references: [
+      ...tables.map((table) => ({
+        fieldId: table.id,
+        name: table.name,
+        targetTypeId: table.name,
+        cardinality: 'many' as const,
+        writable: true,
+      })),
+      // The base's tables as records a listen narrows (`-[t:Tables WHERE …]->`).
+      // At a positioned root they are the connection's own (`tablesEntryPoint`).
+      tablesReference(input.positioned === true ? 'connection' : 'scope'),
+    ],
   };
 }
 
@@ -710,7 +719,10 @@ export async function describeTableAt(input: {
   baseId: string;
   tableId: string;
 }): Promise<SchemaTypeDescriptor | null> {
-  return tableDescriptor(input);
+  const descriptor = await tableDescriptor(input);
+  // Reached as one of a base's `Tables`, it is still a `Table`: a listen
+  // narrowed to it goes on to its `Changes`.
+  return descriptor === null ? null : { ...descriptor, references: [...descriptor.references, changesReference()] };
 }
 
 /** Drop a base's cached tables — used after lf-platform's dev-loop seeds new tables,

@@ -670,7 +670,7 @@ mod tests {
         let token = store.claim_listen_resolve(&pipeline, 60_000).unwrap().expect("no one holds it");
         assert_eq!(store.claim_listen_resolve(&pipeline, 60_000).unwrap(), None, "held: a second resolve waits");
         assert_eq!(store.listen_state(&pipeline).unwrap().map(|s| s.resolution.resolved_at), Some(None), "held, never resolved");
-        let resolved = Resolution { heads: vec!["b1".into(), "b2".into()], resolved_at: Some("2026-10-31T09:00:00.000Z".into()), failure: None };
+        let resolved = Resolution { heads: vec!["b1".into(), "b2".into()], resolved_at: Some("2026-10-31T09:00:00.000Z".into()), failure: None, parents: Default::default() };
         // A pause lands while the resolve reads: the resolve keeps it.
         store.set_listen_paused(&pipeline, Some("LISTEN_LOOP: …")).unwrap();
         assert!(store.save_listen_resolution(&pipeline, &token, &resolved).unwrap());

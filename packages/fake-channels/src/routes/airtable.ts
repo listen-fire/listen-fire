@@ -66,6 +66,10 @@ function changeOf(body: unknown): RecordChange | undefined {
  *  asked for them).
  *  A change kind or a table the webhook didn't subscribe to is dropped. */
 function appendChange(store: EntityStore, baseId: string, wh: FakeWebhook, change: RecordChange): Record<string, unknown> & { appended: boolean } {
+  // A webhook on the base's schema alone (`tableMetadata`) is told of no row.
+  if (!wh.dataTypes.includes('tableData')) {
+    return { appended: false, reason: 'data_type_not_subscribed', dataTypes: wh.dataTypes };
+  }
   if (!wh.changeTypes.includes(change.changeType)) {
     return { appended: false, reason: 'change_type_not_subscribed', subscribedChangeTypes: wh.changeTypes };
   }
@@ -113,12 +117,39 @@ function appendChange(store: EntityStore, baseId: string, wh: FakeWebhook, chang
 
   const payload = {
     timestamp: new Date().toISOString(),
-    baseTransactionNumber: store.nextId(SVC, `txn:${wh.id}`),
+    // Numbered per base, as Airtable numbers its transactions.
+    baseTransactionNumber: Number(store.nextId(SVC, `txn:${baseId}`)),
     changedTablesById: { [change.tableId]: tableChange },
   };
   const seq = store.nextId(SVC, payloadFeedType(wh.id));
   store.create(SVC, payloadFeedType(wh.id), payload, seq);
   return { appended: true, seq: Number(seq), payload };
+}
+
+/** Queue a table's metadata change on a webhook that takes the base's schema
+ *  (`dataTypes: ['tableMetadata']`), as Airtable builds that payload. */
+function appendTableChange(store: EntityStore, wh: FakeWebhook, tableChange: { tableId: string; name: string; previous: string }): boolean {
+  if (!wh.dataTypes.includes('tableMetadata')) return false;
+  const payload = {
+    timestamp: new Date().toISOString(),
+    baseTransactionNumber: Number(store.nextId(SVC, `txn:${wh.baseId}`)),
+    changedTablesById: { [tableChange.tableId]: { changedMetadata: { current: { name: tableChange.name }, previous: { name: tableChange.previous } } } },
+  };
+  store.create(SVC, payloadFeedType(wh.id), payload, store.nextId(SVC, payloadFeedType(wh.id)));
+  return true;
+}
+
+/** Ping a webhook as Airtable does: `{ base, webhook, timestamp }`, signed
+ *  `x-airtable-content-mac: hmac-sha256=<hex>` with its base64 MAC secret. */
+async function ping(baseId: string, webhook: FakeWebhook): Promise<{ webhookId: string; targetUrl: string; status: number; body: string }> {
+  const body = JSON.stringify({ base: { id: baseId }, webhook: { id: webhook.id }, timestamp: new Date().toISOString() });
+  const mac = createHmac('sha256', Buffer.from(webhook.macSecretBase64, 'base64')).update(body).digest('hex');
+  const answer = await fetch(webhook.notificationUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-airtable-content-mac': `hmac-sha256=${mac}` },
+    body,
+  });
+  return { webhookId: webhook.id, targetUrl: webhook.notificationUrl, status: answer.status, body: await answer.text() };
 }
 
 export function airtableRoutes(store: EntityStore): Router {
@@ -267,14 +298,29 @@ export function airtableRoutes(store: EntityStore): Router {
       // A lapsed webhook is pinged no more.
       if (lapsed(webhook)) continue;
       if (webhook.baseId !== baseId || !appendChange(store, baseId, webhook, change).appended) continue;
-      const body = JSON.stringify({ base: { id: baseId }, webhook: { id: webhook.id }, timestamp: new Date().toISOString() });
-      const mac = createHmac('sha256', Buffer.from(webhook.macSecretBase64, 'base64')).update(body).digest('hex');
-      const answer = await fetch(webhook.notificationUrl, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-airtable-content-mac': `hmac-sha256=${mac}` },
-        body,
-      });
-      deliveries.push({ webhookId: webhook.id, targetUrl: webhook.notificationUrl, status: answer.status, body: await answer.text() });
+      deliveries.push(await ping(baseId, webhook));
+    }
+    res.json({ deliveries });
+  });
+
+  // What Airtable does when a table is renamed: the table's metadata takes
+  // the new name (the meta API lists it so), and every webhook of the base
+  // that takes its schema (`tableMetadata`) is told, then pinged. Each
+  // ping's answer comes back.
+  //   POST /airtable/control/rename-table { baseId, tableId, name }
+  r.post('/control/rename-table', async (req, res) => {
+    const baseId = String(req.body?.baseId ?? '');
+    const tableId = String(req.body?.tableId ?? '');
+    const name = String(req.body?.name ?? '');
+    const table = store.get(SVC, `table:${baseId}`, tableId);
+    if (!table || name === '') return res.status(400).json({ error: 'Expected { baseId, tableId, name } naming a seeded table' });
+    const previous = String((table.data as { name?: unknown }).name ?? '');
+    store.update(SVC, `table:${baseId}`, tableId, { ...table.data, name });
+    const deliveries: Array<{ webhookId: string; targetUrl: string; status: number; body: string }> = [];
+    for (const { data } of store.list(SVC, 'webhook')) {
+      const webhook = data as unknown as FakeWebhook;
+      if (lapsed(webhook) || webhook.baseId !== baseId || !appendTableChange(store, webhook, { tableId, name, previous })) continue;
+      deliveries.push(await ping(baseId, webhook));
     }
     res.json({ deliveries });
   });

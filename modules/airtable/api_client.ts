@@ -201,9 +201,14 @@ const webhookRecordChangeParser = z
   })
   .passthrough();
 
+// A table's metadata as a `tableMetadata` webhook reports it.
+const webhookTableMetadataParser = z.object({ name: z.string().optional(), description: z.string().optional() }).passthrough();
+
 const webhookPayloadParser = z
   .object({
     timestamp: z.string().optional(),
+    // The base's transaction the payload records: unique within the base.
+    baseTransactionNumber: z.number().optional(),
     actionMetadata: z
       .object({ source: z.string().optional() })
       .passthrough()
@@ -216,10 +221,18 @@ const webhookPayloadParser = z
             createdRecordsById: z.record(z.string(), webhookRecordChangeParser).optional(),
             changedRecordsById: z.record(z.string(), webhookRecordChangeParser).optional(),
             destroyedRecordIds: z.array(z.string()).optional(),
+            // A table renamed or redescribed (`tableMetadata`).
+            changedMetadata: z
+              .object({ current: webhookTableMetadataParser.optional(), previous: webhookTableMetadataParser.optional() })
+              .passthrough()
+              .optional(),
           })
           .passthrough(),
       )
       .optional(),
+    // Tables created and removed (`tableMetadata`).
+    createdTablesById: z.record(z.string(), z.object({ metadata: webhookTableMetadataParser.optional() }).passthrough()).optional(),
+    destroyedTableIds: z.array(z.string()).optional(),
   })
   .passthrough();
 
@@ -514,14 +527,18 @@ class AirtableAPIClient {
     notificationUrl,
     tableId,
     changeTypes,
+    dataTypes,
   }: {
     baseId: string;
     notificationUrl: string;
     tableId?: string;
     changeTypes: string[];
+    /** What the webhook is told of: a table's rows (`tableData`, the
+     *  default), or the base's tables themselves (`tableMetadata`). */
+    dataTypes?: ('tableData' | 'tableMetadata')[];
   }): Promise<{ webhookId: string; macSecretBase64: string; expirationTime?: string }> {
     const filters: Record<string, unknown> = {
-      dataTypes: ['tableData'],
+      dataTypes: dataTypes ?? ['tableData'],
       changeTypes,
       ...(tableId ? { recordChangeScope: tableId } : {}),
     };

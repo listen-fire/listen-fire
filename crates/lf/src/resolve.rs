@@ -86,6 +86,12 @@ pub struct Resolution {
     pub resolved_at: Option<String>,
     /// Why its last resolve failed; None: it did not.
     pub failure: Option<String>,
+    /// For each resolved hop whose module reports its changes per record it
+    /// hangs off (`parentChanges: pushed` with `delivery: scope`, Airtable's
+    /// `Tables` per base), by its edge: the ids of those records, which that
+    /// edge is watched under for the listen. Kept with the heads, listed by
+    /// the same resolve.
+    pub parents: BTreeMap<String, Vec<String>>,
 }
 
 /// What the store keeps of a listen with a hop the host resolves
@@ -111,17 +117,29 @@ impl Resolution {
     }
 
     fn members(&self) -> Obj {
-        obj! {
+        let mut members = obj! {
             "heads" => Js::strings(self.heads.clone()),
             "resolvedAt" => opt(&self.resolved_at),
             "failure" => opt(&self.failure),
+        };
+        if !self.parents.is_empty() {
+            let parents = self.parents.iter().map(|(edge, ids)| (edge.clone(), Js::strings(ids.clone())));
+            members.insert("parents".into(), Js::Obj(parents.collect()));
         }
+        members
     }
 
     /// None: the value is not a resolution.
     pub fn from_js(value: &Js) -> Option<Resolution> {
-        let heads = value.get("heads")?.as_array()?.iter().map(|h| h.as_str().map(str::to_string)).collect::<Option<Vec<_>>>()?;
-        Some(Resolution { heads, resolved_at: text(value, "resolvedAt")?, failure: text(value, "failure")? })
+        let ids = |list: &Js| list.as_array()?.iter().map(|h| h.as_str().map(str::to_string)).collect::<Option<Vec<_>>>();
+        let heads = ids(value.get("heads")?)?;
+        // A store that predates them keeps none: nothing reported per record.
+        let parents = match value.get("parents") {
+            None | Some(Js::Null) => BTreeMap::new(),
+            Some(Js::Obj(parents)) => parents.iter().map(|(edge, list)| Some((edge.clone(), ids(list)?))).collect::<Option<_>>()?,
+            Some(_) => return None,
+        };
+        Some(Resolution { heads, resolved_at: text(value, "resolvedAt")?, failure: text(value, "failure")?, parents })
     }
 }
 
@@ -185,6 +203,49 @@ pub async fn resolve_heads(session: &Session, set: &FileSet, listen: &Listen) ->
         return Err(ResolveFailure::OverLimit { limit });
     }
     Ok(heads)
+}
+
+/// The records each resolved hop whose module reports its changes per record
+/// it hangs off (`reported_per_record`) hangs off, by its edge: the hops
+/// before it walked as `resolve_heads` walks the earlier ones, under the same
+/// limit.
+pub async fn resolve_parents(session: &Session, set: &FileSet, listen: &Listen) -> Result<BTreeMap<String, Vec<String>>, ResolveFailure> {
+    let Some(plan) = listen.plan.as_ref() else { return Ok(BTreeMap::new()) };
+    let limit = session.project.listen_scope_limit;
+    let mut parents = BTreeMap::new();
+    for index in reported_per_record(set, listen) {
+        let walk = Walk { source: &set.file(&listen.file).source, connection: &plan.connection, hops: &plan.hops[..index], limit: Some(limit) };
+        let positions = session.read_positions(set, walk).await.map_err(ResolveFailure::Read)?;
+        let mut ids: Vec<String> = Vec::new();
+        for position in positions {
+            let head = head_of(&position).ok_or_else(|| ResolveFailure::Read(format!("a record it landed on names no id: {}", position.to_json())))?;
+            if !ids.contains(&head.record_id) {
+                ids.push(head.record_id);
+            }
+        }
+        if ids.len() > limit {
+            return Err(ResolveFailure::OverLimit { limit });
+        }
+        parents.insert(plan.hops[index].edge.clone(), ids);
+    }
+    Ok(parents)
+}
+
+/// The indexes of the listen's resolved hops whose module reports their
+/// changes per record they hang off (`parentChanges: pushed` with
+/// `delivery: scope`): each is watched once per such record.
+pub fn reported_per_record(set: &FileSet, listen: &Listen) -> Vec<usize> {
+    let hops = listen.plan.as_ref().map(|plan| plan.hops.as_slice()).unwrap_or_default();
+    hops.iter()
+        .enumerate()
+        .filter(|(index, hop)| *index > 0 && hop.judged == HopJudged::Resolved)
+        .filter(|(_, hop)| {
+            crate::edge_polls::hop_schema(set, listen, hop).is_some_and(|declared| {
+                declared.get("parentChanges").and_then(Js::as_str) == Some("pushed") && declared.get("delivery").and_then(Js::as_str) == Some("scope")
+            })
+        })
+        .map(|(index, _)| index)
+        .collect()
 }
 
 fn head_of(position: &Js) -> Option<Head> {
@@ -274,7 +335,9 @@ pub fn watch_kept(session: &Session, set: &FileSet) -> Result<Kept, String> {
     let states = session.store.listen_states(&pipelines).map_err(|e| e.to_string())?;
     let mut moved = false;
     for (listen, pipeline) in resolving.into_iter().zip(&pipelines) {
-        moved |= set.watch(listen, states.get(pipeline).map(|state| state.resolution.heads.clone()).unwrap_or_default());
+        let resolution = states.get(pipeline).map(|state| state.resolution.clone()).unwrap_or_default();
+        moved |= set.watch(listen, resolution.heads);
+        moved |= set.watch_parents(listen, resolution.parents);
     }
     Ok(Kept { states, moved })
 }
@@ -340,15 +403,20 @@ pub async fn resolve(session: &Session, set: &FileSet, listen: &Listen) -> Resul
     };
     let before = session.store.listen_state(&pipeline).map_err(|e| e.to_string())?.unwrap_or_default().resolution;
     let polled = crate::edge_polls::polled_keys(set);
-    let resolution = match resolve_heads(session, set, listen).await {
-        Ok(heads) => Resolution { heads: heads.into_iter().map(|h| h.record_id).collect(), resolved_at: Some(iso(0)), failure: None },
-        Err(failure @ ResolveFailure::OverLimit { .. }) => Resolution { heads: Vec::new(), resolved_at: Some(iso(0)), failure: Some(failure.line(listen)) },
+    let listed = match resolve_heads(session, set, listen).await {
+        Ok(heads) => resolve_parents(session, set, listen).await.map(|parents| (heads, parents)),
+        Err(failure) => Err(failure),
+    };
+    let resolution = match listed {
+        Ok((heads, parents)) => Resolution { heads: heads.into_iter().map(|h| h.record_id).collect(), resolved_at: Some(iso(0)), failure: None, parents },
+        Err(failure @ ResolveFailure::OverLimit { .. }) => Resolution { heads: Vec::new(), resolved_at: Some(iso(0)), failure: Some(failure.line(listen)), parents: BTreeMap::new() },
         Err(failure @ ResolveFailure::Read(_)) => Resolution { failure: Some(failure.line(listen)), ..before.clone() },
     };
     if !session.store.save_listen_resolution(&pipeline, &token, &resolution).map_err(|e| e.to_string())? {
         return Ok(Resolved::Elsewhere);
     }
     set.watch(listen, resolution.heads.clone());
+    set.watch_parents(listen, resolution.parents.clone());
     let still = crate::edge_polls::polled_keys(set);
     for key in polled.keys().filter(|key| key.scope.is_some() && !still.contains_key(*key)) {
         session.store.save_inbound_checkpoint(&crate::edge_polls::poll_subscription(key), &Js::Null).map_err(|e| e.to_string())?;
@@ -424,7 +492,7 @@ mod tests {
 
     #[test]
     fn a_listens_state_crosses_the_store_wire_as_it_is() {
-        let resolution = Resolution { heads: vec!["b1".into(), "b2".into()], resolved_at: Some("2026-10-31T09:00:00.000Z".into()), failure: Some("LISTEN_SCOPE_LIMIT: …".into()) };
+        let resolution = Resolution { heads: vec!["b1".into(), "b2".into()], resolved_at: Some("2026-10-31T09:00:00.000Z".into()), failure: Some("LISTEN_SCOPE_LIMIT: …".into()), parents: BTreeMap::new() };
         assert_eq!(resolution.to_js().to_json(), r#"{"heads":["b1","b2"],"resolvedAt":"2026-10-31T09:00:00.000Z","failure":"LISTEN_SCOPE_LIMIT: …"}"#);
         assert_eq!(Resolution::from_js(&resolution.to_js()), Some(resolution.clone()));
         let state = ListenState { resolution, paused: Some("LISTEN_LOOP: …".into()), held: 3 };
@@ -437,6 +505,10 @@ mod tests {
         assert_eq!(ListenState::from_js(&Js::parse(br#"{"heads":[],"held":-1}"#).unwrap()), None, "a count is a whole number");
         assert_eq!(ListenState::from_js(&Js::parse(br#"{"heads":[1],"resolvedAt":"x"}"#).unwrap()), None, "a head is an id");
         assert_eq!(ListenState::from_js(&Js::parse(br#"{"resolvedAt":"x"}"#).unwrap()), None, "its heads are said, if none");
+        let per_base = Resolution { heads: vec!["tblA".into()], parents: BTreeMap::from([("Tables".to_string(), vec!["appA".to_string()])]), ..Resolution::default() };
+        assert_eq!(per_base.to_js().to_json(), r#"{"heads":["tblA"],"resolvedAt":null,"failure":null,"parents":{"Tables":["appA"]}}"#, "the records a hop reported per record hangs off are kept beside the heads");
+        assert_eq!(Resolution::from_js(&per_base.to_js()), Some(per_base));
+        assert_eq!(Resolution::from_js(&Js::parse(br#"{"heads":[],"parents":{"Tables":[1]}}"#).unwrap()), None, "a parent is an id");
     }
 
     #[test]

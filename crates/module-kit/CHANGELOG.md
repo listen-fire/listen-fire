@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `ListenResolution` gains `parents` (by edge, the ids of the records each resolved hop reported per record hangs off; serialised only when there are some, read as none when absent): a store keeps it with the heads (docs/contracts/store-slot.md).
 - The `Store` trait gains what the records door reads (docs/contracts/system-events.md): `runs.failed` (`RunsFailed { after, until, limit }`), `releases.note` (`ReleasesNote { version, at }`) and `releases.list` (`ReleasesList { after, limit }`); listen-fire reads none from a store that answers `method_not_implemented`. `waits.open` takes `record_id`, and `Stranded` carries it.
 - Breaking (listen-fire 0.13): the `Store` trait gains `listens.hold` (`ListensHold { pipeline }`), which adds one to a paused listen's `held` count, and `ListenState` gains `held` (`u64`): a pause (`listens.setPaused`) keeps it, a resume (`None`) clears it, a resolve keeps it.
 - Breaking (listen-fire 0.13): the `Store` trait gains the write ledger, `writes.record` (`WritesRecord { adapter, record_type, external_id, run_id, depth, at, forget_before }`) and `writes.depth` (`WritesDepth { adapter, record_type, external_id, since }`, answering `Option<DeepestWrite { run_id, depth }>`): each record write a run sends, with the run's place in its chain of writes and arrivals, which listen-fire's loop breaker reads to pause a listen whose chain is too deep (docs/contracts/store-slot.md). An arrival may carry `occurredAt`, when it happened at its provider (adapter protocol 2.6).

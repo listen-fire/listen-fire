@@ -10,7 +10,7 @@
 //! MOV_LISTEN_DUPLICATE, MOV_LISTEN_ALIAS_DUPLICATE.
 
 use movement_parser::ast::{ListenDeclaration, PathHead, PathRoot, TypeRef};
-use movement_parser::catalog::types::{CollectionSchema, Delivery, EdgeSchema, InstanceSchema, ParentChanges, PositionSchema};
+use movement_parser::catalog::types::{CollectionSchema, Delivery, EdgeSchema, InstanceSchema, PositionSchema};
 use movement_parser::listen_plan::{HopJudged, ListenPlan, PlanHop};
 use movement_parser::lowering::expression::{EdgeStep, Expression, LogicalOp, TraversalStep};
 
@@ -61,13 +61,6 @@ impl Declared<'_> {
         match self {
             Declared::Collection(c) => c.delivery,
             Declared::Edge(e) => e.delivery,
-        }
-    }
-
-    fn parent_changes(&self) -> Option<ParentChanges> {
-        match self {
-            Declared::Collection(c) => c.parent_changes,
-            Declared::Edge(e) => e.parent_changes,
         }
     }
 
@@ -271,9 +264,6 @@ impl Checker<'_> {
                 unwatchable = true;
                 HopJudged::None
             };
-            if judged == HopJudged::Resolved && !self.changes_followed(hop, instance, path) {
-                unwatchable = true;
-            }
             planned.push(PlanHop {
                 edge: edge.to_string(),
                 from: hop.from.unwrap_or_default().to_string(),
@@ -317,27 +307,6 @@ impl Checker<'_> {
             spell_name(&last.step.edge_type_id)
         );
         self.report(codes::LISTEN_UNWATCHABLE, message, path.span);
-    }
-
-    /// MOV_LISTEN_UNWATCHABLE, false, for a hop the host lists whose module
-    /// reports its changes (`parentChanges: pushed`) per record it hangs off
-    /// (`delivery: scope`): listen-fire follows a hop's changes only where
-    /// they are reported once for the connection, so it would never list
-    /// such a hop again.
-    fn changes_followed(&mut self, hop: &Hop, instance: &Instance, path: &PathHead) -> bool {
-        let Some(from) = hop.from else { return true };
-        if hop.edge.parent_changes() != Some(ParentChanges::Pushed) || hop.edge.delivery() != Some(Delivery::Scope) {
-            return true;
-        }
-        let parent = crate::types::position::display_name_of(instance, from);
-        let message = format!(
-            "'-[:{}]->' on {} reports its changes only per {parent} (`parentChanges: pushed` with `delivery: scope`), and listen-fire does not follow changes reported per {parent} yet, so this listen would never list its {}s again",
-            hop.step.edge_type_id,
-            owner(instance, hop.from),
-            crate::types::position::display_name_of(instance, hop.to)
-        );
-        self.report(codes::LISTEN_UNWATCHABLE, message, path.span);
-        false
     }
 
     /// A name `filter` reads that is neither one of `aliases` nor a field of

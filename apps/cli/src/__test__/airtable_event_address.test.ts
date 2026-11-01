@@ -1,8 +1,7 @@
-// A parameter typed by an Airtable event address names a table the
-// connection's base has, or `listen-fire check` refuses it where it is written,
-// against the fake Airtable (packages/fake-channels: bases "Pipeline Tracker"
-// and "Ops"). An address that names no table used to leave the parameter
-// untyped, so a misspelled field read off its record checked clean.
+// An Airtable listen walks to the table it hears by name, and `listen-fire
+// check` refuses one naming a table the connection's base does not have, or a
+// kind of change there is not, where it is written — against the fake Airtable
+// (packages/fake-channels: bases "Pipeline Tracker" and "Ops").
 
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -50,8 +49,8 @@ async function connected(url: string): Promise<string> {
   return dir;
 }
 
-/** The expense review a builder wrote, against `base` and `table`, reading `field`. */
-function check(dir: string, input: { base: string; table: string; field: string }) {
+/** The expense review a builder wrote, on `table` of the connection's `base`, for changes of `kind`. */
+function check(dir: string, input: { base: string; table: string; kind: string }) {
   writeFileSync(
     join(dir, 'movements/expenses.mvt'),
     `import { \`@lf/airtable\` as airtable } from adapters
@@ -59,40 +58,34 @@ import { my_airtable } from credentials
 
 finance = connect airtable using my_airtable { base: "${input.base}" }
 
-function \`Review Expense\`(change: <finance-[e:\`Record Change\` WHERE e.table == "${input.table}"]->>) {
-  expense = only(change-[:Record]->)
-  if (expense != null && expense.${input.field} > 500) {
-    write expense { Vendor: "flagged" }
-  }
+function \`Review Expense\`(change: <finance-[:Change]->>) {
+  return only(change-[:Record]->).Id
 }
 
-listen to finance { base: "${input.base}", table: "${input.table}", events: ["record.created"] } fire \`Review Expense\`
+listen to finance-[t:Tables WHERE t.Name == "${input.table}"]->-[c:Changes WHERE c.Kind == "${input.kind}"]-> fire \`Review Expense\`
 `,
   );
   return lfSync(dir, 'check');
 }
 
-test('an Airtable event address must name a table the base has, and then types the record it carries', async () => {
+test('an Airtable listen must name a table its base has, and a kind of change there is', async () => {
   const fake = await fakeChannels();
   try {
     const dir = await connected(fake.url);
 
-    const nowhere = check(dir, { base: 'Finance', table: 'Expenses', field: 'Amout' });
+    const nowhere = check(dir, { base: 'Finance', table: 'Expenses', kind: 'created' });
     assert.equal(nowhere.code, 1, nowhere.out);
-    assert.match(nowhere.out, /expenses\.mvt:6:\d+ error MOV_UNKNOWN_POSITION .*"Expenses"/);
     assert.match(nowhere.out, /warning MOV_CONSTRUCT_UNKNOWN_OPTION 'base' value "Finance" isn't one this connection can see — try: "Pipeline Tracker", "Ops"/);
 
-    const noTable = check(dir, { base: 'Ops', table: 'Expenses', field: 'Spend' });
+    const noTable = check(dir, { base: 'Ops', table: 'Expenses', kind: 'created' });
     assert.equal(noTable.code, 1, noTable.out);
-    assert.match(noTable.out, /expenses\.mvt:6:\d+ error MOV_ENUM_UNKNOWN_VALUE "Expenses" .*expected one of: tblVENDORS/);
-    assert.doesNotMatch(noTable.out, /MOV_UNKNOWN_POSITION/);
+    assert.match(noTable.out, /expenses\.mvt:\d+:\d+ error MOV_UNKNOWN_POSITION 'finance' has no Table whose Name is "Expenses" — it has: "Vendors"/);
 
-    const misspelled = check(dir, { base: 'Ops', table: 'tblVENDORS', field: 'Spendd' });
-    assert.equal(misspelled.code, 1, misspelled.out);
-    assert.match(misspelled.out, /error MOV_UNKNOWN_PROPERTY .*Spendd/);
-    assert.doesNotMatch(misspelled.out, /MOV_UNKNOWN_POSITION|MOV_CONSTRUCT_UNKNOWN_OPTION/);
+    const noKind = check(dir, { base: 'Ops', table: 'Vendors', kind: 'renamed' });
+    assert.equal(noKind.code, 1, noKind.out);
+    assert.match(noKind.out, /error MOV_ENUM_UNKNOWN_VALUE "renamed" isn't a value of enum \(created \| updated \| deleted\)/);
 
-    const right = check(dir, { base: 'Ops', table: 'tblVENDORS', field: 'Spend' });
+    const right = check(dir, { base: 'Ops', table: 'Vendors', kind: 'created' });
     assert.equal(right.code, 0, right.out);
   } finally {
     await fake.stop();
