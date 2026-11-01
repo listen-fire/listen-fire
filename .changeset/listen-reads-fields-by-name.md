@@ -1,7 +1,4 @@
 ---
-"@listen-fire/engine": patch
-"@listen-fire/movement-lang": patch
-"@listen-fire/engine-contracts": patch
 "@listen-fire/embed": patch
 "@listen-fire/email": patch
 ---
