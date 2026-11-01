@@ -38,7 +38,7 @@ use crate::movements_slot::{Change, ChangeKind, Listed, MovementsStore, Watched,
 use crate::sources::{MOVEMENT_EXTENSION, MovementFile, Parsed, scan_movements};
 use crate::backend::{RunHostStore, StoreSpec, open_store};
 use crate::edge_polls::EDGE_POLL_WORK_KIND;
-use crate::store::{ClaimDue, DeliverySource, EventReceipt, NewDelivery, NewWork, POLL_WORK_KIND, Release, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, iso, iso_at};
+use crate::store::{ClaimDue, DeliverySource, EventReceipt, NewDelivery, NewWork, Release, RunSettle, RunStart, SETTLE_RACE_WORK_KIND, iso, iso_at};
 use module_wire::results as wire_results;
 
 /// How many files' parses a session's runs keep (movement_engine::program::keep_parses):
@@ -583,6 +583,19 @@ enum PolledRow {
 /// One poll of a shared key's edge (`poll_edge_once`): what it ran itself
 /// (the arming poll's line, or the judging of a page that minted no run),
 /// the credential it polled as, and the row it kept for the runs it minted.
+/// An arrival's receipt key (crate::arrivals::arrival_receipt_key).
+fn receipt_of(arrival: &ArrivalIn) -> String {
+    arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), arrival.identity.as_deref().unwrap_or_default(), arrival.version.as_deref())
+}
+
+/// The listens sharing a key with no cursor that its last poll did not
+/// arm, `armed` being the pipelines it did. A checkpoint kept before it
+/// named them armed each listen then sharing it: none has joined.
+fn joined_since(set: &FileSet, shared: &crate::edge_polls::Shared, armed: Option<&Js>) -> Vec<usize> {
+    let Some(armed) = armed.and_then(Js::as_array) else { return Vec::new() };
+    shared.fires.iter().copied().filter(|i| !armed.iter().any(|p| p.as_str() == Some(set.listens[*i].pipeline().as_str()))).collect()
+}
+
 struct EdgePolled {
     fired: Fired,
     polled_as: Option<String>,
@@ -887,6 +900,13 @@ impl Session {
         };
         let mut started = BTreeSet::new();
         let mut paused: HashMap<String, bool> = HashMap::new();
+        // A poll's page lists again what an earlier one did: that a listen
+        // has taken it before is said only under LF_LOG=debug there.
+        let polled = matches!(judged_by, JudgedBy::Minted(_));
+        let taken_before = |fired: &mut Fired, line: String| match polled {
+            true => crate::log::debug(|| line),
+            false => fired.redelivered.push(line),
+        };
         for arrival in arrivals.iter().filter(|a| !a.gone) {
             let identity = arrival.identity.as_deref().unwrap_or_default();
             // Whether a listen on the edge takes it, and what was said of
@@ -953,14 +973,14 @@ impl Session {
                         self.store.hold_listen_arrival(&pipeline).map_err(|e| e.to_string())?;
                         fired.redelivered.push(format!("{named}: the arrival {identity} on {} runs nothing, {}", arrival.edge, crate::loop_breaker::HELD));
                     } else {
-                        fired.redelivered.push(format!("{named} has taken the arrival {identity} on {} before: this delivery runs nothing", arrival.edge));
+                        taken_before(&mut fired, format!("{named} has taken the arrival {identity} on {} before: this delivery runs nothing", arrival.edge));
                     }
                     continue;
                 }
                 let chain = self.chain_before(adapter, listen, arrival)?;
                 if chain.len() >= self.project.loop_depth {
                     if !self.store.claim_event(&EventReceipt::own(&pipeline, &claimed)).map_err(|e| e.to_string())? {
-                        fired.redelivered.push(format!("{named} has taken the arrival {identity} on {} before: this delivery runs nothing", arrival.edge));
+                        taken_before(&mut fired, format!("{named} has taken the arrival {identity} on {} before: this delivery runs nothing", arrival.edge));
                         continue;
                     }
                     let line = crate::loop_breaker::loop_line(&named, &chain);
@@ -978,7 +998,7 @@ impl Session {
                         started.insert(run_id);
                         fired.outcomes.push(outcome);
                     }
-                    None => fired.redelivered.push(format!("{named} has run the arrival {identity} on {} before: this delivery runs nothing", arrival.edge)),
+                    None => taken_before(&mut fired, format!("{named} has run the arrival {identity} on {} before: this delivery runs nothing", arrival.edge)),
                 }
             }
             // A poll's row was judged when the poll minted its runs.
@@ -1291,23 +1311,46 @@ impl Session {
         };
         let arrivals = crate::arrivals::arrivals_of(&answer).map_err(|e| format!("{}: a poll of '{}' answered {e}", key.adapter, key.edge))?;
         let arrivals = under_scope(&arrivals, key);
+        let cursorless = shared.declared.as_ref().is_some_and(|d| d.cursorless);
         let mut cursor = obj! { "armed" => Js::Bool(true) };
         if let Some(at) = answer.get("cursor").filter(|c| **c != Js::Null) {
             cursor.insert("cursor".into(), at.clone());
         }
+        // An edge listed whole each time keeps what it listed and which
+        // listens have seen it: the next poll judges only what is new, and a
+        // listen that joins the key later arms on its first poll.
+        if cursorless {
+            cursor.insert("armedFor".into(), Js::Arr(shared.fires.iter().map(|i| Js::str(set.listens[*i].pipeline())).collect()));
+            cursor.insert("listed".into(), Js::Arr(arrivals.iter().map(|a| Js::str(receipt_of(a))).collect()));
+        }
         let checkpoint = Js::Obj(cursor);
         let polled_as = credential.map(|c| c.name.clone());
         let mut fired = Fired::default();
-        if state.is_none() {
-            let listens: Vec<String> = shared.fires.iter().map(|i| &set.listens[*i]).map(|l| format!("{}:{}", set.file(&l.file).name, l.movement_name)).collect();
-            if !listens.is_empty() {
-                fired.redelivered.push(format!("{}: {} armed; it fires on changes from now", key.adapter, listens.join(", ")));
+        let arming = |fired: &mut Fired, listens: &[usize]| {
+            let named: Vec<String> = listens.iter().map(|i| &set.listens[*i]).map(|l| format!("{}:{}", set.file(&l.file).name, l.movement_name)).collect();
+            if !named.is_empty() {
+                fired.redelivered.push(format!("{}: {} armed; it fires on changes from now", key.adapter, named.join(", ")));
             }
+        };
+        if state.is_none() {
+            arming(&mut fired, &shared.fires);
             // A cursor already keeps the backlog from firing; only an edge listed whole each time needs its receipts.
-            if shared.declared.as_ref().is_some_and(|d| d.cursorless) {
+            if cursorless {
                 self.note_seen_arrivals(set, &key.adapter, &arrivals, key.credential.as_deref(), &shared.fires)?;
             }
         } else {
+            let (arrivals, shared) = match state.as_ref().filter(|_| cursorless) {
+                Some(state) => {
+                    let joined = joined_since(set, shared, state.get("armedFor"));
+                    arming(&mut fired, &joined);
+                    self.note_seen_arrivals(set, &key.adapter, &arrivals, key.credential.as_deref(), &joined)?;
+                    let listed: Option<BTreeSet<&str>> = state.get("listed").and_then(Js::as_array).map(|seen| seen.iter().filter_map(Js::as_str).collect());
+                    let fresh: Vec<ArrivalIn> = arrivals.iter().filter(|a| listed.as_ref().is_none_or(|seen| !seen.contains(receipt_of(a).as_str()))).cloned().collect();
+                    (fresh, crate::edge_polls::Shared { fires: shared.fires.iter().copied().filter(|i| !joined.contains(i)).collect(), ..shared.clone() })
+                }
+                None => (arrivals, shared.clone()),
+            };
+            let (arrivals, shared) = (&arrivals, &shared);
             let (logged, at) = (crate::arrivals::logged(&arrivals), iso(0));
             let resend_window_ms = crate::externals::resend_window_ms(&self.project, &key.adapter, &resend_manifest);
             let log = crate::waits::DeliveryArrivals { team_id: LOCAL_TENANT, adapter_type: &key.adapter, arrivals: &logged, at: &at, resend_window_ms };
@@ -1351,7 +1394,9 @@ impl Session {
             }
             let mark = self.store.arrival_mark().map_err(|e| e.to_string())?;
             crate::arrivals::log_and_wake(&*self.store, &log)?;
-            fired = self.fire_arrivals_to(set, &key.adapter, &arrivals, Delivered { arrival_mark: Some(mark), ..came_for }, JudgedBy::Sharing(shared)).await?;
+            let judged = self.fire_arrivals_to(set, &key.adapter, arrivals, Delivered { arrival_mark: Some(mark), ..came_for }, JudgedBy::Sharing(shared)).await?;
+            fired.outcomes.extend(judged.outcomes);
+            fired.redelivered.extend(judged.redelivered);
         }
         self.store.save_inbound_checkpoint(subscription, &checkpoint).map_err(|e| e.to_string())?;
         Ok(EdgePolled { fired, polled_as, row: None })
@@ -1362,6 +1407,9 @@ impl Session {
     /// run, so the next poll (which lists all of it again) fires only what
     /// is new.
     fn note_seen_arrivals(&self, set: &FileSet, adapter: &str, arrivals: &[ArrivalIn], credential: Option<&str>, sharing: &[usize]) -> Result<(), String> {
+        if sharing.is_empty() {
+            return Ok(());
+        }
         let now_ms = self.now_ms() as f64;
         for arrival in arrivals.iter().filter(|a| !a.gone) {
             let receipt = arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), arrival.identity.as_deref().unwrap_or_default(), arrival.version.as_deref());
@@ -2026,12 +2074,6 @@ impl Session {
                     return Ok((Next::Done, Vec::new()));
                 }
                 Ok(self.drive_parked_run(set, &run_id, Drain::OwedRaces).await?.row_next())
-            }
-            // A settings listen's poll, queued before 0.13: nothing polls it
-            // now, so its checkpoint goes with it.
-            POLL_WORK_KIND => {
-                self.store.save_inbound_checkpoint(&text("subscription")?, &Js::Null).map_err(|e| e.to_string())?;
-                Ok((Next::Done, Vec::new()))
             }
             EDGE_POLL_WORK_KIND => self.poll_edge_row(set, &text("subscription")?).await,
             crate::resolve::RESOLVE_WORK_KIND => self.resolve_row(set, &text("pipeline")?).await,

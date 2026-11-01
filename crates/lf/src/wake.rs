@@ -216,8 +216,8 @@ pub mod tests {
     #[test]
     fn a_wake_round_trips_the_wire() {
         for when in [When::Now, When::At(1_700_000_000_123)] {
-            let (method, params) = request(when, "poll_listen");
-            assert_eq!(request_of(method, &Js::from(params)), Ok((when, "poll_listen".to_string())));
+            let (method, params) = request(when, "poll_edge");
+            assert_eq!(request_of(method, &Js::from(params)), Ok((when, "poll_edge".to_string())));
         }
         assert!(request_of("wake.at", &Js::from(obj! { "kind" => Js::str("x"), "at" => Js::str("soon") })).unwrap_err().contains("instant"));
         assert!(request_of("wake.now", &Js::from(obj! {})).unwrap_err().contains("kind"));

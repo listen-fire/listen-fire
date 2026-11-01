@@ -198,10 +198,8 @@ create table if not exists work (
 
 /// The core's park reasons (`CORE_PARK_REASONS`).
 pub const CORE_PARK_REASONS: &[&str] = &["timer", "await", "limit"];
-/// A polled listen's row in the work queue: its next poll.
-pub const POLL_WORK_KIND: &str = "poll_listen";
 /// The work kinds listen-fire queues.
-pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", "poll_listen", crate::edge_polls::EDGE_POLL_WORK_KIND, crate::resolve::RESOLVE_WORK_KIND, "refresh_subscription", SETTLE_RACE_WORK_KIND];
+pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", crate::edge_polls::EDGE_POLL_WORK_KIND, crate::resolve::RESOLVE_WORK_KIND, "refresh_subscription", SETTLE_RACE_WORK_KIND];
 /// A race a resumed arm won and left to its run to settle (crate::run_host):
 /// the row is what the run owes until the commit of the step that settles
 /// the race deletes it.
@@ -766,10 +764,11 @@ impl Store {
         // Callbacks and the waits keyed by a correlation retired at 0.13: a
         // run parked on one cannot resume on this release, and the work rows
         // that would have woken it (a callback's firing, a wake by key
-        // rather than by wait) have no kind left to run as.
+        // rather than by wait) have no kind left to run as. Nor has a
+        // settings listen's poll: a listen is polled on its edge from 0.13.
         db.execute_batch(
             "drop table if exists callback; drop table if exists await_correlation;
-             delete from work where kind = 'fire_callback' or (kind = 'wake_await' and json_extract(payload, '$.waitId') is null);",
+             delete from work where kind in ('fire_callback', 'poll_listen') or (kind = 'wake_await' and json_extract(payload, '$.waitId') is null);",
         )?;
         // Added to a state file written before the cost cap kept run spend.
         for column in SPEND_COLUMNS {
@@ -1741,11 +1740,12 @@ mod tests {
     }
 
     #[test]
-    fn work_rows_of_the_retired_callbacks_go_on_open() {
+    fn work_rows_of_the_retired_callbacks_and_settings_polls_go_on_open() {
         let (store, path) = state_file();
         let due = iso(-1_000);
         for (kind, key, payload) in [
             ("fire_callback", "legacy-fire", r#"{"callbackId":"c1"}"#),
+            ("poll_listen", "listen:notes:watch", r#"{"subscription":"listen:notes:watch"}"#),
             ("wake_await", "legacy-key-wake", r#"{"adapterType":"slack","correlationKey":"k"}"#),
             ("wake_await", "wait-wake", r#"{"waitId":"w1","runId":"r1","address":"s1"}"#),
             ("resume_timer", "timer", r#"{"runId":"r1"}"#),
@@ -1755,17 +1755,17 @@ mod tests {
         drop(store);
         let reopened = Store::open(&path).unwrap();
         let left: Vec<String> = reopened.claim_due(&claim(10, 60_000)).unwrap().into_iter().map(|w| w.key).collect();
-        assert_eq!(left.len(), 2, "a firing and a wake by key are dropped: {left:?}");
+        assert_eq!(left.len(), 2, "a firing, a settings listen's poll and a wake by key are dropped: {left:?}");
         assert!(left.contains(&"wait-wake".to_string()) && left.contains(&"timer".to_string()), "{left:?}");
     }
 
     #[test]
     fn an_arm_if_absent_leaves_a_held_row_due_when_its_holder_says() {
         let (store, _) = state_file();
-        assert!(store.enqueue_if_absent("poll_listen", "p", &no_payload(), None).unwrap(), "queued");
+        assert!(store.enqueue_if_absent("poll_edge", "p", &no_payload(), None).unwrap(), "queued");
         let held = store.claim_due(&claim(10, 60_000)).unwrap();
         assert_eq!(held.len(), 1);
-        assert!(!store.enqueue_if_absent("poll_listen", "p", &no_payload(), None).unwrap(), "a second worker's arm queues nothing");
+        assert!(!store.enqueue_if_absent("poll_edge", "p", &no_payload(), None).unwrap(), "a second worker's arm queues nothing");
         let next = iso(3_600_000);
         store.release_work(&held[0].id, &held[0].claim, Some(&next), Release::Rescheduled).unwrap();
         assert_eq!(work_row(&store, "p").0, next, "due when the holder said, not at once");
@@ -1811,10 +1811,10 @@ mod tests {
     #[test]
     fn a_claim_naming_kinds_leases_only_rows_of_those_kinds() {
         let (store, _) = state_file();
-        for (kind, key) in [("poll_listen", "p1"), ("resume_timer", "t1"), ("poll_listen", "p2"), ("fire_event", "e1")] {
+        for (kind, key) in [("poll_edge", "p1"), ("resume_timer", "t1"), ("poll_edge", "p2"), ("fire_event", "e1")] {
             store.enqueue(kind, key, &no_payload(), Some(&iso(-1_000))).unwrap();
         }
-        let polls = [String::from("poll_listen")];
+        let polls = [String::from("poll_edge")];
         let mut keys: Vec<String> = store.claim_due(&ClaimDue { kinds: Some(&polls), ..claim(10, 60_000) }).unwrap().into_iter().map(|w| w.key).collect();
         keys.sort();
         assert_eq!(keys, ["p1", "p2"]);
@@ -1827,8 +1827,9 @@ mod tests {
     #[test]
     fn a_kind_lf_does_not_drain_is_refused_at_the_queue() {
         let (store, _) = state_file();
-        // A callback's body is no work since callbacks retired at 0.13.
+        // A callback's body is no work since callbacks retired at 0.13, nor a settings listen's poll.
         assert!(matches!(store.enqueue("fire_callback", "k", &no_payload(), None), Err(StoreError::Invalid(_))));
+        assert!(matches!(store.enqueue("poll_listen", "k", &no_payload(), None), Err(StoreError::Invalid(_))));
     }
 
     #[test]

@@ -248,12 +248,8 @@ fn result_schema(method: &str) -> Option<S> {
         "getRelated" => arr(related_result()),
         "iterateRelated" | "iterateRelatedPage" => related_page(),
         "preprocessInbound" => obj(vec![req("events", arr(discriminable_event())), opt("arrivals", arr(arrival())), opt("checkpoint", S::Unknown)]),
-        // A listen's poll in the settings form, or, from 2.6, a poll of a
-        // listenable edge shared by the listens on it.
-        "poll" => S::Union(vec![
-            obj(vec![req("events", arr(discriminable_event())), opt("checkpoint", S::Unknown)]),
-            obj(vec![req("arrivals", arr(arrival())), opt("cursor", S::Unknown)]),
-        ]),
+        // A poll of a listenable edge, shared by the listens on it (2.6).
+        "poll" => obj(vec![req("arrivals", arr(arrival())), opt("cursor", S::Unknown)]),
         "listEventTypes" => arr(obj(vec![
             req("tag", S::Str),
             req("positionType", S::Str),
@@ -525,7 +521,6 @@ mod tests {
         assert_eq!(accepted.get("arrivals").map(Js::to_json), Some(format!("[{landed}]")));
         let unnamed = r#"{"events":[],"arrivals":[{"edge":"Comments","key":"thread:c1","landing":{"fields":{}}}]}"#;
         assert!(check("preprocessInbound", "acme", &js(unnamed)).unwrap_err().contains("Invalid input at arrivals.0"));
-        assert!(check("poll", "acme", &js(r#"{"events":[],"arrivals":[]}"#)).unwrap().get("arrivals").is_none(), "a poll reports none");
     }
 
     #[test]
@@ -536,7 +531,13 @@ mod tests {
         assert_eq!(check("poll", "feed", &js(r#"{"arrivals":[]}"#)).unwrap().to_json(), r#"{"arrivals":[]}"#, "no cursor: none kept");
         let unnamed = r#"{"arrivals":[{"edge":"Notes","landing":{"fields":{}}}]}"#;
         assert!(check("poll", "feed", &js(unnamed)).is_err(), "an arrival names its identity");
-        assert!(check("poll", "feed", &js(r#"{"cursor":7}"#)).is_err(), "neither events nor arrivals");
+        assert!(check("poll", "feed", &js(r#"{"cursor":7}"#)).is_err(), "no arrivals");
+    }
+
+    #[test]
+    fn a_0_12_poll_answer_of_events_is_refused_naming_arrivals() {
+        let refused = check("poll", "feed", &js(r#"{"events":[],"checkpoint":7}"#)).unwrap_err();
+        assert!(refused.contains("arrivals"), "{refused}");
     }
 
     #[test]

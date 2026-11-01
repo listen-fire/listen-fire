@@ -358,7 +358,7 @@ export const wakeSlotCases: WakeConformanceCase[] = [
     name: 'wake: many nows in a row are each answered, and start a worker',
     async run(harness) {
       const asked = Date.now();
-      for (const kind of ['fire_event', 'wake_await', 'fire_event', 'poll_listen', 'fire_callback']) {
+      for (const kind of ['fire_event', 'wake_await', 'fire_event', 'poll_edge', 'resolve_listen']) {
         assert.equal(await harness.client.call('wake.now', { kind }), null);
       }
       await startsSince(harness, asked, Date.now() + harness.slackMs, 'five wake.now');

@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 
 use crate::json::Js;
 use crate::backend::RunHostStore;
-use crate::store::{ClaimedWork, POLL_WORK_KIND, Release, SETTLE_RACE_WORK_KIND, StoreError, iso, timer_work_key, timer_work_payload};
+use crate::store::{ClaimedWork, Release, SETTLE_RACE_WORK_KIND, StoreError, iso, timer_work_key, timer_work_payload};
 
 /// A minute of silence is a dead process, not a slow one (`RUN_LEASE_TTL_MS`).
 pub const RUN_LEASE_TTL_MS: i64 = 60_000;
@@ -129,14 +129,13 @@ const FAILED_RETRY_CAP_MS: i64 = 3_600_000;
 /// The attempts a row has before it gives up (the platform has no cap).
 /// With the backoff that is about three hours of failing: an outage of a
 /// module or a provider is waited out, while a row that can never succeed,
-/// or that kills its worker each time, stops and says why. A polled
-/// listen's row never gives up, nor a shared poll's, nor a listen's
-/// re-resolution: its failures are its source's, and polling again is its
+/// or that kills its worker each time, stops and says why. A shared poll's
+/// row never gives up, nor a listen's re-resolution: its failures are its source's, and polling again is its
 /// schedule (dead, its listens would never be polled again).
 pub const MAX_WORK_ATTEMPTS: i64 = 10;
 
 fn gives_up(kind: &str) -> bool {
-    kind != POLL_WORK_KIND && kind != crate::edge_polls::EDGE_POLL_WORK_KIND && kind != crate::resolve::RESOLVE_WORK_KIND
+    kind != crate::edge_polls::EDGE_POLL_WORK_KIND && kind != crate::resolve::RESOLVE_WORK_KIND
 }
 
 /// When a row that failed its `attempts`-th attempt is tried again, from now.
@@ -544,10 +543,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_row_whose_attempts_never_end_is_past_its_cap_and_a_polled_listens_never_is() {
+    async fn a_row_whose_attempts_never_end_is_past_its_cap_and_a_shared_polls_never_is() {
         let store_ = state_file();
         store_.enqueue("fire_event", "e", &Js::Null, Some(&iso(-1_000))).unwrap();
-        store_.enqueue("poll_listen", "p", &Js::Null, Some(&iso(-1_000))).unwrap();
+        store_.enqueue("poll_edge", "p", &Js::Null, Some(&iso(-1_000))).unwrap();
         // Each claim's worker died: its lease lapses at once.
         let lapsing = || store_.claim_due(&ClaimDue { limit: 10, lease_ms: -1, due_by: None, kinds: None }).unwrap();
         for _ in 0..MAX_WORK_ATTEMPTS {
@@ -556,8 +555,8 @@ mod tests {
         let rows = lapsing();
         let event = rows.iter().find(|w| w.kind == "fire_event").unwrap();
         assert!(past_cap(event));
-        assert!(!past_cap(rows.iter().find(|w| w.kind == "poll_listen").unwrap()));
-        assert!(matches!(work_failed(&store_, rows.iter().find(|w| w.kind == "poll_listen").unwrap(), "source down").await.unwrap(), FailedWork::Retried));
+        assert!(!past_cap(rows.iter().find(|w| w.kind == "poll_edge").unwrap()));
+        assert!(matches!(work_failed(&store_, rows.iter().find(|w| w.kind == "poll_edge").unwrap(), "source down").await.unwrap(), FailedWork::Retried));
         assert!(matches!(give_up_work(&store_, event, "never finished").await.unwrap(), FailedWork::GaveUp { runs, .. } if runs.is_empty()));
     }
 

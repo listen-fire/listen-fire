@@ -28,9 +28,14 @@ process.env.LF_SERVE_MODULE ??= join(REPO, 'apps/cli/node_modules/.bin/serve-mod
 function notesProject(listens: string[], options: { takes?: boolean } = {}): string {
   const dir = feedProject();
   if (options.takes === true) writeFileSync(join(dir, 'externals/feed/takes'), '');
+  writeListens(dir, listens);
+  return dir;
+}
+
+/** Rewrite the feed project's one file to hold `listens`. */
+function writeListens(dir: string, listens: string[]): void {
   const fired = ['a', 'b'].map((letter) => `function ${letter}(n: <f-[:Notes]->>) {\n  fail("${letter} saw \${n.Title}")\n}\n`).join('\n');
   writeFileSync(join(dir, 'movements/notes.mvt'), `import { feed } from adapters\n\nf = connect feed\n\n${fired}\n${listens.join('\n')}\n`);
-  return dir;
 }
 
 function lfAt(dir: string, args: string[], aheadMs = 0): { code: number; out: string } {
@@ -283,6 +288,37 @@ test('an edge without a cursor lists all of it again: what the arming poll saw i
   assert.deepEqual(edgePolls(dir), [{ edge: 'Notes' }, { edge: 'Notes' }]);
   assert.deepEqual(saw(drained.out, 'a'), ['a3']);
   assert.equal(runsOf(dir, 'a'), 1);
+});
+
+test('a listen that joins an edge without a cursor arms on its first poll, and a listing unchanged since keeps nothing', () => {
+  const dir = notesProject(['listen to f-[n:Notes WHERE n.Title CONTAINS "a"]-> fire a']);
+  writeFileSync(join(dir, 'externals/feed/nocursor'), '');
+  feed(dir, [{ id: 'n1', title: 'a1', at: 1 }]);
+  lfAt(dir, ['drain', '--until-idle']);
+  writeListens(dir, ['listen to f-[n:Notes WHERE n.Title CONTAINS "a"]-> fire a', 'listen to f-[n:Notes]-> fire b']);
+  const joined = lfAt(dir, ['drain', '--until-idle'], 61_000);
+  assert.match(joined.out, /notes:b armed; it fires on changes from now/);
+  assert.doesNotMatch(joined.out, /notes:a armed/, 'the listen armed before is not armed again');
+  assert.equal(runsOf(dir, 'b'), 0, 'what was listed before it joined is not its to fire');
+  feed(dir, [
+    { id: 'n1', title: 'a1', at: 1 },
+    { id: 'n2', title: 'a2', at: 2 },
+  ]);
+  const fresh = lfAt(dir, ['drain', '--until-idle'], 122_000);
+  assert.deepEqual(saw(fresh.out, 'a'), ['a2']);
+  assert.deepEqual(saw(fresh.out, 'b'), ['a2']);
+  const db = new DatabaseSync(join(dir, '.lf', 'state.db'));
+  try {
+    const deliveries = () => (db.prepare('select count(*) as n from delivery').get() as { n: number }).n;
+    const kept = deliveries();
+    const idle = lfAt(dir, ['drain', '--until-idle'], 183_000);
+    assert.equal(idle.out.trim(), '', 'an unchanged listing says nothing');
+    assert.equal(deliveries(), kept, 'and keeps no delivery');
+  } finally {
+    db.close();
+  }
+  assert.equal(runsOf(dir, 'a'), 1);
+  assert.equal(runsOf(dir, 'b'), 1);
 });
 
 test('an edge with a cursor keeps no receipts for what its arming poll saw: its cursor holds the backlog back', () => {

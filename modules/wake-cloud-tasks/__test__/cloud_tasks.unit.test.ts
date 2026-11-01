@@ -72,7 +72,7 @@ describe('a wake becomes a task', () => {
       [taskName(M), iso(M * MINUTE + 12_345)],
       [taskName(M + 1), iso((M + 1) * MINUTE)],
     ]);
-    await wake.now('poll_listen');
+    await wake.now('poll_edge');
     expect(api.created).toHaveLength(2);
   });
 

@@ -41,7 +41,7 @@ pub struct Pool {
 }
 
 impl Pool {
-    /// `--kinds poll_listen,poll_edge`: each a work kind.
+    /// `--kinds poll_edge,resolve_listen`: each a work kind.
     pub fn of(list: &str) -> Result<Pool, String> {
         let kinds: Vec<&str> = list.split(',').map(str::trim).filter(|k| !k.is_empty()).collect();
         if kinds.is_empty() {
@@ -116,16 +116,17 @@ mod tests {
 
     #[test]
     fn a_pool_names_work_kinds() {
-        let pool = Pool::of("poll_listen, poll_edge").unwrap();
-        assert!(pool.takes("poll_listen") && pool.takes("poll_edge") && !pool.takes("resume_timer"));
-        assert_eq!(pool.work_kinds(), Some(&["poll_listen".to_string(), "poll_edge".to_string()][..]));
+        let pool = Pool::of("poll_edge, resolve_listen").unwrap();
+        assert!(pool.takes("poll_edge") && pool.takes("resolve_listen") && !pool.takes("resume_timer"));
+        assert_eq!(pool.work_kinds(), Some(&["poll_edge".to_string(), "resolve_listen".to_string()][..]));
         let runs = Pool::of("fire_event,resume_timer").unwrap();
-        assert!(!runs.takes("poll_listen"));
+        assert!(!runs.takes("poll_edge"));
         assert!(Pool::of("poll").unwrap_err().contains("not a kind of work"));
         assert!(Pool::of(",").is_err());
         let all = Pool::default();
         assert!(all.takes("wake_await") && all.work_kinds().is_none());
         assert!(Pool::of("fire_callback").unwrap_err().contains("not a kind of work"), "callbacks retired at 0.13");
-        assert_eq!(Pool::of("poll_listen,cron").unwrap_err(), "--kinds cron: a cron listen's ticks are polled from 0.13, as `poll_edge` rows: name poll_edge");
+        assert!(Pool::of("poll_listen").unwrap_err().contains("not a kind of work"), "a settings listen's poll retired at 0.13");
+        assert_eq!(Pool::of("poll_edge,cron").unwrap_err(), "--kinds cron: a cron listen's ticks are polled from 0.13, as `poll_edge` rows: name poll_edge");
     }
 }
