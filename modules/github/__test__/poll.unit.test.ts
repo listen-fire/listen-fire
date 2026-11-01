@@ -74,7 +74,28 @@ describe('pollGithub', () => {
       },
     });
     expect((answer.cursor as GithubCheckpoint).updatedAfter).toBe(notifiedAt(5));
-    expect(fake.requests.at(-1)?.path).toBe(`/notifications?per_page=50&page=1&since=${encodeURIComponent(notifiedAt(0))}`);
+    const since = encodeURIComponent(notifiedAt(0));
+    expect(fake.requests.map((r) => r.path)).toEqual([`/notifications?per_page=50&page=1&since=${since}`, `/notifications?per_page=50&page=1&since=${since}&participating=true`]);
+  });
+
+  it('stamps `Participating` on every arrival, from a second call that names the threads you take part in', async () => {
+    fake.notify({ id: 'watching', reason: 'subscribed', repo: 'acme/api', type: 'Issue', number: 1, title: 'Watched', updated_at: notifiedAt(1) });
+    fake.notify({ id: 'mine', reason: 'author', repo: 'acme/api', type: 'Issue', number: 2, title: 'Mine', updated_at: notifiedAt(2), participating: true });
+    const answer = await poll({ updatedAfter: notifiedAt(0) });
+    expect(answer.arrivals.map((a) => 'landing' in a && [a.identity, a.landing.fields['Participating']])).toEqual([['watching', false], ['mine', true]]);
+    const reasoned = await poll({ updatedAfter: notifiedAt(0) }, reasonIn('subscribed'));
+    expect(reasoned.arrivals.map((a) => 'landing' in a && [a.identity, a.landing.fields['Participating'], a.takenApplied])).toEqual([['watching', false, true]]);
+  });
+
+  it('pays the second call only when there is something to deliver', async () => {
+    fake.notify({ id: 'watching', reason: 'subscribed', repo: 'acme/api', type: 'Issue', number: 1, title: 'Watched', updated_at: notifiedAt(1) });
+    const none = await poll({ updatedAfter: notifiedAt(0) }, reasonIn('mention'));
+    expect(none.arrivals).toEqual([]);
+    expect(fake.requests.filter((r) => r.path.includes('participating'))).toEqual([]);
+    clock += 61_000;
+    const quiet = await poll({ updatedAfter: notifiedAt(1), lastModified: new Date(notifiedAt(1)).toUTCString() });
+    expect(quiet.arrivals).toEqual([]);
+    expect(fake.requests.filter((r) => r.path.includes('participating'))).toEqual([]);
   });
 
   it('asks conditionally next time, and an unchanged feed is a 304 that fires nothing', async () => {
@@ -142,7 +163,7 @@ describe('pollGithub', () => {
     }
     const answer = await poll({ updatedAfter: notifiedAt(0) });
     expect(answer.arrivals).toHaveLength(55);
-    expect(fake.requests.filter((r) => r.path.startsWith('/notifications'))).toHaveLength(2);
+    expect(fake.requests.filter((r) => r.path.startsWith('/notifications') && !r.path.includes('participating'))).toHaveLength(2);
   });
 
   it('refuses an edge it does not have, by name', async () => {

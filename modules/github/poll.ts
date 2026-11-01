@@ -13,6 +13,12 @@
 // delivered arrives again. The module applies the taken filter itself:
 // `Reason` over what came back, `Participating == true` as GitHub's own
 // filter, so every arrival says `takenApplied`.
+//
+// GitHub tells participation only through that filter, so every arrival is
+// stamped with it: when the listen did not ask GitHub, a second call for the
+// same window names the participating threads, and the host can judge any
+// comparison on `Participating` (inside an OR, or `!=`) over a value that is
+// always there.
 
 import { holds, takenComparisons, type PollEdgeAnswer, type PollEdgeInput, type TakenComparison } from 'module-kit';
 
@@ -45,8 +51,8 @@ function participatingOf(taken: readonly TakenComparison[]): boolean | undefined
   return typeof pinned?.value === 'boolean' ? pinned.value : undefined;
 }
 
-function arrival(thread: GithubThread, participating: boolean | undefined, applied: boolean): Arrival {
-  const record = normalizeNotification(thread, participating !== undefined ? { participating } : {});
+function arrival(thread: GithubThread, participating: boolean, applied: boolean): Arrival {
+  const record = normalizeNotification(thread, { participating });
   return {
     edge: GITHUB_NOTIFICATIONS_COLLECTION,
     identity: thread.id,
@@ -105,16 +111,18 @@ export async function pollGithub(client: GithubClient, input: PollEdgeInput, now
   // `since` is GitHub's boundary to draw; the mark is ours, so a thread at
   // exactly the mark (already delivered) is not delivered twice.
   const fresh = answer.threads.filter((t) => t.updated_at > checkpoint.updatedAfter);
-  // `Participating == false` is the threads GitHub's own filter leaves out.
-  const theirs = participating === false && fresh.length > 0 ? await participatingIds(client, checkpoint.updatedAfter) : undefined;
   const others = (taken ?? []).filter((c) => c.field !== GITHUB_PARTICIPATING_FIELD);
   // Oldest first: a movement handles threads in the order they moved.
-  const arrivals = [...fresh]
+  const candidates = [...fresh]
     .sort((a, b) => a.updated_at.localeCompare(b.updated_at))
-    .filter((thread) => theirs === undefined || !theirs.has(thread.id))
-    .map((thread) => ({ thread, fields: notificationFields(normalizeNotification(thread)) }))
-    .filter(({ fields }) => others.every((c) => holds(fields[c.field], c)))
-    .map(({ thread }) => arrival(thread, participating, taken !== undefined));
+    .filter((thread) => others.every((c) => holds(notificationFields(normalizeNotification(thread))[c.field], c)));
+  // Unless GitHub was asked, the participating threads are named by a second
+  // call for the same window; only a poll with something to deliver pays it.
+  const theirs = participating !== true && candidates.length > 0 ? await participatingIds(client, checkpoint.updatedAfter) : undefined;
+  const takes = (thread: GithubThread): boolean => theirs?.has(thread.id) ?? true;
+  const arrivals = candidates
+    .filter((thread) => participating === undefined || takes(thread) === participating)
+    .map((thread) => arrival(thread, takes(thread), taken !== undefined));
 
   const newest = fresh.map((t) => t.updated_at).sort().at(-1);
   const next: GithubCheckpoint = {

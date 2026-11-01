@@ -153,3 +153,35 @@ test('listen-fire run --poll arms, fires once per new notification the listen se
     await channels.stop();
   }
 });
+
+test('a listen that reads Participating beside another field hears a participating thread of any reason', async () => {
+  const github = await startFakeGithub({ token: TOKEN, pollIntervalSeconds: 0 });
+  const channels = await fakeChannels();
+  try {
+    github.repo({ owner: 'acme', name: 'api' });
+    const dir = await triageProject(github, channels);
+    const hearing = TRIAGE.replace(
+      'WHERE n.Reason IN ["review_requested", "mention", "assign"]',
+      'WHERE n.Reason == "mention" OR n.Participating == true',
+    );
+    assert.notEqual(hearing, TRIAGE);
+    writeFileSync(join(dir, 'movements/triage.mvt'), hearing);
+    const checked = await run(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+
+    const armed = await run(dir, 'run', '--poll', 'triage');
+    assert.equal(armed.code, 0, armed.out);
+
+    const later = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    github.notify({ id: 't-mention', reason: 'mention', repo: 'acme/api', type: 'Issue', number: 7, title: 'Mentioned', updated_at: later(1) });
+    github.notify({ id: 't-mine', reason: 'author', repo: 'acme/api', type: 'Issue', number: 8, title: 'Mine', updated_at: later(2), participating: true });
+    github.notify({ id: 't-watch', reason: 'subscribed', repo: 'acme/api', type: 'Issue', number: 9, title: 'Only watched', updated_at: later(3) });
+
+    const fired = await run(dir, 'run', '--poll', 'triage');
+    assert.equal(fired.code, 0, fired.out);
+    assert.deepEqual((await slackMessages(channels)).sort(), ['C001 author in acme/api: Mine', 'C001 mention in acme/api: Mentioned']);
+  } finally {
+    await github.close();
+    await channels.stop();
+  }
+});
