@@ -129,6 +129,20 @@ describe('GithubAdapter walks', () => {
     expect(await walk(pr!, 'Comments')).toEqual([]);
   });
 
+  it('walks Notifications by Participating either way, each thread carrying what it was found by', async () => {
+    fake.notify({ id: 'mine', reason: 'mention', repo: 'acme/api', type: 'Issue', number: 7, title: 'Crash on boot', updated_at: '2026-10-28T09:02:00Z', participating: true });
+    fake.notify({ id: 'watched', reason: 'subscribed', repo: 'acme/web', type: 'Release', title: 'v2', updated_at: '2026-10-28T09:03:00Z', participating: false });
+    const flag = (value: boolean): Expression => ({ type: 'compare', op: 'eq', left: { type: 'edge_property', propertyTypeId: 'Participating' }, right: { type: 'static', value } }) as Expression;
+
+    const taking = (await walk(meta(), 'Notifications', { where: flag(true) })).map((r) => r.position);
+    expect(await Promise.all(taking.map((p) => read(p, 'Id')))).toEqual(['mine']);
+    expect(await read(taking[0]!, 'Participating')).toBe(true);
+
+    const watching = (await walk(meta(), 'Notifications', { where: flag(false) })).map((r) => r.position);
+    expect(await Promise.all(watching.map((p) => read(p, 'Id')))).toEqual(['watched']);
+    expect(await read(watching[0]!, 'Participating')).toBe(false);
+  });
+
   it('reads a notification’s repository off the thread, with no call', async () => {
     fake.notify({ id: 't1', reason: 'mention', repo: 'acme/web', type: 'Release', title: 'v2', updated_at: '2026-10-28T09:02:00Z' });
     const [thread] = (await walk(meta(), 'Notifications')).map((r) => r.position);

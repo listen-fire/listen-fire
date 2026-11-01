@@ -215,19 +215,25 @@ export class GithubAdapter extends BaseAdapter implements Adapter {
       }
       case GITHUB_NOTIFICATIONS_COLLECTION: {
         const window = updatedWindowFromWhere(input.where);
-        // Only `== true` is a question GitHub answers; a thread read any
-        // other way carries no `Participating`, and the engine judges it.
-        const participating = participatingFromWhere(input.where) === true;
-        const answer = await client.listNotifications({ ...window, ...(participating ? { participating } : {}), ...limitOf(input, input.where === undefined, 'Updated At', 'desc') });
+        // GitHub tells participation only by its `participating` filter:
+        // `== true` asks it, `== false` is the threads that filter leaves
+        // out. Either way each thread carries what it was found by, so the
+        // engine's own check agrees.
+        const participating = participatingFromWhere(input.where);
+        const answer = await client.listNotifications({ ...window, ...(participating === true ? { participating } : {}), ...limitOf(input, input.where === undefined, 'Updated At', 'desc') });
         if (!answer.modified) return [];
-        return answer.threads.map((thread) => ({
-          position: makeStablePosition({
-            adapterType: GITHUB_ADAPTER_TYPE,
-            recordType: GITHUB_NOTIFICATION_DISPLAY_NAME,
-            recordId: thread.id,
-            data: normalizeNotification(thread, participating ? { participating } : {}),
-          }),
-        }));
+        const theirs = participating === false ? await client.listNotifications({ ...window, participating: true }) : undefined;
+        const excluded = new Set(theirs?.modified ? theirs.threads.map((t) => t.id) : []);
+        return answer.threads
+          .filter((thread) => !excluded.has(thread.id))
+          .map((thread) => ({
+            position: makeStablePosition({
+              adapterType: GITHUB_ADAPTER_TYPE,
+              recordType: GITHUB_NOTIFICATION_DISPLAY_NAME,
+              recordId: thread.id,
+              data: normalizeNotification(thread, participating !== undefined ? { participating } : {}),
+            }),
+          }));
       }
       default:
         return [];
