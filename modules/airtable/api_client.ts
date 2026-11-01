@@ -517,31 +517,28 @@ class AirtableAPIClient {
 
   // -- Webhook management --
 
-  /** Register a per-base webhook. `dataTypes` says what it is told of: a
-   *  table's rows (`tableData`, the default, for a table's `Changes`) or the
-   *  base's tables themselves (`tableMetadata`, for its `Tables`). `tableId`
-   *  scopes it to one table via `recordChangeScope`; `changeTypes` is the
-   *  Airtable-native selection (`add` / `update` / `remove`). The returned
-   *  `macSecretBase64` is issued ONCE here; persist it immediately. */
+  /** Register a per-base webhook, over every table of the base (no
+   *  `recordChangeScope`). `dataTypes` says what it is told of: the rows
+   *  (`tableData`, the default, for the tables' `Changes`) or the base's
+   *  tables themselves (`tableMetadata`, for its `Tables`); `changeTypes` is
+   *  the Airtable-native selection (`add` / `update` / `remove`). The
+   *  returned `macSecretBase64` is issued ONCE here; persist it immediately. */
   async createWebhook({
     baseId,
     notificationUrl,
-    tableId,
     changeTypes,
     dataTypes,
   }: {
     baseId: string;
     notificationUrl: string;
-    tableId?: string;
     changeTypes: string[];
-    /** What the webhook is told of: a table's rows (`tableData`, the
-     *  default), or the base's tables themselves (`tableMetadata`). */
+    /** What the webhook is told of: the base's rows (`tableData`, the
+     *  default), or its tables themselves (`tableMetadata`). */
     dataTypes?: ('tableData' | 'tableMetadata')[];
   }): Promise<{ webhookId: string; macSecretBase64: string; expirationTime?: string }> {
     const filters: Record<string, unknown> = {
       dataTypes: dataTypes ?? ['tableData'],
       changeTypes,
-      ...(tableId ? { recordChangeScope: tableId } : {}),
     };
     const result = await this.fetch({
       route: `/v0/bases/${baseId}/webhooks`,

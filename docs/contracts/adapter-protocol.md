@@ -681,6 +681,17 @@ overrides; you state it because Listen-Fire has none of its own.
 - `carries` — the earlier hops whose records an arrival carries, by edge
   name, outermost first (`["Bases", "Tables"]` on a table's `Changes`): a
   filter on one of them is judged against the record the arrival carries.
+- `scopedBy` — with `delivery: scope`, and only then: the earlier hop, by
+  edge name, whose records your subscriptions are made per, instead of the
+  record the edge hangs off. listen-fire then subscribes once per record that
+  hop landed on for a listen, whatever number of records hang off it. Each
+  arrival still names, as its `key`, the record it is under, and a listen
+  keeps only arrivals under the records it watches. Airtable's `Changes`
+  declares `scopedBy: "Bases"`: one data webhook per base
+  (`ensureEventSubscription({ edge: "Changes", scope: <base id> })`), each
+  change keyed by its table, so a listen over three tables of one base makes
+  one webhook, not three. The hop must come before the edge on every path to
+  it from the instance.
 - `attributes` — `true` if an arrival names the record it is about.
 - `addressed` — `true` if each arrival is sent to an address its sender chose
   (an inbox's plus-suffix). An arrival that no listen's `WHERE` takes is then
@@ -706,7 +717,9 @@ cannot mean what it says: a `delivery` that is none of the three, a polled
 edge without `pollEverySeconds` (or `pollEverySeconds` on one that is not
 polled), `bounded: false` without `boundedBy` (or `boundedBy` on a bounded
 edge), a `boundedBy` field the landing does not declare, a `carries` hop that
-is no edge into the type the next one hangs off, `cheapToList` with neither
+is no edge into the type the next one hangs off, a `scopedBy` on an edge not
+delivered per scope or on a root collection, or naming a hop some path to the
+edge does not come through, `cheapToList` with neither
 `parentChanges` nor `relistEverySeconds` (or both, or either without
 `cheapToList`), `parentChanges: "pushed"` on an edge that is not `listenable`, a number that is not a positive whole number of seconds, a
 field of kind `owned` that names no scalar, or one listenable edge name that
@@ -1876,7 +1889,7 @@ from `apps/cli`.
 
 ## Changes
 
-- **What a module declares about listening** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0; additive). A listenable reference or entry point may declare `delivery`, `pollEverySeconds`, `bounded`, `boundedBy`, `carries`, `attributes`, `cheapToList`, `parentChanges` and `relistEverySeconds` ([Declaring a listenable edge](#declaring-a-listenable-edge)); an entry point may declare `listenable`, `cursor`, `identity` and `version`, and is then an edge a listen starts at; a field may be of kind `owned`; the manifest may declare `resendWindowSeconds`, and `listenSettingsBecome`, how its 0.12 settings listens become traversals for `listen-fire upgrade`. Each is refused by name when it cannot mean what it says, a field of kind `owned` that names no scalar included. Why: a standing listen becomes a traversal over the edges a module declares listenable, and the host needs to know how each one's arrivals reach it, what bounds it, and how often to poll or re-list, from the module, since it has no numbers of its own. listen-fire reads them into the catalog; the checker and the hosts act on them in later 0.13 work. An older host ignores them.
+- **What a module declares about listening** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0; additive). A listenable reference or entry point may declare `delivery`, `pollEverySeconds`, `bounded`, `boundedBy`, `carries`, `scopedBy` (a reference delivered per scope, subscribed per record an earlier hop landed on), `attributes`, `cheapToList`, `parentChanges` and `relistEverySeconds` ([Declaring a listenable edge](#declaring-a-listenable-edge)); an entry point may declare `listenable`, `cursor`, `identity` and `version`, and is then an edge a listen starts at; a field may be of kind `owned`; the manifest may declare `resendWindowSeconds`, and `listenSettingsBecome`, how its 0.12 settings listens become traversals for `listen-fire upgrade`. Each is refused by name when it cannot mean what it says, a field of kind `owned` that names no scalar included. Why: a standing listen becomes a traversal over the edges a module declares listenable, and the host needs to know how each one's arrivals reach it, what bounds it, and how often to poll or re-list, from the module, since it has no numbers of its own. listen-fire reads them into the catalog; the checker and the hosts act on them in later 0.13 work. An older host ignores them.
 - **`resolvesEmpty` retired** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0). A reference that declares it is refused when listen-fire describes the module, naming it: a record that goes leaves the wait waiting on every edge, so there is nothing to declare.
 - **The key form retired** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0). listen-fire no longer calls `resolveAwait` or `wakeKeys`, and ignores a `checkInbound` acceptance's `wakeKeys`: a run waits on the arrivals a module reports (2.5). A module may still implement them; nothing calls them.
 - **Pages, replies on acceptance, the inbound URL and `answerShapeFrom`** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0; additive). A module that checks its own inbound may `reply` with `html` (sent as `text/html`), and its `accepted` answer may carry `reply`, what the door answers once it has kept the request in place of its own acknowledgement ([A module that checks its own inbound](#a-module-that-checks-its-own-inbound)). A request may carry `inbound: { url }`, where the install's inbound requests reach the module ([The envelope](#the-envelope)). A reference may declare `answerShapeFrom`, the write field naming the node that types its landing. Why: `@lf/forms` serves a form at its own door, hands out its link, thanks the person who answered, and types the answer by the node the program wrote. An older host sends no `inbound`, refuses an answer carrying `html` or an acceptance's `reply` as outside `checkInbound`'s shape, and reads no `answerShapeFrom`.

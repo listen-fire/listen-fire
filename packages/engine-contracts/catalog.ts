@@ -908,6 +908,10 @@ const listeningDeclarationShape = {
   /** The earlier hops' edges whose records an arrival carries, outermost
    *  first: a filter on one of them is judged on the arrival. */
   carries: z.array(z.string()).optional(),
+  /** A `delivery: scope` edge subscribed per record an earlier hop, this
+   *  edge named, landed on (Airtable's `Changes` per base: `Bases`), not per
+   *  record it hangs off: on every path to it, that hop comes before it. */
+  scopedBy: z.string().optional(),
   /** An arrival names the record it is about. */
   attributes: z.boolean().optional(),
   /** Each arrival is sent to an address its sender chose (mail's
@@ -1782,6 +1786,8 @@ export function unreadableListening(
   }
   const carried = unreadableCarries(name, 'entry' in declarant ? undefined : declarant.owner, declared.carries ?? [], entries, descriptors);
   if (carried !== undefined) return carried;
+  const scoped = unreadableScopedBy(name, declarant, entries, descriptors);
+  if (scoped !== undefined) return scoped;
   const parentChanges: unknown = declared.parentChanges;
   if (parentChanges !== undefined && parentChanges !== 'pushed') {
     return `'${name}' declares parentChanges ${JSON.stringify(parentChanges)}: the one value is 'pushed'`;
@@ -1825,6 +1831,61 @@ function undeclaredLandingField(
   return undefined;
 }
 
+/** Each type's edges in, by its type id, each with the type it hangs off
+ *  (none for the instance): the references first in the descriptors' order,
+ *  then the root collections. */
+function edgesInto(entries: readonly SchemaEntryPoint[], descriptors: ReadonlyMap<string, SchemaTypeDescriptor>): Map<string, EdgeInto[]> {
+  const into = new Map<string, EdgeInto[]>();
+  const add = (typeId: string, edge: EdgeInto) => into.set(typeId, [...(into.get(typeId) ?? []), edge]);
+  for (const [from, descriptor] of descriptors) {
+    for (const reference of descriptor.references) {
+      for (const target of referenceTargetTypeIds(reference)) add(target, { edge: reference.name ?? reference.fieldId, from });
+    }
+  }
+  for (const entry of entries) {
+    if (entry.readable || entry.writable || entry.listenable === true) add(entry.typeId, { edge: collectionNameOf(entry), from: undefined });
+  }
+  return into;
+}
+
+/** `scopedBy` names an earlier hop that comes before the edge on every path
+ *  to it from the instance, and only an edge subscribed per scope is scoped
+ *  by one: the host subscribes once per record that hop lands on. A type no
+ *  root collection reaches is not judged. */
+function unreadableScopedBy(
+  name: string,
+  declarant: ListeningDeclarant,
+  entries: readonly SchemaEntryPoint[],
+  descriptors: ReadonlyMap<string, SchemaTypeDescriptor>,
+): string | undefined {
+  const declared = 'entry' in declarant ? declarant.entry : declarant.reference;
+  const scopedBy = declared.scopedBy;
+  if (scopedBy === undefined) return undefined;
+  if ('entry' in declarant) {
+    return `'${name}' declares 'scopedBy', and '${name}' is a root collection: nothing comes before it to scope a subscription by`;
+  }
+  if (declared.delivery !== 'scope') {
+    return `'${name}' declares 'scopedBy' but not 'delivery: scope': only an edge subscribed per scope is scoped by an earlier hop`;
+  }
+  const into = edgesInto(entries, descriptors);
+  const seen = new Set<string>();
+  // A path from the instance to the edge that no hop named `scopedBy` is on,
+  // innermost hop first.
+  const unscoped = (at: string, path: string[]): string[] | undefined => {
+    if (seen.has(at)) return undefined;
+    seen.add(at);
+    for (const { edge, from } of into.get(at) ?? []) {
+      if (edge === scopedBy) continue;
+      const found = from === undefined ? [...path, edge] : unscoped(from, [...path, edge]);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  };
+  const path = unscoped(declarant.owner, []);
+  if (path === undefined) return undefined;
+  return `'${name}' declares 'scopedBy: ${scopedBy}', but the path ${[...path.reverse(), name].join(' → ')} comes through no '${scopedBy}': it must come before '${name}' on every path to it`;
+}
+
 /** `carries` names the hops before the declarant, outermost first: read from
  *  the innermost, each must be an edge into the type the one after it hangs
  *  off. `owner` is the type the declarant hangs off, none for a root. */
@@ -1836,16 +1897,7 @@ function unreadableCarries(
   descriptors: ReadonlyMap<string, SchemaTypeDescriptor>,
 ): string | undefined {
   if (carries.length === 0) return undefined;
-  const into = new Map<string, EdgeInto[]>();
-  const add = (typeId: string, edge: EdgeInto) => into.set(typeId, [...(into.get(typeId) ?? []), edge]);
-  for (const [from, descriptor] of descriptors) {
-    for (const reference of descriptor.references) {
-      for (const target of referenceTargetTypeIds(reference)) add(target, { edge: reference.name ?? reference.fieldId, from });
-    }
-  }
-  for (const entry of entries) {
-    if (entry.readable || entry.writable || entry.listenable === true) add(entry.typeId, { edge: collectionNameOf(entry), from: undefined });
-  }
+  const into = edgesInto(entries, descriptors);
   const display = (typeId: string) => descriptors.get(typeId)?.displayName ?? entries.find((e) => e.typeId === typeId)?.displayName ?? typeId;
   let hangsOff = owner === undefined ? [] : [owner];
   let inner = name;

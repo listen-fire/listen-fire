@@ -1,0 +1,60 @@
+{
+  "about": "A listenable edge's scopedBy judged against what its module describes, by engine-contracts unreadableListening and crates/lf schema.rs unreadable_listening, word for word. `entries` is a connection walking to its tables through its bases; `positioned` is one positioned at a base, whose tables are a root collection.",
+  "entries": [
+    { "typeId": "base", "displayName": "Base", "collectionName": "Bases", "writable": false, "readable": true },
+    { "typeId": "table", "displayName": "Table", "writable": false, "readable": false }
+  ],
+  "positioned": [{ "typeId": "table", "displayName": "Table", "collectionName": "Tables", "writable": false, "readable": true }],
+  "descriptors": {
+    "base": { "typeId": "base", "displayName": "Base", "fields": [], "references": [{ "fieldId": "tables", "name": "Tables", "targetTypeId": "table", "cardinality": "many", "direction": "outgoing" }] },
+    "table": {
+      "typeId": "table",
+      "displayName": "Table",
+      "fields": [],
+      "references": [
+        { "fieldId": "linked", "name": "Linked", "targetTypeId": "table", "cardinality": "many", "direction": "outgoing" },
+        { "fieldId": "changes", "name": "Changes", "targetTypeId": "change", "cardinality": "many", "direction": "outgoing" }
+      ]
+    },
+    "change": { "typeId": "change", "displayName": "Change", "fields": [], "references": [] }
+  },
+  "cases": [
+    {
+      "name": "an earlier hop on every path to the edge",
+      "reference": { "fieldId": "changes", "name": "Changes", "targetTypeId": "change", "cardinality": "many", "direction": "outgoing", "listenable": true, "delivery": "scope", "scopedBy": "Bases" },
+      "owner": "table",
+      "refusal": null
+    },
+    {
+      "name": "the hop the edge hangs off",
+      "reference": { "fieldId": "changes", "name": "Changes", "targetTypeId": "change", "cardinality": "many", "direction": "outgoing", "listenable": true, "delivery": "scope", "scopedBy": "Tables" },
+      "owner": "table",
+      "refusal": null
+    },
+    {
+      "name": "a path from a root collection that skips it",
+      "reference": { "fieldId": "changes", "name": "Changes", "targetTypeId": "change", "cardinality": "many", "direction": "outgoing", "listenable": true, "delivery": "scope", "scopedBy": "Bases" },
+      "owner": "table",
+      "positioned": true,
+      "refusal": "'Changes' declares 'scopedBy: Bases', but the path Tables → Changes comes through no 'Bases': it must come before 'Changes' on every path to it"
+    },
+    {
+      "name": "a hop on no path",
+      "reference": { "fieldId": "changes", "name": "Changes", "targetTypeId": "change", "cardinality": "many", "direction": "outgoing", "listenable": true, "delivery": "scope", "scopedBy": "Nope" },
+      "owner": "table",
+      "refusal": "'Changes' declares 'scopedBy: Nope', but the path Bases → Tables → Changes comes through no 'Nope': it must come before 'Changes' on every path to it"
+    },
+    {
+      "name": "an edge not subscribed per scope",
+      "reference": { "fieldId": "changes", "name": "Changes", "targetTypeId": "change", "cardinality": "many", "direction": "outgoing", "listenable": true, "delivery": "connection", "scopedBy": "Bases" },
+      "owner": "table",
+      "refusal": "'Changes' declares 'scopedBy' but not 'delivery: scope': only an edge subscribed per scope is scoped by an earlier hop"
+    },
+    {
+      "name": "a root collection",
+      "entry": { "typeId": "table", "displayName": "Table", "collectionName": "Tables", "writable": false, "readable": true, "scopedBy": "Bases" },
+      "positioned": true,
+      "refusal": "'Tables' declares 'scopedBy', and 'Tables' is a root collection: nothing comes before it to scope a subscription by"
+    }
+  ]
+}

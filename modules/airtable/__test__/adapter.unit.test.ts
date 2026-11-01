@@ -966,15 +966,29 @@ describe('waits and subscriptions', () => {
     await expect(adapter.arrivals.awaitKeys({ edge: 'Deals', heads: [] })).rejects.toThrow("'Deals' is not a listenable edge");
   });
 
-  it('a table\'s Changes is registered on the base that holds it, scoped to the table; a base\'s Tables on the base, for its schema', async () => {
+  it('Changes is one webhook on a base\'s rows, every table of it; Tables one on its schema; at a positioned connection, its own base', async () => {
     const { adapter, webhooks } = makeMultiBaseAdapter({ teamId: 'team-air-subs', bases: [crm(), ops()] });
-    await adapter.ensureEventSubscription({ edge: 'Changes', scope: 'tblTASKS01', callbackUrl: 'https://lf.test/a' });
+    await adapter.ensureEventSubscription({ edge: 'Changes', scope: 'appOPS01', callbackUrl: 'https://lf.test/a' });
     await adapter.ensureEventSubscription({ edge: 'Tables', scope: 'appCRM01', callbackUrl: 'https://lf.test/b' });
     expect(webhooks).toEqual([
-      { baseId: 'appOPS01', notificationUrl: 'https://lf.test/a', tableId: 'tblTASKS01', changeTypes: ['add', 'update', 'remove'] },
+      { baseId: 'appOPS01', notificationUrl: 'https://lf.test/a', dataTypes: ['tableData'], changeTypes: ['add', 'update', 'remove'] },
       { baseId: 'appCRM01', notificationUrl: 'https://lf.test/b', dataTypes: ['tableMetadata'], changeTypes: ['add', 'update', 'remove'] },
     ]);
-    await expect(adapter.ensureEventSubscription({ edge: 'Changes', scope: 'tblNOPE', callbackUrl: 'https://lf.test/c' })).rejects.toThrow('no base this connection can see holds table tblNOPE');
+    await expect(adapter.ensureEventSubscription({ edge: 'Changes', callbackUrl: 'https://lf.test/c' })).rejects.toThrow("a subscription to 'Changes' names the base it is for");
+
+    const positioned = makeMultiBaseAdapter({ teamId: 'team-air-subs-positioned', bases: [crm(), ops()], base: 'CRM' });
+    await positioned.adapter.ensureEventSubscription({ edge: 'Changes', callbackUrl: 'https://lf.test/d' });
+    expect(positioned.webhooks).toEqual([{ baseId: 'appCRM01', notificationUrl: 'https://lf.test/d', dataTypes: ['tableData'], changeTypes: ['add', 'update', 'remove'] }]);
+  });
+
+  it('Changes is scoped by the Bases walked to, or delivered to a connection positioned at its base', async () => {
+    const walked = makeMultiBaseAdapter({ teamId: 'team-air-scoped', bases: [crm()] }).adapter;
+    const changes = (descriptor: Awaited<ReturnType<AirtableAdapter['describe']>>) => descriptor?.references.find((r) => r.name === 'Changes');
+    expect(changes(await walked.describe('Table'))).toMatchObject({ delivery: 'scope', scopedBy: 'Bases' });
+    const positioned = makeMultiBaseAdapter({ teamId: 'team-air-scoped-positioned', bases: [crm()], base: 'CRM' }).adapter;
+    const declared = changes(await positioned.describe('Table'));
+    expect(declared).toMatchObject({ delivery: 'connection' });
+    expect(declared?.scopedBy).toBeUndefined();
   });
 });
 

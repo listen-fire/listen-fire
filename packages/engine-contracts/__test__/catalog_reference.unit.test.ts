@@ -19,6 +19,7 @@ import type { SettingsBecome } from 'movement-lang';
 import { WireListenDeclarations } from '../protocol';
 import cases from './write_paths.cases.json';
 import settingsBecome from './settings_become.cases.json';
+import scopedBy from './scoped_by.cases.json';
 
 const reference = { fieldId: 'r', name: 'Replies', targetTypeId: 'm', cardinality: 'many', direction: 'outgoing' } as const;
 
@@ -434,6 +435,21 @@ describe('a listenSettingsBecome', () => {
     it(c.name, () => {
       const positioned = 'positioned' in c && c.positioned === true;
       expect(unreadableSettingsBecome(c.become as SettingsBecome, entries(positioned), descriptors) ?? null).toBe(c.refusal);
+    });
+  }
+});
+
+// A listenable edge's scopedBy, refused at describe in listen-fire's words
+// (crates/lf schema.rs `unreadable_listening` reads the same cases).
+describe('a scopedBy', () => {
+  const descriptors = new Map(Object.entries(scopedBy.descriptors).map(([typeId, d]) => [typeId, schemaTypeDescriptorSchema.parse(d)]));
+  const entries = (positioned: boolean) => (positioned ? scopedBy.positioned : scopedBy.entries).map((e) => schemaEntryPointSchema.parse(e));
+  for (const c of scopedBy.cases) {
+    it(c.name, () => {
+      const positioned = 'positioned' in c && c.positioned === true;
+      const declarant =
+        'entry' in c ? { entry: schemaEntryPointSchema.parse(c.entry) } : { reference: schemaReferenceDescriptorSchema.parse(c.reference), owner: c.owner };
+      expect(unreadableListening(declarant, entries(positioned), descriptors) ?? null).toBe(c.refusal);
     });
   }
 });

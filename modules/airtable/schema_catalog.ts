@@ -464,18 +464,26 @@ export function describeBaseMeta(): SchemaTypeDescriptor {
  * The `Table` node: a table of a base, by its `Name` and `Id`, and its
  * `Changes`. Narrowed by a WHERE, it is that table, its rows' fields included.
  */
-export function describeTableMeta(): SchemaTypeDescriptor {
+export function describeTableMeta(at: { positioned: boolean }): SchemaTypeDescriptor {
   return {
     typeId: TABLE_META_TYPE,
     displayName: TABLE_META_TYPE,
     description: "A table in one of this workspace's bases. Listen on its `Changes` for what happens to its rows.",
     fields: [metaField('Name', "The table's name."), metaField('Id', "Airtable's id for the table (tbl…).")],
-    references: [changesReference()],
+    references: [changesReference(at)],
   };
 }
 
-/** A table's `Changes`: pushed to a webhook per table, each change once. */
-export function changesReference(): SchemaReferenceDescriptor {
+/**
+ * A table's `Changes`, each change once, pushed to ONE data webhook per base
+ * whatever number of its tables a listen watches: Airtable lets an OAuth
+ * integration make 2 webhooks per base, and the schema webhook (`Tables`) is
+ * the other. Off a base walked to, it is subscribed per base the listen's
+ * `Bases` hop landed on (`scopedBy`); at a connection positioned at a base,
+ * once for the connection. Each change names its table, and a listen keeps
+ * only its own tables' changes.
+ */
+export function changesReference(at: { positioned: boolean }): SchemaReferenceDescriptor {
   return {
     fieldId: AIRTABLE_CHANGES_EDGE,
     name: AIRTABLE_CHANGES_EDGE,
@@ -486,7 +494,7 @@ export function changesReference(): SchemaReferenceDescriptor {
     readable: false,
     writable: false,
     listenable: true,
-    delivery: 'scope',
+    ...(at.positioned ? { delivery: 'connection' as const } : { delivery: 'scope' as const, scopedBy: AIRTABLE_BASES_EDGE }),
     identity: 'Id',
     attributes: true,
     description: "What happens to the table's rows, each change once: created, a field updated (`Field` names it), deleted.",
@@ -780,13 +788,15 @@ export async function describeTableAt(input: {
   teamId: string;
   baseId: string;
   tableId: string;
+  /** The connection is positioned at the table's base. */
+  positioned: boolean;
 }): Promise<SchemaTypeDescriptor | null> {
   const descriptor = await tableDescriptor(input);
   if (descriptor === null) return null;
   // Reached as one of a base's `Tables`, it is still a `Table`: a listen
   // narrowed to it goes on to its `Changes`.
   refuseReservedReferenceNames(descriptor.displayName, descriptor.references);
-  return { ...descriptor, references: [...descriptor.references, changesReference()] };
+  return { ...descriptor, references: [...descriptor.references, changesReference({ positioned: input.positioned })] };
 }
 
 /** Drop a base's cached tables — used after lf-platform's dev-loop seeds new tables,

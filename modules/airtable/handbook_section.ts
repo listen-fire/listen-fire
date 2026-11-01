@@ -36,5 +36,9 @@ A connection started at its base (\`connect airtable using … { base: "Hiring" 
 ### a-renamed-table
 
 The bases and tables a listen names are looked up again whenever Airtable reports that a base's tables changed: a table renamed to "Expenses" is heard from that moment, and the one renamed away from it no longer is. Changes a table had before it matched are never replayed. \`listen-fire listens\` shows which tables a listen hears now and when they were last looked up.
+
+### webhooks-per-base
+
+Each base a listen reaches costs two Airtable webhooks, however many of its tables the listen hears: one for its rows, one for its tables' names. Airtable lets one connected app make only two webhooks on a base, so a second connection to the same base (another credential, or one started at the base beside one that walks to it) is refused by Airtable when it registers its own.
 `,
 };

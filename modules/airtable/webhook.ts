@@ -4,9 +4,9 @@
 // webhook, and the changes are read from that webhook's payload feed from
 // the cursor the host keeps for it. Two kinds of webhook feed listens:
 //
-// - one per table, for a table's `Changes`: each record created, each field
-//   of a record updated (one change per field, `Field` naming it), each record
-//   deleted;
+// - one per base, for its tables' `Changes` (`tableData`, every table): each
+//   record created, each field of a record updated (one change per field,
+//   `Field` naming it), each record deleted, keyed by its table;
 // - one per base, for its `Tables` (Airtable's `tableMetadata` data type): a
 //   table created, renamed or removed. A listen whose tables are narrowed by a
 //   WHERE is listed again on each, so a table renamed into its filter is

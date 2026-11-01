@@ -258,7 +258,7 @@ export class AirtableAdapter extends BaseAdapter {
     // The event's `Record` edge lands here before anything says WHICH table —
     // free, like every unnarrowed meta node: its shape is a fact about the
     // adapter, not the workspace.
-    if (typeId === TABLE_META_TYPE) return describeTableMeta();
+    if (typeId === TABLE_META_TYPE) return describeTableMeta({ positioned: (await this.entryBaseId()) !== undefined });
     // What a listen lands on costs nothing to describe: a change's shape is a
     // fact about the adapter, not about the workspace.
     if (typeId === AIRTABLE_CHANGE_TYPE) return describeChange();
@@ -311,6 +311,7 @@ export class AirtableAdapter extends BaseAdapter {
         teamId: this.teamId,
         baseId,
         tableId: position.identity.recordId,
+        positioned: (await this.entryBaseId()) !== undefined,
       });
       // A table is a leaf of the META-graph: its link edges lead to other
       // TYPES, but reaching those is `describe`/traversal's business, not a
@@ -734,16 +735,16 @@ export class AirtableAdapter extends BaseAdapter {
   };
 
   // ── Event subscriptions (one webhook per subscription) ────────────────────
-  // A table's `Changes` is a webhook scoped to the table (`recordChangeScope`)
-  // taking every change kind; a base's `Tables` is a webhook on the base
-  // taking its schema (`tableMetadata`). Airtable webhooks belong to a base,
-  // so a table's is registered on the base the table is in.
+  // Two webhooks per base, the most Airtable lets one OAuth integration make
+  // there: `Changes` is a webhook on the base's rows (`tableData`, every
+  // table, every change kind), `Tables` one on its schema (`tableMetadata`).
+  // Each is subscribed per base (the connection's own when it is positioned).
 
   async ensureEventSubscription(input: EnsureEdgeSubscriptionInput): Promise<EventSubscriptionRegistration | undefined> {
     const at = await this.webhookScope(input);
     const client = await this.getApiClient();
     if (input.current?.externalId !== undefined) {
-      if (at.tableId === undefined || (await this.asksForEveryInclude(client, at.baseId, input.current.externalId))) return undefined;
+      if (at.dataType === 'tableMetadata' || (await this.asksForEveryInclude(client, at.baseId, input.current.externalId))) return undefined;
       // Registered before a webhook asked for what it asks for now: drop it
       // and register anew (best-effort; a stale one expires anyway).
       await client.deleteWebhook({ baseId: at.baseId, webhookId: input.current.externalId }).catch((err) => {
@@ -755,9 +756,8 @@ export class AirtableAdapter extends BaseAdapter {
     const created = await client.createWebhook({
       baseId: at.baseId,
       notificationUrl: input.callbackUrl,
-      ...(at.tableId !== undefined
-        ? { tableId: at.tableId, changeTypes: ['add', 'update', 'remove'] }
-        : { dataTypes: ['tableMetadata'] as const, changeTypes: ['add', 'update', 'remove'] }),
+      dataTypes: [at.dataType],
+      changeTypes: ['add', 'update', 'remove'],
     });
     // macSecretBase64 is issued ONLY here — the host keeps it as the inbound
     // MAC key. A webhook lapses 7 days on unless refreshed: the host
@@ -806,43 +806,18 @@ export class AirtableAdapter extends BaseAdapter {
   }
 
   /**
-   * The base a subscription's webhook belongs to, and for a table's `Changes`
-   * the table: a `Changes` subscription is scoped by its table, a `Tables`
-   * one by its base (or, at a positioned root, the connection's base).
+   * The base a subscription's webhook belongs to, and what it is told of: a
+   * `Changes` subscription is the base's rows, a `Tables` one its schema,
+   * each scoped by its base (at a positioned root, the connection's own).
    */
-  private async webhookScope(input: { edge: string; scope?: string }): Promise<{ baseId: string; tableId?: string }> {
-    if (input.edge === AIRTABLE_CHANGES_EDGE) {
-      if (input.scope === undefined) throw new Error(`airtable: a subscription to '${AIRTABLE_CHANGES_EDGE}' names the table it is for`);
-      return { baseId: await this.baseOfTable(input.scope), tableId: input.scope };
+  private async webhookScope(input: { edge: string; scope?: string }): Promise<{ baseId: string; dataType: 'tableData' | 'tableMetadata' }> {
+    const dataType = input.edge === AIRTABLE_CHANGES_EDGE ? 'tableData' : input.edge === AIRTABLE_TABLES_EDGE ? 'tableMetadata' : undefined;
+    if (dataType === undefined) {
+      throw new Error(`airtable: '${input.edge}' is not a listenable edge (only '${AIRTABLE_CHANGES_EDGE}' and '${AIRTABLE_TABLES_EDGE}')`);
     }
-    if (input.edge === AIRTABLE_TABLES_EDGE) {
-      const baseId = input.scope ?? (await this.entryBaseId());
-      if (baseId === undefined) throw new Error(`airtable: a subscription to '${AIRTABLE_TABLES_EDGE}' names the base it is for`);
-      return { baseId };
-    }
-    throw new Error(`airtable: '${input.edge}' is not a listenable edge (only '${AIRTABLE_CHANGES_EDGE}' and '${AIRTABLE_TABLES_EDGE}')`);
-  }
-
-  /** The base a table is in: the connection's own when it is positioned,
-   *  else the one whose tables list it. A table made since they were read is
-   *  found by reading them again. */
-  private async baseOfTable(tableId: string): Promise<string> {
-    const positioned = await this.entryBaseId();
-    if (positioned !== undefined) return positioned;
-    const find = async () => {
-      const client = await this.getApiClient();
-      for (const base of await basesForWalk({ client, teamId: this.teamId })) {
-        const tables = await cachedTables({ client, teamId: this.teamId, baseId: base.id });
-        if (tables.some((t) => t.id === tableId)) return base.id;
-      }
-      return undefined;
-    };
-    const found = await find();
-    if (found !== undefined) return found;
-    for (const base of await basesForWalk({ client: await this.getApiClient(), teamId: this.teamId })) invalidateTableCache(this.teamId, base.id);
-    const again = await find();
-    if (again === undefined) throw new Error(`airtable: no base this connection can see holds table ${tableId}`);
-    return again;
+    const baseId = input.scope ?? (await this.entryBaseId());
+    if (baseId === undefined) throw new Error(`airtable: a subscription to '${input.edge}' names the base it is for`);
+    return { baseId, dataType };
   }
 
   // ── Internal: lazy API client construction ──────────────────────────────

@@ -227,7 +227,7 @@ pub struct Reference {
     pub writable: bool,
     /// `readable`; `listenable`, `cursor`, `identity`, `version`; and how a
     /// listen reads it: `delivery`, `pollEverySeconds`, `bounded`,
-    /// `boundedBy`, `carries`, `attributes`, `addressed`, `cheapToList`, `parentChanges`,
+    /// `boundedBy`, `carries`, `scopedBy`, `attributes`, `addressed`, `cheapToList`, `parentChanges`,
     /// `relistEverySeconds` (docs/contracts/adapter-protocol.md, "Declaring a
     /// listenable edge").
     #[serde(flatten)]

@@ -24,6 +24,12 @@
 //! it lists the listen's heads again (crate::resolve). One its module
 //! reports per record it hangs off (`delivery: scope`: Airtable's `Tables`,
 //! one schema webhook per base) is watched once per such record.
+//!
+//! An edge pushed per scope that names an earlier hop it is scoped by
+//! (`scopedBy`: Airtable's `Changes`, one data webhook per base, `Bases`) is
+//! watched once per record that hop landed on for the listen, not per head:
+//! its arrivals still name the head they are under, and the listen keeps
+//! only those under its own heads (crate::runs `fire_arrivals`).
 
 use std::collections::BTreeMap;
 
@@ -113,6 +119,7 @@ pub fn poll_keys(set: &FileSet, heads: &dyn Fn(&Listen) -> Vec<Option<String>>) 
     keys_of(&set.listens, &|listen| Watched {
         position: position_of(set, listen),
         heads: heads(listen),
+        ancestors: listen.plan.as_ref().and_then(|plan| plan.hops.last()).map(|last| set.parents(listen, &last.edge)).unwrap_or_default(),
         declared: declared(set, listen),
         pushed_parents: crate::resolve::pushed_parent_hops(set, listen)
             .into_iter()
@@ -133,6 +140,9 @@ pub fn poll_keys(set: &FileSet, heads: &dyn Fn(&Listen) -> Vec<Option<String>>) 
 struct Watched {
     position: String,
     heads: Vec<Option<String>>,
+    /// The records the hop its last edge is scoped by landed on
+    /// (`Declared.scoped_by`), as its last resolve listed them.
+    ancestors: Vec<Option<String>>,
     declared: Option<Declared>,
     pushed_parents: Vec<(String, Option<Declared>, Vec<Option<String>>)>,
 }
@@ -150,12 +160,16 @@ fn keys_of(listens: &[Listen], watched: &dyn Fn(&Listen) -> Watched) -> BTreeMap
     for (index, listen) in listens.iter().enumerate() {
         let Some(last) = listen.plan.as_ref().and_then(|plan| plan.hops.last()) else { continue };
         let taken = last.taken.as_ref().map(|taken| serde_json::to_string(taken).expect("a filter is always JSON")).unwrap_or_default();
-        let Watched { position, heads, declared, pushed_parents } = watched(listen);
+        let Watched { position, heads, ancestors, declared, pushed_parents } = watched(listen);
         let key = |edge: &str, scope: Option<String>, taken: &str| PollKey { adapter: listen.adapter.clone(), credential: listen.credential.clone(), position: position.clone(), edge: edge.to_string(), scope, taken: taken.to_string() };
         // Pushed to the connection, an edge's arrivals are one stream for
-        // every head: each names the head it is under.
-        let scopes = match declared.as_ref().and_then(|d| d.delivery) {
-            Some(Delivery::Connection) if !heads.is_empty() => vec![None],
+        // every head: each names the head it is under. Scoped by an earlier
+        // hop, one stream per record that hop landed on, each naming its head
+        // likewise; a listen suspended, or resolving none, is as any other.
+        let resolved = heads.iter().any(Option::is_some);
+        let scopes = match declared.as_ref() {
+            Some(Declared { delivery: Some(Delivery::Connection), .. }) if !heads.is_empty() => vec![None],
+            Some(Declared { scoped_by: Some(_), .. }) if resolved => ancestors,
             _ => heads,
         };
         for scope in scopes {
@@ -205,6 +219,9 @@ pub fn resolves(listen: &Listen) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Declared {
     pub delivery: Option<Delivery>,
+    /// The earlier hop whose records it is subscribed per, by its edge
+    /// (`scopedBy`), for an edge pushed per scope; None: per head.
+    pub scoped_by: Option<String>,
     /// How often it is polled when the operator says nothing.
     pub poll_every_seconds: Option<u64>,
     /// It declares `cursor: false`: a poll lists all of it, however often it is polled.
@@ -226,7 +243,8 @@ fn declared_hop(set: &FileSet, listen: &Listen, hop: &movement_parser::listen_pl
         Some(Js::Num(n)) => n.as_u64(),
         _ => None,
     };
-    Some(Declared { delivery, poll_every_seconds, cursorless: matches!(edge.get("cursor"), Some(Js::Bool(false))) })
+    let scoped_by = edge.get("scopedBy").and_then(Js::as_str).map(str::to_string);
+    Some(Declared { delivery, scoped_by, poll_every_seconds, cursorless: matches!(edge.get("cursor"), Some(Js::Bool(false))) })
 }
 
 /// Whether the module declares the listen's last edge `addressed`: each
@@ -237,12 +255,19 @@ pub fn addressed(set: &FileSet, listen: &Listen) -> bool {
 }
 
 /// What the module declares of one hop of the listen's traversal, as the
-/// set's catalog has it: the instance schema its credential names, else any
-/// of its module's that declares the edge.
+/// set's catalog has it: the instance schema its connection is filed under
+/// (its credential and position: a connection positioned at a base is
+/// described there, and may declare otherwise), else any of its module's
+/// that declares the edge.
 pub fn hop_schema(set: &FileSet, listen: &Listen, hop: &movement_parser::listen_plan::PlanHop) -> Option<Js> {
     let schemas = set.catalog.get("adapters")?.get(&listen.adapter)?.get("schemas")?;
     let Js::Obj(schemas) = schemas else { return None };
-    let own = listen.credential.as_deref().unwrap_or_default();
+    let running = set.running.iter().find(|r| !r.is_plugin() && r.external.manifest.name == listen.adapter);
+    let own = match running {
+        Some(running) => crate::check::connection_schema_key(running, listen.credential.as_deref(), &listen.args),
+        None => listen.credential.clone().unwrap_or_default(),
+    };
+    let own = own.as_str();
     let edge_in = |schema: &Js| match hop.from.as_str() {
         "" => schema.get("collections")?.get(&hop.edge).cloned(),
         from => schema.get("positions")?.get(from)?.get("edges")?.get(&hop.edge).cloned(),
@@ -323,7 +348,7 @@ mod tests {
 
     /// A listen watched in `heads`, its last edge delivered as `delivery`.
     fn watched(heads: Vec<Option<String>>, delivery: Delivery) -> Watched {
-        Watched { position: String::new(), heads, declared: Some(Declared { delivery: Some(delivery), poll_every_seconds: Some(60), cursorless: false }), pushed_parents: Vec::new() }
+        Watched { position: String::new(), heads, ancestors: Vec::new(), declared: Some(Declared { delivery: Some(delivery), scoped_by: None, poll_every_seconds: Some(60), cursorless: false }), pushed_parents: Vec::new() }
     }
 
     /// The listens firing on each key, as a key's indices.
@@ -385,11 +410,11 @@ mod tests {
         let listens = [listen("a", Some("null"), true), listen("b", Some("null"), true)];
         let boards = PollKey { edge: "Boards".into(), ..key("", None) };
         let parents = |l: &Listen| Watched {
-            pushed_parents: if l.movement_name == "a" { vec![("Boards".into(), Some(Declared { delivery: Some(Delivery::Polled), poll_every_seconds: Some(1), cursorless: false }), vec![None])] } else { Vec::new() },
+            pushed_parents: if l.movement_name == "a" { vec![("Boards".into(), Some(Declared { delivery: Some(Delivery::Polled), scoped_by: None, poll_every_seconds: Some(1), cursorless: false }), vec![None])] } else { Vec::new() },
             ..watched(vec![Some("board-1".to_string())], Delivery::Polled)
         };
         let keys = keys_of(&listens, &parents);
-        assert_eq!(keys[&boards], Shared { declared: Some(Declared { delivery: Some(Delivery::Polled), poll_every_seconds: Some(1), cursorless: false }), fires: Vec::new(), resolves: vec![0] });
+        assert_eq!(keys[&boards], Shared { declared: Some(Declared { delivery: Some(Delivery::Polled), scoped_by: None, poll_every_seconds: Some(1), cursorless: false }), fires: Vec::new(), resolves: vec![0] });
         assert_eq!(keys[&key("", Some("board-1"))].fires, vec![0, 1], "its own last edge as before");
         assert!(keys[&key("", Some("board-1"))].resolves.is_empty());
     }
@@ -400,7 +425,7 @@ mod tests {
     #[test]
     fn a_resolved_hop_reported_per_record_is_watched_under_each_record_it_hangs_off() {
         let listens = [listen("a", Some("null"), true)];
-        let per_base = Some(Declared { delivery: Some(Delivery::Scope), poll_every_seconds: None, cursorless: false });
+        let per_base = Some(Declared { delivery: Some(Delivery::Scope), scoped_by: None, poll_every_seconds: None, cursorless: false });
         let parents = |_: &Listen| Watched {
             pushed_parents: vec![("Boards".into(), per_base.clone(), vec![Some("app-1".to_string()), Some("app-2".to_string())])],
             ..watched(vec![Some("board-1".to_string())], Delivery::Scope)
@@ -411,6 +436,33 @@ mod tests {
             assert_eq!(keys[&boards], Shared { declared: per_base.clone(), fires: Vec::new(), resolves: vec![0] }, "{base}");
         }
         assert!(!keys.contains_key(&PollKey { edge: "Boards".into(), ..key("", None) }), "never once for the whole connection");
+    }
+
+    /// An edge pushed per scope and scoped by an earlier hop (Airtable's
+    /// `Changes` by `Bases`) is subscribed once per record that hop landed
+    /// on, whatever number of heads hang off it: two listens on tables of one
+    /// base share one; a listen suspended, or resolving no hop, is keyed as
+    /// any other.
+    #[test]
+    fn an_edge_scoped_by_an_earlier_hop_is_subscribed_once_per_record_that_hop_landed_on() {
+        let listens = [listen("a", Some("null"), true), listen("b", Some("null"), true), listen("c", Some("null"), false)];
+        let scoped = |heads: Vec<Option<String>>, ancestors: Vec<Option<String>>| Watched {
+            ancestors,
+            declared: Some(Declared { delivery: Some(Delivery::Scope), scoped_by: Some("Bases".into()), poll_every_seconds: None, cursorless: false }),
+            ..watched(heads, Delivery::Scope)
+        };
+        let some = |ids: &[&str]| ids.iter().map(|id| Some(id.to_string())).collect::<Vec<_>>();
+        let keys = firing(&keys_of(&listens, &|l| match l.movement_name.as_str() {
+            "a" => scoped(some(&["tblA", "tblB", "tblC"]), some(&["app1"])),
+            "b" => scoped(some(&["tblD"]), some(&["app1", "app2"])),
+            _ => scoped(vec![None], Vec::new()),
+        }));
+        assert_eq!(
+            keys,
+            BTreeMap::from([(key("", Some("app1")), vec![0, 1]), (key("", Some("app2")), vec![1]), (key("", None), vec![2])]),
+            "one per base, never per table"
+        );
+        assert!(keys_of(&listens[..1], &|_| scoped(Vec::new(), some(&["app1"]))).is_empty(), "suspended: watched nowhere");
     }
 
     #[test]
@@ -450,14 +502,14 @@ mod tests {
     #[test]
     fn the_operators_interval_for_a_connection_is_over_the_edges() {
         let mut poll_every = BTreeMap::new();
-        let declared = Declared { delivery: Some(Delivery::Polled), poll_every_seconds: Some(60), cursorless: false };
+        let declared = Declared { delivery: Some(Delivery::Polled), scoped_by: None, poll_every_seconds: Some(60), cursorless: false };
         assert_eq!(interval_ms(&poll_every, &key("", None), None, Some(&declared)), Ok(60_000));
         poll_every.insert("feed".into(), 1_000);
         assert_eq!(interval_ms(&poll_every, &key("", None), None, Some(&declared)), Ok(1_000), "named by its module");
         assert_eq!(interval_ms(&poll_every, &key("", None), Some("work"), Some(&declared)), Ok(60_000), "polled as another credential");
         poll_every.insert("work".into(), 5_000);
         assert_eq!(interval_ms(&poll_every, &key("", None), Some("work"), Some(&declared)), Ok(5_000));
-        let undeclared = Declared { delivery: Some(Delivery::Polled), poll_every_seconds: None, cursorless: false };
+        let undeclared = Declared { delivery: Some(Delivery::Polled), scoped_by: None, poll_every_seconds: None, cursorless: false };
         assert!(interval_ms(&poll_every, &key("", None), Some("other"), Some(&undeclared)).unwrap_err().contains("declares no pollEverySeconds"));
     }
 }

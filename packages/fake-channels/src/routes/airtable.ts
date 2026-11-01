@@ -160,6 +160,11 @@ async function ping(baseId: string, webhook: FakeWebhook): Promise<{ webhookId: 
   return { webhookId: webhook.id, targetUrl: webhook.notificationUrl, status: answer.status, body: await answer.text() };
 }
 
+/** How many webhooks one OAuth integration may make on one base
+ *  (https://airtable.com/developers/web/api/create-a-webhook): below the
+ *  base's own cap of 10, so it is the one that binds. */
+const OAUTH_WEBHOOKS_PER_BASE = 2;
+
 export function airtableRoutes(store: EntityStore): Router {
   const r = Router();
   // The fake's clock, moved on by `/control/advance-clock`.
@@ -188,6 +193,21 @@ export function airtableRoutes(store: EntityStore): Router {
   // the listen reconciler persists it as the inbound HMAC key.
   r.post('/v0/bases/:baseId/webhooks', (req, res) => {
     const { baseId } = req.params;
+    // Every caller is taken as one OAuth integration, as listen-fire's module
+    // connects. A lapsed webhook is not counted: Airtable's docs do not say
+    // whether one is.
+    const live = store
+      .list(SVC, 'webhook')
+      .map((w) => w.data as unknown as FakeWebhook)
+      .filter((w) => w.baseId === baseId && !lapsed(w));
+    if (live.length >= OAUTH_WEBHOOKS_PER_BASE) {
+      return res.status(422).json({
+        error: {
+          type: 'TOO_MANY_WEBHOOKS_BY_OAUTH_INTEGRATION_IN_BASE',
+          message: `A single OAuth integration can create up to ${OAUTH_WEBHOOKS_PER_BASE} webhooks per base; base ${baseId} has ${live.length}`,
+        },
+      });
+    }
     const filters = (req.body?.specification?.options?.filters ?? {}) as {
       dataTypes?: string[];
       changeTypes?: string[];

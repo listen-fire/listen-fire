@@ -362,6 +362,13 @@ pub struct EdgeSchema {
     /// first: a filter on one of them is judged on the arrival.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub carries: Option<Vec<String>>,
+    /// An edge delivered per scope whose subscription is made per record an
+    /// earlier hop, this edge named, landed on, not per record it hangs off
+    /// (Airtable's `Changes`, one data webhook per base: `Bases`). Each
+    /// arrival still names the record it is under, and a listen keeps only
+    /// those under its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scoped_by: Option<String>,
     /// An arrival names the record it is about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attributes: Option<bool>,
@@ -570,6 +577,13 @@ pub struct CollectionSchema {
     /// first: a filter on one of them is judged on the arrival.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub carries: Option<Vec<String>>,
+    /// An edge delivered per scope whose subscription is made per record an
+    /// earlier hop, this edge named, landed on, not per record it hangs off
+    /// (Airtable's `Changes`, one data webhook per base: `Bases`). Each
+    /// arrival still names the record it is under, and a listen keeps only
+    /// those under its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scoped_by: Option<String>,
     /// An arrival names the record it is about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attributes: Option<bool>,

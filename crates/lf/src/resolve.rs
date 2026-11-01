@@ -87,11 +87,13 @@ pub struct Resolution {
     pub resolved_at: Option<String>,
     /// Why its last resolve failed; None: it did not.
     pub failure: Option<String>,
-    /// For each resolved hop whose module reports its changes per record it
-    /// hangs off (`parentChanges: pushed` with `delivery: scope`, Airtable's
-    /// `Tables` per base), by its edge: the ids of those records, which that
-    /// edge is watched under for the listen. Kept with the heads, listed by
-    /// the same resolve.
+    /// By edge, the ids of the records that edge is watched under for the
+    /// listen when they are not its heads: for each resolved hop whose module
+    /// reports its changes per record it hangs off (`parentChanges: pushed`
+    /// with `delivery: scope`, Airtable's `Tables` per base), those records;
+    /// for a last edge scoped by an earlier hop (`scopedBy`, Airtable's
+    /// `Changes` by `Bases`), the records that hop landed on. Kept with the
+    /// heads, listed by the same resolve.
     pub parents: BTreeMap<String, Vec<String>>,
 }
 
@@ -204,14 +206,28 @@ pub async fn resolve_walk(session: &Session, set: &FileSet, listen: &Listen) -> 
     let limit = session.project.listen_scope_limit;
     let walk = Walk { source: &set.file(&listen.file).source, connection: &plan.connection, hops: earlier, limit: Some(limit) };
     let walked = session.read_positions(set, walk).await.map_err(ResolveFailure::Read)?;
+    // What each earlier hop landed on: `along`, then the heads' own hop.
+    let landed_by = |hop: usize| if hop + 1 == earlier.len() { Some(&walked.landed) } else { walked.along.get(hop) };
     let mut parents = BTreeMap::new();
-    for index in reported_per_record(set, listen) {
-        let level = walked.along.get(index - 1).ok_or_else(|| ResolveFailure::Read(format!("the walk said nothing of what {} hangs off", plan.hops[index].edge)))?;
+    let mut watched_under = |edge: &str, hop: usize| -> Result<(), ResolveFailure> {
+        let level = landed_by(hop).ok_or_else(|| ResolveFailure::Read(format!("the walk said nothing of what {} landed on", plan.hops[hop].edge)))?;
         let ids = distinct_heads(level)?.into_iter().map(|head| head.record_id).collect::<Vec<_>>();
         if ids.len() > limit {
-            return Err(ResolveFailure::OverLimit { limit, position: plan.hops[index - 1].to.clone() });
+            return Err(ResolveFailure::OverLimit { limit, position: plan.hops[hop].to.clone() });
         }
-        parents.insert(plan.hops[index].edge.clone(), ids);
+        parents.insert(edge.to_string(), ids);
+        Ok(())
+    };
+    for index in reported_per_record(set, listen) {
+        watched_under(&plan.hops[index].edge, index - 1)?;
+    }
+    if let Some(last) = plan.hops.last()
+        && let Some(scoped_by) = crate::edge_polls::declared(set, listen).and_then(|declared| declared.scoped_by)
+    {
+        let hop = earlier.iter().rposition(|hop| hop.edge == scoped_by).ok_or_else(|| {
+            ResolveFailure::Read(format!("its module subscribes to '{}' once per record its '{scoped_by}' hop lands on, and no earlier hop of the listen walks '{scoped_by}'", last.edge))
+        })?;
+        watched_under(&last.edge, hop)?;
     }
     let heads = distinct_heads(&walked.landed)?;
     if heads.len() > limit {

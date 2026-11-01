@@ -559,6 +559,12 @@ export interface EdgeListening {
   /** The earlier hops' edges whose records an arrival carries, outermost
    *  first: a filter on one of them is judged on the arrival. */
   carries?: string[];
+  /** An edge delivered per scope whose subscription is made per record an
+   *  earlier hop, this edge named, landed on, not per record it hangs off
+   *  (Airtable's `Changes`, one data webhook per base: `Bases`). Each arrival
+   *  still names the record it is under, and a listen keeps only those under
+   *  its own. */
+  scopedBy?: string;
   /** An arrival names the record it is about. */
   attributes?: boolean;
   /** Each arrival is sent to an address its sender chose (mail's plus-suffix),

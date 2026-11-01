@@ -1,8 +1,10 @@
 // Airtable listens under listen-fire serve, against the fake Airtable
 // (packages/fake-channels). A listen walks to the tables it hears by name —
 // `at-[b:Bases WHERE b.Name == "Hiring"]->-[t:Tables WHERE t.Name ==
-// "Expenses"]->-[c:Changes …]->` — and listen-fire registers one webhook per
-// table it lands on, plus one schema webhook per base whose tables it narrows.
+// "Expenses"]->-[c:Changes …]->` — and listen-fire registers one data webhook
+// per base its tables are in, whatever number of them it watches, plus one
+// schema webhook per base whose tables it narrows: the 2 webhooks per base
+// Airtable lets an OAuth integration make, which the fake enforces.
 // A change runs only its table's listens, judged on its Kind, Field and New;
 // a table renamed into the filter is watched from the moment Airtable's schema
 // webhook reports it, its earlier changes never replayed. A 0.12 listen in
@@ -170,20 +172,31 @@ async function serving(dir: string) {
   return served(dir, ['--port', String(port)]);
 }
 
-/** The fake's webhooks: those on rows, by the table each is scoped to, and
- *  those on a base's schema, by the base. */
-async function webhooksOf(fake: Fake): Promise<{ tables: string[]; schemas: string[]; all: Webhook[] }> {
+/** The fake's webhooks: those on rows, by their base (none is scoped to one
+ *  table), and those on a base's schema, by the base. */
+async function webhooksOf(fake: Fake): Promise<{ data: string[]; schemas: string[]; all: Webhook[] }> {
   const all = (await fake.json('/admin/airtable/webhook/state')) as Webhook[];
+  const data = all.filter((w) => w.dataTypes.includes('tableData'));
+  assert.deepEqual(data.filter((w) => w.recordChangeScope !== undefined), [], 'a data webhook watches every table of its base');
   return {
-    tables: all.filter((w) => w.dataTypes.includes('tableData')).map((w) => w.recordChangeScope ?? '').sort(),
+    data: data.map((w) => w.baseId).sort(),
     schemas: all.filter((w) => w.dataTypes.includes('tableMetadata')).map((w) => w.baseId).sort(),
     all,
   };
 }
 
+/** Wait, up to `ms`, for the listen to be listed as watching `tables` Tables. */
+async function watching(dir: string, tables: number, ms: number, lines: string[]): Promise<void> {
+  const shown = new RegExp(`hiring:review .* watching ${tables} Tables?, resolved \\d+s ago`);
+  for (const deadline = Date.now() + ms; !shown.test(lfSync(dir, 'listens').out); ) {
+    if (Date.now() > deadline) throw new Error(`never watched ${tables} Tables: ${lfSync(dir, 'listens').out}\n${lines.join('\n')}`);
+    await new Promise((done) => setTimeout(done, 100));
+  }
+}
+
 const deliver = (fake: Fake, change: Record<string, unknown>) => fake.json('/airtable/control/deliver', { baseId: 'appHIRE01', ...change }) as Promise<Deliveries>;
 
-test('a listen on Expenses changes registers one webhook for that table and fires on a created record', async () => {
+test('a listen on Expenses changes registers one data webhook on its base and fires on a created record', async () => {
   const fake = await fakeChannels();
   try {
     const dir = await hiringProject(fake);
@@ -194,7 +207,7 @@ test('a listen on Expenses changes registers one webhook for that table and fire
     try {
       await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
       const registered = await webhooksOf(fake);
-      assert.deepEqual(registered.tables, ['tblEXPN01'], 'one webhook, for the Expenses table alone');
+      assert.deepEqual(registered.data, ['appHIRE01'], 'one webhook on the base\'s rows');
       assert.deepEqual(registered.schemas, ['appHIRE01'], 'and one on the base\'s tables, which the listen narrows by name');
       const runs = () => server.lines.filter((l) => /^run \S+ hiring:review completed$/.test(l)).length;
 
@@ -202,13 +215,54 @@ test('a listen on Expenses changes registers one webhook for that table and fire
       assert.deepEqual(created.deliveries.map((d) => d.status), [200]);
       await until(() => runs() === 1, server.lines);
 
-      // An update of the same table is not a creation; a row made in another table reaches no webhook.
+      // An update of the same table is not a creation; a row made in another
+      // table of the base reaches its webhook, and is not the listen's.
       await deliver(fake, { changeType: 'update', tableId: 'tblEXPN01', recordId: 'recTAXI', fields: { Item: 'Cab' }, previous: { Item: 'Taxi' } });
       const elsewhere = await deliver(fake, { changeType: 'add', tableId: 'tblROLE01', recordId: 'recENG', fields: { Title: 'Engineer' } });
-      assert.deepEqual(elsewhere.deliveries, []);
+      assert.deepEqual(elsewhere.deliveries.map((d) => d.status), [200]);
       await deliver(fake, { changeType: 'add', tableId: 'tblEXPN01', recordId: 'recHOTEL', fields: { Item: 'Hotel' } });
       await until(() => runs() === 2, server.lines);
-      assert.equal(runs(), 2, 'the update ran nothing');
+      assert.equal(runs(), 2, 'neither the update nor the role ran anything');
+    } finally {
+      await server.stop();
+    }
+  } finally {
+    await fake.stop();
+  }
+});
+
+test('a listen over three tables of one base registers one data webhook, fires on each, and runs nothing for a table it does not watch', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), EXPENSES.replace('t.Name == "Expenses"', 't.Name IN ["Candidates", "Roles", "Expenses"]').replace('c:Changes WHERE c.Kind == "created"', 'c:Changes'));
+    const checked = lfSync(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+    const server = await serving(dir);
+    try {
+      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
+      await watching(dir, 3, 5_000, server.lines);
+      const registered = await webhooksOf(fake);
+      assert.deepEqual([registered.data, registered.schemas], [['appHIRE01'], ['appHIRE01']], 'two webhooks on the base, within what one OAuth integration may make');
+      assert.ok(!server.lines.some((l) => /TOO_MANY_WEBHOOKS/.test(l)), server.lines.join('\n'));
+      const runs = () => server.lines.filter((l) => /^run \S+ hiring:review completed$/.test(l)).length;
+
+      const made = [
+        { tableId: 'tblCAND01', recordId: 'recEVE', fields: { Name: 'Eve' } },
+        { tableId: 'tblROLE01', recordId: 'recPM', fields: { Title: 'PM' } },
+        { tableId: 'tblEXPN01', recordId: 'recLUNCH', fields: { Item: 'Lunch' } },
+      ];
+      for (const [i, row] of made.entries()) {
+        const delivered = await deliver(fake, { changeType: 'add', ...row });
+        assert.deepEqual(delivered.deliveries.map((d) => [d.webhookId, d.status]), [[registered.all.find((w) => w.dataTypes.includes('tableData'))?.id, 200]], 'through the one data webhook');
+        await until(() => runs() === i + 1, server.lines);
+      }
+
+      // Interviews is in the base and not the listen's: its row is heard, and runs nothing.
+      const unwatched = await deliver(fake, { changeType: 'add', tableId: 'tblINTV01', recordId: 'recINT', fields: { Candidate: 'Eve' } });
+      assert.deepEqual(unwatched.deliveries.map((d) => d.status), [200]);
+      await new Promise((done) => setTimeout(done, 500));
+      assert.equal(runs(), 3, 'a table the listen does not watch ran nothing');
     } finally {
       await server.stop();
     }
@@ -225,24 +279,22 @@ test('a table renamed into the filter is watched from the next re-resolution, an
     const server = await serving(dir);
     try {
       await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
-      assert.deepEqual((await webhooksOf(fake)).tables, ['tblEXPN01']);
+      const registered = (await webhooksOf(fake)).all.map((w) => w.id).sort();
+      assert.deepEqual((await webhooksOf(fake)).data, ['appHIRE01']);
       const runs = () => server.lines.filter((l) => /^run \S+ hiring:review completed$/.test(l)).length;
 
-      // A role made while Roles is not an Expenses table: no webhook hears it.
+      // A role made while Roles is not an Expenses table: the base's webhook
+      // hears it, and it is not the listen's.
       const before = await deliver(fake, { changeType: 'add', tableId: 'tblROLE01', recordId: 'recEARLY', fields: { Title: 'Early' } });
-      assert.deepEqual(before.deliveries, []);
+      assert.deepEqual(before.deliveries.map((d) => d.status), [200]);
 
       // Roles is renamed Expenses: the base's schema webhook says so, and the
       // listen lists its tables again on that report alone, no clock moved.
+      // Its base was watched already: no webhook is made or removed.
       const renamed = (await fake.json('/airtable/control/rename-table', { baseId: 'appHIRE01', tableId: 'tblROLE01', name: 'Expenses' })) as Deliveries;
       assert.deepEqual(renamed.deliveries.map((d) => d.status), [200]);
-      for (const deadline = Date.now() + 20_000; !(await webhooksOf(fake)).tables.includes('tblROLE01'); ) {
-        if (Date.now() > deadline) throw new Error(`the renamed table was never watched; saw:\n${server.lines.join('\n')}`);
-        await new Promise((done) => setTimeout(done, 100));
-      }
-      assert.deepEqual((await webhooksOf(fake)).tables, ['tblEXPN01', 'tblROLE01']);
-      const listed = lfSync(dir, 'listens');
-      assert.match(listed.out, /hiring:review .* watching 2 Tables, resolved \d+s ago/, listed.out);
+      await watching(dir, 2, 20_000, server.lines);
+      assert.deepEqual((await webhooksOf(fake)).all.map((w) => w.id).sort(), registered, 'the same two webhooks');
 
       // Its change from before the rename is never replayed; its next one runs.
       assert.equal(runs(), 0, 'nothing ran for the role made before the rename');
@@ -266,14 +318,15 @@ test('a table renamed out of the filter is watched no more', async () => {
     const server = await serving(dir);
     try {
       await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
-      assert.deepEqual((await webhooksOf(fake)).tables, ['tblEXPN01']);
+      assert.deepEqual((await webhooksOf(fake)).data, ['appHIRE01']);
       const runs = () => server.lines.filter((l) => /^run \S+ hiring:review completed$/.test(l)).length;
 
       // Expenses is renamed Receipts: the base's schema webhook says so, and
-      // the table's own webhook is removed as the listen lists its tables again.
+      // with no table left to watch its data webhook is removed as the listen
+      // lists its tables again.
       const renamed = (await fake.json('/airtable/control/rename-table', { baseId: 'appHIRE01', tableId: 'tblEXPN01', name: 'Receipts' })) as Deliveries;
       assert.deepEqual(renamed.deliveries.map((d) => d.status), [200]);
-      for (const deadline = Date.now() + 20_000; (await webhooksOf(fake)).tables.length > 0; ) {
+      for (const deadline = Date.now() + 20_000; (await webhooksOf(fake)).data.length > 0; ) {
         if (Date.now() > deadline) throw new Error(`the renamed table was still watched; saw:\n${server.lines.join('\n')}`);
         await new Promise((done) => setTimeout(done, 100));
       }
@@ -312,26 +365,25 @@ test('a base renamed into the filter with no matching table is watched for one, 
     const server = await serving(dir);
     try {
       await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
-      assert.deepEqual([(await webhooksOf(fake)).tables, (await webhooksOf(fake)).schemas], [['tblEXPN01'], ['appHIRE01']]);
+      assert.deepEqual([(await webhooksOf(fake)).data, (await webhooksOf(fake)).schemas], [['appHIRE01'], ['appHIRE01']]);
 
       // Spending becomes Finance: the bases listed again hold it, with no
       // Expenses table, so the listen's tables are as they were, and its base
-      // is watched for one.
+      // is watched for one: its schema, and its rows, as every base the
+      // listen walked to is.
       await fake.json('/airtable/control/rename-base', { baseId: 'appSPND01', name: 'Finance' });
       for (const deadline = Date.now() + 20_000; !(await webhooksOf(fake)).schemas.includes('appSPND01'); ) {
         if (Date.now() > deadline) throw new Error(`the renamed base's tables were never watched; saw:\n${server.lines.join('\n')}`);
         await new Promise((done) => setTimeout(done, 100));
       }
-      assert.deepEqual((await webhooksOf(fake)).tables, ['tblEXPN01']);
+      assert.deepEqual((await webhooksOf(fake)).data, ['appHIRE01', 'appSPND01']);
+      await watching(dir, 1, 1_000, server.lines);
 
       // An Expenses table made in it is reported by that webhook, and watched
       // on that report, well before the clock lists the bases again.
       const made = (await fake.json('/airtable/control/create-table', { baseId: 'appSPND01', table: { id: 'tblEXPN02', name: 'Expenses', primaryFieldId: 'fldEItem', fields: [{ id: 'fldEItem', name: 'Item', type: 'singleLineText' }] } })) as Deliveries;
       assert.deepEqual(made.deliveries.map((d) => d.status), [200]);
-      for (const deadline = Date.now() + 2_500; !(await webhooksOf(fake)).tables.includes('tblEXPN02'); ) {
-        if (Date.now() > deadline) throw new Error(`the table made in the renamed base was not watched on its report; saw:\n${server.lines.join('\n')}`);
-        await new Promise((done) => setTimeout(done, 100));
-      }
+      await watching(dir, 2, 2_500, server.lines);
       const runs = () => server.lines.filter((l) => /^run \S+ hiring:review completed$/.test(l)).length;
       await deliver(fake, { baseId: 'appSPND01', changeType: 'add', tableId: 'tblEXPN02', recordId: 'recFIN01', fields: { Item: 'Audit' } });
       await until(() => runs() === 1, server.lines);
@@ -358,7 +410,7 @@ test('the bases a listen\'s tables hang off count against listenScopeLimit, said
       await until(() => server.lines.some((l) => l.includes(said)), server.lines);
       const listed = lfSync(dir, 'listens');
       assert.ok(listed.out.includes(said), listed.out);
-      assert.deepEqual((await webhooksOf(fake)).tables, [], 'suspended: watched nowhere');
+      assert.deepEqual((await webhooksOf(fake)).data, [], 'suspended: watched nowhere');
     } finally {
       await server.stop();
     }
@@ -395,7 +447,7 @@ test('Stage becoming Interview fires; Stage becoming Rejected does not', async (
     try {
       await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
       const registered = await webhooksOf(fake);
-      assert.deepEqual([registered.tables, registered.schemas], [['tblCAND01'], ['appHIRE01']]);
+      assert.deepEqual([registered.data, registered.schemas], [['appHIRE01'], ['appHIRE01']], 'positioned at Hiring: one webhook on its rows, one on its schema');
       const interviews = () => server.lines.filter((l) => /^run \S+ hiring:schedule_interview completed$/.test(l)).length;
 
       // One update of Name and Stage is two changes: only Stage's runs it.
@@ -510,7 +562,7 @@ test('a quiet webhook is refreshed a day before it lapses, and one that lapsed i
     writeFileSync(join(dir, 'movements/hiring.mvt'), STAGE);
     const port = await freePort();
     appendFileSync(join(dir, 'lf.yaml'), `publicUrl: http://127.0.0.1:${port}\n`);
-    const tableHook = async () => (await webhooksOf(fake)).all.find((w) => w.recordChangeScope === 'tblCAND01');
+    const tableHook = async () => (await webhooksOf(fake)).all.find((w) => w.dataTypes.includes('tableData'));
     // listen-fire's clock and the fake's moved on together: `days` past the registration.
     const serveAt = (days: number) => served(dir, ['--port', String(port)], days === 0 ? {} : { LF_CLOCK_AHEAD_MS: String(days * DAY_MS) });
     const advance = (days: number) => fake.json('/airtable/control/advance-clock', { ms: days * DAY_MS });

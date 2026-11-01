@@ -237,6 +237,7 @@ function listeningOf(declared: Pick<SchemaReferenceDescriptor, 'cursor' | 'ident
     ...(declared.delivery !== undefined ? { delivery: declared.delivery } : {}),
     ...(declared.pollEverySeconds !== undefined ? { pollEverySeconds: declared.pollEverySeconds } : {}),
     ...(declared.carries !== undefined ? { carries: declared.carries } : {}),
+    ...(declared.scopedBy !== undefined ? { scopedBy: declared.scopedBy } : {}),
     ...(declared.attributes !== undefined ? { attributes: declared.attributes } : {}),
     ...(declared.addressed !== undefined ? { addressed: declared.addressed } : {}),
     ...(declared.cheapToList !== undefined ? { cheapToList: declared.cheapToList } : {}),

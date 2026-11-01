@@ -286,6 +286,13 @@ fn position_construction_args(running: &RunningExternal) -> Vec<ConstructionArg>
         .collect()
 }
 
+/// The key a connection's schema is filed under (`instanceSchemaKey`): its
+/// credential, and the position its construction `args` pin, if any.
+pub(crate) fn connection_schema_key(running: &RunningExternal, credential: Option<&str>, args: &[(String, String)]) -> String {
+    let args: Args = JsMap(args.iter().cloned().collect());
+    instance_schema_key(credential, Some(&position_key(&position_construction_args(running), Some(&args))))
+}
+
 /// The constructions of this module that pin a position, each with its position.
 fn positions_of<'a>(running: &RunningExternal, imported: &'a Imported) -> Vec<(&'a Construction, Position)> {
     let construction_args = position_construction_args(running);

@@ -267,8 +267,22 @@ const EDGE_TRUE_FLAGS: &[&str] = &["ephemeral"];
 
 /// What a reference or a listenable entry says of its arrivals and of being
 /// listed under a listen, passed through as declared, in this order.
-const LISTENING: [&str; 13] =
-    ["cursor", "identity", "version", "bounded", "boundedBy", "delivery", "pollEverySeconds", "carries", "attributes", "addressed", "cheapToList", "parentChanges", "relistEverySeconds"];
+const LISTENING: [&str; 14] = [
+    "cursor",
+    "identity",
+    "version",
+    "bounded",
+    "boundedBy",
+    "delivery",
+    "pollEverySeconds",
+    "carries",
+    "scopedBy",
+    "attributes",
+    "addressed",
+    "cheapToList",
+    "parentChanges",
+    "relistEverySeconds",
+];
 
 fn pass_listening(declared: &Js, onto: &mut Obj) {
     for passed in LISTENING {
@@ -870,6 +884,9 @@ pub fn unreadable_listening(declarant: Declarant, entries: &[Js], descriptors: &
     if let Some(refusal) = unreadable_carries(&declarant, entries, descriptors) {
         return Some(refusal);
     }
+    if let Some(refusal) = unreadable_scoped_by(&declarant, entries, descriptors) {
+        return Some(refusal);
+    }
     let parent_changes = declared.get("parentChanges");
     if let Some(value) = parent_changes
         && value.as_str() != Some("pushed")
@@ -1051,18 +1068,7 @@ fn unreadable_carries(declarant: &Declarant, entries: &[Js], descriptors: &Index
         return None;
     }
     let name = declarant.name();
-    // Each type's edges in: (edge name, the type it hangs off, none for the instance).
-    let mut into: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
-    for (owner, descriptor) in descriptors {
-        for reference in items(descriptor.get("references")) {
-            for target in reference_target_type_ids(reference) {
-                into.entry(target).or_default().push((key(nullish_or(reference.get("name"), reference.get("fieldId"))), Some(owner.clone())));
-            }
-        }
-    }
-    for entry in entries.iter().filter(|e| is_collection(e)) {
-        into.entry(key(entry.get("typeId"))).or_default().push((collection_name_of(entry), None));
-    }
+    let into = edges_into(entries, descriptors);
     let display = |type_id: &str| {
         descriptors.get(type_id).or_else(|| entries.iter().find(|e| key(e.get("typeId")) == type_id)).map_or_else(|| type_id.to_string(), |d| key(d.get("displayName")))
     };
@@ -1090,6 +1096,64 @@ fn unreadable_carries(declarant: &Declarant, entries: &[Js], descriptors: &Index
         inner = hop;
     }
     None
+}
+
+/// Each type's edges in, by its type id: (edge name, the type it hangs off,
+/// none for the instance), the references first in the descriptors' order,
+/// then the root collections.
+fn edges_into(entries: &[Js], descriptors: &IndexMap<String, Js>) -> HashMap<String, Vec<(String, Option<String>)>> {
+    let mut into: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
+    for (owner, descriptor) in descriptors {
+        for reference in items(descriptor.get("references")) {
+            for target in reference_target_type_ids(reference) {
+                into.entry(target).or_default().push((key(nullish_or(reference.get("name"), reference.get("fieldId"))), Some(owner.clone())));
+            }
+        }
+    }
+    for entry in entries.iter().filter(|e| is_collection(e)) {
+        into.entry(key(entry.get("typeId"))).or_default().push((collection_name_of(entry), None));
+    }
+    into
+}
+
+/// `scopedBy` names an earlier hop that comes before the edge on every path
+/// to it from the instance, and only an edge subscribed per scope is scoped
+/// by one: the host subscribes once per record that hop lands on. A type no
+/// root collection reaches is not judged.
+fn unreadable_scoped_by(declarant: &Declarant, entries: &[Js], descriptors: &IndexMap<String, Js>) -> Option<String> {
+    let scoped_by = declarant.declared().get("scopedBy")?;
+    let name = declarant.name();
+    let Declarant::Reference { owner, .. } = declarant else {
+        return Some(format!("'{name}' declares 'scopedBy', and '{name}' is a root collection: nothing comes before it to scope a subscription by"));
+    };
+    if declarant.declared().get("delivery").and_then(Js::as_str) != Some("scope") {
+        return Some(format!("'{name}' declares 'scopedBy' but not 'delivery: scope': only an edge subscribed per scope is scoped by an earlier hop"));
+    }
+    let scoped_by = key(Some(scoped_by));
+    let into = edges_into(entries, descriptors);
+    // A path from the instance to the edge that no hop named `scoped_by` is
+    // on, innermost hop first.
+    fn unscoped(into: &HashMap<String, Vec<(String, Option<String>)>>, scoped_by: &str, at: &str, seen: &mut HashSet<String>, path: &mut Vec<String>) -> bool {
+        if !seen.insert(at.to_string()) {
+            return false;
+        }
+        for (edge, from) in into.get(at).into_iter().flatten().filter(|(edge, _)| edge != scoped_by) {
+            path.push(edge.clone());
+            match from {
+                None => return true,
+                Some(from) if unscoped(into, scoped_by, from, seen, path) => return true,
+                Some(_) => {}
+            }
+            path.pop();
+        }
+        false
+    }
+    let mut path = Vec::new();
+    if !unscoped(&into, &scoped_by, owner, &mut HashSet::new(), &mut path) {
+        return None;
+    }
+    let path: Vec<String> = path.into_iter().rev().chain([name.clone()]).collect();
+    Some(format!("'{name}' declares 'scopedBy: {scoped_by}', but the path {} comes through no '{scoped_by}': it must come before '{name}' on every path to it", path.join(" → ")))
 }
 
 /// The refusal of a reference whose `literalsFrom` cannot type what it says
@@ -1443,14 +1507,14 @@ mod tests {
     #[test]
     fn a_reference_projects_how_it_is_listened_to() {
         let edge = edge_schema(
-            &js(r#"{"name":"Changes","listenable":true,"identity":"Id","delivery":"scope","carries":["Bases","Tables"],"attributes":true,"bounded":true}"#),
+            &js(r#"{"name":"Changes","listenable":true,"identity":"Id","delivery":"scope","carries":["Bases","Tables"],"scopedBy":"Bases","attributes":true,"bounded":true}"#),
             Some("Change"),
             false,
             "changes",
         );
         assert_eq!(
             Js::from(edge).to_json(),
-            r#"{"target":"Change","listenable":true,"identity":"Id","bounded":true,"delivery":"scope","carries":["Bases","Tables"],"attributes":true}"#
+            r#"{"target":"Change","listenable":true,"identity":"Id","bounded":true,"delivery":"scope","carries":["Bases","Tables"],"scopedBy":"Bases","attributes":true}"#
         );
         let tables = edge_schema(&js(r#"{"name":"Tables","cheapToList":true,"parentChanges":"pushed"}"#), Some("Table"), false, "tables");
         assert_eq!(Js::from(tables).to_json(), r#"{"target":"Table","cheapToList":true,"parentChanges":"pushed"}"#);
@@ -1593,6 +1657,26 @@ mod tests {
             let become_ = crate::externals::settings_become(case.get("become").unwrap()).unwrap();
             let expected = case.get("refusal").and_then(Js::as_str).map(str::to_string);
             assert_eq!(unreadable_settings_become(&become_, entries, &descriptors), expected, "{}", key(case.get("name")));
+        }
+    }
+
+    #[test]
+    fn scoped_by_names_a_hop_before_the_edge_on_every_path_to_it() {
+        let cases = js(include_str!("../../../packages/engine-contracts/__test__/scoped_by.cases.json"));
+        let descriptors: IndexMap<String, Js> = match cases.get("descriptors") {
+            Some(Js::Obj(d)) => d.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            _ => panic!("descriptors"),
+        };
+        assert!(!items(cases.get("cases")).is_empty());
+        for case in items(cases.get("cases")) {
+            let entries = items(cases.get(if Js::is_true(case.get("positioned")) { "positioned" } else { "entries" }));
+            let owner = key(case.get("owner"));
+            let declarant = match case.get("entry") {
+                Some(entry) => Declarant::Entry(entry),
+                None => Declarant::Reference { reference: case.get("reference").unwrap(), owner: &owner },
+            };
+            let expected = case.get("refusal").and_then(Js::as_str).map(str::to_string);
+            assert_eq!(unreadable_listening(declarant, entries, &descriptors), expected, "{}", key(case.get("name")));
         }
     }
 

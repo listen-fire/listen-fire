@@ -12,7 +12,7 @@ import { AIRTABLE_CHANGE_KINDS, AIRTABLE_CHANGES_EDGE, AIRTABLE_TABLES_EDGE } fr
 /**
  * Static manifest. A full create/update/delete write surface makes it
  * writable; a table's `Changes` and a base's `Tables` are what a listen hears,
- * through Airtable's webhooks (one per table, one per base).
+ * through Airtable's webhooks (two per base: its rows, its tables).
  */
 export const AIRTABLE_MANIFEST: AdapterManifest = {
   adapterType: AIRTABLE_ADAPTER_TYPE,
@@ -91,8 +91,10 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
     ],
   },
   triggerExpectation:
-    'Listen-Fire registers one Airtable webhook per table a listen on its `Changes` watches, and one ' +
-    'per base whose tables the listen narrows by a WHERE (Airtable\'s schema webhook). Airtable notifies ' +
+    'Listen-Fire registers one Airtable webhook on the rows of each base whose tables a listen on their ' +
+    '`Changes` watches, however many it watches, and one per base whose tables the listen narrows by a ' +
+    'WHERE (Airtable\'s schema webhook): two per base, the most Airtable lets one connected app make. ' +
+    'A change in a table of the base the listen does not watch runs nothing. Airtable notifies ' +
     'that something changed and Listen-Fire pulls the changes, usually within seconds but coalesced by ' +
     'Airtable (rapid edits can land as one batch). A change arrives on its table\'s `Changes`: a row ' +
     'created, a field of it updated (one change per field: `Field` names it, `Old` and `New` what it held) ' +
