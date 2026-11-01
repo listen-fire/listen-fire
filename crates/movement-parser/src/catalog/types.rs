@@ -480,6 +480,11 @@ pub struct PositionSchema {
     /// described, readable or write-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field_docs: Option<JsMap<String>>,
+    /// The id its module keys a record's field by, by the field's name,
+    /// where the two differ: a host reads an arrival's fields by name before
+    /// judging it, as a run reads them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_ids: Option<JsMap<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

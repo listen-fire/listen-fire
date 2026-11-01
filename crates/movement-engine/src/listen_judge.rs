@@ -103,6 +103,23 @@ impl Serialize for Verdict {
     }
 }
 
+/// A record's `fields` as a program reads them, by name: each field the
+/// catalog names otherwise than its module keys it (`field_ids`, the
+/// position's `fieldIds`: name → id) takes the value its id holds, as a run
+/// reading it through the module does. A host hands the judge each record so
+/// named (packages/engine-contracts/conformance/listen-field-names.json);
+/// the rest of the record is kept as it came.
+pub fn named_fields(fields: &Json, field_ids: &serde_json::Map<String, Json>) -> Json {
+    let Json::Object(keyed) = fields else { return fields.clone() };
+    let mut named = keyed.clone();
+    for (name, id) in field_ids {
+        if let Some(value) = id.as_str().and_then(|id| keyed.get(id)) {
+            named.insert(name.clone(), value.clone());
+        }
+    }
+    Json::Object(named)
+}
+
 /// Whether `arrival` fires the listen `plan` describes, `now_ms` (epoch ms)
 /// the instant `WITHIN` measures from.
 pub fn judge_arrival(plan: &ListenPlan, arrival: &PlanArrival, now_ms: f64) -> Verdict {
@@ -406,6 +423,18 @@ mod tests {
             let errors: Vec<_> = answer.diagnostics.iter().filter(|d| d.severity.is_none()).map(|d| format!("{} {}", d.code, d.message)).collect();
             assert_eq!(errors, Vec::<String>::new(), "{name}");
             assert_eq!(serde_json::to_value(&answer.listens).unwrap(), json!([entry["plan"]]), "{name}");
+        }
+    }
+
+    #[test]
+    fn named_fields_matches_the_shared_table_of_cases() {
+        let table: Json = serde_json::from_str(include_str!("../../../packages/engine-contracts/conformance/listen-field-names.json")).unwrap();
+        let cases = table["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let name = case["case"].as_str().unwrap();
+            let field_ids = case["fieldIds"].as_object().unwrap();
+            assert_eq!(named_fields(&case["fields"], field_ids), case["named"], "{name}");
         }
     }
 

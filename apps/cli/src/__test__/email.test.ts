@@ -40,24 +40,33 @@ const INTAKE = [
   '',
 ].join('\n');
 
+/** What a message says besides where it goes. */
+interface Said {
+  sender: string;
+  subject: string;
+  body: string;
+}
+
+const HELLO: Said = { sender: 'ada@example.com', subject: 'Hello', body: 'Hi' };
+
 /** One message to `recipient`, posted to the module's door as Mailgun signs it. */
-function sentTo(dir: string, recipient: string, id = recipient): ReturnType<typeof lf> {
+function sentTo(dir: string, recipient: string, id = recipient, said: Said = HELLO): ReturnType<typeof lf> {
   const timestamp = String(Math.floor(Date.now() / 1000));
   const token = `tok-${id}`;
   const signature = createHmac('sha256', SIGNING_KEY).update(timestamp + token).digest('hex');
-  const form = new URLSearchParams({ sender: 'ada@example.com', recipient, To: recipient, subject: 'Hello', 'body-plain': 'Hi', 'Message-Id': `<m-${id}>`, timestamp, token, signature });
+  const form = new URLSearchParams({ sender: said.sender, recipient, To: recipient, subject: said.subject, 'body-plain': said.body, 'Message-Id': `<m-${id}>`, timestamp, token, signature });
   const file = join(dir, 'mail.form');
   writeFileSync(file, form.toString());
   return lf(dir, 'run', '--webhook', 'email', '--body', file, '--header', 'content-type:application/x-www-form-urlencoded');
 }
 
-async function intake(): Promise<string> {
+async function intake(listens = INTAKE): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), 'lf-email-'));
   assert.equal(lf(dir, 'init', dir).code, 0);
   const connected = await ok(lfAsked(dir, ['connect', '@lf/email', '--webhook-secret', SIGNING_KEY], { answers: [''] }));
   assert.match(connected, /connected email/);
   assert.match(connected, /works without a user credential/);
-  writeFileSync(join(dir, 'movements/intake.mvt'), INTAKE);
+  writeFileSync(join(dir, 'movements/intake.mvt'), listens);
   return dir;
 }
 
@@ -97,4 +106,37 @@ test('mail is routed by the Emails key the listen names, the box itself by the e
   const unbounded = lf(dir, 'check');
   assert.equal(unbounded.code, 1, unbounded.out);
   assert.match(unbounded.out, /MOV_UNBOUNDED_EDGE/);
+});
+
+test("a listen's WHERE reads a message's fields by the names the run reads them by", async () => {
+  const listens = [
+    'import { email } from adapters',
+    '',
+    'inbox = connect email',
+    '',
+    'function deal(m: <inbox-[:Emails]->>) { return "deal: ${m.Subject}" }',
+    '',
+    'listen to inbox-[e:Emails WHERE e.Key == "deals" AND e.Subject CONTAINS "Series A" AND e.From CONTAINS "acme.test" AND e.Body CONTAINS "term sheet"]-> fire deal',
+    '',
+  ].join('\n');
+  const dir = await intake(listens);
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+
+  const pitch: Said = { sender: 'Rita <rita@acme.test>', subject: 'Series A for Acme', body: 'The term sheet is attached.' };
+  const fired = sentTo(dir, 'inbox+deals@acme.test', 'pitch', pitch);
+  assert.equal(fired.code, 0, fired.out);
+  assert.match(fired.out, /returned "deal: Series A for Acme"/);
+
+  // Each field the WHERE reads decides: a message failing any one runs nothing.
+  for (const [id, said] of [
+    ['other-subject', { ...pitch, subject: 'Lunch?' }],
+    ['other-sender', { ...pitch, sender: 'eve@elsewhere.test' }],
+    ['other-body', { ...pitch, body: 'No attachment.' }],
+  ] as const) {
+    const skipped = sentTo(dir, 'inbox+deals@acme.test', id, said);
+    assert.equal(skipped.code, 0, skipped.out);
+    assert.doesNotMatch(skipped.out, /returned/, id);
+    assert.match(skipped.out, /matches the WHERE of no listen on it: it runs nothing/, id);
+  }
 });

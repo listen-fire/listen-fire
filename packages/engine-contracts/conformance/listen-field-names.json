@@ -1,0 +1,47 @@
+{
+  "about": "An arrival's record's fields as a listen's filter reads them: by the names the program writes. A module may key its records by its own field ids (email keys `Subject` as `subject`), so a host reads each record the arrival carries, its landing and its parents, by the catalog's names before judging it: `fieldIds` is the record type's position's `fieldIds` in the catalog (name → id, only where the two differ), `fields` the record as its module delivered it, and `named` what the judge is handed. Each name takes the value its id holds, read off the record as delivered (so two fields whose names are each other's ids swap), as a run reading the field through its module does; a name whose id the record does not hold is left as it came; every key the record came with is kept. Held by listen-fire's Rust (crates/movement-engine/src/listen_judge.rs, named_fields) and the engine's TypeScript (listen_plans.ts, namedFields).",
+  "cases": [
+    {
+      "case": "an email keyed by its module's ids is read by the names a listen writes",
+      "fieldIds": { "Message Id": "messageId", "Subject": "subject", "From": "sender", "To": "recipient", "Body": "content", "HTML Body": "bodyHtml", "Plain Body": "bodyText" },
+      "fields": { "messageId": "<m1@example.com>", "Key": "deals", "subject": "Hello", "sender": "rita@example.com", "recipient": "inbox+deals@example.com", "content": "Hi there" },
+      "named": { "messageId": "<m1@example.com>", "Key": "deals", "subject": "Hello", "sender": "rita@example.com", "recipient": "inbox+deals@example.com", "content": "Hi there", "Message Id": "<m1@example.com>", "Subject": "Hello", "From": "rita@example.com", "To": "inbox+deals@example.com", "Body": "Hi there" }
+    },
+    {
+      "case": "a field the record does not hold stays absent, never null",
+      "fieldIds": { "Subject": "subject", "HTML Body": "bodyHtml" },
+      "fields": { "subject": "Hello" },
+      "named": { "subject": "Hello", "Subject": "Hello" }
+    },
+    {
+      "case": "a field whose id holds null is read as null",
+      "fieldIds": { "Subject": "subject" },
+      "fields": { "subject": null },
+      "named": { "subject": null, "Subject": null }
+    },
+    {
+      "case": "a record that also carries the name is read by its id, as the run reads it",
+      "fieldIds": { "Subject": "subject" },
+      "fields": { "subject": "from the id", "Subject": "from the name" },
+      "named": { "subject": "from the id", "Subject": "from the id" }
+    },
+    {
+      "case": "a record that carries only the name keeps it",
+      "fieldIds": { "Labels": "labels" },
+      "fields": { "Labels": ["Deals"] },
+      "named": { "Labels": ["Deals"] }
+    },
+    {
+      "case": "two fields whose names are each other's ids swap, each read off the record as delivered",
+      "fieldIds": { "Name": "title", "Title": "name" },
+      "fields": { "title": "A", "name": "B" },
+      "named": { "title": "A", "name": "B", "Name": "A", "Title": "B" }
+    },
+    {
+      "case": "a type whose module keys its fields by their names is read as it came",
+      "fieldIds": {},
+      "fields": { "Name": "Acme", "Domain": "acme.test" },
+      "named": { "Name": "Acme", "Domain": "acme.test" }
+    }
+  ]
+}

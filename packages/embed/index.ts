@@ -33,11 +33,13 @@ import type { EngineHost } from 'movement-engine/public/host';
 import {
   arrivalReceiptKey,
   arrivalTriggerOf,
+  fieldIdsOf,
   landingMisfits,
   landingNode,
   listenConstructionsOf,
   listenFires,
   listenPlansOf,
+  namedArrival,
   plannedListensOf,
   triggerAwaitsOf,
   type DeclaredNode,
@@ -686,6 +688,9 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
       }
       const delivered = { adapterType: delivery.adapterType, ...(delivery.connection !== undefined ? { credentialName: delivery.connection } : {}) };
       const nowMs = at.getTime();
+      // A listen reads an arrival's fields by the names its program writes,
+      // which its connection's schema maps from the ids its module keys them by.
+      const schemas = (await catalog(tenant)).adapters[delivery.adapterType]?.schemas ?? {};
       const minted: MintedRun[] = [];
       for (const [index, arrival] of delivery.arrivals.entries()) {
         if ('gone' in arrival) continue;
@@ -695,7 +700,8 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
         const misfitLines: string[] = [];
         for (const { saved, key, read } of reading) {
           for (const listen of read.listens) {
-            const verdict = listenFires(listen, arrival, delivered, nowMs);
+            const heard = namedArrival(arrival, fieldIdsOf(schemas[listen.credentialName ?? '']));
+            const verdict = listenFires(listen, heard, delivered, nowMs);
             if (verdict === null) continue;
             const named = `${saved.name}:${listen.plan.movement}`;
             if (listen.refused !== undefined) {
@@ -715,7 +721,7 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
                 say(`${named}: an arrival on ${arrival.edge} cannot be checked against the node its listen states (${listen.landing.unread}): it runs nothing`);
                 continue;
               }
-              const fit = landingMisfits({ ...listen.landing, landing: arrival.landing.fields });
+              const fit = landingMisfits({ ...listen.landing, landing: heard.landing.fields });
               if (fit.misfits.length > 0) {
                 misfitLines.push(`${named}: the arrival ${arrival.identity} on ${arrival.edge} is not a ${fit.node} (${fit.misfits.join('; ')}): it runs nothing`);
                 continue;

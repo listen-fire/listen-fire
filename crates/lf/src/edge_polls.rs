@@ -348,6 +348,7 @@ mod tests {
             args: Vec::new(),
             plan,
             trigger_awaits: Default::default(),
+            field_ids: Default::default(),
         }
     }
 

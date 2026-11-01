@@ -581,6 +581,7 @@ export function instanceSchemaFromDescriptors(input: {
     const fieldDocs: Record<string, string> = {};
     /** Every described field's words, readable or write-only: the position's. */
     const positionFieldDocs: Record<string, string> = {};
+    const fieldIds: Record<string, string> = {};
     /** Writable field id → the surface name it projected to — what an
      *  UNTAGGED write union's variants (declared in field ids) map through. */
     const writeFieldNameById = new Map<string, string>();
@@ -628,6 +629,7 @@ export function instanceSchemaFromDescriptors(input: {
         // keyed by the same surface name (chunk 4/5). The gate (chunk 6) reads it
         // for a `native` edge into this position.
         if (field.capability !== undefined) propertyCapabilities[fieldName] = field.capability;
+        if (field.fieldId !== fieldName) fieldIds[fieldName] = field.fieldId;
       }
       if (field.writable) {
         writableFields[fieldName] = type;
@@ -803,6 +805,9 @@ export function instanceSchemaFromDescriptors(input: {
         // language service's hover leads with.
         ...(typeDescription !== undefined ? { description: typeDescription } : {}),
         ...(Object.keys(positionFieldDocs).length > 0 ? { fieldDocs: positionFieldDocs } : {}),
+        // Where a module keys its records otherwise: a host reads an arrival's
+        // fields by these names before judging it (namedLanding).
+        ...(Object.keys(fieldIds).length > 0 ? { fieldIds } : {}),
       };
     }
     // A purely read-only type (no writable field) needs no write shape at

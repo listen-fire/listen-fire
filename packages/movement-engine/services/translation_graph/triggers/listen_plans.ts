@@ -197,6 +197,46 @@ export function listenFires(listen: PlannedListen, arrival: Arrival, delivery: {
   );
 }
 
+/**
+ * A record's `fields` as a program reads them, by name: each field the
+ * catalog names otherwise than its module keys it (`fieldIds`, the
+ * position's: name → id) takes the value its id holds, as a run reading it
+ * through the module does; the rest of the record is kept as it came. A host
+ * hands the judge each record so named (listen-fire's Rust `named_fields`,
+ * held by both to engine-contracts/conformance/listen-field-names.json).
+ */
+export function namedFields(fields: Readonly<Record<string, unknown>>, fieldIds: Readonly<Record<string, string>>): Record<string, unknown> {
+  const named: Record<string, unknown> = { ...fields };
+  for (const [name, id] of Object.entries(fieldIds)) {
+    if (Object.hasOwn(fields, id)) named[name] = fields[id];
+  }
+  return named;
+}
+
+/** Each record type's `fieldIds` in one connection's schema, by the record
+ *  type's name: what `namedArrival` reads an arrival's records by. */
+export type FieldIdsByType = Readonly<Record<string, Readonly<Record<string, string>>>>;
+
+/** The `fieldIds` of each record type `schema` (a connection's, from the
+ *  catalog) positions. */
+export function fieldIdsOf(schema: { positions: Readonly<Record<string, { fieldIds?: Record<string, string> }>> } | undefined): FieldIdsByType {
+  return Object.fromEntries(Object.entries(schema?.positions ?? {}).flatMap(([name, position]) => (position.fieldIds !== undefined ? [[name, position.fieldIds]] : [])));
+}
+
+/** `arrival`'s records, its landing and its parents, read by the names a
+ *  program writes (`namedFields`), each by the record type it states. */
+export function namedArrival(arrival: Exclude<Arrival, { gone: true }>, fieldIds: FieldIdsByType): Exclude<Arrival, { gone: true }> {
+  const named = (record: AwaitLanding): AwaitLanding => {
+    const ids = record.recordType !== undefined ? fieldIds[record.recordType] : undefined;
+    return ids === undefined ? record : { ...record, fields: namedFields(record.fields, ids) };
+  };
+  return {
+    ...arrival,
+    landing: named(arrival.landing),
+    ...(arrival.parents !== undefined ? { parents: arrival.parents.map((parent) => (parent === null ? null : named(parent))) } : {}),
+  };
+}
+
 /** What the judge reads of a record an arrival carries: its record type,
  *  which tells it from another record type's edge of the same name, its
  *  fields, and those its module could not read. */

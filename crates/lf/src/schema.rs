@@ -403,6 +403,7 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
         let mut required_fields: Vec<String> = Vec::new();
         let mut field_docs = Obj::new();
         let mut position_field_docs = Obj::new();
+        let mut field_ids = Obj::new();
         let mut write_field_name_by_id: HashMap<String, String> = HashMap::new();
         let mut dropped_field = false;
         let fields = items(descriptor.get("fields"));
@@ -435,6 +436,10 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
                 properties.insert(field_name.clone(), type_.clone());
                 if let Some(capability) = field.get("capability") {
                     property_capabilities.insert(field_name.clone(), capability.clone());
+                }
+                let field_id = key(field.get("fieldId"));
+                if field_id != field_name {
+                    field_ids.insert(field_name.clone(), Js::str(field_id));
                 }
             }
             if truthy(field.get("writable")) {
@@ -517,6 +522,9 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
             }
             if !position_field_docs.is_empty() {
                 position.insert("fieldDocs".into(), Js::from(position_field_docs));
+            }
+            if !field_ids.is_empty() {
+                position.insert("fieldIds".into(), Js::from(field_ids));
             }
             positions.insert(name.clone(), Js::from(position));
         }

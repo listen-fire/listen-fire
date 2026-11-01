@@ -528,7 +528,7 @@ function stripHtml(html: string): string {
  * when neither is set (treated as an empty body, not null, so downstream
  * string operators don't break).
  */
-function normalisedBody(payload: Partial<EmailPayload>): string {
+export function normalisedBody(payload: Partial<EmailPayload>): string {
   if (payload.bodyText && payload.bodyText.length > 0) {
     return isMarkupText(payload.bodyText) ? stripHtml(payload.bodyText) : payload.bodyText;
   }

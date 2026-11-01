@@ -843,6 +843,10 @@ export interface PositionSchema {
   /** What the adapter says each field is, by name — every field it described,
    *  readable or write-only. */
   fieldDocs?: Record<string, string>;
+  /** The id its module keys a record's field by, by the field's name, where
+   *  the two differ: a host reads an arrival's fields by name before judging
+   *  it, as a run reads them. */
+  fieldIds?: Record<string, string>;
 }
 
 

@@ -18,8 +18,9 @@ import { createEmbeddedHost, memoryEmbeddedHostStore, type SavedProgram } from '
  *  people, listenable too, an arrival on them carrying their company when
  *  `carried`; when not, its companies are cheap to list, so a listen may
  *  filter them by listing them. Every company it is asked to create is
- *  written down. */
-function crmModule(written: string[], options: { carried: boolean }) {
+ *  written down. When `keyed`, it keys a company's `Name` as `name`. */
+function crmModule(written: string[], options: { carried: boolean; keyed?: boolean }) {
+  const nameId = options.keyed === true ? 'name' : 'Name';
   const create = (ctx: ModuleContext): Adapter => ({
     adapterType: 'crm',
     supportedTriggers: ['webhook'],
@@ -44,7 +45,7 @@ function crmModule(written: string[], options: { carried: boolean }) {
       return {
         typeId,
         displayName: 'Company',
-        fields: [field('Name')],
+        fields: [{ ...field('Name'), fieldId: nameId }],
         references: [
           {
             fieldId: 'People',
@@ -63,7 +64,7 @@ function crmModule(written: string[], options: { carried: boolean }) {
     resolveEntity: async () => ({ candidates: [] }),
     getFieldValue: async ({ position, fieldId }) => {
       const data = position.identity.data;
-      return data !== null && typeof data === 'object' ? (Reflect.get(data, fieldId) ?? null) : null;
+      return data !== null && typeof data === 'object' ? (Reflect.get(data, position.recordType === 'Company' && fieldId === 'Name' ? nameId : fieldId) ?? null) : null;
     },
     getRelated: async () => [],
     createRecord: async ({ recordType, fields }) => {
@@ -151,10 +152,10 @@ function company(name: string, more: Partial<Exclude<Arrival, { gone: true }>> =
   return { edge: 'Companies', identity: `company-${name}`, landing: { recordId: `company-${name}`, recordType: 'Company', fields: { Name: name } }, ...more };
 }
 
-async function setup(options: { carried?: boolean } = {}) {
+async function setup(options: { carried?: boolean; keyed?: boolean } = {}) {
   const written: string[] = [];
   const warned: string[] = [];
-  const crm = crmModule(written, { carried: options.carried ?? true });
+  const crm = crmModule(written, { carried: options.carried ?? true, ...(options.keyed !== undefined ? { keyed: options.keyed } : {}) });
   const store = memoryEmbeddedHostStore();
   const host = createEmbeddedHost({ modules: [crm], store, log: { warn: (message) => void warned.push(message) }, moduleHost: () => ({ validateResults: true }) });
   await host.connect('acme', { name: 'north', module: crm, credential: { space: 'north' } });
@@ -169,6 +170,17 @@ describe("the embedded host's listens", () => {
     const fired = await host.dispatch('acme', { adapterType: 'crm', connection: 'north', arrivals: [company('Acme'), company('Globex')] });
 
     expect(fired.map(({ program: name, movement, outcome }) => ({ name, movement, ok: outcome.ok }))).toEqual([{ name: 'acme', movement: 'f', ok: true }]);
+    expect(written).toEqual(['acme: Seen Acme']);
+  });
+
+  it('judges an arrival its module keys by its own field ids by the names the listen reads', async () => {
+    const { host, written } = await setup({ keyed: true });
+    await host.save('acme', { name: 'acme', source: program('listen to app-[c:Companies WHERE c.Name == "Acme"]-> fire f') });
+    const keyed = (name: string): Arrival => ({ edge: 'Companies', identity: `company-${name}`, landing: { recordId: `company-${name}`, recordType: 'Company', fields: { name } } });
+
+    const fired = await host.dispatch('acme', { adapterType: 'crm', connection: 'north', arrivals: [keyed('Acme'), keyed('Globex')] });
+
+    expect(fired.map(({ outcome }) => outcome.ok)).toEqual([true]);
     expect(written).toEqual(['acme: Seen Acme']);
   });
 

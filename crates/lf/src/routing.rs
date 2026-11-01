@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use std::rc::Rc;
 
-use movement_engine::listen_judge::{ArrivedRecord, PlanArrival, Verdict, judge_arrival};
+use movement_engine::listen_judge::{ArrivedRecord, PlanArrival, Verdict, judge_arrival, named_fields};
 use movement_engine::listen_landing::{DeclaredPayload, FileScope};
 use movement_parser::ast::{RValue, Statement};
 use movement_parser::catalog::types::CatalogSnapshot;
@@ -44,7 +44,15 @@ pub struct Listen {
     /// as it is kept, so what lands while the run sits in the queue still
     /// counts.
     pub trigger_awaits: TriggerAwaits,
+    /// Each record type its connection's module keys some fields of by ids
+    /// other than their names, as the catalog says (`fieldIds`): an
+    /// arrival's records are read by name before they are judged.
+    pub field_ids: FieldIds,
 }
+
+/// Each record type's `fieldIds` in a connection's schema (name → id), by
+/// the record type's name; only types that have any.
+pub type FieldIds = HashMap<String, serde_json::Map<String, Json>>;
 
 /// The edges a fired function waits on off the records its run is handed at
 /// delivery, as the checker stamps them on its parameter.
@@ -114,9 +122,9 @@ impl Listen {
             return None;
         }
         let arrived = |record: &Js| {
-            let fields = record.get("fields")?;
+            let fields = self.named(record)?;
             let unknown = record.get("unknown").and_then(Js::as_array).map(|names| names.iter().filter_map(Js::as_str).map(str::to_string).collect()).unwrap_or_default();
-            Some(ArrivedRecord { record_type: record.get("recordType").and_then(Js::as_str).map(str::to_string), fields: json_of(fields), unknown })
+            Some(ArrivedRecord { record_type: record.get("recordType").and_then(Js::as_str).map(str::to_string), fields, unknown })
         };
         let Some(landing) = arrival.landing.as_ref().and_then(arrived) else {
             return Some(Verdict::Skips { hop: plan.hops.len().saturating_sub(1), reason: None });
@@ -136,7 +144,16 @@ impl Listen {
     /// or the listen states none.
     pub fn misfits(&self, arrival: &ArrivalIn) -> Vec<String> {
         let Some(declared) = &self.payload else { return Vec::new() };
-        declared.misfits(&arrival.landing.as_ref().and_then(|landing| landing.get("fields")).map_or(Json::Null, json_of))
+        declared.misfits(&arrival.landing.as_ref().and_then(|landing| self.named(landing)).unwrap_or(Json::Null))
+    }
+
+    /// A record's fields as the listen's program reads them, by name
+    /// (`named_fields`): its module may key them by its own ids, which the
+    /// catalog maps for the record type it states. None when it has none.
+    fn named(&self, record: &Js) -> Option<Json> {
+        let fields = json_of(record.get("fields")?);
+        let ids = record.get("recordType").and_then(Js::as_str).and_then(|record_type| self.field_ids.get(record_type));
+        Some(ids.map_or_else(|| fields.clone(), |ids| named_fields(&fields, ids)))
     }
 
 }
@@ -182,7 +199,29 @@ pub fn listens_across(parsed: &[Rc<crate::sources::Parsed>], catalog: &Js) -> Li
         read.unwatched.extend(unplanned);
         listens_of(file, program, &scopes, plans, &mut read);
     }
+    if let Some(Ok(catalog)) = &snapshot {
+        for listen in &mut read.listens {
+            listen.field_ids = field_ids_of(catalog, listen);
+        }
+    }
     read
+}
+
+/// The `fieldIds` of each record type in the schema of `listen`'s
+/// connection, as the checker instantiates it from its construction.
+fn field_ids_of(catalog: &CatalogSnapshot, listen: &Listen) -> FieldIds {
+    let credential_arg = catalog.adapter(&listen.adapter).and_then(movement_parser::catalog::helpers::credential_arg_of).map_or_else(|| CREDENTIAL_ARG.to_string(), |arg| arg.name.clone());
+    let credential = listen.credential.clone().map(|credential| (credential_arg, credential));
+    let args: movement_parser::catalog::snapshot::Args = listen.args.iter().cloned().chain(credential).collect();
+    let Some(schema) = catalog.instantiate(&listen.adapter, &args) else { return FieldIds::default() };
+    schema
+        .positions
+        .iter()
+        .filter_map(|(name, position)| {
+            let ids = position.field_ids.as_ref().filter(|ids| !ids.is_empty())?;
+            Some((name.clone(), ids.iter().map(|(field, id)| (field.clone(), Json::String(id.clone()))).collect()))
+        })
+        .collect()
 }
 
 /// The catalog as the checker reads it, or why it does not load.
@@ -341,6 +380,7 @@ fn listens_of(file: &crate::sources::Parsed, program: &movement_parser::ast::Pro
             args,
             plan,
             trigger_awaits,
+            field_ids: FieldIds::default(),
         });
     }
 }
@@ -511,6 +551,23 @@ mod tests {
         );
     }
 
+    /// The CRM, its module keying a company's `Name` as `name` (`fieldIds`).
+    fn crm_keyed_by_ids() -> Vec<Listen> {
+        let catalog = CRM_CATALOG.replace(r#""properties":{"id":"text","Name":"text"},"#, r#""properties":{"id":"text","Name":"text"},"fieldIds":{"Name":"name"},"#);
+        let source = "import { acme_crm as crm_kind } from adapters\nimport { acme } from credentials\n\ncrm = connect crm_kind using acme\n\nfunction welcome(c: <crm-[:Company]->>) {\n  return c.Name\n}\n\nlisten to crm-[c:Company WHERE c.Name == \"Acme\"]-> fire welcome\n";
+        let files = vec![MovementFile { name: "crm".into(), path: PathBuf::from("crm.mvt"), source: source.into(), version: None }];
+        let read = listens_across(&Parsed::each(&files, &[]), &js(&catalog));
+        assert_eq!(read.unwatched, Vec::<String>::new());
+        read.listens
+    }
+
+    #[test]
+    fn an_arrival_keyed_by_its_modules_field_ids_is_judged_by_the_names_the_listen_reads() {
+        let welcome = &crm_keyed_by_ids()[0];
+        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","name":"Acme"}"#), Some("acme"), 0.0), Some(Verdict::Fires));
+        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","name":"Osprey"}"#), Some("acme"), 0.0), Some(Verdict::Skips { hop: 0, reason: None }));
+    }
+
     #[test]
     fn a_field_its_module_could_not_read_leaves_a_listen_reading_it_undecided_and_the_rest_judged() {
         let listens = crm_listens();
@@ -564,6 +621,7 @@ mod tests {
                 args,
                 plan,
                 trigger_awaits: TriggerAwaits::default(),
+                field_ids: FieldIds::default(),
             };
             assert_eq!(listen.pipeline(), case["pipeline"].as_str().unwrap(), "{}", case["case"]);
         }
@@ -586,6 +644,7 @@ mod tests {
                 args: Vec::new(),
                 plan: serde_json::from_str(r#"{"movement":"m","connection":"n","adapter":"notes","hops":[]}"#).unwrap(),
                 trigger_awaits: TriggerAwaits::default(),
+                field_ids: FieldIds::default(),
             };
             assert_eq!(listen.hears(case["delivery"].as_str()), case["hears"].as_bool().unwrap(), "{}", case["case"]);
         }
