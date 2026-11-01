@@ -4,12 +4,13 @@
 // read by the next one. `ctx.config.baseUrlOverride` (the dev loop's fake)
 // wins over the credential's own base URL.
 
-import { defineModule, type CredentialFields, type ModuleContext } from 'module-kit';
+import { defineModule, type CredentialFields, type ModuleContext, type PollEdgeInput, type PollInput } from 'module-kit';
 
 import { DealroomApiClient, dealroomCredsParser } from './api_client';
 import { DealroomAdapter, type DealroomClientSource } from './adapter';
 import { DEALROOM_MANIFEST } from './manifest';
-import { DEALROOM_POLL_INTERVAL_SECONDS, pollDealroom } from './poll';
+import { pollDealroom } from './poll';
+import { DEALROOM_POLL_EVERY_SECONDS } from './types';
 
 /** The client the context's credential reaches Dealroom with. */
 export function dealroomClientFrom(ctx: ModuleContext): DealroomClientSource {
@@ -50,11 +51,18 @@ export const dealroomModule = defineModule({
       ],
     },
   ],
-  poll: { intervalSeconds: DEALROOM_POLL_INTERVAL_SECONDS },
+  // Adapter protocol 2.6: `Funding Rounds` is a listenable edge, polled.
+  protocolMinor: 6,
+  poll: { intervalSeconds: DEALROOM_POLL_EVERY_SECONDS },
   create: (ctx) => {
     const client = dealroomClientFrom(ctx);
     return Object.assign(new DealroomAdapter(client), {
-      poll: async (input: Parameters<typeof pollDealroom>[1]) => pollDealroom(await client(), input),
+      poll: async (input: PollInput | PollEdgeInput) => {
+        if (!('edge' in input)) {
+          throw new Error('@lf/dealroom is listened to on its Funding Rounds edge: `listen to dealroom-[r:`Funding Rounds`]-> fire f` (`listen-fire upgrade` rewrites a 0.12 listen)');
+        }
+        return pollDealroom(await client(), input);
+      },
     });
   },
 });

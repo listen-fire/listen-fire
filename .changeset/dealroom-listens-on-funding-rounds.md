@@ -1,0 +1,5 @@
+---
+"@listen-fire/dealroom": minor
+---
+
+Dealroom funding rounds arrive on the `Funding Rounds` edge, readable and listenable, polled every ten minutes (lf.yaml `pollEvery` overrides it for a connection): ``listen to dealroom-[r:`Funding Rounds` WHERE r.Round IN ["SERIES A"] AND r.`Company Locations` CONTAINS "Germany"]-> fire f``. Each round Dealroom records after the listen began arrives once, with `occurredAt` and `about` the company that raised it; a round corrected afterwards does not arrive again. Two new fields, `Company Industries` and `Company Locations` (the industries, and the cities and countries, of the company that raised), take `eq`, `in` and `contains`; they and `Round` reach Dealroom's own terms filters, on a walk of `Funding Rounds` as on a listen, and the module judges the rest of the taken filter itself. It declares how a 0.12 `listen to dealroom { rounds, industries, hq_locations }` becomes this (`listenSettingsBecome`) and no longer declares `listenConfig`, a `fires` edge or event types. Adapter protocol 2.6.

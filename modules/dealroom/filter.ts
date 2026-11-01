@@ -19,6 +19,10 @@ import {
   type DealroomSearchRequest,
 } from './api_client';
 import {
+  DEALROOM_COMPANY_INDUSTRIES_FIELD,
+  DEALROOM_COMPANY_INDUSTRIES_FIELD_ID,
+  DEALROOM_COMPANY_LOCATIONS_FIELD,
+  DEALROOM_COMPANY_LOCATIONS_FIELD_ID,
   DEALROOM_COMPANY_TYPE_ID,
   DEALROOM_FUNDING_ROUND_TYPE_ID,
   DEALROOM_INVESTOR_TYPE_ID,
@@ -272,6 +276,8 @@ export function fundingRoundSearchFromWhere(
   const must: DealroomMustFilters = {};
   for (const conjunct of conjunctsOf(where)) {
     if (has(conjunct, 'round', 'Round')) pushTerms(must, 'rounds', conjunct);
+    else if (has(conjunct, DEALROOM_COMPANY_INDUSTRIES_FIELD_ID, DEALROOM_COMPANY_INDUSTRIES_FIELD)) pushTerms(must, 'industries', conjunct);
+    else if (has(conjunct, DEALROOM_COMPANY_LOCATIONS_FIELD_ID, DEALROOM_COMPANY_LOCATIONS_FIELD)) pushTerms(must, 'hq_locations', conjunct);
     else if (has(conjunct, 'amount', 'Amount')) pushNumberBounds(must, { min: 'amount_min', max: 'amount_max' }, conjunct);
     else if (has(conjunct, 'date', 'Date')) pushDateBounds(must, { min: 'date_min', max: 'date_max' }, conjunct);
     else if (has(conjunct, 'is_verified', 'Is Verified')) pushBooleanTerms(must, 'is_verified', conjunct);

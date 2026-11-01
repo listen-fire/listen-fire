@@ -75,21 +75,26 @@ export const DEALROOM_ROUND_INVESTORS_EDGE_NAME = 'Investors';
 export const DEALROOM_ROUND_INVESTOR_INVESTOR_EDGE = 'round_investor_investor';
 export const DEALROOM_ROUND_INVESTOR_INVESTOR_EDGE_NAME = 'Investor';
 
-// ── The `events:` vocabulary ────────────────────────────────────────────────
-// One kind: a funding round Dealroom has just recorded. `created_utc` is the
-// only "new since" the API offers on a round, and it is the only event anybody
-// asked for — a new COMPANY on Dealroom is a catalogue event, and the same
+// ── Listening ───────────────────────────────────────────────────────────────
+// `Funding Rounds` is a listenable edge: a funding round Dealroom has just
+// recorded arrives on it. `created_utc` is the only "new since" the API offers
+// on a round; a new COMPANY on Dealroom is a catalogue event, and the same
 // question is a `Companies` walk with a `Created At` bound.
 
-export const DEALROOM_FUNDING_ROUND_EVENT = 'funding_round';
+/** How often the host polls `Funding Rounds` unless lf.yaml's `pollEvery` says
+ *  otherwise. Rounds land in batches through the day, so a ten-minute look is
+ *  plenty and keeps well inside the request budget. */
+export const DEALROOM_POLL_EVERY_SECONDS = 600;
 
-export const DEALROOM_SUBSCRIBABLE_EVENTS = [DEALROOM_FUNDING_ROUND_EVENT] as const;
-
-/** The discriminator a polled funding-round event carries. */
-export const DEALROOM_FUNDING_ROUND_EVENT_TAG = 'dealroom:funding_round';
+/** The raising company's industries and locations, by name: what a listen
+ *  narrows a round by (Dealroom's terms filters of the same names). */
+export const DEALROOM_COMPANY_INDUSTRIES_FIELD = 'Company Industries';
+export const DEALROOM_COMPANY_INDUSTRIES_FIELD_ID = 'company_industries';
+export const DEALROOM_COMPANY_LOCATIONS_FIELD = 'Company Locations';
+export const DEALROOM_COMPANY_LOCATIONS_FIELD_ID = 'company_locations';
 
 /**
- * The opaque checkpoint the PollSource persists. Creation is the one
+ * The opaque cursor the poll hands back. Creation is the one
  * "changed since" mark Dealroom offers on a round, so this is the newest
  * `created_utc` already delivered, in epoch milliseconds. Absent is a trigger
  * that has never polled — the first poll sets it and emits nothing.

@@ -6,8 +6,10 @@ import type { AdapterManifest } from 'movement-engine/public/adapter';
 
 import {
   DEALROOM_ADAPTER_TYPE,
-  DEALROOM_FUNDING_ROUND_EVENT,
-  DEALROOM_SUBSCRIBABLE_EVENTS,
+  DEALROOM_COMPANY_INDUSTRIES_FIELD,
+  DEALROOM_COMPANY_LOCATIONS_FIELD,
+  DEALROOM_FUNDING_ROUNDS_COLLECTION,
+  DEALROOM_FUNDING_ROUND_DISPLAY_NAME,
 } from './types';
 
 const DEALROOM_HANDBOOK_CONTENT = `Dealroom is a database of \`Companies\`, \`Investors\`, \`People\` and \`Funding Rounds\`, with the links between them. It is read-only: look something up by name or domain, walk out to what it is connected to, and react to new rounds.
@@ -51,10 +53,10 @@ A round's \`Company\` is who raised. Its \`Investors\` are participations, not b
 ### listening — a new round
 
 \`\`\`
-listen to dealroom { rounds: ["SERIES A"], hq_locations: ["Europe"] } fire triage
+listen to dealroom-[r:\`Funding Rounds\` WHERE r.Round IN ["SERIES A"] AND r.\`Company Locations\` CONTAINS "Germany"]-> fire triage
 \`\`\`
 
-A listener fires once per round Dealroom RECORDED since the last look. The FIRST look sets the mark and delivers nothing, so going live never replays the back catalogue — walk \`Funding Rounds\` when you want history. \`rounds\`, \`industries\` and \`hq_locations\` narrow delivery; \`every\` (for example \`every: 20m\`) overrides the ten-minute default. A round that is corrected afterwards does not fire again: recording is the only "new since" Dealroom offers.
+A listen on \`Funding Rounds\` fires once per round Dealroom RECORDED since the last look, ten minutes or so behind (\`pollEvery\` in lf.yaml changes the ten minutes for the connection). The FIRST look sets the mark and delivers nothing, so going live never replays the back catalogue — walk \`Funding Rounds\` when you want history. \`Round\`, \`Company Industries\` and \`Company Locations\` (the industries and the cities and countries of the company that raised) narrow delivery at Dealroom, and any other field of the round narrows too (\`r.Amount >= 5000000\`). Listens on one connection with the same WHERE share one poll. A round that is corrected afterwards does not fire again: recording is the only "new since" Dealroom offers.
 
 ### what is deliberately not here
 
@@ -83,18 +85,19 @@ export const DEALROOM_MANIFEST: AdapterManifest = {
     'needs an explicit ORDER BY on the hop, as in -[r:Rounds ORDER BY r.Date DESC]->. ' +
     'Team memberships and a round’s investors are nodes in their own right ' +
     'because the titles and the lead flag belong to the pair; walk Person or ' +
-    'Investor from one for the full record, at the cost of a fetch. A listener ' +
-    'fires on rounds Dealroom recorded since the last poll, and the first poll ' +
-    'delivers nothing.',
+    'Investor from one for the full record, at the cost of a fetch. A listen on ' +
+    'Funding Rounds fires on rounds Dealroom recorded since the last poll, and the first poll ' +
+    'delivers nothing. Narrow it with Round, Company Industries and Company ' +
+    'Locations in the listen’s WHERE.',
   handbookSection: {
     title: 'Dealroom: companies, investors, rounds',
     content: DEALROOM_HANDBOOK_CONTENT,
   },
   triggerExpectation:
-    'One kind: `funding_round`. It fires once per round Dealroom RECORDED ' +
-    'since the last poll (`created_utc`), narrowed by the `rounds`, ' +
-    '`industries` and `hq_locations` listen options, each a Dealroom terms ' +
-    'filter. The first poll sets the checkpoint and emits nothing, so going ' +
+    'Fires once per funding round Dealroom RECORDED since the last poll ' +
+    '(`created_utc`; every ten minutes, and lf.yaml `pollEvery` changes it): ' +
+    'a listen on the `Funding Rounds` edge. Round, Company Industries and ' +
+    'Company Locations narrow it at Dealroom. The first poll sets the cursor and delivers nothing, so going ' +
     'live never replays the back catalogue. A round that is edited afterwards ' +
     'does NOT fire — Dealroom offers no changed-since mark other than ' +
     'recording. Companies, investors and people do not fire at all; the same ' +
@@ -102,17 +105,18 @@ export const DEALROOM_MANIFEST: AdapterManifest = {
   supportedTriggers: ['poll'],
   methods: ['listEntryPoints', 'describe', 'edgesFrom', 'getFieldValue', 'getRelated', 'readRecord'],
   requiredCredentialType: 'DEALROOM',
-  // `events` is projected from `subscribableEvents` — Dealroom has no webhook
-  // to subscribe to, but the value is what types the listened parameter and
-  // what the poll source reads to decide what to fetch.
-  subscribableEvents: [...DEALROOM_SUBSCRIBABLE_EVENTS],
-  defaultSubscribedEvents: [DEALROOM_FUNDING_ROUND_EVENT],
-  listenConfig: [
-    { key: 'rounds', required: false },
-    { key: 'industries', required: false },
-    { key: 'hq_locations', required: false },
-    { key: 'pollIntervalSeconds', required: false },
-  ],
+  // A 0.12 `listen to dealroom { rounds, industries, hq_locations }` is
+  // a listen on `Funding Rounds` with that WHERE (`listen-fire upgrade`).
+  listenSettingsBecome: {
+    path: [DEALROOM_FUNDING_ROUNDS_COLLECTION],
+    aliases: ['r'],
+    paramFrom: DEALROOM_FUNDING_ROUND_DISPLAY_NAME,
+    keys: {
+      rounds: { hop: 0, field: 'Round', op: 'in' },
+      industries: { hop: 0, field: DEALROOM_COMPANY_INDUSTRIES_FIELD, op: 'contains' },
+      hq_locations: { hop: 0, field: DEALROOM_COMPANY_LOCATIONS_FIELD, op: 'contains' },
+    },
+  },
   triggerKinds: ['DEALROOM'],
   vocabulary: {
     // Dealroom's mark: the bars and the D of its logo, without the tile, as one filled path.

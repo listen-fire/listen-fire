@@ -16,6 +16,10 @@ import type { SchemaEntryPoint, SchemaTypeDescriptor } from 'movement-engine/pub
 import { META_RECORD_TYPE } from 'movement-engine/public/catalog';
 import {
   DEALROOM_COMPANIES_COLLECTION,
+  DEALROOM_COMPANY_INDUSTRIES_FIELD,
+  DEALROOM_COMPANY_INDUSTRIES_FIELD_ID,
+  DEALROOM_COMPANY_LOCATIONS_FIELD,
+  DEALROOM_COMPANY_LOCATIONS_FIELD_ID,
   DEALROOM_COMPANY_DISPLAY_NAME,
   DEALROOM_COMPANY_INVESTORS_EDGE,
   DEALROOM_COMPANY_INVESTORS_EDGE_NAME,
@@ -30,7 +34,6 @@ import {
   DEALROOM_DATABASE_TYPE_ID,
   DEALROOM_FUNDING_ROUNDS_COLLECTION,
   DEALROOM_FUNDING_ROUND_DISPLAY_NAME,
-  DEALROOM_FUNDING_ROUND_EVENT,
   DEALROOM_FUNDING_ROUND_TYPE_ID,
   DEALROOM_FUND_DISPLAY_NAME,
   DEALROOM_FUND_TYPE_ID,
@@ -48,6 +51,7 @@ import {
   DEALROOM_INVESTOR_TEAM_EDGE_NAME,
   DEALROOM_INVESTOR_TYPE_ID,
   DEALROOM_PEOPLE_COLLECTION,
+  DEALROOM_POLL_EVERY_SECONDS,
   DEALROOM_PERSON_COMPANIES_EDGE,
   DEALROOM_PERSON_COMPANIES_EDGE_NAME,
   DEALROOM_PERSON_DISPLAY_NAME,
@@ -84,9 +88,10 @@ const PEOPLE_DESCRIPTION =
   'search.';
 
 const FUNDING_ROUNDS_DESCRIPTION =
-  'Funding rounds Dealroom has recorded. `Round`, `Date` bounds, `Amount` ' +
-  'bounds, `Is Verified` and a `Created At` lower bound reach the search; walk ' +
-  '`Company` for who raised and `Investors` for who put money in.';
+  'Funding rounds Dealroom has recorded, and, listened to, each one it records ' +
+  'from then on. `Round`, `Company Industries`, `Company Locations`, `Date` ' +
+  'bounds, `Amount` bounds, `Is Verified` and a `Created At` lower bound reach ' +
+  'the search; walk `Company` for who raised and `Investors` for who put money in.';
 
 /**
  * A root collection served by one of Dealroom's four search endpoints. The
@@ -144,6 +149,8 @@ export function dealroomEntryPoints(): SchemaEntryPoint[] {
       collectionName: DEALROOM_PEOPLE_COLLECTION,
       description: PEOPLE_DESCRIPTION,
     },
+    // One edge, two promises: past rounds can be searched, and each round
+    // Dealroom records after the listen began arrives on it.
     {
       typeId: DEALROOM_FUNDING_ROUND_TYPE_ID,
       displayName: DEALROOM_FUNDING_ROUND_DISPLAY_NAME,
@@ -151,20 +158,11 @@ export function dealroomEntryPoints(): SchemaEntryPoint[] {
       readable: true,
       collectionName: DEALROOM_FUNDING_ROUNDS_COLLECTION,
       description: FUNDING_ROUNDS_DESCRIPTION,
-    },
-    // The EVENT edge onto the same node the readable collection lands on
-    // (adapters/CLAUDE.md rule 9 — two edges, two promises, one node).
-    {
-      typeId: DEALROOM_FUNDING_ROUND_TYPE_ID,
-      displayName: DEALROOM_FUNDING_ROUND_DISPLAY_NAME,
-      writable: false,
-      readable: false,
-      fires: true,
-      firesOn: [DEALROOM_FUNDING_ROUND_EVENT],
-      description:
-        'Delivered when Dealroom records a funding round that did not exist at ' +
-        'the last poll. Walk `Company` for who raised and `Investors` for who ' +
-        'put money in.',
+      listenable: true,
+      capability: ROOT_SEARCH,
+      delivery: 'polled',
+      pollEverySeconds: DEALROOM_POLL_EVERY_SECONDS,
+      cursor: true,
     },
     {
       typeId: DEALROOM_TEAM_MEMBER_TYPE_ID,
@@ -195,7 +193,7 @@ export const DEALROOM_ROOT: SchemaTypeDescriptor = {
   description:
     'The Dealroom database. Walk `Companies`, `Investors`, `People` or ' +
     '`Funding Rounds` to look something up by name, domain or filter, then walk ' +
-    'on to its rounds, investors, team and funds. Listen on `Funding Round` to ' +
+    'on to its rounds, investors, team and funds. Listen on `Funding Rounds` to ' +
     'be told when Dealroom records a new one.',
   fields: [],
   references: [
@@ -234,17 +232,7 @@ export const DEALROOM_ROOT: SchemaTypeDescriptor = {
       name: DEALROOM_FUNDING_ROUNDS_COLLECTION,
       description: FUNDING_ROUNDS_DESCRIPTION,
       capability: ROOT_SEARCH,
-    },
-    {
-      fieldId: `fires:${DEALROOM_FUNDING_ROUND_TYPE_ID}`,
-      targetTypeId: DEALROOM_FUNDING_ROUND_TYPE_ID,
-      cardinality: 'one',
-      direction: 'outgoing',
-      name: DEALROOM_FUNDING_ROUND_DISPLAY_NAME,
-      fires: true,
-      firesOn: [DEALROOM_FUNDING_ROUND_EVENT],
-      readable: false,
-      description: 'A newly recorded funding round — what a listen delivers.',
+      listenable: true,
     },
   ],
 };
@@ -484,6 +472,8 @@ const FUNDING_ROUND_DESCRIPTOR: SchemaTypeDescriptor = {
     { fieldId: 'unknown_investors', displayName: 'Unknown Investors', kind: 'string', cardinality: 'many', writable: false, required: false, description: 'Participants Dealroom has a name for but no investor record — they are NOT on `Investors`.' },
     { fieldId: 'last_updated_utc', displayName: 'Last Updated', kind: 'date', writable: false, required: false, capability: { filterOperators: ['gt', 'gte'], orderable: true } },
     { fieldId: 'created_utc', displayName: 'Created At', kind: 'date', writable: false, required: false, description: 'When Dealroom recorded the round — what a listener’s "new since last poll" is measured on.', capability: { filterOperators: ['gt', 'gte'], orderable: true } },
+    { fieldId: DEALROOM_COMPANY_INDUSTRIES_FIELD_ID, displayName: DEALROOM_COMPANY_INDUSTRIES_FIELD, kind: 'string', cardinality: 'many', writable: false, required: false, description: 'The industries of the company that raised, by name. A WHERE reaches the search as an industries filter.', capability: { filterOperators: ['eq', 'in', 'contains'] } },
+    { fieldId: DEALROOM_COMPANY_LOCATIONS_FIELD_ID, displayName: DEALROOM_COMPANY_LOCATIONS_FIELD, kind: 'string', cardinality: 'many', writable: false, required: false, description: 'The cities and countries of the company that raised, by name. A WHERE reaches the search as a location filter.', capability: { filterOperators: ['eq', 'in', 'contains'] } },
   ],
   references: [
     {

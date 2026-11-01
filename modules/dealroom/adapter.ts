@@ -2,14 +2,13 @@
 // people and funding rounds, and the relationships between them.
 //
 // Dealroom is READ-ONLY and a POLLED source: there are no webhooks anywhere in
-// the API, so event production is the module's `poll` (poll.ts). This is the
-// read half. The type graph itself is `schema.ts`; the WHERE and ORDER BY
+// the API, so a funding round's arrival is the module's `poll` (poll.ts). This
+// is the read half. The type graph itself is `schema.ts`; the WHERE and ORDER BY
 // pushdown is `filter.ts`.
 
 import type {
   Adapter,
   EdgesFromResult,
-  EventType,
   GetFieldValueInput,
   GetRelatedInput,
   ReadInput,
@@ -62,7 +61,9 @@ import {
   DEALROOM_ADAPTER_TYPE,
   DEALROOM_COMPANIES_COLLECTION,
   DEALROOM_COMPANY_DISPLAY_NAME,
+  DEALROOM_COMPANY_INDUSTRIES_FIELD_ID,
   DEALROOM_COMPANY_INVESTORS_EDGE,
+  DEALROOM_COMPANY_LOCATIONS_FIELD_ID,
   DEALROOM_COMPANY_ROUNDS_EDGE,
   DEALROOM_COMPANY_SIMILAR_EDGE,
   DEALROOM_COMPANY_TEAM_EDGE,
@@ -70,8 +71,6 @@ import {
   DEALROOM_DATABASE_TYPE_ID,
   DEALROOM_FUNDING_ROUNDS_COLLECTION,
   DEALROOM_FUNDING_ROUND_DISPLAY_NAME,
-  DEALROOM_FUNDING_ROUND_EVENT,
-  DEALROOM_FUNDING_ROUND_EVENT_TAG,
   DEALROOM_FUNDING_ROUND_TYPE_ID,
   DEALROOM_FUND_DISPLAY_NAME,
   DEALROOM_FUND_TYPE_ID,
@@ -92,7 +91,6 @@ import {
   DEALROOM_ROUND_INVESTOR_DISPLAY_NAME,
   DEALROOM_ROUND_INVESTOR_INVESTOR_EDGE,
   DEALROOM_ROUND_INVESTOR_TYPE_ID,
-  DEALROOM_SUBSCRIBABLE_EVENTS,
   DEALROOM_TEAM_MEMBER_DISPLAY_NAME,
   DEALROOM_TEAM_MEMBER_PERSON_EDGE,
   DEALROOM_TEAM_MEMBER_TYPE_ID,
@@ -104,7 +102,6 @@ export {
   DEALROOM_ADAPTER_TYPE,
   DEALROOM_COMPANY_TYPE_ID,
   DEALROOM_DATABASE_TYPE_ID,
-  DEALROOM_FUNDING_ROUND_EVENT_TAG,
   DEALROOM_FUNDING_ROUND_TYPE_ID,
   DEALROOM_INVESTOR_TYPE_ID,
   DEALROOM_PERSON_TYPE_ID,
@@ -198,6 +195,17 @@ function headquarters(data: Record<string, unknown>, part: 'city' | 'country'): 
   return stringAt(objectAt(chosen[part])?.['name']);
 }
 
+/** The cities and countries of a company's locations, by name: the vocabulary
+ *  Dealroom's location filter takes. */
+function locationNames(company: Record<string, unknown>): string[] {
+  const raw = company['hq_locations'];
+  const names = (Array.isArray(raw) ? raw : []).flatMap((entry) => {
+    const location = objectAt(entry);
+    return [stringAt(objectAt(location?.['city'])?.['name']), stringAt(objectAt(location?.['country'])?.['name'])];
+  });
+  return [...new Set(names.filter((name): name is string => name !== null))];
+}
+
 /** A round's date. Dealroom records the year and the month and no day, so every
  *  round in a month reads as the first of it — the field's description says so
  *  rather than the value pretending to a precision it has not got. */
@@ -224,10 +232,30 @@ function computedField(
   if (LABEL_FIELDS.has(fieldId)) return labelsOf(data[fieldId] as DealroomLabelList);
   if (INSTANT_FIELDS.has(fieldId)) return isoOf(data[fieldId]);
   if (typeId === DEALROOM_FUNDING_ROUND_TYPE_ID && fieldId === 'date') return roundDate(data);
+  if (typeId === DEALROOM_FUNDING_ROUND_TYPE_ID && fieldId === DEALROOM_COMPANY_INDUSTRIES_FIELD_ID) {
+    return labelsOf(objectAt(data['company'])?.['industries'] as DealroomLabelList);
+  }
+  if (typeId === DEALROOM_FUNDING_ROUND_TYPE_ID && fieldId === DEALROOM_COMPANY_LOCATIONS_FIELD_ID) {
+    return locationNames(objectAt(data['company']) ?? {});
+  }
   if (typeId === DEALROOM_FUND_TYPE_ID && fieldId === 'date') {
     return isoOf(data['date_utc']) ?? isoOf(data['date']) ?? stringAt(data['date']);
   }
   return undefined;
+}
+
+/** A round's fields as an arrival's landing carries them, by the names a
+ *  program reads them by and by the ids a filter may name, for the host to
+ *  judge a listen's WHERE. */
+export function roundFields(round: DealroomFundingRound): Record<string, unknown> {
+  const data: Record<string, unknown> = { ...round };
+  const fields = describeDealroomType(DEALROOM_FUNDING_ROUND_TYPE_ID)?.fields ?? [];
+  return Object.fromEntries(
+    fields.flatMap((field) => {
+      const value = computedField(DEALROOM_FUNDING_ROUND_TYPE_ID, field.fieldId, data) ?? data[field.fieldId] ?? null;
+      return [[field.displayName, value], [field.fieldId, value]];
+    }),
+  );
 }
 
 export class DealroomAdapter extends BaseAdapter implements Adapter {
@@ -520,20 +548,6 @@ export class DealroomAdapter extends BaseAdapter implements Adapter {
       if (error instanceof DealroomApiError && error.status === 404) return null;
       throw error;
     }
-  }
-
-  // ── 5. Event typing ────────────────────────────────────────────────────
-
-  async listEventTypes(): Promise<EventType[]> {
-    // The PollSource tags every event it produces, so discrimination is by tag
-    // alone — never by sniffing the payload.
-    return [
-      {
-        tag: DEALROOM_FUNDING_ROUND_EVENT_TAG,
-        positionType: DEALROOM_FUNDING_ROUND_TYPE_ID,
-        match: { path: 'id', equals: [] },
-      },
-    ];
   }
 }
 

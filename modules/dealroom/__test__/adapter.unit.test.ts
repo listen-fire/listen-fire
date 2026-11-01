@@ -25,7 +25,7 @@ import {
   type DealroomTeamMember,
 } from '../api_client';
 import { DealroomAdapter, DEALROOM_MANIFEST } from '../index';
-import { listenFilters, pollDealroom } from '../poll';
+import { pollDealroom } from '../poll';
 import {
   companySearchFromWhere,
   fundingRoundSearchFromWhere,
@@ -277,33 +277,48 @@ describe('DealroomAdapter entry surface', () => {
         typeId: e.typeId,
         readable: e.readable,
         writable: e.writable,
-        fires: e.fires ?? false,
+        listenable: e.listenable ?? false,
         collection: e.collectionName ?? null,
       })),
     ).toEqual([
-      { typeId: DEALROOM_COMPANY_TYPE_ID, readable: true, writable: false, fires: false, collection: 'Companies' },
-      { typeId: DEALROOM_INVESTOR_TYPE_ID, readable: true, writable: false, fires: false, collection: 'Investors' },
-      { typeId: DEALROOM_PERSON_TYPE_ID, readable: true, writable: false, fires: false, collection: 'People' },
-      { typeId: DEALROOM_FUNDING_ROUND_TYPE_ID, readable: true, writable: false, fires: false, collection: 'Funding Rounds' },
-      { typeId: DEALROOM_FUNDING_ROUND_TYPE_ID, readable: false, writable: false, fires: true, collection: null },
-      { typeId: DEALROOM_TEAM_MEMBER_TYPE_ID, readable: false, writable: false, fires: false, collection: null },
-      { typeId: DEALROOM_ROUND_INVESTOR_TYPE_ID, readable: false, writable: false, fires: false, collection: null },
-      { typeId: DEALROOM_FUND_TYPE_ID, readable: false, writable: false, fires: false, collection: null },
+      { typeId: DEALROOM_COMPANY_TYPE_ID, readable: true, writable: false, listenable: false, collection: 'Companies' },
+      { typeId: DEALROOM_INVESTOR_TYPE_ID, readable: true, writable: false, listenable: false, collection: 'Investors' },
+      { typeId: DEALROOM_PERSON_TYPE_ID, readable: true, writable: false, listenable: false, collection: 'People' },
+      { typeId: DEALROOM_FUNDING_ROUND_TYPE_ID, readable: true, writable: false, listenable: true, collection: 'Funding Rounds' },
+      { typeId: DEALROOM_TEAM_MEMBER_TYPE_ID, readable: false, writable: false, listenable: false, collection: null },
+      { typeId: DEALROOM_ROUND_INVESTOR_TYPE_ID, readable: false, writable: false, listenable: false, collection: null },
+      { typeId: DEALROOM_FUND_TYPE_ID, readable: false, writable: false, listenable: false, collection: null },
     ]);
   });
 
-  it('declares the poll trigger, the Dealroom credential, the one event kind and the listen options', () => {
+  it('declares Funding Rounds as a polled, cursored edge and nothing else as listenable', async () => {
+    const entries = await adapter.listEntryPoints();
+    expect(entries.filter((e) => e.listenable).map((e) => ({
+      collection: e.collectionName,
+      delivery: e.delivery,
+      pollEverySeconds: e.pollEverySeconds,
+      cursor: e.cursor,
+      filter: e.capability?.filter,
+    }))).toEqual([{ collection: 'Funding Rounds', delivery: 'polled', pollEverySeconds: 600, cursor: true, filter: 'native' }]);
+  });
+
+  it('declares the poll trigger, the Dealroom credential and how a 0.12 listen becomes a traversal', () => {
     expect(DEALROOM_MANIFEST.supportedTriggers).toEqual(['poll']);
     expect(DEALROOM_MANIFEST.requiredCredentialType).toBe('DEALROOM');
     expect(DEALROOM_MANIFEST.triggerKinds).toEqual(['DEALROOM']);
-    expect(DEALROOM_MANIFEST.subscribableEvents).toEqual(['funding_round']);
-    expect(DEALROOM_MANIFEST.defaultSubscribedEvents).toEqual(['funding_round']);
-    expect(DEALROOM_MANIFEST.listenConfig?.map((k) => k.key)).toEqual([
-      'rounds',
-      'industries',
-      'hq_locations',
-      'pollIntervalSeconds',
-    ]);
+    expect(DEALROOM_MANIFEST.subscribableEvents).toBeUndefined();
+    expect(DEALROOM_MANIFEST.defaultSubscribedEvents).toBeUndefined();
+    expect(DEALROOM_MANIFEST.listenConfig).toBeUndefined();
+    expect(DEALROOM_MANIFEST.listenSettingsBecome).toEqual({
+      path: ['Funding Rounds'],
+      aliases: ['r'],
+      paramFrom: 'Funding Round',
+      keys: {
+        rounds: { hop: 0, field: 'Round', op: 'in' },
+        industries: { hop: 0, field: 'Company Industries', op: 'contains' },
+        hq_locations: { hop: 0, field: 'Company Locations', op: 'contains' },
+      },
+    });
     // Dealroom has no record-writing endpoint at all.
     expect(DEALROOM_MANIFEST.methods).not.toEqual(expect.arrayContaining(['createRecord']));
   });
@@ -314,14 +329,14 @@ describe('DealroomAdapter entry surface', () => {
 describe('DealroomAdapter.describe', () => {
   const adapter = offline();
 
-  it('describes the database meta node with the four root collections plus the event edge', async () => {
+  it('describes the database meta node with the four root collections, Funding Rounds listenable', async () => {
     for (const ref of [ADAPTER_META_TYPE_ID, DEALROOM_DATABASE_TYPE_ID]) {
       const d = await adapter.describe(ref);
       expect(d?.typeId).toBe(DEALROOM_DATABASE_TYPE_ID);
       expect(d?.references.map((r) => r.name)).toEqual([
-        'Companies', 'Investors', 'People', 'Funding Rounds', 'Funding Round',
+        'Companies', 'Investors', 'People', 'Funding Rounds',
       ]);
-      expect(d?.references.filter((r) => r.fires).map((r) => r.name)).toEqual(['Funding Round']);
+      expect(d?.references.filter((r) => r.listenable).map((r) => r.name)).toEqual(['Funding Rounds']);
       // Nothing on Dealroom is writable.
       expect(d?.references.filter((r) => r.writable)).toEqual([]);
       // Every root collection pushes filter, order AND limit.
@@ -610,6 +625,8 @@ describe('the WHERE pushdown', () => {
           cmp(prop('Amount'), 'gte', value(1_000_000)),
           cmp(prop('Date'), 'gte', value('2026-01-01T00:00:00.000Z')),
           cmp(prop('Is Verified'), 'eq', value(true)),
+          cmp(prop('Company Industries'), 'contains', value('fintech')),
+          cmp(prop('Company Locations'), 'in', list('Germany', 'France')),
         ),
       ).must,
     ).toEqual({
@@ -617,6 +634,8 @@ describe('the WHERE pushdown', () => {
       amount_min: 1_000_000,
       date_min: '2026-01-01 00:00:00',
       is_verified: ['true'],
+      industries: ['fintech'],
+      hq_locations: ['Germany', 'France'],
     });
   });
 
@@ -837,68 +856,117 @@ describe('DealroomAdapter.readRecord', () => {
 // ── the poll ────────────────────────────────────────────────────────────────
 
 describe('pollDealroom', () => {
-  const source = (client: DealroomApiClient) => ({
-    getEvents: (input: { config: unknown; checkpoint?: unknown }) => pollDealroom(client, input),
+  const poll = (client: DealroomApiClient, input: { filter?: unknown; cursor?: unknown }) =>
+    pollDealroom(client, { edge: 'Funding Rounds', ...input });
+  const ids = (answer: Awaited<ReturnType<typeof pollDealroom>>) => answer.arrivals.map((a) => ('identity' in a ? a.identity : ''));
+  const compare = (field: string, op: string, right: unknown) => ({
+    type: 'compare',
+    op,
+    left: { type: 'property', propertyTypeId: field, fieldOnly: true },
+    right: { type: 'static', value: right },
   });
+  const conjunction = (...operands: unknown[]) => ({ type: 'logical', op: 'and', operands });
 
-  it('first poll sets the mark and emits nothing (no backfill)', async () => {
+  it('first poll sets the cursor and delivers nothing (no backfill)', async () => {
     const searchFundingRounds = jest.fn(async () => page([round()]));
-    const { events, checkpoint } = await source(fakeClient({ searchFundingRounds })).getEvents({
-      config: {},
-    });
-    expect(events).toEqual([]);
-    expect((checkpoint as { createdAfter: number }).createdAfter).toBeGreaterThan(0);
+    const { arrivals, cursor } = await poll(fakeClient({ searchFundingRounds }), {});
+    expect(arrivals).toEqual([]);
+    expect((cursor as { createdAfter: number }).createdAfter).toBeGreaterThan(0);
     expect(searchFundingRounds).not.toHaveBeenCalled();
   });
 
-  it('a subsequent poll emits one tagged event per round, oldest first, and advances the mark', async () => {
+  it('a later poll delivers each round on Funding Rounds, oldest first, about its company, and advances the cursor', async () => {
     const older = round({ id: 401, created_utc: '2026-09-10 08:00:00' });
     const newer = round({ id: 402, created_utc: '2026-09-10 09:00:00' });
     const searchFundingRounds = jest.fn(async () => page([newer, older]));
-    const { events, checkpoint } = await source(fakeClient({ searchFundingRounds })).getEvents({
-      config: { rounds: ['SERIES A'], hq_locations: ['Europe'] },
-      checkpoint: { createdAfter: CREATED_MS - 1 },
+    const answer = await poll(fakeClient({ searchFundingRounds }), { cursor: { createdAfter: CREATED_MS - 1 } });
+    expect(ids(answer)).toEqual(['401', '402']);
+    expect(answer.arrivals[0]).toMatchObject({
+      edge: 'Funding Rounds',
+      occurredAt: new Date(CREATED_MS).toISOString(),
+      about: { recordType: 'Company', externalId: '101' },
+      landing: {
+        recordId: '401',
+        recordType: 'Funding Round',
+        fields: expect.objectContaining({ Round: 'SERIES A', round: 'SERIES A', 'Company Industries': ['fintech'], 'Company Locations': ['Lyon', 'France', 'Berlin', 'Germany'] }),
+      },
     });
-    expect(events.map((e) => e.externalId)).toEqual(['401', '402']);
-    expect(events.every((e) => e.tag === 'dealroom:funding_round')).toBe(true);
-    expect(events.every((e) => e.eventType === 'funding_round')).toBe(true);
-    expect(events[0].occurredAt).toBe(new Date(CREATED_MS).toISOString());
-    expect((checkpoint as { createdAfter: number }).createdAfter).toBe(
-      parseDealroomInstant('2026-09-10 09:00:00'),
-    );
+    expect((answer.cursor as { createdAfter: number }).createdAfter).toBe(parseDealroomInstant('2026-09-10 09:00:00'));
   });
 
-  it('asks Dealroom for rounds recorded since the mark, with the listen filters applied', async () => {
+  it('asks Dealroom for rounds recorded since the cursor, with the terms it takes sent as its filters', async () => {
     const searchFundingRounds = jest.fn(async (_r: DealroomSearchRequest) =>
       page([round({ created_utc: '2026-09-10 09:00:00' })]),
     );
-    await source(fakeClient({ searchFundingRounds })).getEvents({
-      config: { rounds: ['SERIES A'], industries: ['fintech'] },
-      checkpoint: { createdAfter: CREATED_MS },
+    const answer = await poll(fakeClient({ searchFundingRounds }), {
+      cursor: { createdAfter: CREATED_MS },
+      filter: conjunction(
+        compare('Round', 'in', ['SERIES A']),
+        compare('Company Industries', 'contains', 'fintech'),
+        compare('Company Locations', 'eq', 'Europe'),
+      ),
     });
     expect(searchFundingRounds).toHaveBeenCalledTimes(1);
     const request = searchFundingRounds.mock.calls[0][0];
     expect(request.must).toEqual({
       rounds: ['SERIES A'],
       industries: ['fintech'],
+      hq_locations: ['Europe'],
       created_utc_min: CREATED_UTC,
     });
     expect(request.sort).toBe('created_utc');
+    // Dealroom judged them; a region is not a name the round lists, so the round is not judged again.
+    expect(answer.arrivals).toHaveLength(1);
+    expect(answer.arrivals[0]).toMatchObject({ takenApplied: true });
   });
 
-  it('drops the round that SET the mark — Dealroom’s bound is inclusive', async () => {
+  it('judges the rest of the taken filter over the round', async () => {
+    const big = round({ id: 401, amount: 9_000_000, created_utc: '2026-09-10 09:00:00' });
+    const small = round({ id: 402, amount: 1_000_000, created_utc: '2026-09-10 10:00:00' });
+    const searchFundingRounds = jest.fn(async (_r: DealroomSearchRequest) => page([big, small]));
+    const answer = await poll(fakeClient({ searchFundingRounds }), {
+      cursor: { createdAfter: CREATED_MS },
+      filter: compare('Amount', 'gte', 5_000_000),
+    });
+    expect(ids(answer)).toEqual(['401']);
+    expect(searchFundingRounds.mock.calls[0][0].must).toEqual({ created_utc_min: CREATED_UTC });
+    // The cursor passes the round that did not match, so it is not looked at again.
+    expect((answer.cursor as { createdAfter: number }).createdAfter).toBe(parseDealroomInstant('2026-09-10 10:00:00'));
+  });
+
+  it('judges a second comparison on a terms key over the round, since Dealroom ORs a key’s values', async () => {
+    const searchFundingRounds = jest.fn(async (_r: DealroomSearchRequest) =>
+      page([
+        round({ id: 401, created_utc: '2026-09-10 09:00:00', company: company({ industries: ['fintech', 'ai'] }) }),
+        round({ id: 402, created_utc: '2026-09-10 10:00:00', company: company({ industries: ['fintech'] }) }),
+      ]),
+    );
+    const answer = await poll(fakeClient({ searchFundingRounds }), {
+      cursor: { createdAfter: CREATED_MS },
+      filter: conjunction(compare('Company Industries', 'contains', 'fintech'), compare('Company Industries', 'contains', 'ai')),
+    });
+    expect(searchFundingRounds.mock.calls[0][0].must).toEqual({ industries: ['fintech'], created_utc_min: CREATED_UTC });
+    expect(ids(answer)).toEqual(['401']);
+  });
+
+  it('leaves a filter it cannot read to the host: nothing sent, nothing claimed applied', async () => {
+    const searchFundingRounds = jest.fn(async (_r: DealroomSearchRequest) => page([round({ created_utc: '2026-09-10 09:00:00' })]));
+    const unreadable = { type: 'compare', op: 'eq', left: { type: 'property', propertyTypeId: 'Round' }, right: { type: 'property', propertyTypeId: 'Currency' } };
+    const answer = await poll(fakeClient({ searchFundingRounds }), { cursor: { createdAfter: CREATED_MS }, filter: unreadable });
+    expect(searchFundingRounds.mock.calls[0][0].must).toEqual({ created_utc_min: CREATED_UTC });
+    expect(answer.arrivals).toHaveLength(1);
+    expect(answer.arrivals[0]).not.toHaveProperty('takenApplied');
+  });
+
+  it('drops the round that SET the cursor — Dealroom’s bound is inclusive', async () => {
     const searchFundingRounds = jest.fn(async () => page([round({ created_utc: CREATED_UTC })]));
-    const { events } = await source(fakeClient({ searchFundingRounds })).getEvents({
-      config: {},
-      checkpoint: { createdAfter: CREATED_MS },
-    });
-    expect(events).toEqual([]);
+    const { arrivals } = await poll(fakeClient({ searchFundingRounds }), { cursor: { createdAfter: CREATED_MS } });
+    expect(arrivals).toEqual([]);
   });
 
-  it('reads each listen filter as a terms list, and leaves the ones nobody set out', () => {
-    expect(listenFilters({ rounds: 'SERIES A', pollIntervalSeconds: 60 })).toEqual({
-      rounds: ['SERIES A'],
-    });
-    expect(listenFilters(undefined)).toEqual({});
+  it('refuses an edge it does not have, by name', async () => {
+    await expect(pollDealroom(fakeClient({}), { edge: 'Companies', cursor: { createdAfter: CREATED_MS } })).rejects.toThrow(
+      '@lf/dealroom: no edge Companies to poll (its listenable edge is Funding Rounds)',
+    );
   });
 });
