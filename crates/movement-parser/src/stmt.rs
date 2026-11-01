@@ -128,10 +128,10 @@ fn member_path_binding_name(expr: &ExprSlot) -> Option<String> {
     (end == raw.len()).then(|| names.join("."))
 }
 
-/// The bare name a WHERE-less single hop lands on (`-[:company]->`; an alias
-/// is tolerated), or `None` for anything pinned or longer — the TypeScript
-/// regex `^-\[\s*(?:IDENT\s*)?:\s*(`[^`]+`|IDENT)\s*\]->$` over the trimmed
-/// hop, matched by hand.
+/// The name a WHERE-less single hop lands on (`-[:company]->`,
+/// `-[:Funding Round]->`, ``-[:`Record Change`]->``; an alias is tolerated),
+/// or `None` for anything pinned or longer. An unquoted name is read as the
+/// expression parser reads a label, so it may hold spaces.
 fn unpinned_hop_name(hop_raw: &str) -> Option<String> {
     let units: Vec<u16> = crate::util::form::units_vec(hop_raw);
     let s = trim(&units);
@@ -5134,7 +5134,7 @@ mod tests {
     }
 
     #[test]
-    fn the_unpinned_hop_name_matches_the_typescript_regex() {
+    fn the_unpinned_hop_name_reads_a_label_as_the_expression_parser_does() {
         assert_eq!(unpinned_hop_name("-[:company]->").as_deref(), Some("company"));
         assert_eq!(unpinned_hop_name(" -[ c : company ]-> ").as_deref(), Some("company"));
         assert_eq!(unpinned_hop_name("-[:`Record Change`]->").as_deref(), Some("Record Change"));
