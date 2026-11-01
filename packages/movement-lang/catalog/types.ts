@@ -1599,6 +1599,10 @@ export type SchemaFieldType =
    *  its values. */
   | { kind: 'owned'; name: string; owner: string; allowPattern?: string }
   | { kind: 'maybeAbsent'; of: SchemaFieldType }
+  /** A record's fields held as the field's value (`c.Current`): typed as a
+   *  plain object of that position's fields, never as the record. It has no
+   *  edges and no identity, so a checker refuses a walk, a write or a record
+   *  parameter on it, bound to a name or not. */
   | { kind: 'record'; position: SchemaPositionRef };
 
 /** Which record a `record` field holds: one record type of the instance, or

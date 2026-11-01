@@ -639,7 +639,8 @@ pub(crate) fn empty_position_schema() -> PositionSchema {
 pub fn lookup_property_type(position: Option<&Position>, property: &str) -> Option<Ty> {
     match position? {
         Position::Position(p) => {
-            let declared = p.instance.schema.positions.get(&p.position)?.properties.get(property).map(|t| field_in(&p.instance, t));
+            let holder = p.instance.schema.positions.get(&p.position)?;
+            let declared = holder.properties.get(property).map(|t| field_in(&p.instance, Some(holder), t));
             let typed = match (declared, write_typed_field(p.write_typed.as_ref(), property)) {
                 (Some(declared), Some(written)) if is_maybe_absent(Some(&declared)) => maybe_absent(written.clone()),
                 (_, Some(written)) => written.clone(),
@@ -652,13 +653,14 @@ pub fn lookup_property_type(position: Option<&Position>, property: &str) -> Opti
             if let Some(from_shape) = h.result_shape.get(property) {
                 return Some(from_shape.clone());
             }
-            position_schema_of_ref(handle)?.properties.get(property).map(|t| field_in(&h.instance, t))
+            let holder = position_schema_of_ref(handle)?;
+            holder.properties.get(property).map(|t| field_in(&h.instance, Some(&holder), t))
         }
         Position::Union(u) => {
             let types: Vec<Ty> = u
                 .variants
                 .iter()
-                .filter_map(|v| u.instance.schema.positions.get(v).and_then(|p| p.properties.get(property)).map(|t| field_in(&u.instance, t)))
+                .filter_map(|v| u.instance.schema.positions.get(v).and_then(|p| p.properties.get(property)).map(|t| field_in(&u.instance, None, t)))
                 .collect();
             if types.len() != u.variants.len() || types.is_empty() {
                 return None;
@@ -677,9 +679,29 @@ pub fn lookup_property_type(position: Option<&Position>, property: &str) -> Opti
 }
 
 /// A field's declared type, a record it holds typed by its position in the
-/// same instance.
-fn field_in(instance: &InstanceRef, declared: &movement_parser::catalog::types::FieldType) -> Ty {
-    Ty::from_schema_in(declared, &|name| position_ref_in(instance, name))
+/// same instance; the live record is the one edge of `holder` landing on
+/// that position.
+fn field_in(instance: &InstanceRef, holder: Option<&PositionSchema>, declared: &movement_parser::catalog::types::FieldType) -> Ty {
+    Ty::from_schema_in(declared, &|name| {
+        let position = position_ref_in(instance, name)?;
+        let mut landing = holder.into_iter().flat_map(|h| h.edges.iter()).filter(|(_, edge)| edge.target == name).map(|(edge, _)| edge.clone());
+        let live_edge = match (landing.next(), landing.next()) {
+            (Some(one), None) => Some(one),
+            _ => None,
+        };
+        Some(super::field::HeldRecord { position, live_edge })
+    })
+}
+
+/// The name a position's schema knows it by, when it has one.
+pub fn position_name(position: &Position) -> Option<&str> {
+    match position {
+        Position::Position(p) => Some(&p.position),
+        Position::Union(u) => Some(&u.union),
+        Position::Handle(h) => h.position.as_deref(),
+        Position::MaybeEmpty(of) => position_name(of),
+        _ => None,
+    }
 }
 
 /// The type a write gives `property` itself, of the fields a record carries.

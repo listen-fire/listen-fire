@@ -53,7 +53,8 @@ fn catalog() -> CatalogSnapshot {
             }
         },
         "collections": { "Tables": { "target": "Table", "cheapToList": true } },
-        "writableRoots": {},
+        "writableRoots": { "Candidates": { "fields": { "Name": "text" }, "resultShape": { "Id": "text" } } },
+        "supportsInPlaceUpdate": true,
         "refinements": { key_of(NARROWED): "Table \"Candidates\"" },
         "selectedMembers": { key_of(NARROWED): "Candidates" }
     });
@@ -175,4 +176,64 @@ fn a_selected_member_passes_to_a_function_of_its_type() {
     assert_eq!(call("at-[:Table]->"), Vec::<(String, String)>::new());
     assert_eq!(call("at-[:`Table \"Candidates\"`]->"), Vec::<(String, String)>::new());
     assert_eq!(codes(&call("at-[:Candidates]->")), ["MOV_CALL_ARG_TYPE"]);
+}
+
+/// A held row is a value with typed fields, as TypeScript types a plain
+/// object: read through a name as directly, but no edges, no identity, and
+/// never a record a function or a write asks for. The live row is `Record`.
+#[test]
+fn a_held_row_bound_to_a_name_reads_its_fields() {
+    assert_eq!(candidates("r = c.Current\n  x = r.Stage"), Vec::<(String, String)>::new());
+    assert_eq!(codes(&candidates("r = c.Current\n  x = r.Stage == \"Intervew\"")), ["MOV_ENUM_UNKNOWN_VALUE"]);
+    let typo = candidates("r = c.Current\n  x = r.Stge");
+    assert_eq!(codes(&typo), ["MOV_UNKNOWN_PROPERTY"], "{typo:#?}");
+    assert!(typo[0].1.contains("Stage"), "{typo:#?}");
+    // Maybe absent through the name, as directly; a guard proves it present.
+    assert_eq!(codes(&candidates("r = c.Previous\n  x = r.Score + 1")), ["MOV_ABSENT_REQUIRED"]);
+    assert_eq!(candidates("r = c.Previous\n  if (r != null) {\n    x = r.Score + 1\n  }"), Vec::<(String, String)>::new());
+}
+
+#[test]
+fn an_edge_is_never_walked_off_a_held_row() {
+    let named = candidates("r = c.Current\n  if (r != null) {\n    x = r-[:Role]->\n  }");
+    assert_eq!(codes(&named), ["MOV_WALK_OFF_HELD_RECORD"], "{named:#?}");
+    assert!(named[0].1.contains("-[:Record]->"), "{named:#?}");
+    let head = candidates("r = c.Current\n  if (r != null) {\n    r-[:Role]-> {\n      y = 1\n    }\n  }");
+    assert_eq!(codes(&head), ["MOV_WALK_OFF_HELD_RECORD"], "{head:#?}");
+    assert!(head[0].1.contains("-[:Record]->"), "{head:#?}");
+    let direct = candidates("x = c.Current-[:Role]->");
+    assert_eq!(codes(&direct), ["MOV_WALK_OFF_HELD_RECORD"], "{direct:#?}");
+    assert!(direct[0].1.contains("c-[:Record]->"), "{direct:#?}");
+}
+
+#[test]
+fn a_held_row_is_not_the_record_a_function_asks_for() {
+    let call = |arg: &str| {
+        errors_of(&format!(
+            "function g(x: <at-[:Candidates]->>) {{\n  y = x-[:Role]->\n}}\nfunction f(c: <at-[:`Candidates Change`]->>) {{\n  g({arg})\n}}\n"
+        ))
+    };
+    assert_eq!(codes(&call("c.Current")), ["MOV_CALL_ARG_TYPE"]);
+    assert_eq!(codes(&call("c.Previous")), ["MOV_CALL_ARG_TYPE"]);
+    assert_eq!(call("only(c-[:Record]->)"), Vec::<(String, String)>::new());
+
+    let write = |target: &str| candidates(&format!("r = {target}\n  if (r != null) {{\n    write r {{ Name: \"x\" }}\n  }}"));
+    assert_eq!(codes(&write("c.Current")), ["MOV_WRITE_POSITION_NOT_RECORD"]);
+    assert_eq!(write("only(c-[:Record]->)"), Vec::<(String, String)>::new());
+}
+
+#[test]
+fn a_maybe_absent_held_row_is_refused_where_a_value_must_be_present() {
+    let call = |arg: &str| errors_of(&format!("function g(x: <json>) {{\n  return x\n}}\nfunction f(c: <at-[:`Candidates Change`]->>) {{\n  g({arg})\n}}\n"));
+    let found = call("c.Previous");
+    assert_eq!(codes(&found), ["MOV_CALL_ARG_TYPE"], "{found:#?}");
+    assert!(found[0].1.contains("absent"), "{found:#?}");
+}
+
+#[test]
+fn reading_on_past_a_field_never_points_into_a_walk_off_a_held_row() {
+    let found = candidates("x = c.Current.Role.Id");
+    assert_eq!(codes(&found), ["MOV_UNKNOWN_PROPERTY"], "{found:#?}");
+    assert!(found[0].1.contains("c-[:Record]->"), "{found:#?}");
+    assert!(!found[0].1.contains("Bind the field"), "{found:#?}");
 }

@@ -332,7 +332,7 @@ pub fn param_accepts(param: ParamType, ty: &Ty) -> bool {
         Ty::Date | Ty::Datetime => matches!(param, T::Scalar | T::Temporal),
         Ty::File => param == T::File,
         Ty::List { .. } | Ty::Tuple { .. } => matches!(param, T::List | T::TextOrList),
-        Ty::Json | Ty::Record(_) | Ty::Dict { .. } => false,
+        Ty::Json | Ty::Record(_) | Ty::Dict { .. } | Ty::HeldRecord(_) => false,
     }
 }
 

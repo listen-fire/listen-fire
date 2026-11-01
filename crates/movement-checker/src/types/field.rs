@@ -44,6 +44,20 @@ pub enum Ty {
     Union(Rc<Vec<Ty>>),
     /// A record held as a value; `None` is a record nobody can name.
     Record(Option<Rc<Position>>),
+    /// What a `record` field holds (`c.Current`): a record's fields as a
+    /// value, TypeScript's plain object type. Its fields read with `.` as the
+    /// record's do; it has no edges and no identity, so no walk, write or
+    /// record parameter takes it.
+    HeldRecord(Rc<HeldRecord>),
+}
+
+/// The fields a `record` field holds, by the position that declares them.
+#[derive(Debug, Clone)]
+pub struct HeldRecord {
+    pub position: Position,
+    /// The edge off the record holding the field that reaches the live
+    /// record, when it has exactly one: what a refused walk points to.
+    pub live_edge: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,9 +98,10 @@ impl Ty {
         Ty::from_schema_in(schema, &|_| None)
     }
 
-    /// `from_schema`, a record field typed by the position `held` finds for
-    /// its name.
-    pub fn from_schema_in(schema: &SchemaFieldType, held: &dyn Fn(&str) -> Option<Position>) -> Ty {
+    /// `from_schema`, a record field typed by the fields `held` finds for its
+    /// position's name. A record field whose position is not found holds
+    /// fields nobody can name: data that reads nothing.
+    pub fn from_schema_in(schema: &SchemaFieldType, held: &dyn Fn(&str) -> Option<HeldRecord>) -> Ty {
         let from_schema = |schema: &SchemaFieldType| Ty::from_schema_in(schema, held);
         match schema {
             SchemaFieldType::Scalar(scalar) => match scalar {
@@ -115,7 +130,11 @@ impl Ty {
                 }
                 Composite::MaybeAbsent { of } => maybe_absent(from_schema(of)),
                 Composite::Union { of } => value_union(&of.iter().map(from_schema).collect::<Vec<_>>()).unwrap_or(Ty::Json),
-                Composite::Record { position } => Ty::record(position.as_ref().and_then(|p| p.name()).and_then(held)),
+                Composite::Record { position: None } => Ty::Record(None),
+                Composite::Record { position: Some(position) } => match position.name().and_then(held) {
+                    Some(fields) => Ty::HeldRecord(Rc::new(fields)),
+                    None => Ty::Json,
+                },
                 Composite::Owned { name, owner, allow_pattern } => {
                     Ty::Owned(Rc::new(OwnedScalar { name: name.clone(), owner: owner.clone(), allow_pattern: allow_pattern.clone() }))
                 }
@@ -159,6 +178,10 @@ impl Ty {
             Ty::MaybeAbsent(of) => Composite::MaybeAbsent { of: Box::new(of.to_schema()) },
             Ty::Union(of) => Composite::Union { of: of.iter().map(Ty::to_schema).collect() },
             Ty::Record(_) => Composite::Record { position: None },
+            Ty::HeldRecord(held) => Composite::Record {
+                position: super::position::position_name(&held.position)
+                    .map(|position| movement_parser::catalog::types::PositionRef::Position { position: position.to_string() }),
+            },
         };
         SchemaFieldType::Composite(composite)
     }
@@ -330,6 +353,10 @@ impl Parts {
             Ty::Record(Some(position)) => {
                 let next = self.of_position.len();
                 format!("record@{}", self.of_position.entry(Rc::as_ptr(position) as usize).or_insert(next))
+            }
+            Ty::HeldRecord(held) => {
+                let next = self.of_position.len();
+                format!("held@{}", self.of_position.entry(Rc::as_ptr(held) as usize).or_insert(next))
             }
         })
     }
@@ -824,7 +851,7 @@ pub fn base_kind(ty: &Ty) -> Option<BaseKind> {
 fn member_base_kind(ty: &Ty) -> BaseKind {
     match unwrap_list(ty) {
         Ty::Record(_) => BaseKind::Record,
-        Ty::Tuple { .. } | Ty::Dict { .. } | Ty::Union(_) => BaseKind::Json,
+        Ty::Tuple { .. } | Ty::Dict { .. } | Ty::HeldRecord(_) | Ty::Union(_) => BaseKind::Json,
         Ty::Enum { .. } | Ty::MaybeAbsent(_) | Ty::List { .. } | Ty::Text | Ty::Owned(_) => BaseKind::Text,
         Ty::Number => BaseKind::Number,
         Ty::Boolean => BaseKind::Boolean,
@@ -842,7 +869,7 @@ pub fn holds_one_value(ty: &Ty) -> bool {
     match strip_absent(ty) {
         Ty::List { .. } | Ty::Tuple { .. } | Ty::Json => false,
         Ty::Union(members) => members.iter().all(holds_one_value),
-        Ty::Text | Ty::Owned(_) | Ty::Number | Ty::Boolean | Ty::Date | Ty::Datetime | Ty::File | Ty::Absent | Ty::Never | Ty::Dict { .. } | Ty::Enum { .. } | Ty::Record(_) | Ty::MaybeAbsent(_) => true,
+        Ty::Text | Ty::Owned(_) | Ty::Number | Ty::Boolean | Ty::Date | Ty::Datetime | Ty::File | Ty::Absent | Ty::Never | Ty::Dict { .. } | Ty::HeldRecord(_) | Ty::Enum { .. } | Ty::Record(_) | Ty::MaybeAbsent(_) => true,
     }
 }
 
@@ -868,7 +895,7 @@ pub fn comparison_category(ty: &Ty) -> ComparisonCategory {
     match strip_absent(ty) {
         Ty::Record(_) => ComparisonCategory::Record,
         Ty::Enum { .. } | Ty::Text | Ty::Owned(_) => ComparisonCategory::Textual,
-        Ty::List { .. } | Ty::Tuple { .. } | Ty::Dict { .. } | Ty::MaybeAbsent(_) | Ty::File => ComparisonCategory::Structural,
+        Ty::List { .. } | Ty::Tuple { .. } | Ty::Dict { .. } | Ty::HeldRecord(_) | Ty::MaybeAbsent(_) | Ty::File => ComparisonCategory::Structural,
         Ty::Date | Ty::Datetime => ComparisonCategory::Temporal,
         Ty::Number => ComparisonCategory::Numeric,
         Ty::Boolean => ComparisonCategory::Boolean,
@@ -1273,6 +1300,7 @@ fn equals_node(left: &Ty, right: &Ty, known: &mut HashMap<(NodeKey, NodeKey), bo
             (Some(l), Some(r)) => same_starting_point(l, r),
             _ => false,
         },
+        (Ty::HeldRecord(l), Ty::HeldRecord(r)) => same_starting_point(&l.position, &r.position),
         (Ty::Enum { options: l, .. }, Ty::Enum { options: r, .. }) => l == r,
         (Ty::MaybeAbsent(l), Ty::MaybeAbsent(r)) => equals_in(l, r, known),
         (Ty::Union(l), Ty::Union(r)) => l.len() == r.len() && l.iter().all(|m| r.iter().any(|o| equals_in(m, o, known))),
@@ -1467,6 +1495,7 @@ pub fn describe_field_type(ty: &Ty) -> String {
             None => format!("dict of {}", describe_member(of)),
         },
         Ty::Record(position) => position.as_deref().map_or("a record".to_string(), describe_position),
+        Ty::HeldRecord(held) => format!("a value holding the fields of {}", describe_position(&held.position)),
         Ty::Enum { options, open } => {
             if open.is_some() {
                 format!("known values ({}, …)", options.join(" | "))

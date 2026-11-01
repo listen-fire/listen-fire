@@ -20,7 +20,7 @@ use movement_parser::lowering::expression::{
 };
 
 use crate::codes;
-use crate::families::walks::FieldRead;
+use crate::families::walks::{FieldRead, HeldRead};
 use crate::diagnostic::{Diagnostic, Severity};
 
 use super::field::*;
@@ -727,7 +727,9 @@ impl<'a> Typing<'a> {
     /// (`c.Current.Stage`), a value read on as the record it is: reading
     /// through a reference would hide a fetch, and a held record has none.
     /// `None` for any other read, typed as it always was.
-    fn read_off_record(&mut self, root: Option<&str>, record: &Position, terminal: &Expression) -> Option<Option<Ty>> {
+    /// `held` is set when `record` is what a `record` field holds, so a
+    /// refusal points at the live record.
+    fn read_off_record(&mut self, root: Option<&str>, record: &Position, terminal: &Expression, held: Option<&HeldRead>) -> Option<Option<Ty>> {
         let (property, past) = match terminal {
             Expression::Property { property_type_id, .. } => (property_type_id.as_str(), None),
             Expression::Traverse { alias_root: Some(head), steps: past_steps, expression: past } => (head.as_str(), Some((past_steps, &**past))),
@@ -735,7 +737,7 @@ impl<'a> Typing<'a> {
         };
         let chain = dot_chain(terminal).unwrap_or_default();
         let read = FieldRead { root, property, rest: chain.get(1..).unwrap_or_default() };
-        if crate::families::walks::report_edge_read_as_field(self, record, &read) {
+        if crate::families::walks::report_edge_read_as_field(self, record, &read, held) {
             return Some(None);
         }
         let (past_steps, past) = past?;
@@ -744,15 +746,11 @@ impl<'a> Typing<'a> {
         if self.diagnostics.len() > before {
             return Some(None);
         }
-        if past_steps.is_empty()
-            && holds_record(record, property)
-            && let Some(Ty::Record(Some(held))) = field.as_ref().map(strip_absent)
+        if holds_record(record, property)
+            && let Some(Ty::HeldRecord(fields)) = field.as_ref().map(strip_absent)
         {
-            let held = if is_maybe_absent(field.as_ref()) { Position::MaybeEmpty(Box::new((**held).clone())) } else { (**held).clone() };
-            return Some(match self.read_off_record(None, &held, past) {
-                Some(read) => read,
-                None => self.infer_at(past, Some(&held)),
-            });
+            let held = HeldRead { spelled: format!("'{}'", read.label()), holder: read.root, held: fields };
+            return Some(self.read_off_held(&held, is_maybe_absent(field.as_ref()), past_steps, past));
         }
         let next = match past {
             Expression::Property { property_type_id, .. } if past_steps.is_empty() => Some(property_type_id.as_str()),
@@ -772,6 +770,32 @@ impl<'a> Typing<'a> {
             _ => crate::families::walks::report_read_through_field(self, &read, field.as_ref(), next),
         }
         Some(None)
+    }
+
+    /// A read on past what a `record` field holds: its fields read as the
+    /// record's do; a walk is refused, since a value has no edges.
+    fn read_off_held(&mut self, held: &HeldRead, maybe_absent: bool, steps: &[TraversalStep], past: &Expression) -> Option<Ty> {
+        if !steps.is_empty() {
+            crate::families::walks::report_walk_off_held(self, held, steps);
+            return None;
+        }
+        let fields = if maybe_absent { Position::MaybeEmpty(Box::new(held.held.position.clone())) } else { held.held.position.clone() };
+        match self.read_off_record(None, &fields, past, Some(held)) {
+            Some(read) => read,
+            None => self.infer_at(past, Some(&fields)),
+        }
+    }
+
+    /// A name holding what a `record` field holds (`r = c.Current`).
+    fn held_by_name(&self, root: &str) -> Option<(Rc<HeldRecord>, bool)> {
+        if self.root_type(root).is_some() {
+            return None;
+        }
+        let held = self.scalar_type(root)?;
+        match strip_absent(&held) {
+            Ty::HeldRecord(fields) => Some((fields.clone(), is_maybe_absent(Some(&held)))),
+            _ => None,
+        }
     }
 
     /// `scalarFieldRead`: `t.Name` (and `t.Name.x`) where `t` holds text, a
@@ -892,6 +916,12 @@ impl<'a> Typing<'a> {
                 if exists_subject(expr).is_some() {
                     return (Some(Ty::Boolean), Vec::new());
                 }
+                if let Some(root) = alias_root.as_deref()
+                    && let Some((fields, maybe_absent)) = self.held_by_name(root)
+                {
+                    let held = HeldRead { spelled: format!("'{root}'"), holder: None, held: &fields };
+                    return (self.read_off_held(&held, maybe_absent, steps, expression), Vec::new());
+                }
                 let start = match alias_root {
                     Some(root) => self.walk_start(root),
                     None => position.cloned(),
@@ -920,7 +950,7 @@ impl<'a> Typing<'a> {
                     self.walk_destinations.insert(key(expr), destination.clone());
                 }
                 if let (Some(root), Some(record)) = (alias_root.as_deref(), destination.as_ref())
-                    && let Some(read) = self.read_off_record(steps.is_empty().then_some(root), record, expression)
+                    && let Some(read) = self.read_off_record(steps.is_empty().then_some(root), record, expression, None)
                 {
                     return (read, Vec::new());
                 }

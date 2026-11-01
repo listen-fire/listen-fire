@@ -49,7 +49,7 @@ use crate::codes;
 use crate::families::values::quote_name;
 use crate::diagnostic::Severity;
 use crate::scope::{Resolution, ScopeId};
-use crate::types::field::{CollectionOrder, Ty, describe_field_type, holds_records, record_head_position};
+use crate::types::field::{CollectionOrder, HeldRecord, Ty, describe_field_type, holds_records, record_head_position};
 use crate::types::scope_env::SymbolTypes;
 use crate::types::event_address::conjuncts;
 use crate::types::infer::Typing;
@@ -292,22 +292,76 @@ impl FieldRead<'_> {
 
 /// A name read as a field off a record that is one of its edges instead,
 /// said with the walk that reaches it (`n.Repository` is
-/// `n-[:Repository]->`). True when it fired.
-pub fn report_edge_read_as_field(typing: &mut Typing, position: &Position, read: &FieldRead) -> bool {
+/// `n-[:Repository]->`). Off a held record, the walk is the live record's
+/// (`c.Current.Role` is `c-[:Record]->-[:Role]->`). True when it fired.
+pub fn report_edge_read_as_field(typing: &mut Typing, position: &Position, read: &FieldRead, held: Option<&HeldRead>) -> bool {
     if let Position::MaybeEmpty(of) = position {
-        return report_edge_read_as_field(typing, of, read);
+        return report_edge_read_as_field(typing, of, read, held);
     }
     let Some(schema) = position_schema_of_ref(position) else { return false };
     if schema.properties.contains_key(read.property) || !schema.edges.contains_key(read.property) {
         return false;
     }
     let after: String = read.rest.iter().map(|name| format!(".{}", quote_name(name))).collect();
-    let walk = format!("{}-[:{}]->{after}", read.root.map(quote_name).unwrap_or_default(), quote_name(read.property));
-    typing.report(
-        codes::UNKNOWN_PROPERTY,
-        format!("'{}' is an edge of {}, not a field — walk it: `{walk}`", read.property, describe_position(position)),
-    );
+    let hop = format!("-[:{}]->{after}", quote_name(read.property));
+    let message = match held {
+        Some(held) => format!(
+            "'{}' is an edge of {}, not a field, and {} holds that record's fields as a value, not the record: {}",
+            read.property,
+            describe_position(position),
+            held.spelled,
+            held.live_walk(&hop)
+        ),
+        None => format!("'{}' is an edge of {}, not a field — walk it: `{}{hop}`", read.property, describe_position(position), read.root.map(quote_name).unwrap_or_default()),
+    };
+    typing.report(codes::UNKNOWN_PROPERTY, message);
     true
+}
+
+/// A read off what a `record` field holds (`c.Current`, or a name bound to
+/// it): how it is spelled, and the name holding the field when the read
+/// spells it (`c`), so a refusal can spell the walk to the live record.
+pub struct HeldRead<'a> {
+    pub spelled: String,
+    pub holder: Option<&'a str>,
+    pub held: &'a HeldRecord,
+}
+
+impl HeldRead<'_> {
+    /// Where the walk `hop` starts instead: the live record.
+    pub(crate) fn live_walk(&self, hop: &str) -> String {
+        match (&self.held.live_edge, self.holder) {
+            (Some(edge), Some(holder)) => format!("walk it off the live record — `{}-[:{}]->{hop}`", quote_name(holder), quote_name(edge)),
+            (Some(edge), None) => format!(
+                "walk it off the live record, reached from the record {} was read off along '{edge}' — `…-[:{}]->{hop}`",
+                self.spelled,
+                quote_name(edge)
+            ),
+            (None, _) => format!("walk it off the live record, reached from the record {} was read off", self.spelled),
+        }
+    }
+}
+
+/// `MOV_WALK_OFF_HELD_RECORD`: a walk off what a `record` field holds. It
+/// holds the record's fields as they were when the value was made, with no
+/// identity to fetch an edge by.
+pub fn report_walk_off_held(typing: &mut Typing, read: &HeldRead, steps: &[TraversalStep]) {
+    let hop: String = steps
+        .iter()
+        .map(|step| match step {
+            TraversalStep::Edge(edge) => format!("-[:{}]->", quote_name(&edge.edge_type_id)),
+            _ => "-[…]->".to_string(),
+        })
+        .collect();
+    typing.report(
+        codes::WALK_OFF_HELD_RECORD,
+        format!(
+            "{} is {}, not the record, and a value has no edges to walk: {}",
+            read.spelled,
+            describe_field_type(&Ty::HeldRecord(std::rc::Rc::new(read.held.clone()))),
+            read.live_walk(&hop)
+        ),
+    );
 }
 
 /// A read that goes on past a record's field (`n.Metadata.crm_id`): the
@@ -466,7 +520,7 @@ fn report_read(typing: &mut Typing, position: &Position, property: &str) {
             {
                 return;
             }
-            if report_edge_read_as_field(typing, position, &FieldRead { root: None, property, rest: &[] }) {
+            if report_edge_read_as_field(typing, position, &FieldRead { root: None, property, rest: &[] }, None) {
                 return;
             }
             let mut available: Vec<String> = h.result_shape.keys().cloned().collect();
@@ -499,7 +553,7 @@ fn report_read(typing: &mut Typing, position: &Position, property: &str) {
             if is_write_only(schema, property) || report_undescribed(typing, position, schema, &format!("the field '{property}'")) {
                 return;
             }
-            if schema.open_properties == Some(true) || report_edge_read_as_field(typing, position, &FieldRead { root: None, property, rest: &[] }) {
+            if schema.open_properties == Some(true) || report_edge_read_as_field(typing, position, &FieldRead { root: None, property, rest: &[] }, None) {
                 return;
             }
             let mut available: Vec<&str> = schema.properties.keys().map(String::as_str).collect();
@@ -1170,6 +1224,16 @@ impl crate::checker::Checker<'_> {
             PathRoot::Name { name } => crate::families::names::spell_name(name),
             PathRoot::Expression { expr } => expr.raw.clone(),
         };
+        if let Ty::HeldRecord(fields) = crate::types::field::strip_absent(&value) {
+            let read = HeldRead { spelled: format!("'{spelled}'"), holder: None, held: fields };
+            let message = format!(
+                "'{spelled}' is {}, not the record, and a value has no edges to walk: {}",
+                describe_field_type(&Ty::HeldRecord(fields.clone())),
+                read.live_walk(head.hops_raw.trim())
+            );
+            self.report(codes::WALK_OFF_HELD_RECORD, message, head.span);
+            return;
+        }
         self.report(
             codes::HEAD_NOT_A_POSITION,
             format!(

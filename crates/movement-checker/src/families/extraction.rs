@@ -657,7 +657,7 @@ fn extract_content_item_problem(ty: &Ty, which: &str) -> Option<String> {
         Ty::Record(_) => Some(format!(
             "{which} of the content is a record, and 'extract' reads text and files — render the record as text first: `TEXT.SERIALISE(record, 'JSON')`"
         )),
-        Ty::Dict { .. } | Ty::Json => Some(format!(
+        Ty::Dict { .. } | Ty::HeldRecord(_) | Ty::Json => Some(format!(
             "{which} of the content is {}, and 'extract' reads text and files — render it as text first: `TEXT.SERIALISE(value, 'JSON')`",
             describe_field_type(ty)
         )),
