@@ -80,7 +80,7 @@ test('listen-fire run: AI() calls Anthropic on the secrets key and its answer is
         '  write crm-[:Company]-> { Name: ai("Write a welcome line for ${company.Name}") }',
         '}',
         '',
-        'listen to crm { events: ["company.created"] } fire name_it',
+        'listen to crm-[:Company]-> fire name_it',
         '',
       ].join('\n'),
     );
@@ -112,7 +112,7 @@ test('listen-fire run: a model call with no provider key fails naming the secret
       '  write crm-[:Company]-> { Name: ai("Write a welcome line for ${company.Name}") }',
       '}',
       '',
-      'listen to crm { events: ["company.created"] } fire name_it',
+      'listen to crm-[:Company]-> fire name_it',
       '',
     ].join('\n'),
   );
@@ -160,7 +160,7 @@ test('listen-fire run: lf.yaml maxRunCostUsd pauses a run at its cap; listen-fir
         '  write crm-[:Company]-> { Name: ai("Shorten: ${line}") }',
         '}',
         '',
-        'listen to crm { events: ["company.created"] } fire name_it',
+        'listen to crm-[:Company]-> fire name_it',
         '',
       ].join('\n'),
     );
@@ -191,7 +191,7 @@ const TWO_CALLS = [
   '  write crm-[:Company]-> { Name: ai("Shorten: ${line}") }',
   '}',
   '',
-  'listen to crm { events: ["company.created"] } fire name_it',
+  'listen to crm-[:Company]-> fire name_it',
   '',
 ].join('\n');
 
@@ -280,7 +280,7 @@ test('listen-fire run: a plugin module asks the host for a model call through th
         '  write crm-[:Company]-> { Name: greeter.greet(company.Name) }',
         '}',
         '',
-        'listen to crm { events: ["company.created"] } fire greet_it',
+        'listen to crm-[:Company]-> fire greet_it',
         '',
       ].join('\n'),
     );

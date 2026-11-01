@@ -32,7 +32,7 @@ function report(company: <crm-[:Company]->>) {
   write crm-[:Company]-> { Name: "Report for \${company.Name}", Report: doc }
 }
 
-listen to crm { events: ["company.created"] } fire report
+listen to crm-[:Company]-> fire report
 `,
   );
   return dir;

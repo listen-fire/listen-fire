@@ -24,4 +24,4 @@ function ask(company: <crm-[:Company]->>) {
   write crm-[:Company]-> { Name: "Approved ${answer.Approve} ${coalesce(answer.Note, "none")}" }
 }
 
-listen to crm {} fire ask
+listen to crm-[:Company]-> fire ask

@@ -145,7 +145,7 @@ function movement(dir: string, body: string, head = ''): void {
       body,
       '}',
       '',
-      'listen to crm { events: ["company.created"] } fire read_deck',
+      'listen to crm-[:Company]-> fire read_deck',
       '',
     ].join('\n'),
   );

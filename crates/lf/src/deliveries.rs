@@ -92,6 +92,11 @@ fn line_of(row: &DeliveryRow) -> String {
 /// for the drain. Returns the new delivery's id and how many events it holds.
 fn replay(store: &dyn RunHostStore, original: &DeliveryRow) -> Result<(String, usize), String> {
     let events = original.events.clone().unwrap_or_default();
+    // A delivery of arrivals queues nothing here: a listen's receipt is the
+    // record that it ran an arrival, so it is replayed through that listen.
+    if events.is_empty() {
+        return Err(arrivals_replayed_by_a_listen(&original.id));
+    }
     let new_id = uuid::Uuid::new_v4().to_string();
     // The original's arrivals were logged when it was kept: the replay's runs
     // read their triggers' waits from now on.
@@ -120,6 +125,11 @@ fn replay(store: &dyn RunHostStore, original: &DeliveryRow) -> Result<(String, u
     }
     crate::wake::queued_rows(&work);
     Ok((new_id, work.len()))
+}
+
+/// Why `deliveries replay` refuses a delivery with no events to queue.
+fn arrivals_replayed_by_a_listen(id: &str) -> String {
+    format!("delivery {id} kept no events to queue: what it brought is replayed through a listen, `listen-fire listens replay <file>:<movement> --delivery {id}` (--force to run an arrival the listen ran before)")
 }
 
 /// `--since`: an ISO instant, or `<n>h` / `<n>d` before now, as the store's
@@ -163,6 +173,26 @@ mod tests {
         let rows = store.claim_due(&ClaimDue { limit: 10, lease_ms: 60_000, due_by: None, kinds: None }).unwrap();
         let marks: Vec<Option<&Js>> = rows.iter().filter(|r| r.kind == "fire_event").map(|r| r.payload.get("arrivalMark")).collect();
         assert_eq!(marks, [Some(&Js::Num(mark.into()))]);
+    }
+
+    /// A delivery of arrivals is replayed through a listen, which holds the
+    /// receipt of each it ran: `deliveries replay` keeps nothing for it and
+    /// says which command does.
+    #[test]
+    fn a_delivery_of_arrivals_is_refused_naming_listens_replay() {
+        use crate::backend::RunHostStore;
+        use crate::store::Store;
+        let dir = std::env::temp_dir().join(format!("lf-replay-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(&dir.join("state.db")).unwrap();
+        let original = NewDelivery { id: "d-2".into(), external_id: None, received_at: iso(0), source: DeliverySource::Webhook, inline: true, replay_of: None, events: vec![], request: None };
+        assert!(store.keep_delivery("inbox", None, &original, &[], None, &[]).unwrap().is_some());
+        let kept = RunHostStore::delivery(&store, "d-2").unwrap().unwrap();
+        assert_eq!(
+            replay(&store, &kept).unwrap_err(),
+            "delivery d-2 kept no events to queue: what it brought is replayed through a listen, `listen-fire listens replay <file>:<movement> --delivery d-2` (--force to run an arrival the listen ran before)"
+        );
+        assert_eq!(store.deliveries(&DeliveryQuery { subscription_id: None, since: None, limit: 10 }).unwrap().len(), 1, "no replay kept");
     }
 
     #[test]

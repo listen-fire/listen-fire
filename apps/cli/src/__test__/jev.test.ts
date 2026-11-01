@@ -24,7 +24,7 @@ function triage(company: <crm-[:Company]->>) {
   write crm-[:Company]-> { Name: "\${kind.label} \${kind.confidence} \${robots}" }
 }
 
-listen to crm { events: ["company.created"] } fire triage
+listen to crm-[:Company]-> fire triage
 `;
 
 function lfAsync(dir: string, ...args: string[]): Promise<{ code: number; out: string }> {

@@ -22,4 +22,4 @@ function approve(company: <crm-[:Company]->>) {
   }
 }
 
-listen to crm {} fire approve
+listen to crm-[:Company]-> fire approve

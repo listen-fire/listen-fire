@@ -29,7 +29,7 @@ function report(company: <crm-[:Company]->>) {
   write crm-[:Company]-> { Name: "Report ${'$'}{company.Name}", Report: File.from("Hello ${'$'}{company.Name}", "text") }
 }
 
-listen to crm { events: ["company.created"] } fire report
+listen to crm-[:Company]-> fire report
 `,
   );
   return dir;
@@ -51,7 +51,21 @@ test('a FILE() written to an external crosses as a URL the local document store 
 
 test('listen-fire run --dry-run captures the writes and makes none', () => {
   const dir = project();
-  const run = lf(dir, 'run', '--dry-run', '--event', 'events/company_created.json');
+  writeFileSync(
+    join(dir, 'movements/by_hand.mvt'),
+    `import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+function welcome_by_hand(go: <manual-[:Invocations]->>) {
+  write crm-[:Company]-> { Name: "Welcome ${'$'}{go.Text}" }
+}
+
+listen to manual-[:Invocations]-> fire welcome_by_hand
+`,
+  );
+  const run = lf(dir, 'run', 'welcome_by_hand', '--text', 'Vireo Robotics', '--dry-run');
   assert.equal(run.code, 0, run.out);
   assert.match(run.out, /dry run, not written: .*"kind":"create".*Welcome Vireo Robotics/);
   assert.ok(!existsSync(join(dir, STATE)) || companies(dir).length === 0, 'nothing reached the external');

@@ -32,8 +32,7 @@ test('listen-fire catalog: the snapshot of the example\'s external, as one JSON 
 const CHECKED: Array<{ name: string; change?: (source: string) => string; noSecrets?: true; refused?: RegExp }> = [
   { name: 'the example, clean' },
   { name: 'a name nothing binds and a field the type lacks', change: (s) => s.replace('Name: "Welcome ${company.Name}"', 'Nme: "Welcome ${nobody}"'), refused: /Nme|nobody/ },
-  { name: 'a listen config key the external does not declare', change: (s) => s.replace('{ events: ["company.created"] }', '{ colour: "red" }'), refused: /colour/ },
-  { name: 'an event the external does not declare', change: (s) => s.replace('"company.created"', '"company.deleted"'), refused: /company\.deleted/ },
+  { name: 'a listen on an edge the external does not declare', change: (s) => s.replace('listen to crm-[:Company]->', 'listen to crm-[:Companys]->'), refused: /Companys/ },
   { name: 'a file that does not parse', change: (s) => s.replace('fire welcome', 'fire welcome {'), refused: /./ },
   { name: 'a credential the secrets lack', noSecrets: true, refused: /acme/ },
 ];
@@ -106,7 +105,7 @@ test('listen-fire check and catalog: what a module declares about listening reac
   external(
     dir,
     ["identity: 'Id',", "identity: 'Id', delivery: 'connection', carries: ['Company'], attributes: true,"],
-    ['fires: true,', "fires: true, listenable: true, identity: 'Name', delivery: 'polled', pollEverySeconds: 60,"],
+    ["identity: 'id',\n      version: 'Version',\n      delivery: 'connection',", "identity: 'Name',\n      version: 'Version',\n      delivery: 'polled', pollEverySeconds: 60,"],
     [
       "{ fieldId: 'Report', displayName: 'Report', kind: 'file', writable: true, required: false },",
       "{ fieldId: 'Report', displayName: 'Report', kind: 'file', writable: true, required: false }, { fieldId: 'Schedule', displayName: 'Schedule', kind: 'owned', owned: { name: 'Cron' }, writable: false, required: false },",
@@ -153,26 +152,26 @@ const LISTENING_REFUSED: Array<{ name: string; change: [string, string]; refused
   {
     name: 'carries naming no earlier hop',
     change: ["identity: 'Id',", "identity: 'Id', carries: ['Nope'],"],
-    refused: /'Comments' says its arrivals carry earlier hops, but 'carries' names 'Nope', which is no edge into 'Company' \(the edges into it: Company\)/,
+    refused: /'Comments' says its arrivals carry earlier hops, but 'carries' names 'Nope', which is no edge into 'Company' or a record before it \(the edges into them: Company\)/,
   },
   {
     name: 'a root collection cheap to list that says nothing of how its members change',
-    change: ['fires: true,', 'fires: true, cheapToList: true,'],
+    change: ["description: 'A company.", "cheapToList: true, description: 'A company."],
     refused: /lists 'Company': 'Company' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEverySeconds': say how a listen learns its members changed/,
   },
   {
     name: 'a root collection that is pushed but not cheap to list',
-    change: ['fires: true,', "fires: true, parentChanges: 'pushed',"],
+    change: ["description: 'A company.", "parentChanges: 'pushed', description: 'A company."],
     refused: /lists 'Company': 'Company' declares 'parentChanges' but not 'cheapToList: true': only a hop cheap to list is re-listed/,
   },
   {
     name: 'a relist interval that is not a whole number of seconds',
-    change: ['fires: true,', 'fires: true, cheapToList: true, relistEverySeconds: 1.5,'],
+    change: ["description: 'A company.", "cheapToList: true, relistEverySeconds: 1.5, description: 'A company."],
     refused: /'Company' declares 'relistEverySeconds: 1\.5': expected a positive whole number of seconds/,
   },
   {
     name: 'a root collection that carries earlier hops',
-    change: ['fires: true,', "fires: true, carries: ['Company'],"],
+    change: ["description: 'A company.", "carries: ['Company'], description: 'A company."],
     refused: /'Company' says its arrivals carry earlier hops, but 'carries' names 'Company', and 'Company' is a root collection: nothing comes before it/,
   },
   {
@@ -222,7 +221,7 @@ const INTROSPECTIONS: Record<string, unknown> = {
     adapterType: 'wide',
     supportsInPlaceUpdate: true,
     entries: [
-      entry('co', 'Company', { fires: true, firesOn: ['create'] }),
+      entry('co', 'Company'),
       entry('pp', 'Person', { collectionName: 'People' }),
       entry('nt', 'Note', { readable: false, writable: false }),
       entry('dl', 'Deal'),
@@ -359,19 +358,13 @@ const INTROSPECTIONS: Record<string, unknown> = {
       ['log', { typeId: 'log', displayName: 'Log', fields: [field('line', 'string', { displayName: 'Line', writable: true })], references: [] }],
     ],
   },
-  'one readable entry and no event edge: the event position by the heuristic': {
-    adapterType: 'single',
-    supportsInPlaceUpdate: true,
-    entries: [entry('only', 'Only', { writable: false }), entry('child', 'Child', { readable: false, writable: false })],
-    descriptors: [['only', { typeId: 'only', displayName: 'Only', fields: [field('a', 'string', { cardinality: 'many' })], references: [] }]],
-  },
 };
 
 /** What each introspection must make the projection say, so a parity over
  *  an output that exercises nothing cannot pass for one. */
 const EXERCISES: Record<string, { members: string[]; notes: number }> = {
   'a wide adapter: kinds, clashes, unions, write unions, discriminated writes': {
-    members: ['listenable', 'cursor', 'identity', 'version', 'unions', 'unionDisplayNames', 'createShapes', 'discriminated', 'writeOnlyProperties', 'ambiguousProperties', 'pinnedProperties', 'propertyCapabilities', 'nativeUniqueness', 'fuzzyResolution', 'writeUnion', 'requiredEdges', 'fieldDocs', 'resources', 'polymorphic', 'eventPositions'],
+    members: ['listenable', 'cursor', 'identity', 'version', 'unions', 'unionDisplayNames', 'createShapes', 'discriminated', 'writeOnlyProperties', 'ambiguousProperties', 'pinnedProperties', 'propertyCapabilities', 'nativeUniqueness', 'fuzzyResolution', 'writeUnion', 'requiredEdges', 'fieldDocs', 'resources', 'polymorphic'],
     notes: 6,
   },
   'a walked instance: a root descriptor, reached types, a scoped describe': { members: ['capability', 'edgesCarryProperties', 'undescribed'], notes: 1 },
@@ -379,7 +372,6 @@ const EXERCISES: Record<string, { members: string[]; notes: number }> = {
     members: ['readable', 'listenable', 'capability', 'identity', 'cursor', 'bounded', 'boundedBy', 'delivery', 'pollEverySeconds', 'carries', 'attributes', 'addressed', 'cheapToList', 'parentChanges', 'relistEverySeconds', 'owner', 'allowPattern'],
     notes: 0,
   },
-  'one readable entry and no event edge: the event position by the heuristic': { members: ['eventPosition'], notes: 0 },
 };
 
 for (const [name, raw] of Object.entries(INTROSPECTIONS)) {

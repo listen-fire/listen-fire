@@ -60,7 +60,7 @@ function welcome(company: <crm-[:Company]->>) {
   write crm-[:Company]-> { Name: "Welcome \${loud}" }
 }
 
-listen to crm { events: ["company.created"] } fire welcome
+listen to crm-[:Company]-> fire welcome
 `,
   );
   return dir;
@@ -129,7 +129,7 @@ function found(company: <crm-[:Company]->>) {
   write crm-[:Company]-> { Name: "Found \${names}" }
 }
 
-listen to crm { events: ["company.created"] } fire found
+listen to crm-[:Company]-> fire found
 `,
     );
     const check = await lfAsync(dir, 'check');

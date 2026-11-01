@@ -1,5 +1,5 @@
-// A polled notes feed module for listen-fire's tests: a module whose manifest
-// declares `poll`, installed into a copy of the example project.
+// A polled notes feed module for listen-fire's tests: a module whose `Notes`
+// edge is polled, installed into a copy of the example project.
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -10,10 +10,8 @@ const MODULE_KIT = resolve(__dirname, '../../../../packages/module-kit');
 export interface Note {
   id: string;
   title: string;
-  /** When it last changed: what a poll's checkpoint and cursor pass. */
+  /** When it last changed: what a poll's cursor passes. */
   at: number;
-  /** The note's kind, its `eventType`: `note.added` unless it says. */
-  type?: string;
   /** How many times it was edited: its `Edited` field, the version of its
    *  arrivals on `Notes` (0 unless it says). */
   edited?: number;
@@ -38,18 +36,14 @@ export interface Board {
   at?: number;
 }
 
-/** A notes feed, polled: `feed.json` is what the provider holds, `polls.log`
- *  the checkpoint each poll was handed, `listeners.log` the listener each poll
- *  named, and `replay` makes it forget the
- *  checkpoint (an overlapping poll's duplicates), `fast` polls it every
- *  second rather than every minute, `unlabelled` leaves its events' kind
- *  unset (a module older than adapter protocol 2.3). Each poll takes 300ms.
+/** A notes feed, polled: `feed.json` is what the provider holds. Each poll
+ *  takes 300ms.
  *
  *  Its root `Notes` is listenable (adapter protocol 2.6): polled every
  *  `pollEverySeconds` (60, or 1 when `fast`), with a cursor, each arrival
  *  named by its `Id` and versioned by `Edited`. `edge-polls.log` holds what
  *  each poll of an edge was handed (`{ edge, filter?, scope?, cursor? }`);
- *  `replay` makes it forget the cursor too.
+ *  `replay` makes it forget the cursor (an overlapping poll's duplicates).
  *  With `nocursor` present `Notes` declares `cursor: false`: every poll lists
  *  all of it. With `takes` present the feed takes `Title ==` on `Notes`: it applies a
  *  filter it is handed and says so (`takenApplied`). With `unreadable` present
@@ -168,8 +162,6 @@ module.exports = defineModule({
     displayName: 'Feed',
     supportedTriggers: ['poll'],
     methods: [],
-    webhookEventTypeId: 'note',
-    subscribableEvents: ['note.added', 'note.removed'],
     ...(existsSync(at('based')) ? { positionArgs: [{ name: 'base', optionsFrom: 'Board', label: 'Base' }] } : {}),
   },
   poll: { intervalSeconds: existsSync(at('fast')) ? 1 : 60 },
@@ -183,7 +175,6 @@ module.exports = defineModule({
         displayName: 'Note',
         readable: false,
         writable: false,
-        fires: true,
         listenable: true,
         collectionName: 'Notes',
         delivery: 'polled',
@@ -241,19 +232,7 @@ module.exports = defineModule({
           throw new Error(\`feed: no key for \${recordId} on '\${edge}'\`);
         }),
     },
-    poll: async (input) => {
-      if ('edge' in input) return pollEdge(input);
-      const { checkpoint, movementId } = input;
-      appendFileSync(at('polls.log'), JSON.stringify(checkpoint ?? null) + '\\n');
-      appendFileSync(at('listeners.log'), JSON.stringify(movementId ?? null) + '\\n');
-      await new Promise((done) => setTimeout(done, 300));
-      const since = existsSync(at('replay')) || typeof checkpoint !== 'number' ? 0 : checkpoint;
-      const notes = notesOf(since);
-      return {
-        events: notes.map((n) => ({ payload: n, externalId: n.id, idempotencyKey: n.id, ...(existsSync(at('unlabelled')) ? {} : { eventType: n.type ?? 'note.added' }) })),
-        checkpoint: notes.reduce((high, n) => Math.max(high, n.at), since),
-      };
-    },
+    poll: pollEdge,
   }),
 });
 `;
@@ -268,7 +247,7 @@ export function feedProject(listen?: string): string {
 
 /** `dir` with the feed module installed and a movement listening to it
  *  (`notes:seen`, which fails naming each note it is fired with; `listen` is the listen statement). */
-export function withFeed(dir: string, listen = 'listen to f fire seen'): string {
+export function withFeed(dir: string, listen = 'listen to f-[:Notes]-> fire seen'): string {
   mkdirSync(join(dir, 'externals/feed'));
   writeFileSync(join(dir, 'externals/feed/lf-external.yaml'), 'name: feed\nmodule: ./feed.ts\n');
   writeFileSync(join(dir, 'externals/feed/feed.ts'), FEED_MODULE);
@@ -278,7 +257,7 @@ export function withFeed(dir: string, listen = 'listen to f fire seen'): string 
   ]);
   writeFileSync(
     join(dir, 'movements/notes.mvt'),
-    `import { feed } from adapters\n\nf = connect feed\n\nfunction seen(n: <f-[:Note]->>) {\n  fail("seen \${n.Title}")\n}\n\n${listen}\n`,
+    `import { feed } from adapters\n\nf = connect feed\n\nfunction seen(n: <f-[:Notes]->>) {\n  fail("seen \${n.Title}")\n}\n\n${listen}\n`,
   );
   return dir;
 }
@@ -298,19 +277,9 @@ export function boardLists(dir: string): number {
   return existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter((l) => l !== '').length : 0;
 }
 
-/** The checkpoint each poll so far was handed. */
-export function polls(dir: string): unknown[] {
-  return logged(dir, 'polls.log');
-}
-
 /** What each poll of an edge so far was handed. */
 export function edgePolls(dir: string): unknown[] {
   return logged(dir, 'edge-polls.log');
-}
-
-/** The listener each poll so far named (`movementId`). */
-export function listeners(dir: string): unknown[] {
-  return logged(dir, 'listeners.log');
 }
 
 function logged(dir: string, name: string): unknown[] {

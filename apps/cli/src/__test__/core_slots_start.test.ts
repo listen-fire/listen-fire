@@ -63,7 +63,7 @@ test('listen-fire drain starts every slot module as it opens, the slow one with 
 
 test('a one-shot command starts a slot module only at its first call', () => {
   const dir = withSlots();
-  const ran = lfIn(dir, 'run', '--event', 'events/company_created.json', '--dry-run');
+  const ran = lfIn(dir, 'run', '--event', 'events/company_created.json');
   assert.equal(ran.code, 0, ran.out);
   assert.ok(!started(dir).includes('acme_llm'), 'no model call, no models module');
 });

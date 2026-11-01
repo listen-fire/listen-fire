@@ -63,7 +63,7 @@ function read(company: <crm-[:Company]->>) {
   write crm-[:Company]-> { Name: Text.includes(page, "warehouse robots") ? "Read: robots" : "Read: \${page}" }
 }
 
-listen to crm { events: ["company.created"] } fire read
+listen to crm-[:Company]-> fire read
 `,
   );
   return dir;

@@ -41,11 +41,11 @@ function welcome(company: <crm-[:Company]->>) {
   write crm-[:Company]-> { Name: "Welcome \${company.Name}" }
 }
 
-listen to crm { events: ["company.created"] } fire welcome
+listen to crm-[:Company]-> fire welcome
 `;
 
-/** A listen on an event the example's webhook never produces. */
-export const UPDATES_ONLY = COMPLETING.replace('company.created', 'company.updated');
+/** A listen whose WHERE no company the example's webhook brings fits. */
+export const UPDATES_ONLY = COMPLETING.replace('listen to crm-[:Company]->', 'listen to crm-[c:Company WHERE c.Name == "Nobody"]->');
 
 export function signedWebhook(dir: string): { body: Buffer; signature: string } {
   const body = readFileSync(join(dir, 'events/webhook_body.json'));

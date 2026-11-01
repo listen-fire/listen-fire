@@ -17,4 +17,4 @@ function both(company: <crm-[:Company]->>) {
   write crm-[:Company]-> { Name: "${early} ${late} ${company.Name}" }
 }
 
-listen to crm {} fire both
+listen to crm-[:Company]-> fire both

@@ -37,7 +37,7 @@ function triage(company: <crm-[:Company]->>) {
   }
 }
 
-listen to crm { events: ["company.created"] } fire triage
+listen to crm-[:Company]-> fire triage
 `;
 
 /** The example project with the movement in place of the example's. */

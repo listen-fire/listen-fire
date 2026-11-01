@@ -63,7 +63,7 @@ test('listen-fire run --dry-run rehearses past a wait: a refresh of a rehearsed 
   );
 
   // A rehearsal waits on nothing: the sleep is passed in the one segment.
-  const fired = lf(dir, 'run', '--dry-run', '--event', 'events/company_created.json');
+  const fired = lf(dir, 'run', 'rehearse', '--dry-run');
   assert.equal(fired.code, 0, fired.out);
   assert.match(fired.out, /rehearsal:rehearse completed/);
   assert.match(fired.out, /dry run, not written: .*"Name":"Rehearsed"/);
@@ -74,13 +74,13 @@ test('listen-fire run --dry-run rehearses past a wait: a refresh of a rehearsed 
 
 test('listen-fire run --dry-run rehearses an await on an edge: it opens no wait, binds the empty landing, and what follows the await is captured in the same segment', () => {
   const dir = project('await');
-  const fired = lf(dir, 'run', '--dry-run', '--event', 'events/company_created.json');
+  const fired = lf(dir, 'run', 'rehearse', '--text', 'Vireo Robotics', '--dry-run');
   assert.equal(fired.code, 0, fired.out);
-  assert.match(fired.out, /await:discuss completed/);
+  assert.match(fired.out, /await:rehearse completed/);
   assert.doesNotMatch(fired.out, /parked/);
   assert.match(fired.out, /dry run, not written: .*"Name":"Discuss Vireo Robotics"/);
   assert.match(fired.out, /dry run, not written: .*"Name":"Answered/);
-  assert.equal(fired.out.match(/await:discuss/g)?.length, 1, fired.out);
+  assert.equal(fired.out.match(/await:rehearse/g)?.length, 1, fired.out);
   assert.deepEqual(companies(dir), [], 'a rehearsal writes nothing, before its await or after');
   assert.equal(stateOf(dir, (db) => db.prepare('select count(*) as n from wait_row').get() as { n: number }).n, 0, 'a rehearsal opens no wait');
 });

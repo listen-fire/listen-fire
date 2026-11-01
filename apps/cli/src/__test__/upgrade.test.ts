@@ -288,6 +288,11 @@ test('listen-fire upgrade rewrites a 0.12 listen and its parameter, and a second
 
 test('listen-fire upgrade holds the pin on a settings listen it cannot rewrite, naming the traversal to write', () => {
   const dir = project();
+  const companies = join(dir, 'movements', 'companies.mvt');
+  const traversal = readFileSync(companies, 'utf8');
+  const settings = traversal.replace('listen to crm-[:Company]-> fire welcome', 'listen to crm { events: ["company.created"] } fire welcome');
+  assert.notEqual(settings, traversal, "the example's listen changed; update this test");
+  writeFileSync(companies, settings);
   pinned(dir, '0.12.13');
   const { code, out } = lf(dir, 'upgrade');
   assert.equal(code, 1, out);

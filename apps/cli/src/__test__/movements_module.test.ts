@@ -251,7 +251,7 @@ movement welcome(company: <crm-[:Company]->>) {
   await sleep(1h)
 }
 
-listen to crm { events: ["company.created"] } fire welcome
+listen to crm-[:Company]-> fire welcome
 `;
 const UPGRADED = OLD.replace('acme_crm(credentials: acme)', 'connect acme_crm using acme')
   .replace('movement welcome', 'function welcome')

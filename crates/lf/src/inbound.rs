@@ -1374,7 +1374,7 @@ mod tests {
         let sent = [("Content-Type", "application/json"), ("Stripe-Signature", "t=1,v1=x"), ("Authorization", "Bearer k"), ("X-Thing", "1"), ("x-gh-delivery", "d-1")];
         // By default a module that checks its own requests keeps no header.
         assert_eq!(kept(r#"{"providerKey":"stripe","scheme":"module"}"#, &sent), "{}");
-        assert_eq!(kept(r#"{"providerKey":"forms","scheme":"module","captureHeaders":["content-type","x-thing"]}"#, &sent), r#"{"content-type":"application/json","x-thing":"1"}"#);
+        assert_eq!(kept(r#"{"providerKey":"kit","scheme":"module","captureHeaders":["content-type","x-thing"]}"#, &sent), r#"{"content-type":"application/json","x-thing":"1"}"#);
         // Under a declared scheme, the two the host reads itself, and those declared.
         let github = r#"{"providerKey":"gh","scheme":"hmac_sha256_hex","signatureHeaders":["x-hub-signature-256"],"deliveryId":{"header":"x-gh-delivery"}"#;
         assert_eq!(kept(&format!("{github}}}"), &sent), r#"{"content-type":"application/json","x-gh-delivery":"d-1"}"#);

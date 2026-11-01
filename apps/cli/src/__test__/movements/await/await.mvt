@@ -11,4 +11,14 @@ function discuss(company: <crm-[:Company]->>) {
   write crm-[:Company]-> { Name: "Answered ${c.Text}" }
 }
 
-listen to crm {} fire discuss
+listen to crm-[:Company]-> fire discuss
+
+# The same, run by hand (`listen-fire run rehearse --text …`): a rehearsal is
+# of a run by hand.
+function rehearse(go: <manual-[:Invocations]->>) {
+  thread = write crm-[:Company]-> { Name: "Discuss ${go.Text}" }
+  c = await thread-[:Comments]->
+  write crm-[:Company]-> { Name: "Answered ${c.Text}" }
+}
+
+listen to manual-[:Invocations]-> fire rehearse

@@ -14,7 +14,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 
 import { lf, lfCommand } from './example';
-import { boards, edgePolls, feed, feedProject, polls } from './feed';
+import { boards, edgePolls, feed, feedProject } from './feed';
 
 // A workspace-built listen-fire finds its bundled modules beside its own
 // (canonical) path; a worktree's listen-fire may be the main checkout's, so the
@@ -85,8 +85,6 @@ test('two listens on one connection and edge share one poll; each fires on its o
   assert.deepEqual(saw(drained.out, 'a'), ['a']);
   assert.deepEqual(saw(drained.out, 'b'), ['bee']);
   assert.deepEqual([runsOf(dir, 'a'), runsOf(dir, 'b')], [1, 1]);
-  // The settings form's poll was never asked.
-  assert.deepEqual(polls(dir), []);
 });
 
 test('two listens with different taken filters poll twice', () => {
@@ -226,7 +224,7 @@ test('two drains at once poll an edge once', async () => {
 
 test('listen-fire run --poll polls a listen\'s edge at once, once for every listen sharing it', () => {
   const dir = notesProject([A_IS_A, 'listen to f-[n:Notes WHERE n.Title CONTAINS "b"]-> fire b']);
-  // The first poll only arms, as the settings form's does.
+  // The first poll only arms.
   const armed = lfAt(dir, ['run', '--poll', 'a']);
   assert.equal(armed.code, 0, armed.out);
   assert.match(armed.out, /armed; it fires on changes from now/);
@@ -244,7 +242,7 @@ test('listen-fire run --poll polls a listen\'s edge at once, once for every list
   assert.deepEqual([runsOf(dir, 'a'), runsOf(dir, 'b')], [1, 1]);
   const none = lfAt(dir, ['run', '--poll', 'nope']);
   assert.notEqual(none.code, 0);
-  assert.match(none.out, /no listen on a polled source fires 'nope'/);
+  assert.match(none.out, /no listen on a polled edge fires 'nope'/);
 });
 
 test('a poll first made by run --poll is polled by the drains after it', () => {

@@ -45,7 +45,7 @@ function welcome(company: <crm-[:Company]->>) {
 ${body}
 }
 
-listen to crm { events: ["company.created"] } fire welcome
+listen to crm-[:Company]-> fire welcome
 `;
 
 /** Fails at its one write, having written nothing. */

@@ -2,8 +2,8 @@
 // `Note` with a field of its own (`Title` in "alpha", `Heading` in "beta"); one
 // that names none has no types. Every describe and every create is logged to
 // calls.jsonl in its working folder with the space it was asked in, as the
-// request's `settings` carry it. It is a polled source too: each poll of a
-// space logs the checkpoint it was handed and returns one note of that space.
+// request's `settings` carry it. Its `Note` is a polled edge too: each poll of
+// a space logs the cursor it was handed and returns one note of that space.
 // Listens where listen-fire says (`MODULE_SOCKET`, else `PORT`).
 
 import { createServer } from 'node:http';
@@ -18,8 +18,6 @@ const manifest = {
   runtimeCapabilities: { traversal: { incoming: false, edgeProperties: false }, resources: false },
   methods: ['manifest', 'listEntryPoints', 'describe', 'resolveEntity', 'getFieldValue', 'getRelated', 'createRecord', 'updateRecord', 'deleteRecord', 'poll'],
   poll: { intervalSeconds: 60 },
-  webhookEventTypeId: 'Note',
-  subscribableEvents: ['note.added'],
   credentials: [{ name: 'workspace', kind: 'static', fields: [{ name: 'workspace', secret: false }] }],
   positionArgs: [{ name: 'space', optionsFrom: 'Space', label: 'Space' }],
 };
@@ -31,12 +29,20 @@ function answer(method, params, space) {
       return manifest;
     case 'listEntryPoints':
       if (space === undefined) return [];
-      return [{ typeId: 'Note', displayName: 'Note', writable: true, readable: false, fires: true }];
+      return [{ typeId: 'Note', displayName: 'Note', writable: true, readable: false, listenable: true, identity: 'Id', delivery: 'polled', pollEverySeconds: 60, cursor: true }];
     case 'describe': {
       log({});
       const field = FIELD[space];
       if (field === undefined) throw new Error(`no space "${space}"`);
-      return { typeId: 'Note', displayName: 'Note', fields: [{ fieldId: field, displayName: field, kind: 'string', writable: true, required: false }], references: [] };
+      return {
+        typeId: 'Note',
+        displayName: 'Note',
+        fields: [
+          { fieldId: 'Id', displayName: 'Id', kind: 'string', writable: false, required: false },
+          { fieldId: field, displayName: field, kind: 'string', writable: true, required: false },
+        ],
+        references: [],
+      };
     }
     case 'resolveEntity':
       return { candidates: [] };
@@ -44,10 +50,10 @@ function answer(method, params, space) {
       log({ fields: params.fields });
       return { adapterType: 'notes', externalId: `${space}-1`, recordType: 'Note', data: params.fields };
     case 'poll': {
-      log({ checkpoint: params.checkpoint ?? null });
-      const at = typeof params.checkpoint === 'number' ? params.checkpoint + 1 : 1;
+      log({ cursor: params.cursor ?? null });
+      const at = typeof params.cursor === 'number' ? params.cursor + 1 : 1;
       const id = `${space}-${at}`;
-      return { events: [{ payload: { id, [FIELD[space]]: id }, externalId: id, idempotencyKey: id, eventType: 'note.added' }], checkpoint: at };
+      return { arrivals: [{ edge: params.edge, identity: id, landing: { recordId: id, recordType: 'Note', fields: { Id: id, [FIELD[space]]: id } } }], cursor: at };
     }
     case 'getFieldValue':
       return params.position?.identity?.data?.[params.fieldId] ?? null;

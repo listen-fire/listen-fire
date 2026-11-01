@@ -23,4 +23,4 @@ function decide(company: <crm-[:Company]->>) {
   }
 }
 
-listen to crm {} fire decide
+listen to crm-[:Company]-> fire decide

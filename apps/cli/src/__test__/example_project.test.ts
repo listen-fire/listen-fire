@@ -72,10 +72,10 @@ function onboard(company: <crm-[:Company]->>) {
   write company { Name: "Onboarded \${company.Name}" }
 }
 
-listen to crm { events: ["company.created"] } fire onboard
+listen to crm-[:Company]-> fire onboard
 `,
   );
-  // The shipped event is tagged as the CRM's webhook tags it, so it names the record it fired on.
+  // The shipped arrival names the record it landed on.
   const check = lf(dir, 'check');
   assert.equal(check.code, 0, check.out);
   const run = lf(dir, 'run', '--event', 'events/company_created.json');
@@ -83,15 +83,6 @@ listen to crm { events: ["company.created"] } fire onboard
   assert.match(run.out, /companies:onboard completed — 1 write\(s\)/);
   assert.deepEqual(crmCompanies(dir), [{ externalId: 'c-1', fields: { Name: 'Onboarded Vireo Robotics' } }]);
 
-  // Untagged, it matches none of the CRM's event types: the failure says so, not only that nothing is stable.
-  const shipped = JSON.parse(readFileSync(join(dir, 'events/company_created.json'), 'utf8'));
-  delete shipped.event.tag;
-  writeFileSync(join(dir, 'events/company_untagged.json'), JSON.stringify(shipped));
-  const untagged = lf(dir, 'run', '--event', 'events/company_untagged.json');
-  assert.notEqual(untagged.code, 0, untagged.out);
-  assert.match(untagged.out, /no stable record to update/);
-  assert.match(untagged.out, /matched none of acme_crm's event types \(it carries no `tag`, and no type's `match` fits its payload\)/);
-  assert.match(untagged.out, /company\.created, company\.updated/);
 });
 
 test('listen-fire runs show --json: when the run started and finished, and each write: its target, action and values', () => {
@@ -110,12 +101,12 @@ function onboard(company: <crm-[:Company]->>) {
   write company { Name: "Onboarded \${company.Name}" }
 }
 
-listen to crm { events: ["company.created"] } fire onboard
+listen to crm-[:Company]-> fire onboard
 `,
   );
-  const event = { external: 'acme_crm', event: { payload: { id: 'c-1', Name: 'Vireo Robotics' }, externalId: 'c-1', tag: 'company.created', eventType: 'company.created', changeType: 'create', recordType: 'Company' } };
-  writeFileSync(join(dir, 'events/company_tagged.json'), JSON.stringify(event));
-  const run = lf(dir, 'run', '--event', 'events/company_tagged.json');
+  const event = { external: 'acme_crm', event: { arrivals: [{ edge: 'Company', identity: 'c-1', landing: { recordId: 'c-1', recordType: 'Company', fields: { id: 'c-1', Name: 'Vireo Robotics' } } }] } };
+  writeFileSync(join(dir, 'events/company_landed.json'), JSON.stringify(event));
+  const run = lf(dir, 'run', '--event', 'events/company_landed.json');
   assert.equal(run.code, 0, run.out);
   // The human line stays a count.
   assert.match(run.out, /companies:onboard completed — 2 write\(s\)/);
@@ -203,10 +194,10 @@ test('listen-fire serve: the external emits a company, the run awaits its first 
     const crm = `http://127.0.0.1:${externalPort(dir)}`;
     const door = `http://127.0.0.1:${serving.port}/api/public/adapter/acme_crm`;
 
-    // The emit door fires the listen; the run parks on the await.
+    // The company's arrival at the wake door fires the listen; the run parks on the await.
     const created = await fetch(`${crm}/dev/companies`, { method: 'POST', body: JSON.stringify({ Name: 'Osprey' }) });
-    const company = (await created.json()) as { id: string; pushed: { status: number; body: { accepted: number } } };
-    assert.deepEqual(company.pushed, { status: 202, body: { accepted: 1 } });
+    const company = (await created.json()) as { id: string; arrived: { status: number; body: { accepted: number } } };
+    assert.deepEqual(company.arrived, { status: 202, body: { accepted: 1 } });
     await serving.waitFor(/run .* await:discuss parked/);
     const discussion = crmCompanies(dir).find((c) => c.fields.Name === 'Discuss Osprey');
     assert.ok(discussion, JSON.stringify(crmCompanies(dir)));

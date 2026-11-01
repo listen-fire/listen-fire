@@ -1,6 +1,6 @@
 // A GitHub-like feed of notifications: a root `Notifications` it announces
-// arrivals on, each with the `Reason` it was sent for. Its 0.12 listens said
-// `listen to x { events: [...] }`; its manifest declares how such a listen
+// arrivals on, each with the `Reason` it was sent for. Its 0.12 listens named
+// the reasons in the settings form; its manifest declares how such a listen
 // becomes a traversal (`listenSettingsBecome`), so `listen-fire upgrade`
 // rewrites one. Listens where listen-fire says (`MODULE_SOCKET`, else `PORT`).
 
@@ -13,7 +13,6 @@ const manifest = {
   supportedTriggers: ['webhook'],
   runtimeCapabilities: { traversal: { incoming: false, edgeProperties: false }, resources: false },
   methods: ['manifest', 'listEntryPoints', 'describe', 'getFieldValue', 'getRelated'],
-  subscribableEvents: ['mention', 'assign', 'review_requested'],
   listenSettingsBecome: {
     path: ['Notifications'],
     aliases: ['n'],
@@ -48,7 +47,6 @@ function answer(method) {
           listenable: true,
           identity: 'Id',
           delivery: 'connection',
-          fires: true,
         },
       ];
     case 'describe':

@@ -11,4 +11,4 @@ function decide(company: <crm-[:Company]->>) {
   write crm-[:Company]-> { Name: "Decided ${a.Decision}" }
 }
 
-listen to crm {} fire decide
+listen to crm-[:Company]-> fire decide

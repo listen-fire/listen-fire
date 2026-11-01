@@ -34,7 +34,7 @@ function note(company: <crm-[:Company]->>) {
 ${body}
 }
 
-listen to crm { events: ["company.created"] } fire note
+listen to crm-[:Company]-> fire note
 `,
   );
   return dir;
@@ -68,9 +68,9 @@ test('a field only another position has is refused at check', () => {
 });
 
 // A listen is polled as its connection: in the position its construction
-// names, under a checkpoint of its own, so two connections that differ only in
+// names, under a cursor of its own, so two connections that differ only in
 // position are two sources.
-test('a listen on a positioned connection polls in its own position, with a checkpoint of its own', () => {
+test('a listen on a positioned connection polls in its own position, with a cursor of its own', () => {
   const dir = notesProject('  write alpha-[:Note]-> { Title: company.Name }');
   writeFileSync(
     join(dir, 'movements/seen.mvt'),
@@ -88,15 +88,17 @@ function seen_beta(n: <beta-[:Note]->>) {
   fail("beta saw \${n.Heading}")
 }
 
-listen to alpha fire seen_alpha
-listen to beta fire seen_beta
+listen to alpha-[:Note]-> fire seen_alpha
+listen to beta-[:Note]-> fire seen_beta
 `,
   );
   const check = lf(dir, 'check');
   assert.equal(check.code, 0, check.out);
-  const polled = () => calls(dir).filter((c) => c.method === 'poll').map((c) => `${c.space} ${JSON.stringify((c as { checkpoint?: unknown }).checkpoint)}`);
-  assert.match(lf(dir, 'run', '--poll', 'seen_alpha').out, /alpha saw alpha-1/);
-  assert.match(lf(dir, 'run', '--poll', 'seen_beta').out, /beta saw beta-1/);
+  const polled = () => calls(dir).filter((c) => c.method === 'poll').map((c) => `${c.space} ${JSON.stringify((c as { cursor?: unknown }).cursor)}`);
+  // The first poll of each only arms.
+  assert.match(lf(dir, 'run', '--poll', 'seen_alpha').out, /seen:seen_alpha armed/);
+  assert.match(lf(dir, 'run', '--poll', 'seen_beta').out, /seen:seen_beta armed/);
   assert.match(lf(dir, 'run', '--poll', 'seen_alpha').out, /alpha saw alpha-2/);
-  assert.deepEqual(polled(), ['alpha null', 'beta null', 'alpha 1']);
+  assert.match(lf(dir, 'run', '--poll', 'seen_beta').out, /beta saw beta-2/);
+  assert.deepEqual(polled(), ['alpha null', 'beta null', 'alpha 1', 'beta 1']);
 });

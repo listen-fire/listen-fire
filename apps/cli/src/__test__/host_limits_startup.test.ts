@@ -40,7 +40,7 @@ function note(company: <crm-[:Company]->>) {
   write alpha-[:Note]-> { Title: company.Name }
 }
 
-listen to crm { events: ["company.created"] } fire note
+listen to crm-[:Company]-> fire note
 `,
   );
   return dir;

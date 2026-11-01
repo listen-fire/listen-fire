@@ -77,8 +77,8 @@ test('listen-fire connect lists an installed store module beside the built-ins',
 
 function keyedEvent(dir: string, key: string): string {
   const file = join(dir, 'events/keyed.json');
-  const event = JSON.parse(readFileSync(join(dir, 'events/company_created.json'), 'utf8')) as { event: Record<string, unknown> };
-  event.event.idempotencyKey = key;
+  const event = JSON.parse(readFileSync(join(dir, 'events/company_created.json'), 'utf8')) as { event: { arrivals: Array<Record<string, unknown>> } };
+  for (const arrival of event.event.arrivals) arrival.identity = key;
   writeFileSync(file, JSON.stringify(event));
   return 'events/keyed.json';
 }
@@ -87,19 +87,17 @@ for (const [over, make] of [
   ['the SQLite store', () => project()],
   ['a store module', () => moduleProject().dir],
 ] as const) {
-  test(`${over}: a redelivered event (same idempotencyKey) runs nothing; a dry run notes no receipt`, () => {
+  test(`${over}: a redelivered arrival (same identity) runs nothing`, () => {
     const dir = make();
     const event = keyedEvent(dir, 'delivery-1');
-    const dry = lf(dir, 'run', '--dry-run', '--event', event);
-    assert.equal(dry.code, 0, dry.out);
     const first = lf(dir, 'run', '--event', event);
     assert.match(first.out, /^run \S+ companies:\S+ (?:completed|parked)/m);
     const again = lf(dir, 'run', '--event', event);
     assert.equal(again.code, 0, again.out);
-    assert.match(again.out, /has run the event delivery-1 before: this delivery runs nothing/);
+    assert.match(again.out, /companies:welcome has run the arrival delivery-1 on Company before: this delivery runs nothing/);
     assert.doesNotMatch(again.out, /^run /m);
     assert.equal(companies(dir).length, 1, companies(dir).join(', '));
-    // Another key is another occurrence.
+    // Another identity is another occurrence.
     assert.match(lf(dir, 'run', '--event', keyedEvent(dir, 'delivery-2')).out, /^run \S+ companies:\S+ (?:completed|parked)/m);
   });
 }

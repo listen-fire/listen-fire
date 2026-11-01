@@ -12,7 +12,7 @@ import { cpSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { companies, project } from '../example';
-import { polls, withFeed } from '../feed';
+import { edgePolls, withFeed } from '../feed';
 import { lfBinary } from '../lf_bin';
 import { freshTeam, POSTGRES_URL, psql } from './pg';
 
@@ -91,29 +91,28 @@ test('a poll pool and a run pool on one store split the work by kind', async () 
     const runMachine = join(mkdtempSync(join(tmpdir(), 'lf-pool-')), 'p');
     cpSync(dir, runMachine, { recursive: true });
     const pools: Array<[string, string]> = [
-      [dir, 'poll_listen'],
-      [runMachine, 'resume_timer,wake_await,fire_event,cron'],
+      [dir, 'poll_edge'],
+      [runMachine, 'resume_timer,wake_await,fire_event'],
     ];
     const [pollPool, runPool] = await Promise.all(
       pools.map(([machine, kinds]) =>
         lfHost(machine, ['drain', ...store, '--kinds', kinds, '--until-idle', '--max-seconds', '120'], { LF_CLOCK_AHEAD_MS: TWO_HOURS_MS }),
       ),
     );
-    // The notes movement fails by design, naming each note: so the poll pool exits 1.
-    assert.equal(pollPool!.code, 1, pollPool!.out);
+    assert.equal(pollPool!.code, 0, pollPool!.out);
     assert.equal(runPool!.code, 0, runPool!.out);
 
-    // The poll pool polled the feed once and ran its notes; it resumed no run.
-    assert.deepEqual(polls(dir), [null]);
-    assert.match(pollPool!.out, /notes:seen/);
+    // The poll pool polled the feed's edge once (the first poll only arms); it resumed no run.
+    assert.deepEqual(edgePolls(dir), [{ edge: 'Notes' }]);
+    assert.match(pollPool!.out, /armed; it fires on changes from now/);
     assert.doesNotMatch(pollPool!.out, /companies:welcome/);
     // The run pool resumed every parked run, and polled nothing.
-    assert.deepEqual(polls(runMachine), []);
+    assert.deepEqual(edgePolls(runMachine), []);
     const resumed = [...runPool!.out.matchAll(/^run (\S+) companies:welcome completed/gm)].map((m) => m[1]);
     assert.deepEqual([...resumed].sort(), [...fired].sort(), runPool!.out);
     assert.doesNotMatch(runPool!.out, /notes:seen/);
     // What is left is the feed's next poll, due an interval on.
-    assert.deepEqual(psql(`select kind from lf.work where team_id = '${team}'`), [['poll_listen']]);
+    assert.deepEqual(psql(`select kind from lf.work where team_id = '${team}'`), [['poll_edge']]);
   } finally {
     clear();
   }

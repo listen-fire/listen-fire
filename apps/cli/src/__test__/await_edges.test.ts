@@ -184,9 +184,9 @@ test('the wake door refuses keys, naming adapter protocol 2.5', async () => {
 
 test('a rehearsal opens no wait and binds the empty landing', () => {
   const dir = project('await');
-  const run = lf(dir, 'run', '--dry-run', '--event', 'events/company_created.json');
+  const run = lf(dir, 'run', 'rehearse', '--text', 'Vireo Robotics', '--dry-run');
   assert.equal(run.code, 0, run.out);
-  assert.match(run.out, /await:discuss completed/);
+  assert.match(run.out, /await:rehearse completed/);
   assert.doesNotMatch(run.out, /parked/);
   assert.deepEqual(companies(dir), []);
 });

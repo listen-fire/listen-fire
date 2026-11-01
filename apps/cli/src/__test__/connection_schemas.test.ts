@@ -39,7 +39,7 @@ function note(company: <crm-[:Company]->>) {
 ${body}
 }
 
-listen to crm { events: ["company.created"] } fire note
+listen to crm-[:Company]-> fire note
 `,
   );
   return dir;

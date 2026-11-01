@@ -12,4 +12,4 @@ function discuss(company: <crm-[:Company]->>) {
   write crm-[:Company]-> { Name: "Answered ${c.Text}" }
 }
 
-listen to crm {} fire discuss
+listen to crm-[:Company]-> fire discuss
