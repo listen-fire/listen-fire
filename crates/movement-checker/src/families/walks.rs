@@ -469,16 +469,7 @@ fn report_undescribed(typing: &mut Typing, position: &Position, schema: &Positio
     if schema.undescribed != Some(true) {
         return false;
     }
-    let hint = match position {
-        Position::Position(p) => crate::families::listens::event_types::subject_address_hint(&p.instance.schema, &p.instance.name, &p.position),
-        _ => None,
-    };
-    let remedy = match hint {
-        Some(address) => format!(
-            "If it is the record an event is about, name its table in the movement's signature (an event is narrowed only by the address the signature names): {address}"
-        ),
-        None => "Narrow the type that reaches it to a concrete one first.".to_string(),
-    };
+    let remedy = "Narrow the type that reaches it to a concrete one first.";
     typing.report(
         codes::UNDESCRIBED_POSITION,
         format!("nothing describes {}, so {what} can't be checked here — it would be null at run time. {remedy}", describe_position(position)),
@@ -1406,6 +1397,13 @@ impl crate::checker::Checker<'_> {
     }
 }
 
+/// A union's member addressed by its action, as a type:
+/// `<gh-[e:`Event` WHERE e.action == "opened"]->>`.
+fn address_source(instance: &str, event: &str, (key, value): &(&str, &str)) -> String {
+    let value = serde_json::to_string(value).expect("strings always serialise");
+    format!("<{instance}-[e:`{event}` WHERE e.{key} == {value}]->>")
+}
+
 /// The IS test a NARROWING message suggests: the first `action` option whose
 /// narrowing of the union's own address carries what was asked for.
 fn narrowing_example(u: &crate::types::position::UnionPosition, carrying: &[&String]) -> String {
@@ -1421,7 +1419,7 @@ fn narrowing_example(u: &crate::types::position::UnionPosition, carrying: &[&Str
         }
         let key = crate::types::event_address::event_address_key(&crate::types::event_address::EventAddress { event: address.event.clone(), narrowing });
         if carrying.iter().any(|v| **v == key) {
-            let address = crate::families::listens::event_types::address_source(&u.instance.name, &address.event, &[("action".to_string(), option.clone())]);
+            let address = address_source(&u.instance.name, &address.event, &("action", option.as_str()));
             return format!("x IS {address}");
         }
     }

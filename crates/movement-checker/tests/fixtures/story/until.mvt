@@ -5,7 +5,7 @@ crm  = connect attio using acme_main
 team = connect slack using team_workspace
 runs = connect manual
 
-function `Wait For The Name`(go: <runs-[:Invocation]->>) {
+function `Wait For The Name`(go: <runs-[:Invocations]->>) {
   co = write crm-[:Companies]-> {
     unique by (FUZZY Name)
     Name: go.Text
@@ -21,4 +21,4 @@ function `Wait For The Name`(go: <runs-[:Invocation]->>) {
   write ops-[:Messages]-> { Message: "Renamed at last." }
 }
 
-listen to runs {} fire `Wait For The Name`
+listen to runs-[:Invocations]-> fire `Wait For The Name`

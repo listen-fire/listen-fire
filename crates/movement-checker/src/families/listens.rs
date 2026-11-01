@@ -2,8 +2,7 @@
 //! what.
 //!
 //! Codes: MOV_LISTEN_FILE_LEVEL, MOV_LISTEN_NOT_INSTANCE,
-//! MOV_LISTEN_BAD_CONFIG, MOV_LISTEN_DUPLICATE, MOV_LISTEN_ALIAS_DUPLICATE,
-//! MOV_LISTEN_CANNOT_FIRE, MOV_LISTEN_PARAM_MISMATCH,
+//! MOV_LISTEN_DUPLICATE, MOV_LISTEN_ALIAS_DUPLICATE, MOV_LISTEN_PARAM_MISMATCH,
 //! MOV_LISTEN_SHAPE_MISMATCH, MOV_LISTEN_MISSING, MOV_CALLBACK_RETIRED,
 //! MOV_LISTEN_SETTINGS_RETIRED (settings_become.rs) (and
 //! MOV_ADAPTER_NOT_CONSTRUCTED and MOV_CALL_NOT_MOVEMENT where a listen
@@ -15,37 +14,27 @@
 use std::collections::{HashMap, HashSet};
 
 use movement_parser::ast::{
-    CallArg, CallbackExpression, CallbackSubject, ExprSlot, ListenDeclaration, MovementDeclaration, MovementParam, NamedArg, ParamTypeRef,
+    CallArg, CallbackExpression, CallbackSubject, ListenDeclaration, MovementDeclaration, MovementParam, ParamTypeRef,
     Span, TypeRef, ValueType,
 };
 use movement_parser::catalog::helpers::parse_field_type_name;
-use movement_parser::catalog::types::TriggerConfigFormat;
-use movement_parser::lowering::expression::{Expression, ListElement, StaticValue};
-use serde_json::json;
 
 use indexmap::IndexMap;
 use movement_parser::catalog::types::EdgeSchema;
-
-use movement_parser::surface::phrase::{Connection, connection};
 
 use crate::checker::Checker;
 use crate::codes;
 use crate::types::Ty;
 use crate::types::position::{LocalEdge, LocalNode, Position};
-use crate::cron::cron_schedule_error;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::families::names::spell_name;
-use crate::families::systems::{is_boolean_literal, is_value_param_type};
 use crate::scope::{Resolution, ScopeId, SymbolId, SymbolKind};
 
 const EVERY_KEY: &str = "every";
 const POLL_INTERVAL_KEY: &str = "pollIntervalSeconds";
-use crate::slots::{expression_of_slot, is_bare_ident};
 
-pub(crate) mod event_types;
 mod settings_become;
 mod traversal;
-mod watched_field;
 
 /// `SUPPRESS_SELF_KEY`: the listen key every listener accepts.
 const SUPPRESS_SELF_KEY: &str = "suppress_self";
@@ -75,52 +64,15 @@ pub struct ListenState {
 struct Dispatchable {
     movement: String,
     instance_name: String,
-    adapter: Option<String>,
-    position: Option<String>,
-    narrowing_keys: Option<Vec<String>>,
+    /// The parameter's hops as written (`-[:Notifications]->`), when it
+    /// names the edge it lands on.
+    hops: Option<String>,
     span: Span,
 }
 
 pub struct MovementInfo {
     pub params: Vec<MovementParam>,
     pub decl_scope: ScopeId,
-}
-
-/// What a listen's config states, read as its keys are checked.
-#[derive(Default)]
-struct ConfigRead {
-    /// Each single-literal value, by key: the address it subscribes to.
-    pins: Vec<(String, String)>,
-    /// The `events:` selection.
-    selected: Option<Vec<String>>,
-    /// A `fields`-format key's bare names, and where they are written.
-    fields: Option<(Vec<String>, Span)>,
-    /// A `type`-format key's node (`payload: <Payment>`): what the listen's
-    /// events are, as the program declares it.
-    payload: Option<SymbolId>,
-    /// A `field`-format key's field name, and where it is written.
-    field: Option<(String, Span)>,
-    /// A `field-value`-format key, its literal, and where it is written.
-    field_value: Option<(String, Expression, Span)>,
-}
-
-/// `suggestedListenKey`: a movement's name as a slug.
-fn suggested_listen_key(movement: &str) -> String {
-    let lower = movement.to_lowercase();
-    let mut slug = String::new();
-    let mut gap = false;
-    for c in lower.chars() {
-        if c.is_ascii_lowercase() || c.is_ascii_digit() {
-            if gap && !slug.is_empty() {
-                slug.push('-');
-            }
-            gap = false;
-            slug.push(c);
-        } else {
-            gap = true;
-        }
-    }
-    if slug.is_empty() { "intake".to_string() } else { slug }
 }
 
 /// A file's own listens, set aside while an imported library is checked.
@@ -203,13 +155,10 @@ impl Checker<'_> {
         if symbol.kind != SymbolKind::Instance {
             return;
         }
-        let instance = symbol.instance.as_deref();
         self.listens.dispatchables.push(Dispatchable {
             movement: movement.name.clone(),
             instance_name: type_.graph.clone(),
-            adapter: symbol.adapter.clone(),
-            position: type_.position.clone(),
-            narrowing_keys: instance.and_then(|i| i.schema.as_ref()).and_then(|s| s.event_narrowing_keys.clone()),
+            hops: type_.hops_raw.clone().filter(|h| !h.trim().is_empty()),
             span: Span { start: movement.span.start, end: movement.span.start },
         });
     }
@@ -222,36 +171,12 @@ impl Checker<'_> {
         }
         let dispatchables = std::mem::take(&mut self.listens.dispatchables);
         for d in &dispatchables {
-            let spec = d.adapter.as_deref().and_then(|a| self.catalog.adapter(a));
-            let vocabulary = spec.and_then(|s| s.trigger_config.as_ref());
-            let required = spec.and_then(|s| s.trigger_config_required.clone()).unwrap_or_default();
-            let address_tail = d.narrowing_keys.as_ref().and_then(|k| k.last());
-            let cron = spec
-                .and_then(|s| s.trigger_config_formats.as_ref())
-                .and_then(|f| f.0.get("schedule"))
-                .is_some_and(|f| *f == TriggerConfigFormat::Cron);
-            let config = if cron {
-                " { schedule: \"0 9 * * 1\" }".to_string()
-            } else if !required.is_empty() {
-                let keys: Vec<String> = required
-                    .iter()
-                    .map(|key| match &d.position {
-                        Some(position) if Some(key) == address_tail => format!("{key}: \"{position}\""),
-                        _ if key == "key" => format!("key: \"{}\"", suggested_listen_key(&d.movement)),
-                        _ => format!("{key}: \"…\""),
-                    })
-                    .collect();
-                format!(" {{ {} }}", keys.join(", "))
-            } else if vocabulary.is_some_and(|v| v.iter().any(|k| k == "key")) {
-                format!(" {{ key: \"{}\" }}", suggested_listen_key(&d.movement))
-            } else {
-                String::new()
-            };
+            let path = format!("{}{}", d.instance_name, d.hops.as_deref().map_or("-[:…]->", str::trim));
             let mut info = Diagnostic::error(
                 codes::LISTEN_MISSING,
                 format!(
-                    "'{}' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to {}{config} fire {}",
-                    d.movement, d.instance_name, d.movement
+                    "'{}' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to {path} fire {}",
+                    d.movement, d.movement
                 ),
                 d.span,
             );
@@ -260,7 +185,8 @@ impl Checker<'_> {
         }
     }
 
-    /// `checkListen`: `listen to <instance> { <config> } fire <movement>`.
+    /// `checkListen`: `listen to <traversal> fire <movement>`; the 0.12
+    /// settings form (`listen to <instance> { … }`) is only refused.
     pub fn check_listen(&mut self, statement: &ListenDeclaration, scope: ScopeId) {
         if let Some(id) = self.scopes.resolve_function(scope, &statement.movement) {
             self.note_fired(id);
@@ -277,288 +203,9 @@ impl Checker<'_> {
         if let Some(path) = &statement.path {
             return self.check_listen_traversal(statement, path, scope);
         }
+        // The settings form is retired: its refusal, carrying the upgrade's
+        // rewrite to a traversal, is all the check says of it.
         self.report_settings_retired(statement, scope);
-        let instance_id = self.resolve_reference(&statement.instance, statement.span, scope);
-        let instance_kind = instance_id.map(|id| self.scopes.symbol(id).kind);
-        if let Some(construct) = &statement.construct {
-            let adapter = match instance_id.map(|id| self.scopes.symbol(id)) {
-                Some(symbol) if symbol.kind == SymbolKind::Adapter => symbol.imported_name.clone().unwrap_or_else(|| symbol.name.clone()),
-                _ => construct.callee.clone(),
-            };
-            let message = format!(
-                "'listen to {}(…)' constructs an instance inline — construct and name it first, then listen by name: 'go = {}' … 'listen to go {{}} fire {}'",
-                statement.instance,
-                self.construction_call(&adapter),
-                statement.movement
-            );
-            self.report(codes::ADAPTER_NOT_CONSTRUCTED, message, statement.span);
-        } else if let Some(symbol) = instance_id.map(|id| self.scopes.symbol(id)) {
-            if symbol.kind == SymbolKind::Adapter {
-                let adapter = symbol.imported_name.clone().unwrap_or_else(|| symbol.name.clone());
-                let message = format!(
-                    "'{}' is an adapter, not an instance — construct and name an instance first, then listen to it by name: 'go = {}' … 'listen to go {{}} fire {}'",
-                    statement.instance,
-                    self.construction_call(&adapter),
-                    statement.movement
-                );
-                self.report(codes::ADAPTER_NOT_CONSTRUCTED, message, statement.span);
-            } else if symbol.kind != SymbolKind::Instance {
-                let message = format!(
-                    "'{}' is {} — 'listen to' names a constructed adapter instance (e.g. inbox = {})",
-                    statement.instance,
-                    symbol.kind.describe(),
-                    connection(&Connection { adapter: "email", args: &[("credentials", "…")], credential: Some("credentials") })
-                );
-                self.report(codes::LISTEN_NOT_INSTANCE, message, statement.span);
-            }
-        }
-
-        if let Some(arg) = statement.config.iter().find(|a| a.name == SUPPRESS_SELF_KEY)
-            && (arg.is_type == Some(true) || !is_boolean_literal(arg.value.raw.trim()))
-        {
-            self.report(
-                codes::LISTEN_BAD_CONFIG,
-                format!(
-                    "'{SUPPRESS_SELF_KEY}' takes a boolean literal — write {SUPPRESS_SELF_KEY}: true to ignore this system's own writes echoing back (the 2-way-sync case), or omit it (the default is off)"
-                ),
-                arg.value.span,
-            );
-        }
-
-        let instance = instance_id.filter(|_| instance_kind == Some(SymbolKind::Instance)).map(|id| self.scopes.symbol(id));
-        let adapter_name = instance.and_then(|s| s.adapter.clone());
-        let construction_args = instance.and_then(|s| s.instance.as_ref()).map(|i| i.construction_args.clone()).unwrap_or_default();
-        let spec = adapter_name.as_deref().and_then(|a| self.catalog.adapter(a));
-        let adapter_label = adapter_name.clone().unwrap_or_else(|| "undefined".to_string());
-        for required in spec.and_then(|s| s.trigger_config_required.as_ref()).into_iter().flatten() {
-            if statement.config.iter().any(|a| &a.name == required) {
-                continue;
-            }
-            let position_supplies = spec
-                .is_some_and(|s| s.construction_args.iter().any(|a| a.kind == movement_parser::catalog::types::ArgKind::Position && &a.name == required))
-                && construction_args.get(required).is_some_and(|v| !v.trim().is_empty());
-            if position_supplies {
-                continue;
-            }
-            let format = spec.and_then(|s| s.trigger_config_formats.as_ref()).and_then(|f| f.0.get(required));
-            let example = if format == Some(&TriggerConfigFormat::Cron) {
-                "\"0 9 * * 1\"".to_string()
-            } else if format == Some(&TriggerConfigFormat::Type) {
-                "<Payment>".to_string()
-            } else if required == "key" {
-                format!("\"{}\"", suggested_listen_key(&statement.movement))
-            } else {
-                "\"…\"".to_string()
-            };
-            let why = spec.and_then(|s| s.trigger_config_required_why.as_ref()).and_then(|w| w.0.get(required));
-            let rewritten =
-                format!("listen to {} {{ {required}: {example} }} fire {}", spell_name(&statement.instance), spell_name(&statement.movement));
-            let exact = required == "key" && statement.config.is_empty() && statement.alias.is_none() && statement.construct.is_none();
-            let why = why.map(|w| format!(" ({w})")).unwrap_or_default();
-            let mut diagnostic = Diagnostic::error(
-                codes::LISTEN_BAD_CONFIG,
-                format!("a '{adapter_label}' listener requires a '{required}' config{why} — e.g. {rewritten}"),
-                statement.span,
-            );
-            if exact {
-                diagnostic.fix = Some(json!({ "edits": [{ "span": statement.span, "text": rewritten }] }));
-            }
-            self.push(diagnostic);
-        }
-        let mut read = ConfigRead::default();
-        for arg in &statement.config {
-            if arg.name == SUPPRESS_SELF_KEY {
-                continue;
-            }
-            self.check_listen_config_arg(arg, spec, &adapter_label, scope, &mut read);
-        }
-
-        let schema = instance_id
-            .map(|id| self.scopes.symbol(id))
-            .and_then(|s| s.instance.clone())
-            .filter(|i| i.schema.is_some());
-        let schema = schema.as_ref().and_then(|i| i.schema.as_ref());
-        let subscribed = read.selected.clone().or_else(|| spec.and_then(|s| s.default_events.clone()));
-        if let Some(schema) = schema {
-            let span_for = |key: &str| statement.config.iter().find(|a| a.name == key).map_or(statement.span, |a| a.value.span);
-            self.check_hop_pins(schema, &read.pins, span_for);
-        }
-        let event_types = schema.and_then(|schema| event_types::derived_event_types(schema, subscribed.as_deref(), &read.pins));
-        if self.recording() {
-            let fires_movement = self.scopes.resolve_function(scope, &statement.movement).is_some_and(|id| self.scopes.symbol(id).kind == SymbolKind::Movement);
-            let what = crate::story::What::Listen {
-                instance: statement.instance.clone(),
-                adapter_type: adapter_name.clone(),
-                fires: statement.movement.clone(),
-                fires_movement,
-                events: subscribed.clone(),
-                narrowing: read.pins.clone(),
-                event_types: event_types.iter().flatten().map(|t| (t.key.clone(), t.display.clone())).collect(),
-                path: None,
-            };
-            self.record_node(statement.span, scope, what);
-        }
-        let watched = schema.zip(event_types.as_deref()).and_then(|(schema, event_types)| watched_field::watched_properties(schema, event_types));
-        if let (Some((names, span)), Some(watched)) = (&read.fields, &watched) {
-            self.check_listen_fields(watched, names, *span);
-        }
-        match (watched.as_ref(), schema, event_types.as_deref()) {
-            (None, Some(schema), Some(fires)) if read.field.is_some() || read.field_value.is_some() => {
-                let param = self
-                    .scopes
-                    .resolve_function(scope, &statement.movement)
-                    .and_then(|id| self.listens.movements.get(&id))
-                    .and_then(|info| info.params.first().cloned());
-                self.refuse_unchecked_field(&read, spec, schema, fires, statement, param.as_ref());
-            }
-            _ => self.check_watched_field(&read, spec, watched.as_ref()),
-        }
-
-        let mut config: Vec<String> = statement.config.iter().map(|a| format!("{}={}", a.name, a.value.raw.trim())).collect();
-        config.sort();
-        let identity = format!("{}::{}", statement.instance, config.join(","));
-        if !self.listens.identities.insert(identity) {
-            let braces = if statement.config.is_empty() { "" } else { " { … }" };
-            self.report(
-                codes::LISTEN_DUPLICATE,
-                format!(
-                    "Duplicate listener — an identical 'listen to {}{braces}' already exists; two listens on the same instance must differ in config",
-                    statement.instance
-                ),
-                statement.span,
-            );
-        }
-        if let Some(alias) = &statement.alias
-            && !self.listens.aliases.insert(format!("{}::{alias}", statement.movement))
-        {
-            self.report(
-                codes::LISTEN_ALIAS_DUPLICATE,
-                format!("Two lanes of '{}' are both named \"{alias}\" — give each listen a distinct alias", statement.movement),
-                statement.span,
-            );
-        }
-
-        let callee = statement.movement.clone();
-        let Some(movement_id) = self.resolve_reference(&callee, statement.span, scope) else { return };
-        let movement_kind = self.scopes.symbol(movement_id).kind;
-        if movement_kind == SymbolKind::FileImport {
-            return;
-        }
-        if movement_kind != SymbolKind::Movement {
-            self.report(
-                codes::CALL_NOT_MOVEMENT,
-                format!(
-                    "'{}' is {}, not a movement — 'fire' names a movement declared in this file",
-                    statement.movement,
-                    movement_kind.describe()
-                ),
-                statement.span,
-            );
-            return;
-        }
-        let Some(info) = self.listens.movements.get(&movement_id) else { return };
-        let (params, decl_scope) = (info.params.clone(), info.decl_scope);
-        if params.len() != 1 {
-            self.report(
-                codes::LISTEN_PARAM_MISMATCH,
-                format!(
-                    "'{}' takes {} parameters — a movement fired by a listener takes exactly one, the event position",
-                    statement.movement,
-                    params.len()
-                ),
-                statement.span,
-            );
-            return;
-        }
-        let Some(instance_id) = instance_id.filter(|_| instance_kind == Some(SymbolKind::Instance)) else { return };
-        if let Some(spec) = spec
-            && spec.can_fire != Some(true)
-        {
-            self.report(
-                codes::LISTEN_CANNOT_FIRE,
-                format!(
-                    "'{}' can't start an automation — it has no way to tell us when something changes there. Use it as somewhere to write to, and start this from something that can notify us (a schedule, an inbox, a chat message, or a record change in a system that reports one)",
-                    statement.instance
-                ),
-                statement.span,
-            );
-            return;
-        }
-        let param = &params[0];
-        let Some(type_) = &param.type_ else { return };
-        if let Some(payload) = read.payload {
-            return self.check_listen_payload_param(payload, param, type_, decl_scope, statement);
-        }
-        if is_value_param_type(self, type_, decl_scope) {
-            self.report(
-                codes::LISTEN_PARAM_MISMATCH,
-                format!(
-                    "'{}' takes '{}: <{}>', a value, but a listener fires its movement with an event position of '{}' — type the parameter as one ('<{}-[:…]->>')",
-                    statement.movement,
-                    param.name,
-                    spell_param_type(type_),
-                    statement.instance,
-                    statement.instance
-                ),
-                statement.span,
-            );
-            return;
-        }
-        let ParamTypeRef::Name(declared) = type_ else { return };
-        let Resolution::Found(param_graph) = self.scopes.resolve(decl_scope, &declared.graph) else { return };
-        if self.scopes.symbol(param_graph).kind == SymbolKind::Shape {
-            let instance = self.scopes.symbol(instance_id).instance.clone();
-            if let Some(shape) = self.declared_node(param_graph).map(|d| d.instance.clone()) {
-                let schema = instance.as_ref().and_then(|i| i.schema.as_ref());
-                self.check_listen_shape_conformance(&shape.schema, &shape.name, schema, &declared.graph, statement);
-            }
-            return;
-        }
-        if param_graph != instance_id {
-            let param_type = format!("{}{}", declared.graph, declared.hops_raw.as_deref().unwrap_or(""));
-            self.report(
-                codes::LISTEN_PARAM_MISMATCH,
-                format!(
-                    "'{}' takes '{}: <{param_type}>', but this listener fires with an event position of '{}' — the parameter's type must equal the listened instance's event position type (a '<{}-[:…]->>' position, not '<{param_type}>')",
-                    statement.movement, param.name, statement.instance, statement.instance
-                ),
-                statement.span,
-            );
-        }
-        let (Some(schema), Some(event_types)) = (schema, &event_types) else { return };
-        let Some(param_type) = event_types::param_position(schema, declared) else { return };
-        let Some(mismatch) = event_types.iter().find(|t| !event_types::positions_match(t, &param_type)) else { return };
-        let wrote = format!("<{}{}>", declared.graph, declared.hops_raw.as_deref().unwrap_or(""));
-        let instance = &statement.instance;
-        let movement = &statement.movement;
-        let fires = event_types::describe_event_type(schema, mismatch, instance);
-        if let Some((signature, binding, event_param)) =
-            event_types::record_signature_rewrite(schema, instance, mismatch, &param.name, &param_type)
-        {
-            self.report(
-                codes::LISTEN_PARAM_MISMATCH,
-                format!(
-                    "'{movement}' takes '{}: {wrote}', but this listener fires {fires} — the EVENT, not the record it is about. Type the parameter against the event and reach the record in one hop: '{movement}({event_param}: {signature})', then wrap the body in '{binding}'.",
-                    param.name
-                ),
-                statement.span,
-            );
-            return;
-        }
-        let example = event_types::event_traversal_example(schema, &param.name, instance);
-        let tail = match example {
-            None => ".".to_string(),
-            Some(example) => format!(" — e.g. `{example}` (a delete event has no record to read)."),
-        };
-        self.report(
-            codes::LISTEN_PARAM_MISMATCH,
-            format!(
-                "'{movement}' takes '{}: {wrote}' ({}), but this listener fires {fires}. Every listen firing a movement must satisfy its signature — either narrow this listen to what '{movement}' accepts, or widen the signature{tail}",
-                param.name,
-                event_types::describe_position(schema, &param_type, &declared.graph)
-            ),
-            statement.span,
-        );
     }
 
     /// A listen that declares its events' type (`payload: <Payment>`) fires
@@ -594,50 +241,6 @@ impl Checker<'_> {
         }
         let mut visited = HashSet::new();
         self.conform_shape_node(&declared.schema, &declared.name, &payload.schema, &payload.name, statement, &mut visited, "");
-    }
-
-    /// `checkListenShapeConformance`: the instance's event position against
-    /// the node declaration the movement's parameter names (its schema, any
-    /// base folded in).
-    fn check_listen_shape_conformance(
-        &mut self,
-        shape: &movement_parser::catalog::types::InstanceSchema,
-        shape_name: &str,
-        schema: Option<&movement_parser::catalog::types::InstanceSchema>,
-        written: &str,
-        statement: &ListenDeclaration,
-    ) {
-        if !shape.positions.contains_key(shape_name) {
-            return;
-        }
-        let event = schema.and_then(|s| s.event_position.as_ref().and_then(|e| s.positions.get(e).map(|p| (e, p))));
-        let Some((event_name, event_position)) = event else {
-            let mut info = Diagnostic::error(
-                codes::LISTEN_SHAPE_MISMATCH,
-                format!(
-                    "'{}' isn't connected (or its event schema is unknown) — conformance to the declaration '{written}' is unchecked for this lane",
-                    statement.instance
-                ),
-                statement.span,
-            );
-            info.severity = Some(Severity::Info);
-            return self.push(info);
-        };
-        if surface_not_enumerated(event_position) {
-            let mut info = Diagnostic::error(
-                codes::LISTEN_SHAPE_MISMATCH,
-                format!(
-                    "'{}'s event schema can't be introspected — conformance to the declaration '{written}' is unchecked for this lane",
-                    statement.instance
-                ),
-                statement.span,
-            );
-            info.severity = Some(Severity::Info);
-            return self.push(info);
-        }
-        let schema = schema.expect("an event position is read off a schema");
-        let mut visited = HashSet::new();
-        self.conform_shape_node(shape, shape_name, schema, event_name, statement, &mut visited, "");
     }
 
     /// `conformShapeNode`: every field and nested node the declaration
@@ -697,258 +300,6 @@ impl Checker<'_> {
         }
     }
 
-    /// `checkHopPins`: each pin of a listen's address against what the
-    /// adapter published as legal under the pins before it.
-    fn check_hop_pins(&mut self, schema: &movement_parser::catalog::types::InstanceSchema, pins: &[(String, String)], span_for: impl Fn(&str) -> Span) {
-        let (Some(keys), Some(values)) = (&schema.event_narrowing_keys, &schema.event_narrowing_values) else { return };
-        let mut pinned: Vec<(String, String)> = Vec::new();
-        for key in keys {
-            let Some((_, value)) = pins.iter().find(|(k, _)| k == key) else { return };
-            let Some(options) = values.get(&crate::types::event_address::narrowing_prefix_key(&pinned)).and_then(|v| v.get(key)) else { return };
-            let domain = crate::types::field::Ty::Enum { options: options.clone(), open: None };
-            if let Some(found) = crate::families::values::check_enum_literal(value, &domain) {
-                let mut diagnostic = crate::diagnostic::Diagnostic::error(found.code, found.message, span_for(key));
-                diagnostic.severity = found.severity;
-                return self.push(diagnostic);
-            }
-            pinned.push((key.clone(), value.clone()));
-        }
-    }
-
-    /// The `fields:` names, against what the listen's events land on (or the
-    /// record each is about, where the event declares a subject edge).
-    fn check_listen_fields(&mut self, watched: &IndexMap<&String, &movement_parser::catalog::types::FieldType>, names: &[String], span: Span) {
-        let known: Vec<&String> = watched.keys().copied().collect();
-        let mut sorted: Vec<&String> = known.clone();
-        sorted.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
-        let one_of = if sorted.is_empty() {
-            String::new()
-        } else {
-            format!(" — one of: {}", sorted.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))
-        };
-        for name in names.iter().filter(|n| !known.contains(n)) {
-            self.report(codes::LISTEN_BAD_CONFIG, format!("'{name}' is not a property of what this listener watches{one_of}"), span);
-        }
-    }
-
-    /// A `type`-format key's value: a node the program declares, or the
-    /// reason it is not one.
-    fn listen_payload_node(&mut self, arg: &NamedArg, scope: ScopeId) -> Option<SymbolId> {
-        let key = &arg.name;
-        let raw = arg.value.raw.trim();
-        if arg.is_type != Some(true) {
-            self.report(
-                codes::LISTEN_BAD_CONFIG,
-                format!("'{key}' takes a node the program declares, as a type — e.g. `{key}: <Payment>` after `node Payment {{ amount: <number> }}`"),
-                arg.value.span,
-            );
-            return None;
-        }
-        let name = raw.strip_prefix('`').and_then(|n| n.strip_suffix('`')).unwrap_or(raw);
-        let found = match self.scopes.resolve(scope, name) {
-            Resolution::Found(id) => Some(id),
-            _ => None,
-        };
-        if let Some(id) = found.filter(|id| self.declared_node(*id).is_some()) {
-            return Some(id);
-        }
-        let message = if crate::checker::SCALAR_TYPE_NAMES.contains(&name) {
-            format!("'{key}' takes a node the program declares, not the value type '<{raw}>' — declare the fields it carries: `node Payment {{ amount: <number> }}`, then `{key}: <Payment>`")
-        } else if let Some(id) = found {
-            format!("'{raw}' is {}, not a node the program declares — '{key}' takes one: `node {raw} {{ … }}`", self.scopes.symbol(id).kind.describe())
-        } else {
-            format!("no node '{raw}' is declared — declare the fields its events carry: `node {raw} {{ amount: <number> }}`")
-        };
-        self.report(codes::LISTEN_BAD_CONFIG, message, arg.value.span);
-        None
-    }
-
-    /// One config key of a listen, against the adapter's vocabulary and formats.
-    fn check_listen_config_arg(
-        &mut self,
-        arg: &NamedArg,
-        spec: Option<&movement_parser::catalog::types::AdapterSpec>,
-        adapter: &str,
-        scope: ScopeId,
-        read: &mut ConfigRead,
-    ) {
-        let vocabulary: &[String] = spec.and_then(|s| s.trigger_config.as_deref()).unwrap_or(&[]);
-        // A source's poll interval is spelled `every`; the manifests still
-        // declare it as `pollIntervalSeconds`, which the parser already
-        // refuses with the fix.
-        let polled = vocabulary.iter().any(|k| k == POLL_INTERVAL_KEY);
-        let known = vocabulary.contains(&arg.name) || (polled && arg.name == EVERY_KEY);
-        if spec.is_some() && !known {
-            let accepted = if vocabulary.is_empty() {
-                " — they take no config".to_string()
-            } else {
-                let shown: Vec<&str> = vocabulary.iter().map(|k| if k == POLL_INTERVAL_KEY { EVERY_KEY } else { k.as_str() }).collect();
-                format!(" — they accept: {}", shown.join(", "))
-            };
-            self.report(
-                codes::LISTEN_BAD_CONFIG,
-                format!("'{adapter}' listeners do not accept a config key '{}'{accepted}", arg.name),
-                arg.value.span,
-            );
-            return;
-        }
-        if polled && arg.name == EVERY_KEY {
-            if crate::families::flow::duration_ms(arg.value.raw.trim()).is_none_or(|ms| ms == 0) {
-                self.report(
-                    codes::LISTEN_BAD_CONFIG,
-                    format!("'{}' is not a valid poll interval — use a unit-suffixed duration like 30s, 5m, 1h", arg.value.raw.trim()),
-                    arg.value.span,
-                );
-            }
-            return;
-        }
-        let raw = arg.value.raw.trim();
-        let format = spec.and_then(|s| s.trigger_config_formats.as_ref()).and_then(|f| f.0.get(&arg.name)).cloned();
-        if format == Some(TriggerConfigFormat::Type) {
-            read.payload = self.listen_payload_node(arg, scope);
-            return;
-        }
-        if arg.is_type == Some(true) {
-            self.report(
-                codes::LISTEN_BAD_CONFIG,
-                format!(
-                    "'{}' takes a plain value — '<{raw}>' is a type reference, and listen config is quoted values: {}: \"{raw}\"",
-                    arg.name, arg.name
-                ),
-                arg.value.span,
-            );
-            return;
-        }
-        let span = arg.value.span;
-        if let Some([literal]) = static_string_values(&arg.value).as_deref()
-            && !is_list_slot(&arg.value)
-        {
-            read.pins.retain(|(k, _)| k != &arg.name);
-            read.pins.push((arg.name.clone(), literal.clone()));
-        }
-        if let Some(options) = spec.and_then(|s| s.trigger_config_options.as_ref()).and_then(|o| o.0.get(&arg.name)) {
-            match static_string_values(&arg.value).filter(|_| is_list_slot(&arg.value)) {
-                None => {
-                    let example = options.first().map_or("\"…\"".to_string(), |o| format!("\"{o}\""));
-                    let one_of = if options.is_empty() { String::new() } else { format!(" — one of: {}", options.join(", ")) };
-                    self.report(
-                        codes::LISTEN_BAD_CONFIG,
-                        format!("'{}' is a list of events{one_of} — e.g. {}: [{example}]", arg.name, arg.name),
-                        span,
-                    );
-                }
-                Some(values) => {
-                    read.selected = Some(values.clone());
-                    for value in values.iter().filter(|v| !options.contains(v)) {
-                        self.report(
-                            codes::LISTEN_BAD_CONFIG,
-                            format!("'{value}' is not an event '{adapter}' can subscribe to — one of: {}", options.join(", ")),
-                            span,
-                        );
-                    }
-                }
-            }
-        }
-        match format {
-            Some(TriggerConfigFormat::Cron) => match static_string_values(&arg.value).as_deref() {
-                Some([value]) => {
-                    if let Some(error) = cron_schedule_error(value) {
-                        self.report(
-                            codes::LISTEN_BAD_CONFIG,
-                            format!(
-                                "'{value}' is not a valid schedule — {error}. Five fields: minute hour day-of-month month day-of-week, e.g. \"0 9 * * 1\" is 09:00 every Monday"
-                            ),
-                            span,
-                        );
-                    }
-                }
-                _ => self.report(
-                    codes::LISTEN_BAD_CONFIG,
-                    format!(
-                        "'{}' takes one quoted cron expression — e.g. {}: \"0 9 * * 1\" (minute hour day-of-month month day-of-week, UTC unless a timezone is set)",
-                        arg.name, arg.name
-                    ),
-                    span,
-                ),
-            },
-            Some(TriggerConfigFormat::Timezone) => {
-                match static_string_values(&arg.value).as_deref() {
-                    Some([zone]) => {
-                        if let Some(problem) = crate::host::time_zone_error(self.zones, zone) {
-                            self.report(
-                                codes::LISTEN_BAD_CONFIG,
-                                format!("{problem}. The schedule then fires at that local wall-clock time, with daylight-savings handled for you"),
-                                span,
-                            );
-                        }
-                    }
-                    _ => self.report(
-                        codes::LISTEN_BAD_CONFIG,
-                        format!("'{}' takes one quoted IANA time zone — e.g. {}: \"Europe/London\"", arg.name, arg.name),
-                        span,
-                    ),
-                }
-            }
-            Some(TriggerConfigFormat::Strings) => {
-                let values = static_string_values(&arg.value);
-                let well_formed = is_list_slot(&arg.value)
-                    && values.as_ref().is_some_and(|v| !v.is_empty() && v.iter().all(|s| !s.trim().is_empty()));
-                if !well_formed {
-                    self.report(
-                        codes::LISTEN_BAD_CONFIG,
-                        format!("'{}' is a non-empty list of quoted, non-empty names — e.g. {}: [\"…\"]", arg.name, arg.name),
-                        span,
-                    );
-                    return;
-                }
-            }
-            Some(TriggerConfigFormat::Field) => match static_string_values(&arg.value).as_deref() {
-                Some([name]) if !is_list_slot(&arg.value) => read.field = Some((name.clone(), span)),
-                _ => {
-                    self.report(
-                        codes::LISTEN_BAD_CONFIG,
-                        format!("'{}' takes one quoted field name of what this listener watches — e.g. {}: \"Stage\"", arg.name, arg.name),
-                        span,
-                    );
-                    return;
-                }
-            },
-            Some(TriggerConfigFormat::FieldValue) => match watched_field::literal_value(&arg.value) {
-                Some(value) => read.field_value = Some((arg.name.clone(), value, span)),
-                None => {
-                    self.report(
-                        codes::LISTEN_BAD_CONFIG,
-                        format!("'{}' takes a literal value of the field this listen names — e.g. {}: \"…\", a number, true or false, or a list of them", arg.name, arg.name),
-                        span,
-                    );
-                    return;
-                }
-            },
-            Some(TriggerConfigFormat::Fields) => {
-                match bare_name_values(&arg.value) {
-                    None => self.report(
-                        codes::LISTEN_BAD_CONFIG,
-                        format!("'{}' is a list of the watched type's properties, bare — e.g. {}: [domains]", arg.name, arg.name),
-                        span,
-                    ),
-                    Some(names) => read.fields = Some((names, span)),
-                }
-                return;
-            }
-            Some(TriggerConfigFormat::Unknown(format)) => {
-                let mut info = Diagnostic::error(
-                    codes::LISTEN_BAD_CONFIG,
-                    format!("this checker does not know the format '{format}' of '{}', so its value is not checked — a newer release does", arg.name),
-                    span,
-                );
-                info.severity = Some(Severity::Info);
-                self.push(info);
-            }
-            Some(TriggerConfigFormat::Type) | None => {}
-        }
-        self.check_expr_slot(&arg.value, scope);
-    }
-
     /// `callback(…)` is retired at 0.13: one MOV_CALLBACK_RETIRED naming
     /// what replaces it. Its subject is still walked, so the names it uses
     /// stay used, and its fire-time parameters are handed back, so the
@@ -1003,65 +354,6 @@ fn call_arg_name(arg: &CallArg) -> Option<&str> {
         | CallArg::Closure { name, .. }
         | CallArg::Type { name, .. } => name.as_deref(),
     }
-}
-
-/// `isValidDuration`: `4h`, `2d`, `90m`, `1h30m`.
-pub fn is_valid_duration(raw: &str) -> bool {
-    let bytes = raw.as_bytes();
-    if bytes.is_empty() {
-        return false;
-    }
-    let mut i = 0;
-    while i < bytes.len() {
-        let start = i;
-        while i < bytes.len() && bytes[i].is_ascii_digit() {
-            i += 1;
-        }
-        if i == start || i >= bytes.len() || !b"smhdw".contains(&bytes[i]) {
-            return false;
-        }
-        i += 1;
-    }
-    true
-}
-
-/// `staticStringValues`: a string literal, or a list of them.
-fn static_string_values(slot: &ExprSlot) -> Option<Vec<String>> {
-    let string_of = |e: &Expression| match e {
-        Expression::Static { value: StaticValue::String(s) } => Some(s.clone()),
-        _ => None,
-    };
-    match expression_of_slot(slot).ok()? {
-        Expression::List { elements } => elements
-            .iter()
-            .map(|element| match element {
-                ListElement::Expression(e) => string_of(e),
-                ListElement::Spread(_) => None,
-            })
-            .collect(),
-        parsed => string_of(&parsed).map(|s| vec![s]),
-    }
-}
-
-/// `isListSlot`: written as a bracketed list.
-fn is_list_slot(slot: &ExprSlot) -> bool {
-    matches!(expression_of_slot(slot), Ok(Expression::List { .. }))
-}
-
-/// `bareNameValues`: a bare name, or a list of them.
-fn bare_name_values(slot: &ExprSlot) -> Option<Vec<String>> {
-    let trimmed = slot.raw.trim();
-    if is_bare_ident(trimmed) {
-        return Some(vec![trimmed.to_string()]);
-    }
-    let Expression::List { elements } = expression_of_slot(slot).ok()? else { return None };
-    elements
-        .iter()
-        .map(|element| match element {
-            ListElement::Expression(Expression::Property { property_type_id, .. }) => Some(property_type_id.clone()),
-            _ => None,
-        })
-        .collect()
 }
 
 /// `spellParamType`: a parameter's type as written, without the brackets.
@@ -1129,23 +421,4 @@ pub fn callback_type(params: Vec<(String, Option<Ty>)>) -> Position {
     edges.insert("Called".to_string(), LocalEdge { schema, target: Some(call), structural: false, deferred: false, references: false });
     let reads = IndexMap::from([("id".to_string(), Some(Ty::Text)), ("url".to_string(), Some(Ty::Text))]);
     Position::Local(LocalNode { label: "a callback".to_string(), reads, edges: Some(edges), run_built: None, extracted: None })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn slugs_a_movement_name() {
-        assert_eq!(suggested_listen_key("Log Sender"), "log-sender");
-        assert_eq!(suggested_listen_key("  "), "intake");
-        assert_eq!(suggested_listen_key("a__b9"), "a-b9");
-    }
-
-    #[test]
-    fn reads_durations() {
-        assert!(is_valid_duration("1h30m"));
-        assert!(!is_valid_duration("1x"));
-        assert!(!is_valid_duration("h"));
-    }
 }

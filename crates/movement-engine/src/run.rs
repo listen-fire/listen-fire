@@ -52,7 +52,7 @@ use std::rc::Rc;
 use movement_parser::ast::{self, ExprSlot, MovementDeclaration, ParamTypeRef, RValue, Statement};
 use movement_parser::catalog::helpers::{credential_arg_of, unwrap_credential_arg};
 use movement_parser::catalog::snapshot::Args;
-use movement_parser::catalog::types::{CatalogSnapshot, Composite, FieldType, InstanceSchema};
+use movement_parser::catalog::types::CatalogSnapshot;
 use movement_parser::lowering::condition::MovementCondition;
 use movement_parser::lowering::expression::{AggregationFunction, Expression};
 use serde::Deserialize;
@@ -1235,16 +1235,13 @@ impl Run<'_> {
             .unwrap_or(Json::Null);
         let handle = host::instance_of(&resolved).ok_or_else(|| Failure::engine("MOVENG_RUNTIME", format!("adapters.resolve answered {resolved}")))?;
         let adapter_type = resolved.get("adapterType").and_then(Json::as_str).unwrap_or(&instance.adapter_slug).to_string();
-        let schema = instance.schema.as_ref();
         let root_record_type = event_text(&self.event, "rootRecordType");
         let root_surface_type = match self.natural_root_type_name(&handle, root_record_type.as_deref()).await {
             Some(name) => Some(name),
-            None if event_text(&self.event, "triggerType").as_deref() == Some("mutation") => {
-                sole_event_position(schema).or_else(|| type_ref.position.clone())
-            }
+            None if event_text(&self.event, "triggerType").as_deref() == Some("mutation") => type_ref.position.clone(),
             None => None,
         };
-        let address = event_seed_address(schema, &self.event, root_surface_type.as_deref());
+        let address = None;
         let position = seed_event_position(&self.event, &instance.adapter_slug, root_surface_type, address.as_ref())?;
         let surface = restamp(&position, position.record_type.clone().or_else(|| type_ref.position.clone()), &adapter_type).to_js();
         let read = Rc::new(crate::traverse::Read::of_resolved(&resolved, handle.clone(), instance.clone(), type_ref.position.clone()));
@@ -2675,57 +2672,12 @@ fn event_get(value: &Js, key: &str) -> Js {
     }
 }
 
-/// `soleEventPosition`: the one event node an adapter publishes, if one.
-fn sole_event_position(schema: Option<&InstanceSchema>) -> Option<String> {
-    match schema?.event_positions.as_deref()? {
-        [only] => Some(only.position.clone()),
-        _ => None,
-    }
-}
-
 /// An event's canonical narrowed address (`EventAddress`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct EventAddress {
     pub event: String,
     /// Insertion order, as the TypeScript fills it.
     pub narrowing: Vec<(String, String)>,
-}
-
-/// `eventSeedAddress`.
-fn event_seed_address(schema: Option<&InstanceSchema>, event: &Js, root_type_name: Option<&str>) -> Option<EventAddress> {
-    let schema = schema?;
-    let nodes = schema.event_positions.as_deref().filter(|n| !n.is_empty())?;
-    if !matches!(event_text(event, "triggerType").as_deref(), Some("webhook" | "poll")) {
-        return None;
-    }
-    let node = nodes
-        .iter()
-        .find(|n| Some(n.position.as_str()) == root_type_name)
-        .or_else(|| (nodes.len() == 1).then(|| &nodes[0]))?
-        .position
-        .clone();
-    let payload = event_get(event, "payload");
-    let pinned = |key: &str| match event_get(&payload, key) {
-        Js::String(value) if !value.is_empty() => Some(value.into_string()),
-        _ => None,
-    };
-    let mut narrowing = Vec::new();
-    for key in schema.event_narrowing_keys.iter().flatten() {
-        if let Some(value) = pinned(key) {
-            narrowing.push((key.clone(), value));
-        }
-    }
-    let action_type = schema.positions.0.get(&node).and_then(|p| p.properties.0.get("action"));
-    if matches!(action_type, Some(FieldType::Composite(Composite::Enum { .. })))
-        && let Some(value) = pinned("action")
-    {
-        if let Some(slot) = narrowing.iter_mut().find(|(k, _)| k == "action") {
-            slot.1 = value;
-        } else {
-            narrowing.push(("action".into(), value));
-        }
-    }
-    Some(EventAddress { event: node, narrowing })
 }
 
 /// `eventAddressKey`: the bare event name, or `JSON.stringify([event,

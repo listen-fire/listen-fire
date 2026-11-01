@@ -55,10 +55,10 @@ const CATALOG: &str = r#"{"adapters":{
     "Comment":{"properties":{"Text":"text"},"edges":{}}},
     "collections":{"Bases":{"target":"Base","cheapToList":true,"relistEverySeconds":300,"capability":{"filter":"native","supportsLimit":false}}},
     "writableRoots":{}}}},
-  "crm":{"canFire":true,"constructionArgs":[],"triggerConfig":["events"],"schemas":{"":{"positions":{
+  "crm":{"canFire":true,"constructionArgs":[],"schemas":{"":{"positions":{
     "Company":{"properties":{"Name":"text"},"edges":{}}},
     "collections":{"Companies":{"target":"Company"}},
-    "writableRoots":{},"eventPosition":"Company","eventPositions":[{"position":"Company"}]}}}
+    "writableRoots":{}}}}
 },"credentials":{},"plugins":{}}"#;
 
 /// The connections, and one function per landing a listen here fires with:

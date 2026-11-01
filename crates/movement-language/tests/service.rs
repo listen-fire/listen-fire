@@ -71,7 +71,7 @@ fn a_wait_for_only_what_arrives_is_offered() {
 
 #[test]
 fn a_binding_below_the_cursor_is_not_yet_in_scope() {
-    let pos = after(PROGRAM, "function hello(run: <manual-[:Invocation]->>) {\n", 0);
+    let pos = after(PROGRAM, "function hello(run: <manual-[:Invocations]->>) {\n", 0);
     let names: Vec<String> = labels(&service().complete(PROGRAM, pos)).into_iter().map(String::from).collect();
     assert!(names.contains(&"run".to_string()) && !names.contains(&"greeting".to_string()), "{names:?}");
 }
@@ -116,7 +116,7 @@ fn edges_follow_a_hop_opening() {
 
 #[test]
 fn record_types_follow_an_instance_in_a_type() {
-    let (text, pos) = typed(PROGRAM, "listen to manual fire hello\n", "function more(x: <chat-[:");
+    let (text, pos) = typed(PROGRAM, "listen to manual-[:Invocations]-> fire hello\n", "function more(x: <chat-[:");
     assert_eq!(labels(&service().complete(&text, pos)), ["channel", "message"]);
 }
 
@@ -139,16 +139,6 @@ fn module_tags_complete_inside_an_import() {
     assert_eq!(items[0].insert.as_deref(), Some("`@lf/web` as web"));
     let items = service().complete("import {  } from \"lib/greet\"\n", Pos { line: 0, character: 9 });
     assert_eq!(labels(&items), ["greet"]);
-}
-
-#[test]
-fn settings_keys_complete_inside_a_listen() {
-    let (text, pos) = typed(PROGRAM, "listen to manual fire hello\n", "listen to chat { ");
-    let items = service().complete(&text, pos);
-    assert_eq!(labels(&items), ["channel", "every", "suppress_self"]);
-    assert_eq!(items[0].detail.as_deref(), Some("required by slack"));
-    let (text, pos) = typed(PROGRAM, "listen to manual fire hello\n", "listen to cron { ");
-    assert_eq!(labels(&service().complete(&text, pos)), ["schedule", "timezone", "suppress_self"]);
 }
 
 #[test]
@@ -230,9 +220,9 @@ fn hover_shows_the_type_a_doc_line_and_a_versioned_link() {
     let hover = service.hover(PROGRAM, after(PROGRAM, "function sc", 0)).unwrap();
     assert!(hover.contents.contains("function scan(c: <chat-[:channel]->>)\n```\nNo listen fires it"), "{}", hover.contents);
     let hover = service.hover(PROGRAM, after(PROGRAM, "function hel", 0)).unwrap();
-    assert!(hover.contents.contains("Runs when: `listen to manual`."), "{}", hover.contents);
+    assert!(hover.contents.contains("Runs when: `listen to manual-[:Invocations]->`."), "{}", hover.contents);
     let hover = service.hover(PROGRAM, after(PROGRAM, "<manu", 0)).unwrap();
-    assert!(hover.contents.contains("Built into listen-fire; no import needed.\n\nGives: Invocation (Text, `Run by (name)`)"), "{}", hover.contents);
+    assert!(hover.contents.contains("Built into listen-fire; no import needed.\n\nListen to: Invocations"), "{}", hover.contents);
     let hover = service.hover(PROGRAM, after(PROGRAM, "  greeti", 0)).unwrap();
     assert!(hover.contents.contains("Set on line 6."), "{}", hover.contents);
 }
@@ -243,7 +233,7 @@ fn definition_finds_bindings_functions_and_library_declarations() {
     let found = service.definition(PROGRAM, after(PROGRAM, "return greet(gree", 0)).unwrap();
     assert_eq!(found.file, None);
     assert_eq!(found.range.start, Pos { line: 5, character: 2 });
-    let found = service.definition(PROGRAM, after(PROGRAM, "listen to manual fire hel", 0)).unwrap();
+    let found = service.definition(PROGRAM, after(PROGRAM, "listen to manual-[:Invocations]-> fire hel", 0)).unwrap();
     assert_eq!(found.range.start, Pos { line: 4, character: 9 });
     let found = service.definition(PROGRAM, after(PROGRAM, "return gre", 0)).unwrap();
     assert_eq!(found.file.as_deref(), Some("lib/greet"));
@@ -285,7 +275,7 @@ fn completion_on_a_line_that_breaks_the_parse_still_sees_the_scope() {
     assert!(service().diagnostics(&text).iter().any(|d| d.code == "MOV_PARSE"));
     assert!(labels(&service().complete(&text, pos)).contains(&"greeting"));
     // A function header half written: everything above still answers.
-    let (text, pos) = typed(PROGRAM, "listen to manual fire hello\n", "function late(x: <num");
+    let (text, pos) = typed(PROGRAM, "listen to manual-[:Invocations]-> fire hello\n", "function late(x: <num");
     let names: Vec<String> = labels(&service().complete(&text, pos)).into_iter().map(String::from).collect();
     assert!(names.contains(&"hello".to_string()), "{names:?}");
 }

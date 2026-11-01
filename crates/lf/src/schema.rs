@@ -627,17 +627,6 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
         }
     }
 
-    let event_positions: Vec<Js> = all_entries
-        .iter()
-        .filter(|e| Js::is_true(e.get("fires")))
-        .map(|e| {
-            let mut position = obj! { "position" => Js::str(key(e.get("displayName"))) };
-            if let Some(on) = e.get("firesOn") {
-                position.insert("on".into(), Js::Arr(items(Some(on)).to_vec()));
-            }
-            Js::from(position)
-        })
-        .collect();
     let published_collection_names: HashSet<String> = all_entries
         .iter()
         .filter(|e| Js::is_true(e.get("readable")) || Js::is_true(e.get("writable")) || Js::is_true(e.get("listenable")))
@@ -650,12 +639,6 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
             ));
         }
     }
-    let readable_entries: Vec<&&Js> = all_entries.iter().filter(|e| truthy(e.get("readable"))).collect();
-    let event_position = event_positions
-        .first()
-        .and_then(|p| p.get("position").cloned())
-        .or_else(|| (readable_entries.len() == 1).then(|| Js::str(key(readable_entries[0].get("displayName")))));
-
     let materialise = |names: &[String]| -> Obj {
         names.iter().filter_map(|n| shape_by_name.get(n).map(|s| (n.clone(), Js::from(s.clone())))).collect()
     };
@@ -673,12 +656,6 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
     }
     if input.edges_carry_properties {
         schema.insert("edgesCarryProperties".into(), Js::Bool(true));
-    }
-    if let Some(event_position) = event_position {
-        schema.insert("eventPosition".into(), event_position);
-    }
-    if !event_positions.is_empty() {
-        schema.insert("eventPositions".into(), Js::Arr(event_positions));
     }
     Projection { schema: Js::from(schema), notes }
 }
@@ -742,6 +719,20 @@ pub fn retired_reference_key(reference: &Js) -> Option<String> {
         "declare 'listenable: true' (and, optionally, 'identity': the landing's field that names an arrival)"
     };
     Some(format!("'{name}' declares '{retired}', retired in 0.13: {instead}"))
+}
+
+/// The keys 0.13 retired from an entry point (`fires`, `firesOn`) and from a
+/// manifest (`subscribableEvents`, `defaultSubscribedEvents`, `listenConfig`,
+/// `subscriptionScopeKeys`): each said what a settings listen could hear.
+pub const RETIRED_ENTRY_KEYS: [&str; 2] = ["fires", "firesOn"];
+pub const RETIRED_MANIFEST_KEYS: [&str; 4] = ["subscribableEvents", "defaultSubscribedEvents", "listenConfig", "subscriptionScopeKeys"];
+
+/// The refusal of an entry point (or, `name` its adapter, a manifest) that
+/// declares a key 0.13 retired (engine-contracts `retiredEntryKey` says the
+/// same).
+pub fn retired_entry_key(name: &str, declared: &Js, keys: &[&str]) -> Option<String> {
+    let retired = keys.iter().find(|retired| declared.get(retired).is_some())?;
+    Some(format!("'{name}' declares '{retired}', retired in 0.13: declare a listenable edge (and the settings it replaces in 'listenSettingsBecome')"))
 }
 
 /// The refusal of a field of kind `owned` that names no scalar: it would
@@ -1419,6 +1410,17 @@ mod tests {
             "'replies' declares 'watchable', retired in 0.13: declare 'listenable: true' (and, optionally, 'identity': the landing's field that names an arrival)"
         );
         assert_eq!(retired_reference_key(&js(r#"{"name":"Replies","listenable":true}"#)), None);
+    }
+
+    /// The cases engine-contracts' `retiredEntryKey` reads too.
+    #[test]
+    fn a_reference_declaring_fires_is_refused_naming_listenable() {
+        let cases = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/engine-contracts/__test__/retired_entry_key.cases.json")).unwrap();
+        for case in Js::parse(&cases).unwrap().as_array().unwrap() {
+            let keys: &[&str] = if case.get("on").and_then(Js::as_str) == Some("entry") { &RETIRED_ENTRY_KEYS } else { &RETIRED_MANIFEST_KEYS };
+            let refusal = retired_entry_key(case.get("name").and_then(Js::as_str).unwrap(), case.get("declared").unwrap(), keys);
+            assert_eq!(refusal.as_deref(), case.get("refusal").and_then(Js::as_str), "{:?}", case.get("case"));
+        }
     }
 
     #[test]

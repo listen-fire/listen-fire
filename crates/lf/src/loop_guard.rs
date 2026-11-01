@@ -85,11 +85,6 @@ pub fn fingerprint(record: &Js) -> String {
     Sha256::digest(record.to_json().as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The record an inbound event names: its `externalId`, if it carries one.
-pub fn event_record(event: &Js) -> Option<&str> {
-    event.get("externalId").and_then(Js::as_str).filter(|id| !id.is_empty())
-}
-
 /// The project's loop guard, if its slot is filled.
 pub fn of_project(project: &crate::project::Project, credentials: &crate::secrets::Credentials) -> Result<Option<std::sync::Arc<dyn LoopGuard>>, String> {
     let Some(module) = &project.core.loop_guard else { return Ok(None) };

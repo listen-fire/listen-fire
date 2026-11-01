@@ -8,7 +8,7 @@ use crate::util::js;
 
 /// The snapshot versions this build reads (service/snapshot.ts
 /// `SUPPORTED_CATALOG_SNAPSHOT_VERSIONS`).
-pub const SUPPORTED_CATALOG_SNAPSHOT_VERSIONS: &[u32] = &[1, 2];
+pub const SUPPORTED_CATALOG_SNAPSHOT_VERSIONS: &[u32] = &[3];
 
 impl CatalogSnapshot {
     /// The snapshot in `json`, refused when it does not read as one — a
@@ -27,6 +27,11 @@ impl CatalogSnapshot {
         match self.contract_version {
             None => Ok(()),
             Some(seen) if SUPPORTED_CATALOG_SNAPSHOT_VERSIONS.contains(&seen) => Ok(()),
+            // Versions 1 and 2 carried the settings listen's keys and event
+            // positions: read as 3 they would lose them without a word.
+            Some(seen @ (1 | 2)) => Err(format!(
+                "the catalog snapshot carries contract version {seen}, written before 0.13 retired the settings listen; this release reads version 3: rebuild the catalog with it"
+            )),
             Some(seen) => Err(format!(
                 "the catalog snapshot carries contract version {seen}, which this release does not read (supported: {})",
                 SUPPORTED_CATALOG_SNAPSHOT_VERSIONS.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")

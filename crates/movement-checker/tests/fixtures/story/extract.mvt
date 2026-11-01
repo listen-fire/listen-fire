@@ -14,7 +14,7 @@ node CompanyDetail: "the company" {
   employees: <number> "its headcount"
 }
 
-function `Enrich`(m: <inbox-[:Email]->>) {
+function `Enrich`(m: <inbox-[:Emails]->>) {
   content   = [m.Body]
   companies = extract(content, Company, { tier: "careful" })
 
@@ -31,4 +31,4 @@ function `Enrich`(m: <inbox-[:Email]->>) {
   write crm-[:Companies]-> { unique by (FUZZY Name) Name: coalesce(sender.name, "unknown"), Description: big ? "large" : "small" }
 }
 
-listen to inbox { key: "enrich" } fire `Enrich`
+listen to inbox-[e:Emails WHERE e.Key == "enrich"]-> fire `Enrich`

@@ -92,13 +92,7 @@ struct Summary {
     records: Vec<Record>,
     writes: Vec<Write>,
     triggers: Vec<String>,
-    events: Vec<String>,
-    default_events: Vec<String>,
-    /// A listen's config keys and whether each is required.
-    listen_config: Vec<(String, bool)>,
     poll_seconds: Option<u64>,
-    /// The record an event arrives as.
-    event_record: Option<String>,
     /// `name (kind): field, field?` lines, one credential each.
     credentials: Vec<String>,
     settings: Vec<String>,
@@ -165,11 +159,7 @@ async fn read_module(project: &Project, reference: &str, external: &External, cr
         records: Vec::new(),
         writes: Vec::new(),
         triggers: running.supported_triggers.clone(),
-        events: strings_at(answer, "subscribableEvents"),
-        default_events: strings_at(answer, "defaultSubscribedEvents"),
-        listen_config: running.listen.get("listenConfig").and_then(Js::as_array).unwrap_or_default().iter().filter_map(|c| Some((c.get("key")?.as_str()?.to_string(), Js::is_true(c.get("required"))))).collect(),
         poll_seconds: running.poll_interval_seconds,
-        event_record: None,
         credentials: running.credential_declarations.iter().map(credential_line).collect(),
         settings: settings_lines(answer),
         plugins: plugins_of(running),
@@ -221,21 +211,13 @@ fn core_summary(reference: &str, module: &crate::core::CoreModule) -> Summary {
         records: Vec::new(),
         writes: Vec::new(),
         triggers: Vec::new(),
-        events: Vec::new(),
-        default_events: Vec::new(),
-        listen_config: Vec::new(),
         poll_seconds: None,
-        event_record: None,
         credentials: Vec::new(),
         settings,
         plugins: Vec::new(),
         needs,
         protocol_minor: None,
     }
-}
-
-fn strings_at(answer: &Js, key: &str) -> Vec<String> {
-    answer.get(key).and_then(Js::as_array).unwrap_or_default().iter().filter_map(Js::as_str).map(str::to_string).collect()
 }
 
 fn first_line(text: &str) -> &str {
@@ -333,14 +315,12 @@ fn fill_from_schema(summary: &mut Summary, schema: &Js) {
     };
     let positions = object(schema.get("positions"));
     let collections = object(schema.get("collections"));
-    summary.event_record = schema.get("eventPosition").and_then(Js::as_str).map(str::to_string);
     summary.collections = collections.iter().filter_map(|(name, c)| Some((name.clone(), c.get("target")?.as_str()?.to_string()))).collect();
     for (name, position) in &positions {
         if Js::is_true(position.get("undescribed")) {
             continue;
         }
-        let events = summary.events.clone();
-        let fields = object(position.get("properties")).iter().map(|(field, type_)| (field.clone(), type_text(type_, &events))).collect();
+        let fields = object(position.get("properties")).iter().map(|(field, type_)| (field.clone(), type_text(type_))).collect();
         let edges = object(position.get("edges"))
             .iter()
             .filter(|(_, edge)| !Js::is_false(edge.get("readable")))
@@ -373,19 +353,15 @@ fn fill_from_schema(summary: &mut Summary, schema: &Js) {
 }
 
 /// A field's type as a program spells it: `text`, `enum(open|paid)`, `list<text>`.
-/// An enum of the module's event types says so, rather than listing them twice.
-fn type_text(type_: &Js, events: &[String]) -> String {
+fn type_text(type_: &Js) -> String {
     match type_ {
         Js::Str(name) => name.clone(),
         Js::Obj(_) => match type_.get("kind").and_then(Js::as_str) {
             Some("enum") => {
                 let options: Vec<&str> = type_.get("options").and_then(Js::as_array).unwrap_or_default().iter().filter_map(Js::as_str).collect();
-                if options.len() > 1 && options.iter().all(|o| events.iter().any(|e| e == o)) && options.len() == events.len() {
-                    return "enum(the event types listed below)".to_string();
-                }
                 format!("enum({})", options.join("|"))
             }
-            Some("list") => format!("list<{}>", type_.get("of").map_or_else(|| "?".to_string(), |of| type_text(of, events))),
+            Some("list") => format!("list<{}>", type_.get("of").map_or_else(|| "?".to_string(), |of| type_text(of))),
             Some(other) => other.to_string(),
             None => "?".to_string(),
         },
@@ -499,18 +475,6 @@ impl Summary {
                 .collect::<Vec<_>>()
                 .join(", ");
             line(format!("listens: {how}"));
-            if let Some(record) = &self.event_record {
-                line(format!("  an event arrives as the {record} record"));
-            }
-            if !self.events.is_empty() {
-                line(format!("  events: {}", self.events.join(", ")));
-                if !self.default_events.is_empty() {
-                    line(format!("  by default: {}", self.default_events.join(", ")));
-                }
-            }
-            if !self.listen_config.is_empty() {
-                line(format!("  listen keys: {}", self.listen_config.iter().map(|(k, required)| format!("{k}{}", if *required { " (required)" } else { "" })).collect::<Vec<_>>().join(", ")));
-            }
         }
 
         if !self.credentials.is_empty() || !self.settings.is_empty() {
@@ -567,9 +531,6 @@ impl Summary {
             })).collect()),
             "listens" => Js::Obj(obj! {
                 "triggers" => Js::strings(&self.triggers),
-                "events" => Js::strings(&self.events),
-                "defaultEvents" => Js::strings(&self.default_events),
-                "keys" => Js::Arr(self.listen_config.iter().map(|(k, required)| Js::Obj(obj! { "name" => Js::str(k), "required" => Js::Bool(*required) })).collect()),
                 "pollSeconds" => self.poll_seconds.map_or(Js::Null, |s| Js::Num(s.into())),
             }),
             "credentials" => Js::strings(&self.credentials),

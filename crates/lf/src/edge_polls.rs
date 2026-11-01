@@ -119,7 +119,7 @@ pub fn poll_keys(set: &FileSet, heads: &dyn Fn(&Listen) -> Vec<Option<String>>) 
     keys_of(&set.listens, &|listen| Watched {
         position: position_of(set, listen),
         heads: heads(listen),
-        ancestors: listen.plan.as_ref().and_then(|plan| plan.hops.last()).map(|last| set.parents(listen, &last.edge)).unwrap_or_default(),
+        ancestors: listen.plan.hops.last().map(|last| set.parents(listen, &last.edge)).unwrap_or_default(),
         declared: declared(set, listen),
         pushed_parents: crate::resolve::pushed_parent_hops(set, listen)
             .into_iter()
@@ -158,7 +158,7 @@ fn position_of(set: &FileSet, listen: &Listen) -> String {
 fn keys_of(listens: &[Listen], watched: &dyn Fn(&Listen) -> Watched) -> BTreeMap<PollKey, Shared> {
     let mut keys: BTreeMap<PollKey, Shared> = BTreeMap::new();
     for (index, listen) in listens.iter().enumerate() {
-        let Some(last) = listen.plan.as_ref().and_then(|plan| plan.hops.last()) else { continue };
+        let Some(last) = listen.plan.hops.last() else { continue };
         let taken = last.taken.as_ref().map(|taken| serde_json::to_string(taken).expect("a filter is always JSON")).unwrap_or_default();
         let Watched { position, heads, ancestors, declared, pushed_parents } = watched(listen);
         let key = |edge: &str, scope: Option<String>, taken: &str| PollKey { adapter: listen.adapter.clone(), credential: listen.credential.clone(), position: position.clone(), edge: edge.to_string(), scope, taken: taken.to_string() };
@@ -212,7 +212,7 @@ fn digest_of(key: &PollKey) -> String {
 /// Whether the listen has a hop the host resolves (crate::resolve): it is
 /// watched under the heads that hop lands on, not the whole connection.
 pub fn resolves(listen: &Listen) -> bool {
-    listen.plan.as_ref().is_some_and(|plan| plan.hops.iter().any(|hop| hop.judged == HopJudged::Resolved))
+    listen.plan.hops.iter().any(|hop| hop.judged == HopJudged::Resolved)
 }
 
 /// What a module declares of how one edge's arrivals reach the host.
@@ -232,7 +232,7 @@ pub struct Declared {
 /// catalog: the instance schema its credential names, else any of its
 /// module's that declares the edge.
 pub fn declared(set: &FileSet, listen: &Listen) -> Option<Declared> {
-    declared_hop(set, listen, listen.plan.as_ref()?.hops.last()?)
+    declared_hop(set, listen, listen.plan.hops.last()?)
 }
 
 /// What the module declares of one hop's edge of the listen's traversal.
@@ -250,7 +250,7 @@ fn declared_hop(set: &FileSet, listen: &Listen, hop: &movement_parser::listen_pl
 /// Whether the module declares the listen's last edge `addressed`: each
 /// arrival is sent to an address its sender chose (mail's plus-suffix).
 pub fn addressed(set: &FileSet, listen: &Listen) -> bool {
-    let Some(last) = listen.plan.as_ref().and_then(|plan| plan.hops.last()) else { return false };
+    let Some(last) = listen.plan.hops.last() else { return false };
     hop_schema(set, listen, last).is_some_and(|edge| Js::is_true(edge.get("addressed")))
 }
 
@@ -338,16 +338,14 @@ mod tests {
         let notes = format!(r#"{{"edge":"Notes","from":"{from}","to":"Note","alias":"n","judged":"arrival"{taken_member}}}"#);
         let boards = r#"{"edge":"Boards","from":"","to":"Board","judged":"resolved"}"#;
         let hops = if resolved { format!("[{boards},{notes}]") } else { format!("[{notes}]") };
-        let plan = taken.map(|_| serde_json::from_str(&format!(r#"{{"movement":"{movement}","connection":"f","adapter":"feed","hops":{hops}}}"#)).unwrap());
+        let plan = serde_json::from_str(&format!(r#"{{"movement":"{movement}","connection":"f","adapter":"feed","hops":{hops}}}"#)).unwrap();
         Listen {
             file: "notes".into(),
             adapter: "feed".into(),
-            config: crate::json::Obj::new(),
             movement_name: movement.into(),
             credential: None,
             payload: None,
             args: Vec::new(),
-            address: Ok(BTreeMap::new()),
             plan,
             trigger_awaits: Default::default(),
         }
@@ -367,7 +365,7 @@ mod tests {
 
     #[test]
     fn listens_on_one_edge_of_one_connection_with_one_taken_filter_and_scope_share_a_poll() {
-        let listens = [listen("a", Some("null"), false), listen("b", Some("null"), false), listen("c", Some(TITLE_A), false), listen("settings", None, false)];
+        let listens = [listen("a", Some("null"), false), listen("b", Some("null"), false), listen("c", Some(TITLE_A), false)];
         let keys = firing(&keys_of(&listens, &|_| watched(vec![None], Delivery::Polled)));
         assert_eq!(keys.len(), 2, "{keys:?}");
         assert_eq!(keys[&key("", None)], vec![0, 1], "no filter taken: one poll for both");

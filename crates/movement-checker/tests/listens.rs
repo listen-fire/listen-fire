@@ -9,7 +9,7 @@ fn codes(found: &[Diagnostic]) -> Vec<&str> {
     found.iter().map(|d| d.code.as_str()).collect()
 }
 
-const FEED: &str = r#""feed":{"constructionArgs":[],"canFire":true,"triggerConfig":["pollIntervalSeconds"],"schemas":{"":{"positions":{"Note":{"properties":{},"edges":{}}},"collections":{},"writableRoots":{},"eventPosition":"Note","eventPositions":[{"position":"Note"}]}}}"#;
+const FEED: &str = r#""feed":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Note":{"properties":{},"edges":{}}},"collections":{},"writableRoots":{}}}}"#;
 
 fn check_feed(listen: &str) -> Vec<Diagnostic> {
     let snapshot = format!(r#"{{"adapters":{{{FEED}}},"credentials":{{}},"plugins":{{}}}}"#);
@@ -18,14 +18,6 @@ fn check_feed(listen: &str) -> Vec<Diagnostic> {
     let source = format!("import {{ feed }} from adapters\nf = connect feed\nfunction seen(n: <f-[:Note]->>) {{}}\n{listen}");
     // The settings form's retirement is listen_settings_retired.rs's to pin.
     check_source(&source, &catalog, options).unwrap().into_iter().filter(|d| d.code != "MOV_LISTEN_SETTINGS_RETIRED").collect()
-}
-
-#[test]
-fn from_version_5_a_polled_listens_interval_is_every() {
-    assert_eq!(codes(&check_feed("listen to f { every: 5m } fire seen")), Vec::<&str>::new());
-    let bad = check_feed("listen to f { every: 5 } fire seen");
-    assert_eq!(codes(&bad), ["MOV_LISTEN_BAD_CONFIG"]);
-    assert!(bad[0].message.contains("not a valid poll interval"), "{}", bad[0].message);
 }
 
 #[test]

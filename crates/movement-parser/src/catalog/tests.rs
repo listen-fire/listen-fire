@@ -210,10 +210,26 @@ fn the_adapter_s_own_words_are_read_wherever_it_may_write_them() {
 #[test]
 fn a_snapshot_carries_its_contract_version_and_an_unsupported_one_is_refused() {
     let at = |version: Value| json!({ "contractVersion": version, "adapters": {}, "credentials": {}, "plugins": {} }).to_string();
-    assert_eq!(CatalogSnapshot::load(&at(json!(1))).unwrap().contract_version, Some(1));
-    assert_eq!(CatalogSnapshot::load(&at(json!(2))).unwrap().contract_version, Some(2));
-    let refused = CatalogSnapshot::load(&at(json!(3))).unwrap_err();
-    assert!(refused.contains("catalog snapshot") && refused.contains("version 3") && refused.contains("supported: 1, 2"), "{refused}");
+    assert_eq!(CatalogSnapshot::load(&at(json!(3))).unwrap().contract_version, Some(3));
+    let refused = CatalogSnapshot::load(&at(json!(4))).unwrap_err();
+    assert!(refused.contains("catalog snapshot") && refused.contains("version 4") && refused.contains("supported: 3"), "{refused}");
+}
+
+#[test]
+fn a_snapshot_of_version_2_is_refused_naming_3() {
+    let at = |version: Value| json!({ "contractVersion": version, "adapters": {}, "credentials": {}, "plugins": {} }).to_string();
+    for version in [1, 2] {
+        assert_eq!(
+            CatalogSnapshot::load(&at(json!(version))).unwrap_err(),
+            format!("the catalog snapshot carries contract version {version}, written before 0.13 retired the settings listen; this release reads version 3: rebuild the catalog with it")
+        );
+    }
+}
+
+#[test]
+fn an_adapter_still_carrying_the_settings_listen_keys_is_refused() {
+    let snapshot = json!({ "contractVersion": 3, "adapters": { "gh": { "constructionArgs": [], "schemas": {}, "triggerConfig": ["events"] } }, "credentials": {}, "plugins": {} });
+    assert!(CatalogSnapshot::load(&snapshot.to_string()).unwrap_err().contains("triggerConfig"));
 }
 
 #[test]

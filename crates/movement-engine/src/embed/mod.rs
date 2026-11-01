@@ -616,8 +616,8 @@ mod tests {
     use super::*;
     use test_time::block_on;
 
-    const CATALOG: &str = r#"{"adapters":{"email":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"message":{"properties":{"subject":"text"},"edges":{}}},"collections":{},"eventPosition":"message"}}}},"credentials":{},"plugins":{}}"#;
-    const SOURCE: &str = "import { email } from adapters\ninbox = connect email\nfunction m(msg: <inbox-[:message]->>) {\n  s = msg.`subject`\n  await sleep(1h)\n}\nlisten to inbox fire m\n";
+    const CATALOG: &str = r#"{"adapters":{"email":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"message":{"properties":{"subject":"text"},"edges":{}}},"collections":{"message":{"target":"message","readable":false,"listenable":true,"delivery":"connection"}}}}}},"credentials":{},"plugins":{}}"#;
+    const SOURCE: &str = "import { email } from adapters\ninbox = connect email\nfunction m(msg: <inbox-[:message]->>) {\n  s = msg.`subject`\n  await sleep(1h)\n}\nlisten to inbox-[:message]-> fire m\n";
 
     struct Inbox;
 

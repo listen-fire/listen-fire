@@ -22,26 +22,25 @@ game = connect world
 
 # A monster slain: its slayer gets a trophy at once, and an hour of game
 # time later the herald announces the deed.
-function slain(monster: <game-[:Monster]->>) {
+function slain(monster: <game-[:Slain]->>) {
   write game-[:trophies]-> { Name: "${monster.Name} trophy", Owner: monster.Slayer }
   await sleep(1h)
   write game-[:announcements]-> { Text: "${monster.Slayer} slew the ${monster.Name}" }
 }
 
-listen to game { events: ["monster.slain"] } fire slain
+listen to game-[:Slain]-> fire slain
 "#;
 
-/// What the world adapter offers a movement: one event position and two
+/// What the world adapter offers a movement: one listenable edge and two
 /// record types it may create.
 pub const CATALOG: &str = r#"{
-  "adapters": { "world": { "constructionArgs": [], "canFire": true, "triggerConfig": ["events"], "schemas": { "": {
+  "adapters": { "world": { "constructionArgs": [], "canFire": true, "schemas": { "": {
     "positions": {
       "Monster": { "properties": { "Name": "text", "Slayer": "text" }, "edges": {} },
       "Trophy": { "properties": { "Name": "text", "Owner": "text" }, "edges": {} },
       "Announcement": { "properties": { "Text": "text" }, "edges": {} }
     },
-    "collections": { "trophies": { "target": "Trophy" }, "announcements": { "target": "Announcement" } },
-    "eventPosition": "Monster",
+    "collections": { "Slain": { "target": "Monster", "readable": false, "listenable": true, "delivery": "connection" }, "trophies": { "target": "Trophy" }, "announcements": { "target": "Announcement" } },
     "writableRoots": {
       "Trophy": { "fields": { "Name": "text", "Owner": "text" }, "resultShape": { "externalId": "text" } },
       "Announcement": { "fields": { "Text": "text" }, "resultShape": { "externalId": "text" } }

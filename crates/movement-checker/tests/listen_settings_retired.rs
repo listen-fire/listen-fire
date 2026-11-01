@@ -14,49 +14,44 @@
 //!   the parameter is retyped to that table's changes and the field is
 //!   checked against its rows.
 //!
-//! A warning on this release (the settings form still serves until every
-//! module has moved); an error on a check for a move up from 0.12, so the
-//! upgrade rewrites it or holds the pin.
+//! An error on every check from 0.13: no release serves the settings form,
+//! so the upgrade rewrites it or holds the pin.
 
-use movement_checker::{CheckOptions, Diagnostic, Severity, check_source};
+use movement_checker::{CheckOptions, Diagnostic, check_source};
 use movement_parser::catalog::types::CatalogSnapshot;
 use serde_json::Value;
 
 const CATALOG: &str = r#"{"adapters":{
-  "gh":{"canFire":true,"constructionArgs":[],"triggerConfig":["events","participating","every"],
-    "triggerConfigOptions":{"events":["mention","assign","review_requested"]},
+  "gh":{"canFire":true,"constructionArgs":[],
     "listenSettingsBecome":{"path":["Notifications"],"aliases":["n"],"paramFrom":"Notification",
       "keys":{"events":{"hop":0,"field":"Reason","op":"in"}}},
     "schemas":{"":{"positions":{
       "Notification":{"properties":{"Reason":"text","Title":"text"},"edges":{}}},
       "collections":{"Notifications":{"target":"Notification","listenable":true,"identity":"Id","delivery":"polled","pollEverySeconds":60}},
-      "writableRoots":{},"eventPosition":"Notification","eventPositions":[{"position":"Notification"}]}}},
-  "ghd":{"canFire":true,"constructionArgs":[],"triggerConfig":["events"],
-    "triggerConfigOptions":{"events":["mention","assign","review_requested"]},"defaultEvents":["mention","assign"],
+      "writableRoots":{}}}},
+  "ghd":{"canFire":true,"constructionArgs":[],
     "listenSettingsBecome":{"path":["Notifications"],"aliases":["n"],"paramFrom":"Notification",
-      "keys":{"events":{"hop":0,"field":"Reason","op":"in"}}},
+      "keys":{"events":{"hop":0,"field":"Reason","op":"in","absent":["mention","assign"]}}},
     "schemas":{"":{"positions":{
       "Notification":{"properties":{"Reason":"text","Title":"text"},"edges":{}}},
       "collections":{"Notifications":{"target":"Notification","listenable":true,"identity":"Id","delivery":"polled","pollEverySeconds":60}},
-      "writableRoots":{},"eventPosition":"Notification","eventPositions":[{"position":"Notification"}]}}},
-  "ghv":{"canFire":true,"constructionArgs":[],"triggerConfig":["events"],
-    "triggerConfigOptions":{"events":["mention","assign"]},"defaultEvents":["mention","assign"],
+      "writableRoots":{}}}},
+  "ghv":{"canFire":true,"constructionArgs":[],
     "listenSettingsBecome":{"path":["Notifications"],"aliases":["n"],"paramFrom":"Notification",
-      "keys":{"events":{"hop":0,"field":"Reason","op":"in","values":{"mention":"mentioned"}}}},
+      "keys":{"events":{"hop":0,"field":"Reason","op":"in","values":{"mention":"mentioned"},"absent":["mention","assign"]}}},
     "schemas":{"":{"positions":{
       "Notification":{"properties":{"Reason":"text","Title":"text"},"edges":{}}},
       "collections":{"Notifications":{"target":"Notification","listenable":true,"identity":"Id","delivery":"polled","pollEverySeconds":60}},
-      "writableRoots":{},"eventPosition":"Notification","eventPositions":[{"position":"Notification"}]}}},
-  "ghk":{"canFire":true,"constructionArgs":[],"triggerConfig":["kind"],
+      "writableRoots":{}}}},
+  "ghk":{"canFire":true,"constructionArgs":[],
     "listenSettingsBecome":{"path":["Notifications"],"aliases":["n"],
       "keys":{"kind":{"hop":0,"field":"Subject","op":"eq","values":{"pr":"PullRequest"}}}},
     "schemas":{"":{"positions":{
       "Notification":{"properties":{"Subject":"text"},"edges":{}}},
       "collections":{"Notifications":{"target":"Notification","listenable":true,"identity":"Id","delivery":"polled","pollEverySeconds":60}},
-      "writableRoots":{},"eventPosition":"Notification","eventPositions":[{"position":"Notification"}]}}},
+      "writableRoots":{}}}},
   "at":{"canFire":true,
     "constructionArgs":[{"name":"base","kind":"position","required":false,"optionsFromType":"Base"}],
-    "triggerConfig":["base","table","field","becomes","events"],
     "listenSettingsBecome":{"path":["Bases","Tables","Changes"],"aliases":["b","t","c"],"paramFrom":"Record Change",
       "keys":{"base":{"hop":0,"field":"Id","op":"eq"},"table":{"hop":1,"field":"Id","op":"eq"},
         "events":{"hop":2,"field":"Kind","op":"in","values":{"record.created":"created","record.updated":"updated"}}},
@@ -69,7 +64,7 @@ const CATALOG: &str = r#"{"adapters":{
         "Row":{"properties":{"Id":"text"},"edges":{}},
         "Record Change":{"properties":{"Field":"text"},"edges":{}}},
         "collections":{"Bases":{"target":"Base","cheapToList":true,"relistEverySeconds":300}},
-        "writableRoots":{},"eventPosition":"Record Change","eventPositions":[{"position":"Record Change"}]},
+        "writableRoots":{}},
       "::[[\"base\",\"Hiring\"]]":{"positions":{
         "Table":{"properties":{"Id":"text","Name":"text"},"edges":{"Changes":{"target":"Change","readable":false,"listenable":true,"identity":"Id","delivery":"scope"}}},
         "Table \"Candidates\"":{"properties":{"Id":"text","Name":"text","Stage":"text"},"edges":{"Changes":{"target":"Candidates Change","readable":false,"listenable":true,"identity":"Id","delivery":"scope"}}},
@@ -80,40 +75,39 @@ const CATALOG: &str = r#"{"adapters":{
         "Record Change":{"properties":{"Field":"text"},"edges":{}}},
         "collections":{"Tables":{"target":"Table","cheapToList":true,"parentChanges":"pushed"}},
         "refinements":{"__CANDIDATES_KEY__":"Table \"Candidates\""},
-        "writableRoots":{},"eventPosition":"Record Change","eventPositions":[{"position":"Record Change"}]}}},
-  "hook":{"canFire":true,"constructionArgs":[],"triggerConfig":["payload"],"triggerConfigFormats":{"payload":"type"},
+        "writableRoots":{}}}},
+  "hook":{"canFire":true,"constructionArgs":[],
     "listenSettingsBecome":{"path":["Requests"],"aliases":["r"],"keys":{"payload":{"hop":0,"op":"type"}}},
     "schemas":{"":{"positions":{"Request":{"properties":{},"edges":{},"undescribed":true}},
       "collections":{"Requests":{"target":"Request","readable":false,"listenable":true,"delivery":"connection"}},
-      "writableRoots":{},"eventPosition":"Request","eventPositions":[{"position":"Request"}]}}},
-  "inbox":{"canFire":true,"constructionArgs":[],"triggerConfig":["key"],
+      "writableRoots":{}}}},
+  "inbox":{"canFire":true,"constructionArgs":[],
     "listenSettingsBecome":{"path":["Emails"],"aliases":["e"],"paramFrom":"Email","keys":{"key":{"hop":0,"field":"Key","op":"eq","absent":"","lowercase":true}}},
     "schemas":{"":{"positions":{"Email":{"properties":{"Key":{"kind":"owned","name":"InboxKey","owner":"inbox","allowPattern":"^[a-z0-9.!#$%&'*+/=?^_`{|}~-]*$"},"Subject":"text"},"edges":{},
         "propertyCapabilities":{"Key":{"filterOperators":["eq","in"]}}}},
       "collections":{"Emails":{"target":"Email","readable":false,"listenable":true,"bounded":false,"boundedBy":["Key"],"delivery":"connection",
         "capability":{"filter":"native","supportsLimit":false}}},
-      "writableRoots":{},"eventPosition":"Email","eventPositions":[{"position":"Email"}]}}},
-  "mbox":{"canFire":true,"constructionArgs":[],"triggerConfig":["key"],
+      "writableRoots":{}}}},
+  "mbox":{"canFire":true,"constructionArgs":[],
     "listenSettingsBecome":{"path":["Emails"],"aliases":["e"],"paramFrom":"Email","keys":{"key":{"hop":0,"field":"Key","op":"eq"}}},
     "schemas":{"":{"positions":{"Email":{"properties":{"Key":{"kind":"owned","name":"InboxKey","owner":"mbox","allowPattern":"^[a-z0-9]+$"},"Subject":"text"},"edges":{},
         "propertyCapabilities":{"Key":{"filterOperators":["eq","in"]}}}},
       "collections":{"Emails":{"target":"Email","readable":false,"listenable":true,"bounded":false,"boundedBy":["Key"],"delivery":"connection",
         "capability":{"filter":"native","supportsLimit":false}}},
-      "writableRoots":{},"eventPosition":"Email","eventPositions":[{"position":"Email"}]}}},
-  "ghx":{"canFire":true,"constructionArgs":[],"triggerConfig":["events"],
-    "triggerConfigOptions":{"events":["mention","assign","review_requested"]},"defaultEvents":["mention","assign"],
+      "writableRoots":{}}}},
+  "ghx":{"canFire":true,"constructionArgs":[],
     "listenSettingsBecome":{"path":["Notifications"],"aliases":["n"],"paramFrom":"Notification",
       "keys":{"events":{"hop":0,"field":"Reason","op":"in","absent":["review_requested"]}}},
     "schemas":{"":{"positions":{
       "Notification":{"properties":{"Reason":"text","Title":"text"},"edges":{}}},
       "collections":{"Notifications":{"target":"Notification","listenable":true,"identity":"Id","delivery":"polled","pollEverySeconds":60}},
-      "writableRoots":{},"eventPosition":"Notification","eventPositions":[{"position":"Notification"}]}}},
+      "writableRoots":{}}}},
   "bell":{"canFire":true,"constructionArgs":[],
     "listenSettingsBecome":{"path":["Rings"],"aliases":["r"],"paramFrom":"Ring","keys":{}},
     "schemas":{"":{"positions":{"Ring":{"properties":{"At":"datetime"},"edges":{}}},
       "collections":{"Rings":{"target":"Ring","readable":false,"listenable":true,"delivery":"connection"}},
-      "writableRoots":{},"eventPosition":"Ring","eventPositions":[{"position":"Ring"}]}}},
-  "mail":{"canFire":true,"constructionArgs":[],"triggerConfig":["query","labels","subjects","events","every"],
+      "writableRoots":{}}}},
+  "mail":{"canFire":true,"constructionArgs":[],
     "listenSettingsBecome":{"path":["Messages"],"aliases":["m"],"paramFrom":"Message",
       "keys":{"query":{"hop":0,"field":"Query","op":"eq"},"labels":{"hop":0,"field":"Labels","op":"contains","absent":"INBOX"},"subjects":{"hop":0,"field":"Subject","op":"contains"}},
       "byEvent":{
@@ -129,8 +123,8 @@ const CATALOG: &str = r#"{"adapters":{
         "capability":{"filter":"native","supportsLimit":true}},
         "Labelings":{"target":"Labeling","listenable":true,"readable":false,"identity":"Id","delivery":"polled","pollEverySeconds":60,"cursor":true,
         "capability":{"filter":"native","supportsLimit":false}}},
-      "writableRoots":{},"eventPosition":"Message","eventPositions":[{"position":"Message"}]}}},
-  "pay":{"canFire":true,"constructionArgs":[],"triggerConfig":["events"],
+      "writableRoots":{}}}},
+  "pay":{"canFire":true,"constructionArgs":[],
     "listenSettingsBecome":{"path":["Invoices","Changes"],"aliases":["i","c"],"paramFrom":"Event",
       "keys":{"events":{"hop":1,"field":"Kind","op":"in","values":{"invoice.paid":"paid","invoice.payment_failed":"payment_failed"},
         "absent":["invoice.paid","invoice.payment_failed","charge.failed"]}},
@@ -147,8 +141,8 @@ const CATALOG: &str = r#"{"adapters":{
         "Change":{"properties":{"Id":"text","Kind":{"kind":"enum","options":["paid","payment_failed","failed"]}},"edges":{}},
         "Event":{"properties":{"Id":"text"},"edges":{}}},
       "collections":{"Invoices":{"target":"Invoice"},"Charges":{"target":"Charge"}},
-      "writableRoots":{},"eventPosition":"Event","eventPositions":[{"position":"Event"}]}}},
-  "chat":{"canFire":true,"constructionArgs":[],"triggerConfig":["channels","events"],
+      "writableRoots":{}}}},
+  "chat":{"canFire":true,"constructionArgs":[],
     "listenSettingsBecome":{"path":["Channels","Messages"],"aliases":["ch","m"],"paramFrom":"Message",
       "keys":{"channels":{"hop":0,"field":"Name","op":"in"},"events":{"hop":1,"field":"Mentions App","op":"eq","values":{"app_mention":true},"absent":["message","reaction_added"]}},
       "byEvent":{
@@ -161,17 +155,17 @@ const CATALOG: &str = r#"{"adapters":{
         "Message":{"properties":{"Text":"text","Mentions App":"boolean"},"edges":{"Reactions":{"target":"Reaction","readable":false,"listenable":true,"delivery":"connection","carries":["Channels"]}}},
         "Reaction":{"properties":{"Emoji":"text"},"edges":{}}},
       "collections":{"Channels":{"target":"Channel"}},
-      "writableRoots":{},"eventPosition":"Message","eventPositions":[{"position":"Message"}]}}},
-  "ping":{"canFire":true,"constructionArgs":[],"triggerConfig":["events"],
+      "writableRoots":{}}}},
+  "ping":{"canFire":true,"constructionArgs":[],
     "listenSettingsBecome":{"path":["Pings"],"aliases":["p"],"paramFrom":"Ping",
       "keys":{"events":{"hop":0,"field":"Urgent","op":"eq","values":{"urgent":true,"calm":false}}}},
     "schemas":{"":{"positions":{"Ping":{"properties":{"Urgent":"boolean"},"edges":{}}},
       "collections":{"Pings":{"target":"Ping","readable":false,"listenable":true,"delivery":"connection"}},
-      "writableRoots":{},"eventPosition":"Ping","eventPositions":[{"position":"Ping"}]}}},
-  "feed":{"canFire":true,"constructionArgs":[],"triggerConfig":["topic"],
+      "writableRoots":{}}}},
+  "feed":{"canFire":true,"constructionArgs":[],
     "schemas":{"":{"positions":{"Item":{"properties":{"Topic":"text"},"edges":{}}},
       "collections":{"Items":{"target":"Item","listenable":true,"identity":"Id","delivery":"connection"}},
-      "writableRoots":{},"eventPosition":"Item","eventPositions":[{"position":"Item"}]}}}
+      "writableRoots":{}}}}
 },"credentials":{},"plugins":{}}"#;
 
 const GH: &str = "import { gh as gh_module } from adapters\ngh = connect gh_module\n";
@@ -260,7 +254,7 @@ fn an_events_listen_is_rewritten_safely() {
     let source = format!("{GH}function triage(n: <gh-[:Notification]->>) {{ return 1 }}\nlisten to gh {{ events: [\"mention\", \"assign\"] }} fire triage\n");
     let d = diagnostics(&source);
     assert_eq!(codes(&d), ["MOV_LISTEN_SETTINGS_RETIRED"]);
-    assert_eq!(d[0].severity, Some(Severity::Warning));
+    assert!(d[0].is_error(), "{d:?}");
     assert_eq!(
         d[0].message,
         "`listen to gh { … }` is retired in 0.13: a listen is a traversal ending on the edge its events arrive on. Write `listen to gh-[n:Notifications WHERE n.Reason IN [\"mention\", \"assign\"]]-> fire triage`"
@@ -485,12 +479,12 @@ fn a_parameter_typed_otherwise_is_left_as_written() {
 }
 
 #[test]
-fn a_move_up_from_0_12_is_held_by_it_and_this_release_only_warns() {
+fn a_move_up_from_0_12_and_this_release_both_refuse_it() {
     let source = format!("{GH}function triage(n: <gh-[:Notification]->>) {{ return 1 }}\nlisten to gh {{ events: [\"mention\"], participating: true }} fire triage\n");
     let up = checked(&source, Some("0.12.13"));
     assert!(retired(&up).is_error(), "{up:?}");
     let here = checked(&source, Some("0.13.0"));
-    assert_eq!(retired(&here).severity, Some(Severity::Warning));
+    assert!(retired(&here).is_error(), "{here:?}");
     // The traversal it becomes is not told anything.
     let traversal = format!("{GH}function triage(n: <gh-[:Notifications]->>) {{ return 1 }}\nlisten to gh-[n:Notifications WHERE n.Reason IN [\"mention\"]]-> fire triage\n");
     assert_eq!(checked(&traversal, Some("0.12.13")), Vec::<Diagnostic>::new());

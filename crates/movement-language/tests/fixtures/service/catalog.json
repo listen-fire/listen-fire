@@ -1,7 +1,7 @@
 {"adapters":{
-  "cron":{"constructionArgs":[],"canFire":true,"triggerConfig":["schedule","timezone"],"triggerConfigRequired":["schedule"],"triggerConfigFormats":{"schedule":"cron","timezone":"timezone"},"schemas":{"":{"positions":{"Tick":{"properties":{"Fired at":"date"},"edges":{}}},"collections":{},"writableRoots":{},"eventPosition":"Tick","eventPositions":[{"position":"Tick"}]}}},
-  "manual":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Invocation":{"properties":{"Text":"text","Run by (name)":"text"},"edges":{}}},"collections":{},"writableRoots":{},"eventPosition":"Invocation","eventPositions":[{"position":"Invocation"}]}}},
-  "slack":{"constructionArgs":[],"canFire":true,"description":"The team's chat.","connectActions":[{"kind":"slack-channel-picker","label":"Connect a channel"}],"triggerConfig":["channel","pollIntervalSeconds"],"triggerConfigRequired":["channel"],"schemas":{"":{"positions":{
+  "cron":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Tick":{"properties":{"Fired at":"date"},"edges":{}}},"collections":{"Ticks":{"target":"Tick","readable":false,"listenable":true,"delivery":"polled"}},"writableRoots":{}}}},
+  "manual":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Invocation":{"properties":{"Text":"text","Run by (name)":"text"},"edges":{}}},"collections":{"Invocations":{"target":"Invocation","readable":false,"listenable":true,"delivery":"connection"}},"writableRoots":{}}}},
+  "slack":{"constructionArgs":[],"canFire":true,"description":"The team's chat.","connectActions":[{"kind":"slack-channel-picker","label":"Connect a channel"}],"schemas":{"":{"positions":{
     "channel":{"properties":{"Name":"text"},"edges":{"Messages":{"target":"message","readable":true,"sequenced":"chronological","description":"What was said in the channel, oldest first."}},"description":"A place the team talks.","fieldDocs":{"Name":"The channel's name, without its #."}},
     "message":{"properties":{"Body":"text","Score":"number"},"edges":{}}},
     "collections":{"Channels":{"target":"channel"}},"writableRoots":{}}}}},

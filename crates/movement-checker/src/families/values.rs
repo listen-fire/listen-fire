@@ -910,17 +910,6 @@ pub fn address_pin_diagnostics(schema: &movement_parser::catalog::types::Instanc
             return found;
         }
     }
-    let (Some(keys), Some(values)) = (&schema.event_narrowing_keys, &schema.event_narrowing_values) else { return found };
-    let mut pinned: Vec<(String, String)> = Vec::new();
-    for key in keys {
-        let Some(value) = pin(key) else { return found };
-        let Some(options) = values.get(&crate::types::event_address::narrowing_prefix_key(&pinned)).and_then(|v| v.get(key)) else { return found };
-        if let Some(diagnostic) = check_enum_literal(&value, &Ty::Enum { options: options.clone(), open: None }) {
-            found.push(diagnostic);
-            return found;
-        }
-        pinned.push((key.clone(), value));
-    }
     found
 }
 
@@ -1513,9 +1502,7 @@ fn type_where_enum_diagnostics(schema: &movement_parser::catalog::types::Instanc
         .get(&step.edge_type_id)
         .or_else(|| schema.collections.get(&step.edge_type_id).and_then(|c| schema.positions.get(&c.target)));
     let Some(landing) = landing else { return Vec::new() };
-    let address_pinned = |key: &str| {
-        key == "action" || (schema.event_narrowing_values.is_some() && schema.event_narrowing_keys.as_ref().is_some_and(|keys| keys.iter().any(|k| k == key)))
-    };
+    let address_pinned = |key: &str| key == "action";
     let field_enum = |expr: &Expression| -> Option<Ty> {
         let (Expression::Property { property_type_id, .. } | Expression::EdgeProperty { property_type_id, .. }) = expr else { return None };
         if address_pinned(property_type_id) {

@@ -6,8 +6,8 @@
 use movement_checker::{CheckOptions, Diagnostic, check_source};
 use movement_parser::catalog::types::CatalogSnapshot;
 
-const UNDESCRIBED: &str = r#""manual":{"constructionArgs":[],"canFire":true,"triggerConfig":[],"schemas":{}}"#;
-const DESCRIBED: &str = r#""manual":{"constructionArgs":[],"canFire":true,"triggerConfig":[],"schemas":{"":{"positions":{"Invocation":{"properties":{"text":"text"},"edges":{}}},"collections":{},"writableRoots":{},"eventPosition":"Invocation","eventPositions":[{"position":"Invocation"}]}}}"#;
+const UNDESCRIBED: &str = r#""manual":{"constructionArgs":[],"canFire":true,"schemas":{}}"#;
+const DESCRIBED: &str = r#""manual":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Invocation":{"properties":{"text":"text"},"edges":{}}},"collections":{},"writableRoots":{}}}}"#;
 
 const CURRENT_FORM: &str = "import { manual } from adapters\nruns = connect manual\nfunction recap(go: <runs-[:Invocation]->>) {\n  t = go.`text`\n  go-[r:record]-> { fail(\"${r.`Name`}\") }\n}\nlisten to runs {} fire recap";
 

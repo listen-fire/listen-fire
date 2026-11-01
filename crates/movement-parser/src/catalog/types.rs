@@ -639,14 +639,6 @@ pub struct CollectionSchema {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EventPosition {
-    pub position: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub on: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InstanceSchema {
     pub positions: JsMap<PositionSchema>,
@@ -678,14 +670,6 @@ pub struct InstanceSchema {
     pub unselected: Option<JsMap<Vec<String>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generic_landings: Option<JsMap<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub event_position: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub event_positions: Option<Vec<EventPosition>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub event_narrowing_keys: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub event_narrowing_values: Option<JsMap<JsMap<Vec<String>>>>,
 }
 
 // ── Adapters, credentials, plugins ──
@@ -716,28 +700,6 @@ pub struct ConnectAction {
     pub label: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TriggerConfigFormat {
-    Cron,
-    Timezone,
-    Fields,
-    Strings,
-    /// A node the program declares (`payload: <Payment>`): the listen's
-    /// events are of that type.
-    Type,
-    /// One field of the record the listen watches, by name (`keyof T`).
-    Field,
-    /// A value of the field the listen's `field`-format key names (`T[K]`).
-    #[serde(rename = "field-value")]
-    FieldValue,
-    /// A format a newer module declares and this release does not know. Its
-    /// key's value is a plain, unchecked value: a module release must never
-    /// break a host on an older core.
-    #[serde(untagged)]
-    Unknown(String),
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Connect {
@@ -764,18 +726,6 @@ pub struct AdapterSpec {
     pub declared_credentials: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub can_fire: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trigger_config: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trigger_config_options: Option<JsMap<Vec<String>>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_events: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trigger_config_required: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trigger_config_required_why: Option<JsMap<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trigger_config_formats: Option<JsMap<TriggerConfigFormat>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connect_actions: Option<Vec<ConnectAction>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1083,7 +1033,8 @@ pub struct SnapshotFile {
 #[serde(deny_unknown_fields)]
 pub struct CatalogSnapshot {
     /// The contract version the builder wrote it under
-    /// (docs/contracts/catalog-snapshot.md); absent reads as 1.
+    /// (docs/contracts/catalog-snapshot.md); absent (a hand-written
+    /// fixture) reads as the current one.
     #[serde(default, rename = "contractVersion")]
     pub contract_version: Option<u32>,
     pub adapters: JsMap<AdapterSnapshot>,

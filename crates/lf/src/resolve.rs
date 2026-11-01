@@ -178,7 +178,7 @@ fn text(value: &Js, key: &str) -> Option<Option<String>> {
 
 /// The record type a listen's last edge hangs off: what its heads are.
 pub fn position_of(listen: &Listen) -> String {
-    let hops = listen.plan.as_ref().map(|plan| plan.hops.as_slice()).unwrap_or_default();
+    let hops = listen.plan.hops.as_slice();
     hops.len().checked_sub(2).map(|i| hops[i].to.clone()).unwrap_or_default()
 }
 
@@ -201,7 +201,7 @@ pub struct Listed {
 /// named by the type that overflowed: the walk stops one past it at its
 /// last hop, so a listen over its limit is never listed whole.
 pub async fn resolve_walk(session: &Session, set: &FileSet, listen: &Listen) -> Result<Listed, ResolveFailure> {
-    let plan = listen.plan.as_ref().ok_or_else(|| ResolveFailure::Read("it is not a listen on a traversal".into()))?;
+    let plan = &listen.plan;
     let earlier = &plan.hops[..plan.hops.len().saturating_sub(1)];
     let limit = session.project.listen_scope_limit;
     let walk = Walk { source: &set.file(&listen.file).source, connection: &plan.connection, hops: earlier, limit: Some(limit) };
@@ -253,7 +253,7 @@ fn distinct_heads(positions: &[Js]) -> Result<Vec<Head>, ResolveFailure> {
 /// changes per record they hang off (`parentChanges: pushed` with
 /// `delivery: scope`): each is watched once per such record.
 pub fn reported_per_record(set: &FileSet, listen: &Listen) -> Vec<usize> {
-    let hops = listen.plan.as_ref().map(|plan| plan.hops.as_slice()).unwrap_or_default();
+    let hops = listen.plan.hops.as_slice();
     hops.iter()
         .enumerate()
         .filter(|(index, hop)| *index > 0 && hop.judged == HopJudged::Resolved)
@@ -486,7 +486,7 @@ pub fn pushed_parent_hops<'a>(set: &FileSet, listen: &'a Listen) -> Vec<&'a Plan
 
 /// The listen's resolved hops, each with what its module declares of it.
 fn resolved_hops<'l>(set: &FileSet, listen: &'l Listen) -> Vec<(&'l PlanHop, Js)> {
-    let hops = listen.plan.as_ref().map(|plan| plan.hops.as_slice()).unwrap_or_default();
+    let hops = listen.plan.hops.as_slice();
     hops.iter().filter(|hop| hop.judged == HopJudged::Resolved).filter_map(|hop| Some((hop, crate::edge_polls::hop_schema(set, listen, hop)?))).collect()
 }
 
@@ -541,13 +541,11 @@ mod tests {
         let listen = Listen {
             file: "notes".into(),
             adapter: "feed".into(),
-            config: Obj::new(),
             movement_name: "a".into(),
             credential: None,
             payload: None,
             args: Vec::new(),
-            address: Ok(Default::default()),
-            plan: Some(serde_json::from_str(plan).unwrap()),
+            plan: serde_json::from_str(plan).unwrap(),
             trigger_awaits: Default::default(),
         };
         assert_eq!(position_of(&listen), "Board");

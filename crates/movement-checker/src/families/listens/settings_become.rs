@@ -3,20 +3,18 @@
 //! with the traversal it becomes when its module declares how its settings
 //! map (`listenSettingsBecome`) and every key it writes maps from a literal.
 //!
-//! Code: MOV_LISTEN_SETTINGS_RETIRED. A warning carrying its rewrite, so a
-//! project on this release still serves its settings listens; on a check for
-//! a move up from before 0.13 it is an error, so the pin holds until it is
-//! rewritten.
+//! Code: MOV_LISTEN_SETTINGS_RETIRED. An error carrying its rewrite: no
+//! release from 0.13 serves a settings listen, and on a move up from 0.12 the
+//! pin holds until each is rewritten.
 
 use movement_parser::ast::{ListenDeclaration, ParamTypeRef, Span};
 use movement_parser::catalog::types::{ArgKind, Composite, FieldChange, FieldType, InstanceSchema, KeyBecomes, KeyOp, PositionRef, SettingsBecome, SettingsValue, SpelledValue};
 use movement_parser::lowering::expression::{Expression, FilterOperator, ListElement, LogicalOp, StaticValue, TraversalStep};
-use movement_parser::version::{Standing, standing};
 use serde_json::json;
 
 use crate::checker::Checker;
 use crate::codes;
-use crate::diagnostic::{Diagnostic, Severity};
+use crate::diagnostic::Diagnostic;
 use crate::families::filter_split::{EdgeView, spell, split_where};
 use crate::families::names::spell_name;
 use crate::families::values::owned_value_error;
@@ -26,12 +24,8 @@ use crate::slots::expression_of_slot;
 
 use super::{EVERY_KEY, POLL_INTERVAL_KEY, SUPPRESS_SELF_KEY};
 
-/// The release whose checks refuse the settings form on a move up.
-const RETIRED_SINCE: &str = "0.13.0";
-
-/// The settings key an omitted value of which meant the module's default
-/// events (`AdapterSpec.default_events`), unless its mapping says what
-/// omitting it meant (`absent`).
+/// The settings key naming the events a listen heard; leaving it out meant
+/// what its mapping says (`absent`).
 const EVENTS_KEY: &str = "events";
 
 const SUPPRESS_SELF_NOTE: &str = " (`suppress_self` is gone: a two-way sync's own echo now runs once more and finds nothing to change)";
@@ -95,7 +89,7 @@ impl Checker<'_> {
         let zones = self.zones;
         let refusal = |owned: &OwnedScalar, literal: &str| owned_value_error(literal, owned, &|zone| Some(zones.is_zone(zone)));
         let rewrite = become_.zip(schema).map(|(become_, schema)| {
-            let from = Narrowing { schema, default_events: spec.and_then(|s| s.default_events.as_deref()), positioned: &positioned, refusal: &refusal };
+            let from = Narrowing { schema, positioned: &positioned, refusal: &refusal };
             rewrite_of(statement, become_, &from)
         });
         let instance_name = spell_name(&statement.instance);
@@ -130,10 +124,6 @@ impl Checker<'_> {
             "`listen to {instance_name} {{ … }}` is retired in 0.13: a listen is a traversal ending on the edge its events arrive on. Write `listen to {path} fire {movement}`{notes}{why_no_fix}"
         );
         let mut diagnostic = Diagnostic { walks, ..Diagnostic::error(codes::LISTEN_SETTINGS_RETIRED, message, statement.span) };
-        let moving_up = self.upgrading_from.is_some_and(|pin| standing(pin, RETIRED_SINCE) == Standing::OlderKey);
-        if !moving_up {
-            diagnostic.severity = Some(Severity::Warning);
-        }
         if let Some(rewrite) = rewrite {
             let alias = statement.alias.as_ref().map(|a| format!(" as {}", serde_json::to_string(a).unwrap_or_default())).unwrap_or_default();
             let mut edits = vec![json!({ "span": statement.span, "text": format!("listen{alias} to {path} fire {movement}") })];
@@ -174,8 +164,6 @@ fn quoted(names: &[String]) -> String {
 /// What a rewrite reads besides the listen and its module's mapping.
 struct Narrowing<'a> {
     schema: &'a InstanceSchema,
-    /// The module's default events (`AdapterSpec.default_events`).
-    default_events: Option<&'a [String]>,
     /// Whether the connection's construction is positioned by a key.
     positioned: &'a dyn Fn(&str) -> bool,
     /// Why an owned field's type refuses a literal, as the checker says it.
@@ -209,11 +197,11 @@ enum NoRewrite {
 /// with `events` spent choosing it unless that mapping compares them too
 /// (Stripe's `invoice.paid` chooses an invoice's `Changes` and is its
 /// `Kind`), else the module's own. A listen that leaves `events` out chooses
-/// by the module's default events, else by what the module's own `events`
-/// key says leaving them out heard (Stripe's: every event, on every edge).
-fn chosen<'b>(statement: &ListenDeclaration, become_: &'b SettingsBecome, default_events: Option<&[String]>) -> Result<(&'b SettingsBecome, bool), NoRewrite> {
+/// by what the module's own `events` key says leaving them out heard
+/// (Stripe's: every event, on every edge).
+fn chosen<'b>(statement: &ListenDeclaration, become_: &'b SettingsBecome) -> Result<(&'b SettingsBecome, bool), NoRewrite> {
     let Some(by_event) = become_.by_event.as_ref().filter(|b| !b.is_empty()) else { return Ok((become_, false)) };
-    let named = heard_events(statement, become_, default_events)?.unwrap_or_default();
+    let named = heard_events(statement, become_)?.unwrap_or_default();
     let ways: Vec<Option<&SettingsBecome>> = named.iter().map(|event| by_event.get(event)).collect();
     if ways.iter().all(Option::is_none) {
         return Ok((become_, false));
@@ -256,10 +244,9 @@ fn narrows_no_more(least: &SettingsBecome, way: &SettingsBecome) -> bool {
         && least.keys.iter().all(|(name, key)| way.keys.get(name) == Some(key))
 }
 
-/// The events a settings listen hears: those its `events` names, else the
-/// module's default events, else what its mapping says leaving `events` out
-/// heard. None: every event (nothing says otherwise).
-fn heard_events(statement: &ListenDeclaration, become_: &SettingsBecome, default_events: Option<&[String]>) -> Result<Option<Vec<String>>, NoRewrite> {
+/// The events a settings listen hears: those its `events` names, else what
+/// its mapping says leaving `events` out heard. None: every event (nothing says otherwise).
+fn heard_events(statement: &ListenDeclaration, become_: &SettingsBecome) -> Result<Option<Vec<String>>, NoRewrite> {
     Ok(match statement.config.iter().find(|a| a.name == EVENTS_KEY) {
         Some(arg) => Some(match expression_of_slot(&arg.value).map_err(|_| NoRewrite::Unmapped)? {
             Expression::Static { value: StaticValue::String(event) } => vec![event],
@@ -272,10 +259,7 @@ fn heard_events(statement: &ListenDeclaration, become_: &SettingsBecome, default
                 .collect::<Result<_, _>>()?,
             _ => return Err(NoRewrite::Unmapped),
         }),
-        None => match default_events.filter(|d| !d.is_empty()) {
-            Some(defaults) => Some(defaults.to_vec()),
-            None => become_.keys.get(EVENTS_KEY).and_then(|k| k.absent.as_ref()).map(|heard| heard.texts().to_vec()),
-        },
+        None => become_.keys.get(EVENTS_KEY).and_then(|k| k.absent.as_ref()).map(|heard| heard.texts().to_vec()),
     })
 }
 
@@ -293,10 +277,9 @@ fn edge_named(path: &[String]) -> String {
 /// The settings listen as the traversal its module maps it to. A `type` key
 /// (`payload: <T>`) becomes the type stated after the traversal
 /// (`-[:Requests]-><T>`). A key the listen leaves out is compared with what
-/// leaving it out meant (`absent`; for `events`, else the module's default
-/// events), or the rewrite would widen the listen.
+/// leaving it out meant (`absent`), or the rewrite would widen the listen.
 fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Narrowing) -> Result<Rewrite, NoRewrite> {
-    let (become_, events_spent) = chosen(statement, become_, from.default_events)?;
+    let (become_, events_spent) = chosen(statement, become_)?;
     let schema = from.schema;
     let consumed = consumed_hops(become_, from.positioned);
     let mut conjuncts: Vec<Vec<Expression>> = vec![Vec::new(); become_.path.len()];
@@ -332,13 +315,8 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
         }
     }
     let written = |name: &str| (events_spent && name == EVENTS_KEY) || statement.config.iter().any(|a| a.name == name);
-    let defaults = from.default_events.filter(|d| !d.is_empty() && !events_spent).map(|d| SettingsValue::Many(d.to_vec()));
-    if defaults.is_some() && !written(EVENTS_KEY) && !become_.keys.contains_key(EVENTS_KEY) {
-        return Err(NoRewrite::Unmapped);
-    }
-    for (name, key) in become_.keys.iter().filter(|(name, _)| !written(name)) {
-        let meant = key.absent.clone().or_else(|| defaults.clone().filter(|_| name == EVENTS_KEY));
-        let Some(meant) = meant else { continue };
+    for (_, key) in become_.keys.iter().filter(|(name, _)| !written(name)) {
+        let Some(meant) = key.absent.clone() else { continue };
         if key.hop < consumed {
             continue;
         }

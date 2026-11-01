@@ -174,36 +174,11 @@ fn holds_line(schema: &InstanceSchema) -> Option<String> {
     Some(format!("Holds: {}", listed(names)?))
 }
 
-/// "Fires: company.created, company.updated": the events a listen may choose.
-fn fires_line(adapter: &AdapterSnapshot) -> Option<String> {
-    let events = adapter.spec.trigger_config_options.as_ref()?.get("events")?;
-    Some(format!("Fires: {}", listed(events.iter().cloned())?))
-}
-
-/// "Listen settings: schedule (required), timezone".
-fn listen_settings_line(adapter: &AdapterSnapshot) -> Option<String> {
-    let required = adapter.spec.trigger_config_required.clone().unwrap_or_default();
-    let keys = adapter.spec.trigger_config.as_ref()?.iter().filter(|k| *k != "pollIntervalSeconds").map(|k| {
-        if required.contains(k) { format!("{k} (required)") } else { k.clone() }
-    });
-    Some(format!("Listen settings: {}", listed(keys)?))
-}
-
-/// "Gives: Tick (Fired at, Schedule)": what a listen on it hands the function it fires.
-fn gives_line(schema: &InstanceSchema) -> Option<String> {
-    let mut names: Vec<&str> = schema.event_positions.iter().flatten().map(|e| e.position.as_str()).collect();
-    if names.is_empty() {
-        names.extend(schema.event_position.as_deref());
-    }
-    let given = names.into_iter().map(|name| {
-        let fields = schema.positions.get(name).and_then(|p| listed(p.properties.keys().map(|f| written_name(f))));
-        let shown = written_name(schema.positions.get(name).and_then(|p| p.display_name.as_deref()).unwrap_or(name));
-        match fields {
-            Some(fields) => format!("{shown} ({fields})"),
-            None => shown,
-        }
-    });
-    Some(format!("Gives: {}", listed(given)?))
+/// "Listen to: Messages, Reactions": the edges off the connection a listen
+/// may end on.
+fn listen_to_line(schema: &InstanceSchema) -> Option<String> {
+    let edges = schema.collections.iter().filter(|(_, c)| c.listenable == Some(true)).map(|(name, _)| written_name(name));
+    Some(format!("Listen to: {}", listed(edges)?))
 }
 
 /// Any one schema an adapter's catalog entry holds (they share their record types).
@@ -338,8 +313,7 @@ fn symbol_card(service: &Service, analysis: &Analysis, text: &Text<'_>, id: move
         SymbolKind::Instance if symbol.unit => {
             let adapter = service.catalog.adapters.get(name);
             let mut lines = vec!["Built into listen-fire; no import needed.".to_string()];
-            lines.extend(adapter.and_then(listen_settings_line));
-            lines.extend(adapter.and_then(any_schema).and_then(gives_line));
+            lines.extend(adapter.and_then(any_schema).and_then(listen_to_line));
             card(name, &lines, docs)
         }
         SymbolKind::Instance => {
@@ -357,8 +331,9 @@ fn symbol_card(service: &Service, analysis: &Analysis, text: &Text<'_>, id: move
                     None => format!("A connection to {adapter_name}."),
                 });
             }
-            lines.extend(instance.and_then(|i| i.schema.as_ref()).or_else(|| adapter.and_then(any_schema)).and_then(holds_line));
-            lines.extend(adapter.and_then(fires_line));
+            let schema = instance.and_then(|i| i.schema.as_ref()).or_else(|| adapter.and_then(any_schema));
+            lines.extend(schema.and_then(holds_line));
+            lines.extend(schema.and_then(listen_to_line));
             card(&header, &lines, docs)
         }
         SymbolKind::Adapter => {
@@ -369,7 +344,7 @@ fn symbol_card(service: &Service, analysis: &Analysis, text: &Text<'_>, id: move
             let using = if credentialed || adapter.is_none() { " using <credential>" } else { "" };
             lines.push(format!("An adapter. Use it with `connect {name}{using}`."));
             lines.extend(adapter.and_then(any_schema).and_then(holds_line));
-            lines.extend(adapter.and_then(fires_line));
+            lines.extend(adapter.and_then(any_schema).and_then(listen_to_line));
             card(name, &lines, docs)
         }
         SymbolKind::Credential => {

@@ -28,8 +28,7 @@ fn catalog() -> Catalog {
                 "edges": {}
             }
         },
-        "collections": { "Organizations": { "target": "Organization" } },
-        "eventPosition": "Organization",
+        "collections": { "Organizations": { "target": "Organization" }, "Organization": { "target": "Organization", "readable": false, "listenable": true, "delivery": "connection" } },
         "supportsInPlaceUpdate": true,
         "writableRoots": {
             "Organization": { "fields": { "Name": "text", "Deal Created": "date" }, "resultShape": { "externalId": "text", "Name": "text", "Deal Created": "date" } }
@@ -51,7 +50,7 @@ fn catalog() -> Catalog {
     let json = serde_json::json!({
         "adapters": { "affinity": {
             "constructionArgs": [{ "kind": "credential", "name": "credentials", "required": true }],
-            "canFire": true, "triggerConfig": ["events"],
+            "canFire": true, 
             "schemas": { "Affinity": schema }
         } },
         "credentials": { "Affinity": { "adapters": ["affinity"] } },
@@ -62,7 +61,7 @@ fn catalog() -> Catalog {
 
 fn program(hop_where: &str) -> String {
     format!(
-        "import {{ affinity }} from adapters\nimport {{ Affinity }} from credentials\ncrm = connect affinity using Affinity\nfunction m(o: <crm-[:Organization]->>) {{\n  created = o-[le:`List Entries` WHERE {hop_where}]-> {{\n    return le.`Deal Created`\n  }}\n  write crm-[:Organizations]-> {{ Name: \"Veltha\", `Deal Created` ?: only(created) }}\n}}\nlisten to crm {{ events: [\"organization\"] }} fire m\n"
+        "import {{ affinity }} from adapters\nimport {{ Affinity }} from credentials\ncrm = connect affinity using Affinity\nfunction m(o: <crm-[:Organization]->>) {{\n  created = o-[le:`List Entries` WHERE {hop_where}]-> {{\n    return le.`Deal Created`\n  }}\n  write crm-[:Organizations]-> {{ Name: \"Veltha\", `Deal Created` ?: only(created) }}\n}}\nlisten to crm-[:Organization]-> fire m\n"
     )
 }
 

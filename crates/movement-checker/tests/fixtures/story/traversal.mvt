@@ -4,7 +4,7 @@ import { acme } from credentials
 runs = connect manual
 crm  = connect attio using acme
 
-function `Top Ten`(go: <runs-[:Invocation]->>) {
+function `Top Ten`(go: <runs-[:Invocations]->>) {
   crm-[c:Companies WHERE c.Categories == "Customer" ORDER BY c.`Created At` DESC LIMIT 10]-> {
     write crm-[:Companies]-> {
       unique by (`Name`)
@@ -18,4 +18,4 @@ function `Top Ten`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire `Top Ten`
+listen to runs-[:Invocations]-> fire `Top Ten`

@@ -4,7 +4,7 @@ import { acme } from credentials
 runs = connect manual
 crm  = connect attio using acme
 
-function `Cut A Document`(go: <runs-[:Invocation]->>) {
+function `Cut A Document`(go: <runs-[:Invocations]->>) {
   go-[f:Files]-> {
     text   = File.read(f.File)
     pieces = Text.chunks(coalesce(text, ""), { size: 40000, overlap: 2000 })
@@ -18,7 +18,7 @@ function `Cut A Document`(go: <runs-[:Invocation]->>) {
   }
 }
 
-function `Intake Documents`(go: <runs-[:Invocation]->>) {
+function `Intake Documents`(go: <runs-[:Invocations]->>) {
   docs    = go-[:Files]->.File
   pieces  = Text.chunks(coalesce(File.read(first(docs)), ""), { size: 40000, overlap: 2000 })
   write crm-[:Companies]-> { Name: coalesce(first(pieces), "untitled") }

@@ -70,8 +70,6 @@ enum Context {
     TypeOf { instance: String },
     /// `connect x using `: a credential for module `x`.
     Credential { module: String },
-    /// `listen to x { `: a settings key.
-    SettingsKey { source: String },
     /// `import { ` … `} from <source>`.
     ImportName { source: Option<String> },
     Name,
@@ -137,20 +135,11 @@ fn hop_receiver(pre: &str) -> Option<&str> {
     head.strip_suffix(trailing_word(head))?.strip_suffix("-[")
 }
 
-/// Inside an unclosed `{ … }`: a listen's settings, or an import's names.
+/// Inside an unclosed `{ … }`: an import's names.
 fn brace_context(before: &str, after: &str) -> Option<Context> {
     let (brace, _) = open_brackets_at(before).into_iter().rev().find(|(_, c)| *c == '{')?;
-    let inside = &before[brace + 1..];
     let head = &before[..brace];
     let statement = head.rsplit('\n').next().unwrap_or(head).trim();
-    if let Some(source) = statement.strip_prefix("listen to ") {
-        // A key, not a value: nothing since the last `,` but the key itself.
-        let since = inside.rsplit(',').next().unwrap_or(inside);
-        if since.contains(':') {
-            return None;
-        }
-        return Some(Context::SettingsKey { source: source.trim().to_string() });
-    }
     if statement == "import" || statement.ends_with(" import") {
         let rest = &after[after.find('}')? + 1..];
         let source = rest.trim_start().strip_prefix("from").map(|r| r.split_whitespace().next().unwrap_or("").trim_matches('"').to_string());
@@ -266,32 +255,6 @@ fn items_for(service: &Service, source: &str, pos: Pos, context: Context) -> Vec
                 names = catalog.credential_names().into_iter().map(|name| Item::new(name, ItemKind::Credential, None)).collect();
             }
             names
-        }
-        Context::SettingsKey { source: listened } => {
-            let adapter = service
-                .analyze(source, Some(pos.line))
-                .and_then(|a| {
-                    let id = a.analysis.resolve(at, &listened)?;
-                    let symbol = a.analysis.symbol(id);
-                    symbol.adapter.clone().or_else(|| symbol.imported_name.clone()).or_else(|| Some(symbol.name.clone()))
-                })
-                .unwrap_or(listened);
-            let bare = adapter.trim_matches('`').strip_prefix("@lf/").unwrap_or(adapter.trim_matches('`')).to_string();
-            let spec = catalog.adapter(&bare).or_else(|| catalog.adapter(&adapter));
-            let mut keys: Vec<String> = spec
-                .and_then(|s| s.trigger_config.clone())
-                .unwrap_or_default()
-                .into_iter()
-                .map(|k| if k == "pollIntervalSeconds" { "every".to_string() } else { k })
-                .collect();
-            keys.push("suppress_self".into());
-            let required = spec.and_then(|s| s.trigger_config_required.clone()).unwrap_or_default();
-            keys.into_iter()
-                .map(|key| {
-                    let detail = Some(if required.contains(&key) { format!("required by {bare}") } else { format!("a setting of {bare}") });
-                    Item { insert: Some(format!("{key}: ")), ..Item::new(key, ItemKind::Property, detail) }
-                })
-                .collect()
         }
         Context::ImportName { source: from } => import_items(service, from.as_deref()),
         Context::Name => {

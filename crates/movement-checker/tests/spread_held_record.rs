@@ -8,7 +8,7 @@
 use movement_checker::{CheckOptions, check_source};
 use movement_parser::catalog::types::CatalogSnapshot;
 
-const CATALOG: &str = r#"{"contractVersion":2,"adapters":{"attio":{"canFire":true,"constructionArgs":[{"name":"credentials","kind":"credential","required":true}],"schemas":{"crm_cred":{"positions":{"note":{"properties":{"body":"text","title":"text","payload":"json"},"edges":{}}},"collections":{"notes":{"target":"note"}},"writableRoots":{"note":{"fields":{"body":"text","title":"text","payload":"json"},"resultShape":{"externalId":"text"}}}}}}},"credentials":{"crm_cred":{"adapters":["attio"]}},"plugins":{}}"#;
+const CATALOG: &str = r#"{"contractVersion":3,"adapters":{"attio":{"canFire":true,"constructionArgs":[{"name":"credentials","kind":"credential","required":true}],"schemas":{"crm_cred":{"positions":{"note":{"properties":{"body":"text","title":"text","payload":"json"},"edges":{}}},"collections":{"notes":{"target":"note"}},"writableRoots":{"note":{"fields":{"body":"text","title":"text","payload":"json"},"resultShape":{"externalId":"text"}}}}}}},"credentials":{"crm_cred":{"adapters":["attio"]}},"plugins":{}}"#;
 
 fn codes(body: &str) -> Vec<String> {
     let source = format!(

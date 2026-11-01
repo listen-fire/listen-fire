@@ -5,7 +5,7 @@ inbox = connect email
 crm   = connect attio using acme
 runs  = connect manual
 
-function `Intake`(m: <inbox-[:Email]->>) {
+function `Intake`(m: <inbox-[:Emails]->>) {
   person = write crm-[:People]-> { unique by (`Job Title`), Name: m.From }
   employer = match person-[:Company]-> { unique by (Name), Name: "Acme" }
   if (employer != null) {
@@ -16,7 +16,7 @@ function `Intake`(m: <inbox-[:Email]->>) {
   }
 }
 
-function `Rewire`(m: <inbox-[:Email]->>) {
+function `Rewire`(m: <inbox-[:Emails]->>) {
   a = write crm-[:Companies]-> { Name: m.Subject }
   b = write crm-[:People]-> { Name: m.From }
   unlink a -[:employs]-> b
@@ -24,12 +24,12 @@ function `Rewire`(m: <inbox-[:Email]->>) {
   delete stale
 }
 
-function `Reactivate`(go: <runs-[:Invocation]->>) {
+function `Reactivate`(go: <runs-[:Invocations]->>) {
   crm-[record:Companies WHERE record.Categories == "Lead"]-> {
     write record { Categories: "Customer" }
   }
 }
 
-listen to inbox { key: "intake" } fire `Intake`
-listen to inbox { key: "rewire" } fire `Rewire`
-listen to runs {} fire `Reactivate`
+listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire `Intake`
+listen to inbox-[e:Emails WHERE e.Key == "rewire"]-> fire `Rewire`
+listen to runs-[:Invocations]-> fire `Reactivate`

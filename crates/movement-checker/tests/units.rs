@@ -6,7 +6,7 @@
 use movement_checker::{CheckOptions, Diagnostic, check_source};
 use movement_parser::catalog::types::CatalogSnapshot;
 
-const CATALOG: &str = r#"{"adapters":{"cron":{"constructionArgs":[],"canFire":true,"triggerConfig":["schedule","timezone"],"triggerConfigRequired":["schedule"],"triggerConfigFormats":{"schedule":"cron","timezone":"timezone"},"schemas":{"":{"positions":{"Tick":{"properties":{"Fired at":"date"},"edges":{}}},"collections":{},"writableRoots":{},"eventPosition":"Tick","eventPositions":[{"position":"Tick"}]}}},"manual":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Invocation":{"properties":{"Text":"text"},"edges":{}}},"collections":{},"writableRoots":{},"eventPosition":"Invocation","eventPositions":[{"position":"Invocation"}]}}}},"credentials":{},"plugins":{}}"#;
+const CATALOG: &str = r#"{"adapters":{"cron":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Tick":{"properties":{"Fired at":"date"},"edges":{}}},"collections":{},"writableRoots":{}}}},"manual":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Invocation":{"properties":{"Text":"text"},"edges":{}}},"collections":{},"writableRoots":{}}}}},"credentials":{},"plugins":{}}"#;
 
 fn check(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
@@ -30,8 +30,6 @@ fn from_version_5_cron_and_manual_need_no_import() {
 fn a_unit_is_typed_as_its_adapter_describes_it() {
     let found = check(&UNITS.replace("run.`Text`", "run.`Txt`"));
     assert_eq!(codes(&found), ["MOV_UNKNOWN_PROPERTY"]);
-    let found = check(&UNITS.replace(" { schedule: \"0 9 * * 1\" }", ""));
-    assert_eq!(codes(&found), ["MOV_LISTEN_BAD_CONFIG"]);
 }
 
 #[test]

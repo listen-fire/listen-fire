@@ -20,7 +20,7 @@ pub fn command(session: &Session, rest: &[String], out: &mut impl Write) -> Resu
     match rest.first().map(String::as_str) {
         None => {
             let now = crate::limiter::now_ms();
-            for listen in set.listens.iter().filter(|l| l.plan.is_some()) {
+            for listen in &set.listens {
                 let state = session.store.listen_state(&listen.pipeline()).map_err(|e| e.to_string())?;
                 let cadence = if crate::resolve::resolved_at_open_only(session, &set, listen) { Cadence::AtOpenOnly } else { Cadence::Kept };
                 writeln!(out, "{}", line(&set, listen, state.as_ref(), cadence, now)).map_err(|e| e.to_string())?;
@@ -32,7 +32,7 @@ pub fn command(session: &Session, rest: &[String], out: &mut impl Write) -> Resu
                 eprintln!("listen-fire listens resume needs a listen: <file>:<movement>");
                 return Ok(2);
             };
-            let named_by = |l: &&Listen| l.plan.is_some() && format!("{}:{}", l.file, l.movement_name) == *named;
+            let named_by = |l: &&Listen| format!("{}:{}", l.file, l.movement_name) == *named;
             let listens: Vec<&Listen> = set.listens.iter().filter(named_by).collect();
             if listens.is_empty() {
                 eprintln!("listen-fire: no listen on a traversal fires {named}: `listen-fire listens` names each as <file>:<movement>");
@@ -74,7 +74,7 @@ enum Cadence {
 /// `{file}:{movement}{ as "alias"} — {path} — {judged per hop} — {watching}
 /// — {standing}{; loops}`.
 fn line(set: &FileSet, listen: &Listen, state: Option<&ListenState>, cadence: Cadence, now_ms: i64) -> String {
-    let Some(plan) = &listen.plan else { return String::new() };
+    let plan = &listen.plan;
     let alias = plan.alias.as_ref().map(|a| format!(" as \"{a}\"")).unwrap_or_default();
     let path = path_of(plan);
     let judged: Vec<&str> = plan
@@ -134,7 +134,7 @@ fn path_of(plan: &ListenPlan) -> String {
 /// (each names the record it is about), or what it lands on is a record a
 /// write to its module makes.
 fn attributable(set: &FileSet, listen: &Listen) -> bool {
-    let Some(last) = listen.plan.as_ref().and_then(|plan| plan.hops.last()) else { return false };
+    let Some(last) = listen.plan.hops.last() else { return false };
     if crate::edge_polls::hop_schema(set, listen, last).is_some_and(|edge| Js::is_true(edge.get("attributes"))) {
         return true;
     }

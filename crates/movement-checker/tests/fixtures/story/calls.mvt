@@ -14,7 +14,7 @@ function note(title: <text>) {
   write crm-[:Companies]-> { unique by (FUZZY Name) Name: title }
 }
 
-function `Intake`(m: <inbox-[:Email]->>) {
+function `Intake`(m: <inbox-[:Emails]->>) {
   left = countdown(3)
   page = fetchUrl("https://example.com")
   note(Text.upper(m.Subject))
@@ -22,4 +22,4 @@ function `Intake`(m: <inbox-[:Email]->>) {
   summarise(m.Body)
 }
 
-listen to inbox { key: "intake" } fire `Intake`
+listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire `Intake`

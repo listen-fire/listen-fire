@@ -35,11 +35,11 @@
 //!
 //! let catalog = Catalog::from_json(r#"{"adapters":{"email":{"constructionArgs":[],"canFire":true,
 //!   "schemas":{"":{"positions":{"message":{"properties":{"subject":"text"},"edges":{}}},
-//!   "collections":{},"eventPosition":"message"}}}},"credentials":{},"plugins":{}}"#).unwrap();
+//!   "collections":{"message":{"target":"message","readable":false,"listenable":true,"delivery":"connection"}}}}}},"credentials":{},"plugins":{}}"#).unwrap();
 //! let source = "import { email } from adapters\n\
 //!               inbox = connect email\n\
 //!               function seen(msg: <inbox-[:message]->>) {\n  s = msg.`subject`\n}\n\
-//!               listen to inbox fire seen\n";
+//!               listen to inbox-[:message]-> fire seen\n";
 //! assert!(embed::check(source, &catalog, embed::LANGUAGE_VERSION).iter().all(|p| p.severity != Severity::Error));
 //!
 //! let event = Event::new("email", Data::map([("subject", Data::text("Hello"))]));

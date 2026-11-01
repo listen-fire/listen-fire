@@ -63,7 +63,7 @@ struct Reread {
 
 pub async fn command(session: &Session, asked: &Asked<'_>, out: &mut impl Write) -> Result<i32, String> {
     let set = session.file_set();
-    let named_by = |l: &&Listen| l.plan.is_some() && format!("{}:{}", l.file, l.movement_name) == asked.named;
+    let named_by = |l: &&Listen| format!("{}:{}", l.file, l.movement_name) == asked.named;
     let mut listens: Vec<&Listen> = set.listens.iter().filter(named_by).collect();
     if listens.is_empty() {
         eprintln!("listen-fire: no listen on a traversal fires {}: `listen-fire listens` names each as <file>:<movement>", asked.named);

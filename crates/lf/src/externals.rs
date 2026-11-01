@@ -320,14 +320,6 @@ impl RunningExternal {
             .collect()
     }
 
-    /// The listen config keys whose values scope a webhook subscription
-    /// (`subscriptionScopeKeys`: Airtable's base and table), in order: one
-    /// webhook per credential and scope. Empty for a module that declares none.
-    pub fn subscription_scope_keys(&self) -> Vec<String> {
-        let declared = self.manifest_answer.get("subscriptionScopeKeys").and_then(Js::as_array).unwrap_or_default();
-        declared.iter().filter_map(Js::as_str).filter(|k| !k.is_empty()).map(str::to_string).collect()
-    }
-
     /// The position a construction with `args` (source text, by name) puts a
     /// connection of this module in: each declared position arg it gives a
     /// value, as the `settings` a call in that position carries. None for a
@@ -685,50 +677,10 @@ fn plugins_declaration(raw: &Js, methods: &[String]) -> Result<Option<Js>, Strin
 }
 
 /// `WireListenDeclarations.parse`: the declarations, unknown keys stripped.
+/// The keys 0.13 retired are refused at describe, read off the manifest
+/// itself (crate::schema::RETIRED_MANIFEST_KEYS).
 fn listen_declarations(raw: &Js) -> Result<Obj, String> {
     let mut out = Obj::new();
-    for key in ["subscribableEvents", "defaultSubscribedEvents"] {
-        let Some(value) = raw.get(key) else { continue };
-        let ok = value.as_array().is_some_and(|items| items.iter().all(|i| i.as_str().is_some_and(|s| !s.is_empty())));
-        if !ok {
-            return Err(format!("{key}: expected an array of non-empty strings"));
-        }
-        out.insert(key.into(), value.clone());
-    }
-    if let Some(value) = raw.get("listenConfig") {
-        let items = value.as_array().ok_or("listenConfig: expected an array")?;
-        let mut entries = Vec::new();
-        for item in items {
-            let key = item.get("key").and_then(Js::as_str).filter(|k| !k.is_empty()).ok_or("listenConfig.key: expected a non-empty string")?;
-            let mut entry = Obj::new();
-            entry.insert("key".into(), Js::str(key));
-            if let Some(required) = item.get("required") {
-                let Js::Bool(required) = required else { return Err("listenConfig.required: expected boolean".into()) };
-                entry.insert("required".into(), Js::Bool(*required));
-            }
-            if let Some(format) = item.get("format") {
-                // Open: a format this listen-fire does not know is a newer module's;
-                // the checker reads its key's value as unchecked.
-                let format = format.as_str().filter(|f| !f.is_empty());
-                entry.insert("format".into(), Js::str(format.ok_or("listenConfig.format: expected a non-empty string")?));
-            }
-            if let Some(narrows) = item.get("narrows") {
-                // One hop of the address a listen's event is narrowed by
-                // (crate::listen_narrowing).
-                let named = |k: &str| narrows.get(k).and_then(Js::as_str).filter(|v| !v.is_empty()).map(Js::str);
-                let (Some(collection), Some(match_field)) = (named("collection"), named("matchField")) else {
-                    return Err("listenConfig.narrows: expected { collection, matchField }, each a non-empty string".into());
-                };
-                entry.insert("narrows".into(), Js::Obj(crate::obj! { "collection" => collection, "matchField" => match_field }));
-            }
-            entries.push(Js::Obj(entry));
-        }
-        let formats = |format: &str| entries.iter().filter(|e| e.get("format").and_then(Js::as_str) == Some(format)).count();
-        if formats("field-value") > 0 && formats("field") != 1 {
-            return Err("listenConfig: a 'field-value' key needs exactly one 'field' key to be a value of".into());
-        }
-        out.insert("listenConfig".into(), Js::Arr(entries));
-    }
     if let Some(value) = raw.get("listenSettingsBecome") {
         let parsed = settings_become(value)?;
         let stored = serde_json::to_string(&parsed).map_err(|e| format!("listenSettingsBecome: {e}"))?;
@@ -1062,22 +1014,6 @@ mod tests {
         assert!(with("manifest,invokePlugin", false).unwrap_err().contains("declares no `plugins`"));
         let empty = Js::parse(br#"{ "plugins": { "package": "@lf/web", "plugins": [] } }"#).unwrap();
         assert!(plugins_declaration(&empty, &["invokePlugin".to_string()]).unwrap_err().contains("at least one"));
-    }
-
-    #[test]
-    fn listen_declarations_keep_only_the_three() {
-        let raw = Js::parse(br#"{ "subscribableEvents": ["a"], "other": 1, "listenConfig": [{ "key": "schedule", "required": true, "extra": 2 }] }"#).unwrap();
-        let listen = listen_declarations(&raw).unwrap();
-        assert_eq!(Js::Obj(listen).to_json(), r#"{"subscribableEvents":["a"],"listenConfig":[{"key":"schedule","required":true}]}"#);
-    }
-
-    #[test]
-    fn a_listen_key_that_narrows_keeps_its_hop() {
-        let raw = Js::parse(br#"{ "listenConfig": [{ "key": "table", "required": true, "narrows": { "collection": "Table", "matchField": "Id", "extra": 1 } }] }"#).unwrap();
-        let listen = listen_declarations(&raw).unwrap();
-        assert_eq!(Js::Obj(listen).to_json(), r#"{"listenConfig":[{"key":"table","required":true,"narrows":{"collection":"Table","matchField":"Id"}}]}"#);
-        let half = Js::parse(br#"{ "listenConfig": [{ "key": "table", "narrows": { "collection": "Table" } }] }"#).unwrap();
-        assert!(listen_declarations(&half).unwrap_err().contains("listenConfig.narrows"));
     }
 
     #[test]

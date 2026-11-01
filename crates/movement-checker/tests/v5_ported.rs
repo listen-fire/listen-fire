@@ -200,7 +200,7 @@ fn an_unknown_meta_key_suggests_the_closest() {
 
 // Listens
 
-const CRON: &str = r#""cron":{"constructionArgs":[],"canFire":true,"triggerConfig":["schedule","timezone"],"triggerConfigRequired":["schedule"],"triggerConfigFormats":{"schedule":"cron","timezone":"timezone"},"schemas":{"":{"positions":{"Tick":{"properties":{},"edges":{}}},"collections":{},"writableRoots":{},"eventPosition":"Tick","eventPositions":[{"position":"Tick"}]}}}"#;
+const CRON: &str = r#""cron":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Tick":{"properties":{},"edges":{}}},"collections":{},"writableRoots":{}}}}"#;
 
 fn cron_catalog() -> String {
     format!(r#"{{"adapters":{{{CRON}}},"credentials":{{}},"plugins":{{}}}}"#)
@@ -210,39 +210,7 @@ fn cron_catalog() -> String {
 fn a_dispatchable_movement_without_a_listen_is_told_how_to_add_one() {
     let found = run("import { cron } from adapters\nt = connect cron\nfunction digest(e: <t-[:Tick]->>) {}", &cron_catalog());
     assert_eq!(codes(&found), ["MOV_LISTEN_MISSING"]);
-    assert!(found[0].1.ends_with("e.g. listen to t { schedule: \"0 9 * * 1\" } fire digest"), "{found:?}");
-}
-
-#[test]
-fn any_listen_silences_the_missing_listen_and_its_config_is_checked() {
-    let source = "import { cron } from adapters\nt = connect cron\nfunction digest(e: <t-[:Tick]->>) {}\nlisten to t { schedule: \"61 9 * * 1\" } fire digest";
-    let found = run(source, &cron_catalog());
-    assert_eq!(codes(&found), ["MOV_LISTEN_BAD_CONFIG"]);
-    assert!(found[0].1.contains("minute value 61 is out of range (0-59)"), "{found:?}");
-}
-
-/// A host whose zone database holds one zone.
-struct OneZone(&'static str);
-
-impl movement_checker::host::ZoneLookup for OneZone {
-    fn is_zone(&self, zone: &str) -> bool {
-        zone == self.0
-    }
-}
-
-#[test]
-fn a_cron_time_zone_is_the_hosts_to_recognise() {
-    let source = "import { cron } from adapters\nt = connect cron\nfunction digest(e: <t-[:Tick]->>) {}\nlisten to t { schedule: \"0 9 * * 1\", timezone: \"Narnia/Cair\" } fire digest";
-    let catalog = CatalogSnapshot::load(&cron_catalog()).unwrap();
-    // The settings form's retirement is listen_settings_retired.rs's to pin.
-    let with = |zones: &dyn movement_checker::host::ZoneLookup| {
-        let found = check_source(source, &catalog, CheckOptions { upgrading_from: None, zones }).unwrap();
-        found.into_iter().filter(|d| d.code != "MOV_LISTEN_SETTINGS_RETIRED").collect::<Vec<_>>()
-    };
-    let refused = with(&movement_checker::host::native::NativeZones);
-    assert_eq!(refused.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["MOV_LISTEN_BAD_CONFIG"]);
-    assert!(refused[0].message.starts_with("'Narnia/Cair' is not a recognised IANA time zone"), "{}", refused[0].message);
-    assert!(with(&OneZone("Narnia/Cair")).is_empty());
+    assert!(found[0].1.ends_with("e.g. listen to t-[:Tick]-> fire digest"), "{found:?}");
 }
 
 // Libraries

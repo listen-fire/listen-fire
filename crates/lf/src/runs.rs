@@ -15,8 +15,8 @@ use indexmap::IndexMap;
 use crate::catalog::{ConnectionSchemas, catalog_of};
 use crate::check::{LOCAL_TENANT, check_parsed, describe_external, missing_line};
 use crate::documents::Documents;
-use crate::loop_guard::{Answer, Asked, Current, LoopGuard, Wrote};
-use crate::externals::{External, Reach, RunningExternal, needed_externals, rpc, rpc_in, scan_externals, start_externals};
+use crate::loop_guard::{LoopGuard, Wrote};
+use crate::externals::{External, Reach, RunningExternal, needed_externals, rpc_in, scan_externals, start_externals};
 use crate::module_hosts::{Hold, Keep, ModuleProcess};
 use movement_engine::executor::join_all;
 use crate::json::{Js, Obj};
@@ -25,7 +25,7 @@ use crate::project::Project;
 use movement_parser::version::{LANGUAGE_VERSION, Standing, standing};
 use crate::remote::{Externals, SegmentAdapters};
 use crate::arrivals::{ArrivalIn, arrival_receipt_key};
-use crate::routing::{Arrival, Listen, arrival_trigger_of, event_matches_trigger_scope, trigger_event_of, untyped_event_line};
+use crate::routing::{Listen, arrival_trigger_of};
 use movement_engine::listen_judge::Verdict;
 use crate::run_host::{
     BUSY_RETRY_MS, CANCELLED_BY_OPERATOR, FailedWork, Lease, Settled, StepOutcome, StepRequest, Stepper, WORKER_LOST, after_step, arm_timer_wake,
@@ -148,24 +148,6 @@ impl FileSet {
         self.parents.borrow_mut().insert(listen.pipeline(), parents.clone()).is_none_or(|before| before != parents)
     }
 
-    /// The listens on a polled source (its manifest declares `poll`), each
-    /// with its source and the subscription its checkpoint is kept under.
-    fn polled_listens(&self) -> impl Iterator<Item = (&Listen, &RunningExternal, String)> {
-        self.listens.iter().filter(|listen| listen.plan.is_none()).filter_map(|listen| {
-            let running = self.running.iter().find(|r| !r.is_plugin() && r.external.manifest.name == listen.adapter && r.poll_interval_seconds.is_some())?;
-            let file = self.file(&listen.file);
-            let config = Js::Obj(listen.config.clone()).to_json();
-            let subscription = format!("poll:{}:{}:{}:{config}", listen.adapter, file.name, listen.movement_name);
-            // A positioned connection's listen is polled under a key of its
-            // own; one in no position keeps the key it always had, and with
-            // it the checkpoint an earlier listen-fire kept.
-            let subscription = match running.position_settings(&listen.args) {
-                Some(position) => format!("{subscription}:{position}"),
-                None => subscription,
-            };
-            Some((listen, &**running, subscription))
-        })
-    }
 }
 
 /// What a session is opened for, which its module processes follow.
@@ -412,7 +394,7 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     let files = scan_movements(&project)?;
     let parsed = Parsed::each(&files, &parsed);
     let catalog = catalog_of(&running, &schemas, credentials, &files);
-    let crate::routing::Listens { mut listens, unwatched } = crate::routing::listens_across(&parsed, &catalog);
+    let crate::routing::Listens { listens, unwatched } = crate::routing::listens_across(&parsed, &catalog);
     if routes_listens {
         let mut why = not_checking(&files, &parsed, &catalog, unwatched)?;
         if !why.is_empty() {
@@ -420,7 +402,6 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
             return Err(why.join("\n"));
         }
     }
-    crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
     let user = local_identity(&project.user, |k| std::env::var(k).ok());
     let _holds = hold_all(&running, role.keep());
     let file_set = Rc::new(FileSet { files, parsed, catalog, listens, heads: Default::default(), parents: Default::default(), running, schemas, _holds });
@@ -587,15 +568,6 @@ impl<'a> Delivered<'a> {
         }
     }
 
-    /// Whether `listen` takes it, under the module's `scope_keys`.
-    fn reaches(&self, listen: &Listen, scope_keys: &[String]) -> bool {
-        listen.hears_through(self.credential, self.subscription, scope_keys)
-    }
-}
-
-/// The external's `subscriptionScopeKeys`, when it is running.
-fn scope_keys_of(set: &FileSet, external: &str) -> Vec<String> {
-    set.running.iter().find(|r| r.external.manifest.name == external).map(|r| r.subscription_scope_keys()).unwrap_or_default()
 }
 
 /// Who runs the `fire_event` row a shared poll that fires keeps.
@@ -653,7 +625,7 @@ pub struct Fired {
 /// with (mail sent to a key no listen names): with its values of the owned
 /// fields those WHEREs compare, the ones only its module reads.
 fn unmatched_line(adapter: &str, arrival: &ArrivalIn, skipped: &[&Listen]) -> String {
-    let compared: BTreeSet<&str> = skipped.iter().filter_map(|l| l.plan.as_ref()?.hops.last()).flat_map(|hop| hop.owned.iter().map(String::as_str)).collect();
+    let compared: BTreeSet<&str> = skipped.iter().filter_map(|l| l.plan.hops.last()).flat_map(|hop| hop.owned.iter().map(String::as_str)).collect();
     let fields = arrival.landing.as_ref().and_then(|landing| landing.get("fields"));
     let held: Vec<String> = compared.iter().filter_map(|field| fields?.get(field).map(|value| format!("its {field} is {}", value.to_json()))).collect();
     let about = if held.is_empty() { String::new() } else { format!(" ({})", held.join(", ")) };
@@ -861,17 +833,6 @@ impl Session {
     /// Now, as this session judges what is due (`LF_CLOCK_AHEAD_MS` on).
     pub fn now_ms(&self) -> i64 {
         crate::limiter::now_ms() + self.due_offset_ms
-    }
-
-    /// Route one event to every listen it matches, and run each (`fireEvent`).
-    /// An event with an `idempotencyKey` runs a listen once: a redelivery
-    /// runs nothing. A dry run notes no receipt, so the real delivery after
-    /// it still runs. Each run names the delivery the event came in, when it
-    /// came in one, and only the listens of the connection it came for take it.
-    pub async fn fire_event(&self, external: &str, event: &Js, dry_run: bool, delivered: Delivered<'_>) -> Result<Fired, String> {
-        let set = self.file_set();
-        let scope_keys = scope_keys_of(&set, external);
-        self.fire_to(&set, external, event, Arrival::Pushed, dry_run, delivered.came_in(), |l| delivered.reaches(l, &scope_keys)).await
     }
 
     /// Judge each arrival that landed against every listen on its edge that
@@ -1103,7 +1064,7 @@ impl Session {
     /// other store read does: a loop breaker that is silently off is worse
     /// than a delivery that is tried again.
     fn chain_before(&self, adapter: &str, listen: &Listen, arrival: &ArrivalIn) -> Result<Vec<String>, String> {
-        let landing_type = listen.plan.as_ref().and_then(|plan| plan.hops.last()).map(|hop| hop.to.as_str()).unwrap_or_default();
+        let landing_type = listen.plan.hops.last().map(|hop| hop.to.as_str()).unwrap_or_default();
         let records = crate::loop_breaker::records_of(adapter, arrival, landing_type);
         if records.is_empty() {
             return Ok(Vec::new());
@@ -1129,64 +1090,6 @@ impl Session {
     /// said as each set opens is said once.
     pub fn says_once(&self, line: &str) -> bool {
         self.said.borrow_mut().insert(line.to_string())
-    }
-
-    /// `fire_event`, to the listens `to` keeps of those the event reaches.
-    #[allow(clippy::too_many_arguments)] // the file set, the event and how it came, then the firing's own options
-    async fn fire_to(
-        &self,
-        set: &FileSet,
-        external: &str,
-        event: &Js,
-        arrival: Arrival,
-        dry_run: bool,
-        came_in: CameIn<'_>,
-        to: impl Fn(&Listen) -> bool,
-    ) -> Result<Fired, String> {
-        let event_types = self.event_types_of(set, external).await?;
-        let key = event.get("idempotencyKey").and_then(Js::as_str).filter(|k| !k.is_empty());
-        let now_reads = RefCell::new(HashMap::new());
-        let mut fired = Fired::default();
-        // An event reaches the listens in the settings form; a listen on a
-        // traversal is fired by arrivals alone (`fire_arrivals`).
-        let heard: Vec<&Listen> =
-            set.listens.iter().filter(|l| l.plan.is_none() && l.adapter == external && event_matches_trigger_scope(event, &l.config, arrival) && to(l)).collect();
-        let (reached, misfit): (Vec<&Listen>, Vec<&Listen>) = heard.into_iter().partition(|l| l.takes(event));
-        for listen in misfit {
-            let declared = listen.payload.as_ref().map(|p| (p.name.as_str(), p.misfits(&event.get("payload").map_or(serde_json::Value::Null, crate::wire::json_of_js)).join("; "))).unwrap_or_default();
-            fired.redelivered.push(format!("{}:{} declares the payload {}, which this event does not fit ({}): it runs nothing", listen.file, listen.movement_name, declared.0, declared.1));
-        }
-        for listen in reached {
-            let run_id = uuid::Uuid::new_v4().to_string();
-            let file = set.file(&listen.file);
-            let pipeline = listen.pipeline();
-            let receipt = key.filter(|_| !dry_run);
-            let ran_before = |key: &str| format!("{}:{} has run the event {key} before: this delivery runs nothing", file.name, listen.movement_name);
-            if !dry_run && self.is_own_echo(set, external, event, &pipeline, &now_reads).await {
-                // The echo's receipt is noted all the same, so its redelivery
-                // runs nothing however the record moves meanwhile.
-                if let Some(key) = receipt
-                    && !self.store.claim_event(&EventReceipt::own(&pipeline, key)).map_err(|e| e.to_string())?
-                {
-                    fired.redelivered.push(ran_before(key));
-                    continue;
-                }
-                let record = crate::loop_guard::event_record(event).unwrap_or_default();
-                fired.redelivered.push(format!("{}:{} wrote the record {record} and it is unchanged since: this event is that write's echo and runs nothing", file.name, listen.movement_name));
-                continue;
-            }
-            let trigger = trigger_event_of(&pipeline, external, event, &event_types, &iso(0));
-            match self.run_listen(set, &run_id, listen, trigger, dry_run, receipt.map(|key| (pipeline.as_str(), key)), came_in).await? {
-                Some(mut outcome) => {
-                    if let (Some(error), Some(untyped)) = (outcome.error.as_mut(), untyped_event_line(external, event, &event_types)) {
-                        error.push_str(&format!("\n  {untyped}"));
-                    }
-                    fired.outcomes.push(outcome)
-                }
-                None => fired.redelivered.push(ran_before(key.unwrap_or_default())),
-            }
-        }
-        Ok(fired)
     }
 
     /// `listen-fire run <movement>`: one invocation on the manual unit, an
@@ -1236,28 +1139,15 @@ impl Session {
         Ok(fired)
     }
 
-    /// Give each polled listen without one its `poll_listen` work row, due
-    /// now. A checkpoint does not stand for the row: `run --poll` polls and
-    /// keeps one without queueing it. The row then lives as long as the listen: each poll releases
-    /// it for the next interval, so whichever worker claims it (under the
-    /// work lease, so never two at once) polls, and a poll due while no
-    /// worker ran is one poll on the next drain. The row is queued only
-    /// where none is (`enqueue_if_absent`): workers arming one listen at
-    /// once queue it once, and an arm never moves the due time of the row
-    /// another worker holds, which would poll it again at once.
-    fn arm_polls(&self, set: &FileSet) -> Result<(), String> {
-        for (_, _, subscription) in set.polled_listens() {
-            let payload = Js::Obj(obj! { "subscription" => Js::str(&subscription) });
-            if self.store.enqueue_if_absent(POLL_WORK_KIND, &format!("{POLL_WORK_KIND}:{subscription}"), &payload, None, None).map_err(|e| e.to_string())? {
-                crate::wake::queued(POLL_WORK_KIND, None);
-            }
-        }
-        Ok(())
-    }
-
     /// Give each shared poll without one its `poll_edge` work row, due
-    /// now, as `arm_polls` does a listen's: the row then lives as long as
-    /// some listen shares its key.
+    /// now: the row then lives as long as some listen shares its key. A
+    /// checkpoint does not stand for the row: `run --poll` polls and keeps
+    /// one without queueing it. Each poll releases the row for the next
+    /// interval, so whichever worker claims it (under the work lease, so
+    /// never two at once) polls, and a poll due while no worker ran is one
+    /// poll on the next drain. The row is queued only where none is
+    /// (`enqueue_if_absent`): workers arming one key at once queue it once,
+    /// and an arm never moves the due time of the row another worker holds.
     fn arm_edge_polls(&self, set: &FileSet) -> Result<(), String> {
         for key in crate::edge_polls::polled_keys(set).into_keys() {
             let subscription = crate::edge_polls::poll_subscription(&key);
@@ -1484,86 +1374,17 @@ impl Session {
         Ok(())
     }
 
-    /// One poll of one listen's source: `poll({ config, checkpoint? })`, each
-    /// event it returns fired to that listen as a webhook's is (a redelivered
-    /// `idempotencyKey` runs nothing), then the source's checkpoint kept for
-    /// the next poll — only once its events are in, so a failed poll is
-    /// polled again from where the last good one ended.
-    async fn poll_once(&self, set: &FileSet, listen: &Listen, running: &RunningExternal, subscription: &str) -> Result<Fired, String> {
-        let state = self.store.inbound_checkpoint(subscription).map_err(|e| e.to_string())?;
-        let params = poll_params(listen, state.as_ref());
-        let secrets = self.secrets();
-        let credentials = secrets.credentials();
-        // Polled as its own connection: the credential its construction names, else the source's.
-        let credential = match &listen.credential {
-            Some(name) => Some(credentials.iter().find(|c| c.name == *name).ok_or_else(|| format!("no credential \"{name}\" in the secrets file"))?),
-            None => credential_for(credentials, &listen.adapter),
-        };
-        let raw = rpc_in(running, credentials, credential, LOCAL_TENANT, "poll", params, running.position_settings(&listen.args)).await?;
-        let answer = wire_results::check("poll", &listen.adapter, &raw)?;
-        let mut fired = Fired::default();
-        let events = answer.get("events").and_then(Js::as_array).unwrap_or(&[]);
-        // A source's first poll only sets its mark (Gmail's does): say so,
-        // or a listen that is live looks like one that is not.
-        if state.is_none() && events.is_empty() {
-            fired.redelivered.push(format!("{}: {}:{} armed; it fires on changes from now", listen.adapter, set.file(&listen.file).name, listen.movement_name));
-        }
-        for event in events {
-            if event.get("eventType").and_then(Js::as_str).is_none() {
-                note_unlabelled_poll_event(&listen.adapter);
-            }
-            let one = self.fire_to(set, &listen.adapter, event, Arrival::Polled, false, CameIn::default(), |l| std::ptr::eq(l, listen)).await?;
-            fired.outcomes.extend(one.outcomes);
-            fired.redelivered.extend(one.redelivered);
-        }
-        let mut kept = obj! { "armed" => Js::Bool(true) };
-        if let Some(checkpoint) = answer.get("checkpoint").filter(|c| **c != Js::Null) {
-            kept.insert("checkpoint".into(), checkpoint.clone());
-        }
-        self.store.save_inbound_checkpoint(subscription, &Js::Obj(kept)).map_err(|e| e.to_string())?;
-        Ok(fired)
-    }
-
-    /// A `poll_listen` row: poll its listen, and say when it is next due — the
-    /// listen's `every` (`pollIntervalSeconds` in the older language), else its source's interval. A row whose
-    /// listen is gone is done, and its checkpoint forgotten.
-    async fn poll_row(&self, set: &FileSet, subscription: &str) -> Result<(Next, Vec<RunOutcome>), String> {
-        let Some((listen, running, _)) = set.polled_listens().find(|(_, _, s)| s == subscription) else {
-            self.store.save_inbound_checkpoint(subscription, &Js::Null).map_err(|e| e.to_string())?;
-            return Ok((Next::Done, Vec::new()));
-        };
-        let fired = self.poll_once(set, listen, running, subscription).await?;
-        for line in &fired.redelivered {
-            eprintln!("listen-fire: {line}");
-        }
-        // `every: 5m` now, `pollIntervalSeconds: 300` before.
-        let every = listen.config.get("every").and_then(Js::as_str).and_then(movement_engine::park::duration_ms).filter(|ms| *ms >= 1000.0).map(|ms| (ms / 1000.0) as u64);
-        let seconds = every.or(match listen.config.get("pollIntervalSeconds") {
-            Some(Js::Num(n)) => n.as_u64().filter(|s| *s > 0),
-            _ => None,
-        });
-        let interval_ms = seconds.or(running.poll_interval_seconds).unwrap_or(1) as i64 * 1000;
-        Ok((Next::DueAt(iso(self.due_offset_ms + interval_ms)), fired.outcomes))
-    }
-
-    /// `listen-fire run --poll <movement>`: poll now, once, the source of every listen
-    /// that fires `movement` on a polled source.
+    /// `listen-fire run --poll <movement>`: poll now, once, each polled edge
+    /// a listen that fires `movement` is on, through its shared key, once
+    /// however many of the key's listens fire `movement`.
     pub async fn run_poll(&self, movement: &str) -> Result<Fired, String> {
         let set = self.file_set();
-        let listens: Vec<_> = set.polled_listens().filter(|(l, _, _)| l.movement_name == movement).collect();
-        // A listen on a traversal of a polled edge is polled through its
-        // shared key, once however many of the key's listens fire `movement`.
         let mut edges = crate::edge_polls::polled_keys(&set);
         edges.retain(|_, shared| shared.fires.iter().any(|i| set.listens[*i].movement_name == movement));
-        if listens.is_empty() && edges.is_empty() {
-            return Err(format!("no listen on a polled source fires '{movement}': a source is polled when its manifest declares `poll`, an edge when it declares `delivery: polled`"));
+        if edges.is_empty() {
+            return Err(format!("no listen on a polled edge fires '{movement}': an edge is polled when its module declares `delivery: polled`"));
         }
         let mut fired = Fired::default();
-        for (listen, running, subscription) in listens {
-            let one = self.poll_once(&set, listen, running, &subscription).await?;
-            fired.outcomes.extend(one.outcomes);
-            fired.redelivered.extend(one.redelivered);
-        }
         for (key, shared) in &edges {
             let polled = self.poll_edge_once(&set, key, shared, PolledRow::RunHere).await?;
             fired.outcomes.extend(polled.fired.outcomes);
@@ -1579,16 +1400,6 @@ impl Session {
             }
         }
         Ok(fired)
-    }
-
-    async fn event_types_of(&self, set: &FileSet, external: &str) -> Result<Vec<Js>, String> {
-        let Some(running) = set.running.iter().find(|r| r.external.manifest.name == external) else { return Ok(Vec::new()) };
-        if !running.methods.iter().any(|m| m == "listEventTypes") {
-            return Ok(Vec::new());
-        }
-        let raw = rpc(running, self.secrets().credentials(), LOCAL_TENANT, "listEventTypes", serde_json::json!({})).await?;
-        let types = wire_results::check("listEventTypes", external, &raw)?;
-        Ok(types.as_array().map(<[Js]>::to_vec).unwrap_or_default())
     }
 
     /// Start the run and step its first segment. With a `receipt` (the
@@ -1885,59 +1696,6 @@ impl Session {
         }
     }
 
-    /// Whether `event` is only the echo of `writer`'s own write, as the loop
-    /// guard says (crate::loop_guard). When the guard needs the record as it
-    /// stands, it is read once per event and type, into `now_reads`. Any
-    /// doubt (no guard, no readRecord, a failed read or answer) fires.
-    async fn is_own_echo(&self, set: &FileSet, external: &str, event: &Js, writer: &str, now_reads: &RefCell<HashMap<String, Option<Js>>>) -> bool {
-        let (Some(guard), Some(external_id)) = (&self.loop_guard, crate::loop_guard::event_record(event)) else { return false };
-        let asked = Asked { adapter: external, external_id, writer, current: None };
-        let record_type = match guard.is_echo(&asked) {
-            Ok(Answer::Echo(echo)) => return echo,
-            Ok(Answer::Read { record_type }) => record_type,
-            Err(message) => return self.guard_failed(&message),
-        };
-        let read = now_reads.borrow().get(&record_type).cloned();
-        let record = match read {
-            Some(record) => record,
-            None => {
-                let record = self.read_record(set, external, &record_type, external_id).await;
-                now_reads.borrow_mut().insert(record_type.clone(), record.clone());
-                record
-            }
-        };
-        let Some(record) = record else { return false };
-        match guard.is_echo(&Asked { current: Some(Current { record_type: &record_type, record: &record }), ..asked }) {
-            Ok(answer) => answer == Answer::Echo(true),
-            Err(message) => self.guard_failed(&message),
-        }
-    }
-
-    fn guard_failed(&self, message: &str) -> bool {
-        eprintln!("listen-fire: the loop guard: {message} (the event fires)");
-        false
-    }
-
-    /// The record as it stands now, or None when it can not be read.
-    async fn read_record(&self, set: &FileSet, external: &str, record_type: &str, external_id: &str) -> Option<Js> {
-        let running = set.running.iter().find(|r| !r.is_plugin() && r.external.manifest.name == external)?;
-        if !running.methods.iter().any(|m| m == "readRecord") {
-            return None;
-        }
-        let params = serde_json::json!({ "recordType": record_type, "externalId": external_id });
-        let read = match rpc(running, self.secrets().credentials(), LOCAL_TENANT, "readRecord", params).await {
-            Ok(raw) => wire_results::check("readRecord", external, &raw),
-            Err(message) => Err(message),
-        };
-        match read {
-            Ok(record) => Some(record),
-            Err(message) => {
-                eprintln!("listen-fire: {external}: reading {record_type} {external_id} to tell an echo of a write from a change: {message} (it fires)");
-                None
-            }
-        }
-    }
-
     /// Where a run stands once an entry into it is over, as its row says. A
     /// run still parked re-arms its timer row at its earliest parked timer.
     fn settled_outcome(&self, run_id: &str, entry: &'static str, tally: Tally, lease_lost: bool) -> Result<RunOutcome, String> {
@@ -2148,9 +1906,6 @@ impl Session {
     async fn drain_work_in(&self, set: &FileSet, limit: i64, log: &mut impl Write) -> Result<(usize, Vec<RunOutcome>), String> {
         self.follow_kept_heads(set).await?;
         let mut outcomes = Vec::new();
-        if self.pool.takes(POLL_WORK_KIND) {
-            self.arm_polls(set)?;
-        }
         if self.pool.takes(EDGE_POLL_WORK_KIND) {
             self.arm_edge_polls(set)?;
         }
@@ -2240,25 +1995,10 @@ impl Session {
                 }
                 Ok((Next::Done, fired.outcomes))
             }
+            // A row queued before 0.13 for a listen in the settings form.
             "fire_event" => {
-                let event = payload.get("event").cloned().ok_or("a fire_event row has no event")?;
-                let external = text("external")?;
-                // Rows queued before deliveries were kept name none, and
-                // rows queued before they named their connection name none.
-                let delivery_id = payload.get("deliveryId").and_then(Js::as_str);
-                let delivered = Delivered::of_row(payload, delivery_id);
-                let scope_keys = scope_keys_of(set, &external);
-                let fired = self.fire_to(set, &external, &event, Arrival::Pushed, false, delivered.came_in(), |l| delivered.reaches(l, &scope_keys)).await?;
-                for line in &fired.redelivered {
-                    eprintln!("listen-fire: {line}");
-                }
-                if let Some(id) = delivery_id
-                    && fired.outcomes.is_empty()
-                    && fired.redelivered.is_empty()
-                {
-                    eprintln!("listen-fire: {}", no_listen_line(id, &external));
-                }
-                Ok((Next::Done, fired.outcomes))
+                eprintln!("listen-fire: {}", retired_event_line(&text("external")?));
+                Ok((Next::Done, Vec::new()))
             }
             "resume_timer" => {
                 let run_id = text("runId")?;
@@ -2287,7 +2027,12 @@ impl Session {
                 }
                 Ok(self.drive_parked_run(set, &run_id, Drain::OwedRaces).await?.row_next())
             }
-            POLL_WORK_KIND => self.poll_row(set, &text("subscription")?).await,
+            // A settings listen's poll, queued before 0.13: nothing polls it
+            // now, so its checkpoint goes with it.
+            POLL_WORK_KIND => {
+                self.store.save_inbound_checkpoint(&text("subscription")?, &Js::Null).map_err(|e| e.to_string())?;
+                Ok((Next::Done, Vec::new()))
+            }
             EDGE_POLL_WORK_KIND => self.poll_edge_row(set, &text("subscription")?).await,
             crate::resolve::RESOLVE_WORK_KIND => self.resolve_row(set, &text("pipeline")?).await,
             crate::subscriptions::REFRESH_WORK_KIND => Ok((
@@ -2678,13 +2423,12 @@ impl Session {
         }
 
         let catalog = catalog_of(&running, &schemas, credentials, &files);
-        let crate::routing::Listens { mut listens, unwatched } = crate::routing::listens_across(&parsed, &catalog);
+        let crate::routing::Listens { listens, unwatched } = crate::routing::listens_across(&parsed, &catalog);
         let why = not_checking(&files, &parsed, &catalog, unwatched)?;
         if !why.is_empty() {
             return self.refuse(log, pairs, why);
         }
-        crate::listen_narrowing::resolve_listen_addresses(&mut listens, &running, credentials).await;
-        let _holds = hold_all(&running, self.role.keep());
+            let _holds = hold_all(&running, self.role.keep());
         let taken = Rc::new(FileSet { files, parsed, catalog, listens, heads: Default::default(), parents: Default::default(), running, schemas, _holds });
         for line in crate::resolve::open(self, &taken, crate::resolve::Opening::Reloaded).await? {
             let _ = writeln!(log, "listen-fire: {line}");
@@ -2874,31 +2618,11 @@ pub fn read_event_file(path: &std::path::Path) -> Result<(String, Js), String> {
 
 /// What a drain says of a delivery's event that no listen takes: the
 /// delivery is kept (`listen-fire deliveries` lists it) and ran nothing.
-fn no_listen_line(delivery_id: &str, external: &str) -> String {
-    format!("delivery {delivery_id}: no listen takes its {external} event; it is kept and ran nothing")
-}
-
-/// A poll event with no `eventType` (a module older than adapter protocol
-/// 2.3) still reaches the listen that polled it; listen-fire says so once per module
-/// per process, so an unlabelled source is never silent.
-fn note_unlabelled_poll_event(module: &str) {
-    static NOTED: std::sync::LazyLock<std::sync::Mutex<std::collections::BTreeSet<String>>> = std::sync::LazyLock::new(Default::default);
-    let first = NOTED.lock().map(|mut noted| noted.insert(module.to_string())).unwrap_or(false);
-    if first {
-        eprintln!("{module}: a polled event carries no eventType; it was delivered to the listen that polled it — label poll events (adapter protocol 2.3)");
-    }
-}
-
-/// `poll`'s params (adapter protocol 2): the listen's options, the checkpoint
-/// the previous poll left, and `movementId`. Locally the listener is the
-/// listen's pipeline, `listen:<file>:<movement>`: a movement's name alone
-/// would not tell it from a same-named movement in another file.
-fn poll_params(listen: &Listen, state: Option<&Js>) -> serde_json::Value {
-    let mut params = serde_json::json!({ "config": crate::wire::json_of_js(&Js::Obj(listen.config.clone())), "movementId": listen.pipeline() });
-    if let Some(checkpoint) = state.and_then(|s| s.get("checkpoint")) {
-        params["checkpoint"] = crate::wire::json_of_js(checkpoint);
-    }
-    params
+/// What an event comes to now that 0.13 retired the settings listen it
+/// fired: nothing. A module that still answers events, or a row queued
+/// before 0.13, is told so where it is read, never dropped silently.
+pub fn retired_event_line(external: &str) -> String {
+    format!("{external} delivered an event, which only a listen in the settings form heard, retired in 0.13: it runs nothing — a module delivers arrivals on its listenable edges")
 }
 
 #[cfg(test)]
@@ -2971,26 +2695,6 @@ mod tests {
             assert_eq!(delivery_of(&outcomes), None, "a row queued before deliveries were kept names none");
         });
         std::fs::remove_dir_all(root).ok();
-    }
-
-    #[test]
-    fn a_delivery_no_listen_takes_is_said_to_run_nothing() {
-        assert_eq!(no_listen_line("d-1", "acme"), "delivery d-1: no listen takes its acme event; it is kept and ran nothing");
-    }
-
-    fn polled(config: Obj) -> Listen {
-        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None, args: Vec::new(), payload: None, address: Ok(Default::default()), plan: None, trigger_awaits: Default::default() }
-    }
-
-    #[test]
-    fn a_poll_request_names_the_listening_pipeline_and_carries_the_checkpoint() {
-        let listen = polled(obj! { "every" => Js::str("5m") });
-        let first = poll_params(&listen, None);
-        assert_eq!(first["movementId"], "listen:alerts:alerts");
-        assert_eq!(first["config"]["every"], "5m");
-        assert!(first.get("checkpoint").is_none());
-        let state = Js::Obj(obj! { "armed" => Js::Bool(true), "checkpoint" => Js::str("c1") });
-        assert_eq!(poll_params(&listen, Some(&state))["checkpoint"], "c1");
     }
 
     fn identity(configured: (Option<&str>, Option<&str>), env: &[(&str, &str)]) -> (String, String) {
@@ -3333,8 +3037,8 @@ mod tests {
             assert!(lines.iter().any(|l| l.ends_with("/acme_i.mvt:11:1 the listen that fires welcome does not check, so nothing would fire it")), "{log}");
             assert_eq!(lines.last(), Some(&RUN_CHECK), "{log}");
             let kept = session.file_set();
-            let served: Vec<(&str, bool)> = kept.listens.iter().map(|l| (l.file.as_str(), l.plan.is_some())).collect();
-            assert_eq!(served, [("acme_i", false), ("hello", true)], "the running set's listens are still served");
+            let served: Vec<&str> = kept.listens.iter().map(|l| l.file.as_str()).collect();
+            assert_eq!(served, ["hello"], "the running set's listens are still served");
         });
     }
 
@@ -3363,8 +3067,8 @@ mod tests {
             let session = open_at(&root, Role::Command, false).await.unwrap();
             assert_eq!(returns(&session, "hello").await, "v1", "a function of another file runs");
             let set = session.file_set();
-            let read: Vec<(&str, &str, bool)> = set.listens.iter().map(|l| (l.file.as_str(), l.movement_name.as_str(), l.plan.is_some())).collect();
-            assert_eq!(read, [("hello", "hello", true), ("watching", "tick", true)], "the file's listen that checks is read beside the one that does not");
+            let read: Vec<(&str, &str)> = set.listens.iter().map(|l| (l.file.as_str(), l.movement_name.as_str())).collect();
+            assert_eq!(read, [("hello", "hello"), ("watching", "tick")], "the file's listen that checks is read beside the one that does not");
         });
     }
 

@@ -36,7 +36,7 @@ use movement_parser::ast::{
 use movement_parser::lowering::expression::{Expression, ListElement, ObjectMember, TraversalStep};
 
 use crate::json::{Js, Obj};
-use crate::listen_narrowing::{Walk, Walker};
+use crate::member_walk::{Walk, Walker};
 use crate::obj;
 use crate::secrets::{Construction, construction_of};
 

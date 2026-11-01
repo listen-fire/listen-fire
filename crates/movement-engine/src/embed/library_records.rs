@@ -13,8 +13,7 @@ fn catalog(library: &str) -> Catalog {
         "Channel": { "properties": { "Name": "text" }, "edges": { "Messages": { "target": "Message", "writable": true } } },
         "Message": { "properties": { "Text": "text" }, "edges": {} }
       },
-      "collections": { "Channels": { "target": "Channel" } },
-      "eventPosition": "Message",
+      "collections": { "Channels": { "target": "Channel" }, "Message": { "target": "Message", "readable": false, "listenable": true, "delivery": "connection" } },
       "supportsInPlaceUpdate": true,
       "createShapes": { "Message": { "fields": { "Text": "text" }, "resultShape": { "externalId": "text", "Text": "text" } } }
     }"#;
@@ -22,7 +21,7 @@ fn catalog(library: &str) -> Catalog {
         r#"{{
       "adapters": {{ "chat": {{
         "constructionArgs": [{{ "kind": "credential", "name": "credentials", "required": true }}],
-        "canFire": true, "triggerConfig": ["events"],
+        "canFire": true, 
         "schemas": {{ "team": {schema}, "other": {schema} }}
       }} }},
       "credentials": {{ "team": {{ "adapters": ["chat"] }}, "other": {{ "adapters": ["chat"] }} }},
@@ -49,7 +48,7 @@ fn caller(credential: &str, body: &str) -> String {
 
 fn caller_naming(connection: &str, credential: &str, body: &str) -> String {
     format!(
-        "import {{ chat }} from adapters\nimport {{ {credential} }} from credentials\nimport {{ general }} from \"lib/channels\"\n{connection} = connect chat using {credential}\nfunction m(msg: <{connection}-[:Message]->>) {{\n  ch = general()\n  if (ch == null) {{ fail(\"no general\") }}\n{body}}}\nlisten to {connection} {{ events: [\"message\"] }} fire m\n"
+        "import {{ chat }} from adapters\nimport {{ {credential} }} from credentials\nimport {{ general }} from \"lib/channels\"\n{connection} = connect chat using {credential}\nfunction m(msg: <{connection}-[:Message]->>) {{\n  ch = general()\n  if (ch == null) {{ fail(\"no general\") }}\n{body}}}\nlisten to {connection}-[:Message]-> fire m\n"
     )
 }
 

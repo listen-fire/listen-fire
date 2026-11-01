@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 
 use indexmap::IndexMap;
 use movement_checker::host::native::NativeZones;
-use movement_checker::types::event_address::EventAddress;
 use movement_checker::{CheckOptions, Severity};
 use movement_parser::ast::Program;
 use movement_parser::catalog::helpers::position_key;
@@ -20,13 +19,13 @@ use movement_parser::util::form::{external_text, form_of_text, read_json_text};
 use serde_json::json;
 
 use crate::catalog::{ConnectionSchemas, Described, catalog_of, connections_of};
-use crate::listen_narrowing::{Narrowing, Walk, Walker, address_hops, narrow_event_positions, position_arg_options, with_event_narrowing_keys};
+use crate::member_walk::{Walk, Walker, position_arg_options};
 use crate::externals::{RunningExternal, needed_externals, rpc_in, scan_externals, start_externals};
 use crate::json::Js;
 use crate::project::Project;
 use crate::refinements::{InstanceChain, Refining, refine_instance_schema};
 use crate::protocol::shape_error;
-use crate::schema::{Declarant, ambiguous_arrivals, describe_external_schema, retired_reference_key, undeclared_arrival_field, unreadable_answer_shape_from, unreadable_listening, unreadable_literals_from, unreadable_owned_field, unreadable_record_field, unreadable_settings_become};
+use crate::schema::{Declarant, RETIRED_ENTRY_KEYS, RETIRED_MANIFEST_KEYS, ambiguous_arrivals, describe_external_schema, retired_entry_key, retired_reference_key, undeclared_arrival_field, unreadable_answer_shape_from, unreadable_listening, unreadable_literals_from, unreadable_owned_field, unreadable_record_field, unreadable_settings_become};
 use crate::secrets::{Construction, Credential, Credentials, Imported, MissingCredential, Secrets, imported_credentials, missing_credentials};
 use crate::sources::{MovementFile, Parsed, scan_movements};
 
@@ -169,17 +168,16 @@ pub async fn catalog_with(checking: &mut Checking, walked: &[MovementFile]) -> R
 /// describe per credential bound to it that the files import (one bound but
 /// never imported is never asked, so a server it names that is down fails no
 /// check). `known` is kept: only a connection it lacks is described. Each is
-/// narrowed by the event addresses the files' signatures name against it
-/// (crate::listen_narrowing) and by the WHEREs the files' hops select with
-/// (crate::refinements), again whenever those change.
+/// narrowed by the WHEREs the files' hops select with (crate::refinements),
+/// again whenever those change.
 pub async fn describe_external(running: &RunningExternal, credentials: &Credentials, imported: &Imported, known: ConnectionSchemas) -> Result<ConnectionSchemas, String> {
     let connections = connections_of(running, credentials);
     let mut wanted: Vec<Wanted> = Vec::new();
     if !connections.credential_required {
-        wanted.push(Wanted { key: String::new(), credential: None, settings: None, position_values: BTreeMap::new() });
+        wanted.push(Wanted { key: String::new(), credential: None, settings: None });
     }
     for credential in connections.credentials.iter().copied().filter(|c| imported.contains(&c.name)) {
-        wanted.push(Wanted { key: credential.name.clone(), credential: Some(credential), settings: None, position_values: BTreeMap::new() });
+        wanted.push(Wanted { key: credential.name.clone(), credential: Some(credential), settings: None });
     }
     // A connection that pins an entry position (`base: "CRM"`) is described in
     // that position, under a key of its own: its schema is that position's.
@@ -193,14 +191,12 @@ pub async fn describe_external(running: &RunningExternal, credentials: &Credenti
             None => None,
         };
         let key = instance_schema_key(construction.credential.as_deref(), Some(&position.key));
-        let position_values = position.settings.as_object().into_iter().flatten().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect();
-        wanted.push(Wanted { key, credential, settings: Some(position.settings), position_values });
+        wanted.push(Wanted { key, credential, settings: Some(position.settings) });
     }
     let mut schemas = known;
     let adapter_type = running.manifest_answer.get("adapterType").and_then(Js::as_str).unwrap_or(&running.external.manifest.name);
     let position_args = running.position_args();
     for connection in wanted {
-        let addresses = addresses_of(running, imported, &connection.key);
         let chains = chains_of(running, imported, &connection.key);
         let walk = ConnectionWalk { running, credentials, credential: connection.credential, settings: connection.settings.clone() };
         let failed = |why: String| {
@@ -211,7 +207,7 @@ pub async fn describe_external(running: &RunningExternal, credentials: &Credenti
             }
         };
         let (entries, described, position_options) = match schemas.get(&connection.key) {
-            Some(held) if held.addresses == addresses && held.chains == chains => continue,
+            Some(held) if held.chains == chains => continue,
             Some(held) => (held.entries.clone(), held.described.clone(), held.position_options.clone()),
             None => {
                 let (entries, described) = describe_as(running, credentials, connection.credential, connection.settings.clone()).await.map_err(failed)?;
@@ -223,13 +219,10 @@ pub async fn describe_external(running: &RunningExternal, credentials: &Credenti
                 (entries, described, position_options)
             }
         };
-        let hops = address_hops(&running.listen, &connection.position_values);
-        let narrowing = Narrowing { adapter: &running.external.manifest.name, adapter_type, hops: &hops, addresses: &addresses, entries: &entries, walk: &walk };
-        let schema = narrow_event_positions(with_event_narrowing_keys(described.clone(), &hops), &narrowing).await.map_err(failed)?;
         let walker = Walker::new(&walk, adapter_type);
         let refining = Refining { adapter: &running.external.manifest.name, entries: &entries, walker: &walker };
-        let schema = refine_instance_schema(schema, &chains.iter().collect::<Vec<_>>(), &refining).await.map_err(failed)?;
-        schemas.insert(connection.key, Described { entries, described, addresses, chains, schema, position_options });
+        let schema = refine_instance_schema(described.clone(), &chains.iter().collect::<Vec<_>>(), &refining).await.map_err(failed)?;
+        schemas.insert(connection.key, Described { entries, described, chains, schema, position_options });
     }
     Ok(schemas)
 }
@@ -240,15 +233,6 @@ struct Wanted<'c> {
     credential: Option<&'c Credential>,
     /// What a call in its position carries.
     settings: Option<serde_json::Value>,
-    /// Its position's values, by position arg.
-    position_values: BTreeMap<String, String>,
-}
-
-/// The event addresses the files' signatures name against the connection
-/// filed under `key`, in the files' order.
-fn addresses_of(running: &RunningExternal, imported: &Imported, key: &str) -> Vec<EventAddress> {
-    let of_connection = connection_filter(running, key);
-    imported.event_addresses.iter().filter(|a| of_connection(&a.construction)).map(|a| a.address.clone()).collect()
 }
 
 /// The hop chains the files walk from the connection filed under `key`, in the files' order.
@@ -335,12 +319,21 @@ fn positions_of<'a>(running: &RunningExternal, imported: &'a Imported) -> Vec<(&
 pub(crate) async fn describe_as(running: &RunningExternal, credentials: &Credentials, credential: Option<&Credential>, settings: Option<serde_json::Value>) -> Result<(Vec<Js>, Js), String> {
     let name = &running.external.manifest.name;
     let rpc = |method: &'static str, params: serde_json::Value| rpc_in(running, credentials, credential, LOCAL_TENANT, method, params, settings.clone());
+    if let Some(refusal) = retired_entry_key(name, &running.manifest_answer, &RETIRED_MANIFEST_KEYS) {
+        return Err(format!("Remote adapter \"{name}\" declares {refusal}"));
+    }
     let entries = rpc("listEntryPoints", json!({})).await?;
     let entry_list = entries
         .as_array()
         .filter(|list| list.iter().all(is_entry_point))
         .ok_or_else(|| shape_error("listEntryPoints", name, &entries, "expected an array of { typeId, displayName, writable, readable }"))?
         .to_vec();
+    for entry in &entry_list {
+        let type_id = entry.get("typeId").and_then(Js::as_str).unwrap_or_default();
+        if let Some(refusal) = retired_entry_key(type_id, entry, &RETIRED_ENTRY_KEYS) {
+            return Err(format!("Remote adapter \"{name}\" lists {refusal}"));
+        }
+    }
     let mut descriptors = IndexMap::new();
     for entry in &entry_list {
         let type_id = entry.get("typeId").and_then(Js::as_str).unwrap_or_default().to_string();

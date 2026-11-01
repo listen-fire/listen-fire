@@ -1,5 +1,5 @@
 {
-  "contractVersion": 2,
+  "contractVersion": 3,
   "adapters": {
     "email": {
       "canFire": true,
@@ -2966,17 +2966,6 @@
           "required": true
         }
       ],
-      "triggerConfig": [
-        "events",
-        "channels"
-      ],
-      "triggerConfigOptions": {
-        "events": [
-          "app_mention",
-          "message",
-          "reaction_added"
-        ]
-      },
       "schemas": {
         "acme_slack": {
           "positions": {
@@ -3243,23 +3232,7 @@
                 ]
               }
             }
-          },
-          "eventPosition": "Message",
-          "eventPositions": [
-            {
-              "position": "Message",
-              "on": [
-                "message",
-                "app_mention"
-              ]
-            },
-            {
-              "position": "Reaction",
-              "on": [
-                "reaction_added"
-              ]
-            }
-          ]
+          }
         },
         "team_chat": {
           "positions": {
@@ -3526,23 +3499,7 @@
                 ]
               }
             }
-          },
-          "eventPosition": "Message",
-          "eventPositions": [
-            {
-              "position": "Message",
-              "on": [
-                "message",
-                "app_mention"
-              ]
-            },
-            {
-              "position": "Reaction",
-              "on": [
-                "reaction_added"
-              ]
-            }
-          ]
+          }
         },
         "team_workspace": {
           "positions": {
@@ -3809,23 +3766,7 @@
                 ]
               }
             }
-          },
-          "eventPosition": "Message",
-          "eventPositions": [
-            {
-              "position": "Message",
-              "on": [
-                "message",
-                "app_mention"
-              ]
-            },
-            {
-              "position": "Reaction",
-              "on": [
-                "reaction_added"
-              ]
-            }
-          ]
+          }
         },
         "my_slack": {
           "positions": {
@@ -4092,23 +4033,7 @@
                 ]
               }
             }
-          },
-          "eventPosition": "Message",
-          "eventPositions": [
-            {
-              "position": "Message",
-              "on": [
-                "message",
-                "app_mention"
-              ]
-            },
-            {
-              "position": "Reaction",
-              "on": [
-                "reaction_added"
-              ]
-            }
-          ]
+          }
         }
       }
     },
@@ -5101,32 +5026,13 @@
                 "Reply Markup": "Telegram's `reply_markup`, exactly as the Bot API spells it — passed through verbatim (no wrapping, no typed shape here; a malformed keyboard surfaces as a loud Telegram error at run time). Usually an inline keyboard: rows of buttons, each `{ text, url }` (opens a link) or `{ text, callback_data }` (a tap this bot handles, capped by Telegram at 64 BYTES). To make a tap DO something, mint a callback (`c = callback({ … })`) and put `\"${c.id}\"` in `callback_data` — it fits the 64-byte cap comfortably — one callback per button, since its body is what that button means. Telegram captures nothing at tap time, so a callback fired from a keyboard takes no values; anything a person has to fill in needs a `url` button instead. Buttons compose with everything else on the send. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). Example:\n{ inline_keyboard: [\n  [ { text: \"Approve\", callback_data: \"${approve.id}\" },\n    { text: \"Decline\", callback_data: \"${decline.id}\" } ],\n] }"
               }
             }
-          },
-          "eventPosition": "Message",
-          "eventPositions": [
-            {
-              "position": "Message"
-            }
-          ]
+          }
         }
       }
     },
     "whatsapp": {
       "canFire": true,
       "constructionArgs": [],
-      "triggerConfig": [
-        "events"
-      ],
-      "triggerConfigOptions": {
-        "events": [
-          "message",
-          "reaction",
-          "location"
-        ]
-      },
-      "defaultEvents": [
-        "message"
-      ],
       "schemas": {
         "": {
           "positions": {
@@ -5271,49 +5177,13 @@
                 "Emoji": "The reaction emoji. Inbound: empty when the reaction was removed. On a write along msg-[:Reactions]->: the single emoji to react with — required."
               }
             }
-          },
-          "eventPosition": "Message",
-          "eventPositions": [
-            {
-              "position": "Message",
-              "on": [
-                "message"
-              ]
-            },
-            {
-              "position": "Reaction",
-              "on": [
-                "reaction"
-              ]
-            },
-            {
-              "position": "Location",
-              "on": [
-                "location"
-              ]
-            }
-          ]
+          }
         }
       }
     },
     "system": {
       "canFire": true,
       "constructionArgs": [],
-      "triggerConfig": [
-        "events",
-        "pollIntervalSeconds"
-      ],
-      "triggerConfigOptions": {
-        "events": [
-          "Run Failed",
-          "Validation Issue",
-          "Deprecated Version",
-          "Release Applied"
-        ]
-      },
-      "defaultEvents": [
-        "Run Failed"
-      ],
       "schemas": {
         "": {
           "positions": {
@@ -5346,34 +5216,7 @@
             }
           },
           "collections": {},
-          "writableRoots": {},
-          "eventPosition": "Run Failed",
-          "eventPositions": [
-            {
-              "position": "Run Failed",
-              "on": [
-                "Run Failed"
-              ]
-            },
-            {
-              "position": "Validation Issue",
-              "on": [
-                "Validation Issue"
-              ]
-            },
-            {
-              "position": "Deprecated Version",
-              "on": [
-                "Deprecated Version"
-              ]
-            },
-            {
-              "position": "Release Applied",
-              "on": [
-                "Release Applied"
-              ]
-            }
-          ]
+          "writableRoots": {}
         }
       }
     },
@@ -5386,31 +5229,6 @@
           "required": true
         }
       ],
-      "triggerConfig": [
-        "events",
-        "participating",
-        "pollIntervalSeconds"
-      ],
-      "triggerConfigOptions": {
-        "events": [
-          "agent_session_finished",
-          "approval_requested",
-          "assign",
-          "author",
-          "ci_activity",
-          "comment",
-          "invitation",
-          "manual",
-          "member_feature_requested",
-          "mention",
-          "review_requested",
-          "security_advisory_credit",
-          "security_alert",
-          "state_change",
-          "subscribed",
-          "team_mention"
-        ]
-      },
       "schemas": {
         "my_github": {
           "positions": {
@@ -5816,13 +5634,7 @@
               "uniquenessAuthorable": false
             }
           },
-          "supportsInPlaceUpdate": true,
-          "eventPosition": "Notification",
-          "eventPositions": [
-            {
-              "position": "Notification"
-            }
-          ]
+          "supportsInPlaceUpdate": true
         }
       }
     },
@@ -5890,24 +5702,6 @@
     "kg": {
       "canFire": true,
       "constructionArgs": [],
-      "triggerConfig": [
-        "type",
-        "events",
-        "fields"
-      ],
-      "triggerConfigRequired": [
-        "type"
-      ],
-      "triggerConfigOptions": {
-        "events": [
-          "record.created",
-          "record.updated",
-          "record.deleted"
-        ]
-      },
-      "triggerConfigFormats": {
-        "fields": "fields"
-      },
       "schemas": {
         "": {
           "positions": {
@@ -6170,24 +5964,6 @@
               "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Support Ticket\"]]]",
               "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Support Ticket\"]]]"
             ]
-          },
-          "eventPosition": "Record Change",
-          "eventPositions": [
-            {
-              "position": "Record Change"
-            }
-          ],
-          "eventNarrowingKeys": [
-            "type"
-          ],
-          "eventNarrowingValues": {
-            "[]": {
-              "type": [
-                "Company",
-                "Person",
-                "Support Ticket"
-              ]
-            }
           },
           "collections": {
             "Company": {

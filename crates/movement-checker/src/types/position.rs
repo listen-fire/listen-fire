@@ -337,7 +337,7 @@ pub struct UnionPosition {
     pub variants: Vec<String>,
     pub narrows: Option<String>,
     pub display: Option<String>,
-    /// The event address a parameter type named it by (`positionFromAddress`).
+    /// The pins an `IS` test narrowed it by, which a further test extends.
     pub address: Option<super::event_address::EventAddress>,
     pub parameter: Option<NeedRef>,
 }

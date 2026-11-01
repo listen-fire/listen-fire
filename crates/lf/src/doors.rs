@@ -39,7 +39,7 @@ use crate::inbound::{
 use crate::arrivals::{ArrivalIn, arrivals_of, log_and_wake, logged};
 use crate::json::Js;
 use crate::obj;
-use crate::routing::{Arrival, Listen, event_matches_trigger_scope};
+use crate::routing::Listen;
 use crate::runs::{Delivered, Fired, Session};
 use crate::secrets::{Binding, Credential, Credentials, install_of, signer_of};
 use crate::subscriptions::{has_scoped, scoped_secret};
@@ -320,35 +320,17 @@ impl<R: Reader> LfDoors<'_, R> {
         self.served.iter().filter_map(|s| s.inbound.as_ref()).find(|setup| setup.provider_key() == provider_key)
     }
 
-    /// Under the inline sink, a kept delivery's events, each run now under
-    /// its receipt, then what `landed` for its connection's traversal
-    /// listens. One event's failure never stops the next; any failure is
-    /// the delivery's, answered 500 for its sender to send again.
+    /// Under the inline sink, what `landed` for its connection's traversal
+    /// listens, run now. A failure is the delivery's, answered 500 for its
+    /// sender to send again.
     async fn run_inline(&self, receipt: &NewDelivery, mark: i64, landed: Option<LandedHere<'_>>) -> Result<(), String> {
         let EventSink::Inline { session, fired } = &self.sink else { return Ok(()) };
         // The mark before the delivery's arrivals, as a queued row carries
         // it: a run the delivery starts has its own trigger noted on its
         // waits, and any other arrival of the delivery may answer them.
         let mut failures = Vec::new();
-        for kept in &receipt.events {
-            let (external, event) = (kept.get("external").and_then(Js::as_str).unwrap_or_default(), kept.get("event").unwrap_or(&Js::Null));
-            let delivered = Delivered { arrival_mark: Some(mark), ..Delivered::of_row(kept, Some(&receipt.id)) };
-            match session.fire_event(external, event, false, delivered).await {
-                Ok(one) => {
-                    for line in &one.redelivered {
-                        eprintln!("listen-fire: {line}");
-                    }
-                    fired.borrow_mut().outcomes.extend(one.outcomes);
-                }
-                Err(error) => {
-                    eprintln!("Webhook event processing failed: {error}");
-                    failures.push(error);
-                }
-            }
-        }
-        // What landed is judged once the events have run, as its row is
-        // drained after theirs. Its row is done once it ran; one that failed
-        // is left to a drain, a run lease from now.
+        // What landed is judged here. Its row is done once it ran; one that
+        // failed is left to a drain, a run lease from now.
         if let Some(LandedHere { external, came_for, arrivals, row_key }) = landed {
             let delivered = Delivered { id: Some(&receipt.id), arrival_mark: Some(mark), ..came_for };
             match session.fire_arrivals(external, arrivals, delivered).await {
@@ -532,11 +514,11 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         let Minted { runs: minted, mut waits, .. } = self.mint_runs(adapter_type, Some(&kept.source.install), came_for.credential, &landed).await?;
         let delivered = Delivered { id: Some(&receipt.id), ..came_for };
         let inline = matches!(self.sink, EventSink::Inline { .. });
-        // Run inline, the events run inside the request, from the receipt.
-        let mut work: Vec<NewWork> = match inline {
-            false => kept.receipts.iter().map(|event| fire_event_work(adapter_type, event.clone(), delivered)).collect(),
-            true => Vec::new(),
-        };
+        // An event fires nothing from 0.13: it is kept with the delivery, and said.
+        if !kept.receipts.is_empty() {
+            eprintln!("listen-fire: {}", crate::runs::retired_event_line(adapter_type));
+        }
+        let mut work: Vec<NewWork> = Vec::new();
         // What landed is a row, its runs' waits live while it is queued. Run
         // inline, the request runs the row itself and completes it; it is
         // due a run lease out, so a drain takes it only if this process died.
@@ -579,14 +561,12 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         Ok(true)
     }
 
-    /// A delivery none of whose events fits the payload every listen it
-    /// would reach declares (`payload: <Payment>`) is refused, naming the
-    /// fields; so is one with an arrival that fits none of the types the
-    /// listens on its edge state (`-[:Requests]-><Payment>`). A listen that
-    /// declares none takes any event or arrival. A listen on another record
+    /// A delivery with an arrival that fits none of the types the listens on
+    /// its edge state (`-[:Requests]-><Payment>`) is refused, naming the
+    /// fields. A listen that states none takes any arrival. A listen on another record
     /// type's edge of the same name is not reached: the judge skips the
     /// arrival there, whatever its fields.
-    fn refuse_events(&self, source: &Source, events: &[Js], arrivals: &[ArrivalIn]) -> Option<String> {
+    fn refuse_arrivals(&self, source: &Source, arrivals: &[ArrivalIn]) -> Option<String> {
         let credential = self.delivering_credential(source);
         let now_ms = crate::limiter::now_ms() as f64;
         let mut lines = Vec::new();
@@ -599,18 +579,6 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
             for listen in reached {
                 let Some(declared) = &listen.payload else { continue };
                 lines.push(format!("{}, as the listen firing {}:{} states it: {}", declared.name, listen.file, listen.movement_name, listen.misfits(arrival).join("; ")));
-            }
-        }
-        for event in events {
-            let reached: Vec<&Listen> =
-                self.listens.iter().filter(|l| l.plan.is_none() && l.adapter == source.adapter_type && l.hears(credential) && event_matches_trigger_scope(event, &l.config, Arrival::Pushed)).collect();
-            if reached.is_empty() || reached.iter().any(|l| l.takes(event)) {
-                continue;
-            }
-            let payload = event.get("payload").unwrap_or(&Js::Null);
-            for listen in reached {
-                let Some(declared) = &listen.payload else { continue };
-                lines.push(format!("{}, as the listen firing {}:{} declares it: {}", declared.name, listen.file, listen.movement_name, declared.misfits(&crate::wire::json_of_js(payload)).join("; ")));
             }
         }
         (!lines.is_empty()).then(|| format!("the body does not fit what the listens on {} declare — {}", source.install, lines.join(" | ")))
@@ -647,7 +615,7 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
         Ok(vec![Js::Obj(obj! { "external" => Js::str(&caller.adapter_type), "event" => event.clone() })])
     }
 
-    /// The batch as one delivery, its receipt and its rows in one write.
+    /// The batch as one delivery, kept with its receipt.
     async fn enqueue_pushed(&self, caller: &PushCaller, captured: Vec<Js>, external_id: Option<&str>, request: &Js) -> Result<bool, String> {
         if captured.is_empty() {
             return Ok(true);
@@ -662,20 +630,11 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
             events: captured,
             request: Some(request.clone()),
         };
-        let mut work: Vec<NewWork> = receipt
-            .events
-            .iter()
-            .map(|pushed| {
-                let external = pushed.get("external").and_then(Js::as_str).unwrap_or_default();
-                fire_event_work(external, pushed.get("event").cloned().unwrap_or(Js::Null), Delivered { id: Some(&receipt.id), ..Delivered::default() })
-            })
-            .collect();
-        self.mark_fire_rows(&mut work)?;
-        if self.store.keep_delivery(&caller.subscription_id, None, &receipt, &work, None, &[]).map_err(|e| e.to_string())?.is_none() {
+        // An event fires nothing from 0.13: it is kept with its receipt, and said.
+        if self.store.keep_delivery(&caller.subscription_id, None, &receipt, &[], None, &[]).map_err(|e| e.to_string())?.is_none() {
             return Ok(false);
         }
-        crate::wake::queued_rows(&work);
-        self.list(&work);
+        eprintln!("listen-fire: {}", crate::runs::retired_event_line(&caller.adapter_type));
         Ok(true)
     }
 

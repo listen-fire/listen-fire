@@ -8,7 +8,7 @@
 use movement_checker::{CheckOptions, check_source};
 use movement_parser::catalog::types::CatalogSnapshot;
 
-const CATALOG: &str = r#"{"contractVersion":2,"adapters":{"crm":{"canFire":true,"constructionArgs":[{"name":"credentials","kind":"credential","required":true}],"schemas":{"crm_cred":{"positions":{"company":{"properties":{"name":"text","employees":"number"},"edges":{}}},"collections":{"companies":{"target":"company"}},"writableRoots":{"company":{"fields":{"name":"text","employees":"number"},"resultShape":{"externalId":"text"}}}}}}},"credentials":{"crm_cred":{"adapters":["crm"]}},"plugins":{}}"#;
+const CATALOG: &str = r#"{"contractVersion":3,"adapters":{"crm":{"canFire":true,"constructionArgs":[{"name":"credentials","kind":"credential","required":true}],"schemas":{"crm_cred":{"positions":{"company":{"properties":{"name":"text","employees":"number"},"edges":{}}},"collections":{"companies":{"target":"company"}},"writableRoots":{"company":{"fields":{"name":"text","employees":"number"},"resultShape":{"externalId":"text"}}}}}}},"credentials":{"crm_cred":{"adapters":["crm"]}},"plugins":{}}"#;
 
 fn absent(body: &str) -> Vec<String> {
     let source = format!("import {{ crm }} from adapters\nimport {{ crm_cred }} from credentials\nc = connect crm using crm_cred\nfunction go(t: <text>) {{\n{body}\n}}\n");

@@ -64,7 +64,7 @@ use crate::edge_polls::{edge_subscription, pushed_keys};
 use crate::externals::{RunningExternal, rpc_in};
 use crate::check::LOCAL_TENANT;
 use crate::json::{Js, Obj};
-use crate::routing::{Scope, subscription_key};
+use crate::routing::Scope;
 use crate::runs::{FileSet, Session};
 use crate::secrets_slot::SecretsStore;
 use crate::secrets::{Binding, Credential, Credentials, credential_for};
@@ -320,63 +320,24 @@ fn registered_channels(credential: &Credential) -> Vec<(String, Subscribed)> {
 /// and its subscription key ("" for a module that declares no scope keys).
 type Channel = (Option<String>, String);
 
-/// What a channel's listens want: its scope and their events.
+/// A webhook a listen in the settings form registered before 0.13: its scope.
 struct Want {
     scope: Scope,
-    events: BTreeSet<String>,
 }
 
-/// The external's webhook subscriptions, with the events each one's listens
-/// need: each listen's `events`, else the module's default subscription,
-/// else everything it can subscribe to. A listen's channel is its
-/// credential (its construction's, else the external's user credential;
-/// None when it has none) and its scope (its config's values of the module's
-/// `subscriptionScopeKeys`, the platform's channel scope). Every other
-/// webhook a credential of the external holds wants no events, so it is
-/// removed. A listen whose config misses a scope key has no channel, and a
-/// line saying so.
-fn wanted(set: &FileSet, running: &RunningExternal, credentials: &Credentials) -> (BTreeMap<Channel, Want>, Vec<String>) {
+/// The external's webhooks for the events of listens in the settings form,
+/// each registered before 0.13 retired them: no listen wants their events
+/// any more, so each is removed.
+fn retired(running: &RunningExternal, credentials: &Credentials) -> BTreeMap<Channel, Want> {
     let name = &running.external.manifest.name;
-    let declared = |key: &str| -> Vec<String> {
-        running.listen.get(key).and_then(Js::as_array).into_iter().flatten().filter_map(Js::as_str).map(str::to_string).collect()
-    };
-    let fallback = {
-        let defaults = declared("defaultSubscribedEvents");
-        if defaults.is_empty() { declared("subscribableEvents") } else { defaults }
-    };
-    let scope_keys = running.subscription_scope_keys();
-    let mut wanted: BTreeMap<Channel, Want> = BTreeMap::new();
-    let mut notes = Vec::new();
-    // A listen on a traversal is subscribed for by the key it shares
-    // (`edge_webhooks`), or fired by what its connection pushes.
-    for listen in set.listens.iter().filter(|l| l.adapter == *name && l.plan.is_none()) {
-        let scope = match listen.scope(&scope_keys) {
-            Ok(scope) => scope,
-            Err(_) if let Err(why) = &listen.address => {
-                notes.push(format!("{name}: {} has no webhook: {why}", listen.pipeline()));
-                continue;
-            }
-            Err(missing) => {
-                let missing: Vec<String> = missing.iter().map(|k| format!("'{k}'")).collect();
-                notes.push(format!("{name}: {} names no {} for its webhook, so none is registered for it", listen.pipeline(), missing.join(" or ")));
-                continue;
-            }
-        };
-        let credential = listen.credential.clone().or_else(|| credential_for(credentials, name).map(|c| c.name.clone()));
-        let key = subscription_key(&scope);
-        let want = wanted.entry((credential, key)).or_insert_with(|| Want { scope, events: BTreeSet::new() });
-        match listen.config.get("events").and_then(Js::as_array) {
-            Some(named) => want.events.extend(named.iter().filter_map(Js::as_str).map(str::to_string)),
-            None => want.events.extend(fallback.iter().cloned()),
-        }
-    }
+    let mut retired = BTreeMap::new();
     for registered in credentials.iter().filter(|c| c.external == *name && c.binding != Binding::Install) {
         for (key, subscribed) in registered_channels(registered) {
             let Subscribed::Events(scope) = subscribed else { continue };
-            wanted.entry((Some(registered.name.clone()), key)).or_insert_with(|| Want { scope, events: BTreeSet::new() });
+            retired.entry((Some(registered.name.clone()), key)).or_insert(Want { scope });
         }
     }
-    (wanted, notes)
+    retired
 }
 
 /// The external's webhooks for the arrivals on its pushed edges: one per
@@ -426,16 +387,15 @@ struct Webhook {
     label: String,
 }
 
-/// The external's webhooks, as `wanted` has them.
-fn webhooks_of(external: &str, wanted: BTreeMap<Channel, Want>) -> Vec<Webhook> {
-    let several = wanted.keys().map(|(credential, _)| credential).collect::<BTreeSet<_>>().len() > 1;
-    wanted
+/// The external's webhooks for events, as `retired` has them: none needed.
+fn webhooks_of(external: &str, retired: BTreeMap<Channel, Want>) -> Vec<Webhook> {
+    let several = retired.keys().map(|(credential, _)| credential).collect::<BTreeSet<_>>().len() > 1;
+    retired
         .into_iter()
         .map(|((credential, key), want)| {
             let subscribed = Subscribed::Events(want.scope);
             let label = label_of(external, credential.as_deref().filter(|_| several), &subscribed, &key);
-            let events: Vec<String> = want.events.into_iter().collect();
-            Webhook { external: external.to_string(), credential, key, subscribed, needed: !events.is_empty(), events, label }
+            Webhook { external: external.to_string(), credential, key, subscribed, needed: false, events: Vec::new(), label }
         })
         .collect()
 }
@@ -499,9 +459,7 @@ pub async fn reconcile(session: &Session) -> Vec<String> {
     let mut lines = Vec::new();
     let mut webhooks = Vec::new();
     for running in registering(&set) {
-        let (wanted, notes) = wanted(&set, running, secrets.credentials());
-        lines.extend(notes);
-        webhooks.extend(webhooks_of(&running.external.manifest.name, wanted));
+        webhooks.extend(webhooks_of(&running.external.manifest.name, retired(running, secrets.credentials())));
         webhooks.extend(edge_webhooks(&set, running, secrets.credentials()).into_values());
     }
     lines.extend(register(session, webhooks).await);
@@ -509,32 +467,24 @@ pub async fn reconcile(session: &Session) -> Vec<String> {
     lines
 }
 
-/// A refresh's registrations: each webhook whose listens want other events
-/// in `after` than in `before`, each edge's webhook a listen newly shares or
-/// none shares any more, and each whose last registration failed. A
-/// failure is said once per message; a success is always said, and so is a
-/// listen the refresh left without a scope.
+/// A refresh's registrations: each edge's webhook a listen newly shares or
+/// none shares any more, and each whose last registration failed (a
+/// retired webhook for events among them). A failure is said once per
+/// message; a success is always said.
 pub async fn follow_refresh(session: &Session, before: &FileSet, after: &FileSet) -> Vec<String> {
     let secrets = session.secrets();
     let credentials = secrets.credentials();
-    let mut lines = Vec::new();
     let mut webhooks = Vec::new();
     for running in registering(after) {
-        let (was, said) = wanted(before, running, credentials);
-        let (now, notes) = wanted(after, running, credentials);
-        lines.extend(notes.into_iter().filter(|note| !said.contains(note)));
-        let changed = webhooks_of(&running.external.manifest.name, now).into_iter().filter(|w| {
-            let before = was.get(&(w.credential.clone(), w.key.clone())).map(|want| want.events.iter().cloned().collect::<Vec<_>>());
-            session.registrations.failing(&w.label) || before.as_ref() != Some(&w.events)
-        });
-        webhooks.extend(changed);
+        let failed = webhooks_of(&running.external.manifest.name, retired(running, credentials)).into_iter().filter(|w| session.registrations.failing(&w.label));
+        webhooks.extend(failed);
         let was = edge_webhooks(before, running, credentials);
         let edges = edge_webhooks(after, running, credentials).into_iter().filter(|(channel, w)| {
             session.registrations.failing(&w.label) || was.get(channel).map(|before| before.needed) != Some(w.needed)
         });
         webhooks.extend(edges.map(|(_, w)| w));
     }
-    lines.extend(register(session, webhooks).await);
+    let mut lines = register(session, webhooks).await;
     lines.extend(arm_refreshes(session));
     lines
 }

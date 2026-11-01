@@ -166,9 +166,8 @@ fn instances_and_listens_record_what_the_config_resolved() {
     assert_eq!(listen["instance"], "inbox");
     assert_eq!(listen["adapterType"], "email");
     assert_eq!((listen["fires"].as_str(), listen["firesMovement"].as_bool()), (Some("Intake"), Some(true)));
-    assert_eq!(listen["narrowing"], json!({ "key": "intake" }));
-    assert_eq!(listen["eventTypes"], json!([{ "key": "Email" }]));
-    assert_eq!(on_line(&a, "listen", 35)["narrowing"], json!({}));
+    assert_eq!(listen["path"], "inbox-[e:Emails WHERE e.Key == \"intake\"]->");
+    assert_eq!(on_line(&a, "listen", 35)["path"], "runs-[:Invocations]->");
 }
 
 #[test]

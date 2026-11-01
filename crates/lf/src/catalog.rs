@@ -14,7 +14,7 @@ use crate::secrets::{Binding, Credential, Credentials};
 use crate::sources::MovementFile;
 
 /// `CATALOG_SNAPSHOT_VERSION`.
-const CATALOG_SNAPSHOT_VERSION: u64 = 2;
+const CATALOG_SNAPSHOT_VERSION: u64 = 3;
 
 /// `instanceSchemaKey({ credentialName })`: the credential's name, `''` for none.
 fn instance_schema_key(credential_name: Option<&str>) -> String {
@@ -26,17 +26,14 @@ fn instance_schema_key(credential_name: Option<&str>) -> String {
 pub type ConnectionSchemas = IndexMap<String, Described>;
 
 /// One connection as its module described it, and as the catalog serves it:
-/// with an event position grafted for each address the signatures name
-/// against it (crate::listen_narrowing), and a refined position for each
-/// selection a hop's WHERE makes on it (crate::refinements).
+/// with a refined position for each selection a hop's WHERE makes on it
+/// (crate::refinements).
 #[derive(Clone)]
 pub struct Described {
     /// Its `listEntryPoints` answer.
     pub entries: Vec<Js>,
     /// Its schema as projected from its introspection.
     pub described: Js,
-    /// The addresses `schema` is narrowed by.
-    pub addresses: Vec<movement_checker::types::event_address::EventAddress>,
     /// The hop chains whose WHEREs `schema` is narrowed by.
     pub chains: Vec<crate::refinements::InstanceChain>,
     /// What the checker reads.
@@ -218,8 +215,8 @@ fn adapter_snapshot_of(adapter: AdapterDeclarations) -> Js {
     if !adapter.declared_credentials.is_empty() {
         snapshot.insert("declaredCredentials".into(), Js::strings(adapter.declared_credentials));
     }
-    for (k, v) in trigger_config_vocabulary(adapter.supported_triggers, adapter.listen) {
-        snapshot.insert(k, v);
+    if !adapter.supported_triggers.is_empty() {
+        snapshot.insert("canFire".into(), Js::Bool(true));
     }
     if let Some(description) = adapter.description {
         snapshot.insert("description".into(), Js::str(description));
@@ -236,57 +233,6 @@ fn adapter_snapshot_of(adapter: AdapterDeclarations) -> Js {
         snapshot.insert("constructionArgOptions".into(), Js::from(adapter.construction_arg_options));
     }
     Js::from(snapshot)
-}
-
-/// `triggerConfigVocabulary` for a manifest with no `triggerConfig` blocks.
-fn trigger_config_vocabulary(supported_triggers: &[String], listen: &Obj) -> Obj {
-    let mut keys: Vec<String> = Vec::new();
-    let mut options = Obj::new();
-    let mut required: Vec<String> = Vec::new();
-    let mut formats = Obj::new();
-    let subscribable = listen.get("subscribableEvents").and_then(Js::as_array).unwrap_or(&[]);
-    if !subscribable.is_empty() {
-        keys.push("events".into());
-        options.insert("events".into(), Js::Arr(subscribable.to_vec()));
-    }
-    for entry in listen.get("listenConfig").and_then(Js::as_array).unwrap_or(&[]) {
-        let Some(key) = entry.get("key").and_then(Js::as_str) else { continue };
-        if !keys.iter().any(|k| k == key) {
-            keys.push(key.into());
-        }
-        if Js::is_true(entry.get("required")) && !required.iter().any(|k| k == key) {
-            required.push(key.into());
-        }
-        if let Some(format) = entry.get("format") {
-            formats.insert(key.into(), format.clone());
-        }
-    }
-    // Every polled source takes its listen's own interval (spelled `every`
-    // in this release by the checker, over this key).
-    if supported_triggers.iter().any(|t| t == "poll") && !keys.iter().any(|k| k == "pollIntervalSeconds") {
-        keys.push("pollIntervalSeconds".into());
-    }
-    let mut out = Obj::new();
-    if !supported_triggers.is_empty() {
-        out.insert("canFire".into(), Js::Bool(true));
-    }
-    if !keys.is_empty() {
-        out.insert("triggerConfig".into(), Js::strings(&keys));
-    }
-    if !options.is_empty() {
-        out.insert("triggerConfigOptions".into(), Js::from(options));
-    }
-    if !required.is_empty() {
-        out.insert("triggerConfigRequired".into(), Js::strings(&required));
-    }
-    if !formats.is_empty() {
-        out.insert("triggerConfigFormats".into(), Js::from(formats));
-    }
-    let defaults = listen.get("defaultSubscribedEvents").and_then(Js::as_array).unwrap_or(&[]);
-    if !defaults.is_empty() {
-        out.insert("defaultEvents".into(), Js::Arr(defaults.to_vec()));
-    }
-    out
 }
 
 /// `pluginsOf`: each plugin external's package, keyed by module and name, each

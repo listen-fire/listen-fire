@@ -17,15 +17,14 @@ use crate::executor::{Answer, PendingRequest, Step};
 /// document holding a file, and tickets whose `Reply` edge is listenable
 /// (as are a monster's taunts, a note's comments and a reply's reactions).
 const CATALOG: &str = r#"{
-  "adapters": { "world": { "constructionArgs": [], "canFire": true, "triggerConfig": ["events"], "schemas": { "": {
+  "adapters": { "world": { "constructionArgs": [], "canFire": true, "schemas": { "": {
     "positions": {
       "Monster": { "properties": { "Name": "text", "Slayer": "text", "Scroll": "file" }, "edges": { "Lair": { "target": "Note" }, "Taunts": { "target": "Reply", "listenable": true, "sequenced": "chronological" } } },
       "Note": { "properties": { "Title": "text", "Attachment": "file" }, "edges": { "Comments": { "target": "Reply", "listenable": true, "sequenced": "chronological" } } },
       "Ticket": { "properties": { "Subject": "text" }, "edges": { "Reply": { "target": "Reply", "listenable": true, "sequenced": "chronological" } } },
       "Reply": { "properties": { "Body": "text" }, "edges": { "Reactions": { "target": "Reply", "listenable": true, "sequenced": "chronological" } } }
     },
-    "collections": { "notes": { "target": "Note" }, "tickets": { "target": "Ticket" } },
-    "eventPosition": "Monster",
+    "collections": { "notes": { "target": "Note" }, "tickets": { "target": "Ticket" }, "Monster": { "target": "Monster", "readable": false, "listenable": true, "delivery": "connection" } },
     "supportsInPlaceUpdate": true,
     "writableRoots": {
       "Note": { "fields": { "Title": "text", "Attachment": "file" }, "resultShape": { "externalId": "text", "Title": "text" }, "fuzzyResolution": true },
@@ -54,7 +53,7 @@ fn input(source: &str) -> RunInput {
 
 /// The movement's source with `body` as its one function.
 fn movement(imports: &str, body: &str) -> String {
-    format!("import {{ world }} from adapters\n{imports}game = connect world\nfunction m(monster: <game-[:Monster]->>) {{\n{body}}}\nlisten to game {{ events: [\"monster.slain\"] }} fire m\n")
+    format!("import {{ world }} from adapters\n{imports}game = connect world\nfunction m(monster: <game-[:Monster]->>) {{\n{body}}}\nlisten to game-[:Monster]-> fire m\n")
 }
 
 fn errors(source: &str) -> Vec<Problem> {
@@ -1089,7 +1088,7 @@ fn a_park_of_state_version_2_is_refused_naming_0_12() {
 /// The movement's source with `functions` declared before `m`, whose body is
 /// `body`.
 fn movement_with(functions: &str, body: &str) -> String {
-    format!("import {{ world }} from adapters\ngame = connect world\n{functions}function m(monster: <game-[:Monster]->>) {{\n{body}}}\nlisten to game {{ events: [\"monster.slain\"] }} fire m\n")
+    format!("import {{ world }} from adapters\ngame = connect world\n{functions}function m(monster: <game-[:Monster]->>) {{\n{body}}}\nlisten to game-[:Monster]-> fire m\n")
 }
 
 /// The JSON host's answer for the monster's lair: one note, `note-lair`;

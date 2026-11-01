@@ -4,7 +4,7 @@
 //!   listen-fire init [dir]                       scaffold a starter project
 //!   listen-fire check [--dir <project>]          every diagnostic the project's files have
 //!   listen-fire run <movement> [--text <text>] [--dry-run]  run a movement a `listen to manual` fires, its Invocation's Text given
-//!   listen-fire run --event <file> [--dry-run]   route an event to its listens and run each
+//!   listen-fire run --event <file>   judge the file's arrivals against the listens on their edges and run each
 //!   listen-fire run --poll <movement>            poll now the polled sources of the listens that fire it
 //!   listen-fire resume [<run-id>]                step a parked run's every leaf now, or drain what is due in every parked run
 //!   listen-fire upgrade [--check] [--all]        rewrite the movement files into the language of this release
@@ -115,9 +115,9 @@ mod listener {
         Ok(())
     }
 }
-mod listen_narrowing;
 mod refinements;
 mod lsp;
+mod member_walk;
 mod modules;
 mod models;
 mod module_hosts;
@@ -178,7 +178,7 @@ use std::path::PathBuf;
 
 const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|deliveries|drain|serve|cancel|upgrade|modules|connect|credential|completion> [--dir <project folder>] [--ephemeral] [--store <state.db|postgres://…>] [--team <uuid>]
        listen-fire run <movement> [--text <text>] [--dry-run]
-       listen-fire run --event <file.json> [--dry-run]
+       listen-fire run --event <file.json>
        listen-fire run --poll <movement>
        listen-fire run --webhook <external> --body <file> [--install <credential>] [--header k:v]...
        listen-fire resume [<run-id>]
@@ -208,7 +208,7 @@ const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|
   check     every diagnostic the project's movement files have (as `listen-fire check`)
   catalog   the catalog snapshot the files are checked against, as JSON
   lsp       the language server (LSP over stdin/stdout): diagnostics, completion, hover, definitions and fixes for the movement files
-  run       run <movement>: one manual invocation, to the `listen to manual-[:Invocations]-> fire <movement>` listens (--text: the Invocation's Text); --event: route the event file's event to the listens it matches and run each; --poll <movement>: poll now, once, the source of each listen that fires it on a polled source (its manifest declares `poll`), and run the listen on each new event; and each polled edge a traversal listen that fires it is on, once for every listen sharing the poll
+  run       run <movement>: one manual invocation, to the `listen to manual-[:Invocations]-> fire <movement>` listens (--text: the Invocation's Text); --event: judge the event file's arrivals against the listens on their edges and run each; --poll <movement>: poll now, once, each polled edge a listen that fires it is on, once for every listen sharing the poll
   resume    step every parked leaf of one run now; with no run, drain the due work and what is due in every parked run (a timer not yet come stays parked)
   upgrade   rewrite the movement files by the fixes that keep their meaning (--all: every fix offered; --check: print the diff, write nothing)
   runs      the runs in the state file, most recent first (as `listen-fire runs`); `runs show <run-id>`: one run, its event, trace, park and attempts; `runs rerun <run-id>`: run a failed run again as its next attempt, with its own event and the movement as the project holds it now (so a fix to the movement takes effect), from the start; refused unless the run's latest attempt failed, while another listen-fire holds the run, and when the failed attempt already committed writes (they are listed; --force reruns it anyway, making them again)
@@ -516,17 +516,18 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
             }
             let session = runs::open_session(project, &runs::Opening { ephemeral: args.ephemeral, store: &store, role: runs::Role::Command, routes_listens: false }).await?;
             let (external, event) = runs::read_event_file(event_file)?;
-            // An event file of arrivals (adapter protocol 2.6) is judged
-            // against the traversal listens on their edges, as a delivery is.
-            if event.get("arrivals").is_some() {
-                if args.dry_run {
-                    eprintln!("listen-fire: --dry-run rehearses a settings event; an event file of arrivals runs as delivered");
-                    return Ok(2);
-                }
-                let arrivals = arrivals::arrivals_of(&event).map_err(|e| format!("{}: {e}", event_file.display()))?;
-                return report_fired(&session.fire_arrivals(&external, &arrivals, runs::Delivered::default()).await?, args.json, &mut out);
+            // An event file holds arrivals (adapter protocol 2.6), judged
+            // against the listens on their edges, as a delivery is.
+            if event.get("arrivals").is_none() {
+                eprintln!("listen-fire: {}: {}", event_file.display(), runs::retired_event_line(&external));
+                return Ok(2);
             }
-            report_fired(&session.fire_event(&external, &event, args.dry_run, runs::Delivered::default()).await?, args.json, &mut out)
+            if args.dry_run {
+                eprintln!("listen-fire: --dry-run rehearses `run <movement>`; an event file of arrivals runs as delivered");
+                return Ok(2);
+            }
+            let arrivals = arrivals::arrivals_of(&event).map_err(|e| format!("{}: {e}", event_file.display()))?;
+            report_fired(&session.fire_arrivals(&external, &arrivals, runs::Delivered::default()).await?, args.json, &mut out)
         }
         "resume" => {
             let project = load()?;

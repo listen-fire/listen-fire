@@ -2,7 +2,7 @@ import { `@lf/slack` as slack } from adapters
 import { greet } from "lib/greet"
 chat = connect slack
 
-function hello(run: <manual-[:Invocation]->>) {
+function hello(run: <manual-[:Invocations]->>) {
   greeting = Text.upper(run.`Text`)
   return greet(greeting)
 }
@@ -12,4 +12,4 @@ function scan(c: <chat-[:channel]->>) {
   return count(ms)
 }
 
-listen to manual fire hello
+listen to manual-[:Invocations]-> fire hello
