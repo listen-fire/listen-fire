@@ -1914,9 +1914,23 @@ function unreadableScopedBy(
   return `'${name}' declares 'scopedBy: ${scopedBy}', but the path ${[...path.reverse(), name].join(' → ')} comes through no '${scopedBy}': it must come before '${name}' on every path to it`;
 }
 
-/** `carries` names the hops before the declarant, outermost first: read from
- *  the innermost, each must be an edge into the type the one after it hangs
- *  off. `owner` is the type the declarant hangs off, none for a root. */
+/** `types`, then each type an edge into one of them hangs off, and so on out
+ *  to the instance: the types on a path to them. */
+function typesBefore(types: readonly string[], into: ReadonlyMap<string, readonly EdgeInto[]>): string[] {
+  const before = [...types];
+  for (let at = 0; at < before.length; at++) {
+    for (const { from } of into.get(before[at]!) ?? []) {
+      if (from !== undefined && !before.includes(from)) before.push(from);
+    }
+  }
+  return before;
+}
+
+/** `carries` names hops before the declarant, outermost first: read from the
+ *  innermost, each must be an edge into the type the one after it hangs off,
+ *  or into a type before that one on a path to it. A hop it does not carry
+ *  may come between (Slack's reaction carries its channel, not the message
+ *  it is on). `owner` is the type the declarant hangs off, none for a root. */
 function unreadableCarries(
   name: string,
   owner: string | undefined,
@@ -1933,11 +1947,11 @@ function unreadableCarries(
     if (hangsOff.length === 0) {
       return `'${name}' says its arrivals carry earlier hops, but 'carries' names '${hop}', and '${inner}' is a root collection: nothing comes before it`;
     }
-    const edgesIn = hangsOff.flatMap((t) => into.get(t) ?? []);
+    const edgesIn = typesBefore(hangsOff, into).flatMap((t) => into.get(t) ?? []);
     const matched = edgesIn.filter((e) => e.edge === hop);
     if (matched.length === 0) {
       const edges = [...new Set(edgesIn.map((e) => e.edge))];
-      return `'${name}' says its arrivals carry earlier hops, but 'carries' names '${hop}', which is no edge into ${hangsOff.map((t) => `'${display(t)}'`).join(' or ')} (the edges into it: ${edges.length === 0 ? 'none' : edges.join(', ')})`;
+      return `'${name}' says its arrivals carry earlier hops, but 'carries' names '${hop}', which is no edge into ${hangsOff.map((t) => `'${display(t)}'`).join(' or ')} or a record before it (the edges into them: ${edges.length === 0 ? 'none' : edges.join(', ')})`;
     }
     hangsOff = [...new Set(matched.flatMap((e) => (e.from === undefined ? [] : [e.from])))];
     inner = hop;

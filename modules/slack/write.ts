@@ -18,6 +18,7 @@ import type { FileRef, WriteResult } from 'movement-engine/public/adapter';
 
 import { SLACK_ADAPTER_TYPE } from './types';
 import { finalizeMessageText } from './mentions';
+import { SLACK_MAX_TOPIC_LENGTH, slackMessageKey, slackTopicBlockId } from './inbound';
 
 type SlackClient = ReturnType<typeof getSlackClient>;
 
@@ -115,6 +116,14 @@ const WRITE_UNION_CLASH =
  *  holds them, so a write cannot also set the blocks or the file. */
 const BUTTONS_CLASH = "SlackAdapter.createRecord: a Slack Message's Buttons can't be combined with Blocks or File";
 
+/** A Topic is stored as the id of the block a message's buttons sit in, so
+ *  a message without Buttons has nowhere to hold one. The checker's write
+ *  union keeps it off a file post and a Blocks post; this keeps it off a
+ *  plain one, which the union cannot tell apart from a post with buttons
+ *  not yet written. */
+export const TOPIC_WITHOUT_BUTTONS =
+  "SlackAdapter.createRecord: a Slack Message's Topic needs Buttons: Slack keeps it as the id of the block the buttons sit in (`lf:<topic>`), so a press carries it back; a message without Buttons has nowhere to hold one.";
+
 /**
  * The one create path: post or reply, decided by the anchor; text and/or
  * file and/or blocks, decided by the fields (internal currency: `text` /
@@ -147,6 +156,10 @@ export async function createUnifiedMessage(input: {
   const fileValue = asFileValue(fields.file);
   const blocks = asBlocksValue(fields.blocks);
   const buttons = asButtonsValue(fields.buttons);
+  const topic = asTopicValue(fields.topic);
+  if (topic !== undefined && buttons === undefined) {
+    throw new Error(TOPIC_WITHOUT_BUTTONS);
+  }
   if (!text && !fileValue && blocks === undefined && buttons === undefined) {
     throw new Error(
       'SlackAdapter.createRecord: a Slack Message needs at least one of Message / File / Blocks.',
@@ -180,18 +193,24 @@ export async function createUnifiedMessage(input: {
   // Blocks ride verbatim; `text` is the notification fallback Slack shows in
   // previews/notifications, omitted entirely when absent (Slack accepts a
   // blocks-only post).
-  const posted = buttons !== undefined && finalText !== undefined ? buttonBlocks(finalText, buttons) : blocks;
+  const posted = buttons !== undefined && finalText !== undefined ? buttonBlocks(finalText, buttons, topic) : blocks;
   const response = await postMessage({ client, channelId, threadTs, text: finalText, blocks: posted });
   if (!response.ts) {
     throw new Error('SlackAdapter.createRecord: Slack returned no message ts.');
   }
   return {
     adapterType: SLACK_ADAPTER_TYPE,
-    externalId: response.ts,
+    // The message's record id, `channel:ts`: the name it has when its
+    // channel is listed and when it arrives, so the host knows a message
+    // that arrives as the one a run wrote.
+    externalId: slackMessageKey(channelId, response.ts),
     data: {
       channelId,
       ts: response.ts,
       ...(threadTs !== undefined ? { threadTs } : {}),
+      // What the message holds, as a listed one does: its `Topic` is read
+      // from its blocks.
+      ...(posted !== undefined ? { blocks: posted } : {}),
       name: finalText,
       url: channelPermalink(channelId, response.ts),
     },
@@ -483,12 +502,26 @@ function buttonField(button: object, i: number, field: 'Text' | 'Value', meaning
   return value;
 }
 
+/** A write's Topic: text Slack can hold as a block id. Absent and null mean
+ *  none. */
+function asTopicValue(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'string' || raw.length === 0) {
+    throw new Error(`SlackAdapter.createRecord: Topic must be text, got ${describeBlocksValue(raw)}.`);
+  }
+  if (raw.length > SLACK_MAX_TOPIC_LENGTH) {
+    throw new Error(`SlackAdapter.createRecord: Topic is ${raw.length} characters; Slack holds at most ${SLACK_MAX_TOPIC_LENGTH} (it is kept as a block id).`);
+  }
+  return raw;
+}
+
 /**
  * The blocks a message with buttons posts: its text as a section, then one
- * actions block. Each button's `action_id` is its place (`lf_button_<i>`),
- * since Slack needs one distinct per block; what a press means is its value.
+ * actions block, whose id is the message's Topic when it has one. Each
+ * button's `action_id` is its place (`lf_button_<i>`), since Slack needs one
+ * distinct per block; what a press means is its value.
  */
-export function buttonBlocks(text: string, buttons: readonly SlackButton[]): unknown[] {
+export function buttonBlocks(text: string, buttons: readonly SlackButton[], topic?: string): unknown[] {
   if (text.length > MAX_SECTION_TEXT) {
     throw new Error(
       `SlackAdapter.createRecord: a Slack Message with Buttons has at most ${MAX_SECTION_TEXT} characters of Message text (Slack's limit for the text above the buttons); this one has ${text.length}.`,
@@ -498,6 +531,7 @@ export function buttonBlocks(text: string, buttons: readonly SlackButton[]): unk
     { type: 'section', text: { type: 'mrkdwn', text } },
     {
       type: 'actions',
+      ...(topic !== undefined ? { block_id: slackTopicBlockId(topic) } : {}),
       elements: buttons.map((button, i) => ({
         type: 'button',
         text: { type: 'plain_text', text: button.Text },

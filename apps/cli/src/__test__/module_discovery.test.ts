@@ -108,7 +108,7 @@ test('listen-fire modules show says what a module writes, and that a module with
   const slack = lfSync(dir, 'modules', 'show', '@lf/slack');
   assert.equal(slack.code, 0, slack.out);
   assert.match(slack.out, /^access: reads and writes$/m);
-  assert.match(slack.out, /^ {2}a Message along Channel\.Messages: Message, File, Blocks, Buttons$/m);
+  assert.match(slack.out, /^ {2}a Message along Channel\.Messages: Message, File, Blocks, Buttons, Topic$/m);
   assert.match(slack.out, /^ {2}a Reaction along Message\.Reactions, write only: Emoji\*$/m);
 
   const airtable = lfSync(dir, 'modules', 'show', '@lf/airtable');
@@ -135,9 +135,8 @@ test('listen-fire modules show says what a module writes, and that a module with
 // A module whose arrivals carry what adapter protocol 2.6 added (a root
 // arrival with no key, `parents`, `about`, `occurredAt`, `notFor`,
 // `takenApplied`) states minor 6, so a host that speaks less refuses it by
-// name rather than judging its listens without them. Slack's arrivals are
-// keyed and carry none of them.
-const SPEAKS_2_6 = ['affinity', 'attio', 'dealroom', 'email', 'evertrace', 'github', 'gmail', 'granola', 'stripe', 'system', 'telegram', 'webhook', 'whatsapp'];
+// name rather than judging its listens without them.
+const SPEAKS_2_6 = ['affinity', 'attio', 'dealroom', 'email', 'evertrace', 'github', 'gmail', 'granola', 'slack', 'stripe', 'system', 'telegram', 'webhook', 'whatsapp'];
 
 test('listen-fire modules show --json states the protocol minor each bundled module needs: 6 where its arrivals carry what 2.6 added', () => {
   const dir = freshProject();
@@ -147,7 +146,6 @@ test('listen-fire modules show --json states the protocol minor each bundled mod
     return (JSON.parse(shown.out) as { protocolMinor: unknown }).protocolMinor;
   };
   for (const module of SPEAKS_2_6) assert.equal(minorOf(module), 6, `@lf/${module} states protocolMinor 6`);
-  assert.equal(minorOf('slack'), 5);
 });
 
 // ── connect without a terminal ───────────────────────────────────────────────

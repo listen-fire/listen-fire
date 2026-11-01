@@ -91,10 +91,10 @@ export function slackModuleWith(hosted: SlackHosted): AdapterModuleDefinition {
     kind: 'adapter',
     name: '@lf/slack',
     manifest: SLACK_MANIFEST,
-    // Adapter protocol 2.5: a message's presses and replies arrive with the
-    // inbound delivery that announced them (`arrivals`), which an older host
-    // would drop.
-    protocolMinor: 5,
+    // Adapter protocol 2.6: a channel's messages, a message's reactions,
+    // presses and replies arrive with the delivery that announced them
+    // (`arrivals`), carrying the channel and message above them (`parents`).
+    protocolMinor: 6,
     // The stored payload the platform's Slack installer writes (its own flow:
     // a signed state and comma-joined scopes, not the shared connect flow).
     // A bot token never expires, so the host has nothing to refresh.

@@ -687,6 +687,9 @@ overrides; you state it because Listen-Fire has none of its own.
 - `carries` — the earlier hops whose records an arrival carries, by edge
   name, outermost first (`["Bases", "Tables"]` on a table's `Changes`): a
   filter on one of them is judged against the record the arrival carries.
+  A hop it does not carry may come between: Slack's reaction carries its
+  channel (`["Channels"]` on a message's `Reactions`), not the message it
+  is on, so a listen filtering that message is refused.
 - `scopedBy` — with `delivery: scope`, and only then: the earlier hop, by
   edge name, whose records your subscriptions are made per, instead of the
   record the edge hangs off. listen-fire then subscribes once per record that
@@ -723,7 +726,7 @@ cannot mean what it says: a `delivery` that is none of the three, a polled
 edge without `pollEverySeconds` (or `pollEverySeconds` on one that is not
 polled), `bounded: false` without `boundedBy` (or `boundedBy` on a bounded
 edge), a `boundedBy` field the landing does not declare, a `carries` hop that
-is no edge into the type the next one hangs off, a `scopedBy` on an edge not
+is no edge into the type the next one hangs off or a type before it, a `scopedBy` on an edge not
 delivered per scope or on a root collection, or naming a hop some path to the
 edge does not come through, `cheapToList` with neither
 `parentChanges` nor `relistEverySeconds` (or both, or either without

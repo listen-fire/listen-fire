@@ -6,7 +6,11 @@
 //
 // Taught around waiting on the message itself: a press is an `Interaction`
 // on the posted message, a reply a `Replies` member, both awaited. Buttons are
-// a field of the write, and their Values type what a press answers with.
+// a field of the write, and their Values type what a press answers with. A
+// standing listen hears a channel's `Messages`, a message's `Reactions` and
+// `Interactions`, each arriving with the channel (and a press with the
+// message) above it; a message's `Topic` is how a listen hears one poll's
+// presses.
 
 import type { AdapterManifest } from 'movement-engine/public/adapter';
 
@@ -111,16 +115,53 @@ write msg-[:Reactions]-> { Emoji: "eyes" }
 
 This is the natural "I've picked this up" before a slower step runs, and reacting twice with the same emoji is harmless — the second write finds it already there and changes nothing. Reactions only go on: you can add one, but you cannot read a message's reactions back or take one off.
 
+### listening-to-a-channel
+
+A listen ends on the edge a record arrives on: a channel's \`Messages\` for each new message in it, a message's \`Reactions\` for each emoji added, its \`Interactions\` for each press. What arrives carries the channel it is in, so a listen narrows by the channel's \`Name\` without listing anything:
+
+\`\`\`
+function triage(m: <chat-[:Message]->>) {
+  write m-[:Reactions]-> { Emoji: "eyes" }
+}
+
+listen to chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[m:Messages WHERE m.\`Mentions App\` == true]-> fire triage
+\`\`\`
+
+- \`Mentions App\` is true when the message @-mentions the app — the usual way to run on Slack, since many workspaces send the app only the messages that mention it.
+- A thread reply is not one of a channel's \`Messages\`: it is its thread's \`Replies\`.
+- A reaction arrives with its channel but not its message, so a listen on \`Reactions\` narrows by channel only; a filter on the message it is under is refused while you write it.
+
+### a-poll-that-keeps-answering
+
+To run once for every answer to a message, write the message with a \`Topic\` and listen to the \`Interactions\` of the messages that have it. Each press is its own run:
+
+\`\`\`
+write office-[:Messages]-> {
+  Message: "Lunch on Friday?"
+  Topic: "lunch-poll"
+  Buttons: [{ Text: "In", Value: "in" }, { Text: "Out", Value: "out" }]
+}
+\`\`\`
+
+\`\`\`
+listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.\`Posted At\` WITHIN 3d]->-[:Interactions]-> fire count_vote
+\`\`\`
+
+- A \`Topic\` goes only on a message with \`Buttons\`; one without is refused. Slack keeps no other data on a message that comes back with a press, so the \`Topic\` is stored as the id of the block its buttons sit in (\`lf:<topic>\`), and read back from there: a press carries its message's \`Topic\` and \`Posted At\`, and the listen's filter is judged on the press itself — no message history is listed.
+- \`WITHIN 3d\` on the message means a press on last week's poll runs nothing.
+- The fired function reads the press: \`only(press-[:Actions]->).Value\`, \`press-[:By]->\` who pressed, \`press-[:Message]->\` the poll. Keep the tally where each run can update one row, such as a table written \`unique by (Poll, Person)\`, so a changed vote replaces the old one.
+
 ### what-fires-a-run
 
-Slack delivers only the events its app is subscribed to, so an automation reading Slack usually fires on the bot being mentioned rather than on every message in a channel; narrow further with \`events\` and \`channels\` on the listener. A run also needs the person who sent the message (or added the reaction) to be a known member of the team, matched on their Slack profile email — activity from guests, external members of a shared channel, other bots, and this platform's own posts is dropped before anything runs. A press and a thread reply are different: they reach the run waiting on their message whoever made them, so say in a \`WHERE\` whose answer counts when it matters. Slack only sends presses and replies its app is set up to send — interactivity switched on, and message events subscribed. Point both of the app's request URLs, Interactivity's and Event Subscriptions', at the connection's door, the address your host gives for it: \`listen-fire serve\` prints it for every Slack connection a run can wait on, whether or not a listen names the connection.
+Slack delivers only the events its app is subscribed to, so an automation reading Slack usually fires on the bot being mentioned rather than on every message in a channel; narrow with \`Mentions App\` and the channel's \`Name\` in the listen. A run also needs the person who sent the message (or added the reaction) to be a known member of the team, matched on their Slack profile email — activity from guests, external members of a shared channel, other bots, and this platform's own posts is dropped before anything runs. A press and a thread reply are different: they reach the run waiting on their message whoever made them, so say in a \`WHERE\` whose answer counts when it matters. Slack only sends presses and replies its app is set up to send — interactivity switched on, and message events subscribed. Point both of the app's request URLs, Interactivity's and Event Subscriptions', at the connection's door, the address your host gives for it: \`listen-fire serve\` prints it for every Slack connection a run can wait on, whether or not a listen names the connection.
 
 ### Common mistakes
 
 - **Setting two of \`File\`, \`Buttons\` and \`Blocks\` on one message.** One shape per message. Send the file, then post the buttons as a reply if you need both.
 - **Waiting on a person without a \`sleep\` beside it.** A run waiting on a press nobody makes waits for ever; race it with the time it may take.
 - **Expecting a bad block to fail at save time.** Blocks are passed through untouched; Slack is the one that validates them, at run time.
-- **Promising every message in a channel.** What arrives depends on the workspace's subscription, and on the sender being a known member.`,
+- **Promising every message in a channel.** What arrives depends on the workspace's subscription, and on the sender being a known member.
+- **A \`Topic\` on a message without \`Buttons\`.** It is kept on the buttons' block, so it needs buttons to live on.`,
   engineClaims: [
     {
       construct: 'a Slack message with Buttons, a press on it awaited in a race with a sleep',
@@ -152,7 +193,7 @@ function sign_off(msg: <team-[:Message]->>) {
   }
 }
 
-listen to team { events: ["app_mention"] } fire sign_off
+listen to team-[:Channels]->-[m:Messages WHERE m.\`Mentions App\` == true]-> fire sign_off
 `,
     },
     {
@@ -175,7 +216,36 @@ function follow_up(msg: <team-[:Message]->>) {
   }
 }
 
-listen to team { events: ["app_mention"] } fire follow_up
+listen to team-[:Channels]->-[m:Messages WHERE m.\`Mentions App\` == true]-> fire follow_up
+`,
+    },
+    {
+      construct: 'a poll whose every press is its own run: a Topic written with Buttons, and a listen on the Interactions of the messages that have it',
+      status: 'runs',
+      probe: `
+import { \`@lf/slack\` as slack } from adapters
+import { team_workspace } from credentials
+
+team = connect slack using team_workspace
+
+function ask_lunch(msg: <team-[:Message]->>) {
+  office = only(msg-[:Channel]->)
+  if (office == null) { fail("no channel") }
+  write office-[:Messages]-> {
+    Message: "Lunch on Friday?"
+    Topic: "lunch-poll"
+    Buttons: [{ Text: "In", Value: "in" }, { Text: "Out", Value: "out" }]
+  }
+}
+
+function count_vote(press: <team-[:Interaction]->>) {
+  poll = only(press-[:Message]->)
+  if (poll == null) { fail("a press with no message") }
+  return "\${press-[:By]->.Name} said \${only(press-[:Actions]->).Value} to \${poll.Id}"
+}
+
+listen to team-[:Channels]->-[m:Messages WHERE m.\`Mentions App\` == true]-> fire ask_lunch
+listen to team-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.\`Posted At\` WITHIN 3d]->-[:Interactions]-> fire count_vote
 `,
     },
   ],

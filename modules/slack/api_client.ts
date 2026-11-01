@@ -28,6 +28,9 @@ class WebClientWithCache extends WebClient {
     // shared movements bot processes; profiles/emails are stable, so a 5-minute
     // cache collapses repeated lookups of the same user to one call per window.
     'users.info': 5 * MINUTE,
+    // The app's bot user, whom a message `Mentions App` names: read for
+    // every inbound message, fixed for the life of the token.
+    'auth.test': 60 * MINUTE,
   };
 
   async apiCall(...args: Parameters<WebClient['apiCall']>) {

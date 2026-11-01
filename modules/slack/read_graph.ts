@@ -22,10 +22,10 @@ export const SLACK_CHANNEL_TYPE_ID = 'slack:channel';
 
 /** The surface name of a message's `ts` — named once, because the channel's
  *  `Messages` edge declares its natural order by it. */
-export const SLACK_MESSAGE_TIMESTAMP_NAME = 'Timestamp';
+export const SLACK_MESSAGE_TIMESTAMP_NAME = 'Posted At';
 
 /**
- * A channel's `Messages`. BOUNDED, not native: a time bound on `Timestamp`
+ * A channel's `Messages`. BOUNDED, not native: a time bound on `Posted At`
  * narrows the fetch at Slack (the adapter turns it into a history window), but
  * every other predicate — and every other ORDER BY — is satisfied over the
  * page-bounded set the hop yields. Declaring it native would tell the checker
@@ -33,7 +33,7 @@ export const SLACK_MESSAGE_TIMESTAMP_NAME = 'Timestamp';
  * untrue here and a step backwards for authors.
  *
  * `conversations.history` takes no sort argument and answers newest first, so
- * `Timestamp` descending is the natural order — the one ORDER BY whose LIMIT
+ * `Posted At` descending is the natural order — the one ORDER BY whose LIMIT
  * may bound the page (`channelMessages`).
  */
 export const SLACK_CHANNEL_MESSAGES_CAPABILITY = {
@@ -102,8 +102,10 @@ export function describeChannel(input: { messageTypeId: string }): SchemaTypeDes
     description:
       'A Slack channel the connected bot can see. Select one with WHERE on ' +
       '`Name`, then walk its `Messages` (history the bot can read) or `Members`. ' +
-      'A WHERE on a message\'s `Timestamp` narrows the history at Slack rather ' +
-      'than after the fetch.',
+      'A WHERE on a message\'s `Posted At` narrows the history at Slack rather ' +
+      'than after the fetch. Listen on its `Messages` for each new message ' +
+      '(`listen to chat-[ch:Channels WHERE ch.Name == "deals"]->-[:Messages]->`): each ' +
+      'arrives with its channel, so the channel\'s `Name` is judged on the message itself.',
     fields: [
       { fieldId: 'id', displayName: 'Id', kind: 'string', writable: false, required: true },
       { fieldId: 'name', displayName: 'Name', kind: 'string', writable: false, required: true },
@@ -124,6 +126,14 @@ export function describeChannel(input: { messageTypeId: string }): SchemaTypeDes
         direction: 'outgoing',
         name: SLACK_CHANNEL_EDGE_NAMES.messages,
         writable: true,
+        // Slack's Events API announces each new top-level message to the
+        // app's one request URL, with the channel it is in; the channel's
+        // name comes from the module's cached channel read. A thread reply is
+        // its root's `Replies`, as the history lists it.
+        listenable: true,
+        delivery: 'connection',
+        carries: [SLACK_CHANNELS_COLLECTION],
+        cursor: false,
         capability: SLACK_CHANNEL_MESSAGES_CAPABILITY,
         // Inherently sequenced, which is a separate fact from the `order`
         // above: `conversations.history` takes no sort argument and answers

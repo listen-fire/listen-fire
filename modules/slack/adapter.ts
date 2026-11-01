@@ -36,7 +36,6 @@ import type {
   DeleteResult,
   DiscriminableEvent,
   EdgesFromResult,
-  EventType,
   FileRef,
   GetFieldValueInput,
   GetRelatedInput,
@@ -71,11 +70,14 @@ import {
 import {
   SLACK_INTERACTIONS_EDGE_NAME,
   SLACK_INTERACTION_TYPE_NAME,
-  SLACK_MESSAGE_EVENT_TYPES,
+  SLACK_MESSAGES_EDGE_NAME,
+  SLACK_REACTIONS_EDGE_NAME,
   SLACK_REPLIES_EDGE_NAME,
+  isoInstantFromSlackTs,
   slackArrivals,
-  slackInboundEvents,
+  slackMentionsApp,
   slackMessageKey,
+  slackTopicOfBlocks,
   type SlackActionData,
   type SlackInteractionData,
 } from './inbound';
@@ -142,27 +144,12 @@ const NO_PARENT_CHANNEL = (op: string): string =>
   `SlackAdapter.createRecord(${op}): the parent message carries no channel — ` +
   'its parent data must include `channel` (position/event) or `channelId` (write handle).';
 
-/** The inner Slack event types the message's fires edge covers (`firesOn`) —
- *  the `events:` config values that deliver a `Slack Message`. The fires edge
- *  lands STRAIGHT on the message (rule 1, adapters/CLAUDE.md): a field-less
- *  `Message Received` node carried no facts and was pure indirection, so a
- *  listen delivers the message itself, whole, seeded stable on its ts. */
-export { SLACK_MESSAGE_EVENT_TYPES } from './inbound';
-
 /**
- * A reaction added to a message (`reaction_added`). Its own inbound event type
- * — discriminated apart from messages so a movement opts in via
- * `listen to <slack> { events: ["reaction_added"] }`. Graph-first: the reacted
- * message, the channel, and the reactor are all reachable as edges. Mirrors the
- * WhatsApp Reaction model.
+ * A reaction added to a message: what arrives on its `Reactions`, and what a
+ * write along that edge adds. The reacted message, the channel, and the
+ * reactor are all reachable as edges.
  */
 export const SLACK_REACTION_TYPE_ID = 'slack:reaction';
-
-/** The inner Slack event types the reaction's fires edge covers (`firesOn`) —
- *  the `events:` config value that delivers a `Slack Reaction`. Mirrors
- *  `SLACK_MESSAGE_EVENT_TYPES`: a reaction is an inbound event, delivered on
- *  its own fires edge, discriminated apart from messages. */
-export const SLACK_REACTION_EVENT_TYPES = ['reaction_added'] as const;
 
 /** Edge ids on a Slack Reaction — the up-hops to the message it's on, the
  *  channel it's in, and the user who added it. */
@@ -228,6 +215,7 @@ export const SLACK_FILE_TYPE_ID = 'slack:file';
  * by tests.
  */
 export const SLACK_MESSAGE_FIELDS = {
+  id: 'id',
   text: 'text',
   file: 'file',
   user: 'user',
@@ -235,6 +223,8 @@ export const SLACK_MESSAGE_FIELDS = {
   ts: 'ts',
   blocks: 'blocks',
   buttons: 'buttons',
+  topic: 'topic',
+  mentionsApp: 'mentions_app',
 } as const;
 
 /**
@@ -245,35 +235,29 @@ export const SLACK_MESSAGE_FIELDS = {
  */
 export const SLACK_INTERACTION_TYPE_ID = 'slack:interaction';
 export const SLACK_INTERACTION_FIELDS = { id: 'id', at: 'at' } as const;
-export const SLACK_INTERACTION_EDGES = { actions: 'actions', by: 'by' } as const;
-export const SLACK_INTERACTION_EDGE_NAMES = { actions: 'Actions', by: 'By' } as const;
+export const SLACK_INTERACTION_EDGES = { actions: 'actions', by: 'by', message: 'message' } as const;
+export const SLACK_INTERACTION_EDGE_NAMES = { actions: 'Actions', by: 'By', message: 'Message' } as const;
 
 /** One control used in a press: the value it answered with, and its label. */
 export const SLACK_ACTION_TYPE_ID = 'slack:action';
 export const SLACK_ACTION_FIELDS = { value: 'value', text: 'text' } as const;
 
-/** A message's listenable edge an `awaitKeys` request names, by its natural
- *  name or its field id; `undefined` for any other edge. */
-function listenableEdgeOf(edge: string): typeof SLACK_INTERACTIONS_EDGE_NAME | typeof SLACK_REPLIES_EDGE_NAME | undefined {
+/** The listenable edges an `awaitKeys` request may name. */
+type SlackListenableEdge =
+  | typeof SLACK_MESSAGES_EDGE_NAME
+  | typeof SLACK_INTERACTIONS_EDGE_NAME
+  | typeof SLACK_REPLIES_EDGE_NAME
+  | typeof SLACK_REACTIONS_EDGE_NAME;
+
+/** A listenable edge an `awaitKeys` request names, by its natural name or its
+ *  field id; `undefined` for any other edge. */
+function listenableEdgeOf(edge: string): SlackListenableEdge | undefined {
   const name = naturalName(edge);
+  if (name === SLACK_MESSAGES_EDGE_NAME || edge === SLACK_CHANNEL_EDGES.messages) return SLACK_MESSAGES_EDGE_NAME;
   if (name === SLACK_INTERACTIONS_EDGE_NAME || edge === SLACK_MESSAGE_THREAD_EDGES.interactions) return SLACK_INTERACTIONS_EDGE_NAME;
   if (name === SLACK_REPLIES_EDGE_NAME || edge === SLACK_MESSAGE_THREAD_EDGES.replies) return SLACK_REPLIES_EDGE_NAME;
+  if (name === SLACK_REACTIONS_EDGE_NAME || edge === SLACK_MESSAGE_THREAD_EDGES.reactions) return SLACK_REACTIONS_EDGE_NAME;
   return undefined;
-}
-
-/**
- * The `Timestamp` field's value: Slack's `ts` (epoch seconds, microseconds
- * after the point) read as the instant it denotes. The raw `ts` keeps flowing
- * everywhere it is an IDENTIFIER — record ids, thread anchors, reply
- * correlation, the write anchor — because to Slack it is a key, not a time.
- * The FIELD is the time, which is what a movement compares and filters on.
- */
-function isoInstantFromSlackTs(ts: string | undefined): string | null {
-  if (!ts) return null;
-  const seconds = Number(ts);
-  if (!Number.isFinite(seconds)) return null;
-  const date = new Date(seconds * 1000);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 /**
@@ -334,7 +318,9 @@ export interface SlackFileRecord {
  * `webApi/input.ts` parses.
  */
 interface SlackMessageData {
+  type?: string;
   text?: string;
+  blocks?: unknown;
   user?: string;
   channel?: string;
   ts?: string;
@@ -357,42 +343,21 @@ interface SlackReactionData {
 export class SlackAdapter extends BaseAdapter {
 
   /**
-   * THE raw→events seam for Slack deliveries — the pure `slackInboundEvents`
-   * (the retired provider `parseEvents` logic) + the legacy conversion, so
-   * the event shape downstream is byte-identical to the old path.
+   * A delivery as what arrived on the workspace's listenable edges
+   * (inbound.ts): each arrival carries the channel (and, for a press, the
+   * message) it is under, the channel named from the cached channel read.
    */
   async preprocessInbound(input: {
     raw: unknown;
     checkpoint?: unknown;
   }): Promise<{ events: DiscriminableEvent[]; arrivals?: Arrival[] }> {
-    const arrivals = slackArrivals(input.raw);
-    return { events: slackInboundEvents(input.raw), ...(arrivals.length > 0 ? { arrivals } : {}) };
+    const arrivals = await slackArrivals(input.raw, {
+      channelName: (channelId) => this.resolveChannelName(channelId),
+      botUserId: () => this.botUserId(),
+    });
+    return { events: [], ...(arrivals.length > 0 ? { arrivals } : {}) };
   }
 
-  /**
-   * Two inbound event shapes, discriminated on the inner event's `type`:
-   *   • `message` / `app_mention` → a STABLE `Slack Message` position (recordId =
-   *     the message ts), which is what lets a reply write anchor off the inbound
-   *     message (`write sm-[:Replies]->`): the linked write needs a durable
-   *     parent id, and the ts is it.
-   *   • `reaction_added` → a `Slack Reaction` position — kept separate so a
-   *     reaction never mis-discriminates as a message and a movement opts in via
-   *     `events: ["reaction_added"]`.
-   */
-  async listEventTypes(): Promise<EventType[]> {
-    return [
-      {
-        tag: SLACK_MESSAGE_TYPE_ID,
-        positionType: SLACK_MESSAGE_TYPE_ID,
-        match: { path: 'type', equals: ['message', 'app_mention'] },
-      },
-      {
-        tag: SLACK_REACTION_TYPE_ID,
-        positionType: SLACK_REACTION_TYPE_ID,
-        match: { path: 'type', equals: [...SLACK_REACTION_EVENT_TYPES] },
-      },
-    ];
-  }
   readonly adapterType = SLACK_ADAPTER_TYPE;
   readonly supportedTriggers = SLACK_MANIFEST.supportedTriggers;
 
@@ -404,30 +369,17 @@ export class SlackAdapter extends BaseAdapter {
 
   async listEntryPoints(): Promise<SchemaEntryPoint[]> {
     return [
-      // The EVENT edge lands STRAIGHT on the message: `chat -[:Slack
-      // Message]-> <the message>`. A separate `Message Received` node carried
-      // no facts of its own — pure indirection — so rule 1
-      // (adapters/CLAUDE.md) collapses it: a listen delivers the message
-      // itself, whole (seeded stable on its ts). No change-kind axis
-      // (`app_mention` vs `message` is a subscription fact, not a field), so
-      // `firesOn` says WHICH `events:` values deliver here. `reaction_added`
-      // is deliberately not on it — a different event kind (`Slack
-      // Reaction`).
-      //
       // ONE Slack Message type — writable ONLY along an edge (Channel's
       // `Messages`, a message's `Replies`), never as a top-level create, and
-      // readable ONLY by arriving: the fires edge, a channel's `Messages`
-      // edge, a reaction's `Message` edge. The root can enumerate neither
-      // ("all Slack messages" is not a read Slack serves) — a fires edge is
-      // reachability, never a root collection
-      // (7_readable_means_readable.md).
+      // reached ONLY under a channel: a channel's `Messages` (its history, and
+      // what arrives in it), a message's `Replies`, a reaction's or a press's
+      // `Message`. The root lists none ("all Slack messages" is not a read
+      // Slack serves; 7_readable_means_readable.md).
       {
         typeId: SLACK_MESSAGE_TYPE_ID,
         displayName: 'Message',
         writable: false,
         readable: false,
-        fires: true,
-        firesOn: [...SLACK_MESSAGE_EVENT_TYPES],
       },
       {
         typeId: SLACK_FILE_TYPE_ID,
@@ -455,24 +407,12 @@ export class SlackAdapter extends BaseAdapter {
       {
         typeId: SLACK_REACTION_TYPE_ID,
         displayName: 'Reaction',
-        // An inbound EVENT — a `reaction_added` position delivered on its own
-        // fires edge (`events: ["reaction_added"]`), exactly like `Message`
-        // and like the WhatsApp `Reaction`. NOT a readable root: "all Slack
-        // reactions" is not a read Slack serves, so a reaction is reached only
-        // by arriving (the fires edge) or by walking a message — never listed
-        // from the root (7_readable_means_readable.md). The reacted message,
-        // its channel, and the reactor are all edges off it.
-        //
-        // No `defaultSubscribedEvents` on Slack: a config-less listen's
-        // runtime gate (`eventMatchesTriggerScope`) passes EVERY event, so the
-        // checker's absent default — which types a config-less listen as
-        // firing every declared event edge — matches the runtime. (WhatsApp
-        // differs: its gate defaults config-less to messages only, hence its
-        // `defaultSubscribedEvents: ['message']`.)
+        // Arrives on a message's `Reactions`, or is written along it; "all
+        // Slack reactions" is not a read Slack serves, so it is never listed
+        // from the root. The reacted message, its channel, and the reactor are
+        // all edges off it.
         writable: false,
         readable: false,
-        fires: true,
-        firesOn: [...SLACK_REACTION_EVENT_TYPES],
       },
       // The read graph (positions-and-edges model): channels and users are
       // stable nouns, collections off the meta root, WHERE-selectable.
@@ -481,19 +421,20 @@ export class SlackAdapter extends BaseAdapter {
   }
 
   /**
-   * Slack's root: two things you can list, and two that happen to you.
+   * Slack's root: the two things you can list. Everything that happens — a
+   * message, a reply, a reaction, a press — arrives on an edge under a
+   * channel or a message, carrying the records above it.
    *
    * `File` is not here — it hangs off a message's `Files` edge, and "all Slack
-   * files" is not a read Slack serves. Nor is Message or Reaction READABLE
-   * from the root for the same reason: a fires edge is reachability, never a
-   * root collection (7_readable_means_readable.md).
+   * files" is not a read Slack serves.
    */
   private static readonly ROOT: SchemaTypeDescriptor = {
     typeId: META_RECORD_TYPE,
     displayName: 'Slack',
     description:
       'A Slack workspace the connected bot can see. List its `Channels` and ' +
-      '`Users`, or listen for a message or a reaction arriving.',
+      '`Users`; listen for a message on a channel\'s `Messages`, a reaction on a ' +
+      'message\'s `Reactions`, or a press on its `Interactions`.',
     fields: [],
     references: [
       {
@@ -511,28 +452,6 @@ export class SlackAdapter extends BaseAdapter {
         direction: 'outgoing',
         name: SLACK_USERS_COLLECTION,
         description: 'Members of the workspace.',
-      },
-      {
-        fieldId: SLACK_MESSAGE_TYPE_ID,
-        targetTypeId: SLACK_MESSAGE_TYPE_ID,
-        cardinality: 'one',
-        direction: 'outgoing',
-        name: 'Message',
-        fires: true,
-        firesOn: [...SLACK_MESSAGE_EVENT_TYPES],
-        readable: false,
-        description: 'A message arriving — what a listen delivers.',
-      },
-      {
-        fieldId: SLACK_REACTION_TYPE_ID,
-        targetTypeId: SLACK_REACTION_TYPE_ID,
-        cardinality: 'one',
-        direction: 'outgoing',
-        name: 'Reaction',
-        fires: true,
-        firesOn: [...SLACK_REACTION_EVENT_TYPES],
-        readable: false,
-        description: 'Somebody reacting to a message.',
       },
     ],
   };
@@ -555,13 +474,21 @@ export class SlackAdapter extends BaseAdapter {
         typeId: SLACK_MESSAGE_TYPE_ID,
         displayName: 'Message',
         description:
-          'A Slack message — what a listen delivers, whole: read ' +
-          '`e.`Message`` straight off the event, reply along its `Replies` ' +
+          'A Slack message — what a listen on a channel\'s `Messages` delivers, whole: read ' +
+          '`m.Message` straight off it, reply along its `Replies` ' +
           'edge, react to it along its `Reactions` edge. Created only along an ' +
           'edge: post via a Channel\'s `Messages` edge, reply via a message\'s ' +
           '`Replies` edge — the channel and thread come from the parent, never ' +
           'from fields.',
         fields: [
+          {
+            fieldId: SLACK_MESSAGE_FIELDS.id,
+            displayName: 'Id',
+            kind: 'string',
+            writable: false,
+            required: false,
+            description: 'Names this message in its workspace: its channel\'s id and its Slack timestamp (`C…:1700000000.000100`).',
+          },
           {
             fieldId: SLACK_MESSAGE_FIELDS.text,
             displayName: 'Message',
@@ -668,6 +595,34 @@ export class SlackAdapter extends BaseAdapter {
               orderable: false,
             },
           },
+          {
+            fieldId: SLACK_MESSAGE_FIELDS.topic,
+            displayName: 'Topic',
+            kind: 'string',
+            // Written only with Buttons, read on every message: a press
+            // carries its message's Topic, so a listen's filter on it is
+            // judged on the press itself.
+            writable: true,
+            required: false,
+            description:
+              'A marker of your own for a message with Buttons (`Topic: "lunch-poll"`), so a ' +
+              'listen can tell its presses from other messages\' presses: ' +
+              '`listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll"]->-[:Interactions]->`. ' +
+              'Only a message with Buttons takes one: Slack keeps no other data on a message that ' +
+              'comes back with a press, so the Topic is stored as the id of the block its buttons ' +
+              'sit in (`lf:<topic>`), and read back from there — on the pressed message and on a ' +
+              'listed one alike. A message without Buttons has none.',
+          },
+          {
+            fieldId: SLACK_MESSAGE_FIELDS.mentionsApp,
+            displayName: 'Mentions App',
+            kind: 'boolean',
+            writable: false,
+            required: false,
+            description:
+              'Whether the message @-mentions the connected app: ' +
+              '`listen to chat-[:Channels]->-[m:Messages WHERE m.`Mentions App` == true]->` runs when somebody asks it something.',
+          },
         ],
         // Files reach the source graph as a regular outgoing many-edge:
         // one `slack:file` position per attachment. The composition
@@ -708,7 +663,7 @@ export class SlackAdapter extends BaseAdapter {
             listenable: true,
             cursor: false,
             // No identity field: a reply's record id, `channel:ts`, names it
-            // both listed and announced. Its `Timestamp` reads as an instant
+            // both listed and announced. Its `Posted At` reads as an instant
             // to the millisecond, which two replies can share.
             // `conversations.replies` answers oldest-first and the hop only
             // drops the root message from that page — it never reorders.
@@ -728,28 +683,36 @@ export class SlackAdapter extends BaseAdapter {
             writable: false,
             readable: false,
             listenable: true,
+            // Slack posts every press to the app's one interactivity URL.
+            delivery: 'connection',
+            // A press comes with the message pressed, its blocks included, so
+            // it carries that message (its `Topic`, when it was written with
+            // one) and the channel it is in.
+            carries: [SLACK_CHANNELS_COLLECTION, SLACK_CHANNEL_EDGE_NAMES.messages],
             cursor: false,
             // The press's `trigger_id`, which Slack issues once per press.
             identity: 'Id',
             literalsFrom: [{ at: [SLACK_INTERACTION_EDGE_NAMES.actions, 'Value'], from: 'Buttons[].Value' }],
             description:
               'A press on one of this message\'s Buttons (or a control in its Blocks): ' +
-              '`await msg-[:Interactions]->` waits for the next one.',
+              '`await msg-[:Interactions]->` waits for the next one, and ' +
+              '`listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll"]->-[:Interactions]->` ' +
+              'runs once per press on any message written with that Topic.',
           },
           // React to the message you were handed: `write msg-[:Reactions]-> {
           // Emoji: "eyes" }`. Channel + ts come from the parent position, the
           // same way `Replies` takes its thread from the parent — nothing about
           // WHICH message a reaction lands on is ever a field.
           //
-          // WRITE-ONLY, deliberately. Slack does put a `reactions` array on
-          // `conversations.history` / `.replies` items, but the message a
-          // movement usually holds arrived as an inbound `event_callback`, and
-          // that payload carries no reactions at all. A readable edge would
+          // Not READABLE, deliberately. Slack does put a `reactions` array on
+          // `conversations.history` / `.replies` items, but a message that
+          // arrived carries no reactions at all. A readable edge would
           // therefore answer honestly off a traversed message and silently
-          // empty off the delivered one — the dominant case — and the only fix
-          // is a `reactions.get` per message, an N+1 this adapter will not add.
-          // Absent a guarantee on every position there is no guarantee, so the
-          // checker rejects the read (MOV_WRITE_ONLY_EDGE) instead.
+          // empty off the delivered one, and the only fix is a `reactions.get`
+          // per message, an N+1 this adapter will not add. LISTENABLE, though:
+          // Slack's Events API announces each reaction added, with the channel
+          // it is in — not the message's text, so a listen cannot filter on
+          // the message, only on its channel.
           {
             fieldId: SLACK_MESSAGE_THREAD_EDGES.reactions,
             targetTypeId: SLACK_REACTION_TYPE_ID,
@@ -758,10 +721,17 @@ export class SlackAdapter extends BaseAdapter {
             name: SLACK_MESSAGE_THREAD_EDGE_NAMES.reactions,
             writable: true,
             readable: false,
+            listenable: true,
+            delivery: 'connection',
+            carries: [SLACK_CHANNELS_COLLECTION],
+            // A reaction is about the message it is on.
+            attributes: true,
+            cursor: false,
             description:
-              'React to this message with an emoji (write-only — reading a ' +
-              'message\'s reactions would cost a call per message, so this edge ' +
-              'only writes).',
+              'React to this message with an emoji, or hear a reaction added: ' +
+              '`listen to chat-[ch:Channels WHERE ch.Name == "deals"]->-[:Messages]->-[:Reactions]->`. ' +
+              'A reaction arrives with its channel, not its message, so a listen narrows it by ' +
+              'channel; reading a message\'s reactions back is not offered (a call per message).',
           },
           {
             fieldId: SLACK_MESSAGE_THREAD_EDGES.author,
@@ -791,7 +761,7 @@ export class SlackAdapter extends BaseAdapter {
           variants: [
             { name: 'a file post', fields: [SLACK_MESSAGE_FIELDS.text, SLACK_MESSAGE_FIELDS.file] },
             { name: 'an interactive post', fields: [SLACK_MESSAGE_FIELDS.text, SLACK_MESSAGE_FIELDS.blocks] },
-            { name: 'a post with buttons', fields: [SLACK_MESSAGE_FIELDS.text, SLACK_MESSAGE_FIELDS.buttons] },
+            { name: 'a post with buttons', fields: [SLACK_MESSAGE_FIELDS.text, SLACK_MESSAGE_FIELDS.buttons, SLACK_MESSAGE_FIELDS.topic] },
           ],
         },
       };
@@ -802,8 +772,8 @@ export class SlackAdapter extends BaseAdapter {
         displayName: SLACK_INTERACTION_TYPE_NAME,
         description:
           'Someone pressing a button (or using another control) on a message — what ' +
-          '`await msg-[:Interactions]->` binds. `Actions` are the controls used, `By` ' +
-          'the member who pressed.',
+          '`await msg-[:Interactions]->` binds, and what a listen on a message\'s `Interactions` ' +
+          'runs on. `Actions` are the controls used, `By` the member who pressed, `Message` the message pressed.',
         fields: [
           {
             fieldId: SLACK_INTERACTION_FIELDS.id,
@@ -842,6 +812,15 @@ export class SlackAdapter extends BaseAdapter {
             name: SLACK_INTERACTION_EDGE_NAMES.by,
             writable: false,
             description: 'The member who pressed.',
+          },
+          {
+            fieldId: SLACK_INTERACTION_EDGES.message,
+            targetTypeId: SLACK_MESSAGE_TYPE_ID,
+            cardinality: 'one',
+            direction: 'outgoing',
+            name: SLACK_INTERACTION_EDGE_NAMES.message,
+            writable: false,
+            description: 'The message pressed, as Slack sent it with the press: its text, its `Posted At`, its `Topic`.',
           },
         ],
       };
@@ -907,8 +886,8 @@ export class SlackAdapter extends BaseAdapter {
         typeId: SLACK_REACTION_TYPE_ID,
         displayName: 'Reaction',
         description:
-          'An emoji reaction added to a message. Fires when someone reacts, ' +
-          'if you listen with `events: ["reaction_added"]`. Walk `Message` to ' +
+          'An emoji reaction added to a message: what a listen on a message\'s `Reactions` runs on. ' +
+          'Walk `Message` to ' +
           'the message it\'s on, `Channel` to the channel, `Reactor` to the user. ' +
           'Also the reaction WRITE: created along a message\'s `Reactions` edge, ' +
           'which is how a movement reacts to the message it was handed.',
@@ -1135,6 +1114,15 @@ export class SlackAdapter extends BaseAdapter {
     );
     const data = (payload ?? {}) as SlackMessageData;
     switch (fieldId) {
+      case SLACK_MESSAGE_FIELDS.id: {
+        const recordId = positionRecordId(input.position);
+        if (recordId !== undefined && recordId.includes(':')) return recordId;
+        return data.channel !== undefined && data.ts !== undefined ? slackMessageKey(data.channel, data.ts) : null;
+      }
+      case SLACK_MESSAGE_FIELDS.topic:
+        return slackTopicOfBlocks(data.blocks);
+      case SLACK_MESSAGE_FIELDS.mentionsApp:
+        return slackMentionsApp(data, await this.botUserId());
       case SLACK_MESSAGE_FIELDS.text:
         return data.text ?? null;
       case SLACK_MESSAGE_FIELDS.user:
@@ -1241,6 +1229,7 @@ export class SlackAdapter extends BaseAdapter {
         }));
       }
       if (edgeId === SLACK_INTERACTION_EDGES.by) return this.messageAuthor({ user: press.user?.id });
+      if (edgeId === SLACK_INTERACTION_EDGES.message) return this.pressedMessage(press);
       return [];
     }
     if (this.isRecordOfType(input.position.recordType, SLACK_ACTION_TYPE_ID, resolver)) {
@@ -1421,11 +1410,51 @@ export class SlackAdapter extends BaseAdapter {
   }
 
   /**
-   * Resolve a channel id → its name — the dispatch gate uses this for the
-   * `channels` listen filter (`listen to <slack> { channels: [...] }`), matching
-   * an inbound event's channel against the author's names. Cached via
-   * `conversations.info` (so the hot path is one call per channel per window);
-   * null when there's no usable client or the lookup fails.
+   * `press-[:Message]->` — the message pressed, as Slack sent it with the
+   * press, in the channel pressed in: nothing is fetched.
+   */
+  private async pressedMessage(press: Partial<SlackInteractionData>): Promise<RelatedResult[]> {
+    const { message, channel } = press;
+    const ts = typeof message?.ts === 'string' ? message.ts : undefined;
+    if (message === undefined || ts === undefined || channel === undefined) return [];
+    const resolver = await this.resolver();
+    return [
+      {
+        position: makeStablePosition({
+          adapterType: this.adapterType,
+          recordType: resolver.naturalTypeName(SLACK_MESSAGE_TYPE_ID),
+          recordId: slackMessageKey(channel, ts),
+          data: { ...message, channel },
+        }),
+      },
+    ];
+  }
+
+  /**
+   * The connected app's bot user — whom a message `Mentions App` names
+   * (`<@U…>` in its text). Read with `auth.test`, which the client caches;
+   * null when there's no usable client or the read fails.
+   */
+  private async botUserId(): Promise<string | null> {
+    const client = await this.getSlackApiClient();
+    if (!client) return null;
+    try {
+      const who = await client.api.auth.test();
+      return typeof who.user_id === 'string' ? who.user_id : null;
+    } catch (err) {
+      this.sources.log.warn('[SlackAdapter] reading the app\'s bot user failed (Mentions App)', {
+        teamId: this.sources.tenant,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Resolve a channel id → its name, as an arrival carries its channel: a
+   * listen's filter on the channel (`ch.Name IN ["deals"]`) is judged on it.
+   * Cached via `conversations.info` (so the hot path is one call per channel
+   * per window); null when there's no usable client or the lookup fails.
    */
   async resolveChannelName(channelId: string): Promise<string | null> {
     const client = await this.getSlackApiClient();
@@ -1501,7 +1530,7 @@ export class SlackAdapter extends BaseAdapter {
     input: GetRelatedInput,
   ): Promise<RelatedResult[]> {
     const client = await this.requireSlackApiClient('getRelated(messages)');
-    // Scoped to Message: the WHERE names its fields naturally (`Timestamp`),
+    // Scoped to Message: the WHERE names its fields naturally (`Posted At`),
     // and a bare resolver describes nothing to match them against.
     const resolver = await this.resolver({ types: [SLACK_MESSAGE_TYPE_ID] });
     const naturalMessage = resolver.naturalTypeName(SLACK_MESSAGE_TYPE_ID);
@@ -1723,41 +1752,50 @@ export class SlackAdapter extends BaseAdapter {
     }
   }
 
-  // ── 4d. Arrivals — `await m-[:Interactions]->`, `await m-[:Replies]->` ────
+  // ── 4d. Arrivals — `await ch-[:Messages]->`, `await m-[:Interactions]->` …
   //
-  // A message's two listenable edges are both keyed by a message: its own
-  // `channel:ts` for `Interactions` (a press names the message it was on),
-  // its thread root's for `Replies` (a reply names its thread). The key comes
+  // A channel's `Messages` are keyed by the channel's id. A message's three
+  // listenable edges are keyed by a message, `channel:ts`, so neither key
+  // can be taken for the other: its own for `Interactions` (a press names the
+  // message it was on) and `Reactions` (a reaction names its message), its
+  // thread root's for `Replies` (a reply names its thread). The key comes
   // from the head alone, through the same anchors a reaction and a reply
-  // write use, so the three agree on which message, and which thread, a
-  // message is. What lands there arrives with the inbound delivery
+  // write use, so they agree on which message, and which thread, a message
+  // is. What lands there arrives with the inbound delivery
   // (`preprocessInbound`'s `arrivals`, inbound.ts).
   readonly arrivals: ArrivalsCapability = {
     awaitKeys: async ({ edge, heads }: { edge: string; heads: AwaitHead[] }): Promise<AwaitKey[]> => {
-      const keyOf = (head: AwaitHead): { channelId: string | undefined; ts: string } => {
+      const listened = listenableEdgeOf(edge);
+      if (listened === undefined) {
+        throw new Error(
+          `SlackAdapter.awaitKeys: '${edge}' is not a listenable edge (only '${SLACK_MESSAGES_EDGE_NAME}', '${SLACK_INTERACTIONS_EDGE_NAME}', '${SLACK_REACTIONS_EDGE_NAME}' and '${SLACK_REPLIES_EDGE_NAME}').`,
+        );
+      }
+      const keyOf = (head: AwaitHead): string => {
         const parent = { externalId: head.recordId, data: head.headData };
-        switch (listenableEdgeOf(edge)) {
+        const messageKey = (channelId: string | undefined, ts: string): string => {
+          if (channelId === undefined) {
+            throw new Error(
+              `SlackAdapter.awaitKeys: the message ${head.recordId} carries no channel (its data names neither \`channel\` nor \`channelId\`), so '${edge}' has no key to wait under.`,
+            );
+          }
+          return slackMessageKey(channelId, ts);
+        };
+        switch (listened) {
+          case SLACK_MESSAGES_EDGE_NAME:
+            return head.recordId;
           case SLACK_INTERACTIONS_EDGE_NAME:
-            return reactionAnchorFromParent(parent);
+          case SLACK_REACTIONS_EDGE_NAME: {
+            const { channelId, ts } = reactionAnchorFromParent(parent);
+            return messageKey(channelId, ts);
+          }
           case SLACK_REPLIES_EDGE_NAME: {
             const { channelId, threadTs } = replyAnchorFromParent(parent);
-            return { channelId, ts: threadTs };
+            return messageKey(channelId, threadTs);
           }
-          case undefined:
-            throw new Error(
-              `SlackAdapter.awaitKeys: '${edge}' is not a listenable edge (only '${SLACK_INTERACTIONS_EDGE_NAME}' and '${SLACK_REPLIES_EDGE_NAME}').`,
-            );
         }
       };
-      return heads.map((head) => {
-        const { channelId, ts } = keyOf(head);
-        if (channelId === undefined) {
-          throw new Error(
-            `SlackAdapter.awaitKeys: the message ${head.recordId} carries no channel (its data names neither \`channel\` nor \`channelId\`), so '${edge}' has no key to wait under.`,
-          );
-        }
-        return { key: slackMessageKey(channelId, ts) };
-      });
+      return heads.map((head) => ({ key: keyOf(head) }));
     },
   };
 

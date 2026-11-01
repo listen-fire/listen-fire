@@ -106,6 +106,32 @@ export function press(channel: string, ts: string, value: string, trigger = `tri
   return new URLSearchParams({ payload: JSON.stringify(payload) }).toString();
 }
 
+/** Slack's `block_actions` payload for a press, by `user`, of the button
+ *  valued `value` on the message `ts` the fake holds in `channel`, as Slack
+ *  posts it: the message pressed comes with it, its blocks included. */
+export async function pressOn(channels: Fake, input: { channel: string; ts: string; value: string; user?: string; trigger?: string }): Promise<string> {
+  const answer = await fetch(`${channels.url}/slack/control/press`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) });
+  const pressed = (await answer.json()) as { ok: boolean; error?: string; payload?: unknown };
+  assert.ok(pressed.ok, pressed.error);
+  return new URLSearchParams({ payload: JSON.stringify(pressed.payload) }).toString();
+}
+
+/** Rows the fake Slack holds, added as a workspace would have them. */
+export async function seedSlack(channels: Fake, entities: Array<{ entity_type: string; id: string; data: Record<string, unknown> }>): Promise<void> {
+  const answer = await fetch(`${channels.url}/admin/slack/seed`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ entities }) });
+  assert.equal(answer.status, 200, await answer.text());
+}
+
+/** The Web API methods the module called, in order, since the log was last forgotten. */
+export async function slackCalls(channels: Fake): Promise<string[]> {
+  const rows = (await (await fetch(`${channels.url}/admin/slack/request_log/state`)).json()) as Array<{ method: string }>;
+  return rows.map((row) => row.method);
+}
+
+export async function forgetSlackCalls(channels: Fake): Promise<void> {
+  await fetch(`${channels.url}/admin/slack/request_log/state`, { method: 'DELETE' });
+}
+
 /** An Events API delivery of `event`. */
 export function eventCallback(event: Record<string, unknown>): string {
   return JSON.stringify({ type: 'event_callback', team_id: 'T001', event_id: `Ev-${Math.random().toString(36).slice(2)}`, event });

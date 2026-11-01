@@ -5,7 +5,24 @@
 import type { AdapterManifest } from 'movement-engine/public/adapter';
 
 import { SLACK_HANDBOOK_SECTION } from './handbook_section';
+import { SLACK_MESSAGES_EDGE_NAME, SLACK_MESSAGE_TYPE_NAME, SLACK_REACTIONS_EDGE_NAME, SLACK_REACTION_TYPE_NAME } from './inbound';
+import { SLACK_CHANNELS_COLLECTION } from './read_graph';
 import { SLACK_ADAPTER_TYPE } from './types';
+
+/** 0.12's `channels: [...]`: the channels a listen heard, by name. */
+const CHANNEL_NAMES = { hop: 0, field: 'Name', op: 'in' } as const;
+
+/** 0.12's `events: ["app_mention"]`: a message that names the app. */
+const MENTIONS = { hop: 1, field: 'Mentions App', op: 'eq', values: { app_mention: true } } as const;
+
+/** What a 0.12 listen hearing messages becomes: a listen on a channel's
+ *  `Messages`, its channels compared by name. */
+const MESSAGES_BECOME = {
+  path: [SLACK_CHANNELS_COLLECTION, SLACK_MESSAGES_EDGE_NAME],
+  aliases: ['ch', 'm'],
+  paramFrom: SLACK_MESSAGE_TYPE_NAME,
+  keys: { channels: CHANNEL_NAMES },
+};
 
 /**
  * Static manifest — the construction-free declaration the registry exposes via
@@ -25,33 +42,51 @@ export const SLACK_MANIFEST: AdapterManifest = {
     'members, message history and threads.',
   triggerExpectation:
     'Slack only delivers the events its app is subscribed to in the Slack ' +
-    'admin — it does NOT see every message by default. The common setup is ' +
-    '@-mentions of the bot (and replies in threads it is part of); seeing ' +
-    'all channel messages requires the workspace to enable the message.channels ' +
-    'scope, which many teams do not. So do not promise "every message in a ' +
-    'channel" — describe it as firing when the bot is mentioned, and if the ' +
-    'user actually wants all-message capture, tell them it depends on their ' +
-    'Slack app scopes and ask. Narrow further in the listen with ' +
-    'events: ["app_mention"] / ["message"] / ["reaction_added"], and to specific ' +
-    'channels with channels: ["dealflow", ...] (by channel name). ' +
+    'admin — it does NOT see every message by default. A listen on a channel\'s ' +
+    'Messages runs on each top-level message in the channels it names that Slack ' +
+    'sends (message.channels for public channels, which many teams do not enable); ' +
+    'the common setup is @-mentions of the bot, narrowed with ' +
+    'm.`Mentions App` == true. So do not promise "every message in a channel" — if ' +
+    'the user wants all-message capture, tell them it depends on their Slack app\'s ' +
+    'subscriptions and ask. A listen on a message\'s Reactions runs on each emoji ' +
+    'added, and on its Interactions on each button press (one run per press). ' +
     'Also: a listener only fires when the message\'s SENDER (or the person who ' +
     'reacted) resolves to a registered member of this team (matched by Slack ' +
     'profile email). Activity from unregistered people — guests, external ' +
     'members of shared channels, other bots, and Listen-Fire\'s own posts — is dropped ' +
     'before any automation runs, so do not promise runs on activity from people ' +
     'outside the team.',
+  authoringHints:
+    'Listen on the edge the record arrives on, each its own record type: a channel\'s ' +
+    'Messages (a Message), a message\'s Reactions (a Reaction) or Interactions (an ' +
+    'Interaction, a button press). Each arrives with its channel, and a press with its ' +
+    'message too, so narrow on them in the traversal: ' +
+    'chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[m:Messages WHERE m.`Mentions App` == true]->. ' +
+    'A reaction does not carry its message: filter a Reactions listen by channel only. ' +
+    'Write a Topic with a message\'s Buttons to listen to its presses alone: ' +
+    'chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.`Posted At` WITHIN 3d]->-[:Interactions]->.',
   inboundRequiresRegisteredActor: true,
   handbookSection: SLACK_HANDBOOK_SECTION,
   supportedTriggers: ['webhook'],
-  // The listen `events` vocabulary — the Slack inner-event types a movement can
-  // subscribe to. `message` covers every message.* subscription (channels / im /
-  // groups / mpim); `reaction_added` fires the Slack Reaction event type.
-  subscribableEvents: ['app_mention', 'message', 'reaction_added'],
-  // `listen to <slack> { channels: ["dealflow", ...] }` narrows a listener to
-  // specific channels by NAME. Optional; values are channel names (unvalidated
-  // here — the live workspace roster isn't in the static manifest). Enforced at
-  // the dispatch gate (resolve the event's channel → name, drop non-matches).
-  listenConfig: [{ key: 'channels' }],
+  // A 0.12 `listen to chat { channels, events }` heard messages and mentions
+  // on a channel's `Messages` and reactions on a message's `Reactions`; one
+  // naming no events is rewritten onto `Messages`, the edge its parameter
+  // (a Message) was typed by. A mention is a message that names the app
+  // (`Mentions App`); one listen naming events of both edges has no rewrite.
+  listenSettingsBecome: {
+    ...MESSAGES_BECOME,
+    keys: { ...MESSAGES_BECOME.keys, events: MENTIONS },
+    byEvent: {
+      message: MESSAGES_BECOME,
+      app_mention: { ...MESSAGES_BECOME, keys: { ...MESSAGES_BECOME.keys, events: MENTIONS } },
+      reaction_added: {
+        path: [SLACK_CHANNELS_COLLECTION, SLACK_MESSAGES_EDGE_NAME, SLACK_REACTIONS_EDGE_NAME],
+        aliases: ['ch', 'm', 'r'],
+        paramFrom: SLACK_REACTION_TYPE_NAME,
+        keys: { channels: CHANNEL_NAMES },
+      },
+    },
+  },
   // `createRecord` posts a message — a real write (so Slack is writable).
   // `updateRecord` / `deleteRecord` are deliberately NOT listed: Slack's
   // overrides throw (the v3 output only ever posts), so they aren't genuine
@@ -59,7 +94,7 @@ export const SLACK_MANIFEST: AdapterManifest = {
   methods: [
     'listEntryPoints', 'describe', 'getFieldValue', 'getRelated', 'preprocessInbound',
     'getActorCandidates', 'extractActor', 'resolveFileRef',
-    'createRecord', 'invokeFieldFunction', 'listEventTypes', 'awaitKeys',
+    'createRecord', 'invokeFieldFunction', 'awaitKeys',
   ],
   requiredCredentialType: 'SLACK',
   triggerKinds: ['SLACK'],
@@ -69,9 +104,7 @@ export const SLACK_MANIFEST: AdapterManifest = {
       fill: true,
     },
     eventPhrase: {
-      // No per-event phrasing today (app_mention / message / reaction_added
-      // all shared one generic sentence in the former switch) — `default`
-      // mirrors that, channel→routing-key→bare.
+      // One sentence for every Slack arrival, channel→routing-key→bare.
       default: [
         { template: 'When a Slack message arrives in {channel}' },
         { template: 'When a Slack message arrives in `{key}`' },

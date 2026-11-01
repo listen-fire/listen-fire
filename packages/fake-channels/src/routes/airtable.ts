@@ -165,6 +165,59 @@ async function ping(baseId: string, webhook: FakeWebhook): Promise<{ webhookId: 
  *  base's own cap of 10, so it is the one that binds. */
 const OAUTH_WEBHOOKS_PER_BASE = 2;
 
+/**
+ * The part of Airtable's formula language a module's record search sends:
+ * `AND(…)` and `OR(…)` of `{Field} = "text"` and `RECORD_ID() = "rec…"`. A
+ * field is matched by name, or by the id the table names it by, as a record
+ * holds either. Any other formula (a fuzzy name search) answers every
+ * record, as this fake did before it read any.
+ */
+function formulaHolds(formula: string, record: Record<string, unknown>, fieldIds: Map<string, string>): boolean {
+  const text = formula.trim();
+  const call = /^(AND|OR)\((.*)\)$/s.exec(text);
+  if (call) {
+    const parts = splitArguments(call[2]!);
+    return call[1] === 'AND' ? parts.every((part) => formulaHolds(part, record, fieldIds)) : parts.some((part) => formulaHolds(part, record, fieldIds));
+  }
+  const id = /^RECORD_ID\(\)\s*=\s*"((?:[^"\\]|\\.)*)"$/s.exec(text);
+  if (id) return record.id === unescape(id[1]!);
+  const field = /^\{([^}]+)\}\s*=\s*"((?:[^"\\]|\\.)*)"$/s.exec(text);
+  if (field) {
+    const name = field[1]!;
+    const fields: Record<string, unknown> = typeof record.fields === 'object' && record.fields !== null ? { ...record.fields } : {};
+    const held = fields[name] ?? fields[fieldIds.get(name) ?? name];
+    return String(held ?? '') === unescape(field[2]!);
+  }
+  return true;
+}
+
+function unescape(text: string): string {
+  return text.replace(/\\(.)/g, '$1');
+}
+
+/** A call's arguments, split at its top-level commas. */
+function splitArguments(text: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let quoted = false;
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '\\') i++;
+      else if (c === '"') quoted = false;
+    } else if (c === '"') quoted = true;
+    else if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (c === ',' && depth === 0) {
+      parts.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(text.slice(start));
+  return parts;
+}
+
 export function airtableRoutes(store: EntityStore): Router {
   const r = Router();
   // The fake's clock, moved on by `/control/advance-clock`.
@@ -439,7 +492,10 @@ export function airtableRoutes(store: EntityStore): Router {
   // List records
   r.get('/v0/:baseId/:tableId', (req, res) => {
     const key = `record:${req.params.baseId}:${req.params.tableId}`;
-    const records = store.list(SVC, key);
+    const formula = typeof req.query.filterByFormula === 'string' ? req.query.filterByFormula : undefined;
+    const table = store.get(SVC, `table:${req.params.baseId}`, req.params.tableId);
+    const fieldIds = new Map(((table?.data.fields ?? []) as Array<{ id: string; name: string }>).map((f) => [f.name, f.id]));
+    const records = store.list(SVC, key).filter((record) => formula === undefined || formulaHolds(formula, record.data, fieldIds));
     // Handle offset-based pagination
     const offset = req.query.offset ? Number(req.query.offset) : 0;
     const pageSize = 100;

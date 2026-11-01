@@ -62,8 +62,90 @@ function slackFile(id: string, data: Record<string, unknown>, base: string): Rec
   };
 }
 
+/** The id of the bot user every `auth.test` names: whom a message that
+ *  mentions the app names (`<@U0BOT>`). */
+export const FAKE_SLACK_BOT_USER = 'U0BOT';
+
+/**
+ * A press on the button valued `value` of the stored message `ts` in
+ * `channel`, by `user`: the `block_actions` payload Slack posts, carrying the
+ * message as Slack holds it, its blocks included (so its buttons' block id),
+ * and the action as the button was posted (its block id and action id).
+ */
+function blockActions(
+  store: EntityStore,
+  input: { channel: string; ts: string; value: string; user: string; trigger?: string },
+): { payload: Record<string, unknown> } | { error: string } {
+  const stored = store.get(SVC, 'message', input.ts);
+  if (!stored || stored.data.channel !== input.channel) return { error: 'message_not_found' };
+  const blocks = Array.isArray(stored.data.blocks) ? (stored.data.blocks as Array<Record<string, unknown>>) : [];
+  const found = blocks.flatMap((block) =>
+    (Array.isArray(block.elements) ? (block.elements as Array<Record<string, unknown>>) : [])
+      .filter((element) => element.value === input.value)
+      .map((element) => ({ block, element })),
+  )[0];
+  if (found === undefined) return { error: 'no_such_button' };
+  const member = store.get(SVC, 'user', input.user);
+  const channel = store.get(SVC, 'channel', input.channel);
+  const actionTs = `${Date.now() / 1000}`;
+  return {
+    payload: {
+      type: 'block_actions',
+      trigger_id: input.trigger ?? `trigger-${Math.random().toString(36).slice(2)}`,
+      user: { id: input.user, username: member?.data.name ?? null, name: member?.data.name ?? null, team_id: 'T001' },
+      api_app_id: 'A001',
+      container: { type: 'message', message_ts: input.ts, channel_id: input.channel, is_ephemeral: false },
+      channel: { id: input.channel, name: channel?.data.name ?? input.channel },
+      message: {
+        type: 'message',
+        ts: input.ts,
+        text: stored.data.text,
+        user: stored.data.user,
+        blocks,
+      },
+      actions: [
+        {
+          type: found.element.type,
+          action_id: found.element.action_id,
+          block_id: found.block.block_id ?? 'b',
+          value: found.element.value,
+          text: found.element.text,
+          action_ts: actionTs,
+        },
+      ],
+    },
+  };
+}
+
 export function slackRoutes(store: EntityStore): Router {
   const r = Router();
+
+  // Every Web API method called, in order: what a test reads to say a module
+  // did NOT make a call (no history listed to judge a press).
+  r.use((req, _res, next) => {
+    if (req.method === 'POST' && !req.path.startsWith('/control/') && !req.path.startsWith('/upload/') && !req.path.startsWith('/response/')) {
+      store.create(SVC, 'request_log', { method: req.path.replace(/^\//, ''), at: new Date().toISOString() }, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    }
+    next();
+  });
+
+  r.post('/auth.test', (_req, res) => {
+    res.json({ ok: true, url: 'https://fake.slack.com/', team: 'Fake', user: 'listen-fire', team_id: 'T001', user_id: FAKE_SLACK_BOT_USER, bot_id: 'B001' });
+  });
+
+  // Not Slack: what Slack would post to the app's interactivity URL for a
+  // press, for a test to sign and deliver itself.
+  r.post('/control/press', (req, res) => {
+    const pressed = blockActions(store, {
+      channel: String(req.body.channel ?? ''),
+      ts: String(req.body.ts ?? ''),
+      value: String(req.body.value ?? ''),
+      user: String(req.body.user ?? 'U001'),
+      ...(typeof req.body.trigger === 'string' ? { trigger: req.body.trigger } : {}),
+    });
+    if ('error' in pressed) return res.status(404).json({ ok: false, error: pressed.error });
+    res.json({ ok: true, payload: pressed.payload });
+  });
 
   // Slack Web API uses POST for everything and sends form-encoded or JSON
   //

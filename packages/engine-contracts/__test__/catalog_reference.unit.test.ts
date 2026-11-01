@@ -349,15 +349,17 @@ describe('a listening declaration', () => {
           new Map([...descriptors, ['b', base]]),
         );
       expect(changes(['Bases', 'Messages'])).toBeUndefined();
+      // A hop not carried may come between: the base, not the message.
+      expect(changes(['Bases'])).toBeUndefined();
       expect(changes(['Messages', 'Bases'])).toBe(
-        "'Interactions' says its arrivals carry earlier hops, but 'carries' names 'Bases', which is no edge into 'Message' (the edges into it: Messages)",
+        "'Interactions' says its arrivals carry earlier hops, but 'carries' names 'Messages', and 'Bases' is a root collection: nothing comes before it",
       );
     });
 
     it('carries naming no earlier hop is refused', () => {
-      expect(interactions(['Nope'])).toMatch(/'carries' names 'Nope', which is no edge into 'Message'/);
+      expect(interactions(['Nope'])).toMatch(/'carries' names 'Nope', which is no edge into 'Message' or a record before it/);
       expect(interactions(['Nope'])).toBe(
-        "'Interactions' says its arrivals carry earlier hops, but 'carries' names 'Nope', which is no edge into 'Message' (the edges into it: Messages)",
+        "'Interactions' says its arrivals carry earlier hops, but 'carries' names 'Nope', which is no edge into 'Message' or a record before it (the edges into them: Messages)",
       );
       expect(interactions(['Nope', 'Messages'])).toBe(
         "'Interactions' says its arrivals carry earlier hops, but 'carries' names 'Nope', and 'Messages' is a root collection: nothing comes before it",

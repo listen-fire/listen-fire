@@ -3,22 +3,31 @@
 // form-encoded as `payload=<json>`; the host hands the module the form's
 // fields). Only an `event_callback` carries an event; `url_verification`
 // (answered by the host's door before it gets here), `app_rate_limited` and
-// anything else carry none. The inner event is forwarded whole — the adapter
-// reads `text` / `user` / `channel` / `ts` / `files` straight off a
-// position's data — keyed by its `ts`, with the envelope's `event_id` as the
-// idempotency key Slack's retries share.
+// anything else carry none.
 //
-// A delivery also reports what arrived on a message's listenable edges: a
-// press is an arrival on the pressed message's `Interactions`, a thread reply
-// one on its thread root's `Replies`, and a deleted message ends both. Each
-// is keyed by its message, `channel:ts`, the key `awaitKeys` names for a
-// message a run waits on. Pure: both of the platform's doors (a team's own
-// app, the shared app) and every other host parse a delivery here.
+// A delivery reports what arrived on the workspace's listenable edges, each
+// landing on its own record type:
+//
+//   Channel -[:Messages]->     Message      a top-level message
+//   Message -[:Replies]->      Message      a reply in its thread
+//   Message -[:Reactions]->    Reaction     an emoji added to it
+//   Message -[:Interactions]-> Interaction  a press on one of its controls
+//
+// Each arrival carries the records above it that its edge declares it
+// carries: a message and a reaction their channel, a press its channel and
+// its message. So a listen's filter on those hops is judged on the arrival
+// itself, with no listing of channels or history. A message's channel name
+// comes from the module's cached channel read; its `Topic` from the block id
+// its buttons were posted under (`lf:<topic>`), which Slack hands back with
+// the pressed message.
+//
+// An arrival on a message's edge is keyed by its message, `channel:ts` (the
+// key `awaitKeys` names for a message a run waits on); one on a channel's
+// `Messages` by the channel's id. A deleted message ends its edges.
 
 import { z } from 'zod';
 
-import type { Arrival } from 'engine-contracts';
-import type { DiscriminableEvent } from 'movement-engine/public/adapter';
+import type { Arrival, AwaitLanding } from 'engine-contracts';
 
 /**
  * Slack file attachment subset. Only the fields the SlackAdapter's
@@ -99,11 +108,8 @@ const slackEnvelopeSchema = z
   })
   .passthrough();
 
-/** The id Slack events normalise to: the one entry type, `slack:message`. */
-export const SLACK_INBOUND_OBJECT_ID = 'slack:message';
-
-/** The inner-event types that are a message (and so a `create`). */
-export const SLACK_MESSAGE_EVENT_TYPES = ['message', 'app_mention'] as const;
+/** The inner-event types that are a message. */
+const SLACK_MESSAGE_EVENT_TYPES = ['message', 'app_mention'] as const;
 
 function isSlackMessageEventType(type: string): type is (typeof SLACK_MESSAGE_EVENT_TYPES)[number] {
   return SLACK_MESSAGE_EVENT_TYPES.some((messageType) => messageType === type);
@@ -135,36 +141,6 @@ export function parseSlackDeliveries(body: unknown): SlackDelivery[] {
   ];
 }
 
-/** A record verb an event type spells, for the few Slack types that are one
- *  (`channel_created`, …). */
-function changeTypeOf(eventType: string): 'create' | 'update' | 'delete' | undefined {
-  if (eventType.includes('created')) return 'create';
-  if (eventType.includes('updated')) return 'update';
-  if (eventType.includes('deleted')) return 'delete';
-  return undefined;
-}
-
-/**
- * The events one delivery fires. A message (or a mention) is a `create`, so
- * the engine seeds a STABLE message position a reply can anchor on; the
- * engine discriminates the rest by the inner event's `type`.
- */
-export function slackInboundEvents(body: unknown): DiscriminableEvent[] {
-  return parseSlackDeliveries(body).map((delivery) => {
-    const changeType = isSlackMessageEventType(delivery.eventType)
-      ? ('create' as const)
-      : changeTypeOf(delivery.eventType);
-    return {
-      payload: delivery.event,
-      externalId: delivery.recordId,
-      recordType: SLACK_INBOUND_OBJECT_ID,
-      eventType: delivery.eventType,
-      ...(delivery.idempotencyKey ? { idempotencyKey: delivery.idempotencyKey } : {}),
-      ...(changeType !== undefined ? { changeType } : {}),
-    };
-  });
-}
-
 /** For a door that answers `url_verification` itself: the envelope, read. */
 export const slackEnvelope = slackEnvelopeSchema;
 
@@ -172,18 +148,112 @@ export const slackEnvelope = slackEnvelopeSchema;
 
 /** The key a message's listenable edges are waited on under, and its
  *  arrivals reported on: the message's channel and `ts`. A thread's `Replies`
- *  are keyed by its root message. */
+ *  are keyed by its root message. It is also a message's record id. */
 export function slackMessageKey(channel: string, ts: string): string {
   return `${channel}:${ts}`;
 }
 
-/** The natural names an arrival's landing is typed by. */
+/** The natural names an arrival's landing and parents are typed by. */
 export const SLACK_INTERACTION_TYPE_NAME = 'Interaction';
-const SLACK_MESSAGE_TYPE_NAME = 'Message';
+export const SLACK_MESSAGE_TYPE_NAME = 'Message';
+export const SLACK_REACTION_TYPE_NAME = 'Reaction';
+export const SLACK_CHANNEL_TYPE_NAME = 'Channel';
 
-/** The edges a message's arrivals land on, by their natural names. */
+/** The edges arrivals land on, by their natural names. */
+export const SLACK_MESSAGES_EDGE_NAME = 'Messages';
 export const SLACK_INTERACTIONS_EDGE_NAME = 'Interactions';
 export const SLACK_REPLIES_EDGE_NAME = 'Replies';
+export const SLACK_REACTIONS_EDGE_NAME = 'Reactions';
+
+/**
+ * The `Timestamp`-like fields' value: Slack's `ts` (epoch seconds,
+ * microseconds after the point) read as the instant it denotes. The raw `ts`
+ * stays an IDENTIFIER everywhere it is one (record ids, thread anchors);
+ * the field is the time a movement compares.
+ */
+export function isoInstantFromSlackTs(ts: string | null | undefined): string | null {
+  if (!ts) return null;
+  const seconds = Number(ts);
+  if (!Number.isFinite(seconds)) return null;
+  const date = new Date(seconds * 1000);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+// ── A message's Topic ──────────────────────────────────────────────────────
+//
+// Slack keeps no metadata on a message that comes back with a press, so a
+// message's `Topic` is stored where a press does carry it: the id of the
+// block its buttons sit in, `lf:<topic>`. Written only with Buttons, and read
+// back from that one place, on a pressed message and on a listed one alike.
+
+const SLACK_TOPIC_BLOCK_PREFIX = 'lf:';
+
+/** Slack's own limit on a block id. */
+export const SLACK_MAX_TOPIC_LENGTH = 255 - SLACK_TOPIC_BLOCK_PREFIX.length;
+
+/** The block id a message's buttons are posted under, marking its topic. */
+export function slackTopicBlockId(topic: string): string {
+  return `${SLACK_TOPIC_BLOCK_PREFIX}${topic}`;
+}
+
+/** A message's topic: the marked block id of the block its buttons sit in. */
+export function slackTopicOfBlocks(blocks: unknown): string | null {
+  if (!Array.isArray(blocks)) return null;
+  for (const block of blocks) {
+    if (typeof block !== 'object' || block === null || Reflect.get(block, 'type') !== 'actions') continue;
+    const id: unknown = Reflect.get(block, 'block_id');
+    if (typeof id === 'string' && id.startsWith(SLACK_TOPIC_BLOCK_PREFIX)) return id.slice(SLACK_TOPIC_BLOCK_PREFIX.length);
+  }
+  return null;
+}
+
+/** Whether a message mentions the connected app: Slack says so of an
+ *  `app_mention`; any other names the app's bot user in its text. Unknown
+ *  (null) when the bot user is. */
+export function slackMentionsApp(message: { type?: unknown; text?: unknown }, botUserId: string | null): boolean | null {
+  if (message.type === 'app_mention') return true;
+  if (botUserId === null) return null;
+  return typeof message.text === 'string' && message.text.includes(`<@${botUserId}>`);
+}
+
+/** A Slack message as a landing or a carried parent: its payload as Slack
+ *  sent it (what a read of the record finds), with its channel, and its
+ *  fields by the names a listen's WHERE compares. */
+export function slackMessageRecord(input: { channel: string; message: Record<string, unknown>; botUserId: string | null }): AwaitLanding & { recordId: string } {
+  const { channel, message, botUserId } = input;
+  const ts = typeof message.ts === 'string' ? message.ts : '';
+  const recordId = slackMessageKey(channel, ts);
+  return {
+    recordId,
+    recordType: SLACK_MESSAGE_TYPE_NAME,
+    fields: {
+      ...message,
+      channel,
+      Id: recordId,
+      Message: typeof message.text === 'string' ? message.text : null,
+      User: typeof message.user === 'string' ? message.user : null,
+      Channel: channel,
+      'Posted At': isoInstantFromSlackTs(ts),
+      Topic: slackTopicOfBlocks(message.blocks),
+      'Mentions App': slackMentionsApp(message, botUserId),
+    },
+  };
+}
+
+/** A channel as a carried parent, named from the module's channel read;
+ *  null when the name could not be read, so a filter on it is not judged
+ *  on a guess. */
+function slackChannelRecord(id: string, name: string | null): AwaitLanding | null {
+  if (name === null) return null;
+  return { recordId: id, recordType: SLACK_CHANNEL_TYPE_NAME, fields: { id, name, Id: id, Name: name } };
+}
+
+/** What an arrival needs that the delivery does not hold: a channel's name
+ *  (cached by the module) and the app's bot user (who a mention names). */
+export interface SlackArrivalLookups {
+  channelName(channelId: string): Promise<string | null>;
+  botUserId(): Promise<string | null>;
+}
 
 const slackTextObject = z.object({ text: z.string().optional() }).passthrough();
 
@@ -206,7 +276,8 @@ const slackActionSchema = z
 /**
  * A `block_actions` interaction payload: who pressed (`user`), where
  * (`container.channel_id` + `container.message_ts`, or `channel.id` +
- * `message.ts`), and the controls used (`actions`). `trigger_id` names the
+ * `message.ts`), the message pressed as Slack holds it (`message`, its
+ * blocks included), and the controls used (`actions`). `trigger_id` names the
  * press. A press outside a message (a modal, the Home tab) names no message,
  * and arrives on nothing.
  */
@@ -243,6 +314,10 @@ export interface SlackInteractionData {
   actions: SlackActionData[];
   /** The member who pressed, as Slack names them. */
   user: { id: string; username?: string; name?: string; team_id?: string };
+  /** The channel pressed in. */
+  channel?: string;
+  /** The message pressed, as Slack sent it with the press (`Message`). */
+  message?: Record<string, unknown>;
 }
 
 function slackAction(action: z.infer<typeof slackActionSchema>): SlackActionData {
@@ -274,15 +349,18 @@ function blockActionsOf(raw: unknown): z.infer<typeof slackBlockActionsSchema> |
   return read.success ? read.data : undefined;
 }
 
-/** A press as one arrival on its message's `Interactions`. */
-function interactionArrival(press: z.infer<typeof slackBlockActionsSchema>): Arrival | undefined {
+/** A press as one arrival on its message's `Interactions`, carrying the
+ *  channel and the message it was on. */
+async function interactionArrival(press: z.infer<typeof slackBlockActionsSchema>, lookups: SlackArrivalLookups): Promise<Arrival | undefined> {
   const channel = press.container?.channel_id ?? press.channel?.id;
   const ts = press.container?.message_ts ?? press.message?.ts;
   if (channel === undefined || ts === undefined) return undefined;
   const { id, username, name, team_id } = press.user;
+  const at = press.actions[0]?.action_ts ?? null;
+  const pressed = press.message !== undefined ? { ...press.message } : undefined;
   const fields: SlackInteractionData = {
     id: press.trigger_id,
-    at: press.actions[0]?.action_ts ?? null,
+    at,
     actions: press.actions.map(slackAction),
     user: {
       id,
@@ -290,20 +368,58 @@ function interactionArrival(press: z.infer<typeof slackBlockActionsSchema>): Arr
       ...(name != null ? { name } : {}),
       ...(team_id != null ? { team_id } : {}),
     },
+    channel,
+    ...(pressed !== undefined ? { message: pressed } : {}),
   };
+  const key = slackMessageKey(channel, ts);
+  const occurredAt = isoInstantFromSlackTs(at);
+  const message = pressed !== undefined ? slackMessageRecord({ channel, message: pressed, botUserId: await lookups.botUserId() }) : null;
   return {
     edge: SLACK_INTERACTIONS_EDGE_NAME,
-    key: slackMessageKey(channel, ts),
+    key,
     identity: press.trigger_id,
-    landing: { recordType: SLACK_INTERACTION_TYPE_NAME, fields: { ...fields } },
+    landing: { recordType: SLACK_INTERACTION_TYPE_NAME, fields: { ...fields, Id: press.trigger_id, At: occurredAt } },
+    parents: [slackChannelRecord(channel, await lookups.channelName(channel)), message],
+    about: { recordType: SLACK_MESSAGE_TYPE_NAME, externalId: key },
+    ...(occurredAt !== null ? { occurredAt } : {}),
   };
 }
 
-/** What one Events API event says arrived: a thread reply on its root's
- *  `Replies`; a deleted message the end of both its edges. A reply that
- *  mentions the app comes twice, as a `message` and an `app_mention`, under
- *  the one identity, so the second is a repeat. */
-function eventArrivals(event: z.infer<typeof slackInnerEventSchema>): Arrival[] {
+/** A reaction added to a message, as one arrival on its `Reactions`. */
+async function reactionArrival(event: z.infer<typeof slackInnerEventSchema>, lookups: SlackArrivalLookups): Promise<Arrival[]> {
+  const item = event.item;
+  if (item?.type !== 'message' || item.channel === undefined || item.ts === undefined || event.reaction === undefined) return [];
+  const channel = item.channel;
+  const key = slackMessageKey(channel, item.ts);
+  const occurredAt = isoInstantFromSlackTs(event.event_ts);
+  return [
+    {
+      edge: SLACK_REACTIONS_EDGE_NAME,
+      key,
+      // A reaction taken off and put back is another reaction: its event's
+      // own time tells them apart, and a retried delivery repeats it.
+      identity: `${key}:${event.user ?? ''}:${event.reaction}:${event.event_ts ?? ''}`,
+      landing: {
+        // The id a run's own reaction write is handed, so the host matches
+        // a reaction it caused to its write.
+        recordId: `reaction:${key}:${event.reaction}`,
+        recordType: SLACK_REACTION_TYPE_NAME,
+        fields: { ...event, Emoji: event.reaction, Channel: channel, Reactor: event.user ?? null },
+      },
+      parents: [slackChannelRecord(channel, await lookups.channelName(channel))],
+      about: { recordType: SLACK_MESSAGE_TYPE_NAME, externalId: key },
+      ...(occurredAt !== null ? { occurredAt } : {}),
+    },
+  ];
+}
+
+/** What one Events API event says arrived: a top-level message on its
+ *  channel's `Messages`; a thread reply on its root's `Replies`; a reaction
+ *  on its message's `Reactions`; a deleted message the end of its edges. A
+ *  message that mentions the app comes twice, as a `message` and an
+ *  `app_mention`, under the one identity, so the second is a repeat. */
+async function eventArrivals(event: z.infer<typeof slackInnerEventSchema>, lookups: SlackArrivalLookups): Promise<Arrival[]> {
+  if (event.type === 'reaction_added') return reactionArrival(event, lookups);
   if (!isSlackMessageEventType(event.type) || event.channel === undefined) return [];
   const channel = event.channel;
   if (event.subtype === 'message_deleted') {
@@ -313,30 +429,48 @@ function eventArrivals(event: z.infer<typeof slackInnerEventSchema>): Arrival[] 
     return [
       { edge: SLACK_INTERACTIONS_EDGE_NAME, key, gone: true },
       { edge: SLACK_REPLIES_EDGE_NAME, key, gone: true },
+      { edge: SLACK_REACTIONS_EDGE_NAME, key, gone: true },
     ];
   }
-  // An edit or a deletion is hidden; a root message carries no `thread_ts`,
-  // or its own `ts` there.
-  if (event.hidden === true || event.ts === undefined || event.thread_ts === undefined || event.thread_ts === event.ts) return [];
-  // Named by its record id, `channel:ts`: the name the same reply has when
-  // the thread is listed, so a reply both listed and announced counts once.
-  const recordId = slackMessageKey(channel, event.ts);
+  // An edit or a deletion is hidden.
+  if (event.hidden === true || event.ts === undefined) return [];
+  const message = slackMessageRecord({ channel, message: { ...event }, botUserId: await lookups.botUserId() });
+  const occurredAt = isoInstantFromSlackTs(event.ts);
+  const when = occurredAt !== null ? { occurredAt } : {};
+  // A root message carries no `thread_ts`, or its own `ts` there. Each is
+  // named by its record id, `channel:ts`: the name the same message has
+  // when its channel's history or its thread is listed, so a message both
+  // listed and announced counts once.
+  if (event.thread_ts === undefined || event.thread_ts === event.ts) {
+    return [
+      {
+        edge: SLACK_MESSAGES_EDGE_NAME,
+        key: channel,
+        identity: message.recordId,
+        landing: message,
+        parents: [slackChannelRecord(channel, await lookups.channelName(channel))],
+        ...when,
+      },
+    ];
+  }
   return [
     {
       edge: SLACK_REPLIES_EDGE_NAME,
       key: slackMessageKey(channel, event.thread_ts),
-      identity: recordId,
-      landing: { recordId, recordType: SLACK_MESSAGE_TYPE_NAME, fields: { ...event, channel } },
+      identity: message.recordId,
+      landing: message,
+      ...when,
     },
   ];
 }
 
-/** What one delivery says arrived on messages' listenable edges. */
-export function slackArrivals(raw: unknown): Arrival[] {
+/** What one delivery says arrived on the workspace's listenable edges. */
+export async function slackArrivals(raw: unknown, lookups: SlackArrivalLookups): Promise<Arrival[]> {
   const press = blockActionsOf(raw);
   if (press !== undefined) {
-    const arrival = interactionArrival(press);
+    const arrival = await interactionArrival(press, lookups);
     return arrival === undefined ? [] : [arrival];
   }
-  return parseSlackDeliveries(raw).flatMap((delivery) => eventArrivals(delivery.event));
+  const arrivals = await Promise.all(parseSlackDeliveries(raw).map((delivery) => eventArrivals(delivery.event, lookups)));
+  return arrivals.flat();
 }

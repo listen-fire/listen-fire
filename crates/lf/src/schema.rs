@@ -1070,9 +1070,11 @@ pub fn ambiguous_arrivals(entries: &[Js], descriptors: &IndexMap<String, Js>) ->
     ))
 }
 
-/// `carries` names the hops before the declarant, outermost first: read
-/// from the innermost, each must be an edge into the type the one after it
-/// hangs off.
+/// `carries` names hops before the declarant, outermost first: read from
+/// the innermost, each must be an edge into the type the one after it hangs
+/// off, or into a type before that one on a path to it. A hop it does not
+/// carry may come between (Slack's reaction carries its channel, not the
+/// message it is on).
 fn unreadable_carries(declarant: &Declarant, entries: &[Js], descriptors: &IndexMap<String, Js>) -> Option<String> {
     let carries = items(declarant.declared().get("carries"));
     if carries.is_empty() {
@@ -1092,13 +1094,14 @@ fn unreadable_carries(declarant: &Declarant, entries: &[Js], descriptors: &Index
         if hangs_off.is_empty() {
             return Some(format!("'{name}' says its arrivals carry earlier hops, but 'carries' names '{hop}', and '{inner}' is a root collection: nothing comes before it"));
         }
-        let edges_in = || hangs_off.iter().flat_map(|t| into.get(t).into_iter().flatten());
+        let before = types_before(&hangs_off, &into);
+        let edges_in = || before.iter().flat_map(|t| into.get(t).into_iter().flatten());
         let matched: Vec<&Option<String>> = edges_in().filter(|(edge, _)| *edge == hop).map(|(_, owner)| owner).collect();
         if matched.is_empty() {
             let types: Vec<String> = hangs_off.iter().map(|t| format!("'{}'", display(t))).collect();
             let edges: IndexSet<&str> = edges_in().map(|(edge, _)| edge.as_str()).collect();
             return Some(format!(
-                "'{name}' says its arrivals carry earlier hops, but 'carries' names '{hop}', which is no edge into {} (the edges into it: {})",
+                "'{name}' says its arrivals carry earlier hops, but 'carries' names '{hop}', which is no edge into {} or a record before it (the edges into them: {})",
                 types.join(" or "),
                 if edges.is_empty() { "none".to_string() } else { edges.into_iter().collect::<Vec<_>>().join(", ") }
             ));
@@ -1107,6 +1110,22 @@ fn unreadable_carries(declarant: &Declarant, entries: &[Js], descriptors: &Index
         inner = hop;
     }
     None
+}
+
+/// `types`, then each type an edge into one of them hangs off, and so on
+/// out to the instance: the types on a path to them.
+fn types_before(types: &IndexSet<String>, into: &HashMap<String, Vec<(String, Option<String>)>>) -> IndexSet<String> {
+    let mut before = types.clone();
+    let mut at = 0;
+    while let Some(t) = before.get_index(at).cloned() {
+        for (_, owner) in into.get(&t).into_iter().flatten() {
+            if let Some(owner) = owner {
+                before.insert(owner.clone());
+            }
+        }
+        at += 1;
+    }
+    before
 }
 
 /// Each type's edges in, by its type id: (edge name, the type it hangs off,
@@ -1753,13 +1772,15 @@ mod tests {
         };
         assert_eq!(changes(r#"["Bases","Tables"]"#), None);
         assert_eq!(changes(r#"["Tables"]"#), None);
+        // A hop not carried may come between: the base, not the table.
+        assert_eq!(changes(r#"["Bases"]"#), None);
         assert_eq!(
             changes(r#"["Nope"]"#).unwrap(),
-            "'Changes' says its arrivals carry earlier hops, but 'carries' names 'Nope', which is no edge into 'Table' (the edges into it: Tables)"
+            "'Changes' says its arrivals carry earlier hops, but 'carries' names 'Nope', which is no edge into 'Table' or a record before it (the edges into them: Tables, Bases)"
         );
         assert_eq!(
             changes(r#"["Tables","Bases"]"#).unwrap(),
-            "'Changes' says its arrivals carry earlier hops, but 'carries' names 'Bases', which is no edge into 'Table' (the edges into it: Tables)",
+            "'Changes' says its arrivals carry earlier hops, but 'carries' names 'Tables', and 'Bases' is a root collection: nothing comes before it",
             "outermost first: the innermost hop is last"
         );
         assert_eq!(

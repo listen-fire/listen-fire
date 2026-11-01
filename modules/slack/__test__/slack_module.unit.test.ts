@@ -4,7 +4,10 @@
 // inbound. The whole surface's answers are held to the legacy adapter by
 // lf-platform's apps/api recorded parity (slack_parity.unit.test.ts).
 
+import type { AddressInfo } from 'node:net';
 import type { CredentialFields, ModuleCredential, ModuleFiles } from 'module-kit';
+
+import { createServer, type Server } from 'node:http';
 
 import { adapterInProcess, noCredential, refusingFiles, refusingKv } from 'module-kit';
 import { makeMetaPosition } from 'movement-engine/public/catalog';
@@ -41,6 +44,38 @@ function fakeSlack(): { fetch: typeof fetch; calls: Call[] } {
     return Response.json({ ok: true, ts: '1.2', channels: [], members: [] });
   };
   return { fetch, calls };
+}
+
+/** A Slack Web API over HTTP, as the module's client reaches it: the
+ *  channels it names (`conversations.info`), the app's bot user
+ *  (`auth.test`), and every method called, in order. */
+async function slackApi(channels: Record<string, string>): Promise<{ baseUrl: string; methods: string[]; close(): Promise<void> }> {
+  const methods: string[] = [];
+  const server: Server = createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      const method = (req.url ?? '').replace(/^\//, '');
+      methods.push(method);
+      const form = new URLSearchParams(body);
+      res.setHeader('content-type', 'application/json');
+      const id = form.get('channel') ?? '';
+      const name = channels[id];
+      const answer =
+        method === 'auth.test' ? { ok: true, user_id: 'UBOT', bot_id: 'B1' }
+        : method !== 'conversations.info' ? { ok: true }
+        : name === undefined ? { ok: false, error: 'channel_not_found' }
+        : { ok: true, channel: { id, name } };
+      res.end(JSON.stringify(answer));
+    });
+  });
+  await new Promise<void>((listening) => server.listen(0, '127.0.0.1', () => listening()));
+  const { port } = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${port}/`,
+    methods,
+    close: () => new Promise<void>((closed) => (server.closeAllConnections(), server.close(() => closed()))),
+  };
 }
 
 function load(input: { credential: ModuleCredential; hosted?: SlackHosted; files?: ModuleFiles; fetch?: typeof fetch }) {
@@ -131,22 +166,81 @@ describe('@lf/slack', () => {
     expect(read).toHaveBeenCalledWith(ref);
   });
 
-  it('a delivery fires its event with Slack’s idempotency key; a message is a create', async () => {
-    const { adapter } = load({ credential: credential({}) });
-    const raw = { type: 'event_callback', event_id: 'Ev9', event: { type: 'message', channel: 'C1', user: 'U1', text: 'hi', ts: '9.1' } };
-    await expect(adapter.preprocessInbound?.({ raw })).resolves.toEqual({
-      events: [
-        {
-          payload: raw.event,
-          externalId: '9.1',
-          recordType: 'slack:message',
-          eventType: 'message',
-          idempotencyKey: 'Ev9',
-          changeType: 'create',
-        },
-      ],
-    });
-    await expect(adapter.preprocessInbound?.({ raw: { type: 'url_verification', challenge: 'c' } })).resolves.toEqual({ events: [] });
+  it('a top-level message is one Messages arrival keyed by its channel, carrying the channel by name', async () => {
+    const api = await slackApi({ C1: 'deals' });
+    try {
+      const { adapter } = load({ credential: credential({ accessToken: 'xoxb-messages', baseUrl: api.baseUrl }) });
+      const event = { type: 'message', channel: 'C1', user: 'U1', text: 'hi <@UBOT>', ts: '1700000000.000100' };
+      await expect(adapter.preprocessInbound?.({ raw: { type: 'event_callback', event_id: 'Ev9', event } })).resolves.toEqual({
+        events: [],
+        arrivals: [
+          {
+            edge: 'Messages',
+            key: 'C1',
+            identity: 'C1:1700000000.000100',
+            landing: {
+              recordId: 'C1:1700000000.000100',
+              recordType: 'Message',
+              fields: {
+                ...event,
+                Id: 'C1:1700000000.000100',
+                Message: 'hi <@UBOT>',
+                User: 'U1',
+                Channel: 'C1',
+                'Posted At': '2023-11-14T22:13:20.000Z',
+                Topic: null,
+                'Mentions App': true,
+              },
+            },
+            parents: [{ recordId: 'C1', recordType: 'Channel', fields: { id: 'C1', name: 'deals', Id: 'C1', Name: 'deals' } }],
+            occurredAt: '2023-11-14T22:13:20.000Z',
+          },
+        ],
+      });
+      // A message that does not name the bot user does not mention the app;
+      // Slack's own `app_mention` always does.
+      const plain = await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: { ...event, text: 'hi' } } });
+      expect(plain?.arrivals?.map((a) => ('landing' in a ? a.landing.fields['Mentions App'] : undefined))).toEqual([false]);
+      const mention = await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: { ...event, type: 'app_mention', text: 'hi' } } });
+      expect(mention?.arrivals?.map((a) => ('landing' in a ? a.landing.fields['Mentions App'] : undefined))).toEqual([true]);
+      // A channel whose name cannot be read is carried as unknown, never guessed.
+      const elsewhere = await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: { ...event, channel: 'C9' } } });
+      expect(elsewhere?.arrivals?.map((a) => ('parents' in a ? a.parents : undefined))).toEqual([[null]]);
+      // No event, no arrival.
+      await expect(adapter.preprocessInbound?.({ raw: { type: 'url_verification', challenge: 'c' } })).resolves.toEqual({ events: [] });
+      // The channel and the bot user were read once each, from the client's cache after.
+      expect(api.methods.filter((m) => m === 'auth.test')).toHaveLength(1);
+      expect(api.methods.every((m) => m !== 'conversations.history')).toBe(true);
+    } finally {
+      await api.close();
+    }
+  });
+
+  it('a reaction is one Reactions arrival keyed by its message, about it, carrying only its channel', async () => {
+    const api = await slackApi({ C1: 'deals' });
+    try {
+      const { adapter } = load({ credential: credential({ accessToken: 'xoxb-reactions', baseUrl: api.baseUrl }) });
+      const event = { type: 'reaction_added', user: 'U2', reaction: 'eyes', item: { type: 'message', channel: 'C1', ts: '1700.1' }, item_user: 'U1', event_ts: '1700000000.000200' };
+      await expect(adapter.preprocessInbound?.({ raw: { type: 'event_callback', event_id: 'Ev8', event } })).resolves.toEqual({
+        events: [],
+        arrivals: [
+          {
+            edge: 'Reactions',
+            key: 'C1:1700.1',
+            identity: 'C1:1700.1:U2:eyes:1700000000.000200',
+            landing: { recordId: 'reaction:C1:1700.1:eyes', recordType: 'Reaction', fields: { ...event, Emoji: 'eyes', Channel: 'C1', Reactor: 'U2' } },
+            parents: [{ recordId: 'C1', recordType: 'Channel', fields: { id: 'C1', name: 'deals', Id: 'C1', Name: 'deals' } }],
+            about: { recordType: 'Message', externalId: 'C1:1700.1' },
+            occurredAt: '2023-11-14T22:13:20.000Z',
+          },
+        ],
+      });
+      // A reaction on a file is no message's.
+      const onFile = { ...event, item: { type: 'file', file: 'F1' } };
+      await expect(adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: onFile } })).resolves.toEqual({ events: [] });
+    } finally {
+      await api.close();
+    }
   });
 
   it('Buttons post as an actions block whose values are the written Values', async () => {
@@ -166,7 +260,8 @@ describe('@lf/slack', () => {
       createUnifiedMessage({ client, host: slackSourcesFrom(ctx), anchor: { kind: 'post', channelId: 'C1' }, fields });
 
     const result = await write({ text: 'Pursue?', buttons: [{ Text: 'Pursue', Value: 'pursue' }, { Text: 'Pass', Value: 'pass' }] });
-    expect(result).toMatchObject({ externalId: '1700.1', data: { channelId: 'C1', ts: '1700.1' } });
+    // Named as the message is when its channel is listed and when it arrives.
+    expect(result).toMatchObject({ externalId: 'C1:1700.1', data: { channelId: 'C1', ts: '1700.1' } });
     expect(posted[0]).toMatchObject({ channel: 'C1', text: 'Pursue?' });
     expect(posted[0]?.blocks).toEqual([
       { type: 'section', text: { type: 'mrkdwn', text: 'Pursue?' } },
@@ -184,6 +279,55 @@ describe('@lf/slack', () => {
     await expect(write({ text: 'x', buttons, file: { __brand: 'FileRef', name: 'a', content: 'b' } })).rejects.toThrow("a Slack Message's Buttons can't be combined with Blocks or File");
     await expect(write({ buttons })).rejects.toThrow(/Buttons needs its Message text/);
     expect(posted).toHaveLength(1);
+  });
+
+  it('a Topic is the id of the block the buttons sit in, read back from there; one without Buttons is refused by name', async () => {
+    const { slackSourcesFrom } = await import('../index');
+    const { moduleContext } = await import('module-kit');
+    const { createUnifiedMessage, TOPIC_WITHOUT_BUTTONS } = await import('../write');
+    const ctx = moduleContext({ tenant: 't', credential: credential({}), log: silent, files: refusingFiles('x'), kv: refusingKv('x'), validateResults: false });
+    const posted: Array<Record<string, unknown>> = [];
+    const client = {
+      api: {
+        conversations: { info: async () => ({ ok: true, channel: { is_member: true } }), members: async () => ({ ok: true, members: [] }) },
+        users: { list: async () => ({ ok: true, members: [] }) },
+        chat: { postMessage: async (args: Record<string, unknown>) => (posted.push(args), { ok: true, ts: '1700.1' }) },
+      },
+    } as never;
+    const write = (fields: Record<string, unknown>) =>
+      createUnifiedMessage({ client, host: slackSourcesFrom(ctx), anchor: { kind: 'post', channelId: 'C1' }, fields });
+
+    const buttons = [{ Text: 'In', Value: 'in' }];
+    const result = await write({ text: 'Lunch?', topic: 'lunch-poll', buttons });
+    expect(posted[0]?.blocks).toEqual([
+      { type: 'section', text: { type: 'mrkdwn', text: 'Lunch?' } },
+      { type: 'actions', block_id: 'lf:lunch-poll', elements: [{ type: 'button', text: { type: 'plain_text', text: 'In' }, value: 'in', action_id: 'lf_button_0' }] },
+    ]);
+    // The message a run wrote reads its Topic as a listed one does, off its blocks.
+    const { adapter } = load({ credential: credential({}) });
+    const { makeStablePosition } = await import('movement-engine/public/catalog');
+    const written = makeStablePosition({ adapterType: 'slack', recordType: 'Message', recordId: result.externalId, data: result.data });
+    await expect(adapter.getFieldValue({ position: written, fieldId: 'Topic' })).resolves.toBe('lunch-poll');
+    await expect(adapter.getFieldValue({ position: written, fieldId: 'Id' })).resolves.toBe('C1:1700.1');
+    const listed = makeStablePosition({ adapterType: 'slack', recordType: 'Message', recordId: 'C1:1700.2', data: { channel: 'C1', ts: '1700.2', text: 'hi' } });
+    await expect(adapter.getFieldValue({ position: listed, fieldId: 'Topic' })).resolves.toBeNull();
+
+    await expect(write({ text: 'Lunch?', topic: 'lunch-poll' })).rejects.toThrow(TOPIC_WITHOUT_BUTTONS);
+    await expect(write({ text: 'Lunch?', topic: 'x'.repeat(253), buttons })).rejects.toThrow('Topic is 253 characters; Slack holds at most 252');
+    expect(posted).toHaveLength(1);
+  });
+
+  it('the Topic is documented where an author reads it: the handbook section and the field, both naming the block id it is kept on', async () => {
+    const { SLACK_HANDBOOK_SECTION } = await import('../handbook_section');
+    expect(SLACK_HANDBOOK_SECTION.content).toContain('A \`Topic\` goes only on a message with \`Buttons\`; one without is refused.');
+    expect(SLACK_HANDBOOK_SECTION.content).toContain('the \`Topic\` is stored as the id of the block its buttons sit in (\`lf:<topic>\`)');
+    const { adapter } = load({ credential: credential({}) });
+    const topic = (await adapter.describe('Message'))?.fields.find((f) => f.displayName === 'Topic');
+    expect(topic?.description).toContain('Only a message with Buttons takes one');
+    expect(topic?.description).toContain('stored as the id of the block its buttons sit in (`lf:<topic>`)');
+    // The checker keeps a Topic to the post with buttons.
+    const union = (await adapter.describe('Message'))?.writeUnion?.variants.map((v) => [v.name, v.fields.includes('topic')]);
+    expect(union).toEqual([['a file post', false], ['an interactive post', false], ['a post with buttons', true]]);
   });
 
   it('a Buttons entry missing its Text or Value, or past Slack\'s limits, is refused naming it before anything posts', async () => {
@@ -220,48 +364,96 @@ describe('@lf/slack', () => {
     expect(posted).toHaveLength(1);
   });
 
-  it('a block_actions payload is one Interactions arrival keyed by its message', async () => {
-    const { adapter } = load({ credential: credential({}) });
-    const payload = {
-      type: 'block_actions',
-      trigger_id: '13345224609.738474920.8088930838d88f008e0',
-      user: { id: 'U1', username: 'ada', name: 'ada', team_id: 'T1' },
-      api_app_id: 'A1',
-      container: { type: 'message', message_ts: '1700.1', channel_id: 'C1', is_ephemeral: false },
-      channel: { id: 'C1', name: 'general' },
-      message: { type: 'message', ts: '1700.1', text: 'Pursue?' },
-      actions: [
-        { type: 'button', action_id: 'lf_button_0', block_id: 'b1', value: 'pursue', text: { type: 'plain_text', text: 'Pursue' }, action_ts: '1700.9' },
-      ],
-    };
-    // As the host hands a form-encoded delivery over: its fields.
-    await expect(adapter.preprocessInbound?.({ raw: { payload: JSON.stringify(payload) } })).resolves.toEqual({
-      events: [],
-      arrivals: [
-        {
-          edge: 'Interactions',
-          key: 'C1:1700.1',
-          identity: '13345224609.738474920.8088930838d88f008e0',
-          landing: {
-            recordType: 'Interaction',
-            fields: {
-              id: '13345224609.738474920.8088930838d88f008e0',
-              at: '1700.9',
-              actions: [{ value: 'pursue', text: 'Pursue', action_id: 'lf_button_0', block_id: 'b1', type: 'button' }],
-              user: { id: 'U1', username: 'ada', name: 'ada', team_id: 'T1' },
-            },
+  it('a block_actions payload is one Interactions arrival keyed by its message, carrying its channel and the message pressed', async () => {
+    const api = await slackApi({ C1: 'office' });
+    try {
+      const { adapter } = load({ credential: credential({ accessToken: 'xoxb-presses', baseUrl: api.baseUrl }) });
+      const blocks = [{ type: 'section', text: { type: 'mrkdwn', text: 'Lunch?' } }, { type: 'actions', block_id: 'lf:lunch-poll', elements: [] }];
+      const message = { type: 'message', ts: '1700000000.000100', text: 'Lunch?', user: 'UBOT', blocks };
+      const payload = {
+        type: 'block_actions',
+        trigger_id: '13345224609.738474920.8088930838d88f008e0',
+        user: { id: 'U1', username: 'ada', name: 'ada', team_id: 'T1' },
+        api_app_id: 'A1',
+        container: { type: 'message', message_ts: '1700000000.000100', channel_id: 'C1', is_ephemeral: false },
+        channel: { id: 'C1', name: 'office' },
+        message,
+        actions: [
+          { type: 'button', action_id: 'lf_button_0', block_id: 'lf:lunch-poll', value: 'in', text: { type: 'plain_text', text: 'In' }, action_ts: '1700000060.000900' },
+        ],
+      };
+      const press = {
+        id: '13345224609.738474920.8088930838d88f008e0',
+        at: '1700000060.000900',
+        actions: [{ value: 'in', text: 'In', action_id: 'lf_button_0', block_id: 'lf:lunch-poll', type: 'button' }],
+        user: { id: 'U1', username: 'ada', name: 'ada', team_id: 'T1' },
+        channel: 'C1',
+        message,
+      };
+      // As the host hands a form-encoded delivery over: its fields.
+      await expect(adapter.preprocessInbound?.({ raw: { payload: JSON.stringify(payload) } })).resolves.toEqual({
+        events: [],
+        arrivals: [
+          {
+            edge: 'Interactions',
+            key: 'C1:1700000000.000100',
+            identity: '13345224609.738474920.8088930838d88f008e0',
+            landing: { recordType: 'Interaction', fields: { ...press, Id: press.id, At: '2023-11-14T22:14:20.000Z' } },
+            parents: [
+              { recordId: 'C1', recordType: 'Channel', fields: { id: 'C1', name: 'office', Id: 'C1', Name: 'office' } },
+              {
+                recordId: 'C1:1700000000.000100',
+                recordType: 'Message',
+                fields: {
+                  ...message,
+                  channel: 'C1',
+                  Id: 'C1:1700000000.000100',
+                  Message: 'Lunch?',
+                  User: 'UBOT',
+                  Channel: 'C1',
+                  'Posted At': '2023-11-14T22:13:20.000Z',
+                  Topic: 'lunch-poll',
+                  'Mentions App': false,
+                },
+              },
+            ],
+            about: { recordType: 'Message', externalId: 'C1:1700000000.000100' },
+            occurredAt: '2023-11-14T22:14:20.000Z',
           },
-        },
-      ],
-    });
-    // An optional member field Slack sends as null is left out, not a reason
-    // to drop the press.
-    const nulled = { ...payload, user: { id: 'U1', username: null, name: null, team_id: null } };
-    const landed = await adapter.preprocessInbound?.({ raw: { payload: JSON.stringify(nulled) } });
-    expect(landed?.arrivals?.map((arrival) => ('landing' in arrival ? arrival.landing?.fields.user : undefined))).toEqual([{ id: 'U1' }]);
-    // A press outside a message (a modal) names none, and arrives on nothing.
-    const { container: _container, channel: _channel, message: _message, ...modal } = payload;
-    await expect(adapter.preprocessInbound?.({ raw: { payload: JSON.stringify(modal) } })).resolves.toEqual({ events: [] });
+        ],
+      });
+      // An optional member field Slack sends as null is left out, not a reason
+      // to drop the press.
+      const nulled = { ...payload, user: { id: 'U1', username: null, name: null, team_id: null } };
+      const landed = await adapter.preprocessInbound?.({ raw: { payload: JSON.stringify(nulled) } });
+      expect(landed?.arrivals?.map((arrival) => ('landing' in arrival ? arrival.landing?.fields.user : undefined))).toEqual([{ id: 'U1' }]);
+      // A press Slack sends without its message carries no message, so a
+      // filter on it cannot be judged rather than passing.
+      const { message: _pressed, ...bare } = payload;
+      const unmessaged = await adapter.preprocessInbound?.({ raw: { payload: JSON.stringify(bare) } });
+      expect(unmessaged?.arrivals?.map((arrival) => ('parents' in arrival ? arrival.parents?.[1] : undefined))).toEqual([null]);
+      // A press outside a message (a modal) names none, and arrives on nothing.
+      const { container: _container, channel: _channel, message: _message, ...modal } = payload;
+      await expect(adapter.preprocessInbound?.({ raw: { payload: JSON.stringify(modal) } })).resolves.toEqual({ events: [] });
+      // Nothing listed the channel's history to find the message.
+      expect(api.methods.filter((m) => m !== 'auth.test' && m !== 'conversations.info')).toEqual([]);
+    } finally {
+      await api.close();
+    }
+  });
+
+  it('a press walks to the message pressed, as it came with the press, with nothing fetched', async () => {
+    const { adapter } = load({ credential: credential({}) });
+    const { makeUnstablePosition } = await import('movement-engine/public/catalog');
+    const pressed = { ts: '1700000000.000100', text: 'Lunch?', blocks: [{ type: 'actions', block_id: 'lf:lunch-poll' }] };
+    const press = makeUnstablePosition({ adapterType: 'slack', recordType: 'Interaction', data: { id: 'trig-1', at: null, actions: [], user: { id: 'U1' }, channel: 'C1', message: pressed } });
+    const [message] = await adapter.getRelated({ position: press, fieldId: 'Message', direction: 'outgoing' });
+    await expect(adapter.getFieldValue({ position: message!.position, fieldId: 'Topic' })).resolves.toBe('lunch-poll');
+    await expect(adapter.getFieldValue({ position: message!.position, fieldId: 'Id' })).resolves.toBe('C1:1700000000.000100');
+    await expect(adapter.getFieldValue({ position: message!.position, fieldId: 'Posted At' })).resolves.toBe('2023-11-14T22:13:20.000Z');
+    // A press Slack sent without its message walks to none.
+    const bare = makeUnstablePosition({ adapterType: 'slack', recordType: 'Interaction', data: { id: 'trig-2', at: null, actions: [], user: { id: 'U1' }, channel: 'C1' } });
+    await expect(adapter.getRelated({ position: bare, fieldId: 'Message', direction: 'outgoing' })).resolves.toEqual([]);
   });
 
   it('an Interaction reads its Id and At, and walks to its Actions and the member who pressed', async () => {
@@ -280,40 +472,45 @@ describe('@lf/slack', () => {
     await expect(adapter.getFieldValue({ position: actions[0]!.position, fieldId: 'Text' })).resolves.toBe('Pursue');
   });
 
-  it('a thread reply is a Replies arrival on its root; a root message is none', async () => {
+  it('a thread reply is a Replies arrival on its root, not one of its channel\'s Messages', async () => {
     const { adapter } = load({ credential: credential({}) });
     const reply = { type: 'message', channel: 'C1', user: 'U2', text: 'yes', ts: '1700.5', thread_ts: '1700.1' };
     const answer = await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event_id: 'Ev2', event: reply } });
-    expect(answer?.arrivals).toEqual([
-      { edge: 'Replies', key: 'C1:1700.1', identity: 'C1:1700.5', landing: { recordId: 'C1:1700.5', recordType: 'Message', fields: reply } },
+    expect(answer?.arrivals).toMatchObject([
+      { edge: 'Replies', key: 'C1:1700.1', identity: 'C1:1700.5', landing: { recordId: 'C1:1700.5', recordType: 'Message', fields: { ...reply, Message: 'yes' } } },
     ]);
-    expect(answer?.events).toHaveLength(1);
+    expect(answer?.events).toEqual([]);
     const root = { type: 'message', channel: 'C1', user: 'U2', text: 'hi', ts: '1700.1' };
-    expect((await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: root } }))?.arrivals).toBeUndefined();
+    expect((await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: root } }))?.arrivals?.map((a) => a.edge)).toEqual(['Messages']);
   });
 
-  it('a thread reply that mentions the app arrives as its message would, under the same identity', async () => {
+  it('a message that mentions the app arrives as its message would, under the same identity', async () => {
     const { adapter } = load({ credential: credential({}) });
     const reply = { type: 'app_mention', channel: 'C1', user: 'U2', text: '<@UBOT> yes', ts: '1700.5', thread_ts: '1700.1' };
     const answer = await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event_id: 'Ev3', event: reply } });
-    expect(answer?.arrivals).toEqual([
-      { edge: 'Replies', key: 'C1:1700.1', identity: 'C1:1700.5', landing: { recordId: 'C1:1700.5', recordType: 'Message', fields: reply } },
+    expect(answer?.arrivals).toMatchObject([
+      { edge: 'Replies', key: 'C1:1700.1', identity: 'C1:1700.5', landing: { recordId: 'C1:1700.5', recordType: 'Message', fields: { ...reply, 'Mentions App': true } } },
     ]);
     // Slack sends the same reply again as a `message`: the one identity, so a repeat.
     const asMessage = await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event_id: 'Ev4', event: { ...reply, type: 'message' } } });
     expect(asMessage?.arrivals?.map((a) => ('identity' in a ? a.identity : undefined))).toEqual(['C1:1700.5']);
-    // A mention outside a thread is no reply.
+    // A mention outside a thread is one of its channel's Messages, under the same identity either way.
     const { thread_ts: _thread, ...mention } = reply;
-    expect((await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: mention } }))?.arrivals).toBeUndefined();
+    const top = await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: mention } });
+    expect(top?.arrivals?.map((a) => [a.edge, 'identity' in a ? a.identity : undefined])).toEqual([['Messages', 'C1:1700.5']]);
   });
 
-  it('a message_deleted event is a gone arrival on Interactions and Replies', async () => {
+  it('a message_deleted event is a gone arrival on Interactions, Replies and Reactions', async () => {
     const { adapter } = load({ credential: credential({}) });
     const deleted = { type: 'message', subtype: 'message_deleted', hidden: true, channel: 'C1', ts: '1700.8', deleted_ts: '1700.1' };
     expect((await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: deleted } }))?.arrivals).toEqual([
       { edge: 'Interactions', key: 'C1:1700.1', gone: true },
       { edge: 'Replies', key: 'C1:1700.1', gone: true },
+      { edge: 'Reactions', key: 'C1:1700.1', gone: true },
     ]);
+    // An edit is hidden, and arrives on nothing.
+    const edited = { type: 'message', subtype: 'message_changed', hidden: true, channel: 'C1', ts: '1700.9' };
+    expect((await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: edited } }))?.arrivals).toBeUndefined();
   });
 
   it('awaitKeys names a message by its own ts for Interactions and by its thread root for Replies', async () => {
@@ -326,7 +523,38 @@ describe('@lf/slack', () => {
     ];
     await expect(adapter.arrivals?.awaitKeys({ edge: 'Interactions', heads })).resolves.toEqual([{ key: 'C1:1700.1' }, { key: 'C2:1700.7' }]);
     await expect(adapter.arrivals?.awaitKeys({ edge: 'Replies', heads })).resolves.toEqual([{ key: 'C1:1700.1' }, { key: 'C2:1700.2' }]);
+    await expect(adapter.arrivals?.awaitKeys({ edge: 'Reactions', heads })).resolves.toEqual([{ key: 'C1:1700.1' }, { key: 'C2:1700.7' }]);
+    // A channel's Messages are keyed by the channel, never by a message's `channel:ts`.
+    await expect(adapter.arrivals?.awaitKeys({ edge: 'Messages', heads: [{ recordId: 'C1', headData: { id: 'C1', name: 'deals' } }] })).resolves.toEqual([{ key: 'C1' }]);
     await expect(adapter.arrivals?.awaitKeys({ edge: 'Author', heads })).rejects.toThrow(/'Author' is not a listenable edge/);
+  });
+
+  it('declares a channel\'s Messages and a message\'s Reactions and Interactions listenable, each carrying what is above it, and nothing of 0.12\'s settings', async () => {
+    const loaded = load({ credential: credential({}) });
+    const { adapter, manifest } = loaded;
+    const channel = await adapter.describe('Channel');
+    expect(channel?.references.find((r) => r.name === 'Messages')).toMatchObject({ listenable: true, delivery: 'connection', carries: ['Channels'], cursor: false });
+    // Listed as well as announced: a listen passes through it to a message's edges.
+    expect(channel?.references.find((r) => r.name === 'Messages')?.readable).not.toBe(false);
+    const message = await adapter.describe('Message');
+    expect(message?.references.find((r) => r.name === 'Reactions')).toMatchObject({ readable: false, writable: true, listenable: true, delivery: 'connection', carries: ['Channels'], attributes: true });
+    expect(message?.references.find((r) => r.name === 'Interactions')).toMatchObject({ delivery: 'connection', carries: ['Channels', 'Messages'] });
+    expect(message?.fields.map((f) => f.displayName)).toEqual(expect.arrayContaining(['Id', 'Posted At', 'Topic', 'Mentions App']));
+    expect(message?.fields.map((f) => f.displayName)).not.toContain('Timestamp');
+    // Each listenable edge lands on its own record type.
+    expect([channel?.references.find((r) => r.name === 'Messages')?.targetTypeId, message?.references.find((r) => r.name === 'Reactions')?.targetTypeId, message?.references.find((r) => r.name === 'Interactions')?.targetTypeId]).toEqual([
+      'slack:message',
+      'slack:reaction',
+      'slack:interaction',
+    ]);
+    const entries = await adapter.listEntryPoints();
+    expect(entries.some((e) => 'fires' in e)).toBe(false);
+    expect(manifest).not.toHaveProperty('subscribableEvents');
+    expect(manifest).not.toHaveProperty('listenConfig');
+    expect(manifest.methods).not.toContain('listEventTypes');
+    expect('listEventTypes' in adapter).toBe(false);
+    expect(slackModule.protocolMinor).toBe(6);
+    expect(manifest.listenSettingsBecome?.byEvent?.app_mention?.keys.events).toEqual({ hop: 1, field: 'Mentions App', op: 'eq', values: { app_mention: true } });
   });
 
   it('declares Interactions listenable and typed by the Buttons written, which its describe holds', async () => {

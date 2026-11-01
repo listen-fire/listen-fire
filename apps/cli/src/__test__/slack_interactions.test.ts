@@ -2,7 +2,8 @@
 // Slack module against the fake in packages/fake-channels (as github.test.ts
 // does), with the signing secret its deliveries are signed with. A run posts a
 // message with Buttons and parks on `await msg-[:Interactions]->`; Slack's
-// press arrives at `listen-fire serve`'s door form-encoded (`payload=<json>`)
+// press (the fake's, carrying the message pressed with its blocks, as
+// Slack's does) arrives at `listen-fire serve`'s door form-encoded (`payload=<json>`)
 // and signed with Slack's own scheme (`v0:<timestamp>:<body>`, keyed by the
 // signing secret), and the run resumes with the button's value. A thread
 // reply, an Events API delivery, resumes `await msg-[:Replies]->` (a deleted
@@ -17,7 +18,7 @@ import { test } from 'node:test';
 
 import { served } from './example';
 import { lf } from './interactive';
-import { HEADER, botMessages, deliver, eventCallback, parkedRun, press, slackWorld } from './slack_world';
+import { HEADER, botMessages, deliver, eventCallback, parkedRun, press, pressOn, slackWorld } from './slack_world';
 
 const PRESS = `${HEADER}
 function decide(run: <manual-[:Invocations]->>) {
@@ -66,12 +67,13 @@ test('a press resumes the run with the button\'s literal value', async () => {
       ],
     });
 
-    const forged = await deliver(serving, press(posted.channel, posted.ts, 'pursue'), 'application/x-www-form-urlencoded', { secret: 'not-the-secret' });
+    const pursue = await pressOn(world.channels, { channel: posted.channel, ts: posted.ts, value: 'pursue' });
+    const forged = await deliver(serving, pursue, 'application/x-www-form-urlencoded', { secret: 'not-the-secret' });
     assert.equal(forged.status, 401, forged.body);
-    const replayed = await deliver(serving, press(posted.channel, posted.ts, 'pursue'), 'application/x-www-form-urlencoded', { at: Math.floor(Date.now() / 1000) - 6 * 60 });
+    const replayed = await deliver(serving, pursue, 'application/x-www-form-urlencoded', { at: Math.floor(Date.now() / 1000) - 6 * 60 });
     assert.equal(replayed.status, 401, replayed.body);
 
-    const pressed = await deliver(serving, press(posted.channel, posted.ts, 'pursue'), 'application/x-www-form-urlencoded');
+    const pressed = await deliver(serving, pursue, 'application/x-www-form-urlencoded');
     assert.ok(pressed.status >= 200 && pressed.status < 300, pressed.body);
     await serving.waitFor(/resumed .* slack:decide completed/);
     assert.deepEqual((await botMessages(world.channels)).map((m) => m.text), ['Pursue?', 'chose pursue']);
@@ -157,10 +159,11 @@ test('two presses at once resume the run once', async () => {
     const [posted] = await botMessages(world.channels);
     assert.ok(posted);
     const form = 'application/x-www-form-urlencoded';
-    const answers = await Promise.all([
-      deliver(serving, press(posted.channel, posted.ts, 'pursue', 'trigger-a'), form),
-      deliver(serving, press(posted.channel, posted.ts, 'pass', 'trigger-b'), form),
+    const presses = await Promise.all([
+      pressOn(world.channels, { channel: posted.channel, ts: posted.ts, value: 'pursue', trigger: 'trigger-a' }),
+      pressOn(world.channels, { channel: posted.channel, ts: posted.ts, value: 'pass', trigger: 'trigger-b' }),
     ]);
+    const answers = await Promise.all(presses.map((pressed) => deliver(serving, pressed, form)));
     for (const answer of answers) assert.ok(answer.status >= 200 && answer.status < 300, answer.body);
     await serving.waitFor(/resumed .* slack:decide completed/);
     // Long enough for a second resume to have written, had there been one.
@@ -189,7 +192,7 @@ test('a press on a message no run waits for is answered and resumes nothing', as
     assert.equal(serving.lines.filter((line) => /resumed/.test(line)).length, 0, serving.lines.join('\n'));
     assert.deepEqual((await botMessages(world.channels)).map((m) => m.text), ['Pursue?']);
     // The run still waits on its own message.
-    await deliver(serving, press(posted.channel, posted.ts, 'pursue'), form);
+    await deliver(serving, await pressOn(world.channels, { channel: posted.channel, ts: posted.ts, value: 'pursue' }), form);
     await serving.waitFor(/resumed .* slack:decide completed/);
     assert.deepEqual((await botMessages(world.channels)).map((m) => m.text), ['Pursue?', 'chose pursue']);
   } finally {

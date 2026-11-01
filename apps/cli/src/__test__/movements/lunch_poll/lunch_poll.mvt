@@ -1,0 +1,31 @@
+import { `@lf/slack` as slack, `@lf/airtable` as airtable } from adapters
+import { team_slack, team_airtable } from credentials
+
+chat = connect slack using team_slack
+office = connect airtable using team_airtable { base: "Office" }
+
+function ask_lunch(t: <cron-[:Ticks]->>) {
+  channel = only(chat-[ch:Channels WHERE ch.Name == "office"]->)
+  if (channel == null) { fail("no #office channel") }
+  write channel-[:Messages]-> {
+    Message: "Lunch on Friday?"
+    Topic: "lunch-poll"
+    Buttons: [{ Text: "In", Value: "in" }, { Text: "Out", Value: "out" }]
+  }
+}
+
+function count_vote(press: <chat-[:Interaction]->>) {
+  poll = only(press-[:Message]->)
+  if (poll == null) { fail("a press with no message") }
+  answer = only(press-[:Actions]->).Value
+  if (answer == null) { fail("a press with no answer") }
+  write office-[:Lunch]-> {
+    unique by (Poll, Person)
+    Poll: poll.Id
+    Person: press-[:By]->.Name
+    Answer: answer
+  }
+}
+
+listen to cron-[t:Ticks WHERE t.Schedule == "0 10 * * 3" AND t.Zone == "Europe/London"]-> fire ask_lunch
+listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.`Posted At` WITHIN 3d]->-[:Interactions]-> fire count_vote
