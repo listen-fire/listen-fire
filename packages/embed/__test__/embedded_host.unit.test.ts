@@ -72,7 +72,11 @@ function notesModule(
       arrivals: {
         awaitKeys: async ({ heads }) => {
           await options.keying?.();
-          return heads.map((head) => ({ key: `note:${head.recordId}` }));
+          // Each head names its record type, as a module keying waits by it needs.
+          return heads.map((head) => {
+            if (head.recordType !== 'Note') throw new Error(`notes: a head of record type ${String(head.recordType)} has no Comments`);
+            return { key: `note:${head.recordId}` };
+          });
         },
       },
     };

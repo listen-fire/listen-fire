@@ -71,6 +71,29 @@ export function recordEdgeOf(recordType: string): string {
   return perListName(recordType) === undefined ? recordType : ENTITY_DISPLAY_NAMES['list-entry'];
 }
 
+/** The key a record's `Changes` are waited on and arrive under: its id,
+ *  qualified by the kind of record it is. Organizations, persons,
+ *  opportunities and list entries each number their ids apart, so a bare id
+ *  would answer a wait on organization 13 with person 13's change. Only ever
+ *  compared, never read back. */
+export function changesKey(record: ChangedRecord): string {
+  return `${record.entity}:${record.id}`;
+}
+
+/** The changed record a wait's head names, by the record type its host says
+ *  it is (`List Entry — <list>` for a list's entry), or why it names none. */
+export function changedRecordOfHead(head: { recordId: string; recordType?: string }): ChangedRecord | { refused: string } {
+  if (head.recordType === undefined) {
+    return { refused: `a wait on record ${head.recordId}'s ${AFFINITY_CHANGES_EDGE} needs its record type, which this host does not say (adapter protocol 2.6 hosts do)` };
+  }
+  const entity =
+    perListName(head.recordType) !== undefined || head.recordType === ENTITY_DISPLAY_NAMES['list-entry']
+      ? 'list-entry'
+      : AFFINITY_CHANGED_ENTITIES.find((e) => ENTITY_DISPLAY_NAMES[e] === head.recordType);
+  if (entity === undefined) return { refused: `a ${head.recordType} has no ${AFFINITY_CHANGES_EDGE}` };
+  return { entity, id: head.recordId };
+}
+
 function perListName(recordType: string): string | undefined {
   return recordType.startsWith(`${ENTITY_DISPLAY_NAMES['list-entry']} — `) ? listNameFromPerListType(recordType) : undefined;
 }

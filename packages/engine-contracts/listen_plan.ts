@@ -117,12 +117,13 @@ export const planArrivalSchema: z.ZodType<PlanArrival> = z
   .strict();
 
 /** Whether an arrival fires a listen: it does; it fails the filter of hop
- *  `skips` (outermost is 0); or the judge cannot tell, and says why. An
- *  undecided arrival runs nothing, and the host logs the reason. */
-export type Verdict = { fires: true } | { skips: number } | { undecided: string };
+ *  `skips` (outermost is 0), or, with a `reason`, the record it carries for
+ *  that hop is of another record type; or the judge cannot tell, and says
+ *  why. An undecided arrival runs nothing, and the host logs the reason. */
+export type Verdict = { fires: true } | { skips: number; reason?: string } | { undecided: string };
 
 export const verdictSchema: z.ZodType<Verdict> = z.union([
   z.object({ fires: z.literal(true) }).strict(),
-  z.object({ skips: z.number().int().nonnegative() }).strict(),
+  z.object({ skips: z.number().int().nonnegative(), reason: z.string().optional() }).strict(),
   z.object({ undecided: z.string() }).strict(),
 ]);

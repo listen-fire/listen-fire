@@ -5,7 +5,8 @@
 // `listen-fire run` returns the Deals entry's `Deal Created` without reading a column
 // off the Portfolio entry. A listen on the Deals list's entries' `Changes`
 // runs on each change of one column, through the one webhook `listen-fire
-// serve` registers for the connection.
+// serve` registers for the connection. A wait on an organization's `Changes`
+// is answered by its own next change, never by a person's of the same id.
 
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
@@ -28,7 +29,7 @@ interface Fake {
   stop(): Promise<void>;
 }
 
-async function fakeAffinity(dir: string): Promise<Fake> {
+async function fakeAffinity(dir: string, options: { twinPersons?: boolean } = {}): Promise<Fake> {
   const plan = join(dir, 'plan.json');
   const log = join(dir, 'requests.log');
   writeFileSync(
@@ -36,6 +37,7 @@ async function fakeAffinity(dir: string): Promise<Fake> {
     JSON.stringify({
       owners: ['daria@project-a.vc'],
       portfolio: true,
+      ...options,
       deals: [
         {
           name: 'Veltha',
@@ -223,6 +225,70 @@ test("a listen on the Deals list's entries runs on each Status change, naming th
     const returned = listed.runs.map((r) => lf(dir, 'runs', 'show', r.runId).out);
     assert.ok(returned.some((out) => out.includes('updated Status: Diligence')), returned.join('\n'));
     assert.ok(returned.some((out) => out.includes('updated Status: Passed')), returned.join('\n'));
+  } finally {
+    await fake.stop();
+  }
+});
+
+// An organization's creation waits for its next change. Affinity numbers
+// organizations, persons and list entries apart, so a person may share the
+// organization's id: the wait is keyed by the kind of record as well as its
+// id, and the listen fires only on the record type it lands on.
+const CHASED = `import { affinity } from adapters
+import { Affinity } from credentials
+
+crm = connect affinity using Affinity
+
+function chased(c: <crm-[:OrganizationChange]->>) {
+  said = c-[o:Organization]-> {
+    next = await new o-[:Changes]->
+    return "\${o.Name}: \${c.Kind}, then \${next.Kind}"
+  }
+  return said
+}
+
+listen to crm-[:Organization]->-[c:Changes WHERE c.Kind == "created"]-> fire chased
+`;
+
+test('a wait on an organization’s Changes is not answered by a person’s change of the same id, nor does a person’s creation fire its listen; the organization’s next change answers it', async () => {
+  const fake = await fakeAffinity(mkdtempSync(join(tmpdir(), 'lf-affinity-fake-')), { twinPersons: true });
+  try {
+    const port = await freePort();
+    const dir = project(fake, '', CHASED, `publicUrl: http://127.0.0.1:${port}\n`);
+    const checked = lf(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+
+    const api = async (path: string) => (await fetch(`${fake.url}${path}`)).json() as Promise<unknown>;
+    const { organizations } = (await api('/organizations?term=Veltha')) as { organizations: Array<{ id: number; name: string }> };
+    const org = organizations.find((o) => o.name === 'Veltha')!;
+
+    const serving = await served(dir, ['--port', String(port)]);
+    try {
+      const url = (await serving.waitFor(/registered webhook \S+ for the arrivals on Changes at /)).replace(/^.* at /, '');
+      const runs = (state: string) => serving.lines.filter((l) => new RegExp(`^(run|resumed) \\S+ deal_date:chased ${state}$`).test(l)).length;
+
+      assert.equal((await deliver(url, 'organization.created', { id: org.id, name: 'Veltha', domain: 'veltha.example' })).status, 200);
+      await until(() => runs('parked') === 1, serving.lines);
+
+      // The person with the organization's id: its creation passes the
+      // WHERE but is a person's change, and its update is not the
+      // organization's.
+      assert.ok((await deliver(url, 'person.created', { id: org.id, first_name: 'Ada', last_name: 'Veltha' })).status < 300);
+      assert.ok((await deliver(url, 'person.updated', { id: org.id, first_name: 'Ada', last_name: 'Veltha-Lind' })).status < 300);
+      await new Promise((done) => setTimeout(done, 1000));
+      assert.equal(runs('parked'), 1, serving.lines.join('\n'));
+      assert.equal(runs('completed'), 0, serving.lines.join('\n'));
+
+      assert.equal((await deliver(url, 'organization.updated', { id: org.id, name: 'Veltha', domain: 'veltha.io' })).status, 200);
+      await until(() => runs('completed') === 1, serving.lines);
+      await new Promise((done) => setTimeout(done, 500));
+      assert.equal(runs('parked'), 1, serving.lines.join('\n'));
+    } finally {
+      await serving.stop();
+    }
+    const listed = JSON.parse(lf(dir, 'runs', '--json').out) as { runs: Array<{ runId: string }> };
+    assert.equal(listed.runs.length, 1, JSON.stringify(listed));
+    assert.match(lf(dir, 'runs', 'show', listed.runs[0]!.runId).out, /Veltha: created, then updated/);
   } finally {
     await fake.stop();
   }

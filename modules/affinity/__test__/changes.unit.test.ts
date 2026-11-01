@@ -79,7 +79,7 @@ describe('@lf/affinity reports each event as the arrival on its record’s Chang
     const [arrival] = arrivals;
     expect(arrival).toMatchObject({
       edge: 'Changes',
-      key: '13',
+      key: 'list-entry:13',
       landing: { recordType: 'List Entry Change — Hot Leads', fields: { Kind: 'updated', Record: '13', Field: 'List Score' } },
       parents: [{ recordId: '13', recordType: 'List Entry — Hot Leads', fields: { 'List Score': 5, listName: 'Hot Leads' } }],
       about: { recordType: 'List Entry — Hot Leads', externalId: '13' },
@@ -101,7 +101,7 @@ describe('@lf/affinity reports each event as the arrival on its record’s Chang
     const { adapter } = makeAdapter();
     const created = (await adapter.preprocessInbound({ raw: fieldValue('organization.created', { id: 7101, name: 'Acme', domain: 'acme.com' }) })).arrivals[0];
     expect(created).toMatchObject({
-      key: '7101',
+      key: 'organization:7101',
       landing: { recordType: 'OrganizationChange', fields: { Kind: 'created', Record: '7101' } },
       parents: [{ recordType: 'Organization', fields: { Name: 'Acme', Domain: 'acme.com' } }],
       about: { recordType: 'Organization', externalId: '7101' },
@@ -116,7 +116,7 @@ describe('@lf/affinity reports each event as the arrival on its record’s Chang
   it('a field value on an organization is its update, naming the field; one on an opportunity carries the opportunity', async () => {
     const { adapter } = makeAdapter();
     const stage = (await adapter.preprocessInbound({ raw: fieldValue('field_value.created', { id: 90, field_id: 100, entity_type: 1, entity_id: 7101, list_entry_id: null, value: 2 }) })).arrivals[0];
-    expect(stage).toMatchObject({ key: '7101', landing: { recordType: 'OrganizationChange', fields: { Kind: 'updated', Field: 'Stage' } } });
+    expect(stage).toMatchObject({ key: 'organization:7101', landing: { recordType: 'OrganizationChange', fields: { Kind: 'updated', Field: 'Stage' } } });
     const opportunity = (await adapter.preprocessInbound({ raw: fieldValue('opportunity.updated', { id: 700, name: 'Acme — Series A' }) })).arrivals[0];
     expect(opportunity).toMatchObject({ landing: { recordType: 'OpportunityChange' }, parents: [{ recordType: 'Opportunity', fields: { Name: 'Acme — Series A' } }] });
   });
@@ -124,7 +124,7 @@ describe('@lf/affinity reports each event as the arrival on its record’s Chang
   it('a list_entry event types the entry by the list its body names', async () => {
     const { adapter } = makeAdapter();
     const added = (await adapter.preprocessInbound({ raw: fieldValue('list_entry.created', { id: 13, list_id: 556, entity_id: 7201, entity_type: 0, created_at: '2026-10-02T00:00:00Z' }) })).arrivals[0];
-    expect(added).toMatchObject({ key: '13', landing: { recordType: 'List Entry Change — People List', fields: { Kind: 'created' } }, occurredAt: '2026-10-02T00:00:00Z' });
+    expect(added).toMatchObject({ key: 'list-entry:13', landing: { recordType: 'List Entry Change — People List', fields: { Kind: 'created' } }, occurredAt: '2026-10-02T00:00:00Z' });
   });
 
   it('a note, a reminder, a list, a field value on a list the workspace does not list, and junk run nothing', async () => {
@@ -142,9 +142,25 @@ describe('@lf/affinity reports each event as the arrival on its record’s Chang
 });
 
 describe('@lf/affinity waits, walks and subscribes on Changes', () => {
-  it('keys a wait on a record’s Changes by the record’s id, and knows no other edge', async () => {
+  it('keys a wait on a record’s Changes by its kind and id, as its arrivals are keyed, and knows no other edge', async () => {
     const { adapter } = makeAdapter();
-    expect(await adapter.arrivals.awaitKeys({ edge: 'Changes', heads: [{ recordId: '7101' }, { recordId: '13' }] })).toEqual([{ key: '7101' }, { key: '13' }]);
+    const heads = [
+      { recordId: '13', recordType: 'Organization' },
+      { recordId: '13', recordType: 'Person' },
+      { recordId: '13', recordType: 'List Entry — Hot Leads' },
+      { recordId: '13', recordType: 'Opportunity' },
+    ];
+    expect(await adapter.arrivals.awaitKeys({ edge: 'Changes', heads })).toEqual([
+      { key: 'organization:13' },
+      { key: 'person:13' },
+      { key: 'list-entry:13' },
+      { key: 'opportunity:13' },
+    ]);
+    // The key a wait on organization 7101 opens under is the key its change arrives on.
+    const change = (await adapter.preprocessInbound({ raw: fieldValue('organization.updated', { id: 7101, name: 'Acme' }) })).arrivals[0];
+    expect(await adapter.arrivals.awaitKeys({ edge: 'Changes', heads: [{ recordId: '7101', recordType: 'Organization' }] })).toEqual([{ key: change?.key }]);
+    await expect(adapter.arrivals.awaitKeys({ edge: 'Changes', heads: [{ recordId: '7101' }] })).rejects.toThrow(/needs its record type/);
+    await expect(adapter.arrivals.awaitKeys({ edge: 'Changes', heads: [{ recordId: '5', recordType: 'Note' }] })).rejects.toThrow(/a Note has no Changes/);
     await expect(adapter.arrivals.awaitKeys({ edge: 'Notes', heads: [{ recordId: '7101' }] })).rejects.toThrow(/'Notes' is not a listenable edge/);
   });
 

@@ -6,11 +6,15 @@
 // arrived on which key (`arrivals` on its acceptance, or the `wake` door).
 // No run identity crosses into the module.
 
-/** A record a run waits on: the id its write answered, and the data it
- *  carried (Slack keys a thread by the channel in it, not by its id). */
+/** A record a run waits on: the id its write answered, the data it
+ *  carried (Slack keys a thread by the channel in it, not by its id), and its
+ *  record type, as the module names it, wherever the host knows it (2.6). A
+ *  module whose ids collide across its record types qualifies its keys by it,
+ *  in the answer and in each arrival's `key` alike. */
 export interface AwaitHead {
   recordId: string;
   headData?: Record<string, unknown>;
+  recordType?: string;
 }
 
 /** The key one head's edge is waited on under, or the record is gone and

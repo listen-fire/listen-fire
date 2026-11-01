@@ -6,7 +6,9 @@
 // `plan.json` seeds the workspace: { owners: [email…], deals: [{ name, host,
 // founders: [{ first, last, linkedin }], seed: "synced" | "empty-field" | "new",
 // portfolio?: { dealCreated, ownership } }], portfolio?: true }: with `portfolio`
-// the workspace has a second list, and a deal naming one sits on it too.
+// the workspace has a second list, and a deal naming one sits on it too. With
+// `twinPersons` each organization has a person of the same id, as Affinity's
+// separately numbered records can.
 // Every request is appended to `requests.log`, one `METHOD /path?query` a line.
 // It prints `listening on <port>` once it is up.
 
@@ -31,6 +33,7 @@ interface Plan {
     portfolio?: { dealCreated: string; ownership: string };
   }>;
   portfolio?: boolean;
+  twinPersons?: boolean;
 }
 
 const [planFile, logFile] = process.argv.slice(2);
@@ -42,6 +45,11 @@ for (const deal of plan.deals) {
   if (deal.seed === 'new') continue;
   const seeded = seedSyncedDeal(fake, owners, { ...deal, founder: deal.founders[0] }, { emptyDealSource: deal.seed === 'empty-field' });
   if (deal.portfolio) seedPortfolioEntry(fake, seeded, deal.portfolio);
+}
+if (plan.twinPersons) {
+  for (const org of [...fake.orgs.values()]) {
+    fake.persons.set(org.id, { id: org.id, first_name: 'Twin', last_name: org.name, primary_email: null, emails: [], organization_ids: [] });
+  }
 }
 fake.install();
 const answer = global.fetch;

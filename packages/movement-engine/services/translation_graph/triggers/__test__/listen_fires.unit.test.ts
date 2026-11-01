@@ -109,7 +109,7 @@ describe('which listens an arrival is judged against', () => {
 
   it('skips an arrival on an edge of the same name off another record type, and cannot judge one that does not say its record type', () => {
     const other = note('keep', { landing: { recordId: 'n1', recordType: 'Draft', fields: { Title: 'keep' } } });
-    expect(listenFires(listen, other, delivered, 0)).toEqual({ skips: 0 });
+    expect(listenFires(listen, other, delivered, 0)).toEqual({ skips: 0, reason: "it has record type Draft, not Note, which this listen's Notes lands on" });
     const untyped = note('keep', { landing: { recordId: 'n1', fields: { Title: 'keep' } } });
     expect(listenFires(listen, untyped, delivered, 0)).toEqual({
       undecided: "the arrival notes reported on Notes does not say its record type, so it cannot be told from another record type's Notes (this listen's lands on Note)",

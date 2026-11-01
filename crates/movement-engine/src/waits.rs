@@ -330,6 +330,9 @@ impl Run<'_> {
                 if !head.head_data.is_nullish() {
                     members.push(("headData", head.head_data.clone()));
                 }
+                if let Some(record_type) = &head.record_type {
+                    members.push(("recordType", Js::str(record_type.clone())));
+                }
                 crate::env::object_of(members)
             })
             .collect();

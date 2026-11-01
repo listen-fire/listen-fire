@@ -1115,9 +1115,9 @@ function settingsLine(program: string, listener: FileListener): string {
  *  (crates/lf/src/doors.rs `trigger_head`). */
 function triggerHeadOf(arrival: Arrival): AwaitHead | undefined {
   if ('gone' in arrival) return undefined;
-  const { recordId, fields } = arrival.landing;
+  const { recordId, recordType, fields } = arrival.landing;
   if (recordId === undefined || recordId === '') return undefined;
-  return { recordId, headData: fields };
+  return { recordId, headData: fields, ...(recordType !== undefined && recordType !== '' ? { recordType } : {}) };
 }
 
 /** Why this host would not fire `plan` as it is written, if it would not.

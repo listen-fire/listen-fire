@@ -60,7 +60,9 @@ import {
   changeEntryPoint,
   changeFieldOf,
   changeOf,
+  changedRecordOfHead,
   changesEdge,
+  changesKey,
   changeTypeName,
   describeChange,
   recordEdgeOf,
@@ -231,7 +233,7 @@ export class AffinityAdapter extends BaseAdapter {
       arrivals: [
         {
           edge: AFFINITY_CHANGES_EDGE,
-          key: change.record.id,
+          key: changesKey(change.record),
           identity: change.identity,
           landing: { recordId: change.identity, recordType: changeTypeName(recordType), fields },
           parents: [record === null ? null : { recordId: change.record.id, recordType, fields: record }],
@@ -242,12 +244,16 @@ export class AffinityAdapter extends BaseAdapter {
     };
   }
 
-  /** A run waits on a record's `Changes` under its record id: the key each
-   *  arrival on them names. */
+  /** A run waits on a record's `Changes` under its id qualified by its kind
+   *  (`changesKey`): the key each arrival on them names. */
   readonly arrivals: ArrivalsCapability = {
     awaitKeys: async ({ edge, heads }: { edge: string; heads: AwaitHead[] }): Promise<AwaitKey[]> => {
       if (edge !== AFFINITY_CHANGES_EDGE) throw new Error(`affinity: '${edge}' is not a listenable edge (only '${AFFINITY_CHANGES_EDGE}')`);
-      return heads.map((head) => ({ key: head.recordId }));
+      return heads.map((head) => {
+        const record = changedRecordOfHead(head);
+        if ('refused' in record) throw new Error(`affinity: ${record.refused}`);
+        return { key: changesKey(record) };
+      });
     },
   };
 

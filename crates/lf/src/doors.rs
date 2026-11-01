@@ -541,12 +541,16 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
     /// would reach declares (`payload: <Payment>`) is refused, naming the
     /// fields; so is one with an arrival that fits none of the types the
     /// listens on its edge state (`-[:Requests]-><Payment>`). A listen that
-    /// declares none takes any event or arrival.
+    /// declares none takes any event or arrival. A listen on another record
+    /// type's edge of the same name is not reached: the judge skips the
+    /// arrival there, whatever its fields.
     fn refuse_events(&self, source: &Source, events: &[Js], arrivals: &[ArrivalIn]) -> Option<String> {
         let credential = self.delivering_credential(source);
+        let now_ms = crate::limiter::now_ms() as f64;
         let mut lines = Vec::new();
         for arrival in arrivals.iter().filter(|a| !a.gone) {
-            let reached: Vec<&Listen> = self.listens.iter().filter(|l| l.is_on(&source.adapter_type, &arrival.edge) && l.hears(credential)).collect();
+            let of_another_type = |l: &Listen| matches!(l.fires(arrival, credential, now_ms), Some(movement_engine::listen_judge::Verdict::Skips { reason: Some(_), .. }));
+            let reached: Vec<&Listen> = self.listens.iter().filter(|l| l.is_on(&source.adapter_type, &arrival.edge) && l.hears(credential) && !of_another_type(l)).collect();
             if reached.is_empty() || reached.iter().any(|l| l.misfits(arrival).is_empty()) {
                 continue;
             }
@@ -968,14 +972,17 @@ pub(crate) fn queued_by(waits: &mut [DeliveryWait], fire_key: &str) {
 }
 
 /// The record an arrival lands, as `awaitKeys` takes a head: `{ recordId,
-/// headData? }`, as a run waiting on it from its trigger names it. None for
-/// a landing that names no record: nothing can be waited on off it.
+/// headData?, recordType? }`, as a run waiting on it from its trigger names
+/// it. None for a landing that names no record: nothing can be waited on off it.
 fn trigger_head(arrival: &ArrivalIn) -> Option<Js> {
     let landing = arrival.landing.as_ref()?;
     let record_id = landing.get("recordId").and_then(Js::as_str).filter(|id| !id.is_empty())?;
     let mut head = obj! { "recordId" => Js::str(record_id) };
     if let Some(fields) = landing.get("fields").filter(|f| **f != Js::Null) {
         head.insert("headData".into(), fields.clone());
+    }
+    if let Some(record_type) = landing.get("recordType").and_then(Js::as_str).filter(|t| !t.is_empty()) {
+        head.insert("recordType".into(), Js::str(record_type));
     }
     Some(Js::Obj(head))
 }
@@ -2005,6 +2012,15 @@ pub(crate) mod tests {
                 assert_eq!(wakes.iter().map(|w| w.run_id.as_str()).collect::<Vec<_>>(), [outcome.run_id.as_str()], "each run waits on its own note");
             }
         });
+    }
+
+    /// A run waiting on its trigger asks `awaitKeys` about the record that
+    /// landed, naming its record type, so a module whose record types number
+    /// their ids apart can key the wait by it.
+    #[test]
+    fn a_trigger_s_head_names_the_record_type_its_landing_states() {
+        let arrival = arrivals_of(&Js::parse(br#"{"arrivals":[{"edge":"Notes","identity":"n-1","landing":{"recordId":"n-1","recordType":"Note","fields":{"Id":"n-1"}}}]}"#).unwrap()).unwrap().remove(0);
+        assert_eq!(trigger_head(&arrival).unwrap().to_json(), r#"{"recordId":"n-1","headData":{"Id":"n-1"},"recordType":"Note"}"#);
     }
 
     /// An inline delivery of two notes and a comment on the second: what

@@ -869,8 +869,11 @@ impl Session {
                     // Said only under LF_LOG=debug: one line per arrival and
                     // listen would flood a busy edge's output with lines that
                     // say nothing went wrong.
-                    Verdict::Skips { hop } => {
-                        crate::log::debug(|| format!("{named}: the arrival {identity} on {} does not match the WHERE of hop {}: nothing is owed, and it runs nothing", arrival.edge, hop + 1));
+                    Verdict::Skips { hop, reason } => {
+                        crate::log::debug(|| match &reason {
+                            Some(reason) => format!("{named}: the arrival {identity} on {} is not this listen's at hop {}: {reason}: nothing is owed, and it runs nothing", arrival.edge, hop + 1),
+                            None => format!("{named}: the arrival {identity} on {} does not match the WHERE of hop {}: nothing is owed, and it runs nothing", arrival.edge, hop + 1),
+                        });
                         skipped.push(listen);
                         continue;
                     }
@@ -1104,7 +1107,8 @@ impl Session {
             let named = format!("{}:{}", set.file(&listen.file).name, listen.movement_name);
             match listen.fires(&arrivals[0], None, now_ms) {
                 Some(Verdict::Fires) => matched.push(i),
-                Some(Verdict::Skips { hop }) => fired.redelivered.push(format!("{named}: the invocation does not match the WHERE of hop {}: it runs nothing", hop + 1)),
+                Some(Verdict::Skips { hop, reason: None }) => fired.redelivered.push(format!("{named}: the invocation does not match the WHERE of hop {}: it runs nothing", hop + 1)),
+                Some(Verdict::Skips { hop, reason: Some(reason) }) => fired.redelivered.push(format!("{named}: the invocation is not this listen's at hop {}: {reason}: it runs nothing", hop + 1)),
                 Some(Verdict::Undecided { reason }) => fired.redelivered.push(format!("{named}: the invocation cannot be judged ({reason}): it runs nothing")),
                 None => {}
             }

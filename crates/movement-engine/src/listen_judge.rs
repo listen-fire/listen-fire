@@ -70,12 +70,14 @@ pub struct ArrivedRecord {
 }
 
 /// Whether an arrival fires a listen. On the wire `{"fires":true}`,
-/// `{"skips":n}` or `{"undecided":"…"}`.
+/// `{"skips":n}` (`{"skips":n,"reason":"…"}` when a record's type, not a
+/// filter, skipped it) or `{"undecided":"…"}`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Verdict {
     Fires,
-    /// It fails the filter of hop `hop`, outermost 0.
-    Skips { hop: usize },
+    /// It fails the filter of hop `hop`, outermost 0; or, with a reason, the
+    /// record it carries for that hop is of another record type.
+    Skips { hop: usize, reason: Option<String> },
     /// The judge cannot tell, and says why.
     Undecided { reason: String },
 }
@@ -84,7 +86,8 @@ impl Serialize for Verdict {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
             Verdict::Fires => json!({ "fires": true }),
-            Verdict::Skips { hop } => json!({ "skips": hop }),
+            Verdict::Skips { hop, reason: None } => json!({ "skips": hop }),
+            Verdict::Skips { hop, reason: Some(reason) } => json!({ "skips": hop, "reason": reason }),
             Verdict::Undecided { reason } => json!({ "undecided": reason }),
         }
         .serialize(serializer)
@@ -98,7 +101,7 @@ pub fn judge_arrival(plan: &ListenPlan, arrival: &PlanArrival, now_ms: f64) -> V
         return Verdict::Undecided { reason: format!("the listen firing '{}' has no hops to judge an arrival by", plan.movement) };
     };
     if arrival.edge != plan.hops[last].edge {
-        return Verdict::Skips { hop: last };
+        return Verdict::Skips { hop: last, reason: None };
     }
     let carried: Vec<Option<&ArrivedRecord>> = plan
         .hops
@@ -121,7 +124,7 @@ pub fn judge_arrival(plan: &ListenPlan, arrival: &PlanArrival, now_ms: f64) -> V
     for (i, record) in std::iter::once(last).chain(0..last).filter_map(|i| Some((i, carried[i]?))) {
         match &record.record_type {
             Some(stated) if *stated == plan.hops[i].to => {}
-            Some(_) => return Verdict::Skips { hop: i },
+            Some(stated) => return Verdict::Skips { hop: i, reason: Some(another_type(plan, &arrival.edge, i, stated)) },
             None => {
                 undecided.get_or_insert_with(|| untyped(plan, &arrival.edge, i));
             }
@@ -132,7 +135,7 @@ pub fn judge_arrival(plan: &ListenPlan, arrival: &PlanArrival, now_ms: f64) -> V
     for (i, hop) in plan.hops.iter().enumerate().filter(|(_, hop)| hop.judged == HopJudged::Arrival) {
         match judge.hop(i, hop, arrival.taken_applied) {
             Judged::Holds => {}
-            Judged::Fails => return Verdict::Skips { hop: i },
+            Judged::Fails => return Verdict::Skips { hop: i, reason: None },
             Judged::Unknown(reason) => {
                 undecided.get_or_insert(reason);
             }
@@ -150,6 +153,18 @@ fn untyped(plan: &ListenPlan, edge: &str, i: usize) -> String {
         format!("the arrival {module} reported on {edge} does not say its record type, so it cannot be told from another record type's {edge} (this listen's lands on {})", hop.to)
     } else {
         format!("the arrival {module} reported on {edge} carries a {} record that does not say its record type (this listen's {} lands on {})", hop.edge, hop.edge, hop.to)
+    }
+}
+
+/// Why an arrival whose hop-`i` record states the record type `stated`
+/// skips: it is another record type's edge of the same name, whatever its
+/// fields.
+fn another_type(plan: &ListenPlan, edge: &str, i: usize, stated: &str) -> String {
+    let hop = &plan.hops[i];
+    if i + 1 == plan.hops.len() {
+        format!("it has record type {stated}, not {}, which this listen's {edge} lands on", hop.to)
+    } else {
+        format!("the {} record it carries has record type {stated}, not {}, which this listen's {} lands on", hop.edge, hop.to, hop.edge)
     }
 }
 

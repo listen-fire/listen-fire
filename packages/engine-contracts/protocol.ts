@@ -1235,6 +1235,7 @@ export const WireAwaitLanding = z.object({
 export const WireAwaitHead = z.object({
   recordId: z.string(),
   headData: z.record(z.string(), z.unknown()).optional(),
+  recordType: z.string().optional(),
 });
 
 export const WireAwaitKey = z.union([z.object({ key: z.string().min(1) }), z.object({ gone: z.literal(true) })]);

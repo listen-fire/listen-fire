@@ -133,7 +133,7 @@ impl Listen {
             Some(ArrivedRecord { record_type: record.get("recordType").and_then(Js::as_str).map(str::to_string), fields: json_of(fields) })
         };
         let Some(landing) = arrival.landing.as_ref().and_then(arrived) else {
-            return Some(Verdict::Skips { hop: plan.hops.len().saturating_sub(1) });
+            return Some(Verdict::Skips { hop: plan.hops.len().saturating_sub(1), reason: None });
         };
         let planned = PlanArrival {
             edge: arrival.edge.clone(),
@@ -770,7 +770,7 @@ mod tests {
         let listens = crm_listens();
         let welcome = &listens[1];
         assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Osprey"}"#), Some("acme"), 0.0), Some(Verdict::Fires));
-        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Ignored"}"#), Some("acme"), 0.0), Some(Verdict::Skips { hop: 0 }));
+        assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Ignored"}"#), Some("acme"), 0.0), Some(Verdict::Skips { hop: 0, reason: None }));
         assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Osprey"}"#), Some("another"), 0.0), None, "another connection's");
         assert_eq!(listens[0].fires(&company(r#"{"Name":"Osprey"}"#), Some("acme"), 0.0), None, "a settings listen takes events, never arrivals");
     }
@@ -779,7 +779,7 @@ mod tests {
     fn an_arrival_on_the_listened_edge_name_fires_only_when_it_landed_on_the_record_type_the_listen_lands_on() {
         let welcome = &crm_listens()[1];
         let osprey = r#"{"id":"company-1","Name":"Osprey"}"#;
-        assert_eq!(welcome.fires(&landed_as("Comment", osprey), Some("acme"), 0.0), Some(Verdict::Skips { hop: 0 }), "another record type's edge of the same name");
+        assert_eq!(welcome.fires(&landed_as("Comment", osprey), Some("acme"), 0.0), Some(Verdict::Skips { hop: 0, reason: Some("it has record type Comment, not Company, which this listen's Company lands on".into()) }), "another record type's edge of the same name");
         let untyped = crate::arrivals::arrivals_of(&js(&format!(r#"{{"arrivals":[{{"edge":"Company","identity":"company-1","landing":{{"fields":{osprey}}}}}]}}"#))).unwrap().remove(0);
         assert_eq!(
             welcome.fires(&untyped, Some("acme"), 0.0),
