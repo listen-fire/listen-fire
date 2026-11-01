@@ -37,6 +37,8 @@
 //! - MOV_UNKNOWN_POSITION
 //! - MOV_UNKNOWN_PROPERTY
 //! - MOV_UNREACHABLE_BRANCH
+//! - MOV_WALK_OFF_HELD_RECORD
+//! - MOV_WALK_ROOT_NOT_RECORD
 //! - MOV_WALK_ROOTLESS
 
 use movement_parser::ast::{PathHead, PathRoot};
@@ -360,6 +362,24 @@ pub fn report_walk_off_held(typing: &mut Typing, read: &HeldRead, steps: &[Trave
             read.spelled,
             describe_field_type(&Ty::HeldRecord(std::rc::Rc::new(read.held.clone()))),
             read.live_walk(&hop)
+        ),
+    );
+}
+
+/// A walk off a value that is not a graph record: `spelled` names the root,
+/// `ty` is what it holds. A held record points back to the live record; any
+/// other value has no record to point to.
+pub fn report_walk_off_value(typing: &mut Typing, spelled: &str, ty: &Ty, steps: &[TraversalStep]) {
+    if let Some(held) = crate::types::field::held_record_in(ty) {
+        let read = HeldRead { spelled: spelled.to_string(), holder: None, held };
+        report_walk_off_held(typing, &read, steps);
+        return;
+    }
+    typing.report(
+        codes::WALK_ROOT_NOT_RECORD,
+        format!(
+            "{spelled} is {}, and a walk starts at a record — a value has no edges to step along. Walk from the record the value was read off, or read the value with the value functions instead.",
+            describe_field_type(ty)
         ),
     );
 }

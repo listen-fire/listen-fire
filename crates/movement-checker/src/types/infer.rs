@@ -96,6 +96,15 @@ impl TypeEnv for EmptyEnv {
 
 /// The identity of an expression node, for the per-node answers kept while
 /// typing (the TypeScript's `WeakMap`s). Never dereferenced.
+/// The hops a traversal walks: its own steps, or the ones an `exists(…)`
+/// carries when the traversal has none.
+fn walk_hops<'a>(steps: &'a [TraversalStep], expression: &'a Expression) -> &'a [TraversalStep] {
+    match expression {
+        Expression::Exists { steps: inside, .. } if steps.is_empty() => inside,
+        _ => steps,
+    }
+}
+
 fn key(expr: &Expression) -> usize {
     expr as *const Expression as usize
 }
@@ -775,8 +784,9 @@ impl<'a> Typing<'a> {
     /// A read on past what a `record` field holds: its fields read as the
     /// record's do; a walk is refused, since a value has no edges.
     fn read_off_held(&mut self, held: &HeldRead, maybe_absent: bool, steps: &[TraversalStep], past: &Expression) -> Option<Ty> {
-        if !steps.is_empty() {
-            crate::families::walks::report_walk_off_held(self, held, steps);
+        let hops = walk_hops(steps, past);
+        if !hops.is_empty() {
+            crate::families::walks::report_walk_off_held(self, held, hops);
             return None;
         }
         let fields = if maybe_absent { Position::MaybeEmpty(Box::new(held.held.position.clone())) } else { held.held.position.clone() };
@@ -872,6 +882,13 @@ impl<'a> Typing<'a> {
                 return Some(inner);
             }
         }
+        let hops = walk_hops(steps, expression);
+        if !hops.is_empty()
+            && let Some(inner) = ty.as_ref().filter(|inner| cannot_start_a_walk(inner))
+        {
+            crate::families::walks::report_walk_off_value(self, &format!("'{key}'"), inner, hops);
+            return Some(None);
+        }
         let record = record_head_position(ty.as_ref());
         let destination = self.walk_steps(record, steps, false);
         Some(self.infer_at(expression, destination.as_ref()))
@@ -921,6 +938,16 @@ impl<'a> Typing<'a> {
                 {
                     let held = HeldRead { spelled: format!("'{root}'"), holder: None, held: &fields };
                     return (self.read_off_held(&held, maybe_absent, steps, expression), Vec::new());
+                }
+                if let Some(root) = alias_root.as_deref()
+                    && let hops = walk_hops(steps, expression)
+                    && !hops.is_empty()
+                    && self.root_type(root).is_none()
+                    && let Some(ty) = self.scalar_type(root)
+                    && cannot_start_a_walk(&ty)
+                {
+                    crate::families::walks::report_walk_off_value(self, &format!("'{root}'"), &ty, hops);
+                    return (None, Vec::new());
                 }
                 let start = match alias_root {
                     Some(root) => self.walk_start(root),

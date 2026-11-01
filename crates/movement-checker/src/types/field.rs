@@ -1182,6 +1182,31 @@ pub fn record_head_position(ty: Option<&Ty>) -> Option<Position> {
     record_in(ty).flatten()
 }
 
+/// What a walk may start from is a graph record (or a list of them). False
+/// when nothing is known of the value, so an untyped name is never refused.
+pub fn cannot_start_a_walk(ty: &Ty) -> bool {
+    match strip_absent(ty) {
+        Ty::Record(_) | Ty::Never => false,
+        Ty::Union(members) => members.iter().all(cannot_start_a_walk),
+        Ty::List { of, .. } => cannot_start_a_walk(of),
+        Ty::Tuple { of, rest } => {
+            of.iter().all(|slot| slot.as_ref().is_some_and(cannot_start_a_walk)) && rest.as_ref().is_none_or(|rest| rest.of.as_deref().is_some_and(cannot_start_a_walk))
+        }
+        _ => true,
+    }
+}
+
+/// The held record a value is, or a list of: what a refused walk can point
+/// back to the live record of.
+pub fn held_record_in(ty: &Ty) -> Option<&Rc<HeldRecord>> {
+    match strip_absent(ty) {
+        Ty::HeldRecord(held) => Some(held),
+        Ty::List { of, .. } => held_record_in(of),
+        Ty::Tuple { of, .. } => of.iter().flatten().find_map(held_record_in),
+        _ => None,
+    }
+}
+
 /// `holdsRecords`.
 pub fn holds_records(ty: Option<&Ty>) -> bool {
     record_in(ty).is_some()

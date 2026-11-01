@@ -237,3 +237,38 @@ fn reading_on_past_a_field_never_points_into_a_walk_off_a_held_row() {
     assert!(found[0].1.contains("c-[:Record]->"), "{found:#?}");
     assert!(!found[0].1.contains("Bind the field"), "{found:#?}");
 }
+
+#[test]
+fn a_walk_off_a_held_row_is_refused_inside_exists_too() {
+    let found = candidates("r = c.Current\n  if (r != null) {\n    if (exists(r-[:Role]->)) {\n      y = 1\n    }\n  }");
+    assert_eq!(codes(&found), ["MOV_WALK_OFF_HELD_RECORD"], "{found:#?}");
+    assert!(found[0].1.contains("-[:Record]->"), "{found:#?}");
+}
+
+/// A walk starts at a record. A name holding anything else has no edges, so
+/// the walk is refused where it is written, naming what the root holds.
+#[test]
+fn a_walk_off_a_name_that_holds_no_record_is_refused() {
+    let walk = |bind: &str, walked: &str| candidates(&format!("{bind}\n  x = {walked}-[:Role]->"));
+    for (bind, walked, holds) in [
+        ("t = \"x\"", "t", "text"),
+        ("n = 1", "n", "number"),
+        ("l = [1, 2]", "l", "number"),
+        ("d = { a: \"x\" }", "d", "a: text"),
+    ] {
+        let found = walk(bind, walked);
+        assert_eq!(codes(&found), ["MOV_WALK_ROOT_NOT_RECORD"], "{bind}: {found:#?}");
+        assert!(found[0].1.contains(holds), "{bind}: {found:#?}");
+    }
+    let member = candidates("d = { a: \"x\" }\n  x = d.a-[:Role]->");
+    assert_eq!(codes(&member), ["MOV_WALK_ROOT_NOT_RECORD"], "{member:#?}");
+    // A held row, through any path, is the held row's refusal.
+    for body in ["d = { a: c.Current }\n  x = d.a-[:Role]->", "l = [c.Current]\n  x = l-[:Role]->"] {
+        let held = candidates(body);
+        assert_eq!(codes(&held), ["MOV_WALK_OFF_HELD_RECORD"], "{body}: {held:#?}");
+    }
+    let exists = candidates("t = \"x\"\n  if (exists(t-[:Role]->)) {\n    y = 1\n  }");
+    assert_eq!(codes(&exists), ["MOV_WALK_ROOT_NOT_RECORD"], "{exists:#?}");
+    let block = candidates("t = \"x\"\n  t-[:Role]-> {\n    y = 1\n  }");
+    assert_eq!(codes(&block), ["MOV_HEAD_NOT_A_POSITION"], "{block:#?}");
+}
