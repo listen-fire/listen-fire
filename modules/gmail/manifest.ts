@@ -45,7 +45,7 @@ function triage(msg: <gmail-[:Message]->>) {
 }
 \`\`\`
 
-\`Body\` is the one to reach for: it is the plain text, derived from the HTML when the message carried only HTML. \`Plain Body\` and \`HTML Body\` are there when you need the alternative that actually arrived. \`From\` is the whole header, display name included; \`To\` and \`Cc\` are lists of addresses. \`Labels\` are Gmail's label ids — \`INBOX\`, \`UNREAD\` and the rest in capitals, a user label by the id Gmail gave it (\`Label_12\`). A listen's \`m.Labels CONTAINS\` also takes a user label by its name.
+\`Body\` is the one to reach for: it is the plain text, derived from the HTML when the message carried only HTML. \`Plain Body\` and \`HTML Body\` are there when you need the alternative that actually arrived. \`From\` is the whole header, display name included; \`To\` and \`Cc\` are lists of addresses. \`Labels\` are label names, in a walk and in a listen alike: a user label as the mailbox calls it (\`Deals\`), Gmail's own in capitals (\`INBOX\`, \`UNREAD\`), so \`m.Labels CONTAINS "Deals"\` means the same wherever it is written.
 
 ### searching the mailbox
 

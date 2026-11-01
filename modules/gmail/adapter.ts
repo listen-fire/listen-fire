@@ -42,6 +42,7 @@ import { uniformWalk } from 'module-kit/adapter/hop';
 import { naturalName } from 'module-kit/adapter/name_resolution';
 import { moduleFileRef } from 'module-kit/files';
 import { GmailApiError, type GmailApiClient } from './api_client';
+import { LabelNames } from './label_names';
 import { decodeGmailMessage, type GmailMessageRecord } from './mime';
 import { gmailQueryFromWhere, gmailQueryOfWhere } from './filter';
 import { GMAIL_MANIFEST } from './manifest';
@@ -198,8 +199,8 @@ export class GmailAdapter extends BaseAdapter implements Adapter {
       ...(query !== undefined ? { query } : {}),
       maxResults: cap,
     });
-    const records = await Promise.all(
-      bounded(messages, cap).map(async (ref) => decodeGmailMessage(await client.getMessage(ref.id))),
+    const records = await new LabelNames(client).named(
+      await Promise.all(bounded(messages, cap).map(async (ref) => decodeGmailMessage(await client.getMessage(ref.id)))),
     );
     const searched = gmailQueryOfWhere(input.where);
     return records.map((record) => messagePosition(searched === undefined ? record : { ...record, query: searched }));
@@ -216,7 +217,8 @@ export class GmailAdapter extends BaseAdapter implements Adapter {
     }
     const client = await this.client();
     try {
-      return { ...decodeGmailMessage(await client.getMessage(input.externalId)) };
+      const [record] = await new LabelNames(client).named([decodeGmailMessage(await client.getMessage(input.externalId))]);
+      return { ...record };
     } catch (error) {
       if (error instanceof GmailApiError && error.status === 404) return null;
       throw error;

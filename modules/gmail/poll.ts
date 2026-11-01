@@ -33,6 +33,7 @@ import {
   type GmailLabelAddition,
   type GmailMessageRef,
 } from './api_client';
+import { LabelNames, isSystemLabel } from './label_names';
 import { decodeGmailMessage, type GmailMessageRecord } from './mime';
 import { combineGmailQueries } from './filter';
 import { labelingLandingFields, messageLandingFields } from './schema';
@@ -103,22 +104,15 @@ function pendingOf(value: unknown): GmailPendingArrival[] {
   return out;
 }
 
-/** Gmail's own labels, which every mailbox has and no person made. */
-const SYSTEM_LABELS = new Set(['INBOX', 'UNREAD', 'STARRED', 'IMPORTANT', 'SENT', 'DRAFT', 'SPAM', 'TRASH', 'CHAT']);
-
-export function isSystemLabel(id: string): boolean {
-  return SYSTEM_LABELS.has(id) || id.startsWith('CATEGORY_');
-}
-
 /**
  * The labels a listen names, as ids (what history and a message carry) and
  * names (what Gmail's search takes). A system label is its own id and name; a
  * user label may be written either way, and is looked up once per poll. One
  * the mailbox does not have fails the poll, naming the labels it does have.
  */
-async function resolveLabels(client: GmailApiClient, written: readonly string[]): Promise<GmailLabel[]> {
+async function resolveLabels(client: GmailApiClient, names: LabelNames, written: readonly string[]): Promise<GmailLabel[]> {
   if (written.every(isSystemLabel)) return written.map((id) => ({ id, name: id }));
-  const known = await client.listLabels();
+  const known = await names.list();
   return written.map((label) => {
     if (isSystemLabel(label)) return { id: label, name: label };
     const found =
@@ -261,9 +255,10 @@ export class GmailPollSource {
   async poll(input: PollEdgeInput): Promise<PollEdgeAnswer> {
     const watch = watchOf(input.edge, input.filter);
     const client = await this.client();
-    const named = watch.labels === undefined ? undefined : await resolveLabels(client, watch.labels);
+    const names = new LabelNames(client);
+    const named = watch.labels === undefined ? undefined : await resolveLabels(client, names, watch.labels);
     const anyOf: GmailLabel[][] = [];
-    for (const group of watch.anyLabels ?? []) anyOf.push(await resolveLabels(client, group));
+    for (const group of watch.anyLabels ?? []) anyOf.push(await resolveLabels(client, names, group));
     const plan = watchPlan(watch.edge, named, anyOf);
 
     const now = Date.now();
@@ -296,15 +291,17 @@ export class GmailPollSource {
         if (now - Date.parse(firstSeenAt) < PENDING_GRACE_MS) pending.push({ id, firstSeenAt });
       }
       const held = new Set((named ?? []).map((label) => label.id));
-      arrivals = fetched
+      // Held by id, as history and the message carry them; delivered by name.
+      const holding = fetched
         .filter((message) => [...held].every((id) => message.labels.includes(id)))
         .filter((message) => anyOf.every((group) => group.some((label) => message.labels.includes(label.id))))
         // Oldest first — a run handles the mail in the order it arrived.
-        .sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''))
+        .sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''));
+      arrivals = (await names.named(holding))
         .map((message) => messageArrival(message, watch))
         .filter((arrival) => holdsAll(arrival.landing.fields, watch.rest));
     } else {
-      arrivals = await this.labelArrivals({ client, labelled, watch });
+      arrivals = await this.labelArrivals({ client, names, labelled, watch });
     }
 
     // `lastSeenAt` is the moment this poll LOOKED, not the newest message's own
@@ -365,7 +362,7 @@ export class GmailPollSource {
    * not admit is excluded, not pending. A message deleted since it was
    * labelled is skipped.
    */
-  private async labelArrivals(input: { client: GmailApiClient; labelled: GmailLabelAddition[]; watch: Watch }): Promise<Arrival[]> {
+  private async labelArrivals(input: { client: GmailApiClient; names: LabelNames; labelled: GmailLabelAddition[]; watch: Watch }): Promise<Arrival[]> {
     const { watch } = input;
     // What the addition alone says is judged before a message is fetched.
     const own = new Set([LABEL_FIELD, LABEL_TYPE_FIELD]);
@@ -382,7 +379,8 @@ export class GmailPollSource {
       if (!fetched.has(change.id)) fetched.set(change.id, await messageOrGone(input.client, change.id));
       const message = fetched.get(change.id);
       if (message === undefined || message === null) continue;
-      const arrival = labelingArrival(message, change, watch);
+      const [named] = await input.names.named([message]);
+      const arrival = labelingArrival(named ?? message, change, watch);
       if (holdsAll(arrival.landing.fields, watch.rest)) arrivals.push(arrival);
     }
     return arrivals;

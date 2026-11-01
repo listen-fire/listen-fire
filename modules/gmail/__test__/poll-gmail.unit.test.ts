@@ -211,6 +211,18 @@ describe('a listen on Messages', () => {
     expect(answer.arrivals.every((a) => 'takenApplied' in a && a.takenApplied === true)).toBe(true);
   });
 
+  it('delivers Labels by name, a user label as the mailbox calls it and a system label as Gmail does', async () => {
+    const { source, calls } = pollWith({
+      messages: [wireMessage('deals', ['INBOX', 'Label_deals'])],
+      history: { INBOX: [{ added: [added('deals', '4001')], historyId: '5000' }] },
+      search: [{ id: 'deals' }],
+    });
+    const answer = await source.poll({ edge: 'Messages', filter: and(INBOX, cmp('Labels', 'contains', 'Deals')), cursor: MARK });
+
+    expect(answer.arrivals.map((a) => 'landing' in a && a.landing.fields['Labels'])).toEqual([['INBOX', 'Deals']]);
+    expect(calls.labels).toBe(1);
+  });
+
   it('applies the rest of the filter over the message it fetched', async () => {
     const { source } = pollWith({
       messages: [wireMessage('invoice'), wireMessage('hello')],

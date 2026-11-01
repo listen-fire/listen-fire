@@ -170,3 +170,27 @@ listen to mail { labels: ["Deals", "Hiring"] } fire triage`));
     await fake.stop();
   }
 });
+
+test('a walk of Messages by a user label name returns its messages, whose Labels are names', async () => {
+  const fake = await fakeChannels();
+  try {
+    const { dir } = await gmailProject(fake, 'gmail');
+    const deals = await fake.makeLabel('Deals');
+    await fake.message({ id: 'm-deals', subject: 'A term sheet', labelIds: ['INBOX', deals] });
+    await fake.message({ id: 'm-plain', subject: 'A newsletter', labelIds: ['INBOX'] });
+    writeFileSync(join(dir, 'movements/hello.mvt'), program(`function look(run: <manual-[:Invocations]->>) {
+  m = only(mail-[x:Messages WHERE x.Labels CONTAINS "Deals"]->)
+  if (m == null) { fail("no Deals mail") }
+  return "\${m.Subject} / \${m.Labels}"
+}
+
+listen to manual-[:Invocations]-> fire look`));
+    assert.equal(lf(dir, 'check').code, 0);
+    const walked = lf(dir, 'run', 'look');
+    assert.equal(walked.code, 0, walked.out);
+    assert.match(walked.out, /returned "A term sheet \/ .*INBOX.*Deals.*"/, walked.out);
+    assert.doesNotMatch(walked.out, /Label_/, walked.out);
+  } finally {
+    await fake.stop();
+  }
+});

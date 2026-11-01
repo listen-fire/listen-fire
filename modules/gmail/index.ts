@@ -46,6 +46,7 @@ export * from './compose';
 export * from './credential';
 export * from './filter';
 export * from './manifest';
+export * from './label_names';
 export * from './mime';
 export * from './poll';
 export * from './schema';
