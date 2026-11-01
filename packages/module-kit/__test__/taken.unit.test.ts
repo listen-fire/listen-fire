@@ -1,6 +1,9 @@
 // A taken filter read as comparisons, and each comparison judged as the
 // engine judges it.
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { holds, narrowedTo, takenComparisons } from '../taken';
 
 const field = (name: string) => ({ type: 'property', propertyTypeId: name, fieldOnly: true });
@@ -60,5 +63,25 @@ describe('holds and narrowedTo', () => {
     expect(narrowedTo({ field: 'Reason', op: 'in', value: ['a', 'b'] })).toEqual(['a', 'b']);
     expect(narrowedTo({ field: 'Query', op: 'eq', value: 'from:acme' })).toEqual(['from:acme']);
     expect(narrowedTo({ field: 'Subject', op: 'contains', value: 'x' })).toBeUndefined();
+  });
+});
+
+// The engine's judge decides the same table (crates/movement-engine
+// listen_judge.rs): a module saying `takenApplied` drops nothing it would fire.
+describe('a taken filter, applied as the engine judges it', () => {
+  interface TakenCase {
+    case: string;
+    filter: unknown;
+    fields: Record<string, unknown>;
+    holds: boolean;
+    applied: boolean;
+  }
+  // Test data, not a published export: read where the repository keeps it.
+  const table: { cases: TakenCase[] } = JSON.parse(readFileSync(join(__dirname, '../../engine-contracts/conformance/taken-comparisons.json'), 'utf8'));
+
+  it.each(table.cases)('$case', ({ filter, fields, holds: expected, applied }) => {
+    const taken = takenComparisons(filter);
+    expect(taken !== undefined).toBe(applied);
+    if (taken !== undefined) expect(taken.every((comparison) => holds(fields[comparison.field], comparison))).toBe(expected);
   });
 });

@@ -1,0 +1,911 @@
+{
+  "about": "Whether a landing meets the part of a listen's WHERE a module takes (adapter protocol 2.6's `filter`), as the engine's judge decides it. A module that applies the taken part itself and says `takenApplied: true` must decide every case exactly as the engine does, or the host never re-checks what the module dropped. `filter` is the taken expression a module is handed, `fields` the landing's fields, `holds` the engine's answer. `applied` is whether module-kit applies the filter itself (`takenComparisons` reads it); when false, the module leaves it to the host and says no `takenApplied`. Held by the engine's Rust (crates/movement-engine/src/filter.rs tests, through the listen judge) and module-kit's TypeScript (taken.ts, `takenComparisons` and `holds`).",
+  "cases": [
+    {
+      "case": "numeric texts order as numbers",
+      "filter": {
+        "type": "compare",
+        "op": "gt",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Amount",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": "20"
+        }
+      },
+      "fields": {
+        "Amount": "100"
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "a numeric text orders against a number",
+      "filter": {
+        "type": "compare",
+        "op": "gt",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Amount",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": 3
+        }
+      },
+      "fields": {
+        "Amount": "5"
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "a numeric text with spaces around it is a number",
+      "filter": {
+        "type": "compare",
+        "op": "gt",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Amount",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": 3
+        }
+      },
+      "fields": {
+        "Amount": " 12 "
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "a number orders below a larger one",
+      "filter": {
+        "type": "compare",
+        "op": "lt",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Amount",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": 10
+        }
+      },
+      "fields": {
+        "Amount": 9.5
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "a date text with no offset is UTC",
+      "filter": {
+        "type": "compare",
+        "op": "gte",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Due",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": "2026-03-05T10:00:00Z"
+        }
+      },
+      "fields": {
+        "Due": "2026-03-05T10:00"
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "a date text with an offset orders by its instant",
+      "filter": {
+        "type": "compare",
+        "op": "lt",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Due",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": "2026-03-05T10:00:00Z"
+        }
+      },
+      "fields": {
+        "Due": "2026-03-05T12:00:00+05:00"
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "a year alone is a date, and a numeric text only against another number",
+      "filter": {
+        "type": "compare",
+        "op": "gt",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Year",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": "2025-12-31"
+        }
+      },
+      "fields": {
+        "Year": "2026"
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "a text that is no ISO date orders as text",
+      "filter": {
+        "type": "compare",
+        "op": "lt",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Due",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": "2025-01-01"
+        }
+      },
+      "fields": {
+        "Due": "Mar 5, 2024"
+      },
+      "holds": false,
+      "applied": true
+    },
+    {
+      "case": "a day its month lacks is no date, so it orders as text",
+      "filter": {
+        "type": "compare",
+        "op": "gt",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Due",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": "2026-03-01"
+        }
+      },
+      "fields": {
+        "Due": "2026-02-30"
+      },
+      "holds": false,
+      "applied": true
+    },
+    {
+      "case": "texts that are neither numbers nor dates order by their code units",
+      "filter": {
+        "type": "compare",
+        "op": "lt",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Name",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": "b"
+        }
+      },
+      "fields": {
+        "Name": "B"
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "the empty text orders as text",
+      "filter": {
+        "type": "compare",
+        "op": "lt",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Name",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": "a"
+        }
+      },
+      "fields": {
+        "Name": ""
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "booleans order as the instants 0 and 1",
+      "filter": {
+        "type": "compare",
+        "op": "gt",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Done",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": false
+        }
+      },
+      "fields": {
+        "Done": true
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "an absent field orders against nothing",
+      "filter": {
+        "type": "compare",
+        "op": "lt",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Amount",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": 10
+        }
+      },
+      "fields": {},
+      "holds": false,
+      "applied": true
+    },
+    {
+      "case": "a list and a number do not order",
+      "filter": {
+        "type": "compare",
+        "op": "gt",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Amount",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": 1
+        }
+      },
+      "fields": {
+        "Amount": [
+          5
+        ]
+      },
+      "holds": false,
+      "applied": true
+    },
+    {
+      "case": "equality is strict: a numeric text is not its number",
+      "filter": {
+        "type": "compare",
+        "op": "eq",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Amount",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": 5
+        }
+      },
+      "fields": {
+        "Amount": "5"
+      },
+      "holds": false,
+      "applied": true
+    },
+    {
+      "case": "equal texts are equal",
+      "filter": {
+        "type": "compare",
+        "op": "eq",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Name",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": "Acme"
+        }
+      },
+      "fields": {
+        "Name": "Acme"
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "lists are equal as sets of their distinct members",
+      "filter": {
+        "type": "compare",
+        "op": "eq",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Tags",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "list",
+          "elements": [
+            {
+              "type": "static",
+              "value": "a"
+            },
+            {
+              "type": "static",
+              "value": "b"
+            }
+          ]
+        }
+      },
+      "fields": {
+        "Tags": [
+          "b",
+          "a",
+          "a"
+        ]
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "a list with a repeated member is not a list of two distinct ones",
+      "filter": {
+        "type": "compare",
+        "op": "eq",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Tags",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "list",
+          "elements": [
+            {
+              "type": "static",
+              "value": "a"
+            },
+            {
+              "type": "static",
+              "value": "b"
+            }
+          ]
+        }
+      },
+      "fields": {
+        "Tags": [
+          "a",
+          "a"
+        ]
+      },
+      "holds": false,
+      "applied": true
+    },
+    {
+      "case": "not-equal on lists is not set equality",
+      "filter": {
+        "type": "compare",
+        "op": "neq",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Tags",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "list",
+          "elements": [
+            {
+              "type": "static",
+              "value": "a"
+            }
+          ]
+        }
+      },
+      "fields": {
+        "Tags": [
+          "a",
+          "b"
+        ]
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "== null holds for an absent field",
+      "filter": {
+        "type": "compare",
+        "op": "eq",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Note",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": null
+        }
+      },
+      "fields": {},
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "== null holds for a null field",
+      "filter": {
+        "type": "compare",
+        "op": "eq",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Note",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": null
+        }
+      },
+      "fields": {
+        "Note": null
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "!= null fails for an absent field",
+      "filter": {
+        "type": "compare",
+        "op": "neq",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Note",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": null
+        }
+      },
+      "fields": {},
+      "holds": false,
+      "applied": true
+    },
+    {
+      "case": "!= null holds for a present field",
+      "filter": {
+        "type": "compare",
+        "op": "neq",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Note",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": null
+        }
+      },
+      "fields": {
+        "Note": ""
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "an order against null never holds",
+      "filter": {
+        "type": "compare",
+        "op": "gt",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Amount",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": null
+        }
+      },
+      "fields": {
+        "Amount": 5
+      },
+      "holds": false,
+      "applied": true
+    },
+    {
+      "case": "IN is strict: a numeric text is not in a list of numbers",
+      "filter": {
+        "type": "compare",
+        "op": "in",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Amount",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "list",
+          "elements": [
+            {
+              "type": "static",
+              "value": 1
+            },
+            {
+              "type": "static",
+              "value": 5
+            }
+          ]
+        }
+      },
+      "fields": {
+        "Amount": "5"
+      },
+      "holds": false,
+      "applied": true
+    },
+    {
+      "case": "IN holds for a member",
+      "filter": {
+        "type": "compare",
+        "op": "in",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Stage",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "list",
+          "elements": [
+            {
+              "type": "static",
+              "value": "Lead"
+            },
+            {
+              "type": "static",
+              "value": "Won"
+            }
+          ]
+        }
+      },
+      "fields": {
+        "Stage": "Won"
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "IN [null] holds only for null, not for an absent field",
+      "filter": {
+        "type": "compare",
+        "op": "in",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Stage",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "list",
+          "elements": [
+            {
+              "type": "static",
+              "value": null
+            }
+          ]
+        }
+      },
+      "fields": {},
+      "holds": false,
+      "applied": true
+    },
+    {
+      "case": "CONTAINS on a text is a substring",
+      "filter": {
+        "type": "compare",
+        "op": "contains",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Subject",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": "Series A"
+        }
+      },
+      "fields": {
+        "Subject": "Re: Series A terms"
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "CONTAINS on a list is membership",
+      "filter": {
+        "type": "compare",
+        "op": "contains",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Labels",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": "Deals"
+        }
+      },
+      "fields": {
+        "Labels": [
+          "Inbox",
+          "Deals"
+        ]
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "CONTAINS on a number holds nothing",
+      "filter": {
+        "type": "compare",
+        "op": "contains",
+        "left": {
+          "type": "edge_property",
+          "propertyTypeId": "Amount",
+          "fieldOnly": true
+        },
+        "right": {
+          "type": "static",
+          "value": "5"
+        }
+      },
+      "fields": {
+        "Amount": 15
+      },
+      "holds": false,
+      "applied": true
+    },
+    {
+      "case": "an OR of == on one field is IN",
+      "filter": {
+        "type": "logical",
+        "op": "or",
+        "operands": [
+          {
+            "type": "compare",
+            "op": "eq",
+            "left": {
+              "type": "edge_property",
+              "propertyTypeId": "Stage",
+              "fieldOnly": true
+            },
+            "right": {
+              "type": "static",
+              "value": "Lead"
+            }
+          },
+          {
+            "type": "compare",
+            "op": "eq",
+            "left": {
+              "type": "edge_property",
+              "propertyTypeId": "Stage",
+              "fieldOnly": true
+            },
+            "right": {
+              "type": "static",
+              "value": "Won"
+            }
+          }
+        ]
+      },
+      "fields": {
+        "Stage": "Lead"
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "an OR of CONTAINS on one field holds when any does",
+      "filter": {
+        "type": "logical",
+        "op": "or",
+        "operands": [
+          {
+            "type": "compare",
+            "op": "contains",
+            "left": {
+              "type": "edge_property",
+              "propertyTypeId": "Labels",
+              "fieldOnly": true
+            },
+            "right": {
+              "type": "static",
+              "value": "Deals"
+            }
+          },
+          {
+            "type": "compare",
+            "op": "contains",
+            "left": {
+              "type": "edge_property",
+              "propertyTypeId": "Labels",
+              "fieldOnly": true
+            },
+            "right": {
+              "type": "static",
+              "value": "Hiring"
+            }
+          }
+        ]
+      },
+      "fields": {
+        "Labels": [
+          "Hiring"
+        ]
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "an OR with == null is left to the host, which reads it as absence",
+      "filter": {
+        "type": "logical",
+        "op": "or",
+        "operands": [
+          {
+            "type": "compare",
+            "op": "eq",
+            "left": {
+              "type": "edge_property",
+              "propertyTypeId": "Stage",
+              "fieldOnly": true
+            },
+            "right": {
+              "type": "static",
+              "value": "Lead"
+            }
+          },
+          {
+            "type": "compare",
+            "op": "eq",
+            "left": {
+              "type": "edge_property",
+              "propertyTypeId": "Stage",
+              "fieldOnly": true
+            },
+            "right": {
+              "type": "static",
+              "value": null
+            }
+          }
+        ]
+      },
+      "fields": {},
+      "holds": true,
+      "applied": false
+    },
+    {
+      "case": "a mirrored comparison reads the field on the right",
+      "filter": {
+        "type": "compare",
+        "op": "lt",
+        "left": {
+          "type": "static",
+          "value": 3
+        },
+        "right": {
+          "type": "edge_property",
+          "propertyTypeId": "Amount",
+          "fieldOnly": true
+        }
+      },
+      "fields": {
+        "Amount": "5"
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "an AND holds when each part does",
+      "filter": {
+        "type": "logical",
+        "op": "and",
+        "operands": [
+          {
+            "type": "compare",
+            "op": "eq",
+            "left": {
+              "type": "edge_property",
+              "propertyTypeId": "Stage",
+              "fieldOnly": true
+            },
+            "right": {
+              "type": "static",
+              "value": "Won"
+            }
+          },
+          {
+            "type": "compare",
+            "op": "gt",
+            "left": {
+              "type": "edge_property",
+              "propertyTypeId": "Amount",
+              "fieldOnly": true
+            },
+            "right": {
+              "type": "static",
+              "value": "20"
+            }
+          }
+        ]
+      },
+      "fields": {
+        "Stage": "Won",
+        "Amount": "100"
+      },
+      "holds": true,
+      "applied": true
+    },
+    {
+      "case": "an AND fails when one part does",
+      "filter": {
+        "type": "logical",
+        "op": "and",
+        "operands": [
+          {
+            "type": "compare",
+            "op": "eq",
+            "left": {
+              "type": "edge_property",
+              "propertyTypeId": "Stage",
+              "fieldOnly": true
+            },
+            "right": {
+              "type": "static",
+              "value": "Won"
+            }
+          },
+          {
+            "type": "compare",
+            "op": "gt",
+            "left": {
+              "type": "edge_property",
+              "propertyTypeId": "Amount",
+              "fieldOnly": true
+            },
+            "right": {
+              "type": "static",
+              "value": "20"
+            }
+          }
+        ]
+      },
+      "fields": {
+        "Stage": "Won",
+        "Amount": "3"
+      },
+      "holds": false,
+      "applied": true
+    }
+  ]
+}

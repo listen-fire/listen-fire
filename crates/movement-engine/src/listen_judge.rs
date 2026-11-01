@@ -426,6 +426,23 @@ mod tests {
         }
     }
 
+    /// The taken part a module may apply itself (`takenApplied`), as the
+    /// judge decides it: module-kit's `holds` is held to the same table.
+    #[test]
+    fn a_taken_filter_is_judged_as_the_shared_table_of_comparisons_says() {
+        let table: Json = serde_json::from_str(include_str!("../../../packages/engine-contracts/conformance/taken-comparisons.json")).unwrap();
+        let cases = table["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let name = case["case"].as_str().unwrap();
+            let hop = json!({ "edge": "Records", "from": "", "to": "Record", "alias": "r", "taken": case["filter"], "judged": "arrival" });
+            let plan: ListenPlan = serde_json::from_value(json!({ "movement": "m", "connection": "c", "adapter": "a", "hops": [hop] })).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let arrival = PlanArrival { edge: "Records".into(), key: None, landing: ArrivedRecord { record_type: Some("Record".into()), fields: case["fields"].clone(), unknown: Vec::new() }, parents: Vec::new(), taken_applied: false };
+            let fires = judge_arrival(&plan, &arrival, 0.0) == Verdict::Fires;
+            assert_eq!(fires, case["holds"].as_bool().unwrap(), "{name}");
+        }
+    }
+
     #[test]
     fn named_fields_matches_the_shared_table_of_cases() {
         let table: Json = serde_json::from_str(include_str!("../../../packages/engine-contracts/conformance/listen-field-names.json")).unwrap();

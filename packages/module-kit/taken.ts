@@ -66,7 +66,8 @@ function comparison(expr: unknown): TakenComparison | undefined {
     const values: Scalar[] = [];
     for (const operand of operands) {
       const one = comparison(operand);
-      if (one === undefined || (one.op !== 'eq' && one.op !== 'contains') || Array.isArray(one.value)) return undefined;
+      // `x == null` asks for absence, which an `in` list cannot say: left to the host.
+      if (one === undefined || (one.op !== 'eq' && one.op !== 'contains') || Array.isArray(one.value) || one.value === null) return undefined;
       if (first !== undefined && (one.field !== first.field || one.op !== first.op)) return undefined;
       first ??= one;
       values.push(one.value);
@@ -117,30 +118,100 @@ export function narrowedTo(comparison: TakenComparison): string[] | undefined {
   return undefined;
 }
 
-function order(left: unknown, right: unknown): number | undefined {
-  if (typeof left === 'number' && typeof right === 'number') return left - right;
-  if (typeof left === 'string' && typeof right === 'string') {
-    const a = Date.parse(left);
-    const b = Date.parse(right);
-    if (!Number.isNaN(a) && !Number.isNaN(b)) return a - b;
-    return left < right ? -1 : left > right ? 1 : 0;
+/** A finite number, or a text that reads as one (`Number`, blank refused):
+ *  what orders numerically. */
+function finiteNumber(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== 'string' || value.trim() === '') return undefined;
+  const read = Number(value);
+  return Number.isFinite(read) ? read : undefined;
+}
+
+/** Days from 1970-01-01 to a proleptic Gregorian date. */
+function daysFromCivil(year: number, month: number, day: number): number {
+  const y = month <= 2 ? year - 1 : year;
+  const era = Math.floor(y / 400);
+  const yoe = y - era * 400;
+  const doy = Math.floor((153 * ((month + 9) % 12) + 2) / 5) + day - 1;
+  return era * 146_097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719_468;
+}
+
+const ISO_INSTANT = /^(?:([+-])(\d{6})|(\d{4}))(?:-(\d{2})(?:-(\d{2}))?)?(?:[Tt ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?([Zz]|[+-]\d{2}:?\d{2})?)?$/;
+
+/** An ISO 8601 / RFC 3339 text as an instant (epoch ms), a text with no
+ *  offset read as UTC; undefined for any other text, a day its month lacks,
+ *  the hour 24 (crates/movement-engine js_date.rs `parse`). */
+function isoInstant(text: string): number | undefined {
+  const m = ISO_INSTANT.exec(text);
+  if (m === null) return undefined;
+  const [, sign, signed, plain, mm, dd, hh, mi, ss, fraction, offset] = m;
+  if (sign === '-' && Number(signed) === 0) return undefined;
+  const year = plain !== undefined ? Number(plain) : (sign === '-' ? -1 : 1) * Number(signed);
+  const month = mm !== undefined ? Number(mm) : 1;
+  const day = dd !== undefined ? Number(dd) : 1;
+  const nextMonth = month === 12 ? daysFromCivil(year + 1, 1, 1) : daysFromCivil(year, month + 1, 1);
+  if (month < 1 || month > 12 || day < 1 || day > nextMonth - daysFromCivil(year, month, 1)) return undefined;
+  let ms = daysFromCivil(year, month, day) * 86_400_000;
+  if (hh !== undefined) {
+    const [hour, minute, second] = [Number(hh), Number(mi), ss !== undefined ? Number(ss) : 0];
+    if (hour > 23 || minute > 59 || second > 59) return undefined;
+    ms += hour * 3_600_000 + minute * 60_000 + second * 1000 + (fraction !== undefined ? Number(fraction.slice(0, 3).padEnd(3, '0')) : 0);
+    if (offset !== undefined && offset.toUpperCase() !== 'Z') {
+      const [hours, minutes] = [Number(offset.slice(1, 3)), Number(offset.slice(-2))];
+      if (hours > 23 || minutes > 59) return undefined;
+      ms += (offset.startsWith('+') ? -1 : 1) * (hours * 60 + minutes) * 60_000;
+    }
   }
+  return Number.isFinite(ms) && Math.abs(ms) <= 8.64e15 ? Math.trunc(ms) + 0 : undefined;
+}
+
+/** A value as an instant: a finite number as itself, a boolean as 0 or 1,
+ *  anything else by its text, as an ISO instant. */
+function instant(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  return isoInstant(String(value));
+}
+
+/** How two values order for `> >= < <=`: as numbers when both are (numeric
+ *  texts included), else as instants when both are, else as texts when both
+ *  are; undefined when they do not order (crates/movement-engine filter.rs
+ *  `relational_order`). */
+function order(left: unknown, right: unknown): number | undefined {
+  const [ln, rn] = [finiteNumber(left), finiteNumber(right)];
+  if (ln !== undefined && rn !== undefined) return Math.sign(ln - rn);
+  const [li, ri] = [instant(left), instant(right)];
+  if (li !== undefined && ri !== undefined) return Math.sign(li - ri);
+  if (typeof left === 'string' && typeof right === 'string') return left < right ? -1 : left > right ? 1 : 0;
   return undefined;
 }
 
+/** SameValueZero: `===`, but NaN is NaN. */
 function same(left: unknown, right: unknown): boolean {
   return left === right || (Number.isNaN(left) && Number.isNaN(right));
 }
 
-/** Whether `value` (a landing's field) satisfies the comparison, as the
- *  engine compares (crates/movement-engine filter.rs `compare_values`). */
+/** Two lists equal as sets: the same distinct members. */
+function setEquals(left: readonly unknown[], right: readonly unknown[]): boolean {
+  const distinct = (items: readonly unknown[]) => items.filter((item, i) => items.findIndex((other) => same(other, item)) === i).length;
+  return distinct(left) === distinct(right) && left.every((v) => right.some((r) => same(v, r)));
+}
+
+/** Whether `value` (a landing's field) satisfies the comparison, exactly as
+ *  the engine's judge decides it (crates/movement-engine filter.rs
+ *  `compare_values` and `compare_to_null`), held to
+ *  engine-contracts/conformance/taken-comparisons.json. */
 export function holds(value: unknown, comparison: TakenComparison): boolean {
   const right = comparison.value;
+  // `x == null` / `x != null` ask whether it is there; any other operator
+  // against null holds nothing.
+  if (right === null) return comparison.op === 'eq' ? value === null || value === undefined : comparison.op === 'neq' && value !== null && value !== undefined;
   switch (comparison.op) {
     case 'eq':
-      return Array.isArray(value) && Array.isArray(right) ? value.length === right.length && value.every((v) => right.some((r) => same(v, r))) : same(value, right);
+      return Array.isArray(value) && Array.isArray(right) ? setEquals(value, right) : value === right;
     case 'neq':
-      return !holds(value, { ...comparison, op: 'eq' });
+      return Array.isArray(value) && Array.isArray(right) ? !setEquals(value, right) : value !== right;
     case 'in':
       return Array.isArray(right) && right.some((r) => same(r, value));
     case 'contains':
