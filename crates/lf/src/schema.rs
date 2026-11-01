@@ -936,11 +936,16 @@ pub fn unreadable_listening(declarant: Declarant, entries: &[Js], descriptors: &
 /// Why a key's `absent` cannot be compared as its key compares a value: on
 /// a `type` key, a list on an `eq` key that is not one value, or a value its
 /// `values` do not spell (engine-contracts `absentRefusal` says the same).
-fn absent_refusal(name: &str, key: &movement_parser::catalog::types::KeyBecomes) -> Option<String> {
+/// An `events` key's `absent` naming only events that choose a mapping
+/// (`chooses`, the `byEvent` events) is spent choosing, never compared.
+fn absent_refusal(name: &str, key: &movement_parser::catalog::types::KeyBecomes, chooses: &[&str]) -> Option<String> {
     if key.absent_field.is_some() && key.absent.is_none() {
         return Some(format!("'listenSettingsBecome' gives '{name}' an 'absentField' but no 'absent' value to compare on it"));
     }
     let texts = key.absent.as_ref()?.texts();
+    if name == "events" && !chooses.is_empty() && texts.iter().all(|t| chooses.contains(&t.as_str())) {
+        return None;
+    }
     if key.op == KeyOp::Type {
         return Some(format!("'listenSettingsBecome' gives '{name}' an absent value, but a 'type' key compares no field"));
     }
@@ -973,11 +978,12 @@ fn op_name(op: KeyOp) -> &'static str {
 /// stands on the path's first hops, so the path is read from its first edge
 /// that is a root collection here. A type nobody described is not judged.
 pub fn unreadable_settings_become(become_: &SettingsBecome, entries: &[Js], descriptors: &IndexMap<String, Js>) -> Option<String> {
+    let chooses: Vec<&str> = become_.by_event.iter().flat_map(|ways| ways.keys()).map(String::as_str).collect();
     let ways = become_.by_event.iter().flat_map(|ways| ways.iter());
-    std::iter::once(become_).chain(ways.map(|(_, way)| way)).find_map(|mapping| unreadable_mapping(mapping, entries, descriptors))
+    unreadable_mapping(become_, &chooses, entries, descriptors).or_else(|| ways.into_iter().find_map(|(_, way)| unreadable_mapping(way, &[], entries, descriptors)))
 }
 
-fn unreadable_mapping(become_: &SettingsBecome, entries: &[Js], descriptors: &IndexMap<String, Js>) -> Option<String> {
+fn unreadable_mapping(become_: &SettingsBecome, chooses: &[&str], entries: &[Js], descriptors: &IndexMap<String, Js>) -> Option<String> {
     let path = &become_.path;
     if become_.aliases.len() != path.len() {
         return Some(format!("'listenSettingsBecome' gives {} aliases for a path of {} edges: give one per edge", become_.aliases.len(), path.len()));
@@ -992,7 +998,7 @@ fn unreadable_mapping(become_: &SettingsBecome, entries: &[Js], descriptors: &In
         if key.lowercase == Some(true) && key.op == KeyOp::Type {
             return Some(format!("'listenSettingsBecome' gives '{name}' 'lowercase: true', but a 'type' key compares no text"));
         }
-        if let Some(refusal) = absent_refusal(name, key) {
+        if let Some(refusal) = absent_refusal(name, key, chooses) {
             return Some(refusal);
         }
     }
@@ -1089,10 +1095,14 @@ fn unreadable_carries(declarant: &Declarant, entries: &[Js], descriptors: &Index
         Declarant::Reference { owner, .. } => ([owner.to_string()].into_iter().collect(), name.clone()),
         Declarant::Entry(_) => (IndexSet::new(), name.clone()),
     };
+    // An edge on a path to the declarant, named past the root: the hops are
+    // written innermost first.
+    let on_its_path: IndexSet<String> = types_before(&hangs_off, &into).iter().flat_map(|t| into.get(t).into_iter().flatten()).map(|(edge, _)| edge.clone()).collect();
     for hop in carries.iter().rev() {
         let hop = key(Some(hop));
         if hangs_off.is_empty() {
-            return Some(format!("'{name}' says its arrivals carry earlier hops, but 'carries' names '{hop}', and '{inner}' is a root collection: nothing comes before it"));
+            let order = if on_its_path.contains(&hop) { format!("; 'carries' lists hops outermost first, so '{inner}' comes before '{hop}'") } else { String::new() };
+            return Some(format!("'{name}' says its arrivals carry earlier hops, but 'carries' names '{hop}', and '{inner}' is a root collection: nothing comes before it{order}"));
         }
         let before = types_before(&hangs_off, &into);
         let edges_in = || before.iter().flat_map(|t| into.get(t).into_iter().flatten());
@@ -1780,7 +1790,7 @@ mod tests {
         );
         assert_eq!(
             changes(r#"["Tables","Bases"]"#).unwrap(),
-            "'Changes' says its arrivals carry earlier hops, but 'carries' names 'Tables', and 'Bases' is a root collection: nothing comes before it",
+            "'Changes' says its arrivals carry earlier hops, but 'carries' names 'Tables', and 'Bases' is a root collection: nothing comes before it; 'carries' lists hops outermost first, so 'Bases' comes before 'Tables'",
             "outermost first: the innermost hop is last"
         );
         assert_eq!(

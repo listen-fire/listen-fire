@@ -266,13 +266,16 @@ The manifest file registers your server with a team:
   mapping when you declare none (or none of them is mapped). One naming
   events of two mappings has no rewrite (its author writes one listen per
   edge), and nor has one naming an event `byEvent` does not beside one it
-  does. Several values of a `contains` key become an OR of `CONTAINS`: the
+  does. Events of one edge whose mappings differ only by keys one compares
+  besides take the mapping that compares least (Slack's `message` with
+  `app_mention`: a mention is a message). Several values of a `contains` key become an OR of `CONTAINS`: the
   rewrite is safe only when the field declares `containsAny`. A rewrite is offered only when every literal it writes is one the field's
   owned scalar takes. A connection positioned at a member (an Airtable `base`)
   stands on the hops its position keys map to. A path naming an edge you do
   not describe, a key mapped past the path, an `eq`/`in` key with no `field`,
   `lowercase: true` on a `type` key, an `absent` the key cannot compare (on a
-  `type` key, several values on an `eq` or `neq` key, a value its `values` do not spell,
+  `type` key, several values on an `eq` or `neq` key unless each is a `byEvent`
+  event, which it then only chooses by, a value its `values` do not spell,
   an `absentField` with no `absent`), or a `fieldChange` past the path or on a
   key the mapping also maps, in the mapping or any `byEvent` one, is refused when the module is described. A listen with a key you do not map is left for its author.
 - Optional fields: `handbookSection` (`{ title, content }`, prose the authoring

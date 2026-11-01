@@ -62,6 +62,14 @@ function slackFile(id: string, data: Record<string, unknown>, base: string): Rec
   };
 }
 
+/** A new message's `ts` as Slack writes one: seconds since the epoch, a
+ *  point and six digits (here milliseconds then three random ones, so two
+ *  posts in one millisecond do not collide), which reads as the instant. */
+function slackTs(): string {
+  const ms = Date.now();
+  return `${Math.floor(ms / 1000)}.${String(ms % 1000).padStart(3, '0')}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`;
+}
+
 /** The id of the bot user every `auth.test` names: whom a message that
  *  mentions the app names (`<@U0BOT>`). */
 export const FAKE_SLACK_BOT_USER = 'U0BOT';
@@ -126,6 +134,21 @@ export function slackRoutes(store: EntityStore): Router {
     if (req.method === 'POST' && !req.path.startsWith('/control/') && !req.path.startsWith('/upload/') && !req.path.startsWith('/response/')) {
       store.create(SVC, 'request_log', { method: req.path.replace(/^\//, ''), at: new Date().toISOString() }, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     }
+    next();
+  });
+
+  // Not Slack: the Web API methods that answer 500 until cleared
+  // (`{ methods: [] }`), as a Slack outage does.
+  r.post('/control/outage', (req, res) => {
+    const methods: unknown = req.body.methods;
+    const down = Array.isArray(methods) ? methods.filter((m): m is string => typeof m === 'string') : [];
+    store.create(SVC, 'outage', { methods: down }, 'current');
+    res.json({ ok: true, methods: down });
+  });
+  r.use((req, res, next) => {
+    const down = store.get(SVC, 'outage', 'current')?.data.methods;
+    const method = req.path.replace(/^\//, '');
+    if (req.method === 'POST' && Array.isArray(down) && down.includes(method)) return void res.status(500).send('outage');
     next();
   });
 
@@ -293,7 +316,7 @@ export function slackRoutes(store: EntityStore): Router {
       });
       return;
     }
-    const ts = `${Date.now() / 1000}.${Math.random().toString().slice(2, 8)}`;
+    const ts = slackTs();
     store.create(
       SVC,
       'message',
@@ -437,7 +460,7 @@ export function slackRoutes(store: EntityStore): Router {
     // message (with `initial_comment` as its text) into the channel/thread.
     // Materialise it so the e2e can observe the caption on channel history.
     if (req.body.channel_id) {
-      const ts = `${Date.now() / 1000}.${Math.random().toString().slice(2, 8)}`;
+      const ts = slackTs();
       store.create(
         SVC,
         'message',

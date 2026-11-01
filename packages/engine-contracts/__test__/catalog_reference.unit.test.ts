@@ -352,7 +352,7 @@ describe('a listening declaration', () => {
       // A hop not carried may come between: the base, not the message.
       expect(changes(['Bases'])).toBeUndefined();
       expect(changes(['Messages', 'Bases'])).toBe(
-        "'Interactions' says its arrivals carry earlier hops, but 'carries' names 'Messages', and 'Bases' is a root collection: nothing comes before it",
+        "'Interactions' says its arrivals carry earlier hops, but 'carries' names 'Messages', and 'Bases' is a root collection: nothing comes before it; 'carries' lists hops outermost first, so 'Bases' comes before 'Messages'",
       );
     });
 

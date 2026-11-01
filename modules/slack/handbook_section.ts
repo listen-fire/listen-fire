@@ -144,16 +144,18 @@ write office-[:Messages]-> {
 \`\`\`
 
 \`\`\`
-listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.\`Posted At\` WITHIN 3d]->-[:Interactions]-> fire count_vote
+listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.Timestamp WITHIN 3d]->-[:Interactions]-> fire count_vote
 \`\`\`
 
-- A \`Topic\` goes only on a message with \`Buttons\`; one without is refused. Slack keeps no other data on a message that comes back with a press, so the \`Topic\` is stored as the id of the block its buttons sit in (\`lf:<topic>\`), and read back from there: a press carries its message's \`Topic\` and \`Posted At\`, and the listen's filter is judged on the press itself — no message history is listed.
+- A \`Topic\` goes only on a message with \`Buttons\`; one without is refused. Slack keeps no other data on a message that comes back with a press, so the \`Topic\` is stored as the id of the block its buttons sit in (\`lf:<topic>\`), and read back from there: a press carries its message's \`Topic\` and \`Timestamp\`, and the listen's filter is judged on the press itself — no message history is listed.
+- A block id starting \`lf:\` is reserved for the \`Topic\`: a message whose own \`Blocks\` use one is refused.
+- A thread reply is a message too: a press on a reply written with the \`Topic\` runs the listen as a press on the top-level poll does.
 - \`WITHIN 3d\` on the message means a press on last week's poll runs nothing.
-- The fired function reads the press: \`only(press-[:Actions]->).Value\`, \`press-[:By]->\` who pressed, \`press-[:Message]->\` the poll. Keep the tally where each run can update one row, such as a table written \`unique by (Poll, Person)\`, so a changed vote replaces the old one.
+- The fired function reads the press: \`only(press-[:Actions]->).Value\`, \`press-[:By]->\` who pressed, \`press-[:Message]->\` the poll. Keep the tally where each run can update one row, such as a table written \`unique by\` the poll and the member's \`Id\`, so a changed vote replaces the old one (two members may share a display name, never an \`Id\`).
 
 ### what-fires-a-run
 
-Slack delivers only the events its app is subscribed to, so an automation reading Slack usually fires on the bot being mentioned rather than on every message in a channel; narrow with \`Mentions App\` and the channel's \`Name\` in the listen. A run also needs the person who sent the message (or added the reaction) to be a known member of the team, matched on their Slack profile email — activity from guests, external members of a shared channel, other bots, and this platform's own posts is dropped before anything runs. A press and a thread reply are different: they reach the run waiting on their message whoever made them, so say in a \`WHERE\` whose answer counts when it matters. Slack only sends presses and replies its app is set up to send — interactivity switched on, and message events subscribed. Point both of the app's request URLs, Interactivity's and Event Subscriptions', at the connection's door, the address your host gives for it: \`listen-fire serve\` prints it for every Slack connection a run can wait on, whether or not a listen names the connection.
+Slack delivers only the events its app is subscribed to, so an automation reading Slack usually fires on the bot being mentioned rather than on every message in a channel; narrow with \`Mentions App\` and the channel's \`Name\` in the listen. A run also needs the person who sent the message (or added the reaction) to be a known member of the team, matched on their Slack profile email — activity from guests, external members of a shared channel, other bots, and this platform's own posts is dropped before anything runs. A press and a thread reply are different: they reach the run waiting on their message whoever made them, so say in a \`WHERE\` whose answer counts when it matters. Slack only sends what its app is set up to send: presses need interactivity switched on, messages and replies the message events subscribed, and a listen on \`Reactions\` the \`reaction_added\` event. Point both of the app's request URLs, Interactivity's and Event Subscriptions', at the connection's door, the address your host gives for it: \`listen-fire serve\` prints it for every Slack connection a run can wait on, whether or not a listen names the connection.
 
 ### Common mistakes
 
@@ -245,7 +247,7 @@ function count_vote(press: <team-[:Interaction]->>) {
 }
 
 listen to team-[:Channels]->-[m:Messages WHERE m.\`Mentions App\` == true]-> fire ask_lunch
-listen to team-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.\`Posted At\` WITHIN 3d]->-[:Interactions]-> fire count_vote
+listen to team-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.Timestamp WITHIN 3d]->-[:Interactions]-> fire count_vote
 `,
     },
   ],

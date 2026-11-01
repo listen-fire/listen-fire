@@ -150,12 +150,12 @@ const CATALOG: &str = r#"{"adapters":{
       "writableRoots":{},"eventPosition":"Event","eventPositions":[{"position":"Event"}]}}},
   "chat":{"canFire":true,"constructionArgs":[],"triggerConfig":["channels","events"],
     "listenSettingsBecome":{"path":["Channels","Messages"],"aliases":["ch","m"],"paramFrom":"Message",
-      "keys":{"channels":{"hop":0,"field":"Name","op":"in"},"events":{"hop":1,"field":"Mentions App","op":"eq","values":{"app_mention":true}}},
+      "keys":{"channels":{"hop":0,"field":"Name","op":"in"},"events":{"hop":1,"field":"Mentions App","op":"eq","values":{"app_mention":true},"absent":["message","reaction_added"]}},
       "byEvent":{
         "message":{"path":["Channels","Messages"],"aliases":["ch","m"],"paramFrom":"Message","keys":{"channels":{"hop":0,"field":"Name","op":"in"}}},
         "app_mention":{"path":["Channels","Messages"],"aliases":["ch","m"],"paramFrom":"Message",
           "keys":{"channels":{"hop":0,"field":"Name","op":"in"},"events":{"hop":1,"field":"Mentions App","op":"eq","values":{"app_mention":true}}}},
-        "reaction_added":{"path":["Channels","Messages","Reactions"],"aliases":["ch","m","r"],"paramFrom":"Message","keys":{"channels":{"hop":0,"field":"Name","op":"in"}}}}},
+        "reaction_added":{"path":["Channels","Messages","Reactions"],"aliases":["ch","m","r"],"paramFrom":"Reaction","keys":{"channels":{"hop":0,"field":"Name","op":"in"}}}}},
     "schemas":{"":{"positions":{
         "Channel":{"properties":{"Name":"text"},"edges":{"Messages":{"target":"Message","listenable":true,"delivery":"connection","carries":["Channels"]}}},
         "Message":{"properties":{"Text":"text","Mentions App":"boolean"},"edges":{"Reactions":{"target":"Reaction","readable":false,"listenable":true,"delivery":"connection","carries":["Channels"]}}},
@@ -758,10 +758,26 @@ fn an_event_spelled_as_a_flag_is_compared_as_true_or_false() {
 
 #[test]
 fn a_listen_on_a_channel_s_messages_and_their_reactions_takes_the_edge_its_event_names() {
+    // Naming no events, a 0.12 listen heard messages and reactions: two edges.
     let channel = format!("{CHAT}function f(m: <chat-[:Message]->>) {{ return 1 }}\nlisten to chat {{ channels: [\"deals\"] }} fire f\n");
-    let text = fixed(&channel, &diagnostics(&channel));
+    let d = diagnostics(&channel);
+    assert!(retired(&d).fix.is_none(), "{:?}", retired(&d).fix);
+    assert!(
+        retired(&d).message.ends_with("(there is no rewrite: its events arrive on `-[:Channels]->-[:Messages]->` and `-[:Channels]->-[:Messages]->-[:Reactions]->`, so write one listen for each)"),
+        "{}",
+        retired(&d).message
+    );
+
+    let messages = format!("{CHAT}function f(m: <chat-[:Message]->>) {{ return 1 }}\nlisten to chat {{ events: [\"message\"], channels: [\"deals\"] }} fire f\n");
+    let text = fixed(&messages, &diagnostics(&messages));
     assert!(text.contains("listen to chat-[ch:Channels WHERE ch.Name IN [\"deals\"]]->-[:Messages]-> fire f"), "{text}");
     assert!(text.contains("function f(m: <chat-[:Message]->>)"), "{text}");
+    assert_rechecks_clean(&text);
+
+    // A mention is a message, so a listen hearing both heard every message.
+    let mentions_too = format!("{CHAT}function f(m: <chat-[:Message]->>) {{ return 1 }}\nlisten to chat {{ events: [\"message\", \"app_mention\"], channels: [\"deals\"] }} fire f\n");
+    let text = fixed(&mentions_too, &diagnostics(&mentions_too));
+    assert!(text.contains("listen to chat-[ch:Channels WHERE ch.Name IN [\"deals\"]]->-[:Messages]-> fire f"), "{text}");
     assert_rechecks_clean(&text);
 
     let reacted = format!("{CHAT}function f(r: <chat-[:Reaction]->>) {{ return 1 }}\nlisten to chat {{ events: [\"reaction_added\"] }} fire f\n");

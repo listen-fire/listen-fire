@@ -166,7 +166,7 @@ export const SLACK_REPLIES_EDGE_NAME = 'Replies';
 export const SLACK_REACTIONS_EDGE_NAME = 'Reactions';
 
 /**
- * The `Timestamp`-like fields' value: Slack's `ts` (epoch seconds,
+ * The `Timestamp` field's value: Slack's `ts` (epoch seconds,
  * microseconds after the point) read as the instant it denotes. The raw `ts`
  * stays an IDENTIFIER everywhere it is one (record ids, thread anchors);
  * the field is the time a movement compares.
@@ -186,7 +186,7 @@ export function isoInstantFromSlackTs(ts: string | null | undefined): string | n
 // block its buttons sit in, `lf:<topic>`. Written only with Buttons, and read
 // back from that one place, on a pressed message and on a listed one alike.
 
-const SLACK_TOPIC_BLOCK_PREFIX = 'lf:';
+export const SLACK_TOPIC_BLOCK_PREFIX = 'lf:';
 
 /** Slack's own limit on a block id. */
 export const SLACK_MAX_TOPIC_LENGTH = 255 - SLACK_TOPIC_BLOCK_PREFIX.length;
@@ -233,7 +233,7 @@ export function slackMessageRecord(input: { channel: string; message: Record<str
       Message: typeof message.text === 'string' ? message.text : null,
       User: typeof message.user === 'string' ? message.user : null,
       Channel: channel,
-      'Posted At': isoInstantFromSlackTs(ts),
+      Timestamp: isoInstantFromSlackTs(ts),
       Topic: slackTopicOfBlocks(message.blocks),
       'Mentions App': slackMentionsApp(message, botUserId),
     },
@@ -242,14 +242,16 @@ export function slackMessageRecord(input: { channel: string; message: Record<str
 
 /** A channel as a carried parent, named from the module's channel read;
  *  null when the name could not be read, so a filter on it is not judged
- *  on a guess. */
+ *  on a guess (the host's verdict is undecided). */
 function slackChannelRecord(id: string, name: string | null): AwaitLanding | null {
   if (name === null) return null;
   return { recordId: id, recordType: SLACK_CHANNEL_TYPE_NAME, fields: { id, name, Id: id, Name: name } };
 }
 
 /** What an arrival needs that the delivery does not hold: a channel's name
- *  (cached by the module) and the app's bot user (who a mention names). */
+ *  (cached by the module) and the app's bot user (who a mention names).
+ *  Each is bounded, and null when Slack could not say in time: the arrival
+ *  goes on with what is known. */
 export interface SlackArrivalLookups {
   channelName(channelId: string): Promise<string | null>;
   botUserId(): Promise<string | null>;

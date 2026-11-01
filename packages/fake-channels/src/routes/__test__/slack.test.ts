@@ -74,3 +74,29 @@ test('slack: auth.test names the bot user, and every Web API method called is lo
     await close();
   }
 });
+
+test('slack: an outage answers 500 on the methods it names until cleared', async () => {
+  const { baseUrl, close } = await bootApp();
+  try {
+    await post(baseUrl, 'control/outage', { methods: ['conversations.info'] });
+    const down = await fetch(`${baseUrl}/slack/conversations.info`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: 'C001' }) });
+    assert.equal(down.status, 500);
+    assert.equal((await post(baseUrl, 'auth.test', {})).user_id, FAKE_SLACK_BOT_USER);
+    await post(baseUrl, 'control/outage', { methods: [] });
+    assert.equal((await post(baseUrl, 'conversations.info', { channel: 'C001' })).ok, true);
+  } finally {
+    await close();
+  }
+});
+
+test('slack: a posted message\'s ts is seconds, a point and six digits, reading as when it was posted', async () => {
+  const { baseUrl, close } = await bootApp();
+  try {
+    const before = Date.now();
+    const posted = await post(baseUrl, 'chat.postMessage', { channel: 'C001', text: 'hi' });
+    assert.match(posted.ts, /^\d+\.\d{6}$/);
+    assert.ok(Math.abs(Number(posted.ts) * 1000 - before) < 5000, posted.ts);
+  } finally {
+    await close();
+  }
+});

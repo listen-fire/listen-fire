@@ -611,7 +611,8 @@ export class SlackAdapter extends BaseAdapter {
               'Only a message with Buttons takes one: Slack keeps no other data on a message that ' +
               'comes back with a press, so the Topic is stored as the id of the block its buttons ' +
               'sit in (`lf:<topic>`), and read back from there — on the pressed message and on a ' +
-              'listed one alike. A message without Buttons has none.',
+              'listed one alike. It is written only with Buttons, and block ids starting `lf:` are ' +
+              'reserved for it: a message whose own Blocks use one is refused.',
           },
           {
             fieldId: SLACK_MESSAGE_FIELDS.mentionsApp,
@@ -663,7 +664,7 @@ export class SlackAdapter extends BaseAdapter {
             listenable: true,
             cursor: false,
             // No identity field: a reply's record id, `channel:ts`, names it
-            // both listed and announced. Its `Posted At` reads as an instant
+            // both listed and announced. Its `Timestamp` reads as an instant
             // to the millisecond, which two replies can share.
             // `conversations.replies` answers oldest-first and the hop only
             // drops the root message from that page — it never reorders.
@@ -820,7 +821,7 @@ export class SlackAdapter extends BaseAdapter {
             direction: 'outgoing',
             name: SLACK_INTERACTION_EDGE_NAMES.message,
             writable: false,
-            description: 'The message pressed, as Slack sent it with the press: its text, its `Posted At`, its `Topic`.',
+            description: 'The message pressed, as Slack sent it with the press: its text, its `Timestamp`, its `Topic`.',
           },
         ],
       };
@@ -1432,43 +1433,37 @@ export class SlackAdapter extends BaseAdapter {
 
   /**
    * The connected app's bot user — whom a message `Mentions App` names
-   * (`<@U…>` in its text). Read with `auth.test`, which the client caches;
-   * null when there's no usable client or the read fails.
+   * (`<@U…>` in its text). Read with `auth.test` through the bounded lookup
+   * client, which caches it; null when it cannot be read.
    */
   private async botUserId(): Promise<string | null> {
-    const client = await this.getSlackApiClient();
-    if (!client) return null;
-    try {
-      const who = await client.api.auth.test();
-      return typeof who.user_id === 'string' ? who.user_id : null;
-    } catch (err) {
-      this.sources.log.warn('[SlackAdapter] reading the app\'s bot user failed (Mentions App)', {
-        teamId: this.sources.tenant,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return null;
-    }
+    const who = await this.lookup('the app\'s bot user (auth.test, Mentions App)', (client) => client.lookups.auth.test());
+    return typeof who?.user_id === 'string' ? who.user_id : null;
   }
 
   /**
    * Resolve a channel id → its name, as an arrival carries its channel: a
    * listen's filter on the channel (`ch.Name IN ["deals"]`) is judged on it.
-   * Cached via `conversations.info` (so the hot path is one call per channel
-   * per window); null when there's no usable client or the lookup fails.
+   * Read with `conversations.info` through the bounded lookup client, which
+   * caches it (one call per channel per minute); null when it cannot be read.
    */
   async resolveChannelName(channelId: string): Promise<string | null> {
+    const info = await this.lookup(`channel ${channelId}'s name (conversations.info)`, (client) => client.lookups.conversations.info({ channel: channelId }));
+    const record = info?.channel ? normalizeChannel(info.channel as Record<string, unknown>) : null;
+    return record?.name ?? null;
+  }
+
+  /** One of a delivery's lookups, bounded by the lookup client: null, said
+   *  with what was being read, when there is no client or Slack did not
+   *  answer in time. */
+  private async lookup<T>(what: string, call: (client: SlackAPIClient) => Promise<T>): Promise<T | null> {
     const client = await this.getSlackApiClient();
     if (!client) return null;
     try {
-      const info = await client.api.conversations.info({ channel: channelId });
-      const record = info.channel
-        ? normalizeChannel(info.channel as Record<string, unknown>)
-        : null;
-      return record?.name ?? null;
+      return await call(client);
     } catch (err) {
-      this.sources.log.warn('[SlackAdapter] channel-name resolution failed (listen channel filter)', {
+      this.sources.log.warn(`[SlackAdapter] reading ${what} failed`, {
         teamId: this.sources.tenant,
-        channelId,
         error: err instanceof Error ? err.message : String(err),
       });
       return null;
@@ -1530,7 +1525,7 @@ export class SlackAdapter extends BaseAdapter {
     input: GetRelatedInput,
   ): Promise<RelatedResult[]> {
     const client = await this.requireSlackApiClient('getRelated(messages)');
-    // Scoped to Message: the WHERE names its fields naturally (`Posted At`),
+    // Scoped to Message: the WHERE names its fields naturally (`Timestamp`),
     // and a bare resolver describes nothing to match them against.
     const resolver = await this.resolver({ types: [SLACK_MESSAGE_TYPE_ID] });
     const naturalMessage = resolver.naturalTypeName(SLACK_MESSAGE_TYPE_ID);

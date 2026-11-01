@@ -18,7 +18,7 @@ import type { FileRef, WriteResult } from 'movement-engine/public/adapter';
 
 import { SLACK_ADAPTER_TYPE } from './types';
 import { finalizeMessageText } from './mentions';
-import { SLACK_MAX_TOPIC_LENGTH, slackMessageKey, slackTopicBlockId } from './inbound';
+import { SLACK_MAX_TOPIC_LENGTH, SLACK_TOPIC_BLOCK_PREFIX, slackMessageKey, slackTopicBlockId } from './inbound';
 
 type SlackClient = ReturnType<typeof getSlackClient>;
 
@@ -124,6 +124,12 @@ const BUTTONS_CLASH = "SlackAdapter.createRecord: a Slack Message's Buttons can'
 export const TOPIC_WITHOUT_BUTTONS =
   "SlackAdapter.createRecord: a Slack Message's Topic needs Buttons: Slack keeps it as the id of the block the buttons sit in (`lf:<topic>`), so a press carries it back; a message without Buttons has nowhere to hold one.";
 
+/** The block ids a Topic is kept on (`lf:<topic>`) are the module's: a
+ *  message's own Blocks using one would read back as a Topic no write set. */
+export function reservedBlockId(blockId: string): string {
+  return `SlackAdapter.createRecord: a Slack Message's Blocks use the block id '${blockId}', and block ids starting '${SLACK_TOPIC_BLOCK_PREFIX}' are reserved for a Topic (kept on the block its Buttons sit in): give the block another id.`;
+}
+
 /**
  * The one create path: post or reply, decided by the anchor; text and/or
  * file and/or blocks, decided by the fields (internal currency: `text` /
@@ -175,6 +181,12 @@ export async function createUnifiedMessage(input: {
   }
   if (fileValue && blocks !== undefined) {
     throw new Error(WRITE_UNION_CLASH);
+  }
+  const reserved = blocks
+    ?.map((block): unknown => (typeof block === 'object' && block !== null ? Reflect.get(block, 'block_id') : undefined))
+    .find((id): id is string => typeof id === 'string' && id.startsWith(SLACK_TOPIC_BLOCK_PREFIX));
+  if (reserved !== undefined) {
+    throw new Error(reservedBlockId(reserved));
   }
   const channelId = anchor.channelId;
   await ensureChannelMembership(client, channelId);

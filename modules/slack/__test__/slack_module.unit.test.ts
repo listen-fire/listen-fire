@@ -49,7 +49,10 @@ function fakeSlack(): { fetch: typeof fetch; calls: Call[] } {
 /** A Slack Web API over HTTP, as the module's client reaches it: the
  *  channels it names (`conversations.info`), the app's bot user
  *  (`auth.test`), and every method called, in order. */
-async function slackApi(channels: Record<string, string>): Promise<{ baseUrl: string; methods: string[]; close(): Promise<void> }> {
+async function slackApi(
+  channels: Record<string, string>,
+  faults: Map<string, 'down' | 'limited' | 'hangs'> = new Map(),
+): Promise<{ baseUrl: string; methods: string[]; close(): Promise<void> }> {
   const methods: string[] = [];
   const server: Server = createServer((req, res) => {
     let body = '';
@@ -57,6 +60,10 @@ async function slackApi(channels: Record<string, string>): Promise<{ baseUrl: st
     req.on('end', () => {
       const method = (req.url ?? '').replace(/^\//, '');
       methods.push(method);
+      const fault = faults.get(method);
+      if (fault === 'hangs') return;
+      if (fault === 'down') return void res.writeHead(500).end('outage');
+      if (fault === 'limited') return void res.writeHead(429, { 'retry-after': '30' }).end();
       const form = new URLSearchParams(body);
       res.setHeader('content-type', 'application/json');
       const id = form.get('channel') ?? '';
@@ -187,7 +194,7 @@ describe('@lf/slack', () => {
                 Message: 'hi <@UBOT>',
                 User: 'U1',
                 Channel: 'C1',
-                'Posted At': '2023-11-14T22:13:20.000Z',
+                Timestamp: '2023-11-14T22:13:20.000Z',
                 Topic: null,
                 'Mentions App': true,
               },
@@ -214,6 +221,58 @@ describe('@lf/slack', () => {
     } finally {
       await api.close();
     }
+  });
+
+  it('a lookup Slack cannot answer is bounded: the delivery goes on with what is known, its failure kept briefly, misses asked once', async () => {
+    const faults = new Map<string, 'down' | 'limited' | 'hangs'>([['conversations.info', 'down']]);
+    const api = await slackApi({ C1: 'deals' }, faults);
+    const before = { ...process.env };
+    // Read when the token's client is made.
+    process.env.SLACK_LOOKUP_FAILURE_CACHE_MS = '300';
+    process.env.SLACK_LOOKUP_TIMEOUT_MS = '300';
+    try {
+      const { adapter } = load({ credential: credential({ accessToken: 'xoxb-outage', baseUrl: api.baseUrl }) });
+      const event = { type: 'message', channel: 'C1', user: 'U1', text: 'hi', ts: '1700000000.000100' };
+      const deliver = (message: typeof event = event) => adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: message } });
+      const parents = (read: Awaited<ReturnType<typeof deliver>>) => read?.arrivals?.map((a) => ('parents' in a ? a.parents : undefined));
+
+      // Slack's 500 is not retried; two deliveries at once ask once.
+      const started = Date.now();
+      const [first, second] = await Promise.all([deliver(), deliver()]);
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect([parents(first), parents(second)]).toEqual([[[null]], [[null]]]);
+      expect(api.methods.filter((m) => m === 'conversations.info')).toHaveLength(1);
+      // Within the failure's short keep, Slack is not asked again.
+      expect(parents(await deliver())).toEqual([[null]]);
+      expect(api.methods.filter((m) => m === 'conversations.info')).toHaveLength(1);
+
+      // Recovered, and past the keep: the channel is named.
+      faults.clear();
+      await new Promise((settle) => setTimeout(settle, 400));
+      expect(parents(await deliver())).toEqual([[{ recordId: 'C1', recordType: 'Channel', fields: { id: 'C1', name: 'deals', Id: 'C1', Name: 'deals' } }]]);
+
+      // A rate-limited call fails at once, never waiting out Slack's retry-after.
+      faults.set('conversations.info', 'limited');
+      const limited = Date.now();
+      expect(parents(await deliver({ ...event, channel: 'C2' }))).toEqual([[null]]);
+      expect(Date.now() - limited).toBeLessThan(1000);
+      // A call Slack never answers times out.
+      faults.set('conversations.info', 'hangs');
+      const hung = Date.now();
+      expect(parents(await deliver({ ...event, channel: 'C3' }))).toEqual([[null]]);
+      expect(Date.now() - hung).toBeLessThan(1500);
+    } finally {
+      process.env = before;
+      await api.close();
+    }
+
+  });
+
+  it('a delivery\'s lookups are bounded by the operator\'s settings, each a default where unset or out of range', async () => {
+    const { slackLookupSettings } = await import('../api_client');
+    expect(slackLookupSettings({})).toEqual({ timeoutMs: 2000, retries: 0, failureCacheMs: 5000 });
+    expect(slackLookupSettings({ SLACK_LOOKUP_TIMEOUT_MS: '750', SLACK_LOOKUP_RETRIES: '1', SLACK_LOOKUP_FAILURE_CACHE_MS: '0' })).toEqual({ timeoutMs: 750, retries: 1, failureCacheMs: 0 });
+    expect(slackLookupSettings({ SLACK_LOOKUP_TIMEOUT_MS: '0', SLACK_LOOKUP_RETRIES: '-1', SLACK_LOOKUP_FAILURE_CACHE_MS: 'soon' })).toEqual({ timeoutMs: 2000, retries: 0, failureCacheMs: 5000 });
   });
 
   it('a reaction is one Reactions arrival keyed by its message, about it, carrying only its channel', async () => {
@@ -284,7 +343,7 @@ describe('@lf/slack', () => {
   it('a Topic is the id of the block the buttons sit in, read back from there; one without Buttons is refused by name', async () => {
     const { slackSourcesFrom } = await import('../index');
     const { moduleContext } = await import('module-kit');
-    const { createUnifiedMessage, TOPIC_WITHOUT_BUTTONS } = await import('../write');
+    const { createUnifiedMessage, TOPIC_WITHOUT_BUTTONS, reservedBlockId } = await import('../write');
     const ctx = moduleContext({ tenant: 't', credential: credential({}), log: silent, files: refusingFiles('x'), kv: refusingKv('x'), validateResults: false });
     const posted: Array<Record<string, unknown>> = [];
     const client = {
@@ -314,6 +373,10 @@ describe('@lf/slack', () => {
 
     await expect(write({ text: 'Lunch?', topic: 'lunch-poll' })).rejects.toThrow(TOPIC_WITHOUT_BUTTONS);
     await expect(write({ text: 'Lunch?', topic: 'x'.repeat(253), buttons })).rejects.toThrow('Topic is 253 characters; Slack holds at most 252');
+    // A Topic's block ids are the module's: a message's own Blocks may not use one.
+    const own = [{ type: 'actions', block_id: 'lf:mine', elements: [] }];
+    await expect(write({ text: 'Lunch?', blocks: own })).rejects.toThrow(reservedBlockId('lf:mine'));
+    expect(reservedBlockId('lf:mine')).toContain("block ids starting 'lf:' are reserved for a Topic");
     expect(posted).toHaveLength(1);
   });
 
@@ -321,10 +384,12 @@ describe('@lf/slack', () => {
     const { SLACK_HANDBOOK_SECTION } = await import('../handbook_section');
     expect(SLACK_HANDBOOK_SECTION.content).toContain('A \`Topic\` goes only on a message with \`Buttons\`; one without is refused.');
     expect(SLACK_HANDBOOK_SECTION.content).toContain('the \`Topic\` is stored as the id of the block its buttons sit in (\`lf:<topic>\`)');
+    expect(SLACK_HANDBOOK_SECTION.content).toContain('A block id starting \`lf:\` is reserved for the \`Topic\`');
     const { adapter } = load({ credential: credential({}) });
     const topic = (await adapter.describe('Message'))?.fields.find((f) => f.displayName === 'Topic');
     expect(topic?.description).toContain('Only a message with Buttons takes one');
     expect(topic?.description).toContain('stored as the id of the block its buttons sit in (`lf:<topic>`)');
+    expect(topic?.description).toContain('block ids starting `lf:` are reserved for it');
     // The checker keeps a Topic to the post with buttons.
     const union = (await adapter.describe('Message'))?.writeUnion?.variants.map((v) => [v.name, v.fields.includes('topic')]);
     expect(union).toEqual([['a file post', false], ['an interactive post', false], ['a post with buttons', true]]);
@@ -411,7 +476,7 @@ describe('@lf/slack', () => {
                   Message: 'Lunch?',
                   User: 'UBOT',
                   Channel: 'C1',
-                  'Posted At': '2023-11-14T22:13:20.000Z',
+                  Timestamp: '2023-11-14T22:13:20.000Z',
                   Topic: 'lunch-poll',
                   'Mentions App': false,
                 },
@@ -450,7 +515,7 @@ describe('@lf/slack', () => {
     const [message] = await adapter.getRelated({ position: press, fieldId: 'Message', direction: 'outgoing' });
     await expect(adapter.getFieldValue({ position: message!.position, fieldId: 'Topic' })).resolves.toBe('lunch-poll');
     await expect(adapter.getFieldValue({ position: message!.position, fieldId: 'Id' })).resolves.toBe('C1:1700000000.000100');
-    await expect(adapter.getFieldValue({ position: message!.position, fieldId: 'Posted At' })).resolves.toBe('2023-11-14T22:13:20.000Z');
+    await expect(adapter.getFieldValue({ position: message!.position, fieldId: 'Timestamp' })).resolves.toBe('2023-11-14T22:13:20.000Z');
     // A press Slack sent without its message walks to none.
     const bare = makeUnstablePosition({ adapterType: 'slack', recordType: 'Interaction', data: { id: 'trig-2', at: null, actions: [], user: { id: 'U1' }, channel: 'C1' } });
     await expect(adapter.getRelated({ position: bare, fieldId: 'Message', direction: 'outgoing' })).resolves.toEqual([]);
@@ -539,8 +604,8 @@ describe('@lf/slack', () => {
     const message = await adapter.describe('Message');
     expect(message?.references.find((r) => r.name === 'Reactions')).toMatchObject({ readable: false, writable: true, listenable: true, delivery: 'connection', carries: ['Channels'], attributes: true });
     expect(message?.references.find((r) => r.name === 'Interactions')).toMatchObject({ delivery: 'connection', carries: ['Channels', 'Messages'] });
-    expect(message?.fields.map((f) => f.displayName)).toEqual(expect.arrayContaining(['Id', 'Posted At', 'Topic', 'Mentions App']));
-    expect(message?.fields.map((f) => f.displayName)).not.toContain('Timestamp');
+    expect(message?.fields.map((f) => f.displayName)).toEqual(expect.arrayContaining(['Id', 'Timestamp', 'Topic', 'Mentions App']));
+    expect(message?.fields.map((f) => f.displayName)).not.toContain('Posted At');
     // Each listenable edge lands on its own record type.
     expect([channel?.references.find((r) => r.name === 'Messages')?.targetTypeId, message?.references.find((r) => r.name === 'Reactions')?.targetTypeId, message?.references.find((r) => r.name === 'Interactions')?.targetTypeId]).toEqual([
       'slack:message',

@@ -234,10 +234,26 @@ fn chosen<'b>(statement: &ListenDeclaration, become_: &'b SettingsBecome, defaul
     if !unnamed.is_empty() {
         return Err(NoRewrite::UnmappedEvents { unnamed, events: by_event.keys().cloned().collect() });
     }
-    match ways.as_slice() {
-        [Some(first), rest @ ..] if rest.iter().all(|w| w.is_some_and(|w| w == *first)) => Ok((*first, !first.keys.contains_key(EVENTS_KEY))),
-        _ => Err(NoRewrite::Unmapped),
+    // Events of one edge whose mappings differ only by what one compares
+    // besides (Slack's `message` and `app_mention`: a mention is a message
+    // that names the app) were heard together as the mapping that narrows
+    // least.
+    let ways: Vec<&SettingsBecome> = ways.into_iter().flatten().collect();
+    match ways.iter().find(|least| ways.iter().all(|way| narrows_no_more(least, way))) {
+        Some(least) => Ok((*least, !least.keys.contains_key(EVENTS_KEY))),
+        None => Err(NoRewrite::Unmapped),
     }
+}
+
+/// Whether a listen taking `least` hears at least what one taking `way`
+/// does: one traversal, and every key `least` compares compared alike by
+/// `way`.
+fn narrows_no_more(least: &SettingsBecome, way: &SettingsBecome) -> bool {
+    least.path == way.path
+        && least.aliases == way.aliases
+        && least.param_from == way.param_from
+        && least.field_change == way.field_change
+        && least.keys.iter().all(|(name, key)| way.keys.get(name) == Some(key))
 }
 
 /// The events a settings listen hears: those its `events` names, else the

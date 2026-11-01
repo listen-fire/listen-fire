@@ -1,6 +1,6 @@
 // The slice of a hop's WHERE that Slack's own history API can answer: a time
 // window on the message timestamp. `conversations.history` takes `oldest` /
-// `latest` and nothing else, so a bound on `Posted At` is the ONE predicate
+// `latest` and nothing else, so a bound on `Timestamp` is the ONE predicate
 // worth pushing — everything else stays in memory where the engine already
 // evaluates it.
 //
@@ -76,7 +76,7 @@ function boundFromConjunct(
 ): { side: BoundSide; seconds: number } | undefined {
   if (expr.type !== 'compare') return undefined;
 
-  // `Posted At WITHIN "7d"` — recency against the wall clock, so only ever a
+  // `Timestamp WITHIN "7d"` — recency against the wall clock, so only ever a
   // lower bound. The engine's own WITHIN reads the clock LATER (after the
   // fetch), which makes its window a subset of this one.
   if (expr.op === 'within') {
@@ -130,7 +130,7 @@ function mirrorOp(op: Extract<Expression, { type: 'compare' }>['op']) {
  * as `property`; either way the name denotes the landing record, which is what
  * the window bounds.
  *
- * A read through the hop's own alias (`m.\`Posted At\`` in `[m:Messages …]`)
+ * A read through the hop's own alias (`m.\`Timestamp\`` in `[m:Messages …]`)
  * arrives lowered to that same field read, so it counts. A read through another
  * hop's alias (a zero-step traverse) deliberately does NOT: a window built from
  * another record's timestamp would drop messages the author asked for. Not

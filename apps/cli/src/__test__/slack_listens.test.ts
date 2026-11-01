@@ -6,7 +6,7 @@
 // arrival itself. The lunch poll is the standing replacement for a callback
 // that answered more than once: every press on a message written with the
 // poll's `Topic` is its own run, its vote kept in an Airtable table one row
-// per poll and person.
+// per poll and member (by the member's id: two members may share a name).
 
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -16,7 +16,7 @@ import { test } from 'node:test';
 import { until } from './attio_fixture';
 import { lf as lfSync, served, type Served } from './example';
 import { lf, ok } from './interactive';
-import { HEADER, deliver, eventCallback, forgetSlackCalls, pressOn, seedSlack, slackCalls, slackWorld, type World } from './slack_world';
+import { HEADER, botMessages, deliver, eventCallback, forgetSlackCalls, pressOn, seedSlack, slackCalls, slackWorld, type World } from './slack_world';
 
 const LUNCH_POLL = readFileSync(join(__dirname, 'movements/lunch_poll/lunch_poll.mvt'), 'utf8');
 const FORM = 'application/x-www-form-urlencoded';
@@ -44,6 +44,7 @@ function posted(ts: number, blockId: string) {
 
 interface Vote {
   Poll: unknown;
+  PersonId: unknown;
   Person: unknown;
   Answer: unknown;
 }
@@ -74,6 +75,7 @@ async function lunchWorld(): Promise<LunchWorld> {
               primaryFieldId: 'fldPoll',
               fields: [
                 { id: 'fldPoll', name: 'Poll', type: 'singleLineText' },
+                { id: 'fldPersonId', name: 'Person Id', type: 'singleLineText' },
                 { id: 'fldPerson', name: 'Person', type: 'singleLineText' },
                 { id: 'fldAnswer', name: 'Answer', type: 'singleLineText' },
               ],
@@ -96,7 +98,7 @@ async function lunchWorld(): Promise<LunchWorld> {
       // The module writes a row's cells by their field ids.
       votes: async () => {
         const rows = (await (await fetch(`${url}/admin/airtable/record:appOFFICE:tblLUNCH/state`)).json()) as Array<{ fields: Record<string, unknown> }>;
-        return rows.map(({ fields }) => ({ Poll: fields.fldPoll, Person: fields.fldPerson, Answer: fields.fldAnswer }));
+        return rows.map(({ fields }) => ({ Poll: fields.fldPoll, PersonId: fields.fldPersonId, Person: fields.fldPerson, Answer: fields.fldAnswer }));
       },
     };
   } catch (error) {
@@ -108,6 +110,21 @@ async function lunchWorld(): Promise<LunchWorld> {
 /** How many of `serving`'s runs of `fn` completed. */
 const completed = (serving: Served, fn: string) => serving.lines.filter((line) => new RegExp(`^run \\S+ slack:${fn} completed$`).test(line)).length;
 
+/** Wednesday's tick at 10:00 London, as the cron unit hands it to `ask_lunch`. */
+const LUNCH_TICK = JSON.stringify({
+  external: 'cron',
+  event: {
+    arrivals: [
+      {
+        edge: 'Ticks',
+        identity: 'tick:0 10 * * 3:Europe/London:2026-10-28T10:00:00.000Z',
+        landing: { recordType: 'Tick', fields: { 'Fired at': '2026-10-28T10:00:00.000Z', Schedule: '0 10 * * 3', Zone: 'Europe/London' } },
+        occurredAt: '2026-10-28T10:00:00.000Z',
+      },
+    ],
+  },
+});
+
 test('every press on a lunch poll is its own run, judged on arrival with no listing of messages', async () => {
   const world = await lunchWorld();
   try {
@@ -115,15 +132,25 @@ test('every press on a lunch poll is its own run, judged on arrival with no list
     const checked = lfSync(world.dir, 'check');
     assert.equal(checked.code, 0, checked.out);
 
+    // The tick posts the poll, its Topic on its buttons' block.
+    writeFileSync(join(world.dir, 'tick.json'), LUNCH_TICK);
+    const asked = lfSync(world.dir, 'run', '--event', 'tick.json');
+    assert.equal(asked.code, 0, asked.out);
+    assert.match(asked.out, /ask_lunch completed/);
+    const [poll, ...others] = await botMessages(world.channels);
+    assert.equal(others.length, 0);
+    assert.equal(poll.channel, OFFICE);
+    assert.deepEqual(
+      (poll.blocks ?? []).map((block) => Reflect.get(Object(block), 'block_id')).filter((id) => id !== undefined),
+      ['lf:lunch-poll'],
+    );
+
     const serving = await served(world.dir);
     try {
-      const now = Date.now() / 1000;
-      const poll = posted(now - 60, 'lf:lunch-poll');
-      await seedSlack(world.channels, [poll]);
       await forgetSlackCalls(world.channels);
 
       const vote = async (user: string, value: string) => {
-        const delivered = await deliver(serving, await pressOn(world.channels, { channel: OFFICE, ts: poll.id, value, user }), FORM);
+        const delivered = await deliver(serving, await pressOn(world.channels, { channel: OFFICE, ts: poll.ts, value, user }), FORM);
         assert.ok(delivered.status >= 200 && delivered.status < 300, delivered.body);
       };
       await vote('U001', 'in');
@@ -136,10 +163,10 @@ test('every press on a lunch poll is its own run, judged on arrival with no list
 
       const votes = await world.votes();
       assert.deepEqual(
-        votes.map((v) => [v.Poll, v.Person, v.Answer]).sort(),
+        votes.map((v) => [v.Poll, v.PersonId, v.Person, v.Answer]).sort(),
         [
-          [`${OFFICE}:${poll.id}`, 'ada', 'out'],
-          [`${OFFICE}:${poll.id}`, 'priya', 'out'],
+          [`${OFFICE}:${poll.ts}`, 'U001', 'ada', 'out'],
+          [`${OFFICE}:${poll.ts}`, 'U002', 'priya', 'out'],
         ],
       );
       // The poll's Topic and age were judged off each press: its channel's history was never listed.
@@ -230,6 +257,42 @@ test('a message in #deals fires a channel-filtered listen; one in #random does n
   }
 });
 
+test('in a Slack outage a message is still taken: a listen filtering its channel cannot be judged, one that does not runs', async () => {
+  const world = await slackWorld(`${HEADER}
+function heard(m: <chat-[:Message]->>) {
+  return "heard \${m.Message}"
+}
+
+function every(m: <chat-[:Message]->>) {
+  return "every \${m.Message}"
+}
+
+listen to chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[:Messages]-> fire heard
+listen to chat-[:Channels]->-[:Messages]-> fire every
+`);
+  try {
+    await seedSlack(world.channels, [{ entity_type: 'channel', id: 'C0DEALS', data: { id: 'C0DEALS', name: 'deals', is_private: false, is_member: true } }]);
+    await fetch(`${world.channels.url}/slack/control/outage`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ methods: ['conversations.info'] }) });
+    const serving = await served(world.dir);
+    try {
+      const ts = (Date.now() / 1000).toFixed(6);
+      const started = Date.now();
+      const delivered = await deliver(serving, eventCallback({ type: 'message', channel: 'C0DEALS', user: 'U001', text: 'Acme', ts }), 'application/json');
+      // Taken within Slack's three seconds: the lookup is not retried.
+      assert.ok(delivered.status >= 200 && delivered.status < 300, delivered.body);
+      assert.ok(Date.now() - started < 3000, `${Date.now() - started}ms`);
+      await until(() => completed(serving, 'every') === 1, serving.lines);
+      await serving.waitFor(/slack:heard: an arrival on Messages cannot be judged \(the arrival carries no Channels record, which this listen's filter on it reads\): it runs nothing/);
+      await new Promise((settle) => setTimeout(settle, 500));
+      assert.equal(completed(serving, 'heard'), 0, serving.lines.join('\n'));
+    } finally {
+      await serving.stop();
+    }
+  } finally {
+    await world.close();
+  }
+});
+
 test('a reaction listen filtered on its message is refused: arrivals do not carry the message and messages are not cheap to list', async () => {
   const program = `${HEADER}
 function seen(r: <chat-[:Reaction]->>) {
@@ -255,7 +318,7 @@ listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll"]->-[:Reac
   }
 });
 
-test('upgrade rewrites `listen to chat { channels: ["deals"] }`', async () => {
+test('upgrade rewrites a 0.12 Slack listen onto the edge its events name; one naming none heard two edges and holds the pin', async () => {
   const old = (settings: string, param = 'Message') => `${HEADER}
 function heard(m: <chat-[:${param}]->>) {
   return "heard"
@@ -270,7 +333,9 @@ listen to chat ${settings} fire heard
     const pinned = () => writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
 
     for (const [settings, param, listen] of [
-      ['{ channels: ["deals"] }', 'Message', 'chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[:Messages]->'],
+      ['{ events: ["message"], channels: ["deals"] }', 'Message', 'chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[:Messages]->'],
+      // A mention is a message, so both are every message.
+      ['{ events: ["message", "app_mention"], channels: ["deals"] }', 'Message', 'chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[:Messages]->'],
       ['{ events: ["app_mention"], channels: ["deals"] }', 'Message', 'chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[m:Messages WHERE m.`Mentions App` == true]->'],
       ['{ events: ["reaction_added"] }', 'Reaction', 'chat-[:Channels]->-[:Messages]->-[:Reactions]->'],
     ] as const) {
@@ -284,14 +349,17 @@ listen to chat ${settings} fire heard
       assert.doesNotMatch(checked.out, /MOV_LISTEN_SETTINGS_RETIRED/);
     }
 
-    // A message and a reaction arrive on two edges: no one listen to rewrite it to.
-    const both = old('{ events: ["message", "reaction_added"] }');
-    writeFileSync(file, both);
-    pinned();
-    const held = lfSync(world.dir, 'upgrade');
-    assert.equal(held.code, 1, held.out);
-    assert.match(held.out, /its events arrive on `-\[:Channels\]->-\[:Messages\]->` and `-\[:Channels\]->-\[:Messages\]->-\[:Reactions\]->`, so write one listen for each/);
-    assert.equal(readFileSync(file, 'utf8'), both);
+    // A message and a reaction arrive on two edges: no one listen to rewrite
+    // it to. Naming no events, a 0.12 listen heard both.
+    for (const settings of ['{ events: ["message", "reaction_added"] }', '{ channels: ["deals"] }']) {
+      const both = old(settings);
+      writeFileSync(file, both);
+      pinned();
+      const held = lfSync(world.dir, 'upgrade');
+      assert.equal(held.code, 1, held.out);
+      assert.match(held.out, /its events arrive on `-\[:Channels\]->-\[:Messages\]->` and `-\[:Channels\]->-\[:Messages\]->-\[:Reactions\]->`, so write one listen for each/);
+      assert.equal(readFileSync(file, 'utf8'), both);
+    }
   } finally {
     await world.close();
   }

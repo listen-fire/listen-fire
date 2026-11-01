@@ -74,6 +74,18 @@
       "refusal": "'listenSettingsBecome' gives 'events' 2 absent values, but an 'eq' key compares one"
     },
     {
+      "name": "absent events that each choose a mapping are spent choosing, so an eq key may name several",
+      "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "events": { "hop": 0, "field": "Urgent", "op": "eq", "values": { "urgent": true }, "absent": ["mention", "assign"] } },
+        "byEvent": { "mention": { "path": ["Notifications"], "aliases": ["n"], "keys": {} }, "assign": { "path": ["Notifications"], "aliases": ["n"], "keys": {} } } },
+      "refusal": null
+    },
+    {
+      "name": "absent events one of which chooses no mapping are compared, so an eq key still compares one",
+      "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "events": { "hop": 0, "field": "Urgent", "op": "eq", "values": { "urgent": true }, "absent": ["mention", "assign"] } },
+        "byEvent": { "mention": { "path": ["Notifications"], "aliases": ["n"], "keys": {} } } },
+      "refusal": "'listenSettingsBecome' gives 'events' 2 absent values, but an 'eq' key compares one"
+    },
+    {
       "name": "an absent value its values do not spell",
       "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "events": { "hop": 0, "field": "Reason", "op": "in", "absent": ["mention", "assign"], "values": { "mention": "mentioned" } } } },
       "refusal": "'listenSettingsBecome' gives 'events' the absent value \"assign\", which its values do not spell"

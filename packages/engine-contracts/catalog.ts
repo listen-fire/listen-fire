@@ -1943,9 +1943,13 @@ function unreadableCarries(
   const display = (typeId: string) => descriptors.get(typeId)?.displayName ?? entries.find((e) => e.typeId === typeId)?.displayName ?? typeId;
   let hangsOff = owner === undefined ? [] : [owner];
   let inner = name;
+  // An edge on a path to the declarant, named past the root: the hops are
+  // written innermost first.
+  const onItsPath = new Set(typesBefore(hangsOff, into).flatMap((t) => (into.get(t) ?? []).map((e) => e.edge)));
   for (const hop of [...carries].reverse()) {
     if (hangsOff.length === 0) {
-      return `'${name}' says its arrivals carry earlier hops, but 'carries' names '${hop}', and '${inner}' is a root collection: nothing comes before it`;
+      const order = onItsPath.has(hop) ? `; 'carries' lists hops outermost first, so '${inner}' comes before '${hop}'` : '';
+      return `'${name}' says its arrivals carry earlier hops, but 'carries' names '${hop}', and '${inner}' is a root collection: nothing comes before it${order}`;
     }
     const edgesIn = typesBefore(hangsOff, into).flatMap((t) => into.get(t) ?? []);
     const matched = edgesIn.filter((e) => e.edge === hop);
@@ -1993,11 +1997,14 @@ export function ambiguousArrivals(entries: readonly SchemaEntryPoint[], descript
 
 /** Why a key's `absent` cannot be compared as its key compares a value:
  *  on a `type` key, a list on an `eq` key that is not one value, or a value
- *  its `values` do not spell. */
-function absentRefusal(name: string, key: KeyBecomes): string | undefined {
+ *  its `values` do not spell. An `events` key's `absent` naming only events
+ *  that choose a mapping (`chooses`, the `byEvent` events) is spent
+ *  choosing, never compared. */
+function absentRefusal(name: string, key: KeyBecomes, chooses: readonly string[]): string | undefined {
   if (key.absentField !== undefined && key.absent === undefined) return `'listenSettingsBecome' gives '${name}' an 'absentField' but no 'absent' value to compare on it`;
   if (key.absent === undefined) return undefined;
   const texts = typeof key.absent === 'string' ? [key.absent] : key.absent;
+  if (name === 'events' && chooses.length > 0 && texts.every((t) => chooses.includes(t))) return undefined;
   if (key.op === 'type') return `'listenSettingsBecome' gives '${name}' an absent value, but a 'type' key compares no field`;
   if ((key.op === 'eq' || key.op === 'neq') && texts.length !== 1) {
     return `'listenSettingsBecome' gives '${name}' ${texts.length} absent values, but ${key.op === 'eq' ? "an 'eq'" : "a 'neq'"} key compares one`;
@@ -2024,8 +2031,9 @@ export function unreadableSettingsBecome(
   entries: readonly SchemaEntryPoint[],
   descriptors: ReadonlyMap<string, SchemaTypeDescriptor>,
 ): string | undefined {
-  for (const mapping of [become, ...Object.values(become.byEvent ?? {})]) {
-    const refusal = unreadableMapping(mapping, entries, descriptors);
+  const chooses = Object.keys(become.byEvent ?? {});
+  for (const [mapping, choosing] of [[become, chooses] as const, ...Object.values(become.byEvent ?? {}).map((way) => [way, []] as const)]) {
+    const refusal = unreadableMapping(mapping, choosing, entries, descriptors);
     if (refusal !== undefined) return refusal;
   }
   return undefined;
@@ -2033,6 +2041,7 @@ export function unreadableSettingsBecome(
 
 function unreadableMapping(
   become: Omit<SettingsBecome, 'byEvent'>,
+  chooses: readonly string[],
   entries: readonly SchemaEntryPoint[],
   descriptors: ReadonlyMap<string, SchemaTypeDescriptor>,
 ): string | undefined {
@@ -2044,7 +2053,7 @@ function unreadableMapping(
     if (key.hop >= path.length) return `'listenSettingsBecome' maps '${name}' to hop ${key.hop}, past the last of its ${path.length} edges`;
     if (key.op !== 'type' && key.field === undefined) return `'listenSettingsBecome' maps '${name}' by '${key.op}' but names no field to compare`;
     if (key.lowercase === true && key.op === 'type') return `'listenSettingsBecome' gives '${name}' 'lowercase: true', but a 'type' key compares no text`;
-    const refusal = absentRefusal(name, key);
+    const refusal = absentRefusal(name, key, chooses);
     if (refusal !== undefined) return refusal;
   }
   const change = become.fieldChange;

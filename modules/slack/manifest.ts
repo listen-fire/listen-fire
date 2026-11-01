@@ -15,6 +15,10 @@ const CHANNEL_NAMES = { hop: 0, field: 'Name', op: 'in' } as const;
 /** 0.12's `events: ["app_mention"]`: a message that names the app. */
 const MENTIONS = { hop: 1, field: 'Mentions App', op: 'eq', values: { app_mention: true } } as const;
 
+/** 0.12's `events` at the top level: a mention, as above; left out, the
+ *  listen heard every message and every reaction, two edges. */
+const EVENTS = { ...MENTIONS, absent: ['message', 'reaction_added'] };
+
 /** What a 0.12 listen hearing messages becomes: a listen on a channel's
  *  `Messages`, its channels compared by name. */
 const MESSAGES_BECOME = {
@@ -64,18 +68,19 @@ export const SLACK_MANIFEST: AdapterManifest = {
     'chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[m:Messages WHERE m.`Mentions App` == true]->. ' +
     'A reaction does not carry its message: filter a Reactions listen by channel only. ' +
     'Write a Topic with a message\'s Buttons to listen to its presses alone: ' +
-    'chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.`Posted At` WITHIN 3d]->-[:Interactions]->.',
+    'chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.Timestamp WITHIN 3d]->-[:Interactions]->.',
   inboundRequiresRegisteredActor: true,
   handbookSection: SLACK_HANDBOOK_SECTION,
   supportedTriggers: ['webhook'],
   // A 0.12 `listen to chat { channels, events }` heard messages and mentions
-  // on a channel's `Messages` and reactions on a message's `Reactions`; one
-  // naming no events is rewritten onto `Messages`, the edge its parameter
-  // (a Message) was typed by. A mention is a message that names the app
-  // (`Mentions App`); one listen naming events of both edges has no rewrite.
+  // on a channel's `Messages` and reactions on a message's `Reactions`. A
+  // mention is a message that names the app (`Mentions App`), so `message`
+  // with `app_mention` is every message. One naming no events heard both
+  // edges, as does one naming a message's and a reaction's events: no
+  // rewrite, one listen for each.
   listenSettingsBecome: {
     ...MESSAGES_BECOME,
-    keys: { ...MESSAGES_BECOME.keys, events: MENTIONS },
+    keys: { ...MESSAGES_BECOME.keys, events: EVENTS },
     byEvent: {
       message: MESSAGES_BECOME,
       app_mention: { ...MESSAGES_BECOME, keys: { ...MESSAGES_BECOME.keys, events: MENTIONS } },

@@ -19,13 +19,16 @@ function count_vote(press: <chat-[:Interaction]->>) {
   if (poll == null) { fail("a press with no message") }
   answer = only(press-[:Actions]->).Value
   if (answer == null) { fail("a press with no answer") }
+  person = only(press-[:By]->)
+  if (person == null) { fail("a press by no one") }
   write office-[:Lunch]-> {
-    unique by (Poll, Person)
+    unique by (Poll, `Person Id`)
     Poll: poll.Id
-    Person: press-[:By]->.Name
+    `Person Id`: person.Id
+    Person: person.Name
     Answer: answer
   }
 }
 
 listen to cron-[t:Ticks WHERE t.Schedule == "0 10 * * 3" AND t.Zone == "Europe/London"]-> fire ask_lunch
-listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.`Posted At` WITHIN 3d]->-[:Interactions]-> fire count_vote
+listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.Timestamp WITHIN 3d]->-[:Interactions]-> fire count_vote
