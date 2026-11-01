@@ -42,7 +42,7 @@ function `Payment Failed`(e: <Payment>) {
 listen to stripe-[:Requests]-><Payment> fire `Payment Failed`
 ```
 
-- `payload:` is required. It names a node the program declares, and the event is that node.
+- The node after `-[:Requests]->` is required. It names a node the program declares, and each delivery is that node.
 - `listen-fire check` refuses a read of a field the node does not declare. It also checks the movement's parameter against the node.
 - The node's fields are the body's top-level JSON keys.
 

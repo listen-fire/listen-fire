@@ -90,8 +90,8 @@ describe('a form', () => {
     expect(unreadableAnswerShapeFrom(submissions!, form, descriptors)).toBeUndefined();
   });
 
-  it('needs a host that keeps the arrivals an inbound request reports (protocol 2.5)', () => {
-    expect(formsModule.protocolMinor).toBe(5);
+  it('needs a host that keeps the arrivals an inbound request reports and the headers it names (protocol 2.6)', () => {
+    expect(formsModule.protocolMinor).toBe(6);
   });
 
   it('is waited on under its id', async () => {

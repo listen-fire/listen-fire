@@ -16,9 +16,10 @@ export const formsModule = defineModule({
   kind: 'adapter',
   name: '@lf/forms',
   manifest: FORMS_MANIFEST,
-  // Adapter protocol 2.5: an answer arrives with the request that posts it
-  // (`arrivals`), which an older host would drop.
-  protocolMinor: 5,
+  // Adapter protocol 2.6: an answer arrives with the request that posts it
+  // (`arrivals`, 2.5), and the kept request holds the headers
+  // `captureHeaders` names (2.6), which an older host would not honour.
+  protocolMinor: 6,
   credentials: [],
   // The module checks every request itself; nothing is signed, since the
   // form's unguessable id is what guards it.
