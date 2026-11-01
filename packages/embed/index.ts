@@ -39,6 +39,7 @@ import {
   listenConstructionsOf,
   listenFires,
   listenPlansOf,
+  listenSchemaOf,
   namedArrival,
   plannedListensOf,
   triggerAwaitsOf,
@@ -731,7 +732,7 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
       const nowMs = at.getTime();
       // A listen reads an arrival's fields by the names its program writes,
       // which its connection's schema maps from the ids its module keys them by.
-      const schemas = (await catalog(tenant)).adapters[delivery.adapterType]?.schemas ?? {};
+      const adapter = (await catalog(tenant)).adapters[delivery.adapterType];
       const minted: MintedRun[] = [];
       const unjudged: Array<Omit<ArrivalNotJudged, 'deliveryId'>> = [];
       for (const [index, arrival] of delivery.arrivals.entries()) {
@@ -742,7 +743,7 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
         const misfitLines: string[] = [];
         for (const { saved, key, read } of reading) {
           for (const listen of read.listens) {
-            const heard = namedArrival(arrival, fieldIdsOf(schemas[listen.credentialName ?? '']));
+            const heard = namedArrival(arrival, fieldIdsOf(listenSchemaOf(adapter, listen)));
             const verdict = listenFires(listen, heard, delivered, nowMs);
             if (verdict === null) continue;
             const named = `${saved.name}:${listen.plan.movement}`;

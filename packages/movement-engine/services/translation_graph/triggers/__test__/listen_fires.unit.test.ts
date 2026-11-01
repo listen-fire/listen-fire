@@ -10,7 +10,7 @@ import { listenPlanSchema, type Arrival, type ListenPlan } from 'engine-contract
 import { z } from 'zod';
 
 import { parsePinned } from '../../../movement_engine/program_check';
-import { arrivalReceiptKey, arrivalTriggerOf, listenFires, listenPipeline, plannedListensOf, type PlannedListen } from '../listen_plans';
+import { arrivalReceiptKey, arrivalTriggerOf, listenFires, listenPipeline, listenSchemaOf, plannedListensOf, type PlannedListen } from '../listen_plans';
 
 // Test data, not a published export: read where the repository keeps it.
 const pipelines = z
@@ -90,6 +90,29 @@ const listen: PlannedListen = { plan: notesPlan, pipeline: 'listen:notes:copy:00
 function note(title: string, more: Partial<Exclude<Arrival, { gone: true }>> = {}): Arrival {
   return { edge: 'Notes', identity: 'n1', landing: { recordId: 'n1', recordType: 'Note', fields: { Title: title } }, ...more };
 }
+
+describe("the schema of a listen's connection", () => {
+  const schema = (name: string) => ({ positions: { [name]: { properties: {}, fieldIds: { Name: name } } }, collections: {} }) as never;
+  const crm = {
+    constructionArgs: [
+      { name: 'credentials', kind: 'credential' as const, required: true },
+      { name: 'base', kind: 'position' as const, required: false },
+    ],
+    schemas: { 'north::[["base","CRM"]]': schema('positioned'), north: schema('unpositioned'), south: schema('another') },
+  };
+  const of = (listen: { credentialName?: string; constructionArgs?: Record<string, string> }) => Object.keys(listenSchemaOf(crm, listen)?.positions ?? {});
+
+  it("is its credential's at the entry position its construction pins, as listen-fire instantiates it", () => {
+    expect(of({ credentialName: 'north', constructionArgs: { base: '"CRM"' } })).toEqual(['positioned']);
+  });
+
+  it("falls back to its credential's unpositioned schema, and is never another credential's", () => {
+    expect(of({ credentialName: 'north', constructionArgs: { base: '"Ops"' } })).toEqual(['unpositioned']);
+    expect(of({ credentialName: 'north' })).toEqual(['unpositioned']);
+    expect(of({ credentialName: 'east', constructionArgs: { base: '"CRM"' } })).toEqual([]);
+    expect(listenSchemaOf(undefined, { credentialName: 'north' })).toBeUndefined();
+  });
+});
 
 describe('the receipt a listen takes of an arrival', () => {
   it("is its edge, the record it landed on, its identity and its version, as listen-fire's", () => {

@@ -11,11 +11,11 @@
 import { createHash } from 'node:crypto';
 
 import { listenPlanSchema, verdictSchema } from 'engine-contracts';
-import { RUN_HOST_UNITS, callJudgeArrival, callLandingMisfits, callLandingNode, callListenIdentity, unwrapCredentialArg } from 'movement-lang';
+import { RUN_HOST_UNITS, callJudgeArrival, callLandingMisfits, callLandingNode, callListenIdentity, entryPositionKeyOf, instanceSchemaKey, unwrapCredentialArg } from 'movement-lang';
 import { z } from 'zod';
 
 import type { ArrivedRecord, Arrival, AwaitLanding, ListenPlan, PlanArrival, TriggerEvent, Verdict } from 'engine-contracts';
-import type { CheckAnswer, ImportStatement, Program } from 'movement-lang';
+import type { AdapterSnapshot, CheckAnswer, ImportStatement, InstanceSchema, Program } from 'movement-lang';
 
 import { listenHearsCredential } from './listen_config';
 
@@ -151,6 +151,8 @@ export interface PlannedListen {
   plan: ListenPlan;
   pipeline: string;
   credentialName?: string;
+  /** Its construction's other arguments, raw: the entry position it pins. */
+  constructionArgs?: Record<string, string>;
 }
 
 /** Each of `plans` (the check's of `program`, the file `file`) with its
@@ -166,6 +168,7 @@ export function plannedListensOf(input: { file: string; program: Program; plans:
       plan,
       pipeline: listenPipeline({ file: input.file, plan, ...(credentialName !== undefined ? { credentialName } : {}), ...(constructionArgs !== undefined ? { constructionArgs } : {}) }),
       ...(credentialName !== undefined ? { credentialName } : {}),
+      ...(constructionArgs !== undefined ? { constructionArgs } : {}),
     };
   });
 }
@@ -219,6 +222,17 @@ export type FieldIdsByType = Readonly<Record<string, Readonly<Record<string, str
 
 /** The `fieldIds` of each record type `schema` (a connection's, from the
  *  catalog) positions. */
+/** The schema of `listen`'s connection among its module's, as the checker
+ *  instantiates it from its construction (listen-fire's `field_ids_of`): its
+ *  credential's schema at the entry position the construction pins, else its
+ *  credential's unpositioned one; never another credential's. */
+export function listenSchemaOf(adapter: Pick<AdapterSnapshot, 'constructionArgs' | 'schemas'> | undefined, listen: Pick<PlannedListen, 'credentialName' | 'constructionArgs'>): InstanceSchema | undefined {
+  if (adapter === undefined) return undefined;
+  const credential = listen.credentialName !== undefined ? { credentialName: listen.credentialName } : {};
+  const positionKey = entryPositionKeyOf(adapter, listen.constructionArgs);
+  return adapter.schemas[instanceSchemaKey({ ...credential, positionKey })] ?? adapter.schemas[instanceSchemaKey(credential)];
+}
+
 export function fieldIdsOf(schema: { positions: Readonly<Record<string, { fieldIds?: Record<string, string> }>> } | undefined): FieldIdsByType {
   return Object.fromEntries(Object.entries(schema?.positions ?? {}).flatMap(([name, position]) => (position.fieldIds !== undefined ? [[name, position.fieldIds]] : [])));
 }
