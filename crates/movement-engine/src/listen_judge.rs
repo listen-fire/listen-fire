@@ -235,9 +235,45 @@ impl Judge<'_> {
         }
     }
 
-    /// One conjunct of hop `i`'s filter, its alias reads answered by the
-    /// records the arrival carries.
+    /// One conjunct of hop `i`'s filter, three-valued: an AND that one side
+    /// fails fails, and an OR that one side holds holds, whichever side that
+    /// is and whatever the other side could not read. Only what no side
+    /// decides is undecided.
     fn conjunct(&self, i: usize, conjunct: &Expression) -> Judged {
+        match conjunct {
+            Expression::Logical { op, operands } => {
+                let decides: fn(&Judged) -> bool = match op {
+                    LogicalOp::And => |judged: &Judged| matches!(judged, Judged::Fails),
+                    LogicalOp::Or => |judged: &Judged| matches!(judged, Judged::Holds),
+                };
+                let mut unknown = None;
+                for operand in operands {
+                    match self.conjunct(i, operand) {
+                        judged if decides(&judged) => return judged,
+                        Judged::Unknown(reason) => {
+                            unknown.get_or_insert(reason);
+                        }
+                        _ => {}
+                    }
+                }
+                match (unknown, *op) {
+                    (Some(reason), _) => Judged::Unknown(reason),
+                    (None, LogicalOp::And) => Judged::Holds,
+                    (None, LogicalOp::Or) => Judged::Fails,
+                }
+            }
+            Expression::Not { expression } => match self.conjunct(i, expression) {
+                Judged::Holds => Judged::Fails,
+                Judged::Fails => Judged::Holds,
+                unknown => unknown,
+            },
+            leaf => self.leaf(i, leaf),
+        }
+    }
+
+    /// A filter's part that is neither AND, OR nor NOT, its alias reads
+    /// answered by the records the arrival carries.
+    fn leaf(&self, i: usize, conjunct: &Expression) -> Judged {
         let missing: Cell<Option<usize>> = Cell::new(None);
         let unread: Cell<Option<(usize, &str)>> = Cell::new(None);
         let record = |j: usize| match &self.records[j] {

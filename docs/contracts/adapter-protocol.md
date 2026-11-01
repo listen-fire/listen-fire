@@ -811,7 +811,8 @@ From adapter protocol 2.6 an arrival may say more, for the listens on its edge
   provider did not answer stands between the delivery and a field's value.
   Report the arrival anyway, and acknowledge the delivery: never rely on the
   provider sending it again. A listen whose filter reads one of those fields
-  is not judged on a guess: it runs nothing for this arrival, and the host
+  is not judged on a guess (unless another side of an `OR` holds, or of an
+  `AND` fails, which decides it whatever the field): it runs nothing for this arrival, and the host
   reports it (on listen-fire an `Arrival Not Judged` system event,
   [system-events.md](system-events.md)). Every other listen on the edge is
   judged as usual. What `fields` holds for an unknown field (null, or

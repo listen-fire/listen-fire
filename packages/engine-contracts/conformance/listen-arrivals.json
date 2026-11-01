@@ -1,5 +1,5 @@
 {
-  "about": "Whether an arrival fires a listen, by its plan's filters. Each plan is the checker's answer for its listen's source against `catalog` (both runners check that it still is). Only hops judged on arrival are judged, each against the record the arrival carries for it: `landing` for the last hop, `parents` (aligned to the plan's `carries`) for earlier ones. Each record states its `recordType`, which must be the record type its hop lands on (`to`): one edge name may hang off several record types (`pay`'s Customer and Invoice each have `Changes`), and a record of another type skips at its hop, the landing judged first; a record that states none is undecided. A hop's checked part is always evaluated; its taken part too, unless `takenApplied` says the module applied it. `now` is the instant WITHIN measures from. The verdict is `{fires: true}`, `{skips: n}` (the hop whose filter fails, outermost 0; with a `reason` when the record carried for that hop is of another record type, so no filter was read), or `{undecided: reason}` (the host logs it and runs nothing). Held by listen-fire's Rust (crates/movement-engine/src/listen_judge.rs, judge_arrival), the engine's TypeScript (judgeArrival, through the wasm) and the hosted product. A read on through a record a field holds (`c.Current.Stage`) reads that field of the landing, then the member of what it holds; a record absent reads its members absent. The checker has the listen test a record present before it reads through it (`exists(c.Current) AND c.Current.Stage == …`), and an operand of AND or OR is read only when the operands before it leave the answer open, so a read the test guards is never read on an absent record. A record may name the fields its module could not read (`unknown`): a conjunct reading one is undecided, whatever `fields` holds for it, never read as absent; a hop that fails still decides.",
+  "about": "Whether an arrival fires a listen, by its plan's filters. Each plan is the checker's answer for its listen's source against `catalog` (both runners check that it still is). Only hops judged on arrival are judged, each against the record the arrival carries for it: `landing` for the last hop, `parents` (aligned to the plan's `carries`) for earlier ones. Each record states its `recordType`, which must be the record type its hop lands on (`to`): one edge name may hang off several record types (`pay`'s Customer and Invoice each have `Changes`), and a record of another type skips at its hop, the landing judged first; a record that states none is undecided. A hop's checked part is always evaluated; its taken part too, unless `takenApplied` says the module applied it. `now` is the instant WITHIN measures from. The verdict is `{fires: true}`, `{skips: n}` (the hop whose filter fails, outermost 0; with a `reason` when the record carried for that hop is of another record type, so no filter was read), or `{undecided: reason}` (the host logs it and runs nothing). Held by listen-fire's Rust (crates/movement-engine/src/listen_judge.rs, judge_arrival), the engine's TypeScript (judgeArrival, through the wasm) and the hosted product. A read on through a record a field holds (`c.Current.Stage`) reads that field of the landing, then the member of what it holds; a record absent reads its members absent. The checker has the listen test a record present before it reads through it (`exists(c.Current) AND c.Current.Stage == …`), and an operand of AND or OR is read only when the operands before it leave the answer open, so a read the test guards is never read on an absent record. A record may name the fields its module could not read (`unknown`): a part of the filter reading one is undecided, whatever `fields` holds for it, never read as absent; AND, OR and NOT are three-valued, so an OR one side holds holds and an AND one side fails fails, in either order; a hop that fails still decides.",
   "catalog": {
     "adapters": {
       "chat": {
@@ -1438,6 +1438,182 @@
         ],
         "movement": "restaged"
       }
+    },
+    "either": {
+      "source": "import { rows as rows_module } from adapters; rows = connect rows_module\nfunction either(c: <rows-[:`Candidates Change`]->>) { return c.Kind }\nlisten to rows-[t:Tables WHERE t.Name == \"Candidates\"]->-[c:Changes WHERE c.Kind == \"created\" OR c.Id == \"1:recA\"]-> fire either\n",
+      "plan": {
+        "adapter": "rows",
+        "connection": "rows",
+        "hops": [
+          {
+            "alias": "t",
+            "edge": "Tables",
+            "from": "",
+            "judged": "resolved",
+            "taken": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Name",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "Candidates"
+              },
+              "type": "compare"
+            },
+            "to": "Table"
+          },
+          {
+            "alias": "c",
+            "checked": {
+              "op": "or",
+              "operands": [
+                {
+                  "left": {
+                    "fieldOnly": true,
+                    "propertyTypeId": "Kind",
+                    "type": "edge_property"
+                  },
+                  "op": "eq",
+                  "right": {
+                    "type": "static",
+                    "value": "created"
+                  },
+                  "type": "compare"
+                },
+                {
+                  "left": {
+                    "fieldOnly": true,
+                    "propertyTypeId": "Id",
+                    "type": "edge_property"
+                  },
+                  "op": "eq",
+                  "right": {
+                    "type": "static",
+                    "value": "1:recA"
+                  },
+                  "type": "compare"
+                }
+              ],
+              "type": "logical"
+            },
+            "edge": "Changes",
+            "from": "Table",
+            "judged": "arrival",
+            "to": "Change"
+          }
+        ],
+        "movement": "either"
+      }
+    },
+    "neither": {
+      "source": "import { rows as rows_module } from adapters; rows = connect rows_module\nfunction neither(c: <rows-[:`Candidates Change`]->>) { return c.Kind }\nlisten to rows-[t:Tables WHERE t.Name == \"Candidates\"]->-[c:Changes WHERE (c.Kind == \"deleted\" AND c.Id == \"x\") OR (c.Id == \"y\" AND c.Kind == \"deleted\")]-> fire neither\n",
+      "plan": {
+        "adapter": "rows",
+        "connection": "rows",
+        "hops": [
+          {
+            "alias": "t",
+            "edge": "Tables",
+            "from": "",
+            "judged": "resolved",
+            "taken": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Name",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "Candidates"
+              },
+              "type": "compare"
+            },
+            "to": "Table"
+          },
+          {
+            "alias": "c",
+            "checked": {
+              "op": "or",
+              "operands": [
+                {
+                  "op": "and",
+                  "operands": [
+                    {
+                      "left": {
+                        "fieldOnly": true,
+                        "propertyTypeId": "Kind",
+                        "type": "edge_property"
+                      },
+                      "op": "eq",
+                      "right": {
+                        "type": "static",
+                        "value": "deleted"
+                      },
+                      "type": "compare"
+                    },
+                    {
+                      "left": {
+                        "fieldOnly": true,
+                        "propertyTypeId": "Id",
+                        "type": "edge_property"
+                      },
+                      "op": "eq",
+                      "right": {
+                        "type": "static",
+                        "value": "x"
+                      },
+                      "type": "compare"
+                    }
+                  ],
+                  "type": "logical"
+                },
+                {
+                  "op": "and",
+                  "operands": [
+                    {
+                      "left": {
+                        "fieldOnly": true,
+                        "propertyTypeId": "Id",
+                        "type": "edge_property"
+                      },
+                      "op": "eq",
+                      "right": {
+                        "type": "static",
+                        "value": "y"
+                      },
+                      "type": "compare"
+                    },
+                    {
+                      "left": {
+                        "fieldOnly": true,
+                        "propertyTypeId": "Kind",
+                        "type": "edge_property"
+                      },
+                      "op": "eq",
+                      "right": {
+                        "type": "static",
+                        "value": "deleted"
+                      },
+                      "type": "compare"
+                    }
+                  ],
+                  "type": "logical"
+                }
+              ],
+              "type": "logical"
+            },
+            "edge": "Changes",
+            "from": "Table",
+            "judged": "arrival",
+            "to": "Change"
+          }
+        ],
+        "movement": "neither"
+      }
     }
   },
   "cases": [
@@ -1498,6 +1674,11 @@
     {"case": "a field change: a row created holding Stage changed it, as in 0.12", "plan": "restaged", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "17:recADA", "Kind": "created", "Current": {"Id": "recADA", "Name": "Ada", "Stage": "Applied"}}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
     {"case": "a field change: a row created without Stage did not", "plan": "restaged", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "18:recADA", "Kind": "created", "Current": {"Id": "recADA", "Name": "Ada"}}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
     {"case": "a field change: a row deleted (neither row held) did not", "plan": "restaged", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "19:recADA", "Kind": "deleted"}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
-    {"case": "a read through a held row its module could not read is undecided", "plan": "moved", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "13:recADA", "Kind": "updated", "Current": {"Id": "recADA", "Name": "Ada", "Stage": "Interview"}}, "unknown": ["Previous"]}}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "rows could not read Previous of the arrival on Changes, which this listen's filter reads"}}
+    {"case": "a read through a held row its module could not read is undecided", "plan": "moved", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "13:recADA", "Kind": "updated", "Current": {"Id": "recADA", "Name": "Ada", "Stage": "Interview"}}, "unknown": ["Previous"]}}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "rows could not read Previous of the arrival on Changes, which this listen's filter reads"}},
+    {"case": "an OR one side holds fires though its other side could not be read, that side first", "plan": "either", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "1:recA"}, "unknown": ["Kind"]}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "an OR one side holds fires though its other side could not be read, that side second", "plan": "either", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Kind": "created"}, "unknown": ["Id"]}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "an OR no side holds, one side unread, is undecided", "plan": "either", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "2:recB"}, "unknown": ["Kind"]}}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "rows could not read Kind of the arrival on Changes, which this listen's filter reads"}},
+    {"case": "an AND one side fails fails though its other side could not be read, in either order", "plan": "neither", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Kind": "created"}, "unknown": ["Id"]}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "an AND one side fails fails though its other side could not be read, the unread field the other", "plan": "neither", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "z"}, "unknown": ["Kind"]}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}}
   ]
 }
