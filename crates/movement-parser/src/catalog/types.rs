@@ -861,9 +861,10 @@ pub struct KeyBecomes {
     pub field: Option<String>,
     pub op: KeyOp,
     /// A settings value's spelling as a field value (`"record.created"` →
-    /// `"created"`); absent, a value is the field's as written.
+    /// `"created"`, or Slack's `"app_mention"` → `true` on a flag); absent,
+    /// a value is the field's as written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub values: Option<JsMap<String>>,
+    pub values: Option<JsMap<SpelledValue>>,
     /// What a 0.12 listen meant by leaving the key out, as a settings value
     /// (`""`: mail sent to the box itself; a list: the events it heard). The
     /// rewrite of a listen that omits the key compares it, so the traversal
@@ -880,6 +881,15 @@ pub struct KeyBecomes {
     /// lowercased, so `{ key: "Deals" }` still hears what it heard.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lowercase: Option<bool>,
+}
+
+/// What a settings value is spelled as on the field a key compares: a text,
+/// or a flag (a boolean field).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SpelledValue {
+    Text(String),
+    Flag(bool),
 }
 
 /// A settings value as a 0.12 listen wrote it: one text, or a list of them.

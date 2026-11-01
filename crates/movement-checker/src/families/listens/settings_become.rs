@@ -9,7 +9,7 @@
 //! rewritten.
 
 use movement_parser::ast::{ListenDeclaration, ParamTypeRef, Span};
-use movement_parser::catalog::types::{ArgKind, Composite, FieldChange, FieldType, InstanceSchema, KeyBecomes, KeyOp, PositionRef, SettingsBecome, SettingsValue};
+use movement_parser::catalog::types::{ArgKind, Composite, FieldChange, FieldType, InstanceSchema, KeyBecomes, KeyOp, PositionRef, SettingsBecome, SettingsValue, SpelledValue};
 use movement_parser::lowering::expression::{Expression, FilterOperator, ListElement, LogicalOp, StaticValue, TraversalStep};
 use movement_parser::version::{Standing, standing};
 use serde_json::json;
@@ -521,6 +521,9 @@ fn comparison(key: &KeyBecomes, field: &str, op: KeyOp, written: &Written) -> Op
     let one = |value: &StaticValue| Expression::Static { value: value.clone() };
     match (op, written) {
         (KeyOp::Eq | KeyOp::In, Written::One(value)) => Some(compare_on(&on, FilterOperator::Eq, one(value))),
+        // `events: ["app_mention"]` names one event in a list: an `eq` key
+        // compares the one value its list spells.
+        (KeyOp::Eq, Written::Many(values)) if values.first().is_some_and(|first| values.iter().all(|v| v == first)) => Some(compare_on(&on, FilterOperator::Eq, one(&values[0]))),
         (KeyOp::Neq, Written::One(value)) => Some(compare_on(&on, FilterOperator::Neq, one(value))),
         (KeyOp::In, Written::Many(values)) => {
             let elements = values.iter().map(|v| ListElement::Expression(one(v))).collect();
@@ -657,7 +660,10 @@ fn unbounded_hops(schema: &InstanceSchema, path: &[String], consumed: usize, con
 /// when it has one (a value the map lacks has no spelling).
 fn mapped(key: &KeyBecomes, raw: &StaticValue) -> Option<StaticValue> {
     let spelled = match (raw, &key.values) {
-        (StaticValue::String(s), Some(values)) => values.get(s).map(|v| StaticValue::String(v.clone())),
+        (StaticValue::String(s), Some(values)) => values.get(s).map(|v| match v {
+            SpelledValue::Text(text) => StaticValue::String(text.clone()),
+            SpelledValue::Flag(flag) => StaticValue::Bool(*flag),
+        }),
         (StaticValue::Null, _) => None,
         (raw, _) => Some(raw.clone()),
     }?;

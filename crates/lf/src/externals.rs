@@ -781,6 +781,10 @@ fn normalised_mapping(raw: &mut serde_json::Value, top: bool) -> Result<(), Stri
             if key.get("absent").is_some_and(|v| !texts(v)) {
                 return Err("listenSettingsBecome.keys.absent: expected a text or a list of texts".into());
             }
+            let spelled = |v: &serde_json::Value| v.as_object().is_some_and(|values| values.values().all(|v| v.is_string() || v.is_boolean()));
+            if key.get("values").is_some_and(|v| !spelled(v)) {
+                return Err("listenSettingsBecome.keys.values: expected each value spelled as a text or true or false".into());
+            }
             if key.get("lowercase").is_some_and(|v| !v.is_boolean()) {
                 return Err("listenSettingsBecome.keys.lowercase: expected true or false".into());
             }

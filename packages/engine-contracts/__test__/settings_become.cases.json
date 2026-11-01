@@ -175,6 +175,17 @@
         "refusal": "listenSettingsBecome.keys.lowercase: expected true or false"
       },
       {
+        "name": "a value spelled as a flag is kept",
+        "raw": { "path": ["Messages"], "aliases": ["m"], "keys": { "events": { "hop": 0, "field": "Mentions App", "op": "eq", "values": { "app_mention": true, "message": "x" } } } },
+        "read": { "path": ["Messages"], "aliases": ["m"], "keys": { "events": { "hop": 0, "field": "Mentions App", "op": "eq", "values": { "app_mention": true, "message": "x" } } } },
+        "refusal": null
+      },
+      {
+        "name": "a value spelled as a number",
+        "raw": { "path": ["Messages"], "aliases": ["m"], "keys": { "events": { "hop": 0, "field": "Count", "op": "eq", "values": { "one": 1 } } } },
+        "refusal": "listenSettingsBecome.keys.values: expected each value spelled as a text or true or false"
+      },
+      {
         "name": "an event's own mapping is kept, read as the module's is; its own byEvent is stripped",
         "raw": { "path": ["Messages"], "aliases": ["m"], "keys": {}, "byEvent": { "label_added": { "path": ["Labelings"], "aliases": ["l"], "extra": 1, "byEvent": { "x": { "path": ["X"], "aliases": ["x"], "keys": {} } }, "keys": { "labels": { "hop": 0, "field": "Label", "op": "in", "absent": "user", "absentField": "Label Type" } } } } },
         "read": { "path": ["Messages"], "aliases": ["m"], "keys": {}, "byEvent": { "label_added": { "path": ["Labelings"], "aliases": ["l"], "keys": { "labels": { "hop": 0, "field": "Label", "op": "in", "absent": "user", "absentField": "Label Type" } } } } },

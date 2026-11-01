@@ -253,8 +253,9 @@ export interface KeyBecomes {
   field?: string;
   op: KeyOp;
   /** A settings value's spelling as a field value (`"record.created"` →
-   *  `"created"`); absent, a value is the field's as written. */
-  values?: Record<string, string>;
+   *  `"created"`, or Slack's `"app_mention"` → `true` on a flag); absent, a
+   *  value is the field's as written. */
+  values?: Record<string, string | boolean>;
   /** What a 0.12 listen meant by leaving the key out, as a settings value
    *  (`""`: mail sent to the box itself; a list: the events it heard). The
    *  rewrite of a listen that omits the key compares it, so the traversal

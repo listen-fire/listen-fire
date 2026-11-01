@@ -781,7 +781,7 @@ const settingsMapping = z.object({
       hop: z.number().int().nonnegative(),
       field: z.string().min(1, 'listenSettingsBecome.keys.field: expected a non-empty string').optional(),
       op: z.enum(KEY_OPS),
-      values: z.record(z.string(), z.string()).optional(),
+      values: z.record(z.string(), z.union([z.string(), z.boolean()], { error: 'listenSettingsBecome.keys.values: expected each value spelled as a text or true or false' })).optional(),
       absent: z.union([z.string(), z.array(z.string())], { error: 'listenSettingsBecome.keys.absent: expected a text or a list of texts' }).optional(),
       absentField: z.string().min(1, 'listenSettingsBecome.keys.absentField: expected a non-empty string').optional(),
       lowercase: z.boolean({ error: 'listenSettingsBecome.keys.lowercase: expected true or false' }).optional(),

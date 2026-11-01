@@ -148,6 +148,26 @@ const CATALOG: &str = r#"{"adapters":{
         "Event":{"properties":{"Id":"text"},"edges":{}}},
       "collections":{"Invoices":{"target":"Invoice"},"Charges":{"target":"Charge"}},
       "writableRoots":{},"eventPosition":"Event","eventPositions":[{"position":"Event"}]}}},
+  "chat":{"canFire":true,"constructionArgs":[],"triggerConfig":["channels","events"],
+    "listenSettingsBecome":{"path":["Channels","Messages"],"aliases":["ch","m"],"paramFrom":"Message",
+      "keys":{"channels":{"hop":0,"field":"Name","op":"in"},"events":{"hop":1,"field":"Mentions App","op":"eq","values":{"app_mention":true}}},
+      "byEvent":{
+        "message":{"path":["Channels","Messages"],"aliases":["ch","m"],"paramFrom":"Message","keys":{"channels":{"hop":0,"field":"Name","op":"in"}}},
+        "app_mention":{"path":["Channels","Messages"],"aliases":["ch","m"],"paramFrom":"Message",
+          "keys":{"channels":{"hop":0,"field":"Name","op":"in"},"events":{"hop":1,"field":"Mentions App","op":"eq","values":{"app_mention":true}}}},
+        "reaction_added":{"path":["Channels","Messages","Reactions"],"aliases":["ch","m","r"],"paramFrom":"Message","keys":{"channels":{"hop":0,"field":"Name","op":"in"}}}}},
+    "schemas":{"":{"positions":{
+        "Channel":{"properties":{"Name":"text"},"edges":{"Messages":{"target":"Message","listenable":true,"delivery":"connection","carries":["Channels"]}}},
+        "Message":{"properties":{"Text":"text","Mentions App":"boolean"},"edges":{"Reactions":{"target":"Reaction","readable":false,"listenable":true,"delivery":"connection","carries":["Channels"]}}},
+        "Reaction":{"properties":{"Emoji":"text"},"edges":{}}},
+      "collections":{"Channels":{"target":"Channel"}},
+      "writableRoots":{},"eventPosition":"Message","eventPositions":[{"position":"Message"}]}}},
+  "ping":{"canFire":true,"constructionArgs":[],"triggerConfig":["events"],
+    "listenSettingsBecome":{"path":["Pings"],"aliases":["p"],"paramFrom":"Ping",
+      "keys":{"events":{"hop":0,"field":"Urgent","op":"eq","values":{"urgent":true,"calm":false}}}},
+    "schemas":{"":{"positions":{"Ping":{"properties":{"Urgent":"boolean"},"edges":{}}},
+      "collections":{"Pings":{"target":"Ping","readable":false,"listenable":true,"delivery":"connection"}},
+      "writableRoots":{},"eventPosition":"Ping","eventPositions":[{"position":"Ping"}]}}},
   "feed":{"canFire":true,"constructionArgs":[],"triggerConfig":["topic"],
     "schemas":{"":{"positions":{"Item":{"properties":{"Topic":"text"},"edges":{}}},
       "collections":{"Items":{"target":"Item","listenable":true,"identity":"Id","delivery":"connection"}},
@@ -168,6 +188,8 @@ const GHX: &str = "import { ghx as ghx_module } from adapters\nghx = connect ghx
 const MAIL: &str = "import { mail as mail_module } from adapters\nmail = connect mail_module\n";
 const PAY: &str = "import { pay as pay_module } from adapters\npay = connect pay_module\n";
 const BELL: &str = "import { bell as bell_module } from adapters\nbell = connect bell_module\n";
+const CHAT: &str = "import { chat as chat_module } from adapters\nchat = connect chat_module\n";
+const PING: &str = "import { ping as ping_module } from adapters\nping = connect ping_module\n";
 
 /// The catalog, the Hiring connection's `Table` narrowed to Candidates by
 /// `t.Id == "tblCAND01"` under the key a check of that WHERE looks up.
@@ -717,4 +739,42 @@ fn a_listen_that_names_no_events_where_leaving_them_out_heard_every_edge_is_told
     let d = diagnostics(&everything);
     assert!(retired(&d).fix.is_none(), "{:?}", retired(&d).fix);
     assert!(retired(&d).message.ends_with("(there is no rewrite: its events arrive on `-[:Invoices]->-[:Changes]->` and `-[:Charges]->-[:Changes]->`, so write one listen for each)"), "{}", retired(&d).message);
+}
+
+#[test]
+fn an_event_spelled_as_a_flag_is_compared_as_true_or_false() {
+    // A hop under a record: Slack's mention is a flag of the message.
+    let mentioned = format!("{CHAT}function f(m: <chat-[:Message]->>) {{ return 1 }}\nlisten to chat {{ events: [\"app_mention\"], channels: [\"deals\"] }} fire f\n");
+    let text = fixed(&mentioned, &diagnostics(&mentioned));
+    assert!(text.contains("listen to chat-[ch:Channels WHERE ch.Name IN [\"deals\"]]->-[m:Messages WHERE m.`Mentions App` == true]-> fire f"), "{text}");
+    assert_rechecks_clean(&text);
+
+    // A root edge: either flag is written as the field holds it.
+    let calm = format!("{PING}function f(p: <ping-[:Ping]->>) {{ return 1 }}\nlisten to ping {{ events: \"calm\" }} fire f\n");
+    let text = fixed(&calm, &diagnostics(&calm));
+    assert!(text.contains("listen to ping-[p:Pings WHERE p.Urgent == false]-> fire f"), "{text}");
+    assert_rechecks_clean(&text);
+}
+
+#[test]
+fn a_listen_on_a_channel_s_messages_and_their_reactions_takes_the_edge_its_event_names() {
+    let channel = format!("{CHAT}function f(m: <chat-[:Message]->>) {{ return 1 }}\nlisten to chat {{ channels: [\"deals\"] }} fire f\n");
+    let text = fixed(&channel, &diagnostics(&channel));
+    assert!(text.contains("listen to chat-[ch:Channels WHERE ch.Name IN [\"deals\"]]->-[:Messages]-> fire f"), "{text}");
+    assert!(text.contains("function f(m: <chat-[:Message]->>)"), "{text}");
+    assert_rechecks_clean(&text);
+
+    let reacted = format!("{CHAT}function f(r: <chat-[:Reaction]->>) {{ return 1 }}\nlisten to chat {{ events: [\"reaction_added\"] }} fire f\n");
+    let text = fixed(&reacted, &diagnostics(&reacted));
+    assert!(text.contains("listen to chat-[:Channels]->-[:Messages]->-[:Reactions]-> fire f"), "{text}");
+    assert_rechecks_clean(&text);
+
+    let both = format!("{CHAT}function f(m: <chat-[:Message]->>) {{ return 1 }}\nlisten to chat {{ events: [\"message\", \"reaction_added\"] }} fire f\n");
+    let d = diagnostics(&both);
+    assert!(retired(&d).fix.is_none(), "{:?}", retired(&d).fix);
+    assert!(
+        retired(&d).message.ends_with("(there is no rewrite: its events arrive on `-[:Channels]->-[:Messages]->` and `-[:Channels]->-[:Messages]->-[:Reactions]->`, so write one listen for each)"),
+        "{}",
+        retired(&d).message
+    );
 }
