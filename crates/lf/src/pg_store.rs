@@ -1207,10 +1207,8 @@ impl RunHostStore for PgStore {
         })
     }
 
-    /// The floor: the lowest mark an unexpired run lease took or a queued
-    /// `fire_event` row carries (`arrivalMark`: its runs have yet to open
-    /// the waits not opened at keep), else the latest seq. A
-    /// wait its run opened lives as long as its run's state;
+    /// The floor: the lowest mark an unexpired run lease took, else the
+    /// latest seq. A wait its run opened lives as long as its run's state;
     /// one a delivery opened (`fire_key`), while its run exists or the
     /// `fire_event` row that queues it is there, not buried.
     fn sweep_arrivals(&self, limit: i64, floor: Option<i64>) -> Result<i64> {
@@ -1218,10 +1216,7 @@ impl RunHostStore for PgStore {
             let swept = self.execute(
                 "delete from lf.arrival where seq in (
                    select a.seq from lf.arrival a
-                   where a.seq <= coalesce((select min(mark) from (
-                                              select lease_mark as mark from lf.trigger_run where lease_until > now() and lease_mark is not null
-                                              union all
-                                              select (payload->>'arrivalMark')::int8 from lf.work where kind = 'fire_event' and dead_at is null and payload ? 'arrivalMark') marks),
+                   where a.seq <= coalesce((select min(lease_mark) from lf.trigger_run where lease_until > now() and lease_mark is not null),
                                            (select coalesce(max(seq), 0) from lf.arrival))
                      and ($2::int8 is null or a.seq <= $2::int8)
                      and not exists (select 1 from lf.wait_row w

@@ -6,10 +6,9 @@
 //! - Every arrival a module reports is logged under a store-wide increasing
 //!   seq. The sweep (`sweep_arrivals`) forgets it once no live wait on its
 //!   record's edge reads it and it is at or below the floor: the lowest mark
-//!   a running step took when it claimed its run's lease or a queued
-//!   `fire_event` row carries, else the latest seq. Its identity outlives it
-//!   for the module's re-send window, so a provider's re-send after the
-//!   sweep is still a repeat.
+//!   a running step took when it claimed its run's lease, else the latest
+//!   seq. Its identity outlives it for the module's re-send window, so a
+//!   provider's re-send after the sweep is still a repeat.
 //! - A wait is live while its run exists, or, for one a delivery opened for
 //!   the run it queued (`DeliveryWait`), while that run's `fire_event` row
 //!   is queued.
@@ -573,17 +572,9 @@ impl Store {
 }
 
 /// The sweep's floor, `?1` being now: the lowest mark an unexpired run
-/// lease took or a queued `fire_event` row carries (`arrivalMark`), else the
-/// latest seq. A running step took its marks after its lease's, so what
-/// arrives while it runs is above it. A queued row's runs have yet to open
-/// the waits not opened at keep, and read from its mark: until the row is
-/// completed or buried, its delivery's arrivals, and those after, stay.
-const FLOOR: &str = "select coalesce(
-       (select min(mark) from (
-          select lease_mark as mark from run where lease_until > ?1 and lease_mark is not null
-          union all
-          select json_extract(payload, '$.arrivalMark') from work where kind = 'fire_event' and dead_at is null and json_extract(payload, '$.arrivalMark') is not null)),
-       (select coalesce(max(seq), 0) from arrival))";
+/// lease took, else the latest seq. A running step took its marks after its
+/// lease's, so what arrives while it runs is above it.
+const FLOOR: &str = "select coalesce((select min(lease_mark) from run where lease_until > ?1 and lease_mark is not null), (select coalesce(max(seq), 0) from arrival))";
 
 /// Whether the wait `w` is live: one its run opened lives as long as its
 /// run's state; one a delivery opened (`fire_key`), while its run exists or
@@ -1075,7 +1066,6 @@ mod tests {
         a_wait_opened_at_delivery_keeps_arrivals_until_its_run_ends_and_burying_its_fire_row_drops_those_of_runs_that_never_started,
         a_fire_row_its_caller_ran_and_completed_by_key_drops_the_waits_of_runs_that_never_started,
         a_fire_row_a_live_claim_holds_is_not_completed_by_key_it_stays_queued_and_its_waits_stay_live,
-        a_queued_fire_rows_mark_keeps_the_arrivals_above_it_from_the_sweep_until_the_row_is_completed_or_buried,
     }
 
     /// The identities a store keeps are not read through the slot once
@@ -1126,11 +1116,9 @@ mod tests {
         let client = crate::pg_store::connect_client(&url).unwrap();
         for case in cases() {
             // The cases share the database: what an earlier case left
-            // sweepable goes, its leases lapse and its queued fire rows are
-            // buried, so a case's sweep counts its own arrivals under its own
-            // floor.
+            // sweepable goes, and its leases lapse, so a case's sweep counts
+            // its own arrivals under its own floor.
             crate::pg_store::block_on(client.execute("update lf.trigger_run set lease_until = now() - interval '1 millisecond' where lease_until > now()", &[])).unwrap();
-            crate::pg_store::block_on(client.execute("update lf.work set dead_at = now(), dead_reason = 'an earlier case' where kind = 'fire_event' and dead_at is null", &[])).unwrap();
             while store.sweep_arrivals(10_000, None).unwrap() > 0 {}
             run_case(&store, &case, &claim_rows);
         }
