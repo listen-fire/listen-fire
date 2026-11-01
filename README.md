@@ -3,9 +3,54 @@
 
 **The automation language for agents.**
 
-Today your agent acts when you ask it to. Most of what you want done happens when you are not asking: an email arrives, it is 8am, a deal moves stage in the CRM. Having the agent handle each of those is another model call every time, and no two calls do quite the same thing.
+Your agent acts when you ask it to. Most of what you want done happens when you aren't asking: an email arrives, it's 8:30, a deal moves stage. Waking the agent for each of those costs a model call every time, and no two calls do quite the same thing.
 
-With Listen-Fire the agent is asked once. Tell it "when I label an email Dealflow, add the company to Attio and tell #dealflow"; it writes a short program, checked against the real fields of your tools, and from then on every such email is handled the same way, with no agent in the loop and no tokens spent unless the program asks for AI.
+With Listen-Fire you ask once. You tell your agent:
+
+> Every weekday at 8:30, post the GitHub notifications that need me to Slack as one message.
+
+It writes a program:
+
+```
+import { `@lf/github` as github, `@lf/slack` as slack } from adapters
+import { my_github, my_slack } from credentials
+
+gh   = connect github using my_github
+chat = connect slack using my_slack
+
+function triage(t: <cron-[:Ticks]->>) {
+  lines = gh-[n:Notifications WHERE n.Reason IN ["review_requested", "mention"] ORDER BY n.`Updated At` DESC]-> {
+    url = coalesce(n-[:`Pull Request`]->.`HTML URL`, n-[:Issue]->.`HTML URL`, "")
+    return "• ${n-[:Repository]->.`Full Name`}: ${n.Title} (${n.Reason}) ${url}"
+  }
+  if (count(lines) == 0) { return "nothing needs you" }
+  channel = only(chat-[ch:Channels WHERE ch.Name == "general"]->)
+  if (channel == null) { fail("no #general channel") }
+  write channel-[:Messages]-> { Message: "GitHub needs you:\n${Text.join(lines, "\n")}" }
+}
+
+listen to cron-[t:Ticks WHERE t.Schedule == "30 8 * * 1-5"]-> fire triage
+```
+
+Its first draft used GitHub's JSON name for the link, and `listen-fire check` refused it before anything ran:
+
+```
+$ listen-fire check
+movements/triage.mvt:9:11 error MOV_UNKNOWN_PROPERTY gh.Pull Request has no field 'html_url' — it has: Number, Title, … HTML URL, …
+```
+
+The agent fixed it from that list. Now every weekday it posts this, with no model and no tokens:
+
+```
+GitHub needs you:
+• acme/api: Retry webhook deliveries with backoff (review_requested) https://github.com/acme/api/pull/42
+• acme/api: Webhook retries double-charge on timeout (mention) https://github.com/acme/api/issues/57
+• acme/web: Move settings to the new layout (review_requested) https://github.com/acme/web/pull/318
+```
+
+You can read off the program exactly what it can reach: your GitHub notifications and the issues and pull requests they're about, and one Slack channel. It never holds a key; the engine does. Nothing in a notification can add a step or reach anything else.
+
+All of that output is real. [`examples/github-triage`](examples/github-triage) reproduces it from a clone, with stand-ins for GitHub and Slack and no accounts.
 <!-- hero:end -->
 
 ## How it works
@@ -54,30 +99,16 @@ run efde8ee1-… hello:hello completed — 0 write(s), 0 trace entries
 
 **Where it runs:** as one binary on your machine; as the same binary split into a web-facing service and on-demand workers on cloud compute that can scale to zero; or inside your own Node or Rust product ([deploy options](#deploy-options)).
 
-## The example program
+## Reading a program
 
-A program **listens** to something in one of your systems and **fires** a named function in response. That is the whole shape of a program, and it is where the name comes from.
+A program **listens** to something and **fires** a named function in response. That is the whole shape of a program, and it is where the name comes from. In the program above, `listen to cron-[t:Ticks WHERE t.Schedule == …]-> fire triage` runs `triage` every weekday at 8:30.
 
-```
-import { `@lf/email` as email, `@lf/attio` as attio } from adapters
-import { acme_main } from credentials
+Each system appears to the program as a graph of records joined by edges:
+- `gh-[n:Notifications WHERE …]->` is "my GitHub notifications that match", walked one at a time as `n`.
+- ``n-[:`Pull Request`]->`` follows a notification to the pull request it's about.
+- `write channel-[:Messages]-> { … }` adds a message to a Slack channel.
 
-inbox = connect email
-crm   = connect attio using acme_main
-
-function `Inbound Intake`(msg: <inbox-[:Emails]->>) {
-  write crm-[:Companies]-> {
-    unique by (Name)
-    Name: msg.Subject
-  }
-}
-
-listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire `Inbound Intake`
-```
-
-In plain English: every email that reaches the inbox becomes a company in the Attio CRM, named after the subject line, and an email with a subject already in the CRM updates that company instead of making a second one (`unique by`).
-
-Each system is presented to the program as a graph of records joined by edges, so `<inbox-[:Emails]->>` is "an email that arrived in the inbox", and `crm-[:Companies]->` is "the companies in the CRM". The program starts from the record that arrived, follows edges to related records, and writes along other systems' edges. The language lives in [`packages/movement-lang`](packages/movement-lang) and the handbook in [`packages/handbook/chapters`](packages/handbook/chapters); [`foundations.ts`](packages/handbook/chapters/foundations.ts) and [`anatomy.ts`](packages/handbook/chapters/anatomy.ts) are the two to start with.
+The program starts from what arrived, follows edges to related records, and writes along other systems' edges. It never handles an ID, an API shape or a key. The language lives in [`packages/movement-lang`](packages/movement-lang) and the handbook in [`packages/handbook/chapters`](packages/handbook/chapters); [`foundations.ts`](packages/handbook/chapters/foundations.ts) and [`anatomy.ts`](packages/handbook/chapters/anatomy.ts) are the two to start with.
 
 ## Worked example: CRM intake at a venture fund
 
