@@ -304,7 +304,7 @@ chat = connect slack using team_workspace
 
 function orderCheck(body: string): Array<{ code: string; message: string }> {
   const probe = `${ORDER_PRELUDE}
-function m(evt: <crm-[:\`Webhook Event\`]->>) {
+function m(evt: <crm-[:CompanyChange]->>) {
 ${body}
 }`;
   return checkSourceInRust(probe, HANDBOOK_CATALOG, { languageVersion: LANGUAGE_VERSION })

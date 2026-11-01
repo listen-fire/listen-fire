@@ -473,8 +473,8 @@ import { acme } from credentials
 
 crm = connect attio using acme
 
-function m(evt: <crm-[e:\`Webhook Event\` WHERE e.action == "record.created"]->>) {
-  evt-[co:Companies]-> {
+function m(evt: <crm-[:CompanyChange]->>) {
+  evt-[co:Company]-> {
     domain = first(co.Domains)
     write co { Description ?: domain }
   }

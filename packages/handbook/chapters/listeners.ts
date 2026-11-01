@@ -49,7 +49,7 @@ listen as "Intro intake" to inbox-[e:Emails WHERE e.Key == "intros"]-> fire \`In
 `,
     },
     {
-      construct: 'suppress_self on a listener (opt-in two-way-sync echo suppression)',
+      construct: 'a two-way sync whose listen takes only the fields it reads, so its own write does not run it again',
       status: 'runs',
       probe: `
 import { \`@lf/attio\` as attio } from adapters
@@ -57,18 +57,17 @@ import { acme } from credentials
 
 crm = connect attio using acme
 
-function \`Mirror Company\`(ev: <crm-[:\`Webhook Event\`]->>) {
-  if (ev is <crm-[e:\`Webhook Event\` WHERE e.action == "record.updated"]->>) {
-    ev-[rec:Companies]-> {
-      write crm-[:Companies]-> {
-        unique by (Name)
-        Name: rec.Name
-      }
+function \`Mirror Company\`(c: <crm-[:CompanyChange]->>) {
+  c-[rec:Company]-> {
+    write crm-[:Companies]-> {
+      unique by (Name)
+      Name: rec.Name
+      Description: "Mirrored"
     }
   }
 }
 
-listen to crm { suppress_self: true } fire \`Mirror Company\`
+listen to crm-[:Companies]->-[c:Changes WHERE c.Field == "Name"]-> fire \`Mirror Company\`
 `,
     },
   ],

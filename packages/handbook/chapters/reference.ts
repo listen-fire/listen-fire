@@ -171,8 +171,8 @@ Field ?: d                                 # '?:' takes a maybe-absent value, no
 \`\`\`
 listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire intake
 listen as "Nightly digest" to timer { schedule: "0 9 * * 1" } fire \`Weekly Digest\`   # 5-field cron, UTC
-listen to crm { events: ["record.created"] } fire \`On New\`
-listen to crm { events: ["record.created", "record.updated"] } fire mirror
+listen to crm-[:Companies]->-[c:Changes WHERE c.Kind == "created"]-> fire \`On New\`
+listen to crm-[:Companies]->-[c:Changes WHERE c.Kind IN ["created", "updated"]]-> fire mirror
 listen to go {} fire \`On Run\`                      # manual / on-demand (go = connect manual)
 \`\`\`
 

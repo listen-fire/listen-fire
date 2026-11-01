@@ -19,6 +19,10 @@
       "email, cron, manual": {
         "capturedAt": "2026-10-31",
         "via": "lf catalog over a project connecting the real @lf/email module, with the cron and manual units (0.13: each listens on its edge, Emails, Ticks and Invocations; their settings vocabulary and event positions are gone); the platform capture's fields the local projection lacks are kept"
+      },
+      "attio": {
+        "capturedAt": "2026-11-01",
+        "via": "lf catalog over a project connecting the real @lf/attio module against fake-channels (0.13: each object's records list Changes, landing on its own change type, CompanyChange, PersonChange, DealChange and FundChange; the Webhook Event, its variants and the events settings are gone); the rest of the attio entry is the platform capture"
       }
     }
   },
@@ -53,17 +57,7 @@
           "required": true
         }
       ],
-      "canFire": true,
-      "triggerConfig": [
-        "events"
-      ],
-      "triggerConfigOptions": {
-        "events": [
-          "record.created",
-          "record.updated",
-          "record.deleted"
-        ]
-      }
+      "canFire": true
     },
     "slack": {
       "constructionArgs": [
@@ -342,6 +336,18 @@
             "Files": {
               "target": "File",
               "writable": true
+            },
+            "Changes": {
+              "target": "CompanyChange",
+              "readable": false,
+              "listenable": true,
+              "identity": "Id",
+              "delivery": "connection",
+              "carries": [
+                "Companies"
+              ],
+              "attributes": true,
+              "description": "What happens to a company in Attio, each change once: created, an attribute updated (`Field` names it), deleted."
             }
           },
           "propertyCapabilities": {
@@ -443,6 +449,18 @@
             "Files": {
               "target": "File",
               "writable": true
+            },
+            "Changes": {
+              "target": "PersonChange",
+              "readable": false,
+              "listenable": true,
+              "identity": "Id",
+              "delivery": "connection",
+              "carries": [
+                "People"
+              ],
+              "attributes": true,
+              "description": "What happens to a person in Attio, each change once: created, an attribute updated (`Field` names it), deleted."
             }
           },
           "propertyCapabilities": {
@@ -490,13 +508,39 @@
         },
         "Deals": {
           "properties": {},
-          "edges": {},
+          "edges": {
+            "Changes": {
+              "target": "DealChange",
+              "readable": false,
+              "listenable": true,
+              "identity": "Id",
+              "delivery": "connection",
+              "carries": [
+                "Deals"
+              ],
+              "attributes": true,
+              "description": "What happens to a deal in Attio, each change once: created, an attribute updated (`Field` names it), deleted."
+            }
+          },
           "undescribed": true,
           "deletable": true
         },
         "Funds": {
           "properties": {},
-          "edges": {},
+          "edges": {
+            "Changes": {
+              "target": "FundChange",
+              "readable": false,
+              "listenable": true,
+              "identity": "Id",
+              "delivery": "connection",
+              "carries": [
+                "Funds"
+              ],
+              "attributes": true,
+              "description": "What happens to a fund in Attio, each change once: created, an attribute updated (`Field` names it), deleted."
+            }
+          },
           "undescribed": true
         },
         "Pipeline": {
@@ -629,65 +673,6 @@
           },
           "edges": {}
         },
-        "Webhook Event": {
-          "properties": {
-            "action": {
-              "kind": "enum",
-              "options": [
-                "record.created",
-                "record.updated",
-                "record.deleted"
-              ]
-            },
-            "Workspace": "text",
-            "Object": "text",
-            "Record": "text",
-            "List": "text",
-            "Entry": "text",
-            "Task": "text",
-            "Note": "text",
-            "Comment": "text",
-            "Attribute": "text"
-          },
-          "edges": {
-            "Companies": {
-              "target": "Companies",
-              "requiresLiveRecord": true
-            },
-            "People": {
-              "target": "People",
-              "requiresLiveRecord": true
-            },
-            "Deals": {
-              "target": "Deals",
-              "requiresLiveRecord": true
-            },
-            "Funds": {
-              "target": "Funds",
-              "requiresLiveRecord": true
-            },
-            "List": {
-              "target": "List"
-            },
-            "Pipeline": {
-              "target": "Pipeline",
-              "requiresLiveRecord": true
-            },
-            "VC Deal Flow": {
-              "target": "VC Deal Flow",
-              "requiresLiveRecord": true
-            },
-            "Task": {
-              "target": "Task"
-            },
-            "Note": {
-              "target": "Note"
-            },
-            "Comment": {
-              "target": "Comment"
-            }
-          }
-        },
         "Companies List": {
           "properties": {
             "Name": "text",
@@ -698,166 +683,160 @@
             "listName"
           ]
         },
-        "[\"Webhook Event\",[[\"action\",\"record.created\"]]]": {
-          "properties": {
-            "action": {
-              "kind": "enum",
-              "options": [
-                "record.created",
-                "record.updated",
-                "record.deleted"
-              ]
-            },
-            "Workspace": "text",
-            "Object": "text",
-            "Record": "text",
-            "List": "text",
-            "Entry": "text",
-            "Task": "text",
-            "Note": "text",
-            "Comment": "text",
-            "Attribute": "text"
-          },
-          "edges": {
-            "Companies": {
-              "target": "Companies",
-              "requiresLiveRecord": true
-            },
-            "People": {
-              "target": "People",
-              "requiresLiveRecord": true
-            },
-            "Deals": {
-              "target": "Deals",
-              "requiresLiveRecord": true
-            },
-            "Funds": {
-              "target": "Funds",
-              "requiresLiveRecord": true
-            },
-            "List": {
-              "target": "List"
-            },
-            "Pipeline": {
-              "target": "Pipeline",
-              "requiresLiveRecord": true
-            },
-            "VC Deal Flow": {
-              "target": "VC Deal Flow",
-              "requiresLiveRecord": true
-            },
-            "Task": {
-              "target": "Task"
-            },
-            "Note": {
-              "target": "Note"
-            },
-            "Comment": {
-              "target": "Comment"
-            }
-          },
-          "displayName": "Webhook Event where action=record.created"
-        },
         "People List": {
           "properties": {},
           "edges": {},
           "undescribed": true
         },
-        "[\"Webhook Event\",[[\"action\",\"record.updated\"]]]": {
+        "CompanyChange": {
           "properties": {
-            "action": {
+            "Id": "text",
+            "Kind": {
               "kind": "enum",
               "options": [
-                "record.created",
-                "record.updated",
-                "record.deleted"
+                "created",
+                "updated",
+                "deleted"
               ]
             },
-            "Workspace": "text",
-            "Object": "text",
-            "Record": "text",
-            "List": "text",
-            "Entry": "text",
-            "Task": "text",
-            "Note": "text",
-            "Comment": "text",
-            "Attribute": "text"
+            "Field": {
+              "kind": "enum",
+              "options": [
+                "Name",
+                "Domains",
+                "Description",
+                "Categories",
+                "Team Size",
+                "Team"
+              ]
+            },
+            "Record": "text"
           },
           "edges": {
-            "Companies": {
+            "Company": {
               "target": "Companies",
-              "requiresLiveRecord": true
-            },
-            "People": {
-              "target": "People",
-              "requiresLiveRecord": true
-            },
-            "Deals": {
-              "target": "Deals",
-              "requiresLiveRecord": true
-            },
-            "Funds": {
-              "target": "Funds",
-              "requiresLiveRecord": true
-            },
-            "List": {
-              "target": "List"
-            },
-            "Pipeline": {
-              "target": "Pipeline",
-              "requiresLiveRecord": true
-            },
-            "VC Deal Flow": {
-              "target": "VC Deal Flow",
-              "requiresLiveRecord": true
-            },
-            "Task": {
-              "target": "Task"
-            },
-            "Note": {
-              "target": "Note"
-            },
-            "Comment": {
-              "target": "Comment"
+              "requiresLiveRecord": true,
+              "description": "The company that changed, read from Attio."
             }
           },
-          "displayName": "Webhook Event where action=record.updated"
+          "description": "A change to a company in Attio: what happened (`Kind`) and, on an update, which attribute (`Field`). Walk `Company` for the company as it is now.",
+          "fieldDocs": {
+            "Id": "Names the change: the same on every redelivery of it.",
+            "Kind": "What happened to the company.",
+            "Field": "On an update, the attribute that changed, by its title (`Stage`).",
+            "Record": "The company's record id."
+          }
         },
-        "[\"Webhook Event\",[[\"action\",\"record.deleted\"]]]": {
+        "PersonChange": {
           "properties": {
-            "action": {
+            "Id": "text",
+            "Kind": {
               "kind": "enum",
               "options": [
-                "record.created",
-                "record.updated",
-                "record.deleted"
+                "created",
+                "updated",
+                "deleted"
               ]
             },
-            "Workspace": "text",
-            "Object": "text",
-            "Record": "text",
-            "List": "text",
-            "Entry": "text",
-            "Task": "text",
-            "Note": "text",
-            "Comment": "text",
-            "Attribute": "text"
+            "Field": {
+              "kind": "enum",
+              "options": [
+                "Name",
+                "Email",
+                "Job Title",
+                "Company"
+              ]
+            },
+            "Record": "text"
           },
           "edges": {
-            "List": {
-              "target": "List"
-            },
-            "Task": {
-              "target": "Task"
-            },
-            "Note": {
-              "target": "Note"
-            },
-            "Comment": {
-              "target": "Comment"
+            "Person": {
+              "target": "People",
+              "requiresLiveRecord": true,
+              "description": "The person that changed, read from Attio."
             }
           },
-          "displayName": "Webhook Event where action=record.deleted"
+          "description": "A change to a person in Attio: what happened (`Kind`) and, on an update, which attribute (`Field`). Walk `Person` for the person as it is now.",
+          "fieldDocs": {
+            "Id": "Names the change: the same on every redelivery of it.",
+            "Kind": "What happened to the person.",
+            "Field": "On an update, the attribute that changed, by its title (`Stage`).",
+            "Record": "The person's record id."
+          }
+        },
+        "DealChange": {
+          "properties": {
+            "Id": "text",
+            "Kind": {
+              "kind": "enum",
+              "options": [
+                "created",
+                "updated",
+                "deleted"
+              ]
+            },
+            "Field": {
+              "kind": "enum",
+              "options": [
+                "Name",
+                "Stage",
+                "Value",
+                "Company"
+              ]
+            },
+            "Record": "text"
+          },
+          "edges": {
+            "Deal": {
+              "target": "Deals",
+              "requiresLiveRecord": true,
+              "description": "The deal that changed, read from Attio."
+            }
+          },
+          "description": "A change to a deal in Attio: what happened (`Kind`) and, on an update, which attribute (`Field`). Walk `Deal` for the deal as it is now.",
+          "fieldDocs": {
+            "Id": "Names the change: the same on every redelivery of it.",
+            "Kind": "What happened to the deal.",
+            "Field": "On an update, the attribute that changed, by its title (`Stage`).",
+            "Record": "The deal's record id."
+          }
+        },
+        "FundChange": {
+          "properties": {
+            "Id": "text",
+            "Kind": {
+              "kind": "enum",
+              "options": [
+                "created",
+                "updated",
+                "deleted"
+              ]
+            },
+            "Field": {
+              "kind": "enum",
+              "options": [
+                "Name",
+                "Vintage",
+                "GPs",
+                "Advisors"
+              ]
+            },
+            "Record": "text"
+          },
+          "edges": {
+            "Fund": {
+              "target": "Funds",
+              "requiresLiveRecord": true,
+              "description": "The fund that changed, read from Attio."
+            }
+          },
+          "description": "A change to a fund in Attio: what happened (`Kind`) and, on an update, which attribute (`Field`). Walk `Fund` for the fund as it is now.",
+          "fieldDocs": {
+            "Id": "Names the change: the same on every redelivery of it.",
+            "Kind": "What happened to the fund.",
+            "Field": "On an update, the attribute that changed, by its title (`Stage`).",
+            "Record": "The fund's record id."
+          }
         }
       },
       "collections": {
@@ -899,13 +878,6 @@
         "VC Deal Flow": {
           "target": "VC Deal Flow"
         }
-      },
-      "unions": {
-        "Webhook Event": [
-          "[\"Webhook Event\",[[\"action\",\"record.created\"]]]",
-          "[\"Webhook Event\",[[\"action\",\"record.updated\"]]]",
-          "[\"Webhook Event\",[[\"action\",\"record.deleted\"]]]"
-        ]
       },
       "writableRoots": {
         "Companies": {
@@ -1252,13 +1224,7 @@
           }
         }
       },
-      "supportsInPlaceUpdate": true,
-      "eventPosition": "Webhook Event",
-      "eventPositions": [
-        {
-          "position": "Webhook Event"
-        }
-      ]
+      "supportsInPlaceUpdate": true
     },
     "slack": {
       "positions": {

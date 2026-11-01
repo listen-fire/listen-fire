@@ -122,7 +122,7 @@
   {
     "chapter": "expressions",
     "construct": "'== null' as a presence guard clause that narrows a maybe-absent first() scalar",
-    "source": "\nimport { `@lf/attio` as attio } from adapters\nimport { acme } from credentials\n\ncrm = connect attio using acme\n\nfunction m(evt: <crm-[e:`Webhook Event` WHERE e.action == \"record.created\"]->>) {\n  evt-[co:Companies]-> {\n    domain = first(co.Domains)\n    if (domain == null) { fail(\"no domain on this company\") }\n    write co { Description: domain }\n  }\n}\n"
+    "source": "\nimport { `@lf/attio` as attio } from adapters\nimport { acme } from credentials\n\ncrm = connect attio using acme\n\nfunction m(evt: <crm-[:CompanyChange]->>) {\n  evt-[co:Company]-> {\n    domain = first(co.Domains)\n    if (domain == null) { fail(\"no domain on this company\") }\n    write co { Description: domain }\n  }\n}\n"
   },
   {
     "chapter": "expressions",
@@ -207,7 +207,7 @@
   {
     "chapter": "writes",
     "construct": "'?:' discharging a first()-bound value that may be absent, no guard needed",
-    "source": "\nimport { `@lf/attio` as attio } from adapters\nimport { acme } from credentials\n\ncrm = connect attio using acme\n\nfunction m(evt: <crm-[e:`Webhook Event` WHERE e.action == \"record.created\"]->>) {\n  evt-[co:Companies]-> {\n    domain = first(co.Domains)\n    write co { Description ?: domain }\n  }\n}\n"
+    "source": "\nimport { `@lf/attio` as attio } from adapters\nimport { acme } from credentials\n\ncrm = connect attio using acme\n\nfunction m(evt: <crm-[:CompanyChange]->>) {\n  evt-[co:Company]-> {\n    domain = first(co.Domains)\n    write co { Description ?: domain }\n  }\n}\n"
   },
   {
     "chapter": "writes",
@@ -292,12 +292,12 @@
   {
     "chapter": "branching",
     "construct": "is type tests (union narrowing through a branch)",
-    "source": "\nimport { `@lf/attio` as attio } from adapters\nimport { acme } from credentials\n\ncrm = connect attio using acme\n\nfunction `Route`(ev: <crm-[:`Webhook Event`]->>) {\n  if (ev is <crm-[e:`Webhook Event` WHERE e.action == \"record.created\"]->>) {\n    ev-[rec:Companies]-> {\n      write rec { Description: \"logged on creation\" }\n    }\n  }\n}\n"
+    "source": "\nimport { `@lf/attio` as attio } from adapters\nimport { acme } from credentials\n\ncrm = connect attio using acme\n\nfunction `Route`(ev: <crm-[:CompanyChange]->>) {\n  if (ev is <crm-[x:CompanyChange WHERE x.Kind == \"created\"]->>) {\n    ev-[rec:Company]-> {\n      write rec { Description: \"logged on creation\" }\n    }\n  }\n}\n"
   },
   {
     "chapter": "branching",
     "construct": "is against a declared node (structural conformance as a test)",
-    "source": "\nimport { `@lf/attio` as attio, `@lf/slack` as slack } from adapters\nimport { acme as crmCred, team_workspace as slackCred } from credentials\n\ncrm  = connect attio using crmCred\nchat = connect slack using slackCred\n\nnode Postable {\n  Name: <text>\n}\n\nfunction `Announce`(evt: <crm-[e:`Webhook Event` WHERE e.action == \"record.created\"]->>) {\n  channel = only(chat-[ch:Channels WHERE ch.Name == \"alerts\"]->)\n  if (channel == null) { fail(\"channel not found\") }\n\n  evt-[co:Companies]-> {\n    if (co is <Postable>) {\n      write channel-[:Messages]-> { Message: \"${co.Name}\" }\n    }\n  }\n}\n"
+    "source": "\nimport { `@lf/attio` as attio, `@lf/slack` as slack } from adapters\nimport { acme as crmCred, team_workspace as slackCred } from credentials\n\ncrm  = connect attio using crmCred\nchat = connect slack using slackCred\n\nnode Postable {\n  Name: <text>\n}\n\nfunction `Announce`(evt: <crm-[:CompanyChange]->>) {\n  channel = only(chat-[ch:Channels WHERE ch.Name == \"alerts\"]->)\n  if (channel == null) { fail(\"channel not found\") }\n\n  evt-[co:Company]-> {\n    if (co is <Postable>) {\n      write channel-[:Messages]-> { Message: \"${co.Name}\" }\n    }\n  }\n}\n"
   },
   {
     "chapter": "branching",
@@ -312,12 +312,12 @@
   {
     "chapter": "branching",
     "construct": "guard clause on an only-bound record (`if (x == null) { fail(…) }`) narrowing the write below it, plus a `? :` over an optional field",
-    "source": "\nimport { `@lf/attio` as attio, `@lf/slack` as slack } from adapters\nimport { acme as crmCred, team_workspace as slackCred } from credentials\n\ncrm  = connect attio using crmCred\nchat = connect slack using slackCred\n\nfunction `Notify Company Change`(evt: <crm-[:`Webhook Event`]->>) {\n  channel = only(chat-[ch:Channels WHERE ch.Name == \"automation-alerts\"]->)\n  if (channel == null) { fail(\"channel not found\") }\n\n  if (evt is <crm-[e:`Webhook Event` WHERE e.action == \"record.created\"]->>) {\n    evt-[co:Companies]-> {\n      domain      = first(co.Domains)\n      `Domain Line` = domain != null ? \"\\n<https://${domain}|${domain}>\" : \"\"\n\n      write channel-[:Messages]-> {\n          Message: \"*New company in Attio:* ${co.Name}\\n${co.Description}${`Domain Line`}\"\n      }\n    }\n  }\n}\n\nlisten to crm { events: [\"record.created\", \"record.updated\"] } fire `Notify Company Change`\n"
+    "source": "\nimport { `@lf/attio` as attio, `@lf/slack` as slack } from adapters\nimport { acme as crmCred, team_workspace as slackCred } from credentials\n\ncrm  = connect attio using crmCred\nchat = connect slack using slackCred\n\nfunction `Notify Company Change`(evt: <crm-[:CompanyChange]->>) {\n  channel = only(chat-[ch:Channels WHERE ch.Name == \"automation-alerts\"]->)\n  if (channel == null) { fail(\"channel not found\") }\n\n  if (evt is <crm-[x:CompanyChange WHERE x.Kind == \"created\"]->>) {\n    evt-[co:Company]-> {\n      domain      = first(co.Domains)\n      `Domain Line` = domain != null ? \"\\n<https://${domain}|${domain}>\" : \"\"\n\n      write channel-[:Messages]-> {\n          Message: \"*New company in Attio:* ${co.Name}\\n${co.Description}${`Domain Line`}\"\n      }\n    }\n  }\n}\n\nlisten to crm-[:Companies]->-[c:Changes WHERE c.Kind IN [\"created\", \"updated\"]]-> fire `Notify Company Change`\n"
   },
   {
     "chapter": "branching",
     "construct": "a chain of flat guard clauses, each narrowing a separate only-bound binding",
-    "source": "\nimport { `@lf/attio` as attio, `@lf/slack` as slack } from adapters\nimport { acme as crmCred, team_workspace as slackCred } from credentials\n\ncrm  = connect attio using crmCred\nchat = connect slack using slackCred\n\nfunction m(evt: <crm-[e:`Webhook Event` WHERE e.action == \"record.created\"]->>) {\n  channel = only(chat-[ch:Channels WHERE ch.Name == \"alerts\"]->)\n  if (channel == null) { fail(\"channel not found\") }\n\n  evt-[co:Companies]-> {\n    owner = only(co-[t:Team]->)\n    if (owner == null) { fail(\"no owner\") }\n\n    write channel-[:Messages]-> { Message: \"${co.Name} owned by ${owner.Name}\" }\n  }\n}\n"
+    "source": "\nimport { `@lf/attio` as attio, `@lf/slack` as slack } from adapters\nimport { acme as crmCred, team_workspace as slackCred } from credentials\n\ncrm  = connect attio using crmCred\nchat = connect slack using slackCred\n\nfunction m(evt: <crm-[:CompanyChange]->>) {\n  channel = only(chat-[ch:Channels WHERE ch.Name == \"alerts\"]->)\n  if (channel == null) { fail(\"channel not found\") }\n\n  evt-[co:Company]-> {\n    owner = only(co-[t:Team]->)\n    if (owner == null) { fail(\"no owner\") }\n\n    write channel-[:Messages]-> { Message: \"${co.Name} owned by ${owner.Name}\" }\n  }\n}\n"
   },
   {
     "chapter": "listeners",
@@ -326,8 +326,8 @@
   },
   {
     "chapter": "listeners",
-    "construct": "suppress_self on a listener (opt-in two-way-sync echo suppression)",
-    "source": "\nimport { `@lf/attio` as attio } from adapters\nimport { acme } from credentials\n\ncrm = connect attio using acme\n\nfunction `Mirror Company`(ev: <crm-[:`Webhook Event`]->>) {\n  if (ev is <crm-[e:`Webhook Event` WHERE e.action == \"record.updated\"]->>) {\n    ev-[rec:Companies]-> {\n      write crm-[:Companies]-> {\n        unique by (Name)\n        Name: rec.Name\n      }\n    }\n  }\n}\n\nlisten to crm { suppress_self: true } fire `Mirror Company`\n"
+    "construct": "a two-way sync whose listen takes only the fields it reads, so its own write does not run it again",
+    "source": "\nimport { `@lf/attio` as attio } from adapters\nimport { acme } from credentials\n\ncrm = connect attio using acme\n\nfunction `Mirror Company`(c: <crm-[:CompanyChange]->>) {\n  c-[rec:Company]-> {\n    write crm-[:Companies]-> {\n      unique by (Name)\n      Name: rec.Name\n      Description: \"Mirrored\"\n    }\n  }\n}\n\nlisten to crm-[:Companies]->-[c:Changes WHERE c.Field == \"Name\"]-> fire `Mirror Company`\n"
   },
   {
     "chapter": "reviews",
@@ -477,12 +477,12 @@
   {
     "chapter": "builtins",
     "construct": "the commutative aggregates (count, only) over a captured relationship, plus Text.join/first/List.last/xs[n] each ordered inline with sort",
-    "source": "\nimport { `@lf/attio` as attio } from adapters\nimport { acme } from credentials\n\ncrm = connect attio using acme\n\nfunction m(evt: <crm-[e:`Webhook Event` WHERE e.action == \"record.created\"]->>) {\n  evt-[co:Companies]-> {\n    names = co-[p:Team]-> { return p.Name }\n    n     = count(co-[p:Team]->)\n    owner = only(co-[t:Team WHERE t.`Job Title` == \"CEO\"]->)\n    newest = first(sort(names))\n    oldest = List.last(sort(names))\n    head   = sort(names)[0]\n    write co {\n      Description: \"${n} people, ${Text.join(sort(names), \", \")}, ${coalesce(owner.Name, \"no CEO\")}, ${coalesce(newest, \"\")}/${coalesce(oldest, \"\")}/${coalesce(head, \"\")}\"\n    }\n  }\n}\n"
+    "source": "\nimport { `@lf/attio` as attio } from adapters\nimport { acme } from credentials\n\ncrm = connect attio using acme\n\nfunction m(evt: <crm-[:CompanyChange]->>) {\n  evt-[co:Company]-> {\n    names = co-[p:Team]-> { return p.Name }\n    n     = count(co-[p:Team]->)\n    owner = only(co-[t:Team WHERE t.`Job Title` == \"CEO\"]->)\n    newest = first(sort(names))\n    oldest = List.last(sort(names))\n    head   = sort(names)[0]\n    write co {\n      Description: \"${n} people, ${Text.join(sort(names), \", \")}, ${coalesce(owner.Name, \"no CEO\")}, ${coalesce(newest, \"\")}/${coalesce(oldest, \"\")}/${coalesce(head, \"\")}\"\n    }\n  }\n}\n"
   },
   {
     "chapter": "builtins",
     "construct": "List.sum/avg/min/max over a list of numbers",
-    "source": "\nimport { `@lf/attio` as attio } from adapters\nimport { acme } from credentials\n\ncrm = connect attio using acme\n\nfunction m(evt: <crm-[e:`Webhook Event` WHERE e.action == \"record.created\"]->>) {\n  evt-[co:Companies]-> {\n    amounts = [1200, 400, 900]\n    total   = List.sum(amounts)\n    average = List.avg(amounts)\n    lowest  = List.min(amounts)\n    highest = List.max(amounts)\n    write co {\n      `Team Size` ?: total\n      Description: \"${average}/${coalesce(Text.from(lowest), \"\")}/${coalesce(Text.from(highest), \"\")}\"\n    }\n  }\n}\n"
+    "source": "\nimport { `@lf/attio` as attio } from adapters\nimport { acme } from credentials\n\ncrm = connect attio using acme\n\nfunction m(evt: <crm-[:CompanyChange]->>) {\n  evt-[co:Company]-> {\n    amounts = [1200, 400, 900]\n    total   = List.sum(amounts)\n    average = List.avg(amounts)\n    lowest  = List.min(amounts)\n    highest = List.max(amounts)\n    write co {\n      `Team Size` ?: total\n      Description: \"${average}/${coalesce(Text.from(lowest), \"\")}/${coalesce(Text.from(highest), \"\")}\"\n    }\n  }\n}\n"
   },
   {
     "chapter": "builtins",

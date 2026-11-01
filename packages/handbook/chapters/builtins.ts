@@ -69,8 +69,8 @@ import { acme } from credentials
 
 crm = connect attio using acme
 
-function m(evt: <crm-[e:\`Webhook Event\` WHERE e.action == "record.created"]->>) {
-  evt-[co:Companies]-> {
+function m(evt: <crm-[:CompanyChange]->>) {
+  evt-[co:Company]-> {
     names = co-[p:Team]-> { return p.Name }
     n     = count(co-[p:Team]->)
     owner = only(co-[t:Team WHERE t.\`Job Title\` == "CEO"]->)
@@ -93,8 +93,8 @@ import { acme } from credentials
 
 crm = connect attio using acme
 
-function m(evt: <crm-[e:\`Webhook Event\` WHERE e.action == "record.created"]->>) {
-  evt-[co:Companies]-> {
+function m(evt: <crm-[:CompanyChange]->>) {
+  evt-[co:Company]-> {
     amounts = [1200, 400, 900]
     total   = List.sum(amounts)
     average = List.avg(amounts)

@@ -24,16 +24,16 @@ No \`else\` means the other cases simply do nothing. A condition may read a valu
 Narrow a source that may be several kinds with \`is\`, before you traverse it:
 
 \`\`\`
-function \`Route Change\`(ev: <crm-[:\`Webhook Event\`]->>) {
-  if (ev is <crm-[e:\`Webhook Event\` WHERE e.action == "record.created"]->>) {
-    ev-[rec:Companies]-> {
+function \`Route Change\`(ev: <crm-[:CompanyChange]->>) {
+  if (ev is <crm-[x:CompanyChange WHERE x.Kind == "created"]->>) {
+    ev-[rec:Company]-> {
       write rec { Description: "logged on creation" }
     }
   }
 }
 \`\`\`
 
-A change event stands for creates, updates, and deletes, and what you can reach differs by case — a deleted record isn't there to traverse to. Inside the arm \`ev\` is a *created* event, so the edges only a live record has are reachable; outside it they are not, and traversing without narrowing is refused while you author, naming the cases the edge belongs to. \`is\` is valid anywhere a boolean is; inside a walk's \`WHERE\` it is \`IS\`. If a record arrives without a kind on it — an event the trigger never discriminated, or one delivered without the field a test names — the run stops with that reason rather than picking a branch, so no arm ever runs against a record it can't identify.
+A change stands for a creation, an update or a deletion; inside the arm \`ev\` is a *created* change, and the arm's code reads it as one. \`is\` is valid anywhere a boolean is; inside a walk's \`WHERE\` it is \`IS\`. If a record arrives without the field a test names, the run stops with that reason rather than picking a branch, so no arm ever runs against a record it can't identify.
 
 A hop narrows from inside its \`WHERE\` the same way: testing a member's label (\`x.listName == "Deal Pipeline"\`) picks that member for the whole hop — see *blocks* in the traversal chapter.
 
@@ -59,7 +59,7 @@ Presence narrows the same way: \`== null\` / \`!= null\` settles whether a value
 Stop a run with a reason instead of writing bad data — and settle what follows in the same line:
 
 \`\`\`
-function \`Notify Company Change\`(evt: <crm-[:\`Webhook Event\`]->>) {
+function \`Notify Company Change\`(evt: <crm-[:CompanyChange]->>) {
   channel = only(chat-[ch:Channels WHERE ch.Name == "automation-alerts"]->)
   if (channel == null) { fail("channel not found") }
 
@@ -90,9 +90,9 @@ import { acme } from credentials
 
 crm = connect attio using acme
 
-function \`Route\`(ev: <crm-[:\`Webhook Event\`]->>) {
-  if (ev is <crm-[e:\`Webhook Event\` WHERE e.action == "record.created"]->>) {
-    ev-[rec:Companies]-> {
+function \`Route\`(ev: <crm-[:CompanyChange]->>) {
+  if (ev is <crm-[x:CompanyChange WHERE x.Kind == "created"]->>) {
+    ev-[rec:Company]-> {
       write rec { Description: "logged on creation" }
     }
   }
@@ -113,11 +113,11 @@ node Postable {
   Name: <text>
 }
 
-function \`Announce\`(evt: <crm-[e:\`Webhook Event\` WHERE e.action == "record.created"]->>) {
+function \`Announce\`(evt: <crm-[:CompanyChange]->>) {
   channel = only(chat-[ch:Channels WHERE ch.Name == "alerts"]->)
   if (channel == null) { fail("channel not found") }
 
-  evt-[co:Companies]-> {
+  evt-[co:Company]-> {
     if (co is <Postable>) {
       write channel-[:Messages]-> { Message: "\${co.Name}" }
     }
@@ -180,12 +180,12 @@ import { acme as crmCred, team_workspace as slackCred } from credentials
 crm  = connect attio using crmCred
 chat = connect slack using slackCred
 
-function \`Notify Company Change\`(evt: <crm-[:\`Webhook Event\`]->>) {
+function \`Notify Company Change\`(evt: <crm-[:CompanyChange]->>) {
   channel = only(chat-[ch:Channels WHERE ch.Name == "automation-alerts"]->)
   if (channel == null) { fail("channel not found") }
 
-  if (evt is <crm-[e:\`Webhook Event\` WHERE e.action == "record.created"]->>) {
-    evt-[co:Companies]-> {
+  if (evt is <crm-[x:CompanyChange WHERE x.Kind == "created"]->>) {
+    evt-[co:Company]-> {
       domain      = first(co.Domains)
       \`Domain Line\` = domain != null ? "\\n<https://\${domain}|\${domain}>" : ""
 
@@ -196,7 +196,7 @@ function \`Notify Company Change\`(evt: <crm-[:\`Webhook Event\`]->>) {
   }
 }
 
-listen to crm { events: ["record.created", "record.updated"] } fire \`Notify Company Change\`
+listen to crm-[:Companies]->-[c:Changes WHERE c.Kind IN ["created", "updated"]]-> fire \`Notify Company Change\`
 `,
     },
     {
@@ -209,11 +209,11 @@ import { acme as crmCred, team_workspace as slackCred } from credentials
 crm  = connect attio using crmCred
 chat = connect slack using slackCred
 
-function m(evt: <crm-[e:\`Webhook Event\` WHERE e.action == "record.created"]->>) {
+function m(evt: <crm-[:CompanyChange]->>) {
   channel = only(chat-[ch:Channels WHERE ch.Name == "alerts"]->)
   if (channel == null) { fail("channel not found") }
 
-  evt-[co:Companies]-> {
+  evt-[co:Company]-> {
     owner = only(co-[t:Team]->)
     if (owner == null) { fail("no owner") }
 
