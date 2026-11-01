@@ -1,6 +1,7 @@
 // A delivery is one call and one write, as listen-fire keeps it: its
-// arrivals are logged and its runs' trigger waits opened from the mark
-// before them, so a later item of the same delivery answers a run's
+// arrivals are logged and its runs' waits on the records it hands them (the
+// trigger, and each record the trigger's arrival carries) opened from the
+// mark before them, so a later item of the same delivery answers a run's
 // `await new` and the trigger never answers its own; its listens run each
 // arrival once, however often it is delivered. Each run it starts is a
 // row kept with it: one that does not start inside the call is started by a
@@ -118,6 +119,157 @@ async function setup() {
   await host.connect('acme', { name: 'team', module: chat, credential: { workspace: 'acme' } });
   return { host, store, chat, posted, warned };
 }
+
+/** A help desk: its tickets, and each ticket's comments, listenable, each
+ *  arriving with its ticket. A comment leads back to its ticket. A ticket's
+ *  comments are waited on under its id. Every ticket it is asked to open is
+ *  written down by title. */
+function deskModule(opened: string[]) {
+  const field = (name: string) => ({ fieldId: name, displayName: name, kind: 'string' as const, writable: true, required: false });
+  const create = (): Adapter => ({
+    adapterType: 'desk',
+    supportedTriggers: ['webhook'],
+    runtimeCapabilities: () => BASE_RUNTIME_CAPABILITIES,
+    // A comment is described, never a root: it is reached off its ticket.
+    listEntryPoints: async () => [
+      { typeId: 'Ticket', displayName: 'Ticket', collectionName: 'Tickets', readable: true, writable: true },
+      { typeId: 'Comment', displayName: 'Comment', readable: false, writable: false },
+    ],
+    describe: async (typeId) => {
+      if (typeId === 'Ticket') {
+        return {
+          typeId,
+          displayName: 'Ticket',
+          fields: ['Id', 'Title'].map(field),
+          references: [
+            {
+              fieldId: 'Comments',
+              name: 'Comments',
+              targetTypeId: 'Comment',
+              cardinality: 'many' as const,
+              direction: 'outgoing' as const,
+              readable: false,
+              listenable: true,
+              delivery: 'connection' as const,
+              identity: 'Id',
+              carries: ['Tickets'],
+            },
+          ],
+        };
+      }
+      if (typeId === 'Comment') {
+        return {
+          typeId,
+          displayName: 'Comment',
+          fields: ['Id', 'Ticket', 'Kind', 'Text'].map(field),
+          references: [{ fieldId: 'Ticket', name: 'Ticket', targetTypeId: 'Ticket', cardinality: 'one' as const, direction: 'outgoing' as const }],
+        };
+      }
+      return null;
+    },
+    resolveEntity: async () => ({ candidates: [] }),
+    getFieldValue: async ({ position, fieldId }) => {
+      const data = position.identity.data;
+      return data !== null && typeof data === 'object' ? (Reflect.get(data, fieldId) ?? null) : null;
+    },
+    getRelated: async ({ position, fieldId }) => {
+      const data = position.identity.data;
+      const ticket = fieldId === 'Ticket' && data !== null && typeof data === 'object' ? Reflect.get(data, 'Ticket') : undefined;
+      if (typeof ticket !== 'string') return [];
+      return [{ position: { adapterType: 'desk', recordType: 'Ticket', identity: { kind: 'stable' as const, recordId: ticket, data: { Id: ticket, Title: 'Printer' } } } }];
+    },
+    createRecord: async ({ recordType, fields }) => {
+      opened.push(String(fields.Title));
+      return { adapterType: 'desk', externalId: `opened-${opened.length}`, recordType, data: { ...fields } };
+    },
+    updateRecord: async () => {
+      throw new Error('not used');
+    },
+    deleteRecord: async () => {
+      throw new Error('not used');
+    },
+    arrivals: {
+      awaitKeys: async ({ heads }) => heads.map((head) => ({ key: `ticket:${head.recordId}` })),
+    },
+  });
+  return defineModule({
+    kind: 'adapter',
+    name: '@test/desk',
+    manifest: {
+      adapterType: 'desk',
+      displayName: 'Desk',
+      description: 'A help desk.',
+      supportedTriggers: ['webhook'],
+      methods: ['listEntryPoints', 'describe', 'resolveEntity', 'getFieldValue', 'getRelated', 'createRecord', 'awaitKeys'],
+      declaredCredentials: ['desk'],
+      introspectedSchema: true,
+    },
+    credentials: [{ name: 'desk', kind: 'static', fields: [{ name: 'workspace' }] }],
+    create,
+  });
+}
+
+/** A question on a ticket waits for the ticket's next comment, and opens a
+ *  ticket noting both. */
+const FOLLOW = `import { desk } from adapters
+import { support } from credentials
+
+help = connect desk using support
+
+function follow(c: <help-[:Comment]->>) {
+  c-[t:Ticket]-> {
+    next = await new t-[:Comments]->
+    write help-[:Tickets]-> { Title: "after \${c.Text}, \${next.Text}" }
+  }
+}
+
+listen to help-[:Tickets]->-[c:Comments WHERE c.Kind == "question"]-> fire follow
+`;
+
+function comment(id: string, kind: string, text: string): Arrival {
+  return {
+    edge: 'Comments',
+    key: 'ticket:t1',
+    identity: id,
+    landing: { recordId: id, recordType: 'Comment', fields: { Id: id, Ticket: 't1', Kind: kind, Text: text } },
+    parents: [{ recordId: 't1', recordType: 'Ticket', fields: { Id: 't1', Title: 'Printer' } }],
+  };
+}
+
+async function deskSetup() {
+  const opened: string[] = [];
+  const desk = deskModule(opened);
+  const host = createEmbeddedHost({ modules: [desk], store: memoryEmbeddedHostStore(), moduleHost: () => ({ validateResults: true }) });
+  await host.connect('acme', { name: 'support', module: desk, credential: { workspace: 'acme' } });
+  expect(await host.save('acme', { name: 'follow', source: FOLLOW })).toEqual({ saved: true, listens: 1 });
+  return { host, opened };
+}
+
+describe('a record the trigger’s arrival carries', () => {
+  it('is reached at delivery: a later item of the same delivery on it answers the run’s wait', async () => {
+    const { host, opened } = await deskSetup();
+
+    const [ran, ...more] = await host.dispatch('acme', { adapterType: 'desk', arrivals: [comment('c1', 'question', 'jammed?'), comment('c2', 'answer', 'cleared')] });
+
+    expect(more).toEqual([]);
+    expect(ran.outcome).toMatchObject({ ok: true, parked: false });
+    expect(opened).toEqual(['after jammed?, cleared']);
+  });
+
+  it('is never answered by the arrival that started the run; its next item, delivered later, answers it', async () => {
+    const { host, opened } = await deskSetup();
+
+    const [first] = await host.dispatch('acme', { adapterType: 'desk', arrivals: [comment('c1', 'question', 'jammed?')] });
+    expect(first.outcome).toMatchObject({ ok: true, parked: true });
+    expect(opened).toEqual([]);
+
+    const [woken, ...more] = await host.dispatch('acme', { adapterType: 'desk', arrivals: [comment('c2', 'answer', 'cleared')] });
+    expect(more).toEqual([]);
+    expect(woken.runId).toBe(first.runId);
+    expect(woken.outcome).toMatchObject({ ok: true, parked: false });
+    expect(opened).toEqual(['after jammed?, cleared']);
+  });
+});
 
 describe('a delivery', () => {
   it("is kept in one write: a later item of the same delivery answers the run an earlier one started", async () => {

@@ -210,17 +210,31 @@ impl<R: Reader> LfDoors<'_, R> {
     }
 
     /// The runs `landed` fires on the connection it came for, each minted
-    /// now as `{ pipeline, receipt, runId }`, and the waits each opens on its
-    /// trigger as the delivery is kept: one per edge its fired function waits
-    /// on off its parameter, keyed by the module's `awaitKeys`, asked once
-    /// per edge and connection for every trigger on it. A wait on the
-    /// trigger's own edge and record has the trigger noted on it, so the run
-    /// is never answered by the arrival that started it; any other arrival of
-    /// the delivery may answer it. A run judged here that the drain does not
-    /// start has its waits dropped there.
+    /// now as `{ pipeline, receipt, runId }`, and the waits each opens as the
+    /// delivery is kept on the records it is handed: its trigger, on each
+    /// edge its fired function waits on off its parameter, and each record
+    /// the trigger's arrival carries (its `parents`), on each edge the
+    /// function waits on off that record's type. The run reached them at
+    /// delivery, so what lands on them from the delivery on counts. Each is
+    /// keyed by the module's `awaitKeys`, asked once per edge and connection
+    /// for every record on it. A wait on the trigger's own edge and record
+    /// has the trigger noted on it, so the run is never answered by the
+    /// arrival that started it; any other arrival of the delivery may answer
+    /// it. A run judged here that the drain does not start has its waits
+    /// dropped there.
     pub(crate) async fn mint_runs(&self, adapter_type: &str, install: Option<&str>, credential: Option<&str>, landed: &[ArrivalIn]) -> Result<(Js, Vec<DeliveryWait>), String> {
-        // Each wait owed: its run, its edge, the connection that asks, and its trigger (by index).
-        let mut owed: Vec<(String, &str, Option<&Credential>, usize)> = Vec::new();
+        // Each wait owed: its run, its edge, the connection that asks, its
+        // trigger (by index) and the record it is on (a head, by index).
+        let mut owed: Vec<(String, &str, Option<&Credential>, usize, usize)> = Vec::new();
+        // Each record a wait is owed on, by the trigger and the place it was handed at.
+        let mut heads: Vec<(HandedAt, Js)> = Vec::new();
+        let mut head_of = |at: HandedAt, head: Js| match heads.iter().position(|(known, _)| *known == at) {
+            Some(index) => index,
+            None => {
+                heads.push((at, head));
+                heads.len() - 1
+            }
+        };
         let mut minted = Vec::new();
         let now_ms = crate::limiter::now_ms() as f64;
         for (index, arrival) in landed.iter().enumerate() {
@@ -232,40 +246,55 @@ impl<R: Reader> LfDoors<'_, R> {
                 let run_id = uuid::Uuid::new_v4().to_string();
                 let receipt = crate::arrivals::arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), identity, arrival.version.as_deref());
                 minted.push(Js::Obj(obj! { "pipeline" => Js::str(listen.pipeline()), "receipt" => Js::str(receipt), "runId" => Js::str(&run_id) }));
-                if trigger_head(arrival).is_none() {
+                let awaits = &listen.trigger_awaits;
+                let trigger = arrival.landing.as_ref().and_then(head_of_landing);
+                if trigger.is_none() && arrival.parents.iter().all(|parent| head_of_landing(parent).is_none()) {
                     continue;
                 }
                 let caller = listen.credential.as_deref().or(install).map(|name| self.install(name).ok_or_else(|| format!("no install {name}"))).transpose()?;
-                owed.extend(listen.trigger_awaits.iter().map(|edge| (run_id.clone(), edge.as_str(), caller, index)));
+                if let Some(head) = trigger {
+                    let at = head_of(HandedAt::Trigger(index), head);
+                    owed.extend(awaits.own.iter().map(|edge| (run_id.clone(), edge.as_str(), caller, index, at)));
+                }
+                for (place, (parent, edges)) in arrival.parents.iter().zip(&awaits.carried).enumerate() {
+                    let Some(head) = head_of_landing(parent) else { continue };
+                    let at = head_of(HandedAt::Carried(index, place), head);
+                    owed.extend(edges.iter().map(|edge| (run_id.clone(), edge.as_str(), caller, index, at)));
+                }
             }
         }
-        // One `awaitKeys` per edge and connection, its heads each trigger once.
+        // One `awaitKeys` per edge and connection, its heads each record once.
         let mut keys: HashMap<(Option<&str>, &str, usize), Option<String>> = HashMap::new();
         let mut asked: Vec<(Option<&Credential>, &str, Vec<usize>)> = Vec::new();
-        for (_, edge, caller, index) in &owed {
+        for (_, edge, caller, _, at) in &owed {
             let name = caller.map(|c| c.name.as_str());
             match asked.iter_mut().find(|(c, e, _)| c.map(|c| c.name.as_str()) == name && e == edge) {
-                Some((_, _, heads)) if heads.contains(index) => {}
-                Some((_, _, heads)) => heads.push(*index),
-                None => asked.push((*caller, edge, vec![*index])),
+                Some((_, _, on)) if on.contains(at) => {}
+                Some((_, _, on)) => on.push(*at),
+                None => asked.push((*caller, edge, vec![*at])),
             }
         }
-        for (caller, edge, heads) in &asked {
-            let ask = Js::Arr(heads.iter().filter_map(|i| trigger_head(&landed[*i])).collect());
+        for (caller, edge, on) in &asked {
+            let ask = Js::Arr(on.iter().map(|at| heads[*at].1.clone()).collect());
             let Some(answer) = self.reader.await_keys(adapter_type, *caller, edge, ask).await? else { continue };
-            let answered = answer.as_array().filter(|keys| keys.len() == heads.len()).ok_or_else(|| format!("{}: awaitKeys answered {}, not one key per head", adapter_type, answer.to_json()))?;
-            for (index, one) in heads.iter().zip(answered) {
+            let answered = answer.as_array().filter(|keys| keys.len() == on.len()).ok_or_else(|| format!("{}: awaitKeys answered {}, not one key per head", adapter_type, answer.to_json()))?;
+            for (at, one) in on.iter().zip(answered) {
                 let key = match one.get("gone") == Some(&Js::Bool(true)) {
                     true => None,
                     false => Some(one.get("key").and_then(Js::as_str).filter(|k| !k.is_empty()).ok_or_else(|| format!("{}: awaitKeys answered {}, not {{ key }} or {{ gone: true }}", adapter_type, one.to_json()))?.to_string()),
                 };
-                keys.insert((caller.map(|c| c.name.as_str()), edge, *index), key);
+                keys.insert((caller.map(|c| c.name.as_str()), edge, *at), key);
             }
         }
         let mut waits = Vec::new();
-        for (run_id, edge, caller, index) in owed {
+        for (run_id, edge, caller, index, at) in owed {
             // A module that offers no `awaitKeys` opens no wait here.
-            let Some(key) = keys.get(&(caller.map(|c| c.name.as_str()), edge, index)).cloned() else { continue };
+            let Some(key) = keys.get(&(caller.map(|c| c.name.as_str()), edge, at)).cloned() else { continue };
+            // Two records may be handed on one edge and key (a trigger that
+            // carries itself): the run has one wait there.
+            if waits.iter().any(|w: &DeliveryWait| w.run_id == run_id && w.edge == edge && w.key == key) {
+                continue;
+            }
             let arrival = &landed[index];
             let own = key.is_some() && edge == arrival.edge && key == arrival.key;
             let pre_noted = own.then(|| arrival.identity.clone().map(|identity| PreNoted { identity, version: arrival.version.clone() })).flatten();
@@ -972,11 +1001,20 @@ pub(crate) fn queued_by(waits: &mut [DeliveryWait], fire_key: &str) {
     }
 }
 
-/// The record an arrival lands, as `awaitKeys` takes a head: `{ recordId,
-/// headData?, recordType? }`, as a run waiting on it from its trigger names
-/// it. None for a landing that names no record: nothing can be waited on off it.
-fn trigger_head(arrival: &ArrivalIn) -> Option<Js> {
-    let landing = arrival.landing.as_ref()?;
+/// Where a run was handed a record at delivery: the trigger of the
+/// delivery's arrival at an index, or the record that arrival carries at a
+/// place among its `parents`.
+#[derive(Clone, Copy, PartialEq)]
+enum HandedAt {
+    Trigger(usize),
+    Carried(usize, usize),
+}
+
+/// A record handed to a run at delivery (a trigger's landing, or a record
+/// its arrival carries), as `awaitKeys` takes a head: `{ recordId,
+/// headData?, recordType? }`, as a run waiting on it names it. None for a
+/// landing that names no record: nothing can be waited on off it.
+fn head_of_landing(landing: &Js) -> Option<Js> {
     let record_id = landing.get("recordId").and_then(Js::as_str).filter(|id| !id.is_empty())?;
     let mut head = obj! { "recordId" => Js::str(record_id) };
     if let Some(fields) = landing.get("fields").filter(|f| **f != Js::Null) {
@@ -2021,7 +2059,7 @@ pub(crate) mod tests {
     #[test]
     fn a_trigger_s_head_names_the_record_type_its_landing_states() {
         let arrival = arrivals_of(&Js::parse(br#"{"arrivals":[{"edge":"Notes","identity":"n-1","landing":{"recordId":"n-1","recordType":"Note","fields":{"Id":"n-1"}}}]}"#).unwrap()).unwrap().remove(0);
-        assert_eq!(trigger_head(&arrival).unwrap().to_json(), r#"{"recordId":"n-1","headData":{"Id":"n-1"},"recordType":"Note"}"#);
+        assert_eq!(head_of_landing(arrival.landing.as_ref().unwrap()).unwrap().to_json(), r#"{"recordId":"n-1","headData":{"Id":"n-1"},"recordType":"Note"}"#);
     }
 
     /// An inline delivery of two notes and a comment on the second: what

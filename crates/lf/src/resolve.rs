@@ -548,7 +548,7 @@ mod tests {
             args: Vec::new(),
             address: Ok(Default::default()),
             plan: Some(serde_json::from_str(plan).unwrap()),
-            trigger_awaits: Vec::new(),
+            trigger_awaits: Default::default(),
         };
         assert_eq!(position_of(&listen), "Board");
         assert_eq!(

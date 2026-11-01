@@ -14,7 +14,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 
-import { WireArrival, listenPlanSchema, tenantIdOf, type Arrival, type AwaitHead, type ListenPlan, type RunInput, type SegmentLimits } from 'engine-contracts';
+import { WireArrival, listenPlanSchema, tenantIdOf, type Arrival, type AwaitHead, type AwaitLanding, type ListenPlan, type RunInput, type SegmentLimits } from 'engine-contracts';
 import {
   adapterInProcess,
   inProcessValidationDefault,
@@ -499,42 +499,61 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
   };
 
   /** The waits a delivery opens for the runs it starts, as listen-fire's door
-   *  opens them (crates/lf/src/doors.rs `mint_runs`): one per edge each
-   *  fired function awaits off its parameter, keyed by the module's
-   *  `awaitKeys`, asked once per edge and connection for every trigger on
-   *  it. A wait on the trigger's own edge and record has the trigger noted on
-   *  it, so the run is never answered by the arrival that started it. Each
-   *  is live while the run's `fire_event` row is queued. */
+   *  opens them (crates/lf/src/doors.rs `mint_runs`), on the records each run
+   *  is handed: its trigger, on each edge its fired function awaits off its
+   *  parameter, and each record the trigger's arrival carries (its
+   *  `parents`), on each edge the function awaits off that record's type.
+   *  The run reached them at delivery, so what lands on them from the
+   *  delivery on counts. Each is keyed by the module's `awaitKeys`, asked
+   *  once per edge and connection for every record on it. A wait on the
+   *  trigger's own edge and record has the trigger noted on it, so the run is
+   *  never answered by the arrival that started it. Each is live while the
+   *  run's `fire_event` row is queued. */
   const deliveryWaitsOf = async (tenant: string, delivery: Delivery, minted: readonly MintedRun[]): Promise<DeliveryWait[]> => {
-    const asked = new Map<string, { connection: string | undefined; edge: string; heads: number[]; runs: MintedRun[] }>();
+    // Each record a wait is owed on, by where the delivery handed it.
+    const heads = new Map<string, AwaitHead>();
+    const owed: Array<{ run: MintedRun; edge: string; connection: string | undefined; head: string }> = [];
     for (const run of minted) {
-      if (triggerHeadOf(run.arrival) === undefined) continue;
       const stamps = await stampsOf(tenant, run.saved, run.key);
       if (stamps === null) continue;
       const connection = run.listen.credentialName ?? delivery.connection;
-      for (const edge of triggerAwaitsOf({ program: run.program, stamps, movement: run.listen.plan.movement })) {
-        const at = JSON.stringify([connection ?? null, edge]);
-        const group = asked.get(at) ?? { connection, edge, heads: [], runs: [] };
-        if (!group.heads.includes(run.index)) group.heads.push(run.index);
-        group.runs.push(run);
-        asked.set(at, group);
+      const awaits = triggerAwaitsOf({ program: run.program, stamps, plan: run.listen.plan });
+      const handed: Array<[string, AwaitHead | undefined, readonly string[]]> = [
+        [`${run.index}`, headOf(run.arrival.landing), awaits.own],
+        ...awaits.carried.map((edges, place): [string, AwaitHead | undefined, readonly string[]] => [`${run.index}:${place}`, headOf(run.arrival.parents?.[place] ?? null), edges]),
+      ];
+      for (const [at, head, edges] of handed) {
+        if (head === undefined) continue;
+        heads.set(at, head);
+        for (const edge of edges) owed.push({ run, edge, connection, head: at });
       }
     }
-    const waits: DeliveryWait[] = [];
-    for (const { connection, edge, heads, runs } of asked.values()) {
+    // One `awaitKeys` per edge and connection, its heads each record once.
+    const askedOf = (connection: string | undefined, edge: string) => JSON.stringify([connection ?? null, edge]);
+    type Asked = { connection: string | undefined; edge: string; on: string[]; keys: Map<string, string | null> };
+    const asked = new Map<string, Asked>();
+    for (const { edge, connection, head } of owed) {
+      const group: Asked = asked.get(askedOf(connection, edge)) ?? { connection, edge, on: [], keys: new Map() };
+      if (!group.on.includes(head)) group.on.push(head);
+      asked.set(askedOf(connection, edge), group);
+    }
+    for (const { connection, edge, on, keys } of asked.values()) {
       const keying = (await keyingInstance(tenant, delivery.adapterType, connection))?.arrivals;
       // A module that offers no `awaitKeys` opens no wait here.
       if (keying === undefined) continue;
-      const triggers = heads.map((index) => delivery.arrivals[index]);
-      const answered = await keying.awaitKeys({ edge, heads: triggers.flatMap((arrival) => triggerHeadOf(arrival) ?? []) });
-      if (answered.length !== heads.length) throw new Error(`${delivery.adapterType}: awaitKeys answered ${answered.length} keys for ${heads.length} heads`);
-      for (const run of runs) {
-        const one = answered[heads.indexOf(run.index)];
-        const key = 'gone' in one ? null : one.key;
-        const { arrival } = run;
-        const own = key !== null && edge === arrival.edge && key === arrival.key;
-        waits.push({ runId: run.runId, edge, key, fireKey: fireKeyOf(run.runId), ...(own ? { preNoted: { identity: arrival.identity, version: arrival.version ?? null } } : {}) });
-      }
+      const answered = await keying.awaitKeys({ edge, heads: on.flatMap((head) => heads.get(head) ?? []) });
+      if (answered.length !== on.length) throw new Error(`${delivery.adapterType}: awaitKeys answered ${answered.length} keys for ${on.length} heads`);
+      on.forEach((head, i) => keys.set(head, 'gone' in answered[i] ? null : answered[i].key));
+    }
+    const waits: DeliveryWait[] = [];
+    for (const { run, edge, connection, head } of owed) {
+      const key = asked.get(askedOf(connection, edge))?.keys.get(head);
+      if (key === undefined) continue;
+      // Two records may be handed on one edge and key: the run has one wait there.
+      if (waits.some((w) => w.runId === run.runId && w.edge === edge && w.key === key)) continue;
+      const { arrival } = run;
+      const own = key !== null && edge === arrival.edge && key === arrival.key;
+      waits.push({ runId: run.runId, edge, key, fireKey: fireKeyOf(run.runId), ...(own ? { preNoted: { identity: arrival.identity, version: arrival.version ?? null } } : {}) });
     }
     return waits;
   };
@@ -1110,12 +1129,12 @@ function settingsLine(program: string, listener: FileListener): string {
   return `${program}:${listener.movementName}: \`listen to ${listener.instanceName} { … }\` is in the retired settings form, which this host fires only as a listen on a traversal: write it as one and save it again; until then it runs nothing`;
 }
 
-/** The record a run's trigger waits are keyed by, as `awaitKeys` is asked
- *  for it; none for an arrival whose landing names no record
- *  (crates/lf/src/doors.rs `trigger_head`). */
-function triggerHeadOf(arrival: Arrival): AwaitHead | undefined {
-  if ('gone' in arrival) return undefined;
-  const { recordId, recordType, fields } = arrival.landing;
+/** A record handed to a run at delivery (a trigger's landing, or a record
+ *  its arrival carries), as `awaitKeys` is asked for it; none for a landing
+ *  that names no record (crates/lf/src/doors.rs `head_of_landing`). */
+function headOf(landing: AwaitLanding | null): AwaitHead | undefined {
+  if (landing === null) return undefined;
+  const { recordId, recordType, fields } = landing;
   if (recordId === undefined || recordId === '') return undefined;
   return { recordId, headData: fields, ...(recordType !== undefined && recordType !== '' ? { recordType } : {}) };
 }

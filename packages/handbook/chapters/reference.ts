@@ -208,7 +208,7 @@ both = all(f, g)                                                     # all at on
 await until(() => { refresh co; return co.Stage == "Won" }, { every: 1h })   # re-check a condition on a cadence
 \`\`\`
 
-- \`await x-[:E]->\` takes the first match already on the edge, in the order its system keeps, or else the first to arrive. \`await new x-[:E]->\` takes only one arriving after \`x\` entered the run.
+- \`await x-[:E]->\` takes the first match already on the edge, in the order its system keeps, or else the first to arrive. \`await new x-[:E]->\` takes only one arriving after \`x\` entered the run: the trigger and each record its arrival carries entered at delivery, any other record when the run reached it.
 - Only an edge its system announces can be awaited. The head is a bound name, and the wait takes one hop off it.
 - What \`await\` binds is always there. A record deleted while the run waits leaves the wait waiting, so race it with a \`sleep\`.
 - A \`WHERE\` that reads a record the run holds reads it once, when the wait is reached.

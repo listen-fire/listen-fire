@@ -149,19 +149,34 @@ function arrivedRecord(landing: AwaitLanding): ArrivedRecord {
   return { ...(landing.recordType !== undefined ? { recordType: landing.recordType } : {}), fields: landing.fields };
 }
 
-/** The edges the check stamps as opening waits on the parameter of the
- *  function `movement` that `program` declares: where a run of it enters
- *  its trigger, and so the waits a delivery opens for the run as it is kept
- *  (crates/lf/src/routing.rs `trigger_awaits_of`). `stamps` is the check's of
- *  `program`. */
-export function triggerAwaitsOf(input: { program: Program; stamps: CheckAnswer['stamps']; movement: string }): string[] {
-  const index = input.program.statements.findIndex((statement) => statement.kind === 'movement' && statement.name === input.movement);
-  if (index === -1) return [];
+/** The edges a fired function waits on off the records its run is handed at
+ *  delivery: off the trigger itself (`own`), and off each record the
+ *  arrival carries, aligned to its `parents` (`carried`). */
+export interface TriggerAwaits {
+  own: string[];
+  carried: string[][];
+}
+
+/** The edges the check stamps on the parameter of the function `plan` fires,
+ *  which `program` declares: where a run of it enters its trigger, and so
+ *  the waits a delivery opens for the run as it is kept
+ *  (crates/lf/src/routing.rs `trigger_awaits_of`). Those awaited off the
+ *  trigger (`opensWaits`), and off each record type the arrival carries
+ *  (`carriedAwaits`), aligned to the plan's `carries` by the type each
+ *  carried hop lands on. `stamps` is the check's of `program`. */
+export function triggerAwaitsOf(input: { program: Program; stamps: CheckAnswer['stamps']; plan: ListenPlan }): TriggerAwaits {
+  const { plan } = input;
+  const index = input.program.statements.findIndex((statement) => statement.kind === 'movement' && statement.name === plan.movement);
+  if (index === -1) return { own: [], carried: [] };
   const path = `/statements/${index}/params/0`;
-  for (const stamp of input.stamps) {
-    if (stamp.file === undefined && stamp.path === path && 'opensWaits' in stamp) return [...stamp.opensWaits];
-  }
-  return [];
+  const onParam = input.stamps.filter((stamp) => stamp.file === undefined && stamp.path === path);
+  const own = onParam.flatMap((stamp) => ('opensWaits' in stamp ? [...stamp.opensWaits] : []));
+  const byType = onParam.flatMap((stamp) => ('carriedAwaits' in stamp ? [stamp.carriedAwaits] : []))[0] ?? {};
+  const carried = (plan.carries ?? []).map((edge) => {
+    const landed = plan.hops.find((hop) => hop.edge === edge)?.to;
+    return landed === undefined ? [] : [...(byType[landed] ?? [])];
+  });
+  return { own, carried };
 }
 
 /** The receipt a listen takes of `arrival` as it runs it, so a redelivery

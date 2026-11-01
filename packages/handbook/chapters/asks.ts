@@ -44,6 +44,8 @@ if (r[0] == null) {
 
 - \`await x-[:Replies]->\` takes the first match already on the edge, in the order the system keeps it, or else the first to arrive.
 - \`await new x-[:Replies]->\` takes only the first to arrive after \`x\` entered the run: when it was written (just before the write), read, or handed in as a parameter.
+- The record that started the run, and each record its arrival brought with it (a change brings its deal), entered at delivery. So a change of that deal in the same delivery counts; the change that started the run never does.
+- A record the run walks to that the arrival did not bring (the deal's company) enters at the walk: only what arrives after that counts.
 - On an edge that only announces — a press, a form's answer — the two are the same: nothing is there before it arrives.
 - On an edge whose system keeps no order, plain \`await\` is refused when you save, because there is no "first already there": write \`await new\`.
 - A \`WHERE\` on the hop says which arrival counts.

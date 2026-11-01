@@ -38,7 +38,7 @@ A wait pulls exactly one record off one edge, so the bare traversal says it.
 | `reply = await first(msg-[:Replies]->)` | `reply = await msg-[:Replies]->` |
 
 - `MOV_V5_SPELLING` carries the rewrite as a safe fix, and `listen-fire upgrade` applies it. It waits for the same one record.
-- New in 0.13: `await new msg-[:Replies]->` takes only a reply that arrives after `msg` entered the run, skipping any already in the thread.
+- New in 0.13: `await new msg-[:Replies]->` takes only a reply that arrives after `msg` entered the run, skipping any already in the thread. A run's trigger, and each record its trigger's arrival carries, entered the run at its delivery.
 
 Two waits 0.12 accepted are refused once respelled, and the pin holds until each is rewritten by hand:
 

@@ -841,10 +841,13 @@ What Listen-Fire does with them:
   again, and an arrival reported again with the same identity and version
   within your `resendWindowSeconds` (an hour unless you declare one) is
   logged once, wherever it comes from.
-- A run a delivery or a poll starts waits on its trigger's edges from just
-  before that delivery's or page's arrivals: any other arrival of the same
-  delivery or page may answer its `await new`, and only the arrival that is
-  its trigger, matched by identity, never does.
+- A run a delivery or a poll starts waits from just before that delivery's
+  or page's arrivals on the records it is handed: its trigger's edges, and
+  the edges off each record its trigger's arrival carries (`parents`) that
+  the automation awaits. Any other arrival of the same delivery or page may
+  answer its `await new` on them, and only the arrival that is its trigger,
+  matched by identity, never does. A record the run reaches some other way
+  is waited on from when the run reaches it.
 - Each run waiting on the record's edge is woken. It reads the arrivals
   logged since it began waiting, judges each once by identity and version,
   and resumes with the first that passes the automation's `WHERE`.

@@ -2866,7 +2866,7 @@ mod tests {
     }
 
     fn polled(config: Obj) -> Listen {
-        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None, args: Vec::new(), payload: None, address: Ok(Default::default()), plan: None, trigger_awaits: Vec::new() }
+        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None, args: Vec::new(), payload: None, address: Ok(Default::default()), plan: None, trigger_awaits: Default::default() }
     }
 
     #[test]
