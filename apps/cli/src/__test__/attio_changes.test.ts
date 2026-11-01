@@ -1,0 +1,94 @@
+// `@lf/attio`'s listens, end to end against the fake Attio: a record's changes
+// arrive on its `Changes`, one record type per object, through the one webhook
+// `listen-fire serve` registers for the connection. A Deals listen narrowed to
+// Stage changes runs on each Stage change and on nothing else, a company's
+// change included; `listen-fire check` refuses an attribute deals do not have.
+
+import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { test } from 'node:test';
+
+import { attioProject, createRecord, deliver, fakeChannels, records, until, updateRecord, valueOf, webhooks, type Fake } from './attio_fixture';
+import { lf as lfSync, served } from './example';
+
+const REPO = resolve(__dirname, '../../../..');
+process.env.LF_MODULES_DIR ??= join(REPO, 'modules');
+
+const HEAD = `import { \`@lf/attio\` as attio } from adapters
+import { henry_attio } from credentials
+
+crm = connect attio using henry_attio
+`;
+
+// Each Stage change notes the deal's stage on the company named after it.
+const STAGES = `${HEAD}
+function moved(c: <crm-[:DealChange]->>) {
+  c-[d:Deal]-> {
+    write crm-[:Companies]-> {
+      unique by (Name)
+      Name: d.Name
+      Description: "\${d.Name} is now \${d.Stage} (\${c.Kind} \${c.Field})"
+    }
+  }
+}
+
+listen to crm-[:Deals]->-[c:Changes WHERE c.Field == "Stage"]-> fire moved
+`;
+
+const stageOf = (deal: { id: { record_id: string } }) => ({ event_type: 'record.updated', id: { object_id: 'deals', record_id: deal.id.record_id, attribute_id: 'stage' } });
+const valueChangeOf = (deal: { id: { record_id: string } }) => ({ event_type: 'record.updated', id: { object_id: 'deals', record_id: deal.id.record_id, attribute_id: 'value' } });
+const description = async (fake: Fake, name: string) => valueOf((await records(fake, 'companies')).find((c) => valueOf(c, 'name') === name), 'description');
+
+test('a Deals listen on Stage runs on each Stage change naming the new stage, and on no other change, a company’s included', async () => {
+  const fake = await fakeChannels();
+  try {
+    const { dir, port } = await attioProject(fake, 'attio-stages');
+    writeFileSync(join(dir, 'movements/stages.mvt'), STAGES);
+    const checked = lfSync(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+
+    // An attribute deals do not have is refused where it is written.
+    writeFileSync(join(dir, 'movements/typo.mvt'), STAGES.replace('c.Field == "Stage"', 'c.Field == "Stag"').replace('function moved', 'function typo').replace('fire moved', 'fire typo'));
+    const refused = lfSync(dir, 'check');
+    assert.notEqual(refused.code, 0, refused.out);
+    assert.match(refused.out, /MOV_ENUM_UNKNOWN_VALUE[\s\S]*"Stag"/);
+    writeFileSync(join(dir, 'movements/typo.mvt'), '');
+
+    const serving = await served(dir, ['--port', String(port)]);
+    try {
+      await serving.waitFor(/^attio \(Changes, edge-[0-9a-f]+\): registered webhook fake-webhook-\d+ for the arrivals on Changes at /);
+      const [webhook] = await webhooks(fake);
+      assert.deepEqual(webhook?.subscriptions.map((s) => s.event_type), ['record.created', 'record.updated', 'record.deleted']);
+      const runs = () => serving.lines.filter((l) => /^run \S+ stages:moved completed$/.test(l)).length;
+
+      const osprey = await createRecord(fake, 'deals', { name: 'Osprey', stage: 'Sourced' });
+      const acme = await createRecord(fake, 'companies', { name: 'Acme' });
+      await updateRecord(fake, 'deals', osprey.id.record_id, { stage: 'Diligence' });
+      assert.deepEqual((await deliver(fake, stageOf(osprey))).map((d) => d.status), [200]);
+      await until(() => runs() === 1, serving.lines);
+      assert.equal(await description(fake, 'Osprey'), 'Osprey is now Diligence (updated Stage)');
+
+      // The same change again, another attribute of the deal, a company's
+      // change, the deal created: none of them is a Stage change of a deal.
+      await deliver(fake, stageOf(osprey));
+      await updateRecord(fake, 'deals', osprey.id.record_id, { value: 5000 });
+      await deliver(fake, valueChangeOf(osprey));
+      await updateRecord(fake, 'companies', acme.id.record_id, { name: 'Acme Ltd' });
+      await deliver(fake, { event_type: 'record.updated', id: { object_id: 'companies', record_id: acme.id.record_id, attribute_id: 'name' } });
+      await deliver(fake, { event_type: 'record.created', id: { object_id: 'deals', record_id: osprey.id.record_id } });
+
+      // The next Stage change runs it again, naming the stage it moved to.
+      await updateRecord(fake, 'deals', osprey.id.record_id, { stage: 'Passed' });
+      await deliver(fake, stageOf(osprey));
+      await until(() => runs() === 2, serving.lines);
+      assert.equal(await description(fake, 'Osprey'), 'Osprey is now Passed (updated Stage)');
+      await new Promise((done) => setTimeout(done, 500));
+      assert.equal(runs(), 2, serving.lines.join('\n'));
+    } finally {
+      await serving.stop();
+    }
+  } finally {
+    await fake.stop();
+  }
+});

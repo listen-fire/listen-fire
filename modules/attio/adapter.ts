@@ -13,9 +13,22 @@ import { LRUCache } from 'lru-cache';
 import { z } from 'zod';
 
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
-import type { ModuleFiles } from 'module-kit';
+import type { EnsureEdgeSubscriptionInput, ModuleFiles, RemoveEdgeSubscriptionInput } from 'module-kit';
+import type { ArrivalsCapability, AwaitHead, AwaitKey } from 'engine-contracts';
 import type { AttioRecord } from './api_client';
-import type { AttioAttribute } from './attributes';
+import { extractAttioValue, optionTitle, type AttioAttribute } from './attributes';
+import {
+  ATTIO_CHANGES_EDGE,
+  ATTIO_RECORD_EVENTS,
+  changeArrivals,
+  changeEntryPoint,
+  changeFieldOf,
+  changesEdge,
+  describeChange,
+  objectOfChangeType,
+  type ChangeArrival,
+  type ChangedObject,
+} from './changes';
 import type { TriggerEvent } from 'movement-engine/public/inbound';
 import type { SnapshotInput } from 'movement-engine/public/adapter';
 import type {
@@ -24,11 +37,7 @@ import type {
   AdapterManifest,
   DeleteInput,
   DeleteResult,
-  DiscriminableEvent,
-  EnsureEventSubscriptionInput,
   EventSubscriptionRegistration,
-  EventType,
-  RemoveEventSubscriptionInput,
   FilterTranslationResult,
   GetFieldValueInput,
   FileRef,
@@ -88,61 +97,6 @@ import {
 
 import type { EdgeCapability, FieldCapability } from 'engine-contracts/expression/expression';
 
-// ── Inbound webhook envelope (consumed by `preprocessInbound`) ──────────────
-// Attio represents actors as `{ id, type }` (workspace-member | api-token |
-// system); we normalize into the framework's uniform actor shape. The signature
-// + registration halves of the webhook contract stay on the webhook_sync
-// provider; only event EXTRACTION lives here.
-const attioWebhookActorSchema = z
-  .object({
-    id: z.string().nullable(),
-    type: z.enum(['workspace-member', 'api-token', 'system']),
-  })
-  .optional();
-
-const attioWebhookBodySchema = z.object({
-  webhook_id: z.string(),
-  events: z.array(
-    z.object({
-      event_type: z.string(),
-      id: z.object({
-        workspace_id: z.string(),
-        object_id: z.string(),
-        record_id: z.string(),
-        attribute_id: z.string().optional(),
-      }),
-      actor: attioWebhookActorSchema,
-    }),
-  ),
-});
-
-function normalizeAttioActor(
-  raw: z.infer<typeof attioWebhookActorSchema>,
-): { type: 'user' | 'api-token' | 'system'; id: string | null } | undefined {
-  if (!raw) return undefined;
-  const type = raw.type === 'workspace-member' ? 'user' : raw.type;
-  return { type, id: raw.id };
-}
-
-/**
- * The key a redelivery of the same occurrence shares. Attio's body carries no
- * id per event, but a record is created once and deleted once, so those two
- * are keyed by the record; an update happens many times and has no key (a
- * redelivered update runs again).
- */
-function attioIdempotencyKey(eventType: string, id: { object_id: string; record_id: string }): { idempotencyKey?: string } {
-  const change = attioChangeType(eventType);
-  if (change !== 'create' && change !== 'delete') return {};
-  return { idempotencyKey: `attio:${eventType}:${id.object_id}:${id.record_id}` };
-}
-
-function attioChangeType(eventType: string): 'create' | 'update' | 'delete' | undefined {
-  if (eventType.includes('created')) return 'create';
-  if (eventType.includes('updated')) return 'update';
-  if (eventType.includes('deleted')) return 'delete';
-  return undefined;
-}
-
 /** Stable adapter identifier. Matches `MutationContext.source.adapterType`. */
 export { ATTIO_ADAPTER_TYPE } from './types';
 import { ATTIO_ADAPTER_TYPE } from './types';
@@ -189,47 +143,8 @@ function listMembershipDisplayName(obj: { name: string }): string {
   return `${obj.name} List`;
 }
 
-/**
- * Synthetic schema constants for the webhook event source position. The
- * trigger router constructs `webhook-event` SourcePositions when
- * dispatching inbound events; the TG body operates over the event's
- * payload via these field paths.
- *
- * Per-target meta-edges: `attio:webhook_event` exposes one outgoing
- * reference per Attio object, named after the object's display name
- * (`Companies`, `People`, …) and targeted at the matching record type.
- * Traversal `-[:Companies]->.HQ` resolves the underlying record by
- * fetching from `companies` when `id.object_id` agrees; on a mismatch
- * the edge yields no related positions (the event isn't for that type).
- * Replaces the earlier single polymorphic `record_for_event` ref —
- * polymorphism collapses to "which edge you traverse."
- *
- */
-export { ATTIO_WEBHOOK_EVENT_TYPE_ID } from './types';
-import { ATTIO_WEBHOOK_EVENT_TYPE_ID } from './types';
 import { ATTIO_MANIFEST } from './manifest';
 export { ATTIO_MANIFEST };
-
-/**
- * Edge ids on `attio:webhook_event` for non-record meta types. The
- * outboundName matches one of these constants; the runtime dispatcher
- * and the editor agree on the canonical strings here so the cascade
- * stays stable across renames.
- *
- *   - `List`  : list-entry events → the parent list (read-only props
- *               of the list itself, e.g. its name)
- *   - `Entry` : list-entry events → the entry within the list, with
- *               its parent record id and per-attribute values
- *   - `Task`  : task events → the task with its content + deadline
- *   - `Note`  : note events → the note with title + content
- *   - `Comment`: comment events → the comment with content + resolved
- *                state
- */
-export const ATTIO_LIST_FOR_EVENT_FIELD = 'List';
-export const ATTIO_ENTRY_FOR_EVENT_FIELD = 'Entry';
-export const ATTIO_TASK_FOR_EVENT_FIELD = 'Task';
-export const ATTIO_NOTE_FOR_EVENT_FIELD = 'Note';
-export const ATTIO_COMMENT_FOR_EVENT_FIELD = 'Comment';
 
 /** Synthetic target-type ids for the non-record meta-edges above.
  *  Adapter-internal — mirrored in the schema descriptor and consumed
@@ -304,30 +219,6 @@ const ATTIO_RECORD_SYSTEM_DATE_FIELDS: SchemaFieldDescriptor[] = [
 ];
 
 /**
- * Map from clean schema-field names on `attio:webhook_event` to the
- * raw Attio payload paths they read. Keeps the schema descriptor
- * speaking to the user (`Object`) while the adapter stays compatible
- * with Attio's underlying event shape (`id.object_id`).
- *
- * This is the exhaustive set of webhook-event fields the adapter
- * provides — anything not listed here is rejected at read time so a
- * mis-typed root (e.g. a Listen-Fire Valuations event landing on an
- * `attio:webhook_event` root) can't smuggle foreign fields through.
- */
-const WEBHOOK_FIELD_TO_PAYLOAD_PATH: Record<string, string> = {
-  event_type: 'event_type',
-  Workspace: 'id.workspace_id',
-  Object: 'id.object_id',
-  Record: 'id.record_id',
-  List: 'id.list_id',
-  Entry: 'id.entry_id',
-  Task: 'id.task_id',
-  Note: 'id.note_id',
-  Comment: 'id.comment_id',
-  Attribute: 'id.attribute_id',
-};
-
-/**
  * Adapter-internal native filter — the result of `translateFilter` over a
  * user-authored filter Expression. The framework treats it as opaque
  * (`unknown` on the SnapshotInput.filter field); only this adapter knows
@@ -391,7 +282,7 @@ type AttioApiClient = Awaited<ReturnType<typeof getAttioClient>>;
  * The contract relies on the catalog being warmed before narrowing is
  * invoked — engine paths reach this via `describe(typeId)` first.
  */
-type AttioObjectInfo = { id: string; name: string; slug: string | null };
+type AttioObjectInfo = ChangedObject;
 const objectCatalogCache = new LRUCache<string, Map<string, AttioObjectInfo>>({
   max: 50,
   ttl: 10 * 60 * 1000,
@@ -740,92 +631,14 @@ function describeFileMeta(): SchemaTypeDescriptor {
   };
 }
 
-function describeWebhookEvent(
-  objects: AttioObjectInfo[],
-  lists: AttioListInfo[],
-): SchemaTypeDescriptor {
-  // One outgoing reference per Attio object — `Companies`, `People`,
-  // etc. — plus the non-record meta-edges. The author picks the edge
-  // whose name matches the object the event is for; the engine fetches
-  // from the corresponding REST endpoint at traversal time.
-  // requiresLiveRecord: the referenced record must still exist to hydrate
-  // this edge — so it is excluded from the `delete` action variant.
-  const recordForEventEdges: SchemaReferenceDescriptor[] = objects.map((obj) => ({
-    fieldId: obj.name,
-    // The target must be the object's framework identity — its entry-point
-    // typeId, which IS `obj.name` (natural display name) since the typeId→
-    // displayname refactor retired the `attio:<slug>` codec for object types.
-    // A stale `attio:<slug>` here no longer matches any entry, so the projection
-    // can't resolve the edge to the natural position and leaves the raw colon-key
-    // as `edge.target` — which then surface-stamps a traversed record
-    // (`inferLinkedSurfaceType`) with `attio:companies`, breaking field
-    // resolution (the `'Domains' is not a known field of 'attio:companies'` drift).
-    targetTypeId: obj.name,
-    cardinality: 'one',
-    requiresLiveRecord: true,
-  }));
-  // The list-ENTRY hop, symmetric with the record hop above: ONE edge per
-  // list, each landing on that list's per-list type (which already carries
-  // its single real parent). The author picks the edge whose name matches the
-  // list the event is for; a mismatched event resolves to `[]`. This replaces
-  // the old single `Entry` edge → generic `List Entry` (whose polymorphic
-  // parent up-hops only existed to make that hop reachable) — narrowing to a
-  // list is how you reach the parent, so the generic goes to the empty
-  // intersection (layer 11).
-  const entryForEventEdges: SchemaReferenceDescriptor[] = lists.map((list) => ({
-    fieldId: list.name,
-    targetTypeId: list.name,
-    cardinality: 'one',
-    requiresLiveRecord: true,
-  }));
-  return {
-    typeId: ATTIO_WEBHOOK_EVENT_TYPE_ID,
-    displayName: 'Webhook Event',
-    fields: [
-      // The change-kind axis is an ORDINARY FIELD — `action`, an enum of the
-      // listen's `events:` vocabulary (ONE namespace; the retired
-      // `configValueToAction` translation table had nothing to translate).
-      // A signature narrows it in the address:
-      // `<crm-[:`Webhook Event` WHERE `action` == "record.created"]->>`.
-      { fieldId: 'action', displayName: 'action', kind: 'enum', enumValues: ['record.created', 'record.updated', 'record.deleted'], writable: false, required: false, description: 'Which kind of change this event is — the same values a listen\'s `events:` names.' },
-      { fieldId: 'Workspace', displayName: 'Workspace', kind: 'string', writable: false, required: false },
-      { fieldId: 'Object', displayName: 'Object', kind: 'string', writable: false, required: false },
-      { fieldId: 'Record', displayName: 'Record', kind: 'string', writable: false, required: false },
-      { fieldId: 'List', displayName: 'List', kind: 'string', writable: false, required: false },
-      { fieldId: 'Entry', displayName: 'Entry', kind: 'string', writable: false, required: false },
-      { fieldId: 'Task', displayName: 'Task', kind: 'string', writable: false, required: false },
-      { fieldId: 'Note', displayName: 'Note', kind: 'string', writable: false, required: false },
-      { fieldId: 'Comment', displayName: 'Comment', kind: 'string', writable: false, required: false },
-      { fieldId: 'Attribute', displayName: 'Attribute', kind: 'string', writable: false, required: false },
-    ],
-    references: [
-      ...recordForEventEdges,
-      { fieldId: ATTIO_LIST_FOR_EVENT_FIELD, targetTypeId: ATTIO_LIST_TYPE_ID, cardinality: 'one' },
-      ...entryForEventEdges,
-      { fieldId: ATTIO_TASK_FOR_EVENT_FIELD, targetTypeId: ATTIO_TASK_TYPE_ID, cardinality: 'one' },
-      { fieldId: ATTIO_NOTE_FOR_EVENT_FIELD, targetTypeId: ATTIO_NOTE_TYPE_ID, cardinality: 'one' },
-      { fieldId: ATTIO_COMMENT_FOR_EVENT_FIELD, targetTypeId: ATTIO_COMMENT_TYPE_ID, cardinality: 'one' },
-    ],
-  };
-}
-
-
 export class AttioAdapter extends BaseAdapter {
   readonly adapterType = ATTIO_ADAPTER_TYPE;
   /** Objects and lists each carry their own attributes, fetched one call at a time.
    *  So a full-surface describe is refused and the author walks in instead. */
   readonly walksContainers = true;
 
-  /** Unstable (webhook/synthetic) positions resolve to Attio's well-known
-   *  webhook-event meta type. Pure config consumed by the engine's generic
-   *  `resolvePositionTypeId`. */
-  readonly webhookEventTypeId = ATTIO_WEBHOOK_EVENT_TYPE_ID;
-
   /**
-   * Snapshot for backfill + webhook for live updates. Webhook routing
-   * itself lives in webhook_sync/handler.ts (per the contract: webhook is
-   * a route the adapter registers, not a method on this interface).
-   * Mutation is KG-intrinsic; never on Attio.
+   * A webhook pushes each record's changes (`Changes`, changes.ts).
    */
   readonly supportedTriggers = ATTIO_MANIFEST.supportedTriggers;
 
@@ -1044,22 +857,6 @@ export class AttioAdapter extends BaseAdapter {
       // record_id; upload attaches to a record) — reads and writes both live
       // on `record-[:Files]->`. No root promise (rule 0).
       { typeId: ATTIO_FILE_TYPE_ID, displayName: 'File', writable: false, readable: false },
-      {
-        typeId: ATTIO_WEBHOOK_EVENT_TYPE_ID,
-        displayName: 'Webhook Event',
-        writable: false,
-        // You cannot list the webhook events that have happened — an event is
-        // pushed, never pulled. `readable: false` is the honest statement
-        // about the root's edge; the edge's whole promise is `fires`.
-        readable: false,
-        // The event EDGE marker. THE EVENT IS JUST A NODE: nothing is
-        // synthesized from this — the change-kind axis is the node's own
-        // `action` enum field (describeWebhookEvent), narrowed in the address
-        // (`<crm-[:`Webhook Event` WHERE `action` == "record.created"]->>`).
-        // Presentation as named narrowed edges (`Record Created` …) is layer
-        // 4's choice and deliberately NOT taken: polymorphic reads better.
-        fires: true,
-      },
     ];
     // One list-membership target per object — edge-creatable meta types (no
     // root promise, like the generic `List`): the create shape rides each
@@ -1072,65 +869,60 @@ export class AttioAdapter extends BaseAdapter {
       writable: false,
       readable: false,
     }));
-    return [...recordEntries, ...perListEntries, ...meta, ...membershipEntries];
+    // Each object's change type, which its records' `Changes` land on: named
+    // so the resolver knows it, never listed (changes.ts).
+    const changeEntries = objects.map(changeEntryPoint);
+    return [...recordEntries, ...perListEntries, ...meta, ...membershipEntries, ...changeEntries];
   }
 
   /**
-   * The event-type union for this workspace: one entry per object type,
-   * recognised by the inbound event's `id.object_id`. Drives engine-side
-   * discrimination of inbound events into typed record positions — replacing
-   * the `attio:webhook_event` meta-type + per-target-edge hop. (Per-list /
-   * task / note / comment event discrimination is a follow-up.)
+   * A delivery: Attio's batch of record events (`{ webhook_id, events }`),
+   * each the arrival on its record's `Changes`, carrying the record as it is
+   * now (changes.ts). It reads each record the batch names once, and each
+   * object's attributes, as the connection's credential.
    */
-  async listEventTypes(): Promise<EventType[]> {
-    const { objects } = await this.warmCatalogs();
-    return objects.map((obj) => {
-      // The discriminated position carries the object's NAME as its
-      // positionType — the engine seeds the inbound root with it directly (no
-      // typeId → displayName restamp needed). The `match` still keys on the
-      // raw object UUID the webhook payload carries.
-      const positionType = obj.name;
-      return {
-        tag: positionType,
-        positionType,
-        match: { path: 'id.object_id', equals: obj.id },
-      };
+  async preprocessInbound(input: { raw: unknown }): Promise<{ events: []; arrivals: ChangeArrival[] }> {
+    const arrivals = await changeArrivals(input.raw, {
+      object: (objectId) => this.objectNamedById(objectId),
+      attributes: (object) => this.objectAttributes(object),
+      record: async (object, recordId) => {
+        try {
+          const client = await this.getApiClient();
+          const record = await client.getRecord({ objectId: object.slug ?? object.id, recordId });
+          return { values: record.values, ...(record.created_at != null ? { createdAt: record.created_at } : {}) };
+        } catch (err) {
+          if (isHttp404(err)) return null;
+          throw err;
+        }
+      },
     });
+    return { events: [], arrivals };
   }
 
-  /**
-   * Inbound intercept. Attio delivers a BATCH of changes in one POST body
-   * (`{ webhook_id, events: [...] }`) — no async fetch needed, so this just
-   * splits the batch into one `DiscriminableEvent` per change. The synthesized
-   * payload (`{ event_type, id, actor }`) is what `listEventTypes`' `match`
-   * (`id.object_id`) discriminates on. `record_id` → `externalId` (the KG
-   * bridge key), `object_id` → `recordType` (the source object), and the
-   * changed attribute UUID → `changedFields` for edge pruning.
-   */
-  async preprocessInbound(input: { raw: unknown }): Promise<{ events: DiscriminableEvent[] }> {
-    const parsed = attioWebhookBodySchema.safeParse(input.raw);
-    if (!parsed.success) return { events: [] };
+  /** A run waits on a record's `Changes` under its record id: the key each
+   *  arrival on them names. */
+  readonly arrivals: ArrivalsCapability = {
+    awaitKeys: async ({ edge, heads }: { edge: string; heads: AwaitHead[] }): Promise<AwaitKey[]> => {
+      if (edge !== ATTIO_CHANGES_EDGE) throw new Error(`attio: '${edge}' is not a listenable edge (only '${ATTIO_CHANGES_EDGE}')`);
+      return heads.map((head) => ({ key: head.recordId }));
+    },
+  };
 
-    return {
-      events: parsed.data.events.map((e) => ({
-        payload: {
-          event_type: e.event_type,
-          // The event node's `action` field — the same value the wire's
-          // `event_type` carries, under the surface name the schema declares
-          // (and the name an address pins: `WHERE `action` == "…"`).
-          action: e.event_type,
-          id: { record_id: e.id.record_id, object_id: e.id.object_id },
-          actor: e.actor,
-        },
-        externalId: e.id.record_id,
-        recordType: e.id.object_id,
-        eventType: e.event_type,
-        ...(attioChangeType(e.event_type) ? { changeType: attioChangeType(e.event_type) } : {}),
-        ...attioIdempotencyKey(e.event_type, e.id),
-        ...(normalizeAttioActor(e.actor) ? { actor: normalizeAttioActor(e.actor) } : {}),
-        ...(e.id.attribute_id ? { changedFields: [e.id.attribute_id] } : {}),
-      })),
-    };
+  /** The object a webhook event's `object_id` names (Attio's id; a slug is
+   *  accepted too). An object made since the catalog was read is found by
+   *  reading it again. */
+  private async objectNamedById(objectId: string): Promise<AttioObjectInfo | undefined> {
+    const named = (objects: AttioObjectInfo[]) => objects.find((o) => o.id === objectId || o.slug === objectId);
+    const held = named((await this.warmCatalogs()).objects);
+    if (held !== undefined) return held;
+    objectCatalogCache.delete(this.teamId);
+    return named((await this.warmCatalogs()).objects);
+  }
+
+  /** An object's attributes, as its record type and change type are built from. */
+  private async objectAttributes(object: AttioObjectInfo): Promise<AttioAttribute[]> {
+    const client = await this.getApiClient();
+    return client.listAttributes({ objectId: object.id });
   }
 
   /**
@@ -1168,16 +960,11 @@ export class AttioAdapter extends BaseAdapter {
       await uniformWalk({
         adapterType: ATTIO_ADAPTER_TYPE,
         at,
-        root: await this.walkRoot(),
+        root: { ...(await this.describeMeta()), typeId: META_RECORD_TYPE },
         describe: (typeId) => this.describe(typeId),
       // Attio's object and list type ids ARE the natural names, so a stub
       // names its target correctly with no extra lookup — which is part of why
       // stubbing is cheap here.
-      //
-      // The event edge is NOT stubbed: `describeWebhookEvent` reads the
-      // already-warm catalogs, so it costs nothing, and its fields (`action`
-      // and the record it carries) are exactly what an author needs to write a
-      // listener. Stub what is expensive, not everything.
       //
       // Hydrating the whole root was tried and measured at 2 upstream calls →
       // 10 (2026-07-19). Reverted: every root edge here is walkable, so a stub
@@ -1185,10 +972,7 @@ export class AttioAdapter extends BaseAdapter {
       // don't.
       ...(atRoot
         ? {
-            stubTarget: (reference) =>
-              reference.targetTypeId === ATTIO_WEBHOOK_EVENT_TYPE_ID
-                ? undefined
-                : stubTargetOf({ typeId: reference.targetTypeId }),
+            stubTarget: (reference) => stubTargetOf({ typeId: reference.targetTypeId }),
           }
         : {}),
       }),
@@ -1255,41 +1039,10 @@ export class AttioAdapter extends BaseAdapter {
     };
   }
 
-  /**
-   * The root node: the meta descriptor's collection edges, plus the event edge
-   * the meta descriptor deliberately omits.
-   *
-   * `describeMeta` leaves the event out because it must not project a
-   * traversable COLLECTION. Under the walk that reasoning inverts: an event is
-   * reached along an edge like everything else, and the edge says which
-   * promise it makes. `fires: true, readable: false` states it exactly — you
-   * are pushed along this one, you cannot enumerate it.
-   */
-  private async walkRoot(): Promise<SchemaTypeDescriptor> {
-    const meta = await this.describeMeta();
-    return {
-      ...meta,
-      typeId: META_RECORD_TYPE,
-      references: [
-        ...meta.references,
-        {
-          fieldId: ATTIO_WEBHOOK_EVENT_TYPE_ID,
-          targetTypeId: ATTIO_WEBHOOK_EVENT_TYPE_ID,
-          cardinality: 'one',
-          direction: 'outgoing',
-          name: 'Webhook Event',
-          fires: true,
-          readable: false,
-          description: 'A record being created, updated or deleted — what a listen delivers.',
-        },
-      ],
-    };
-  }
-
   async describe(typeRef: string): Promise<SchemaTypeDescriptor | null> {
     // Accept the NATURAL type name (engine / checker currency) or the internal
     // typeId (resolver build, legacy callers) — `resolveTypeRef` normalizes
-    // both. The synthetic/meta ids (`attio:webhook_event`, per-list ids, …)
+    // both. The synthetic/meta ids (`attio:list`, per-list ids, …)
     // are entry-point typeIds, so they pass through unchanged. Everything
     // below works on the internal `typeId`.
     const typeId = await this.resolveTypeRef(typeRef);
@@ -1327,10 +1080,8 @@ export class AttioAdapter extends BaseAdapter {
     if (typeId === ATTIO_NOTE_TYPE_ID) return describeNoteMeta();
     if (typeId === ATTIO_COMMENT_TYPE_ID) return describeCommentMeta();
     if (typeId === ATTIO_FILE_TYPE_ID) return describeFileMeta();
-    if (typeId === ATTIO_WEBHOOK_EVENT_TYPE_ID) {
-      const { objects, lists } = await this.warmCatalogs();
-      return describeWebhookEvent(objects, lists);
-    }
+    const changed = objectOfChangeType((await this.warmCatalogs()).objects, typeId);
+    if (changed) return describeChange(changed, await this.objectAttributes(changed));
     // Object record types: the name resolves to its structured identifier via
     // the private cache, then a lazy per-type attribute fetch builds the
     // descriptor. Per-list types fall through to their own builder. An unknown
@@ -1463,10 +1214,8 @@ export class AttioAdapter extends BaseAdapter {
     // per-list collections carry a root edge. Note / Task / List / Comment /
     // File have NO meta edge at all: they are RECORD-OWNED (or list-owned) and
     // reachable only through their parent (rule 0 — the surface must not lie
-    // about access; access lives where it is real). The Webhook Event entry is
-    // deliberately ABSENT here too: an event edge's promise is `fires`, not
-    // read or write, and it must not project a traversable collection
-    // (8_event_edges.md).
+    // about access; access lives where it is real). A record's changes are
+    // listened to on its own `Changes` edge, never off the root.
     const perListReferences: SchemaReferenceDescriptor[] = lists.map((list) => ({
       fieldId: list.name,
       targetTypeId: list.name,
@@ -1530,6 +1279,7 @@ export class AttioAdapter extends BaseAdapter {
         ...base.references,
         ...perListRefs,
         ...ATTACHABLE_TO_RECORDS,
+        changesEdge(obj),
         {
           // Lists live under their PARENT OBJECT (rule 0): `record-[:Lists]->`
           // lands on the List nodes whose parent object is this record's —
@@ -1843,20 +1593,9 @@ export class AttioAdapter extends BaseAdapter {
   // ── 3. Field-level access ───────────────────────────────────────────────
 
   async getFieldValue(input: GetFieldValueInput): Promise<unknown> {
-    // Webhook event positions store the parsed event payload. The
-    // schema descriptor exposes clean field names (`Object`, `List`,
-    // `Record`, …); we map those to the underlying Attio payload
-    // paths (`id.object_id`, `id.list_id`, …) here. `Object` and
-    // `List` are translated UUID → display name so authors can write
-    // `Object == "Companies"` and `List == "Hot Leads"`; the others
-    // surface the raw id unchanged. Unknown values (object renamed,
-    // catalog stale) pass the raw UUID through — comparison against
-    // the authored name then fails to match, surfacing the staleness.
-    //
-    // The webhook event type publishes `fieldId === displayName`
-    // (`Object`/`Object`, `List`/`List`, …), so the NATURAL field name
-    // the engine hands us IS already the key `WEBHOOK_FIELD_TO_PAYLOAD_PATH`
-    // and the descriptor are keyed by — natural==internal here, no resolve.
+    // A change (an arrival's landing) holds its fields flat, by their names.
+    const changed = objectOfChangeType((await this.warmCatalogs()).objects, input.position.recordType);
+    if (changed) return changeFieldOf(positionData(input.position), input.fieldId);
     if (!isStablePosition(input.position)) {
       if (input.position.adapterType !== this.adapterType) {
         throw new Error(
@@ -1882,20 +1621,7 @@ export class AttioAdapter extends BaseAdapter {
         if (fileFieldId === 'data') return this.attioFileRef(data ?? null);
         return data ? (data[fileFieldId as keyof AttioFileRecord] ?? null) : null;
       }
-      const payloadPath = WEBHOOK_FIELD_TO_PAYLOAD_PATH[input.fieldId];
-      if (!payloadPath) {
-        throw new Error(
-          `AttioAdapter.getFieldValue: field "${input.fieldId}" is not declared on the Attio webhook event`,
-        );
-      }
-      const raw = readDotPath(positionData(input.position), payloadPath);
-      if (input.fieldId === 'Object' && typeof raw === 'string') {
-        return (await this.translateObjectIdToName(raw)) ?? raw;
-      }
-      if (input.fieldId === 'List' && typeof raw === 'string') {
-        return (await this.translateListIdToName(raw)) ?? raw;
-      }
-      return raw;
+      throw new Error(`AttioAdapter.getFieldValue: no field "${input.fieldId}" on a ${input.position.recordType ?? 'position'} that is not a record`);
     }
 
     if (input.position.adapterType !== this.adapterType) {
@@ -1972,56 +1698,11 @@ export class AttioAdapter extends BaseAdapter {
       return this.getRelatedFromMeta({ edgeFieldId: recordType, nativeFilter });
     }
 
-    // Webhook event → record traversal. The edge field id is the Attio
-    // object's display name (`Companies`, `People`, …); we resolve it
-    // against the catalog to get the slug/UUID for the REST fetch. Edge
-    // existence implies "this event might be for this object" — the
-    // actual yield is conditional on `event.id.object_id` matching, so a
-    // mismatched event resolves to an empty traversal (the framework
-    // treats "no related positions" as a clean no-op).
-    if (!isStablePosition(input.position)) {
-      if (input.fieldId === ATTIO_LIST_FOR_EVENT_FIELD) {
-        return this.getListForEvent({
-          position: input.position,
-        });
-      }
-      // Per-list entry edge: the fieldId is a LIST's display name. Land the
-      // entry typed as that list's per-list type (which carries its one real
-      // parent), gated on the event's `list_id` matching — a mismatched list
-      // yields `[]`, symmetric with the per-object record edges above.
-      const targetList = await this.structuredListFor(input.fieldId);
-      if (targetList) {
-        return this.getEntryForEvent({
-          position: input.position,
-          targetList,
-        });
-      }
-      if (input.fieldId === ATTIO_TASK_FOR_EVENT_FIELD) {
-        return this.getTaskForEvent({
-          position: input.position,
-        });
-      }
-      if (input.fieldId === ATTIO_NOTE_FOR_EVENT_FIELD) {
-        return this.getNoteForEvent({
-          position: input.position,
-        });
-      }
-      if (input.fieldId === ATTIO_COMMENT_FOR_EVENT_FIELD) {
-        return this.getCommentForEvent({
-          position: input.position,
-        });
-      }
-
-      const obj = await this.findObjectByDisplayName(input.fieldId);
-      if (obj) {
-        return this.getRecordForEvent({
-          position: input.position,
-          targetObject: obj,
-        });
-      }
-      // Unknown edge name on a webhook-event position. Fall through so
-      // the synthetic-edge / record-reference branches below produce the
-      // standard "not implemented" error rather than silently no-oping.
+    // A change → the record it changed, read from Attio now.
+    const changed = objectOfChangeType((await this.warmCatalogs()).objects, input.position.recordType);
+    if (changed) {
+      if (naturalName(input.fieldId) !== changed.singular) return [];
+      return this.changedRecord(changed, positionData(input.position));
     }
 
     if (!isStablePosition(input.position)) {
@@ -2669,62 +2350,18 @@ export class AttioAdapter extends BaseAdapter {
     return { items, ...(nextOffset !== undefined ? { nextCursor: nextOffset } : {}) };
   }
 
-  /**
-   * Resolve `webhook-event → -[:<ObjectName>]->`. The edge name picks the
-   * target object; we still verify that `event.id.object_id` agrees with
-   * that object before fetching. A mismatch yields no related positions
-   * — the event is for a different object and the traversal terminates
-   * cleanly. (Authors filter `event_type == 'record.created'` plus the
-   * specific edge they want; combining several edges in one filter is
-   * how they cover multiple objects.)
-   */
-  private async getRecordForEvent(input: {
-    position: SourcePosition;
-    targetObject: AttioObjectInfo;
-  }): Promise<RelatedResult[]> {
-    const eventObjectId = readDotPath(positionData(input.position), 'id.object_id');
-    if (eventObjectId !== input.targetObject.id) {
-      // Wrong object for this edge — the trigger filter let an event
-      // through that doesn't match this traversal's target. Empty
-      // traversal is the right "no-op" semantics; the caller's
-      // remaining traversals continue.
-      return [];
-    }
-
-    const recordId = readDotPath(positionData(input.position), 'id.record_id');
-    if (typeof recordId !== 'string' || recordId.length === 0) {
-      logger.warn('[AttioAdapter.getRelated] webhook event missing id.record_id', {
-        targetObjectName: input.targetObject.name,
-      });
-      return [];
-    }
-
-    // The emitted record position is named by the target object's display
-    // name (the framework identity); the API fetch uses its slug/UUID.
-    const targetTypeId = input.targetObject.name;
-    const fetchObjectId = input.targetObject.slug ?? input.targetObject.id;
-    const cacheKey = `${this.adapterType}:${targetTypeId}:${recordId}`;
-    const cached = this.fetchCache.get(cacheKey);
-    if (cached) return [{ position: cached }];
-
+  /** The record a change is about, as Attio holds it now; none once it is
+   *  gone. */
+  private async changedRecord(object: AttioObjectInfo, change: unknown): Promise<RelatedResult[]> {
+    const recordId = changeFieldOf(change, 'Record');
+    if (typeof recordId !== 'string' || recordId === '') return [];
     try {
       const client = await this.getApiClient();
-      const record = await client.getRecord({ objectId: fetchObjectId, recordId });
-      const position: SourcePosition = makeStablePosition({
-        adapterType: this.adapterType,
-        recordType: targetTypeId,
-        recordId: record.id.record_id,
-        data: record.values,
-      });
-      this.fetchCache.set(cacheKey, position);
-      return [{ position }];
+      const record = await client.getRecord({ objectId: object.slug ?? object.id, recordId });
+      return [{ position: makeStablePosition({ adapterType: this.adapterType, recordType: object.name, recordId: record.id.record_id, data: record.values }) }];
     } catch (err) {
-      logger.warn('[AttioAdapter.getRelated] failed to fetch record for event', {
-        targetTypeId,
-        recordId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return [];
+      if (isHttp404(err)) return [];
+      throw err;
     }
   }
 
@@ -2782,190 +2419,6 @@ export class AttioAdapter extends BaseAdapter {
       logger.warn('[AttioAdapter.getRelated] failed to fetch record for list entry', {
         targetTypeId,
         parentRecordId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return [];
-    }
-  }
-
-  /**
-   * Resolve `webhook-event → -[:List]->`. The event payload carries
-   * `id.list_id`; we materialize a synthetic `attio:list` position with
-   * the list's id + name. Used for traversals like `-[:List]->.name`.
-   * Looks the list up in the workspace catalog; missing or stale lists
-   * yield an empty traversal.
-   */
-  private async getListForEvent(input: {
-    position: SourcePosition;
-  }): Promise<RelatedResult[]> {
-    const listId = readDotPath(positionData(input.position), 'id.list_id');
-    if (typeof listId !== 'string' || listId.length === 0) {
-      return [];
-    }
-
-    const cacheKey = `${this.adapterType}:${ATTIO_LIST_TYPE_ID}:${listId}`;
-    const cached = this.fetchCache.get(cacheKey);
-    if (cached) return [{ position: cached }];
-
-    try {
-      const client = await this.getApiClient();
-      const lists = await client.listLists();
-      const list = lists.find((l) => l.id === listId);
-      if (!list) return [];
-      const position: SourcePosition = makeStablePosition({
-        adapterType: this.adapterType,
-        // NATURAL name — the internal sentinel (`attio:list`) drifts at
-        // resolveFieldId, which keys its maps by displayName.
-        recordType: (await this.resolver()).naturalTypeName(ATTIO_LIST_TYPE_ID),
-        recordId: list.id,
-        data: { id: list.id, name: list.name },
-      });
-      this.fetchCache.set(cacheKey, position);
-      return [{ position }];
-    } catch (err) {
-      logger.warn('[AttioAdapter.getRelated] failed to resolve list for event', {
-        listId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return [];
-    }
-  }
-
-  /**
-   * Resolve `webhook-event → -[:Entry]->`. The event payload carries
-   * `id.list_id` + `id.entry_id`; we fetch the full list entry and
-   * materialize a synthetic `attio:list_entry` position.
-   */
-  private async getEntryForEvent(input: {
-    position: SourcePosition;
-    /** The list this hop names. The entry lands typed as this list's per-list
-     *  type (so its one parent up-hop is reachable), and the event must be for
-     *  THIS list — a mismatch yields `[]`, like a mismatched record edge. */
-    targetList: AttioListInfo;
-  }): Promise<RelatedResult[]> {
-    const listId = readDotPath(positionData(input.position), 'id.list_id');
-    const entryId = readDotPath(positionData(input.position), 'id.entry_id');
-    if (
-      typeof listId !== 'string' || listId.length === 0 ||
-      typeof entryId !== 'string' || entryId.length === 0
-    ) {
-      return [];
-    }
-    // Gate on the named list matching the event's list (symmetric with the
-    // per-object record edge's `parent_object` match).
-    if (listId !== input.targetList.id) return [];
-    const cacheKey = `${this.adapterType}:${input.targetList.name}:${entryId}`;
-    const cached = this.fetchCache.get(cacheKey);
-    if (cached) return [{ position: cached }];
-    try {
-      const client = await this.getApiClient();
-      const entry = await client.getListEntry({ listId, entryId });
-      const position: SourcePosition = makeStablePosition({
-        adapterType: this.adapterType,
-        // The PER-LIST type name (`VC Deal Flow`), so the checker's
-        // `-[:<Object>]->` parent hop types against that list's single parent
-        // and `isListEntryRecordType` still recognizes it (via structuredListFor).
-        recordType: input.targetList.name,
-        recordId: entryId,
-        // Flat shape: parent_record_id + parent_object + created_at at top
-        // level, entry's own attribute values nested in `entry_values` (the
-        // adapter's external-record getFieldValue path will read them
-        // out of `data` directly without the Attio array-unwrapping
-        // since list_entry's recordType isn't a real object slug). The
-        // parent keys come AFTER the spread so a same-named entry value can't
-        // shadow the record → object back-hop. `list_id` rides along so the
-        // entry's `Comments` edge can scope its thread read
-        // (GET /v2/threads?entry_id=…&list=…) without a second lookup.
-        data: {
-          created_at: entry.created_at,
-          ...entry.values,
-          parent_record_id: entry.parent_record_id,
-          parent_object: entry.parent_object ?? null,
-          list_id: listId,
-        },
-      });
-      this.fetchCache.set(cacheKey, position);
-      return [{ position }];
-    } catch (err) {
-      logger.warn('[AttioAdapter.getRelated] failed to resolve entry for event', {
-        listId,
-        entryId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return [];
-    }
-  }
-
-  /** Resolve `webhook-event → -[:Task]->` via GET /v2/tasks/{id}. */
-  private async getTaskForEvent(input: {
-    position: SourcePosition;
-  }): Promise<RelatedResult[]> {
-    const taskId = readDotPath(positionData(input.position), 'id.task_id');
-    if (typeof taskId !== 'string' || taskId.length === 0) return [];
-    const cacheKey = `${this.adapterType}:${ATTIO_TASK_TYPE_ID}:${taskId}`;
-    const cached = this.fetchCache.get(cacheKey);
-    if (cached) return [{ position: cached }];
-    try {
-      const client = await this.getApiClient();
-      const task = await client.getTask({ taskId });
-      // The shared minter stamps the NATURAL recordType — an event-hop Task
-      // must read identically to a root-read Task.
-      const position = await this.taskPosition(task);
-      this.fetchCache.set(cacheKey, position);
-      return [{ position }];
-    } catch (err) {
-      logger.warn('[AttioAdapter.getRelated] failed to resolve task for event', {
-        taskId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return [];
-    }
-  }
-
-  /** Resolve `webhook-event → -[:Note]->` via GET /v2/notes/{id}. */
-  private async getNoteForEvent(input: {
-    position: SourcePosition;
-  }): Promise<RelatedResult[]> {
-    const noteId = readDotPath(positionData(input.position), 'id.note_id');
-    if (typeof noteId !== 'string' || noteId.length === 0) return [];
-    const cacheKey = `${this.adapterType}:${ATTIO_NOTE_TYPE_ID}:${noteId}`;
-    const cached = this.fetchCache.get(cacheKey);
-    if (cached) return [{ position: cached }];
-    try {
-      const client = await this.getApiClient();
-      const note = await client.getNote({ noteId });
-      // Shared minter — natural recordType, same shape as the root read.
-      const position = await this.notePosition(note);
-      this.fetchCache.set(cacheKey, position);
-      return [{ position }];
-    } catch (err) {
-      logger.warn('[AttioAdapter.getRelated] failed to resolve note for event', {
-        noteId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return [];
-    }
-  }
-
-  /** Resolve `webhook-event → -[:Comment]->` via GET /v2/comments/{id}. */
-  private async getCommentForEvent(input: {
-    position: SourcePosition;
-  }): Promise<RelatedResult[]> {
-    const commentId = readDotPath(positionData(input.position), 'id.comment_id');
-    if (typeof commentId !== 'string' || commentId.length === 0) return [];
-    const cacheKey = `${this.adapterType}:${ATTIO_COMMENT_TYPE_ID}:${commentId}`;
-    const cached = this.fetchCache.get(cacheKey);
-    if (cached) return [{ position: cached }];
-    try {
-      const client = await this.getApiClient();
-      const comment = await client.getComment({ commentId });
-      // Shared minter — natural recordType, author actor resolved to email.
-      const position = await this.commentPosition(comment);
-      this.fetchCache.set(cacheKey, position);
-      return [{ position }];
-    } catch (err) {
-      logger.warn('[AttioAdapter.getRelated] failed to resolve comment for event', {
-        commentId,
         error: err instanceof Error ? err.message : String(err),
       });
       return [];
@@ -3373,29 +2826,10 @@ export class AttioAdapter extends BaseAdapter {
     return null;
   }
 
-  // ── 4. Trigger implementations ──────────────────────────────────────────
+  // ── 4. Collection pages ─────────────────────────────────────────────────
 
-  /**
-   * Snapshot iterator. The framework calls this once per (pipelineInputId,
-   * recordType, native-filter); it must yield one TriggerEvent per source
-   * record.
-   *
-   * `recordType` is the entry's NATURAL object name (e.g. `People`); we
-   * recover the slug/UUID the Attio REST API routes on from the private name
-   * cache. `filter` carries the post-translateFilter native shape
-   * (`AttioNativeFilter`); absence defaults to `{ kind: 'all' }`.
-   */
-  async *snapshot(input: SnapshotInput): AsyncIterable<TriggerEvent> {
-    let offset: number | undefined = 0;
-    do {
-      const page = await this.snapshotPage(input, offset);
-      yield* page.events;
-      offset = page.nextOffset;
-    } while (offset !== undefined);
-  }
-
-  /** One page of `snapshot` at `offset` — the shared unit of Attio's offset
-   *  paging, so the trigger snapshot and a paged root read step identically.
+  /** One page of an object's (or list's) records at `offset` — the unit of
+   *  Attio's offset paging a paged root read steps by.
    *  The page's listing is fetched up front; its events may be produced
    *  lazily (see `listEntriesSnapshotPage`). `nextOffset` is absent on the
    *  last page. */
@@ -4450,42 +3884,26 @@ export class AttioAdapter extends BaseAdapter {
   // `fileRefToBlob`.
 
   // ── Event subscriptions (the listen-reconciliation seam) ────────────────
-  // REAL provisioning: Attio has a first-class webhook API. The platform
-  // owns the stable per-(adapter, credential) callback URL and the inbound
-  // verification path (webhook_sync handler + the attio provider's HMAC
-  // check); these two calls own the source-side registration. Diff-sync
-  // semantics: no current registration → create; same events → no-op;
-  // changed events → PATCH the webhook in place (URL and secret stable).
+  // One Attio webhook serves every listen on a connection's `Changes`: it
+  // takes every record event, and the host judges each arrival by the record
+  // type it landed on. Attio issues the webhook's secret when it is made.
 
-  async ensureEventSubscription(
-    input: EnsureEventSubscriptionInput,
-  ): Promise<EventSubscriptionRegistration | undefined> {
+  async ensureEventSubscription(input: EnsureEdgeSubscriptionInput): Promise<EventSubscriptionRegistration | undefined> {
+    if (input.edge !== ATTIO_CHANGES_EDGE) throw new Error(`attio: '${input.edge}' is not a listenable edge (only '${ATTIO_CHANGES_EDGE}')`);
+    // The one webhook for this URL is held: it already takes every record event.
+    if (input.current?.externalId !== undefined) return undefined;
     const client = await this.getApiClient();
     // Attio requires every subscription to carry a `filter` (nullable, but the
     // field must be present) — omitting it is a 400 `validation_type` on
-    // `subscriptions[].filter`. `null` = no filter (fire on every record of the
-    // subscribed event), which is exactly the listen semantics here.
-    const subscriptions = input.events.map((event_type) => ({ event_type, filter: null }));
-    if (input.current?.externalId !== undefined) {
-      const unchanged =
-        input.current.events.length === input.events.length &&
-        input.current.events.every((e) => input.events.includes(e));
-      if (unchanged) return undefined;
-      await client.updateWebhook({
-        webhookId: input.current.externalId,
-        subscriptions,
-      });
-      // PATCH keeps the source-issued id and secret — nothing new to persist.
-      return { externalId: input.current.externalId };
-    }
+    // `subscriptions[].filter`. `null` = every record of the event.
     const created = await client.createWebhook({
       targetUrl: input.callbackUrl,
-      subscriptions,
+      subscriptions: ATTIO_RECORD_EVENTS.map((event_type) => ({ event_type, filter: null })),
     });
     return { externalId: created.webhookId, secret: created.secret };
   }
 
-  async removeEventSubscription(input: RemoveEventSubscriptionInput): Promise<void> {
+  async removeEventSubscription(input: RemoveEdgeSubscriptionInput): Promise<void> {
     if (input.externalId === undefined) return;
     const client = await this.getApiClient();
     await client.deleteWebhook(input.externalId);
@@ -4725,8 +4143,8 @@ function resolveRecordReferenceTargets(
  */
 async function buildTypeDescriptor(
   client: AttioApiClient,
-  obj: { id: string; name: string; slug: string | null },
-  objectsById: Map<string, { id: string; name: string; slug: string | null }>,
+  obj: AttioObjectInfo,
+  objectsById: Map<string, AttioObjectInfo>,
 ): Promise<SchemaTypeDescriptor> {
   const attrs = await withAttributeOptions(
     client,
@@ -5095,42 +4513,6 @@ function buildAttioPredicate(
     default:
       return { [op]: v };
   }
-}
-
-export function extractAttioValue(raw: unknown): unknown {
-  if (!Array.isArray(raw) || raw.length === 0) return null;
-  const first = raw[0];
-  if (typeof first !== 'object' || first === null) return first;
-
-  const obj = first as Record<string, unknown>;
-  return (
-    obj.value ??
-    obj.full_name ??
-    obj.first_name ??
-    obj.domain ??
-    obj.email_address ??
-    obj.original_email_address ??
-    // status / select values nest the chosen option under `status` / `option`
-    // with a human `title` — read that back, so the field compares and
-    // interpolates as the plain option name ("Lead"), never as the raw
-    // envelope. Without this, every predicate over a status field (including
-    // the engine's re-check of a pushed-down filter) compares an object to a
-    // string and silently matches nothing.
-    optionTitle(obj.status) ??
-    optionTitle(obj.option) ??
-    // actor-reference ("User") values — read back the workspace-member id as
-    // a clean string so the field reads consistently with its `string` kind
-    // (rather than the raw `[{ referenced_actor_type, referenced_actor_id }]`).
-    obj.referenced_actor_id ??
-    raw
-  );
-}
-
-/** The `title` of a nested status/select option object, or undefined. */
-function optionTitle(nested: unknown): string | undefined {
-  if (typeof nested !== 'object' || nested === null) return undefined;
-  const title = (nested as Record<string, unknown>).title;
-  return typeof title === 'string' ? title : undefined;
 }
 
 /**

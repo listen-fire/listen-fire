@@ -7,7 +7,8 @@
 // expire. `ctx.config.baseUrlOverride` (the dev loop's fake) wins over the
 // credential's own base URL. Deliveries are signed with the secret Attio
 // issued for the webhook; the host refuses one with no secret or a bad
-// signature.
+// signature, and hands the rest to `preprocessInbound`, whose arrivals land
+// on each changed record's `Changes`.
 
 import { defineModule, type ModuleContext } from 'module-kit';
 
@@ -66,6 +67,10 @@ export const attioModule = defineModule({
     // Attio issues each webhook's secret when it is registered.
     secretIssuedBy: 'provider',
   },
+  // Adapter protocol 2.6: a record's change arrives carrying the record
+  // (`parents`), `about` it and `occurredAt`, and its webhook is registered
+  // for an edge (`ensureEventSubscription({ edge })`).
+  protocolMinor: 6,
   create: (ctx) =>
     new AttioAdapter({ tenant: ctx.config.tenant, client: attioClientFrom(ctx), files: ctx.files, fetch: ctx.fetch }),
 });
@@ -75,6 +80,7 @@ export default attioModule;
 export * from './adapter';
 export * from './api_client';
 export * from './attributes';
+export * from './changes';
 export * from './field_rejections';
 export * from './manifest';
 export * from './oauth';

@@ -349,6 +349,7 @@ const recordValidator = z.object({
     record_id: z.string(),
   }),
   web_url: z.string().optional(),
+  created_at: z.string().nullable().optional(),
   values: z.record(z.string(), z.any()),
 });
 
@@ -761,7 +762,7 @@ class AttioAPIClient implements AttioConfigurer {
     return null;
   }
 
-  async listObjects(): Promise<{ id: string; name: string; slug: string | null }[]> {
+  async listObjects(): Promise<{ id: string; name: string; singular: string; slug: string | null }[]> {
     const objects = await this.fetch({
       route: '/v2/objects',
       method: 'GET',
@@ -780,6 +781,7 @@ class AttioAPIClient implements AttioConfigurer {
         return {
           id: object.id.object_id,
           name,
+          singular: object.singular_noun ?? name,
           slug: object.api_slug,
         };
       })

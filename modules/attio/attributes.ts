@@ -79,7 +79,7 @@ interface AttioConfigurer {
       apiSlug: string | null;
     }[]
   >;
-  listObjects(): Promise<{ id: string; name: string; slug: string | null }[]>;
+  listObjects(): Promise<{ id: string; name: string; singular: string; slug: string | null }[]>;
   listAttributes(params: { objectId?: string; listId?: string }): Promise<AttioAttribute[]>;
   listAttributeOptions(params: {
     objectId?: string;
@@ -94,6 +94,44 @@ interface AttioConfigurer {
   listWorkspaceMembers(): Promise<
     { id: string; firstName: string; lastName: string; email: string }[]
   >;
+}
+
+/** One attribute's value as a record holds it (Attio's array of typed
+ *  values), read as the plain value a field compares and reads as. */
+export function extractAttioValue(raw: unknown): unknown {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const first = raw[0];
+  if (typeof first !== 'object' || first === null) return first;
+
+  const obj = first as Record<string, unknown>;
+  return (
+    obj.value ??
+    obj.full_name ??
+    obj.first_name ??
+    obj.domain ??
+    obj.email_address ??
+    obj.original_email_address ??
+    // status / select values nest the chosen option under `status` / `option`
+    // with a human `title` — read that back, so the field compares and
+    // interpolates as the plain option name ("Lead"), never as the raw
+    // envelope. Without this, every predicate over a status field (including
+    // the engine's re-check of a pushed-down filter) compares an object to a
+    // string and silently matches nothing.
+    optionTitle(obj.status) ??
+    optionTitle(obj.option) ??
+    // actor-reference ("User") values — read back the workspace-member id as
+    // a clean string so the field reads consistently with its `string` kind
+    // (rather than the raw `[{ referenced_actor_type, referenced_actor_id }]`).
+    obj.referenced_actor_id ??
+    raw
+  );
+}
+
+/** The `title` of a nested status/select option object, or undefined. */
+export function optionTitle(nested: unknown): string | undefined {
+  if (typeof nested !== 'object' || nested === null) return undefined;
+  const title = (nested as Record<string, unknown>).title;
+  return typeof title === 'string' ? title : undefined;
 }
 
 export type { AttioConfigurer, AttioAttribute };

@@ -64,3 +64,13 @@ describe('@lf/attio client from the connected credential', () => {
     await expect(attioClientFrom(context({}))()).rejects.toThrow(/holds no access token/);
   });
 });
+
+describe('@lf/attio listens on a record’s Changes', () => {
+  it('states adapter protocol 2.6, answers awaitKeys, and keeps no 0.12 settings vocabulary', () => {
+    expect(attioModule.protocolMinor).toBe(6);
+    expect(attioModule.manifest.methods).toContain('awaitKeys');
+    expect(attioModule.manifest.methods).not.toContain('listEventTypes');
+    expect(attioModule.manifest).not.toHaveProperty('subscribableEvents');
+    expect(attioModule.manifest.supportedTriggers).toEqual(['webhook']);
+  });
+});

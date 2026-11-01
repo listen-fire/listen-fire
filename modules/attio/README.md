@@ -30,3 +30,20 @@ listen-fire credential add --module attio henry_attio --credential attio
 
 Either way the movement says `connect attio using henry_attio`; Attio receives the
 same bearer header from both.
+
+## Listening
+
+A record's changes arrive on its `Changes`, one record type per object (a deal's
+are `DealChange`, a company's `CompanyChange`):
+
+```
+listen to crm-[:Deals]->-[c:Changes WHERE c.Field == "Stage"]-> fire `Stage Moved`
+```
+
+`Kind` is `created`, `updated` or `deleted`; on an update, `Field` is the title of
+the attribute that changed (Attio sends one change per attribute). Each change
+carries the record as it is after it, so a WHERE on the record's hop
+(`crm-[d:Deals WHERE d.Stage == "Won"]->`) is judged without a read; walk the
+change's `Deal` for the deal itself. `listen-fire serve` registers one webhook per
+connection, for every object's record events, at the door it prints; Attio
+issues its secret. A redelivery of the same change runs nothing.

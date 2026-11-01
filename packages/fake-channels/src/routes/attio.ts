@@ -103,6 +103,16 @@ function normalizeValues(values: Record<string, unknown>): Record<string, unknow
   return out;
 }
 
+/** Values as Attio stores a write of them: each stamped with when it took
+ *  effect (`active_from`), as a real record's are. */
+function stampedValues(values: Record<string, unknown>, at: string): Record<string, unknown[]> {
+  const out: Record<string, unknown[]> = {};
+  for (const [key, items] of Object.entries(normalizeValues(values))) {
+    out[key] = items.map((item) => (item !== null && typeof item === 'object' && !('active_from' in item) ? { ...item, active_from: at } : item));
+  }
+  return out;
+}
+
 /** A webhook as Attio lists it: its secret is shown once, at creation. */
 function publicWebhook(data: Record<string, unknown>): Record<string, unknown> {
   const { secret: _secret, ...shown } = data;
@@ -191,9 +201,11 @@ export function attioRoutes(store: EntityStore): Router {
 
   r.post('/v2/objects/:objectId/records', (req, res) => {
     const id = store.nextId(SVC, `record:${req.params.objectId}`);
+    const at = new Date().toISOString();
     const recordData = {
       id: { workspace_id: 'test', object_id: req.params.objectId, record_id: id },
-      values: normalizeValues(req.body.data?.values || {}),
+      created_at: at,
+      values: stampedValues(req.body.data?.values || {}, at),
     };
     store.create(SVC, `record:${req.params.objectId}`, recordData, id);
     res.json({ data: recordData });
@@ -204,7 +216,7 @@ export function attioRoutes(store: EntityStore): Router {
     if (!record) return res.status(404).json({ error: 'Not found' });
     const values = {
       ...(record.data.values as Record<string, unknown>),
-      ...normalizeValues(req.body.data?.values || {}),
+      ...stampedValues(req.body.data?.values || {}, new Date().toISOString()),
     };
     store.update(SVC, `record:${req.params.objectId}`, req.params.recordId, { ...record.data, values });
     res.json({ data: { ...record.data, values } });

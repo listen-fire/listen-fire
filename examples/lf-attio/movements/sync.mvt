@@ -3,13 +3,12 @@ import { henry_attio } from credentials
 
 crm = connect attio using henry_attio
 
-# A company created or changed in Attio gets a description; the write finds
-# it by name, so it updates that record rather than making another. The
-# update comes back from Attio as record.updated: with the loop guard in
-# lf.yaml's core:, lf knows it for this movement's own write and runs
-# nothing, while someone else's change runs it.
-function stamp(ev: <crm-[e:`Webhook Event`]->>) {
-  ev-[company:Companies]-> {
+# A company created in Attio, or renamed, gets a description; the write finds
+# it by name, so it updates that record rather than making another. The write
+# comes back from Attio as a change to Description, which this listen does not
+# take, so it never loops.
+function stamp(c: <crm-[:CompanyChange]->>) {
+  c-[company:Company]-> {
     write crm-[:Companies]-> {
       unique by (Name)
       Name: company.Name
@@ -18,4 +17,4 @@ function stamp(ev: <crm-[e:`Webhook Event`]->>) {
   }
 }
 
-listen to crm { events: ["record.created", "record.updated"] } fire stamp
+listen to crm-[:Companies]->-[c:Changes WHERE c.Kind == "created" OR c.Field == "Name"]-> fire stamp

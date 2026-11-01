@@ -4,87 +4,32 @@
 // that delivers Attio's signed webhooks to whatever listen-fire serve registered.
 //
 //   listen-fire init → listen-fire connect @lf/attio (pointed at the fake) → listen-fire credential add
-//   --headless → the example's movement → listen-fire check → listen-fire run --event --dry-run
-//   → publicUrl → listen-fire serve (registers the webhook) → a signed delivery runs
-//   the movement, a duplicate runs nothing, the movement's own write echoing
-//   back as record.updated runs it again, until the project opts in to the
-//   loop guard (core: loopGuard): then it runs nothing and a second user's
-//   update runs it →
+//   --headless → the example's movement → listen-fire check → publicUrl →
+//   listen-fire serve (registers the webhook for the connection's Changes) → a
+//   signed delivery of a company created runs the movement, the same delivery
+//   again runs nothing, the movement's own write coming back as a change to
+//   Description runs nothing (the listen takes only creations and renames), a
+//   rename runs it again, a forged delivery is refused →
 //   listen-fire runs → restarts keep the webhook; under a running listen-fire serve the
-//   webhook follows each refresh (fewer events, the listen removed, back);
+//   webhook follows each refresh (the listen removed, back);
 //   a listen removed while listen-fire is stopped is removed at the next start.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync, appendFileSync } from 'node:fs';
-import { createServer } from 'node:net';
+import { cpSync, mkdtempSync, renameSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createInterface } from 'node:readline';
+
+import { createRecord, deliver, fakeChannels, freePort, records, until, updateRecord, valueOf, webhooks } from './attio_fixture';
 import { lf as lfSync, served } from './example';
 import { lf, ok } from './interactive';
 
 const REPO = resolve(__dirname, '../../../..');
 const EXAMPLE = join(REPO, 'examples/lf-attio');
 
-interface Fake {
-  url: string;
-  json(path: string, body?: unknown): Promise<unknown>;
-  stop(): Promise<void>;
-}
-
-/** The `@listen-fire/fake-channels` package on a free port, its state in a folder of its own. */
-async function fakeChannels(): Promise<Fake> {
-  const cwd = mkdtempSync(join(tmpdir(), 'lf-attio-fake-'));
-  const child: ChildProcess = spawn(process.execPath, [require.resolve('@listen-fire/fake-channels/bin/fake-channels.cjs')], {
-    cwd,
-    env: { ...process.env, FAKE_CHANNELS_PORT: '0' },
-    stdio: ['ignore', 'pipe', 'inherit'],
-  });
-  const exited = new Promise<void>((done) => child.once('exit', () => done()));
-  const url = await new Promise<string>((found, failed) => {
-    createInterface({ input: child.stdout! }).on('line', (line) => {
-      const port = /running on http:\/\/localhost:(\d+)/.exec(line)?.[1];
-      if (port !== undefined) found(`http://127.0.0.1:${port}`);
-    });
-    void exited.then(() => failed(new Error('fake-channels exited before listening')));
-  });
-  const json = async (path: string, body?: unknown) => {
-    const answer = await fetch(`${url}${path}`, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    assert.equal(answer.status, 200, `${path}: ${await answer.clone().text()}`);
-    return answer.json() as Promise<unknown>;
-  };
-  return { url, json, stop: async () => (child.kill('SIGTERM'), exited) };
-}
-
-async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
-  const address = server.address();
-  assert.ok(address !== null && typeof address === 'object');
-  await new Promise<void>((done) => server.close(() => done()));
-  return address.port;
-}
-
-/** Wait, up to 20s, for `holds` to hold over the server's output. */
-async function until(holds: () => boolean, lines: string[]): Promise<void> {
-  for (const deadline = Date.now() + 20_000; !holds(); ) {
-    if (Date.now() > deadline) throw new Error(`timed out; saw:\n${lines.join('\n')}`);
-    await new Promise((done) => setTimeout(done, 50));
-  }
-}
-
-interface Webhook {
-  target_url: string;
-  subscriptions: Array<{ event_type: string }>;
-  id: string;
-}
-
-interface Company {
-  id: { record_id: string };
-  values: { name?: Array<{ value: string }>; description?: Array<{ value: string }> };
-}
+const REGISTERED = /^attio \(Changes, edge-[0-9a-f]+\): registered webhook fake-webhook-\d+ for the arrivals on Changes at /;
+const HELD = /^attio \(Changes, edge-[0-9a-f]+\): webhook fake-webhook-\d+ is registered for the arrivals on Changes at /;
+const REMOVED = /^attio \(Changes, edge-[0-9a-f]+\): no listen needs its webhook any more; removed webhook fake-webhook-\d+$/;
 
 test('the Attio walkthrough, end to end against the fake Attio', async () => {
   const fake = await fakeChannels();
@@ -115,65 +60,49 @@ test('the Attio walkthrough, end to end against the fake Attio', async () => {
     adding.answer(location);
     assert.match(await ok(adding), /added henry_attio \(attio, credential attio\)/);
 
-    // 4. The example's movement, and its event for a company in the fake.
+    // 4. The example's movement, checked against the fake's schema.
     cpSync(join(EXAMPLE, 'movements/sync.mvt'), join(dir, 'movements/sync.mvt'));
-    const vireo = ((await fake.json('/attio/v2/objects/companies/records', { data: { values: { name: 'Vireo Robotics' } } })) as { data: Company }).data;
-    const event = JSON.parse(readFileSync(join(EXAMPLE, 'events/created.json'), 'utf8')) as { event: { externalId: string; payload: { id: { record_id: string } } } };
-    event.event.externalId = vireo.id.record_id;
-    event.event.payload.id.record_id = vireo.id.record_id;
-    mkdirSync(join(dir, 'events'));
-    writeFileSync(join(dir, 'events/created.json'), JSON.stringify(event));
-
-    // 5. Checked against the fake's schema.
     const checked = lfSync(dir, 'check');
     assert.equal(checked.code, 0, checked.out);
 
-    // 6. A dry run reads the fake and writes nothing.
-    const dry = lfSync(dir, 'run', '--event', 'events/created.json', '--dry-run');
-    assert.equal(dry.code, 0, dry.out);
-    assert.match(dry.out, /sync:stamp completed/);
-    assert.match(dry.out, /dry run, not written: .*"kind":"update".*"Description":"Seen by lf"/);
-    const companies = async () => (await fake.json('/admin/attio/record:companies/state')) as Company[];
-    const named = async (name: string) => (await companies()).find((c) => c.values.name?.[0]?.value === name);
-    assert.equal((await named('Vireo Robotics'))?.values.description, undefined);
-
-    // 7. Where the fake reaches listen-fire serve.
+    // 5. Where the fake reaches listen-fire serve.
     const port = await freePort();
     const publicUrl = `http://127.0.0.1:${port}`;
     appendFileSync(join(dir, 'lf.yaml'), `publicUrl: ${publicUrl}\n`);
-    const door = `${publicUrl}/api/public/webhook-sync/attio/henry_attio`;
-    const webhooks = async () => (await fake.json('/admin/attio/webhook/state')) as Webhook[];
+    const doors = `${publicUrl}/api/public/webhook-sync/attio/henry_attio/edge-`;
+    const named = async (name: string) => (await records(fake, 'companies')).find((c) => valueOf(c, 'name') === name);
+    const stamped = (lines: string[]) => lines.filter((l) => /^run \S+ sync:stamp completed$/.test(l)).length;
 
-    // 8. listen-fire serve registers the webhook, and a signed delivery runs the movement.
+    // 6. listen-fire serve registers the webhook for the connection's
+    //    Changes, taking every record event, and a signed delivery runs the movement.
     let serving = await served(dir, ['--port', String(port)]);
+    let door = '';
     try {
-      await serving.waitFor(/^attio: registered webhook fake-webhook-\d+ for record\.created,record\.updated at /);
-      const registered = await webhooks();
+      await serving.waitFor(REGISTERED);
+      const registered = await webhooks(fake);
       assert.equal(registered.length, 1);
-      assert.equal(registered[0]?.target_url, door);
-      assert.deepEqual(registered[0]?.subscriptions.map((s) => s.event_type), ['record.created', 'record.updated']);
+      door = registered[0]!.target_url;
+      assert.ok(door.startsWith(doors), door);
+      assert.deepEqual(registered[0]?.subscriptions.map((s) => s.event_type), ['record.created', 'record.updated', 'record.deleted']);
 
-      const northwind = ((await fake.json('/attio/v2/objects/companies/records', { data: { values: { name: 'Northwind Labs' } } })) as { data: Company }).data;
-      const created = { events: [{ event_type: 'record.created', id: { object_id: 'companies', record_id: northwind.id.record_id } }] };
-      const first = (await fake.json('/attio/control/deliver', created)) as { deliveries: Array<{ targetUrl: string; status: number }> };
-      assert.deepEqual(first.deliveries.map((d) => [d.targetUrl, d.status]), [[door, 200]]);
-      await serving.waitFor(/^run \S+ sync:stamp completed$/);
-      assert.equal((await named('Northwind Labs'))?.values.description?.[0]?.value, 'Seen by lf');
+      const northwind = await createRecord(fake, 'companies', { name: 'Northwind Labs' });
+      const created = { event_type: 'record.created', id: { object_id: 'companies', record_id: northwind.id.record_id } };
+      assert.deepEqual((await deliver(fake, created)).map((d) => [d.targetUrl, d.status]), [[door, 200]]);
+      await until(() => stamped(serving.lines) === 1, serving.lines);
+      assert.equal(valueOf(await named('Northwind Labs'), 'description'), 'Seen by lf');
 
-      // The same delivery again: accepted, and nothing runs.
-      const again = (await fake.json('/attio/control/deliver', created)) as { deliveries: Array<{ status: number }> };
-      assert.deepEqual(again.deliveries.map((d) => d.status), [200]);
-      await serving.waitFor(/sync:stamp has run the event attio:record\.created:companies:\S+ before: this delivery runs nothing/);
-      assert.equal(serving.lines.filter((l) => /^run \S+ sync:stamp/.test(l)).length, 1);
-
-      // The movement's own write comes back as record.updated (Attio says a
-      // workspace member, as it may). With no loop guard in the project's
-      // core: nothing knows it for the movement's own write, so it runs.
-      const updated = { events: [{ event_type: 'record.updated', id: { object_id: 'companies', record_id: northwind.id.record_id } }] };
-      const echo = (await fake.json('/attio/control/deliver', updated)) as { deliveries: Array<{ status: number }> };
-      assert.deepEqual(echo.deliveries.map((d) => d.status), [200]);
-      await until(() => serving.lines.filter((l) => /^run \S+ sync:stamp completed$/.test(l)).length === 2, serving.lines);
-      assert.equal(serving.lines.filter((l) => /echo and runs nothing/.test(l)).length, 0);
+      // The same delivery again, and the movement's own write coming back
+      // as a change to Description: accepted, and neither runs it. A rename
+      // does; the deliveries run in the order they came.
+      assert.deepEqual((await deliver(fake, created)).map((d) => d.status), [200]);
+      const echo = { event_type: 'record.updated', id: { object_id: 'companies', record_id: northwind.id.record_id, attribute_id: 'description' } };
+      assert.deepEqual((await deliver(fake, echo)).map((d) => d.status), [200]);
+      await updateRecord(fake, 'companies', northwind.id.record_id, { name: 'Northwind', description: 'Edited by Bob' });
+      await deliver(fake, { event_type: 'record.updated', id: { object_id: 'companies', record_id: northwind.id.record_id, attribute_id: 'name' } });
+      await until(() => stamped(serving.lines) === 2, serving.lines);
+      assert.equal(valueOf(await named('Northwind'), 'description'), 'Seen by lf');
+      await new Promise((done) => setTimeout(done, 500));
+      assert.equal(stamped(serving.lines), 2, serving.lines.join('\n'));
 
       // A delivery not signed by the webhook's secret is refused.
       const forged = await fetch(door, { method: 'POST', headers: { 'content-type': 'application/json', 'attio-signature': 'f00d' }, body: JSON.stringify({ webhook_id: 'x', events: [] }) });
@@ -182,81 +111,36 @@ test('the Attio walkthrough, end to end against the fake Attio', async () => {
       await serving.stop();
     }
 
-    // 8b. Opt in to the loop guard (a slot in lf.yaml's core:, empty by default).
-    appendFileSync(join(dir, 'lf.yaml'), 'core:\n  loopGuard: "@lf/fingerprint-guard"\n');
-    serving = await served(dir, ['--port', String(port)]);
-    try {
-      await serving.waitFor(/^attio: webhook fake-webhook-\d+ is registered for record\.created,record\.updated at /);
-      const completed = () => serving.lines.filter((l) => /^run \S+ sync:stamp completed$/.test(l)).length;
-      const echoes = () => serving.lines.filter((l) => /sync:stamp wrote the record \S+ and it is unchanged since: this event is that write's echo and runs nothing/.test(l)).length;
-
-      const contoso = ((await fake.json('/attio/v2/objects/companies/records', { data: { values: { name: 'Contoso Ltd' } } })) as { data: Company }).data;
-      const contosoUpdated = { events: [{ event_type: 'record.updated', id: { object_id: 'companies', record_id: contoso.id.record_id } }] };
-      await fake.json('/attio/control/deliver', { events: [{ event_type: 'record.created', id: { object_id: 'companies', record_id: contoso.id.record_id } }] });
-      await until(() => completed() === 1, serving.lines);
-      assert.equal((await named('Contoso Ltd'))?.values.description?.[0]?.value, 'Seen by lf');
-
-      // Its own write coming back: the record is as the write left it, so it
-      // is only the echo, and runs nothing.
-      await fake.json('/attio/control/deliver', contosoUpdated);
-      await until(() => echoes() === 1, serving.lines);
-      assert.equal(completed(), 1);
-
-      // A second user changes the description: the same event now runs the
-      // movement, which writes its description back; that write's echo runs
-      // nothing again.
-      const edited = await fetch(`${F}/attio/v2/objects/companies/records/${contoso.id.record_id}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ data: { values: { description: 'Edited by Bob' } } }),
-      });
-      assert.equal(edited.status, 200, await edited.clone().text());
-      await fake.json('/attio/control/deliver', { events: [{ ...contosoUpdated.events[0], actor: { type: 'workspace-member', id: 'fake-member-2' } }] });
-      await until(() => completed() === 2, serving.lines);
-      assert.equal((await named('Contoso Ltd'))?.values.description?.[0]?.value, 'Seen by lf');
-      await fake.json('/attio/control/deliver', contosoUpdated);
-      await until(() => echoes() === 2, serving.lines);
-      assert.equal(completed(), 2);
-    } finally {
-      await serving.stop();
-    }
-
-    // 9. The runs: the dry run, the created company and its unguarded echo, the
-    //    second company and the second user's update.
+    // 7. The runs: the company created, and its rename.
     const runs = lfSync(dir, 'runs');
     assert.equal(runs.code, 0, runs.out);
-    assert.equal(runs.out.split('\n').filter((l) => /sync:stamp completed/.test(l)).length, 5, runs.out);
+    assert.equal(runs.out.split('\n').filter((l) => /sync:stamp completed/.test(l)).length, 2, runs.out);
 
-    // A restart keeps the webhook it registered. Then the listens move under
+    // A restart keeps the webhook it registered. Then the listen moves under
     // the running listen-fire serve, and its webhook follows each refresh.
     serving = await served(dir, ['--port', String(port)]);
     try {
-      await serving.waitFor(/^attio: webhook fake-webhook-\d+ is registered for record\.created,record\.updated at /);
-      assert.equal((await webhooks()).length, 1);
+      await serving.waitFor(HELD);
+      assert.deepEqual((await webhooks(fake)).map((w) => w.target_url), [door]);
       const seen = (pattern: RegExp) => serving.lines.filter((l) => pattern.test(l)).length;
       const movement = join(dir, 'movements/sync.mvt');
       const off = join(dir, 'sync.mvt.off');
 
-      // Fewer events: the webhook is changed in place.
-      writeFileSync(movement, readFileSync(movement, 'utf8').replace('"record.created", "record.updated"', '"record.created"'));
-      await serving.waitFor(/^attio: registered webhook fake-webhook-\d+ for record\.created at /);
-      assert.deepEqual((await webhooks()).map((w) => w.subscriptions.map((s) => s.event_type)), [['record.created']]);
-
       // The listen removed: its webhook is removed.
       renameSync(movement, off);
-      await serving.waitFor(/^attio: no listen needs its webhook any more; removed webhook fake-webhook-\d+$/);
-      assert.deepEqual(await webhooks(), []);
+      await serving.waitFor(REMOVED);
+      assert.deepEqual(await webhooks(fake), []);
 
       // Back: a new webhook, its secret issued again, and a signed delivery runs.
       renameSync(off, movement);
-      await until(() => seen(/^attio: registered webhook fake-webhook-\d+ for record\.created at /) === 2, serving.lines);
-      const registered = await webhooks();
+      await until(() => seen(REGISTERED) === 1, serving.lines);
+      const registered = await webhooks(fake);
       assert.equal(registered.length, 1);
       assert.equal(registered[0]?.target_url, door);
-      const acme = ((await fake.json('/attio/v2/objects/companies/records', { data: { values: { name: 'Acme Again' } } })) as { data: Company }).data;
-      const delivered = (await fake.json('/attio/control/deliver', { events: [{ event_type: 'record.created', id: { object_id: 'companies', record_id: acme.id.record_id } }] })) as { deliveries: Array<{ status: number }> };
-      assert.deepEqual(delivered.deliveries.map((d) => d.status), [200]);
-      await until(() => seen(/^run \S+ sync:stamp completed$/) === 1, serving.lines);
+      const acme = await createRecord(fake, 'companies', { name: 'Acme Again' });
+      const delivered = await deliver(fake, { event_type: 'record.created', id: { object_id: 'companies', record_id: acme.id.record_id } });
+      assert.deepEqual(delivered.map((d) => d.status), [200]);
+      await until(() => stamped(serving.lines) === 1, serving.lines);
     } finally {
       await serving.stop();
     }
@@ -265,8 +149,8 @@ test('the Attio walkthrough, end to end against the fake Attio', async () => {
     renameSync(join(dir, 'movements/sync.mvt'), join(dir, 'sync.mvt.off'));
     serving = await served(dir, ['--port', String(port)]);
     try {
-      await serving.waitFor(/^attio: no listen needs its webhook any more; removed webhook fake-webhook-\d+$/);
-      assert.deepEqual(await webhooks(), []);
+      await serving.waitFor(REMOVED);
+      assert.deepEqual(await webhooks(fake), []);
     } finally {
       await serving.stop();
     }

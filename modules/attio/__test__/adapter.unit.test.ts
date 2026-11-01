@@ -38,7 +38,6 @@ import {
   AttioAdapter,
   ATTIO_LIST_ENTRY_TYPE_ID,
   ATTIO_LISTS_EDGE,
-  ATTIO_WEBHOOK_EVENT_TYPE_ID,
 } from '../adapter';
 import { testHost, testFileStore } from './fake_host';
 import { fileValue, RESOURCES_REFERENCE_FIELD_ID, type FileValue } from 'movement-engine/public/adapter';
@@ -82,7 +81,7 @@ function makeAdapter(input: {
     // resolver just needs to build without throwing (names fall through to
     // identity). One object is enough to satisfy the catalog warm.
     listObjects: async () => [
-      { id: 'companies', name: 'Companies', slug: 'companies' },
+      { id: 'companies', name: 'Companies', singular: 'Company', slug: 'companies' },
     ],
     listLists: async () => [],
     listAttributes: async () => [],
@@ -342,7 +341,7 @@ function makePerListAdapter(input: { teamId: string }): AttioAdapter {
   const adapter = new AttioAdapter(testHost(input.teamId));
   const fakeClient = {
     listObjects: async () => [
-      { id: 'deals', name: 'Deal', slug: 'deals' },
+      { id: 'deals', name: 'Deal', singular: 'Deal', slug: 'deals' },
     ],
     listLists: async () => [
       {
@@ -396,7 +395,7 @@ describe('AttioAdapter per-list within recency key (INV2)', () => {
   it('does not duplicate the entry date when a custom attribute already claims the slug', async () => {
     const adapter = new AttioAdapter(testHost('team-inv2-collide'));
     const fakeClient = {
-      listObjects: async () => [{ id: 'deals', name: 'Deal', slug: 'deals' }],
+      listObjects: async () => [{ id: 'deals', name: 'Deal', singular: 'Deal', slug: 'deals' }],
       listLists: async () => [
         { id: 'list-c', name: 'Collide List', parentObjectSlugs: ['deals'], apiSlug: 'collide_list' },
       ],
@@ -423,8 +422,8 @@ function makeCapabilityAdapter(): AttioAdapter {
   const adapter = new AttioAdapter(testHost('team-cap'));
   const fakeClient = {
     listObjects: async () => [
-      { id: 'companies', name: 'Company', slug: 'companies' },
-      { id: 'people', name: 'Person', slug: 'people' },
+      { id: 'companies', name: 'Company', singular: 'Company', slug: 'companies' },
+      { id: 'people', name: 'Person', singular: 'Person', slug: 'people' },
     ],
     listLists: async () => [],
     listAttributes: async () => [
@@ -605,7 +604,7 @@ describe('AttioAdapter record-reference write promises (layer 13)', () => {
   it('carries the ROOT collection capability through to the CHECKER projection', async () => {
     const adapter = new AttioAdapter(testHost('team-root'));
     const fakeClient = {
-      listObjects: async () => [{ id: 'companies', name: 'Company', slug: 'companies' }],
+      listObjects: async () => [{ id: 'companies', name: 'Company', singular: 'Company', slug: 'companies' }],
       listLists: async () => [
         { id: 'list-1', name: 'VC Deal Flow', parentObjectSlugs: ['companies'] },
       ],
@@ -674,7 +673,7 @@ function makeRecordAdapter(input: {
 }): AttioAdapter {
   const adapter = new AttioAdapter(testHost(input.teamId));
   const fakeClient = {
-    listObjects: async () => input.objects ?? [{ id: 'deals', name: 'Deal', slug: 'deals' }],
+    listObjects: async () => input.objects ?? [{ id: 'deals', name: 'Deal', singular: 'Deal', slug: 'deals' }],
     // No lists scoped to deals — keeps `describeRecord`'s per-list ref
     // collection empty and focuses the assertion on the object fields.
     listLists: async () => [],
@@ -746,7 +745,7 @@ describe('AttioAdapter descriptor enum options', () => {
   }): AttioAdapter {
     const adapter = new AttioAdapter(testHost(input.teamId));
     const fakeClient = {
-      listObjects: async () => [{ id: 'deals', name: 'Deal', slug: 'deals' }],
+      listObjects: async () => [{ id: 'deals', name: 'Deal', singular: 'Deal', slug: 'deals' }],
       listLists: async () => [],
       listAttributes: async () => [
         { id: `${input.teamId}-attr-name`, name: 'Name', type: 'text', apiSlug: 'name', isWritable: true, isRequired: true, isMulti: false },
@@ -818,7 +817,7 @@ describe('AttioAdapter reference-valued uniqueness resolution', () => {
   }): AttioAdapter {
     const adapter = new AttioAdapter(testHost(input.teamId));
     const fakeClient = {
-      listObjects: async () => [{ id: 'obj-deals', name: 'Deals', slug: 'deals' }],
+      listObjects: async () => [{ id: 'obj-deals', name: 'Deals', singular: 'Deal', slug: 'deals' }],
       listLists: async () => [],
       listAttributes: async () => [
         { id: 'attr-dname', name: 'Name', type: 'text', apiSlug: 'name', isMulti: false },
@@ -889,122 +888,145 @@ describe('AttioAdapter reference-valued uniqueness resolution', () => {
   });
 });
 
-describe('AttioAdapter.listEventTypes', () => {
-  function makeAdapter(teamId: string): AttioAdapter {
+// ---------------------------------------------------------------------------
+// A record's Changes: each object's records hang their changes off `Changes`,
+// landing on the object's own change type, and a webhook delivery is the
+// arrivals on them (changes.ts).
+// ---------------------------------------------------------------------------
+
+describe('AttioAdapter — a record’s Changes', () => {
+  const STAGE_AT = '2026-11-01T09:00:00.000Z';
+  function makeChangesAdapter(teamId: string, records: Record<string, unknown> = {}): AttioAdapter {
     const adapter = new AttioAdapter(testHost(teamId));
+    const attr = (slug: string, name: string, type: string) => ({ id: `${slug}-attr`, name, type, isMulti: false, isRequired: false, isUnique: false, isWritable: true, apiSlug: slug });
     const fakeClient = {
       listObjects: async () => [
-        { id: 'uuid-companies', name: 'Companies', slug: 'companies' },
-        { id: 'uuid-deals', name: 'Deals', slug: 'deals' },
+        { id: 'deals-uuid', name: 'Deals', singular: 'Deal', slug: 'deals' },
+        { id: 'companies-uuid', name: 'Companies', singular: 'Company', slug: 'companies' },
       ],
       listLists: async () => [],
-    } as unknown as Awaited<ReturnType<typeof import('../api_client').getAttioClient>>;
-    (adapter as unknown as { getApiClient: () => Promise<typeof fakeClient> }).getApiClient =
-      async () => fakeClient;
-    return adapter;
-  }
-
-  it('emits one event type per object, matched on id.object_id', async () => {
-    const adapter = makeAdapter('team-eventtypes');
-    const types = await adapter.listEventTypes();
-    expect(types).toEqual([
-      { tag: 'Companies', positionType: 'Companies', match: { path: 'id.object_id', equals: 'uuid-companies' } },
-      { tag: 'Deals', positionType: 'Deals', match: { path: 'id.object_id', equals: 'uuid-deals' } },
-    ]);
-  });
-
-  it('its union discriminates a real inbound Attio webhook payload', async () => {
-    const adapter = makeAdapter('team-eventtypes-2');
-    const types = await adapter.listEventTypes();
-    const { discriminateEvent } = await import('movement-engine/public/inbound');
-    const result = discriminateEvent({
-      adapterType: 'attio',
-      event: {
-        payload: { event_type: 'record.updated', id: { object_id: 'uuid-deals', record_id: 'rec-7' } },
-        externalId: 'rec-7',
+      listAttributes: async (args: { objectId?: string }) =>
+        args.objectId === 'deals-uuid' ? [attr('name', 'Name', 'text'), attr('stage', 'Stage', 'status')] : [attr('name', 'Name', 'text')],
+      listStatuses: async () => [],
+      listAttributeOptions: async () => [],
+      getRecord: async ({ recordId }: { objectId: string; recordId: string }) => {
+        const record = records[recordId];
+        if (record === undefined) throw Object.assign(new Error('Not found'), { status: 404 });
+        return record;
       },
-      eventTypes: types,
-    });
-    expect(result?.eventType.positionType).toBe('Deals');
-    expect(result?.position.recordType).toBe('Deals');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// getRecordForEvent — the meta-edge hydrate (`ev-[:Companies]->`). The ACTION
-// axis (Layer 3) is orthogonal to this OBJECT axis: the variant is on the seed,
-// the object is reached here. Pinned unchanged: an object-matching event
-// hydrates the live record; a non-matching (Person) event yields an empty
-// traversal — the framework's clean no-op.
-// ---------------------------------------------------------------------------
-
-describe('AttioAdapter.getRelated — webhook event → record (getRecordForEvent)', () => {
-  function makeEventAdapter(teamId: string): AttioAdapter {
-    const adapter = new AttioAdapter(testHost(teamId));
-    const fakeClient = {
-      listObjects: async () => [
-        { id: 'uuid-companies', name: 'Companies', slug: 'companies' },
-        { id: 'uuid-people', name: 'People', slug: 'people' },
-      ],
-      listLists: async () => [],
-      getRecord: async ({ recordId }: { objectId: string; recordId: string }) => ({
-        id: { record_id: recordId },
-        values: { name: [{ value: 'Acme' }] },
-        web_url: null,
-      }),
     } as unknown as Awaited<ReturnType<typeof import('../api_client').getAttioClient>>;
-    (adapter as unknown as { getApiClient: () => Promise<typeof fakeClient> }).getApiClient =
-      async () => fakeClient;
+    (adapter as unknown as { getApiClient: () => Promise<typeof fakeClient> }).getApiClient = async () => fakeClient;
     return adapter;
   }
-
-  const eventPosition = (objectId: string): SourcePosition =>
-    makeUnstablePosition({
-      adapterType: 'attio',
-      // The action variant rides as the seed type (Layer 3 seedEventPosition).
-      recordType: 'Record Created',
-      data: { event_type: 'record.created', id: { object_id: objectId, record_id: 'co-1' } },
-    });
-
-  it('hydrates the live record when the event object matches the edge target', async () => {
-    const adapter = makeEventAdapter('team-getrecordforevent-1');
-    const related = await adapter.getRelated({
-      position: eventPosition('uuid-companies'),
-      fieldId: 'Companies',
-      direction: 'outgoing',
-    });
-    expect(related).toHaveLength(1);
-    const [hit] = related;
-    expect(isStablePosition(hit.position)).toBe(true);
-    expect(hit.position.recordType).toBe('Companies');
-    expect(positionRecordId(hit.position)).toBe('co-1');
+  const deal = {
+    id: { workspace_id: 'w', object_id: 'deals-uuid', record_id: 'deal-1' },
+    created_at: '2026-10-30T08:00:00.000Z',
+    values: { name: [{ value: 'Osprey', active_from: '2026-10-30T08:00:00.000Z' }], stage: [{ status: { title: 'Diligence' }, active_from: STAGE_AT }] },
+  };
+  const delivery = (...events: Array<{ event_type: string; object_id: string; record_id: string; attribute_id?: string }>) => ({
+    webhook_id: 'wh-1',
+    events: events.map(({ event_type, ...id }) => ({ event_type, id: { workspace_id: 'w', ...id }, actor: { type: 'workspace-member', id: 'm-1' } })),
   });
 
-  it('yields an empty traversal when the event is for a different object (the no-op)', async () => {
-    const adapter = makeEventAdapter('team-getrecordforevent-2');
-    const related = await adapter.getRelated({
-      position: eventPosition('uuid-people'),
-      fieldId: 'Companies',
-      direction: 'outgoing',
+  it('every object’s records list Changes, each landing on the object’s own change type, carrying the record', async () => {
+    const adapter = makeChangesAdapter('team-changes-edge');
+    const deals = await adapter.describe('Deals');
+    expect(deals!.references.find((r) => r.name === 'Changes')).toMatchObject({
+      targetTypeId: 'DealChange',
+      readable: false,
+      listenable: true,
+      delivery: 'connection',
+      identity: 'Id',
+      attributes: true,
+      carries: ['Deals'],
     });
-    expect(related).toEqual([]);
+    const companies = await adapter.describe('Companies');
+    expect(companies!.references.find((r) => r.name === 'Changes')?.targetTypeId).toBe('CompanyChange');
+  });
+
+  it('a change type’s Field is an enum of its object’s attributes, and it walks to its record', async () => {
+    const adapter = makeChangesAdapter('team-changes-type');
+    const change = await adapter.describe('DealChange');
+    const fields = Object.fromEntries(change!.fields.map((f) => [f.displayName, f]));
+    expect(fields['Kind']).toMatchObject({ kind: 'enum', enumValues: ['created', 'updated', 'deleted'] });
+    expect(fields['Field']).toMatchObject({ kind: 'enum', enumValues: ['Name', 'Stage'] });
+    expect(change!.references).toEqual([expect.objectContaining({ fieldId: 'Deal', name: 'Deal', targetTypeId: 'Deals', cardinality: 'one' })]);
+  });
+
+  it('an update arrives on its record’s Changes, naming the attribute, carrying the record, at the value’s time', async () => {
+    const adapter = makeChangesAdapter('team-changes-update', { 'deal-1': deal });
+    const { events, arrivals } = await adapter.preprocessInbound({ raw: delivery({ event_type: 'record.updated', object_id: 'deals-uuid', record_id: 'deal-1', attribute_id: 'stage-attr' }) });
+    expect(events).toEqual([]);
+    expect(arrivals).toHaveLength(1);
+    const [arrival] = arrivals;
+    expect(arrival).toMatchObject({
+      edge: 'Changes',
+      key: 'deal-1',
+      landing: { recordType: 'DealChange', fields: { Kind: 'updated', Field: 'Stage', Record: 'deal-1' } },
+      parents: [{ recordId: 'deal-1', recordType: 'Deals', fields: { Name: 'Osprey', Stage: 'Diligence', 'Created At': deal.created_at } }],
+      about: { recordType: 'Deals', externalId: 'deal-1' },
+      occurredAt: STAGE_AT,
+    });
+    expect(arrival!.landing.recordId).toBe(arrival!.identity);
+    expect(arrival!.landing.fields['Id']).toBe(arrival!.identity);
+  });
+
+  it('a redelivered change names the same identity; the attribute’s next value is another change', async () => {
+    const records: Record<string, unknown> = { 'deal-1': deal };
+    const adapter = makeChangesAdapter('team-changes-identity', records);
+    const stage = delivery({ event_type: 'record.updated', object_id: 'deals-uuid', record_id: 'deal-1', attribute_id: 'stage-attr' });
+    const first = (await adapter.preprocessInbound({ raw: stage })).arrivals[0]!.identity;
+    expect((await adapter.preprocessInbound({ raw: stage })).arrivals[0]!.identity).toBe(first);
+    records['deal-1'] = { ...deal, values: { ...deal.values, stage: [{ status: { title: 'Passed' }, active_from: '2026-11-01T10:00:00.000Z' }] } };
+    expect((await adapter.preprocessInbound({ raw: stage })).arrivals[0]!.identity).not.toBe(first);
+  });
+
+  it('a batch is its arrivals in order, each record read once; a deleted record carries none', async () => {
+    let reads = 0;
+    const records = new Proxy({ 'deal-1': deal } as Record<string, unknown>, { get: (target, key: string) => (reads++, target[key]) });
+    const adapter = makeChangesAdapter('team-changes-batch', records);
+    const { arrivals } = await adapter.preprocessInbound({
+      raw: delivery(
+        { event_type: 'record.created', object_id: 'deals-uuid', record_id: 'deal-1' },
+        { event_type: 'record.updated', object_id: 'deals-uuid', record_id: 'deal-1', attribute_id: 'name-attr' },
+        { event_type: 'record.deleted', object_id: 'companies-uuid', record_id: 'co-9' },
+        { event_type: 'note.created', object_id: 'deals-uuid', record_id: 'deal-1' },
+      ),
+    });
+    expect(reads).toBe(1);
+    expect(arrivals.map((a) => [a.landing.recordType, a.landing.fields['Kind'], a.landing.fields['Field']])).toEqual([
+      ['DealChange', 'created', undefined],
+      ['DealChange', 'updated', 'Name'],
+      ['CompanyChange', 'deleted', undefined],
+    ]);
+    expect(arrivals[0]).toMatchObject({ occurredAt: deal.created_at });
+    expect(arrivals[2]).toMatchObject({ key: 'co-9', parents: [null] });
+    expect(arrivals[2]).not.toHaveProperty('occurredAt');
+  });
+
+  it('a run waits on a record’s Changes under its record id; another edge is refused', async () => {
+    const adapter = makeChangesAdapter('team-changes-await');
+    await expect(adapter.arrivals.awaitKeys({ edge: 'Changes', heads: [{ recordId: 'deal-1' }] })).resolves.toEqual([{ key: 'deal-1' }]);
+    await expect(adapter.arrivals.awaitKeys({ edge: 'Notes', heads: [{ recordId: 'deal-1' }] })).rejects.toThrow(/'Notes' is not a listenable edge/);
+  });
+
+  it('a change reads its fields flat and walks to its record as Attio holds it now', async () => {
+    const adapter = makeChangesAdapter('team-changes-walk', { 'deal-1': deal });
+    const change = makeStablePosition({ adapterType: 'attio', recordType: 'DealChange', recordId: 'x', data: { Id: 'x', Kind: 'updated', Field: 'Stage', Record: 'deal-1' } });
+    await expect(adapter.getFieldValue({ position: change, fieldId: 'Field' } as never)).resolves.toBe('Stage');
+    const [related] = await adapter.getRelated({ position: change, fieldId: 'Deal', direction: 'outgoing' } as never);
+    expect(related?.position).toMatchObject({ recordType: 'Deals' });
+    expect(positionRecordId(related!.position)).toBe('deal-1');
   });
 });
-
-// ---------------------------------------------------------------------------
-// List entry → parent record back-edge (`entry-[:Companies]->`). The entry
-// carries parent_record_id + parent_object; the edge whose object matches the
-// entry's parent object hydrates the live record, and a non-matching object
-// edge yields the empty no-op — the honest "can't resolve" outcome.
-// ---------------------------------------------------------------------------
 
 describe('AttioAdapter.getRelated — list entry → parent record', () => {
   function makeEntryAdapter(teamId: string): AttioAdapter {
     const adapter = new AttioAdapter(testHost(teamId));
     const fakeClient = {
       listObjects: async () => [
-        { id: 'uuid-companies', name: 'Companies', slug: 'companies' },
-        { id: 'uuid-people', name: 'People', slug: 'people' },
+        { id: 'uuid-companies', name: 'Companies', singular: 'Company', slug: 'companies' },
+        { id: 'uuid-people', name: 'People', singular: 'Person', slug: 'people' },
       ],
       listLists: async () => [],
       getRecord: async ({ recordId }: { objectId: string; recordId: string }) => ({
@@ -1241,8 +1263,8 @@ function makeLinkAdapter(input: {
   const adapter = new AttioAdapter(testHost(input.teamId));
   const fakeClient = {
     listObjects: async () => [
-      { id: 'obj-people', slug: 'people', name: 'People' },
-      { id: 'obj-comp', slug: 'companies', name: 'Companies' },
+      { id: 'obj-people', slug: 'people', name: 'People', singular: 'Person' },
+      { id: 'obj-comp', slug: 'companies', name: 'Companies', singular: 'Company' },
     ],
     listLists: async () => [],
     listAttributes: async ({ objectId }: { objectId?: string }) =>
@@ -1373,7 +1395,7 @@ function makeActorAdapter(input: {
 }): AttioAdapter {
   const adapter = new AttioAdapter(testHost(input.teamId));
   const fakeClient = {
-    listObjects: async () => [{ id: 'deals', name: 'Deal', slug: 'deals' }],
+    listObjects: async () => [{ id: 'deals', name: 'Deal', singular: 'Deal', slug: 'deals' }],
     listLists: async () => [],
     listAttributes: async () => [
       {
@@ -1462,76 +1484,40 @@ describe('AttioAdapter actor-reference (User) fields', () => {
   });
 });
 
-// Event subscriptions: Attio rejects a webhook subscription that omits `filter`
-// (400 validation_type on `subscriptions[].filter`). Every subscription must
-// carry it — `null` means "no filter", the listen semantics here. Regression
-// guard for the silent webhook-registration failure that also stalled saves.
-describe('ensureEventSubscription — Attio webhook payload', () => {
-  it('sends filter: null on every subscription when creating a webhook', async () => {
+// One webhook serves every listen on a connection's `Changes`. Attio rejects
+// a webhook subscription that omits `filter` (400 validation_type on
+// `subscriptions[].filter`): every subscription carries it, `null` meaning
+// every record of the event.
+describe('ensureEventSubscription — one webhook for the arrivals on Changes', () => {
+  it('creates a webhook taking every record event, with filter: null on each', async () => {
     const webhookCalls: { subscriptions: unknown }[] = [];
     const adapter = makeAdapter({ teamId: 'team-webhook-create', webhookCalls });
 
-    const result = await adapter.ensureEventSubscription({
-      events: ['record.created', 'record.updated'],
-      callbackUrl: 'https://example.test/cb',
-    });
+    const result = await adapter.ensureEventSubscription({ edge: 'Changes', callbackUrl: 'https://example.test/cb' });
 
     expect(result).toEqual({ externalId: 'wh-1', secret: 'shh' });
     expect(webhookCalls).toHaveLength(1);
     expect(webhookCalls[0].subscriptions).toEqual([
       { event_type: 'record.created', filter: null },
       { event_type: 'record.updated', filter: null },
-    ]);
-  });
-
-  it('sends filter: null when PATCHing an existing webhook whose events changed', async () => {
-    const webhookCalls: { subscriptions: unknown }[] = [];
-    const adapter = makeAdapter({ teamId: 'team-webhook-update', webhookCalls });
-
-    await adapter.ensureEventSubscription({
-      events: ['record.created', 'record.deleted'],
-      callbackUrl: 'https://example.test/cb',
-      current: { externalId: 'wh-existing', events: ['record.created'] },
-    });
-
-    expect(webhookCalls).toHaveLength(1);
-    expect(webhookCalls[0].subscriptions).toEqual([
-      { event_type: 'record.created', filter: null },
       { event_type: 'record.deleted', filter: null },
     ]);
   });
+
+  it('keeps the webhook it holds for the URL', async () => {
+    const webhookCalls: { subscriptions: unknown }[] = [];
+    const adapter = makeAdapter({ teamId: 'team-webhook-held', webhookCalls });
+    await expect(adapter.ensureEventSubscription({ edge: 'Changes', callbackUrl: 'https://example.test/cb', current: { externalId: 'wh-existing' } })).resolves.toBeUndefined();
+    expect(webhookCalls).toEqual([]);
+  });
+
+  it('refuses an edge that is not listenable', async () => {
+    const adapter = makeAdapter({ teamId: 'team-webhook-edge' });
+    await expect(adapter.ensureEventSubscription({ edge: 'Notes', callbackUrl: 'https://example.test/cb' })).rejects.toThrow(/'Notes' is not a listenable edge/);
+  });
 });
 
-// Regression guard for the 'attio:companies' drift: the webhook-event's
-// record-for-event edges must target the object's NATURAL entry typeId
-// (obj.name, e.g. 'Companies'), NOT the retired `attio:<slug>` codec. Object
-// entry points are keyed `typeId: obj.name` (post typeid→displayname refactor),
-// so a stale `attio:companies` target fails to resolve in the projection and
-// surface-stamps a traversed record with the unresolvable colon-key — which is
-// exactly what broke `evt-[co:Companies]-> { … co.Domains }` in production.
-describe('describeWebhookEvent — record-for-event edge targets', () => {
-  it('targets the object entry typeId (natural name), not attio:<slug>', async () => {
-    const adapter = makeAdapter({ teamId: 'team-webhook-edge' });
-    const descriptor = await adapter.describe(ATTIO_WEBHOOK_EVENT_TYPE_ID);
-    const companiesEdge = descriptor!.references.find((r) => r.fieldId === 'Companies');
-    expect(companiesEdge).toBeDefined();
-    // The fake catalog's object is { id:'companies', name:'Companies', slug:'companies' };
-    // its entry point typeId is obj.name = 'Companies', so the edge must match it.
-    expect(companiesEdge!.targetTypeId).toBe('Companies');
-  });
-
-  it('publishes a PER-LIST entry edge (not a generic `Entry`), symmetric with the record edges', async () => {
-    const adapter = makeRootReadAdapter('team-webhook-perlist');
-    const descriptor = await adapter.describe(ATTIO_WEBHOOK_EVENT_TYPE_ID);
-    const names = descriptor!.references.map((r) => r.fieldId);
-    // 'Hot Leads' is the workspace's one list; its entry edge lands on the
-    // per-list type (which carries its single parent), replacing the old
-    // generic `Entry` → `List Entry` hop.
-    expect(names).toContain('Hot Leads');
-    expect(descriptor!.references.find((r) => r.fieldId === 'Hot Leads')!.targetTypeId).toBe('Hot Leads');
-    expect(names).not.toContain('Entry');
-  });
-
+describe('the generic List Entry', () => {
   it('the generic `List Entry` publishes NO parent up-hop — the empty intersection (layer 11)', async () => {
     const adapter = makeRootReadAdapter('team-generic-listentry');
     const descriptor = await adapter.describe('List Entry');
@@ -1577,9 +1563,9 @@ describe('describe — record-reference to an un-nameable object is dropped', ()
 // phantom that is neither field nor edge, with nothing logged.
 describe('describe — record-reference with relationship: null (UI-created)', () => {
   const ATTIO_OBJECTS = [
-    { id: 'deals', name: 'Deal', slug: 'deals' },
-    { id: 'people', name: 'Person', slug: 'people' },
-    { id: 'companies', name: 'Company', slug: 'companies' },
+    { id: 'deals', name: 'Deal', singular: 'Deal', slug: 'deals' },
+    { id: 'people', name: 'Person', singular: 'Person', slug: 'people' },
+    { id: 'companies', name: 'Company', singular: 'Company', slug: 'companies' },
   ];
   const NAME_ATTR = { id: 'a-name', name: 'Name', type: 'text', apiSlug: 'name', isWritable: true, isRequired: false, isMulti: false };
 
@@ -1726,7 +1712,8 @@ describe('describe — record-reference with relationship: null (UI-created)', (
   });
 });
 
-import { extractAttioValue, flattenAttioRecordValues } from '../adapter';
+import { flattenAttioRecordValues } from '../adapter';
+import { extractAttioValue } from '../attributes';
 
 // Attio status / select values nest the chosen option under `status` /
 // `option` with a human `title`. Reading them back must yield that title —
@@ -1799,8 +1786,8 @@ function makeRootReadAdapter(teamId: string): AttioAdapter {
   });
   const fakeClient = {
     listObjects: async () => [
-      { id: 'companies-uuid', name: 'Companies', slug: 'companies' },
-      { id: 'people-uuid', name: 'People', slug: 'people' },
+      { id: 'companies-uuid', name: 'Companies', singular: 'Company', slug: 'companies' },
+      { id: 'people-uuid', name: 'People', singular: 'Person', slug: 'people' },
     ],
     listLists: async () => [
       { id: 'hot-uuid', name: 'Hot Leads', parentObjectSlugs: ['companies'], apiSlug: 'hot_leads' },
@@ -2004,10 +1991,10 @@ describe('AttioAdapter listEntryPoints — readable means readable', () => {
     expect(byName.get('Comment')).toMatchObject({ readable: false, writable: false });
     expect(byName.get('File')).toMatchObject({ readable: false, writable: false });
     expect(byName.get('List Entry')).toMatchObject({ readable: false, writable: false });
-    // The event edge's promise is `fires`, never read.
-    const event = byName.get('Webhook Event');
-    expect(event).toMatchObject({ readable: false, writable: false });
-    expect(event?.fires).toBe(true);
+    // A record's change type is named, never listed: it is reached on the
+    // record's own `Changes`.
+    expect(byName.get('CompanyChange')).toMatchObject({ readable: false, writable: false });
+    expect(byName.get('Webhook Event')).toBeUndefined();
   });
 
   it('the inert scope declaration is gone from every entry', async () => {
@@ -2431,171 +2418,6 @@ describe('AttioAdapter record-scoped attachable reads', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Event-hop positions carry NATURAL recordTypes — the internal sentinel
-// spelling (`attio:note` …) drifts at resolveFieldId, whose maps are keyed by
-// displayName. The regression this pins: a movement that hops
-// `event-[:Note]->` must be able to READ the fields of what it lands on.
-// ---------------------------------------------------------------------------
-
-describe('AttioAdapter event hops mint natural recordTypes', () => {
-  const eventPosition = (id: Record<string, string>): SourcePosition =>
-    makeUnstablePosition({
-      adapterType: 'attio',
-      recordType: ATTIO_WEBHOOK_EVENT_TYPE_ID,
-      data: { event_type: 'x', id },
-    });
-
-  function makeEventHopAdapter(teamId: string): AttioAdapter {
-    const adapter = makeRootReadAdapter(teamId);
-    // Extend the root-read fake client with the single-entity GETs the event
-    // hops fetch through.
-    const withClient = adapter as unknown as {
-      getApiClient: () => Promise<Record<string, unknown>>;
-    };
-    const clientPromise = withClient.getApiClient();
-    withClient.getApiClient = async () => {
-      const client = await clientPromise;
-      return {
-        ...client,
-        getTask: async () => ({
-          id: { workspace_id: 't', task_id: 'task-1' },
-          content_plaintext: 'call Acme',
-          deadline_at: null,
-          is_completed: false,
-          completed_at: null,
-          created_at: '2026-07-02T00:00:00Z',
-        }),
-        getNote: async () => ({
-          id: { workspace_id: 't', note_id: 'note-1' },
-          title: 'First note',
-          content_plaintext: 'hello',
-          parent_object: 'companies',
-          parent_record_id: 'rec-1',
-          created_at: '2026-07-01T00:00:00Z',
-        }),
-        getComment: async () => ({
-          id: { workspace_id: 't', comment_id: 'comment-1' },
-          thread_id: 'thread-1',
-          content_plaintext: 'Let’s close this',
-          resolved_at: null,
-          created_at: '2026-07-04T00:00:00Z',
-          author: { type: 'workspace-member', id: 'member-1' },
-        }),
-        getListEntry: async () => ({
-          id: { workspace_id: 't', list_id: 'hot-uuid', entry_id: 'entry-1' },
-          entry_values: { stage: [{ status: { title: 'New' } }] },
-          values: { stage: [{ status: { title: 'New' } }] },
-          parent_record_id: 'rec-1',
-          parent_object: 'companies',
-          created_at: '2026-07-03T00:00:00Z',
-        }),
-      };
-    };
-    return adapter;
-  }
-
-  it('event-[:Task]-> lands on `Task` and its fields read', async () => {
-    const adapter = makeEventHopAdapter('team-hop-task');
-    const results = await adapter.getRelated({
-      position: eventPosition({ workspace_id: 't', task_id: 'task-1' }),
-      fieldId: 'Task',
-      direction: 'outgoing',
-    });
-    expect(results).toHaveLength(1);
-    expect(results[0].position.recordType).toBe('Task');
-    await expect(
-      adapter.getFieldValue({ position: results[0].position, fieldId: 'Content' }),
-    ).resolves.toBe('call Acme');
-  });
-
-  it('event-[:Note]-> lands on `Note` and its fields read', async () => {
-    const adapter = makeEventHopAdapter('team-hop-note');
-    const results = await adapter.getRelated({
-      position: eventPosition({ workspace_id: 't', note_id: 'note-1' }),
-      fieldId: 'Note',
-      direction: 'outgoing',
-    });
-    expect(results[0].position.recordType).toBe('Note');
-    await expect(
-      adapter.getFieldValue({ position: results[0].position, fieldId: 'Title' }),
-    ).resolves.toBe('First note');
-  });
-
-  it('event-[:Comment]-> lands on `Comment` with the author resolved to an email', async () => {
-    const adapter = makeEventHopAdapter('team-hop-comment');
-    const results = await adapter.getRelated({
-      position: eventPosition({ workspace_id: 't', comment_id: 'comment-1' }),
-      fieldId: 'Comment',
-      direction: 'outgoing',
-    });
-    expect(results[0].position.recordType).toBe('Comment');
-    await expect(
-      adapter.getFieldValue({ position: results[0].position, fieldId: 'Author (email)' }),
-    ).resolves.toBe('ada@example.com');
-  });
-
-  it('event-[:List]-> lands on `List`', async () => {
-    const adapter = makeEventHopAdapter('team-hop-list');
-    const results = await adapter.getRelated({
-      position: eventPosition({ workspace_id: 't', list_id: 'hot-uuid' }),
-      fieldId: 'List',
-      direction: 'outgoing',
-    });
-    expect(results[0].position.recordType).toBe('List');
-    await expect(
-      adapter.getFieldValue({ position: results[0].position, fieldId: 'Name' }),
-    ).resolves.toBe('Hot Leads');
-  });
-
-  it('event-[:<list>]-> lands on the PER-LIST type (not generic `List Entry`), so its Comments edge works', async () => {
-    const adapter = makeEventHopAdapter('team-hop-entry');
-    const results = await adapter.getRelated({
-      position: eventPosition({ workspace_id: 't', list_id: 'hot-uuid', entry_id: 'entry-1' }),
-      // Option 3: the entry hop is per-list, symmetric with the record hop.
-      // `Hot Leads` is list `hot-uuid`'s display name.
-      fieldId: 'Hot Leads',
-      direction: 'outgoing',
-    });
-    expect(results[0].position.recordType).toBe('Hot Leads');
-    // The entry-scoped Comments read works straight off the hopped-to entry.
-    const comments = await adapter.getRelated({
-      position: results[0].position,
-      fieldId: 'Comments',
-      direction: 'outgoing',
-    });
-    expect(comments.map((r) => positionRecordId(r.position))).toEqual(['comment-2']);
-  });
-
-  it('event-[:<list>]-> reaches the parent record via the per-list type\'s single object edge', async () => {
-    const adapter = makeEventHopAdapter('team-hop-entry-parent');
-    const [entry] = await adapter.getRelated({
-      position: eventPosition({ workspace_id: 't', list_id: 'hot-uuid', entry_id: 'entry-1' }),
-      fieldId: 'Hot Leads',
-      direction: 'outgoing',
-    });
-    // Hot Leads is a companies list, so its entry's one parent is Companies —
-    // and the entry carries parent_object: 'companies', parent_record_id: 'rec-1'.
-    const parent = await adapter.getRelated({
-      position: entry.position,
-      fieldId: 'Companies',
-      direction: 'outgoing',
-    });
-    expect(parent[0].position.recordType).toBe('Companies');
-    expect(positionRecordId(parent[0].position)).toBe('rec-1');
-  });
-
-  it('event-[:<list>]-> yields [] when the event is for a DIFFERENT list', async () => {
-    const adapter = makeEventHopAdapter('team-hop-entry-mismatch');
-    const results = await adapter.getRelated({
-      // The event is for a list id that isn't `hot-uuid`.
-      position: eventPosition({ workspace_id: 't', list_id: 'some-other-list', entry_id: 'entry-1' }),
-      fieldId: 'Hot Leads',
-      direction: 'outgoing',
-    });
-    expect(results).toEqual([]);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // `Lists` is ONE polymorphic edge with a member per joinable list, and
