@@ -517,11 +517,12 @@ class AirtableAPIClient {
 
   // -- Webhook management --
 
-  /** Register a per-base webhook. `tableId` scopes it to one table via
-   *  `recordChangeScope`; `changeTypes` is the Airtable-native selection
-   *  (`add` / `update` / `remove`). Always restricts to `tableData` — Listen-Fire
-   *  never wants schema/metadata pings (those still cost a pull + a run). The
-   *  returned `macSecretBase64` is issued ONCE here; persist it immediately. */
+  /** Register a per-base webhook. `dataTypes` says what it is told of: a
+   *  table's rows (`tableData`, the default, for a table's `Changes`) or the
+   *  base's tables themselves (`tableMetadata`, for its `Tables`). `tableId`
+   *  scopes it to one table via `recordChangeScope`; `changeTypes` is the
+   *  Airtable-native selection (`add` / `update` / `remove`). The returned
+   *  `macSecretBase64` is issued ONCE here; persist it immediately. */
   async createWebhook({
     baseId,
     notificationUrl,

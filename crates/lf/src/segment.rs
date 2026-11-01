@@ -424,7 +424,7 @@ pub async fn run_segment(host: &SegmentHost<'_>, input: SegmentInput<'_>) -> Res
 /// committed: the records they land on, each its position (`{adapterType,
 /// recordType, identity: {recordId, data}}`). A walk that fails says why
 /// instead.
-pub async fn read_positions(host: &SegmentHost<'_>, input: SegmentInput<'_>) -> Result<Vec<Js>, String> {
+pub async fn read_positions(host: &SegmentHost<'_>, input: SegmentInput<'_>) -> Result<Walked, String> {
     let text = input_text(host, &input)?;
     let wall_clock = segment_wall_clock()?;
     let done = drive(host, &text, wall_clock).await.map_err(|Fault(message)| message)?;
@@ -434,11 +434,23 @@ pub async fn read_positions(host: &SegmentHost<'_>, input: SegmentInput<'_>) -> 
             Ended::LeaseLost => "its lease was lost".to_string(),
         });
     }
-    let landed = done.get("result").and_then(|result| result.get("landed")).ok_or_else(|| format!("the Rust engine finished with {done}, which this host does not decode"))?;
-    match host.wire.borrow_mut().read(landed)?.js() {
+    let undecoded = || format!("the Rust engine finished with {done}, which this host does not decode");
+    let result = done.get("result").ok_or_else(undecoded)?;
+    let positions = |level: &serde_json::Value| match host.wire.borrow_mut().read(level)?.js() {
         Js::Arr(positions) => Ok(positions),
         other => Err(format!("the walk answered {}, not the positions it landed on", other.to_json())),
-    }
+    };
+    let landed = positions(result.get("landed").ok_or_else(undecoded)?)?;
+    let along = result.get("along").and_then(serde_json::Value::as_array).ok_or_else(undecoded)?.iter().map(positions).collect::<Result<_, _>>()?;
+    Ok(Walked { landed, along })
+}
+
+/// What a walk with no run landed on (`read_positions`).
+pub struct Walked {
+    /// The positions its last hop landed on.
+    pub landed: Vec<Js>,
+    /// For each hop before its last, the positions that hop landed on.
+    pub along: Vec<Vec<Js>>,
 }
 
 #[cfg(test)]

@@ -219,17 +219,34 @@ export interface SettingsBecome {
    *  spent choosing it. A listen naming events of two mappings has no
    *  rewrite: one listen per edge. One level deep. */
   byEvent?: Record<string, Omit<SettingsBecome, 'byEvent'>>;
+  /** Where the traversal does not do what the settings listen did: a listen
+   *  one applies to is rewritten with its note, and never safely, so
+   *  `listen-fire upgrade` holds the pin until `--all`. */
+  changed?: ChangedMeaning[];
 }
 
-/** What one settings key becomes: a comparison on a hop's field (`eq`, `in`,
- *  `contains`: a member of a list field, several values an OR of them), or
- *  the landing's declared type (`type`, `payload: <T>`). */
+/** A difference between a settings listen and its rewrite, and the listens
+ *  it applies to: those that write every key of `written`, none of
+ *  `unwritten`, and hear one of `hearing` (the events their `events` names,
+ *  or, left out, what leaving it out heard: every event when the module says
+ *  nothing of it). */
+export interface ChangedMeaning {
+  /** What differs, as the upgrade says it. */
+  note: string;
+  written?: string[];
+  unwritten?: string[];
+  hearing?: string[];
+}
+
+/** What one settings key becomes: a comparison on a hop's field (`eq`, `neq`,
+ *  `in`, `contains`: a member of a list field, several values an OR of
+ *  them), or the landing's declared type (`type`, `payload: <T>`). */
 export interface KeyBecomes {
   /** The index into `path` of the hop it narrows. */
   hop: number;
   /** The field it compares (absent for `type`). */
   field?: string;
-  op: 'eq' | 'in' | 'contains' | 'type';
+  op: KeyOp;
   /** A settings value's spelling as a field value (`"record.created"` →
    *  `"created"`); absent, a value is the field's as written. */
   values?: Record<string, string>;
@@ -245,6 +262,20 @@ export interface KeyBecomes {
   /** 0.12 compared this key's values lowercased: the rewrite writes them
    *  lowercased, so `{ key: "Deals" }` still hears what it heard. */
   lowercase?: boolean;
+  /** Comparisons the key makes beside its own, on the same hop and with the
+   *  same value, spelled as its own is (Airtable's `becomes: v` is
+   *  `New == v` and also `Old != v`: 0.12 fired only when the field came to
+   *  hold the value). Never with `absent`. */
+  also?: AlsoCompared[];
+}
+
+export type KeyOp = 'eq' | 'neq' | 'in' | 'contains' | 'type';
+
+/** One more comparison a settings key makes (`KeyBecomes.also`). */
+export interface AlsoCompared {
+  /** The field it compares. */
+  field: string;
+  op: KeyOp;
 }
 
 

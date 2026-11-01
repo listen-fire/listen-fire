@@ -237,10 +237,21 @@ The manifest file registers your server with a team:
   each settings key's hop, field and comparison
   (`{ "events": { "hop": 0, "field": "Reason", "op": "in" } }`, with `values`
   where a settings value is spelled otherwise on the field). The comparison is
-  `eq`, `in`, `contains` (a member of a list field; several values are an OR
+  `eq`, `neq`, `in`, `contains` (a member of a list field; several values are an OR
   of them, `labels: ["INBOX", "SPAM"]` becoming
   `m.Labels CONTAINS "INBOX" OR m.Labels CONTAINS "SPAM"`) or `type`. The upgrade turns
   that listen into `listen to gh-[n:Notifications WHERE n.Reason IN ["mention"]]->`.
+  A key that compares more than its own field says `also`: further fields
+  compared with the same value on the same hop (Airtable's
+  `"becomes": { "hop": 2, "field": "New", "op": "eq", "also": [{ "field": "Old", "op": "neq" }] }`
+  becomes `c.New == "Interview" AND c.Old != "Interview"`). A mapping says
+  `changed` where its rewrite does otherwise than the settings listen did:
+  each `{ note, written?, unwritten?, hearing? }` applies to a listen that
+  writes every key of `written`, none of `unwritten`, and hears one of the
+  events `hearing` names (every event, when it leaves `events` out and you
+  say nothing of what that heard). Such a listen is told the note and
+  rewritten only by `listen-fire upgrade --all`: a changed meaning is
+  announced, never applied silently.
   A key may also say `absent`, what a listen that left it out meant, as a
   settings value (`"absent": ""` for an inbox's own mail, a list for the
   events a listen with none heard): the rewrite of such a listen compares it,
@@ -261,10 +272,11 @@ The manifest file registers your server with a team:
   owned scalar takes. A connection positioned at a member (an Airtable `base`)
   stands on the hops its position keys map to. A path naming an edge you do
   not describe, a key mapped past the path, an `eq`/`in` key with no `field`,
-  `lowercase: true` on a `type` key, or an `absent` the key cannot compare (on a
-  `type` key, several values on an `eq` key, a value its `values` do not spell,
-  an `absentField` with no `absent`), in the mapping or any `byEvent` one,
-  is refused when the module is described. A listen with a key you do not map is left for its author.
+  `lowercase: true` on a `type` key, an `absent` the key cannot compare (on a
+  `type` key, several values on an `eq` or `neq` key, a value its `values` do not spell,
+  an `absentField` with no `absent`), an `also` on a `type` key, beside an
+  `absent` or by `type`, or a `changed` naming a key the mapping does not
+  map, in the mapping or any `byEvent` one, is refused when the module is described. A listen with a key you do not map is left for its author.
 - Optional fields: `handbookSection` (`{ title, content }`, prose the authoring
   handbook shows about your system), `vocabulary` (an icon and event phrasing),
   `webhookEventTypeId`.

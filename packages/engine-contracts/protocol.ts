@@ -769,6 +769,8 @@ export const WireInvokeFieldFunctionInput = z.object({
 // whether its path names edges the module describes is judged at describe.
 // The refusal texts are word for word those of `lf`'s manifest reader
 // (settings_become.cases.json).
+const KEY_OPS = ['eq', 'neq', 'in', 'contains', 'type'] as const;
+
 const settingsMapping = z.object({
   path: z.array(z.string().min(1, 'listenSettingsBecome.path: expected non-empty edge names')).min(1, 'listenSettingsBecome.path: expected at least one edge'),
   aliases: z.array(z.string().min(1, 'listenSettingsBecome.aliases: expected non-empty aliases')),
@@ -778,13 +780,26 @@ const settingsMapping = z.object({
     z.object({
       hop: z.number().int().nonnegative(),
       field: z.string().min(1, 'listenSettingsBecome.keys.field: expected a non-empty string').optional(),
-      op: z.enum(['eq', 'in', 'contains', 'type']),
+      op: z.enum(KEY_OPS),
       values: z.record(z.string(), z.string()).optional(),
       absent: z.union([z.string(), z.array(z.string())], { error: 'listenSettingsBecome.keys.absent: expected a text or a list of texts' }).optional(),
       absentField: z.string().min(1, 'listenSettingsBecome.keys.absentField: expected a non-empty string').optional(),
       lowercase: z.boolean({ error: 'listenSettingsBecome.keys.lowercase: expected true or false' }).optional(),
+      also: z
+        .array(z.object({ field: z.string().min(1, 'listenSettingsBecome.keys.also.field: expected a non-empty string'), op: z.enum(KEY_OPS) }))
+        .optional(),
     }),
   ),
+  changed: z
+    .array(
+      z.object({
+        note: z.string().min(1, 'listenSettingsBecome.changed.note: expected a non-empty string'),
+        written: z.array(z.string()).optional(),
+        unwritten: z.array(z.string()).optional(),
+        hearing: z.array(z.string()).optional(),
+      }),
+    )
+    .optional(),
 });
 
 export const WireListenDeclarations = z.object({

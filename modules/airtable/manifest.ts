@@ -59,8 +59,12 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
   positionArgs: [{ name: 'base', optionsFrom: BASE_META_TYPE, label: 'Base' }],
   // A 0.12 listen (`{ base, table, events, field, becomes }`) is a listen on
   // the table's `Changes`: the base and table narrow their hops by `Id`, the
-  // events by `Kind`, the field and the value it becomes by `Field` and `New`.
-  // A connection positioned at the base drops the `Bases` hop.
+  // events by `Kind`, the field by `Field`, and the value it becomes by `New`
+  // and an `Old` that was not it (0.12 fired only when the field came to hold
+  // it). A connection positioned at the base drops the `Bases` hop. A change
+  // is one per field an update touched, and a created row one change with no
+  // field: where that runs a listen otherwise than 0.12 did, the upgrade says
+  // so and holds the pin until `--all`.
   listenSettingsBecome: {
     path: [AIRTABLE_BASES_EDGE, AIRTABLE_TABLES_EDGE, AIRTABLE_CHANGES_EDGE],
     aliases: ['b', 't', 'c'],
@@ -71,8 +75,20 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
       table: { hop: 1, field: 'Id', op: 'eq' },
       events: { hop: 2, field: 'Kind', op: 'in', values: Object.fromEntries(AIRTABLE_CHANGE_KINDS.map((kind) => [`record.${kind}`, kind])) },
       field: { hop: 2, field: 'Field', op: 'eq' },
-      becomes: { hop: 2, field: 'New', op: 'eq' },
+      becomes: { hop: 2, field: 'New', op: 'eq', also: [{ field: 'Old', op: 'neq' }] },
     },
+    changed: [
+      {
+        note: 'a listen hearing updates with no `field` now runs once for each field an update touched, where 0.12 ran it once per update',
+        unwritten: ['field'],
+        hearing: ['record.updated'],
+      },
+      {
+        note: 'a `field` or `becomes` listen no longer runs on a newly created row, where 0.12 counted every field of a created row as changed',
+        written: ['field'],
+        hearing: ['record.created'],
+      },
+    ],
   },
   triggerExpectation:
     'Listen-Fire registers one Airtable webhook per table a listen on its `Changes` watches, and one ' +

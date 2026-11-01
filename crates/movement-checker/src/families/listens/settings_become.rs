@@ -53,6 +53,9 @@ struct Rewrite {
     /// not take together, so the host compares each value exactly where
     /// 0.12 handed them all to the module.
     host_judged: Vec<String>,
+    /// What the traversal does otherwise than the listen did, by its
+    /// mapping (`changed`): each said, and the rewrite never safe.
+    changed: Vec<String>,
 }
 
 impl Checker<'_> {
@@ -109,6 +112,9 @@ impl Checker<'_> {
         if !host_judged.is_empty() {
             notes.push_str(&host_judged_note(host_judged));
         }
+        for note in rewrite.as_ref().map_or(&[][..], |r| r.changed.as_slice()) {
+            notes.push_str(&format!(" ({note})"));
+        }
         let message = format!(
             "`listen to {instance_name} {{ … }}` is retired in 0.13: a listen is a traversal ending on the edge its events arrive on. Write `listen to {path} fire {movement}`{notes}{why_no_fix}"
         );
@@ -123,7 +129,7 @@ impl Checker<'_> {
             if let Some(span) = rewrite.param_from.as_deref().and_then(|from| self.param_from_span(statement, from, scope)) {
                 edits.push(json!({ "span": span, "text": rewrite.param_type }));
             }
-            let safe = !suppresses_self && !every && rewrite.host_judged.is_empty();
+            let safe = !suppresses_self && !every && rewrite.host_judged.is_empty() && rewrite.changed.is_empty();
             diagnostic.fix = Some(if safe { json!({ "edits": edits, "safe": true }) } else { json!({ "edits": edits }) });
         }
         self.push(diagnostic);
@@ -192,23 +198,7 @@ enum NoRewrite {
 /// key says leaving them out heard (Stripe's: every event, on every edge).
 fn chosen<'b>(statement: &ListenDeclaration, become_: &'b SettingsBecome, default_events: Option<&[String]>) -> Result<(&'b SettingsBecome, bool), NoRewrite> {
     let Some(by_event) = become_.by_event.as_ref().filter(|b| !b.is_empty()) else { return Ok((become_, false)) };
-    let named: Vec<String> = match statement.config.iter().find(|a| a.name == EVENTS_KEY) {
-        Some(arg) => match expression_of_slot(&arg.value).map_err(|_| NoRewrite::Unmapped)? {
-            Expression::Static { value: StaticValue::String(event) } => vec![event],
-            Expression::List { elements } => elements
-                .iter()
-                .map(|e| match e {
-                    ListElement::Expression(Expression::Static { value: StaticValue::String(event) }) => Ok(event.clone()),
-                    _ => Err(NoRewrite::Unmapped),
-                })
-                .collect::<Result<_, _>>()?,
-            _ => return Err(NoRewrite::Unmapped),
-        },
-        None => match default_events.filter(|d| !d.is_empty()) {
-            Some(defaults) => defaults.to_vec(),
-            None => become_.keys.get(EVENTS_KEY).and_then(|k| k.absent.as_ref()).map(|heard| heard.texts().to_vec()).unwrap_or_default(),
-        },
-    };
+    let named = heard_events(statement, become_, default_events)?.unwrap_or_default();
     let ways: Vec<Option<&SettingsBecome>> = named.iter().map(|event| by_event.get(event)).collect();
     if ways.iter().all(Option::is_none) {
         return Ok((become_, false));
@@ -235,6 +225,48 @@ fn chosen<'b>(statement: &ListenDeclaration, become_: &'b SettingsBecome, defaul
     }
 }
 
+/// The events a settings listen hears: those its `events` names, else the
+/// module's default events, else what its mapping says leaving `events` out
+/// heard. None: every event (nothing says otherwise).
+fn heard_events(statement: &ListenDeclaration, become_: &SettingsBecome, default_events: Option<&[String]>) -> Result<Option<Vec<String>>, NoRewrite> {
+    Ok(match statement.config.iter().find(|a| a.name == EVENTS_KEY) {
+        Some(arg) => Some(match expression_of_slot(&arg.value).map_err(|_| NoRewrite::Unmapped)? {
+            Expression::Static { value: StaticValue::String(event) } => vec![event],
+            Expression::List { elements } => elements
+                .iter()
+                .map(|e| match e {
+                    ListElement::Expression(Expression::Static { value: StaticValue::String(event) }) => Ok(event.clone()),
+                    _ => Err(NoRewrite::Unmapped),
+                })
+                .collect::<Result<_, _>>()?,
+            _ => return Err(NoRewrite::Unmapped),
+        }),
+        None => match default_events.filter(|d| !d.is_empty()) {
+            Some(defaults) => Some(defaults.to_vec()),
+            None => become_.keys.get(EVENTS_KEY).and_then(|k| k.absent.as_ref()).map(|heard| heard.texts().to_vec()),
+        },
+    })
+}
+
+/// The notes of the mapping's `changed` that apply to the listen: it
+/// writes every key of `written`, none of `unwritten`, and hears one of
+/// `hearing`.
+fn changed_meanings(statement: &ListenDeclaration, become_: &SettingsBecome, heard: Option<&[String]>) -> Vec<String> {
+    let written = |key: &String| statement.config.iter().any(|a| a.name == *key);
+    become_
+        .changed
+        .iter()
+        .flatten()
+        .filter(|changed| changed.written.iter().flatten().all(written))
+        .filter(|changed| !changed.unwritten.iter().flatten().any(written))
+        .filter(|changed| match (&changed.hearing, heard) {
+            (Some(hearing), Some(heard)) => hearing.iter().any(|event| heard.contains(event)),
+            _ => true,
+        })
+        .map(|changed| changed.note.clone())
+        .collect()
+}
+
 /// The edge a mapping's path ends on, as a message names it: by its name
 /// alone when the path is one hop (`Messages`), else by the whole path, since
 /// two paths may end on edges of one name (an invoice's `Changes` and a
@@ -253,6 +285,7 @@ fn edge_named(path: &[String]) -> String {
 /// events), or the rewrite would widen the listen.
 fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Narrowing) -> Result<Rewrite, NoRewrite> {
     let (become_, events_spent) = chosen(statement, become_, from.default_events)?;
+    let changed = changed_meanings(statement, become_, heard_events(statement, become_, from.default_events)?.as_deref());
     let schema = from.schema;
     let consumed = consumed_hops(become_, from.positioned);
     let mut conjuncts: Vec<Vec<Expression>> = vec![Vec::new(); become_.path.len()];
@@ -268,8 +301,6 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
         if key.hop >= become_.path.len() {
             return Err(NoRewrite::Unmapped);
         }
-        let value = |raw: &StaticValue| mapped(key, raw).ok_or(NoRewrite::Unmapped);
-        let compare = |op, right| compare_on(key, op, right);
         match key.op {
             // The landing's type is stated after the traversal, which ends on the hop it types.
             KeyOp::Type if arg.is_type == Some(true) && key.hop + 1 == become_.path.len() => {
@@ -277,38 +308,12 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
                 landing = Some(format!("<{}>", raw.strip_prefix('<').and_then(|r| r.strip_suffix('>')).unwrap_or(raw)));
             }
             KeyOp::Type => return Err(NoRewrite::Unmapped),
-            KeyOp::Eq | KeyOp::In | KeyOp::Contains if key.field.is_none() || arg.is_type == Some(true) => return Err(NoRewrite::Unmapped),
-            KeyOp::Eq => {
-                let Ok(Expression::Static { value: raw }) = expression_of_slot(&arg.value) else { return Err(NoRewrite::Unmapped) };
-                conjuncts[key.hop].push(compare(FilterOperator::Eq, Expression::Static { value: value(&raw)? }));
-            }
-            KeyOp::In => match expression_of_slot(&arg.value).map_err(|_| NoRewrite::Unmapped)? {
-                Expression::List { elements } => {
-                    let items = elements
-                        .iter()
-                        .map(|e| match e {
-                            ListElement::Expression(Expression::Static { value: raw }) => value(raw).map(|v| ListElement::Expression(Expression::Static { value: v })),
-                            _ => Err(NoRewrite::Unmapped),
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    conjuncts[key.hop].push(compare(FilterOperator::In, Expression::List { elements: items }));
+            _ if key.field.is_none() || arg.is_type == Some(true) => return Err(NoRewrite::Unmapped),
+            _ => {
+                let written = written_values(key, &expression_of_slot(&arg.value).map_err(|_| NoRewrite::Unmapped)?)?;
+                for (field, op) in compared(key) {
+                    conjuncts[key.hop].push(comparison(key, field, op, &written).ok_or(NoRewrite::Unmapped)?);
                 }
-                Expression::Static { value: raw } => conjuncts[key.hop].push(compare(FilterOperator::Eq, Expression::Static { value: value(&raw)? })),
-                _ => return Err(NoRewrite::Unmapped),
-            },
-            KeyOp::Contains => {
-                let values = match expression_of_slot(&arg.value).map_err(|_| NoRewrite::Unmapped)? {
-                    Expression::List { elements } => elements
-                        .iter()
-                        .map(|e| match e {
-                            ListElement::Expression(Expression::Static { value: raw }) => value(raw),
-                            _ => Err(NoRewrite::Unmapped),
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
-                    Expression::Static { value: raw } => vec![value(&raw)?],
-                    _ => return Err(NoRewrite::Unmapped),
-                };
-                conjuncts[key.hop].push(any_contains(key, values).ok_or(NoRewrite::Unmapped)?);
             }
         }
     }
@@ -356,7 +361,55 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
         [edge] => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(edge)),
         _ => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(landing_of(schema, kept).ok_or(NoRewrite::Unmapped)?)),
     };
-    Ok(Rewrite { path, param_type, param_from: become_.param_from.clone(), host_judged })
+    Ok(Rewrite { path, param_type, param_from: become_.param_from.clone(), host_judged, changed })
+}
+
+/// A key's value as written: one literal, or a list of them, each spelled
+/// as its field holds it.
+enum Written {
+    One(StaticValue),
+    Many(Vec<StaticValue>),
+}
+
+fn written_values(key: &KeyBecomes, value: &Expression) -> Result<Written, NoRewrite> {
+    let spelled = |raw: &StaticValue| mapped(key, raw).ok_or(NoRewrite::Unmapped);
+    match value {
+        Expression::Static { value: raw } => Ok(Written::One(spelled(raw)?)),
+        Expression::List { elements } => elements
+            .iter()
+            .map(|e| match e {
+                ListElement::Expression(Expression::Static { value: raw }) => spelled(raw),
+                _ => Err(NoRewrite::Unmapped),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Written::Many),
+        _ => Err(NoRewrite::Unmapped),
+    }
+}
+
+/// Each field the key compares, and how: its own, then its `also`.
+fn compared(key: &KeyBecomes) -> Vec<(&str, KeyOp)> {
+    let own = key.field.as_deref().map(|field| (field, key.op));
+    own.into_iter().chain(key.also.iter().flatten().map(|also| (also.field.as_str(), also.op))).collect()
+}
+
+/// `field` compared with the written value by `op`: `==` and `!=` take
+/// one value, `IN` a list (one value by `==`), `CONTAINS` either (several
+/// an OR). None for a value the op does not compare.
+fn comparison(key: &KeyBecomes, field: &str, op: KeyOp, written: &Written) -> Option<Expression> {
+    let on = KeyBecomes { field: Some(field.to_string()), ..key.clone() };
+    let one = |value: &StaticValue| Expression::Static { value: value.clone() };
+    match (op, written) {
+        (KeyOp::Eq | KeyOp::In, Written::One(value)) => Some(compare_on(&on, FilterOperator::Eq, one(value))),
+        (KeyOp::Neq, Written::One(value)) => Some(compare_on(&on, FilterOperator::Neq, one(value))),
+        (KeyOp::In, Written::Many(values)) => {
+            let elements = values.iter().map(|v| ListElement::Expression(one(v))).collect();
+            Some(compare_on(&on, FilterOperator::In, Expression::List { elements }))
+        }
+        (KeyOp::Contains, Written::One(value)) => any_contains(&on, vec![value.clone()]),
+        (KeyOp::Contains, Written::Many(values)) => any_contains(&on, values.clone()),
+        (KeyOp::Eq | KeyOp::Neq | KeyOp::Type, _) => None,
+    }
 }
 
 /// The comparison what omitting `key` meant is: one value by `==`, a list
@@ -370,6 +423,7 @@ fn absent_comparison(key: &KeyBecomes, meant: &SettingsValue) -> Option<Expressi
         (KeyOp::Eq | KeyOp::In, SettingsValue::One(_), [only]) | (KeyOp::Eq, SettingsValue::Many(_), [only]) => {
             Some(compare_on(key, FilterOperator::Eq, Expression::Static { value: only.clone() }))
         }
+        (KeyOp::Neq, _, [only]) => Some(compare_on(key, FilterOperator::Neq, Expression::Static { value: only.clone() })),
         (KeyOp::In, SettingsValue::Many(_), _) => {
             let elements = items.into_iter().map(|v| ListElement::Expression(Expression::Static { value: v })).collect();
             Some(compare_on(key, FilterOperator::In, Expression::List { elements }))

@@ -164,11 +164,17 @@ export function arrivalsFromPayload(payload: AirtableWebhookPayload, context: Pa
       arrivals.push(change(recordId, `${transaction}:${recordId}:created`, 'created', named(created.cellValuesByFieldId)));
     }
     for (const [recordId, updated] of Object.entries(changes.changedRecordsById ?? {})) {
-      // `current` holds the changed cells; `unchanged` every other one.
+      // `current` holds the changed cells; `unchanged` every other one. A cell
+      // emptied by the update may be left out of `current` (Airtable types a
+      // cell as "Cell value V2 or null", and says no more of an empty one),
+      // so a field `previous` holds that `unchanged` does not changed too,
+      // to nothing: its `New` is null.
       const current = updated.current?.cellValuesByFieldId ?? {};
+      const unchanged = updated.unchanged?.cellValuesByFieldId ?? {};
       const previous = named(updated.previous?.cellValuesByFieldId);
-      const cells = { ...named(updated.unchanged?.cellValuesByFieldId), ...named(current) };
-      for (const fieldId of Object.keys(current)) {
+      const cells = { ...named(unchanged), ...named(current) };
+      const emptied = Object.keys(updated.previous?.cellValuesByFieldId ?? {}).filter((fieldId) => !Object.hasOwn(current, fieldId) && !Object.hasOwn(unchanged, fieldId));
+      for (const fieldId of [...Object.keys(current), ...emptied]) {
         const name = tableFields?.get(fieldId)?.name ?? fieldId;
         arrivals.push(change(recordId, `${transaction}:${recordId}:${fieldId}`, 'updated', cells, { name, old: asText(previous[name]), now: asText(cells[name]) }));
       }

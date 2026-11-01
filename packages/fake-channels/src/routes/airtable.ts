@@ -126,14 +126,22 @@ function appendChange(store: EntityStore, baseId: string, wh: FakeWebhook, chang
   return { appended: true, seq: Number(seq), payload };
 }
 
+/** What a base's schema change says, as Airtable's payload says it: a
+ *  table renamed, or one made. */
+type TableChange = { renamed: { tableId: string; name: string; previous: string } } | { created: { tableId: string; name: string } };
+
 /** Queue a table's metadata change on a webhook that takes the base's schema
  *  (`dataTypes: ['tableMetadata']`), as Airtable builds that payload. */
-function appendTableChange(store: EntityStore, wh: FakeWebhook, tableChange: { tableId: string; name: string; previous: string }): boolean {
+function appendTableChange(store: EntityStore, wh: FakeWebhook, change: TableChange): boolean {
   if (!wh.dataTypes.includes('tableMetadata')) return false;
+  const said =
+    'renamed' in change
+      ? { changedTablesById: { [change.renamed.tableId]: { changedMetadata: { current: { name: change.renamed.name }, previous: { name: change.renamed.previous } } } } }
+      : { createdTablesById: { [change.created.tableId]: { metadata: { name: change.created.name } } } };
   const payload = {
     timestamp: new Date().toISOString(),
     baseTransactionNumber: Number(store.nextId(SVC, `txn:${wh.baseId}`)),
-    changedTablesById: { [tableChange.tableId]: { changedMetadata: { current: { name: tableChange.name }, previous: { name: tableChange.previous } } } },
+    ...said,
   };
   store.create(SVC, payloadFeedType(wh.id), payload, store.nextId(SVC, payloadFeedType(wh.id)));
   return true;
@@ -316,14 +324,45 @@ export function airtableRoutes(store: EntityStore): Router {
     if (!table || name === '') return res.status(400).json({ error: 'Expected { baseId, tableId, name } naming a seeded table' });
     const previous = String((table.data as { name?: unknown }).name ?? '');
     store.update(SVC, `table:${baseId}`, tableId, { ...table.data, name });
+    res.json({ deliveries: await tellSchemaWebhooks(baseId, { renamed: { tableId, name, previous } }) });
+  });
+
+  // What Airtable does when a table is made: the meta API lists it, and every
+  // webhook of the base that takes its schema is told, then pinged.
+  //   POST /airtable/control/create-table { baseId, table: { id, name, primaryFieldId?, fields? } }
+  r.post('/control/create-table', async (req, res) => {
+    const baseId = String(req.body?.baseId ?? '');
+    const table = req.body?.table as { id?: unknown; name?: unknown } | undefined;
+    if (!store.get(SVC, 'base', baseId) || typeof table?.id !== 'string' || typeof table.name !== 'string') {
+      return res.status(400).json({ error: 'Expected { baseId, table: { id, name, … } } naming a seeded base' });
+    }
+    store.create(SVC, `table:${baseId}`, { fields: [], ...table }, table.id);
+    res.json({ deliveries: await tellSchemaWebhooks(baseId, { created: { tableId: table.id, name: table.name } }) });
+  });
+
+  // What Airtable does when a base is renamed: the meta API lists it so, and
+  // no webhook is told (Airtable reports no base made or renamed).
+  //   POST /airtable/control/rename-base { baseId, name }
+  r.post('/control/rename-base', (req, res) => {
+    const baseId = String(req.body?.baseId ?? '');
+    const name = String(req.body?.name ?? '');
+    const base = store.get(SVC, 'base', baseId);
+    if (!base || name === '') return res.status(400).json({ error: 'Expected { baseId, name } naming a seeded base' });
+    store.update(SVC, 'base', baseId, { ...base.data, name });
+    res.json({ ok: true });
+  });
+
+  /** Queue `change` on every live schema webhook of the base and ping each:
+   *  each ping's answer. */
+  async function tellSchemaWebhooks(baseId: string, change: TableChange): Promise<Array<{ webhookId: string; targetUrl: string; status: number; body: string }>> {
     const deliveries: Array<{ webhookId: string; targetUrl: string; status: number; body: string }> = [];
     for (const { data } of store.list(SVC, 'webhook')) {
       const webhook = data as unknown as FakeWebhook;
-      if (lapsed(webhook) || webhook.baseId !== baseId || !appendTableChange(store, webhook, { tableId, name, previous })) continue;
+      if (lapsed(webhook) || webhook.baseId !== baseId || !appendTableChange(store, webhook, change)) continue;
       deliveries.push(await ping(baseId, webhook));
     }
-    res.json({ deliveries });
-  });
+    return deliveries;
+  }
 
   // Move the fake's clock on (NOT a real Airtable route): a webhook lapses
   // once the clock passes its `expirationTime`, so a test can let a quiet

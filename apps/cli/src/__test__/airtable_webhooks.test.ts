@@ -258,6 +258,115 @@ test('a table renamed into the filter is watched from the next re-resolution, an
   }
 });
 
+test('a table renamed out of the filter is watched no more', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), EXPENSES.replace('c:Changes WHERE c.Kind == "created"', 'c:Changes'));
+    const server = await serving(dir);
+    try {
+      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
+      assert.deepEqual((await webhooksOf(fake)).tables, ['tblEXPN01']);
+      const runs = () => server.lines.filter((l) => /^run \S+ hiring:review completed$/.test(l)).length;
+
+      // Expenses is renamed Receipts: the base's schema webhook says so, and
+      // the table's own webhook is removed as the listen lists its tables again.
+      const renamed = (await fake.json('/airtable/control/rename-table', { baseId: 'appHIRE01', tableId: 'tblEXPN01', name: 'Receipts' })) as Deliveries;
+      assert.deepEqual(renamed.deliveries.map((d) => d.status), [200]);
+      for (const deadline = Date.now() + 20_000; (await webhooksOf(fake)).tables.length > 0; ) {
+        if (Date.now() > deadline) throw new Error(`the renamed table was still watched; saw:\n${server.lines.join('\n')}`);
+        await new Promise((done) => setTimeout(done, 100));
+      }
+      assert.deepEqual((await webhooksOf(fake)).schemas, ['appHIRE01'], 'the base is still narrowed by name, so its schema is still watched');
+
+      // A row made in it now reaches no webhook, and nothing runs.
+      const after = await deliver(fake, { changeType: 'add', tableId: 'tblEXPN01', recordId: 'recAFTER', fields: { Item: 'Lunch' } });
+      assert.deepEqual(after.deliveries, []);
+      await new Promise((done) => setTimeout(done, 500));
+      assert.equal(runs(), 0);
+    } finally {
+      await server.stop();
+    }
+  } finally {
+    await fake.stop();
+  }
+});
+
+/** A Spending base beside Hiring, holding no Expenses table. */
+const SPENDING = [
+  { entity_type: 'base', id: 'appSPND01', data: { id: 'appSPND01', name: 'Spending' } },
+  { entity_type: 'table:appSPND01', id: 'tblLEDG01', data: { id: 'tblLEDG01', name: 'Ledger', primaryFieldId: 'fldLItem', fields: [{ id: 'fldLItem', name: 'Item', type: 'singleLineText' }] } },
+];
+
+/** A listen on the Expenses tables of the Hiring and Finance bases. */
+const HIRING_AND_FINANCE = EXPENSES.replace('b:Bases WHERE b.Name == "Hiring"', 'b:Bases WHERE b.Name IN ["Hiring", "Finance"]').replace('c:Changes WHERE c.Kind == "created"', 'c:Changes');
+
+test('a base renamed into the filter with no matching table is watched for one, and a table made in it is watched at once', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    await fake.json('/admin/airtable/seed', { entities: SPENDING });
+    writeFileSync(join(dir, 'movements/hiring.mvt'), HIRING_AND_FINANCE);
+    // Airtable reports no base renamed: the listen lists its bases again on a clock.
+    appendFileSync(join(dir, 'lf.yaml'), 'resolveEvery:\n  henry_airtable: 4s\n');
+    const server = await serving(dir);
+    try {
+      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
+      assert.deepEqual([(await webhooksOf(fake)).tables, (await webhooksOf(fake)).schemas], [['tblEXPN01'], ['appHIRE01']]);
+
+      // Spending becomes Finance: the bases listed again hold it, with no
+      // Expenses table, so the listen's tables are as they were, and its base
+      // is watched for one.
+      await fake.json('/airtable/control/rename-base', { baseId: 'appSPND01', name: 'Finance' });
+      for (const deadline = Date.now() + 20_000; !(await webhooksOf(fake)).schemas.includes('appSPND01'); ) {
+        if (Date.now() > deadline) throw new Error(`the renamed base's tables were never watched; saw:\n${server.lines.join('\n')}`);
+        await new Promise((done) => setTimeout(done, 100));
+      }
+      assert.deepEqual((await webhooksOf(fake)).tables, ['tblEXPN01']);
+
+      // An Expenses table made in it is reported by that webhook, and watched
+      // on that report, well before the clock lists the bases again.
+      const made = (await fake.json('/airtable/control/create-table', { baseId: 'appSPND01', table: { id: 'tblEXPN02', name: 'Expenses', primaryFieldId: 'fldEItem', fields: [{ id: 'fldEItem', name: 'Item', type: 'singleLineText' }] } })) as Deliveries;
+      assert.deepEqual(made.deliveries.map((d) => d.status), [200]);
+      for (const deadline = Date.now() + 2_500; !(await webhooksOf(fake)).tables.includes('tblEXPN02'); ) {
+        if (Date.now() > deadline) throw new Error(`the table made in the renamed base was not watched on its report; saw:\n${server.lines.join('\n')}`);
+        await new Promise((done) => setTimeout(done, 100));
+      }
+      const runs = () => server.lines.filter((l) => /^run \S+ hiring:review completed$/.test(l)).length;
+      await deliver(fake, { baseId: 'appSPND01', changeType: 'add', tableId: 'tblEXPN02', recordId: 'recFIN01', fields: { Item: 'Audit' } });
+      await until(() => runs() === 1, server.lines);
+    } finally {
+      await server.stop();
+    }
+  } finally {
+    await fake.stop();
+  }
+});
+
+test('the bases a listen\'s tables hang off count against listenScopeLimit, said as Bases', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    await fake.json('/admin/airtable/seed', { entities: SPENDING });
+    await fake.json('/airtable/control/rename-base', { baseId: 'appSPND01', name: 'Finance' });
+    writeFileSync(join(dir, 'movements/hiring.mvt'), HIRING_AND_FINANCE);
+    // One Expenses table, within the limit; two bases it is looked for in, past it.
+    appendFileSync(join(dir, 'lf.yaml'), 'listenScopeLimit: 1\n');
+    const server = await serving(dir);
+    try {
+      const said = 'LISTEN_SCOPE_LIMIT: hiring:review matched more Bases than its limit of 1; it is suspended until its filter matches fewer';
+      await until(() => server.lines.some((l) => l.includes(said)), server.lines);
+      const listed = lfSync(dir, 'listens');
+      assert.ok(listed.out.includes(said), listed.out);
+      assert.deepEqual((await webhooksOf(fake)).tables, [], 'suspended: watched nowhere');
+    } finally {
+      await server.stop();
+    }
+  } finally {
+    await fake.stop();
+  }
+});
+
 /** The candidates' Stage listen at a connection positioned at Hiring. */
 const STAGE = `import { \`@lf/airtable\` as airtable } from adapters
 import { henry_airtable } from credentials
@@ -339,9 +448,52 @@ listen to hiring { base: "appHIRE01", table: "tblCAND01", events: ["record.updat
         .replace('<hiring-[:`Record Change` WHERE `table` == "tblCAND01"]->>', '<hiring-[:Change]->>')
         .replace(
           'listen to hiring { base: "appHIRE01", table: "tblCAND01", events: ["record.updated"], field: "Stage", becomes: "Interview" }',
-          'listen to hiring-[t:Tables WHERE t.Id == "tblCAND01"]->-[c:Changes WHERE c.Kind IN ["updated"] AND c.Field == "Stage" AND c.New == "Interview"]->',
+          'listen to hiring-[t:Tables WHERE t.Id == "tblCAND01"]->-[c:Changes WHERE c.Kind IN ["updated"] AND c.Field == "Stage" AND c.New == "Interview" AND c.Old != "Interview"]->',
         ),
     );
+    const checked = lfSync(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+  } finally {
+    await fake.stop();
+  }
+});
+
+test('upgrade holds the pin on an Airtable listen whose meaning changed, says how, and rewrites it with --all', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    const file = join(dir, 'movements/hiring.mvt');
+    const old = `import { \`@lf/airtable\` as airtable } from adapters
+import { henry_airtable } from credentials
+
+hiring = connect airtable using henry_airtable { base: "Hiring" }
+
+function any_change(change: <hiring-[:\`Record Change\`]->>) {
+  return "changed"
+}
+
+function staged(change: <hiring-[:\`Record Change\`]->>) {
+  return "staged"
+}
+
+listen to hiring { base: "appHIRE01", table: "tblCAND01" } fire any_change
+listen to hiring { base: "appHIRE01", table: "tblCAND01", field: "Stage", becomes: "Interview" } fire staged
+`;
+    writeFileSync(file, old);
+    const lfYaml = join(dir, 'lf.yaml');
+    writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
+
+    const held = lfSync(dir, 'upgrade');
+    assert.equal(held.code, 1, held.out);
+    assert.match(held.out, /fire any_change` \(a listen hearing updates with no `field` now runs once for each field an update touched, where 0\.12 ran it once per update\)/, held.out);
+    assert.match(held.out, /fire staged` \(a `field` or `becomes` listen no longer runs on a newly created row, where 0\.12 counted every field of a created row as changed\)/, held.out);
+    assert.equal(readFileSync(file, 'utf8'), old, 'nothing is rewritten while a meaning changed is unannounced');
+
+    const upgraded = lfSync(dir, 'upgrade', '--all');
+    assert.equal(upgraded.code, 0, upgraded.out);
+    const rewritten = readFileSync(file, 'utf8');
+    assert.match(rewritten, /listen to hiring-\[t:Tables WHERE t\.Id == "tblCAND01"\]->-\[:Changes\]-> fire any_change/);
+    assert.match(rewritten, /listen to hiring-\[t:Tables WHERE t\.Id == "tblCAND01"\]->-\[c:Changes WHERE c\.Field == "Stage" AND c\.New == "Interview" AND c\.Old != "Interview"\]-> fire staged/);
     const checked = lfSync(dir, 'check');
     assert.equal(checked.code, 0, checked.out);
   } finally {

@@ -1905,9 +1905,22 @@ function absentRefusal(name: string, key: KeyBecomes): string | undefined {
   if (key.absent === undefined) return undefined;
   const texts = typeof key.absent === 'string' ? [key.absent] : key.absent;
   if (key.op === 'type') return `'listenSettingsBecome' gives '${name}' an absent value, but a 'type' key compares no field`;
-  if (key.op === 'eq' && texts.length !== 1) return `'listenSettingsBecome' gives '${name}' ${texts.length} absent values, but an 'eq' key compares one`;
+  if ((key.op === 'eq' || key.op === 'neq') && texts.length !== 1) {
+    return `'listenSettingsBecome' gives '${name}' ${texts.length} absent values, but ${key.op === 'eq' ? "an 'eq'" : "a 'neq'"} key compares one`;
+  }
   const unspelled = key.values === undefined ? undefined : texts.find((t) => !Object.hasOwn(key.values!, t));
   if (unspelled !== undefined) return `'listenSettingsBecome' gives '${name}' the absent value "${unspelled}", which its values do not spell`;
+  return undefined;
+}
+
+/** Why a key's `also` comparisons cannot be made beside its own: on a `type`
+ *  key, beside an `absent` (what leaving the key out meant is compared on one
+ *  field), or by `type` (crates/lf schema.rs `also_refusal` says the same). */
+function alsoRefusal(name: string, key: KeyBecomes): string | undefined {
+  if (key.also === undefined) return undefined;
+  if (key.op === 'type') return `'listenSettingsBecome' gives '${name}' 'also' comparisons, but a 'type' key compares no field`;
+  if (key.absent !== undefined) return `'listenSettingsBecome' gives '${name}' 'also' comparisons and an absent value, which is compared on one field`;
+  if (key.also.some((a) => a.op === 'type')) return `'listenSettingsBecome' gives '${name}' an 'also' comparison by 'type', which compares no field`;
   return undefined;
 }
 
@@ -1915,7 +1928,9 @@ function absentRefusal(name: string, key: KeyBecomes): string | undefined {
  * The refusal of a module's `listenSettingsBecome` that cannot be the
  * traversal it says (crates/lf schema.rs `unreadable_settings_become` says the
  * same): an alias count that is not one per edge, a key mapped past the path
- * or compared on no field, a `lowercase` on a key that compares no text, an `absent` its key cannot compare, a path that starts at no root collection, or an
+ * or compared on no field, a `lowercase` on a key that compares no text, an
+ * `absent` its key cannot compare, an `also` it cannot make, a key named in
+ * `changed` it does not map, a path that starts at no root collection, or an
  * edge its type before it does not have; each `byEvent` mapping is judged the
  * same. A connection positioned at a member
  * stands on the path's first hops, so the path is read from its first edge
@@ -1946,9 +1961,11 @@ function unreadableMapping(
     if (key.hop >= path.length) return `'listenSettingsBecome' maps '${name}' to hop ${key.hop}, past the last of its ${path.length} edges`;
     if (key.op !== 'type' && key.field === undefined) return `'listenSettingsBecome' maps '${name}' by '${key.op}' but names no field to compare`;
     if (key.lowercase === true && key.op === 'type') return `'listenSettingsBecome' gives '${name}' 'lowercase: true', but a 'type' key compares no text`;
-    const absent = absentRefusal(name, key);
-    if (absent !== undefined) return absent;
+    const refusal = absentRefusal(name, key) ?? alsoRefusal(name, key);
+    if (refusal !== undefined) return refusal;
   }
+  const unmapped = (become.changed ?? []).flatMap((c) => [...(c.written ?? []), ...(c.unwritten ?? [])]).find((key) => !Object.hasOwn(become.keys, key));
+  if (unmapped !== undefined) return `'listenSettingsBecome' names '${unmapped}' in 'changed', but maps no key '${unmapped}'`;
   const roots = entries.filter((e) => e.readable || e.writable || e.listenable === true);
   const start = path.findIndex((edge) => roots.some((e) => collectionNameOf(e) === edge));
   if (start < 0) {

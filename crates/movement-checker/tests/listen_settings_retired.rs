@@ -5,10 +5,12 @@
 //! - `gh`: a root `Notifications` its module announces, the 0.12 `events`
 //!   setting becoming `Reason IN` on that one hop.
 //! - `at`: `Bases` → `Tables` → `Changes`, `base` and `table` each an `Id ==`
-//!   on their hop, `field` and `becomes` a `Field ==` and a `New ==` on the
-//!   last, and `events` a `Kind IN` spelled as the field holds it
-//!   (`"record.created"` is `"created"`); a connection positioned at a base
-//!   stands on the first hop.
+//!   on their hop, `field` a `Field ==` and `becomes` a `New ==` and an
+//!   `Old !=` on the last, and `events` a `Kind IN` spelled as the field
+//!   holds it (`"record.created"` is `"created"`); a connection positioned
+//!   at a base stands on the first hop. Two meanings changed: a listen on
+//!   updates with no `field` runs once per field, and a `field` listen no
+//!   longer hears a created row.
 //!
 //! A warning on this release (the settings form still serves until every
 //! module has moved); an error on a check for a move up from 0.12, so the
@@ -55,19 +57,22 @@ const CATALOG: &str = r#"{"adapters":{
     "triggerConfig":["base","table","field","becomes","events"],
     "listenSettingsBecome":{"path":["Bases","Tables","Changes"],"aliases":["b","t","c"],"paramFrom":"Record Change",
       "keys":{"base":{"hop":0,"field":"Id","op":"eq"},"table":{"hop":1,"field":"Id","op":"eq"},
-        "field":{"hop":2,"field":"Field","op":"eq"},"becomes":{"hop":2,"field":"New","op":"eq"},
-        "events":{"hop":2,"field":"Kind","op":"in","values":{"record.created":"created","record.updated":"updated"}}}},
+        "field":{"hop":2,"field":"Field","op":"eq"},"becomes":{"hop":2,"field":"New","op":"eq","also":[{"field":"Old","op":"neq"}]},
+        "events":{"hop":2,"field":"Kind","op":"in","values":{"record.created":"created","record.updated":"updated"}}},
+      "changed":[
+        {"note":"a listen hearing updates with no `field` now runs once for each field an update touched, where 0.12 ran once per update","unwritten":["field"],"hearing":["record.updated"]},
+        {"note":"a `field` or `becomes` listen no longer runs on a newly created row, where 0.12 counted every field of a created row as changed","written":["field"],"hearing":["record.created"]}]},
     "schemas":{
       "":{"positions":{
         "Base":{"properties":{"Id":"text","Name":"text"},"edges":{"Tables":{"target":"Table","cheapToList":true,"parentChanges":"pushed"}}},
         "Table":{"properties":{"Id":"text","Name":"text"},"edges":{"Changes":{"target":"Change","readable":false,"listenable":true,"identity":"Id","delivery":"scope"}}},
-        "Change":{"properties":{"Id":"text","Field":"text","New":"text","Kind":"text"},"edges":{}},
+        "Change":{"properties":{"Id":"text","Field":"text","Old":"text","New":"text","Kind":"text"},"edges":{}},
         "Record Change":{"properties":{"Field":"text"},"edges":{}}},
         "collections":{"Bases":{"target":"Base","cheapToList":true,"relistEverySeconds":300}},
         "writableRoots":{},"eventPosition":"Record Change","eventPositions":[{"position":"Record Change"}]},
       "::[[\"base\",\"Hiring\"]]":{"positions":{
         "Table":{"properties":{"Id":"text","Name":"text"},"edges":{"Changes":{"target":"Change","readable":false,"listenable":true,"identity":"Id","delivery":"scope"}}},
-        "Change":{"properties":{"Id":"text","Field":"text","New":"text","Kind":"text"},"edges":{}},
+        "Change":{"properties":{"Id":"text","Field":"text","Old":"text","New":"text","Kind":"text"},"edges":{}},
         "Record Change":{"properties":{"Field":"text"},"edges":{}}},
         "collections":{"Tables":{"target":"Table","cheapToList":true,"parentChanges":"pushed"}},
         "writableRoots":{},"eventPosition":"Record Change","eventPositions":[{"position":"Record Change"}]}}},
@@ -233,16 +238,58 @@ fn a_hop_the_connection_consumes_is_dropped() {
         "{HIRING}function moved(c: <hiring-[:`Record Change`]->>) {{ return 1 }}\nlisten to hiring {{ base: \"appHIRE01\", table: \"tblCAND01\", field: \"Stage\", becomes: \"Interview\" }} fire moved\n"
     );
     let d = diagnostics(&source);
-    let told = retired(&d);
-    assert_eq!(told.fix.as_ref().unwrap()["safe"], true);
     let text = fixed(&source, &d);
     assert_eq!(
         text,
         format!(
-            "{HIRING}function moved(c: <hiring-[:Change]->>) {{ return 1 }}\nlisten to hiring-[t:Tables WHERE t.Id == \"tblCAND01\"]->-[c:Changes WHERE c.Field == \"Stage\" AND c.New == \"Interview\"]-> fire moved\n"
+            "{HIRING}function moved(c: <hiring-[:Change]->>) {{ return 1 }}\nlisten to hiring-[t:Tables WHERE t.Id == \"tblCAND01\"]->-[c:Changes WHERE c.Field == \"Stage\" AND c.New == \"Interview\" AND c.Old != \"Interview\"]-> fire moved\n"
         )
     );
     assert_rechecks_clean(&text);
+}
+
+/// A key that compares more than its own field (`becomes`: `New ==` and
+/// also `Old !=`, so it hears the field come to hold the value, as 0.12
+/// did) writes each, with the same value; a list is no value `!=` compares.
+#[test]
+fn a_key_that_also_compares_another_field_writes_both() {
+    let source = format!(
+        "{HIRING}function moved(c: <hiring-[:`Record Change`]->>) {{ return 1 }}\nlisten to hiring {{ table: \"tblCAND01\", field: \"Stage\", becomes: \"Interview\", events: [\"record.updated\"] }} fire moved\n"
+    );
+    let d = diagnostics(&source);
+    let told = retired(&d);
+    assert_eq!(told.fix.as_ref().unwrap()["safe"], true, "updates alone, narrowed by field: nothing differs from 0.12");
+    let text = fixed(&source, &d);
+    assert!(
+        text.ends_with("listen to hiring-[t:Tables WHERE t.Id == \"tblCAND01\"]->-[c:Changes WHERE c.Field == \"Stage\" AND c.New == \"Interview\" AND c.Old != \"Interview\" AND c.Kind IN [\"updated\"]]-> fire moved\n"),
+        "{text}"
+    );
+    assert_rechecks_clean(&text);
+    let listed = source.replace("becomes: \"Interview\"", "becomes: [\"Interview\", \"Offer\"]");
+    assert_eq!(retired(&diagnostics(&listed)).fix, None, "several values: no one value to compare by `!=`");
+}
+
+/// Where the traversal does otherwise than the settings listen did, its
+/// module says so (`changed`), and the rewrite carries each note that
+/// applies and is never safe: `listen-fire upgrade` holds the pin until
+/// `--all`.
+#[test]
+fn a_changed_meaning_is_said_and_makes_the_fix_unsafe() {
+    const PER_FIELD: &str = "(a listen hearing updates with no `field` now runs once for each field an update touched, where 0.12 ran once per update)";
+    const NOT_CREATED: &str = "(a `field` or `becomes` listen no longer runs on a newly created row, where 0.12 counted every field of a created row as changed)";
+    let told = |settings: &str| {
+        let source = format!("{HIRING}function moved(c: <hiring-[:`Record Change`]->>) {{ return 1 }}\nlisten to hiring {{ table: \"tblCAND01\"{settings} }} fire moved\n");
+        let d = diagnostics(&source);
+        let told = retired(&d).clone();
+        assert_rechecks_clean(&fixed(&source, &d));
+        (told.message.contains(PER_FIELD), told.message.contains(NOT_CREATED), told.fix.as_ref().unwrap()["safe"] == true)
+    };
+    assert_eq!(told(""), (true, false, false), "every event, no field: updates now run per field");
+    assert_eq!(told(", events: [\"record.updated\"]"), (true, false, false));
+    assert_eq!(told(", events: [\"record.created\"]"), (false, false, true), "creations alone: as 0.12");
+    assert_eq!(told(", field: \"Stage\""), (false, true, false), "every event, by field: a created row no longer runs");
+    assert_eq!(told(", field: \"Stage\", events: [\"record.created\", \"record.updated\"]"), (false, true, false));
+    assert_eq!(told(", field: \"Stage\", events: [\"record.updated\"]"), (false, false, true));
 }
 
 #[test]

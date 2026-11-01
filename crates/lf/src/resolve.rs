@@ -55,9 +55,11 @@ pub struct Head {
 /// Why a listen's heads could not be listed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolveFailure {
-    /// `LISTEN_SCOPE_LIMIT`: its hops match more heads than lf.yaml's
-    /// `listenScopeLimit`, `limit` (how many more is never read).
-    OverLimit { limit: usize },
+    /// `LISTEN_SCOPE_LIMIT`: a hop of it matches more records than lf.yaml's
+    /// `listenScopeLimit`, `limit` (how many more is never read): its heads,
+    /// or the records a hop reported per record hangs off, of the type
+    /// `position`.
+    OverLimit { limit: usize, position: String },
     /// `LISTEN_RESOLVE_FAILED`: the read did not answer.
     Read(String),
 }
@@ -66,12 +68,11 @@ impl ResolveFailure {
     /// The line `listen-fire listens` shows, and listen-fire prints.
     pub fn line(&self, listen: &Listen) -> String {
         let named = format!("{}:{}", listen.file, listen.movement_name);
-        let position = position_of(listen);
         match self {
-            ResolveFailure::OverLimit { limit } => {
+            ResolveFailure::OverLimit { limit, position } => {
                 format!("LISTEN_SCOPE_LIMIT: {named} matched more {position}s than its limit of {limit}; it is suspended until its filter matches fewer")
             }
-            ResolveFailure::Read(why) => format!("LISTEN_RESOLVE_FAILED: {named} could not list the {position}s it watches: {why}"),
+            ResolveFailure::Read(why) => format!("LISTEN_RESOLVE_FAILED: {named} could not list the {}s it watches: {why}", position_of(listen)),
         }
     }
 }
@@ -179,56 +180,57 @@ pub fn position_of(listen: &Listen) -> String {
     hops.len().checked_sub(2).map(|i| hops[i].to.clone()).unwrap_or_default()
 }
 
-/// The listen's heads: its plan's earlier hops walked through the engine off
-/// its connection, in its own file, as a walk in a run reads them (each
-/// hop's WHERE, the part its module takes and the part the engine checks
-/// alike), with no run row. More than lf.yaml's `listenScopeLimit` is a
-/// failure, never a cut: the walk stops one past it, so a listen over its
-/// limit is never listed whole.
-pub async fn resolve_heads(session: &Session, set: &FileSet, listen: &Listen) -> Result<Vec<Head>, ResolveFailure> {
+/// What a listen's earlier hops land on: its heads, and the records each
+/// resolved hop reported per record hangs off.
+pub struct Listed {
+    pub heads: Vec<Head>,
+    /// By the hop's edge (`Resolution.parents`).
+    pub parents: BTreeMap<String, Vec<String>>,
+}
+
+/// The listen's heads, and the records each resolved hop whose module
+/// reports its changes per record it hangs off (`reported_per_record`)
+/// hangs off: its plan's earlier hops walked once through the engine off its
+/// connection, in its own file, as a walk in a run reads them (each hop's
+/// WHERE, the part its module takes and the part the engine checks alike),
+/// with no run row. A hop's records are read from that walk: what the hop
+/// before it landed on, whether or not a later hop went on from them. More
+/// than lf.yaml's `listenScopeLimit` of either is a failure, never a cut,
+/// named by the type that overflowed: the walk stops one past it at its
+/// last hop, so a listen over its limit is never listed whole.
+pub async fn resolve_walk(session: &Session, set: &FileSet, listen: &Listen) -> Result<Listed, ResolveFailure> {
     let plan = listen.plan.as_ref().ok_or_else(|| ResolveFailure::Read("it is not a listen on a traversal".into()))?;
     let earlier = &plan.hops[..plan.hops.len().saturating_sub(1)];
     let limit = session.project.listen_scope_limit;
     let walk = Walk { source: &set.file(&listen.file).source, connection: &plan.connection, hops: earlier, limit: Some(limit) };
-    let positions = session.read_positions(set, walk).await.map_err(ResolveFailure::Read)?;
+    let walked = session.read_positions(set, walk).await.map_err(ResolveFailure::Read)?;
+    let mut parents = BTreeMap::new();
+    for index in reported_per_record(set, listen) {
+        let level = walked.along.get(index - 1).ok_or_else(|| ResolveFailure::Read(format!("the walk said nothing of what {} hangs off", plan.hops[index].edge)))?;
+        let ids = distinct_heads(level)?.into_iter().map(|head| head.record_id).collect::<Vec<_>>();
+        if ids.len() > limit {
+            return Err(ResolveFailure::OverLimit { limit, position: plan.hops[index - 1].to.clone() });
+        }
+        parents.insert(plan.hops[index].edge.clone(), ids);
+    }
+    let heads = distinct_heads(&walked.landed)?;
+    if heads.len() > limit {
+        return Err(ResolveFailure::OverLimit { limit, position: position_of(listen) });
+    }
+    Ok(Listed { heads, parents })
+}
+
+/// The records `positions` are, each once, in the order first landed on.
+fn distinct_heads(positions: &[Js]) -> Result<Vec<Head>, ResolveFailure> {
     let mut seen = BTreeSet::new();
     let mut heads = Vec::new();
     for position in positions {
-        let head = head_of(&position).ok_or_else(|| ResolveFailure::Read(format!("a record it landed on names no id: {}", position.to_json())))?;
+        let head = head_of(position).ok_or_else(|| ResolveFailure::Read(format!("a record it landed on names no id: {}", position.to_json())))?;
         if seen.insert(head.record_id.clone()) {
             heads.push(head);
         }
     }
-    if heads.len() > limit {
-        return Err(ResolveFailure::OverLimit { limit });
-    }
     Ok(heads)
-}
-
-/// The records each resolved hop whose module reports its changes per record
-/// it hangs off (`reported_per_record`) hangs off, by its edge: the hops
-/// before it walked as `resolve_heads` walks the earlier ones, under the same
-/// limit.
-pub async fn resolve_parents(session: &Session, set: &FileSet, listen: &Listen) -> Result<BTreeMap<String, Vec<String>>, ResolveFailure> {
-    let Some(plan) = listen.plan.as_ref() else { return Ok(BTreeMap::new()) };
-    let limit = session.project.listen_scope_limit;
-    let mut parents = BTreeMap::new();
-    for index in reported_per_record(set, listen) {
-        let walk = Walk { source: &set.file(&listen.file).source, connection: &plan.connection, hops: &plan.hops[..index], limit: Some(limit) };
-        let positions = session.read_positions(set, walk).await.map_err(ResolveFailure::Read)?;
-        let mut ids: Vec<String> = Vec::new();
-        for position in positions {
-            let head = head_of(&position).ok_or_else(|| ResolveFailure::Read(format!("a record it landed on names no id: {}", position.to_json())))?;
-            if !ids.contains(&head.record_id) {
-                ids.push(head.record_id);
-            }
-        }
-        if ids.len() > limit {
-            return Err(ResolveFailure::OverLimit { limit });
-        }
-        parents.insert(plan.hops[index].edge.clone(), ids);
-    }
-    Ok(parents)
 }
 
 /// The indexes of the listen's resolved hops whose module reports their
@@ -403,12 +405,8 @@ pub async fn resolve(session: &Session, set: &FileSet, listen: &Listen) -> Resul
     };
     let before = session.store.listen_state(&pipeline).map_err(|e| e.to_string())?.unwrap_or_default().resolution;
     let polled = crate::edge_polls::polled_keys(set);
-    let listed = match resolve_heads(session, set, listen).await {
-        Ok(heads) => resolve_parents(session, set, listen).await.map(|parents| (heads, parents)),
-        Err(failure) => Err(failure),
-    };
-    let resolution = match listed {
-        Ok((heads, parents)) => Resolution { heads: heads.into_iter().map(|h| h.record_id).collect(), resolved_at: Some(iso(0)), failure: None, parents },
+    let resolution = match resolve_walk(session, set, listen).await {
+        Ok(Listed { heads, parents }) => Resolution { heads: heads.into_iter().map(|h| h.record_id).collect(), resolved_at: Some(iso(0)), failure: None, parents },
         Err(failure @ ResolveFailure::OverLimit { .. }) => Resolution { heads: Vec::new(), resolved_at: Some(iso(0)), failure: Some(failure.line(listen)), parents: BTreeMap::new() },
         Err(failure @ ResolveFailure::Read(_)) => Resolution { failure: Some(failure.line(listen)), ..before.clone() },
     };
@@ -538,8 +536,13 @@ mod tests {
         };
         assert_eq!(position_of(&listen), "Board");
         assert_eq!(
-            ResolveFailure::OverLimit { limit: 2 }.line(&listen),
+            ResolveFailure::OverLimit { limit: 2, position: position_of(&listen) }.line(&listen),
             "LISTEN_SCOPE_LIMIT: notes:a matched more Boards than its limit of 2; it is suspended until its filter matches fewer"
+        );
+        assert_eq!(
+            ResolveFailure::OverLimit { limit: 1, position: "Base".into() }.line(&listen),
+            "LISTEN_SCOPE_LIMIT: notes:a matched more Bases than its limit of 1; it is suspended until its filter matches fewer",
+            "the records a hop reported per record hangs off overflowed: said by their type"
         );
         assert_eq!(ResolveFailure::Read("feed: down".into()).line(&listen), "LISTEN_RESOLVE_FAILED: notes:a could not list the Boards it watches: feed: down");
         assert_eq!((counted(1, "Board"), counted(2, "Board"), counted(0, "Board")), ("1 Board".to_string(), "2 Boards".to_string(), "0 Boards".to_string()));

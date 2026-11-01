@@ -55,6 +55,7 @@ import {
   basesEntryPoint,
   basesForWalk,
   entryPointsForBase,
+  freshBases,
   listenedEntryPoints,
   resolveBaseId,
   BASE_META_TYPE,
@@ -67,6 +68,7 @@ import {
   describeBase,
   describeTableAt,
   cachedTables,
+  freshTables,
   invalidateTableCache,
   loadTableCatalog,
   tablesEntryPoint,
@@ -489,7 +491,9 @@ export class AirtableAdapter extends BaseAdapter {
     // WHERE narrows them by), as the `base:` construction arg's options too.
     if (outgoing && input.position.recordType === META_RECORD_TYPE && input.fieldId === AIRTABLE_BASES_EDGE) {
       const client = await this.getApiClient();
-      const bases = await basesForWalk({ client, teamId: this.teamId });
+      // Read now, never from the cache: a listen lists them again on a clock
+      // to see a base renamed, which Airtable never reports (`freshBases`).
+      const bases = await freshBases({ client, teamId: this.teamId });
       return bases.map((b) => ({
         position: makeStablePosition({ adapterType: this.adapterType, recordType: BASE_META_TYPE, recordId: b.id, data: { Name: b.name, Id: b.id } }),
       }));
@@ -507,7 +511,9 @@ export class AirtableAdapter extends BaseAdapter {
             : undefined;
     if (tablesOf !== undefined) {
       const client = await this.getApiClient();
-      const tables = await cachedTables({ client, teamId: this.teamId, baseId: tablesOf });
+      // Read now, never from the cache: a listen narrowed by its tables is
+      // listed again when one is renamed, and must see the rename (`freshTables`).
+      const tables = await freshTables({ client, teamId: this.teamId, baseId: tablesOf });
       return tables.map((table) => ({
         position: makeStablePosition({ adapterType: this.adapterType, recordType: TABLE_META_TYPE, recordId: table.id, data: { Name: table.name, Id: table.id, baseId: tablesOf } }),
       }));

@@ -879,12 +879,79 @@ describe('arrivalsFromPayload', () => {
     expect(changesTables({ changedTablesById: { tblDEALS01: { destroyedRecordIds: ['recGONE'] } } })).toBe(false);
   });
 
+  it('a cell an update emptied is a change to nothing, whether Airtable leaves it out of current or holds it null', () => {
+    const arrivals = arrivalsFromPayload(
+      {
+        baseTransactionNumber: 11,
+        changedTablesById: {
+          tblDEALS01: {
+            changedRecordsById: {
+              recLEFT: { current: { cellValuesByFieldId: {} }, previous: { cellValuesByFieldId: { fldSTAGE: { id: 'selS', name: 'Seed' } } }, unchanged: { cellValuesByFieldId: { fldNAME: 'Acme' } } },
+              recNULL: { current: { cellValuesByFieldId: { fldSTAGE: null } }, previous: { cellValuesByFieldId: { fldSTAGE: { id: 'selS', name: 'Seed' } } }, unchanged: { cellValuesByFieldId: { fldNAME: 'Beta' } } },
+            },
+          },
+        },
+      },
+      context(false),
+    );
+    expect(arrivals.map((a) => [a.identity, a.landing.fields.Field, a.landing.fields.Old, a.landing.fields.New])).toEqual([
+      ['11:recLEFT:fldSTAGE', 'Stage', 'Seed', null],
+      ['11:recNULL:fldSTAGE', 'Stage', 'Seed', null],
+    ]);
+    // An unchanged field `previous` happens to hold is no change.
+    expect(changeDataOf(arrivals[0].landing.fields)?.row.cells).toEqual({ Name: 'Acme' });
+  });
+
   it('a field with no metadata is named by its id, and the table by its id', () => {
     const arrivals = arrivalsFromPayload(
       { baseTransactionNumber: 3, changedTablesById: { tblX: { changedRecordsById: { recA: { current: { cellValuesByFieldId: { fldQ: 1 } } } } } } },
       context(false),
     );
     expect(arrivals.map((a) => [a.landing.fields.Field, a.about])).toEqual([['fldQ', { recordType: 'tblX', externalId: 'recA' }]]);
+  });
+});
+
+// A name this module gives its own types and edges is never a user's too: a
+// base holding a table so named, or a table with a link field named as its
+// own `Changes`, is refused where it would be described, naming what to
+// rename in Airtable, rather than one silently shadowing the other.
+describe('names the module keeps for itself', () => {
+  const named = (name: string) => ({ ...tasksTable(), id: `tbl${name.toUpperCase()}`, name });
+
+  it.each(['Tables', 'Change', 'Row', 'Table', 'Base'])('a base holding a table named %s is refused, walked to or positioned at', async (name) => {
+    const bases = [{ id: 'appODD01', name: 'Odd', tables: [dealsTable(), named(name)] }];
+    const walked = makeMultiBaseAdapter({ teamId: `team-air-reserved-walk-${name}`, bases });
+    const said = `airtable: base "Odd" has a table named "${name}", a name the Airtable module gives its own (Base, Table, Change, Row, Tables), so a program could not tell which it meant: rename the table in Airtable to reach this base`;
+    await expect(walked.adapter.describe('Odd')).rejects.toThrow(said);
+    const base = makeStablePosition({ adapterType: 'airtable', recordType: 'Base', recordId: 'appODD01', data: { Name: 'Odd', Id: 'appODD01' } });
+    await expect(walked.adapter.edgesFrom(base)).rejects.toThrow(said);
+    const positioned = makeMultiBaseAdapter({ teamId: `team-air-reserved-pos-${name}`, bases, base: 'Odd' });
+    await expect(positioned.adapter.listEntryPoints()).rejects.toThrow(said);
+  });
+
+  it('a table whose link field is named Changes is refused where it is reached as a Table', async () => {
+    const linked = { ...dealsTable(), fields: [...dealsTable().fields, { id: 'fldCHG', name: 'Changes', type: 'multipleRecordLinks', options: { linkedTableId: 'tblTASKS01' } }] };
+    const { adapter } = makeMultiBaseAdapter({ teamId: 'team-air-reserved-link', bases: [{ id: 'appCRM01', name: 'CRM', tables: [linked, tasksTable()] }] });
+    const table = makeStablePosition({ adapterType: 'airtable', recordType: 'Table', recordId: 'tblDEALS01', data: { baseId: 'appCRM01', Id: 'tblDEALS01', Name: 'Deals' } });
+    await expect(adapter.edgesFrom(table)).rejects.toThrow(
+      'airtable: table "Deals" has a link field named "Changes", the name of a table\'s own edge to its changes, so a program could not tell which it meant: rename the field in Airtable to reach this table',
+    );
+  });
+});
+
+// A listen narrowed by its tables is listed again when Airtable reports one
+// renamed, possibly in another process than the one the report reached: so
+// a base's `Tables` is read from Airtable each time, never from the cache.
+describe('a base\'s Tables', () => {
+  it('are listed fresh each time, so a rename is seen at once', async () => {
+    const tables = [dealsTable(), tasksTable()];
+    const { adapter, listedTableBaseIds } = makeMultiBaseAdapter({ teamId: 'team-air-fresh', bases: [{ id: 'appCRM01', name: 'CRM', tables }] });
+    const base = makeStablePosition({ adapterType: 'airtable', recordType: 'Base', recordId: 'appCRM01', data: { Name: 'CRM', Id: 'appCRM01' } });
+    const listed = async () => (await adapter.getRelated({ position: base, fieldId: 'Tables', direction: 'outgoing' })).map((r) => positionData(r.position));
+    expect(await listed()).toMatchObject([{ Name: 'Deals' }, { Name: 'Tasks' }]);
+    tables[1] = { ...tasksTable(), name: 'Expenses' };
+    expect(await listed()).toMatchObject([{ Name: 'Deals' }, { Name: 'Expenses' }]);
+    expect(listedTableBaseIds).toEqual(['appCRM01', 'appCRM01']);
   });
 });
 

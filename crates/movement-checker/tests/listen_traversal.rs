@@ -172,13 +172,11 @@ fn comments_across_a_table_are_unwatchable() {
 }
 
 /// A hop the host lists whose changes its module reports per record it
-/// hangs off is refused by name: listen-fire follows a hop's changes only
-/// where they are reported for the connection. Reported off the connection
-/// itself, or not reported at all, the hop is listed as before.
+/// hangs off is planned as any listed hop: listen-fire watches it once per
+/// record it hangs off (Airtable's schema webhook, one per base), filtered
+/// or not.
 #[test]
 fn a_listed_hop_whose_changes_are_reported_per_record_is_planned_as_any_listed_hop() {
-    // listen-fire watches such a hop once per record it hangs off (Airtable's
-    // schema webhook, one per base), so its listen is planned, filtered or not.
     assert_eq!(check("listen to at-[:Bases]->-[v:Views WHERE v.Name == \"Deals\"]->-[:Changes]-> fire c\n"), Vec::<String>::new());
     assert_eq!(judged(&plans_of("listen to at-[:Bases]->-[v:Views WHERE v.Name == \"Deals\"]->-[:Changes]-> fire c\n")[0]), json!(["resolved", "resolved", "arrival"]));
     let (plans, codes) = answer_of("listen to at-[:Bases]->-[:Views]->-[:Changes]-> fire c\n");

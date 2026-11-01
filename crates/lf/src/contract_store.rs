@@ -478,7 +478,7 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
         "listens.claimResolve" => Ok(store.claim_listen_resolve(p.str("pipeline")?, p.int("ttlMs")?)?.map(|token| Js::Obj(obj! { "token" => Js::Str(token) })).unwrap_or(Js::Null)),
         "listens.saveResolution" => {
             let resolution = crate::resolve::Resolution::from_js(&p.value("resolution"))
-                .ok_or_else(|| Failure::Params("resolution: expected { heads, resolvedAt, failure }".into()))?;
+                .ok_or_else(|| Failure::Params("resolution: expected { heads, resolvedAt, failure, parents? }".into()))?;
             Ok(Js::Bool(store.save_listen_resolution(p.str("pipeline")?, p.str("token")?, &resolution)?))
         }
         "listens.setPaused" => {

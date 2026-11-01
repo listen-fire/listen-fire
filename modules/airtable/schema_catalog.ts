@@ -68,6 +68,21 @@ export async function cachedTables(input: {
   return tables as AirtableTableMeta[];
 }
 
+/** A base's tables read now, past the cache, and kept in it: what a base's
+ *  `Tables` lists. A listen re-resolved on a schema ping may be listed by
+ *  another process than the one the ping reached, whose cache it never
+ *  cleared; listing fresh, any process sees the rename. One `listTables`
+ *  per base listed, which `Tables` declares cheap. */
+export async function freshTables(input: {
+  client: AirtableAPIClient;
+  teamId: string;
+  baseId: string;
+}): Promise<AirtableTableMeta[]> {
+  const tables = (await input.client.listTables({ baseId: input.baseId })) as AirtableTableMeta[];
+  tableCatalogCache.set(tableCacheKey(input.teamId, input.baseId), tables);
+  return tables;
+}
+
 async function cachedBases(input: {
   client: AirtableAPIClient;
   teamId: string;
@@ -79,6 +94,18 @@ async function cachedBases(input: {
   for (const b of bases) map.set(b.id, b.name);
   baseCatalogCache.set(input.teamId, map);
   return map;
+}
+
+/** The workspace's bases read now, past the cache, and kept in it: what the
+ *  root's `Bases` lists, so a listen listing them again on its clock sees a
+ *  base renamed since (Airtable reports none). One `listBases`. */
+export async function freshBases(input: {
+  client: AirtableAPIClient;
+  teamId: string;
+}): Promise<{ id: string; name: string }[]> {
+  const bases = await input.client.listBases();
+  baseCatalogCache.set(input.teamId, new Map(bases.map((b) => [b.id, b.name])));
+  return bases.map((b) => ({ id: b.id, name: b.name }));
 }
 
 /** The workspace's bases, cache-backed — `id → name`. The root hop reads them
@@ -292,6 +319,39 @@ export const AIRTABLE_BASES_RELIST_SECONDS = 3600;
 
 /** The edge a workspace's bases hang off the connection by. */
 export const AIRTABLE_BASES_EDGE = 'Bases';
+
+// ── Names this module gives its own types and edges ──────────────────────────
+// A table is named by its own name, as a type and as its base's edge to it, and
+// a link field as its table's edge. Where one is a name this module gives its
+// own (a table called `Change`, a link field called `Changes`), one of the two
+// would shadow the other, and which one a program meant could not be told. So
+// the describe that would hold both is refused, naming the table or field to
+// rename in Airtable. Why not give the user's a namespaced name: that name
+// would be a string to parse back, and the rename is one click in Airtable.
+
+/** What a table may not be called: the types this module describes itself
+ *  (`Base`, `Table`, `Change`, `Row`) and a base's own edge (`Tables`). */
+const RESERVED_TABLE_NAMES: readonly string[] = [BASE_META_TYPE, TABLE_META_TYPE, AIRTABLE_CHANGE_TYPE, AIRTABLE_ROW_TYPE, AIRTABLE_TABLES_EDGE];
+
+/** Refuse a base holding a table named as one of this module's own types or
+ *  edges. */
+function refuseReservedTableNames(baseName: string, tables: readonly AirtableTableMeta[]): void {
+  const clash = tables.find((table) => RESERVED_TABLE_NAMES.includes(table.name));
+  if (clash === undefined) return;
+  throw new Error(
+    `airtable: base "${baseName}" has a table named "${clash.name}", a name the Airtable module gives its own (${RESERVED_TABLE_NAMES.join(', ')}), so a program could not tell which it meant: rename the table in Airtable to reach this base`,
+  );
+}
+
+/** Refuse a table, reached as one of a base's `Tables`, whose link field is
+ *  named as its own `Changes` edge. */
+function refuseReservedReferenceNames(tableName: string, references: readonly SchemaReferenceDescriptor[]): void {
+  const clash = references.find((reference) => (reference.name ?? reference.fieldId) === AIRTABLE_CHANGES_EDGE);
+  if (clash === undefined) return;
+  throw new Error(
+    `airtable: table "${tableName}" has a link field named "${AIRTABLE_CHANGES_EDGE}", the name of a table's own edge to its changes, so a program could not tell which it meant: rename the field in Airtable to reach this table`,
+  );
+}
 
 /**
  * The root's `Bases`: every base the connection can see, each a member
@@ -560,6 +620,7 @@ export async function entryPointsForBase(input: {
     teamId: input.teamId,
     baseId: input.baseId,
   });
+  refuseReservedTableNames(baseName, tables);
   return baseEntryPoints({ tables });
 }
 
@@ -602,6 +663,7 @@ export async function describeBase(input: {
     teamId: input.teamId,
     baseId: input.baseId,
   });
+  refuseReservedTableNames(baseName, tables);
   return {
     typeId: baseName,
     displayName: baseName,
@@ -720,9 +782,11 @@ export async function describeTableAt(input: {
   tableId: string;
 }): Promise<SchemaTypeDescriptor | null> {
   const descriptor = await tableDescriptor(input);
+  if (descriptor === null) return null;
   // Reached as one of a base's `Tables`, it is still a `Table`: a listen
   // narrowed to it goes on to its `Changes`.
-  return descriptor === null ? null : { ...descriptor, references: [...descriptor.references, changesReference()] };
+  refuseReservedReferenceNames(descriptor.displayName, descriptor.references);
+  return { ...descriptor, references: [...descriptor.references, changesReference()] };
 }
 
 /** Drop a base's cached tables — used after lf-platform's dev-loop seeds new tables,

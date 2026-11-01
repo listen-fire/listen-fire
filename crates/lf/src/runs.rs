@@ -136,6 +136,12 @@ impl FileSet {
         self.parents.borrow().get(&listen.pipeline()).and_then(|parents| parents.get(edge)).into_iter().flatten().cloned().map(Some).collect()
     }
 
+    /// Every hop of the listen reported per record, by its edge, with the
+    /// records it is watched under.
+    pub fn all_parents(&self, listen: &Listen) -> BTreeMap<String, Vec<String>> {
+        self.parents.borrow().get(&listen.pipeline()).cloned().unwrap_or_default()
+    }
+
     /// Watch the listen's hops reported per record under `parents` from now:
     /// whether they are not those they were watched under.
     pub fn watch_parents(&self, listen: &Listen, parents: BTreeMap<String, Vec<String>>) -> bool {
@@ -1216,16 +1222,20 @@ impl Session {
     }
 
     /// Resolve the listen again (crate::resolve::resolve), say a failure that
-    /// changed, and move the webhooks a server holds with its heads. False:
+    /// changed, and move the webhooks a server holds with its heads and the
+    /// records its hops reported per record hang off. False:
     /// another process held it, and nothing was listed here.
     async fn re_resolve(&self, set: &FileSet, listen: &Listen) -> Result<bool, String> {
-        let before = set.heads(listen);
+        let before = (set.heads(listen), set.all_parents(listen));
         match crate::resolve::resolve(self, set, listen).await? {
             crate::resolve::Resolved::Elsewhere => return Ok(false),
             crate::resolve::Resolved::Kept(Some(line)) => eprintln!("listen-fire: {line}"),
             crate::resolve::Resolved::Kept(None) => {}
         }
-        if self.role.registers_webhooks() && set.heads(listen) != before {
+        // A hop reported per record is subscribed to under each record it
+        // hangs off, so parents that moved alone move webhooks too: a base
+        // renamed into the WHERE with no table in it yet is watched for one.
+        if self.role.registers_webhooks() && (set.heads(listen), set.all_parents(listen)) != before {
             for line in crate::subscriptions::reconcile(self).await {
                 eprintln!("listen-fire: {line}");
             }
@@ -1666,10 +1676,11 @@ impl Session {
         Ok((ran, committed))
     }
 
-    /// The records `walk`'s hops land on (crate::segment::read_positions):
-    /// walked through the engine as a run's walk is, against the set's
-    /// connections, with no run row and nothing kept.
-    pub async fn read_positions(&self, set: &FileSet, walk: Walk<'_>) -> Result<Vec<Js>, String> {
+    /// The records `walk`'s hops land on, and each earlier hop's
+    /// (crate::segment::read_positions): walked through the engine as a
+    /// run's walk is, against the set's connections, with no run row and
+    /// nothing kept.
+    pub async fn read_positions(&self, set: &FileSet, walk: Walk<'_>) -> Result<crate::segment::Walked, String> {
         let secrets = self.secrets();
         let externals = self.externals_in(set, &secrets);
         let segment_id = uuid::Uuid::new_v4().to_string();

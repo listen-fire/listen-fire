@@ -7,8 +7,11 @@
 //! on each record it lands on, and an alias names its hop's record to every
 //! hop after it.
 //!
-//! Its `done` is `{result: {landed}}`, each record it landed on as its
-//! position (`{adapterType, recordType, identity}`), on the eval wire; or
+//! Its `done` is `{result: {landed, along}}`: `landed`, each record its last
+//! hop landed on as its position (`{adapterType, recordType, identity}`), on
+//! the eval wire; `along`, for each hop before the last, the records it
+//! landed on, whether or not a later hop went on from them (a host watching
+//! a hop once per record it hangs off reads them from the same walk); or
 //! `{thrown: error}` / `{declined: reason}`, as a segment's. With a `limit`,
 //! the walk stops once its last hop has landed on more than `limit`
 //! distinct records: it answers `limit + 1` of them, and lists no further,
@@ -52,7 +55,7 @@ pub async fn segment(host: Host, input: SegmentInput, walk: Walk) -> Json {
         Ok(run) => {
             let walked = run.walk_plan(&walk).await;
             let _ = run.hand_over_trace(true).await;
-            walked.map(|landed| json!({ "landed": run.wire.encode_result(&landed) }))
+            walked.map(|(landed, along)| json!({ "landed": run.wire.encode_result(&landed), "along": along.iter().map(|level| run.wire.encode_result(level)).collect::<Vec<_>>() }))
         }
         Err(stop) => Err(stop),
     };
@@ -67,8 +70,9 @@ pub async fn segment(host: Host, input: SegmentInput, walk: Walk) -> Json {
 impl Run<'_> {
     /// The positions `walk` lands on, in order: each hop fetched off every
     /// record the hop before it kept, in a scope holding the file's names
-    /// and the aliases of that record's own path.
-    async fn walk_plan(&self, walk: &Walk) -> Result<Js, Stop> {
+    /// and the aliases of that record's own path. With them, the positions
+    /// each hop before the last landed on.
+    async fn walk_plan(&self, walk: &Walk) -> Result<(Js, Vec<Js>), Stop> {
         let file = self.root_scope().await?;
         let instance = match file.resolve(&walk.connection) {
             Some(Binding::Instance(instance)) => instance,
@@ -78,8 +82,12 @@ impl Run<'_> {
         let span = Js::Undefined;
         let start = Rc::new(Landed::new(crate::traverse::meta_position(&instance.adapter_slug), None, read.clone()));
         let mut paths: Vec<(Rc<Scope>, Rc<Landed>)> = vec![(file, start)];
+        let mut along = Vec::new();
         let last = walk.hops.len().saturating_sub(1);
         for (index, hop) in walk.hops.iter().enumerate() {
+            if index > 0 {
+                along.push(Js::array(paths.iter().map(|(_, landed)| landed.position()).collect()));
+            }
             let step = step_of(hop);
             let stop_at = walk.limit.filter(|_| index == last).map(|limit| limit + 1);
             let mut distinct = BTreeSet::new();
@@ -108,7 +116,7 @@ impl Run<'_> {
             }
             paths = next;
         }
-        Ok(Js::array(paths.into_iter().map(|(_, landed)| landed.position()).collect()))
+        Ok((Js::array(paths.into_iter().map(|(_, landed)| landed.position()).collect()), along))
     }
 
     /// The program's own file bound as a run binds it before its function
@@ -326,6 +334,17 @@ mod tests {
         landed.items().iter().map(|p| format!("{} {}", get(p, "recordType").to_js_string(), crate::traverse::record_id(p).to_js_string())).collect()
     }
 
+    fn along(done: &Json) -> Vec<Vec<String>> {
+        let Json::Array(levels) = &done["result"]["along"] else { panic!("a list of levels: {done}") };
+        levels
+            .iter()
+            .map(|level| {
+                let Js::Array(level) = env::decode(level).unwrap_or_else(|e| panic!("{e}: {done}")) else { panic!("a list: {done}") };
+                level.items().iter().map(|p| format!("{} {}", get(p, "recordType").to_js_string(), crate::traverse::record_id(p).to_js_string())).collect()
+            })
+            .collect()
+    }
+
     const SOURCE: &str = "import { crm } from adapters\nboards = crm()\n";
 
     /// Each hop keeps only what its WHERE holds for, the part its module
@@ -339,6 +358,18 @@ mod tests {
         let (done, asked) = walk(SOURCE, plan);
         assert_eq!(landed(&done), ["Note n1"], "{done}");
         assert_eq!(asked, ["Boards of undefined", "Notes of b1"], "only the kept board is walked on");
+    }
+
+    /// Beside what its last hop landed on, the walk says what each hop
+    /// before it landed on, a record no later hop went on from included:
+    /// the closed Ops board, which holds no note its lead owns, is there.
+    #[test]
+    fn a_walk_says_what_each_earlier_hop_landed_on() {
+        let (done, _) = walk(SOURCE, hops("boards-[b:Boards WHERE b.Name == \"Ops\"]->-[n:Notes WHERE n.Owner == \"ann\"]->", &[]));
+        assert_eq!(landed(&done), ["Note n1"], "{done}");
+        assert_eq!(along(&done), [["Board b1", "Board b2"]], "{done}");
+        let (done, _) = walk(SOURCE, hops("boards-[b:Boards WHERE b.Name == \"Dev\"]->", &[]));
+        assert_eq!(along(&done), Vec::<Vec<String>>::new(), "one hop: nothing before it");
     }
 
     /// The walk ends on the hops it is given, and an empty hop list lands

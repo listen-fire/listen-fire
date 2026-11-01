@@ -102,6 +102,36 @@
       "name": "an absentField with no absent value",
       "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "labels": { "hop": 0, "field": "Reason", "op": "in", "absentField": "Kind" } } },
       "refusal": "'listenSettingsBecome' gives 'labels' an 'absentField' but no 'absent' value to compare on it"
+    },
+    {
+      "name": "a key that also compares another field, and a changed meaning",
+      "become": { "path": ["Bases", "Tables", "Changes"], "aliases": ["b", "t", "c"], "keys": { "field": { "hop": 2, "field": "Field", "op": "eq" }, "becomes": { "hop": 2, "field": "New", "op": "eq", "also": [{ "field": "Old", "op": "neq" }] } }, "changed": [{ "note": "a created row no longer runs it", "written": ["field"], "unwritten": ["becomes"], "hearing": ["record.created"] }] },
+      "refusal": null
+    },
+    {
+      "name": "also on a type key",
+      "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "payload": { "hop": 0, "op": "type", "also": [{ "field": "Reason", "op": "eq" }] } } },
+      "refusal": "'listenSettingsBecome' gives 'payload' 'also' comparisons, but a 'type' key compares no field"
+    },
+    {
+      "name": "also beside an absent value",
+      "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "key": { "hop": 0, "field": "Key", "op": "eq", "absent": "", "also": [{ "field": "Reason", "op": "neq" }] } } },
+      "refusal": "'listenSettingsBecome' gives 'key' 'also' comparisons and an absent value, which is compared on one field"
+    },
+    {
+      "name": "an also comparison by type",
+      "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "key": { "hop": 0, "field": "Key", "op": "eq", "also": [{ "field": "Reason", "op": "type" }] } } },
+      "refusal": "'listenSettingsBecome' gives 'key' an 'also' comparison by 'type', which compares no field"
+    },
+    {
+      "name": "absent values a neq key cannot compare",
+      "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "events": { "hop": 0, "field": "Reason", "op": "neq", "absent": ["mention", "assign"] } } },
+      "refusal": "'listenSettingsBecome' gives 'events' 2 absent values, but a 'neq' key compares one"
+    },
+    {
+      "name": "a changed meaning naming a key the mapping does not map",
+      "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "events": { "hop": 0, "field": "Reason", "op": "in" } }, "changed": [{ "note": "it runs per field", "unwritten": ["field"] }] },
+      "refusal": "'listenSettingsBecome' names 'field' in 'changed', but maps no key 'field'"
     }
   ],
   "manifestReads": {
@@ -169,6 +199,22 @@
         "name": "an empty absentField",
         "raw": { "path": ["Emails"], "aliases": ["e"], "keys": { "key": { "hop": 0, "field": "Key", "op": "eq", "absent": "", "absentField": "" } } },
         "refusal": "listenSettingsBecome.keys.absentField: expected a non-empty string"
+      },
+      {
+        "name": "also comparisons and changed meanings are kept, their unknown keys stripped",
+        "raw": { "path": ["Changes"], "aliases": ["c"], "keys": { "becomes": { "hop": 0, "field": "New", "op": "eq", "also": [{ "field": "Old", "op": "neq", "extra": 1 }] } }, "changed": [{ "note": "it runs per field", "written": ["becomes"], "hearing": ["record.updated"], "extra": 1 }] },
+        "read": { "path": ["Changes"], "aliases": ["c"], "keys": { "becomes": { "hop": 0, "field": "New", "op": "eq", "also": [{ "field": "Old", "op": "neq" }] } }, "changed": [{ "note": "it runs per field", "written": ["becomes"], "hearing": ["record.updated"] }] },
+        "refusal": null
+      },
+      {
+        "name": "an also comparison on an empty field",
+        "raw": { "path": ["Changes"], "aliases": ["c"], "keys": { "becomes": { "hop": 0, "field": "New", "op": "eq", "also": [{ "field": "", "op": "neq" }] } } },
+        "refusal": "listenSettingsBecome.keys.also.field: expected a non-empty string"
+      },
+      {
+        "name": "a changed meaning with no note",
+        "raw": { "path": ["Changes"], "aliases": ["c"], "keys": {}, "changed": [{ "note": "" }] },
+        "refusal": "listenSettingsBecome.changed.note: expected a non-empty string"
       }
     ]
   }
