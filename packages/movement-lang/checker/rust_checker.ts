@@ -81,15 +81,19 @@ export function checkSourceInRust(source: string, snapshot: CatalogSnapshot, opt
  *  the Program, `file` naming a library's): a write spread's field list, a
  *  graph spread's copy plan (as plain data), that a graph entry is a
  *  reference, the type a linked write off a record a hop's WHERE chose
- *  creates, the edges awaited off a record that enters the run there, that
- *  a plain `await` reads its edge's listing first, or the fields of a node a
- *  write field names as an answer's shape (sent as the field's value). */
+ *  creates, the edges awaited off a record that enters the run there, on a
+ *  fired function's parameter the edges awaited off each record type its
+ *  trigger's arrival carries (by that type; the host's, never the
+ *  engine's), that a plain `await` reads its edge's listing first, or the
+ *  fields of a node a write field names as an answer's shape (sent as the
+ *  field's value). */
 export type Stamp = { file?: string; path: string } & (
   | { spreadFields: readonly string[] }
   | { copy: unknown }
   | { reference: true }
   | { writtenType: string }
   | { opensWaits: readonly string[] }
+  | { carriedAwaits: Readonly<Record<string, readonly string[]>> }
   | { listsFirst: true }
   | { nodeSchema: Readonly<Record<string, unknown>> }
 );
@@ -170,7 +174,7 @@ function callOptions(options: RustCheckOptions): { upgradingFrom?: string } {
 
 /** Every fact a stamp may carry; a stamp carries exactly one, as the
  *  engine's `join_check` holds it to. */
-const STAMP_FACTS = ['spreadFields', 'copy', 'reference', 'writtenType', 'opensWaits', 'listsFirst', 'nodeSchema'] as const;
+const STAMP_FACTS = ['spreadFields', 'copy', 'reference', 'writtenType', 'opensWaits', 'carriedAwaits', 'listsFirst', 'nodeSchema'] as const;
 
 /** One stamp as the Rust checker answers it: a path, and exactly one fact. */
 export function stampOf(value: unknown): Stamp {
@@ -191,9 +195,22 @@ export function stampOf(value: unknown): Stamp {
   if (Array.isArray(value.opensWaits) && value.opensWaits.every((e) => typeof e === 'string')) {
     return { ...at, opensWaits: value.opensWaits };
   }
+  const carriedAwaits = edgesByTypeOf(value.carriedAwaits);
+  if (carriedAwaits !== undefined) return { ...at, carriedAwaits };
   if (value.listsFirst === true) return { ...at, listsFirst: true };
   if (isRecord(value.nodeSchema)) return { ...at, nodeSchema: value.nodeSchema };
   throw new Error(`the Rust checker answered a stamp that stamps nothing: ${JSON.stringify(value)}`);
+}
+
+/** Edges by record type, or undefined when `value` is not that. */
+function edgesByTypeOf(value: unknown): Record<string, string[]> | undefined {
+  if (!isRecord(value)) return undefined;
+  const byType: Record<string, string[]> = {};
+  for (const [recordType, edges] of Object.entries(value)) {
+    if (!Array.isArray(edges) || !edges.every((edge): edge is string => typeof edge === 'string')) return undefined;
+    byType[recordType] = edges;
+  }
+  return byType;
 }
 
 function linkOf(value: unknown): LinkData {

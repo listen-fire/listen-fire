@@ -19,13 +19,20 @@
 //! (a writable root, no position) is a record type too: its write is where it
 //! enters, and its edges are its writable root's.
 //!
+//! A record an arrival carries (its `parents`, as the listened edge declares
+//! them) enters the run at its delivery, as the trigger does: on the
+//! parameter of each function a listen fires, the edges awaited off each
+//! record type the listen's arrivals carry are stamped by that type
+//! (`carriedAwaits`), so the host opens those waits as it keeps the delivery.
+//!
 //! Separately, a plain `await` on an edge that can also be listed takes the
 //! first match already there (`listsFirst`); `await new` never does.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use movement_parser::ast::{AwaitSource, PathHead, PathRoot, RValue, Span};
+use movement_parser::ast::{AwaitSource, PathHead, PathRoot, Program, RValue, Span, Statement};
 use movement_parser::catalog::types::EdgeSchema;
+use movement_parser::listen_plan::ListenPlan;
 
 use crate::answer::{StampKind, StampSite};
 use crate::checker::Checker;
@@ -118,6 +125,41 @@ impl Checker<'_> {
             if !edges.is_empty() {
                 self.stamp_at(site, StampKind::OpensWaits(edges.into_iter().collect()));
             }
+        }
+    }
+
+    /// After the walk: on the parameter of the function each of `plans`
+    /// fires, the edges awaited off each record type its arrivals carry (the
+    /// type its carried hop lands on), by that type. A function fired by
+    /// several listens holds what each carries.
+    pub(crate) fn stamp_carried_awaits(&mut self, program: &Program, plans: &[ListenPlan]) {
+        let mut on_params: Vec<(Span, BTreeMap<String, BTreeSet<String>>)> = Vec::new();
+        for plan in plans {
+            let fired = program.statements.iter().find_map(|s| match s {
+                Statement::Movement(declared) if declared.name == plan.movement => declared.params.first(),
+                _ => None,
+            });
+            let Some(param) = fired else { continue };
+            for carried in &plan.carries {
+                let Some(hop) = plan.hops.iter().find(|hop| &hop.edge == carried) else { continue };
+                let edges: BTreeSet<String> =
+                    self.wait_entries.awaited.iter().filter(|(adapter, position, _)| *adapter == plan.adapter && *position == hop.to).map(|(.., edge)| edge.clone()).collect();
+                if edges.is_empty() {
+                    continue;
+                }
+                let at = match on_params.iter().position(|(span, _)| *span == param.span) {
+                    Some(at) => at,
+                    None => {
+                        on_params.push((param.span, BTreeMap::new()));
+                        on_params.len() - 1
+                    }
+                };
+                on_params[at].1.entry(hop.to.clone()).or_default().extend(edges);
+            }
+        }
+        for (span, by_type) in on_params {
+            let by_type = by_type.into_iter().map(|(record_type, edges)| (record_type, edges.into_iter().collect())).collect();
+            self.stamp_at(StampSite::in_program(span), StampKind::CarriedAwaits(by_type));
         }
     }
 

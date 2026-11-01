@@ -398,18 +398,22 @@ pub fn join_check(root: File, answer: &Json) -> Result<Checked, String> {
             Some(other) => return Err(format!("a stamp's file is a path, not {other}")),
         };
         let node = node_at(file, &path).ok_or_else(|| format!("no node at {path}"))?;
-        let stamped = stamp_of(&path, &node, stamp)?;
-        file.stamps.insert(path, stamped);
+        if let Some(stamped) = stamp_of(&path, &node, stamp)? {
+            file.stamps.insert(path, stamped);
+        }
     }
     checked.declarations = Declarations::of(&checked.root.program, &checked.imports, &checked.files)?;
     Ok(checked)
 }
 
 /// The fact `stamp` settles on `node` (at `path`): exactly one, of a kind
-/// that lands on a node like it, by the rules the check placed it by.
-fn stamp_of(path: &str, node: &Json, stamp: &Json) -> Result<Stamp, String> {
-    use movement_checker::answer::{is_awaited_traversal, is_linked_target, is_map_spread, is_record_entry, is_value_entry, is_write_field_value, is_write_spread};
-    const FACTS: [&str; 7] = ["spreadFields", "copy", "reference", "writtenType", "opensWaits", "listsFirst", "nodeSchema"];
+/// that lands on a node like it, by the rules the check placed it by. None
+/// for a fact only the host reads: the edges awaited off the records a
+/// fired function's trigger carries, whose waits the host opens as it keeps
+/// the delivery.
+fn stamp_of(path: &str, node: &Json, stamp: &Json) -> Result<Option<Stamp>, String> {
+    use movement_checker::answer::{is_awaited_traversal, is_linked_target, is_map_spread, is_parameter, is_record_entry, is_value_entry, is_write_field_value, is_write_spread};
+    const FACTS: [&str; 8] = ["spreadFields", "copy", "reference", "writtenType", "opensWaits", "carriedAwaits", "listsFirst", "nodeSchema"];
     let mut facts = FACTS.iter().filter_map(|fact| Some((*fact, stamp.get(*fact)?)));
     let stamped = match (facts.next(), facts.next()) {
         (Some(("spreadFields", fields)), None) if is_write_spread(node, path) => {
@@ -421,11 +425,12 @@ fn stamp_of(path: &str, node: &Json, stamp: &Json) -> Result<Stamp, String> {
         (Some(("opensWaits", edges)), None) if is_record_entry(node, path) => {
             Some(Stamp::OpensWaits(serde_json::from_value(edges.clone()).map_err(|e| format!("the edges stamped at {path}: {e}"))?))
         }
+        (Some(("carriedAwaits", Json::Object(_))), None) if is_parameter(node, path) => return Ok(None),
         (Some(("listsFirst", Json::Bool(true))), None) if is_awaited_traversal(node, path) => Some(Stamp::ListsFirst),
         (Some(("nodeSchema", schema @ Json::Object(_))), None) if is_write_field_value(node, path) => Some(Stamp::NodeSchema(schema.clone())),
         _ => None,
     };
-    stamped.ok_or_else(|| format!("the stamp at {path} does not fit the node there: {stamp}"))
+    stamped.map(Some).ok_or_else(|| format!("the stamp at {path} does not fit the node there: {stamp}"))
 }
 
 fn imports_of(list: Option<&Json>) -> Result<Vec<Import>, String> {
@@ -532,6 +537,20 @@ mod tests {
         assert!(join_check(parse(source).unwrap(), &on_a_write).unwrap_err().contains("does not fit"));
         let two_facts = json!({ "diagnostics": [], "stamps": [{ "path": awaited, "listsFirst": true, "opensWaits": [] }] });
         assert!(join_check(parse(source).unwrap(), &two_facts).unwrap_err().contains("does not fit"));
+    }
+
+    #[test]
+    fn a_carried_awaits_stamp_is_the_host_s_and_leaves_the_parameter_s_waits_as_they_are() {
+        let source = "import { chat } from adapters\nc = connect chat\nfunction f(m: <c-[:Channel]->>) {\n  x = 1\n}";
+        let param = "/statements/2/params/0";
+        for order in [[0, 1], [1, 0]] {
+            let facts = [json!({ "path": param, "opensWaits": ["Interactions"] }), json!({ "path": param, "carriedAwaits": { "Message": ["Replies"] } })];
+            let stamps: Vec<Json> = order.iter().map(|i| facts[*i].clone()).collect();
+            let checked = join_check(parse(source).unwrap(), &json!({ "diagnostics": [], "stamps": stamps })).unwrap();
+            assert_eq!(checked.root.stamps.get(param), Some(&Stamp::OpensWaits(vec!["Interactions".into()])));
+        }
+        let off_a_parameter = json!({ "diagnostics": [], "stamps": [{ "path": "/statements/2/body/0", "carriedAwaits": { "Message": ["Replies"] } }] });
+        assert!(join_check(parse(source).unwrap(), &off_a_parameter).unwrap_err().contains("does not fit"));
     }
 
     #[test]

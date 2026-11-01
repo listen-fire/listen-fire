@@ -4,7 +4,9 @@
 //! function's parameter) is stamped with the edges awaited off it
 //! (`opensWaits`), so the run can open those waits from that moment. A plain
 //! `await` on an edge that can also be listed reads the listing first
-//! (`listsFirst`). Every rule is checked on two catalog shapes: a chat
+//! (`listsFirst`). A record a listen's arrival carries enters at its
+//! delivery: the fired function's parameter is stamped with the edges
+//! awaited off each carried record type (`carriedAwaits`). Every rule is checked on two catalog shapes: a chat
 //! (Messages, awaited for their Interactions or Replies) and a CRM (Deals,
 //! awaited for their Notes); a type a program can only write is checked on
 //! two more (Questions, awaited for their Answers; Invoices, for their
@@ -30,10 +32,10 @@ const CATALOG: &str = r#"{"adapters":{
     "Company":{"properties":{"Name":"text"},"edges":{"Deals":{"target":"Deal","writable":true}}},
     "Deal":{"properties":{"Name":"text"},"edges":{
       "Notes":{"target":"Note","listenable":true,"sequenced":"document"},
-      "Changes":{"target":"Change","readable":false,"listenable":true},
+      "Changes":{"target":"Change","readable":false,"listenable":true,"carries":["Deals"]},
       "Company":{"target":"Company"}}},
     "Note":{"properties":{"Body":"text"},"edges":{}},
-    "Change":{"properties":{"Field":"text"},"edges":{}}},
+    "Change":{"properties":{"Field":"text"},"edges":{"Deal":{"target":"Deal"}}}},
     "collections":{"Deals":{"target":"Deal"},"Companies":{"target":"Company"}},"supportsInPlaceUpdate":true,
     "writableRoots":{"Deal":{"fields":{"Name":"text"},"resultShape":{"externalId":"text"}}}}}},
   "ask":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
@@ -112,6 +114,20 @@ fn opens(tree: &Json, stamps: &[Json], file: Option<&str>) -> Vec<(String, Vec<S
 /// Each `listsFirst` stamp in the program checked, by its node.
 fn lists_first(tree: &Json, stamps: &[Json]) -> Vec<String> {
     stamps.iter().filter(|s| s["file"].is_null() && s["listsFirst"] == true).map(|s| label(tree, s["path"].as_str().unwrap())).collect()
+}
+
+/// Each `carriedAwaits` stamp in the program checked, as (its node, the
+/// record type, the edges).
+fn carried(tree: &Json, stamps: &[Json]) -> Vec<(String, String, Vec<String>)> {
+    let mut found = Vec::new();
+    for stamp in stamps.iter().filter(|s| s["file"].is_null()) {
+        let Some(by_type) = stamp.get("carriedAwaits").and_then(Json::as_object) else { continue };
+        for (record_type, edges) in by_type {
+            let edges = edges.as_array().unwrap().iter().map(|e| e.as_str().unwrap().to_string()).collect();
+            found.push((label(tree, stamp["path"].as_str().unwrap()), record_type.clone(), edges));
+        }
+    }
+    found
 }
 
 fn pairs(expected: &[(&str, &[&str])]) -> Vec<(String, Vec<String>)> {
@@ -221,4 +237,24 @@ fn a_write_of_a_type_the_program_can_only_write_opens_its_waits() {
     let (tree, _, found) = stamps(pay, None);
     // Any Invoice may be awaited for its Payments, so both writes open them.
     assert_eq!(opens(&tree, &found, None), pairs(&[("write unawaited", &["Payments"]), ("write inv", &["Payments"])]));
+}
+
+#[test]
+fn a_fired_function_s_parameter_names_the_edges_awaited_off_each_record_its_arrival_carries() {
+    // A Change arrives carrying its Deal; the run walks to the Deal and
+    // awaits its next Change and its next Note. The Change itself is
+    // awaited for nothing.
+    let crm = "function chase(c: <crm-[:Change]->>) {\n  c-[d:Deal]-> {\n    next = await new d-[:Changes]->\n    note = await new d-[:Notes]->\n  }\n}\nlisten to crm-[:Deals]->-[c:Changes]-> fire chase\n";
+    let (tree, _, found) = stamps(crm, None);
+    assert_eq!(carried(&tree, &found), [("param c".to_string(), "Deal".to_string(), vec!["Changes".to_string(), "Notes".to_string()])]);
+    assert_eq!(opens(&tree, &found, None), pairs(&[("block -[d:Deal]->", &["Changes", "Notes"])]));
+
+    // A function no listen fires, and one whose program awaits nothing off
+    // what its arrival carries, are stamped with nothing carried.
+    let unfired = "function chase(c: <crm-[:Change]->>) {\n  c-[d:Deal]-> {\n    next = await new d-[:Changes]->\n  }\n}\n";
+    let (tree, _, found) = stamps(unfired, None);
+    assert_eq!(carried(&tree, &found), []);
+    let unawaited = "function chase(c: <crm-[:Change]->>) {\n  co = only(crm-[:Companies]->)\n}\nlisten to crm-[:Deals]->-[c:Changes]-> fire chase\n";
+    let (tree, _, found) = stamps(unawaited, None);
+    assert_eq!(carried(&tree, &found), []);
 }

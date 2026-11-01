@@ -13,6 +13,10 @@
 //!   type, so the run cannot learn which member the check typed it as;
 //! - where a record enters the run, the edges the program awaits off
 //!   records of its type (`opensWaits`, crate::families::wait_entries);
+//! - on the parameter of a function a listen fires, the edges the program
+//!   awaits off each record type the listen's arrivals carry
+//!   (`carriedAwaits`): the host's to read, as it keeps a delivery, and
+//!   never the engine's;
 //! - on a plain `await` of an edge that can also be listed, that it reads
 //!   the listing first (`listsFirst`);
 //! - on a write field naming a node as the shape of what lands on an edge
@@ -47,6 +51,9 @@ pub enum StampKind {
     WrittenType(String),
     /// The edges awaited off the record that enters the run here.
     OpensWaits(Vec<String>),
+    /// On a fired function's parameter: the edges awaited off each record
+    /// type its trigger's arrival carries, by that type.
+    CarriedAwaits(std::collections::BTreeMap<String, Vec<String>>),
     /// A plain `await` whose edge can be listed: the first match already
     /// there is taken before any arrival.
     ListsFirst,
@@ -70,6 +77,13 @@ pub struct StampSite {
     file: Option<String>,
     nested: Vec<(Span, At)>,
     span: Span,
+}
+
+impl StampSite {
+    /// The node at `span` in the program checked, outside any nested call.
+    pub(crate) fn in_program(span: Span) -> StampSite {
+        StampSite { file: None, nested: Vec::new(), span }
+    }
 }
 
 /// One stamp as recorded.
@@ -166,6 +180,8 @@ impl Checker<'_> {
 pub fn check_answer(program: &Program, catalog: &CatalogSnapshot, options: CheckOptions) -> Answer {
     let (diagnostics, mut checker) = crate::run_check(program, catalog, options);
     checker.stamp_wait_entries();
+    let listens = checker.listens.take_plans();
+    checker.stamp_carried_awaits(program, &listens);
     let link = checker.imports.link();
     let root = serde_json::to_value(program).expect("an AST is always JSON");
     let mut library_trees: std::collections::HashMap<&str, Json> = std::collections::HashMap::new();
@@ -188,7 +204,6 @@ pub fn check_answer(program: &Program, catalog: &CatalogSnapshot, options: Check
         }
     }
     let link = link.map(|link| link_json(link, catalog));
-    let listens = checker.listens.take_plans();
     let unwatched = checker.listens.take_unwatched();
     Answer { diagnostics, stamps, link, listens, unwatched, unplaced }
 }
@@ -231,6 +246,7 @@ fn stamp_json(recorded: &Recorded, path: String) -> Json {
         StampKind::Reference => stamp["reference"] = json!(true),
         StampKind::WrittenType(written) => stamp["writtenType"] = json!(written),
         StampKind::OpensWaits(edges) => stamp["opensWaits"] = json!(edges),
+        StampKind::CarriedAwaits(by_type) => stamp["carriedAwaits"] = json!(by_type),
         StampKind::ListsFirst => stamp["listsFirst"] = json!(true),
         StampKind::NodeSchema(schema) => stamp["nodeSchema"] = schema.clone(),
     }
@@ -258,6 +274,7 @@ fn place(tree: &Json, nested: &[(Span, At)], span: &Span, kind: &StampKind) -> O
                 StampKind::Reference => is_value_entry(node),
                 StampKind::WrittenType(_) => is_linked_target(node),
                 StampKind::OpensWaits(_) => is_record_entry(node, path),
+                StampKind::CarriedAwaits(_) => is_parameter(node, path),
                 StampKind::ListsFirst => is_awaited_traversal(node, path),
                 StampKind::NodeSchema(_) => is_write_field_value(node, path),
             }
@@ -297,8 +314,12 @@ pub fn is_record_entry(node: &Json, path: &str) -> bool {
     let write = last == Some("write") && node.get("target").is_some_and(Json::is_object) && node.get("uniqueBy").is_some();
     let assign = node.get("kind").and_then(Json::as_str) == Some("assign") && node.get("value").is_some();
     let block_head = last == Some("head") && parent == Some("block") && node.get("hopsRaw").is_some_and(Json::is_string);
-    let parameter = parent == Some("params") && node.get("kind").is_none() && node.get("name").is_some_and(Json::is_string);
-    write || assign || block_head || parameter
+    write || assign || block_head || is_parameter(node, path)
+}
+
+/// A function's or a closure's parameter.
+pub fn is_parameter(node: &Json, path: &str) -> bool {
+    path.rsplit('/').nth(1) == Some("params") && node.get("kind").is_none() && node.get("name").is_some_and(Json::is_string)
 }
 
 /// What an `await` waits on, when it is a walk to one edge.
