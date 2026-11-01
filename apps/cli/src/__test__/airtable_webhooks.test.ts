@@ -204,7 +204,7 @@ test('a listen on Expenses changes registers one data webhook on its base and fi
     const dir = await hiringProject(fake);
     // Walked to from the workspace, the table's changes are typed by its own
     // fields too: one it has reads, one it lacks is refused where it is written.
-    const reading = (field: string) => EXPENSES.replace('c.Kind == "created"]->', `c.Kind == "created" AND c.Current.${field} != "skip"]->`);
+    const reading = (field: string) => EXPENSES.replace('c.Kind == "created"]->', `c.Kind == "created" AND exists(c.Current) AND c.Current.${field} != "skip"]->`);
     writeFileSync(join(dir, 'movements/hiring.mvt'), reading('Itm'));
     const misspelled = lfSync(dir, 'check');
     assert.equal(misspelled.code, 1, misspelled.out);
@@ -441,12 +441,12 @@ hiring = connect airtable using henry_airtable { base: "Hiring" }
 function schedule_interview(c: <hiring-[:\`Candidates Change\`]->>) {
   write hiring-[:Interviews]-> {
     Candidate: coalesce(only(c-[:Record]->).Name, "gone")
-    From: coalesce(c.Previous.Stage, "nothing")
-    Changed: coalesce(c.Current.Name, "nothing")
+    From: exists(c.Previous) ? coalesce(c.Previous.Stage, "nothing") : "nothing"
+    Changed: exists(c.Current) ? coalesce(c.Current.Name, "nothing") : "nothing"
   }
 }
 
-listen to hiring-[t:Tables WHERE t.Name == "Candidates"]->-[c:Changes WHERE c.Current.Stage == "Interview" AND c.Previous.Stage != "Interview"]-> fire schedule_interview
+listen to hiring-[t:Tables WHERE t.Name == "Candidates"]->-[c:Changes WHERE exists(c.Current) AND c.Current.Stage == "Interview" AND (NOT exists(c.Previous) OR c.Previous.Stage != "Interview")]-> fire schedule_interview
 `;
 
 test('Stage coming to be Interview fires once per edit, on an update or a row created at it; staying Interview or becoming Rejected does not', async () => {
@@ -513,10 +513,10 @@ import { henry_airtable } from credentials
 hiring = connect airtable using henry_airtable { base: "Hiring" }
 
 function owner_changed(c: <hiring-[:\`Candidates Change\`]->>) {
-  return c.Current.Owner
+  return c.Kind
 }
 
-listen to hiring-[t:Tables WHERE t.Name == "Candidates"]->-[c:Changes WHERE c.Current.Owner != c.Previous.Owner]-> fire owner_changed
+listen to hiring-[t:Tables WHERE t.Name == "Candidates"]->-[c:Changes WHERE (exists(c.Current) AND exists(c.Previous) AND c.Current.Owner != c.Previous.Owner) OR (exists(c.Current) AND NOT exists(c.Previous) AND exists(c.Current.Owner)) OR (NOT exists(c.Current) AND exists(c.Previous) AND exists(c.Previous.Owner))]-> fire owner_changed
 `;
 
 test('an update that leaves a collaborator unchanged does not fire Owner changing; one that changes it does', async () => {
@@ -576,7 +576,7 @@ listen to hiring { base: "appHIRE01", table: "tblCAND01", events: ["record.updat
         .replace('<hiring-[:`Record Change` WHERE `table` == "tblCAND01"]->>', '<hiring-[:`Candidates Change`]->>')
         .replace(
           'listen to hiring { base: "appHIRE01", table: "tblCAND01", events: ["record.updated"], field: "Stage", becomes: "Interview" }',
-          'listen to hiring-[t:Tables WHERE t.Id == "tblCAND01"]->-[c:Changes WHERE c.Kind IN ["updated"] AND c.Current.Stage == "Interview" AND c.Previous.Stage != "Interview"]->',
+          'listen to hiring-[t:Tables WHERE t.Id == "tblCAND01"]->-[c:Changes WHERE c.Kind IN ["updated"] AND exists(c.Current) AND c.Current.Stage == "Interview" AND (NOT exists(c.Previous) OR c.Previous.Stage != "Interview")]->',
         ),
     );
     const checked = lfSync(dir, 'check');
@@ -621,8 +621,8 @@ listen to hiring { base: "appHIRE01", table: "tblCAND01", field: "Stage" } fire 
     const rewritten = readFileSync(file, 'utf8');
     assert.equal(rewritten.match(/<hiring-\[:`Candidates Change`\]->>/g)?.length, 3, rewritten);
     assert.match(rewritten, /listen to hiring-\[t:Tables WHERE t\.Id == "tblCAND01"\]->-\[:Changes\]-> fire any_change/);
-    assert.match(rewritten, /listen to hiring-\[t:Tables WHERE t\.Id == "tblCAND01"\]->-\[c:Changes WHERE c\.Current\.Stage == "Interview" AND c\.Previous\.Stage != "Interview"\]-> fire staged/);
-    assert.match(rewritten, /listen to hiring-\[t:Tables WHERE t\.Id == "tblCAND01"\]->-\[c:Changes WHERE c\.Current\.Stage != c\.Previous\.Stage\]-> fire moved/);
+    assert.ok(rewritten.includes('listen to hiring-[t:Tables WHERE t.Id == "tblCAND01"]->-[c:Changes WHERE exists(c.Current) AND c.Current.Stage == "Interview" AND (NOT exists(c.Previous) OR c.Previous.Stage != "Interview")]-> fire staged'), rewritten);
+    assert.ok(rewritten.includes('listen to hiring-[t:Tables WHERE t.Id == "tblCAND01"]->-[c:Changes WHERE (exists(c.Current) AND exists(c.Previous) AND c.Current.Stage != c.Previous.Stage) OR (exists(c.Current) AND NOT exists(c.Previous) AND exists(c.Current.Stage)) OR (NOT exists(c.Current) AND exists(c.Previous) AND exists(c.Previous.Stage))]-> fire moved'), rewritten);
     const checked = lfSync(dir, 'check');
     assert.equal(checked.code, 0, checked.out);
 

@@ -545,7 +545,7 @@ function changeDescriptor(input: { typeId: string; row: string }): SchemaTypeDes
     typeId: input.typeId,
     displayName: input.typeId,
     description:
-      'A change to a row of an Airtable table, one per row an edit touched: what happened (`Kind`), the row as the edit left it (`Current`) and as it was before (`Previous`). Compare them in a listen (`c.Current.Stage == "Interview" AND c.Previous.Stage != "Interview"`); walk `Record` for the row as it is now.',
+      'A change to a row of an Airtable table, one per row an edit touched: what happened (`Kind`), the row as the edit left it (`Current`) and as it was before (`Previous`). Compare them in a listen, each tested present before a field is read through it (`exists(c.Current) AND c.Current.Stage == "Interview" AND (NOT exists(c.Previous) OR c.Previous.Stage != "Interview")`); walk `Record` for the row as it is now.',
     fields: [
       { ...metaField('Id', 'Names the change: the same each time Airtable reports it.'), required: true },
       { fieldId: 'Kind', displayName: 'Kind', kind: 'enum', enumValues: [...AIRTABLE_CHANGE_KINDS], writable: false, required: true, description: 'What happened to the row.' },
