@@ -28,10 +28,8 @@ import type {
   PluginAnswer,
   PluginInvocation,
   PluginModuleDefinition,
-  PollAnswer,
   PollEdgeAnswer,
   PollEdgeInput,
-  PollInput,
 } from './define';
 
 import { refusingRecords } from './host_records';
@@ -179,7 +177,7 @@ export interface InProcessAdapterModule {
   adapter: Adapter;
   manifest: WireManifestResultShape;
   /** Present when the module declares `poll`: a listen's poll, or (2.6) an edge's. */
-  poll?(input: PollInput | PollEdgeInput): Promise<PollAnswer | PollEdgeAnswer>;
+  poll?(input: PollEdgeInput): Promise<PollEdgeAnswer>;
   /** Present when the module declares `periodic`. */
   runPeriodic?(name: string): Promise<void>;
 }
@@ -206,7 +204,7 @@ export function adapterInProcess(definition: AdapterModuleDefinition, host: Modu
     adapter: host.validateResults ? validatingAdapter(definition.name, instance) : instance,
     manifest,
     ...(poll !== undefined
-      ? { poll: async (input: PollInput | PollEdgeInput) => check('poll', await Reflect.apply(poll, instance, [input])) }
+      ? { poll: async (input: PollEdgeInput) => check('poll', await Reflect.apply(poll, instance, [input])) }
       : {}),
     ...(runPeriodic !== undefined
       ? {

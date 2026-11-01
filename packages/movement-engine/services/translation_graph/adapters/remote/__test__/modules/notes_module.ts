@@ -60,13 +60,13 @@ function notesAdapter(ctx: ModuleContext): AdapterModuleMethods {
     },
   };
   return Object.assign(adapter, {
-    poll: async ({ checkpoint }: { config: unknown; checkpoint?: unknown }) => {
-      const since = typeof checkpoint === 'number' ? checkpoint : 0;
+    poll: async ({ edge, cursor }: { edge: string; cursor?: unknown }) => {
+      const since = typeof cursor === 'number' ? cursor : 0;
       const notes = await provider(ctx, `/notes?since=${since}`);
       const list = Array.isArray(notes) ? (notes as Array<{ id: string; title: string; at: number }>) : [];
       return {
-        events: list.map((note) => ({ payload: note, externalId: note.id, tag: 'note_created' })),
-        checkpoint: list.reduce((high, note) => Math.max(high, note.at), since),
+        arrivals: list.map((note) => ({ edge, identity: note.id, landing: { recordId: note.id, recordType: 'Note', fields: { Id: note.id, Title: note.title } } })),
+        cursor: list.reduce((high, note) => Math.max(high, note.at), since),
       };
     },
     runPeriodic: async ({ name }: { name: string }) => {

@@ -219,17 +219,18 @@ describe('the credential on the envelope', () => {
 });
 
 describe('the module methods', () => {
-  it('poll: a listen config and checkpoint in, events and the next checkpoint out', () => {
-    const params = { config: { every: 600 }, checkpoint: { since: '2026-10-17' } };
+  it('poll: an edge and its cursor in, its arrivals and the next cursor out; the 0.12 settings poll is refused', () => {
+    const params = { edge: 'Notes', cursor: { since: '2026-10-17' } };
     expect(METHODS.poll.params.parse(params)).toEqual(params);
-    expect(METHODS.poll.params.parse({ config: {} })).toEqual({ config: {} });
-    const result = { events: [{ payload: { id: 'n-1' }, externalId: 'n-1', tag: 'note.created' }], checkpoint: { since: '2026-10-18' } };
+    expect(METHODS.poll.params.safeParse({ config: { every: 600 }, checkpoint: { since: '2026-10-17' } }).success).toBe(false);
+    const result = { arrivals: [{ edge: 'Notes', identity: 'n-1', landing: { recordId: 'n-1', fields: { Title: 'a' } } }], cursor: { since: '2026-10-18' } };
     expect(METHODS.poll.result.parse(result)).toEqual(result);
+    expect(METHODS.poll.result.safeParse({ events: [], checkpoint: {} }).success).toBe(false);
   });
 
-  it('event subscriptions: a listen\'s events in the settings form, or from 2.6 one edge\'s arrivals', () => {
+  it('event subscriptions: one edge\'s arrivals (2.6); a 0.12 settings listen\'s webhook is only removed or refreshed', () => {
     const events = { events: ['note.created'], callbackUrl: 'https://lf.example/hook', current: { externalId: 'wh-1', events: [] }, scope: { shelf: 'red' } };
-    expect(METHODS.ensureEventSubscription.params.parse(events)).toEqual(events);
+    expect(METHODS.ensureEventSubscription.params.safeParse(events).success).toBe(false);
     const filter = { type: 'compare', op: 'eq', left: { type: 'property', propertyTypeId: 'Title', fieldOnly: true }, right: { type: 'static', value: 'a' } };
     const edge = { edge: 'Notes', filter, scope: 'board-1', callbackUrl: 'https://lf.example/hook/edge-1', current: { externalId: 'wh-2' } };
     expect(METHODS.ensureEventSubscription.params.parse(edge)).toEqual(edge);

@@ -5,7 +5,7 @@
 // that keeps its facts elsewhere (lf-platform) hands them in itself
 // (`systemModuleWith`).
 
-import { defineModule, type AdapterModuleDefinition, type ModuleContext, type PollEdgeInput, type PollInput } from 'module-kit';
+import { defineModule, type AdapterModuleDefinition, type ModuleContext, type PollEdgeInput } from 'module-kit';
 
 import { SystemAdapter } from './adapter';
 import { SYSTEM_MANIFEST } from './manifest';
@@ -38,10 +38,7 @@ export function systemModuleWith(recordsOf: (ctx: ModuleContext) => SystemRecord
     poll: { intervalSeconds: SYSTEM_POLL_EVERY_SECONDS },
     create: (ctx) =>
       Object.assign(new SystemAdapter(), {
-        poll: async (input: PollInput | PollEdgeInput) => {
-          if (!('edge' in input)) {
-            throw new Error('@lf/system is listened to on its Events edge: `listen to sys-[e:Events WHERE e.Kind == "Run Failed"]-> fire f` (`listen-fire upgrade` rewrites a 0.12 listen)');
-          }
+        poll: async (input: PollEdgeInput) => {
           return pollSystemEvents(recordsOf(ctx), input, settings);
         },
       }),

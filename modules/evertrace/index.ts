@@ -4,7 +4,7 @@
 // read by the next one. `ctx.config.baseUrlOverride` (the dev loop's fake)
 // wins over the credential's own base URL.
 
-import { defineModule, type CredentialFields, type ModuleContext, type PollEdgeInput, type PollInput } from 'module-kit';
+import { defineModule, type CredentialFields, type ModuleContext, type PollEdgeInput } from 'module-kit';
 
 import { EvertraceApiClient, evertraceCredsParser } from './api_client';
 import { EvertraceAdapter, type EvertraceClientSource } from './adapter';
@@ -57,10 +57,7 @@ export const evertraceModule = defineModule({
   create: (ctx) => {
     const client = evertraceClientFrom(ctx);
     return Object.assign(new EvertraceAdapter(client), {
-      poll: async (input: PollInput | PollEdgeInput) => {
-        if (!('edge' in input)) {
-          throw new Error('@lf/evertrace is listened to on its Signals and List Entries edges: `listen to evertrace-[s:Signals]-> fire f` (`listen-fire upgrade` rewrites a 0.12 listen)');
-        }
+      poll: async (input: PollEdgeInput) => {
         return pollEvertrace(await client(), input, { log: ctx.log });
       },
     });

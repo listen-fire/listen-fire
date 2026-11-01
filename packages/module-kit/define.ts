@@ -23,8 +23,6 @@ import type { ZodType } from 'zod';
 import type {
   AdapterManifest,
   Arrival,
-  DiscriminableEvent,
-  EnsureEventSubscriptionInput,
   EventSubscriptionRefresh,
   EventSubscriptionRegistration,
   RefreshEventSubscriptionInput,
@@ -211,19 +209,6 @@ export interface ModuleContext {
 
 // ── What a module's `create` returns ────────────────────────────────────────
 
-/** A poll for one listen in the settings form (`listen to x { … } fire f`). */
-export interface PollInput {
-  /** The listen's options. */
-  config: unknown;
-  /** What the previous poll returned; absent the first time. */
-  checkpoint?: unknown;
-  /** The automation the polled listen belongs to, where the host knows it
-   *  (`listen-fire` sends the listen's pipeline, `listen:<file>:<movement>`). A
-   *  source whose events concern automations themselves (the platform's own)
-   *  needs it to keep an automation from being told about itself. */
-  movementId?: string;
-}
-
 /** A poll of one listenable edge (adapter protocol 2.6), made once for every
  *  listen on the same connection, edge, filter and scope. */
 export interface PollEdgeInput {
@@ -238,11 +223,6 @@ export interface PollEdgeInput {
   /** What your previous poll answered as `cursor`; absent the first time.
    *  The host fires nothing on a first poll: it only keeps the cursor. */
   cursor?: unknown;
-}
-
-export interface PollAnswer {
-  events: DiscriminableEvent[];
-  checkpoint?: unknown;
 }
 
 export interface PollEdgeAnswer {
@@ -290,16 +270,16 @@ export interface RefreshEdgeSubscriptionInput extends EdgeSubscription {
 }
 
 /** An adapter, plus the methods its declarations pair with. The event
- *  subscription methods take either shape: a listen's in the settings form
- *  (its `events`), or (adapter protocol 2.6) an edge's, told apart by `edge`. */
+ *  subscription methods are an edge's (adapter protocol 2.6); removing and
+ *  refreshing one may also be asked of a webhook a 0.12 settings listen
+ *  registered (its `scope` a record), told apart by `edge`. */
 export type AdapterModuleMethods = Omit<Adapter, 'ensureEventSubscription' | 'removeEventSubscription' | 'refreshEventSubscription'> & {
-  ensureEventSubscription?(input: EnsureEventSubscriptionInput | EnsureEdgeSubscriptionInput): Promise<EventSubscriptionRegistration | undefined>;
+  ensureEventSubscription?(input: EnsureEdgeSubscriptionInput): Promise<EventSubscriptionRegistration | undefined>;
   removeEventSubscription?(input: RemoveEventSubscriptionInput | RemoveEdgeSubscriptionInput): Promise<void>;
   refreshEventSubscription?(input: RefreshEventSubscriptionInput | RefreshEdgeSubscriptionInput): Promise<EventSubscriptionRefresh | undefined>;
-  /** Paired with the `poll` declaration. `edge` tells the two inputs apart:
-   *  a listen's poll in the settings form, or (adapter protocol 2.6) a poll
-   *  of a listenable edge, which answers its arrivals. */
-  poll?(input: PollInput | PollEdgeInput): Promise<PollAnswer | PollEdgeAnswer>;
+  /** Paired with the `poll` declaration: a poll of a listenable edge
+   *  (adapter protocol 2.6), which answers its arrivals. */
+  poll?(input: PollEdgeInput): Promise<PollEdgeAnswer>;
   /** Paired with the `periodic` declaration. */
   runPeriodic?(input: { name: string }): Promise<void>;
   /** For a provider whose refresh is not the standard OAuth 2 grant: the

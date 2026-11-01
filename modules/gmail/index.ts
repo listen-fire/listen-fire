@@ -7,7 +7,7 @@
 // Arriving mail and labels are its two polled edges (`Messages`,
 // `Labelings`); there is no push route.
 
-import { defineModule, readHandedFile, type PollEdgeInput, type PollInput } from 'module-kit';
+import { defineModule, readHandedFile, type PollEdgeInput } from 'module-kit';
 
 import { GmailAdapter } from './adapter';
 import { GMAIL_CREDENTIAL, GMAIL_DRAFTS_CREDENTIAL, gmailClientFrom } from './credential';
@@ -28,10 +28,7 @@ export const gmailModule = defineModule({
     const adapter = new GmailAdapter({ client, readFile: (ref) => readHandedFile(ctx, ref), log: ctx.log });
     const source = new GmailPollSource(client);
     return Object.assign(adapter, {
-      poll: async (input: PollInput | PollEdgeInput) => {
-        if (!('edge' in input)) {
-          throw new Error('@lf/gmail is listened to on its Messages and Labelings edges: `listen to mail-[m:Messages WHERE m.Labels CONTAINS "INBOX"]-> fire f` (`listen-fire upgrade` rewrites a 0.12 listen)');
-        }
+      poll: async (input: PollEdgeInput) => {
         return source.poll(input);
       },
     });

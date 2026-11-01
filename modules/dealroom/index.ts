@@ -4,7 +4,7 @@
 // read by the next one. `ctx.config.baseUrlOverride` (the dev loop's fake)
 // wins over the credential's own base URL.
 
-import { defineModule, type CredentialFields, type ModuleContext, type PollEdgeInput, type PollInput } from 'module-kit';
+import { defineModule, type CredentialFields, type ModuleContext, type PollEdgeInput } from 'module-kit';
 
 import { DealroomApiClient, dealroomCredsParser } from './api_client';
 import { DealroomAdapter, type DealroomClientSource } from './adapter';
@@ -57,10 +57,7 @@ export const dealroomModule = defineModule({
   create: (ctx) => {
     const client = dealroomClientFrom(ctx);
     return Object.assign(new DealroomAdapter(client), {
-      poll: async (input: PollInput | PollEdgeInput) => {
-        if (!('edge' in input)) {
-          throw new Error('@lf/dealroom is listened to on its Funding Rounds edge: `listen to dealroom-[r:`Funding Rounds`]-> fire f` (`listen-fire upgrade` rewrites a 0.12 listen)');
-        }
+      poll: async (input: PollEdgeInput) => {
         return pollDealroom(await client(), input);
       },
     });

@@ -419,22 +419,23 @@ interface PositionArg {
 // DOCUMENTED no-ops (return undefined) or omit them entirely; the KG needs
 // neither (mutation dispatch is in-process).
 
+/** A subscription for one listenable edge's arrivals (adapter protocol
+ *  2.6), made once for every listen on the same connection, edge, filter and
+ *  scope, when the edge declares `delivery: connection` or `scope`. */
 export interface EnsureEventSubscriptionInput {
-  /** The events the subscription should now cover — the union of every
-   *  listen's `events` config on this (adapter, credential[, scope]) channel,
-   *  defaulting to the manifest's full `subscribableEvents`. */
-  events: string[];
-  /** The stable per-channel URL the source should POST to. */
+  /** The edge, by its name in the schema (`Notes`). */
+  edge: string;
+  /** The part of the listens' WHERE on the edge the adapter takes; absent
+   *  when it takes none of it. */
+  filter?: unknown;
+  /** The record the edge hangs off, by its id, when the listens watch it
+   *  under one; absent for the whole connection. */
+  scope?: string;
+  /** The stable per-subscription URL the source should POST to. */
   callbackUrl: string;
-  /** The registration currently held for this URL, when one exists — the
-   *  diff-sync input. `events` is what the source is registered for now. */
-  current?: { externalId?: string; events: string[] };
-  /**
-   * The channel's scope, e.g. Airtable's `{ base, table }`. Empty/absent for adapters
-   * whose channel is just (adapter, credential). The adapter reads what it
-   * declared; the reconciler passes it through opaquely.
-   */
-  scope?: Record<string, string>;
+  /** The registration currently held for this URL, when one exists: keep
+   *  it rather than adding another. */
+  current?: { externalId?: string };
 }
 
 /** What the source issued — the platform persists it on the subscription
@@ -454,7 +455,7 @@ export interface EventSubscriptionRegistration {
 export interface RefreshEventSubscriptionInput {
   /** The source-issued id of the subscription to extend. */
   externalId: string;
-  /** The channel's scope (mirrors {@link EnsureEventSubscriptionInput.scope}). */
+  /** A 0.12 settings listen's webhook's scope (Airtable's `{ base, table }`). */
   scope?: Record<string, string>;
 }
 
@@ -467,9 +468,9 @@ export interface RemoveEventSubscriptionInput {
   callbackUrl: string;
   /** The source-issued id held for this URL, when one exists. */
   externalId?: string;
-  /** The channel's adapter-declared scope (mirrors
-   *  {@link EnsureEventSubscriptionInput.scope}) — Airtable's per-base delete
-   *  needs the `base` to address the webhook. Absent for unscoped channels. */
+  /** A 0.12 settings listen's webhook's adapter-declared scope: Airtable's
+   *  per-base delete needs the `base` to address the webhook. Absent for
+   *  unscoped channels. */
   scope?: Record<string, string>;
 }
 
@@ -630,11 +631,11 @@ export interface Adapter {
   readonly metaRecordType?: string;
 
   /**
-   * Ensure the source system delivers the named events to `callbackUrl` —
+   * Ensure the source system delivers an edge's arrivals to `callbackUrl` —
    * the listen-reconciliation seam (see the module-level event-subscription
-   * notes above `EnsureEventSubscriptionInput`). Idempotent: called with
-   * the full desired event set every time the team's listens change; the
-   * adapter diffs against `current` and registers / updates as needed.
+   * notes above `EnsureEventSubscriptionInput`). Idempotent: called each time
+   * the listens sharing the subscription change; the adapter keeps
+   * `current` where it is still registered.
    * Implemented for real where the source has a subscription API (attio
    * webhooks); a documented no-op (return undefined) where it doesn't;
    * omitted where events need no external registration at all.

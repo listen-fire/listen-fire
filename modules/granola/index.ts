@@ -4,7 +4,7 @@
 // read by the next one. `ctx.config.baseUrlOverride` (the dev loop's fake)
 // wins over the credential's own base URL.
 
-import { defineModule, type CredentialFields, type ModuleContext, type PollEdgeInput, type PollInput } from 'module-kit';
+import { defineModule, type CredentialFields, type ModuleContext, type PollEdgeInput } from 'module-kit';
 
 import { GranolaClient, granolaCredsParser } from './api_client';
 import { GranolaAdapter, type GranolaClientSource } from './adapter';
@@ -57,10 +57,7 @@ export const granolaModule = defineModule({
   create: (ctx) => {
     const client = granolaClientFrom(ctx);
     return Object.assign(new GranolaAdapter(client), {
-      poll: async (input: PollInput | PollEdgeInput) => {
-        if (!('edge' in input)) {
-          throw new Error('@lf/granola is listened to on its Meetings edge: `listen to granola-[n:Meetings]-> fire f` (`listen-fire upgrade` rewrites a 0.12 listen)');
-        }
+      poll: async (input: PollEdgeInput) => {
         return pollGranola(await client(), input);
       },
     });

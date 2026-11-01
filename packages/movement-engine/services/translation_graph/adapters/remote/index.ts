@@ -85,7 +85,7 @@ import type {
 import type { TriggerEvent, TriggerType } from '../../triggers/types';
 import type { Expression } from 'movement-lang/expression/types';
 import type { AuthStrategy } from '../../protocol/client';
-import type { MethodName, WireCredentialDeclarationShape, WireCredentialShape, WireCredentialUpdateShape, WireDeclaredLimitShape, WirePluginResultShape } from 'engine-contracts';
+import type { MethodName, WireCredentialDeclarationShape, WireCredentialShape, WireCredentialUpdateShape, WireDeclaredLimitShape, WirePluginResultShape, WirePollEdgeInputShape, WirePollEdgeResultShape } from 'engine-contracts';
 
 import { authHeader, postRpc, parseWireResult, RemoteProtocolError } from '../../protocol/client';
 import { limited, limiterSlot, limitRequest, type Limiter } from '../../../limiter/limiter';
@@ -464,18 +464,11 @@ export class RemoteAdapter implements Adapter {
     }
   }
 
-  /** One pull of a polled source. */
-  async poll(input: { config: unknown; checkpoint?: unknown }): Promise<{ events: DiscriminableEvent[]; checkpoint?: unknown }> {
+  /** One poll of a listenable edge (adapter protocol 2.6): what arrived on
+   *  it since `cursor`, and the cursor to hand back next time. */
+  async poll(input: WirePollEdgeInputShape): Promise<WirePollEdgeResultShape> {
     this.advertisedOrRefused('poll');
-    const answer = await this.call('poll', { config: input.config ?? {}, ...(input.checkpoint !== undefined ? { checkpoint: input.checkpoint } : {}) });
-    if (!('events' in answer)) {
-      throw new Error(`Remote adapter "${this.config.adapterType}" answered a listen's poll with arrivals, which answer a poll of an edge (adapter protocol 2.6)`);
-    }
-    return {
-      // Sole sanctioned boundary `as`: validated wire events → the domain's.
-      events: answer.events as DiscriminableEvent[],
-      ...(answer.checkpoint !== undefined ? { checkpoint: answer.checkpoint } : {}),
-    };
+    return this.call('poll', input);
   }
 
   /** One run of a declared periodic task. */

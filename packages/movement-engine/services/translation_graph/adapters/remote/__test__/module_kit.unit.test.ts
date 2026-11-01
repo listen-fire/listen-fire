@@ -140,9 +140,9 @@ describe('in process', () => {
       const related = await loaded.adapter.getRelated({ position: makeMetaPosition('notes'), fieldId: 'Notes', direction: 'outgoing' });
       expect(related.map((r) => r.position.recordType)).toEqual(['Note', 'Note']);
       expect(provider.seen).toEqual(['Bearer k1']);
-      expect(await loaded.poll?.({ config: {}, checkpoint: 10 })).toEqual({
-        events: [{ payload: NOTES[1], externalId: 'n2', tag: 'note_created' }],
-        checkpoint: 20,
+      expect(await loaded.poll?.({ edge: 'Notes', cursor: 10 })).toEqual({
+        arrivals: [{ edge: 'Notes', identity: 'n2', landing: { recordId: 'n2', recordType: 'Note', fields: { Id: 'n2', Title: 'Second' } } }],
+        cursor: 20,
       });
     } finally {
       await provider.close();
@@ -184,7 +184,7 @@ describe('as a process', () => {
       const at = { position: makeMetaPosition('notes'), fieldId: 'Notes', direction: 'outgoing' as const };
       expect(await remote.getRelated(at)).toEqual(await local.adapter.getRelated(at));
       expect(await remote.listEntryPoints()).toEqual(await local.adapter.listEntryPoints());
-      expect(await remote.poll({ config: {}, checkpoint: 10 })).toEqual(await local.poll?.({ config: {}, checkpoint: 10 }));
+      expect(await remote.poll({ edge: 'Notes', cursor: 10 })).toEqual(await local.poll?.({ edge: 'Notes', cursor: 10 }));
       expect(provider.seen).toEqual(['Bearer k1', 'Bearer k1', 'Bearer k1', 'Bearer k1']);
     } finally {
       await server.close();

@@ -1297,15 +1297,6 @@ export const WireArrival = z.union([
 ]);
 export type WireArrivalShape = z.infer<typeof WireArrival>;
 
-/** A listen's poll in the settings form. */
-export const WirePollListenInput = z.object({ config: z.unknown(), checkpoint: z.unknown().optional(), movementId: z.string().optional() });
-export type WirePollListenInputShape = z.infer<typeof WirePollListenInput>;
-export const WirePollListenResult = z.object({
-  events: z.array(WireDiscriminableEvent),
-  checkpoint: z.unknown().optional(),
-});
-export type WirePollListenResultShape = z.infer<typeof WirePollListenResult>;
-
 /** A poll of one listenable edge (adapter protocol 2.6), made once for every
  *  listen on the same connection, edge, filter and scope. `filter` is the part
  *  of the listens' WHERE on the edge that the module takes (an Expression, as
@@ -1481,15 +1472,6 @@ export const WireEventType = z.object({
 
 // ── Event subscriptions (mirror `EnsureEventSubscriptionInput` & co.) ───────
 
-export const WireEnsureEventSubscriptionInput = z.object({
-  events: z.array(z.string()),
-  callbackUrl: z.string(),
-  current: z
-    .object({ externalId: z.string().optional(), events: z.array(z.string()) })
-    .optional(),
-  scope: z.record(z.string(), z.string()).optional(),
-});
-
 export const WireEventSubscriptionRegistration = z.object({
   externalId: z.string().optional(),
   secret: z.string().optional(),
@@ -1656,11 +1638,11 @@ export const METHODS = {
     params: WireLinkRecordsInput,
     result: z.object({ removed: z.boolean() }),
   },
-  // A listen's in the settings form (its `events`), or from 2.6 an edge's
-  // (WireEnsureEdgeSubscriptionInput), told apart by `edge`; so too for
-  // removing and refreshing one.
+  // An edge's (WireEnsureEdgeSubscriptionInput, 2.6). Removing and
+  // refreshing one also take the form a 0.12 settings listen's webhook was
+  // registered in, told apart by `edge`, so a host can remove it.
   ensureEventSubscription: {
-    params: z.union([WireEnsureEdgeSubscriptionInput, WireEnsureEventSubscriptionInput]),
+    params: WireEnsureEdgeSubscriptionInput,
     // `null` is the documented no-op: nothing was registered.
     result: WireEventSubscriptionRegistration.nullable(),
   },
@@ -1716,18 +1698,12 @@ export const METHODS = {
   },
   // Module methods (within version 2; each paired with its manifest
   // declaration, see `refuseUnpairedDeclarations`).
-  // One solicited pull of a polled source, in one of two shapes.
-  // - A listen in the settings form: `config` is the listen's options,
-  //   `checkpoint` whatever the previous poll returned (absent the first
-  //   time), `movementId` the automation the listen belongs to where the host
-  //   knows it (`listen-fire` sends the listen's pipeline,
-  //   `listen:<file>:<movement>`). It answers `events`.
-  // - From 2.6, a listenable edge polled once for every listen on it
-  //   (WirePollEdgeInput). It answers `arrivals`, and the `cursor` to hand
-  //   back next time.
+  // One solicited pull of a listenable edge, polled once for every listen
+  // on it (WirePollEdgeInput, 2.6). It answers `arrivals`, and the `cursor`
+  // to hand back next time.
   poll: {
-    params: z.union([WirePollEdgeInput, WirePollListenInput]),
-    result: z.union([WirePollListenResult, WirePollEdgeResult]),
+    params: WirePollEdgeInput,
+    result: WirePollEdgeResult,
   },
   // Refresh the request's `credential` when the host's own OAuth 2 refresh
   // does not fit the provider. The host serialises it per credential. The

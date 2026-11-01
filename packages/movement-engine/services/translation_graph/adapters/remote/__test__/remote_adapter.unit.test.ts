@@ -315,7 +315,7 @@ describe('RemoteAdapter v2 forwarders', () => {
   it('ensureEventSubscription maps a null answer to "nothing registered"; removeEventSubscription resolves void', async () => {
     enqueue({ externalId: 'wh-1', secret: 's' }, null, null);
     const adapter = buildAdapter();
-    const input = { events: ['record.created'], callbackUrl: 'https://host/hook' };
+    const input = { edge: 'Records', callbackUrl: 'https://host/hook' };
     expect(await adapter.ensureEventSubscription!(input)).toEqual({ externalId: 'wh-1', secret: 's' });
     expect(await adapter.ensureEventSubscription!(input)).toBeUndefined();
     expect(await adapter.removeEventSubscription!({ callbackUrl: 'https://host/hook' })).toBeUndefined();

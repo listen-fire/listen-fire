@@ -5,7 +5,7 @@
 // `ctx.config.baseUrlOverride` (the dev loop's fake) wins over the
 // credential's own base URL.
 
-import { defineModule, type CredentialFields, type ModuleContext, type PollEdgeInput, type PollInput } from 'module-kit';
+import { defineModule, type CredentialFields, type ModuleContext, type PollEdgeInput } from 'module-kit';
 
 import { GithubClient, githubCredsParser } from './api_client';
 import { GithubAdapter, type GithubClientSource } from './adapter';
@@ -58,10 +58,7 @@ export const githubModule = defineModule({
   create: (ctx) => {
     const client = githubClientFrom(ctx);
     return Object.assign(new GithubAdapter(client), {
-      poll: async (input: PollInput | PollEdgeInput) => {
-        if (!('edge' in input)) {
-          throw new Error('@lf/github is listened to on its Notifications edge: `listen to gh-[n:Notifications WHERE n.Reason IN ["mention"]]-> fire f` (`listen-fire upgrade` rewrites a 0.12 listen)');
-        }
+      poll: async (input: PollEdgeInput) => {
         return pollGithub(await client(), input);
       },
     });
