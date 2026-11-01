@@ -26,3 +26,14 @@ fn a_script_that_does_not_check_is_refused_before_it_runs() {
     let problems = Game::new(&broken).err().expect("refused");
     assert!(problems.contains("Owner"), "{problems}");
 }
+
+#[test]
+fn a_listen_fires_only_on_a_monster_its_where_takes() {
+    let dragons_only = SCRIPT.replace("listen to game-[:Slain]->", "listen to game-[m:Slain WHERE m.Name == \"Dragon\"]->");
+    let mut game = Game::new(&dragons_only).expect("the script checks");
+    game.fire(GameEvent::MonsterSlain { monster: "Goblin".into(), by: "Ada".into() });
+    assert!(game.world.trophies.is_empty(), "a goblin is no dragon");
+    game.fire(GameEvent::MonsterSlain { monster: "Dragon".into(), by: "Ada".into() });
+    assert_eq!(game.world.trophies, vec![("Dragon trophy".to_string(), "Ada".to_string())]);
+    assert!(game.failures.is_empty(), "{:?}", game.failures);
+}

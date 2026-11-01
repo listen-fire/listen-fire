@@ -4,7 +4,10 @@ The movement engine. Embed it in a Rust program with `embed`: implement the
 host traits your movements need (`Adapters` for the systems they read and
 write, `Store` to park a `sleep` (it must also keep and return library texts by hash: `save_source`, `load_source`), `Models`, `Judge`, `Files`, `Modules`,
 `Secrets`, `Clock`, `Trace`), then `embed::check` a movement and
-`embed::run` it on an event. Every host call returns a future (an
+`embed::run` it on an event. `embed::listens` answers each listen the
+checker plans, its edge and its plan; hand an arrival on that edge to
+`Listen::judge` and run the function of each listen it fires (an
+`Undecided` verdict runs nothing, and says why). Every host call returns a future (an
 in-memory host returns `ready(…)`), and the run starts every request the
 engine has pending at once and answers each as it lands, so the arms of an
 `all(...)` are served concurrently; the run is a plain future, driven by

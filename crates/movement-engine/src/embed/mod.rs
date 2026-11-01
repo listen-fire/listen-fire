@@ -208,11 +208,13 @@ pub fn check(source: &str, catalog: &Catalog, language_version: &str) -> Vec<Pro
     }
 }
 
-/// Every `listen to <traversal> fire <function>` in `source`: which function
-/// an arrival on which edge fires. Routing is the host's: a host matches an
-/// arrival to the listens on its edge and runs each one's function. A listen
-/// in the settings form (`listen to x { … }`), retired in 0.13, routes
-/// nothing and is left out; the check refuses it.
+/// Every `listen to <traversal> fire <function>` in `source`, as the checker
+/// plans it against `catalog`: which function an arrival on which edge
+/// fires, and the filters it is judged by. Routing is the host's: hand each
+/// arrival to [`Listen::judge`] of every listen on its edge, and run the
+/// function of each it fires. A listen the checker plans none for (one that
+/// does not check, or in the settings form, `listen to x { … }`, retired in
+/// 0.13) routes nothing and is left out; [`check`] says why.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Listen {
     /// The adapter the listened instance connects (its import alias resolved).
@@ -222,9 +224,35 @@ pub struct Listen {
     pub path: String,
     /// The edge the traversal ends on: what an arrival lands on to reach this listen.
     pub edge: String,
+    /// How the checker plans it: each hop and the filter it is judged by.
+    pub plan: ListenPlan,
+    /// Each record type its connection's module keys some fields of by ids
+    /// other than their names (the catalog's `fieldIds`).
+    field_ids: std::collections::HashMap<String, serde_json::Map<String, Json>>,
 }
 
-pub fn listens(source: &str, language_version: &str) -> Result<Vec<Listen>, String> {
+/// Whether an arrival fires a listen ([`Listen::judge`]).
+pub use crate::listen_judge::{ArrivedRecord, PlanArrival, Verdict as ListenVerdict};
+pub use movement_parser::listen_plan::ListenPlan;
+
+impl Listen {
+    /// Whether `arrival` (on this listen's edge) fires it at `now_ms`
+    /// (epoch ms, the instant `WITHIN` measures from), as listen-fire's
+    /// judge decides: each record it carries is read by the names the
+    /// program writes, then judged against the plan's filters. A record of
+    /// another record type skips; an `Undecided` verdict runs nothing, and
+    /// says why, which a host reports rather than drops.
+    pub fn judge(&self, arrival: &PlanArrival, now_ms: f64) -> ListenVerdict {
+        let named = |record: &ArrivedRecord| match record.record_type.as_ref().and_then(|t| self.field_ids.get(t)) {
+            Some(ids) => ArrivedRecord { fields: crate::listen_judge::named_fields(&record.fields, ids), ..record.clone() },
+            None => record.clone(),
+        };
+        let arrival = PlanArrival { landing: named(&arrival.landing), parents: arrival.parents.iter().map(|p| p.as_ref().map(named)).collect(), ..arrival.clone() };
+        crate::listen_judge::judge_arrival(&self.plan, &arrival, now_ms)
+    }
+}
+
+pub fn listens(source: &str, catalog: &Catalog, language_version: &str) -> Result<Vec<Listen>, String> {
     use movement_parser::ast::{RValue, Statement};
     if let Some(refusal) = movement_parser::version::refusal(language_version, LANGUAGE_VERSION) {
         return Err(refusal);
@@ -232,6 +260,8 @@ pub fn listens(source: &str, language_version: &str) -> Result<Vec<Listen>, Stri
     let form = movement_parser::util::form::form_of_text(source);
     let program = movement_parser::stmt::parse_program(&form, true)
         .map_err(|e| format!("{} (line {}, col {})", movement_parser::util::form::external_text(&e.message), e.loc.line, e.loc.col))?;
+    let options = movement_checker::CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let mut plans = movement_checker::answer::check_answer(&program, &catalog.snapshot, options).listens.into_iter();
     let mut aliases = std::collections::HashMap::new();
     let mut instances = std::collections::HashMap::new();
     let mut out = Vec::new();
@@ -244,15 +274,37 @@ pub fn listens(source: &str, language_version: &str) -> Result<Vec<Listen>, Stri
             }
             Statement::Assign(assign) => {
                 if let RValue::Construct { construct } = &assign.value {
-                    instances.insert(assign.name.clone(), aliases.get(&construct.callee).cloned().unwrap_or_else(|| construct.callee.clone()));
+                    let adapter = aliases.get(&construct.callee).cloned().unwrap_or_else(|| construct.callee.clone());
+                    // The instance's schema, as the checker instantiates it: the credential by the name it is imported as.
+                    let credential_arg = catalog.snapshot.adapter(&adapter).and_then(movement_parser::catalog::helpers::credential_arg_of).map_or_else(|| "credentials".to_string(), |arg| arg.name.clone());
+                    let args: movement_parser::catalog::snapshot::Args = construct
+                        .args
+                        .iter()
+                        .map(|arg| {
+                            let raw = arg.value.raw.trim();
+                            let credential = (arg.name == credential_arg).then(|| movement_parser::catalog::helpers::unwrap_credential_arg(raw)).flatten();
+                            (arg.name.clone(), credential.map_or_else(|| raw.to_string(), |local| aliases.get(&local).cloned().unwrap_or(local)))
+                        })
+                        .collect();
+                    instances.insert(assign.name.clone(), (adapter, args));
                 }
             }
             Statement::Listen(listen) => {
-                let (Some(adapter), Some(head)) = (instances.get(&listen.instance), &listen.path) else { continue };
+                let (Some((adapter, args)), Some(head)) = (instances.get(&listen.instance), &listen.path) else { continue };
+                // The checker plans each listen it accepts, in source order.
+                let Some(plan) = plans.as_slice().first().filter(|plan| plan.connection == listen.instance && plan.movement == listen.movement).cloned() else { continue };
+                plans.next();
                 let spelled = crate::traverse::spell_path_head(head);
                 let edge = last_edge(&spelled)?;
                 let path = movement_parser::util::form::external_text(&spelled).into_owned();
-                out.push(Listen { adapter: adapter.clone(), function: listen.movement.clone(), path, edge });
+                let field_ids = catalog
+                    .snapshot
+                    .instantiate(adapter, args)
+                    .map(|schema| {
+                        schema.positions.iter().filter_map(|(name, position)| Some((name.clone(), position.field_ids.as_ref()?.iter().map(|(field, id)| (field.clone(), Json::String(id.clone()))).collect()))).collect()
+                    })
+                    .unwrap_or_default();
+                out.push(Listen { adapter: adapter.clone(), function: listen.movement.clone(), path, edge, plan, field_ids });
             }
             _ => {}
         }
@@ -652,15 +704,28 @@ mod tests {
         RunInput::new(SOURCE, event, "2026-03-12T12:00:00.000Z").function("m").catalog(Catalog::from_json(CATALOG).unwrap())
     }
 
+    /// An inbox whose module keys a message's `Subject` as `subject`.
+    const KEYED: &str = r#"{"adapters":{"email":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Message":{"properties":{"Subject":"text"},"fieldIds":{"Subject":"subject"},"edges":{}}},"collections":{"message":{"target":"Message","readable":false,"listenable":true,"delivery":"connection"}}}}}},"credentials":{},"plugins":{}}"#;
+
     /// A listen names the traversal it is on, as written, and the edge it
-    /// ends on; one in the settings form routes nothing.
+    /// ends on, and is judged by its WHERE, reading the module's fields by
+    /// the names the program writes; one in the settings form routes nothing.
     #[test]
-    fn a_listen_names_its_traversal_and_the_edge_it_ends_on() {
-        let source = "import { email } from adapters\ninbox = connect email\nfunction m(msg: <inbox-[:message]->>) {\n  return 1\n}\nlisten to inbox-[t:threads WHERE t.`subject` == \"Hi\"]->-[:message]-> fire m\nlisten to inbox { events: [\"x\"] } fire m\n";
-        assert_eq!(
-            listens(source, LANGUAGE_VERSION).unwrap(),
-            vec![Listen { adapter: "email".into(), function: "m".into(), path: "inbox-[t:threads WHERE t.`subject` == \"Hi\"]->-[:message]->".into(), edge: "message".into() }]
-        );
+    fn a_listen_is_routed_by_its_edge_and_judged_by_its_where() {
+        let source = "import { email } from adapters\ninbox = connect email\nfunction m(msg: <inbox-[:message]->>) {\n  return 1\n}\nlisten to inbox-[e:message WHERE e.Subject == \"Hi\"]-> fire m\nlisten to inbox { events: [\"x\"] } fire m\n";
+        let found = listens(source, &Catalog::from_json(KEYED).unwrap(), LANGUAGE_VERSION).unwrap();
+        let named: Vec<(&str, &str, &str, &str)> = found.iter().map(|l| (l.adapter.as_str(), l.function.as_str(), l.path.as_str(), l.edge.as_str())).collect();
+        assert_eq!(named, [("email", "m", "inbox-[e:message WHERE e.Subject == \"Hi\"]->", "message")]);
+        let arrival = |record_type: &str, subject: &str| PlanArrival {
+            edge: "message".into(),
+            key: None,
+            landing: ArrivedRecord { record_type: Some(record_type.into()), fields: json!({ "subject": subject }), unknown: Vec::new() },
+            parents: Vec::new(),
+            taken_applied: false,
+        };
+        assert_eq!(found[0].judge(&arrival("Message", "Hi"), 0.0), ListenVerdict::Fires);
+        assert_eq!(found[0].judge(&arrival("Message", "Bye"), 0.0), ListenVerdict::Skips { hop: 0, reason: None });
+        assert!(matches!(found[0].judge(&arrival("Draft", "Hi"), 0.0), ListenVerdict::Skips { reason: Some(_), .. }), "another record type's edge of that name");
     }
 
     /// A host with no store cannot park: the run fails naming what it
@@ -668,7 +733,8 @@ mod tests {
     #[test]
     fn a_run_that_parks_on_a_host_with_no_store_fails_naming_the_park() {
         assert!(check(SOURCE, &Catalog::from_json(CATALOG).unwrap(), LANGUAGE_VERSION).iter().all(|p| p.severity != Severity::Error));
-        assert_eq!(listens(SOURCE, LANGUAGE_VERSION).unwrap(), vec![Listen { adapter: "email".into(), function: "m".into(), path: "inbox-[:message]->".into(), edge: "message".into() }]);
+        let found = listens(SOURCE, &Catalog::from_json(CATALOG).unwrap(), LANGUAGE_VERSION).unwrap();
+        assert_eq!(found.iter().map(|l| (l.function.as_str(), l.edge.as_str())).collect::<Vec<_>>(), [("m", "message")]);
         let mut inbox = Inbox;
         let outcome = block_on(run(&mut Hosts::new().adapters(&mut inbox), &input())).unwrap();
         let Outcome::Failed(failure) = outcome else { panic!("{outcome:?}") };

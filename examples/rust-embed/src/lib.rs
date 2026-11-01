@@ -11,8 +11,8 @@
 //! own executor instead.
 
 use listen_fire::engine::embed::{
-    self, AdapterCall, AdapterInstance, AdapterReply, AdapterRequest, Adapters, Catalog, Clock, Data, Event, HostFuture, HostResult, Hosts, Outcome, ParkedState,
-    RunInput, Store, TimerPark, Trace, ready,
+    self, AdapterCall, AdapterInstance, AdapterReply, AdapterRequest, Adapters, ArrivedRecord, Catalog, Clock, Data, Event, HostFuture, HostResult, Hosts, ListenVerdict,
+    Outcome, ParkedState, PlanArrival, RunInput, Store, TimerPark, Trace, ready,
 };
 
 /// The movement the game ships with, as a level designer would write it.
@@ -149,9 +149,17 @@ pub struct GameClock {
     next_id: u64,
 }
 
+/// The campaign's start, 2026-01-01T00:00:00Z, in epoch ms.
+const CAMPAIGN_START_MS: f64 = 1_767_225_600_000.0;
+
 impl GameClock {
     pub fn iso(&self) -> String {
         iso(self.minutes)
+    }
+
+    /// Game time in epoch ms: the instant a listen's `WITHIN` measures from.
+    pub fn epoch_ms(&self) -> f64 {
+        CAMPAIGN_START_MS + f64::from(self.minutes) * 60_000.0
     }
 }
 
@@ -210,21 +218,27 @@ impl Game {
         if !problems.is_empty() {
             return Err(problems.iter().map(|p| format!("{}:{} {} {}", p.line, p.column, p.code, p.message)).collect::<Vec<_>>().join("\n"));
         }
-        let listens = embed::listens(script, embed::LANGUAGE_VERSION)?;
+        let listens = embed::listens(script, &catalog, embed::LANGUAGE_VERSION)?;
         Ok(Game { world: World::default(), parks: Parks::default(), clock: GameClock::default(), log: Log::default(), script: script.to_string(), catalog, listens, parked: Vec::new(), failures: Vec::new() })
     }
 
     /// An in-game event: a monster slain lands on `Slain`, and every listen
-    /// on that edge fires.
+    /// on that edge whose WHERE it meets fires. One the judge cannot decide
+    /// runs nothing, and the game says why.
     pub fn fire(&mut self, event: GameEvent) {
         let GameEvent::MonsterSlain { monster, by } = event;
-        let event = Event::new("world", Data::map([("Name", Data::text(&monster)), ("Slayer", Data::text(by))])).of_type("monster.slain").about("Monster", monster);
-        let functions: Vec<String> = self
-            .listens
-            .iter()
-            .filter(|l| l.adapter == "world" && l.edge == "Slain")
-            .map(|l| l.function.clone())
-            .collect();
+        let landing = ArrivedRecord { record_type: Some("Monster".into()), fields: serde_json::json!({ "Name": monster, "Slayer": by }), unknown: Vec::new() };
+        let arrival = PlanArrival { edge: "Slain".into(), key: None, landing, parents: Vec::new(), taken_applied: false };
+        let now_ms = self.clock.epoch_ms();
+        let mut functions = Vec::new();
+        for listen in self.listens.iter().filter(|l| l.adapter == "world" && l.edge == "Slain") {
+            match listen.judge(&arrival, now_ms) {
+                ListenVerdict::Fires => functions.push(listen.function.clone()),
+                ListenVerdict::Skips { .. } => {}
+                ListenVerdict::Undecided { reason } => self.failures.push(format!("{} not judged: {reason}", listen.function)),
+            }
+        }
+        let event = Event::new("world", Data::map([("Name", Data::text(&monster)), ("Slayer", Data::text(&by))])).of_type("monster.slain").about("Monster", monster);
         for function in functions {
             let input = RunInput::new(self.script.clone(), event.clone(), self.clock.iso()).function(function).catalog(self.catalog.clone());
             self.settle(&input, None);
