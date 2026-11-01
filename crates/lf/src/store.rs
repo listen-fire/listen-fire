@@ -117,9 +117,10 @@ create table if not exists arrival_unjudged (
   reason text not null,
   cause text,
   noted_at text not null,
-  attempt integer not null default 0,
+  attempt integer not null,
   primary key (pipeline, arrival, attempt)
 );
+create index if not exists arrival_unjudged_at on arrival_unjudged (noted_at, pipeline, arrival, attempt);
 create table if not exists module_processes (
   id integer primary key check (id = 1),
   processes text not null,
@@ -632,7 +633,8 @@ pub struct NewDelivery {
     pub replay_of: Option<String>,
     pub events: Vec<Js>,
     /// The request as the door received it (crate::inbound::Captured): its
-    /// body and the headers its module's inbound handling reads. Sensitive:
+    /// body, the headers its module declares it reads (never a credential)
+    /// and the arrivals it brought. Sensitive:
     /// kept while the delivery is (`deliveries.retainDays`), shown only when
     /// asked for. A poll's page keeps the arrivals it read instead
     /// (crate::inbound::Page). None for a delivery no request made (a replay).
@@ -753,7 +755,6 @@ impl Store {
         db.execute_batch("create index if not exists run_delivery on run (delivery_id)")?;
         Self::open_wait_rows(&db)?;
         Self::open_event_receipts(&db)?;
-        Self::open_unjudged(&db)?;
         // Added to a state file written before a delivery kept its request.
         let delivery_columns = db
             .prepare("select name from pragma_table_info('delivery')")?
@@ -853,50 +854,6 @@ impl Store {
                  insert into event_receipt (listen, key, received_at) select listen, key, received_at from event_receipt_before;
                  drop table event_receipt_before;"
             ))?)
-        })();
-        match rebuilt {
-            Ok(()) => Ok(db.execute_batch("commit")?),
-            Err(error) => {
-                db.execute_batch("rollback")?;
-                Err(error)
-            }
-        }
-    }
-
-    /// The unjudged arrivals, rebuilt from a state file written before each
-    /// replay of an arrival was an attempt of its own (SQLite cannot change
-    /// a primary key): each kept is its first judging, attempt 0.
-    fn open_unjudged(db: &Connection) -> Result<()> {
-        db.execute_batch("begin immediate")?;
-        let rebuilt = (|| -> Result<()> {
-            let columns = db
-                .prepare("select name from pragma_table_info('arrival_unjudged')")?
-                .query_map([], |r| r.get::<_, String>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            if !columns.iter().any(|c| c == "attempt") {
-                db.execute_batch(
-                    "alter table arrival_unjudged rename to arrival_unjudged_before;
-                     drop index if exists arrival_unjudged_at;
-                     create table arrival_unjudged (
-                       pipeline text not null,
-                       arrival text not null,
-                       file text not null,
-                       movement text not null,
-                       delivery_id text,
-                       edge text not null,
-                       record_id text,
-                       reason text not null,
-                       cause text,
-                       noted_at text not null,
-                       attempt integer not null default 0,
-                       primary key (pipeline, arrival, attempt)
-                     );
-                     insert into arrival_unjudged (pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at)
-                       select pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at from arrival_unjudged_before;
-                     drop table arrival_unjudged_before;",
-                )?;
-            }
-            Ok(db.execute_batch("create index if not exists arrival_unjudged_at on arrival_unjudged (noted_at, pipeline, arrival, attempt)")?)
         })();
         match rebuilt {
             Ok(()) => Ok(db.execute_batch("commit")?),

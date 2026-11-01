@@ -71,7 +71,7 @@ export const ARRIVAL_NOT_JUDGED: SystemEventKind = {
   name: 'Arrival Not Judged',
   id: 'arrival_not_judged',
   description:
-    'A listen could not tell whether something that arrived fires it: its WHERE reads a field the module could not read (the provider did not answer a lookup), or a record the arrival does not carry. That listen ran nothing for it; the arrival\'s other listens ran as usual. `Listen`, `Delivery Id` and `Arrival Id` say which listen, which delivery and which arrival. Reported once per listen and arrival, and once more for each replay that still cannot judge it (`listen-fire listens replay`, which puts the delivery through that listen again once the provider answers). A program is never told about its own listen\'s arrivals.',
+    'A listen could not tell whether something that arrived fires it: its WHERE reads a field the module could not read (the provider did not answer a lookup), or a record the arrival does not carry. That listen ran nothing for it; the arrival\'s other listens ran as usual. `Listen`, `Delivery Id` and `Arrival Id` say which listen, which delivery and which arrival; `Attempt` is 0 as delivered, one more for each replay. Reported once per listen and arrival, and once more for each replay that still cannot judge it (`listen-fire listens replay`, which puts the delivery through that listen again once the provider answers). A program is never told about its own listen\'s arrivals.',
 };
 
 export const SYSTEM_EVENT_KINDS: readonly SystemEventKind[] = [RUN_FAILED, RUN_PAUSED, VALIDATION_ISSUE, DEPRECATED_VERSION, RELEASE_APPLIED, WAIT_LOST_ITS_RECORD, ARRIVAL_NOT_JUDGED];
@@ -106,10 +106,12 @@ export interface SystemEventFields {
   'Delivery Id': string;
   /** For an arrival not judged: the arrival, as the listen names it (its edge, record, identity and version); else empty. */
   'Arrival Id': string;
+  /** For an arrival not judged: 0 as delivered, one more for each replay that still could not judge it; else 0. */
+  Attempt: number;
 }
 
 /** The fields' declarations, in the order a handler reads them. */
-export const SYSTEM_EVENT_FIELDS: ReadonlyArray<{ name: keyof SystemEventFields; kind: 'string' | 'date' | 'enum'; description: string }> = [
+export const SYSTEM_EVENT_FIELDS: ReadonlyArray<{ name: keyof SystemEventFields; kind: 'string' | 'number' | 'date' | 'enum'; description: string }> = [
   { name: 'Event Id', kind: 'string', description: 'Names the event: the same on every poll that finds it.' },
   { name: 'Kind', kind: 'enum', description: 'Which thing happened. A listen names the kinds it wants: `e.Kind == "Run Failed"`, or `e.Kind IN [...]`.' },
   { name: 'Automation', kind: 'string', description: 'The program the event is about (its movement); empty when it concerns none.' },
@@ -125,4 +127,5 @@ export const SYSTEM_EVENT_FIELDS: ReadonlyArray<{ name: keyof SystemEventFields;
   { name: 'Listen', kind: 'string', description: 'For an arrival not judged: the listen that could not judge it, as the host names it. Empty on every other kind.' },
   { name: 'Delivery Id', kind: 'string', description: 'For an arrival not judged: the delivery it came in, which the host keeps for a while (on listen-fire `deliveries.retainDays`, 14 days by default); empty when the host kept none. Empty on every other kind.' },
   { name: 'Arrival Id', kind: 'string', description: 'For an arrival not judged: the arrival, as the listen names it (its edge, record, identity and version). Empty on every other kind.' },
+  { name: 'Attempt', kind: 'number', description: 'For an arrival not judged: 0 when it was delivered, one more for each replay (`listen-fire listens replay`) that still could not judge it. 0 on every other kind.' },
 ];

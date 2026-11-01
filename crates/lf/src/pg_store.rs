@@ -157,7 +157,6 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (14, include_str!("pg_store_schema_14.sql")),
     (15, include_str!("pg_store_schema_15.sql")),
     (16, include_str!("pg_store_schema_16.sql")),
-    (17, include_str!("pg_store_schema_17.sql")),
 ];
 
 /// The advisory lock the migrations run under: "lf-store" as a number.

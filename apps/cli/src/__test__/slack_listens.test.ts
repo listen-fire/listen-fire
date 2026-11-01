@@ -359,7 +359,7 @@ listen to chat-[:Channels]->-[:Messages]-> fire every
 
     // Still down: the replay cannot judge it either, and is reported again as attempt 1.
     const stillDown = lfSync(world.dir, 'listens', 'replay', 'slack:heard', '--delivery', deliveryId);
-    assert.equal(stillDown.code, 0, stillDown.out);
+    assert.equal(stillDown.code, 1, `still undecided: a script can tell it from a replay that ran\n${stillDown.out}`);
     assert.match(stillDown.out, /slack:heard: the arrival \S+ on Messages still cannot be judged \(slack could not read Name of the Channels record the arrival carries, which this listen's filter reads\): reported again, attempt 1/);
     assert.deepEqual(facts().map((f) => [f.attempt, f.deliveryId]), [[0, deliveryId], [1, deliveryId]], 'each failed attempt is its own fact, naming the delivery that keeps the request');
     assert.equal(ran('heard'), 0);

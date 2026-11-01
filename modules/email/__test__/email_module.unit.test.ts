@@ -48,7 +48,7 @@ describe('@lf/email', () => {
     const { manifest } = load({ credential: credential({}) });
     expect(manifest.adapterType).toBe('email');
     expect(manifest.credentials?.[0]?.name).toBe('email');
-    expect(manifest.inbound).toEqual({ providerKey: 'email', scheme: 'module' });
+    expect(manifest.inbound).toEqual({ providerKey: 'email', scheme: 'module', captureHeaders: ['svix-id'] });
     expect(manifest.methods).toContain('checkInbound');
   });
 

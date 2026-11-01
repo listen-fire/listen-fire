@@ -56,7 +56,8 @@ export const emailModule = defineModule({
   // An arrival on a root edge names no key (adapter protocol 2.6).
   protocolMinor: 6,
   // Mailgun and Resend each sign their own way, neither a declared scheme.
-  inbound: { providerKey: 'email', scheme: 'module' },
+  // `svix-id` tells a Resend notification from a Mailgun post when a kept request is replayed.
+  inbound: { providerKey: 'email', scheme: 'module', captureHeaders: ['svix-id'] },
   create: (ctx) => new InboundEmailAdapter(emailSourcesFrom(ctx), { access: () => emailAccessFrom(ctx) }),
 });
 

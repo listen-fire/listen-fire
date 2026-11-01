@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
@@ -159,7 +159,7 @@ test('a polled delivery is replayed through one listen from the page the poll ke
 
     // Still unreadable: the page is judged again, a is reported again as attempt 1, and the module is not polled.
     const still = lfAt(dir, ['listens', 'replay', 'notes:a', '--delivery', deliveryId]);
-    assert.equal(still.code, 0, still.out);
+    assert.equal(still.code, 1, `still undecided: a script can tell it from a replay that ran\n${still.out}`);
     assert.match(still.out, /notes:a: the arrival n3 on Notes still cannot be judged \(feed could not read Title of the arrival on Notes, which this listen's filter reads\): reported again, attempt 1/);
     assert.deepEqual(facts().map((f) => f.attempt), [0, 1]);
     assert.deepEqual([runsOf(dir, 'a'), runsOf(dir, 'b')], [0, 1]);
@@ -178,6 +178,18 @@ test('a polled delivery is replayed through one listen from the page the poll ke
     assert.match(again.out, /notes:a: nothing replayed \(--force runs it again\)/);
     assert.equal(runsOf(dir, 'a'), 1);
     assert.equal(edgePolls(dir).length, polled, 'no replay asked the feed for anything');
+
+    // The feed now takes a Title filter, and `a` filters on Title: it is polled
+    // for its own, and no longer shares the poll the page was read for. Those
+    // arrivals were read for another filter, so `a` is refused them.
+    writeFileSync(join(dir, 'externals/feed/takes'), '');
+    writeFileSync(join(dir, 'movements/notes.mvt'), readFileSync(join(dir, 'movements/notes.mvt'), 'utf8').replace(/listen to .* fire a\n.*\n/, `${A_IS_A}\n`));
+    const taken = lf(dir, 'check');
+    assert.equal(taken.code, 0, taken.out);
+    const apart = lfAt(dir, ['listens', 'replay', 'notes:a', '--delivery', deliveryId, '--force']);
+    assert.equal(apart.code, 1, apart.out);
+    assert.match(apart.out, new RegExp(`delivery ${deliveryId} is a poll's page, read for the listens that shared that poll: the listen named is not one of them`));
+    assert.equal(runsOf(dir, 'a'), 1);
   } finally {
     db.close();
   }

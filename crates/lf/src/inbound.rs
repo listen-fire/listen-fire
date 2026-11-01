@@ -120,6 +120,11 @@ pub struct Declaration {
     /// Lower case: the header carrying the provider's id for a delivery
     /// (`deliveryId: { header }`), so a redelivery under it is kept out.
     pub delivery_id_header: Option<String>,
+    /// Lower case: the headers the module's inbound handling reads besides
+    /// the body (`captureHeaders`), the only ones a kept request holds beside
+    /// what the host reads itself. Never one that carries a credential
+    /// (`credential_header`).
+    pub capture_headers: Vec<String>,
 }
 
 impl Declaration {
@@ -172,8 +177,27 @@ impl Declaration {
                 Some(header.to_string())
             }
         };
-        Ok(Declaration { provider_key: provider_key.to_string(), scheme, signature_headers, intercepts, secret_from_provider, delivery_id_header })
+        let mut capture_headers = Vec::new();
+        for h in value.get("captureHeaders").map(|list| list.as_array().ok_or("captureHeaders: expected an array")).transpose()?.unwrap_or_default() {
+            let name = header_name(h).ok_or("captureHeaders: a header to keep is a lower-case header name")?;
+            if credential_header(name) || signature_headers.iter().any(|s| s == name) {
+                return Err(format!("captureHeaders: {name} carries a credential, and a kept request never holds one"));
+            }
+            capture_headers.push(name.to_string());
+        }
+        Ok(Declaration { provider_key: provider_key.to_string(), scheme, signature_headers, intercepts, secret_from_provider, delivery_id_header, capture_headers })
     }
+}
+
+/// Whether a header may carry a credential, so no kept request holds it
+/// (`isCredentialHeader`): every scheme's signature header, any header naming
+/// a signature or a secret, and the request's own authorization and cookies.
+pub fn credential_header(name: &str) -> bool {
+    const SCHEMES: [Scheme; 7] = [Scheme::HmacSha256Hex, Scheme::Attio, Scheme::AirtableMac, Scheme::AffinityHexOrB64, Scheme::SlackV0, Scheme::TelegramSecretToken, Scheme::Remote];
+    matches!(name, "authorization" | "proxy-authorization" | "cookie")
+        || name.contains("signature")
+        || name.contains("secret")
+        || SCHEMES.iter().any(|scheme| scheme.default_headers().contains(&name))
 }
 
 /// A lower-case header name, as the wire's `HEADER_NAME` reads one.
@@ -445,14 +469,16 @@ impl RawRequest<'_> {
     }
 
     /// The request as its delivery keeps it (NewDelivery::request), with the
-    /// pull cursor its module read it against: its body, and the headers its
-    /// module's inbound handling reads. A module that checks its own
-    /// requests reads them whole; under a declared scheme the module reads
-    /// the body as its content type says, and the provider's delivery id
-    /// names it. The signature is not kept: a replay is of the host's own
+    /// pull cursor its module read it against: its body, and of its headers
+    /// only those its module declares its inbound handling reads
+    /// (`captureHeaders`) and, under a declared scheme, the two the host reads
+    /// itself: the content type it decodes the body by, and the provider's
+    /// delivery id. No signature, authorization or other credential is kept
+    /// (a declaration naming one is refused): a replay is of the host's own
     /// capture, and is not verified again.
     fn captured(&self, declaration: &Declaration, checkpoint: Option<&Js>) -> Js {
-        let read = |name: &str| declaration.scheme == Scheme::Module || name == "content-type" || declaration.delivery_id_header.as_deref() == Some(name);
+        let host_reads = |name: &str| declaration.scheme != Scheme::Module && (name == "content-type" || declaration.delivery_id_header.as_deref() == Some(name));
+        let read = |name: &str| host_reads(name) || declaration.capture_headers.iter().any(|h| h == name);
         let mut kept = self.wire_with(read);
         if let (Js::Obj(fields), Some(checkpoint)) = (&mut kept, checkpoint) {
             fields.insert("checkpoint".into(), checkpoint.clone());
@@ -469,6 +495,11 @@ pub struct Captured {
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
     pub checkpoint: Option<Js>,
+    /// The arrivals the delivery brought, each by its receipt key
+    /// (ArrivalIn::receipt_key): all a replay judges again. A module that
+    /// reads from a pull cursor reports, read again, every arrival since,
+    /// later deliveries' too. None for a push, which keeps what it pushed.
+    pub arrival_ids: Option<Vec<String>>,
 }
 
 impl Captured {
@@ -478,7 +509,18 @@ impl Captured {
         let Some(Js::Obj(headers)) = kept.get("headers") else { return None };
         let headers = headers.iter().map(|(name, value)| value.as_str().map(|value| (name.clone(), value.to_string()))).collect::<Option<Vec<_>>>()?;
         let body = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, kept.get("body")?.as_str()?).ok()?;
-        Some(Captured { method: text("method")?, path: text("path")?, query: text("query")?, headers, body, checkpoint: kept.get("checkpoint").cloned() })
+        let arrival_ids = match kept.get("arrivalIds") {
+            None => None,
+            Some(ids) => Some(ids.as_array()?.iter().map(|id| id.as_str().map(str::to_string)).collect::<Option<Vec<_>>>()?),
+        };
+        Some(Captured { method: text("method")?, path: text("path")?, query: text("query")?, headers, body, checkpoint: kept.get("checkpoint").cloned(), arrival_ids })
+    }
+
+    /// Note on a kept request the arrivals its delivery brought.
+    fn name_arrivals(kept: &mut Js, arrivals: &[ArrivalIn]) {
+        if let Js::Obj(fields) = kept {
+            fields.insert("arrivalIds".into(), Js::Arr(arrivals.iter().map(|a| Js::Str(a.receipt_key())).collect()));
+        }
     }
 
     fn raw(&self) -> RawRequest<'_> {
@@ -695,7 +737,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
     let Some(source) = store.source_for(&subscription).await? else { return refused(Refusal::UnknownProvider) };
 
     let request = RawRequest { method: delivery.method, path: delivery.path, query: delivery.query, headers: delivery.headers, body: delivery.raw_body, replayed: false };
-    let kept_request = request.captured(&source.declaration, subscription.checkpoint.as_ref());
+    let mut kept_request = request.captured(&source.declaration, subscription.checkpoint.as_ref());
     let (extraction, external_id, reply) = if source.declaration.scheme == Scheme::Module {
         let secret = is_usable_secret(&source.secret).then_some(source.secret.as_str());
         let answer = store.check_inbound(&source, &request, secret, subscription.checkpoint.as_ref()).await?;
@@ -764,6 +806,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
     // The pull cursor rides on "receipted", not "run", and is kept with the
     // receipts it moved past: never one without the other.
     let events_processed = captured.len();
+    Captured::name_arrivals(&mut kept_request, &extraction.arrivals);
     let kept = Kept {
         subscription_id: &subscription.id,
         checkpoint: extraction.checkpoint.as_ref(),
@@ -788,21 +831,24 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
 /// nor a module's own check is run again: the request is the host's own
 /// capture. A module that checks its own requests is told it is a replay
 /// (`RawRequest::replayed`, adapter protocol 2.6) and skips its signature and
-/// timestamp checks; one that ignores it (an older module) may still refuse
-/// the request. Nothing is kept: the cursor its module answers is dropped.
+/// timestamp checks; it may still refuse the request (an older module, or a
+/// secret since removed). Only the arrivals the delivery brought are
+/// answered: a module that reads from a pull cursor reports every arrival
+/// since it, later deliveries' among them. Nothing is kept: the cursor its
+/// module answers is dropped.
 pub async fn reread_delivery<S: InboundStore>(store: &S, subscription_id: &str, captured: &Captured) -> Result<(Source, Extraction), String> {
     let gone = || format!("the subscription {subscription_id} the delivery came through is no longer served");
+    let brought = captured.arrival_ids.as_ref().ok_or("the kept request names none of the arrivals its delivery brought (it was kept by an earlier listen-fire): it cannot be replayed")?;
     let subscription = store.find_subscription(subscription_id).await?.ok_or_else(gone)?;
     let source = store.source_for(&subscription).await?.ok_or_else(gone)?;
     let extraction = if source.declaration.scheme == Scheme::Module {
         let secret = is_usable_secret(&source.secret).then_some(source.secret.as_str());
         let answer = store.check_inbound(&source, &captured.raw(), secret, captured.checkpoint.as_ref()).await?;
         match answer.get("outcome").and_then(Js::as_str) {
-            Some("reply" | "refused") => {
-                return Err(format!(
-                    "{} refused the kept request though it was told it is a replay (adapter protocol 2.6 `replayed`): a module older than 2.6 checks its own signature and timestamp again",
-                    source.adapter_type
-                ));
+            Some(outcome @ ("reply" | "refused")) => {
+                let status = status_of(answer.get("status").or_else(|| answer.get("reply").and_then(|r| r.get("status"))));
+                let said = status.map_or_else(|| outcome.to_string(), |status| format!("{outcome} {status}"));
+                return Err(format!("{} refused the kept request, though it was told it is a replay: it answered {said}", source.adapter_type));
             }
             _ => Extraction {
                 events: answer.get("events").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default(),
@@ -817,7 +863,8 @@ pub async fn reread_delivery<S: InboundStore>(store: &S, subscription_id: &str, 
         let body = delivery_body(&captured.body, &captured.headers)?;
         Extraction { checkpoint: None, ..store.preprocess(&source, &body, captured.checkpoint.as_ref()).await? }
     };
-    Ok((source, extraction))
+    let arrivals = extraction.arrivals.into_iter().filter(|arrival| brought.contains(&arrival.receipt_key())).collect();
+    Ok((source, Extraction { arrivals, ..extraction }))
 }
 
 /// What a push to the `wake` door, kept with its delivery, reports: its
@@ -1106,6 +1153,7 @@ mod tests {
             intercepts: Vec::new(),
             secret_from_provider: false,
             delivery_id_header: None,
+            capture_headers: Vec::new(),
         };
         let unsigned_key = to_hex(&hmac_sha256(b"", BODY));
         assert!(verify_with_scheme(Scheme::Attio, BODY, &headers(&[("x-sig", &unsigned_key)]), "", &declared.signature_headers), "attio is lenient alone");
@@ -1274,17 +1322,70 @@ mod tests {
         assert!(store.seen.borrow()[0].contains("replayed=true"));
     }
 
+    /// A kept request, as `declared` keeps it, that brought `arrivals`.
+    fn kept_as(declared: &[u8], request_headers: &[(String, String)], arrivals: &[ArrivalIn]) -> Captured {
+        let mut kept = RawRequest { method: "POST", path: "/p", query: "", headers: request_headers, body: b"{}", replayed: false }.captured(&Declaration::read(&Js::parse(declared).unwrap()).unwrap(), None);
+        Captured::name_arrivals(&mut kept, arrivals);
+        Captured::read(&kept).unwrap()
+    }
+
+    const REPLIES: &str = r#"{"outcome":"accepted","events":[],"arrivals":[{"edge":"Replies","key":"C1:1","identity":"r1","landing":{"fields":{}}},{"edge":"Replies","key":"C1:2","identity":"r2","landing":{"fields":{}}}]}"#;
+
     #[tokio::test]
     async fn a_replay_of_a_kept_request_says_so_to_the_module_that_checks_its_own() {
-        let store = ModuleChecked::answering(r#"{"outcome":"accepted","events":[],"arrivals":[{"edge":"Replies","key":"C1:1","identity":"r1","landing":{"fields":{}}}]}"#);
-        let live = headers(&[("x-signature", "t=1,v1=old")]);
-        let kept = RawRequest { method: "POST", path: "/p", query: "", headers: &live, body: b"{}", replayed: false }.captured(&Declaration::read(&Js::parse(br#"{"providerKey":"mail","scheme":"module"}"#).unwrap()).unwrap(), None);
-        let captured = Captured::read(&kept).unwrap();
+        let store = ModuleChecked::answering(REPLIES);
+        let live = headers(&[("x-signature", "t=1,v1=old"), ("svix-id", "msg_1")]);
+        let brought = arrivals_of(&Js::parse(REPLIES.as_bytes()).unwrap()).unwrap();
+        let captured = kept_as(br#"{"providerKey":"mail","scheme":"module","captureHeaders":["svix-id"]}"#, &live, &brought);
         let (_, extraction) = reread_delivery(&store, "inst", &captured).await.unwrap();
-        assert_eq!(extraction.arrivals.len(), 1);
+        assert_eq!(extraction.arrivals.len(), 2);
         assert_eq!(store.replayed.borrow().clone(), [true]);
-        // The kept request still carries what the module reads, headers whole.
-        assert!(store.seen.borrow()[0].contains(r#""x-signature":"t=1,v1=old""#));
+        // The kept request carries the headers its module declares it reads, and never its signature.
+        assert!(store.seen.borrow()[0].contains(r#""headers":{"svix-id":"msg_1"}"#), "{}", store.seen.borrow()[0]);
+    }
+
+    /// A module that reads from a pull cursor reports, read again, every
+    /// arrival since the cursor: a later delivery's too. A replay keeps only
+    /// what its own delivery brought.
+    #[tokio::test]
+    async fn a_replay_judges_only_the_arrivals_its_delivery_brought() {
+        let store = ModuleChecked::answering(REPLIES);
+        let brought = arrivals_of(&Js::parse(REPLIES.as_bytes()).unwrap()).unwrap();
+        let captured = kept_as(br#"{"providerKey":"mail","scheme":"module"}"#, &[], &brought[..1]);
+        let (_, extraction) = reread_delivery(&store, "inst", &captured).await.unwrap();
+        assert_eq!(extraction.arrivals.iter().map(|a| a.identity.as_deref()).collect::<Vec<_>>(), [Some("r1")]);
+        // One kept before deliveries named their arrivals is refused by name.
+        let mut unnamed = RawRequest { method: "POST", path: "/p", query: "", headers: &[], body: b"{}", replayed: false }.wire();
+        let error = reread_delivery(&store, "inst", &Captured::read(&unnamed).unwrap()).await.err().unwrap();
+        assert!(error.contains("names none of the arrivals its delivery brought"), "{error}");
+        Captured::name_arrivals(&mut unnamed, &[]);
+        assert_eq!(reread_delivery(&store, "inst", &Captured::read(&unnamed).unwrap()).await.unwrap().1.arrivals.len(), 0);
+    }
+
+    #[test]
+    fn a_declaration_names_the_headers_its_requests_are_kept_with_and_never_a_credential() {
+        let read = |text: &str| Declaration::read(&Js::parse(text.as_bytes()).unwrap());
+        let kept = |declared: &str, sent: &[(&str, &str)]| {
+            let sent = headers(sent);
+            let request = RawRequest { method: "POST", path: "/p", query: "", headers: &sent, body: b"{}", replayed: false };
+            let wire = request.captured(&read(declared).unwrap(), None);
+            wire.get("headers").unwrap().to_json()
+        };
+        let sent = [("Content-Type", "application/json"), ("Stripe-Signature", "t=1,v1=x"), ("Authorization", "Bearer k"), ("X-Thing", "1"), ("x-gh-delivery", "d-1")];
+        // By default a module that checks its own requests keeps no header.
+        assert_eq!(kept(r#"{"providerKey":"stripe","scheme":"module"}"#, &sent), "{}");
+        assert_eq!(kept(r#"{"providerKey":"forms","scheme":"module","captureHeaders":["content-type","x-thing"]}"#, &sent), r#"{"content-type":"application/json","x-thing":"1"}"#);
+        // Under a declared scheme, the two the host reads itself, and those declared.
+        let github = r#"{"providerKey":"gh","scheme":"hmac_sha256_hex","signatureHeaders":["x-hub-signature-256"],"deliveryId":{"header":"x-gh-delivery"}"#;
+        assert_eq!(kept(&format!("{github}}}"), &sent), r#"{"content-type":"application/json","x-gh-delivery":"d-1"}"#);
+        assert_eq!(kept(&format!(r#"{github},"captureHeaders":["x-thing"]}}"#), &sent), r#"{"content-type":"application/json","x-thing":"1","x-gh-delivery":"d-1"}"#);
+        for credential in ["authorization", "cookie", "stripe-signature", "svix-signature", "x-hub-signature-256", "x-slack-signature", "x-telegram-bot-api-secret-token", "x-airtable-content-mac", "x-client-secret"] {
+            let refused = read(&format!(r#"{{"providerKey":"m","scheme":"module","captureHeaders":["{credential}"]}}"#)).err().unwrap();
+            assert_eq!(refused, format!("captureHeaders: {credential} carries a credential, and a kept request never holds one"));
+        }
+        // A declared signature header of its own, whatever its name.
+        assert!(read(r#"{"providerKey":"m","scheme":"remote","signatureHeaders":["x-check"],"captureHeaders":["x-check"]}"#).is_err());
+        assert!(read(r#"{"providerKey":"m","scheme":"module","captureHeaders":["X-Upper"]}"#).is_err());
     }
 
     #[test]
@@ -1304,9 +1405,8 @@ mod tests {
     #[tokio::test]
     async fn a_replay_a_module_still_refuses_is_reported_by_name() {
         let store = ModuleChecked::answering(r#"{"outcome":"refused","status":401}"#);
-        let kept = RawRequest { method: "POST", path: "/p", query: "", headers: &[], body: b"{}", replayed: false }.captured(&Declaration::read(&Js::parse(br#"{"providerKey":"mail","scheme":"module"}"#).unwrap()).unwrap(), None);
-        let error = reread_delivery(&store, "inst", &Captured::read(&kept).unwrap()).await.err().unwrap();
-        assert!(error.starts_with("mail refused the kept request though it was told it is a replay"), "{error}");
+        let error = reread_delivery(&store, "inst", &kept_as(br#"{"providerKey":"mail","scheme":"module"}"#, &[], &[])).await.err().unwrap();
+        assert_eq!(error, "mail refused the kept request, though it was told it is a replay: it answered refused 401");
     }
 
     #[tokio::test]

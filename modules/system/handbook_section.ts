@@ -25,7 +25,7 @@ function report(e: <sys-[:Events]->>) {
 listen to sys-[e:Events WHERE e.Kind == "Run Failed"]-> fire report
 \`\`\`
 
-- Every event carries \`Kind\`, \`Event Id\`, \`Automation\`, \`Automation Id\`, \`Run Id\`, \`Version\`, \`Reason\`, \`Url\` and \`At\`. A wait that lost its record also carries \`Adapter\`, \`Edge\` and \`Record Id\`; an arrival not judged carries \`Edge\`, \`Record Id\`, \`Listen\`, \`Delivery Id\` and \`Arrival Id\`.
+- Every event carries \`Kind\`, \`Event Id\`, \`Automation\`, \`Automation Id\`, \`Run Id\`, \`Version\`, \`Reason\`, \`Url\` and \`At\`. A wait that lost its record also carries \`Adapter\`, \`Edge\` and \`Record Id\`; an arrival not judged carries \`Edge\`, \`Record Id\`, \`Listen\`, \`Delivery Id\`, \`Arrival Id\` and \`Attempt\`.
 - Name the kinds a listen wants with \`e.Kind == "…"\` or \`e.Kind IN [...]\`: \`Run Failed\`, \`Run Paused\`, \`Wait Lost Its Record\`, \`Arrival Not Judged\`, \`Release Applied\`, \`Validation Issue\`, \`Deprecated Version\`.
 - \`Arrival Not Judged\`: a listen could not tell whether something that arrived fires it, because its WHERE reads a field the system could not give (a lookup it did not answer). That listen ran nothing; the arrival's other listens ran. It is reported once per listen and arrival, and once more for each replay that still cannot judge it (\`listen-fire listens replay\`).
 - A program is never told about its own listen's failures or waits, and a rehearsal failing is not reported.

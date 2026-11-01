@@ -907,6 +907,40 @@ export const WireInboundIntercept = z.enum(INBOUND_INTERCEPTS);
 
 const HEADER_NAME = /^[a-z0-9-]+$/;
 
+/** Each scheme's signature header, as the host reads it when a declaration
+ *  names none of its own. */
+const SCHEME_SIGNATURE_HEADERS = [
+  'x-hub-signature-256',
+  'attio-signature',
+  'x-airtable-content-mac',
+  'x-affinity-webhook-signature',
+  'x-slack-signature',
+  'x-telegram-bot-api-secret-token',
+  'x-listen-fire-signature',
+];
+
+/** Whether a header may carry a credential, so no kept request holds it:
+ *  every scheme's signature header, any header naming a signature or a
+ *  secret, and the request's own authorization and cookies. */
+export function isCredentialHeader(name: string): boolean {
+  return ['authorization', 'proxy-authorization', 'cookie'].includes(name) || name.includes('signature') || name.includes('secret') || SCHEME_SIGNATURE_HEADERS.includes(name);
+}
+
+/** The headers the module's inbound handling reads besides the body, lower
+ *  case: the only ones a delivery's kept request holds (for a replay), beside
+ *  what the host reads itself under a declared scheme (the content type and
+ *  the delivery id header). None by default. A header that may carry a
+ *  credential (`isCredentialHeader`) is refused: a kept request never holds
+ *  a signature, a token or a secret. */
+const WireCaptureHeaders = z
+  .array(
+    z
+      .string()
+      .regex(HEADER_NAME, 'a header to keep is a lower-case header name')
+      .refine((name) => !isCredentialHeader(name), 'a header that may carry a credential (a signature, a secret, authorization or a cookie) is never kept'),
+  )
+  .optional();
+
 const WireProviderKey = z.string().regex(/^[a-z][a-z0-9_-]*$/, 'providerKey must be ASCII lower case');
 
 /** Who sets the secret deliveries are signed with. `installer` (the
@@ -938,6 +972,10 @@ export const WireSignedInboundDeclaration = z.object({
    *  `x-github-delivery`), read by the host before the module sees the body:
    *  a redelivery under an id the host kept before is acked and runs nothing. */
   deliveryId: z.object({ header: z.string().regex(HEADER_NAME, 'a delivery id header is a lower-case header name') }).optional(),
+  captureHeaders: WireCaptureHeaders,
+}).refine((declared) => !(declared.captureHeaders ?? []).some((name) => declared.signatureHeaders.includes(name)), {
+  message: 'a header to keep is never one of its signature headers',
+  path: ['captureHeaders'],
 });
 
 /**
@@ -950,6 +988,7 @@ export const WireModuleCheckedInboundDeclaration = z.object({
   providerKey: WireProviderKey,
   scheme: z.literal('module'),
   secretIssuedBy: WireSecretIssuedBy.optional(),
+  captureHeaders: WireCaptureHeaders,
 });
 
 export const WireInboundDeclaration = z.discriminatedUnion('scheme', [WireSignedInboundDeclaration, WireModuleCheckedInboundDeclaration]);

@@ -40,6 +40,12 @@ pub struct ArrivalIn {
 }
 
 impl ArrivalIn {
+    /// What names it among its delivery's arrivals, and on a listen's
+    /// receipt (`arrival_receipt_key`).
+    pub fn receipt_key(&self) -> String {
+        arrival_receipt_key(&self.edge, self.key.as_deref(), self.identity.as_deref().unwrap_or_default(), self.version.as_deref())
+    }
+
     /// As the waits' log keeps it: one naming its record only.
     pub fn logged(&self) -> Option<NewArrival> {
         let key = self.key.clone()?;

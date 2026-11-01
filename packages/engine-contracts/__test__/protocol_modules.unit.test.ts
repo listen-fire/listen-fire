@@ -142,6 +142,20 @@ describe('a module manifest', () => {
     expect(refusal({ ...MODULE_MANIFEST, inbound: { ...MODULE_MANIFEST.inbound, signatureHeaders: [] } })[0]).toMatch(/^inbound\.signatureHeaders/);
   });
 
+  it('takes the headers a kept request holds, and refuses one that may carry a credential', () => {
+    const checked = { ...MODULE_MANIFEST, methods: [...MODULE_MANIFEST.methods, 'checkInbound'] };
+    const keeping = { ...checked, inbound: { providerKey: 'mail', scheme: 'module', captureHeaders: ['content-type', 'svix-id'] } };
+    expect(WireManifestResult.parse(keeping)).toEqual(keeping);
+    for (const header of ['authorization', 'cookie', 'stripe-signature', 'svix-signature', 'x-hub-signature-256', 'x-telegram-bot-api-secret-token', 'x-airtable-content-mac']) {
+      expect(refusal({ ...checked, inbound: { providerKey: 'mail', scheme: 'module', captureHeaders: [header] } })).toEqual([
+        'inbound.captureHeaders.0: a header that may carry a credential (a signature, a secret, authorization or a cookie) is never kept',
+      ]);
+    }
+    const signed = { ...MODULE_MANIFEST.inbound, signatureHeaders: ['x-check'] };
+    expect(WireManifestResult.parse({ ...MODULE_MANIFEST, inbound: { ...signed, captureHeaders: ['x-thing'] } }).inbound).toEqual({ ...signed, captureHeaders: ['x-thing'] });
+    expect(refusal({ ...MODULE_MANIFEST, inbound: { ...signed, captureHeaders: ['x-check'] } })).toEqual(['inbound.captureHeaders: a header to keep is never one of its signature headers']);
+  });
+
   it('takes the header a delivery id is read from, a lower-case header name', () => {
     const declared = { ...MODULE_MANIFEST, inbound: { ...MODULE_MANIFEST.inbound, deliveryId: { header: 'x-attio-delivery' } } };
     expect(WireManifestResult.parse(declared)).toEqual(declared);

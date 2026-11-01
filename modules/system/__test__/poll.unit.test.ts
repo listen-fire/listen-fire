@@ -91,7 +91,7 @@ describe('pollSystemEvents', () => {
     const [one, two] = next.arrivals;
     expect(one).toMatchObject({ identity: 'arrival_not_judged:listen:chat:heard:0a1b2c3d:Messages:C1:C1:1700.1::0', notFor: 'listen:chat:heard:0a1b2c3d', takenApplied: true, occurredAt: at(2) });
     expect(one).not.toHaveProperty('about');
-    expect(['Kind', 'Automation', 'Automation Id', 'Edge', 'Record Id', 'Listen', 'Delivery Id', 'Arrival Id', 'Run Id'].map((name) => field(one, name))).toEqual([
+    expect(['Kind', 'Automation', 'Automation Id', 'Edge', 'Record Id', 'Listen', 'Delivery Id', 'Arrival Id', 'Attempt', 'Run Id'].map((name) => field(one, name))).toEqual([
       'Arrival Not Judged',
       'heard',
       'chat:heard',
@@ -100,6 +100,7 @@ describe('pollSystemEvents', () => {
       'listen:chat:heard:0a1b2c3d',
       'delivery-1',
       'Messages:C1:C1:1700.1:',
+      0,
       '',
     ]);
     expect(field(one, 'Reason')).toBe(heard.reason);
@@ -112,6 +113,21 @@ describe('pollSystemEvents', () => {
     const replayed = await pollSystemEvents(host, { edge: 'Events', filter: kind, cursor: again.cursor }, SETTINGS, T0 + 180_000);
     expect(replayed.arrivals.map((a) => Reflect.get(a, 'identity'))).toEqual(['arrival_not_judged:listen:chat:heard:0a1b2c3d:Messages:C1:C1:1700.1::1']);
     expect((replayed.cursor as SystemCursor).unjudged).toMatchObject({ at: at(70), attempt: 1 });
+    expect(field(replayed.arrivals[0]!, 'Attempt')).toBe(1);
+
+    // A listen on Events that cannot judge an Arrival Not Judged event is not
+    // reported in turn: two such listens would report each other's without end.
+    const report = 'arrival_not_judged:listen:chat:other:00ff00ff:Messages:C1:C1:1700.1::0';
+    const warned = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      unjudged.push({ ...heard, edge: 'Events', recordId: report, arrival: `Events::${report}:`, at: at(130) });
+      const looped = await pollSystemEvents(host, { edge: 'Events', filter: kind, cursor: replayed.cursor }, SETTINGS, T0 + 240_000);
+      expect(looped.arrivals).toEqual([]);
+      expect((looped.cursor as SystemCursor).unjudged).toMatchObject({ at: at(130) });
+      expect(warned).toHaveBeenCalledWith(expect.stringContaining(`could not judge the Arrival Not Judged event ${report}`));
+    } finally {
+      warned.mockRestore();
+    }
   });
 
   it('rows inside the settle window wait for the next poll', async () => {

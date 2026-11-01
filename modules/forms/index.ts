@@ -22,7 +22,8 @@ export const formsModule = defineModule({
   credentials: [],
   // The module checks every request itself; nothing is signed, since the
   // form's unguessable id is what guards it.
-  inbound: { providerKey: 'forms', scheme: 'module', secretIssuedBy: 'provider' },
+  // A form post is read as a form or as JSON by its content type, replayed too.
+  inbound: { providerKey: 'forms', scheme: 'module', secretIssuedBy: 'provider', captureHeaders: ['content-type'] },
   create: (ctx) => new FormsAdapter(formsSourcesFrom(ctx)),
 });
 

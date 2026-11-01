@@ -16,7 +16,8 @@
 //! arrival carries handed to it), and runs here. The listen's receipt holds:
 //! one that ran the arrival before runs nothing, unless `--force`, which runs
 //! it again under a receipt of its own. A listen that still cannot judge the
-//! arrival is reported again, as the next attempt.
+//! arrival is reported again, as the next attempt, and the command exits 1:
+//! the way back is not yet open.
 
 use std::io::Write;
 
@@ -186,7 +187,8 @@ async fn reread(doors: &LfDoors<'_, SessionReader<'_>>, row: &DeliveryRow, captu
 }
 
 /// Put what the delivery reads as now through `listen` alone: the exit
-/// code, non-zero when a run it started failed.
+/// code, non-zero when a run it started failed or the listen still cannot
+/// judge an arrival.
 async fn replay_through(session: &Session, set: &FileSet, listen: &Listen, row: &DeliveryRow, reread: &Reread, force: bool, out: &mut impl Write) -> Result<i32, String> {
     let io = |e: std::io::Error| e.to_string();
     let named = format!("{}:{}", listen.file, listen.movement_name);
@@ -208,11 +210,12 @@ async fn replay_through(session: &Session, set: &FileSet, listen: &Listen, row: 
         let identity = arrival.identity.as_deref().unwrap_or_default();
         writeln!(out, "{named}: the arrival {identity} on {} still cannot be judged ({}): reported again, attempt {}", arrival.edge, one.reason, replay.attempt).map_err(io)?;
     }
+    let undecided = i32::from(!minted.unjudged.is_empty());
     if minted.runs.as_array().is_none_or(<[Js]>::is_empty) {
         if minted.unjudged.is_empty() {
             writeln!(out, "{named}: its filter does not take what delivery {} brought: nothing to run", row.id).map_err(io)?;
         }
-        return Ok(0);
+        return Ok(undecided);
     }
     let came_for = Delivered { credential, minted: Some(&minted.runs), replay: Some(replay), ..Delivered::default() };
     let fired = fire_replay(session, &doors, ReplayRun { adapter, row, landed: &landed, came_for, waits: minted.waits }).await?;
@@ -221,9 +224,9 @@ async fn replay_through(session: &Session, set: &FileSet, listen: &Listen, row: 
             writeln!(out, "{line}").map_err(io)?;
         }
         writeln!(out, "{named}: nothing replayed (--force runs it again)").map_err(io)?;
-        return Ok(0);
+        return Ok(undecided);
     }
-    fired.report(out)
+    Ok(fired.report(out)?.max(undecided))
 }
 
 /// The attempt a replay of `landed` through `listen` is: one more than the

@@ -250,10 +250,11 @@ test('listen-fire serve runs a signed failed payment once: the monthly customer 
   }
 });
 
-// The host keeps the request it received, signature included, for a kept
-// delivery. `listens replay` re-runs it long after Stripe's timestamp window:
-// the host says the request is a replay (adapter protocol 2.6), so the module
-// does not check the signature again. A request that arrives is checked as ever.
+// The host keeps the request it received for a kept delivery, without its
+// signature: Stripe's module declares no header its handling reads. `listens
+// replay` re-runs it long after Stripe's timestamp window: the host says the
+// request is a replay (adapter protocol 2.6), so the module checks no
+// signature. A request that arrives is checked as ever.
 test('listens replay puts a Stripe delivery through its listen days later; a live request past the window, or one that claims to be a replay, is still refused', async () => {
   const world = await paymentsWorld();
   const serving = await served(world.dir);
@@ -285,14 +286,15 @@ test('listens replay puts a Stripe delivery through its listen days later; a liv
     await serving.stop();
   }
   try {
-    // The kept request carries the signature it arrived with; age it past the window.
+    // The kept request holds no signature, nor any other header: Stripe's module reads none on a replay.
     const id = state((db) => String((db.prepare("select id from delivery where external_id = 'evt_m1'").get() as { id: string }).id));
-    state((db) => {
-      const kept = JSON.parse(String((db.prepare('select request from delivery where id = ?').get(id) as { request: string }).request)) as { headers: Record<string, string> };
-      assert.ok(kept.headers['stripe-signature'], 'a module that checks its own requests keeps their headers whole');
-      kept.headers['stripe-signature'] = stale;
-      db.prepare('update delivery set request = ? where id = ?').run(JSON.stringify(kept), id);
-    });
+    const shown = await run(world.dir, 'deliveries', 'show', id, '--request');
+    assert.equal(shown.code, 0, shown.out);
+    const kept = (JSON.parse(shown.out) as { delivery: { request: { headers: Record<string, string>; body: string } } }).delivery.request;
+    assert.deepEqual(kept.headers, {}, 'no stripe-signature is kept');
+    assert.equal(Buffer.from(kept.body, 'base64').toString('utf8'), body);
+    // Days later, as the received_at says.
+    state((db) => db.prepare('update delivery set received_at = ? where id = ?').run(new Date(Date.now() - 3 * 86_400_000).toISOString(), id));
     const replayed = await run(world.dir, 'listens', 'replay', 'hello:Payment Failed', '--delivery', id, '--force');
     assert.equal(replayed.code, 0, replayed.out);
     assert.match(replayed.out, /hello:Payment Failed completed/, replayed.out);

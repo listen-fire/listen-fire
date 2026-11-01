@@ -98,6 +98,7 @@ const EMPTY_FIELDS = {
   Listen: '',
   'Delivery Id': '',
   'Arrival Id': '',
+  Attempt: 0,
 } as const;
 
 function event(input: { kind: SystemEventKind; id: string; at: string; fields: Partial<SystemEventFields>; run?: string; listen?: string | null; taken: boolean }): Arrival {
@@ -163,6 +164,7 @@ function unjudgedEvent(unjudged: UnjudgedArrival, taken: boolean): Arrival {
       Listen: unjudged.listen,
       'Delivery Id': unjudged.deliveryId ?? '',
       'Arrival Id': unjudged.arrival,
+      Attempt: unjudged.attempt,
     },
     ...(unjudged.cause !== null ? { run: unjudged.cause } : {}),
     listen: unjudged.listen,
@@ -235,9 +237,24 @@ export async function pollSystemEvents(records: SystemRecords, input: PollEdgeIn
     const settled = unjudged.slice(0, firstPast(unjudged, until));
     const last = settled.at(-1);
     if (last !== undefined) next.unjudged = { at: last.at, listen: last.listen, arrival: last.arrival, attempt: last.attempt };
-    for (const one of settled) arrivals.push(unjudgedEvent(one, takenApplied));
+    for (const one of settled) {
+      if (isUnjudgedReport(one)) {
+        console.warn(`@lf/system: ${one.automation.id} could not judge the Arrival Not Judged event ${one.recordId ?? ''} (${one.reason}); not reported, so no listen is told of another's report about it`);
+        continue;
+      }
+      arrivals.push(unjudgedEvent(one, takenApplied));
+    }
   }
   return { arrivals, cursor: next };
+}
+
+/** Whether the arrival a listen could not judge is itself one of this
+ *  module's `Arrival Not Judged` events (its record is the event, its id one
+ *  this module minted). It is never reported in turn: two listens on `Events`
+ *  that cannot judge such events would report each other's without end, once
+ *  a poll, and no run would ever start for the loop breaker to count. */
+function isUnjudgedReport(unjudged: UnjudgedArrival): boolean {
+  return unjudged.edge === EVENTS_EDGE && (unjudged.recordId ?? '').startsWith(`${ARRIVAL_NOT_JUDGED.id}:`);
 }
 
 /** The index of the first row past `until`, else the length. */

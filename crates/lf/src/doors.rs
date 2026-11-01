@@ -114,6 +114,7 @@ fn served_in(running: &RunningExternal, resend_window_ms: i64) -> Served {
                 intercepts: Vec::new(),
                 secret_from_provider: false,
                 delivery_id_header: yaml_delivery_id,
+                capture_headers: Vec::new(),
             },
             secret_field: w.secret_field.clone(),
         }),
@@ -1807,7 +1808,7 @@ pub(crate) mod tests {
         let webhooks = r#"{"edge-b1":{"edge":"Comments","scope":"b1","secret":"s3cret"},"edge-b9":{"edge":"Comments","scope":"b9","secret":"s3cret"}}"#;
         let fields = std::collections::BTreeMap::from([("edge_subscriptions".to_string(), webhooks.to_string())]);
         let credential = Credential { name: "acme_a".into(), external: "acme".into(), binding: Binding::Credential("acme".into()), fields, origin: Default::default() };
-        let declaration = Declaration { provider_key: "acme".into(), scheme: Scheme::Remote, signature_headers: Vec::new(), intercepts: Vec::new(), secret_from_provider: false, delivery_id_header: None };
+        let declaration = Declaration { provider_key: "acme".into(), scheme: Scheme::Remote, signature_headers: Vec::new(), intercepts: Vec::new(), secret_from_provider: false, delivery_id_header: None, capture_headers: Vec::new() };
         let doors = LfDoors {
             store: &store,
             served: vec![Served { external: "acme".into(), inbound: Some(InboundSetup { declaration, secret_field: DEFAULT_WEBHOOK_SECRET_FIELD.into() }), push_field: None, resend_window_ms: crate::externals::DEFAULT_RESEND_WINDOW_MS }],

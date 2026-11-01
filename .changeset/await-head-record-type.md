@@ -1,5 +1,4 @@
 ---
-"@listen-fire/engine-contracts": minor
 "@listen-fire/embed": minor
 ---
 

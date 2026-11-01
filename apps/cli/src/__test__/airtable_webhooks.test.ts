@@ -17,6 +17,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 
 import { lf as lfSync, served } from './example';
@@ -238,6 +239,54 @@ test('a listen on Expenses changes registers one data webhook on its base and fi
     } finally {
       await server.stop();
     }
+  } finally {
+    await fake.stop();
+  }
+});
+
+// Airtable's ping names no change: the module reads its payloads from the
+// cursor its webhook was at. Read again from the first delivery's cursor, the
+// feed holds the second delivery's change too. A replay of the first judges
+// the change the first delivery brought, and that alone.
+test('listens replay of an Airtable delivery judges the change it brought, never a later delivery\'s', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), EXPENSES);
+    const server = await serving(dir);
+    try {
+      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
+      const runs = () => server.lines.filter((l) => /^run \S+ hiring:review completed$/.test(l)).length;
+      await deliver(fake, { changeType: 'add', tableId: 'tblEXPN01', recordId: 'recTAXI', fields: { Item: 'Taxi' } });
+      await until(() => runs() === 1, server.lines);
+      await deliver(fake, { changeType: 'add', tableId: 'tblEXPN01', recordId: 'recHOTEL', fields: { Item: 'Hotel' } });
+      await until(() => runs() === 2, server.lines);
+    } finally {
+      await server.stop();
+    }
+    const db = new DatabaseSync(join(dir, '.lf', 'state.db'));
+    const [first, second] = (() => {
+      try {
+        return db.prepare("select id, request from delivery where source = 'webhook' order by received_at").all().map((row) => ({ id: String(row.id), request: JSON.parse(String(row.request)) as { arrivalIds: string[] } }));
+      } finally {
+        db.close();
+      }
+    })();
+    assert.ok(first !== undefined && second !== undefined, 'both deliveries are kept');
+    assert.equal(first.request.arrivalIds.length, 1, JSON.stringify(first.request));
+    assert.match(first.request.arrivalIds[0]!, /recTAXI/);
+    const completed = () => (JSON.parse(lfSync(dir, 'runs', '--json').out) as { runs: Array<{ movement: string; status: string }> }).runs.filter((r) => r.status === 'completed').length;
+    assert.equal(completed(), 2);
+
+    const again = lfSync(dir, 'listens', 'replay', 'hiring:review', '--delivery', first.id);
+    assert.equal(again.code, 0, again.out);
+    assert.match(again.out, /hiring:review: nothing replayed \(--force runs it again\)/);
+    assert.equal(completed(), 2, 'the listen ran both changes before: nothing runs, the later one included');
+
+    const forced = lfSync(dir, 'listens', 'replay', 'hiring:review', '--delivery', first.id, '--force');
+    assert.equal(forced.code, 0, forced.out);
+    assert.equal(forced.out.match(/hiring:review completed/g)?.length, 1, forced.out);
+    assert.equal(completed(), 3, 'the first delivery\'s change runs again; the second delivery\'s does not');
   } finally {
     await fake.stop();
   }
