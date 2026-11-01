@@ -162,6 +162,18 @@ describe('zero-step traverse — runtime leaf-read contract', () => {
     expect(leafReadKey({ type: 'property', propertyTypeId: 'firedAt' })).toBe('firedAt');
   });
 
+  it('keys a read on through a held record by its names, as the Rust engine does', () => {
+    const nested: Expression = {
+      type: 'traverse',
+      aliasRoot: 'c',
+      steps: [],
+      expression: { type: 'traverse', aliasRoot: 'Current', steps: [], expression: { type: 'property', propertyTypeId: 'Stage' } },
+    };
+    expect(leafReadKey(pureLeafReads(nested)[0])).toBe('["c","Current","Stage"]');
+    // A field whose name holds a dot is a field, not a nested read.
+    expect(leafReadKey(aliasParamRead('c', 'Current.Stage'))).toBe('c.Current.Stage');
+  });
+
   it('evaluatePredicate reads the traverse leaf back through the scope key', () => {
     const predicate: Expression = {
       type: 'logical',

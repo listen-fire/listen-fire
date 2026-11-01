@@ -172,7 +172,7 @@ impl Checker<'_> {
         // A host watches only a listen that checks clean.
         let clean = self.diagnostics[before.min(self.diagnostics.len())..].iter().all(|d| d.severity.is_some());
         match plan.filter(|_| clean) {
-            Some(plan) => self.listens.plans.push(plan),
+            Some(plan) => self.listens.plans.push((statement.span, plan)),
             None => self.listens.unwatched.push(statement.span),
         }
     }

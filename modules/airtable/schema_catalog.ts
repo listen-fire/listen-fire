@@ -216,6 +216,7 @@ function valueShapeFor(fieldType: string | undefined): ValueShape {
     case 'multipleSelects':
     case 'multipleCollaborators':
     case 'multipleLookupValues':
+    case 'lookup':
       return { kind: 'string', cardinality: 'many' };
     case 'multipleAttachments':
       // A first-class File field: authors map a FileRef (an email attachment,
@@ -233,7 +234,7 @@ function valueShapeFor(fieldType: string | undefined): ValueShape {
     case 'barcode':
     case 'aiText':
       return { kind: 'string', cardinality: 'one' };
-    // formula / rollup / lookup carry an Airtable-computed `result` whose type
+    // formula / rollup carry an Airtable-computed `result` whose type
     // we don't statically know. It is a SCALAR though (Airtable computes a
     // number, a string, a date — never a document), so `string` is the honest
     // narrowing: unknown-typed but readable and renderable. `json` is for a
@@ -241,7 +242,6 @@ function valueShapeFor(fieldType: string | undefined): ValueShape {
     // — unusable in a comparison or a write, for no gain.
     case 'formula':
     case 'rollup':
-    case 'lookup':
       return { kind: 'string', cardinality: 'one' };
     default:
       // Unknown / system types (createdBy, lastModifiedBy, button,

@@ -25,11 +25,16 @@ pub struct Diagnostic {
     /// The exact rewrite that resolves it (`DiagnosticFix`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fix: Option<Value>,
+    /// A traversal the repair would walk that the catalog was not narrowed
+    /// by, so the repair could not be checked and is not offered: a host
+    /// narrows its catalog by it and checks again (`listen-fire upgrade`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub walks: Option<String>,
 }
 
 impl Diagnostic {
     pub fn error(code: &str, message: impl Into<String>, span: Span) -> Self {
-        Diagnostic { code: code.to_string(), message: message.into(), span, severity: None, upgrade: None, fix: None }
+        Diagnostic { code: code.to_string(), message: message.into(), span, severity: None, upgrade: None, fix: None, walks: None }
     }
 
     pub fn is_error(&self) -> bool {

@@ -315,6 +315,7 @@ impl<'c> Checker<'c> {
         self.check_statement_list(statements, file);
         self.report_missing_listens();
         self.report_waits_that_may_hang();
+        self.report_carried_waits_counted_from_the_walk();
         file
     }
 

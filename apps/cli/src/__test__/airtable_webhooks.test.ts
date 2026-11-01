@@ -72,8 +72,9 @@ async function until(holds: () => boolean, lines: string[]): Promise<void> {
   }
 }
 
-/** A Hiring base: candidates with a Stage select, the interviews a movement
- *  writes, and roles. */
+/** A Hiring base: candidates with a Stage select and an Owner (a
+ *  collaborator, which Airtable sends as an object), the interviews a
+ *  movement writes, and roles. */
 const HIRING = [
   { entity_type: 'base', id: 'appHIRE01', data: { id: 'appHIRE01', name: 'Hiring' } },
   {
@@ -87,6 +88,7 @@ const HIRING = [
         { id: 'fldCName', name: 'Name', type: 'singleLineText' },
         { id: 'fldCEmail', name: 'Email', type: 'email' },
         { id: 'fldStage', name: 'Stage', type: 'singleSelect', options: { choices: [{ id: 'selApplied', name: 'Applied' }, { id: 'selInterview', name: 'Interview' }, { id: 'selRejected', name: 'Rejected' }] } },
+        { id: 'fldOwner', name: 'Owner', type: 'singleCollaborator' },
       ],
     },
   },
@@ -104,7 +106,7 @@ const HIRING = [
       ],
     },
   },
-  { entity_type: 'record:appHIRE01:tblCAND01', id: 'recADA', data: { id: 'recADA', fields: { Name: 'Ada Lovelace', Email: 'ada@example.com', Stage: 'Applied' } } },
+  { entity_type: 'record:appHIRE01:tblCAND01', id: 'recADA', data: { id: 'recADA', fields: { Name: 'Ada Lovelace', Email: 'ada@example.com', Stage: 'Applied', Owner: { id: 'usrANN', email: 'ann@example.com', name: 'Ann' } } } },
   {
     entity_type: 'table:appHIRE01',
     id: 'tblROLE01',
@@ -502,6 +504,51 @@ test('Stage coming to be Interview fires once per edit, on an update or a row cr
   }
 });
 
+/** Owner changing: what 0.12's `field: "Owner"` becomes. A collaborator
+ *  arrives as an object; the module reads it as its email, so the row
+ *  before and after compare by value. */
+const OWNER = `import { \`@lf/airtable\` as airtable } from adapters
+import { henry_airtable } from credentials
+
+hiring = connect airtable using henry_airtable { base: "Hiring" }
+
+function owner_changed(c: <hiring-[:\`Candidates Change\`]->>) {
+  return c.Current.Owner
+}
+
+listen to hiring-[t:Tables WHERE t.Name == "Candidates"]->-[c:Changes WHERE c.Current.Owner != c.Previous.Owner]-> fire owner_changed
+`;
+
+test('an update that leaves a collaborator unchanged does not fire Owner changing; one that changes it does', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), OWNER);
+    const checked = lfSync(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+    const server = await serving(dir);
+    try {
+      await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
+      const runs = () => server.lines.filter((l) => /^run \S+ hiring:owner_changed completed$/.test(l)).length;
+      // Stage changes; Owner rides along unchanged, an object in the row before and after.
+      const unchanged = await deliver(fake, { changeType: 'update', tableId: 'tblCAND01', recordId: 'recADA', fields: { Stage: 'Interview' }, previous: { Stage: 'Applied' } });
+      assert.deepEqual(unchanged.deliveries.map((d) => d.status), [200]);
+      await deliver(fake, {
+        changeType: 'update', tableId: 'tblCAND01', recordId: 'recADA',
+        fields: { Owner: { id: 'usrBO', email: 'bo@example.com', name: 'Bo' } },
+        previous: { Owner: { id: 'usrANN', email: 'ann@example.com', name: 'Ann' } },
+      });
+      await until(() => runs() === 1, server.lines);
+      await new Promise((done) => setTimeout(done, 500));
+      assert.equal(runs(), 1, 'the update that left Owner as it was ran nothing');
+    } finally {
+      await server.stop();
+    }
+  } finally {
+    await fake.stop();
+  }
+});
+
 test('upgrade rewrites the 0.12 Airtable listen and its Record Change parameter', async () => {
   const fake = await fakeChannels();
   try {
@@ -585,6 +632,16 @@ listen to hiring { base: "appHIRE01", table: "tblCAND01", field: "Stage" } fire 
     const held = lfSync(dir, 'upgrade');
     assert.equal(held.code, 1, held.out);
     assert.match(held.out, /there is no rewrite: Candidates has no field `Stge`/);
+
+    // A field on a listen naming no table is checked against every table's
+    // row, which has no Stage: no rewrite, and the listen is left as written.
+    const untabled = old.replace('base: "appHIRE01", table: "tblCAND01", field: "Stage" } fire moved', 'base: "appHIRE01", field: "Stage" } fire moved');
+    writeFileSync(file, untabled);
+    writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
+    const unnarrowed = lfSync(dir, 'upgrade');
+    assert.equal(unnarrowed.code, 1, unnarrowed.out);
+    assert.match(unnarrowed.out, /there is no rewrite: Row has no field `Stage` \(its fields: `Id`\), and its table is not narrowed/);
+    assert.match(readFileSync(file, 'utf8'), /listen to hiring \{ base: "appHIRE01", field: "Stage" \} fire moved/);
   } finally {
     await fake.stop();
   }

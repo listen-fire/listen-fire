@@ -87,17 +87,92 @@ export function changeDataOf(data: unknown): ChangeData | null {
 export type FieldsByTable = Map<string, Map<string, { name: string; type?: string }>>;
 
 /**
- * A cell as a movement reads it. A webhook payload carries select cells in
- * Airtable's cell format V2 — `{ id, name, color }` per choice — where a read
- * of the row returns the plain name. The name is the value: it is what the
- * field's enum holds and what a listen's `c.Current.Stage == "Interview"` names.
+ * A cell as a movement reads it: the value its field declares (text, a
+ * number, a list of them), never the object Airtable sends. The host
+ * compares two cells by value only when they are values — two decoded copies
+ * of one object are never equal — so `c.Current.Owner != c.Previous.Owner`
+ * holds only when Owner changed. A webhook payload carries cells in
+ * Airtable's cell format V2 (https://airtable.com/developers/web/api/field-model):
+ * a select as `{ id, name, color }` (read by its name, what its enum holds),
+ * a collaborator as `{ id, email, name }` (by its email, unique per user),
+ * a barcode as `{ text, type }`, an AI text as `{ state, value, … }`, a
+ * button as `{ label, url }`, a linked record as `{ id, name }` (by its id),
+ * and a lookup as `{ valuesByLinkedRecordId, linkedRecordIds }` (its values
+ * in link order). A formula or a rollup holds whatever it computes, each
+ * object in it read as any other. Attachments stay as Airtable sends them:
+ * a file is the value they are written as, and it is not compared by value.
  */
 function readCell(value: unknown, type: string | undefined): unknown {
-  const nameOf = (cell: unknown): unknown =>
-    typeof cell === 'object' && cell !== null && typeof Reflect.get(cell, 'name') === 'string' ? Reflect.get(cell, 'name') : cell;
-  if (type === 'singleSelect') return nameOf(value);
-  if (type === 'multipleSelects' && Array.isArray(value)) return value.map(nameOf);
-  return value;
+  if (value === null || value === undefined) return value;
+  switch (type) {
+    case 'multipleAttachments':
+      return value;
+    case 'multipleRecordLinks':
+      return Array.isArray(value) ? value.map((link) => member(link, 'id')) : value;
+    case 'multipleLookupValues':
+    case 'lookup':
+      return lookupValues(value);
+    default:
+      return Array.isArray(value) ? value.map(scalarOf) : scalarOf(value);
+  }
+}
+
+/** `object[key]` when it is text, else the object read as any other. */
+function member(cell: unknown, key: string): unknown {
+  if (typeof cell === 'object' && cell !== null) {
+    const held = Reflect.get(cell, key);
+    if (typeof held === 'string') return held;
+  }
+  return scalarOf(cell);
+}
+
+/** A lookup's values, in the order of the records it looked them up on. */
+function lookupValues(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(scalarOf);
+  if (typeof value !== 'object' || value === null) return value;
+  const byRecord = Reflect.get(value, 'valuesByLinkedRecordId');
+  if (typeof byRecord !== 'object' || byRecord === null) return scalarOf(value);
+  const order = Reflect.get(value, 'linkedRecordIds');
+  const ids = Array.isArray(order) ? order.filter((id): id is string => typeof id === 'string') : Object.keys(byRecord);
+  return ids.flatMap((id) => {
+    const values: unknown = Reflect.get(byRecord, id);
+    return Array.isArray(values) ? values.map(scalarOf) : values === undefined ? [] : [scalarOf(values)];
+  });
+}
+
+/** One cell value as text, a number or a boolean: an object by the member
+ *  that names it, the first of `email` (a collaborator), `name` (a select),
+ *  `text` (a barcode), `value` (an AI text, null until generated), `label`
+ *  (a button) and `id`; an object with none of them (a formula's error) as
+ *  its JSON, keys sorted, so equal objects read equal. */
+function scalarOf(cell: unknown): unknown {
+  if (typeof cell !== 'object' || cell === null) return cell;
+  if (Array.isArray(cell)) return stableJson(cell.map(scalarOf));
+  for (const key of ['email', 'name', 'text'] as const) {
+    const named = Reflect.get(cell, key);
+    if (typeof named === 'string') return named;
+  }
+  if ('value' in cell && 'state' in cell) {
+    const generated = Reflect.get(cell, 'value');
+    return typeof generated === 'string' ? generated : null;
+  }
+  for (const key of ['label', 'id'] as const) {
+    const named = Reflect.get(cell, key);
+    if (typeof named === 'string') return named;
+  }
+  return stableJson(cell);
+}
+
+/** JSON with every object's keys sorted, so equal values spell equal. */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (typeof value === 'object' && value !== null) {
+    const entries = Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(Reflect.get(value, key))}`);
+    return `{${entries.join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
 }
 
 /** What turning a payload into arrivals reads besides the payload. */

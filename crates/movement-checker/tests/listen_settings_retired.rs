@@ -76,7 +76,7 @@ const CATALOG: &str = r#"{"adapters":{
         "Change":{"properties":{"Id":"text","Kind":"text","Current":__HELD_ROW__,"Previous":__HELD_ROW__},"edges":{}},
         "Candidates Change":{"properties":{"Id":"text","Kind":"text","Current":__HELD_CANDIDATES__,"Previous":__HELD_CANDIDATES__},"edges":{}},
         "Row":{"properties":{"Id":"text"},"edges":{}},
-        "Candidates":{"properties":{"Id":"text","Stage":"text"},"edges":{}},
+        "Candidates":{"properties":{"Id":"text","Stage":"text","Files":{"kind":"list","of":"file"}},"edges":{}},
         "Record Change":{"properties":{"Field":"text"},"edges":{}}},
         "collections":{"Tables":{"target":"Table","cheapToList":true,"parentChanges":"pushed"}},
         "refinements":{"__CANDIDATES_KEY__":"Table \"Candidates\""},
@@ -316,7 +316,46 @@ fn a_field_the_table_does_not_have_has_no_rewrite() {
     let d = diagnostics(&source);
     let told = retired(&d);
     assert_eq!(told.fix, None);
-    assert!(told.message.contains("(there is no rewrite: Candidates has no field `Stge` (its fields: `Id`, `Stage`))"), "{}", told.message);
+    assert!(told.message.contains("(there is no rewrite: Candidates has no field `Stge` (its fields: `Id`, `Stage`, `Files`))"), "{}", told.message);
+}
+
+/// Where the host has not narrowed the table, its rows are every table's
+/// (`Row`), and the field is checked against those: one they lack has no
+/// rewrite, so `upgrade` never writes a listen that does not check.
+#[test]
+fn a_field_of_a_table_the_host_did_not_narrow_has_no_rewrite() {
+    for settings in ["table: \"tblROLE01\", field: \"Stage\"", "field: \"Stage\""] {
+        let source = format!("{HIRING}function moved(c: <hiring-[:`Record Change`]->>) {{ return 1 }}\nlisten to hiring {{ {settings} }} fire moved\n");
+        let d = diagnostics(&source);
+        let told = retired(&d);
+        assert_eq!(told.fix, None, "{settings}: {told:?}");
+        assert!(
+            told.message.contains("(there is no rewrite: Row has no field `Stage` (its fields: `Id`), and its table is not narrowed to one whose rows hold it)"),
+            "{settings}: {}",
+            told.message
+        );
+        // The traversal the withheld rewrite walks, for a host to narrow by and check again.
+        assert!(told.walks.as_deref().is_some_and(|walks| walks.contains("c.Current.Stage != c.Previous.Stage")), "{settings}: {told:?}");
+    }
+    // A field the narrowed table lacks is refused for good: nothing to narrow by.
+    let narrowed = format!("{HIRING}function moved(c: <hiring-[:`Record Change`]->>) {{ return 1 }}\nlisten to hiring {{ table: \"tblCAND01\", field: \"Stge\" }} fire moved\n");
+    assert_eq!(retired(&diagnostics(&narrowed)).walks, None);
+}
+
+/// A field a listen compares by identity (a list of files: two copies are
+/// never one) is rewritten, but not safely: the rewrite may hear every
+/// update where 0.12 heard the field change, and the listen is told so.
+#[test]
+fn a_field_compared_by_identity_is_rewritten_unsafely_and_says_why() {
+    let source = format!("{HIRING}function moved(c: <hiring-[:`Record Change`]->>) {{ return 1 }}\nlisten to hiring {{ table: \"tblCAND01\", field: \"Files\" }} fire moved\n");
+    let d = diagnostics(&source);
+    let told = retired(&d);
+    let fix = told.fix.as_ref().unwrap_or_else(|| panic!("{told:?}"));
+    assert_eq!(fix.get("safe"), None, "{told:?}");
+    assert!(told.message.contains("`Files` holds list of file, which a listen compares by identity"), "{}", told.message);
+    let text = fixed(&source, &d);
+    assert!(text.contains("c.Current.Files != c.Previous.Files"), "{text}");
+    assert_rechecks_clean(&text);
 }
 
 #[test]

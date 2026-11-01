@@ -137,6 +137,11 @@ export function pureLeafReads(expr: Expression): LeafRead[] {
  * (`t.firedAt`) so it never collides with a bare `firedAt` field read.
  */
 export function leafReadKey(leaf: LeafRead): string {
+  // A read on through the record a field holds (`c.Current.Stage`) is keyed
+  // by its names as a JSON list, as the Rust engine keys it, so it is never
+  // the key of a field whose name holds a dot (`c.\`Current.Stage\``).
+  const held = heldRead(leaf);
+  if (held !== null) return JSON.stringify(held);
   switch (leaf.type) {
     case 'alias_ref':
       return leaf.name;
@@ -160,6 +165,22 @@ export function leafReadKey(leaf: LeafRead): string {
               : '';
       return `${leaf.aliasRoot ?? ''}.${innerKey}`;
     }
+  }
+}
+
+/** A read on past a field through the record it holds: the name it starts
+ *  at, the field, and each member read on through it, in order; null for
+ *  any other read. */
+function heldRead(leaf: LeafRead): string[] | null {
+  if (leaf.type !== 'traverse' || leaf.steps.length > 0) return null;
+  const field = leaf.expression;
+  if (field.type !== 'traverse' || field.aliasRoot === undefined || field.steps.length > 0) return null;
+  const names = [leaf.aliasRoot ?? '', field.aliasRoot];
+  for (let at: Expression = field.expression; ; ) {
+    if (at.type === 'property' || at.type === 'edge_property') return [...names, at.propertyTypeId];
+    if (at.type !== 'traverse' || at.aliasRoot === undefined || at.steps.length > 0) return null;
+    names.push(at.aliasRoot);
+    at = at.expression;
   }
 }
 

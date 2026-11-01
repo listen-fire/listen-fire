@@ -20,7 +20,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::families::filter_split::{EdgeView, spell, split_where};
 use crate::families::names::spell_name;
 use crate::families::values::owned_value_error;
-use crate::types::field::{OwnedScalar, Ty, strip_absent};
+use crate::types::field::{OwnedScalar, Ty, describe_field_type, strip_absent};
 use crate::scope::{Resolution, ScopeId, SymbolKind};
 use crate::slots::expression_of_slot;
 
@@ -36,6 +36,14 @@ const EVENTS_KEY: &str = "events";
 
 const SUPPRESS_SELF_NOTE: &str = " (`suppress_self` is gone: a two-way sync's own echo now runs once more and finds nothing to change)";
 const EVERY_NOTE: &str = " (`every` is gone: the module sets the interval; set `pollEvery` for this connection in lf.yaml)";
+
+/// A compared field whose values a listen compares by identity, not by
+/// value (`fieldChange` on a list of files).
+fn uncompared_note(field: &str, holds: &str) -> String {
+    format!(
+        " (`{field}` holds {holds}, which a listen compares by identity rather than by value, so this listen may run on every update of a row where 0.12 ran when `{field}` changed: check it before applying)"
+    )
+}
 
 fn host_judged_note(fields: &[String]) -> String {
     format!(" (the module can't take several values of {} together, so this listen compares each exactly as the field holds it, where 0.12 handed them all to the module: check they still match)", quoted(fields))
@@ -53,6 +61,8 @@ struct Rewrite {
     /// not take together, so the host compares each value exactly where
     /// 0.12 handed them all to the module.
     host_judged: Vec<String>,
+    /// The note for a compared field a listen compares by identity.
+    uncompared: Option<String>,
 }
 
 impl Checker<'_> {
@@ -97,22 +107,29 @@ impl Checker<'_> {
         };
         let why_no_fix = match &rewrite {
             Some(Err(NoRewrite::Unbounded)) => " (its settings name no value that bounds the edge, so there is no rewrite: name the one it listens for)".to_string(),
-            Some(Err(NoRewrite::Refused(reason))) => format!(" (there is no rewrite: {reason})"),
+            Some(Err(NoRewrite::Refused(reason) | NoRewrite::Unnarrowed { reason, .. })) => format!(" (there is no rewrite: {reason})"),
             Some(Err(NoRewrite::SeveralEdges(edges))) => format!(" (there is no rewrite: its events arrive on {}, so write one listen for each)", quoted(edges)),
             Some(Err(NoRewrite::UnmappedEvents { unnamed, events })) => {
                 format!(" (there is no rewrite: {instance_name} has no event {}; its events are {})", quoted(unnamed), quoted(events))
             }
             _ => String::new(),
         };
+        let walks = match &rewrite {
+            Some(Err(NoRewrite::Unnarrowed { path, .. })) => Some(path.clone()),
+            _ => None,
+        };
         let rewrite = rewrite.and_then(Result::ok);
         let host_judged = rewrite.as_ref().map_or(&[][..], |r| r.host_judged.as_slice());
         if !host_judged.is_empty() {
             notes.push_str(&host_judged_note(host_judged));
         }
+        if let Some(note) = rewrite.as_ref().and_then(|r| r.uncompared.as_deref()) {
+            notes.push_str(note);
+        }
         let message = format!(
             "`listen to {instance_name} {{ … }}` is retired in 0.13: a listen is a traversal ending on the edge its events arrive on. Write `listen to {path} fire {movement}`{notes}{why_no_fix}"
         );
-        let mut diagnostic = Diagnostic::error(codes::LISTEN_SETTINGS_RETIRED, message, statement.span);
+        let mut diagnostic = Diagnostic { walks, ..Diagnostic::error(codes::LISTEN_SETTINGS_RETIRED, message, statement.span) };
         let moving_up = self.upgrading_from.is_some_and(|pin| standing(pin, RETIRED_SINCE) == Standing::OlderKey);
         if !moving_up {
             diagnostic.severity = Some(Severity::Warning);
@@ -123,7 +140,7 @@ impl Checker<'_> {
             if let Some(span) = rewrite.param_from.as_deref().and_then(|from| self.param_from_span(statement, from, scope)) {
                 edits.push(json!({ "span": span, "text": rewrite.param_type }));
             }
-            let safe = !suppresses_self && !every && rewrite.host_judged.is_empty();
+            let safe = !suppresses_self && !every && rewrite.host_judged.is_empty() && rewrite.uncompared.is_none();
             diagnostic.fix = Some(if safe { json!({ "edits": edits, "safe": true }) } else { json!({ "edits": edits }) });
         }
         self.push(diagnostic);
@@ -182,6 +199,10 @@ enum NoRewrite {
     /// Its `events` name events the mapping (`byEvent`) does not, beside ones
     /// it does: those, and the events it names.
     UnmappedEvents { unnamed: Vec<String>, events: Vec<String> },
+    /// The compared field is not one of every table's rows, and the catalog
+    /// was not narrowed by the rewrite's hops, so the field could not be
+    /// checked against its table's: why, and the traversal to narrow by.
+    Unnarrowed { reason: String, path: String },
 }
 
 /// The mapping a listen takes: the one its `events` choose (`byEvent`),
@@ -340,14 +361,23 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
     }
     path.push_str(landing.as_deref().unwrap_or_default());
     // Where the host narrowed the path's hops by their WHEREs, the landing
-    // is the narrowed type (one table's changes), whose rows hold the
-    // compared field or the rewrite would not check.
-    let narrowed = narrowed_landing(schema, &path);
-    if let (Some(change), Some((field, _)), Some(landing)) = (&become_.field_change, &changed_field, narrowed.as_deref()) {
-        if let Some(reason) = unheld_field(schema, landing, &change.current, field) {
-            return Err(NoRewrite::Refused(reason));
+    // is the narrowed type (one table's changes). Narrowed or not, its rows
+    // hold the compared field or the rewrite would not check.
+    let walked = walked_landing(schema, &path);
+    let mut uncompared = None;
+    if let (Some(change), Some((field, _))) = (&become_.field_change, &changed_field) {
+        let Some((landing, narrowed)) = &walked else {
+            return Err(NoRewrite::Refused(format!("the record type its changes land on is not known, so `{field}` cannot be checked")));
+        };
+        let declared = held_field(schema, landing, &change.current, field).map_err(|reason| match narrowed {
+            true => NoRewrite::Refused(reason),
+            false => NoRewrite::Unnarrowed { reason: format!("{reason}, and its table is not narrowed to one whose rows hold it"), path: path.clone() },
+        })?;
+        if !compared_by_value(declared) {
+            uncompared = Some(uncompared_note(field, &describe_field_type(&Ty::from_schema(declared))));
         }
     }
+    let narrowed = walked.filter(|(_, narrowed)| *narrowed).map(|(landing, _)| landing);
     // One hop off the connection is the edge's own address; a longer path
     // is typed by the record it lands on (a path is not a type's address).
     let param_type = match (kept, narrowed) {
@@ -355,7 +385,7 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
         (_, Some(landing)) => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(&landing)),
         _ => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(landing_of(schema, kept).ok_or(NoRewrite::Unmapped)?)),
     };
-    Ok(Rewrite { path, param_type, param_from: become_.param_from.clone(), host_judged })
+    Ok(Rewrite { path, param_type, param_from: become_.param_from.clone(), host_judged, uncompared })
 }
 
 /// What a listen's `field` and `becomes` compare (`fieldChange`), on the
@@ -392,12 +422,12 @@ fn field_change(statement: &ListenDeclaration, change: &FieldChange, alias: &str
     Ok(Some((field, comparisons)))
 }
 
-/// The record type a rewritten traversal lands on where the host narrowed
-/// its hops by their WHEREs (`refinements`): read off the traversal as it is
-/// spelled, so each hop's WHERE is keyed as a check of the rewrite keys it.
-/// None where no hop of it was narrowed.
-fn narrowed_landing(schema: &InstanceSchema, path: &str) -> Option<String> {
-    let refinements = schema.refinements.as_ref()?;
+/// The record type a rewritten traversal lands on, narrowed where the host
+/// narrowed its hops by their WHEREs (`refinements`), and whether any was:
+/// read off the traversal as it is spelled, so each hop's WHERE is keyed as
+/// a check of the rewrite keys it.
+fn walked_landing(schema: &InstanceSchema, path: &str) -> Option<(String, bool)> {
+    let refinements = schema.refinements.as_ref();
     let Expression::Traverse { steps, .. } = crate::slots::expression_of_text(&format!("{path}.`__probe__`")).ok()? else { return None };
     let mut at: Option<String> = None;
     let mut narrowed = false;
@@ -407,27 +437,43 @@ fn narrowed_landing(schema: &InstanceSchema, path: &str) -> Option<String> {
             None => schema.collections.get(&edge.edge_type_id)?.target.clone(),
             Some(position) => schema.positions.get(position)?.edges.get(&edge.edge_type_id)?.target.clone(),
         };
-        let refined = edge.expression_filter.as_deref().and_then(|filter| {
+        let refined = edge.expression_filter.as_deref().zip(refinements).and_then(|(filter, refinements)| {
             let key = movement_parser::catalog::helpers::refinement_key(&target, &serde_json::to_value(filter).ok()?);
             refinements.get(&key).cloned()
         });
         narrowed |= refined.is_some();
         at = Some(refined.unwrap_or(target));
     }
-    at.filter(|_| narrowed)
+    at.map(|landing| (landing, narrowed))
 }
 
-/// Why a narrowed landing's row cannot hold `field`: the row its `current`
-/// field holds has no such field, by the names it has.
-fn unheld_field(schema: &InstanceSchema, landing: &str, current: &str, field: &str) -> Option<String> {
-    let held = schema.positions.get(landing)?.properties.get(current)?;
-    let row = held_position(held)?;
-    let fields = &schema.positions.get(row)?.properties;
-    if fields.contains_key(field) {
-        return None;
+/// `field` as the row a landing's `current` field holds declares it, or why
+/// it holds none: by the names the row has.
+fn held_field<'s>(schema: &'s InstanceSchema, landing: &str, current: &str, field: &str) -> Result<&'s FieldType, String> {
+    let held = schema.positions.get(landing).and_then(|p| p.properties.get(current)).ok_or_else(|| format!("{landing} has no field `{current}` holding its row"))?;
+    let row = held_position(held).ok_or_else(|| format!("{landing}'s `{current}` holds no row"))?;
+    let fields = &schema.positions.get(row).ok_or_else(|| format!("{row} is not described"))?.properties;
+    fields.get(field).ok_or_else(|| {
+        let names: Vec<String> = fields.keys().map(|name| format!("`{name}`")).collect();
+        format!("{row} has no field `{field}` (its fields: {})", names.join(", "))
+    })
+}
+
+/// Whether a listen compares two values of `field` by what they hold: a
+/// scalar, or a list of scalars (compared as sets). A file, a json value or
+/// a structure is compared by identity, so two copies of one are unequal.
+fn compared_by_value(field: &FieldType) -> bool {
+    use movement_parser::catalog::types::Scalar;
+    let scalar = |field: &FieldType| match field {
+        FieldType::Scalar(scalar) => !matches!(scalar, Scalar::File | Scalar::Json),
+        FieldType::Composite(Composite::Enum { .. } | Composite::Owned { .. }) => true,
+        FieldType::Composite(_) => false,
+    };
+    match field {
+        FieldType::Composite(Composite::MaybeAbsent { of }) => compared_by_value(of),
+        FieldType::Composite(Composite::List { of, .. }) => scalar(of),
+        other => scalar(other),
     }
-    let names: Vec<String> = fields.keys().map(|name| format!("`{name}`")).collect();
-    Some(format!("{row} has no field `{field}` (its fields: {})", names.join(", ")))
 }
 
 /// The position a `record` field holds, through a maybe-absent one.

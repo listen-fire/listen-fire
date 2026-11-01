@@ -303,10 +303,13 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
         // its WHERE): the catalog is narrowed by them too, and the file upgraded
         // again against it, until the narrowing settles.
         for _ in 0..MAX_PASSES {
-            if result.source == file.source {
+            // A rewrite the catalog was not narrowed for is withheld, and says
+            // the traversal it would walk: the catalog is narrowed by it too.
+            let unchecked: String = result.remaining.iter().filter_map(|d| d.walks.as_deref()).map(|path| format!("\nlisten to {path} fire __upgrade_probe__\n")).collect();
+            if result.source == file.source && unchecked.is_empty() {
                 break;
             }
-            let rewritten = MovementFile { source: result.source.clone(), version: None, ..file.clone() };
+            let rewritten = MovementFile { source: format!("{}{unchecked}", result.source), version: None, ..file.clone() };
             let narrowed = crate::check::catalog_with(&mut checking, &[rewritten]).await?;
             if narrowed.to_json() == held {
                 break;

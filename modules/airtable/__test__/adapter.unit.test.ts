@@ -911,6 +911,65 @@ describe('arrivalsFromPayload', () => {
     ]);
   });
 
+  it('every cell reads as the value its field declares, so two copies of one compare equal', () => {
+    const fields = new Map<string, { name: string; type?: string }>([
+      ['fldOWN', { name: 'Owner', type: 'singleCollaborator' }],
+      ['fldTEAM', { name: 'Team', type: 'multipleCollaborators' }],
+      ['fldBY', { name: 'Made by', type: 'createdBy' }],
+      ['fldTAGS', { name: 'Tags', type: 'multipleSelects' }],
+      ['fldSYNC', { name: 'Source', type: 'externalSyncSource' }],
+      ['fldCODE', { name: 'Code', type: 'barcode' }],
+      ['fldAI', { name: 'Summary', type: 'aiText' }],
+      ['fldAIW', { name: 'Draft', type: 'aiText' }],
+      ['fldGO', { name: 'Go', type: 'button' }],
+      ['fldLINK', { name: 'Roles', type: 'multipleRecordLinks' }],
+      ['fldLOOK', { name: 'Role titles', type: 'multipleLookupValues' }],
+      ['fldSUM', { name: 'Total', type: 'formula' }],
+      ['fldERR', { name: 'Broken', type: 'formula' }],
+      ['fldFILES', { name: 'CV', type: 'multipleAttachments' }],
+    ]);
+    const ann = { id: 'usrANN', email: 'ann@example.com', name: 'Ann' };
+    const cells = {
+      fldOWN: { ...ann },
+      fldTEAM: [{ ...ann }, { id: 'usrBO', email: 'bo@example.com', name: 'Bo' }],
+      fldBY: { ...ann, profilePicUrl: 'https://x' },
+      fldTAGS: [{ id: 'selA', name: 'Urgent', color: 'red' }],
+      fldSYNC: { id: 'srcA', name: 'CRM', color: 'blue' },
+      fldCODE: { text: '0123', type: 'upce' },
+      fldAI: { state: 'generated', isStale: false, value: 'Strong' },
+      fldAIW: { state: 'loading', isStale: false, value: null },
+      fldGO: { label: 'Open', url: 'https://x' },
+      fldLINK: [{ id: 'recR1', name: 'Engineer' }],
+      fldLOOK: { valuesByLinkedRecordId: { recR2: ['Designer'], recR1: ['Engineer'] }, linkedRecordIds: ['recR1', 'recR2'] },
+      fldSUM: 3,
+      fldERR: { specialValue: 'NaN' },
+      fldFILES: [{ id: 'att1', url: 'https://f', filename: 'cv.pdf' }],
+    };
+    const [arrival] = arrivalsFromPayload(
+      { baseTransactionNumber: 12, changedTablesById: { tblDEALS01: { changedRecordsById: { recA: { current: { cellValuesByFieldId: {} }, unchanged: { cellValuesByFieldId: cells } } } } } },
+      { baseId: 'appCRM01', positioned: false, tableNamesById: new Map([['tblDEALS01', 'Deals']]), fieldsByTable: new Map([['tblDEALS01', fields]]) },
+    );
+    const current = changeDataOf(arrival.landing.fields)?.Current;
+    expect(current).toEqual({
+      Owner: 'ann@example.com',
+      Team: ['ann@example.com', 'bo@example.com'],
+      'Made by': 'ann@example.com',
+      Tags: ['Urgent'],
+      Source: 'CRM',
+      Code: '0123',
+      Summary: 'Strong',
+      Draft: null,
+      Go: 'Open',
+      Roles: ['recR1'],
+      'Role titles': ['Engineer', 'Designer'],
+      Total: 3,
+      Broken: '{"specialValue":"NaN"}',
+      CV: [{ id: 'att1', url: 'https://f', filename: 'cv.pdf' }],
+    });
+    // Unchanged cells are the same values in the row before and after.
+    expect(changeDataOf(arrival.landing.fields)?.Previous?.Owner).toBe(current?.Owner);
+  });
+
   it('a field with no metadata is named by its id, and the table by its id', () => {
     const arrivals = arrivalsFromPayload(
       { baseTransactionNumber: 3, changedTablesById: { tblX: { changedRecordsById: { recA: { current: { cellValuesByFieldId: { fldQ: 1 } } } } } } },

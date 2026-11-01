@@ -147,8 +147,8 @@ fn a_listen_on_the_unnarrowed_table_reads_the_generic_row() {
     assert_eq!(codes(&found), ["MOV_UNKNOWN_PROPERTY"], "{found:#?}");
 }
 
-/// A narrowed type is assignable to the type it narrows, as TypeScript's
-/// structural assignability has it: the changes of one table are changes.
+/// A narrowed type is assignable to the type it narrows, by the narrowing
+/// walk that made it (not field by field): the changes of one table are changes.
 /// Never the other way (a change of any table is not one of Candidates'),
 /// and never across unrelated types.
 #[test]

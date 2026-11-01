@@ -163,6 +163,45 @@ impl Checker<'_> {
         }
     }
 
+    /// After the walk: a carried record whose waits cannot be keyed by the
+    /// edge it was carried for is told so where its listen is written. An
+    /// arrival carries one record per edge name, so two hops of that name are
+    /// one record, and the waits off it open where the function walks to it,
+    /// not at the arrival, as for a record no listen carries.
+    pub(crate) fn report_carried_waits_counted_from_the_walk(&mut self) {
+        let mut told = Vec::new();
+        for (span, plan) in self.listens.written_plans() {
+            for carried in &plan.carries {
+                let landings: Vec<&str> = plan.hops.iter().filter(|hop| &hop.edge == carried).map(|hop| hop.to.as_str()).collect();
+                if landings.len() < 2 {
+                    continue;
+                }
+                let edges: BTreeSet<&str> = self
+                    .wait_entries
+                    .awaited
+                    .iter()
+                    .filter(|(adapter, position, _)| *adapter == plan.adapter && landings.contains(&position.as_str()))
+                    .map(|(.., edge)| edge.as_str())
+                    .collect();
+                if edges.is_empty() {
+                    continue;
+                }
+                let edges: Vec<String> = edges.into_iter().map(|edge| format!("`{edge}`")).collect();
+                told.push((
+                    *span,
+                    format!(
+                        "the waits on {} off the record this listen's arrivals carry for `{carried}` count from where the function walks to it, not from the arrival: {} of its hops walk `{carried}`, and an arrival carries one record per edge name",
+                        edges.join(", "),
+                        landings.len()
+                    ),
+                ));
+            }
+        }
+        for (span, message) in told {
+            self.push(crate::diagnostic::Diagnostic { severity: Some(crate::diagnostic::Severity::Warning), ..crate::diagnostic::Diagnostic::error(crate::codes::CARRIED_WAIT_FROM_WALK, message, span) });
+        }
+    }
+
     /// A body walked more than once (to learn what a call returns, then in
     /// its declaration) meets an entry once per walk: one entry, with every
     /// type any walk found.
