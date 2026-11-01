@@ -139,7 +139,7 @@ describe('the embedded host', () => {
     expect(await host.save('globex', { name: 'n', source: copier('north', 'G') })).toEqual({ saved: true, listens: 1 });
 
     // For one connection: only its listen, writing through its own credential.
-    const north = await host.dispatch('acme', { adapterType: 'notes', connection: 'north', arrivals: [noteArrived('one')] });
+    const north = (await host.dispatch('acme', { adapterType: 'notes', connection: 'north', arrivals: [noteArrived('one')] })).runs;
     expect(north.map(({ program, outcome }) => ({ program, ok: outcome.ok }))).toEqual([{ program: 'n', ok: true }]);
     expect(written).toEqual([{ tenant: 'acme', book: 'acme-north', Title: 'N one' }]);
 
@@ -152,8 +152,8 @@ describe('the embedded host', () => {
     ]);
 
     // An arrival on an edge no listen is on, or from another module, runs nothing.
-    expect(await host.dispatch('acme', { adapterType: 'notes', arrivals: [{ ...noteArrived('x'), edge: 'Comments', key: 'note:n1' }] })).toEqual([]);
-    expect(await host.dispatch('acme', { adapterType: 'crm', arrivals: [noteArrived('x')] })).toEqual([]);
+    expect((await host.dispatch('acme', { adapterType: 'notes', arrivals: [{ ...noteArrived('x'), edge: 'Comments', key: 'note:n1' }] })).runs).toEqual([]);
+    await expect(host.dispatch('acme', { adapterType: 'crm', arrivals: [noteArrived('x')] })).rejects.toThrow('no module for adapter type "crm": add it to the host\'s modules');
   });
 
   it('a write to the fired parameter updates the record that arrived, through updateRecord', async () => {
@@ -171,7 +171,7 @@ function seen(note: <book-[:Note]->>) {
 listen to book-[:Note]-> fire seen
 `;
     expect(await host.save('acme', { name: 'seen', source })).toEqual({ saved: true, listens: 1 });
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
+    const [fired] = (await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] })).runs;
     expect(fired?.outcome).toMatchObject({ ok: true });
     expect(updated).toEqual([{ externalId: 'n1', Title: 'Seen one' }]);
     expect(written).toEqual([]);
@@ -183,7 +183,7 @@ listen to book-[:Note]-> fire seen
     await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
     await host.save('acme', { name: 'later', source: copier('north', 'Later', 'await sleep(1h)\n  ') });
 
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
+    const [fired] = (await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] })).runs;
     expect(fired.outcome).toEqual({ ok: true, writes: [], spentMicrodollars: 0, parked: true });
 
     now = new Date('2026-10-27T09:30:00.000Z');
@@ -205,21 +205,21 @@ listen to book-[:Note]-> fire seen
       listens: 1,
     });
 
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
+    const [fired] = (await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] })).runs;
     expect(fired.outcome).toEqual({ ok: true, writes: [], spentMicrodollars: 0, parked: true });
     // Nothing arrived on another note, or for another tenant.
     const comment = { edge: 'Comments', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
-    expect(await host.dispatch('acme', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n2' }] })).toEqual([]);
-    expect(await host.dispatch('globex', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n1' }] })).toEqual([]);
+    expect((await host.dispatch('acme', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n2' }] })).runs).toEqual([]);
+    await expect(host.dispatch('globex', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n1' }] })).rejects.toThrow('tenant globex has no "notes" connection: its delivery runs nothing');
     expect(await host.tick()).toEqual([]);
     expect(written).toEqual([]);
 
-    const [stepped, ...more] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n1' }] });
+    const [stepped, ...more] = (await host.dispatch('acme', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n1' }] })).runs;
     expect(more).toEqual([]);
     expect(stepped).toMatchObject({ runId: fired.runId, program: 'reply', outcome: { ok: true, parked: false } });
     expect(written).toEqual([{ tenant: 'acme', book: 'acme-north', Title: 'Re lunch?' }]);
     // A sender's retry of the same comment wakes nothing.
-    expect(await host.dispatch('acme', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n1' }] })).toEqual([]);
+    expect((await host.dispatch('acme', { adapterType: 'notes', arrivals: [{ ...comment, key: 'note:n1' }] })).runs).toEqual([]);
   });
 
   it('a tick forgets the arrivals no run awaits; a re-send within the hour is still a repeat', async () => {
@@ -264,11 +264,11 @@ listen to book-[:Note]-> fire seen
     const firing = host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
     await asked;
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
-    expect(await host.dispatch('acme', { adapterType: 'notes', arrivals: [comment] })).toEqual([]);
+    expect((await host.dispatch('acme', { adapterType: 'notes', arrivals: [comment] })).runs).toEqual([]);
     expect(await host.tick()).toEqual([]);
     answer();
 
-    const [fired] = await firing;
+    const [fired] = (await firing).runs;
     expect(fired.outcome).toMatchObject({ ok: true, parked: false });
     expect(written).toEqual([{ tenant: 'acme', book: 'acme-north', Title: 'Re lunch?' }]);
   });
@@ -283,16 +283,16 @@ listen to book-[:Note]-> fire seen
       await host.connect(tenant, { name: 'north', module: notes, credential: { book: `${tenant}-north` } });
       await host.save(tenant, { name: 'reply', source: reply });
     }
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
+    const [fired] = (await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] })).runs;
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
 
     // Another process holds acme's run: its wake goes back, due.
     const held = await store.runHost.leases.claim({ runId: fired.runId, ttlMs: 60_000 });
     expect(held).not.toBeNull();
-    expect(await host.dispatch('acme', { adapterType: 'notes', arrivals: [comment] })).toEqual([]);
+    expect((await host.dispatch('acme', { adapterType: 'notes', arrivals: [comment] })).runs).toEqual([]);
     if (held !== null) await store.runHost.leases.release({ runId: fired.runId, token: held.token });
 
-    expect(await host.dispatch('globex', { adapterType: 'notes', arrivals: [{ ...comment, identity: 'c2' }] })).toEqual([]);
+    expect((await host.dispatch('globex', { adapterType: 'notes', arrivals: [{ ...comment, identity: 'c2' }] })).runs).toEqual([]);
     expect(written).toEqual([]);
     const [stepped, ...more] = await host.tick();
     expect(more).toEqual([]);
@@ -326,7 +326,7 @@ listen to book-[:Note]-> fire seen
   `;
     const source = copier('north', 'Re', raced).replace('${note.Title}', '${coalesce(r[0], "-")}/${coalesce(r[1], "-")}');
     expect(await host.save('acme', { name: 'raced', source })).toEqual({ saved: true, listens: 1 });
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
+    const [fired] = (await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] })).runs;
     expect(fired.outcome).toMatchObject({ ok: true, parked: true });
 
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
@@ -366,7 +366,7 @@ listen to book-[:Note]-> fire seen
     const host = createEmbeddedHost({ modules: [notes], store, moduleHost: () => ({ validateResults: true }) });
     await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
     await host.save('acme', { name: 'reply', source: copier('north', 'Re', 'said = await note-[:Comments]->\n  ').replace('${note.Title}', '${said.Body}') });
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
+    const [fired] = (await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] })).runs;
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
 
     takeOver = true;
@@ -398,12 +398,12 @@ listen to book-[:Note]-> fire seen
     const host = createEmbeddedHost({ modules: [notes], store, moduleHost: () => ({ validateResults: true }) });
     await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
     await host.save('acme', { name: 'reply', source: copier('north', 'Re', 'said = await note-[:Comments]->\n  ').replace('${note.Title}', '${said.Body}') });
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
+    const [fired] = (await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] })).runs;
     // The run failed meanwhile, before its leaves were torn down.
     await store.runHost.parks.commitSegment({ runId: fired.runId, teamId: 'acme', resumed: null, joins: [], parks: [], settle: { status: 'failed', outcome: null, at: new Date().toISOString() } });
 
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
-    expect(await host.dispatch('acme', { adapterType: 'notes', arrivals: [comment] })).toEqual([]);
+    expect((await host.dispatch('acme', { adapterType: 'notes', arrivals: [comment] })).runs).toEqual([]);
     expect(written).toEqual([]);
     expect(await store.runHost.runStatus({ runId: fired.runId })).toBe('failed');
     expect((await store.runHost.parks.leaves({ runId: fired.runId, parkedOnly: true })).length).toBe(1);
@@ -428,7 +428,7 @@ listen to book-[:Note]-> fire seen
     const host = createEmbeddedHost({ modules: [notes], store, moduleHost: () => ({ validateResults: true }) });
     await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
     await host.save('acme', { name: 'reply', source: copier('north', 'Re', 'said = await note-[:Comments]->\n  ').replace('${note.Title}', '${said.Body}') });
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
+    const [fired] = (await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] })).runs;
     expect(await store.runHost.runStatus({ runId: fired.runId })).toBe('parked');
 
     const comment = { edge: 'Comments', key: 'note:n1', identity: 'c1', landing: { recordId: 'c1', recordType: 'Comment', fields: { Id: 'c1', Body: 'lunch?' } } };
@@ -447,7 +447,7 @@ listen to book-[:Note]-> fire seen
     const host = createEmbeddedHost({ modules: [notes], store, now: () => now, moduleHost: () => ({ validateResults: true }) });
     await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
     await host.save('acme', { name: 'later', source: copier('north', 'Later', 'await sleep(1h)\n  ') });
-    const [fired] = await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] });
+    const [fired] = (await host.dispatch('acme', { adapterType: 'notes', arrivals: [noteArrived('one')] })).runs;
     // The run failed meanwhile, before its timer leaf was torn down.
     await store.runHost.parks.commitSegment({ runId: fired.runId, teamId: 'acme', resumed: null, joins: [], parks: [], settle: { status: 'failed', outcome: null, at: now.toISOString() } });
 

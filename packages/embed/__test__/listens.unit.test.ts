@@ -167,7 +167,7 @@ describe("the embedded host's listens", () => {
     const { host, written } = await setup();
     expect(await host.save('acme', { name: 'acme', source: program('listen to app-[c:Companies WHERE c.Name == "Acme"]-> fire f') })).toEqual({ saved: true, listens: 1 });
 
-    const fired = await host.dispatch('acme', { adapterType: 'crm', connection: 'north', arrivals: [company('Acme'), company('Globex')] });
+    const fired = (await host.dispatch('acme', { adapterType: 'crm', connection: 'north', arrivals: [company('Acme'), company('Globex')] })).runs;
 
     expect(fired.map(({ program: name, movement, outcome }) => ({ name, movement, ok: outcome.ok }))).toEqual([{ name: 'acme', movement: 'f', ok: true }]);
     expect(written).toEqual(['acme: Seen Acme']);
@@ -178,7 +178,7 @@ describe("the embedded host's listens", () => {
     await host.save('acme', { name: 'acme', source: program('listen to app-[c:Companies WHERE c.Name == "Acme"]-> fire f') });
     const keyed = (name: string): Arrival => ({ edge: 'Companies', identity: `company-${name}`, landing: { recordId: `company-${name}`, recordType: 'Company', fields: { name } } });
 
-    const fired = await host.dispatch('acme', { adapterType: 'crm', connection: 'north', arrivals: [keyed('Acme'), keyed('Globex')] });
+    const fired = (await host.dispatch('acme', { adapterType: 'crm', connection: 'north', arrivals: [keyed('Acme'), keyed('Globex')] })).runs;
 
     expect(fired.map(({ outcome }) => outcome.ok)).toEqual([true]);
     expect(written).toEqual(['acme: Seen Acme']);
@@ -200,20 +200,59 @@ describe("the embedded host's listens", () => {
     expect(await host.run('acme', { program: 'unsaved' })).toEqual([]);
   });
 
-  it("runs nothing for an arrival another connection's, another module's, on another edge, or saying its record went", async () => {
+  it('runs nothing for an arrival on another edge, or saying its record went', async () => {
     const { host, written } = await setup();
     await host.save('acme', { name: 'acme', source: program('listen to app-[:Companies]-> fire f') });
 
-    expect(await host.dispatch('acme', { adapterType: 'crm', connection: 'south', arrivals: [company('Acme')] })).toEqual([]);
-    expect(await host.dispatch('acme', { adapterType: 'notes', connection: 'north', arrivals: [company('Acme')] })).toEqual([]);
-    expect(await host.dispatch('acme', { adapterType: 'crm', arrivals: [company('Acme', { edge: 'People', key: 'company:acme' })] })).toEqual([]);
-    expect(await host.dispatch('acme', { adapterType: 'crm', arrivals: [{ edge: 'Companies', key: 'company:acme', gone: true }] })).toEqual([]);
-    expect(await host.dispatch('globex', { adapterType: 'crm', arrivals: [company('Acme')] })).toEqual([]);
+    expect((await host.dispatch('acme', { adapterType: 'crm', arrivals: [company('Acme', { edge: 'People', key: 'company:acme' })] })).runs).toEqual([]);
+    expect((await host.dispatch('acme', { adapterType: 'crm', arrivals: [{ edge: 'Companies', key: 'company:acme', gone: true }] })).runs).toEqual([]);
     expect(written).toEqual([]);
 
     // Addressed to the module's install, it reaches every connection's listens.
-    expect(await host.dispatch('acme', { adapterType: 'crm', arrivals: [company('Acme')] })).toHaveLength(1);
+    expect((await host.dispatch('acme', { adapterType: 'crm', arrivals: [company('Acme')] })).runs).toHaveLength(1);
     expect(written).toEqual(['acme: Seen Acme']);
+  });
+
+  it('refuses a delivery it cannot route, by name: no such module, connection or tenant connection, an arrival that is none, and a keyless one off a record', async () => {
+    const { host, written } = await setup();
+    await host.save('acme', { name: 'acme', source: program('listen to app-[:Companies]->-[:People]-> fire f', 'p.Name', '<app-[:Person]->>').replace('f(company:', 'f(p:') });
+
+    await expect(host.dispatch('acme', { adapterType: 'crm', connection: 'teem', arrivals: [company('Acme')] })).rejects.toThrow('tenant acme has no "crm" connection named "teem": its delivery runs nothing');
+    await expect(host.dispatch('acme', { adapterType: 'notes', connection: 'north', arrivals: [company('Acme')] })).rejects.toThrow('no module for adapter type "notes"');
+    await expect(host.dispatch('globex', { adapterType: 'crm', arrivals: [company('Acme')] })).rejects.toThrow('tenant globex has no "crm" connection: its delivery runs nothing');
+    const nameless = { ...company('Acme'), identity: '' };
+    await expect(host.dispatch('acme', { adapterType: 'crm', arrivals: [nameless] })).rejects.toThrow('arrival 0 of the "crm" delivery is not an arrival (identity:');
+    const keyless: Arrival = { edge: 'People', identity: 'person-ann', landing: { recordId: 'person-ann', recordType: 'Person', fields: { Name: 'Ann' } } };
+    await expect(host.dispatch('acme', { adapterType: 'crm', arrivals: [company('Acme'), keyless] })).rejects.toThrow(
+      'arrival 1 on People names no key, and People is no root edge of "crm": a wait on the record it landed on would never hear it; name that record (`key`)',
+    );
+    expect(written).toEqual([]);
+  });
+
+  it('answers each arrival a listen could not judge, with the listen, the arrival, why, and the delivery it came in', async () => {
+    const { host, store, written } = await setup();
+    const listen = 'listen to app-[c:Companies WHERE c.Name == "Acme"]->-[p:People]-> fire f';
+    await host.save('acme', { name: 'people', source: program(listen, 'p.Name', '<app-[:Person]->>').replace('f(company:', 'f(p:') });
+    const ann: Arrival = { edge: 'People', key: 'company:acme', identity: 'person-ann', landing: { recordId: 'person-ann', recordType: 'Person', fields: { Name: 'Ann' } } };
+
+    const { runs, notJudged } = await host.dispatch('acme', { adapterType: 'crm', arrivals: [ann] });
+
+    expect(runs).toEqual([]);
+    expect(written).toEqual([]);
+    const [saved] = await store.programs.list('acme');
+    expect(notJudged).toEqual([
+      {
+        program: 'people',
+        movement: 'f',
+        pipeline: listenPipeline({ file: 'people', plan: saved.listens[0], credentialName: 'north' }),
+        arrival: 'People:company:acme:person-ann:',
+        edge: 'People',
+        identity: 'person-ann',
+        recordId: 'person-ann',
+        reason: "the arrival carries no Companies record, which this listen's filter on it reads",
+        deliveryId: expect.any(String),
+      },
+    ]);
   });
 
   it('an arrival the judge cannot decide runs nothing, and the host says why once per delivery', async () => {
@@ -232,13 +271,13 @@ describe("the embedded host's listens", () => {
     });
 
     // One that carries no company cannot be judged: two of them, said once.
-    expect(await host.dispatch('acme', { adapterType: 'crm', arrivals: [person('Ann'), person('Bob', [null])] })).toEqual([]);
+    expect((await host.dispatch('acme', { adapterType: 'crm', arrivals: [person('Ann'), person('Bob', [null])] })).runs).toEqual([]);
     expect(warned).toEqual(['people:f: an arrival on People cannot be judged (the arrival carries no Companies record, which this listen\'s filter on it reads): it runs nothing']);
     expect(written).toEqual([]);
 
     // One that carries its company is judged by it; one whose carried record is no company is not this listen's.
     const company = (name: string, recordType = 'Company') => ({ recordType, fields: { Name: name } });
-    const fired = await host.dispatch('acme', { adapterType: 'crm', arrivals: [person('Cy', [company('Acme')]), person('Di', [company('Globex')]), person('Ed', [company('Acme', 'Person')])] });
+    const fired = (await host.dispatch('acme', { adapterType: 'crm', arrivals: [person('Cy', [company('Acme')]), person('Di', [company('Globex')]), person('Ed', [company('Acme', 'Person')])] })).runs;
     expect(fired).toHaveLength(1);
     expect(written).toEqual(['acme: Cy']);
   });
@@ -251,9 +290,9 @@ describe("the embedded host's listens", () => {
     const [first] = saved.listens;
     const notFor = listenPipeline({ file: 'twice', plan: first, credentialName: 'north' });
 
-    expect(await host.dispatch('acme', { adapterType: 'crm', arrivals: [company('Acme')] })).toHaveLength(2);
+    expect((await host.dispatch('acme', { adapterType: 'crm', arrivals: [company('Acme')] })).runs).toHaveLength(2);
     written.length = 0;
-    expect(await host.dispatch('acme', { adapterType: 'crm', arrivals: [company('Acme', { notFor, version: '2' })] })).toHaveLength(1);
+    expect((await host.dispatch('acme', { adapterType: 'crm', arrivals: [company('Acme', { notFor, version: '2' })] })).runs).toHaveLength(1);
     expect(written).toEqual(['acme: Seen Acme']);
   });
 
@@ -295,14 +334,14 @@ listen to stripe-[:Requests]-><Refund> fire refunded
     expect(await host.save('acme', { name: 'hooks', source })).toEqual({ saved: true, listens: 2 });
     const request = (identity: string, fields: Record<string, unknown>): Arrival => ({ edge: 'Requests', identity, landing: { recordType: 'Request', fields } });
 
-    const fired = await host.dispatch('acme', { adapterType: 'hook', connection: 'door', arrivals: [request('evt_1', { id: 'pay_1', amount: 12 })] });
+    const fired = (await host.dispatch('acme', { adapterType: 'hook', connection: 'door', arrivals: [request('evt_1', { id: 'pay_1', amount: 12 })] })).runs;
 
     expect(fired.map(({ movement, outcome }) => ({ movement, ok: outcome.ok }))).toEqual([{ movement: 'paid', ok: true }]);
     expect(written).toEqual(['acme: Paid pay_1']);
     // The Refund listen's misfit is not said: a listen on the edge took the arrival.
     expect(warned).toEqual([]);
 
-    expect(await host.dispatch('acme', { adapterType: 'hook', connection: 'door', arrivals: [request('evt_2', { id: 'pay_2', amount: 'twelve' })] })).toEqual([]);
+    expect((await host.dispatch('acme', { adapterType: 'hook', connection: 'door', arrivals: [request('evt_2', { id: 'pay_2', amount: 'twelve' })] })).runs).toEqual([]);
     expect(written).toEqual(['acme: Paid pay_1']);
     expect(warned).toEqual([
       'hooks:paid: the arrival evt_2 on Requests is not a Payment (`amount` is text, not a number): it runs nothing',
@@ -323,7 +362,7 @@ listen to stripe-[:Requests]-><Refund> fire refunded
     await store.programs.put('acme', { name: 'settings', source: program('listen to app fire f'), languageVersion: ENGINE_VERSION, listens: [] });
     const person: Arrival = { edge: 'People', key: 'company:acme', identity: 'person-ann', landing: { recordId: 'person-ann', recordType: 'Person', fields: { Name: 'Ann' } } };
 
-    expect(await host.dispatch('acme', { adapterType: 'crm', arrivals: [person, { ...person, identity: 'person-bob' }] })).toEqual([]);
+    expect((await host.dispatch('acme', { adapterType: 'crm', arrivals: [person, { ...person, identity: 'person-bob' }] })).runs).toEqual([]);
     expect(written).toEqual([]);
     expect(warned).toEqual([
       'settings:f: `listen to app { … }` is in the retired settings form, which this host fires only as a listen on a traversal: write it as one and save it again; until then it runs nothing',
@@ -343,7 +382,7 @@ listen to stripe-[:Requests]-><Refund> fire refunded
     // A stated landing its source does not declare.
     await store.programs.put('acme', { ...current, name: 'misnamed', listens: current.listens.map((plan) => ({ ...plan, landing: 'Payment' })) });
 
-    const fired = await host.dispatch('acme', { adapterType: 'crm', arrivals: [company('Acme')] });
+    const fired = (await host.dispatch('acme', { adapterType: 'crm', arrivals: [company('Acme')] })).runs;
 
     expect(fired.map(({ program: name, outcome }) => ({ name, ok: outcome.ok }))).toEqual([{ name: 'current', ok: true }]);
     expect(written).toEqual(['acme: Seen Acme']);

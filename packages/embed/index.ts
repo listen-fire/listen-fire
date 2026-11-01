@@ -217,6 +217,34 @@ export interface EmbeddedRunOutcome {
   outcome: { ok: true; writes: MovementWriteRecord[]; spentMicrodollars: number; parked: boolean } | { ok: false; error: string };
 }
 
+/** An arrival a listen could not judge (its filter reads a field the module
+ *  could not read, or a record the arrival does not carry): it ran nothing
+ *  for that listen, and the listen's other arrivals and the arrival's other
+ *  listens were judged as usual. listen-fire keeps the same fact, which
+ *  `@lf/system` reports as `Arrival Not Judged`. */
+export interface ArrivalNotJudged {
+  program: string;
+  movement: string;
+  /** The listen, as its receipts name it (`listenPipeline`). */
+  pipeline: string;
+  /** The arrival, as its receipt names it (`arrivalReceiptKey`). */
+  arrival: string;
+  edge: string;
+  identity: string;
+  recordId?: string;
+  /** Why the listen's judge could not decide it. */
+  reason: string;
+  /** The delivery it came in, as this host's store keeps it. */
+  deliveryId: string;
+}
+
+/** What one delivery came to: the outcome of each run it started or woke,
+ *  one per segment, and each arrival a listen could not judge. */
+export interface DispatchOutcome {
+  runs: EmbeddedRunOutcome[];
+  notJudged: ArrivalNotJudged[];
+}
+
 /** What a module of `adapterType` says arrived for a tenant on its
  *  listenable edges. `connection` names the connection it came for; absent,
  *  it is the module's own install's and reaches every connection's listens.
@@ -253,18 +281,21 @@ export interface EmbeddedHost {
    *  runs, one outcome each; and the runs the arrivals woke step on, one
    *  outcome per segment. A listen runs an arrival once: a redelivery of it
    *  runs nothing (its receipt), and so does a second delivery under the
-   *  same `id`. One the judge cannot decide runs nothing, said once per
-   *  delivery (`log`). So does an arrival that does not fit the node a
-   *  listen states its landing is (`-[:Requests]-><Payment>`), said when no
-   *  listen on its edge took it; a listen this host does not fire as
-   *  written; and a program it cannot read, which the others' listens do
-   *  not wait on. An arrival no run awaits yet is kept for an hour (the
-   *  module's `resendWindowSeconds`), for a run that starts waiting on it.
-   *  Each run it starts is a row kept in that write: one that does not start
+   *  same `id`. One the judge cannot decide runs nothing for that listen, and
+   *  is answered in `notJudged` (and said once per delivery, `log`). So does
+   *  an arrival that does not fit the node a listen states its landing is
+   *  (`-[:Requests]-><Payment>`), said when no listen on its edge took it; a
+   *  listen this host does not fire as written; and a program it cannot
+   *  read, which the others' listens do not wait on. A delivery it cannot
+   *  route throws, naming why, and keeps nothing: from a module the host
+   *  does not have, for a connection the tenant does not hold, with an
+   *  arrival that is none, or with one naming no `key` off a record. An
+   *  arrival no live wait reads is forgotten by a later `tick` once no
+   *  running step could still read it. Each run it starts is a row kept in that write: one that does not start
    *  here (a store write failed) makes `dispatch` throw, naming it, and
    *  `tick` starts it once a run lease has passed; the delivery's `id` is
    *  forgotten, so its sender's retry is kept again. */
-  dispatch(tenant: string, delivery: Delivery): Promise<EmbeddedRunOutcome[]>;
+  dispatch(tenant: string, delivery: Delivery): Promise<DispatchOutcome>;
   /** Run one program now: an Invocation lands on the manual unit's
    *  `Invocations`, `text` its `Text` (listen-fire's `listen-fire run <movement> --text`),
    *  and every listen of the program on it that fires runs. None, when the
@@ -273,8 +304,10 @@ export interface EmbeddedHost {
   /** Start every run a delivery queued that its `dispatch` did not (once a
    *  run lease has passed since it), and step on every run whose timer is
    *  due by `now`, every run woken by an arrival, and every run that owes a
-   *  race an earlier step left unsettled: one outcome per segment. First it forgets the arrivals logged more than
-   *  an hour before `now` that no run awaits. */
+   *  race an earlier step left unsettled: one outcome per segment. First it
+   *  forgets the logged arrivals no live wait reads and no running step
+   *  could still read (`sweepArrivals`), and the identities whose module's
+   *  re-send window has passed. */
   tick(now?: Date): Promise<EmbeddedRunOutcome[]>;
 }
 
@@ -678,7 +711,7 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
    * a tick's sweep forgets none of the delivery's arrivals before its runs'
    * waits read them.
    */
-  const deliver = (tenant: string, programs: readonly SavedProgram[], delivery: Delivery, source: DeliverySource): Promise<EmbeddedRunOutcome[]> =>
+  const deliver = (tenant: string, programs: readonly SavedProgram[], delivery: Delivery, source: DeliverySource): Promise<DispatchOutcome> =>
     marks.holding(store.runHost, async () => {
       const at = now();
       const lines: string[] = [];
@@ -700,6 +733,7 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
       // which its connection's schema maps from the ids its module keys them by.
       const schemas = (await catalog(tenant)).adapters[delivery.adapterType]?.schemas ?? {};
       const minted: MintedRun[] = [];
+      const unjudged: Array<Omit<ArrivalNotJudged, 'deliveryId'>> = [];
       for (const [index, arrival] of delivery.arrivals.entries()) {
         if ('gone' in arrival) continue;
         // Whether a listen on the edge took it (an undecided one counts), and
@@ -721,6 +755,16 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
             if ('undecided' in verdict) {
               taken = true;
               say(`${named}: an arrival on ${arrival.edge} cannot be judged (${verdict.undecided}): it runs nothing`);
+              unjudged.push({
+                program: saved.name,
+                movement: listen.plan.movement,
+                pipeline: listen.pipeline,
+                arrival: arrivalReceiptKey(arrival),
+                edge: arrival.edge,
+                identity: arrival.identity,
+                ...(arrival.landing.recordId !== undefined ? { recordId: arrival.landing.recordId } : {}),
+                reason: verdict.undecided,
+              });
               continue;
             }
             if (listen.landing !== undefined) {
@@ -774,8 +818,9 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
       });
       if (!kept.kept) {
         log.warn(`delivery ${delivery.id ?? receipt} was kept before: it runs nothing`);
-        return [];
+        return { runs: [], notJudged: [] };
       }
+      const notJudged = unjudged.map((fact) => ({ ...fact, deliveryId: receipt }));
       for (const line of lines) log.warn(line);
       const outcomes: EmbeddedRunOutcome[] = [];
       const failures: string[] = [];
@@ -792,7 +837,7 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
         await store.runHost.completeKey({ key }).catch((error: unknown) => log.warn(`the row of run ${fire.runId} was not completed (${messageOf(error)}): a tick runs it again, and it starts nothing twice`));
       }
       outcomes.push(...(await stepWork({ dueBy: now().toISOString(), kinds: [WAKE_AWAIT_WORK_KIND], tenant })));
-      if (failures.length === 0) return outcomes;
+      if (failures.length === 0) return { runs: outcomes, notJudged };
       const failed = `${failures.length} run(s) of the delivery did not start: ${failures.join('; ')}: \`tick\` starts each once a run lease has passed`;
       // The sender's retry under the same id is kept, not taken for this one.
       if (delivery.id !== undefined) {
@@ -802,6 +847,38 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
       }
       throw new Error(failed);
     });
+
+  /**
+   * A delivery this host cannot route is refused, never dropped without a
+   * word: one from a module it does not have, or for a connection the tenant
+   * does not hold (none of the module's, when it names none); an arrival
+   * that does not parse; and one naming no `key` on an edge that is no root
+   * of the module's schema, which no wait on the record it landed on would
+   * ever hear.
+   */
+  const refuseMisaddressed = async (tenant: string, delivery: Delivery): Promise<void> => {
+    const { adapterType } = delivery;
+    moduleOf(adapterType);
+    const held = (await store.connections.list(tenant)).filter((connection) => connection.adapterType === adapterType);
+    if (delivery.connection !== undefined && !held.some((connection) => connection.name === delivery.connection)) {
+      throw new Error(`tenant ${tenant} has no "${adapterType}" connection named "${delivery.connection}": its delivery runs nothing`);
+    }
+    if (held.length === 0) throw new Error(`tenant ${tenant} has no "${adapterType}" connection: its delivery runs nothing`);
+    const schemas = (await catalog(tenant)).adapters[adapterType]?.schemas ?? {};
+    const reached = delivery.connection !== undefined ? [schemas[delivery.connection]] : Object.values(schemas);
+    const roots = new Set(reached.flatMap((schema) => Object.keys(schema?.collections ?? {})));
+    for (const [index, arrival] of delivery.arrivals.entries()) {
+      const parsed = WireArrival.safeParse(arrival);
+      if (!parsed.success) {
+        throw new Error(`arrival ${index} of the "${adapterType}" delivery is not an arrival (${parsed.error.issues.map((issue) => `${issue.path.join('.') || 'it'}: ${issue.message}`).join('; ')}): its delivery runs nothing`);
+      }
+      if (!('gone' in arrival) && arrival.key === undefined && !roots.has(arrival.edge)) {
+        throw new Error(
+          `arrival ${index} on ${arrival.edge} names no key, and ${arrival.edge} is no root edge of "${adapterType}": a wait on the record it landed on would never hear it; name that record (\`key\`)`,
+        );
+      }
+    }
+  };
 
   /** One parked run's step: a segment re-entered from its leaf (or a race
    *  settled), its cost counted on from what the run spent before. A step
@@ -1030,13 +1107,14 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
     },
 
     async dispatch(tenant, delivery) {
+      await refuseMisaddressed(tenant, delivery);
       return deliver(tenant, await store.programs.list(tenant), delivery, 'emit');
     },
 
     async run(tenant, { program: name, text }) {
       const program = (await store.programs.list(tenant)).find((p) => p.name === name);
       if (program === undefined) return [];
-      return deliver(tenant, [program], { adapterType: MANUAL, arrivals: [invocationOf({ firedAt: now(), ...(text !== undefined ? { text } : {}) })] }, 'cli');
+      return (await deliver(tenant, [program], { adapterType: MANUAL, arrivals: [invocationOf({ firedAt: now(), ...(text !== undefined ? { text } : {}) })] }, 'cli')).runs;
     },
 
     async tick(at = now()) {

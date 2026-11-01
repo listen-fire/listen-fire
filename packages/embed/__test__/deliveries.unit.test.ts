@@ -249,7 +249,7 @@ describe('a record the trigger’s arrival carries', () => {
   it('is reached at delivery: a later item of the same delivery on it answers the run’s wait', async () => {
     const { host, opened } = await deskSetup();
 
-    const [ran, ...more] = await host.dispatch('acme', { adapterType: 'desk', arrivals: [comment('c1', 'question', 'jammed?'), comment('c2', 'answer', 'cleared')] });
+    const [ran, ...more] = (await host.dispatch('acme', { adapterType: 'desk', arrivals: [comment('c1', 'question', 'jammed?'), comment('c2', 'answer', 'cleared')] })).runs;
 
     expect(more).toEqual([]);
     expect(ran.outcome).toMatchObject({ ok: true, parked: false });
@@ -259,11 +259,11 @@ describe('a record the trigger’s arrival carries', () => {
   it('is never answered by the arrival that started the run; its next item, delivered later, answers it', async () => {
     const { host, opened } = await deskSetup();
 
-    const [first] = await host.dispatch('acme', { adapterType: 'desk', arrivals: [comment('c1', 'question', 'jammed?')] });
+    const [first] = (await host.dispatch('acme', { adapterType: 'desk', arrivals: [comment('c1', 'question', 'jammed?')] })).runs;
     expect(first.outcome).toMatchObject({ ok: true, parked: true });
     expect(opened).toEqual([]);
 
-    const [woken, ...more] = await host.dispatch('acme', { adapterType: 'desk', arrivals: [comment('c2', 'answer', 'cleared')] });
+    const [woken, ...more] = (await host.dispatch('acme', { adapterType: 'desk', arrivals: [comment('c2', 'answer', 'cleared')] })).runs;
     expect(more).toEqual([]);
     expect(woken.runId).toBe(first.runId);
     expect(woken.outcome).toMatchObject({ ok: true, parked: false });
@@ -291,10 +291,10 @@ describe('a run that ends in its first segment', () => {
   it('leaves no wait behind, so a tick forgets what arrives later on the records it was handed', async () => {
     const { host, store } = await setup();
     expect(await host.save('acme', { name: 'sometimes', source: WAITS_SOMETIMES })).toEqual({ saved: true, listens: 1 });
-    const [ran] = await host.dispatch('acme', { adapterType: 'chat', arrivals: [message('m1', 'skip')] });
+    const [ran] = (await host.dispatch('acme', { adapterType: 'chat', arrivals: [message('m1', 'skip')] })).runs;
     expect(ran.outcome).toMatchObject({ ok: true, parked: false });
 
-    for (const i of [1, 2, 3]) await host.dispatch('acme', { adapterType: 'chat', arrivals: [reply(`r${i}`, 'm1', `x${i}`)] });
+    for (const i of [1, 2, 3]) (await host.dispatch('acme', { adapterType: 'chat', arrivals: [reply(`r${i}`, 'm1', `x${i}`)] })).runs;
     await host.tick(new Date(Date.now() + 10 * 3_600_000));
 
     // A wait opened afresh on the thread finds none of the replies still logged.
@@ -308,7 +308,7 @@ describe('a delivery', () => {
     const { host, posted } = await setup();
     expect(await host.save('acme', { name: 'threads', source: answering('room-[:Messages]->', 'room-[:Messages]->') })).toEqual({ saved: true, listens: 1 });
 
-    const [ran, ...more] = await host.dispatch('acme', { adapterType: 'chat', arrivals: [message('m1', 'lunch?'), reply('r1', 'm1', 'yes')] });
+    const [ran, ...more] = (await host.dispatch('acme', { adapterType: 'chat', arrivals: [message('m1', 'lunch?'), reply('r1', 'm1', 'yes')] })).runs;
 
     expect(more).toEqual([]);
     expect(ran.outcome).toMatchObject({ ok: true, parked: false });
@@ -323,12 +323,12 @@ describe('a delivery', () => {
     });
 
     // The reply waits on its own thread, the edge and key it arrived on.
-    const [first] = await host.dispatch('acme', { adapterType: 'chat', arrivals: [reply('r1', 'm1', 'yes')] });
+    const [first] = (await host.dispatch('acme', { adapterType: 'chat', arrivals: [reply('r1', 'm1', 'yes')] })).runs;
     expect(first.outcome).toMatchObject({ ok: true, parked: true });
     expect(posted).toEqual([]);
 
     // The next reply starts a run of its own, and wakes the first.
-    const ran = await host.dispatch('acme', { adapterType: 'chat', arrivals: [reply('r2', 'm1', 'at noon')] });
+    const ran = (await host.dispatch('acme', { adapterType: 'chat', arrivals: [reply('r2', 'm1', 'at noon')] })).runs;
     expect(ran.map(({ runId, outcome }) => ({ first: runId === first.runId, parked: outcome.ok && outcome.parked }))).toEqual([
       { first: false, parked: true },
       { first: true, parked: false },
@@ -344,22 +344,22 @@ describe('a delivery', () => {
     await host.connect('globex', { name: 'team', module: chat, credential: { workspace: 'globex' } });
     expect(await host.save('globex', { name: 'echo', source })).toEqual({ saved: true, listens: 1 });
 
-    expect(await host.dispatch('acme', { adapterType: 'chat', arrivals: [message('m1', 'hi')] })).toHaveLength(2);
+    expect((await host.dispatch('acme', { adapterType: 'chat', arrivals: [message('m1', 'hi')] })).runs).toHaveLength(2);
     // The provider sends it again: each listen has run it.
-    expect(await host.dispatch('acme', { adapterType: 'chat', arrivals: [message('m1', 'hi'), message('m2', 'ho')] })).toHaveLength(2);
+    expect((await host.dispatch('acme', { adapterType: 'chat', arrivals: [message('m1', 'hi'), message('m2', 'ho')] })).runs).toHaveLength(2);
     expect(posted).toEqual(['Re hi', 'Re hi', 'Re ho', 'Re ho']);
     expect(warned).toEqual([
       'echo:answer has run the arrival m1 on Messages before: this delivery runs nothing',
       'echo-too:answer has run the arrival m1 on Messages before: this delivery runs nothing',
     ]);
     // Another tenant's listen of the same name takes its own receipt.
-    expect(await host.dispatch('globex', { adapterType: 'chat', arrivals: [message('m1', 'hi')] })).toHaveLength(1);
+    expect((await host.dispatch('globex', { adapterType: 'chat', arrivals: [message('m1', 'hi')] })).runs).toHaveLength(1);
 
     // A delivery under an id already kept runs nothing, and says so.
     posted.length = 0;
     warned.length = 0;
-    expect(await host.dispatch('acme', { adapterType: 'chat', id: 'evt-1', arrivals: [message('m3', 'hey')] })).toHaveLength(2);
-    expect(await host.dispatch('acme', { adapterType: 'chat', id: 'evt-1', arrivals: [message('m4', 'hey')] })).toEqual([]);
+    expect((await host.dispatch('acme', { adapterType: 'chat', id: 'evt-1', arrivals: [message('m3', 'hey')] })).runs).toHaveLength(2);
+    expect((await host.dispatch('acme', { adapterType: 'chat', id: 'evt-1', arrivals: [message('m4', 'hey')] })).runs).toEqual([]);
     expect(posted).toEqual(['Re hey', 'Re hey']);
     expect(warned).toEqual(['delivery evt-1 was kept before: it runs nothing']);
   });
@@ -414,7 +414,7 @@ describe('a delivery', () => {
       expect(await host.tick(later(1000))).toEqual([]);
 
       // The sender sends it again under its id: kept, and run.
-      const [retried, ...none] = await host.dispatch('acme', { adapterType: 'chat', id: 'evt-1', arrivals: [message('m1', 'hi')] });
+      const [retried, ...none] = (await host.dispatch('acme', { adapterType: 'chat', id: 'evt-1', arrivals: [message('m1', 'hi')] })).runs;
       expect(none).toEqual([]);
       expect(retried.outcome).toMatchObject({ ok: true });
       expect(posted).toEqual(['Re hi']);
@@ -445,7 +445,7 @@ describe('a delivery', () => {
 
       // A retry of the delivery is kept, and its run refused: the arrival's
       // receipt is the first row's run's.
-      expect(await host.dispatch('acme', { adapterType: 'chat', id: 'evt-1', arrivals: [message('m1', 'hi')] })).toEqual([]);
+      expect((await host.dispatch('acme', { adapterType: 'chat', id: 'evt-1', arrivals: [message('m1', 'hi')] })).runs).toEqual([]);
       expect(warned).toEqual(['echo:answer has run the arrival m1 on Messages before: this delivery runs nothing']);
 
       const [started, ...none] = await host.tick(later(RUN_LEASE_TTL_MS + 1));

@@ -9,7 +9,7 @@
 import type { IncomingMessage } from 'node:http';
 
 import { createAuthoringHandler, type AuthoringHandler } from '@listen-fire/authoring-mcp';
-import { createEmbeddedHost, type Arrival, type EmbeddedHost, type EmbeddedHostOptions, type EmbeddedRunLimits, type EmbeddedRunOutcome, type SaveAnswer } from '@listen-fire/embed';
+import { createEmbeddedHost, type Arrival, type ArrivalNotJudged, type EmbeddedHost, type EmbeddedHostOptions, type EmbeddedRunLimits, type EmbeddedRunOutcome, type SaveAnswer } from '@listen-fire/embed';
 import { pricedModels, type ModelClient } from '@listen-fire/engine/public/embed';
 import { slackModule } from '@listen-fire/slack';
 
@@ -51,6 +51,9 @@ export class Embedding {
   private readonly crm = crmModule(this.companies);
   private readonly host: EmbeddedHost;
   private readonly kept: ReturnType<typeof authoringStore>;
+  /** Each arrival a customer's listen could not judge (its filter reads a
+   *  field the CRM could not read): it ran nothing, and the SaaS alerts on it. */
+  readonly notJudged: ArrivalNotJudged[] = [];
   /** Each customer's API key: its CRM's credential, and the demo auth of its MCP endpoint. */
   private readonly apiKeys = new Map<string, string>();
 
@@ -87,7 +90,9 @@ export class Embedding {
   /** Something arrived in a customer's CRM: run each of its movements whose
    *  listen it fires. */
   async fire(tenant: string, arrival: Arrival): Promise<FiredRun[]> {
-    return this.kept.runs.record(await this.host.dispatch(tenant, { adapterType: 'crm', arrivals: [arrival] })).map(firedRun);
+    const { runs, notJudged } = await this.host.dispatch(tenant, { adapterType: 'crm', arrivals: [arrival] });
+    this.notJudged.push(...notJudged);
+    return this.kept.runs.record(runs).map(firedRun);
   }
 
   /** Step on every parked run whose timer is due. The SaaS calls this from a

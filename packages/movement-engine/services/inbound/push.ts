@@ -131,8 +131,8 @@ export async function emitEvents<C>(
   return { accepted: captured.length, failed };
 }
 
-/** Keep what arrived. An arrival no wait reads is kept for a wait opened
- *  later; `accepted` counts them. */
+/** Keep what arrived. An arrival no live wait reads stays logged until a
+ *  sweep passes it (`sweepArrivals`); `accepted` counts them. */
 export async function keepArrivals<C>(
   store: PushStore<C>,
   input: { caller: PushCaller; arrivals: readonly Arrival[] },
