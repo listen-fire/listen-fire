@@ -31,6 +31,8 @@ export interface UnjudgedMark {
   at: string;
   listen: string;
   arrival: string;
+  /** Absent in a cursor kept before replays were attempts of their own: 0. */
+  attempt?: number;
 }
 
 /** The program a run belongs to; null for a run no program owns. */
@@ -71,7 +73,8 @@ export interface StrandedWait {
 }
 
 /** A listen that could not judge an arrival (its WHERE reads what the
- *  arrival's module could not read), kept once per listen and arrival. */
+ *  arrival's module could not read), kept once per listen, arrival and
+ *  attempt. */
 export interface UnjudgedArrival {
   /** The listen, by its pipeline: an event about it is never that listen's. */
   listen: string;
@@ -88,6 +91,9 @@ export interface UnjudgedArrival {
   cause: string | null;
   /** When the host found it could not judge it, ISO 8601. */
   at: string;
+  /** Which judging it was: 0 as it was delivered, one more for each replay
+   *  of it through the listen (`listen-fire listens replay`). */
+  attempt: number;
 }
 
 /** A release the host first ran under, and when. */
@@ -152,6 +158,8 @@ const DoorUnjudged = z.object({
   reason: z.string(),
   cause: z.string().nullable(),
   at: z.string(),
+  // A host that keeps no attempts judges each arrival once.
+  attempt: z.number().int().nonnegative().default(0),
 });
 
 /** listen-fire's facts, read at its records door (`ctx.records`). */
@@ -187,7 +195,7 @@ export function recordsOverHostDoor(ctx: Pick<ModuleContext, 'records'>): System
     },
     releases: (input) => read('records.releases', input, DoorRelease),
     async unjudgedArrivals(input) {
-      const after = { at: input.after.at, pipeline: input.after.listen, arrival: input.after.arrival };
+      const after = { at: input.after.at, pipeline: input.after.listen, arrival: input.after.arrival, attempt: input.after.attempt ?? 0 };
       return (await read('records.unjudgedArrivals', { after, limit: input.limit }, DoorUnjudged)).map((row) => ({
         listen: row.pipeline,
         arrival: row.arrival,
@@ -198,6 +206,7 @@ export function recordsOverHostDoor(ctx: Pick<ModuleContext, 'records'>): System
         reason: row.reason,
         cause: row.cause,
         at: row.at,
+        attempt: row.attempt,
       }));
     },
     async webBaseUrl() {

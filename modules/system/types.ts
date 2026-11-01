@@ -71,7 +71,7 @@ export const ARRIVAL_NOT_JUDGED: SystemEventKind = {
   name: 'Arrival Not Judged',
   id: 'arrival_not_judged',
   description:
-    'A listen could not tell whether something that arrived fires it: its WHERE reads a field the module could not read (the provider did not answer a lookup), or a record the arrival does not carry. That listen ran nothing for it; the arrival\'s other listens ran as usual. `Listen`, `Delivery Id` and `Arrival Id` say which listen, which delivery and which arrival. Reported once per listen and arrival. A program is never told about its own listen\'s arrivals.',
+    'A listen could not tell whether something that arrived fires it: its WHERE reads a field the module could not read (the provider did not answer a lookup), or a record the arrival does not carry. That listen ran nothing for it; the arrival\'s other listens ran as usual. `Listen`, `Delivery Id` and `Arrival Id` say which listen, which delivery and which arrival. Reported once per listen and arrival, and once more for each replay that still cannot judge it (`listen-fire listens replay`, which puts the delivery through that listen again once the provider answers). A program is never told about its own listen\'s arrivals.',
 };
 
 export const SYSTEM_EVENT_KINDS: readonly SystemEventKind[] = [RUN_FAILED, RUN_PAUSED, VALIDATION_ISSUE, DEPRECATED_VERSION, RELEASE_APPLIED, WAIT_LOST_ITS_RECORD, ARRIVAL_NOT_JUDGED];

@@ -150,8 +150,9 @@ function waitEvent(wait: StrandedWait, taken: boolean): Arrival {
 function unjudgedEvent(unjudged: UnjudgedArrival, taken: boolean): Arrival {
   return event({
     kind: ARRIVAL_NOT_JUDGED,
-    // One per listen and arrival, however often it is found.
-    id: `${ARRIVAL_NOT_JUDGED.id}:${unjudged.listen}:${unjudged.arrival}`,
+    // One per listen, arrival and attempt, however often it is found: each
+    // replay that still cannot judge it is reported again.
+    id: `${ARRIVAL_NOT_JUDGED.id}:${unjudged.listen}:${unjudged.arrival}:${unjudged.attempt}`,
     at: unjudged.at,
     fields: {
       Automation: unjudged.automation.name,
@@ -193,7 +194,7 @@ export async function pollSystemEvents(records: SystemRecords, input: PollEdgeIn
   if (asked(RUN_PAUSED)) next.paused ??= { at: until, runId: NIL_ID };
   if (asked(WAIT_LOST_ITS_RECORD)) next.stranded ??= { at: until, waitId: NIL_ID };
   if (asked(RELEASE_APPLIED)) next.releases ??= { at: until, version: '' };
-  if (asked(ARRIVAL_NOT_JUDGED)) next.unjudged ??= { at: until, listen: '', arrival: '' };
+  if (asked(ARRIVAL_NOT_JUDGED)) next.unjudged ??= { at: until, listen: '', arrival: '', attempt: 0 };
   if (previous === undefined) return { arrivals: [], cursor: next };
 
   const arrivals: Arrival[] = [];
@@ -233,7 +234,7 @@ export async function pollSystemEvents(records: SystemRecords, input: PollEdgeIn
     const unjudged = await records.unjudgedArrivals({ after: previous.unjudged, limit });
     const settled = unjudged.slice(0, firstPast(unjudged, until));
     const last = settled.at(-1);
-    if (last !== undefined) next.unjudged = { at: last.at, listen: last.listen, arrival: last.arrival };
+    if (last !== undefined) next.unjudged = { at: last.at, listen: last.listen, arrival: last.arrival, attempt: last.attempt };
     for (const one of settled) arrivals.push(unjudgedEvent(one, takenApplied));
   }
   return { arrivals, cursor: next };

@@ -21,7 +21,8 @@ function records(facts: { failed?: SettledRun[]; stranded?: StrandedWait[]; rele
     pausedRuns: async () => [],
     strandedWaits: async ({ after: mark, limit }) => after(facts.stranded, mark, (w) => w.waitId, mark.waitId).slice(0, limit),
     releases: async ({ after: mark, limit }) => after(facts.releases, mark, (r) => r.version, mark.version).slice(0, limit),
-    unjudgedArrivals: async ({ after: mark, limit }) => after(facts.unjudged, mark, (u) => `${u.listen} ${u.arrival}`, `${mark.listen} ${mark.arrival}`).slice(0, limit),
+    unjudgedArrivals: async ({ after: mark, limit }) =>
+      after(facts.unjudged, mark, (u) => `${u.listen} ${u.arrival} ${u.attempt}`, `${mark.listen} ${mark.arrival} ${mark.attempt ?? 0}`).slice(0, limit),
     webBaseUrl: async () => null,
   };
 }
@@ -71,7 +72,7 @@ describe('pollSystemEvents', () => {
     const host = records({ unjudged });
     const kind = { type: 'compare', op: 'eq', left: { type: 'property', propertyTypeId: 'Kind' }, right: { type: 'static', value: 'Arrival Not Judged' } };
     const first = await pollSystemEvents(host, { edge: 'Events', filter: kind }, SETTINGS, T0);
-    expect((first.cursor as SystemCursor).unjudged).toEqual({ at: at(-10), listen: '', arrival: '' });
+    expect((first.cursor as SystemCursor).unjudged).toEqual({ at: at(-10), listen: '', arrival: '', attempt: 0 });
     const heard: UnjudgedArrival = {
       listen: 'listen:chat:heard:0a1b2c3d',
       arrival: 'Messages:C1:C1:1700.1:',
@@ -82,12 +83,13 @@ describe('pollSystemEvents', () => {
       reason: "slack could not read Name of the Channels record the arrival carries, which this listen's filter reads",
       cause: null,
       at: at(2),
+      attempt: 0,
     };
     unjudged.push(heard, { ...heard, listen: 'listen:chat:other:00ff00ff', automation: { id: 'chat:other', name: 'other' }, cause: 'run-7', at: at(3) });
     const next = await pollSystemEvents(host, { edge: 'Events', filter: kind, cursor: first.cursor }, SETTINGS, T0 + 60_000);
     expect(next.arrivals).toHaveLength(2);
     const [one, two] = next.arrivals;
-    expect(one).toMatchObject({ identity: 'arrival_not_judged:listen:chat:heard:0a1b2c3d:Messages:C1:C1:1700.1:', notFor: 'listen:chat:heard:0a1b2c3d', takenApplied: true, occurredAt: at(2) });
+    expect(one).toMatchObject({ identity: 'arrival_not_judged:listen:chat:heard:0a1b2c3d:Messages:C1:C1:1700.1::0', notFor: 'listen:chat:heard:0a1b2c3d', takenApplied: true, occurredAt: at(2) });
     expect(one).not.toHaveProperty('about');
     expect(['Kind', 'Automation', 'Automation Id', 'Edge', 'Record Id', 'Listen', 'Delivery Id', 'Arrival Id', 'Run Id'].map((name) => field(one, name))).toEqual([
       'Arrival Not Judged',
@@ -105,6 +107,11 @@ describe('pollSystemEvents', () => {
     expect(two).toMatchObject({ about: { recordType: 'Run', externalId: 'run-7' }, notFor: 'listen:chat:other:00ff00ff' });
     const again = await pollSystemEvents(host, { edge: 'Events', filter: kind, cursor: next.cursor }, SETTINGS, T0 + 120_000);
     expect(again.arrivals).toEqual([]);
+    // A replay that still cannot judge it is an attempt of its own, reported once more.
+    unjudged.push({ ...heard, at: at(70), attempt: 1 });
+    const replayed = await pollSystemEvents(host, { edge: 'Events', filter: kind, cursor: again.cursor }, SETTINGS, T0 + 180_000);
+    expect(replayed.arrivals.map((a) => Reflect.get(a, 'identity'))).toEqual(['arrival_not_judged:listen:chat:heard:0a1b2c3d:Messages:C1:C1:1700.1::1']);
+    expect((replayed.cursor as SystemCursor).unjudged).toMatchObject({ at: at(70), attempt: 1 });
   });
 
   it('rows inside the settle window wait for the next poll', async () => {
