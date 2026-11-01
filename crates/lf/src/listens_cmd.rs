@@ -1,6 +1,7 @@
 //! `listen-fire listens`: one line per listen on a traversal, saying what it
 //! is watched by and where it stands; `listen-fire listens resume
-//! <file>:<movement>`: let a paused listen fire again.
+//! <file>:<movement>`: let a paused listen fire again. `listens replay` is
+//! crate::listen_replay's.
 
 use std::io::Write;
 
@@ -55,7 +56,7 @@ pub fn command(session: &Session, rest: &[String], out: &mut impl Write) -> Resu
             Ok(0)
         }
         Some(other) => {
-            eprintln!("listen-fire listens: no subcommand \"{other}\" (listens, or listens resume <file>:<movement>)");
+            eprintln!("listen-fire listens: no subcommand \"{other}\" (listens, listens resume <file>:<movement>, or listens replay <file>:<movement> --delivery <id>)");
             Ok(2)
         }
     }

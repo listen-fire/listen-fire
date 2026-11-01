@@ -390,6 +390,10 @@ export interface NewDelivery {
   inline: boolean;
   replayOf?: string | null;
   events: unknown[];
+  /** The request it was received as (`{ method, path, query, headers, body, checkpoint? }`,
+   *  the body base64; the headers its module reads): sensitive, kept while the delivery is,
+   *  so one listen can be put through it again. Absent for one no request made. */
+  request?: unknown;
 }
 
 /** A work row as `inbound.keepDelivery` queues it (`work.enqueue`'s input). */

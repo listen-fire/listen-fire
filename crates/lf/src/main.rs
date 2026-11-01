@@ -11,6 +11,7 @@
 //!   listen-fire runs [show <run-id>]             the runs, most recent first; one run in full
 //!   listen-fire runs rerun <run-id> [--force]    run a failed run again as its next attempt
 //!   listen-fire deliveries [show|replay <id>]    the kept deliveries; one in full; one queued again
+//!   listen-fire listens replay <file>:<movement> --delivery <id>   put a kept delivery through one listen again
 //!   --json                              (check, catalog, run, resume, runs, deliveries, cancel, connect, credential list) one JSON document
 //!   listen-fire drain [--until-idle] [--max-seconds N]  a worker over the work queue (scale from zero)
 //!   listen-fire serve [--port N] [--doors-only]  the inbound doors and the work drain (--doors-only: no drain)
@@ -143,6 +144,7 @@ mod returned;
 mod prompt;
 mod protocol;
 mod remote;
+mod listen_replay;
 mod listens_cmd;
 mod resolve;
 mod routing;
@@ -185,7 +187,8 @@ const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|
        listen-fire cancel <run-id> [--reason <text>]
        listen-fire runs [show <run-id>]
        listen-fire runs rerun <run-id> [--force]
-       listen-fire deliveries [show <id> | replay <id>] [--subscription <id>] [--since <ISO instant | <n>h | <n>d>]
+       listen-fire deliveries [show <id> [--request] | replay <id>] [--subscription <id>] [--since <ISO instant | <n>h | <n>d>]
+       listen-fire listens [resume <file>:<movement> | replay <file>:<movement> (--delivery <id> | --event <event id>) [--force]]
        listen-fire --contract-store <state.db|postgres://…> [--team <uuid>]
        listen-fire --contract-store-slot [--dir <project>]
        listen-fire --contract-limiter
@@ -209,8 +212,8 @@ const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|
   resume    step every parked leaf of one run now; with no run, drain the due work and what is due in every parked run (a timer not yet come stays parked)
   upgrade   rewrite the movement files by the fixes that keep their meaning (--all: every fix offered; --check: print the diff, write nothing)
   runs      the runs in the state file, most recent first (as `listen-fire runs`); `runs show <run-id>`: one run, its event, trace, park and attempts; `runs rerun <run-id>`: run a failed run again as its next attempt, with its own event and the movement as the project holds it now (so a fix to the movement takes effect), from the start; refused unless the run's latest attempt failed, while another listen-fire holds the run, and when the failed attempt already committed writes (they are listed; --force reruns it anyway, making them again)
-  listens   one line per listen on a traversal: how each hop's filter is honoured (on arrival, or resolved by listing), what it watches and when it last resolved, and whether it is ok, failing (LISTEN_SCOPE_LIMIT, LISTEN_RESOLVE_FAILED) or paused; `listens resume <file>:<movement>`: let a paused listen fire again
-  deliveries  the deliveries the doors kept (events, not bytes), most recent first, at most 50 (--subscription: one subscription's; --since: received at or after an instant, or <n>h or <n>d ago); `deliveries show <id>`: one, its events and runs; `deliveries replay <id>`: queue its events again as a delivery of its own, for listen-fire serve or listen-fire drain to run against the project as it is now (new runs, whatever its runs came to; a failed run: listen-fire runs rerun <run-id>)
+  listens   one line per listen on a traversal: how each hop's filter is honoured (on arrival, or resolved by listing), what it watches and when it last resolved, and whether it is ok, failing (LISTEN_SCOPE_LIMIT, LISTEN_RESOLVE_FAILED) or paused; `listens resume <file>:<movement>`: let a paused listen fire again; `listens replay <file>:<movement> --delivery <id>` (or `--event <id>`, an Arrival Not Judged event's Event Id): read the kept delivery's request again (its module's lookups made afresh, its signature not checked again: it is listen-fire's own capture) and put what it brings through that listen alone, its other listens left as they are; one that ran it before runs nothing unless --force; one that still cannot judge it is reported again, as the next attempt
+  deliveries  the deliveries the doors kept, most recent first, at most 50 (--subscription: one subscription's; --since: received at or after an instant, or <n>h or <n>d ago); `deliveries show <id>`: one, its events and runs, and whether it keeps the request it was received as (--request prints that request, which may hold personal data; kept deliveries.retainDays days); `deliveries replay <id>`: queue its events again as a delivery of its own, for listen-fire serve or listen-fire drain to run against the project as it is now (new runs, whatever its runs came to; a failed run: listen-fire runs rerun <run-id>)
   --json    check, catalog, run, resume, runs, deliveries, cancel, modules, connect, credential list: one JSON document (docs/lf-json.md); a failure is {\"error\": …}
   drain     claim due work rows one at a time and run them (a polled edge's row is its next poll, due every interval its module declares; a cron listen's ticks are its poll, fired once however many workers drain); with --until-idle exit once none is due, with --max-seconds stop claiming after n seconds, with --kinds only rows of those kinds (resume_timer, wake_await, fire_event, poll_listen, poll_edge, resolve_listen, refresh_subscription, settle_race)
   serve     the inbound doors and the work queue's drain (as `listen-fire serve`)
@@ -259,6 +262,10 @@ struct Args {
     force: bool,
     subscription: Option<String>,
     since: Option<String>,
+    /// `listen-fire deliveries show --request`: print the request it kept.
+    request: bool,
+    /// `listen-fire listens replay --delivery`: the kept delivery to put the listen through.
+    delivery: Option<String>,
     contract_store: Option<String>,
     contract_store_slot: bool,
     contract_limiter: bool,
@@ -308,6 +315,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         force: false,
         subscription: None,
         since: None,
+        request: false,
+        delivery: None,
         contract_store: None,
         contract_store_slot: false,
         contract_limiter: false,
@@ -354,6 +363,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--force" => args.force = true,
             "--subscription" => args.subscription = Some(value("--subscription")?),
             "--since" => args.since = Some(value("--since")?),
+            "--request" => args.request = true,
+            "--delivery" => args.delivery = Some(value("--delivery")?),
             "--contract-doors" => args.contract_doors = true,
             "--ephemeral" => args.ephemeral = true,
             "--json" => args.json = true,
@@ -577,7 +588,22 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
         "listens" => {
             let project = load()?;
             let store = store_of(&args, &project)?;
+            let replaying = args.rest.first().map(String::as_str) == Some("replay");
+            // A replay queues work, which the wake slot is told of; the other commands only read.
+            if replaying {
+                let env: Vec<(String, String)> = std::env::vars().collect();
+                wake::install(wake::of_project(&project, secrets::Secrets::open(&project, &env)?.credentials())?);
+            }
             let session = runs::open_session(project, &runs::Opening { ephemeral: false, store: &store, role: runs::Role::Command, routes_listens: false }).await?;
+            if replaying {
+                let Some(named) = args.rest.get(1) else {
+                    eprintln!("listen-fire listens replay needs a listen: <file>:<movement> --delivery <id>");
+                    return Ok(2);
+                };
+                let event = args.event.as_ref().map(|e| e.to_string_lossy().into_owned());
+                let asked = listen_replay::Asked { named, delivery: args.delivery.as_deref(), event: event.as_deref(), force: args.force };
+                return listen_replay::command(&session, &asked, &mut out).await;
+            }
             listens_cmd::command(&session, &args.rest, &mut out)
         }
         "deliveries" => {
@@ -588,7 +614,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
                 let env: Vec<(String, String)> = std::env::vars().collect();
                 wake::install(wake::of_project(&project, secrets::Secrets::open(&project, &env)?.credentials())?);
             }
-            let request = deliveries::Request { rest: &args.rest, subscription: args.subscription.as_deref(), since: args.since.as_deref(), json: args.json };
+            let request = deliveries::Request { rest: &args.rest, subscription: args.subscription.as_deref(), since: args.since.as_deref(), json: args.json, with_request: args.request };
             deliveries::command(&*store, &request, &mut out)
         }
         "drain" => {

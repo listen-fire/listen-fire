@@ -50,7 +50,7 @@ use tokio_postgres::{Client, Row};
 use crate::backend::RunHostStore;
 use crate::json::Js;
 use crate::loop_breaker::{Deepest, LedgerRecord, LedgerWrite};
-use crate::records_door::{FailedPage, ReleaseAfter, SeenRelease, UnjudgedAfter, UnjudgedArrival};
+use crate::records_door::{FailedPage, ReleaseAfter, SeenRelease, UnjudgedArrival, UnjudgedPage};
 use crate::obj;
 use crate::resolve::{ListenState, Resolution};
 use crate::store::{
@@ -157,6 +157,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (14, include_str!("pg_store_schema_14.sql")),
     (15, include_str!("pg_store_schema_15.sql")),
     (16, include_str!("pg_store_schema_16.sql")),
+    (17, include_str!("pg_store_schema_17.sql")),
 ];
 
 /// The advisory lock the migrations run under: "lf-store" as a number.
@@ -572,6 +573,7 @@ impl PgStore {
             event_count: row.get(7),
             runs,
             events,
+            request: None,
             id,
         })
     }
@@ -1589,22 +1591,27 @@ impl RunHostStore for PgStore {
         self.transaction(|| {
             self.execute("delete from lf.arrival_unjudged where team_id = $1::text::uuid and noted_at < $2::text::timestamptz", &[&self.tenant, &forget_before])?;
             let kept = self.execute(
-                "insert into lf.arrival_unjudged (team_id, pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at)
-                 values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text, $10::text, date_trunc('milliseconds', $11::text::timestamptz))
+                "insert into lf.arrival_unjudged (team_id, pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at, attempt)
+                 values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text, $10::text, date_trunc('milliseconds', $11::text::timestamptz), $12::int4)
                  on conflict do nothing",
-                &[&self.tenant, &fact.pipeline, &fact.arrival, &fact.file, &fact.movement, &fact.delivery_id, &fact.edge, &fact.record_id, &fact.reason, &fact.cause, &fact.at],
+                &[&self.tenant, &fact.pipeline, &fact.arrival, &fact.file, &fact.movement, &fact.delivery_id, &fact.edge, &fact.record_id, &fact.reason, &fact.cause, &fact.at, &i32::try_from(fact.attempt).unwrap_or(i32::MAX)],
             )?;
             Ok(kept == 1)
         })
     }
 
-    fn unjudged_arrivals(&self, after: Option<&UnjudgedAfter<'_>>, limit: i64) -> Result<Vec<UnjudgedArrival>> {
-        const COLUMNS: &str = concat!("select pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, ", iso!("noted_at"), " from lf.arrival_unjudged where team_id = $1::text::uuid");
-        let rows = match after {
-            None => self.query(&format!("{COLUMNS} order by noted_at, pipeline, arrival limit $2::int8"), &[&self.tenant, &limit])?,
+    fn unjudged_arrivals(&self, page: &UnjudgedPage<'_>) -> Result<Vec<UnjudgedArrival>> {
+        const COLUMNS: &str = concat!(
+            "select pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, ",
+            iso!("noted_at"),
+            ", attempt from lf.arrival_unjudged where team_id = $1::text::uuid and ($2::text is null or pipeline = $2::text)"
+        );
+        const ORDER: &str = "order by noted_at, pipeline, arrival, attempt limit $3::int8";
+        let rows = match &page.after {
+            None => self.query(&format!("{COLUMNS} {ORDER}"), &[&self.tenant, &page.pipeline, &page.limit])?,
             Some(after) => self.query(
-                &format!("{COLUMNS} and (noted_at, pipeline, arrival) > ($2::text::timestamptz, $3::text, $4::text) order by noted_at, pipeline, arrival limit $5::int8"),
-                &[&self.tenant, &after.at, &after.pipeline, &after.arrival, &limit],
+                &format!("{COLUMNS} and (noted_at, pipeline, arrival, attempt) > ($4::text::timestamptz, $5::text, $6::text, $7::int4) {ORDER}"),
+                &[&self.tenant, &page.pipeline, &page.limit, &after.at, &after.pipeline, &after.arrival, &i32::try_from(after.attempt).unwrap_or(i32::MAX)],
             )?,
         };
         Ok(rows
@@ -1620,6 +1627,7 @@ impl RunHostStore for PgStore {
                 reason: r.get(7),
                 cause: r.get(8),
                 at: r.get(9),
+                attempt: u32::try_from(r.get::<_, i32>(10)).unwrap_or_default(),
             })
             .collect())
     }
@@ -1639,10 +1647,11 @@ impl RunHostStore for PgStore {
         crate::waits::refuse_waits_without_arrivals(arrivals, waits)?;
         let events = Js::Arr(delivery.events.clone()).to_json();
         let event_count = i64::try_from(delivery.events.len()).unwrap_or(i64::MAX);
+        let request = delivery.request.as_ref().map(Js::to_json);
         self.transaction(|| {
             let inserted = self.query_opt(
-                "insert into lf.delivery (id, team_id, subscription_id, external_id, received_at, source, inline, replay_of, events, event_count)
-                 values ($1::text::uuid, $2::text::uuid, $3::text, $4::text, $5::text::timestamptz, $6::text, $7::bool, $8::text::uuid, $9::text::jsonb, $10::int8)
+                "insert into lf.delivery (id, team_id, subscription_id, external_id, received_at, source, inline, replay_of, events, event_count, request)
+                 values ($1::text::uuid, $2::text::uuid, $3::text, $4::text, $5::text::timestamptz, $6::text, $7::bool, $8::text::uuid, $9::text::jsonb, $10::int8, $11::text::jsonb)
                  on conflict do nothing returning id",
                 &[
                     &delivery.id,
@@ -1655,6 +1664,7 @@ impl RunHostStore for PgStore {
                     &delivery.replay_of,
                     &events,
                     &event_count,
+                    &request,
                 ],
             )?;
             if inserted.is_none() {
@@ -1706,7 +1716,7 @@ impl RunHostStore for PgStore {
             return Ok(None);
         }
         let Some(row) = self.query_opt(
-            &format!("select {DELIVERY_COLUMNS}, events::text from lf.delivery where id = $1::text::uuid and team_id = $2::text::uuid"),
+            &format!("select {DELIVERY_COLUMNS}, events::text, request::text from lf.delivery where id = $1::text::uuid and team_id = $2::text::uuid"),
             &[&id, &self.tenant],
         )?
         else {
@@ -1716,10 +1726,15 @@ impl RunHostStore for PgStore {
             Js::Arr(events) => events,
             _ => return Err(StoreError::Invalid(format!("delivery {id}'s events are not a list"))),
         };
-        self.delivery_of(&row, Some(events)).map(Some)
+        let request = row.get::<_, Option<&str>>(9).map(parse_text).transpose()?;
+        Ok(Some(DeliveryRow { request, ..self.delivery_of(&row, Some(events))? }))
     }
 
     fn sweep_deliveries(&self, before: &str, limit: i64) -> Result<i64> {
+        self.execute(
+            "update lf.delivery set request = null where team_id = $1::text::uuid and received_at < $2::text::timestamptz and request is not null",
+            &[&self.tenant, &before],
+        )?;
         let swept = self.execute(
             "delete from lf.delivery where id in (
                select d.id from lf.delivery d

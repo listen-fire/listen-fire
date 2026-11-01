@@ -488,6 +488,39 @@ pub struct Delivered<'a> {
     /// `{ pipeline, receipt, runId }` (`runs`): their waits on their
     /// triggers were opened then, under these ids.
     pub minted: Option<&'a Js>,
+    /// A replay of an arrival through one listen (crate::listen_replay): its
+    /// arrivals are judged by the listen it minted a run for alone.
+    pub replay: Option<Replay<'a>>,
+}
+
+/// A replay of a kept delivery through one listen (`listen-fire listens
+/// replay`), as its row carries it (`replay`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Replay<'a> {
+    /// The delivery it replays, which keeps the request: a listen that
+    /// still cannot judge the arrival names it, to be replayed again.
+    pub of: &'a str,
+    /// Which judging of the arrival by the listen this is: 1 for the first
+    /// replay (0 is its delivery's own).
+    pub attempt: u32,
+    /// Run again though the listen ran the arrival before (`--force`): the
+    /// run takes a receipt of its own.
+    pub again: bool,
+}
+
+impl<'a> Replay<'a> {
+    fn of_row(row: &'a Js) -> Option<Replay<'a>> {
+        let replay = row.get("replay")?;
+        let attempt = match replay.get("attempt") {
+            Some(Js::Num(n)) => u32::try_from(n.as_u64()?).ok()?,
+            _ => return None,
+        };
+        Some(Replay { of: replay.get("of")?.as_str()?, attempt, again: Js::is_true(replay.get("again")) })
+    }
+
+    fn to_js(self) -> Js {
+        Js::Obj(obj! { "of" => Js::str(self.of), "attempt" => Js::Num(self.attempt.into()), "again" => Js::Bool(self.again) })
+    }
 }
 
 impl<'a> Delivered<'a> {
@@ -505,7 +538,21 @@ impl<'a> Delivered<'a> {
             Some(Js::Num(mark)) => mark.as_i64(),
             _ => None,
         };
-        Delivered { id, credential: text("credential"), subscription: text("subscription"), arrival_mark, minted: row.get("runs") }
+        Delivered { id, credential: text("credential"), subscription: text("subscription"), arrival_mark, minted: row.get("runs"), replay: Replay::of_row(row) }
+    }
+
+    /// Which judging of its arrivals this is (crate::records_door::UnjudgedArrival::attempt).
+    pub fn attempt(&self) -> u32 {
+        self.replay.map_or(0, |replay| replay.attempt)
+    }
+
+    /// The receipt a run of the arrival `receipt` takes: its own, unless the
+    /// delivery replays it again (`--force`), which takes one of its own.
+    fn claimed(&self, receipt: &str) -> String {
+        match (self.replay, self.id) {
+            (Some(Replay { again: true, .. }), Some(id)) => format!("{receipt}#replay:{id}"),
+            _ => receipt.to_string(),
+        }
     }
 
     /// The run minted for `pipeline` to run the arrival `receipt`, when the
@@ -526,13 +573,17 @@ impl<'a> Delivered<'a> {
         self.minted.and_then(Js::as_array).unwrap_or_default().iter().filter_map(|run| run.get("runId").and_then(Js::as_str).map(str::to_string)).collect()
     }
 
-    /// Its connection and subscription, written into a kept event or a row.
+    /// Its connection and subscription, and the replay it is, written into
+    /// a kept event or a row.
     pub fn write_into(&self, row: &mut Obj) {
         if let Some(credential) = self.credential {
             row.insert("credential".into(), Js::str(credential));
         }
         if let Some(subscription) = self.subscription {
             row.insert("subscription".into(), Js::str(subscription));
+        }
+        if let Some(replay) = self.replay {
+            row.insert("replay".into(), replay.to_js());
         }
     }
 
@@ -835,6 +886,10 @@ impl Session {
     pub async fn fire_arrivals(&self, adapter: &str, arrivals: &[ArrivalIn], delivered: Delivered<'_>) -> Result<Fired, String> {
         let set = self.file_set();
         self.follow_kept_heads(&set).await?;
+        // A replay puts its arrivals through the listen it minted a run for, alone.
+        if delivered.replay.is_some() {
+            return self.fire_arrivals_to(&set, adapter, arrivals, delivered, JudgedBy::Minted(None)).await;
+        }
         let through_edge = delivered.subscription.filter(|key| crate::subscriptions::is_edge_webhook(self.secrets().credentials(), adapter, key));
         let Some(subscription) = through_edge else {
             return self.fire_arrivals_to(&set, adapter, arrivals, delivered, JudgedBy::Every).await;
@@ -901,7 +956,7 @@ impl Session {
                     }
                     Verdict::Undecided { reason } => {
                         taken = true;
-                        self.note_unjudged(set, adapter, listen, arrival, delivered.id, &reason)?;
+                        self.note_unjudged(set, adapter, listen, arrival, &delivered, &reason)?;
                         let line = format!("{named}: an arrival on {} cannot be judged ({reason}): it runs nothing", arrival.edge);
                         if !fired.redelivered.contains(&line) {
                             fired.redelivered.push(line);
@@ -928,11 +983,12 @@ impl Session {
                     }
                 };
                 let receipt = arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), identity, arrival.version.as_deref());
+                let claimed = delivered.claimed(&receipt);
                 // An arrival a listen does not run (paused, or at the depth
                 // limit) takes its receipt as a run would, so a redelivery
                 // of it is not counted twice, or taken for a new chain.
                 if is_paused {
-                    if self.store.claim_event(&EventReceipt::own(&pipeline, &receipt)).map_err(|e| e.to_string())? {
+                    if self.store.claim_event(&EventReceipt::own(&pipeline, &claimed)).map_err(|e| e.to_string())? {
                         self.store.hold_listen_arrival(&pipeline).map_err(|e| e.to_string())?;
                         fired.redelivered.push(format!("{named}: the arrival {identity} on {} runs nothing, {}", arrival.edge, crate::loop_breaker::HELD));
                     } else {
@@ -942,7 +998,7 @@ impl Session {
                 }
                 let chain = self.chain_before(adapter, listen, arrival)?;
                 if chain.len() >= self.project.loop_depth {
-                    if !self.store.claim_event(&EventReceipt::own(&pipeline, &receipt)).map_err(|e| e.to_string())? {
+                    if !self.store.claim_event(&EventReceipt::own(&pipeline, &claimed)).map_err(|e| e.to_string())? {
                         fired.redelivered.push(format!("{named} has taken the arrival {identity} on {} before: this delivery runs nothing", arrival.edge));
                         continue;
                     }
@@ -956,7 +1012,7 @@ impl Session {
                 let trigger = arrival_trigger_of(&pipeline, adapter, arrival, &iso(0));
                 let run_id = delivered.minted_run(&pipeline, &receipt).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 let came_in = CameIn { chain: &chain, ..delivered.came_in() };
-                match self.run_listen(set, &run_id, listen, trigger, false, Some((pipeline.as_str(), receipt.as_str())), came_in).await? {
+                match self.run_listen(set, &run_id, listen, trigger, false, Some((pipeline.as_str(), claimed.as_str())), came_in).await? {
                     Some(outcome) => {
                         started.insert(run_id);
                         fired.outcomes.push(outcome);
@@ -1015,24 +1071,26 @@ impl Session {
     }
 
     /// Keep that `listen` could not judge `arrival`, delivered in the kept
-    /// delivery `delivery_id` (crate::records_door::UnjudgedArrival), once
-    /// per listen and arrival: the host's own failure, which `@lf/system`
-    /// reports as `Arrival Not Judged`. It fails this listen alone; the
+    /// delivery `delivered` (crate::records_door::UnjudgedArrival; for a
+    /// replay, the delivery it replays), once per listen, arrival and
+    /// attempt: the host's own failure, which `@lf/system` reports as
+    /// `Arrival Not Judged`. It fails this listen alone; the
     /// arrival's other listens are judged as usual. Kept as long as a
     /// delivery is (`deliveries.retainDays`).
-    pub(crate) fn note_unjudged(&self, set: &FileSet, adapter: &str, listen: &Listen, arrival: &ArrivalIn, delivery_id: Option<&str>, reason: &str) -> Result<(), String> {
+    pub(crate) fn note_unjudged(&self, set: &FileSet, adapter: &str, listen: &Listen, arrival: &ArrivalIn, delivered: &Delivered<'_>, reason: &str) -> Result<(), String> {
         let identity = arrival.identity.as_deref().unwrap_or_default();
         let fact = crate::records_door::UnjudgedArrival {
             pipeline: listen.pipeline(),
             arrival: arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), identity, arrival.version.as_deref()),
             file: set.file(&listen.file).name.clone(),
             movement: listen.movement_name.clone(),
-            delivery_id: delivery_id.map(str::to_string),
+            delivery_id: delivered.replay.map(|replay| replay.of).or(delivered.id).map(str::to_string),
             edge: arrival.edge.clone(),
             record_id: arrival.landing.as_ref().and_then(|landing| landing.get("recordId")).and_then(Js::as_str).map(str::to_string),
             reason: reason.to_string(),
             cause: self.chain_before(adapter, listen, arrival)?.pop(),
             at: iso(0),
+            attempt: delivered.attempt(),
         };
         let retain_ms = i64::from(self.project.delivery_retain_days) * 86_400_000;
         self.store.note_unjudged(&fact, &iso(-retain_ms)).map_err(|e| format!("keeping that {}:{} could not judge an arrival on {}: {e}", fact.file, fact.movement, fact.edge))?;
@@ -1374,7 +1432,7 @@ impl Session {
             // the fact names one; its row judges only the listens it minted
             // runs for, so the others are noted here.
             if minted.as_array().is_some_and(|runs| !runs.is_empty()) || !unjudged.is_empty() {
-                let receipt = NewDelivery { id: uuid::Uuid::new_v4().to_string(), external_id: None, received_at: at.clone(), source: DeliverySource::Poll, inline: false, replay_of: None, events: Vec::new() };
+                let receipt = NewDelivery { id: uuid::Uuid::new_v4().to_string(), external_id: None, received_at: at.clone(), source: DeliverySource::Poll, inline: false, replay_of: None, events: Vec::new(), request: None };
                 let mut row = crate::doors::fire_arrivals_work(&key.adapter, &arrivals, Delivered { id: Some(&receipt.id), minted: Some(&minted), ..came_for });
                 if let Js::Obj(payload) = &mut row.payload {
                     payload.insert("polled".into(), Js::str(subscription));
@@ -1389,7 +1447,7 @@ impl Session {
                     .map_err(|e| e.to_string())?
                     .ok_or("a poll's delivery was taken for a duplicate")?;
                 for one in &unjudged {
-                    self.note_unjudged(set, &key.adapter, &doors.listens[one.listen], &landed[one.arrival], Some(&receipt.id), &one.reason)?;
+                    self.note_unjudged(set, &key.adapter, &doors.listens[one.listen], &landed[one.arrival], &Delivered { id: Some(&receipt.id), ..Delivered::default() }, &one.reason)?;
                 }
                 crate::wake::queued_rows(std::slice::from_ref(&row));
                 crate::wake::queued_rows(&kept.wakes);
@@ -2843,6 +2901,27 @@ fn poll_params(listen: &Listen, state: Option<&Js>) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
+    /// A replay's row says it is one, so a drain that takes it (its
+    /// process died) still judges its listen alone; a forced one takes a
+    /// receipt of its own, and a listen that still cannot judge it names the
+    /// delivery that keeps the request.
+    #[test]
+    fn a_replay_row_reads_back_as_the_replay_it_is() {
+        use super::{Delivered, Replay};
+        use crate::json::Js;
+        let mut row = crate::json::Obj::new();
+        let replay = Replay { of: "d-1", attempt: 2, again: true };
+        Delivered { replay: Some(replay), ..Delivered::default() }.write_into(&mut row);
+        let row = Js::Obj(row);
+        let read = Delivered::of_row(&row, Some("d-2"));
+        assert_eq!(read.replay, Some(replay));
+        assert_eq!(read.attempt(), 2);
+        assert_eq!(read.claimed("Messages:C1:C1:1700.1:"), "Messages:C1:C1:1700.1:#replay:d-2");
+        let unforced = Delivered { replay: Some(Replay { again: false, ..replay }), ..read };
+        assert_eq!(unforced.claimed("Messages:C1:C1:1700.1:"), "Messages:C1:C1:1700.1:", "the listen's own receipt: one that ran it runs nothing");
+        assert_eq!(Delivered::default().attempt(), 0, "a delivery's own judging");
+    }
+
     fn facts_with(pin: &str) -> String {
         format!(r#"{{"source":"s","languageVersion":{pin},"movementName":"m","firedAt":"t"}}"#)
     }

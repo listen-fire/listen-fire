@@ -12,13 +12,16 @@ use crate::lfjson;
 use crate::store::{DeliveryQuery, DeliveryRow, DeliverySource, NewDelivery, NewWork, iso};
 
 const LISTED: i64 = 50;
-const USAGE: &str = "usage: listen-fire deliveries [--subscription <id>] [--since <ISO instant | <n>h | <n>d>] [--json]\n       listen-fire deliveries show <id>\n       listen-fire deliveries replay <id>";
+const USAGE: &str = "usage: listen-fire deliveries [--subscription <id>] [--since <ISO instant | <n>h | <n>d>] [--json]\n       listen-fire deliveries show <id> [--request]\n       listen-fire deliveries replay <id>";
 
 pub struct Request<'a> {
     pub rest: &'a [String],
     pub subscription: Option<&'a str>,
     pub since: Option<&'a str>,
     pub json: bool,
+    /// `show --request`: print the request the delivery was received as,
+    /// which is sensitive and never printed otherwise.
+    pub with_request: bool,
 }
 
 pub fn command(store: &dyn RunHostStore, request: &Request<'_>, out: &mut impl Write) -> Result<i32, String> {
@@ -39,7 +42,7 @@ pub fn command(store: &dyn RunHostStore, request: &Request<'_>, out: &mut impl W
         Some("show") => {
             let Some(id) = request.rest.get(1) else { return needs_an_id("show") };
             let row = kept(store, id)?;
-            let doc = lfjson::delivery_show_doc(&row);
+            let doc = lfjson::delivery_show_doc(&row, request.with_request);
             if request.json {
                 return lfjson::emit(out, &doc, 0);
             }
@@ -110,6 +113,7 @@ fn replay(store: &dyn RunHostStore, original: &DeliveryRow) -> Result<(String, u
         inline: false,
         replay_of: Some(original.id.clone()),
         events,
+        request: None,
     };
     if store.keep_delivery(&original.subscription_id, None, &replayed, &work, None, &[]).map_err(|e| e.to_string())?.is_none() {
         return Err(format!("delivery {new_id} was not kept: the store took it for a duplicate"));
@@ -148,7 +152,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let store = Store::open(&dir.join("state.db")).unwrap();
         let event = Js::Obj(crate::obj! { "external" => Js::str("inbox"), "event" => Js::Obj(crate::obj! { "type" => Js::str("note.created") }) });
-        let original = NewDelivery { id: "d-1".into(), external_id: None, received_at: iso(0), source: DeliverySource::Webhook, inline: true, replay_of: None, events: vec![event] };
+        let original = NewDelivery { id: "d-1".into(), external_id: None, received_at: iso(0), source: DeliverySource::Webhook, inline: true, replay_of: None, events: vec![event], request: None };
         assert!(store.keep_delivery("inbox", None, &original, &[], None, &[]).unwrap().is_some());
         let arrival = crate::waits::NewArrival { edge: "Comments".into(), key: "thread:n-1".into(), identity: Some("k1".into()), version: None, landing: None, gone: false };
         store.log_now(crate::check::LOCAL_TENANT, "inbox", &[arrival]).unwrap();

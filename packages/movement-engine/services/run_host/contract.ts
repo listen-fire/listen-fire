@@ -1181,6 +1181,27 @@ export const deliveryContractCases: DeliveryContractCase[] = [
       assert.ok(await backend.delivery({ id: fresh.id }), 'not old enough');
     },
   },
+  {
+    name: 'deliveries: a delivery keeps the request it was received as until the sweep passes it, its runs or not',
+    async run(backend) {
+      const subscriptionId = uniqueKey('sub');
+      const request = { method: 'POST', path: '/api/public/webhook-sync/slack/slack', query: '', headers: { 'content-type': 'application/json' }, body: 'e30=', checkpoint: { cursor: 3 } };
+      const kept = newDelivery({ request });
+      await backend.keepDelivery({ subscriptionId, delivery: kept, work: [] });
+      assert.deepEqual((await backend.delivery({ id: kept.id }))?.request, request, 'inbound.delivery answers it');
+      assert.equal((await backend.deliveries({ subscriptionId, limit: 10 }))[0]?.request, undefined, 'the list never carries it');
+      const none = newDelivery();
+      await backend.keepDelivery({ subscriptionId, delivery: none, work: [] });
+      assert.equal((await backend.delivery({ id: none.id }))?.request, undefined, 'a delivery no request made keeps none');
+      const old = newDelivery({ receivedAt: DAYS(30), request });
+      await backend.keepDelivery({ subscriptionId, delivery: old, work: [] });
+      await startDeliveryRun(backend, old.id);
+      await backend.sweepDeliveries({ before: DAYS(14), limit: 100 });
+      const held = await backend.delivery({ id: old.id });
+      assert.ok(held, 'its run is still running: the delivery is kept');
+      assert.equal(held.request, undefined, 'past retention, its request is forgotten');
+    },
+  },
 ];
 
 // ── Reruns ──────────────────────────────────────────────────────────────────

@@ -546,24 +546,22 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
                 reason: p.str("reason")?.into(),
                 cause: p.opt_str("cause")?.map(str::to_string),
                 at: p.str("at")?.into(),
+                attempt: match p.value("attempt") {
+                    Js::Null => 0,
+                    Js::Num(n) => n.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| Failure::Params("attempt: expected a whole number".into()))?,
+                    _ => return Err(Failure::Params("attempt: expected a whole number".into())),
+                },
             };
             Ok(Js::Bool(store.note_unjudged(&fact, p.str("forgetBefore")?)?))
         }
         "unjudged.list" => {
-            let after = match p.value("after") {
-                Js::Null => None,
-                after => Some((
-                    after.get("at").and_then(Js::as_str).map(str::to_string),
-                    after.get("pipeline").and_then(Js::as_str).map(str::to_string),
-                    after.get("arrival").and_then(Js::as_str).map(str::to_string),
-                )),
-            };
+            let after = p.value("after");
             let after = match &after {
-                None => None,
-                Some((Some(at), Some(pipeline), Some(arrival))) => Some(crate::records_door::UnjudgedAfter { at, pipeline, arrival }),
-                Some(_) => return Err(Failure::Params("after: expected { at, pipeline, arrival }".into())),
+                Js::Null => None,
+                after => Some(crate::records_door::UnjudgedAfter::from_js(after).ok_or_else(|| Failure::Params("after: expected { at, pipeline, arrival, attempt? }".into()))?),
             };
-            Ok(Js::Arr(store.unjudged_arrivals(after.as_ref(), p.int("limit")?)?.iter().map(crate::records_door::UnjudgedArrival::to_js).collect()))
+            let page = crate::records_door::UnjudgedPage { after, pipeline: p.opt_str("pipeline")?, limit: p.int("limit")? };
+            Ok(Js::Arr(store.unjudged_arrivals(&page)?.iter().map(crate::records_door::UnjudgedArrival::to_js).collect()))
         }
 
         "processes.list" => {
@@ -659,6 +657,7 @@ mod tests {
             inline: false,
             replay_of: None,
             events: vec![Js::str("e-1")],
+            request: None,
         };
         let run = RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(-120_000), input: "{}", delivery_id: Some(&receipt.id), team_id: None };
         assert_eq!(call(&store, "events.startRun", event_run_params(&EventReceipt::own("listen:f:m", "d-1"), &run)), Js::Bool(true));

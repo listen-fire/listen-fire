@@ -493,11 +493,14 @@ impl RunHostStore for ProcessStore {
             Err(error) => Err(self.refused(METHOD, error)),
         }
     }
-    fn unjudged_arrivals(&self, after: Option<&crate::records_door::UnjudgedAfter<'_>>, limit: i64) -> Result<Vec<crate::records_door::UnjudgedArrival>> {
+    fn unjudged_arrivals(&self, page: &crate::records_door::UnjudgedPage<'_>) -> Result<Vec<crate::records_door::UnjudgedArrival>> {
         const METHOD: &str = "unjudged.list";
-        let mut params = obj! { "limit" => Js::Num(limit.into()) };
-        if let Some(after) = after {
-            params.insert("after".into(), Js::Obj(obj! { "at" => s(after.at), "pipeline" => s(after.pipeline), "arrival" => s(after.arrival) }));
+        let mut params = obj! { "limit" => Js::Num(page.limit.into()) };
+        if let Some(after) = &page.after {
+            params.insert("after".into(), after.to_js());
+        }
+        if let Some(pipeline) = page.pipeline {
+            params.insert("pipeline".into(), s(pipeline));
         }
         let answer = match self.client.call(METHOD, params) {
             Ok(answer) => answer,

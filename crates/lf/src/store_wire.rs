@@ -242,9 +242,11 @@ pub fn event_run_params(receipt: &EventReceipt<'_>, run: &RunStart<'_>) -> Obj {
     params
 }
 
-/// `inbound.keepDelivery`'s `delivery`.
+/// `inbound.keepDelivery`'s `delivery`: `request` only when it has one, so
+/// a store module written before deliveries kept their requests reads it as
+/// it always has.
 pub fn delivery_params(delivery: &NewDelivery) -> Obj {
-    obj! {
+    let mut params = obj! {
         "id" => Js::str(&delivery.id),
         "externalId" => opt(delivery.external_id.as_deref()),
         "receivedAt" => Js::str(&delivery.received_at),
@@ -252,7 +254,16 @@ pub fn delivery_params(delivery: &NewDelivery) -> Obj {
         "inline" => Js::Bool(delivery.inline),
         "replayOf" => opt(delivery.replay_of.as_deref()),
         "events" => Js::Arr(delivery.events.clone()),
+    };
+    if let Some(request) = &delivery.request {
+        params.insert("request".into(), request.clone());
     }
+    params
+}
+
+/// A delivery's `request`: absent and `null` alike are none.
+fn request_of(v: &Js) -> Option<Js> {
+    v.get("request").filter(|request| !matches!(request, Js::Null)).cloned()
 }
 
 /// `inbound.keepDelivery`'s `delivery`, read back; None when it is not one.
@@ -268,6 +279,7 @@ pub fn new_delivery(v: &Js) -> Option<NewDelivery> {
         },
         replay_of: opt_text(v, "replayOf")?,
         events: v.get("events")?.as_array()?.to_vec(),
+        request: request_of(v),
     })
 }
 
@@ -298,6 +310,9 @@ impl Wire for DeliveryRow {
         if let Some(events) = &self.events {
             row.insert("events".into(), Js::Arr(events.clone()));
         }
+        if let Some(request) = &self.request {
+            row.insert("request".into(), request.clone());
+        }
         Js::from(row)
     }
 
@@ -319,6 +334,7 @@ impl Wire for DeliveryRow {
                 None | Some(Js::Null) => None,
                 Some(events) => Some(events.as_array()?.to_vec()),
             },
+            request: request_of(v),
         })
     }
 }
@@ -552,6 +568,7 @@ mod tests {
             inline: false,
             replay_of: None,
             events: vec![Js::str("e")],
+            request: None,
         };
         let params = Js::from(delivery_params(&delivery));
         assert_eq!(new_delivery(&params).map(|d| Js::from(delivery_params(&d))), Some(params));

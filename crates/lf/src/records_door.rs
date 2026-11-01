@@ -67,8 +67,9 @@ pub struct ReleaseAfter<'a> {
 
 /// A listen that could not judge an arrival (`unjudged.note`): its filter
 /// reads a field the arrival's module could not read, or the arrival lacks a
-/// record the filter reads. Kept once per listen and arrival: a redelivery,
-/// or a drain running its row again, keeps nothing more.
+/// record the filter reads. Kept once per listen, arrival and attempt: a
+/// redelivery, or a drain running its row again, keeps nothing more; each
+/// replay that still cannot judge it is an attempt of its own.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnjudgedArrival {
     /// The listen, by its pipeline (crate::routing::Listen::pipeline).
@@ -91,6 +92,9 @@ pub struct UnjudgedArrival {
     pub cause: Option<String>,
     /// When the host found it could not judge it.
     pub at: String,
+    /// Which judging of the arrival by the listen: 0 as it was delivered,
+    /// one more for each replay of it (`listen-fire listens replay`).
+    pub attempt: u32,
 }
 
 /// Where a page of unjudged arrivals left off: its last one.
@@ -98,6 +102,15 @@ pub struct UnjudgedAfter<'a> {
     pub at: &'a str,
     pub pipeline: &'a str,
     pub arrival: &'a str,
+    pub attempt: u32,
+}
+
+/// One page of `unjudged.list`.
+pub struct UnjudgedPage<'a> {
+    pub after: Option<UnjudgedAfter<'a>>,
+    /// Only this listen's, by its pipeline.
+    pub pipeline: Option<&'a str>,
+    pub limit: i64,
 }
 
 impl UnjudgedArrival {
@@ -115,7 +128,14 @@ impl UnjudgedArrival {
             "reason" => Js::str(&self.reason),
             "cause" => opt(&self.cause),
             "at" => Js::str(&self.at),
+            "attempt" => Js::Num(self.attempt.into()),
         })
+    }
+
+    /// The `Event Id` `@lf/system` reports it under (modules/system/poll.ts):
+    /// one per listen, arrival and attempt.
+    pub fn event_id(&self) -> String {
+        format!("arrival_not_judged:{}:{}:{}", self.pipeline, self.arrival, self.attempt)
     }
 
     /// One read back off the store slot's wire; None when it is not one.
@@ -137,7 +157,30 @@ impl UnjudgedArrival {
             reason: text("reason")?,
             cause: opt("cause")?,
             at: text("at")?,
+            attempt: match value.get("attempt") {
+                Some(Js::Num(n)) => u32::try_from(n.as_u64()?).ok()?,
+                _ => return None,
+            },
         })
+    }
+}
+
+impl UnjudgedAfter<'_> {
+    /// As the store slot and the records door carry it.
+    pub fn to_js(&self) -> Js {
+        Js::Obj(obj! { "at" => Js::str(self.at), "pipeline" => Js::str(self.pipeline), "arrival" => Js::str(self.arrival), "attempt" => Js::Num(self.attempt.into()) })
+    }
+
+    /// Read off the wire: `{ at, pipeline, arrival, attempt? }`, an absent
+    /// attempt the first; None when it is not one.
+    pub fn from_js(value: &Js) -> Option<UnjudgedAfter<'_>> {
+        let text = |key: &str| value.get(key).and_then(Js::as_str);
+        let attempt = match value.get("attempt") {
+            None | Some(Js::Null) => 0,
+            Some(Js::Num(n)) => u32::try_from(n.as_u64()?).ok()?,
+            Some(_) => return None,
+        };
+        Some(UnjudgedAfter { at: text("at")?, pipeline: text("pipeline")?, arrival: text("arrival")?, attempt })
     }
 }
 
@@ -315,10 +358,10 @@ fn releases(store: &dyn RunHostStore, params: &Js) -> std::result::Result<Js, Fa
 fn unjudged_arrivals(store: &dyn RunHostStore, kept_ms: i64, params: &Js) -> std::result::Result<Js, Failure> {
     let after = match params.get("after") {
         None | Some(Js::Null) => None,
-        Some(after) => Some(UnjudgedAfter { at: text(after, "at")?, pipeline: text(after, "pipeline")?, arrival: text(after, "arrival")? }),
+        Some(after) => Some(UnjudgedAfter::from_js(after).ok_or_else(|| Failure::Params("after: expected { at, pipeline, arrival, attempt? }".into()))?),
     };
     let mut rows = Vec::new();
-    for fact in store.unjudged_arrivals(after.as_ref(), limit_of(params)?)? {
+    for fact in store.unjudged_arrivals(&UnjudgedPage { after, pipeline: None, limit: limit_of(params)? })? {
         if let Some(cause) = &fact.cause
             && let Some((_, facts)) = facts_of(store, cause)?
         {
@@ -359,25 +402,26 @@ impl Store {
         Ok(self.db.execute("insert into release_seen (version, seen_at) values (?, ?) on conflict do nothing", rusqlite::params![version, at])? == 1)
     }
 
-    /// Keep that a listen could not judge an arrival, unless it was kept
-    /// before (whether it is new), and forget what was kept before
-    /// `forget_before`, as one write.
+    /// Keep that a listen could not judge an arrival at an attempt, unless
+    /// it was kept before (whether it is new), and forget what was kept
+    /// before `forget_before`, as one write.
     pub fn note_unjudged(&self, fact: &UnjudgedArrival, forget_before: &str) -> Result<bool> {
         let at = crate::store::canonical_iso(&fact.at)?;
         let forget_before = crate::store::canonical_iso(forget_before)?;
         self.transaction(|db| {
             db.execute("delete from arrival_unjudged where noted_at < ?", rusqlite::params![forget_before])?;
             Ok(db.execute(
-                "insert into arrival_unjudged (pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
-                rusqlite::params![fact.pipeline, fact.arrival, fact.file, fact.movement, fact.delivery_id, fact.edge, fact.record_id, fact.reason, fact.cause, at],
+                "insert into arrival_unjudged (pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at, attempt) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
+                rusqlite::params![fact.pipeline, fact.arrival, fact.file, fact.movement, fact.delivery_id, fact.edge, fact.record_id, fact.reason, fact.cause, at, fact.attempt],
             )? == 1)
         })
     }
 
-    /// The unjudged arrivals kept after `after`, oldest first (ties by
-    /// listen, then arrival).
-    pub fn unjudged_arrivals(&self, after: Option<&UnjudgedAfter<'_>>, limit: i64) -> Result<Vec<UnjudgedArrival>> {
-        const COLUMNS: &str = "select pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at from arrival_unjudged";
+    /// The unjudged arrivals of `page`, oldest first (ties by listen, then
+    /// arrival, then attempt).
+    pub fn unjudged_arrivals(&self, page: &UnjudgedPage<'_>) -> Result<Vec<UnjudgedArrival>> {
+        const COLUMNS: &str = "select pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at, attempt from arrival_unjudged where (?1 is null or pipeline = ?1)";
+        const ORDER: &str = "order by noted_at, pipeline, arrival, attempt limit ?2";
         let row = |r: &rusqlite::Row<'_>| {
             Ok(UnjudgedArrival {
                 pipeline: r.get(0)?,
@@ -390,14 +434,15 @@ impl Store {
                 reason: r.get(7)?,
                 cause: r.get(8)?,
                 at: r.get(9)?,
+                attempt: r.get(10)?,
             })
         };
-        Ok(match after {
-            None => self.db.prepare(&format!("{COLUMNS} order by noted_at, pipeline, arrival limit ?"))?.query_map(rusqlite::params![limit], row)?.collect::<rusqlite::Result<Vec<_>>>()?,
+        Ok(match &page.after {
+            None => self.db.prepare(&format!("{COLUMNS} {ORDER}"))?.query_map(rusqlite::params![page.pipeline, page.limit], row)?.collect::<rusqlite::Result<Vec<_>>>()?,
             Some(after) => self
                 .db
-                .prepare(&format!("{COLUMNS} where (noted_at, pipeline, arrival) > (?, ?, ?) order by noted_at, pipeline, arrival limit ?"))?
-                .query_map(rusqlite::params![crate::store::canonical_iso(after.at)?, after.pipeline, after.arrival, limit], row)?
+                .prepare(&format!("{COLUMNS} and (noted_at, pipeline, arrival, attempt) > (?3, ?4, ?5, ?6) {ORDER}"))?
+                .query_map(rusqlite::params![page.pipeline, page.limit, crate::store::canonical_iso(after.at)?, after.pipeline, after.arrival, after.attempt], row)?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         })
     }
@@ -549,6 +594,7 @@ mod tests {
             reason: "slack could not read Name of the Channels record the arrival carries, which this listen's filter reads".into(),
             cause: cause.map(str::to_string),
             at: iso_at(at),
+            attempt: 0,
         }
     }
 
@@ -561,6 +607,14 @@ mod tests {
         assert!(store.note_unjudged(&first, &iso_at(t0 - 1000)).unwrap());
         assert!(!store.note_unjudged(&UnjudgedArrival { at: iso_at(t0 + 5), reason: "again".into(), ..first.clone() }, &iso_at(t0 - 1000)).unwrap(), "once per listen and arrival");
         assert!(store.note_unjudged(&unjudged(&two, "Messages:C1:C1:1700.1:", t0 + 10, None), &iso_at(t0 - 1000)).unwrap(), "another listen's is its own");
+        let replayed = UnjudgedArrival { at: iso_at(t0 + 12), attempt: 1, ..first.clone() };
+        assert!(store.note_unjudged(&replayed, &iso_at(t0 - 1000)).unwrap(), "a replay's attempt is its own");
+        assert!(!store.note_unjudged(&replayed, &iso_at(t0 - 1000)).unwrap(), "once per attempt");
+        let listed = store.unjudged_arrivals(&UnjudgedPage { after: None, pipeline: Some(&one), limit: 10 }).unwrap();
+        assert_eq!(listed, [first.clone(), replayed.clone()], "one listen's, its attempts in order");
+        let after = UnjudgedAfter { at: &first.at, pipeline: &one, arrival: &first.arrival, attempt: 0 };
+        assert_eq!(store.unjudged_arrivals(&UnjudgedPage { after: Some(after), pipeline: Some(&one), limit: 10 }).unwrap(), [replayed.clone()]);
+        assert_eq!(replayed.event_id(), format!("arrival_not_judged:{one}:Messages:C1:C1:1700.1::1"));
         // Only this case's: a database a case ran over before holds others.
         let read = |after: Js| -> Vec<Js> {
             let (status, read) = ask("records.unjudgedArrivals", Js::Obj(obj! { "after" => after, "limit" => Js::Num(10.into()) }));
@@ -568,9 +622,9 @@ mod tests {
             read.get("result").and_then(Js::as_array).unwrap().iter().filter(|r| r.get("pipeline").and_then(Js::as_str).is_some_and(|p| p.ends_with(&t0.to_string()))).cloned().collect()
         };
         let rows = read(Js::Obj(obj! { "at" => Js::Str(iso_at(t0 - 1)), "pipeline" => Js::str(""), "arrival" => Js::str("") }));
-        assert_eq!(rows, [first.to_js(), unjudged(&two, "Messages:C1:C1:1700.1:", t0 + 10, None).to_js()]);
+        assert_eq!(rows, [first.to_js(), unjudged(&two, "Messages:C1:C1:1700.1:", t0 + 10, None).to_js(), replayed.to_js()]);
         let next = read(Js::Obj(obj! { "at" => Js::Str(iso_at(t0)), "pipeline" => Js::str(&one), "arrival" => Js::str("Messages:C1:C1:1700.1:") }));
-        assert_eq!(next.len(), 1);
+        assert_eq!(next.len(), 2);
         let about = crate::loop_breaker::LedgerRecord { adapter: crate::loop_breaker::HOST, record_type: crate::loop_breaker::HOST_RUN, external_id: &cause };
         let deepest = store.deepest_write(&about, &iso(-60_000)).unwrap().unwrap();
         assert_eq!((deepest.run_id.as_str(), deepest.depth), (cause.as_str(), 1), "the run whose write caused the arrival, at its place in its chain");

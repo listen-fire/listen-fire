@@ -423,7 +423,12 @@ pub struct RawRequest<'a> {
 impl RawRequest<'_> {
     /// `WireInboundRequest`: the body base64.
     pub fn wire(&self) -> Js {
-        let headers = self.headers.iter().map(|(k, v)| (k.to_lowercase(), Js::str(v))).collect();
+        self.wire_with(|_| true)
+    }
+
+    /// `wire`, with only the headers `kept` keeps.
+    fn wire_with(&self, kept: impl Fn(&str) -> bool) -> Js {
+        let headers = self.headers.iter().map(|(k, v)| (k.to_lowercase(), Js::str(v))).filter(|(k, _)| kept(k)).collect();
         Js::Obj(obj! {
             "method" => Js::str(self.method),
             "path" => Js::str(self.path),
@@ -432,6 +437,53 @@ impl RawRequest<'_> {
             "body" => Js::Str(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, self.body)),
         })
     }
+
+    /// The request as its delivery keeps it (NewDelivery::request), with the
+    /// pull cursor its module read it against: its body, and the headers its
+    /// module's inbound handling reads. A module that checks its own
+    /// requests reads them whole; under a declared scheme the module reads
+    /// the body as its content type says, and the provider's delivery id
+    /// names it. The signature is not kept: a replay is of the host's own
+    /// capture, and is not verified again.
+    fn captured(&self, declaration: &Declaration, checkpoint: Option<&Js>) -> Js {
+        let read = |name: &str| declaration.scheme == Scheme::Module || name == "content-type" || declaration.delivery_id_header.as_deref() == Some(name);
+        let mut kept = self.wire_with(read);
+        if let (Js::Obj(fields), Some(checkpoint)) = (&mut kept, checkpoint) {
+            fields.insert("checkpoint".into(), checkpoint.clone());
+        }
+        kept
+    }
+}
+
+/// A delivery's kept request read back (RawRequest::captured).
+pub struct Captured {
+    pub method: String,
+    pub path: String,
+    pub query: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+    pub checkpoint: Option<Js>,
+}
+
+impl Captured {
+    /// None when `kept` is not one.
+    pub fn read(kept: &Js) -> Option<Captured> {
+        let text = |key: &str| kept.get(key).and_then(Js::as_str).map(str::to_string);
+        let Some(Js::Obj(headers)) = kept.get("headers") else { return None };
+        let headers = headers.iter().map(|(name, value)| value.as_str().map(|value| (name.clone(), value.to_string()))).collect::<Option<Vec<_>>>()?;
+        let body = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, kept.get("body")?.as_str()?).ok()?;
+        Some(Captured { method: text("method")?, path: text("path")?, query: text("query")?, headers, body, checkpoint: kept.get("checkpoint").cloned() })
+    }
+
+    fn raw(&self) -> RawRequest<'_> {
+        RawRequest { method: &self.method, path: &self.path, query: &self.query, headers: &self.headers, body: &self.body }
+    }
+}
+
+/// A push to a door, as its delivery keeps it: the body alone (its
+/// credential is never kept).
+pub fn captured_push(raw_body: &[u8]) -> Js {
+    RawRequest { method: "POST", path: "", query: "", headers: &[], body: raw_body }.wire()
 }
 
 /// What a door needs of its host (`InboundStore` with the adapter it opens).
@@ -486,6 +538,8 @@ pub struct Kept<'a> {
     pub external_id: Option<&'a str>,
     /// Which door it came through (the receipt's `source`).
     pub door: DeliverySource,
+    /// The request as the delivery keeps it (RawRequest::captured).
+    pub request: Js,
 }
 
 pub struct Delivery<'a> {
@@ -600,8 +654,9 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
     }
     let Some(source) = store.source_for(&subscription).await? else { return refused(Refusal::UnknownProvider) };
 
+    let request = RawRequest { method: delivery.method, path: delivery.path, query: delivery.query, headers: delivery.headers, body: delivery.raw_body };
+    let kept_request = request.captured(&source.declaration, subscription.checkpoint.as_ref());
     let (extraction, external_id, reply) = if source.declaration.scheme == Scheme::Module {
-        let request = RawRequest { method: delivery.method, path: delivery.path, query: delivery.query, headers: delivery.headers, body: delivery.raw_body };
         let secret = is_usable_secret(&source.secret).then_some(source.secret.as_str());
         let answer = store.check_inbound(&source, &request, secret, subscription.checkpoint.as_ref()).await?;
         match answer.get("outcome").and_then(Js::as_str) {
@@ -678,11 +733,54 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
         arrivals: &extraction.arrivals,
         external_id: external_id.as_deref(),
         door: delivery.source,
+        request: kept_request,
     };
     if !store.keep(kept).await? {
         return Ok(Ok(Received::Duplicate));
     }
     Ok(Ok(Received::Kept(events_processed, reply)))
+}
+
+/// What a kept delivery's request reads as now: its module's inbound
+/// handling run again on it (`preprocessInbound`, or `checkInbound` for a
+/// module that checks its own requests), under the pull cursor it was read
+/// against, its lookups made afresh. A declared scheme's signature is not
+/// verified again: the request is the host's own capture. A module that
+/// checks its own requests checks this one too, and may refuse it. Nothing
+/// is kept: the cursor its module answers is dropped.
+pub async fn reread_delivery<S: InboundStore>(store: &S, subscription_id: &str, captured: &Captured) -> Result<(Source, Extraction), String> {
+    let gone = || format!("the subscription {subscription_id} the delivery came through is no longer served");
+    let subscription = store.find_subscription(subscription_id).await?.ok_or_else(gone)?;
+    let source = store.source_for(&subscription).await?.ok_or_else(gone)?;
+    let extraction = if source.declaration.scheme == Scheme::Module {
+        let secret = is_usable_secret(&source.secret).then_some(source.secret.as_str());
+        let answer = store.check_inbound(&source, &captured.raw(), secret, captured.checkpoint.as_ref()).await?;
+        match answer.get("outcome").and_then(Js::as_str) {
+            Some("reply" | "refused") => return Err(format!("{} refused the kept request as it checked it again (its own check of a request runs on a replay)", source.adapter_type)),
+            _ => Extraction {
+                events: answer.get("events").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default(),
+                arrivals: arrivals_of(&answer).map_err(|e| format!("checkInbound for adapter {}: {e}", source.adapter_type))?,
+                checkpoint: None,
+            },
+        }
+    } else {
+        if !store.reads_deliveries(&source) {
+            return Err(format!("{} reads no deliveries (preprocessInbound)", source.adapter_type));
+        }
+        let body = delivery_body(&captured.body, &captured.headers)?;
+        Extraction { checkpoint: None, ..store.preprocess(&source, &body, captured.checkpoint.as_ref()).await? }
+    };
+    Ok((source, extraction))
+}
+
+/// What a push to the `wake` door, kept with its delivery, reports: its
+/// arrivals, as the door read them. A push of events reports none.
+pub fn reread_push(captured: &Captured) -> Result<Vec<ArrivalIn>, String> {
+    let body = Js::parse(&captured.body).map_err(|e| format!("the kept push is not JSON: {e}"))?;
+    if body.get("arrivals").is_none() {
+        return Ok(Vec::new());
+    }
+    wake_body(Some(&body)).map(|woken| woken.arrivals).map_err(|(path, message)| format!("the kept push's {path}: {message}"))
 }
 
 /// A delivery's body as its module reads it: JSON, or a form's fields when it
@@ -751,11 +849,11 @@ pub trait PushStore {
     async fn capture_pushed(&self, caller: &PushCaller, event: &Js) -> Result<Vec<Js>, String>;
     /// The batch's receipts kept and queued as one delivery. False, and
     /// nothing queued, for a duplicate: its external id was kept before.
-    async fn enqueue_pushed(&self, caller: &PushCaller, captured: Vec<Js>, external_id: Option<&str>) -> Result<bool, String>;
+    async fn enqueue_pushed(&self, caller: &PushCaller, captured: Vec<Js>, external_id: Option<&str>, request: &Js) -> Result<bool, String>;
     /// The arrivals that name their record logged, and a wake queued per wait
     /// parked on their records; those that landed judged against the
     /// listens on their edges, for the connection that pushed them.
-    async fn log_pushed_arrivals(&self, caller: &PushCaller, arrivals: &[ArrivalIn]) -> Result<(), String>;
+    async fn log_pushed_arrivals(&self, caller: &PushCaller, arrivals: &[ArrivalIn], request: &Js) -> Result<(), String>;
     fn notify_pushed(&self);
 }
 
@@ -791,11 +889,11 @@ pub async fn answer_push<S: PushStore>(store: &S, push: Push, adapter_type: &str
     let answered = match push {
         Push::Emit => match emit_body(body.as_ref()) {
             Err(issue) => return bad_request(issue),
-            Ok((events, delivery_id)) => emit(store, &caller, events, delivery_id.as_deref()).await,
+            Ok((events, delivery_id)) => emit(store, &caller, events, delivery_id.as_deref(), &captured_push(raw_body)).await,
         },
         Push::Wake => match wake_body(body.as_ref()) {
             Err(issue) => return bad_request(issue),
-            Ok(woken) => wake(store, &caller, &woken).await,
+            Ok(woken) => wake(store, &caller, &woken, &captured_push(raw_body)).await,
         },
     };
     answered.unwrap_or_else(|error| {
@@ -860,7 +958,7 @@ fn bad_request((path, message): (String, String)) -> Answer {
 /// one delivery. A capture that throws fails the call (500) after the
 /// receipts already made are queued, since a receipt without its row would
 /// never run. A batch under an id kept before queues nothing.
-async fn emit<S: PushStore>(store: &S, caller: &PushCaller, events: Vec<Js>, delivery_id: Option<&str>) -> Result<Answer, String> {
+async fn emit<S: PushStore>(store: &S, caller: &PushCaller, events: Vec<Js>, delivery_id: Option<&str>, request: &Js) -> Result<Answer, String> {
     let mut captured = Vec::new();
     let mut failed = 0u64;
     for event in &events {
@@ -877,7 +975,7 @@ async fn emit<S: PushStore>(store: &S, caller: &PushCaller, events: Vec<Js>, del
     // A batch with a failed capture is the caller's to send again: kept
     // without its id, so the retry is kept rather than a duplicate.
     let external_id = delivery_id.filter(|_| failed == 0);
-    if !store.enqueue_pushed(caller, captured, external_id).await? {
+    if !store.enqueue_pushed(caller, captured, external_id, request).await? {
         return Ok(Answer::of(202, Js::Obj(obj! { "accepted" => Js::Num(0.into()), "duplicate" => Js::Bool(true) })));
     }
     if any {
@@ -891,8 +989,8 @@ async fn emit<S: PushStore>(store: &S, caller: &PushCaller, events: Vec<Js>, del
 
 /// Arrivals are logged, each waking the waits parked on its record; one no
 /// wait reads is kept for a wait opened later. `accepted` counts them.
-async fn wake<S: PushStore>(store: &S, caller: &PushCaller, woken: &Woken) -> Result<Answer, String> {
-    store.log_pushed_arrivals(caller, &woken.arrivals).await?;
+async fn wake<S: PushStore>(store: &S, caller: &PushCaller, woken: &Woken, request: &Js) -> Result<Answer, String> {
+    store.log_pushed_arrivals(caller, &woken.arrivals, request).await?;
     store.notify_pushed();
     Ok(Answer::of(202, Js::Obj(obj! { "accepted" => Js::Num((woken.arrivals.len() as u64).into()) })))
 }

@@ -193,19 +193,19 @@ impl<'a> LfDoors<'a, SessionReader<'a>> {
 }
 
 impl<R: Reader> LfDoors<'_, R> {
-    fn install(&self, name: &str) -> Option<&Credential> {
+    pub(crate) fn install(&self, name: &str) -> Option<&Credential> {
         self.installs.iter().find(|c| c.name == name)
     }
 
     /// The connection a delivery to `source`'s door came for: the credential
     /// its URL names. None when that is the module's install, whose door
     /// serves every connection.
-    fn delivering_credential<'s>(&self, source: &'s Source) -> Option<&'s str> {
+    pub(crate) fn delivering_credential<'s>(&self, source: &'s Source) -> Option<&'s str> {
         self.install(&source.install).filter(|c| c.binding != Binding::Install).map(|_| source.install.as_str())
     }
 
     /// How long `external`'s provider may re-send an arrival.
-    fn resend_window_ms(&self, external: &str) -> i64 {
+    pub(crate) fn resend_window_ms(&self, external: &str) -> i64 {
         self.served.iter().find(|s| s.external == external).map_or(crate::externals::DEFAULT_RESEND_WINDOW_MS, |s| s.resend_window_ms)
     }
 
@@ -407,7 +407,7 @@ impl<R: Reader> LfDoors<'_, R> {
     /// under the head the webhook it came through (`subscription_id`) was
     /// made for, when it is one for an edge's arrivals under one head: the
     /// waits log them, and the listens judge them, under that head.
-    fn under_head(&self, subscription_id: &str, arrivals: &[ArrivalIn]) -> Vec<ArrivalIn> {
+    pub(crate) fn under_head(&self, subscription_id: &str, arrivals: &[ArrivalIn]) -> Vec<ArrivalIn> {
         let (name, key) = subscription_of(subscription_id);
         let head = key.zip(self.install(name)).and_then(|(key, credential)| crate::subscriptions::edge_webhook_head(credential, key));
         crate::arrivals::under_head(arrivals, head.as_deref())
@@ -512,7 +512,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
     /// is noted on its waits, may answer it.
     async fn keep(&self, kept: Kept<'_>) -> Result<bool, String> {
         let adapter_type = &kept.source.adapter_type;
-        let came_for = Delivered { id: None, credential: self.delivering_credential(kept.source), subscription: subscription_of(kept.subscription_id).1, arrival_mark: None, minted: None };
+        let came_for = Delivered { id: None, credential: self.delivering_credential(kept.source), subscription: subscription_of(kept.subscription_id).1, arrival_mark: None, minted: None, replay: None };
         let receipt = NewDelivery {
             id: uuid::Uuid::new_v4().to_string(),
             external_id: kept.external_id.map(str::to_string),
@@ -521,6 +521,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
             inline: matches!(self.sink, EventSink::Inline { .. }),
             replay_of: None,
             events: kept.receipts.iter().map(|event| kept_event(adapter_type, event.clone(), came_for)).collect(),
+            request: Some(kept.request),
         };
         let arrivals = self.under_head(kept.subscription_id, kept.arrivals);
         let landed = self.landed_for_listens(adapter_type, came_for.credential, &arrivals);
@@ -645,7 +646,7 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
     }
 
     /// The batch as one delivery, its receipt and its rows in one write.
-    async fn enqueue_pushed(&self, caller: &PushCaller, captured: Vec<Js>, external_id: Option<&str>) -> Result<bool, String> {
+    async fn enqueue_pushed(&self, caller: &PushCaller, captured: Vec<Js>, external_id: Option<&str>, request: &Js) -> Result<bool, String> {
         if captured.is_empty() {
             return Ok(true);
         }
@@ -657,6 +658,7 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
             inline: false,
             replay_of: None,
             events: captured,
+            request: Some(request.clone()),
         };
         let mut work: Vec<NewWork> = receipt
             .events
@@ -680,7 +682,7 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
     /// runs it fires in one write (as a delivery is): the row carries the
     /// mark before the arrivals, and each run's trigger is noted on its
     /// waits. What landed for none is logged alone.
-    async fn log_pushed_arrivals(&self, caller: &PushCaller, arrivals: &[ArrivalIn]) -> Result<(), String> {
+    async fn log_pushed_arrivals(&self, caller: &PushCaller, arrivals: &[ArrivalIn], request: &Js) -> Result<(), String> {
         let (logged, at) = (logged(arrivals), iso(0));
         let log = DeliveryArrivals { team_id: &caller.team_id, adapter_type: &caller.adapter_type, arrivals: &logged, at: &at, resend_window_ms: self.resend_window_ms(&caller.adapter_type) };
         let credential = self.install(&caller.subscription_id).filter(|c| c.binding != Binding::Install).map(|c| c.name.as_str());
@@ -691,7 +693,16 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
         }
         // A listen that cannot judge an arrival is noted as the row runs.
         let Minted { runs: minted, mut waits, .. } = self.mint_runs(&caller.adapter_type, Some(&caller.subscription_id), credential, &landed).await?;
-        let receipt = NewDelivery { id: uuid::Uuid::new_v4().to_string(), external_id: None, received_at: at.clone(), source: DeliverySource::Emit, inline: false, replay_of: None, events: Vec::new() };
+        let receipt = NewDelivery {
+            id: uuid::Uuid::new_v4().to_string(),
+            external_id: None,
+            received_at: at.clone(),
+            source: DeliverySource::Emit,
+            inline: false,
+            replay_of: None,
+            events: Vec::new(),
+            request: Some(request.clone()),
+        };
         let row = fire_arrivals_work(&caller.adapter_type, &landed, Delivered { id: Some(&receipt.id), credential, minted: Some(&minted), ..Delivered::default() });
         queued_by(&mut waits, &row.key);
         let mut rows = vec![row];
@@ -1528,6 +1539,27 @@ pub(crate) mod tests {
             let events = session.store.delivery(&receipt.id).unwrap().unwrap().events.unwrap();
             assert_eq!(events[0].get("external"), Some(&Js::str("inbox")), "a kept event names its external, for a replay");
             assert_eq!(events[0].get("event").and_then(|e| e.get("externalId")), Some(&Js::str("n-1")));
+        });
+    }
+
+    /// The request is kept with its delivery as received, for a replay: its
+    /// body and the headers its module reads, never its signature.
+    #[test]
+    fn a_delivery_keeps_the_request_it_was_received_as_without_its_signature() {
+        let project = InboxProject::new();
+        in_local(async {
+            let session = project.session().await;
+            assert_eq!(hook(&session, NOTE, "d-1").await.0.status, 200);
+            let receipt = &kept(&session)[0];
+            assert_eq!(receipt.request, None, "a listing never carries it");
+            let request = session.store.delivery(&receipt.id).unwrap().unwrap().request.unwrap();
+            let captured = crate::inbound::Captured::read(&request).unwrap();
+            assert_eq!(captured.body, NOTE);
+            assert_eq!((captured.method.as_str(), captured.path.as_str()), ("POST", "/hooks/inbox"));
+            assert_eq!(captured.headers, [("x-inbox-delivery".to_string(), "d-1".to_string())], "the delivery id its module's door reads; not the signature");
+            let shown = crate::lfjson::delivery_show_doc(&session.store.delivery(&receipt.id).unwrap().unwrap(), false);
+            assert_eq!(shown.get("delivery").and_then(|d| d.get("request")), None, "not shown unless asked for");
+            assert_eq!(shown.get("delivery").and_then(|d| d.get("requestKept")), Some(&Js::Bool(true)));
         });
     }
 

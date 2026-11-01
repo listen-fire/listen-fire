@@ -345,12 +345,15 @@ pub struct UnjudgedAfter {
     pub at: String,
     pub pipeline: String,
     pub arrival: String,
+    #[serde(default)]
+    pub attempt: u32,
 }
 
 /// A listen that could not judge an arrival (`unjudged.list`): the listen by
 /// its pipeline, the arrival by its receipt key, its file and movement, the
 /// kept delivery it came in, its edge and record, why, the run whose write
-/// caused it, and when.
+/// caused it, when, and which attempt at judging it (0 as delivered, one
+/// more per replay).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnjudgedArrival {
@@ -364,6 +367,7 @@ pub struct UnjudgedArrival {
     pub reason: String,
     pub cause: Option<String>,
     pub at: String,
+    pub attempt: u32,
 }
 
 /// What a `work.release` says of the claim.
@@ -403,8 +407,9 @@ pub enum DeliverySource {
 }
 
 /// A delivery's receipt (`inbound.keepDelivery`'s `delivery`): the events it
-/// produced. A second one with the same `external_id` at the same
-/// subscription is a duplicate.
+/// produced, and the request it was received as (`request`: sensitive, kept
+/// while the delivery is, for a replay). A second one with the same
+/// `external_id` at the same subscription is a duplicate.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewDelivery {
@@ -417,6 +422,8 @@ pub struct NewDelivery {
     #[serde(default)]
     pub replay_of: Option<String>,
     pub events: Vec<Js>,
+    #[serde(default)]
+    pub request: Option<Js>,
 }
 
 /// A delivery's arrivals (`inbound.keepDelivery`'s `arrivals`), logged in
@@ -484,7 +491,7 @@ pub struct DeliveryRun {
     pub status: String,
 }
 
-/// A kept delivery: `events` only from `inbound.delivery`.
+/// A kept delivery: `events` and `request` only from `inbound.delivery`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeliveryRow {
@@ -499,6 +506,8 @@ pub struct DeliveryRow {
     pub runs: Vec<DeliveryRun>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub events: Option<Vec<Js>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<Js>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -780,9 +789,10 @@ slot! {
         /// `after` names, at most `limit`.
         "releases.list" => fn releases(ReleasesList { #[serde(default)] after: Option<ReleaseAfter>, limit: i64 }) -> Vec<SeenRelease>;
         /// Keep that a listen could not judge an arrival, unless it was kept
-        /// before for the same `pipeline` and `arrival` (whether it is new),
-        /// and forget what was kept before `forget_before`, as one write. A
-        /// store that keeps none may answer `method_not_implemented`.
+        /// before for the same `pipeline`, `arrival` and `attempt` (whether
+        /// it is new), and forget what was kept before `forget_before`, as
+        /// one write. A store that keeps none may answer
+        /// `method_not_implemented`.
         "unjudged.note" => fn note_unjudged(UnjudgedNote {
             pipeline: String,
             arrival: String,
@@ -797,11 +807,14 @@ slot! {
             #[serde(default)]
             cause: Option<String>,
             at: String,
+            #[serde(default)]
+            attempt: u32,
             forget_before: String,
         }) -> bool;
         /// The unjudged arrivals kept, oldest first (ties by pipeline, then
-        /// arrival), after the one `after` names, at most `limit`.
-        "unjudged.list" => fn unjudged_arrivals(UnjudgedList { #[serde(default)] after: Option<UnjudgedAfter>, limit: i64 }) -> Vec<UnjudgedArrival>;
+        /// arrival, then attempt), after the one `after` names, only the
+        /// listen `pipeline`'s when it names one, at most `limit`.
+        "unjudged.list" => fn unjudged_arrivals(UnjudgedList { #[serde(default)] after: Option<UnjudgedAfter>, #[serde(default)] pipeline: Option<String>, limit: i64 }) -> Vec<UnjudgedArrival>;
         /// One write: the receipt first, then the cursor (absent: left as it
         /// is), the arrivals and the work rows. A duplicate
         /// (`delivery.external_id` kept at this subscription before) writes

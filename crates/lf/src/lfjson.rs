@@ -283,9 +283,18 @@ pub fn deliveries_list_doc(rows: &[DeliveryRow]) -> Js {
     Js::Obj(obj! { "deliveries" => Js::Arr(rows.iter().map(Wire::to_wire).collect()) })
 }
 
-/// `deliveries show`: one delivery, with the events it holds and the runs they started.
-pub fn delivery_show_doc(row: &DeliveryRow) -> Js {
-    Js::Obj(obj! { "delivery" => row.to_wire() })
+/// `deliveries show`: one delivery, with the events it holds and the runs
+/// they started, and whether it keeps the request it was received as. The
+/// request itself, which is sensitive, only `with_request`.
+pub fn delivery_show_doc(row: &DeliveryRow, with_request: bool) -> Js {
+    let mut shown = row.to_wire();
+    if let Js::Obj(fields) = &mut shown {
+        fields.insert("requestKept".into(), Js::Bool(row.request.is_some()));
+        if !with_request {
+            fields.shift_remove("request");
+        }
+    }
+    Js::Obj(obj! { "delivery" => shown })
 }
 
 /// `deliveries replay`: the new delivery, the one it replays and the events queued.

@@ -956,6 +956,7 @@ mod tests {
                         inline: false,
                         replay_of: None,
                         events: vec![],
+                        request: None,
                     };
                     let now = iso(0);
                     let log = DeliveryArrivals { team_id: &team, adapter_type: adapter, arrivals: &arrivals, at: &now, resend_window_ms: resend_window_of(step) };
@@ -1144,6 +1145,7 @@ mod tests {
             inline: false,
             replay_of: None,
             events: vec![],
+            request: None,
         };
         let fire = NewWork { kind: "fire_event".into(), key: format!("fire_event:{run}"), payload: Js::Obj(obj! { "external" => Js::str("acme") }), due_at: None, team_id: Some(team.clone()) };
         let arrival = NewArrival { edge: "Comments".into(), key: key.clone(), identity: Some("k1".into()), version: None, landing: Some(Js::Null), gone: false };

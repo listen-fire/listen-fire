@@ -328,20 +328,20 @@ impl PushStore for Observed<'_> {
         Ok(captured)
     }
 
-    async fn enqueue_pushed(&self, caller: &PushCaller, captured: Vec<Js>, external_id: Option<&str>) -> Result<bool, String> {
+    async fn enqueue_pushed(&self, caller: &PushCaller, captured: Vec<Js>, external_id: Option<&str>, request: &Js) -> Result<bool, String> {
         let count = captured.len() as u64;
-        if !self.lf().enqueue_pushed(caller, captured, external_id).await? {
+        if !self.lf().enqueue_pushed(caller, captured, external_id, request).await? {
             return Ok(false);
         }
         self.note(|seen| seen.enqueued += count);
         Ok(true)
     }
 
-    async fn log_pushed_arrivals(&self, caller: &PushCaller, arrivals: &[ArrivalIn]) -> Result<(), String> {
+    async fn log_pushed_arrivals(&self, caller: &PushCaller, arrivals: &[ArrivalIn], request: &Js) -> Result<(), String> {
         if self.faults.log_arrivals {
             return Err("arrival log unavailable".into());
         }
-        self.lf().log_pushed_arrivals(caller, arrivals).await?;
+        self.lf().log_pushed_arrivals(caller, arrivals, request).await?;
         self.note(|seen| seen.arrivals.extend(arrivals.iter().map(ArrivalIn::to_js)));
         Ok(())
     }

@@ -117,9 +117,9 @@ create table if not exists arrival_unjudged (
   reason text not null,
   cause text,
   noted_at text not null,
-  primary key (pipeline, arrival)
+  attempt integer not null default 0,
+  primary key (pipeline, arrival, attempt)
 );
-create index if not exists arrival_unjudged_at on arrival_unjudged (noted_at, pipeline, arrival);
 create table if not exists module_processes (
   id integer primary key check (id = 1),
   processes text not null,
@@ -141,7 +141,8 @@ create table if not exists delivery (
   inline integer not null,
   replay_of text,
   events text not null,
-  event_count integer not null
+  event_count integer not null,
+  request text
 );
 create unique index if not exists delivery_external on delivery (subscription_id, external_id) where external_id is not null;
 create index if not exists delivery_received on delivery (received_at);
@@ -614,7 +615,8 @@ impl DeliverySource {
 }
 
 /// A delivery's receipt, kept in the door's one write (`inbound.keepDelivery`):
-/// the events it produced, never its raw body, headers or signature.
+/// the events it produced, and the request as it was received, for a replay
+/// (crate::listen_replay).
 #[derive(Debug, Clone)]
 pub struct NewDelivery {
     /// listen-fire's own id for it.
@@ -629,6 +631,12 @@ pub struct NewDelivery {
     /// The delivery it replays.
     pub replay_of: Option<String>,
     pub events: Vec<Js>,
+    /// The request as the door received it (crate::inbound::Captured): its
+    /// body and the headers its module's inbound handling reads. Sensitive:
+    /// kept while the delivery is (`deliveries.retainDays`), shown only when
+    /// asked for. None for a delivery no request made (a poll's page, a
+    /// replay).
+    pub request: Option<Js>,
 }
 
 /// A kept delivery, as `inbound.deliveries` and `inbound.delivery` read it.
@@ -646,6 +654,9 @@ pub struct DeliveryRow {
     pub runs: Vec<DeliveryRun>,
     /// Read by `inbound.delivery` only.
     pub events: Option<Vec<Js>>,
+    /// Read by `inbound.delivery` only: the request it was received as,
+    /// while it is kept (NewDelivery::request).
+    pub request: Option<Js>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -742,6 +753,15 @@ impl Store {
         db.execute_batch("create index if not exists run_delivery on run (delivery_id)")?;
         Self::open_wait_rows(&db)?;
         Self::open_event_receipts(&db)?;
+        Self::open_unjudged(&db)?;
+        // Added to a state file written before a delivery kept its request.
+        let delivery_columns = db
+            .prepare("select name from pragma_table_info('delivery')")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if !delivery_columns.iter().any(|c| c == "request") {
+            db.execute_batch("alter table delivery add column request text")?;
+        }
         // Callbacks and the waits keyed by a correlation retired at 0.13: a
         // run parked on one cannot resume on this release, and the work rows
         // that would have woken it (a callback's firing, a wake by key
@@ -833,6 +853,50 @@ impl Store {
                  insert into event_receipt (listen, key, received_at) select listen, key, received_at from event_receipt_before;
                  drop table event_receipt_before;"
             ))?)
+        })();
+        match rebuilt {
+            Ok(()) => Ok(db.execute_batch("commit")?),
+            Err(error) => {
+                db.execute_batch("rollback")?;
+                Err(error)
+            }
+        }
+    }
+
+    /// The unjudged arrivals, rebuilt from a state file written before each
+    /// replay of an arrival was an attempt of its own (SQLite cannot change
+    /// a primary key): each kept is its first judging, attempt 0.
+    fn open_unjudged(db: &Connection) -> Result<()> {
+        db.execute_batch("begin immediate")?;
+        let rebuilt = (|| -> Result<()> {
+            let columns = db
+                .prepare("select name from pragma_table_info('arrival_unjudged')")?
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if !columns.iter().any(|c| c == "attempt") {
+                db.execute_batch(
+                    "alter table arrival_unjudged rename to arrival_unjudged_before;
+                     drop index if exists arrival_unjudged_at;
+                     create table arrival_unjudged (
+                       pipeline text not null,
+                       arrival text not null,
+                       file text not null,
+                       movement text not null,
+                       delivery_id text,
+                       edge text not null,
+                       record_id text,
+                       reason text not null,
+                       cause text,
+                       noted_at text not null,
+                       attempt integer not null default 0,
+                       primary key (pipeline, arrival, attempt)
+                     );
+                     insert into arrival_unjudged (pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at)
+                       select pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at from arrival_unjudged_before;
+                     drop table arrival_unjudged_before;",
+                )?;
+            }
+            Ok(db.execute_batch("create index if not exists arrival_unjudged_at on arrival_unjudged (noted_at, pipeline, arrival, attempt)")?)
         })();
         match rebuilt {
             Ok(()) => Ok(db.execute_batch("commit")?),
@@ -1502,8 +1566,8 @@ impl Store {
     /// subscription, was kept before.
     pub(crate) fn insert_delivery_in(db: &Connection, subscription_id: &str, delivery: &NewDelivery) -> Result<bool> {
         let inserted = db.execute(
-            "insert into delivery (id, subscription_id, external_id, received_at, source, inline, replay_of, events, event_count)
-             values (?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
+            "insert into delivery (id, subscription_id, external_id, received_at, source, inline, replay_of, events, event_count, request)
+             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
             params![
                 delivery.id,
                 subscription_id,
@@ -1514,6 +1578,7 @@ impl Store {
                 delivery.replay_of,
                 Js::Arr(delivery.events.clone()).to_json(),
                 delivery.events.len(),
+                delivery.request.as_ref().map(Js::to_json),
             ],
         )?;
         Ok(inserted == 1)
@@ -1530,18 +1595,21 @@ impl Store {
         rows.into_iter().map(|row| self.delivery_of(row, None)).collect()
     }
 
-    /// crate::backend::RunHostStore::delivery: with its events.
+    /// crate::backend::RunHostStore::delivery: with its events and its request.
     pub fn delivery(&self, id: &str) -> Result<Option<DeliveryRow>> {
         let row = self
             .db
-            .query_row(&format!("select {DELIVERY_COLUMNS}, events from delivery where id = ?"), params![id], |r| Ok((delivery_row(r)?, r.get::<_, String>(8)?)))
+            .query_row(&format!("select {DELIVERY_COLUMNS}, events, request from delivery where id = ?"), params![id], |r| {
+                Ok((delivery_row(r)?, r.get::<_, String>(8)?, r.get::<_, Option<String>>(9)?))
+            })
             .optional()?;
-        row.map(|(row, events)| {
+        row.map(|(row, events, request)| {
             let events = match parse_text(&events)? {
                 Js::Arr(events) => events,
                 _ => return Err(StoreError::Invalid(format!("delivery {id}'s events are not a list"))),
             };
-            self.delivery_of(row, Some(events))
+            let request = request.as_deref().map(parse_text).transpose()?;
+            Ok(DeliveryRow { request, ..self.delivery_of(row, Some(events))? })
         })
         .transpose()
     }
@@ -1560,11 +1628,14 @@ impl Store {
             event_count: row.event_count,
             runs,
             events,
+            request: None,
         })
     }
 
-    /// crate::backend::RunHostStore::sweep_deliveries.
+    /// crate::backend::RunHostStore::sweep_deliveries: a delivery whose runs
+    /// still hold it is kept past `before`, its request forgotten.
     pub fn sweep_deliveries(&self, before: &str, limit: i64) -> Result<i64> {
+        self.db.execute("update delivery set request = null where received_at < ?1 and request is not null", params![before])?;
         let swept = self.db.execute(
             "delete from delivery where id in (
                select d.id from delivery d
@@ -1911,6 +1982,7 @@ mod tests {
             inline: false,
             replay_of: None,
             events: vec![Js::str("e-1")],
+            request: None,
         }
     }
 

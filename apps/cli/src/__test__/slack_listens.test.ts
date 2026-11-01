@@ -305,6 +305,102 @@ listen to chat-[:Channels]->-[:Messages]-> fire every
   }
 });
 
+test('after a Slack outage, `listens replay` puts the kept delivery through the listen that could not judge it, and that listen alone', async () => {
+  const world = await slackWorld(`${HEADER}
+function heard(m: <chat-[:Message]->>) {
+  return "heard \${m.Message}"
+}
+
+function every(m: <chat-[:Message]->>) {
+  return "every \${m.Message}"
+}
+
+listen to chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[:Messages]-> fire heard
+listen to chat-[:Channels]->-[:Messages]-> fire every
+`);
+  const outage = (methods: string[]) =>
+    fetch(`${world.channels.url}/slack/control/outage`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ methods }) });
+  const ran = (fn: string) => (JSON.parse(lfSync(world.dir, 'runs', '--json').out) as { runs: Array<{ movement: string; status: string }> }).runs.filter((r) => r.movement === fn && r.status === 'completed').length;
+  const facts = () => {
+    const db = new DatabaseSync(join(world.dir, '.lf', 'state.db'));
+    try {
+      return db.prepare('select pipeline, arrival, attempt, delivery_id as deliveryId from arrival_unjudged order by attempt').all().map((row) => ({ ...row }));
+    } finally {
+      db.close();
+    }
+  };
+  try {
+    await seedSlack(world.channels, [{ entity_type: 'channel', id: 'C0DEALS', data: { id: 'C0DEALS', name: 'deals', is_private: false, is_member: true } }]);
+    await outage(['conversations.info']);
+    const serving = await served(world.dir);
+    const text = 'Acme wants a term sheet';
+    try {
+      const ts = (Date.now() / 1000).toFixed(6);
+      const delivered = await deliver(serving, eventCallback({ type: 'message', channel: 'C0DEALS', user: 'U001', text, ts }), 'application/json');
+      assert.ok(delivered.status >= 200 && delivered.status < 300, delivered.body);
+      await until(() => completed(serving, 'every') === 1, serving.lines);
+      await serving.waitFor(/slack:heard: an arrival on Messages cannot be judged/);
+    } finally {
+      await serving.stop();
+    }
+    const [first] = facts();
+    assert.ok(first, 'the listen that could not judge it is noted');
+    const deliveryId = String(first.deliveryId);
+
+    // The request is kept, and printed only when asked for.
+    const shown = lfSync(world.dir, 'deliveries', 'show', deliveryId);
+    assert.equal(shown.code, 0, shown.out);
+    const delivery = (JSON.parse(shown.out) as { delivery: Record<string, unknown> }).delivery;
+    assert.equal(delivery.requestKept, true);
+    assert.equal('request' in delivery, false, shown.out);
+    const asked = (JSON.parse(lfSync(world.dir, 'deliveries', 'show', deliveryId, '--request').out) as { delivery: { request: { body: string; headers: Record<string, string> } } }).delivery.request;
+    assert.match(Buffer.from(asked.body, 'base64').toString('utf8'), new RegExp(text));
+    assert.deepEqual(Object.keys(asked.headers).filter((h) => h.startsWith('x-slack')), [], 'no signature is kept');
+
+    // Still down: the replay cannot judge it either, and is reported again as attempt 1.
+    const stillDown = lfSync(world.dir, 'listens', 'replay', 'slack:heard', '--delivery', deliveryId);
+    assert.equal(stillDown.code, 0, stillDown.out);
+    assert.match(stillDown.out, /slack:heard: the arrival \S+ on Messages still cannot be judged \(slack could not read Name of the Channels record the arrival carries, which this listen's filter reads\): reported again, attempt 1/);
+    assert.deepEqual(facts().map((f) => [f.attempt, f.deliveryId]), [[0, deliveryId], [1, deliveryId]], 'each failed attempt is its own fact, naming the delivery that keeps the request');
+    assert.equal(ran('heard'), 0);
+
+    // Slack answers again: the replay runs `heard` once, and `every` is not run again.
+    await outage([]);
+    const recovered = lfSync(world.dir, 'listens', 'replay', 'slack:heard', '--delivery', deliveryId);
+    assert.equal(recovered.code, 0, recovered.out);
+    assert.match(recovered.out, /slack:heard completed/, recovered.out);
+    assert.match(recovered.out, new RegExp(`heard ${text}`), recovered.out);
+    assert.deepEqual([ran('heard'), ran('every')], [1, 1]);
+
+    // Again, by the event Arrival Not Judged reported: it ran the arrival already, so nothing runs.
+    const eventId = `arrival_not_judged:${String(first.pipeline)}:${String(first.arrival)}:0`;
+    const again = lfSync(world.dir, 'listens', 'replay', 'slack:heard', '--event', eventId);
+    assert.equal(again.code, 0, again.out);
+    assert.match(again.out, /slack:heard: nothing replayed \(--force runs it again\)/);
+    assert.equal(ran('heard'), 1);
+
+    // --force runs it again: a new run.
+    const forced = lfSync(world.dir, 'listens', 'replay', 'slack:heard', '--delivery', deliveryId, '--force');
+    assert.equal(forced.code, 0, forced.out);
+    assert.match(forced.out, /slack:heard completed/, forced.out);
+    assert.deepEqual([ran('heard'), ran('every')], [2, 1]);
+
+    // A delivery past deliveries.retainDays is refused by name.
+    const db = new DatabaseSync(join(world.dir, '.lf', 'state.db'));
+    try {
+      db.prepare('update delivery set received_at = ? where id = ?').run(new Date(Date.now() - 30 * 86_400_000).toISOString(), deliveryId);
+    } finally {
+      db.close();
+    }
+    const expired = lfSync(world.dir, 'listens', 'replay', 'slack:heard', '--delivery', deliveryId);
+    assert.equal(expired.code, 1, expired.out);
+    assert.match(expired.out, new RegExp(`delivery ${deliveryId} was received \\S+, more than 14 days ago \\(deliveries.retainDays\\): its request is no longer kept, and it cannot be replayed`));
+    assert.equal(ran('heard'), 2);
+  } finally {
+    await world.close();
+  }
+});
+
 test('a reaction listen filtered on its message is refused: arrivals do not carry the message and messages are not cheap to list', async () => {
   const program = `${HEADER}
 function seen(r: <chat-[:Reaction]->>) {

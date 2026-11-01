@@ -69,7 +69,7 @@ export interface DeliveryRun {
   status: string;
 }
 
-/** A kept delivery; `events` only from `inbound.delivery`. */
+/** A kept delivery; `events` and `request` only from `inbound.delivery`. */
 export interface DeliveryRow {
   id: string;
   subscriptionId: string;
@@ -81,6 +81,7 @@ export interface DeliveryRow {
   eventCount: number;
   runs: DeliveryRun[];
   events?: unknown[];
+  request?: unknown;
 }
 
 /** A run row as `runs.get` answers it. */
@@ -122,6 +123,7 @@ const Delivery: z.ZodType<DeliveryRow> = z.object({
   eventCount: z.number(),
   runs: z.array(z.object({ id: z.string(), status: z.string() })),
   events: z.array(z.unknown()).optional(),
+  request: z.unknown().optional(),
 });
 const Run: z.ZodType<RunRow> = z.object({
   id: z.string(),
