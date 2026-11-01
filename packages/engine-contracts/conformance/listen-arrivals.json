@@ -1,5 +1,5 @@
 {
-  "about": "Whether an arrival fires a listen, by its plan's filters. Each plan is the checker's answer for its listen's source against `catalog` (both runners check that it still is). Only hops judged on arrival are judged, each against the record the arrival carries for it: `landing` for the last hop, `parents` (aligned to the plan's `carries`) for earlier ones. Each record states its `recordType`, which must be the record type its hop lands on (`to`): one edge name may hang off several record types (`pay`'s Customer and Invoice each have `Changes`), and a record of another type skips at its hop, the landing judged first; a record that states none is undecided. A hop's checked part is always evaluated; its taken part too, unless `takenApplied` says the module applied it. `now` is the instant WITHIN measures from. The verdict is `{fires: true}`, `{skips: n}` (the hop whose filter fails, outermost 0; with a `reason` when the record carried for that hop is of another record type, so no filter was read), or `{undecided: reason}` (the host logs it and runs nothing). Held by listen-fire's Rust (crates/movement-engine/src/listen_judge.rs, judge_arrival), the engine's TypeScript (judgeArrival, through the wasm) and the hosted product.",
+  "about": "Whether an arrival fires a listen, by its plan's filters. Each plan is the checker's answer for its listen's source against `catalog` (both runners check that it still is). Only hops judged on arrival are judged, each against the record the arrival carries for it: `landing` for the last hop, `parents` (aligned to the plan's `carries`) for earlier ones. Each record states its `recordType`, which must be the record type its hop lands on (`to`): one edge name may hang off several record types (`pay`'s Customer and Invoice each have `Changes`), and a record of another type skips at its hop, the landing judged first; a record that states none is undecided. A hop's checked part is always evaluated; its taken part too, unless `takenApplied` says the module applied it. `now` is the instant WITHIN measures from. The verdict is `{fires: true}`, `{skips: n}` (the hop whose filter fails, outermost 0; with a `reason` when the record carried for that hop is of another record type, so no filter was read), or `{undecided: reason}` (the host logs it and runs nothing). Held by listen-fire's Rust (crates/movement-engine/src/listen_judge.rs, judge_arrival), the engine's TypeScript (judgeArrival, through the wasm) and the hosted product. A read on through a record a field holds (`c.Current.Stage`) reads that field of the landing, then the member of what it holds; a record absent reads its members absent.",
   "catalog": {
     "adapters": {
       "chat": {
@@ -402,6 +402,167 @@
               }
             },
             "writableRoots": {}
+          }
+        }
+      },
+      "rows": {
+        "canFire": false,
+        "constructionArgs": [],
+        "schemas": {
+          "": {
+            "positions": {
+              "Table": {
+                "properties": {
+                  "Name": "text",
+                  "Id": "text"
+                },
+                "edges": {
+                  "Changes": {
+                    "target": "Change",
+                    "readable": false,
+                    "listenable": true,
+                    "identity": "Id",
+                    "delivery": "connection"
+                  }
+                },
+                "propertyCapabilities": {
+                  "Name": {
+                    "filterOperators": [
+                      "eq"
+                    ]
+                  }
+                }
+              },
+              "Table \"Candidates\"": {
+                "properties": {
+                  "Name": "text",
+                  "Id": "text"
+                },
+                "edges": {
+                  "Changes": {
+                    "target": "Candidates Change",
+                    "readable": false,
+                    "listenable": true,
+                    "identity": "Id",
+                    "delivery": "connection"
+                  }
+                }
+              },
+              "Change": {
+                "properties": {
+                  "Id": "text",
+                  "Kind": {
+                    "kind": "enum",
+                    "options": [
+                      "created",
+                      "updated",
+                      "deleted"
+                    ]
+                  },
+                  "Current": {
+                    "kind": "maybeAbsent",
+                    "of": {
+                      "kind": "record",
+                      "position": {
+                        "kind": "position",
+                        "position": "Row"
+                      }
+                    }
+                  },
+                  "Previous": {
+                    "kind": "maybeAbsent",
+                    "of": {
+                      "kind": "record",
+                      "position": {
+                        "kind": "position",
+                        "position": "Row"
+                      }
+                    }
+                  }
+                },
+                "edges": {
+                  "Record": {
+                    "target": "Row"
+                  }
+                }
+              },
+              "Candidates Change": {
+                "properties": {
+                  "Id": "text",
+                  "Kind": {
+                    "kind": "enum",
+                    "options": [
+                      "created",
+                      "updated",
+                      "deleted"
+                    ]
+                  },
+                  "Current": {
+                    "kind": "maybeAbsent",
+                    "of": {
+                      "kind": "record",
+                      "position": {
+                        "kind": "position",
+                        "position": "Candidates"
+                      }
+                    }
+                  },
+                  "Previous": {
+                    "kind": "maybeAbsent",
+                    "of": {
+                      "kind": "record",
+                      "position": {
+                        "kind": "position",
+                        "position": "Candidates"
+                      }
+                    }
+                  }
+                },
+                "edges": {
+                  "Record": {
+                    "target": "Candidates"
+                  }
+                }
+              },
+              "Row": {
+                "properties": {
+                  "Id": "text"
+                },
+                "edges": {}
+              },
+              "Candidates": {
+                "properties": {
+                  "Id": "text",
+                  "Name": "text",
+                  "Stage": {
+                    "kind": "enum",
+                    "options": [
+                      "Applied",
+                      "Interview",
+                      "Rejected"
+                    ]
+                  }
+                },
+                "edges": {}
+              }
+            },
+            "collections": {
+              "Tables": {
+                "target": "Table",
+                "cheapToList": true,
+                "capability": {
+                  "filter": "native",
+                  "supportsLimit": false
+                }
+              }
+            },
+            "writableRoots": {},
+            "refinements": {
+              "[\"Table\",\"{\\\"left\\\":{\\\"propertyTypeId\\\":\\\"Name\\\",\\\"type\\\":\\\"edge_property\\\"},\\\"op\\\":\\\"eq\\\",\\\"right\\\":{\\\"type\\\":\\\"static\\\",\\\"value\\\":\\\"Candidates\\\"},\\\"type\\\":\\\"compare\\\"}\"]": "Table \"Candidates\""
+            },
+            "selectedMembers": {
+              "[\"Table\",\"{\\\"left\\\":{\\\"propertyTypeId\\\":\\\"Name\\\",\\\"type\\\":\\\"edge_property\\\"},\\\"op\\\":\\\"eq\\\",\\\"right\\\":{\\\"type\\\":\\\"static\\\",\\\"value\\\":\\\"Candidates\\\"},\\\"type\\\":\\\"compare\\\"}\"]": "Candidates"
+            }
           }
         }
       }
@@ -934,6 +1095,93 @@
         ],
         "movement": "welcomed"
       }
+    },
+    "moved": {
+      "source": "import { rows as rows_module } from adapters; rows = connect rows_module\nfunction moved(c: <rows-[:`Candidates Change`]->>) { return c.Current.Stage }\nlisten to rows-[t:Tables WHERE t.Name == \"Candidates\"]->-[c:Changes WHERE c.Current.Stage == \"Interview\" AND c.Previous.Stage != \"Interview\"]-> fire moved\n",
+      "plan": {
+        "adapter": "rows",
+        "connection": "rows",
+        "hops": [
+          {
+            "alias": "t",
+            "edge": "Tables",
+            "from": "",
+            "judged": "resolved",
+            "taken": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Name",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "Candidates"
+              },
+              "type": "compare"
+            },
+            "to": "Table"
+          },
+          {
+            "alias": "c",
+            "checked": {
+              "op": "and",
+              "operands": [
+                {
+                  "left": {
+                    "aliasRoot": "c",
+                    "expression": {
+                      "aliasRoot": "Current",
+                      "expression": {
+                        "propertyTypeId": "Stage",
+                        "type": "edge_property"
+                      },
+                      "steps": [],
+                      "type": "traverse"
+                    },
+                    "steps": [],
+                    "type": "traverse"
+                  },
+                  "op": "eq",
+                  "right": {
+                    "type": "static",
+                    "value": "Interview"
+                  },
+                  "type": "compare"
+                },
+                {
+                  "left": {
+                    "aliasRoot": "c",
+                    "expression": {
+                      "aliasRoot": "Previous",
+                      "expression": {
+                        "propertyTypeId": "Stage",
+                        "type": "edge_property"
+                      },
+                      "steps": [],
+                      "type": "traverse"
+                    },
+                    "steps": [],
+                    "type": "traverse"
+                  },
+                  "op": "neq",
+                  "right": {
+                    "type": "static",
+                    "value": "Interview"
+                  },
+                  "type": "compare"
+                }
+              ],
+              "type": "logical"
+            },
+            "edge": "Changes",
+            "from": "Table",
+            "judged": "arrival",
+            "to": "Change"
+          }
+        ],
+        "movement": "moved"
+      }
     }
   },
   "cases": [
@@ -976,6 +1224,12 @@
     {"case": "a landing of another record type skips although its fields pass every WHERE", "plan": "customers", "arrival": {"edge": "Changes", "key": "cus_1", "landing": {"recordType": "InvoiceChange", "fields": {"Id": "evt_1", "Kind": "created"}}, "parents": [{"recordType": "Customer", "fields": {"Id": "cus_1", "Name": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1, "reason": "it has record type InvoiceChange, not CustomerChange, which this listen's Changes lands on"}},
     {"case": "a change that does not say its record type is undecided", "plan": "customers", "arrival": {"edge": "Changes", "key": "cus_1", "landing": {"fields": {"Id": "evt_1", "Kind": "created"}}, "parents": [{"recordType": "Customer", "fields": {"Id": "cus_1", "Name": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival pay reported on Changes does not say its record type, so it cannot be told from another record type's Changes (this listen's lands on CustomerChange)"}},
     {"case": "a change whose carried customer does not say its record type is undecided", "plan": "customers", "arrival": {"edge": "Changes", "key": "cus_1", "landing": {"recordType": "CustomerChange", "fields": {"Id": "evt_1", "Kind": "created"}}, "parents": [{"fields": {"Id": "cus_1", "Name": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival pay reported on Changes carries a Customers record that does not say its record type (this listen's Customers lands on Customer)"}},
-    {"case": "an untyped change that fails a WHERE still skips", "plan": "customers", "arrival": {"edge": "Changes", "key": "cus_1", "landing": {"fields": {"Id": "evt_1", "Kind": "deleted"}}, "parents": [{"recordType": "Customer", "fields": {"Id": "cus_1", "Name": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}}
+    {"case": "an untyped change that fails a WHERE still skips", "plan": "customers", "arrival": {"edge": "Changes", "key": "cus_1", "landing": {"fields": {"Id": "evt_1", "Kind": "deleted"}}, "parents": [{"recordType": "Customer", "fields": {"Id": "cus_1", "Name": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a row moved from Applied to Interview fires the listen reading through the rows a change holds; the Candidates change lands as the table's un-narrowed Change", "plan": "moved", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "7:recADA", "Kind": "updated", "Current": {"Id": "recADA", "Name": "Ada", "Stage": "Interview"}, "Previous": {"Id": "recADA", "Name": "Ada", "Stage": "Applied"}}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a row created at Interview fires: it held nothing before", "plan": "moved", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "8:recBO", "Kind": "created", "Current": {"Id": "recADA", "Name": "Ada", "Stage": "Interview"}}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a row edited while it stays at Interview does not", "plan": "moved", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "9:recADA", "Kind": "updated", "Current": {"Id": "recADA", "Name": "Ada L.", "Stage": "Interview"}, "Previous": {"Id": "recADA", "Name": "Ada", "Stage": "Interview"}}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a row moved to Rejected does not", "plan": "moved", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "10:recADA", "Kind": "updated", "Current": {"Id": "recADA", "Name": "Ada", "Stage": "Rejected"}, "Previous": {"Id": "recADA", "Name": "Ada", "Stage": "Interview"}}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a row deleted holds nothing now, and does not", "plan": "moved", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "11:recADA", "Kind": "deleted"}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a field whose name holds a dot is not a read through a held row", "plan": "moved", "arrival": {"edge": "Changes", "key": "tblCAND01", "landing": {"recordType": "Change", "fields": {"Id": "12:recADA", "Kind": "updated", "Current.Stage": "Interview", "Current": {"Id": "recADA", "Name": "Ada", "Stage": "Applied"}, "Previous": {"Id": "recADA", "Name": "Ada", "Stage": "Applied"}}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}}
   ]
 }

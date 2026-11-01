@@ -22,6 +22,7 @@
 //! undecided. An undecided arrival runs nothing, and the host logs why.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 
 use movement_parser::listen_plan::{HopJudged, ListenPlan, PlanHop};
 use movement_parser::lowering::expression::{Expression, FilterOperator, LogicalOp};
@@ -31,7 +32,7 @@ use serde_json::{Value as Json, json};
 use crate::env::js_of_json;
 use crate::eval::EvalError;
 use crate::executor::ready;
-use crate::filter::{AskCompare, Comparing, PredicateOptions, compare_values, evaluate_predicate_with, pure_leaf_keys, within};
+use crate::filter::{AskCompare, Comparing, PredicateOptions, compare_values, evaluate_predicate_with, held_read, leaf_read_key, pure_leaf_keys, pure_leaf_reads, read_on, within};
 use crate::js::{Js, object_property};
 
 /// One arrival on a listen's last edge, as its host hands it to the judge.
@@ -237,15 +238,31 @@ impl Judge<'_> {
         };
         let alias = |name: &str| self.plan.hops.iter().position(|hop| hop.alias.as_deref() == Some(name));
         let read_field = |name: &str| field(i, name);
-        let read = |key: &str| {
-            if let Some((j, name)) = key.split_once('.').and_then(|(root, name)| Some((alias(root)?, name))) {
-                return field(j, name);
-            }
-            match alias(key) {
-                Some(j) => record(j).cloned().unwrap_or(Js::Undefined),
-                None => field(i, key),
-            }
-        };
+        // Each leaf is read by what it is, never by parsing its key back: a
+        // hop's alias read off that hop's record, read on through a record a
+        // field holds (`c.Current.Stage`); any other name off this hop's.
+        let mut leaves: HashMap<String, Js> = HashMap::new();
+        for leaf in pure_leaf_reads(conjunct).unwrap_or_default() {
+            let value = match leaf {
+                Expression::AliasRef { name } | Expression::Property { property_type_id: name, field_only: false } | Expression::EdgeProperty { property_type_id: name, field_only: false } => {
+                    match alias(name) {
+                        Some(j) => record(j).cloned().unwrap_or(Js::Undefined),
+                        None => field(i, name),
+                    }
+                }
+                Expression::Traverse { alias_root: Some(root), expression, .. } => match (alias(root), held_read(leaf)) {
+                    (Some(j), Some((_, held, members))) => read_on(field(j, held), &members),
+                    (Some(j), None) => match expression.as_ref() {
+                        Expression::Property { property_type_id: name, .. } | Expression::EdgeProperty { property_type_id: name, .. } | Expression::AliasRef { name } => field(j, name),
+                        _ => Js::Undefined,
+                    },
+                    (None, _) => field(i, &leaf_read_key(leaf)),
+                },
+                _ => continue,
+            };
+            leaves.insert(leaf_read_key(leaf), value);
+        }
+        let read = |key: &str| leaves.get(key).cloned().unwrap_or(Js::Undefined);
         let now_ms = self.now_ms;
         let ask: &AskCompare = &|op: FilterOperator, left: Js, right: Js| -> Comparing {
             Box::pin(async move {

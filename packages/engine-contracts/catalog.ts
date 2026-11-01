@@ -579,6 +579,12 @@ const schemaFieldKindSchema = z.enum([
    * `{ kind: 'owned', name, owner }`, the owner being the module.
    */
   'owned',
+  /**
+   * A record held as the field's value, of the type `record.typeId` names
+   * (a change's row before and after): read on with `.`, never fetched. A
+   * record reached by a fetch is a reference, an edge.
+   */
+  'record',
 ]);
 
 export type SchemaFieldKind = z.infer<typeof schemaFieldKindSchema>;
@@ -861,12 +867,24 @@ export const schemaFieldDescriptorSchema = z.object({
    * module says of its values, a pattern every one matches.
    */
   owned: z.object({ name: z.string().min(1), allowPattern: z.string().optional() }).optional(),
+  /** With `kind: 'record'`: the type of the record it holds, by its type id. */
+  record: z.object({ typeId: z.string().min(1) }).optional(),
+  /** A record may not hold the field at all (a change's row before, when
+   *  the row was created): a read of it may be absent. Absent ⇒ false. */
+  mayBeAbsent: z.boolean().optional(),
 }).superRefine((field, ctx) => {
   if ((field.kind === 'owned') !== (field.owned !== undefined)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['owned'],
       message: `'${field.displayName}': 'owned' names the scalar of a field of kind 'owned', and only of one`,
+    });
+  }
+  if ((field.kind === 'record') !== (field.record !== undefined)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['record'],
+      message: `'${field.displayName}': 'record' names the type of a field of kind 'record', and only of one`,
     });
   }
 });
@@ -882,6 +900,16 @@ export type SchemaFieldDescriptor = z.infer<typeof schemaFieldDescriptorSchema>;
 export function unreadableOwnedField(field: Pick<SchemaFieldDescriptor, 'kind' | 'displayName' | 'owned'>): string | undefined {
   return field.kind === 'owned' && !field.owned?.name
     ? `'${field.displayName}' is of kind 'owned' but declares no 'owned.name': name the scalar its adapter parses`
+    : undefined;
+}
+
+/**
+ * The refusal of a field of kind `record` that names no type: it would
+ * project as nothing (listen-fire's describe says the same).
+ */
+export function unreadableRecordField(field: Pick<SchemaFieldDescriptor, 'kind' | 'displayName' | 'record'>): string | undefined {
+  return field.kind === 'record' && !field.record?.typeId
+    ? `'${field.displayName}' is of kind 'record' but declares no 'record.typeId': name the type of the record it holds`
     : undefined;
 }
 

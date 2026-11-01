@@ -252,14 +252,18 @@ function describedBy(declared: { description?: string }): string | undefined {
 }
 
 /** Map one adapter field descriptor to a movement SchemaFieldType. `reference`
- *  fields return undefined (they surface as edges, not properties). */
+ *  fields return undefined (they surface as edges, not properties). `owner`
+ *  is the adapter (an owned scalar's), `positionOf` the name a type id is
+ *  known by in the schema (a record field's position, as a reference's
+ *  target is named). */
 export function fieldTypeFromDescriptor(
   field: Pick<
     SchemaFieldDescriptor,
-    'kind' | 'enumValues' | 'cardinality' | 'knownValues' | 'knownValuePattern' | 'owned'
+    'kind' | 'enumValues' | 'cardinality' | 'knownValues' | 'knownValuePattern' | 'owned' | 'record' | 'mayBeAbsent'
   >,
-  owner: string,
+  at: { owner: string; positionOf: (typeId: string) => string },
 ): SchemaFieldType | undefined {
+  const { owner } = at;
   const scalar = ((): SchemaFieldType | undefined => {
     switch (field.kind) {
       case 'string':
@@ -315,6 +319,10 @@ export function fieldTypeFromDescriptor(
               owner,
               ...(field.owned.allowPattern !== undefined ? { allowPattern: field.owned.allowPattern } : {}),
             };
+      case 'record':
+        return field.record === undefined
+          ? undefined
+          : { kind: 'record', position: { kind: 'position', position: at.positionOf(field.record.typeId) } };
       case 'reference':
         return undefined;
       default:
@@ -322,7 +330,8 @@ export function fieldTypeFromDescriptor(
     }
   })();
   if (scalar === undefined) return undefined;
-  return field.cardinality === 'many' ? { kind: 'list', of: scalar } : scalar;
+  const type: SchemaFieldType = field.cardinality === 'many' ? { kind: 'list', of: scalar } : scalar;
+  return field.mayBeAbsent === true ? { kind: 'maybeAbsent', of: type } : type;
 }
 
 export interface AdapterSchemaProjection {
@@ -580,7 +589,10 @@ export function instanceSchemaFromDescriptors(input: {
     const writeFieldNameById = new Map<string, string>();
     let droppedField = false;
     for (const field of descriptor.fields) {
-      const type = fieldTypeFromDescriptor(field, input.adapterType);
+      const type = fieldTypeFromDescriptor(field, {
+        owner: input.adapterType,
+        positionOf: (typeId) => allEntries.find((e) => e.typeId === typeId)?.displayName ?? typeId,
+      });
       if (type === undefined) {
         // Reference fields surface as edges; other unmappable kinds are
         // genuinely dropped, so the position must stay OPEN to property

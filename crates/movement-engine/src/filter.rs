@@ -299,7 +299,7 @@ fn leaf_reads<'e>(expr: &'e Expression, into: &mut Vec<&'e Expression>) -> bool 
             true
         }
         Expression::Traverse { steps, expression, .. } if steps.is_empty() => {
-            if !matches!(expression.as_ref(), Expression::Property { .. } | Expression::EdgeProperty { .. } | Expression::AliasRef { .. }) {
+            if !matches!(expression.as_ref(), Expression::Property { .. } | Expression::EdgeProperty { .. } | Expression::AliasRef { .. }) && held_read(expr).is_none() {
                 return false;
             }
             into.push(expr);
@@ -321,9 +321,50 @@ fn leaf_reads<'e>(expr: &'e Expression, into: &mut Vec<&'e Expression>) -> bool 
     }
 }
 
+/// A read on past a field through the record it holds (`c.Current.Stage`):
+/// the name it starts at, the field, and the members read on through what
+/// the field holds, in order. `None` for any other read.
+pub fn held_read(expr: &Expression) -> Option<(Option<&str>, &str, Vec<&str>)> {
+    let Expression::Traverse { alias_root, steps, expression } = expr else { return None };
+    let Expression::Traverse { alias_root: Some(field), steps: inner, expression: rest } = expression.as_ref() else { return None };
+    if !steps.is_empty() || !inner.is_empty() {
+        return None;
+    }
+    let mut members = Vec::new();
+    let mut at = rest.as_ref();
+    loop {
+        match at {
+            Expression::Property { property_type_id, .. } | Expression::EdgeProperty { property_type_id, .. } => {
+                members.push(property_type_id.as_str());
+                return Some((alias_root.as_deref(), field.as_str(), members));
+            }
+            Expression::Traverse { alias_root: Some(member), steps, expression } if steps.is_empty() => {
+                members.push(member.as_str());
+                at = expression;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// `value`'s members, read on one after another: absent past anything that
+/// is not a map.
+pub fn read_on(value: Js, members: &[&str]) -> Js {
+    members.iter().fold(value, |value, member| match &value {
+        Js::Object(object) => crate::js::object_property(object, member),
+        _ => Js::Undefined,
+    })
+}
+
 /// `leafReadKey`: the name a pure leaf read is resolved under and read back
-/// by (`t.field` for a zero-step traversal, `@key` for an ambient).
+/// by (`t.field` for a zero-step traversal, `@key` for an ambient). A read on
+/// through a held record is keyed by its names as a list, so it is never
+/// the key of a field whose name holds a dot.
 pub fn leaf_read_key(leaf: &Expression) -> String {
+    if let Some((root, field, members)) = held_read(leaf) {
+        let names: Vec<&str> = [root.unwrap_or_default(), field].into_iter().chain(members).collect();
+        return serde_json::to_string(&names).unwrap_or_default();
+    }
     match leaf {
         Expression::AliasRef { name } => name.clone(),
         Expression::Property { property_type_id, .. } | Expression::EdgeProperty { property_type_id, .. } => property_type_id.clone(),
@@ -366,13 +407,11 @@ fn leaf_keys(expr: &Expression, into: &mut Vec<String>) -> bool {
             into.push(format!("@{key}"));
             true
         }
-        Expression::Traverse { alias_root, steps, expression } if steps.is_empty() => {
-            let inner = match expression.as_ref() {
-                Expression::Property { property_type_id, .. } | Expression::EdgeProperty { property_type_id, .. } => property_type_id.clone(),
-                Expression::AliasRef { name } => name.clone(),
-                _ => return false,
-            };
-            into.push(format!("{}.{inner}", alias_root.as_deref().unwrap_or("")));
+        Expression::Traverse { steps, .. } if steps.is_empty() => {
+            if !leaf_reads(expr, &mut Vec::new()) {
+                return false;
+            }
+            into.push(leaf_read_key(expr));
             true
         }
         Expression::List { elements } => elements.iter().all(|e| match e {

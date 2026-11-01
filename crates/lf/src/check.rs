@@ -26,7 +26,7 @@ use crate::json::Js;
 use crate::project::Project;
 use crate::refinements::{InstanceChain, Refining, refine_instance_schema};
 use crate::protocol::shape_error;
-use crate::schema::{Declarant, ambiguous_arrivals, describe_external_schema, retired_reference_key, undeclared_arrival_field, unreadable_answer_shape_from, unreadable_listening, unreadable_literals_from, unreadable_owned_field, unreadable_settings_become};
+use crate::schema::{Declarant, ambiguous_arrivals, describe_external_schema, retired_reference_key, undeclared_arrival_field, unreadable_answer_shape_from, unreadable_listening, unreadable_literals_from, unreadable_owned_field, unreadable_record_field, unreadable_settings_become};
 use crate::secrets::{Construction, Credential, Credentials, Imported, MissingCredential, Secrets, imported_credentials, missing_credentials};
 use crate::sources::{MovementFile, Parsed, scan_movements};
 
@@ -334,7 +334,7 @@ pub(crate) async fn describe_as(running: &RunningExternal, credentials: &Credent
         }
     }
     for (type_id, descriptor) in &descriptors {
-        if let Some(refusal) = descriptor.get("fields").and_then(Js::as_array).into_iter().flatten().find_map(unreadable_owned_field) {
+        if let Some(refusal) = descriptor.get("fields").and_then(Js::as_array).into_iter().flatten().find_map(|field| unreadable_owned_field(field).or_else(|| unreadable_record_field(field))) {
             return Err(format!("Remote adapter \"{name}\" describes '{type_id}': {refusal}"));
         }
         let mut references = descriptor.get("references").and_then(Js::as_array).into_iter().flatten();

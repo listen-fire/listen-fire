@@ -45,6 +45,19 @@ describe('introspectAdapter', () => {
     );
   });
 
+  it('reads a record a field holds as the record of its type, named as the schema knows it', async () => {
+    const held = { fieldId: 'last', displayName: 'Last', kind: 'record', record: { typeId: 'tick' }, mayBeAbsent: true, writable: false, required: false };
+    const { schema } = await introspectAdapter(cron({}, [SCHEDULE, held]), MANIFEST);
+    expect(schema.positions.Tick?.properties.Last).toEqual({ kind: 'maybeAbsent', of: { kind: 'record', position: { kind: 'position', position: 'Tick' } } });
+  });
+
+  it('refuses a record field that names no type, naming the field', async () => {
+    const unnamed = { fieldId: 'last', displayName: 'Last', kind: 'record', writable: false, required: false };
+    await expect(introspectAdapter(cron({}, [SCHEDULE, unnamed]), MANIFEST)).rejects.toThrow(
+      "cron describes 'tick': 'Last' is of kind 'record' but declares no 'record.typeId': name the type of the record it holds",
+    );
+  });
+
   it('refuses a listening declaration that cannot mean what it says, naming the entry point', async () => {
     await expect(introspectAdapter(cron({ delivery: 'pushed' }, [SCHEDULE]), MANIFEST)).rejects.toThrow(
       `cron lists 'tick': 'Ticks' declares delivery "pushed", which is none of 'connection', 'scope' or 'polled'`,

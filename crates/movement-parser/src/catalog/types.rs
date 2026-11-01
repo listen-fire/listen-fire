@@ -14,7 +14,6 @@ use std::ops::{Deref, DerefMut};
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::Value;
 
 use crate::tree::JsNumber;
 use crate::util::js::object_key_order;
@@ -166,12 +165,41 @@ pub enum Composite {
         #[serde(rename = "allowPattern", default, skip_serializing_if = "Option::is_none")]
         allow_pattern: Option<String>,
     },
-    /// `position` is the typing layer's `PositionTypeRef`, which this crate
-    /// does not model yet; it is carried, not read.
+    /// A record held as the field's value, read on with `.`
+    /// (`c.Current.Stage`) and never fetched: a reference to a record is an
+    /// edge, not this. `position` is which record (the typing layer's
+    /// `PositionTypeRef`); absent, a record nobody can name.
     Record {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        position: Option<Value>,
+        position: Option<PositionRef>,
     },
+}
+
+/// Which record a `record` field holds: the typing layer's
+/// `PositionTypeRef` as a schema states it. The instance is the one whose
+/// schema declares the field, so it is not spelled; a typing layer that
+/// carries more of it (its instance, a display) is read for these members.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PositionRef {
+    /// The instance itself, whose edges are its collections: no record a
+    /// schema's field holds, carried from a typing layer.
+    Meta {},
+    /// One record type of the instance.
+    Position { position: String },
+    /// One of several (`unions`).
+    Union { union: String },
+}
+
+impl PositionRef {
+    /// The name the instance's schema knows it by.
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            PositionRef::Meta {} => None,
+            PositionRef::Position { position } => Some(position),
+            PositionRef::Union { union } => Some(union),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -198,7 +226,8 @@ impl FieldType {
                 Composite::Dict { of, shape } => shape.is_none() && of.is_schema(),
                 Composite::Tuple { of, rest } => rest.is_none() && of.iter().flatten().all(FieldType::is_schema),
                 Composite::Enum { .. } | Composite::Owned { .. } => true,
-                Composite::Union { .. } | Composite::Record { .. } => false,
+                Composite::Record { position } => position.as_ref().and_then(PositionRef::name).is_some(),
+                Composite::Union { .. } => false,
             },
         }
     }

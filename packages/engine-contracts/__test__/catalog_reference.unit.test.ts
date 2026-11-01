@@ -12,6 +12,7 @@ import {
   unreadableListening,
   unreadableLiteralsFrom,
   unreadableOwnedField,
+  unreadableRecordField,
   unreadableSettingsBecome,
   type SchemaEntryPoint,
 } from '../catalog';
@@ -422,6 +423,28 @@ describe('an owned field', () => {
     expect(unreadableOwnedField(asDescribed('owned'))).toBe(expected);
     expect(unreadableOwnedField(asDescribed('owned', { owned: {} }))).toBe(expected);
     expect(unreadableOwnedField(asDescribed('owned', { owned: { name: '' } }))).toBe(expected);
+  });
+});
+
+describe('a record field', () => {
+  const held = { fieldId: 'cur', displayName: 'Current', writable: false, required: false };
+
+  it('names the type of the record it holds, and may be absent', () => {
+    const parsed = schemaFieldDescriptorSchema.parse({ ...held, kind: 'record', record: { typeId: 'Row' }, mayBeAbsent: true });
+    expect([parsed.record, parsed.mayBeAbsent]).toEqual([{ typeId: 'Row' }, true]);
+  });
+
+  it('is refused without the type, and a type on another kind is refused', () => {
+    expect(schemaFieldDescriptorSchema.safeParse({ ...held, kind: 'record' }).success).toBe(false);
+    expect(schemaFieldDescriptorSchema.safeParse({ ...held, kind: 'json', record: { typeId: 'Row' } }).success).toBe(false);
+  });
+
+  it('is refused by name at describe when it names no type, as listen-fire refuses it', () => {
+    const asDescribed = (extra: object = {}): Parameters<typeof unreadableRecordField>[0] => JSON.parse(JSON.stringify({ ...held, kind: 'record', ...extra }));
+    const expected = "'Current' is of kind 'record' but declares no 'record.typeId': name the type of the record it holds";
+    expect(unreadableRecordField(asDescribed({ record: { typeId: 'Row' } }))).toBeUndefined();
+    expect(unreadableRecordField(asDescribed())).toBe(expected);
+    expect(unreadableRecordField(asDescribed({ record: { typeId: '' } }))).toBe(expected);
   });
 });
 

@@ -77,8 +77,17 @@ impl Ty {
         matches!(self, Ty::Absent)
     }
 
-    /// An adapter surface's type, as the typing layer holds it.
+    /// An adapter surface's type, as the typing layer holds it. A record
+    /// field's position names no instance here: read off a position, the
+    /// instance it is of is known (`from_schema_in`).
     pub fn from_schema(schema: &SchemaFieldType) -> Ty {
+        Ty::from_schema_in(schema, &|_| None)
+    }
+
+    /// `from_schema`, a record field typed by the position `held` finds for
+    /// its name.
+    pub fn from_schema_in(schema: &SchemaFieldType, held: &dyn Fn(&str) -> Option<Position>) -> Ty {
+        let from_schema = |schema: &SchemaFieldType| Ty::from_schema_in(schema, held);
         match schema {
             SchemaFieldType::Scalar(scalar) => match scalar {
                 Scalar::Text => Ty::Text,
@@ -92,22 +101,21 @@ impl Ty {
                 Scalar::Never => Ty::Never,
             },
             SchemaFieldType::Composite(composite) => match composite {
-                Composite::List { of, unordered } => Ty::List { of: Rc::new(Ty::from_schema(of)), unordered: *unordered == Some(true) },
+                Composite::List { of, unordered } => Ty::List { of: Rc::new(from_schema(of)), unordered: *unordered == Some(true) },
                 Composite::Tuple { of, rest } => Ty::Tuple {
-                    of: Rc::new(of.iter().map(|slot| slot.as_ref().map(Ty::from_schema)).collect()),
-                    rest: rest.as_ref().map(|r| TupleRest { at: r.at.0 as usize, of: r.of.as_deref().map(|t| Rc::new(Ty::from_schema(t))) }),
+                    of: Rc::new(of.iter().map(|slot| slot.as_ref().map(from_schema)).collect()),
+                    rest: rest.as_ref().map(|r| TupleRest { at: r.at.0 as usize, of: r.of.as_deref().map(|t| Rc::new(from_schema(t))) }),
                 },
                 Composite::Dict { of, shape } => Ty::Dict {
-                    of: Rc::new(Ty::from_schema(of)),
-                    shape: shape.as_ref().map(|s| Rc::new(s.iter().map(|(k, v)| (k.clone(), v.as_ref().map(Ty::from_schema))).collect())),
+                    of: Rc::new(from_schema(of)),
+                    shape: shape.as_ref().map(|s| Rc::new(s.iter().map(|(k, v)| (k.clone(), v.as_ref().map(from_schema))).collect())),
                 },
                 Composite::Enum { options, open } => {
                     Ty::Enum { options: options.clone(), open: open.as_ref().map(|o| OpenEnum { allow_pattern: o.allow_pattern.clone() }) }
                 }
-                Composite::MaybeAbsent { of } => maybe_absent(Ty::from_schema(of)),
-                Composite::Union { of } => value_union(&of.iter().map(Ty::from_schema).collect::<Vec<_>>()).unwrap_or(Ty::Json),
-                // A schema never declares a record (catalog.ts); one carried here names no position.
-                Composite::Record { .. } => Ty::Record(None),
+                Composite::MaybeAbsent { of } => maybe_absent(from_schema(of)),
+                Composite::Union { of } => value_union(&of.iter().map(from_schema).collect::<Vec<_>>()).unwrap_or(Ty::Json),
+                Composite::Record { position } => Ty::record(position.as_ref().and_then(|p| p.name()).and_then(held)),
                 Composite::Owned { name, owner, allow_pattern } => {
                     Ty::Owned(Rc::new(OwnedScalar { name: name.clone(), owner: owner.clone(), allow_pattern: allow_pattern.clone() }))
                 }

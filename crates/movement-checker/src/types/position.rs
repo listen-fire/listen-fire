@@ -635,7 +635,7 @@ pub(crate) fn empty_position_schema() -> PositionSchema {
 pub fn lookup_property_type(position: Option<&Position>, property: &str) -> Option<Ty> {
     match position? {
         Position::Position(p) => {
-            let declared = p.instance.schema.positions.get(&p.position)?.properties.get(property).map(Ty::from_schema);
+            let declared = p.instance.schema.positions.get(&p.position)?.properties.get(property).map(|t| field_in(&p.instance, t));
             let typed = match (declared, write_typed_field(p.write_typed.as_ref(), property)) {
                 (Some(declared), Some(written)) if is_maybe_absent(Some(&declared)) => maybe_absent(written.clone()),
                 (_, Some(written)) => written.clone(),
@@ -648,13 +648,13 @@ pub fn lookup_property_type(position: Option<&Position>, property: &str) -> Opti
             if let Some(from_shape) = h.result_shape.get(property) {
                 return Some(from_shape.clone());
             }
-            position_schema_of_ref(handle)?.properties.get(property).map(Ty::from_schema)
+            position_schema_of_ref(handle)?.properties.get(property).map(|t| field_in(&h.instance, t))
         }
         Position::Union(u) => {
             let types: Vec<Ty> = u
                 .variants
                 .iter()
-                .filter_map(|v| u.instance.schema.positions.get(v).and_then(|p| p.properties.get(property)).map(Ty::from_schema))
+                .filter_map(|v| u.instance.schema.positions.get(v).and_then(|p| p.properties.get(property)).map(|t| field_in(&u.instance, t)))
                 .collect();
             if types.len() != u.variants.len() || types.is_empty() {
                 return None;
@@ -670,6 +670,12 @@ pub fn lookup_property_type(position: Option<&Position>, property: &str) -> Opti
         Position::Local(local) => local.reads.get(property).cloned().flatten(),
         Position::Closure(_) | Position::Meta { .. } | Position::Extract { .. } => None,
     }
+}
+
+/// A field's declared type, a record it holds typed by its position in the
+/// same instance.
+fn field_in(instance: &InstanceRef, declared: &movement_parser::catalog::types::FieldType) -> Ty {
+    Ty::from_schema_in(declared, &|name| position_ref_in(instance, name))
 }
 
 /// The type a write gives `property` itself, of the fields a record carries.

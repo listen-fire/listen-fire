@@ -398,8 +398,16 @@ reads every declaration from it, the listen declarations included.
 ```
 
 - A field's `kind` is one of `string`, `number`, `boolean`, `date`,
-  `file`, `json`, `enum` (with `enumValues`), `owned` (with `owned`), or
-  `reference` (an edge, not a value). `owned` is a named scalar your module
+  `file`, `json`, `enum` (with `enumValues`), `owned` (with `owned`),
+  `record` (with `record`), or `reference` (an edge, not a value). `record`
+  holds a record as its value, read on with `.` and never fetched (a
+  change's row before and after): `"record": { "typeId": "Candidates" }`
+  names its type, and it reaches the catalog as
+  `{ "kind": "record", "position": { "kind": "position", "position": "<that type's displayName>" } }`.
+  A field of kind `record` that names no type is refused, naming the field.
+  `"mayBeAbsent": true` says a record may lack the field (a change's row
+  before, on a created row): it reaches the catalog as
+  `{ "kind": "maybeAbsent", "of": … }`, and a read of it may be absent. `owned` is a named scalar your module
   owns and parses, a cron schedule or a mailbox key:
   `"owned": { "name": "Cron", "allowPattern": "^…$" }`, `allowPattern` being
   optional, the least you say of its values. It reaches the catalog as

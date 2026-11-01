@@ -124,7 +124,8 @@ type SchemaFieldType =
   | { kind: 'dict'; of: SchemaFieldType }
   | { kind: 'enum'; options: string[]; open?: { allowPattern?: string } }
   | { kind: 'owned'; name: string; owner: string; allowPattern?: string }   // a named scalar its owner (the adapter) parses: a cron schedule
-  | { kind: 'maybeAbsent'; of: SchemaFieldType };
+  | { kind: 'maybeAbsent'; of: SchemaFieldType }
+  | { kind: 'record'; position: { kind: 'position'; position: string } | { kind: 'union'; union: string } };   // a record held as the value, of a position of this instance: read on with `.`, never fetched
 
 interface InstanceSchema {
   positions: Record<string, PositionSchema>;

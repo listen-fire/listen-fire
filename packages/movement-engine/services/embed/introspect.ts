@@ -4,7 +4,7 @@
 // external the same two questions (crates/lf check.rs); an embedder asks
 // them of the adapter it loaded in process.
 
-import { ambiguousArrivals, undeclaredArrivalField, unreadableAnswerShapeFrom, unreadableListening, unreadableLiteralsFrom, unreadableOwnedField, unreadableSettingsBecome } from 'engine-contracts/catalog';
+import { ambiguousArrivals, undeclaredArrivalField, unreadableAnswerShapeFrom, unreadableListening, unreadableLiteralsFrom, unreadableOwnedField, unreadableRecordField, unreadableSettingsBecome } from 'engine-contracts/catalog';
 import type { InstanceSchema } from 'movement-lang';
 
 import type { Adapter, AdapterManifest } from '../translation_graph/adapter';
@@ -21,7 +21,7 @@ export async function introspectAdapter(
   const descriptors = new Map(described.flatMap(([typeId, descriptor]) => (descriptor ? [[typeId, descriptor] as const] : [])));
   for (const [typeId, descriptor] of descriptors) {
     for (const field of descriptor.fields) {
-      const refusal = unreadableOwnedField(field);
+      const refusal = unreadableOwnedField(field) ?? unreadableRecordField(field);
       if (refusal !== undefined) throw new Error(`${manifest.adapterType} describes '${typeId}': ${refusal}`);
     }
     for (const reference of descriptor.references) {

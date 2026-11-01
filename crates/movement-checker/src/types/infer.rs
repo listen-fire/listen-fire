@@ -711,21 +711,22 @@ impl<'a> Typing<'a> {
         self.read_dict_member(&held, member, false)
     }
 
-    /// A dot read off a record, `root` (past its hops, `steps`), that is not a
-    /// field read: a name that is one of the record's edges, or a read on
-    /// past the field (`n.subject.title`). The engine reads a record's field
-    /// whole and nothing past it, so such a read fails every run that
-    /// reaches it, and is refused. `None` for any other read, typed as
-    /// it always was.
-    fn read_off_record(&mut self, root: &str, steps: &[TraversalStep], record: &Position, terminal: &Expression) -> Option<Option<Ty>> {
+    /// A dot read off a record, `root` (where no hop comes between), that is
+    /// not a field read: a name that is one of the record's edges, or a read
+    /// on past the field (`n.subject.title`). The engine reads a record's
+    /// field whole and nothing past it, so such a read fails every run that
+    /// reaches it, and is refused — except past a field that holds a record
+    /// (`c.Current.Stage`), a value read on as the record it is: reading
+    /// through a reference would hide a fetch, and a held record has none.
+    /// `None` for any other read, typed as it always was.
+    fn read_off_record(&mut self, root: Option<&str>, record: &Position, terminal: &Expression) -> Option<Option<Ty>> {
         let (property, past) = match terminal {
             Expression::Property { property_type_id, .. } => (property_type_id.as_str(), None),
             Expression::Traverse { alias_root: Some(head), steps: past_steps, expression: past } => (head.as_str(), Some((past_steps, &**past))),
             _ => return None,
         };
         let chain = dot_chain(terminal).unwrap_or_default();
-        // The walk is spelled from the root only when no hop comes between.
-        let read = FieldRead { root: steps.is_empty().then_some(root), property, rest: chain.get(1..).unwrap_or_default() };
+        let read = FieldRead { root, property, rest: chain.get(1..).unwrap_or_default() };
         if crate::families::walks::report_edge_read_as_field(self, record, &read) {
             return Some(None);
         }
@@ -734,6 +735,16 @@ impl<'a> Typing<'a> {
         let field = self.read_property(Some(record), property);
         if self.diagnostics.len() > before {
             return Some(None);
+        }
+        if past_steps.is_empty()
+            && holds_record(record, property)
+            && let Some(Ty::Record(Some(held))) = field.as_ref().map(strip_absent)
+        {
+            let held = if is_maybe_absent(field.as_ref()) { Position::MaybeEmpty(Box::new((**held).clone())) } else { (**held).clone() };
+            return Some(match self.read_off_record(None, &held, past) {
+                Some(read) => read,
+                None => self.infer_at(past, Some(&held)),
+            });
         }
         let next = match past {
             Expression::Property { property_type_id, .. } if past_steps.is_empty() => Some(property_type_id.as_str()),
@@ -901,7 +912,7 @@ impl<'a> Typing<'a> {
                     self.walk_destinations.insert(key(expr), destination.clone());
                 }
                 if let (Some(root), Some(record)) = (alias_root.as_deref(), destination.as_ref())
-                    && let Some(read) = self.read_off_record(root, steps, record, expression)
+                    && let Some(read) = self.read_off_record(steps.is_empty().then_some(root), record, expression)
                 {
                     return (read, Vec::new());
                 }
@@ -1681,4 +1692,21 @@ fn unselected_message(instance: &str, type_name: &str, members: &[String], edge:
         pins => format!("whose {}", pins.iter().map(|(field, literal)| format!("{field} is \"{literal}\"")).collect::<Vec<_>>().join(" and ")),
     };
     format!("{at}no {type_name} {which}{has}{hint}")
+}
+
+/// Whether `record` declares `property` as a field holding a record of a
+/// named position.
+fn holds_record(record: &Position, property: &str) -> bool {
+    use movement_parser::catalog::types::{Composite, FieldType};
+    let record = match record {
+        Position::MaybeEmpty(of) => of,
+        other => other,
+    };
+    let Some(schema) = super::position::position_schema_of_ref(record) else { return false };
+    let held = match schema.properties.get(property) {
+        Some(FieldType::Composite(Composite::MaybeAbsent { of })) => &**of,
+        Some(declared) => declared,
+        None => return false,
+    };
+    matches!(held, FieldType::Composite(Composite::Record { .. })) && held.is_schema()
 }

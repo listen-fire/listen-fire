@@ -580,6 +580,20 @@ impl<'a> Evaluator<'a> {
     /// other root is the run's to read.
     async fn traverse_from(&self, expr: &Expression, root: &str) -> Eval {
         let Expression::Traverse { steps, expression, .. } = expr else { unreachable!("a rooted traversal") };
+        // `c.Current.Stage` off a record: the field, then what the record it
+        // holds has. A value's own read goes on through a map as it always did.
+        if let Some((_, field, members)) = crate::filter::held_read(expr)
+            && !matches!(self.env.binding(root), None | Some(Binding::Value(_)))
+        {
+            let read = Expression::Traverse {
+                alias_root: Some(root.to_string()),
+                steps: Vec::new(),
+                expression: Box::new(Expression::Property { property_type_id: field.to_string(), field_only: false }),
+            };
+            let held = Box::pin(self.traverse_from(&read, root)).await?;
+            let value = crate::filter::read_on(held.value, &members);
+            return Ok(Evaluated { value: if value.is_nullish() { Js::Null } else { value }, prov: held.prov });
+        }
         match self.env.binding(root) {
             None => Err(EvalError::engine("MOVENG_RUNTIME", format!("'{root}' is not in scope — the checker should have caught this"))),
             Some(Binding::Value(value)) => {

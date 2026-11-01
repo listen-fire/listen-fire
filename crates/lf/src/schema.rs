@@ -98,7 +98,16 @@ fn leave_out_artificial_edge(adapter_type: &str, edge: &str, notes: &mut Vec<Str
 /// `fieldTypeFromDescriptor`: a field's type, or none for a reference (an
 /// edge) or a kind with no projection. `owner` is the adapter, which owns
 /// the scalars it names.
-pub fn field_type_from_descriptor(field: &Js, owner: &str) -> Option<Js> {
+/// Where a field is projected: the adapter (an owned scalar's owner), and the
+/// name a type id is known by in the schema (a record field's position, as a
+/// reference's target is named).
+pub struct Projecting<'a> {
+    pub owner: &'a str,
+    pub position_of: &'a dyn Fn(&str) -> String,
+}
+
+pub fn field_type_from_descriptor(field: &Js, at: &Projecting) -> Option<Js> {
+    let owner = at.owner;
     let scalar = match field.get("kind").and_then(Js::as_str) {
         Some("string") => {
             let known = items(field.get("knownValues"));
@@ -125,13 +134,15 @@ pub fn field_type_from_descriptor(field: &Js, owner: &str) -> Option<Js> {
             }
             Js::from(type_)
         }
+        Some("record") => {
+            let type_id = field.get("record")?.get("typeId").and_then(Js::as_str)?;
+            let position = obj! { "kind" => Js::str("position"), "position" => Js::str((at.position_of)(type_id)) };
+            Js::from(obj! { "kind" => Js::str("record"), "position" => Js::from(position) })
+        }
         _ => return None,
     };
-    Some(if field.get("cardinality").and_then(Js::as_str) == Some("many") {
-        Js::from(obj! { "kind" => Js::str("list"), "of" => scalar })
-    } else {
-        scalar
-    })
+    let type_ = if field.get("cardinality").and_then(Js::as_str) == Some("many") { Js::from(obj! { "kind" => Js::str("list"), "of" => scalar }) } else { scalar };
+    Some(if Js::is_true(field.get("mayBeAbsent")) { Js::from(obj! { "kind" => Js::str("maybeAbsent"), "of" => type_ }) } else { type_ })
 }
 
 fn project_native_uniqueness(
@@ -396,7 +407,8 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
         let mut dropped_field = false;
         let fields = items(descriptor.get("fields"));
         for field in fields {
-            let Some(type_) = field_type_from_descriptor(field, adapter_type) else {
+            let position_of = |type_id: &str| display_of(type_id).unwrap_or_else(|| type_id.to_string());
+            let Some(type_) = field_type_from_descriptor(field, &Projecting { owner: adapter_type, position_of: &position_of }) else {
                 if field.get("kind").and_then(Js::as_str) != Some("reference") {
                     dropped_field = true;
                 }
@@ -741,6 +753,16 @@ pub fn unreadable_owned_field(field: &Js) -> Option<String> {
     }
     let named = field.get("owned").and_then(|owned| owned.get("name")).and_then(Js::as_str).is_some_and(|name| !name.is_empty());
     (!named).then(|| format!("'{}' is of kind 'owned' but declares no 'owned.name': name the scalar its adapter parses", key(field.get("displayName"))))
+}
+
+/// The refusal of a field of kind `record` that names no type: it would
+/// project as nothing (engine-contracts `unreadableRecordField` says the same).
+pub fn unreadable_record_field(field: &Js) -> Option<String> {
+    if field.get("kind").and_then(Js::as_str) != Some("record") {
+        return None;
+    }
+    let named = field.get("record").and_then(|record| record.get("typeId")).and_then(Js::as_str).is_some_and(|id| !id.is_empty());
+    (!named).then(|| format!("'{}' is of kind 'record' but declares no 'record.typeId': name the type of the record it holds", key(field.get("displayName"))))
 }
 
 /// The refusal of a reference whose `identity` or `version` names a field its
@@ -1520,13 +1542,27 @@ mod tests {
         assert_eq!(Js::from(tables).to_json(), r#"{"target":"Table","cheapToList":true,"parentChanges":"pushed"}"#);
     }
 
+    fn owned_by(owner: &str) -> Projecting<'_> {
+        Projecting { owner, position_of: &|type_id| type_id.to_string() }
+    }
+
+    #[test]
+    fn a_record_field_projects_as_the_record_of_its_types_position() {
+        let field = js(r#"{"fieldId":"cur","displayName":"Current","kind":"record","record":{"typeId":"tblCAND01"},"mayBeAbsent":true,"writable":false,"required":false}"#);
+        let position_of = |type_id: &str| if type_id == "tblCAND01" { "Candidates".to_string() } else { type_id.to_string() };
+        assert_eq!(
+            field_type_from_descriptor(&field, &Projecting { owner: "airtable", position_of: &position_of }).unwrap().to_json(),
+            r#"{"kind":"maybeAbsent","of":{"kind":"record","position":{"kind":"position","position":"Candidates"}}}"#
+        );
+    }
+
     #[test]
     fn an_owned_field_projects_as_owned() {
         let field = js(r#"{"fieldId":"schedule","displayName":"Schedule","kind":"owned","owned":{"name":"Cron"},"writable":false,"required":true}"#);
-        assert_eq!(field_type_from_descriptor(&field, "cron").unwrap().to_json(), r#"{"kind":"owned","name":"Cron","owner":"cron"}"#);
+        assert_eq!(field_type_from_descriptor(&field, &owned_by("cron")).unwrap().to_json(), r#"{"kind":"owned","name":"Cron","owner":"cron"}"#);
         let keyed = js(r#"{"fieldId":"key","displayName":"Key","kind":"owned","owned":{"name":"Key","allowPattern":"^[a-z0-9]+$"},"cardinality":"many","writable":false,"required":true}"#);
         assert_eq!(
-            field_type_from_descriptor(&keyed, "email").unwrap().to_json(),
+            field_type_from_descriptor(&keyed, &owned_by("email")).unwrap().to_json(),
             r#"{"kind":"list","of":{"kind":"owned","name":"Key","owner":"email","allowPattern":"^[a-z0-9]+$"}}"#
         );
         let schema = tick_schema(r#"{"typeId":"tick","displayName":"Tick","writable":false,"readable":true}"#);
@@ -1694,6 +1730,15 @@ mod tests {
             ticks_refusal(r#","carries":["Bases"]"#).unwrap(),
             "'Ticks' says its arrivals carry earlier hops, but 'carries' names 'Bases', and 'Ticks' is a root collection: nothing comes before it"
         );
+    }
+
+    #[test]
+    fn a_record_field_without_its_type_is_refused_by_name() {
+        let refusal = |field: &str| unreadable_record_field(&js(field));
+        assert_eq!(refusal(r#"{"fieldId":"cur","displayName":"Current","kind":"record","record":{"typeId":"Row"}}"#), None);
+        let expected = "'Current' is of kind 'record' but declares no 'record.typeId': name the type of the record it holds";
+        assert_eq!(refusal(r#"{"fieldId":"cur","displayName":"Current","kind":"record"}"#).unwrap(), expected);
+        assert_eq!(refusal(r#"{"fieldId":"cur","displayName":"Current","kind":"record","record":{"typeId":""}}"#).unwrap(), expected);
     }
 
     #[test]

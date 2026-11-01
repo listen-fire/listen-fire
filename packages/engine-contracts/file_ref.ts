@@ -227,6 +227,8 @@ export function filesAtType(type: SchemaFieldType | undefined, value: unknown): 
       return filesAtType(type.of, value);
     case 'enum':
     case 'owned':
+    // A record a field holds is the module's: its files are its own fields'.
+    case 'record':
       return value;
   }
 }

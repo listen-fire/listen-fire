@@ -70,8 +70,15 @@ fn is_ident(text: &str) -> bool {
 /// nor an engine reads it as a variable of the same name; a name written bare
 /// is an outer variable from 5 (refused when it is not one). A walk nested in
 /// the WHERE keeps its own hops' reads: a bare name there is ITS record's
-/// field.
+/// field. A read on past the field (`c.Current.Stage`, through a record the
+/// field holds) keeps its alias: it reads the record's field, then a member
+/// of what it holds, which no bare name says.
 fn through_alias(e: &mut MExpr, alias: &str) {
+    if let MExpr::Member { object, .. } = e
+        && matches!(object.as_ref(), MExpr::Member { object, .. } if matches!(object.as_ref(), MExpr::Name { name, .. } if name.text == alias && !name.quoted))
+    {
+        return;
+    }
     if let MExpr::Member { object, property, at } = e
         && matches!(object.as_ref(), MExpr::Name { name, .. } if name.text == alias && !name.quoted)
     {

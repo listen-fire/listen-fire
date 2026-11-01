@@ -1570,15 +1570,16 @@ export function eventAddressEventName(key: string): string {
 
 
 /**
- * What an adapter SURFACE can declare — every field type except a record,
- * nested collections included.
+ * What an adapter SURFACE can declare — every field type, nested collections
+ * included, a record by the name of its position.
  *
- * A record is a place in a graph, and no adapter field is one: a record type
- * arises only where the checker types an EXPRESSION. Saying so here is what
- * keeps a schema clear of the position model — and a schema crosses the wire
- * (`InstanceSchema` is a tRPC response), where a field type that reached into
- * positions would reach back into schemas again, a cycle no serialiser's type
- * can follow.
+ * A record field holds a record as its value (a change's row before and
+ * after), read on with `.` and never fetched. It names its position as the
+ * checker's `PositionTypeRef` does, less the instance: the schema declaring
+ * it is the instance's own. That is what keeps a schema clear of the position
+ * model — a schema crosses the wire (`InstanceSchema` is a tRPC response),
+ * and a field type that carried an instance would reach back into schemas
+ * again, a cycle no serialiser's type can follow.
  *
  * The collections are spelled a second time because TypeScript cannot subtract
  * a member from a RECURSIVE union — `Exclude` removes the record at the top
@@ -1605,7 +1606,12 @@ export type SchemaFieldType =
    *  schedule, a mailbox key. `allowPattern` is the least an owner says of
    *  its values. */
   | { kind: 'owned'; name: string; owner: string; allowPattern?: string }
-  | { kind: 'maybeAbsent'; of: SchemaFieldType };
+  | { kind: 'maybeAbsent'; of: SchemaFieldType }
+  | { kind: 'record'; position: SchemaPositionRef };
+
+/** Which record a `record` field holds: one record type of the instance, or
+ *  one of several (`unions`). */
+export type SchemaPositionRef = { kind: 'position'; position: string } | { kind: 'union'; union: string };
 
 /** `T | absent` over a surface type; a surface type in is a surface type out. */
 export function maybeAbsent(type: SchemaFieldType | undefined): SchemaFieldType | undefined {

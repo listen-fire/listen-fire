@@ -128,10 +128,11 @@ pub fn describe_field_type(type_: &FieldType) -> Result<String, String> {
             format!("{{ {} }}", keys.join(", "))
         }
         Composite::Dict { of, shape: None } => format!("dict of {}", describe_member(of)?),
-        Composite::Record { position: Some(_) } => {
-            return Err("describing a record's position is the typing layer's, which is not ported".into());
-        }
         Composite::Record { position: None } => "a record".into(),
+        Composite::Record { position: Some(position) } => match position.name() {
+            Some(name) => format!("a {name} record"),
+            None => return Err("describing the record of an instance itself is the typing layer's, which is not ported".into()),
+        },
         Composite::Owned { name, .. } => name.clone(),
         Composite::Enum { options, open: Some(_) } => format!("known values ({}, …)", options.join(" | ")),
         Composite::Enum { options, open: None } if options.is_empty() => "enum (no available values)".into(),
