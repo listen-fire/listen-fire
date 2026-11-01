@@ -217,6 +217,8 @@ The body ran when the person acted. Write it after the wait instead, in the arm 
 
 Nothing refuses the old guard; it is dead code.
 
+The record a wait hangs off must be there when the wait is reached. A wait off a name that may hold no record (`d = only(c-[:Deals]->)`, then `await new d-[:Notes]->`) is refused (`MOV_ABSENT_REQUIRED`), as a block's walk off one is: under 0.12 it checked clean and failed the run at the wait. Guard it: `if (d != null) { n = await new d-[:Notes]-> }`, or end the run first when it is missing (`if (d == null) { fail("no deal") }`).
+
 ## 6. Runs parked under 0.12
 
 A run parked under 0.12 cannot resume on a 0.13 engine: it is refused on resume with "this run parked under listen-fire 0.12 (park state 2); a 0.13 engine resumes park state 3". Let parked runs finish, or cancel them (`listen-fire cancel`), before upgrading `listen-fire`. A link a 0.12 callback minted is gone for good: `/api/cb/<id>` answers 410.
@@ -238,6 +240,16 @@ For module authors only.
 - The fired function's parameter is typed by what lands, addressed from the connection: the edge (`<gh-[:Notifications]->>`) or its record type (`<pay-[:InvoiceChange]->>`). `listen-fire upgrade` retypes it with the listen.
 - Why: a listen says which records it wants as a read or a wait does, so it is checked as they are, a filter is judged one way on every host, and listens on one edge share one poll or webhook. The settings form was a second vocabulary per module, unchecked against what arrives.
 - The handbook's listeners chapter teaches the form in full: where each filter is judged, unbounded edges, loops, and an arrival a listen could not judge.
+- A listen that could never fire is refused where it is written, never checked clean:
+  - a hop that lands on one of several record types (a union), through it or onto it (`MOV_LISTEN_UNION_HOP`): what arrives is told apart by the one record type each hop lands on;
+  - a filter judged on each arrival that reads an earlier hop the arrival does not carry (`MOV_LISTEN_UNWATCHABLE`): the judge has only what arrives;
+  - a window measured from now (`WITHIN`) on a hop the host lists to find what to watch (`MOV_LISTEN_UNWATCHABLE`): that hop is judged again only when it is listed again, so put the window on what arrives.
+
+### One name for one hop
+
+One walk names each hop once: `-[c:Channels]->-[c:Messages]->` is refused (`MOV_HOP_ALIAS_REPEATED`), on a listen, a block or a walk inside an expression. Under 0.12 a later read of `c` meant the nearest hop to the checker and the first to a listen's judge. Give each hop its own alias.
+
+In a run, a hop's `WHERE` reads its own record, names in scope and literals, not an earlier hop of the same walk: `at-[t:Tables]->-[c:History WHERE c.Id == t.Name]->` is refused (`MOV_HOP_READS_EARLIER_HOP`). Under 0.12 it checked clean and failed the run. Open a block on the earlier hop and walk on from it inside, where it is a record in scope: `at-[t:Tables]-> { t-[c:History WHERE c.Id == t.Name]-> { … } }`. A listen's hops may read earlier hops, which the host lists with each one named.
 
 ### What the upgrade rewrites
 
@@ -458,3 +470,12 @@ listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.Tim
 | `MOV_AWAIT_MAY_HANG` | warning on an upgrade from 0.12: race the wait with a `sleep` | [5](#5-what-a-wait-binds-is-always-there) |
 | `MOV_LISTEN_SETTINGS_RETIRED` | error: a safe fix, a fix `--all` applies, or by hand | [8](#8-listens-are-traversals) |
 | `MOV_ABSENT_REQUIRED` (a field read through a value that may be missing) | error, by hand: test the value with `exists` | [9](#9-a-field-is-never-read-through-a-value-that-may-be-missing) |
+| `MOV_ABSENT_REQUIRED` (a wait off a record that may be missing) | error, by hand: guard the wait with `!= null` | [5](#5-what-a-wait-binds-is-always-there) |
+| `MOV_LISTEN_EDGE_NOT_LISTENABLE`, `MOV_LISTEN_HOP_NOT_ITERABLE`, `MOV_LISTEN_UNWATCHABLE`, `MOV_LISTEN_IMPURE_WHERE`, `MOV_LISTEN_UNION_HOP` | error, by hand, on a listen written or rewritten as a traversal | [8](#8-listens-are-traversals) |
+| `MOV_HOP_ALIAS_REPEATED` | error, by hand: give each hop of a walk its own alias | [8](#one-name-for-one-hop) |
+| `MOV_HOP_READS_EARLIER_HOP` | error, by hand: open a block on the earlier hop and walk on from it inside | [8](#one-name-for-one-hop) |
+| `MOV_UNBOUNDED_EDGE` | error, by hand: narrow the hop by a field its module takes, with literals (`-[t:Ticks WHERE t.Schedule == "…"]->`) | [changelog](../../CHANGELOG.md#0130) |
+| `MOV_FILTER_NOT_TAKEN` | error, by hand: compare a field only its module evaluates with a literal its module takes | [changelog](../../CHANGELOG.md#0130) |
+| `MOV_OWNED_VALUE_INVALID` | error, by hand: write a value its module accepts (a five-field schedule, a time zone) | [changelog](../../CHANGELOG.md#0130) |
+| `MOV_COLLECTION_NOT_READABLE` | error, by hand: a collection its module only writes to or announces on is written to or listened to, never read | [changelog](../../CHANGELOG.md#0130) |
+| `MOV_WALK_ROOT_NOT_RECORD`, `MOV_WALK_OFF_HELD_RECORD` | error, by hand: start a walk at a graph record (off a change's row, walk from the live record: `c-[:Record]->-[:X]->`) | [changelog](../../CHANGELOG.md#0130) |

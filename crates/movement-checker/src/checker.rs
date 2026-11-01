@@ -1269,7 +1269,7 @@ impl<'c> Checker<'c> {
     /// What the block's body hands back, and the order its head walks in.
     fn check_traversal_block(&mut self, block: &TraversalBlock, scope: ScopeId, assigned: Option<&str>) -> (crate::types::position::ReturnShape, crate::types::field::CollectionOrder) {
         let aliases = self.check_path_head(&block.head, scope);
-        self.report_head_off_maybe_absent(&block.head, scope);
+        self.report_head_off_maybe_absent(&block.head, scope, crate::families::walks::HeadUse::Block);
         let walk = self.walk_head(&block.head, scope, false);
         self.note_block_entry(&block.head, walk.as_ref());
         let body = self.open_landing(scope, &aliases, block.head.span);
@@ -1305,6 +1305,7 @@ impl<'c> Checker<'c> {
                 self.check_awaited_head(head);
                 self.report_await_on_list(head, scope);
                 self.check_path_head(head, scope);
+                self.report_head_off_maybe_absent(head, scope, crate::families::walks::HeadUse::Wait);
                 let walk = self.walk_head(head, scope, true);
                 self.check_awaitable(head, walk.as_ref(), *arrivals_only);
                 self.note_await(&awaited.source, walk.as_ref());

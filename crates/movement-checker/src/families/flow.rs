@@ -221,7 +221,7 @@ impl Checker<'_> {
             self.report(
                 codes::AWAIT_BARE_WALK,
                 format!(
-                    "'await {path}' walks more than one edge, and 'await' waits on one edge of a record a name holds — bind that record first: `one = only({root}{before})`, then `await one{last}`"
+                    "'await {path}' walks more than one edge, and 'await' waits on one edge of a record a name holds — bind that record first, and wait only when it is there: `one = only({root}{before})`, then `if (one != null) {{ x = await one{last} }}`"
                 ),
                 head.span,
             );

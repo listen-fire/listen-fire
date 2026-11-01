@@ -5,7 +5,8 @@
 //! the last (judged on each arrival, or by listing the hop's members).
 //!
 //! Codes: MOV_LISTEN_EDGE_NOT_LISTENABLE, MOV_LISTEN_HOP_NOT_ITERABLE,
-//! MOV_LISTEN_UNWATCHABLE, MOV_LISTEN_IMPURE_WHERE, and for the path form
+//! MOV_LISTEN_UNWATCHABLE, MOV_LISTEN_IMPURE_WHERE, MOV_LISTEN_UNION_HOP, and
+//! for the path form
 //! MOV_LISTEN_NOT_INSTANCE, MOV_LISTEN_PARAM_MISMATCH,
 //! MOV_LISTEN_DUPLICATE, MOV_LISTEN_ALIAS_DUPLICATE.
 
@@ -19,7 +20,7 @@ use crate::codes;
 use crate::families::filter_split::{EdgeView, owned_fields, split_hop, spell};
 use crate::families::flow::spell_path_head;
 use crate::families::names::spell_name;
-use crate::families::walks::is_pure_predicate;
+use crate::families::walks::{alias_reads, is_pure_predicate};
 use crate::scope::{Resolution, ScopeId, SymbolId, SymbolKind};
 use crate::types::position::{Instance, Position, positions_match};
 
@@ -103,18 +104,26 @@ impl Checker<'_> {
         // A walk in a WHERE is refused as the listen's (`foreign_read`), so
         // the wait's walk does not also judge it as a read or a wait.
         let without_walks: Vec<TraversalStep> = lowered.iter().cloned().map(without_walks).collect();
-        let walk = instance.as_ref().and_then(|_| self.walk_head_steps(path, &without_walks, scope, true));
+        let steps: Vec<EdgeStep> = lowered
+            .iter()
+            .filter_map(|step| match step {
+                TraversalStep::Edge(edge) => Some(edge.clone()),
+                _ => None,
+            })
+            .collect();
+        // A hop judged on each arrival is fetched by nothing, so what its
+        // module can filter costs nothing either.
+        let edge_places: Vec<usize> = lowered.iter().enumerate().filter(|(_, step)| matches!(step, TraversalStep::Edge(_))).map(|(place, _)| place).collect();
+        let unfetched: Vec<usize> = instance
+            .as_ref()
+            .and_then(|instance| declared_hops(&instance.schema, &steps).ok())
+            .map(|hops| (0..hops.len()).filter(|i| judging(&hops, *i) == Judging::Arrival).filter_map(|i| edge_places.get(i).copied()).collect())
+            .unwrap_or_default();
+        let walk = instance.as_ref().and_then(|_| self.walk_listen_steps(path, &without_walks, scope, unfetched));
         // The walk is a wait's, and a listen's WHERE is refused by its own
         // code, not by the wait's.
         let walked = self.diagnostics.split_off(before.min(self.diagnostics.len()));
         self.diagnostics.extend(walked.into_iter().filter(|d| d.code != codes::AWAIT_IMPURE_WHERE));
-        let steps: Vec<EdgeStep> = lowered
-            .into_iter()
-            .filter_map(|step| match step {
-                TraversalStep::Edge(edge) => Some(edge),
-                _ => None,
-            })
-            .collect();
         let landing = statement.landing.as_ref().and_then(|stated| self.landing_node(stated, scope));
         let plan = instance
             .as_ref()
@@ -166,8 +175,25 @@ impl Checker<'_> {
             };
             self.record_node(statement.span, scope, what);
         }
-        // A host watches only a listen that checks clean.
+        // A host watches only a listen that checks clean, and a listen that
+        // checks clean is watched: one with no plan says why where it is
+        // written, never checks clean and then never fires.
         let clean = self.diagnostics[before.min(self.diagnostics.len())..].iter().all(|d| d.severity.is_some());
+        if clean && plan.is_none() {
+            match &instance {
+                Some(described) if !described.schema.collections.is_empty() => {
+                    let message = format!("listen-fire can't plan how to watch 'listen to {}' — this is a gap in the checker, so please report it with this program", spell_path_head(path));
+                    self.report(codes::LISTEN_UNWATCHABLE, message, path.span);
+                }
+                _ => {
+                    let message = format!(
+                        "'{0}' has no description in the catalog, so listen-fire can't tell what this listen watches — it would never fire. The catalog describes it from the system behind '{0}': check that its connection resolves and the system answers, then check again.",
+                        statement.instance
+                    );
+                    self.report(codes::EVENT_UNDESCRIBED, message, path.span);
+                }
+            }
+        }
         match plan.filter(|_| clean) {
             Some(plan) => self.listens.plans.push((statement.span, plan)),
             None => self.listens.unwatched.push(statement.span),
@@ -200,7 +226,15 @@ impl Checker<'_> {
     fn plan_listen(&mut self, statement: &ListenDeclaration, path: &PathHead, instance: &Instance, steps: &[EdgeStep], scope: ScopeId) -> Option<ListenPlan> {
         let schema: &InstanceSchema = &instance.schema;
         let module = instance.adapter.as_deref().unwrap_or(&instance.name);
-        let hops = declared_hops(schema, steps)?;
+        let hops = match declared_hops(schema, steps) {
+            Ok(hops) => hops,
+            Err(Undeclared::Union { hop, members }) => {
+                self.report_union_hop(instance, &hop, members, path);
+                return None;
+            }
+            // The walk reported the edge it does not know.
+            Err(Undeclared::Unknown) => return None,
+        };
         let (last, earlier) = hops.split_last()?;
         let mut watchable = true;
         for hop in earlier {
@@ -236,7 +270,6 @@ impl Checker<'_> {
         if !watchable {
             return None;
         }
-        let scoped = last.edge.delivery() == Some(Delivery::Scope);
         let carries = last.edge.carries();
         let mut planned = Vec::new();
         let mut unwatchable = false;
@@ -244,23 +277,31 @@ impl Checker<'_> {
             let edge = hop.step.edge_type_id.as_str();
             let target = schema.positions.get(hop.to).unwrap_or(&NO_LANDING);
             let split = split_hop(hop.step.expression_filter.as_deref(), hop.step.alias.as_deref(), &hop.edge.view(edge, module), target).ok()?;
-            // Under a scope the host lists every head to subscribe to it, so
-            // it judges their filters as it lists them, whatever listing costs.
-            let judged = if i == hops.len() - 1 {
-                HopJudged::Arrival
-            } else if scoped {
-                HopJudged::Resolved
-            } else if hop.step.expression_filter.is_none() {
-                HopJudged::None
-            } else if carries.iter().any(|c| c == edge) {
-                HopJudged::Arrival
-            } else if hops[..=i].iter().all(|h| h.edge.cheap_to_list()) {
-                HopJudged::Resolved
-            } else {
-                self.report_unwatchable(module, hop, &hops[i + 1..], instance, path);
-                unwatchable = true;
-                HopJudged::None
+            let judged = match judging(&hops, i) {
+                Judging::Arrival => HopJudged::Arrival,
+                Judging::Resolved => HopJudged::Resolved,
+                Judging::None => HopJudged::None,
+                Judging::Unwatchable => {
+                    self.report_unwatchable(module, hop, &hops[i + 1..], instance, path);
+                    unwatchable = true;
+                    HopJudged::None
+                }
             };
+            let filter = hop.step.expression_filter.as_deref();
+            // The judge reads only the records an arrival carries, so a hop
+            // judged on it can read no earlier hop the arrival leaves behind.
+            if judged == HopJudged::Arrival
+                && let Some(read) = filter.and_then(|f| alias_reads(f).into_iter().find_map(|name| hops[..i].iter().position(|h| h.step.alias.as_deref() == Some(name)))).filter(|j| !carried(&hops, carries, *j))
+            {
+                self.report_uncarried_read(module, hop, &hops[read], hops.last().unwrap_or(hop), instance, path);
+                unwatchable = true;
+            }
+            // A listed hop is judged only when it is listed again, so a
+            // window measured from now would hold a record that has aged out.
+            if judged == HopJudged::Resolved && filter.is_some_and(reads_now) {
+                self.report_window_listed(hop, hops.last().unwrap_or(hop), path);
+                unwatchable = true;
+            }
             planned.push(PlanHop {
                 edge: edge.to_string(),
                 from: hop.from.unwrap_or_default().to_string(),
@@ -286,6 +327,26 @@ impl Checker<'_> {
         })
     }
 
+    /// MOV_LISTEN_UNION_HOP: `hop` lands on one of several record types. The
+    /// judge tells an arrival's records apart by the record type each hop
+    /// lands on, and an arrival is only ever one of the union's members, so
+    /// the listen would check clean and never fire.
+    fn report_union_hop(&mut self, instance: &Instance, hop: &Hop, members: &[String], path: &PathHead) {
+        let named: Vec<String> = members.iter().map(|m| crate::types::position::display_name_of(instance, m)).collect();
+        let one_of = match named.split_last() {
+            Some((last, [])) => last.clone(),
+            Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+            None => String::new(),
+        };
+        let message = format!(
+            "'-[:{}]->' on {} lands on {}, which is one of {one_of}, and every hop of a listen lands on one record type: the host tells what arrives apart by it, so this listen would never fire — listen through an edge that lands on {one_of} alone, or wait in a run on one record",
+            hop.step.edge_type_id,
+            owner(instance, hop.from),
+            hop.to
+        );
+        self.report(codes::LISTEN_UNION_HOP, message, path.span);
+    }
+
     /// MOV_LISTEN_UNWATCHABLE: `hop`'s filter is neither carried by what
     /// arrives on the last edge nor cheap to re-check by listing. The way
     /// out is a wait, in a run, on one record `hop` lands on.
@@ -302,6 +363,30 @@ impl Checker<'_> {
             last.step.edge_type_id,
             spell_name(&alias),
             spell_name(&last.step.edge_type_id)
+        );
+        self.report(codes::LISTEN_UNWATCHABLE, message, path.span);
+    }
+
+    /// MOV_LISTEN_UNWATCHABLE: `hop` is judged on each arrival, and its filter
+    /// reads `read`, an earlier hop the arrivals on `last` don't carry.
+    fn report_uncarried_read(&mut self, module: &str, hop: &Hop, read: &Hop, last: &Hop, instance: &Instance, path: &PathHead) {
+        let alias = spell_name(read.step.alias.as_deref().unwrap_or_default());
+        let position = crate::types::position::display_name_of(instance, read.to);
+        let message = format!(
+            "this listen's filter on '-[:{}]->' reads `{alias}`, the {position} it is under, but {module}'s arrivals on '-[:{}]->' don't carry the {position}, so no arrival could be judged by it — compare with a literal, or wait in a run, where the {position} is a record the run holds",
+            hop.step.edge_type_id,
+            last.step.edge_type_id
+        );
+        self.report(codes::LISTEN_UNWATCHABLE, message, path.span);
+    }
+
+    /// MOV_LISTEN_UNWATCHABLE: `hop` is listed to find what to watch, and is
+    /// judged only when it is listed again; `window` measures from now.
+    fn report_window_listed(&mut self, hop: &Hop, last: &Hop, path: &PathHead) {
+        let message = format!(
+            "this listen filters '-[:{}]->' by a window measured from now (`WITHIN`), but that hop is listed to find what to watch, and judged again only when it is listed again, so a record that ages out of the window would keep firing — a window is judged on what arrives: put it on '-[:{}]->', or on a hop its arrivals carry",
+            hop.step.edge_type_id,
+            last.step.edge_type_id
         );
         self.report(codes::LISTEN_UNWATCHABLE, message, path.span);
     }
@@ -419,21 +504,85 @@ impl Checker<'_> {
     }
 }
 
-/// Each hop's edge as the schema declares it, from the connection down;
-/// `None` when a hop names nothing the schema declares (the walk said so).
-fn declared_hops<'a>(schema: &'a InstanceSchema, steps: &'a [EdgeStep]) -> Option<Vec<Hop<'a>>> {
+/// Why a listen's hops are not each one edge between two record types.
+enum Undeclared<'a> {
+    /// A hop names nothing the schema declares (the walk said so), or there
+    /// are no hops.
+    Unknown,
+    /// A hop lands on a union of record types.
+    Union { hop: Hop<'a>, members: &'a [String] },
+}
+
+/// Each hop's edge as the schema declares it, from the connection down.
+fn declared_hops<'a>(schema: &'a InstanceSchema, steps: &'a [EdgeStep]) -> Result<Vec<Hop<'a>>, Undeclared<'a>> {
     let mut hops = Vec::new();
     let mut from: Option<&str> = None;
     for step in steps {
         let edge = step.edge_type_id.as_str();
-        let (declared, to) = match from {
-            None => schema.collections.get(edge).map(|c| (Declared::Collection(c), c.target.as_str()))?,
-            Some(position) => schema.positions.get(position)?.edges.get(edge).map(|e| (Declared::Edge(e), e.target.as_str()))?,
+        let declared = match from {
+            None => schema.collections.get(edge).map(|c| (Declared::Collection(c), c.target.as_str())),
+            Some(position) => schema.positions.get(position).and_then(|p| p.edges.get(edge)).map(|e| (Declared::Edge(e), e.target.as_str())),
         };
-        hops.push(Hop { step, from, to, edge: declared });
+        let (declared, to) = declared.ok_or(Undeclared::Unknown)?;
+        let hop = Hop { step, from, to, edge: declared };
+        if let Some(members) = schema.unions.as_ref().and_then(|unions| unions.get(to)) {
+            return Err(Undeclared::Union { hop, members });
+        }
+        hops.push(hop);
         from = Some(to);
     }
-    (!hops.is_empty()).then_some(hops)
+    if hops.is_empty() {
+        return Err(Undeclared::Unknown);
+    }
+    Ok(hops)
+}
+
+/// How the host honours hop `i`'s filter: judged on each arrival, by listing
+/// the hop's members, not at all (no filter), or by neither.
+#[derive(Clone, Copy, PartialEq)]
+enum Judging {
+    Arrival,
+    Resolved,
+    None,
+    Unwatchable,
+}
+
+fn judging(hops: &[Hop], i: usize) -> Judging {
+    let last = &hops[hops.len() - 1];
+    let hop = &hops[i];
+    if i == hops.len() - 1 {
+        Judging::Arrival
+    } else if last.edge.delivery() == Some(Delivery::Scope) {
+        // Under a scope the host lists every head to subscribe to it, so it
+        // judges their filters as it lists them, whatever listing costs.
+        Judging::Resolved
+    } else if hop.step.expression_filter.is_none() {
+        Judging::None
+    } else if last.edge.carries().iter().any(|c| *c == hop.step.edge_type_id) {
+        Judging::Arrival
+    } else if hops[..=i].iter().all(|h| h.edge.cheap_to_list()) {
+        Judging::Resolved
+    } else {
+        Judging::Unwatchable
+    }
+}
+
+/// Whether an arrival on the last edge carries hop `j`'s record: the k-th
+/// hop on an edge name is the k-th carried record of it, as the judge reads
+/// them.
+fn carried(hops: &[Hop], carries: &[String], j: usize) -> bool {
+    let edge = hops[j].step.edge_type_id.as_str();
+    let nth = hops[..j].iter().filter(|h| h.step.edge_type_id == edge).count();
+    carries.iter().filter(|c| *c == edge).count() > nth
+}
+
+/// Whether `filter` compares anything with a window measured from now
+/// (`WITHIN`).
+fn reads_now(filter: &Expression) -> bool {
+    match filter {
+        Expression::Compare { op: movement_parser::lowering::expression::FilterOperator::Within, .. } => true,
+        other => crate::families::values::sub_expressions(other).into_iter().any(reads_now),
+    }
 }
 
 /// Where an edge is declared, as a sentence names it: the connection for a

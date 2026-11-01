@@ -720,8 +720,10 @@ pub fn observe_hop_order(typing: &mut Typing, step: &EdgeStep, ordering: Collect
 
 
 /// Called by the type core once a hop's WHERE and ORDER BY are typed
-/// (`gateHopCapability`): `from` is where the hop left, `target` where it landed.
-pub fn observe_hop(typing: &mut Typing, from: Option<&Position>, step: &EdgeStep, target: Option<&Position>) {
+/// (`gateHopCapability`): `from` is where the hop left, `target` where it
+/// landed. A hop nothing `fetched` (a listen's hop judged on each arrival)
+/// costs no fetch, so what its source can filter is not said of it.
+pub fn observe_hop(typing: &mut Typing, from: Option<&Position>, step: &EdgeStep, target: Option<&Position>, fetched: bool) {
     let Some(from) = from else { return };
     check_pins(typing, step, target);
     let edge = step.edge_type_id.as_str();
@@ -731,7 +733,7 @@ pub fn observe_hop(typing: &mut Typing, from: Option<&Position>, step: &EdgeStep
     }
     let Some(capability) = edge_capability_for(from, edge) else { return };
     let root = matches!(from, Position::Meta { .. });
-    if let Some(filter) = step.expression_filter.as_deref() {
+    if let Some(filter) = step.expression_filter.as_deref().filter(|_| fetched) {
         gate_filter(typing, &capability, filter, edge, target_schema.as_ref(), root);
     }
     if let Some(order_by) = step.cardinality.as_ref().and_then(|c| c.order_by.as_deref()) {
@@ -1149,6 +1151,25 @@ fn edit_distance(a: &[u16], b: &[u16]) -> usize {
 // ── Path heads (`checkPathHead`, and the walk each block, lazy entry and
 // awaited head types its hops with) ──
 
+/// The names `expr` reads a record through, as an alias is read: a bare
+/// name, and the root of a dotted read or a walk.
+pub(crate) fn alias_reads(expr: &Expression) -> Vec<&str> {
+    match expr {
+        Expression::AliasRef { name } | Expression::Property { property_type_id: name, field_only: false } | Expression::EdgeProperty { property_type_id: name, field_only: false } => {
+            vec![name.as_str()]
+        }
+        Expression::Traverse { alias_root: Some(root), .. } => vec![root.as_str()],
+        other => crate::families::values::sub_expressions(other).into_iter().flat_map(alias_reads).collect(),
+    }
+}
+
+/// What walks a head: a block, run once per record it lands on, or a wait.
+#[derive(Clone, Copy)]
+pub enum HeadUse {
+    Block,
+    Wait,
+}
+
 /// Where a head's walk went: each hop alias's landing, and the last.
 pub struct HeadWalk {
     pub locals: indexmap::IndexMap<String, Option<Position>>,
@@ -1211,11 +1232,11 @@ impl crate::checker::Checker<'_> {
         symbol_pos.or_else(|| record_head_position(self.head_root_value_type(head, scope).as_ref()))
     }
 
-    /// `reportHeadOffMaybeAbsent`: a block whose head walks off a root that
-    /// may hold no record (an `extractOne` answer, a `match` that found
-    /// nothing, an unguarded pick, `rows[0]`) is refused: the run fails at the
-    /// head when the record is absent.
-    pub fn report_head_off_maybe_absent(&mut self, head: &PathHead, scope: ScopeId) {
+    /// `reportHeadOffMaybeAbsent`: a block, or a wait, whose head walks off a
+    /// root that may hold no record (an `extractOne` answer, a `match` that
+    /// found nothing, an unguarded pick, `rows[0]`) is refused: the run fails
+    /// at the head when the record is absent.
+    pub fn report_head_off_maybe_absent(&mut self, head: &PathHead, scope: ScopeId, walked_by: HeadUse) {
         if Self::head_steps(head).is_none_or(|steps| steps.is_empty()) || self.head_root_type(head, scope).is_none() {
             return;
         }
@@ -1232,6 +1253,8 @@ impl crate::checker::Checker<'_> {
                 }
                 (name.clone(), format!("if ({name} != null) {{ … }}"))
             }
+            // A wait off an expression is MOV_HEAD_NEEDS_A_NAME's.
+            Some(PathRoot::Expression { .. }) if matches!(walked_by, HeadUse::Wait) => return,
             Some(PathRoot::Expression { expr }) => {
                 if !held_maybe_absent(self.head_root_value_type(head, scope)) {
                     return;
@@ -1240,11 +1263,11 @@ impl crate::checker::Checker<'_> {
             }
             None => return,
         };
-        self.report(
-            codes::ABSENT_REQUIRED,
-            format!("'{spelled}' may be absent, and a block's walk off a record that is not there fails the run rather than running zero times. Guard the walk: '{guard}'."),
-            head.span,
-        );
+        let message = match walked_by {
+            HeadUse::Block => format!("'{spelled}' may be absent, and a block's walk off a record that is not there fails the run rather than running zero times. Guard the walk: '{guard}'."),
+            HeadUse::Wait => format!("'{spelled}' may be absent, and a wait off a record that is not there fails the run rather than waiting. Guard the wait: '{guard}'."),
+        };
+        self.report(codes::ABSENT_REQUIRED, message, head.span);
     }
 
     /// `checkPathHead`'s MOV_HEAD_NOT_A_POSITION: a hop off a root whose value
@@ -1292,12 +1315,29 @@ impl crate::checker::Checker<'_> {
     /// `walk_head` over `steps` in place of the hops `head` writes: a listen
     /// walks its own without what its WHERE refuses on its own account.
     pub(crate) fn walk_head_steps(&mut self, head: &PathHead, steps: &[TraversalStep], scope: ScopeId, awaited: bool) -> Option<HeadWalk> {
+        self.walk_steps_of(head, steps, scope, awaited, None)
+    }
+
+    /// A listen's walk: its hops at `unfetched` fetched by nothing (judged on
+    /// each arrival), and each hop's WHERE free to read an earlier hop's
+    /// alias, which the host binds as it lists them.
+    pub(crate) fn walk_listen_steps(&mut self, head: &PathHead, steps: &[TraversalStep], scope: ScopeId, unfetched: Vec<usize>) -> Option<HeadWalk> {
+        self.walk_steps_of(head, steps, scope, true, Some(unfetched))
+    }
+
+    fn walk_steps_of(&mut self, head: &PathHead, steps: &[TraversalStep], scope: ScopeId, awaited: bool, listen: Option<Vec<usize>>) -> Option<HeadWalk> {
+        let (listen, unfetched) = match listen {
+            Some(unfetched) => (true, unfetched),
+            None => (false, Vec::new()),
+        };
         let start = self.head_root_type(head, scope)?;
         let recorded_start = self.recording().then(|| start.clone());
         let (walk, diagnostics, watchable, landings, observed) = {
             let env = self.typing_env(scope);
             let mut typing = Typing::new(&env, head.span);
             typing.observed = self.observing();
+            typing.unfetched_hops = unfetched;
+            typing.reads_earlier_hops = listen;
             typing.step_root = match &head.root {
                 Some(PathRoot::Name { name }) => Some(crate::families::names::spell_name(name)),
                 _ => None,

@@ -440,6 +440,12 @@ fn every_makes_the_fix_unsafe_and_names_where_the_interval_went() {
     );
     assert_eq!(told.fix.as_ref().unwrap().get("safe"), None);
     assert_rechecks_clean(&fixed(&source, &d));
+    // The older key is the same interval, and is offered no `every:` of its own.
+    let older = format!("{GH}function triage(n: <gh-[:Notification]->>) {{ return 1 }}\nlisten to gh {{ events: [\"assign\"], pollIntervalSeconds: 300 }} fire triage\n");
+    let d = diagnostics(&older);
+    assert_eq!(d.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["MOV_LISTEN_SETTINGS_RETIRED"]);
+    assert!(retired(&d).message.ends_with("(`every` is gone: the module sets the interval; set `pollEvery` for this connection in lf.yaml)"), "{}", retired(&d).message);
+    assert_rechecks_clean(&fixed(&older, &d));
 }
 
 #[test]

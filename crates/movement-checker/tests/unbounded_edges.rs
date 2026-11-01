@@ -317,12 +317,11 @@ fn spelled_e(conjuncts: &[Expression]) -> Vec<String> {
 
 #[test]
 fn a_hop_off_a_record_that_may_be_absent_is_split() {
-    // The wait gets no MOV_ABSENT_REQUIRED, as the read does: that predates
-    // the split (it checks the same at 043aa21624).
+    // The wait off it is refused as the read is, and split all the same.
     let half_guarded = |hop: &str| format!("  a = only(mail-[:Accounts]->)\n  if (a != null) {{\n  b = only(a-[:Boxes]->)\n  {hop}\n  }}\n");
-    assert_eq!(check(&half_guarded("x = await new b-[e:Emails]->")), vec![r#"MOV_UNBOUNDED_EDGE 5:17-5:31 '-[:Emails]->' is unbounded: mail can narrow it only by Key written `==` or `IN [ … ]` with literals, and this hop has no WHERE. Narrow it: `e.Key == "…"`"#]);
+    assert_eq!(check(&half_guarded("x = await new b-[e:Emails]->")), vec![r#"MOV_ABSENT_REQUIRED 5:17-5:31 'b' may be absent, and a wait off a record that is not there fails the run rather than waiting. Guard the wait: 'if (b != null) { … }'. (see handbook: front#maybe-absent)"#, r#"MOV_UNBOUNDED_EDGE 5:17-5:31 '-[:Emails]->' is unbounded: mail can narrow it only by Key written `==` or `IN [ … ]` with literals, and this hop has no WHERE. Narrow it: `e.Key == "…"`"#]);
     assert_eq!(check(&half_guarded("xs = b-[e:Emails]->")), vec![r#"MOV_ABSENT_REQUIRED 5:8-5:22 'b' may be absent, and a walk inside an expression off a record that is not there fails the run. Guard the walk: 'if (b != null) { … }'. (see handbook: front#maybe-absent)"#, r#"MOV_UNBOUNDED_EDGE 5:8-5:22 '-[:Emails]->' is unbounded: mail can narrow it only by Key written `==` or `IN [ … ]` with literals, and this hop has no WHERE. Narrow it: `e.Key == "…"`"#]);
-    assert_eq!(check(&half_guarded("x = await new b-[e:Emails WHERE e.Key == \"sales\"]->")), Vec::<String>::new());
+    assert_eq!(check(&half_guarded("if (b != null) { x = await new b-[e:Emails WHERE e.Key == \"sales\"]-> }")), Vec::<String>::new());
 }
 
 #[test]
@@ -344,7 +343,7 @@ fn only_a_comparison_with_literals_is_taken() {
     }
     let split = split_of_emails("e.Key == \"sales\" AND e.Subject == \"hi\"");
     assert_eq!((spelled_e(&split.taken), spelled_e(&split.checked)), (vec!["e.Key == \"sales\"".to_string(), "e.Subject == \"hi\"".to_string()], vec![]));
-    assert_eq!(check("  xs = mail-[a:Accounts]->-[b:Boxes WHERE b.Key == \"k\"]->-[e:Emails WHERE e.Key == \"sales\" AND e.Subject == a.Name]->\n"), Vec::<String>::new());
+    assert_eq!(check("  mail-[a:Accounts]-> {\n    xs = a-[b:Boxes WHERE b.Key == \"k\"]->-[e:Emails WHERE e.Key == \"sales\" AND e.Subject == a.Name]->\n  }\n"), Vec::<String>::new());
 }
 
 #[test]

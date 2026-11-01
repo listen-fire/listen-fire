@@ -141,7 +141,7 @@ fn every_place_an_awaited_record_enters_is_stamped_and_no_other() {
     // The Channel and the Deal enter too, and nothing awaits off them.
     assert_eq!(opens(&tree, &found, None), pairs(&[("param m", &["Interactions"]), ("write msg", &["Interactions"])]));
 
-    let crm = "function g(c: <crm-[:Companies]->>) {\n  d = only(c-[:Deals]->)\n  crm-[each:Deals]-> {\n    n = await new each-[:Notes]->\n  }\n  ch = only(chat-[:Channels]->)\n  first_note = await d-[:Notes]->\n  change = await d-[:Changes]->\n}\n";
+    let crm = "function g(c: <crm-[:Companies]->>) {\n  d = only(c-[:Deals]->)\n  if (d == null) {\n    fail(\"no deal\")\n  }\n  crm-[each:Deals]-> {\n    n = await new each-[:Notes]->\n  }\n  ch = only(chat-[:Channels]->)\n  first_note = await d-[:Notes]->\n  change = await d-[:Changes]->\n}\n";
     let (tree, _, found) = stamps(crm, None);
     // The Company and the Channel enter, and nothing awaits off them; the
     // awaited Note does not enter anywhere a wait is opened off it.
@@ -150,12 +150,12 @@ fn every_place_an_awaited_record_enters_is_stamped_and_no_other() {
 
 #[test]
 fn a_record_read_back_whole_is_stamped_where_it_was_bound_not_where_it_is_renamed() {
-    let chat = "function f(ch: <chat-[:Channel]->>) {\n  msg = only(ch-[:Messages]->)\n  same = msg\n  r = await same-[:Replies]->\n}\n";
+    let chat = "function f(ch: <chat-[:Channel]->>) {\n  msg = only(ch-[:Messages]->)\n  if (msg == null) {\n    fail(\"no message\")\n  }\n  same = msg\n  r = await same-[:Replies]->\n}\n";
     let (tree, _, found) = stamps(chat, None);
     // `r` is a Message too: a Message's Replies are awaited, so it opens.
     assert_eq!(opens(&tree, &found, None), pairs(&[("assign msg", &["Replies"]), ("assign r", &["Replies"])]));
 
-    let crm = "function g(c: <crm-[:Companies]->>) {\n  d = only(c-[:Deals]->)\n  again = d\n  n = await new again-[:Notes]->\n}\n";
+    let crm = "function g(c: <crm-[:Companies]->>) {\n  d = only(c-[:Deals]->)\n  if (d == null) {\n    fail(\"no deal\")\n  }\n  again = d\n  n = await new again-[:Notes]->\n}\n";
     let (tree, _, found) = stamps(crm, None);
     assert_eq!(opens(&tree, &found, None), pairs(&[("assign d", &["Notes"])]));
 }
@@ -219,7 +219,7 @@ fn a_where_reading_a_record_the_run_holds_still_stamps_its_wait() {
     assert_eq!(opens(&tree, &found, None), pairs(&[("param m", &["Interactions", "Replies"]), ("write msg", &["Interactions", "Replies"]), ("assign r", &["Interactions", "Replies"])]));
     assert_eq!(lists_first(&tree, &found), ["await r"]);
 
-    let crm = "function g(c: <crm-[:Company]->>) {\n  d = only(c-[:Deals]->)\n  n = await d-[n:Notes WHERE n.Body == c.Name]->\n}\n";
+    let crm = "function g(c: <crm-[:Company]->>) {\n  d = only(c-[:Deals]->)\n  if (d == null) {\n    fail(\"no deal\")\n  }\n  n = await d-[n:Notes WHERE n.Body == c.Name]->\n}\n";
     let (tree, _, found) = stamps(crm, None);
     assert_eq!(opens(&tree, &found, None), pairs(&[("assign d", &["Notes"])]));
     assert_eq!(lists_first(&tree, &found), ["await n"]);

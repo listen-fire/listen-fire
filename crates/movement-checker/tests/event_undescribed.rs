@@ -85,7 +85,10 @@ mod held_as_a_value {
         .collect::<Vec<_>>()
         .join("\n");
         let files = serde_json::json!({ "lib/mk": { "source": LIBRARY } }).to_string();
-        check_with(&source, &format!("{UNDESCRIBED},{KG}"), None, &files).into_iter().map(|d| d.code).collect()
+        // The listen on the undescribed connection is refused on its own
+        // line (listen_traversal.rs pins it); these are about the body.
+        let listen_line = 7 + body.len();
+        check_with(&source, &format!("{UNDESCRIBED},{KG}"), None, &files).into_iter().filter(|d| d.span.start.line != listen_line).map(|d| d.code).collect()
     }
 
     #[test]

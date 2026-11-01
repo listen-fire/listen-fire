@@ -20,9 +20,9 @@ fn check_feed(listen: &str) -> Vec<Diagnostic> {
     check_source(&source, &catalog, options).unwrap().into_iter().filter(|d| d.code != "MOV_LISTEN_SETTINGS_RETIRED").collect()
 }
 
+/// The settings form is retired whole, and its poll interval with it: the
+/// module sets the interval now, so no spelling of `every:` is offered.
 #[test]
-fn the_old_poll_interval_key_is_respelled() {
-    let old = check_feed("listen to f { pollIntervalSeconds: 300 } fire seen");
-    assert_eq!(codes(&old), ["MOV_V5_SPELLING"]);
-    assert!(old[0].message.contains("every: 5m"), "{}", old[0].message);
+fn the_old_poll_interval_key_is_not_respelled_as_the_retired_every() {
+    assert_eq!(codes(&check_feed("listen to f { pollIntervalSeconds: 300 } fire seen")), Vec::<&str>::new());
 }

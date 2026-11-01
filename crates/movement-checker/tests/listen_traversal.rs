@@ -39,12 +39,12 @@ const CATALOG: &str = r#"{"adapters":{
       "edges":{"Tables":{"target":"Table","cheapToList":true,"parentChanges":"pushed","capability":{"filter":"native","supportsLimit":false}},
         "Views":{"target":"Table","cheapToList":true,"parentChanges":"pushed","listenable":true,"delivery":"scope","capability":{"filter":"native","supportsLimit":false}}},
       "propertyCapabilities":{"Name":{"filterOperators":["eq"]}}},
-    "Table":{"properties":{"Name":"text"},
+    "Table":{"properties":{"Name":"text","Created":"datetime"},
       "edges":{
         "Changes":{"target":"Change","readable":false,"listenable":true,"identity":"Id","delivery":"scope"},
         "Edits":{"target":"Change","readable":false,"listenable":true,"identity":"Id","delivery":"scope","carries":["Tables"]},
         "Records":{"target":"Record","capability":{"filter":"native","supportsLimit":false}}},
-      "propertyCapabilities":{"Name":{"filterOperators":["eq"]}}},
+      "propertyCapabilities":{"Name":{"filterOperators":["eq"]},"Created":{"filterOperators":["within"]}}},
     "Change":{"properties":{"Id":"text","Kind":"text"},
       "edges":{"Replies":{"target":"Reply","readable":false,"listenable":true,"delivery":"scope"}}},
     "Reply":{"properties":{"Text":"text"},"edges":{}},
@@ -341,4 +341,124 @@ fn the_story_of_a_listen_on_a_traversal_names_its_path() {
         (&listens[0]["instance"], &listens[0]["adapterType"], &listens[0]["fires"], &listens[0]["path"]),
         (&json!("chat"), &json!("chat"), &json!("f"), &json!("chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->"))
     );
+}
+
+/// One name for two hops: the checker would read the nearest, the judge the
+/// first. Refused where it is written, on a listen as on any walk.
+#[test]
+fn a_hop_alias_written_twice_in_one_listen_is_refused() {
+    assert_eq!(
+        check("listen to chat-[c:Channels WHERE c.Name == \"x\"]->-[c:Messages]->-[i:Interactions WHERE i.Id == c.Topic]-> fire f\n"),
+        ["MOV_HOP_ALIAS_REPEATED 6:11-6:106 'c' names two hops of this walk, '-[c:Channels]->' and '-[c:Messages]->' — a name means one thing everywhere it is visible: give each hop its own alias"]
+    );
+    // And it is watched by no plan.
+    let (plans, codes) = answer_of("listen to chat-[c:Channels WHERE c.Name == \"x\"]->-[c:Messages]->-[i:Interactions WHERE i.Id == c.Topic]-> fire f\n");
+    assert_eq!((plans.len(), codes), (0, vec!["MOV_HOP_ALIAS_REPEATED".to_string()]));
+    // Each hop its own alias: the same listen, planned.
+    assert_eq!(judged(&plans_of("listen to chat-[h:Channels WHERE h.Name == \"x\"]->-[c:Messages]->-[i:Interactions WHERE i.Id == c.Topic]-> fire f\n")[0]), json!(["arrival", "none", "arrival"]));
+}
+
+/// The judge reads only the records an arrival carries, so a filter judged
+/// on arrival that reads an earlier hop the arrival does not carry could
+/// never be judged: every arrival would be undecided.
+#[test]
+fn a_filter_judged_on_arrival_reads_only_the_hops_the_arrival_carries() {
+    // The earlier hop unfiltered, so not listed: a reaction carries nothing.
+    assert_eq!(
+        check("listen to chat-[:Channels]->-[m:Messages]->-[x:Reactions WHERE x.Emoji == m.Topic]-> fire r\n"),
+        ["MOV_LISTEN_UNWATCHABLE 6:11-6:85 this listen's filter on '-[:Reactions]->' reads `m`, the Message it is under, but chat's arrivals on '-[:Reactions]->' don't carry the Message, so no arrival could be judged by it — compare with a literal, or wait in a run, where the Message is a record the run holds"]
+    );
+    // Listed is not carried: the host lists the Table, the judge never sees it.
+    assert_eq!(
+        check("listen to at-[:Bases]->-[t:Tables]->-[x:Changes WHERE x.Id == t.Name]-> fire c\n"),
+        ["MOV_LISTEN_UNWATCHABLE 6:11-6:72 this listen's filter on '-[:Changes]->' reads `t`, the Table it is under, but at's arrivals on '-[:Changes]->' don't carry the Table, so no arrival could be judged by it — compare with a literal, or wait in a run, where the Table is a record the run holds"]
+    );
+    assert_eq!(answer_of("listen to at-[:Bases]->-[t:Tables]->-[x:Changes WHERE x.Id == t.Name]-> fire c\n").0.len(), 0);
+    // What the arrival carries, it may read.
+    assert_eq!(check("listen to at-[:Bases]->-[t:Tables]->-[x:Edits WHERE x.Id == t.Name]-> fire c\n"), Vec::<String>::new());
+    assert_eq!(check("listen to chat-[:Channels]->-[m:Messages]->-[i:Interactions WHERE i.Id == m.Topic]-> fire f\n"), Vec::<String>::new());
+    // A listed hop may read the hops listed above it: the host lists them in one walk.
+    assert_eq!(check("listen to at-[b:Bases]->-[t:Tables WHERE t.Name == b.Name]->-[:Changes]-> fire c\n"), Vec::<String>::new());
+}
+
+/// A listed hop is judged again only when it is listed again; a window
+/// measured from now would keep a record that has aged out of it.
+#[test]
+fn a_window_from_now_is_judged_on_arrival_never_on_a_listed_hop() {
+    assert_eq!(
+        check("listen to at-[:Bases]->-[t:Tables WHERE t.Created WITHIN 1d]->-[:Changes]-> fire c\n"),
+        ["MOV_LISTEN_UNWATCHABLE 6:11-6:76 this listen filters '-[:Tables]->' by a window measured from now (`WITHIN`), but that hop is listed to find what to watch, and judged again only when it is listed again, so a record that ages out of the window would keep firing — a window is judged on what arrives: put it on '-[:Changes]->', or on a hop its arrivals carry"]
+    );
+    // Inside an AND, and on a hop listed because it is cheap.
+    assert_eq!(
+        check("listen to at-[b:Bases WHERE b.Name == \"x\"]->-[t:Tables WHERE t.Name == \"y\" AND t.Created WITHIN 1d]->-[:Records]->-[:Comments]-> fire k\n")
+            .iter()
+            .map(|d| d.split(' ').next().unwrap().to_string())
+            .collect::<Vec<_>>(),
+        ["MOV_LISTEN_UNWATCHABLE"]
+    );
+    // On what arrives, or on a hop the arrival carries, it is judged with now.
+    assert_eq!(check("listen to chat-[:Channels]->-[m:Messages WHERE m.`Posted At` WITHIN 1d]->-[:Interactions]-> fire f\n"), Vec::<String>::new());
+    assert_eq!(check("listen to chat-[:Channels]->-[m:Messages WHERE m.`Posted At` WITHIN 1d]-> fire g\nfunction g(m: <chat-[:Message]->>) { return m.Topic }\n"), Vec::<String>::new());
+}
+
+const UNIONS: &str = r#"{"adapters":{"crm":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
+    "Person":{"properties":{"Name":"text"},"edges":{"Notes":{"target":"Note","listenable":true,"delivery":"connection","carries":["Subjects"]}}},
+    "Company":{"properties":{"Name":"text"},"edges":{"Notes":{"target":"Note","listenable":true,"delivery":"connection","carries":["Subjects"]}}},
+    "Note":{"properties":{"Text":"text"},"edges":{}}},
+    "unions":{"Subject":["Person","Company"]},
+    "collections":{"Subjects":{"target":"Subject","cheapToList":true,"capability":{"filter":"native","supportsLimit":false}},
+                   "Things":{"target":"Subject","listenable":true,"delivery":"connection"},
+                   "People":{"target":"Person","cheapToList":true,"listenable":true,"delivery":"connection"}},
+    "writableRoots":{}}}}},"credentials":{},"plugins":{}}"#;
+
+fn check_unions(source: &str) -> (usize, Vec<String>) {
+    let source = format!("import {{ crm as m }} from adapters; crm = connect m;\nfunction f(n: <crm-[:Note]->>) {{ return n.Text }}\nfunction g(n: <crm-[:Things]->>) {{ return n.Name }}\nfunction p(n: <crm-[:Person]->>) {{ return n.Name }}\n{source}");
+    let catalog = CatalogSnapshot::load(UNIONS).unwrap();
+    let program = movement_parser::stmt::parse_program(&source, false).unwrap_or_else(|e| panic!("{source}: {}", e.message));
+    let answer = movement_checker::answer::check_answer(&program, &catalog, options());
+    (answer.listens.len(), answer.diagnostics.into_iter().filter(|d| d.severity.is_none()).map(|d| format!("{} {}", d.code, d.message)).collect())
+}
+
+/// The judge tells an arrival's records apart by the record type each hop
+/// lands on, and an arrival is only ever one member of a union: a listen
+/// through or onto one would check clean and never fire.
+#[test]
+fn a_listen_through_or_onto_a_union_is_refused() {
+    assert_eq!(
+        check_unions("listen to crm-[:Subjects]->-[:Notes]-> fire f\n"),
+        (0, vec!["MOV_LISTEN_UNION_HOP '-[:Subjects]->' on crm lands on Subject, which is one of Person or Company, and every hop of a listen lands on one record type: the host tells what arrives apart by it, so this listen would never fire — listen through an edge that lands on Person or Company alone, or wait in a run on one record".to_string()])
+    );
+    assert_eq!(
+        check_unions("listen to crm-[t:Things WHERE t.Name == \"x\"]-> fire g\n"),
+        (0, vec!["MOV_LISTEN_UNION_HOP '-[:Things]->' on crm lands on Subject, which is one of Person or Company, and every hop of a listen lands on one record type: the host tells what arrives apart by it, so this listen would never fire — listen through an edge that lands on Person or Company alone, or wait in a run on one record".to_string()])
+    );
+    // One member's edge is watched.
+    assert_eq!(check_unions("listen to crm-[:People]->-[:Notes]-> fire f\n"), (1, Vec::<String>::new()));
+    assert_eq!(check_unions("listen to crm-[w:People WHERE w.Name == \"x\"]-> fire p\n"), (1, Vec::<String>::new()));
+}
+
+/// A listen that checks clean is watched: one on a system the catalog does
+/// not describe says so where it is written.
+#[test]
+fn a_listen_with_no_plan_never_checks_clean() {
+    let catalog = CatalogSnapshot::load(r#"{"adapters":{"manual":{"constructionArgs":[],"canFire":true,"schemas":{}}},"credentials":{},"plugins":{}}"#).unwrap();
+    let source = "import { manual } from adapters\nruns = connect manual\nfunction recap(go: <runs-[:Invocation]->>) { return 1 }\nlisten to runs-[:Invocations]-> fire recap\n";
+    let program = movement_parser::stmt::parse_program(source, false).unwrap();
+    let answer = movement_checker::answer::check_answer(&program, &catalog, options());
+    assert_eq!(
+        (answer.listens.len(), answer.diagnostics.iter().map(|d| format!("{} {}", d.code, d.message)).collect::<Vec<_>>()),
+        (0, vec!["MOV_EVENT_UNDESCRIBED 'runs' has no description in the catalog, so listen-fire can't tell what this listen watches — it would never fire. The catalog describes it from the system behind 'runs': check that its connection resolves and the system answers, then check again.".to_string()])
+    );
+}
+
+/// A hop judged on each arrival is fetched by nothing: what its module can't
+/// filter, the judge checks, and no fetch grows for it.
+#[test]
+fn what_a_module_cannot_filter_on_a_hop_judged_on_arrival_costs_no_fetch() {
+    let (plans, codes) = answer_of("listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"a\" AND m.Text == \"b\"]->-[:Interactions]-> fire f\n");
+    assert_eq!((codes, spell(plans[0].hops[1].checked.as_ref().unwrap(), Some("m"))), (Vec::<String>::new(), "m.Text == \"b\"".to_string()));
+    assert_eq!(check("listen to chat-[:Channels]->-[m:Messages WHERE m.Text == \"b\"]->-[:Interactions]-> fire f\n"), Vec::<String>::new());
+    // A listed hop is fetched: the host lists it, and filters what comes back.
+    assert_eq!(answer_of("listen to at-[:Bases]->-[t:Tables WHERE t.Name == \"a\" AND t.Name != \"b\"]->-[:Changes]-> fire c\n").1, ["MOV_HOP_FILTER_RESIDUAL"]);
 }

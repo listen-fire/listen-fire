@@ -26,6 +26,11 @@ pub const CRED_WRONG_ADAPTER: &str = "MOV_CRED_WRONG_ADAPTER";
 pub const CREDENTIAL_NOT_A_VALUE: &str = "MOV_CREDENTIAL_NOT_A_VALUE";
 pub const DUPLICATE_DECL: &str = "MOV_DUPLICATE_DECL";
 pub const SHADOWED_NAME: &str = "MOV_SHADOWED_NAME";
+/// One walk naming two of its hops alike (`-[c:Channels]->-[c:Messages]->`).
+pub const HOP_ALIAS_REPEATED: &str = "MOV_HOP_ALIAS_REPEATED";
+/// A run's walk whose hop reads an earlier hop's alias in its WHERE or
+/// ORDER BY (`-[t:Tables]->-[c:History WHERE c.Id == t.Name]->`).
+pub const HOP_READS_EARLIER_HOP: &str = "MOV_HOP_READS_EARLIER_HOP";
 pub const CALL_NOT_MOVEMENT: &str = "MOV_CALL_NOT_MOVEMENT";
 pub const CALL_ARITY: &str = "MOV_CALL_ARITY";
 pub const FUNCTION_UNKNOWN: &str = "MOV_FUNCTION_UNKNOWN";
@@ -110,6 +115,8 @@ pub const LISTEN_HOP_NOT_ITERABLE: &str = "MOV_LISTEN_HOP_NOT_ITERABLE";
 /// A filter on an earlier hop that is neither carried by an arrival nor
 /// cheap to re-check by listing.
 pub const LISTEN_UNWATCHABLE: &str = "MOV_LISTEN_UNWATCHABLE";
+/// A listen hop landing on a union of record types.
+pub const LISTEN_UNION_HOP: &str = "MOV_LISTEN_UNION_HOP";
 /// A listen's WHERE reading something other than its hops and literals.
 pub const LISTEN_IMPURE_WHERE: &str = "MOV_LISTEN_IMPURE_WHERE";
 /// A settings listen (`listen to x { … }`), retired in 0.13 for a traversal.

@@ -97,14 +97,14 @@ fn an_edge_that_announces_nothing_cannot_be_awaited() {
 fn an_await_walks_one_edge_off_a_record_a_name_holds() {
     assert_eq!(
         check("  r = await msg-[:Thread]->-[:Interactions]->\n"),
-        ["MOV_AWAIT_BARE_WALK 2:13-2:46 'await msg-[:Thread]->-[:Interactions]->' walks more than one edge, and 'await' waits on one edge of a record a name holds — bind that record first: `one = only(msg-[:Thread]->)`, then `await one-[:Interactions]->`"]
+        ["MOV_AWAIT_BARE_WALK 2:13-2:46 'await msg-[:Thread]->-[:Interactions]->' walks more than one edge, and 'await' waits on one edge of a record a name holds — bind that record first, and wait only when it is there: `one = only(msg-[:Thread]->)`, then `if (one != null) { x = await one-[:Interactions]-> }`"]
     );
-    assert_eq!(check("  one = only(msg-[:Thread]->)\n  r = await one-[:Interactions]->\n"), Vec::<String>::new());
+    assert_eq!(check("  one = only(msg-[:Thread]->)\n  if (one != null) { r = await one-[:Interactions]-> }\n"), Vec::<String>::new());
     assert_eq!(
         check("  u = await deal-[:Company]->-[c:Updates WHERE c.Field == \"Name\"]->\n"),
-        ["MOV_AWAIT_BARE_WALK 2:13-2:68 'await deal-[:Company]->-[c:Updates WHERE c.Field == \"Name\"]->' walks more than one edge, and 'await' waits on one edge of a record a name holds — bind that record first: `one = only(deal-[:Company]->)`, then `await one-[c:Updates WHERE c.Field == \"Name\"]->`"]
+        ["MOV_AWAIT_BARE_WALK 2:13-2:68 'await deal-[:Company]->-[c:Updates WHERE c.Field == \"Name\"]->' walks more than one edge, and 'await' waits on one edge of a record a name holds — bind that record first, and wait only when it is there: `one = only(deal-[:Company]->)`, then `if (one != null) { x = await one-[c:Updates WHERE c.Field == \"Name\"]-> }`"]
     );
-    assert_eq!(check("  one = only(deal-[:Company]->)\n  u = await one-[c:Updates WHERE c.Field == \"Name\"]->\n"), Vec::<String>::new());
+    assert_eq!(check("  one = only(deal-[:Company]->)\n  if (one != null) { u = await one-[c:Updates WHERE c.Field == \"Name\"]-> }\n"), Vec::<String>::new());
 }
 
 #[test]
