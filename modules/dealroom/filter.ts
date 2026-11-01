@@ -86,6 +86,11 @@ function conjunctsOf(where: Expression | undefined): Conjunct[] {
       expr.operands.forEach(visit);
       return;
     }
+    if (expr.type === 'logical' && expr.op === 'or') {
+      const any = containsAnyOf(expr.operands);
+      if (any !== undefined) out.push(any);
+      return;
+    }
     if (expr.type !== 'compare') return;
     const { op } = expr;
     if (op === 'in' || op === 'contains') {
@@ -104,6 +109,44 @@ function conjunctsOf(where: Expression | undefined): Conjunct[] {
   };
   if (where !== undefined) visit(where);
   return out;
+}
+
+/** An OR of `CONTAINS` on one field, read as one conjunct whose value lists
+ *  the terms: Dealroom ORs a terms key's values. */
+function containsAnyOf(operands: readonly Expression[]): Conjunct | undefined {
+  let field: string | undefined;
+  const elements: Expression[] = [];
+  for (const operand of operands) {
+    if (operand.type !== 'compare' || operand.op !== 'contains') return undefined;
+    const name = propertyName(operand.left);
+    if (name === undefined || (field !== undefined && name !== field)) return undefined;
+    field = name;
+    elements.push(operand.right);
+  }
+  if (field === undefined) return undefined;
+  const value: Expression = { type: 'list', elements };
+  return { field, op: 'contains', value };
+}
+
+/** A round's company terms (industries, locations) a walk's WHERE asks
+ *  Dealroom for: each conjunct on one, with its terms (several for an OR of
+ *  CONTAINS). Only Dealroom can judge them, so a walk stamps what it asked on
+ *  what came back. */
+export interface AskedTerms {
+  fieldId: typeof DEALROOM_COMPANY_INDUSTRIES_FIELD_ID | typeof DEALROOM_COMPANY_LOCATIONS_FIELD_ID;
+  key: 'industries' | 'hq_locations';
+  terms: string[];
+}
+
+export function askedCompanyTerms(where: Expression | undefined): AskedTerms[] {
+  const asked: AskedTerms[] = [];
+  for (const conjunct of conjunctsOf(where)) {
+    const terms = conjunct.op === 'contains' ? stringsOf(conjunct.value) : undefined;
+    if (terms === undefined || terms.length === 0) continue;
+    if (has(conjunct, DEALROOM_COMPANY_INDUSTRIES_FIELD_ID, DEALROOM_COMPANY_INDUSTRIES_FIELD)) asked.push({ fieldId: DEALROOM_COMPANY_INDUSTRIES_FIELD_ID, key: 'industries', terms });
+    else if (has(conjunct, DEALROOM_COMPANY_LOCATIONS_FIELD_ID, DEALROOM_COMPANY_LOCATIONS_FIELD)) asked.push({ fieldId: DEALROOM_COMPANY_LOCATIONS_FIELD_ID, key: 'hq_locations', terms });
+  }
+  return asked;
 }
 
 function epochMs(value: string | number | boolean | null | undefined): number | undefined {

@@ -62,6 +62,8 @@ const TERMS_KEY: Record<string, string> = {
 
 function termsOf(comparison: TakenComparison): string[] | undefined {
   if (comparison.op === 'contains') return typeof comparison.value === 'string' ? [comparison.value] : undefined;
+  // Dealroom ORs a key's terms: an OR of CONTAINS is what it takes as given.
+  if (comparison.op === 'containsAny') return Array.isArray(comparison.value) ? comparison.value.filter((v) => v !== null).map(String) : undefined;
   return narrowedTo(comparison);
 }
 

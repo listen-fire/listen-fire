@@ -20,6 +20,8 @@ import {
   DEALROOM_COMPANY_INDUSTRIES_FIELD_ID,
   DEALROOM_COMPANY_LOCATIONS_FIELD,
   DEALROOM_COMPANY_LOCATIONS_FIELD_ID,
+  DEALROOM_INDUSTRY_TYPE,
+  DEALROOM_LOCATION_TYPE,
   DEALROOM_COMPANY_DISPLAY_NAME,
   DEALROOM_COMPANY_INVESTORS_EDGE,
   DEALROOM_COMPANY_INVESTORS_EDGE_NAME,
@@ -163,6 +165,7 @@ export function dealroomEntryPoints(): SchemaEntryPoint[] {
       delivery: 'polled',
       pollEverySeconds: DEALROOM_POLL_EVERY_SECONDS,
       cursor: true,
+      identity: 'Id',
     },
     {
       typeId: DEALROOM_TEAM_MEMBER_TYPE_ID,
@@ -236,6 +239,13 @@ export const DEALROOM_ROOT: SchemaTypeDescriptor = {
     },
   ],
 };
+
+/** A round's company terms are Dealroom's to judge: its vocabulary has
+ *  regions and parent industries a round's own list never names, so only
+ *  Dealroom's search can say whether a round is "in Europe". */
+const OWNED_TERMS_DESCRIPTION = (what: string, term: string) =>
+  `The ${what} of the company that raised, by name. Compared with CONTAINS only, and Dealroom judges it: \`CONTAINS\` takes ${term}, ` +
+  'and an OR of CONTAINS takes any of several. Read, it is the company\'s own, plus the terms a walk or listen found the round by.';
 
 const COMPANY_DESCRIPTOR: SchemaTypeDescriptor = {
   typeId: DEALROOM_COMPANY_TYPE_ID,
@@ -456,6 +466,7 @@ const FUNDING_ROUND_DESCRIPTOR: SchemaTypeDescriptor = {
   displayName: DEALROOM_FUNDING_ROUND_DISPLAY_NAME,
   description: 'One funding round — who raised, how much, and from whom.',
   fields: [
+    { fieldId: 'id', displayName: 'Id', kind: 'string', writable: false, required: false, description: "Dealroom's own id for the round." },
     { fieldId: 'round', displayName: 'Round', kind: 'string', writable: false, required: false, description: 'As Dealroom labels it ("SERIES A", "SEED"). A WHERE reaches the search.', capability: { filterOperators: ['eq', 'in'] } },
     { fieldId: 'standardised_round_label', displayName: 'Standardised Round Label', kind: 'string', writable: false, required: false },
     { fieldId: 'year', displayName: 'Year', kind: 'number', writable: false, required: false },
@@ -472,8 +483,8 @@ const FUNDING_ROUND_DESCRIPTOR: SchemaTypeDescriptor = {
     { fieldId: 'unknown_investors', displayName: 'Unknown Investors', kind: 'string', cardinality: 'many', writable: false, required: false, description: 'Participants Dealroom has a name for but no investor record — they are NOT on `Investors`.' },
     { fieldId: 'last_updated_utc', displayName: 'Last Updated', kind: 'date', writable: false, required: false, capability: { filterOperators: ['gt', 'gte'], orderable: true } },
     { fieldId: 'created_utc', displayName: 'Created At', kind: 'date', writable: false, required: false, description: 'When Dealroom recorded the round — what a listener’s "new since last poll" is measured on.', capability: { filterOperators: ['gt', 'gte'], orderable: true } },
-    { fieldId: DEALROOM_COMPANY_INDUSTRIES_FIELD_ID, displayName: DEALROOM_COMPANY_INDUSTRIES_FIELD, kind: 'string', cardinality: 'many', writable: false, required: false, description: 'The industries of the company that raised, by name. A WHERE reaches the search as an industries filter.', capability: { filterOperators: ['eq', 'in', 'contains'] } },
-    { fieldId: DEALROOM_COMPANY_LOCATIONS_FIELD_ID, displayName: DEALROOM_COMPANY_LOCATIONS_FIELD, kind: 'string', cardinality: 'many', writable: false, required: false, description: 'The cities and countries of the company that raised, by name. A WHERE reaches the search as a location filter.', capability: { filterOperators: ['eq', 'in', 'contains'] } },
+    { fieldId: DEALROOM_COMPANY_INDUSTRIES_FIELD_ID, displayName: DEALROOM_COMPANY_INDUSTRIES_FIELD, kind: 'owned', owned: { name: DEALROOM_INDUSTRY_TYPE }, cardinality: 'many', writable: false, required: false, description: OWNED_TERMS_DESCRIPTION('industries', 'an industry Dealroom files companies under (`"fintech"`)'), capability: { filterOperators: ['contains', 'containsAny'] } },
+    { fieldId: DEALROOM_COMPANY_LOCATIONS_FIELD_ID, displayName: DEALROOM_COMPANY_LOCATIONS_FIELD, kind: 'owned', owned: { name: DEALROOM_LOCATION_TYPE }, cardinality: 'many', writable: false, required: false, description: OWNED_TERMS_DESCRIPTION('cities and countries', 'a city, a country or a region (`"Europe"`)'), capability: { filterOperators: ['contains', 'containsAny'] } },
   ],
   references: [
     {

@@ -67,6 +67,20 @@ Universities and alumni, news feeds, traffic and social analytics, the bulk and 
  * only mutating endpoint asks their team to research a company it is missing,
  * which is a support request rather than a record write.
  */
+// A 0.12 `listen to dealroom { rounds, industries, hq_locations }` (its one
+// event, `funding_round`, named or not) is a listen on `Funding Rounds` with
+// that WHERE (`listen-fire upgrade`).
+const FUNDING_ROUNDS_BECOME = {
+  path: [DEALROOM_FUNDING_ROUNDS_COLLECTION],
+  aliases: ['r'],
+  paramFrom: DEALROOM_FUNDING_ROUND_DISPLAY_NAME,
+  keys: {
+    rounds: { hop: 0, field: 'Round', op: 'in' as const },
+    industries: { hop: 0, field: DEALROOM_COMPANY_INDUSTRIES_FIELD, op: 'contains' as const },
+    hq_locations: { hop: 0, field: DEALROOM_COMPANY_LOCATIONS_FIELD, op: 'contains' as const },
+  },
+};
+
 export const DEALROOM_MANIFEST: AdapterManifest = {
   adapterType: DEALROOM_ADAPTER_TYPE,
   displayName: 'Dealroom',
@@ -105,17 +119,10 @@ export const DEALROOM_MANIFEST: AdapterManifest = {
   supportedTriggers: ['poll'],
   methods: ['listEntryPoints', 'describe', 'edgesFrom', 'getFieldValue', 'getRelated', 'readRecord'],
   requiredCredentialType: 'DEALROOM',
-  // A 0.12 `listen to dealroom { rounds, industries, hq_locations }` is
-  // a listen on `Funding Rounds` with that WHERE (`listen-fire upgrade`).
   listenSettingsBecome: {
-    path: [DEALROOM_FUNDING_ROUNDS_COLLECTION],
-    aliases: ['r'],
-    paramFrom: DEALROOM_FUNDING_ROUND_DISPLAY_NAME,
-    keys: {
-      rounds: { hop: 0, field: 'Round', op: 'in' },
-      industries: { hop: 0, field: DEALROOM_COMPANY_INDUSTRIES_FIELD, op: 'contains' },
-      hq_locations: { hop: 0, field: DEALROOM_COMPANY_LOCATIONS_FIELD, op: 'contains' },
-    },
+    ...FUNDING_ROUNDS_BECOME,
+    // 0.12 took `events: ["funding_round"]`, its one event.
+    byEvent: { funding_round: FUNDING_ROUNDS_BECOME },
   },
   triggerKinds: ['DEALROOM'],
   vocabulary: {

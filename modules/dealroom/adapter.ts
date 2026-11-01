@@ -36,6 +36,7 @@ import {
   type DealroomFundingRound,
   type DealroomInvestor,
   type DealroomLabelList,
+  type DealroomMustFilters,
   type DealroomPage,
   type DealroomPerson,
   type DealroomRoundInvestor,
@@ -45,8 +46,10 @@ import {
 } from './api_client';
 import { DEALROOM_MANIFEST } from './manifest';
 import {
+  askedCompanyTerms,
   orderIsPushable,
   searchFromWhere,
+  type AskedTerms,
   sortFromOrderBy,
   teamRequestFromWhere,
 } from './filter';
@@ -61,8 +64,10 @@ import {
   DEALROOM_ADAPTER_TYPE,
   DEALROOM_COMPANIES_COLLECTION,
   DEALROOM_COMPANY_DISPLAY_NAME,
+  DEALROOM_COMPANY_INDUSTRIES_FIELD,
   DEALROOM_COMPANY_INDUSTRIES_FIELD_ID,
   DEALROOM_COMPANY_INVESTORS_EDGE,
+  DEALROOM_COMPANY_LOCATIONS_FIELD,
   DEALROOM_COMPANY_LOCATIONS_FIELD_ID,
   DEALROOM_COMPANY_ROUNDS_EDGE,
   DEALROOM_COMPANY_SIMILAR_EDGE,
@@ -197,6 +202,14 @@ function headquarters(data: Record<string, unknown>, part: 'city' | 'country'): 
 
 /** The cities and countries of a company's locations, by name: the vocabulary
  *  Dealroom's location filter takes. */
+/** A round's own company terms, and the terms a walk found it by. */
+function withMatched(own: unknown, data: Record<string, unknown>, fieldId: string): string[] {
+  const matched: unknown = objectAt(data[MATCHED_KEY])?.[fieldId];
+  const found = Array.isArray(matched) ? matched.filter((t): t is string => typeof t === 'string') : [];
+  const names = Array.isArray(own) ? own.filter((t): t is string => typeof t === 'string') : [];
+  return [...new Set([...names, ...found])];
+}
+
 function locationNames(company: Record<string, unknown>): string[] {
   const raw = company['hq_locations'];
   const names = (Array.isArray(raw) ? raw : []).flatMap((entry) => {
@@ -233,10 +246,10 @@ function computedField(
   if (INSTANT_FIELDS.has(fieldId)) return isoOf(data[fieldId]);
   if (typeId === DEALROOM_FUNDING_ROUND_TYPE_ID && fieldId === 'date') return roundDate(data);
   if (typeId === DEALROOM_FUNDING_ROUND_TYPE_ID && fieldId === DEALROOM_COMPANY_INDUSTRIES_FIELD_ID) {
-    return labelsOf(objectAt(data['company'])?.['industries'] as DealroomLabelList);
+    return withMatched(labelsOf(objectAt(data['company'])?.['industries'] as DealroomLabelList), data, fieldId);
   }
   if (typeId === DEALROOM_FUNDING_ROUND_TYPE_ID && fieldId === DEALROOM_COMPANY_LOCATIONS_FIELD_ID) {
-    return locationNames(objectAt(data['company']) ?? {});
+    return withMatched(locationNames(objectAt(data['company']) ?? {}), data, fieldId);
   }
   if (typeId === DEALROOM_FUND_TYPE_ID && fieldId === 'date') {
     return isoOf(data['date_utc']) ?? isoOf(data['date']) ?? stringAt(data['date']);
@@ -336,7 +349,7 @@ export class DealroomAdapter extends BaseAdapter implements Adapter {
           (page) => client.listCompanyFundingRounds(parentId, page),
           cap,
         );
-        return rounds.map(fundingRoundPosition);
+        return rounds.map((round) => fundingRoundPosition(round));
       }
       case DEALROOM_COMPANY_INVESTORS_EDGE: {
         if (parentId === undefined) return [];
@@ -382,7 +395,7 @@ export class DealroomAdapter extends BaseAdapter implements Adapter {
           (page) => client.listInvestorFundingRounds(parentId, page),
           cap,
         );
-        return rounds.map(fundingRoundPosition);
+        return rounds.map((round) => fundingRoundPosition(round));
       }
       case DEALROOM_INVESTOR_CO_INVESTORS_EDGE: {
         if (parentId === undefined) return [];
@@ -481,14 +494,47 @@ export class DealroomAdapter extends BaseAdapter implements Adapter {
         return rows.map(personPosition);
       }
       case DEALROOM_FUNDING_ROUNDS_COLLECTION: {
-        const rows = await this.searchAll(DEALROOM_FUNDING_ROUND_TYPE_ID, input, (request) =>
-          client.searchFundingRounds(request),
-        );
-        return rows.map(fundingRoundPosition);
+        const found = await this.roundsByAskedTerms(input, (request) => client.searchFundingRounds(request));
+        return found.map(({ round, matched }) => fundingRoundPosition(round, matched));
       }
       default:
         return [];
     }
+  }
+
+  /**
+   * The rounds a root walk finds, each with the company terms it was found by.
+   * Only Dealroom can judge a term (`"Europe"` is in its vocabulary, never in a
+   * round's own list), and the engine judges the WHERE again over what comes
+   * back, so each round carries the terms Dealroom matched it by. A conjunct
+   * of several terms (an OR) is asked one term at a time, so a round carries
+   * only the terms that matched it.
+   */
+  private async roundsByAskedTerms(
+    input: GetRelatedInput,
+    fetchPage: (request: DealroomSearchRequest) => Promise<DealroomPage<DealroomFundingRound>>,
+  ): Promise<{ round: DealroomFundingRound; matched: MatchedTerms }[]> {
+    const asked = askedCompanyTerms(input.where);
+    const keys = asked.map((a) => a.key);
+    const twice = keys.find((key, i) => keys.indexOf(key) !== i);
+    if (twice !== undefined) {
+      const field = asked.find((a) => a.key === twice)?.fieldId === DEALROOM_COMPANY_INDUSTRIES_FIELD_ID ? DEALROOM_COMPANY_INDUSTRIES_FIELD : DEALROOM_COMPANY_LOCATIONS_FIELD;
+      throw new Error(`Dealroom matches a round's ${field} by any of its terms, never by all: write one CONTAINS (or an OR of them) on '${field}' in a walk of ${DEALROOM_FUNDING_ROUNDS_COLLECTION}`);
+    }
+    // Every combination of one term per conjunct, each one search.
+    let variants: { key: AskedTerms['key']; fieldId: AskedTerms['fieldId']; term: string }[][] = [[]];
+    for (const a of asked) variants = variants.flatMap((v) => a.terms.map((term) => [...v, { key: a.key, fieldId: a.fieldId, term }]));
+    const found = new Map<string, { round: DealroomFundingRound; matched: MatchedTerms }>();
+    for (const variant of variants) {
+      const must: DealroomMustFilters = Object.fromEntries(variant.map((v) => [v.key, [v.term]]));
+      for (const round of await this.searchAll(DEALROOM_FUNDING_ROUND_TYPE_ID, input, fetchPage, must)) {
+        const id = recordIdOf({ ...round }) ?? '';
+        const entry = found.get(id) ?? { round, matched: {} };
+        for (const v of variant) entry.matched[v.fieldId] = [...new Set([...(entry.matched[v.fieldId] ?? []), v.term])];
+        found.set(id, entry);
+      }
+    }
+    return [...found.values()];
   }
 
   /**
@@ -501,8 +547,11 @@ export class DealroomAdapter extends BaseAdapter implements Adapter {
     typeId: string,
     input: GetRelatedInput,
     fetchPage: (request: DealroomSearchRequest) => Promise<DealroomPage<T>>,
+    /** Terms keys asked in place of the WHERE's own. */
+    must: DealroomMustFilters = {},
   ): Promise<T[]> {
-    const base = searchFromWhere(typeId, input.where);
+    const where = searchFromWhere(typeId, input.where);
+    const base = { ...where, must: { ...where.must, ...must } };
     const sort = sortFromOrderBy(typeId, input.orderBy);
     const cap = orderIsPushable(typeId, input.orderBy) ? input.limit : undefined;
     const fields = DEALROOM_SEARCH_FIELDS[typeId];
@@ -593,8 +642,14 @@ function personPosition(person: DealroomPerson): RelatedResult {
   return position(DEALROOM_PERSON_DISPLAY_NAME, recordIdOf(data) ?? '', data);
 }
 
-function fundingRoundPosition(round: DealroomFundingRound): RelatedResult {
-  const data = { ...round };
+/** The company terms a walk found a round by, by field id. */
+type MatchedTerms = Partial<Record<AskedTerms['fieldId'], string[]>>;
+
+/** Where a walked round keeps the terms it was found by. */
+const MATCHED_KEY = '__matchedTerms';
+
+function fundingRoundPosition(round: DealroomFundingRound, matched: MatchedTerms = {}): RelatedResult {
+  const data = { ...round, ...(Object.keys(matched).length > 0 ? { [MATCHED_KEY]: matched } : {}) };
   return position(DEALROOM_FUNDING_ROUND_DISPLAY_NAME, recordIdOf(data) ?? '', data);
 }
 

@@ -92,6 +92,9 @@ export const DEALROOM_COMPANY_INDUSTRIES_FIELD = 'Company Industries';
 export const DEALROOM_COMPANY_INDUSTRIES_FIELD_ID = 'company_industries';
 export const DEALROOM_COMPANY_LOCATIONS_FIELD = 'Company Locations';
 export const DEALROOM_COMPANY_LOCATIONS_FIELD_ID = 'company_locations';
+/** The owned scalars a round's company terms hold: Dealroom's own vocabulary. */
+export const DEALROOM_INDUSTRY_TYPE = 'DealroomIndustry';
+export const DEALROOM_LOCATION_TYPE = 'DealroomLocation';
 
 /**
  * The opaque cursor the poll hands back. Creation is the one

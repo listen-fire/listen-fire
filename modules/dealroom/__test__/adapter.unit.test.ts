@@ -309,7 +309,7 @@ describe('DealroomAdapter entry surface', () => {
     expect(DEALROOM_MANIFEST.subscribableEvents).toBeUndefined();
     expect(DEALROOM_MANIFEST.defaultSubscribedEvents).toBeUndefined();
     expect(DEALROOM_MANIFEST.listenConfig).toBeUndefined();
-    expect(DEALROOM_MANIFEST.listenSettingsBecome).toEqual({
+    const rounds = {
       path: ['Funding Rounds'],
       aliases: ['r'],
       paramFrom: 'Funding Round',
@@ -318,7 +318,9 @@ describe('DealroomAdapter entry surface', () => {
         industries: { hop: 0, field: 'Company Industries', op: 'contains' },
         hq_locations: { hop: 0, field: 'Company Locations', op: 'contains' },
       },
-    });
+    };
+    // 0.12's one event, named or not, is the same listen.
+    expect(DEALROOM_MANIFEST.listenSettingsBecome).toEqual({ ...rounds, byEvent: { funding_round: rounds } });
     // Dealroom has no record-writing endpoint at all.
     expect(DEALROOM_MANIFEST.methods).not.toEqual(expect.arrayContaining(['createRecord']));
   });
@@ -724,6 +726,46 @@ describe('DealroomAdapter.getRelated — root collections', () => {
     expect(searchCompanies.mock.calls[0][0].sort).toBeUndefined();
   });
 
+  it('asks Dealroom for a company term and stamps it on the rounds it found, so the WHERE holds of them again', async () => {
+    const searchFundingRounds = jest.fn(async (_r: DealroomSearchRequest) => page([round()]));
+    const adapter = adapterWith(fakeClient({ searchFundingRounds }));
+    const related = await adapter.getRelated({
+      position: meta,
+      fieldId: 'Funding Rounds',
+      direction: 'outgoing',
+      where: and(cmp(prop('Company Locations'), 'contains', value('Europe')), cmp(prop('Round'), 'eq', value('SERIES A'))),
+    });
+    expect(searchFundingRounds).toHaveBeenCalledTimes(1);
+    expect(searchFundingRounds.mock.calls[0][0].must).toEqual({ hq_locations: ['Europe'], rounds: ['SERIES A'] });
+    const position = related[0].position;
+    expect(await adapter.getFieldValue({ position, fieldId: 'Company Locations' })).toEqual(['Lyon', 'France', 'Berlin', 'Germany', 'Europe']);
+  });
+
+  it('asks an OR of company terms one term at a time, so each round carries only the terms that found it', async () => {
+    const searchFundingRounds = jest.fn(async (request: DealroomSearchRequest) => {
+      const terms = request.must?.['industries'];
+      return page(Array.isArray(terms) && terms[0] === 'ai' ? [round({ id: 402 })] : [round({ id: 401 }), round({ id: 402 })]);
+    });
+    const adapter = adapterWith(fakeClient({ searchFundingRounds }));
+    const either = { type: 'logical', op: 'or', operands: [cmp(prop('Company Industries'), 'contains', value('climate')), cmp(prop('Company Industries'), 'contains', value('ai'))] } as Expression;
+    const related = await adapter.getRelated({ position: meta, fieldId: 'Funding Rounds', direction: 'outgoing', where: either });
+    expect(searchFundingRounds.mock.calls.map((call) => call[0].must)).toEqual([{ industries: ['climate'] }, { industries: ['ai'] }]);
+    const read = await Promise.all(related.map(async (r) => [await adapter.getFieldValue({ position: r.position, fieldId: 'Id' }), await adapter.getFieldValue({ position: r.position, fieldId: 'Company Industries' })]));
+    expect(read).toEqual([[401, ['fintech', 'climate']], [402, ['fintech', 'climate', 'ai']]]);
+  });
+
+  it('refuses two company-term conjuncts on one field: Dealroom matches any of a field\'s terms, never all', async () => {
+    const adapter = adapterWith(fakeClient());
+    await expect(
+      adapter.getRelated({
+        position: meta,
+        fieldId: 'Funding Rounds',
+        direction: 'outgoing',
+        where: and(cmp(prop('Company Industries'), 'contains', value('fintech')), cmp(prop('Company Industries'), 'contains', value('ai'))),
+      }),
+    ).rejects.toThrow(/Dealroom matches a round's Company Industries by any of its terms, never by all/);
+  });
+
   it('fails loudly rather than truncating when a walk pages past the offset ceiling', async () => {
     // A client that always answers a full page drives the walk past the cap;
     // the real client refuses the request, so mirror that here.
@@ -903,7 +945,7 @@ describe('pollDealroom', () => {
       filter: conjunction(
         compare('Round', 'in', ['SERIES A']),
         compare('Company Industries', 'contains', 'fintech'),
-        compare('Company Locations', 'eq', 'Europe'),
+        compare('Company Locations', 'contains', 'Europe'),
       ),
     });
     expect(searchFundingRounds).toHaveBeenCalledTimes(1);
@@ -916,6 +958,15 @@ describe('pollDealroom', () => {
     });
     expect(request.sort).toBe('created_utc');
     // Dealroom judged them; a region is not a name the round lists, so the round is not judged again.
+    expect(answer.arrivals).toHaveLength(1);
+    expect(answer.arrivals[0]).toMatchObject({ takenApplied: true });
+  });
+
+  it('sends an OR of company terms as one terms filter, Dealroom matching any of them', async () => {
+    const searchFundingRounds = jest.fn(async (_r: DealroomSearchRequest) => page([round({ created_utc: '2026-09-10 09:00:00' })]));
+    const either = { type: 'logical', op: 'or', operands: [compare('Company Locations', 'contains', 'Europe'), compare('Company Locations', 'contains', 'US')] };
+    const answer = await poll(fakeClient({ searchFundingRounds }), { cursor: { createdAfter: CREATED_MS }, filter: either });
+    expect(searchFundingRounds.mock.calls[0][0].must).toEqual({ hq_locations: ['Europe', 'US'], created_utc_min: CREATED_UTC });
     expect(answer.arrivals).toHaveLength(1);
     expect(answer.arrivals[0]).toMatchObject({ takenApplied: true });
   });
