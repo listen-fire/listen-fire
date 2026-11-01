@@ -1,6 +1,6 @@
 # The catalog snapshot
 
-Version: 2
+Version: 3
 
 A catalog snapshot is a tenant's catalog as plain JSON: the adapters it can construct and their schemas, its credential names, its plugins, the models it can reach, and its saved movement files. The checker, the editor and both engines read it; nothing in it is a live object, and it never carries a credential's secret or id (those travel beside it, as a run's `credentialIds`).
 
@@ -10,9 +10,9 @@ A catalog snapshot is a tenant's catalog as plain JSON: the adapters it can cons
 
 ## Versions
 
-- **The version is an integer**, stated at the top of this document and held by `CATALOG_SNAPSHOT_VERSION`. This release writes version 2 and reads versions 1 and 2, with 1 deprecated (`SUPPORTED_CATALOG_SNAPSHOT_VERSIONS`; [the index](README.md) lists each release).
-- **On the wire:** a snapshot carries `contractVersion`. Both builders set it. It is optional on read: a snapshot without one (written before snapshots carried it, or a hand-written fixture) reads as version 1.
-- **Refusal:** a reader handed a version it does not read refuses it rather than reading it as the current one. The TypeScript reader throws, and the Rust reader answers an error, with the same message: `the catalog snapshot carries contract version 3, which this release does not read (supported: 1, 2)`.
+- **The version is an integer**, stated at the top of this document and held by `CATALOG_SNAPSHOT_VERSION`. This release writes and reads version 3 (`SUPPORTED_CATALOG_SNAPSHOT_VERSIONS`; [the index](README.md) lists each release).
+- **On the wire:** a snapshot carries `contractVersion`. Both builders set it. It is optional on read: a snapshot without one (a hand-written fixture) reads as the current version, and any member a later version retired is still refused.
+- **Refusal:** a reader handed a version it does not read refuses it rather than reading it as the current one. The TypeScript reader throws, and the Rust reader answers an error, with the same message: `the catalog snapshot carries contract version 4, which this release does not read (supported: 3)`. Versions 1 and 2 are refused by name: `the catalog snapshot carries contract version 2, written before 0.13 retired the settings listen; this release reads version 3: rebuild the catalog with it`.
 - **What bumps it:** a change in meaning. A member removed or renamed, a member whose meaning changed, or a required member added. A new optional member keeps the version, but note the Rust reader's strictness: a new member must be declared in its types before a builder may write it, or every Rust read of a snapshot carrying it fails.
 - **How a break lands:** the builder writes the new version; a reader that reads both branches on `contractVersion` at the point of difference.
 
@@ -22,7 +22,7 @@ The shapes are TypeScript-ish: `x?: T` may be absent, and an absent member and o
 
 ```ts
 interface CatalogSnapshot {
-  contractVersion?: number;                       // absent: 1
+  contractVersion?: number;                       // absent: the current version
   adapters: Record<string, AdapterSnapshot>;      // by adapter type
   credentials: Record<string, { adapters: string[]; credential?: string } | { adapter: string }>;   // by import name; `{ adapter }` is the older single-adapter form; `credential`: the module's declared credential it fills
   plugins: Record<string, PluginSpec>;            // by key: module and name (`@lf/web/render`) for a package's plugin, else the name
@@ -40,12 +40,6 @@ interface AdapterSpec {
   constructionArgs: ConstructionArg[];
   declaredCredentials?: string[];                 // a module's declared credentials, by name; a credential naming another (`credential`) is refused at check
   canFire?: boolean;                              // absent on a known spec: it cannot fire anything
-  triggerConfig?: string[];
-  triggerConfigOptions?: Record<string, string[]>;
-  defaultEvents?: string[];
-  triggerConfigRequired?: string[];
-  triggerConfigRequiredWhy?: Record<string, string>;
-  triggerConfigFormats?: Record<string, 'cron' | 'timezone' | 'fields' | 'strings' | 'field' | 'field-value'>;
   connectActions?: Array<{ kind: string; label: string }>;
   connect?: 'oauth' | 'key-entry' | 'intrinsic' | 'handshake' | 'app-only';
   triggerExpectation?: string;
@@ -141,10 +135,6 @@ interface InstanceSchema {
   narrowBy?: Record<string, string[]>;
   unselected?: Record<string, string[]>;
   genericLandings?: Record<string, string>;
-  eventPosition?: string;
-  eventPositions?: Array<{ position: string; on?: string[] }>;
-  eventNarrowingKeys?: string[];
-  eventNarrowingValues?: Record<string, Record<string, string[]>>;
 }
 
 interface PositionSchema {
@@ -249,6 +239,11 @@ interface FieldCapability {
 
 ## Changes
 
+- **Version 3, with 0.13's listen:** the settings listen (`listen to x { … }`) is retired, and with it what said what it could hear.
+  - An `AdapterSpec` loses `triggerConfig?`, `triggerConfigOptions?`, `defaultEvents?`, `triggerConfigRequired?`, `triggerConfigRequiredWhy?` and `triggerConfigFormats?`.
+  - An `InstanceSchema` loses `eventPosition?`, `eventPositions?`, `eventNarrowingKeys?` and `eventNarrowingValues?`.
+  - Every listen is a traversal now, onto an edge or a root collection that declares `listenable`.
+  - Members were removed, so the version moves to 3. Versions 1 and 2 are refused by name, since read as 3 they would lose those members without a word. The Rust reader refuses a snapshot that still carries one, as it refuses any member the TypeScript does not declare.
 - **Version 2, with the 0.13 line:** an `EdgeSchema` loses `awaitable?` and `watchable?` and gains `listenable?`, `cursor?`, `identity?` and `version?`.
   - An edge says whether it can be listed (`readable`) and, separately, whether the module announces arrivals on it (`listenable`).
   - `listenable` takes the place of both retired members, which every declarant set together.

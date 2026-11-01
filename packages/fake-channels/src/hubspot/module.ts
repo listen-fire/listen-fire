@@ -17,15 +17,15 @@ import { defineModule, type AdapterModuleMethods, type ModuleContext } from 'mod
 
 const PROVIDER = process.env.HUBSPOT_PROVIDER_URL ?? 'https://api.hubapi.com';
 const DEAL = 'Deal';
-const DEAL_CREATED = 'deal.created';
 
 const MANIFEST = {
   adapterType: 'hubspot',
   displayName: 'HubSpot',
   description: 'Deals, read and written as the connection’s own HubSpot user.',
   supportedTriggers: ['webhook'] as const,
-  subscribableEvents: [DEAL_CREATED],
-  methods: ['listEntryPoints', 'describe', 'resolveEntity', 'getFieldValue', 'getRelated', 'createRecord', 'listEventTypes'],
+  // Deals land on the listenable root `Deal`, at the connection's door.
+  protocolMinor: 6,
+  methods: ['listEntryPoints', 'describe', 'resolveEntity', 'getFieldValue', 'getRelated', 'createRecord'],
 };
 
 interface Deal {
@@ -50,7 +50,7 @@ function hubspot(ctx: ModuleContext): AdapterModuleMethods {
     supportedTriggers: ['webhook'],
     runtimeCapabilities: () => BASE_RUNTIME_CAPABILITIES,
     listEntryPoints: async () => [
-      { typeId: DEAL, displayName: DEAL, scope: 'self-configured', readable: false, writable: true, fires: true, description: 'A deal.' },
+      { typeId: DEAL, displayName: DEAL, scope: 'self-configured', readable: false, writable: true, listenable: true, delivery: 'connection', description: 'A deal.' },
     ],
     describe: async (typeId) =>
       typeId === DEAL
@@ -79,13 +79,13 @@ function hubspot(ctx: ModuleContext): AdapterModuleMethods {
     deleteRecord: async () => {
       throw new Error('hubspot (test module) does not delete');
     },
-    listEventTypes: async () => [{ tag: DEAL_CREATED, positionType: DEAL }],
   };
   return adapter;
 }
 
-export function dealCreatedEvent(deal: Deal): Record<string, unknown> {
-  return { payload: deal, externalId: deal.id, tag: DEAL_CREATED, eventType: DEAL_CREATED, changeType: 'create', recordType: DEAL };
+/** A deal created, as its arrival on the root `Deal`. */
+export function dealArrival(deal: Deal): Record<string, unknown> {
+  return { edge: DEAL, identity: deal.id, landing: { recordId: deal.id, recordType: DEAL, fields: { Name: deal.Name } } };
 }
 
 export default defineModule({

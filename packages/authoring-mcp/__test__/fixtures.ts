@@ -13,7 +13,7 @@ const company: Record<string, SchemaFieldType> = {
 
 export const CATALOG: TenantCatalog = {
   snapshot: {
-    contractVersion: 2,
+    contractVersion: 3,
     adapters: {
       manual: {
         constructionArgs: [],
@@ -24,8 +24,6 @@ export const CATALOG: TenantCatalog = {
             positions: { Invocation: { properties: { 'Fired at': 'date', Text: 'text' }, edges: {} } },
             collections: { Invocations: { target: 'Invocation', readable: false, listenable: true, delivery: 'connection' } },
             writableRoots: {},
-            eventPosition: 'Invocation',
-            eventPositions: [{ position: 'Invocation' }],
           },
         },
       },
@@ -33,19 +31,16 @@ export const CATALOG: TenantCatalog = {
         constructionArgs: [{ name: 'credentials', kind: 'credential', required: true }],
         declaredCredentials: ['crm'],
         canFire: true,
-        triggerConfig: ['events'],
-        triggerConfigOptions: { events: ['company.created'] },
         description: "The product's own CRM.",
         schemaShape: 'introspected',
         schemas: {
           workspace: {
             positions: { Company: { properties: { ...company }, edges: {} } },
-            collections: { Company: { target: 'Company' } },
+            collections: { Company: { target: 'Company', listenable: true, delivery: 'connection' } },
             writableRoots: {
               Company: { fields: { ...company }, resultShape: { externalId: 'text', url: 'text', ...company }, requiredFields: ['Name'] },
             },
             supportsInPlaceUpdate: true,
-            eventPosition: 'Company',
           },
         },
       },

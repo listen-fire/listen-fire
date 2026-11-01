@@ -41,9 +41,6 @@ export interface ConstructionArg {
 }
 
 
-/** The listen config formats this release's checker validates. */
-export type KnownTriggerConfigFormat = 'cron' | 'timezone' | 'fields' | 'strings' | 'type' | 'field' | 'field-value';
-
 export interface AdapterSpec {
   /**
    * The adapter's full construction signature — the credential (if any) folded
@@ -72,76 +69,6 @@ export interface AdapterSpec {
    * provision valid and stay silent forever.
    */
   canFire?: boolean;
-  /**
-   * The config keys a `listen to <instance> { … }` accepts for this adapter
-   * (e.g. the email plus-address routing `key`). When present, an unknown
-   * key is MOV_LISTEN_BAD_CONFIG; when absent, listener config goes
-   * unvalidated (the adapter declares no vocabulary).
-   */
-  triggerConfig?: string[];
-  /**
-   * Per-key VALUE vocabularies for listen config — the adapter's
-   * subscribable-event surface, projected by the host from its manifest
-   * (e.g. attio's `events` key accepts `record.created` / `record.updated`
-   * / `record.deleted`). A key listed in `triggerConfig` with an entry
-   * here has a CLOSED value set: a listen config value (string, or each
-   * element of a list) outside it is MOV_LISTEN_BAD_CONFIG. Keys without
-   * an entry stay value-unvalidated.
-   */
-  triggerConfigOptions?: Record<string, string[]>;
-  /**
-   * The `events:` selection a listen WITHOUT one is subscribed to — the
-   * adapter's own dispatch default, so the checker derives the same event
-   * type the runtime will deliver (whatsapp: messages only). Absent ⇒ every
-   * subscribable event.
-   */
-  defaultEvents?: string[];
-  /**
-   * Keys (⊆ `triggerConfig`) a listen on this adapter MUST carry — a
-   * listen missing one is MOV_LISTEN_BAD_CONFIG with a ready-to-paste
-   * fix-it. The cron adapter's `schedule` is the motivating case: a
-   * schedule-less cron listener would never fire.
-   */
-  triggerConfigRequired?: string[];
-  /**
-   * Why a required key is required, by key, said after the refusal — the
-   * host's words, because only the host knows what the value does (email's
-   * routing `key` IS the inbound address; without it no mail can reach the
-   * listener). Keys without an entry are refused with the bare fix-it.
-   */
-  triggerConfigRequiredWhy?: Record<string, string>;
-  /**
-   * Per-key value FORMATS the checker validates statically. `'cron'`
-   * validates the value as a five-field cron expression; `'timezone'`
-   * validates it as an IANA time-zone id (movement-lang/cron — the same
-   * parser the platform scheduler runs, so check time and fire time can
-   * never disagree).
-   *
-   * `'fields'` is the changed-attribute filter: a list of BARE property
-   * names, validated against the position the listen's address lands on
-   * (the derived event type). Any adapter with a "only fire when one of
-   * these attributes changed" surface declares it; it is not the graph's,
-   * it is just the graph that needed it first.
-   *
-   * `'strings'` is a non-empty list of non-empty quoted strings — the shape
-   * only; the values are the source system's own (Gmail's `labels`).
-   *
-   * `'type'` is a node the program declares (`payload: <Payment>`): the
-   * listen's events are of that type, and the movement it fires is checked
-   * against it.
-   *
-   * `'field'` is one quoted field name of the record the listen's address
-   * lands on (TypeScript's `keyof T`); `'field-value'` is a literal value of
-   * the field the listen's `'field'`-format key names (`T[K]`): an enum
-   * field's choice, a number field's number. Paired by format, so an adapter
-   * declares at most one `'field'` key.
-   *
-   * Any other string is a format a newer module declares and this release
-   * does not know: the key's value is a plain value, unchecked, and the
-   * checker says so once (an Info), so a module release never breaks a host
-   * on an older core.
-   */
-  triggerConfigFormats?: Record<string, KnownTriggerConfigFormat | (string & {})>;
   /**
    * Interactive "connect" actions the adapter offers when authoring against
    * one of its instances. The checker never reads these — they're carried
@@ -1237,68 +1164,6 @@ export interface InstanceSchema {
    *
    */
   genericLandings?: Record<string, string>;
-  /** The position a `listen` on this instance fires — the type its events
-   *  arrive as. The conformance check (a shape-typed movement parameter)
-   *  targets this position. The first declared event edge when the adapter
-   *  declares any (`eventPositions`); else the projection's single-readable
-   *  heuristic (a poll adapter whose one readable entry IS what a listen
-   *  delivers — granola). Undefined when the instance has no single event
-   *  position. */
-  eventPosition?: string;
-  /**
-   * The instance's DECLARED event surface: one entry per event edge off the
-   * meta node (`SchemaEntryPoint.fires`), in declaration order. THE EVENT IS
-   * JUST A NODE — the projection synthesizes nothing; each entry names the
-   * node an event edge lands on, and `on` lists the `events:` config values
-   * delivered along that edge (a subset of the adapter's subscribable-event
-   * vocabulary). `on` absent ⇒ every subscribable event (or the adapter has
-   * no vocabulary at all — cron's tick, a messaging Message Received).
-   *
-   * This replaces `eventActions` + the variant synthesis
-   * (`Record Created`/`Updated`/`Deleted` were nominal names for address
-   * narrowings — `Record Created` ≡ `` Record Change WHERE `action` ==
-   * "record.created" ``). Where a change-kind axis exists it is an ORDINARY
-   * FIELD on the event node (`action`, an enum of the same `events:`
-   * vocabulary — ONE namespace), and a listen's `events:` selection pins it
-   * in the derived address.
-   *
-   */
-  eventPositions?: Array<{ position: string; on?: string[] }>;
-  /**
-   * The listen-config keys that ADDRESS this instance's events, in hop order —
-   * the adapter's `ListenConfigKey.narrows` set (Airtable: `['base','table']`).
-   *
-   * A listen is a traversal of the event edge with a WHERE, so its config IS an
-   * address; these are the keys that say so. The checker reads them to derive
-   * the type a listen fires (`listenNarrowing`), which is what a signature's
-   * address is compared against. Absent ⇒ this adapter's events aren't
-   * addressable and every listen on it fires the plain event type.
-   *
-   */
-  eventNarrowingKeys?: string[];
-  /**
-   * What may legally be pinned at each event-address hop — keyed by the address
-   * PREFIX it is legal under (`narrowingPrefixKey` over the pins fixed so far).
-   *
-   * `` `table` == "tblDaels" `` is `enum == "a string literal that isn't in the
-   * enum"`, and that is where the typo dies: `MOV_ENUM_UNKNOWN_VALUE`, with a
-   * did-you-mean, through the same `checkEnumLiteral` every other enum
-   * comparison rides. Not a downstream read error, and not an error at the
-   * narrow — a narrowing that matches nothing is `never`, which is a TRUE
-   * statement about a typo'd address, not a failure.
-   *
-   * THE VARIANCE IS THE MODEL, not an obstacle to it. `base`'s options are free
-   * — the root walk already holds the bases. `table`'s options depend on WHICH
-   * base, so they exist only under a prefix that pins one, and cost exactly that
-   * base's hop. The drill-down, one level in, at 1 + 1: a base no signature
-   * names is never opened, so this can never become the `listTables`-per-base
-   * fanout the whole plan exists to kill.
-   *
-   * Absent (or absent for a prefix) ⇒ nobody published the options, and the pin
-   * is unchecked. Silence, never a guess.
-   *
-   */
-  eventNarrowingValues?: Record<string, Record<string, string[]>>;
 }
 
 

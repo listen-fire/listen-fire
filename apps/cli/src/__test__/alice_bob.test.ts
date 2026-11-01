@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { lfCommand } from './example';
-import { dealCreatedEvent, HUBSPOT_MODULE, startFakeHubSpot, type FakeHubSpot } from '@listen-fire/fake-channels/testing';
+import { dealArrival, HUBSPOT_MODULE, startFakeHubSpot, type FakeHubSpot } from '@listen-fire/fake-channels/testing';
 
 const MODULE = HUBSPOT_MODULE;
 const SERVER_SECRET = 'install-server-secret';
@@ -41,7 +41,7 @@ function mirror(deal: <hs_alice-[:Deal]->>) {
   write hs_bob-[:Deal]-> { Name: "Mirror of \${deal.Name}" }
 }
 
-listen to hs_alice { events: ["deal.created"] } fire mirror
+listen to hs_alice-[:Deal]-> fire mirror
 `;
 
 function hubspotProject(fake: FakeHubSpot): string {
@@ -83,7 +83,7 @@ test('one install, two users: the movement reads as Alice and writes as Bob; Ali
     const dir = hubspotProject(fake);
     const before = secrets(dir);
     fake.deals.push({ id: 'deal-1', Name: 'Acme expansion', owner: 'alice' });
-    writeFileSync(join(dir, 'deal.json'), JSON.stringify({ external: 'hubspot', event: dealCreatedEvent({ id: 'deal-1', Name: 'Acme expansion' }) }));
+    writeFileSync(join(dir, 'deal.json'), JSON.stringify({ external: 'hubspot', event: { arrivals: [dealArrival({ id: 'deal-1', Name: 'Acme expansion' })] } }));
 
     const check = await lfAsync(dir, 'check');
     assert.equal(check.code, 0, check.out);

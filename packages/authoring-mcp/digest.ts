@@ -40,7 +40,7 @@ const ENUM_OPTIONS_SHOWN = 4;
 const POSITION_DEPTH = 4;
 
 export const DIGEST_LEGEND =
-  'Marks: `!` required to create · `*` identifies the record (a `unique by` candidate) · `~` read-only · [r] readable, [w] writable, [fires] a listen can fire on it · a `backticked` name is written with its backticks in code.';
+  'Marks: `!` required to create · `*` identifies the record (a `unique by` candidate) · `~` read-only · [r] readable, [w] writable, [listenable] a listen can start on it (`listen to x-[:Name]->`) · a `backticked` name is written with its backticks in code.';
 
 const moreHint = (system: string) => `describeConnection("${system}") for more`;
 
@@ -65,6 +65,8 @@ export function compactType(type: SchemaFieldType): string {
       return 'dict';
     case 'owned':
       return type.name;
+    case 'record':
+      return 'record';
     default:
       return unreachable(type);
   }
@@ -85,14 +87,14 @@ interface RecordField {
   writeOnly: boolean;
 }
 
-/** A record type: a root of the system (a collection, a writable root, an
- *  event), or a place an edge lands on. */
+/** A record type: a root of the system (a collection or a writable root),
+ *  or a place an edge lands on. */
 interface RecordType {
   name: string;
   readable: boolean;
   writable: boolean;
-  fires: boolean;
-  firesOn?: string[];
+  /** Its module announces what lands on it: a listen can start on it. */
+  listenable: boolean;
   fields: RecordField[];
 }
 
@@ -112,48 +114,23 @@ function fieldsOf(position: PositionSchema | undefined, write: WritableRootSchem
   }));
 }
 
-function eventPositionsOf(schema: InstanceSchema): Array<{ position: string; on?: string[] }> {
-  if (schema.eventPositions !== undefined) return schema.eventPositions;
-  return schema.eventPosition !== undefined ? [{ position: schema.eventPosition }] : [];
-}
-
-/** The system's roots: its collections and writable roots by name, and each
- *  event position no root already names. */
+/** The system's roots: its collections and writable roots by name. */
 function rootsOf(schema: InstanceSchema): RecordType[] {
-  const events = eventPositionsOf(schema);
-  const firing = (target: string) => events.find((e) => e.position === target);
   const names = [...new Set([...Object.keys(schema.collections), ...Object.keys(schema.writableRoots)])];
-  const roots = names.map((name): RecordType => {
+  return names.map((name): RecordType => {
     const target = schema.collections[name]?.target ?? schema.writableRoots[name]?.position ?? name;
-    const fired = firing(target);
     return {
       name,
       readable: schema.collections[name] !== undefined && schema.collections[name].readable !== false,
       writable: name in schema.writableRoots,
-      fires: fired !== undefined,
-      ...(fired?.on !== undefined ? { firesOn: fired.on } : {}),
+      listenable: schema.collections[name]?.listenable === true,
       fields: fieldsOf(schema.positions[target], schema.writableRoots[name] ?? schema.createShapes?.[target]),
     };
   });
-  const named = new Set(roots.map((r) => schema.collections[r.name]?.target ?? r.name));
-  for (const event of events) {
-    if (named.has(event.position)) continue;
-    named.add(event.position);
-    roots.push({
-      name: schema.positions[event.position]?.displayName ?? event.position,
-      readable: false,
-      writable: false,
-      fires: true,
-      ...(event.on !== undefined ? { firesOn: event.on } : {}),
-      fields: fieldsOf(schema.positions[event.position], undefined),
-    });
-  }
-  return roots;
 }
 
-function access(type: Pick<RecordType, 'readable' | 'writable' | 'fires' | 'firesOn'>): string {
-  const fires = type.fires ? [type.firesOn !== undefined && type.firesOn.length > 0 ? `fires(${type.firesOn.join('|')})` : 'fires'] : [];
-  const flags = [`${type.readable ? 'r' : ''}${type.writable ? 'w' : ''}`, ...fires].filter(Boolean);
+function access(type: Pick<RecordType, 'readable' | 'writable' | 'listenable'>): string {
+  const flags = [`${type.readable ? 'r' : ''}${type.writable ? 'w' : ''}`, type.listenable ? 'listenable' : ''].filter(Boolean);
   return flags.length > 0 ? ` [${flags.join(' ')}]` : '';
 }
 
@@ -173,7 +150,7 @@ function fieldList(fields: RecordField[], limit: number): string {
 
 // ── The system's header lines ───────────────────────────────────────────────
 
-type SpecLike = Pick<AdapterSnapshot, 'constructionArgs' | 'triggerConfig' | 'triggerConfigOptions' | 'triggerConfigRequired'>;
+type SpecLike = Pick<AdapterSnapshot, 'constructionArgs'>;
 
 /** `attio(credentials: acme)`; a second connection is named after it. A
  *  run host unit is in every program's scope, never constructed. */
@@ -186,19 +163,6 @@ function constructionSpelling(system: string, spec: SpecLike, connections: strin
   });
   const others = connections.slice(1);
   return `\`${system}(${args.join(', ')})\`${others.length > 0 ? ` (other connections: ${others.join(', ')})` : ''}`;
-}
-
-/** `listen { key! }`, `listen { events: company.created|company.updated }`. */
-function listenSpelling(spec: SpecLike): string | null {
-  const keys = spec.triggerConfig ?? [];
-  if (keys.length === 0) return null;
-  const required = new Set(spec.triggerConfigRequired ?? []);
-  const parts = keys.map((key) => {
-    const options = spec.triggerConfigOptions?.[key];
-    const mark = required.has(key) ? '!' : '';
-    return options && options.length > 0 ? `${key}${mark}: ${options.join('|')}` : `${key}${mark}`;
-  });
-  return `listen { ${parts.join(', ')} }`;
 }
 
 /** A system and how this tenant reaches it. */
@@ -231,8 +195,6 @@ function systemView(snapshot: CatalogSnapshot, connections: TenantCatalog['conne
 /** One system's block, never longer than {@link SYSTEM_DIGEST_CHAR_CAP}. */
 export function renderSystemDigest(view: SystemView): string {
   const lines = [`### ${view.system} — ${constructionSpelling(view.system, view.spec, view.connections)}`];
-  const listen = listenSpelling(view.spec);
-  if (listen) lines.push(`- ${listen}`);
   if (view.schema === undefined) {
     lines.push(`- ${view.note ?? 'not described'} — ${moreHint(view.system)}`);
     return fitLines(lines, view.system);
@@ -242,9 +204,10 @@ export function renderSystemDigest(view: SystemView): string {
   const short = roots.map((root) => `- ${spellName(root.name)}${access(root)}: ${root.fields.length} fields`);
   const chosen = [...full];
   const size = () => [...lines, ...chosen].reduce((sum, line) => sum + line.length + 1, 0);
-  // Read-only types give up their fields first, then event payloads, and
-  // writable types last: a wrong field name in a write costs a failed run.
-  const rank = (root: RecordType) => (root.writable ? 2 : root.fires ? 1 : 0);
+  // Read-only types give up their fields first, then what a listen is
+  // handed, and writable types last: a wrong field name in a write costs a
+  // failed run.
+  const rank = (root: RecordType) => (root.writable ? 2 : root.listenable ? 1 : 0);
   const order = roots.map((root, index) => ({ root, index })).sort((a, b) => rank(a.root) - rank(b.root) || b.index - a.index);
   let cut = false;
   for (const { index } of order) {
@@ -359,7 +322,7 @@ function edgeType(schema: InstanceSchema, name: string, edge: EdgeSchema): Recor
     name,
     readable: edge.readable !== false,
     writable,
-    fires: false,
+    listenable: edge.listenable === true,
     fields: fieldsOf(schema.positions[edge.target], writable ? schema.createShapes?.[edge.target] : undefined),
   };
 }
@@ -409,8 +372,6 @@ export function describeFromSnapshot(
 
   const lines = [`### ${system} — ${constructionSpelling(system, spec, view.connections)}`];
   if (spec.description) lines.push(spec.description);
-  const listen = listenSpelling(spec);
-  if (listen) lines.push(`- ${listen}`);
   if (spec.triggerExpectation) lines.push(`- What a listen fires on: ${spec.triggerExpectation}`);
   if (needsConnection(spec) && view.connections.length === 0) lines.push('- Not connected yet: a program cannot construct it until the user connects it.');
   if (schema === undefined) {
@@ -461,8 +422,6 @@ export function connectionsView(catalog: TenantCatalog) {
       system,
       ...(spec.description !== undefined ? { description: spec.description } : {}),
       constructionArgs: spec.constructionArgs.map((arg) => ({ name: arg.name, kind: arg.kind, required: arg.required })),
-      ...(spec.triggerConfig !== undefined ? { listenConfig: spec.triggerConfig } : {}),
-      ...(spec.triggerConfigOptions !== undefined ? { listenConfigOptions: spec.triggerConfigOptions } : {}),
       ...(spec.triggerExpectation !== undefined ? { triggerExpectation: spec.triggerExpectation } : {}),
       canFire: spec.canFire === true,
       connected: catalog.connections.some((c) => c.system === system) || !needsConnection(spec),

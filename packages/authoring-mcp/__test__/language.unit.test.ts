@@ -56,13 +56,13 @@ describe('the check', () => {
 });
 
 describe('the digest of connected systems', () => {
-  it('constructs each system, says what its listen may say, and lists its record types with their fields', () => {
+  it('constructs each system and lists its record types with their fields, marking those a listen can start on', () => {
     const digest = renderConnectionsDigest(CATALOG);
     expect(digest).toContain('### crm — `crm(credentials: workspace)`');
-    expect(digest).toContain('- listen { events: company.created }');
-    expect(digest).toContain('- Company [rw fires]: Name text!, Stage enum(Lead|Customer)');
+    expect(digest).not.toContain('listen {');
+    expect(digest).toContain('- Company [rw listenable]: Name text!, Stage enum(Lead|Customer)');
     expect(digest).toContain('### manual — `listen to manual-[:…]->` (in scope with no import or connect)');
-    expect(digest).toContain('- Invocations [fires]: `Fired at` date, Text text');
+    expect(digest).toContain('- Invocations [listenable]: `Fired at` date, Text text');
     expect(digest).toContain('Not connected yet: mail.');
   });
 
@@ -82,8 +82,6 @@ describe('the digest of connected systems', () => {
                 positions: { Draft: { properties: { Body: 'text' }, edges: {} }, Tick: { properties: { Schedule: 'text' }, edges: {} } },
                 collections: { Drafts: { target: 'Draft', readable: false }, Ticks: { target: 'Tick', readable: false, listenable: true } },
                 writableRoots: { Drafts: { fields: { Body: 'text' }, resultShape: { externalId: 'text' }, requiredFields: [] } },
-                eventPosition: 'Tick',
-                eventPositions: [{ position: 'Tick' }],
               },
             },
           },
@@ -100,7 +98,7 @@ describe('the digest of connected systems', () => {
     expect(root).toMatchObject({ ok: true, text: expect.stringContaining("The product's own CRM.") });
     expect(root.ok && root.text).toContain('position: "-[:Company]->"');
     const at = describeFromSnapshot(CATALOG, { system: 'crm', position: '-[:Company]->' });
-    expect(at).toEqual({ ok: true, text: '### crm at -[:Company]->\nCompany [rw fires]: Name text!, Stage enum(Lead|Customer)\nNo edges leave this node.' });
+    expect(at).toEqual({ ok: true, text: '### crm at -[:Company]->\nCompany [rw listenable]: Name text!, Stage enum(Lead|Customer)\nNo edges leave this node.' });
     expect(describeFromSnapshot(CATALOG, { system: 'crm', position: '-[:Nowhere]->' })).toMatchObject({ ok: true, text: expect.stringContaining('No such place') });
     expect(describeFromSnapshot(CATALOG, { system: 'nope' })).toMatchObject({ ok: false });
   });

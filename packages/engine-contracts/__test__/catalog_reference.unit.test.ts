@@ -1,6 +1,9 @@
 // A reference's edge capabilities: what 0.13 declares, and the three keys it
 // retired, refused rather than stripped.
 import {
+  RETIRED_ENTRY_KEYS,
+  RETIRED_MANIFEST_KEYS,
+  retiredEntryKey,
   ambiguousArrivals,
   parseWritePath,
   schemaEntryPointSchema,
@@ -21,6 +24,7 @@ import { WireListenDeclarations } from '../protocol';
 import cases from './write_paths.cases.json';
 import settingsBecome from './settings_become.cases.json';
 import scopedBy from './scoped_by.cases.json';
+import retiredEntryKeys from './retired_entry_key.cases.json';
 
 const reference = { fieldId: 'r', name: 'Replies', targetTypeId: 'm', cardinality: 'many', direction: 'outgoing' } as const;
 
@@ -491,6 +495,31 @@ describe('a manifest listenSettingsBecome, as read', () => {
       } else {
         expect(read.data?.listenSettingsBecome).toEqual(c.read);
       }
+    });
+  }
+});
+
+// The same cases listen-fire's describe reads (schema.rs
+// `a_reference_declaring_fires_is_refused_naming_listenable`).
+describe('a key 0.13 retired from an entry point, a reference or a manifest', () => {
+  for (const c of retiredEntryKeys) {
+    it(`${c.case} is ${c.refusal === null ? 'read' : 'refused by name'}`, () => {
+      const keys = c.on === 'manifest' ? RETIRED_MANIFEST_KEYS : RETIRED_ENTRY_KEYS;
+      expect(retiredEntryKey(c.name, c.declared, keys) ?? null).toBe(c.refusal);
+    });
+  }
+
+  // The schemas an entry point and a reference are read by refuse it in the same words.
+  const entry = { displayName: 'E', writable: false, readable: false };
+  const { name: _named, ...unnamed } = reference;
+  for (const c of retiredEntryKeys.filter((c) => c.on !== 'manifest' && c.refusal !== null)) {
+    it(`${c.case} is refused by its schema in those words`, () => {
+      const read =
+        c.on === 'entry'
+          ? schemaEntryPointSchema.safeParse({ ...entry, ...c.declared })
+          : schemaReferenceDescriptorSchema.safeParse({ ...unnamed, ...c.declared });
+      expect(read.success).toBe(false);
+      expect(read.error?.issues.map((issue) => issue.message)).toContain(c.refusal);
     });
   }
 });

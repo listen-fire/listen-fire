@@ -32,10 +32,6 @@ type CatalogManifest = Pick<
   | 'declaredCredentials'
   | 'positionArgs'
   | 'supportedTriggers'
-  | 'triggerConfig'
-  | 'subscribableEvents'
-  | 'defaultSubscribedEvents'
-  | 'listenConfig'
   | 'construction'
   | 'triggerExpectation'
   | 'introspectedSchema'
@@ -43,93 +39,6 @@ type CatalogManifest = Pick<
   | 'resendWindowSeconds'
   | 'listenSettingsBecome'
 >;
-
-/**
- * The `listen to <instance> { … }` config vocabulary per adapter — the
- * checker flags unknown keys (MOV_LISTEN_BAD_CONFIG) only where this is
- * declared, and validates VALUES where a key carries a closed set:
- *
- *   - adapters declaring an inbound routing-key config field accept that
- *     field's key (email's plus-suffix `key`, matched by
- *     `findTriggerByInboundKey`);
- *   - adapters declaring `subscribableEvents` accept an `events` key whose
- *     values are exactly those event names (`listen to crm { events:
- *     ["record.created"] } fire …`) — the same vocabulary
- *     `ensureEventSubscription` provisions externally, and the same one
- *     `eventMatchesTriggerScope` routes on;
- *   - adapter-declared `listenConfig` keys (the cron adapter's required,
- *     cron-format `schedule`) project as keys + required set + value
- *     formats.
- */
-export function triggerConfigVocabulary(
-  manifest: Pick<
-    CatalogManifest,
-    'supportedTriggers' | 'triggerConfig' | 'subscribableEvents' | 'defaultSubscribedEvents' | 'listenConfig'
-  >,
-): Pick<
-  AdapterSpec,
-  | 'canFire'
-  | 'triggerConfig'
-  | 'triggerConfigOptions'
-  | 'triggerConfigRequired'
-  | 'triggerConfigRequiredWhy'
-  | 'triggerConfigFormats'
-  | 'defaultEvents'
-> {
-  const keys: string[] = [];
-  const options: Record<string, string[]> = {};
-  const required: string[] = [];
-  const why: Record<string, string> = {};
-  const formats: NonNullable<AdapterSpec['triggerConfigFormats']> = {};
-  // An adapter's inbound routing-key block (email's `key`) becomes a listen
-  // config key — routed generically off the block declaration, not a named
-  // forwarding-address flag. Presentation/action blocks carry no key.
-  //
-  // It is also REQUIRED: a routing key is how an inbound event finds its
-  // listener (`findTriggerByInboundKey` matches on it and nothing else), so a
-  // listen without one provisions a listener no event can ever be addressed
-  // to. That saved clean, with no address, and stayed silent forever.
-  for (const block of manifest.triggerConfig ?? []) {
-    if (
-      (block.kind === 'text' || block.kind === 'slug') &&
-      block.routingKey === true &&
-      !keys.includes(block.key)
-    ) {
-      keys.push(block.key);
-      required.push(block.key);
-      why[block.key] =
-        block.prefix !== undefined || block.suffix !== undefined
-          ? `the ${block.key} is this listener's address, ${block.prefix ?? ''}<${block.key}>${block.suffix ?? ''}; without one nothing can be sent to it and it never fires`
-          : `inbound events find this listener by its ${block.key}; without one nothing can reach it and it never fires`;
-    }
-  }
-  if (manifest.subscribableEvents !== undefined && manifest.subscribableEvents.length > 0) {
-    keys.push('events');
-    options.events = [...manifest.subscribableEvents];
-  }
-  for (const entry of manifest.listenConfig ?? []) {
-    if (!keys.includes(entry.key)) keys.push(entry.key);
-    if (entry.required && !required.includes(entry.key)) required.push(entry.key);
-    if (entry.format !== undefined) formats[entry.key] = entry.format;
-  }
-  return {
-    // A construction-free manifest fact: an adapter that names no trigger type
-    // has no inbound surface to listen to. Only `true` projects — see
-    // `AdapterSpec.canFire`.
-    ...((manifest.supportedTriggers ?? []).length > 0 ? { canFire: true } : {}),
-    ...(keys.length > 0 ? { triggerConfig: keys } : {}),
-    ...(Object.keys(options).length > 0 ? { triggerConfigOptions: options } : {}),
-    ...(required.length > 0 ? { triggerConfigRequired: required } : {}),
-    ...(Object.keys(why).length > 0 ? { triggerConfigRequiredWhy: why } : {}),
-    ...(Object.keys(formats).length > 0 ? { triggerConfigFormats: formats } : {}),
-    // The adapter's own no-selection dispatch default (whatsapp: messages
-    // only) — the checker types a config-less listen with it.
-    ...(manifest.defaultSubscribedEvents !== undefined &&
-    manifest.defaultSubscribedEvents.length > 0
-      ? { defaultEvents: [...manifest.defaultSubscribedEvents] }
-      : {}),
-  };
-}
 
 /**
  * A manifest's full construction signature: the credential (when it needs one)
@@ -198,7 +107,10 @@ function adapterSnapshotOf(input: CatalogAdapterInput): AdapterSnapshot {
   return {
     constructionArgs: input.constructionArgs ?? constructionArgsOf(manifest),
     ...(manifest.declaredCredentials !== undefined ? { declaredCredentials: [...manifest.declaredCredentials] } : {}),
-    ...triggerConfigVocabulary(manifest),
+    // A construction-free manifest fact: an adapter that names no trigger
+    // type has no inbound surface to listen to. Only `true` projects — see
+    // `AdapterSpec.canFire`.
+    ...((manifest.supportedTriggers ?? []).length > 0 ? { canFire: true } : {}),
     ...(connectActions.length > 0 ? { connectActions } : {}),
     ...(input.connect !== undefined ? { connect: input.connect } : {}),
     ...(manifest.triggerExpectation !== undefined ? { triggerExpectation: manifest.triggerExpectation } : {}),

@@ -968,6 +968,21 @@ export function retiredReferenceKey(name: string, key: RetiredReferenceKey): str
 }
 
 const RETIRED_REFERENCE_KEYS = ['awaitable', 'watchable', 'resolvesEmpty'] as const;
+
+/** The keys 0.13 retired from an entry point and from a manifest: each said
+ *  what a settings listen could hear. */
+export const RETIRED_ENTRY_KEYS = ['fires', 'firesOn'] as const;
+export const RETIRED_MANIFEST_KEYS = ['subscribableEvents', 'defaultSubscribedEvents', 'listenConfig', 'subscriptionScopeKeys'] as const;
+
+/** Why an entry point (or, `name` its adapter, a manifest) that declares a key
+ *  0.13 retired is refused; undefined when it declares none (listen-fire's
+ *  describe refuses it in the same words, retired_entry_key.cases.json). */
+export function retiredEntryKey(name: string, declared: object, keys: readonly string[]): string | undefined {
+  const retired = keys.find((key) => key in declared);
+  return retired === undefined
+    ? undefined
+    : `'${name}' declares '${retired}', retired in 0.13: declare a listenable edge (and the settings it replaces in 'listenSettingsBecome')`;
+}
 export type RetiredReferenceKey = (typeof RETIRED_REFERENCE_KEYS)[number];
 
 /** A retired key is refused rather than stripped: a module still declaring it
@@ -978,6 +993,21 @@ function refuseRetiredReferenceKeys(input: unknown, ctx: z.RefinementCtx): unkno
   for (const key of RETIRED_REFERENCE_KEYS) {
     if (key in input) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: retiredReferenceKey(named, key) });
   }
+  refuseRetiredEntryKey(named, input, ctx);
+  return input;
+}
+
+/** A reference or an entry point still declaring `fires`/`firesOn` is
+ *  refused by name, as listen-fire's describe refuses it. */
+function refuseRetiredEntryKey(named: string, input: object, ctx: z.RefinementCtx): void {
+  const refusal = retiredEntryKey(named, input, RETIRED_ENTRY_KEYS);
+  const key = RETIRED_ENTRY_KEYS.find((retired) => retired in input);
+  if (refusal !== undefined && key !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: refusal });
+}
+
+function refuseRetiredEntryPointKeys(input: unknown, ctx: z.RefinementCtx): unknown {
+  if (typeof input !== 'object' || input === null) return input;
+  refuseRetiredEntryKey('typeId' in input ? String(input.typeId) : 'an entry point', input, ctx);
   return input;
 }
 
@@ -1102,23 +1132,6 @@ const referenceDescriptorFieldsSchema = z.object({
    * (MOV_WRITE_ONLY_EDGE). Writes along the edge are untouched.
    */
   readable: z.boolean().optional(),
-  /**
-   * Whether this edge DELIVERS its target rather than letting you fetch it —
-   * the third edge promise beside `readable` and `writable`, and the one a
-   * listen subscribes to. Absent ⇒ this edge is not an event edge.
-   *
-   * It lives HERE, on the edge, because that is where the fact is true: an
-   * event is reached by being pushed along one specific edge from the root,
-   * never by enumerating anything. The node-level `SchemaEntryPoint.fires`
-   * says the same thing one level away from where it applies, and where the
-   * two disagree the edge is right — the node flag is a claim, the edge is
-   * the path.
-   *
-   */
-  fires: z.boolean().optional(),
-  /** The `events:` values this edge delivers, when it delivers several kinds
-   *  (the node-level `firesOn`, stated where it applies). */
-  firesOn: z.array(z.string()).optional(),
   /**
    * This edge leads from an EVENT node to the record the event is ABOUT — the
    * one hop that turns "a change happened" into "here is the thing that
@@ -1668,7 +1681,7 @@ export type SchemaDescriptor = z.infer<typeof schemaDescriptorSchema>;
  * has selected one. Adapters publish entry points cheaply (no
  * per-type API calls) so the picker is responsive.
  */
-export const schemaEntryPointSchema = z.object({
+export const schemaEntryPointSchema = z.preprocess(refuseRetiredEntryPointKeys, z.object({
   typeId: z.string(),
   displayName: z.string(),
   /** Optional human description of the node type — same semantics as on
@@ -1707,26 +1720,6 @@ export const schemaEntryPointSchema = z.object({
    * by this; the adapter's `getRelated(meta, <collectionName>)` resolves it.
    */
   collectionName: z.string().optional(),
-  /** This entry is an EVENT EDGE: a `listen` delivers its node; a movement can
-   *  never traverse it. `fires` is the edge's whole promise — the third edge
-   *  promise beside `readable` and `writable`, spelled the same way (an edge
-   *  property on the entry) for consistency with them. The event is JUST A
-   *  NODE: the projection synthesizes nothing from this marker — no variants,
-   *  no union, no name map. Where the adapter has a change-kind axis it is an
-   *  ordinary enum field on the event node (`action`, options = the listen's
-   *  `events:` vocabulary — ONE namespace), narrowed in the address
-   *  (`` WHERE `action` == "record.created" ``).
-   *
-   *  Independent of `readable`: nobody enumerates an inbox, so an event entry
-   *  is normally `readable: false, writable: false, fires: true` — and it
-   *  mints a position but never a root collection. */
-  fires: z.boolean().optional(),
-  /** The `events:` config values delivered along this event edge — a subset of
-   *  the manifest's `subscribableEvents`, for adapters whose vocabulary spans
-   *  several event edges (Slack's `app_mention`/`message` land on `Message
-   *  Received`; `reaction_added` does not). Meaningful only with `fires`.
-   *  Absent ⇒ every subscribable event (or the adapter has no vocabulary). */
-  firesOn: z.array(z.string()).optional(),
   /**
    * The module announces arrivals on this entry's root collection, as a
    * reference's `listenable` says of its edge: a listen can start at the
@@ -1743,7 +1736,7 @@ export const schemaEntryPointSchema = z.object({
    *  the collection wins. */
   capability: edgeCapabilitySchema.optional(),
   ...listeningDeclarationShape,
-});
+}));
 
 export type SchemaEntryPoint = z.infer<typeof schemaEntryPointSchema>;
 

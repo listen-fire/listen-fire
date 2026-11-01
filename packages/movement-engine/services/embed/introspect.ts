@@ -4,7 +4,7 @@
 // external the same two questions (crates/lf check.rs); an embedder asks
 // them of the adapter it loaded in process.
 
-import { ambiguousArrivals, undeclaredArrivalField, unreadableAnswerShapeFrom, unreadableListening, unreadableLiteralsFrom, unreadableOwnedField, unreadableRecordField, unreadableSettingsBecome } from 'engine-contracts/catalog';
+import { RETIRED_ENTRY_KEYS, RETIRED_MANIFEST_KEYS, ambiguousArrivals, retiredEntryKey, undeclaredArrivalField, unreadableAnswerShapeFrom, unreadableListening, unreadableLiteralsFrom, unreadableOwnedField, unreadableRecordField, unreadableSettingsBecome } from 'engine-contracts/catalog';
 import type { InstanceSchema } from 'movement-lang';
 
 import type { Adapter, AdapterManifest } from '../translation_graph/adapter';
@@ -16,7 +16,13 @@ export async function introspectAdapter(
   adapter: Adapter,
   manifest: Pick<AdapterManifest, 'adapterType' | 'methods' | 'listenSettingsBecome'>,
 ): Promise<{ schema: InstanceSchema; notes: string[] }> {
+  const retiredInManifest = retiredEntryKey(manifest.adapterType, manifest, RETIRED_MANIFEST_KEYS);
+  if (retiredInManifest !== undefined) throw new Error(`${manifest.adapterType}: ${retiredInManifest}`);
   const entries = await adapter.listEntryPoints();
+  for (const entry of entries) {
+    const refusal = retiredEntryKey(entry.typeId, entry, RETIRED_ENTRY_KEYS);
+    if (refusal !== undefined) throw new Error(`${manifest.adapterType}: ${refusal}`);
+  }
   const described = await Promise.all(entries.map(async (entry) => [entry.typeId, await adapter.describe(entry.typeId)] as const));
   const descriptors = new Map(described.flatMap(([typeId, descriptor]) => (descriptor ? [[typeId, descriptor] as const] : [])));
   for (const [typeId, descriptor] of descriptors) {

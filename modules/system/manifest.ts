@@ -4,7 +4,7 @@
 import type { AdapterManifest } from 'movement-engine/public/adapter';
 
 import { SYSTEM_HANDBOOK_SECTION } from './handbook_section';
-import { DEFAULT_KIND, EVENTS_EDGE, KIND_FIELD, SYSTEM_ADAPTER_TYPE, SYSTEM_EVENT_KINDS } from './types';
+import { DEFAULT_KIND, EVENTS_EDGE, KIND_FIELD, SYSTEM_ADAPTER_TYPE } from './types';
 
 export const SYSTEM_MANIFEST: AdapterManifest = {
   adapterType: SYSTEM_ADAPTER_TYPE,
@@ -18,8 +18,6 @@ export const SYSTEM_MANIFEST: AdapterManifest = {
     'Fires on the host’s own events, polled every minute by default: a run of another program ending failed (never a rehearsal), a wait whose record was deleted, a listen that could not judge an arrival, a release first run. The first poll sets the mark and emits nothing, so going live never replays past events.',
   supportedTriggers: ['poll'],
   methods: ['listEntryPoints', 'describe', 'getFieldValue'],
-  subscribableEvents: SYSTEM_EVENT_KINDS.map((kind) => kind.name),
-  defaultSubscribedEvents: [DEFAULT_KIND.name],
   // A 0.12 `listen to sys { events: ["Run Failed", "Run Paused"] }` is
   // `listen to sys-[e:Events WHERE e.Kind IN ["Run Failed", "Run Paused"]]->`
   // (`listen-fire upgrade`); one naming no events heard `Run Failed`.

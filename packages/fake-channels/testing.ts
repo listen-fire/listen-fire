@@ -6,7 +6,7 @@
 import { resolve } from 'node:path';
 
 export { startFakeHubSpot, type FakeHubSpot, type ProviderCall } from './src/hubspot/fake_hubspot';
-export { dealCreatedEvent } from './src/hubspot/module';
+export { dealArrival } from './src/hubspot/module';
 
 /** The HubSpot-like module's file, as serve-module takes it. */
 export const HUBSPOT_MODULE = resolve(__dirname, 'src/hubspot/module.ts');

@@ -24,8 +24,16 @@ const carrying = (member: string): CatalogSnapshot =>
   );
 
 describe("a snapshot's retired edge members", () => {
-  it('is written as version 2', () => {
-    expect(CATALOG_SNAPSHOT_VERSION).toBe(2);
+  it('is written as version 3', () => {
+    expect(CATALOG_SNAPSHOT_VERSION).toBe(3);
+  });
+
+  // Version 3 retired the settings listen's keys and event positions: a
+  // version 2 snapshot is refused by name, never read as 3 without them.
+  it.each([1, 2])('refuses a version %i snapshot naming 3', (version) => {
+    expect(() => fromCatalogSnapshot({ ...EMPTY_CATALOG_SNAPSHOT, contractVersion: version })).toThrow(
+      `the catalog snapshot carries contract version ${version}, written before 0.13 retired the settings listen; this release reads version 3: rebuild the catalog with it`,
+    );
   });
 
   it.each(['awaitable', 'watchable'])('refuses an edge that still carries %s', (member) => {

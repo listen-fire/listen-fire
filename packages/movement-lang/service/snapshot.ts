@@ -74,17 +74,18 @@ export interface AdapterSnapshot extends AdapterSpec {
 
 /** The catalog snapshot contract's version (docs/contracts/catalog-snapshot.md).
  *  A change in meaning bumps it; an additive optional field does not. */
-export const CATALOG_SNAPSHOT_VERSION = 2;
+export const CATALOG_SNAPSHOT_VERSION = 3;
 
 /** The snapshot versions this release reads. */
-export const SUPPORTED_CATALOG_SNAPSHOT_VERSIONS: ReadonlySet<number> = new Set([1, 2]);
+export const SUPPORTED_CATALOG_SNAPSHOT_VERSIONS: ReadonlySet<number> = new Set([3]);
 
 /** Supported snapshot versions that will be removed. */
-export const DEPRECATED_CATALOG_SNAPSHOT_VERSIONS: ReadonlySet<number> = new Set<number>([1]);
+export const DEPRECATED_CATALOG_SNAPSHOT_VERSIONS: ReadonlySet<number> = new Set<number>();
 
 export interface CatalogSnapshot {
   /** The contract version the builder wrote it under. Absent on a snapshot
-   *  written before snapshots carried one, which reads as version 1. */
+   *  written by hand (a fixture), which reads as the current version: any
+   *  member a later version retired is still refused. */
   contractVersion?: number;
   adapters: Record<string, AdapterSnapshot>;
   /**
@@ -311,6 +312,13 @@ export function fromCatalogSnapshot(snapshot: CatalogSnapshot): Catalog {
 function refuseUnsupportedSnapshotVersion(snapshot: CatalogSnapshot): void {
   const seen = snapshot.contractVersion;
   if (seen === undefined || SUPPORTED_CATALOG_SNAPSHOT_VERSIONS.has(seen)) return;
+  // Versions 1 and 2 carried the settings listen's keys and event positions:
+  // read as 3 they would lose them without a word.
+  if (seen === 1 || seen === 2) {
+    throw new Error(
+      `the catalog snapshot carries contract version ${seen}, written before 0.13 retired the settings listen; this release reads version 3: rebuild the catalog with it`,
+    );
+  }
   throw new Error(
     `the catalog snapshot carries contract version ${JSON.stringify(seen)}, which this release does not read ` +
       `(supported: ${[...SUPPORTED_CATALOG_SNAPSHOT_VERSIONS].join(', ')})`,

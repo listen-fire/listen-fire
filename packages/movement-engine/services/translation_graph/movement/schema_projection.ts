@@ -394,11 +394,8 @@ export function instanceSchemaFromDescriptors(input: {
    * The FULL entry list when `entries` is a scoped subset (types-scoped
    * describe). Scope-INVARIANT facts derive from here so the efficient path
    * never contradicts the expensive one: edge TARGET names always resolve to
-   * their natural displayName (never a raw out-of-scope typeId), and
-   * `eventPosition` reflects the instance's real event surface (never
-   * recomputed from a subset — the single-readable heuristic over a scoped
-   * set of one would LIE, teaching an agent to type a listener parameter
-   * against the wrong position). Defaults to `entries` (full describe).
+   * their natural displayName (never a raw out-of-scope typeId). Defaults to
+   * `entries` (full describe).
    */
   allEntries?: SchemaEntryPoint[];
   /**
@@ -566,7 +563,7 @@ export function instanceSchemaFromDescriptors(input: {
       // asking "may I say this surface lacks X?" is still answered no either way
       // (`surfaceNotEnumerated`); a READ through the handle is now an error,
       // because nothing ever claimed it carries anything.
-      if (entry.readable || entry.listenable === true || entry.fires === true || edgeTargetNames.has(name)) {
+      if (entry.readable || entry.listenable === true || edgeTargetNames.has(name)) {
         positions[name] = { properties: {}, edges: {}, undescribed: true };
       }
       continue;
@@ -783,21 +780,13 @@ export function instanceSchemaFromDescriptors(input: {
       edgeSurfaceByFieldId.set(ref.fieldId, edge);
     }
 
-    if (entry.readable || entry.listenable === true || entry.fires === true || edgeTargetNames.has(name)) {
-      // Readable from the root, reachable by traversing to it, OR delivered by
-      // a listen (`fires`). A type you can only arrive at still has a surface
-      // once you're there.
+    if (entry.readable || entry.listenable === true || edgeTargetNames.has(name)) {
+      // Readable from the root, reachable by traversing to it, OR announced on
+      // its root collection (`listenable`). A type you can only arrive at
+      // still has a surface once you're there.
       //
-      // THE EVENT IS JUST A NODE — a `fires` entry projects like any other:
-      // no per-action variants, no union, no synthesized names. Where a
-      // change-kind axis exists it is an ordinary `action` enum field on this
-      // node, narrowed in the ADDRESS (`` WHERE `action` == "record.created" ``);
-      // the narrowed positions are grafted on demand from the addresses the
-      // program names (listen_narrowing.ts), never synthesized here.
-      //
-      // `fires` is not gated on `readable`, and that is the point: nobody can
-      // enumerate an inbox, so an event entry says `readable: false` honestly
-      // — it mints this position but never a root collection.
+      // `listenable` is not gated on `readable`, and that is the point: nobody
+      // can enumerate an inbox, so its entry says `readable: false` honestly.
       const typeDescription = describedBy(descriptor) ?? describedBy(entry);
       positions[name] = {
         properties,
@@ -1006,21 +995,6 @@ export function instanceSchemaFromDescriptors(input: {
     base.discriminated = discriminated;
   }
 
-  // The DECLARED event surface: one entry per `fires`-marked meta edge, in
-  // declaration order, read off the FULL entry list so a scoped describe that
-  // excludes an event entry still names the real event surface. The primary
-  // `eventPosition` (shape conformance, diagnostics) is the first declared
-  // edge; adapters with none fall back to the single-readable heuristic (an
-  // adapter whose one readable entry IS what a listen delivers). The heuristic
-  // never joins `eventPositions`: that list drives listen typing and event
-  // seeding, and a heuristic there would type a re-retrievable record as an
-  // occurrence.
-  const eventPositions = allEntries
-    .filter((e) => e.fires === true)
-    .map((e) => ({
-      position: e.displayName,
-      ...(e.firesOn !== undefined ? { on: [...e.firesOn] } : {}),
-    }));
   // A capability the ROOT descriptor declares for a name `listEntryPoints`
   // publishes no collection under: the walk and the entry list disagreeing
   // about the same root edge. Dropping it silently would leave the gate
@@ -1039,11 +1013,6 @@ export function instanceSchemaFromDescriptors(input: {
     );
   }
 
-  const readableEntries = allEntries.filter((e) => e.readable);
-  const eventPosition =
-    eventPositions[0]?.position ??
-    (readableEntries.length === 1 ? readableEntries[0].displayName : undefined);
-
   return {
     schema: {
       positions,
@@ -1053,8 +1022,6 @@ export function instanceSchemaFromDescriptors(input: {
       ...(Object.keys(createShapes).length > 0 ? { createShapes } : {}),
       ...(input.supportsInPlaceUpdate ? { supportsInPlaceUpdate: true } : {}),
       ...(input.edgesCarryProperties ? { edgesCarryProperties: true } : {}),
-      ...(eventPosition !== undefined ? { eventPosition } : {}),
-      ...(eventPositions.length > 0 ? { eventPositions } : {}),
     },
     notes,
   };

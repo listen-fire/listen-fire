@@ -19,7 +19,6 @@ import type {
   ActorCandidate,
   ActorIdentity,
   Adapter,
-  ConfigBlock,
   EdgesFromResult,
   FileRef,
   GetRelatedInput,
@@ -38,7 +37,7 @@ import { uniformWalk } from 'module-kit/adapter/hop';
 import { META_RECORD_TYPE, makeUnstablePosition, positionData } from 'movement-engine/public/catalog';
 import { BaseAdapter } from 'module-kit/adapter/base';
 import { parseEmailAddress } from './inbound/mail';
-import { EMAIL_MANIFEST, emailTriggerConfig } from './manifest';
+import { EMAIL_MANIFEST } from './manifest';
 import {
   EMAILS_EDGE,
   EMAIL_ADAPTER_NAMES,
@@ -81,13 +80,6 @@ export interface EmailSources {
 export class EmailAdapter extends BaseAdapter implements Adapter {
   readonly adapterType = EMAIL_ADAPTER_TYPE;
   readonly supportedTriggers = EMAIL_MANIFEST.supportedTriggers;
-
-  // The trigger-config surface (the framing prose + inbound routing `key`) is
-  // declared on the manifest so construction-free readers see it; the instance
-  // just references it.
-  get triggerConfig(): readonly ConfigBlock[] {
-    return emailTriggerConfig();
-  }
 
   constructor(private readonly sources: EmailSources) {
     super();
