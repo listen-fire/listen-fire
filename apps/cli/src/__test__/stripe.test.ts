@@ -293,18 +293,23 @@ test('a run waiting on an invoice’s Changes is answered by the invoice’s nex
 // Stripe re-sends an event it holds undelivered for up to three days, under
 // the same event id. The module declares that window, so the host keeps each
 // arrival's identity three days, not its default hour: a re-send inside it is
-// the arrival already logged, and answers no wait opened since. The delivery
-// receipt would refuse a re-send by its id too, so the test forgets each
-// receipt's id, and it ages the identities in the state file (LF_CLOCK_AHEAD_MS
-// does not move the clock they are judged by). The listen's own receipt of
-// the arrival is kept for good, so the trigger never runs twice.
-test('a Stripe re-send two days later, its delivery receipt forgotten, does not answer the wait its own event opened; one past three days does', async () => {
+// the arrival already logged, and one past it is taken for a new arrival. The
+// delivery receipt would refuse a re-send by its id too, so the test forgets
+// each receipt's id, and it ages the identities in the state file
+// (LF_CLOCK_AHEAD_MS does not move the clock they are judged by). The window
+// is read off the arrival log. A trigger never answers its own run's wait: the
+// logged re-send wakes the run, which judges it already seen and parks again.
+// The listen's own receipt of the arrival is kept for good, so the trigger
+// never runs twice.
+test('a Stripe re-send two days later, its delivery receipt forgotten, logs no new arrival; one past three days logs one; neither answers its own run', async () => {
   const world = await paymentsWorld();
   writeFileSync(join(world.dir, 'movements/chase.mvt'), CHASE);
   const state = (statement: string) => {
     const done = spawnSync('sqlite3', [join(world.dir, '.lf/state.db'), statement], { encoding: 'utf8' });
     assert.equal(done.status, 0, done.stderr);
+    return done.stdout.trim();
   };
+  const arrivals = () => Number(state("select count(*) from arrival where identity = 'evt_finalized'"));
   const resent = () => {
     state('update delivery set external_id = null');
     return deliver(url, stripeEvent('invoice.finalized', stripeInvoice({ id: 'in_chase', number: 'LL-chase', customer_email: 'diego@alvareztiles.es', status: 'open' }), { id: 'evt_finalized' }));
@@ -315,29 +320,31 @@ test('a Stripe re-send two days later, its delivery receipt forgotten, does not 
   try {
     url = (await serving.waitFor(/^stripe stripe_account: /)).replace(/^stripe stripe_account: /, '');
     const runs = (status: string) => serving.lines.filter((l) => new RegExp(`^(run|resumed) \\S+ chase:chase ${status}$`).test(l)).length;
+    const settled = async () => {
+      await new Promise((done) => setTimeout(done, 1000));
+      assert.equal(runs('completed'), 0, serving.lines.join('\n'));
+      assert.deepEqual(await outbox(world.channels), [], 'a re-send of the trigger does not answer its own run');
+    };
     const finalized = await resent();
     assert.equal(finalized.status, 202, finalized.body);
     await serving.waitFor(/run .* chase:chase parked/);
+    assert.equal(arrivals(), 1, 'the event is logged on delivery');
 
     ageIdentities('-2 days');
     const inside = await resent();
     assert.ok(inside.status >= 200 && inside.status < 300, inside.body);
     assert.doesNotMatch(inside.body, /"runs":\s*\[\s*\{/, inside.body);
-    await new Promise((done) => setTimeout(done, 1000));
-    assert.equal(runs('completed'), 0, serving.lines.join('\n'));
-    assert.deepEqual(await outbox(world.channels), [], 'inside three days the re-send is the arrival already logged');
+    assert.equal(arrivals(), 1, 'inside three days the re-send is the arrival already logged');
+    await settled();
 
     ageIdentities('-1 days');
     ageIdentities('-1 minutes');
     const past = await resent();
     assert.ok(past.status >= 200 && past.status < 300, past.body);
-    await serving.waitFor(/resumed .* chase:chase completed/);
-    assert.equal(runs('parked'), 1, 'the listen ran its trigger once');
-    assert.deepEqual(
-      (await outbox(world.channels)).map((m) => [m.to, m.subject]),
-      [['diego@alvareztiles.es', 'LL-chase is finalized']],
-      'past three days the same event is taken for a new arrival on the invoice',
-    );
+    assert.doesNotMatch(past.body, /"runs":\s*\[\s*\{/, past.body);
+    assert.equal(arrivals(), 2, 'past three days the same event is taken for a new arrival');
+    await settled();
+    assert.equal(serving.lines.filter((l) => /^run \S+ chase:chase /.test(l)).length, 1, 'the listen ran its trigger once');
   } finally {
     await serving.stop();
     await world.close();
