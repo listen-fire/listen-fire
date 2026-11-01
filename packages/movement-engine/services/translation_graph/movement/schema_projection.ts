@@ -18,8 +18,12 @@
 // The internal ids the adapter's read/write calls consume are resolved INSIDE
 // each adapter from the SAME introspection, by the adapter-layer
 // `AdapterNameResolver` (adapters/name_resolution.ts) — uniform for every
-// adapter, the KG included; the engine/host carries no translation. The
-// projection here only produces the checker's `InstanceSchema`.
+// adapter, the KG included. The one translation a host makes is before
+// judging an arrival: a listen's WHERE reads the arrival's records by name,
+// and a module may key their fields by id, so the projection carries each
+// position's `fieldIds` (name → id, where they differ) and the host maps an
+// arrival's records by them before the judge reads them (`namedFields`).
+// A run still reads through the adapter.
 
 import { isArtificialEdge, unionDisplay, unionKey, unionVariants } from 'movement-lang';
 

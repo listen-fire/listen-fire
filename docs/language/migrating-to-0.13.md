@@ -301,6 +301,7 @@ Each entry shows a 0.12 listen, the 0.13 listen `listen-fire upgrade` writes for
 
 - 0.12: `listen to gh { events: ["mention", "assign"], participating: true } fire triage`
 - 0.13: `listen to gh-[n:Notifications WHERE n.Reason IN ["mention", "assign"] AND n.Participating == true]-> fire triage`, parameter `<gh-[:Notifications]->>`
+- `participating: false` heard every thread, so it becomes no comparison.
 
 #### `@lf/gmail`
 
@@ -308,7 +309,9 @@ Each entry shows a 0.12 listen, the 0.13 listen `listen-fire upgrade` writes for
 - 0.13: `listen to mail-[m:Messages WHERE m.Query == "from:acme" AND m.Labels CONTAINS "INBOX"]-> fire triage`, parameter `<mail-[:Messages]->>`
 - 0.12: `listen to mail { events: ["label_added"], labels: ["Deals"] } fire filed`
 - 0.13: `listen to mail-[l:Labelings WHERE l.Label IN ["Deals"]]-> fire filed`, parameter `<mail-[:Labelings]->>`
-- A label added to a message already there is its own arrival, on `Labelings`. Labels are compared by name (`Deals`), never by id. A label removed and added again fires again.
+- A label added to a message already there is its own arrival, on `Labelings`. Labels are compared by name (`Deals`), never by id.
+- A label removed and added again fires again, where 0.12 fired once, so `listen-fire upgrade` applies this rewrite only under `--all`.
+- `Labels` holds label names where it held ids: a 0.12 program that reads it is warned where it does (`MOV_FIELD_MEANING_CHANGED`).
 
 #### `@lf/granola`
 
@@ -342,7 +345,8 @@ Each entry shows a 0.12 listen, the 0.13 listen `listen-fire upgrade` writes for
 #### `@lf/affinity`
 
 - 0.12: `listen to crm { events: ["organization.created", "organization.updated"] } fire welcomed`
-- 0.13: `listen to crm-[:Organization]->-[c:Changes WHERE c.Kind IN ["created", "updated"]]-> fire welcomed`, parameter `<crm-[:OrganizationChange]->>`
+- 0.13, under `listen-fire upgrade --all`: `listen to crm-[:Organization]->-[c:Changes WHERE c.Kind IN ["created", "updated"]]-> fire welcomed`, parameter `<crm-[:OrganizationChange]->>`
+- `Kind == "updated"` also hears each field value set or cleared on the organization, which 0.12 heard only as `field_value` events. Add `AND c.Field == null` to hear the organization's own changes alone. The same holds for a person and an opportunity.
 - A list entry's changes are written by hand, from the list: ``listen to crm-[:`List Entry — Master Deals List`]->-[c:Changes WHERE c.Field == "Status"]-> fire moved``, parameter ``<crm-[:`List Entry Change — Master Deals List`]->>``.
 - A listen naming a note's or a reminder's events has no rewrite: they run nothing in 0.13.
 
@@ -365,9 +369,12 @@ Each entry shows a 0.12 listen, the 0.13 listen `listen-fire upgrade` writes for
 #### `@lf/slack`
 
 - 0.12: `listen to chat { events: ["message"], channels: ["deals"] } fire triage`
-- 0.13: `listen to chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[:Messages]-> fire triage`, parameter `<chat-[:Message]->>`
+- 0.13, by hand: `listen to chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[:Messages]-> fire triage`, parameter `<chat-[:Message]->>`
+- 0.13, by hand, for a thread's replies: `listen to chat-[:Channels]->-[:Messages]->-[m:Replies WHERE m.Channel == "C0DEALS"]-> fire triage`, parameter `<chat-[:Message]->>`
 - 0.12: `listen to chat { events: ["app_mention"] } fire answer`
-- 0.13: ``listen to chat-[:Channels]->-[m:Messages WHERE m.`Mentions App` == true]-> fire answer``, parameter `<chat-[:Message]->>`
+- 0.13, by hand: ``listen to chat-[:Channels]->-[m:Messages WHERE m.`Mentions App` == true]-> fire answer``, parameter `<chat-[:Message]->>`
+- 0.13, by hand, for a thread's replies: ``listen to chat-[:Channels]->-[:Messages]->-[m:Replies WHERE m.`Mentions App` == true]-> fire answer``, parameter `<chat-[:Message]->>`
+- A reply arrives on its thread's `Replies`, not on `Messages`, so no one listen hears what `message` and `app_mention` heard: `listen-fire upgrade` writes no rewrite for them and says to write one listen for each edge. A reply carries no channel record, so its listen narrows by the reply's own `Channel`, the channel's id.
 - 0.12: `listen to chat { events: ["reaction_added"] } fire noted`
 - 0.13: `listen to chat-[:Channels]->-[:Messages]->-[:Reactions]-> fire noted`, parameter `<chat-[:Reaction]->>`
 - A message and a reaction carry their channel, and a press carries its channel and the message pressed, so a filter on those hops is judged on the arrival. A listen naming no events heard messages and reactions: write one listen for each.
@@ -470,6 +477,7 @@ listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll" AND m.Tim
 | `MOV_AWAIT_MAY_HANG` | warning on an upgrade from 0.12: race the wait with a `sleep` | [5](#5-what-a-wait-binds-is-always-there) |
 | `MOV_LISTEN_SETTINGS_RETIRED` | error: a safe fix, a fix `--all` applies, or by hand | [8](#8-listens-are-traversals) |
 | `MOV_ABSENT_REQUIRED` (a field read through a value that may be missing) | error, by hand: test the value with `exists` | [9](#9-a-field-is-never-read-through-a-value-that-may-be-missing) |
+| `MOV_FIELD_MEANING_CHANGED` | warning on an upgrade from 0.12: the field holds something else now (gmail's `Labels`: names, not ids) | [8](#8-listens-are-traversals) |
 | `MOV_ABSENT_REQUIRED` (a wait off a record that may be missing) | error, by hand: guard the wait with `!= null` | [5](#5-what-a-wait-binds-is-always-there) |
 | `MOV_LISTEN_EDGE_NOT_LISTENABLE`, `MOV_LISTEN_HOP_NOT_ITERABLE`, `MOV_LISTEN_UNWATCHABLE`, `MOV_LISTEN_IMPURE_WHERE`, `MOV_LISTEN_UNION_HOP` | error, by hand, on a listen written or rewritten as a traversal | [8](#8-listens-are-traversals) |
 | `MOV_HOP_ALIAS_REPEATED` | error, by hand: give each hop of a walk its own alias | [8](#one-name-for-one-hop) |

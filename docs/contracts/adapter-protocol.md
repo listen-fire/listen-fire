@@ -136,7 +136,7 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
 | 2.3 | a host behaviour: a polled source labels each poll event with its kind, `eventType`, and a host delivers an unlabelled one to the listen that polled it, with a notice ([Polled sources](#polled-sources-and-periodic-tasks)). An older host routes a labelled event correctly, so no module needs to state 2.3 | listen-fire 0.12.8 |
 | 2.4 | `refreshEventSubscription` ([Event subscriptions that expire](#event-subscriptions-that-expire)) | listen-fire 0.12.10 |
 | 2.5 | `awaitKeys`, arrivals on a delivery's reading, the `wake` door's arrivals, the store slot's `waits.*` (`waits.log` names it) ([Waiting on your system](#waiting-on-your-system-awaits)) | listen-fire 0.13.0 |
-| 2.6 | arrivals for listens ([Reporting arrivals](#reporting-arrivals)): one on a root edge names no `key`, and one may carry `parents`, `about`, `notFor`, `takenApplied` and `occurredAt`; a host fires the listens on the edge it landed on. A polled listenable edge is polled as `poll({ edge, filter?, scope?, cursor? })`, once per connection, edge, taken filter and scope ([Polled sources](#polled-sources-and-periodic-tasks)); a pushed one is subscribed for as `ensureEventSubscription({ edge, filter?, scope?, callbackUrl, current? })`, once per the same ([Subscribing for an edge's arrivals](#subscribing-for-an-edges-arrivals)). A module that reports a root arrival states 2.6, since an older host refuses it. Each head `awaitKeys` is asked about names its `recordType` where the host knows it. `checkInbound` may be handed `replayed: true`, when the host runs a request it kept itself again ([A module that checks its own inbound](#a-module-that-checks-its-own-inbound)), and `inbound.captureHeaders` names the headers a kept request holds ([Declared inbound signatures](#declared-inbound-signatures)) | listen-fire 0.13.0 |
+| 2.6 | arrivals for listens ([Reporting arrivals](#reporting-arrivals)): one on a root edge names no `key`; one may carry `parents`, `about`, `notFor`, `takenApplied`, `occurredAt` and, on its landing and each parent, `unknown`; the landing and each parent state their `recordType`, and an arrival that states none runs no listen. A host fires the listens on the edge it landed on. A polled listenable edge is polled as `poll({ edge, filter?, scope?, cursor? })`, once per connection, edge, taken filter and scope ([Polled sources](#polled-sources-and-periodic-tasks)); a pushed one is subscribed for as `ensureEventSubscription({ edge, filter?, scope?, callbackUrl, current? })`, once per the same ([Subscribing for an edge's arrivals](#subscribing-for-an-edges-arrivals)). Each head `awaitKeys` is asked about names its `recordType` where the host knows it. `checkInbound` may be handed `replayed: true`, when the host runs a request it kept itself again ([A module that checks its own inbound](#a-module-that-checks-its-own-inbound)); `inbound.captureHeaders` names the headers a kept request holds and `inbound.redactFields` the body and query fields it drops ([Declared inbound signatures](#declared-inbound-signatures)). **A module that uses any of these states `protocolMinor: 6`**: an older host would refuse a root arrival, judge without `unknown` or `recordType`, or keep a request whole | listen-fire 0.13.0 |
 
 A module offering one of these methods states no minor for it. Until 0.12.9 the kits stamped a module with the minor of the methods it offered; from 0.12.10 they stamp only what its author declares.
 
@@ -211,11 +211,6 @@ The manifest file registers your server with a team:
   the connection (`connect airtable using acme { base: "CRM" }`); the host
   describes the module once per value a program constructs it with, and sends
   that value on every call of the connection as `"settings": { "base": "CRM" }`.
-- `subscriptionScopeKeys` (optional): the listen config keys whose values scope
-  an event subscription (Airtable's `["base", "table"]`: a webhook watches one
-  table). The host keeps one subscription per credential and scope, and sends a
-  listen's values of those keys as `scope` on `ensureEventSubscription` and
-  `removeEventSubscription` (`{ "base": "app…", "table": "tbl…" }`).
 - `introspectedSchema` (optional): `true` when your schema comes from the
   connected account (Airtable's tables and fields, a spreadsheet's tabs), so
   describing it needs a credential and costs calls to your system. Leave it out
@@ -265,8 +260,8 @@ The manifest file registers your server with a team:
   When your events arrive on more than one edge, `byEvent` maps an event to the
   mapping a listen naming it becomes instead (`{ "label_added": { "path":
   ["Labelings"], … } }`), with `events` spent choosing it; a listen that leaves
-  `events` out chooses by your module's default events, and takes the top
-  mapping when you declare none (or none of them is mapped). One naming
+  `events` out chooses by the `absent` of the top mapping's `events` key, and
+  takes the top mapping when that names none (or none of them is mapped). One naming
   events of two mappings has no rewrite (its author writes one listen per
   edge), and nor has one naming an event `byEvent` does not beside one it
   does. Events of one edge whose mappings differ only by keys one compares
@@ -346,17 +341,14 @@ reads every declaration from it, the listen declarations included.
 
 ```json
 [
-  { "typeId": "Company", "displayName": "Company", "writable": true, "readable": false, "fires": true,
-    "description": "A company. A listen is delivered each one somebody creates in the CRM." },
+  { "typeId": "Company", "displayName": "Company", "writable": true, "readable": false, "listenable": true, "collectionName": "Companies",
+    "description": "A company. A listen on `Companies` is delivered each one somebody creates in the CRM." },
   { "typeId": "Comment", "displayName": "Comment", "writable": false, "readable": false }
 ]
 ```
 
 - `writable`: automations may create this type.
 - `readable`: automations may enumerate it from the root.
-- `fires`: a listen is delivered records of this type (see
-  [emit](#emit-new-data)). An event type is usually `readable: false`: it is
-  pushed, never listed.
 - `listenable` (optional): you announce arrivals on the instance's own edge to
   this type, named by `collectionName` (else `displayName`): a listen can start
   there (`cron-[t:Ticks WHERE t.Schedule == "0 9 * * 1"]->`). The edge exists
@@ -409,13 +401,13 @@ reads every declaration from it, the listen declarations included.
   so it refuses a literal as you would: `"cron"` (a five-field schedule) or
   `"timeZone"` (an IANA zone). The checker chooses that check by `format`
   alone, never by the scalar's name. It reaches the catalog as
-  `{ "kind": "owned", "name": "Cron", "owner": "<your adapterType>", "format": "cron" }`. `changedIn`
-  (`{ "release": "0.13.0", "note": "…" }`) says a release of yours changed
-  what the field holds (gmail's `Labels`: label names where they were ids): a
-  check for an upgrade from before that release warns
-  (`MOV_FIELD_MEANING_CHANGED`) wherever a program reads it, and the pin still
-  moves. A
-  field of kind `owned` that names no scalar is refused, naming the field. A field with any other `kind` is silently dropped, and the
+  `{ "kind": "owned", "name": "Cron", "owner": "<your adapterType>", "format": "cron" }`. A
+  field of kind `owned` that names no scalar is refused, naming the field.
+  Any field may declare `changedIn` (`{ "release": "0.13.0", "note": "…" }`):
+  a release of yours changed what the field holds (gmail's `Labels`: label
+  names where they were ids), so a check for an upgrade from before that
+  release warns (`MOV_FIELD_MEANING_CHANGED`) wherever a program reads it,
+  and the pin still moves. A field with any other `kind` is silently dropped, and the
   type's position is then left open: automations may read any field name
   off it unchecked. Add `"cardinality": "many"` for a list.
 - Fields and references pass through with whatever extra keys you declare.
@@ -587,11 +579,11 @@ an automation cannot delete any other.
 | `awaitKeys` | `{ edge, heads: [{ recordId, headData?, recordType? }] }` | `[{ key }` or `{ gone: true }]`, one per head ([awaits](#awaitkeys)); adapter protocol 2.5 |
 | `resolveAwait` | `{ recordId, edge, headData? }` | `pending` / `landed` / `empty` ([the key form](#the-key-form-before-25)) |
 | `wakeKeys` | `{ raw }` | `string[]` ([the key form](#the-key-form-before-25)) |
-| `preprocessInbound` | `{ raw, checkpoint? }` | `{ events, arrivals?, checkpoint? }` — **required** to receive webhooks through the [host door](#inbound-through-the-host-door); `arrivals` from 2.5 ([Reporting arrivals](#reporting-arrivals)) |
+| `preprocessInbound` | `{ raw, checkpoint? }` | `{ arrivals, checkpoint? }` — **required** to receive webhooks through the [host door](#inbound-through-the-host-door) ([Reporting arrivals](#reporting-arrivals)) |
 | `listEventTypes` | `{}` | `[{ tag, positionType, match? }]` |
-| `ensureEventSubscription` | `{ events, callbackUrl, current?, scope? }`, or from 2.6 `{ edge, filter?, scope?, callbackUrl, current? }` ([Subscribing for an edge's arrivals](#subscribing-for-an-edges-arrivals)) | `{ externalId?, secret, expiresAt? }` |
-| `removeEventSubscription` | `{ callbackUrl, externalId?, scope? }`, or from 2.6 `{ edge, filter?, scope?, callbackUrl, externalId? }` | `null` |
-| `refreshEventSubscription` | `{ externalId, scope? }`, or from 2.6 `{ edge, filter?, scope?, externalId }` | `{ expiresAt? }` or `null` ([Event subscriptions that expire](#event-subscriptions-that-expire)); adapter protocol 2.4 |
+| `ensureEventSubscription` | `{ edge, filter?, scope?, callbackUrl, current? }` ([Subscribing for an edge's arrivals](#subscribing-for-an-edges-arrivals)); adapter protocol 2.6 | `{ externalId?, secret, expiresAt? }` |
+| `removeEventSubscription` | `{ edge, filter?, scope?, callbackUrl, externalId? }`; a webhook a 0.12 listen registered is removed as `{ callbackUrl, externalId?, scope? }` | `null` |
+| `refreshEventSubscription` | `{ edge, filter?, scope?, externalId }` | `{ expiresAt? }` or `null` ([Event subscriptions that expire](#event-subscriptions-that-expire)); adapter protocol 2.4 |
 | `readRecord` | `{ recordType, externalId, fieldIds? }` | the record's fields, or `null` (lets an update with no changes be skipped) |
 | `linkRecords` / `unlinkRecords` | `{ from: { recordType, externalId }, edgeName, to: { … }, mutationContext }` | `{ created }` / `{ removed }` |
 | `resolveFileRef` | `{ ref }` | `{ url, contentType? }` ([Files](#files)) |
@@ -602,7 +594,7 @@ an automation cannot delete any other.
 | `describeOpaqueId` | `{ fieldPath, value }` | a label, or `null` |
 | `invokeFieldFunction` | `{ recordType, fieldId, functionName, args: { instructions, data } }` | the composed value |
 | `edgesFrom` | `{ position, cursor? }` | see [describe](#describe) |
-| `poll` | `{ config, checkpoint?, movementId? }`, or from 2.6 `{ edge, filter?, scope?, cursor? }` | `{ events, checkpoint? }`, or from 2.6 `{ arrivals, cursor? }` ([Modules](#polled-sources-and-periodic-tasks)); needs `poll` declared |
+| `poll` | `{ edge, filter?, scope?, cursor? }` | `{ arrivals, cursor? }` ([Modules](#polled-sources-and-periodic-tasks)); needs `poll` declared; adapter protocol 2.6 |
 | `refreshCredential` | `{}` | `{ fields }` ([Modules](#credentials)); needs `credentials` declared |
 | `runPeriodic` | `{ name }` | `null` ([Modules](#polled-sources-and-periodic-tasks)); needs `periodic` declared |
 | `checkInbound` | `{ request, secret?, checkpoint?, replayed? }` | `accepted` / `refused` / `reply` ([Modules](#a-module-that-checks-its-own-inbound)); needs `inbound.scheme: module` |
@@ -735,7 +727,9 @@ is no edge into the type the next one hangs off or a type before it, a `scopedBy
 delivered per scope or on a root collection, or naming a hop some path to the
 edge does not come through, a `membersChange` that is neither `"pushed"` nor
 `{ relistEverySeconds }`, `membersChange: "pushed"` on an edge that is not `listenable`, a number that is not a positive whole number of seconds, a
-field of kind `owned` that names no scalar, or one listenable edge name that
+field of kind `owned` that names no scalar, `delivery: scope` on a root
+collection (nothing comes before it to scope by), an `identity` or `version`
+naming a field the landing does not declare, or one listenable edge name that
 lands on the same record type from two record types: an arrival says only
 its edge and the record type it landed on, so give each its own record type
 to land on.
@@ -822,7 +816,7 @@ From adapter protocol 2.6 an arrival may say more, for the listens on its edge
   it. On `listen-fire` a listen on a traversal is
   `listen:<file>:<movement>:<digest>`, the digest being the first 8 hex
   digits of the sha256 of the listen's identity (what makes two listens one
-  to the checker), so two listens in one file that fire one function are
+  to the checker) and its connection's construction, so two listens in one file that fire one function are
   told apart. Nothing is said of the listen an arrival is not for.
 - **`takenApplied`**: `true` when your module applied the listen's filter
   before reporting it (a filtered poll or subscription). Absent, the host
@@ -916,13 +910,12 @@ The key form is retired in 0.13.0: no host calls `resolveAwait` or `wakeKeys`, a
 
 There are two ways in. Use whichever fits your system:
 
-- **You push** to the two doors (`emit`, `wake`). Simplest: no subscription,
-  no signatures.
+- **You push** arrivals to the `wake` door. Simplest: no subscription, no
+  signatures.
 - **Listen-Fire subscribes** to you and you deliver webhooks to the URL it
   gives you (the host door). Use this when your system already sends webhooks.
 
-The two are independent and unordered. Nothing relies on a wake arriving
-before or after an event.
+Either way what you report is arrivals ([Reporting arrivals](#reporting-arrivals)).
 
 ### The two doors you call
 
@@ -964,42 +957,11 @@ Answers:
   idempotent, resending the whole batch runs those again. Resend only the
   events that failed, or accept the duplicate runs.
 
-#### emit: new data
+#### emit: retired in 0.13
 
-```json
-{
-  "events": [
-    {
-      "payload": { "id": "company-3", "Name": "Larch Bio" },
-      "externalId": "company-3",
-      "tag": "company.created",
-      "eventType": "company.created",
-      "changeType": "create",
-      "recordType": "Company"
-    }
-  ]
-}
-```
-
-- Each event is matched against the team's listens on your adapter, exactly
-  as a webhook delivery's events are. `tag` is matched against your
-  `listEventTypes` to decide the event's type.
-- `payload` is what the automation reads: it becomes the delivered record's
-  data, read through your `getFieldValue`.
-- Every field but `payload` is optional; there are also `actor`,
-  `occurredAt` and `changedFields`.
-- `accepted` counts receipts: one per listen the event matched. An event no
-  listen selects is accepted as 0 and leaves nothing behind.
-- One malformed event fails the whole request with 400; nothing is queued.
-- `deliveryId` (optional, a non-empty string, else 400 at path `deliveryId`)
-  names the batch. The host keeps the batch as one delivery; a second batch
-  with the same `deliveryId` from the same adapter is kept out and answered
-  202 `{ accepted: 0, duplicate: true }`. `listen-fire` honours it from this release;
-  the hosted platform honours it from its own release. Without `deliveryId`,
-  `emit` is not idempotent: sending an event twice runs its automations twice
-  (an event's `idempotencyKey` still dedupes per listen).
-- While your request is open, Listen-Fire calls you back (`listEventTypes`).
-  A single-threaded server must not block on its own push.
+From 0.13.0 an event fires no listen: a listen is a traversal, fired by the
+arrivals on its edge. `emit` still answers as above and keeps what it is
+sent, and runs nothing. Report what happened on `wake`.
 
 #### wake: what arrived
 
@@ -1022,22 +984,20 @@ Answers:
 
 If your system sends webhooks, let Listen-Fire subscribe:
 
-1. While any automation listens to your adapter, Listen-Fire calls
-   `ensureEventSubscription` on every reconcile of the team's listens (each
-   time an automation is saved or deleted), even when nothing changed:
+1. While any listen ends on a listenable edge of yours that declares
+   `delivery: connection` or `scope`, Listen-Fire calls
+   `ensureEventSubscription` for it ([Subscribing for an edge's arrivals](#subscribing-for-an-edges-arrivals)):
 
    ```json
-   { "events": [], "callbackUrl": "https://listen-fire.example/api/public/webhook-sync/acme_crm/5f0c…" }
+   { "edge": "Companies", "callbackUrl": "https://listen-fire.example/api/public/webhook-sync/acme_crm/5f0c…" }
    ```
    →
    ```json
    { "externalId": "crm-sub-1", "secret": "8c1d…" }
    ```
 
-   - `events` is the selection. An empty selection means every event you offer.
-   - Make it an idempotent upsert. `current` (the previous `externalId` and
-     `events`) arrives when a subscription already exists; update it rather
-     than adding another.
+   - Make it an idempotent upsert. `current` (`{ externalId }`) arrives when
+     the subscription is already held; keep it rather than adding another.
    - Return the same secret to keep it. A different secret rotates it:
      Listen-Fire stores it and verifies the next delivery with it.
    - Being asked again is how a subscription you lost (a restart, a wiped
@@ -1066,17 +1026,16 @@ If your system sends webhooks, let Listen-Fire subscribe:
    | 500 | your adapter does not implement `preprocessInbound`; an arrival it reports names no identity; or an internal failure |
 
 3. While your delivery is open, Listen-Fire calls you back:
-   `preprocessInbound({ raw })` turns your body into events and the arrivals
-   it reports, and `listEventTypes` types the events. The arrivals are logged before the
-   events are kept. A
-   single-threaded server must not block on its own delivery.
+   `preprocessInbound({ raw })` turns your body into the arrivals it reports
+   ([Reporting arrivals](#reporting-arrivals)). A single-threaded server must
+   not block on its own delivery.
 
    ```json
    { "raw": { "companies": [ { "id": "company-3", "Name": "Larch Bio" } ] } }
    ```
    →
    ```json
-   { "events": [ { "payload": { "id": "company-3", "Name": "Larch Bio" }, "externalId": "company-3", "tag": "company.created" } ] }
+   { "arrivals": [ { "edge": "Companies", "identity": "company-3", "landing": { "recordId": "company-3", "recordType": "Company", "fields": { "Name": "Larch Bio" } } } ] }
    ```
 
    `checkpoint` is optional: whatever you return is handed back on the next delivery.
@@ -1108,8 +1067,7 @@ or `scope` is subscribed for with its own shape, once for every listen on it
 - Deliver to its `callbackUrl` as for any subscription, reporting what
   landed as `arrivals` from `preprocessInbound`
   ([Reporting arrivals](#reporting-arrivals)). The host judges an arrival
-  delivered there only against the listens sharing that subscription, and
-  hands their events to no listen in the settings form.
+  delivered there only against the listens sharing that subscription.
 - **`takenApplied`.** Set it on an arrival only when you applied `filter`.
   Without it, the host checks the whole filter itself.
 - `removeEventSubscription` (`{ edge, filter?, scope?, callbackUrl,
@@ -1392,25 +1350,10 @@ A source with no webhooks is polled:
 "poll": { "intervalSeconds": 300 }
 ```
 
-- The host calls `poll` every `intervalSeconds` for each listen on the
-  module; a listen's own `every` overrides it.
-- `poll`: `{ config, checkpoint?, movementId? }` → `{ events, checkpoint? }`.
-  `config` is the listen's options. `checkpoint` is whatever the previous poll
-  returned, absent the first time. `movementId` names the listener, where the
-  host knows it: `listen-fire` sends the listen's pipeline, `listen:<file>:<movement>`.
-  Each event has the `emit` door's shape ([emit](#emit-new-data)).
-- Label each event with its kind, `eventType`, as a pushed event is: one of
-  your `subscribableEvents`, or your one kind when you declare none (adapter
-  protocol 2.3; it needs nothing of the host, so state no higher minor for it). The host routes a polled event by it as it routes a pushed
-  one, so a listen's `events` keeps only the kinds it names.
-- An event with no `eventType` (a module older than 2.3) still reaches the
-  listen that polled it, since the poll was made for that listen with its
-  config. `listen-fire` says so once per module per process.
-- Return only what is new since the checkpoint. A backfill is not a poll.
-
-From adapter protocol 2.6 a listenable edge declaring `delivery: polled` is
-polled with its own shape, once for every listen on it
-([Declaring a listenable edge](#declaring-a-listenable-edge)):
+A listenable edge declaring `delivery: polled` is polled once for every
+listen on it ([Declaring a listenable edge](#declaring-a-listenable-edge);
+adapter protocol 2.6). The declaration says the module answers `poll`; the
+interval is the edge's own (below).
 
 - `poll`: `{ edge, filter?, scope?, cursor? }` → `{ arrivals, cursor? }`.
   `edge` is the edge's name. `filter` is the part of the listens' `WHERE` on
@@ -1895,8 +1838,8 @@ from `apps/cli`.
 6. **Push.** When somebody comments, the CRM `POST`s the comment as an arrival,
    `{ "arrivals": [{ "edge": "Comments", "key": "thread:<company id>", "identity": "<comment id>", "landing": … }] }`,
    to `/wake`.
-   When somebody creates a company, it `POST`s the event to
-   `/emit`. Both send `Authorization: Bearer <secret>`.
+   When somebody creates a company, it `POST`s the company as an arrival on
+   `Company` to `/wake` too. Both send `Authorization: Bearer <secret>`.
 
 7. **Try it under `listen-fire serve`.** Start clean (`rm -rf .lf/state.db .lf/externals`,
    so the ids below are the CRM's first) and replace the example's
@@ -1925,7 +1868,7 @@ from `apps/cli`.
    listen-fire serve --port 5871 &      # wait for its address line, and for .lf/externals/acme_crm/port to appear
    CRM=http://127.0.0.1:$(cat .lf/externals/acme_crm/port)
    curl -s -XPOST $CRM/dev/companies -d '{"Name":"Larch Bio"}'
-   # the CRM pushes emit: {"id":"company-1","pushed":{"status":202,"body":{"accepted":1}}}
+   # the CRM pushes the company's arrival to wake: {"id":"company-1","arrived":{…}}
    # listen-fire serve prints: run … discuss:discuss parked   (it wrote "Discuss Larch Bio", then awaits its first comment)
    curl -s -XPOST $CRM/dev/comments -d '{"company":"company-2","text":"approved"}'
    # the CRM pushes the comment's arrival to wake; listen-fire serve prints: resumed … discuss:discuss completed
@@ -1946,7 +1889,13 @@ from `apps/cli`.
 
 ## Changes
 
-- **`unknown` fields on an arrival** (within version 2, no bump; 2026-11-01; listen-fire 0.13.0; additive). An arrival's landing and each parent may name the fields the module could not read (`unknown`); a listen whose filter reads one is undecided, runs nothing, and the host reports it; every other listen is judged as usual ([Reporting arrivals](#reporting-arrivals)). Why: a field read as absent compared false and skipped the arrival silently, and a provider's retry cannot be relied on to bring it again. A host before it ignores the member, as before.
+- **The settings poll and the events subscription leave the protocol** (adapter protocol 2.6, within version 2; 2026-11-01; listen-fire 0.13.0; breaking for a module that still answers them). `poll` is asked only as `{ edge, filter?, scope?, cursor? }` and answers `{ arrivals, cursor? }`; a 0.12 `{ events, checkpoint }` answer is refused, naming `arrivals`. `ensureEventSubscription` is asked only for an edge; `removeEventSubscription` keeps the 0.12 form only to remove a webhook a 0.12 listen registered, and a host removes such a webhook rather than refreshing it. `emit`'s events fire no listen. Why: a 0.13 listen is a traversal, and nothing a settings poll or an events webhook brings can fire one.
+- **`inbound.redactFields`** (adapter protocol 2.6, within version 2; 2026-11-01; listen-fire 0.13.0; additive). A module names the body and query fields that may carry a credential, and a kept request drops them ([Declared inbound signatures](#declared-inbound-signatures)); a header whose name holds `token`, `key`, `auth`, `hmac` or `password`, or `set-cookie`, is never kept either. A module that names one states `protocolMinor: 6`. Why: Slack sends its legacy verification `token` in the body, and a kept request is stored for days. `@lf/slack` names `token`.
+- **`membersChange`** (within version 2, no bump; 2026-11-01; listen-fire 0.13.0). One member, `"pushed"` or `{ relistEverySeconds }`, says how a listen learns a hop's members changed, where this release's earlier builds read three (`cheapToList`, `parentChanges`, `relistEverySeconds`) ([Declaring a listenable edge](#declaring-a-listenable-edge)). Why: the three described one choice, and two of them together meant nothing.
+- **`owned.format`** (within version 2, no bump; 2026-11-01; listen-fire 0.13.0; additive). An owned scalar may say its values are a `cron` schedule or a `timeZone`, and the checker validates a literal by that format alone, never by the scalar's name ([describe](#describe)). Why: a scalar named `Zone` by another module was checked as a time zone by accident of its name.
+- **`changedIn` on a field** (within version 2, no bump; 2026-11-01; listen-fire 0.13.0; additive). A field may say a release of the module changed what it holds; a check for an upgrade from before that release warns where a program reads it (`MOV_FIELD_MEANING_CHANGED`) ([describe](#describe)). Why: gmail's `Labels` holds label names from 0.13, where it held ids, and a 0.12 program comparing ids would check clean and never match.
+- **`changed`, `alsoArrivesOn` and `null` values in `listenSettingsBecome`** (within version 2, no bump; 2026-11-01; listen-fire 0.13.0; additive). A mapping says where its rewrite hears otherwise than the settings listen did (`changed`: a note, and the rewrite is applied only under `--all`), where its events also arrive on other edges (`alsoArrivesOn`: no rewrite, one listen per edge), and a value that narrowed nothing (`null`) ([The manifest and installing](#the-manifest-and-installing)). Why: `listen-fire upgrade` applied rewrites that heard more or less than 0.12 did (Affinity's `organization.updated`, Slack's thread replies, GitHub's `participating: false`, gmail's `label_added`) and called them safe.
+- **`unknown` fields on an arrival** (adapter protocol 2.6, within version 2; 2026-11-01; listen-fire 0.13.0; additive). An arrival's landing and each parent may name the fields the module could not read (`unknown`); a listen whose filter reads one is undecided, runs nothing, and the host reports it; every other listen is judged as usual ([Reporting arrivals](#reporting-arrivals)). Why: a field read as absent compared false and skipped the arrival silently, and a provider's retry cannot be relied on to bring it again. A module that names one states `protocolMinor: 6`: a host before it would ignore the member and judge the field as absent.
 - **What a module declares about listening** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0; additive). A listenable reference or entry point may declare `delivery`, `pollEverySeconds`, `bounded`, `boundedBy`, `carries`, `scopedBy` (a reference delivered per scope, subscribed per record an earlier hop landed on), `attributes` and `membersChange` ([Declaring a listenable edge](#declaring-a-listenable-edge)); an entry point may declare `listenable`, `cursor`, `identity` and `version`, and is then an edge a listen starts at; a field may be of kind `owned`; the manifest may declare `resendWindowSeconds`, and `listenSettingsBecome`, how its 0.12 settings listens become traversals for `listen-fire upgrade`. Each is refused by name when it cannot mean what it says, a field of kind `owned` that names no scalar included. Why: a standing listen becomes a traversal over the edges a module declares listenable, and the host needs to know how each one's arrivals reach it, what bounds it, and how often to poll or re-list, from the module, since it has no numbers of its own. listen-fire reads them into the catalog; the checker and the hosts act on them in later 0.13 work. An older host ignores them.
 - **`resolvesEmpty` retired** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0). A reference that declares it is refused when listen-fire describes the module, naming it: a record that goes leaves the wait waiting on every edge, so there is nothing to declare.
 - **The key form retired** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0). listen-fire no longer calls `resolveAwait` or `wakeKeys`, and ignores a `checkInbound` acceptance's `wakeKeys`: a run waits on the arrivals a module reports (2.5). A module may still implement them; nothing calls them.
@@ -1954,8 +1903,8 @@ from `apps/cli`.
 - **`slack_v0` refuses a replay** (within version 2, no bump; 2026-10-30; listen-fire 0.13.0). A request whose `x-slack-request-timestamp` is more than five minutes from now is refused 401 though its signature is right, as Slack advises ([Declared inbound signatures](#declared-inbound-signatures)). Nothing changes for a module: Slack signs every request with the time it sends it.
 - **Form-encoded deliveries** (within version 2, no bump; 2026-10-30; listen-fire 0.13.0). The host webhook door reads a delivery sent as `application/x-www-form-urlencoded` as well as JSON: its signature is checked over the raw bytes, and `preprocessInbound`'s `raw` is the form's fields ([Limits and timeouts](#limits-and-timeouts)). Why: Slack posts a press on a message's control that way (`payload=<json>`), so `@lf/slack` reports presses as arrivals on the host's own door, verified with Slack's own signature. An older host refuses such a delivery as not JSON.
 - **Replayed requests** (adapter protocol 2.6, within version 2, no bump; 2026-11-01; listen-fire 0.13.0; additive). `checkInbound` may be handed `replayed: true`, when the host runs a request it kept itself again (`listen-fire listens replay`). A module that verifies its own requests skips its signature and its timestamp window for it; the host vouches, and never sets it for a request that arrived. Why: a replay days after a delivery would otherwise be refused by Stripe's five minute window. `@lf/stripe`, `@lf/webhook`, `@lf/whatsapp` and `@lf/email` read it; `@lf/forms` checks no signature. An older module ignores it and checks as before.
-- **Kept request headers** (adapter protocol 2.6, within version 2, no bump; 2026-11-01; listen-fire 0.13.0; additive). `inbound.captureHeaders` names the headers a module's inbound handling reads besides the body; a kept delivery's request holds only those (and, under a declared scheme, `content-type` and the `deliveryId` header). A header that may carry a credential is refused when the module is described. Why: a kept request is stored for days, and a signature, a token or a secret stored with its body could be sent again at the live door. `@lf/email` names `svix-id`, `@lf/forms` `content-type`; an older module names none, and its requests are kept without headers.
-- **Adapter protocol 2.6: arrivals for listens** (within version 2; listen-fire 0.13.0). An arrival on a root edge names no `key`, and an arrival may carry `parents` (the records of the earlier hops its edge `carries`), `about`, `notFor` and `takenApplied` ([Reporting arrivals](#reporting-arrivals)). Each head `awaitKeys` is asked about names its `recordType` wherever the host knows it, so a module whose record types number their ids apart can key a wait by the kind of record as well as its id. Listen-Fire judges each arrival that landed against the listens on its edge (`listen to <traversal> fire f`) and runs each one it fires, its parameter bound to the landing, once per arrival. Why: a listen is a traversal, fired by what lands on its last edge, not by a module's settings. A module reporting a root arrival states `protocolMinor: 6`; an older host refuses an arrival with no key. A listenable edge declaring `delivery: polled` is polled as `poll({ edge, filter?, scope?, cursor? }) → { arrivals, cursor? }`, once per connection, edge, filter the module takes and scope, shared by every listen on it; an arrival says `takenApplied` only when the module applied the filter. The interval is lf.yaml's `pollEvery` for the connection, else the edge's `pollEverySeconds`. An entry point may declare its root collection's `capability`. A listenable edge declaring `delivery: connection` or `scope` is subscribed for as `ensureEventSubscription({ edge, filter?, scope?, callbackUrl, current? })`, once per connection, edge, filter the module takes and scope; `removeEventSubscription` and `refreshEventSubscription` name the same `edge`, `filter` and `scope`. An arrival delivered through it is judged only against the listens sharing it. An arrival may carry `occurredAt`, when the change happened at its provider: Listen-Fire's loop breaker measures from it whether a run's write caused the arrival (`lf.yaml`'s `loopWindow`, default 20 seconds), so an echo a poll finds late is still the write's; one without it is measured to when Listen-Fire takes it.
+- **Kept request headers** (adapter protocol 2.6, within version 2; 2026-11-01; listen-fire 0.13.0; additive). `inbound.captureHeaders` names the headers a module's inbound handling reads besides the body; a kept delivery's request holds only those (and, under a declared scheme, `content-type` and the `deliveryId` header). A header that may carry a credential is refused when the module is described. Why: a kept request is stored for days, and a signature, a token or a secret stored with its body could be sent again at the live door. `@lf/email` names `svix-id`, `@lf/forms` `content-type`; a module that names one states `protocolMinor: 6`, and an older module names none, so its requests are kept without headers.
+- **Adapter protocol 2.6: arrivals for listens** (within version 2; listen-fire 0.13.0). An arrival on a root edge names no `key`, and an arrival may carry `parents` (the records of the earlier hops its edge `carries`), `about`, `notFor` and `takenApplied` ([Reporting arrivals](#reporting-arrivals)). Each head `awaitKeys` is asked about names its `recordType` wherever the host knows it, so a module whose record types number their ids apart can key a wait by the kind of record as well as its id. Listen-Fire judges each arrival that landed against the listens on its edge (`listen to <traversal> fire f`) and runs each one it fires, its parameter bound to the landing, once per arrival. Why: a listen is a traversal, fired by what lands on its last edge, not by a module's settings. A module that uses any 2.6 member (a root arrival, `unknown`, `recordType`, `captureHeaders`, `redactFields`) states `protocolMinor: 6`, so an older host refuses it rather than misjudging its arrivals or keeping a request whole. A listenable edge declaring `delivery: polled` is polled as `poll({ edge, filter?, scope?, cursor? }) → { arrivals, cursor? }`, once per connection, edge, filter the module takes and scope, shared by every listen on it; an arrival says `takenApplied` only when the module applied the filter. The interval is lf.yaml's `pollEvery` for the connection, else the edge's `pollEverySeconds`. An entry point may declare its root collection's `capability`. A listenable edge declaring `delivery: connection` or `scope` is subscribed for as `ensureEventSubscription({ edge, filter?, scope?, callbackUrl, current? })`, once per connection, edge, filter the module takes and scope; `removeEventSubscription` and `refreshEventSubscription` name the same `edge`, `filter` and `scope`. An arrival delivered through it is judged only against the listens sharing it. An arrival may carry `occurredAt`, when the change happened at its provider: Listen-Fire's loop breaker measures from it whether a run's write caused the arrival (`lf.yaml`'s `loopWindow`, default 20 seconds), so an echo a poll finds late is still the write's; one without it is measured to when Listen-Fire takes it.
 - **Adapter protocol 2.5: arrivals** (within version 2; listen-fire 0.13.0). A module with listenable edges names the key each record's edge is waited on under (`awaitKeys`, a new optional method), and reports what lands there as arrivals: `arrivals` beside the events `preprocessInbound` answers, on `checkInbound`'s `accepted`, or pushed to the `wake` door as `{ arrivals }` ([Waiting on your system](#waiting-on-your-system-awaits)). Listen-Fire logs every arrival and keeps each run's wait itself (the store slot's `waits.*`, [store-slot.md](store-slot.md)). An arrival names its identity; one without is refused by name. Why: a run waiting on an edge reads what arrived since it began waiting, so an arrival during the write that caused it is never lost, and Listen-Fire, not the module, decides whether an arrival matches. Offering `awaitKeys` states no minor. From listen-fire 0.13.0 a wait reads arrivals only: `resolveAwait` is not called for it, `wakeKeys` wakes nothing, and the `wake` door refuses `{ keys }` (400, naming adapter protocol 2.5 and `arrivals`).
 - **Adapter protocol 2.4: subscriptions that expire** (within version 2; 2026-10-27; listen-fire 0.12.10). `ensureEventSubscription` may answer `expiresAt`, and a new optional method, `refreshEventSubscription`, extends a subscription before it lapses ([Event subscriptions that expire](#event-subscriptions-that-expire)). Offering the method states no minor: a `listen-fire` up to 0.12.9 reads a module that lists it and never calls it, so its webhooks lapse there as before. `@lf/airtable` lists it. With this change the kits stop raising a module's stated minor for the methods it offers (`.watch`, `work.enqueueIfAbsent`, `refreshEventSubscription`): it is what the author declares, else 0.
 - **`narrows` on a listen config key** (within version 2, no bump; 2026-10-27; additive). A `listenConfig` entry may say which hop of an event's address it is ([The manifest and installing](#the-manifest-and-installing)). `listen-fire` narrows a signature's event to the node the address walks to, as the hosted product does. An older host ignores the field; a module that declares none is unchanged.
@@ -1963,7 +1912,7 @@ from `apps/cli`.
 - **`poll`'s `movementId`** (within version 2, no bump; 2026-10-26). `listen-fire` sends the listen's pipeline, `listen:<file>:<movement>`, rather than the movement's bare name, so a source can tell two same-named movements in different files apart.
 - **Adapter protocol 2.N** (within version 2, no bump; 2026-10-25; listen-fire 0.12.6). The manifest may state `protocolMinor`, the minor of version 2 it uses, computed by the kits from the features it lists ([Versioning](#versioning)). `listen-fire` and the engine speak 2.0 to 2.2 and refuse a module outside that range by name, a core module included. The rule from here on: an addition a manifest can show bumps the minor. An unstated minor is 2.0, so every module published before is unchanged; an older host ignores the field.
 - **`<slot>.watch`** (within version 2, no bump; 2026-10-23; additive for adapters). A held, bounded request that answers a cursor and the events after it ([Watching for changes](#watching-for-changes-slotwatch)). Adapters and other slots are unchanged. A movements module must answer `movements.watch`: `listen-fire serve` and `listen-fire drain` (without `--until-idle`) refuse a module that does not.
-- **Delivery ids** (within version 2, no bump; 2026-10-22; additive). `inbound.deliveryId: { header }` in a declared scheme, `deliveryId` in `checkInbound`'s `accepted` answer and in `emit`'s body name the provider's id for a delivery, and the host keeps a repeat of it out. An older server declares and sends none and is unchanged; an older host ignores the field. See [Declared inbound signatures](#declared-inbound-signatures) and [emit](#emit-new-data).
+- **Delivery ids** (within version 2, no bump; 2026-10-22; additive). `inbound.deliveryId: { header }` in a declared scheme, `deliveryId` in `checkInbound`'s `accepted` answer and in `emit`'s body name the provider's id for a delivery, and the host keeps a repeat of it out. An older server declares and sends none and is unchanged; an older host ignores the field. See [Declared inbound signatures](#declared-inbound-signatures) and [emit](#emit-retired-in-013).
 - **The ocr slot and the host's OCR door** (within version 2, no bump; 2026-10-20; additive). A ninth core slot, `ocr` ([ocr-slot.md](ocr-slot.md)), and `POST …/{adapterType}/ocr` for a module's `ctx.ocr`.
 - **One transport for every module kind** (within version 2, no bump; 2026-10-19). Every core slot's methods ride this envelope ([Transport](#transport)): a Unix socket on the host's box, loopback TCP without one, HTTPS for a remote module; the store, limiter and loop guard slots' stdin/stdout JSON-RPC wire is retired. New slot methods for models, judge, files and browser; a core module's manifest; per-install outgoing auth; `ctx.kv.compareAndSet`. Additive for adapters and plugins: an older server is unchanged.
 - **Checking an adapter.** `listen-fire check` and `listen-fire catalog` read a server's `describe`, and `listen-fire run --webhook` and `listen-fire serve` drive its push doors ([Build your first adapter](#build-your-first-adapter)). lf-platform keeps its own conformance CLI for the hosted platform.
