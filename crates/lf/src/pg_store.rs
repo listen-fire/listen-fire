@@ -284,27 +284,35 @@ impl PgStore {
     /// The store's setup: create the `lf` schema and apply every migration
     /// not yet applied. Idempotent; safe to run from two places at once.
     pub fn migrate(url: &str) -> Result<Vec<i32>> {
-        let store = PgStore::connect_unchecked(url, crate::backend::POSTGRES_TENANT)?;
+        PgStore::connect_unchecked(url, crate::backend::POSTGRES_TENANT)?.migrate_here(|_| Ok(()))
+    }
+
+    /// `migrate` on this store's own connection: `before` runs once the
+    /// migration lock is held, so a test can forget a migration with no
+    /// other migrator re-applying it in between. A session lock is taken
+    /// again by the same session, so `before` may migrate too.
+    fn migrate_here(&self, before: impl FnOnce(&PgStore) -> Result<()>) -> Result<Vec<i32>> {
         let mut applied_now = Vec::new();
-        block_on(store.client.batch_execute(&format!("select pg_advisory_lock({MIGRATION_LOCK})"))).map_err(failed)?;
+        block_on(self.client.batch_execute(&format!("select pg_advisory_lock({MIGRATION_LOCK})"))).map_err(failed)?;
         let outcome = (|| -> Result<()> {
-            store.execute("create schema if not exists lf", &[])?;
-            store.execute("create table if not exists lf.schema_migration (version integer primary key, applied_at timestamptz not null default now())", &[])?;
-            let done: Vec<i32> = store.query("select version from lf.schema_migration", &[])?.iter().map(|r| r.get(0)).collect();
+            self.execute("create schema if not exists lf", &[])?;
+            self.execute("create table if not exists lf.schema_migration (version integer primary key, applied_at timestamptz not null default now())", &[])?;
+            before(self)?;
+            let done: Vec<i32> = self.query("select version from lf.schema_migration", &[])?.iter().map(|r| r.get(0)).collect();
             for (version, sql) in MIGRATIONS {
                 if done.contains(version) {
                     continue;
                 }
-                store.transaction(|| {
-                    block_on(store.client.batch_execute(sql)).map_err(failed)?;
-                    store.execute("insert into lf.schema_migration (version) values ($1)", &[version])?;
+                self.transaction(|| {
+                    block_on(self.client.batch_execute(sql)).map_err(failed)?;
+                    self.execute("insert into lf.schema_migration (version) values ($1)", &[version])?;
                     Ok(())
                 })?;
                 applied_now.push(*version);
             }
             Ok(())
         })();
-        let _ = block_on(store.client.batch_execute(&format!("select pg_advisory_unlock({MIGRATION_LOCK})")));
+        let _ = block_on(self.client.batch_execute(&format!("select pg_advisory_unlock({MIGRATION_LOCK})")));
         outcome.map(|()| applied_now)
     }
 
@@ -1806,12 +1814,12 @@ mod tests {
         PgStore::migrate(&url).unwrap();
         let store = PgStore::connect(&url, crate::backend::POSTGRES_TENANT).unwrap();
         let tag = uuid::Uuid::new_v4().to_string();
-        let keys = [("fire_callback", "{}", format!("legacy-fire:{tag}")), ("wake_await", r#"{"correlationKey":"k"}"#, format!("legacy-wake:{tag}")), ("wake_await", r#"{"waitId":"w1","runId":"r","address":"s1"}"#, format!("wait-wake:{tag}"))];
+        let keys = [("fire_callback", "{}", format!("legacy-fire:{tag}")), ("poll_listen", r#"{"subscription":"listen:f:m"}"#, format!("legacy-poll:{tag}")), ("wake_await", r#"{"correlationKey":"k"}"#, format!("legacy-wake:{tag}")), ("wake_await", r#"{"waitId":"w1","runId":"r","address":"s1"}"#, format!("wait-wake:{tag}"))];
         for (kind, payload, key) in &keys {
             store.execute("insert into lf.work (kind, key, payload) values ($1, $2, $3::text::jsonb)", &[kind, key, payload]).unwrap();
         }
-        store.execute("delete from lf.schema_migration where version = 10", &[]).unwrap();
-        assert_eq!(PgStore::migrate(&url).unwrap(), [10]);
+        let forget = |s: &PgStore| s.execute("delete from lf.schema_migration where version = 10", &[]).map(drop);
+        assert_eq!(store.migrate_here(forget).unwrap(), [10]);
         let left: Vec<String> = store.query("select key from lf.work where key like '%' || $1", &[&tag]).unwrap().iter().map(|r| r.get(0)).collect();
         assert_eq!(left, [format!("wait-wake:{tag}")]);
         store.execute("delete from lf.work where key like '%' || $1", &[&tag]).unwrap();

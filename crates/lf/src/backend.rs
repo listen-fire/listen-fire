@@ -734,9 +734,7 @@ mod tests {
             let write = LedgerWrite { adapter: "acme_crm".into(), record_type: "Company".into(), external_id: company.clone(), run_id: run.into(), depth, at: at.into() };
             store.ledger_write(&write, forget_before).unwrap();
         };
-        // Instants near now: a store shared with other cases (Postgres) has them
-        // sweep what is older than their own horizon, which is near now too.
-        let base = crate::limiter::now_ms();
+        let base = 1_800_000_000_000;
         let at = |offset_ms: i64| crate::store::iso_at(base + offset_ms);
         let long_ago = at(-3_600_000);
         assert_eq!(store.deepest_write(&record, &long_ago).unwrap(), None);
@@ -768,7 +766,9 @@ mod tests {
     fn the_write_ledger_is_kept_over_postgres() {
         let Some(url) = std::env::var("LF_TEST_PG").ok().filter(|u| !u.is_empty()) else { return };
         PgStore::migrate(&url).unwrap();
-        the_write_ledger_answers_the_deepest_write_since(&PgStore::connect(&url, POSTGRES_TENANT).unwrap());
+        // A tenant of its own: a write sweeps its whole tenant's older rows,
+        // which other cases sharing the database are reading.
+        the_write_ledger_answers_the_deepest_write_since(&PgStore::connect(&url, &uuid::Uuid::new_v4().to_string()).unwrap());
     }
 
     #[test]

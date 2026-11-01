@@ -215,7 +215,7 @@ const USAGE: &str = "usage: listen-fire <init|check|catalog|lsp|run|resume|runs|
   listens   one line per listen on a traversal: how each hop's filter is honoured (on arrival, or resolved by listing), what it watches and when it last resolved, and whether it is ok, failing (LISTEN_SCOPE_LIMIT, LISTEN_RESOLVE_FAILED) or paused; `listens resume <file>:<movement>`: let a paused listen fire again; `listens replay <file>:<movement> --delivery <id>` (or `--event <id>`, an Arrival Not Judged event's Event Id): read the kept delivery's request again (its module's lookups made afresh, its signature not checked again: it is listen-fire's own capture; a polled delivery's kept page is judged again, the module asked nothing) and put the arrivals the delivery brought through that listen alone, its other listens left as they are; one that ran it before runs nothing unless --force; one that still cannot judge it is reported again, as the next attempt, and exits 1
   deliveries  the deliveries the doors kept, most recent first, at most 50 (--subscription: one subscription's; --since: received at or after an instant, or <n>h or <n>d ago); `deliveries show <id>`: one, its events and runs, and whether it keeps the request it was received as (--request prints that request, which may hold personal data; kept deliveries.retainDays days); `deliveries replay <id>`: queue its events again as a delivery of its own, for listen-fire serve or listen-fire drain to run against the project as it is now (new runs, whatever its runs came to; a failed run: listen-fire runs rerun <run-id>)
   --json    check, catalog, run, resume, runs, deliveries, cancel, modules, connect, credential list: one JSON document (docs/lf-json.md); a failure is {\"error\": …}
-  drain     claim due work rows one at a time and run them (a polled edge's row is its next poll, due every interval its module declares; a cron listen's ticks are its poll, fired once however many workers drain); with --until-idle exit once none is due, with --max-seconds stop claiming after n seconds, with --kinds only rows of those kinds (resume_timer, wake_await, fire_event, poll_listen, poll_edge, resolve_listen, refresh_subscription, settle_race)
+  drain     claim due work rows one at a time and run them (a polled edge's row is its next poll, due every interval its module declares; a cron listen's ticks are its poll, fired once however many workers drain); with --until-idle exit once none is due, with --max-seconds stop claiming after n seconds, with --kinds only rows of those kinds (resume_timer, wake_await, fire_event, poll_edge, resolve_listen, refresh_subscription, settle_race)
   serve     the inbound doors and the work queue's drain (as `listen-fire serve`)
   --doors-only  (serve) only the doors, for compute billed by the request: nothing drains in this process, `/hooks/…` queues its events (answering 202 with the rows queued) instead of running them in the request; workers (`listen-fire drain`) run the work, started by the wake slot's module or a schedule. Also LF_DOORS_ONLY=1
   LF_LOG=debug  also say the lines that explain why something ran nothing when nothing went wrong (an arrival a listen's WHERE refuses); unset, they stay unsaid
@@ -495,7 +495,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
             if let Some(movement) = &args.poll {
                 let project = load()?;
                 let store = store_of(&args, &project)?;
-                let session = runs::open_session(project, &runs::Opening { ephemeral: args.ephemeral, store: &store, role: runs::Role::Command, routes_listens: false }).await?;
+                let session = runs::open_session(project, &runs::Opening { ephemeral: args.ephemeral, store: &store, role: runs::Role::Command, routes_listens: true }).await?;
                 return report_fired(&session.run_poll(movement).await?, args.json, &mut out);
             }
             let Some(event_file) = &args.event else {
@@ -514,7 +514,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
                 eprintln!("listen-fire: --ephemeral keeps its run state in a temporary file; it does not take a Postgres --store");
                 return Ok(2);
             }
-            let session = runs::open_session(project, &runs::Opening { ephemeral: args.ephemeral, store: &store, role: runs::Role::Command, routes_listens: false }).await?;
+            let session = runs::open_session(project, &runs::Opening { ephemeral: args.ephemeral, store: &store, role: runs::Role::Command, routes_listens: true }).await?;
             let (external, event) = runs::read_event_file(event_file)?;
             // An event file holds arrivals (adapter protocol 2.6), judged
             // against the listens on their edges, as a delivery is.
@@ -595,7 +595,8 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
                 let env: Vec<(String, String)> = std::env::vars().collect();
                 wake::install(wake::of_project(&project, secrets::Secrets::open(&project, &env)?.credentials())?);
             }
-            let session = runs::open_session(project, &runs::Opening { ephemeral: false, store: &store, role: runs::Role::Command, routes_listens: false }).await?;
+            // A replay fires listens, so it refuses a project that fails check as serve does.
+            let session = runs::open_session(project, &runs::Opening { ephemeral: false, store: &store, role: runs::Role::Command, routes_listens: replaying }).await?;
             if replaying {
                 let Some(named) = args.rest.get(1) else {
                     eprintln!("listen-fire listens replay needs a listen: <file>:<movement> --delivery <id>");

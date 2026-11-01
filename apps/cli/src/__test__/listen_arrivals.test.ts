@@ -208,7 +208,7 @@ test('serve refuses a project whose listen on a traversal does not check, naming
 /** A function whose body reads a name nothing binds: an ordinary check error, in no listen. */
 const BROKEN = 'function broken(run: <manual-[:Invocations]->>) {\n  return nowhere.Name\n}\n\nlisten to manual-[:Invocations]-> fire broken\n';
 
-test('a project with a check error in a function is not served, drained or handed a webhook, and says to run check', async () => {
+test('a project with a check error in a function is not served, drained, handed a webhook, an event or a poll, nor replayed, and says to run check', async () => {
   const dir = project();
   writeFileSync(join(dir, 'movements/broken.mvt'), BROKEN);
   const refused = await served(dir).then(
@@ -217,7 +217,15 @@ test('a project with a check error in a function is not served, drained or hande
   );
   assert.match(refused, /broken\.mvt:2:\d+ error MOV_\w+ /);
   assert.match(refused, RUN_CHECK);
-  for (const args of [['drain', '--until-idle'], ['run', '--webhook', 'acme_crm', '--body', 'events/webhook_body.json'], ['resume']]) {
+  const firing = [
+    ['drain', '--until-idle'],
+    ['run', '--webhook', 'acme_crm', '--body', 'events/webhook_body.json'],
+    ['resume'],
+    ['run', '--event', 'events/company_created.json'],
+    ['run', '--poll', 'broken'],
+    ['listens', 'replay', 'broken:broken', '--delivery', '00000000-0000-4000-8000-000000000000'],
+  ];
+  for (const args of firing) {
     const command = lf(dir, ...args);
     assert.notEqual(command.code, 0, `${args.join(' ')}: ${command.out}`);
     assert.match(command.out, /broken\.mvt:2:\d+ error MOV_\w+ /, args.join(' '));
@@ -226,7 +234,7 @@ test('a project with a check error in a function is not served, drained or hande
   assert.deepEqual(companies(dir), [], 'nothing ran');
 });
 
-test('a run of a function, an event or a named run opens a project whose listen on a traversal does not check', () => {
+test('a run of a function opens a project whose listen on a traversal does not check; an event, which fires listens, does not', () => {
   const dir = project();
   withUnlistenableComments(dir);
   writeFileSync(join(dir, 'movements/notes.mvt'), `import { acme_crm } from adapters\nimport { acme } from credentials\n\ncrm = connect acme_crm using acme\n${ON_COMMENTS}`);
@@ -234,19 +242,12 @@ test('a run of a function, an event or a named run opens a project whose listen 
   const hello = lf(dir, 'run', 'hello');
   assert.equal(hello.code, 0, hello.out);
   assert.match(hello.out, /hello:hello completed/);
-  // The other file's listen in the settings form is read: the event fires it.
-  const run = lf(dir, 'run', '--event', 'events/company_created.json');
-  assert.equal(run.code, 0, run.out);
-  assert.match(run.out, /companies:welcome parked — 1 write\(s\)/);
-  assert.deepEqual(companies(dir), ['Welcome Vireo Robotics']);
-  const runId = /^run (\S+) /m.exec(run.out)?.[1] ?? assert.fail(run.out);
-  const resumed = lf(dir, 'resume', runId);
-  assert.equal(resumed.code, 0, resumed.out);
-  assert.match(resumed.out, /companies:welcome completed/);
-  // Resuming every due run routes the queued deliveries too: refused.
-  const every = lf(dir, 'resume');
-  assert.notEqual(every.code, 0, every.out);
-  assert.match(every.out, /notes\.mvt:\d+:1 the listen that fires note does not check, so nothing would fire it$/m);
+  for (const args of [['run', '--event', 'events/company_created.json'], ['resume']]) {
+    const refused = lf(dir, ...args);
+    assert.notEqual(refused.code, 0, refused.out);
+    assert.match(refused.out, /notes\.mvt:\d+:1 the listen that fires note does not check, so nothing would fire it$/m, args.join(' '));
+  }
+  assert.deepEqual(companies(dir), [], 'the event ran nothing');
 });
 
 test('an edit that adds a listen on a traversal that does not check is refused, and the running files keep serving', async () => {
