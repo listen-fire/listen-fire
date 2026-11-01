@@ -18,12 +18,11 @@ import type {
   EvertraceApiClient,
   EvertraceList,
   EvertraceListEntry,
-  EvertraceSearch,
   EvertraceSignal,
 } from './api_client';
 
 import { landingFields } from './adapter';
-import { narrowsAnything, signalFilterFromSearchRows } from './saved_search';
+import { narrowsAnything, savedSearchFilter } from './saved_search';
 import {
   EVERTRACE_LIST_ENTRIES_COLLECTION,
   EVERTRACE_LIST_ENTRY_DISPLAY_NAME,
@@ -198,11 +197,7 @@ async function signalsFromSearch(input: {
   search: string;
   createdAfter: number;
 }): Promise<EvertraceSignal[]> {
-  const found = await resolveSearch(input.client, input.search);
-  // `GET /searches` carries the rows; a workspace that answers without them
-  // is worth one more call rather than a poll that silently matches nothing.
-  const rows = found.filters ?? (await input.client.getSearch(found.id)).filters ?? [];
-  const { filter, skipped } = signalFilterFromSearchRows(rows);
+  const { found, rows, filter, skipped } = await savedSearchFilter(input.client, input.search);
 
   if (!loggedSearches.has(found.id)) {
     loggedSearches.add(found.id);
@@ -235,21 +230,6 @@ async function signalsFromSearch(input: {
     if (data.length < PAGE_SIZE) break;
   }
   return all;
-}
-
-/** A saved search named by its id or by its exact title. */
-async function resolveSearch(client: EvertraceApiClient, search: string): Promise<EvertraceSearch> {
-  const searches = await client.listSearches();
-  const match =
-    searches.find((s) => s.id === search) ??
-    searches.find((s) => s.title.toLowerCase() === search.toLowerCase());
-  if (!match) {
-    throw new Error(
-      `EvertracePollSource: no saved search called "${search}" in this Evertrace workspace ` +
-        `(saw: ${searches.map((s) => s.title).join(', ') || 'none'}).`,
-    );
-  }
-  return match;
 }
 
 /**

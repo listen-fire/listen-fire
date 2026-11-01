@@ -47,7 +47,8 @@ import {
   type EvertraceSignal,
 } from './api_client';
 import { EVERTRACE_MANIFEST } from './manifest';
-import { lookupSearchTerm, signalFilterFromWhere } from './filter';
+import { lookupSearchTerm, savedSearchOf, signalFilterFromWhere } from './filter';
+import { savedSearchFilter } from './saved_search';
 import {
   EVERTRACE_ROOT,
   EVERTRACE_WORKSPACE_DESCRIPTOR,
@@ -94,6 +95,8 @@ import {
   EVERTRACE_SIGNAL_LIST_ENTRIES_EDGE,
   EVERTRACE_SIGNAL_TYPE_ID,
   EVERTRACE_WORKSPACE_TYPE_ID,
+  EVERTRACE_LIST_ENTRY_KEY_FIELD_ID,
+  EVERTRACE_SAVED_SEARCH_FIELD_ID,
   decodeListEntryId,
   encodeListEntryId,
 } from './types';
@@ -167,12 +170,23 @@ function computedSignalField(fieldId: string, signal: EvertraceSignal): unknown 
  *  filter may name, as an arrival's landing carries them for the host to judge
  *  a listen's WHERE. `record` may carry what only the poll knows (the search or
  *  the list name it was found under). */
+/** A list entry's identity, as its record id spells it. */
+function entryKey(data: Record<string, unknown>): string | null {
+  const { listId, id } = data;
+  return typeof listId === 'string' && typeof id === 'string' ? encodeListEntryId({ listId, entryId: id }) : null;
+}
+
 export function landingFields(typeId: string, record: object): Record<string, unknown> {
   const data: Record<string, unknown> = { ...record };
   const fields = describeEvertraceType(typeId)?.fields ?? [];
   return Object.fromEntries(
     fields.flatMap((field) => {
-      const computed = typeId === EVERTRACE_SIGNAL_TYPE_ID ? computedSignalField(field.fieldId, data as unknown as EvertraceSignal) : undefined;
+      const computed =
+        typeId === EVERTRACE_SIGNAL_TYPE_ID
+          ? computedSignalField(field.fieldId, data as unknown as EvertraceSignal)
+          : typeId === EVERTRACE_LIST_ENTRY_TYPE_ID && field.fieldId === EVERTRACE_LIST_ENTRY_KEY_FIELD_ID
+            ? entryKey(data)
+            : undefined;
       const epoch = EPOCH_MS_FIELDS[typeId]?.has(field.fieldId) ? isoOf(data[field.fieldId]) : undefined;
       const value = computed ?? epoch ?? data[field.fieldId] ?? null;
       return [[field.displayName, value], [field.fieldId, value]];
@@ -229,6 +243,7 @@ export class EvertraceAdapter extends BaseAdapter implements Adapter {
       const computed = computedSignalField(fieldId, data as unknown as EvertraceSignal);
       if (computed !== undefined) return computed;
     }
+    if (typeId === EVERTRACE_LIST_ENTRY_TYPE_ID && fieldId === EVERTRACE_LIST_ENTRY_KEY_FIELD_ID) return entryKey(data);
     if (EPOCH_MS_FIELDS[typeId]?.has(fieldId)) return isoOf(data[fieldId]);
     return data[fieldId] ?? null;
   }
@@ -356,12 +371,17 @@ export class EvertraceAdapter extends BaseAdapter implements Adapter {
 
     switch (input.fieldId) {
       case EVERTRACE_SIGNALS_COLLECTION: {
-        const filter = signalFilterFromWhere(where);
+        // A saved search is Evertrace's to judge: the walk reads through its
+        // rows, and each signal carries the search it was found by, so the
+        // WHERE holds of it again.
+        const search = savedSearchOf(where);
+        const own = signalFilterFromWhere(where);
+        const filter = search === undefined ? own : { ...own, ...(await savedSearchFilter(client, search)).filter };
         const signals = await pageThrough(
           (page, limit) => client.listSignals({ filter, page, limit }),
           cap,
         );
-        return signals.map((signal) => signalPosition(signal));
+        return signals.map((signal) => signalPosition(signal, search === undefined ? {} : { [EVERTRACE_SAVED_SEARCH_FIELD_ID]: search }));
       }
       case EVERTRACE_SEARCHES_COLLECTION: {
         // `GET /searches` is unpaged — the whole set comes back and the hop's
@@ -477,13 +497,13 @@ export class EvertraceAdapter extends BaseAdapter implements Adapter {
 // and an endpoint that re-fetches it. Experiences and educations are not —
 // they exist only inside their signal, so they carry their content inline.
 
-function signalPosition(signal: EvertraceSignal): RelatedResult {
+function signalPosition(signal: EvertraceSignal, stamped: Record<string, string> = {}): RelatedResult {
   return {
     position: makeStablePosition({
       adapterType: EVERTRACE_ADAPTER_TYPE,
       recordType: EVERTRACE_SIGNAL_DISPLAY_NAME,
       recordId: signal.id,
-      data: signal,
+      data: { ...signal, ...stamped },
     }),
   };
 }

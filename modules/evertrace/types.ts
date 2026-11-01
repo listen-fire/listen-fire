@@ -124,6 +124,12 @@ export const EVERTRACE_SAVED_SEARCH_FIELD_ID = 'savedSearch';
  *  id) and the list an entry is on (`List Id`). */
 export const EVERTRACE_LIST_NAME_FIELD = 'List Name';
 export const EVERTRACE_LIST_NAME_FIELD_ID = 'listName';
+/** The owned scalars a saved search and a list are named by: only Evertrace
+ *  can say what a search matches or which list an entry arrived on. */
+export const EVERTRACE_SAVED_SEARCH_TYPE = 'EvertraceSavedSearch';
+export const EVERTRACE_LIST_NAME_TYPE = 'EvertraceListName';
+/** A list entry's identity: its list and its own id, as its record id spells them. */
+export const EVERTRACE_LIST_ENTRY_KEY_FIELD_ID = 'entryKey';
 export const EVERTRACE_LIST_ID_FIELD = 'List Id';
 export const EVERTRACE_LIST_ID_FIELD_ID = 'listId';
 

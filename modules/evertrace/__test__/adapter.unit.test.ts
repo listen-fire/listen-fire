@@ -531,6 +531,34 @@ describe('EvertraceAdapter.getRelated — root collections', () => {
     expect(related).toHaveLength(2);
     expect(pages).toHaveBeenCalledTimes(1);
   });
+
+  it('walks Signals through a saved search, by its rows, and stamps the search so the WHERE holds of what came back', async () => {
+    const listSignals = jest.fn(async (_input: { filter?: unknown; page?: number }) => ({ data: [signal({ id: 'a' })], meta: { page: 1, limit: 100 } }));
+    const adapter = adapterWith(
+      fakeClient({
+        listSignals,
+        listSearches: async () => [search({ filters: [filterRow({ key: 'city', operator: 'in', value: 'Paris' })] })],
+      }),
+    );
+    const related = await adapter.getRelated({
+      position: meta,
+      fieldId: 'Signals',
+      direction: 'outgoing',
+      where: and(compare('eq', property('Saved Search'), value('Stealth in Europe')), compare('gte', property('Score'), value(80))),
+    });
+    expect(listSignals.mock.calls[0]?.[0].filter).toMatchObject({ city: ['Paris'] });
+    expect(await adapter.getFieldValue({ position: related[0]!.position, fieldId: 'Saved Search' })).toBe('Stealth in Europe');
+    // A signal walked without one names no search.
+    const plain = await adapter.getRelated({ position: meta, fieldId: 'Signals', direction: 'outgoing' });
+    expect(await adapter.getFieldValue({ position: plain[0]!.position, fieldId: 'Saved Search' })).toBeNull();
+  });
+
+  it('refuses a saved search the workspace does not have, by name', async () => {
+    const adapter = adapterWith(fakeClient());
+    await expect(
+      adapter.getRelated({ position: meta, fieldId: 'Signals', direction: 'outgoing', where: compare('eq', property('Saved Search'), value('Nope')) }),
+    ).rejects.toThrow(/no saved search called "Nope"/);
+  });
 });
 
 describe('EvertraceAdapter.getRelated — edges below the root', () => {
@@ -810,6 +838,7 @@ describe('EvertraceAdapter — what an author may filter and order', () => {
       delivery: 'polled',
       pollEverySeconds: 300,
       cursor: true,
+      identity: 'Id',
     });
     expect(schema.collections.Lists).toEqual({
       target: 'List',

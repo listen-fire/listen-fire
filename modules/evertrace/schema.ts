@@ -39,9 +39,12 @@ import {
   EVERTRACE_LIST_ID_FIELD_ID,
   EVERTRACE_LIST_NAME_FIELD,
   EVERTRACE_LIST_NAME_FIELD_ID,
+  EVERTRACE_LIST_NAME_TYPE,
+  EVERTRACE_LIST_ENTRY_KEY_FIELD_ID,
   EVERTRACE_POLL_EVERY_SECONDS,
   EVERTRACE_SAVED_SEARCH_FIELD,
   EVERTRACE_SAVED_SEARCH_FIELD_ID,
+  EVERTRACE_SAVED_SEARCH_TYPE,
   EVERTRACE_LIST_DISPLAY_NAME,
   EVERTRACE_LIST_ENTRIES_EDGE,
   EVERTRACE_LIST_ENTRIES_EDGE_NAME,
@@ -141,6 +144,7 @@ export function evertraceEntryPoints(): SchemaEntryPoint[] {
       delivery: 'polled',
       pollEverySeconds: EVERTRACE_POLL_EVERY_SECONDS,
       cursor: true,
+      identity: 'Id',
     },
     {
       typeId: EVERTRACE_SEARCH_TYPE_ID,
@@ -204,6 +208,7 @@ export function evertraceEntryPoints(): SchemaEntryPoint[] {
       delivery: 'polled',
       pollEverySeconds: EVERTRACE_POLL_EVERY_SECONDS,
       cursor: true,
+      identity: 'Id',
     },
   ];
 }
@@ -299,6 +304,7 @@ const SIGNAL_DESCRIPTOR: SchemaTypeDescriptor = {
     'A person whose profile just triggered a trackable event — a new company, ' +
     'a stealth position, a departure, a patent, a grant, a paper.',
   fields: [
+    { fieldId: 'id', displayName: 'Id', kind: 'string', writable: false, required: true, description: "Evertrace's own id for the signal." },
     { fieldId: 'fullName', displayName: 'Name', kind: 'string', writable: false, required: true, description: 'First and last name together. A WHERE on it reaches Evertrace as a case-insensitive partial match.', capability: { filterOperators: ['eq', 'contains'] } },
     { fieldId: 'firstName', displayName: 'First Name', kind: 'string', writable: false, required: true },
     { fieldId: 'lastName', displayName: 'Last Name', kind: 'string', writable: false, required: true },
@@ -323,7 +329,7 @@ const SIGNAL_DESCRIPTOR: SchemaTypeDescriptor = {
     { fieldId: 'discoveredAt', displayName: 'Discovered At', kind: 'date', writable: false, required: true, description: 'When Evertrace saw the triggering event. Lower and upper bounds are pushed as a date range.', capability: { filterOperators: ['gt', 'gte', 'lt', 'lte'] } },
     { fieldId: 'createdAt', displayName: 'Created At', kind: 'date', writable: false, required: true, description: 'When the signal row was created — what a listener’s "new since last poll" is measured on.', capability: { filterOperators: ['gt', 'gte'] } },
     { fieldId: 'tags', displayName: 'Tags', kind: 'string', cardinality: 'many', writable: false, required: false, knownValues: [...EVERTRACE_TAG_VALUES], description: 'What the person is ("Serial Founder", "YC Alumni") and what just happened to them ("New Company", "New Patent"). Both reach Evertrace from a WHERE, through different filters.', capability: { filterOperators: ['eq', 'in', 'contains'] } },
-    { fieldId: EVERTRACE_SAVED_SEARCH_FIELD_ID, displayName: EVERTRACE_SAVED_SEARCH_FIELD, kind: 'string', writable: false, required: false, description: 'A saved search, by its title or its id (`s.`Saved Search` == "Stealth in Europe"`): a listen on `Signals` hears what the search matches. Read, it is the search a signal arrived through, and nothing on a signal found otherwise — to read what a search matches, walk its `Signals`.', capability: { filterOperators: ['eq'] } },
+    { fieldId: EVERTRACE_SAVED_SEARCH_FIELD_ID, displayName: EVERTRACE_SAVED_SEARCH_FIELD, kind: 'owned', owned: { name: EVERTRACE_SAVED_SEARCH_TYPE }, writable: false, required: false, description: 'A saved search, by its title or its id (`s.`Saved Search` == "Stealth in Europe"`): a listen on `Signals` hears what the search matches. Compared with `==` only, and Evertrace judges it: a walk of `Signals` or a listen on it reads what the search matches. Read, it is the search a signal was found by, and nothing on a signal found otherwise.', capability: { filterOperators: ['eq'] } },
     { fieldId: 'listPresence', displayName: 'In A List', kind: 'boolean', writable: false, required: false, description: 'Whether this signal is already on any list in the workspace.' },
     { fieldId: 'screened', displayName: 'Screened', kind: 'boolean', writable: true, required: false, description: 'Set true to mark the signal screened, false to un-screen it.' },
     { fieldId: 'viewed', displayName: 'Viewed', kind: 'boolean', writable: true, required: false, description: 'Set true to mark the signal viewed. Evertrace has no un-view, so false is refused.' },
@@ -541,9 +547,10 @@ const LIST_ENTRY_DESCRIPTOR: SchemaTypeDescriptor = {
     'entry is written along both edges at once: ' +
     '`write (list-[:Entries]->, signal-[:List Entries]->) { }`.',
   fields: [
+    { fieldId: EVERTRACE_LIST_ENTRY_KEY_FIELD_ID, displayName: 'Id', kind: 'string', writable: false, required: true, description: 'The entry, by its list and its own id together.' },
     { fieldId: 'createdAt', displayName: 'Added At', kind: 'date', writable: false, required: true, description: 'When the signal went onto the list. Evertrace sorts the list’s entries by it, so an ORDER BY on it reaches the source.', capability: { orderable: true } },
     { fieldId: EVERTRACE_LIST_ID_FIELD_ID, displayName: EVERTRACE_LIST_ID_FIELD, kind: 'string', writable: false, required: false, description: 'The id of the list it is on.', capability: { filterOperators: ['eq', 'in'] } },
-    { fieldId: EVERTRACE_LIST_NAME_FIELD_ID, displayName: EVERTRACE_LIST_NAME_FIELD, kind: 'string', writable: false, required: false, description: 'The list it is on, by its name (`e.`List Name` == "Pipeline"`): a listen on `List Entries` hears one list, named by its name or its id. Read, it is the name of the list an entry arrived on, and nothing on an entry found otherwise — `List Id` is on every entry.', capability: { filterOperators: ['eq', 'in'] } },
+    { fieldId: EVERTRACE_LIST_NAME_FIELD_ID, displayName: EVERTRACE_LIST_NAME_FIELD, kind: 'owned', owned: { name: EVERTRACE_LIST_NAME_TYPE }, writable: false, required: false, description: 'The list it is on, by its name (`e.`List Name` == "Pipeline"`): a listen on `List Entries` hears one list, named by its name or its id. Compared with `==` or `IN` only, and only on a listen: Evertrace resolves the name. Read, it is the name of the list an entry arrived on, and nothing on an entry found otherwise — `List Id` is on every entry.', capability: { filterOperators: ['eq', 'in'] } },
   ],
   references: [
     {

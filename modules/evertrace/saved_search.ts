@@ -14,6 +14,8 @@
 // is used, which is how the vocabulary gets discovered.
 
 import type {
+  EvertraceApiClient,
+  EvertraceSearch,
   EvertraceSearchFilterRow,
   EvertraceSignalFilter,
 } from './api_client';
@@ -206,4 +208,32 @@ export function signalFilterFromSearchRows(
 /** Whether a translation produced anything to narrow with. */
 export function narrowsAnything(filter: EvertraceSignalFilter): boolean {
   return Object.keys(filter).length > 0;
+}
+
+/** A saved search named by its id or by its exact title. */
+export async function resolveSearch(client: EvertraceApiClient, search: string): Promise<EvertraceSearch> {
+  const searches = await client.listSearches();
+  const match =
+    searches.find((s) => s.id === search) ??
+    searches.find((s) => s.title.toLowerCase() === search.toLowerCase());
+  if (!match) {
+    throw new Error(
+      `Evertrace: no saved search called "${search}" in this Evertrace workspace ` +
+        `(saw: ${searches.map((s) => s.title).join(', ') || 'none'}).`,
+    );
+  }
+  return match;
+}
+
+/** A saved search, named by its id or title, as the signal filter its rows
+ *  make, with the rows it could not read. */
+export async function savedSearchFilter(
+  client: EvertraceApiClient,
+  search: string,
+): Promise<{ found: EvertraceSearch; rows: EvertraceSearchFilterRow[] } & TranslatedSearchFilter> {
+  const found = await resolveSearch(client, search);
+  // `GET /searches` carries the rows; a workspace that answers without them
+  // is worth one more call rather than a search that silently matches nothing.
+  const rows = found.filters ?? (await client.getSearch(found.id)).filters ?? [];
+  return { found, rows, ...signalFilterFromSearchRows(rows) };
 }

@@ -14,7 +14,7 @@
 import type { Expression } from 'engine-contracts/expression/expression';
 import type { EvertraceSignalFilter } from './api_client';
 
-import { EVERTRACE_PROFILE_TAGS, EVERTRACE_SIGNAL_KINDS } from './types';
+import { EVERTRACE_PROFILE_TAGS, EVERTRACE_SAVED_SEARCH_FIELD, EVERTRACE_SAVED_SEARCH_FIELD_ID, EVERTRACE_SIGNAL_KINDS } from './types';
 
 /** One pushable signal field: the names a WHERE may spell it, and where its
  *  value lands in the filter body. */
@@ -157,6 +157,15 @@ function conjunctsOf(where: Expression | undefined): Conjunct[] {
  * `[from]` or `[from, to]`, so an upper bound alone has no shape to travel in
  * and is left to the engine.
  */
+/** The saved search a `Signals` WHERE reads by (`s.\`Saved Search\` == "…"`):
+ *  only Evertrace can say what it matches, so a walk reads through it. The
+ *  checker takes it only as `==` with a literal, joined by AND. */
+export function savedSearchOf(where: Expression | undefined): string | undefined {
+  const conjunct = conjunctsOf(where).find((c) => (c.field === EVERTRACE_SAVED_SEARCH_FIELD || c.field === EVERTRACE_SAVED_SEARCH_FIELD_ID) && c.op === 'eq');
+  const value = conjunct === undefined ? undefined : scalarOf(conjunct.value);
+  return typeof value === 'string' ? value : undefined;
+}
+
 export function signalFilterFromWhere(where: Expression | undefined): EvertraceSignalFilter {
   const filter: EvertraceSignalFilter = {};
   let scoreFloor: number | undefined;
