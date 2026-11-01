@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { companies, project } from '../example';
@@ -18,6 +18,19 @@ import { freshTeam, POSTGRES_URL, psql } from './pg';
 
 const RUNS = 6;
 const TWO_HOURS_MS = String(2 * 60 * 60_000);
+
+/** The example's company arrival, as the `i`th company: each its own record,
+ *  so each fires the listen once. */
+function companyArrival(dir: string, i: number): string {
+  const file = JSON.parse(readFileSync(join(dir, 'events/company_created.json'), 'utf8')) as { event: { arrivals: Array<{ identity: string; landing: { recordId: string; fields: Record<string, unknown> } }> } };
+  for (const arrival of file.event.arrivals) {
+    arrival.identity = `c-${i}`;
+    arrival.landing.recordId = `c-${i}`;
+    arrival.landing.fields.id = `c-${i}`;
+  }
+  writeFileSync(join(dir, `events/company_${i}.json`), JSON.stringify(file));
+  return `events/company_${i}.json`;
+}
 
 function lfHost(dir: string, args: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string }> {
   return new Promise((resolveRun, reject) => {
@@ -37,7 +50,7 @@ test('two drain workers resume every parked run exactly once', async () => {
     const dir = project();
     const fired: string[] = [];
     for (let i = 0; i < RUNS; i++) {
-      const run = spawnSync(lfBinary(), ['run', '--event', 'events/company_created.json', ...store], { cwd: dir, encoding: 'utf8' });
+      const run = spawnSync(lfBinary(), ['run', '--event', companyArrival(dir, i), ...store], { cwd: dir, encoding: 'utf8' });
       assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
       const id = /^run (\S+) companies:welcome parked/m.exec(run.stdout)?.[1];
       assert.ok(id !== undefined, run.stdout);
@@ -81,7 +94,7 @@ test('a poll pool and a run pool on one store split the work by kind', async () 
     const dir = withFeed(project());
     const fired: string[] = [];
     for (let i = 0; i < 3; i++) {
-      const run = spawnSync(lfBinary(), ['run', '--event', 'events/company_created.json', ...store], { cwd: dir, encoding: 'utf8' });
+      const run = spawnSync(lfBinary(), ['run', '--event', companyArrival(dir, i), ...store], { cwd: dir, encoding: 'utf8' });
       assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
       const id = /^run (\S+) companies:welcome parked/m.exec(run.stdout)?.[1];
       assert.ok(id !== undefined, run.stdout);

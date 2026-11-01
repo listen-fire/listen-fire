@@ -1,6 +1,6 @@
 // The delivery receipt over a Postgres store: `listen-fire serve --doors-only` keeps a
 // signed webhook once however often it is sent, a worker (`listen-fire drain`) runs it
-// with the run naming its delivery, a replay runs again, and the drain forgets
+// with the run naming its delivery, its listen's replay runs again, and the drain forgets
 // the settled deliveries after their days. Needs a Postgres (pg.ts) and psql.
 
 import { test } from 'node:test';
@@ -10,7 +10,7 @@ import { lfCommand, served } from '../example';
 import { COMPLETING, type DeliveryDoc, post, receiptProject } from '../deliveries_fixture';
 import { freshTeam, POSTGRES_URL, psql } from './pg';
 
-test('a doors-only serve keeps a webhook once, a worker runs it, and a replay runs it again', async () => {
+test('a doors-only serve keeps a webhook once, a worker runs it, and its listen\'s replay runs it again', async () => {
   const { team, clear } = freshTeam();
   const store = ['--store', POSTGRES_URL, '--team', team];
   const dir = receiptProject(COMPLETING);
@@ -41,8 +41,7 @@ test('a doors-only serve keeps a webhook once, a worker runs it, and a replay ru
     assert.ok(deliveryId);
     assert.deepEqual(psql(`select delivery_id from lf.trigger_run where team_id = '${team}'`), [[deliveryId]]);
 
-    lfStore('deliveries', 'replay', deliveryId);
-    lfStore('drain', '--until-idle');
+    lfStore('listens', 'replay', 'companies:welcome', '--delivery', deliveryId, '--force');
     assert.deepEqual(psql(`select count(*) from lf.trigger_run where team_id = '${team}'`), [['2']]);
     const [newer, older] = deliveries();
     assert.equal(older?.id, deliveryId);
