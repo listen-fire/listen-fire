@@ -174,11 +174,19 @@ fn holds_line(schema: &InstanceSchema) -> Option<String> {
     Some(format!("Holds: {}", listed(names)?))
 }
 
-/// "Listen to: Messages, Reactions": the edges off the connection a listen
-/// may end on.
+/// "Listen to: Messages, Reactions": the edges a listen may end on, off the
+/// connection or off any of its records (a channel's `Messages`), each named
+/// once.
 fn listen_to_line(schema: &InstanceSchema) -> Option<String> {
-    let edges = schema.collections.iter().filter(|(_, c)| c.listenable == Some(true)).map(|(name, _)| written_name(name));
-    Some(format!("Listen to: {}", listed(edges)?))
+    let roots = schema.collections.iter().filter(|(_, c)| c.listenable == Some(true)).map(|(name, _)| name.as_str());
+    let off_records = schema.positions.iter().flat_map(|(_, p)| p.edges.iter().filter(|(_, e)| e.listenable == Some(true)).map(|(name, _)| name.as_str()));
+    let mut named: Vec<&str> = Vec::new();
+    for name in roots.chain(off_records) {
+        if !named.contains(&name) {
+            named.push(name);
+        }
+    }
+    Some(format!("Listen to: {}", listed(named.into_iter().map(written_name))?))
 }
 
 /// Any one schema an adapter's catalog entry holds (they share their record types).

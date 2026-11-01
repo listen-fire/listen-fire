@@ -39,6 +39,45 @@ mod traversal;
 /// `SUPPRESS_SELF_KEY`: the listen key every listener accepts.
 const SUPPRESS_SELF_KEY: &str = "suppress_self";
 
+/// The hops of a listen that fires with what a parameter typed `written`
+/// takes. A parameter may name the record type it takes (`-[:Change]->`), and
+/// a listen ends on an edge: then the shortest walk from the connection to a
+/// listenable edge landing on that type, if the schema has one.
+fn listen_hops_for(schema: Option<&movement_parser::catalog::types::InstanceSchema>, written: &str) -> Option<String> {
+    let Some(schema) = schema else { return Some(written.to_string()) };
+    let single = written.strip_prefix("-[:").and_then(|rest| rest.strip_suffix("]->")).map(|name| name.trim_matches('`'));
+    let Some(record_type) = single.filter(|name| !schema.collections.contains_key(*name) && schema.positions.contains_key(*name)) else {
+        return Some(written.to_string());
+    };
+    let hop = |edge: &str| format!("-[:{}]->", spell_name(edge));
+    let mut frontier: Vec<(String, &str)> = Vec::new();
+    for (name, collection) in schema.collections.iter() {
+        if collection.listenable == Some(true) && collection.target == record_type {
+            return Some(hop(name));
+        }
+        if collection.readable != Some(false) {
+            frontier.push((hop(name), collection.target.as_str()));
+        }
+    }
+    let mut seen: HashSet<&str> = frontier.iter().map(|(_, at)| *at).collect();
+    for _ in 0..4 {
+        let mut next = Vec::new();
+        for (path, at) in &frontier {
+            let Some(position) = schema.positions.get(*at) else { continue };
+            for (name, edge) in position.edges.iter() {
+                if edge.listenable == Some(true) && edge.target == record_type {
+                    return Some(format!("{path}{}", hop(name)));
+                }
+                if crate::families::walks::edge_is_readable(edge) && seen.insert(edge.target.as_str()) {
+                    next.push((format!("{path}{}", hop(name)), edge.target.as_str()));
+                }
+            }
+        }
+        frontier = next;
+    }
+    None
+}
+
 /// What the walk remembers across the file for its listens.
 #[derive(Default)]
 pub struct ListenState {
@@ -155,10 +194,13 @@ impl Checker<'_> {
         if symbol.kind != SymbolKind::Instance {
             return;
         }
+        let written = type_.hops_raw.clone().filter(|h| !h.trim().is_empty());
+        let schema = symbol.instance.as_ref().and_then(|i| i.schema.as_ref());
+        let hops = written.and_then(|written| listen_hops_for(schema, written.trim()));
         self.listens.dispatchables.push(Dispatchable {
             movement: movement.name.clone(),
             instance_name: type_.graph.clone(),
-            hops: type_.hops_raw.clone().filter(|h| !h.trim().is_empty()),
+            hops,
             span: Span { start: movement.span.start, end: movement.span.start },
         });
     }
@@ -208,9 +250,10 @@ impl Checker<'_> {
         self.report_settings_retired(statement, scope);
     }
 
-    /// A listen that declares its events' type (`payload: <Payment>`) fires
-    /// its movement with that node: the parameter is checked against it as a
-    /// parameter is against its argument, field by field.
+    /// A listen that states the node its untyped landing is
+    /// (`hooks-[:Requests]-><Payment>`) fires its function with that node:
+    /// the parameter is checked against it as a parameter is against its
+    /// argument, field by field.
     pub(super) fn check_listen_payload_param(&mut self, payload: SymbolId, param: &MovementParam, type_: &ParamTypeRef, decl_scope: ScopeId, statement: &ListenDeclaration) {
         let Some(payload) = self.declared_node(payload).map(|d| d.instance.clone()) else { return };
         let declared = match type_ {

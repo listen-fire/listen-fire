@@ -338,3 +338,13 @@ fn a_listen_is_offered_the_edges_it_can_take_those_it_can_end_on_first() {
     let (text, pos) = typed(&format!("{head}function f(c: <chat-[:Channel]->>) {{\n  return 1\n}}\n"), ">>) {\n", "  x = c-[:");
     assert_eq!(labels(&listen.complete(&text, pos)), ["Drafts", "Messages"]);
 }
+
+/// A connection's hover names every edge a listen may end on, off the
+/// connection or off its records: a chat announces nothing at its root.
+#[test]
+fn the_hover_lists_every_edge_a_listen_may_end_on() {
+    let listen = Service::new(CatalogSnapshot::load(LISTEN_CATALOG).unwrap());
+    let text = "import { chat as chat_module } from adapters\nchat = connect chat_module\nlisten to chat-[:Channels]->-[:Messages]-> fire f\nfunction f(m: <chat-[:Message]->>) { return 1 }\n";
+    let hover = listen.hover(text, after(text, "listen to cha", 0)).unwrap();
+    assert!(hover.contents.contains("Listen to: Messages, Interactions"), "{}", hover.contents);
+}

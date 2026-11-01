@@ -101,11 +101,15 @@ pub const LISTEN_NOT_INSTANCE: &str = "MOV_LISTEN_NOT_INSTANCE";
 pub const ADAPTER_NOT_CONSTRUCTED: &str = "MOV_ADAPTER_NOT_CONSTRUCTED";
 pub const HEAD_NOT_A_POSITION: &str = "MOV_HEAD_NOT_A_POSITION";
 pub const HEAD_NEEDS_A_NAME: &str = "MOV_HEAD_NEEDS_A_NAME";
+/// Raised by nothing since 0.13 (the settings form it checked is retired
+/// whole, MOV_LISTEN_SETTINGS_RETIRED); the name is never reused.
 pub const LISTEN_CANNOT_FIRE: &str = "MOV_LISTEN_CANNOT_FIRE";
 pub const LISTEN_PARAM_MISMATCH: &str = "MOV_LISTEN_PARAM_MISMATCH";
 pub const LISTEN_SHAPE_MISMATCH: &str = "MOV_LISTEN_SHAPE_MISMATCH";
 pub const LISTEN_DUPLICATE: &str = "MOV_LISTEN_DUPLICATE";
 pub const LISTEN_ALIAS_DUPLICATE: &str = "MOV_LISTEN_ALIAS_DUPLICATE";
+/// Raised by nothing since 0.13 (the settings form it checked is retired
+/// whole, MOV_LISTEN_SETTINGS_RETIRED); the name is never reused.
 pub const LISTEN_BAD_CONFIG: &str = "MOV_LISTEN_BAD_CONFIG";
 pub const LISTEN_MISSING: &str = "MOV_LISTEN_MISSING";
 /// A listen whose last edge its module announces nothing on.

@@ -200,7 +200,7 @@ fn an_unknown_meta_key_suggests_the_closest() {
 
 // Listens
 
-const CRON: &str = r#""cron":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Tick":{"properties":{},"edges":{}}},"collections":{},"writableRoots":{}}}}"#;
+const CRON: &str = r#""cron":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Tick":{"properties":{},"edges":{}}},"collections":{"Ticks":{"target":"Tick","readable":false,"listenable":true}},"writableRoots":{}}}}"#;
 
 fn cron_catalog() -> String {
     format!(r#"{{"adapters":{{{CRON}}},"credentials":{{}},"plugins":{{}}}}"#)
@@ -210,7 +210,8 @@ fn cron_catalog() -> String {
 fn a_dispatchable_movement_without_a_listen_is_told_how_to_add_one() {
     let found = run("import { cron } from adapters\nt = connect cron\nfunction digest(e: <t-[:Tick]->>) {}", &cron_catalog());
     assert_eq!(codes(&found), ["MOV_LISTEN_MISSING"]);
-    assert!(found[0].1.ends_with("e.g. listen to t-[:Tick]-> fire digest"), "{found:?}");
+    // The parameter names the record type; the listen ends on the edge that announces it.
+    assert!(found[0].1.ends_with("e.g. listen to t-[:Ticks]-> fire digest"), "{found:?}");
 }
 
 // Libraries

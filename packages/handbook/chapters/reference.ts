@@ -173,10 +173,10 @@ listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire intake
 listen as "Nightly digest" to cron-[t:Ticks WHERE t.Schedule == "0 9 * * 1" AND t.Zone == "Europe/London"]-> fire \`Weekly Digest\`
 listen to crm-[:Companies]->-[c:Changes WHERE c.Kind == "created"]-> fire \`On New\`
 listen to crm-[:Companies]->-[c:Changes WHERE c.Kind IN ["created", "updated"]]-> fire mirror
-listen to go-[:Invocations]-> fire \`On Run\`          # manual / on-demand (go = connect manual)
+listen to runs-[:Invocations]-> fire \`On Run\`        # manual / on-demand (runs = connect manual)
 \`\`\`
 
-A listen is a traversal from a connection, ending on an edge its system announces arrivals on; the fired function's parameter is typed by what lands (\`<cron-[:Ticks]->>\`). An edge every team shares (\`Ticks\`, \`Emails\`) needs a \`WHERE\` naming its values. The \`as\` alias goes right after \`listen\`, before \`to\`. A manual run *is* the submit-text/files channel: read \`go.Text\` and traverse \`go-[:Files]->.File\` (both optional). Pausing = commenting the \`listen\` line out. There is no \`run\` statement.
+A listen is a traversal from a connection, ending on an edge its system announces arrivals on; the fired function's parameter is typed by what lands (\`<cron-[:Ticks]->>\`). An edge every team shares (\`Ticks\`, \`Emails\`) needs a \`WHERE\` naming its values. The \`as\` alias goes right after \`listen\`, before \`to\`. A manual run *is* the submit-text/files channel: the fired function's parameter (\`go: <runs-[:Invocation]->>\`) holds it, so read \`go.Text\` and traverse \`go-[:Files]->.File\` (both optional). Pausing = commenting the \`listen\` line out. There is no \`run\` statement.
 
 ### reviews
 

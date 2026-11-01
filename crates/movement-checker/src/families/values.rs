@@ -225,6 +225,14 @@ pub fn json_opaque_message(ty: Option<&Ty>, operation: &str) -> Option<String> {
     if !base_kinds(ty).contains(&BaseKind::Json) {
         return None;
     }
+    // A record held as a value is described, field by field: what it can't
+    // be is one value as a whole.
+    if let Ty::HeldRecord(_) = strip_absent(ty) {
+        return Some(format!(
+            "{} is a record held as a value, and it can't be {operation} as a whole — read the fields you mean off it (`c.Current.Stage`)",
+            describe_field_type(strip_absent(ty))
+        ));
+    }
     Some(format!(
         "{} is a structured value and nothing describes its shape, so it can't be {operation} — pass it through unchanged into a json field instead",
         describe_field_type(strip_absent(ty))

@@ -425,8 +425,11 @@ pub fn spell(expr: &Expression, alias: Option<&str>) -> String {
             format!("[{}]", items.join(", "))
         }
         // A presence test is spelled as the program asks it: `exists(c.Previous)`.
-        Expression::Compare { op: FilterOperator::Neq, left, right } if is_field_read(left) && matches!(**right, Expression::Static { value: StaticValue::Null }) => {
-            format!("exists({})", spell(left, alias))
+        Expression::Compare { left, .. } if is_presence_test(expr) => format!("exists({})", spell(left, alias)),
+        // A window is a duration, written bare: `t.Created WITHIN 1d`.
+        Expression::Compare { op: FilterOperator::Within, left, right } if matches!(&**right, Expression::Static { value: StaticValue::String(_) }) => {
+            let Expression::Static { value: StaticValue::String(duration) } = &**right else { unreachable!("matched above") };
+            format!("{} WITHIN {duration}", operand(left))
         }
         Expression::Compare { op, left, right } => {
             let word = match op {
@@ -458,11 +461,16 @@ pub fn spell(expr: &Expression, alias: Option<&str>) -> String {
                 .join(word)
         }
         Expression::Not { expression } => match &**expression {
-            Expression::Compare { .. } if spell(expression, alias).starts_with("exists(") => format!("NOT {}", spell(expression, alias)),
+            Expression::Compare { .. } if is_presence_test(expression) => format!("NOT {}", spell(expression, alias)),
             _ => format!("NOT ({})", spell(expression, alias)),
         },
         _ => "…".to_string(),
     }
+}
+
+/// `x != null` on a field read: what `exists(x)` lowers to.
+fn is_presence_test(expr: &Expression) -> bool {
+    matches!(expr, Expression::Compare { op: FilterOperator::Neq, left, right } if is_field_read(left) && matches!(**right, Expression::Static { value: StaticValue::Null }))
 }
 
 /// A field read (`c.Previous`, `c.Current.Stage`), as `exists(…)` takes one.

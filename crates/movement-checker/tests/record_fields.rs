@@ -370,3 +370,12 @@ fn a_field_is_never_read_through_a_map_member_that_may_be_absent() {
     assert!(found[0].1.contains("'d.a' may be absent"), "{found:#?}");
     assert_eq!(candidates("d = { a: c.Previous }\n  if (exists(d.a)) {\n    x = d.a.Score\n  }"), Vec::<(String, String)>::new());
 }
+
+/// Two rows are not compared whole: the refusal says each is a record held
+/// as a value, and to read the fields meant off it.
+#[test]
+fn a_row_compared_whole_is_told_to_read_its_fields() {
+    let found = present("c.Current", "x = exists(c.Previous) && c.Current == c.Previous");
+    assert_eq!(codes(&found), ["MOV_JSON_OPAQUE"]);
+    assert!(found[0].1.contains("is a record held as a value, and it can't be compared as a whole — read the fields you mean off it (`c.Current.Stage`)"), "{found:?}");
+}

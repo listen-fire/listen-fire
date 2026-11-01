@@ -1838,7 +1838,7 @@
    "snapshot": "graphs",
    "source": "import { email } from adapters\ninbox = connect email\n\nnode Archived {\n  Subject: <text>\n  node Attachments {\n    Name: <text | null>\n    File: <file>\n    node Versions {\n      Label: <text>\n    }\n  }\n}\n\nnode Strict {\n  Subject: <text>\n  node Attachments {\n    Missing: <text>\n  }\n}\n\nnode Typed {\n  Subject: <text>\n  node Attachments {\n    Pages: <text>\n  }\n}\nfunction m(e: <inbox-[:message]->>) {\n  g = graph<Archived> { ...e }\n}\n",
    "expected": [
-    "MOV_LISTEN_MISSING 28:1-28:1 'm' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to inbox-[:message]-> fire m"
+    "MOV_LISTEN_MISSING 28:1-28:1 'm' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to inbox-[:…]-> fire m"
    ]
   },
   {
@@ -1847,7 +1847,7 @@
    "source": "import { email } from adapters\ninbox = connect email\n\nnode Archived {\n  Subject: <text>\n  node Attachments {\n    Name: <text | null>\n    File: <file>\n    node Versions {\n      Label: <text>\n    }\n  }\n}\n\nnode Strict {\n  Subject: <text>\n  node Attachments {\n    Missing: <text>\n  }\n}\n\nnode Typed {\n  Subject: <text>\n  node Attachments {\n    Pages: <text>\n  }\n}\nfunction m(e: <inbox-[:message]->>) {\n  g = graph<Strict> { ...e }\n}\n",
    "expected": [
     "MOV_GRAPH_COPY_SHAPE 29:23-29:27 '...e' copies its 'Attachments' records, and <Strict> → Attachments doesn't fit them: it has no `Missing` — write 'Attachments' after the spread with a body ('Attachments: e-[x:Attachments]-> { field: x.Field }')",
-    "MOV_LISTEN_MISSING 28:1-28:1 'm' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to inbox-[:message]-> fire m"
+    "MOV_LISTEN_MISSING 28:1-28:1 'm' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to inbox-[:…]-> fire m"
    ]
   },
   {
@@ -1856,7 +1856,7 @@
    "source": "import { email } from adapters\ninbox = connect email\n\nnode Archived {\n  Subject: <text>\n  node Attachments {\n    Name: <text | null>\n    File: <file>\n    node Versions {\n      Label: <text>\n    }\n  }\n}\n\nnode Strict {\n  Subject: <text>\n  node Attachments {\n    Missing: <text>\n  }\n}\n\nnode Typed {\n  Subject: <text>\n  node Attachments {\n    Pages: <text>\n  }\n}\nfunction m(e: <inbox-[:message]->>) {\n  g = graph<Typed> { ...e }\n}\n",
    "expected": [
     "MOV_GRAPH_COPY_SHAPE 29:22-29:26 '...e' copies its 'Attachments' records, and <Typed> → Attachments doesn't fit them: its `Pages` is number, not text — write the text it should be: `Text.from(…)` — write 'Attachments' after the spread with a body ('Attachments: e-[x:Attachments]-> { field: x.Field }')",
-    "MOV_LISTEN_MISSING 28:1-28:1 'm' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to inbox-[:message]-> fire m"
+    "MOV_LISTEN_MISSING 28:1-28:1 'm' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to inbox-[:…]-> fire m"
    ]
   },
   {
@@ -1864,7 +1864,7 @@
    "snapshot": "graphs",
    "source": "import { email } from adapters\ninbox = connect email\n\nnode Archived {\n  Subject: <text>\n  node Attachments {\n    Name: <text | null>\n    File: <file>\n    node Versions {\n      Label: <text>\n    }\n  }\n}\n\nnode Strict {\n  Subject: <text>\n  node Attachments {\n    Missing: <text>\n  }\n}\n\nnode Typed {\n  Subject: <text>\n  node Attachments {\n    Pages: <text>\n  }\n}\nfunction m(e: <inbox-[:message]->>) {\n  g = graph<Strict> { ...e, Attachments: e-[x:Attachments]-> { Missing: x.Type } }\n}\n",
    "expected": [
-    "MOV_LISTEN_MISSING 28:1-28:1 'm' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to inbox-[:message]-> fire m"
+    "MOV_LISTEN_MISSING 28:1-28:1 'm' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to inbox-[:…]-> fire m"
    ]
   },
   {

@@ -399,6 +399,9 @@ fn a_window_from_now_is_judged_on_arrival_never_on_a_listed_hop() {
     );
     // On what arrives, or on a hop the arrival carries, it is judged with now.
     assert_eq!(check("listen to chat-[:Channels]->-[m:Messages WHERE m.`Posted At` WITHIN 1d]->-[:Interactions]-> fire f\n"), Vec::<String>::new());
+    // Spelled back as written: a window is a duration, not a text.
+    let plans = plans_of("listen to chat-[:Channels]->-[m:Messages WHERE m.`Posted At` WITHIN 1d AND NOT exists(m.Topic)]->-[:Interactions]-> fire f\n");
+    assert_eq!(spell(plans[0].hops[1].checked.as_ref().unwrap(), Some("m")), "m.`Posted At` WITHIN 1d AND NOT exists(m.Topic)");
     assert_eq!(check("listen to chat-[:Channels]->-[m:Messages WHERE m.`Posted At` WITHIN 1d]-> fire g\nfunction g(m: <chat-[:Message]->>) { return m.Topic }\n"), Vec::<String>::new());
 }
 
@@ -461,4 +464,22 @@ fn what_a_module_cannot_filter_on_a_hop_judged_on_arrival_costs_no_fetch() {
     assert_eq!(check("listen to chat-[:Channels]->-[m:Messages WHERE m.Text == \"b\"]->-[:Interactions]-> fire f\n"), Vec::<String>::new());
     // A listed hop is fetched: the host lists it, and filters what comes back.
     assert_eq!(answer_of("listen to at-[:Bases]->-[t:Tables WHERE t.Name == \"a\" AND t.Name != \"b\"]->-[:Changes]-> fire c\n").1, ["MOV_HOP_FILTER_RESIDUAL"]);
+}
+
+/// A file with no listen is shown one to paste for each function a listen
+/// could fire: a parameter typed by a record type is reached by the walk to
+/// an edge that announces it, since a listen ends on an edge.
+#[test]
+fn the_missing_listen_hint_ends_on_an_edge() {
+    let found: Vec<String> = check("").into_iter().filter(|d| d.starts_with("MOV_LISTEN_MISSING")).collect();
+    assert_eq!(
+        found,
+        [
+            "MOV_LISTEN_MISSING 1:161-1:161 'f' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to chat-[:Channels]->-[:Messages]->-[:Interactions]-> fire f",
+            "MOV_LISTEN_MISSING 2:1-2:1 'c' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to at-[:Bases]->-[:Tables]->-[:Changes]-> fire c",
+            "MOV_LISTEN_MISSING 3:1-3:1 'r' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to chat-[:Channels]->-[:Messages]->-[:Reactions]-> fire r",
+            "MOV_LISTEN_MISSING 4:1-4:1 'k' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to at-[:Bases]->-[:Tables]->-[:Records]->-[:Comments]-> fire k",
+            "MOV_LISTEN_MISSING 5:1-5:1 'n' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to crm-[:…]-> fire n",
+        ]
+    );
 }

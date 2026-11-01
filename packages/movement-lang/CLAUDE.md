@@ -125,6 +125,7 @@ wait (`await x-[:E]->`, `await new x-[:E]->`) traverses a listenable edge and
 pulls one record. This replaces, on purpose, the earlier principle that an event is a
 meta edge you cannot traverse (`8_event_edges.md`), and the checker's meta event
 kind that models it is superseded with it: don't "correct" code back towards it.
-Standing listens move onto the same edges in a later release; until then
-`listen to` keeps its own form. Decision record:
+A standing listen is a traversal onto the same edges (`listen to x-[…]-> fire f`,
+0.13); the settings form `listen to x { … }` is retired, and only parsed so the
+upgrade can rewrite it. Decision record:
 `plans/events-as-edges-2026-10-29/DESIGN.md` ("Why").
