@@ -1252,12 +1252,6 @@ export const WireDiscriminableEvent = z.object({
  *  split by its sender. */
 export const ADAPTER_DOOR_MAX_BATCH = 1000;
 
-/** The body the host's `emit` door accepts — shared with the conformance
- *  CLI's host double so a vendor is checked against the door's own shape. */
-export const AdapterEmitBody = z.object({
-  events: z.array(WireDiscriminableEvent).min(1).max(ADAPTER_DOOR_MAX_BATCH),
-});
-
 // ── Arrivals (adapter protocol 2.5 and 2.6; `arrivals.ts`) ──────────────────────
 
 /** One landing along a listenable edge: its fields, read back through the

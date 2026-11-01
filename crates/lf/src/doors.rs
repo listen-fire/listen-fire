@@ -5,7 +5,7 @@
 //!   POST /api/public/webhook-sync/<provider>/<install>   a provider's delivery
 //!        (`…/<install>/<key>`: one of the install's scoped webhooks, crate::subscriptions)
 //!        (`/hooks/<external>/<install>` is the same door under listen-fire's older name)
-//!   POST /api/public/adapter/<external>/emit  { events }  an external's new data
+//!   POST /api/public/adapter/<external>/emit             retired in 0.13: refused 410 once authenticated
 //!   POST /api/public/adapter/<external>/wake  { arrivals } what landed; or { keys }, resume what is parked
 //!
 //! An install is a credential in the secrets file; its name is the
@@ -16,7 +16,7 @@
 //! the external's manifest declares (`inbound`), or, for an external that
 //! declares none, by its `lf-external.yaml` `webhook:` block (the protocol's
 //! own scheme). A signed delivery with no usable secret is refused, as
-//! everywhere. Each delivery, and each emitted batch, is kept as a receipt
+//! everywhere. Each delivery, and each wake, is kept as a receipt
 //! holding the events it produced; one under a provider's delivery id kept
 //! before at its subscription is a duplicate, acked and kept out. Events are
 //! queued as `fire_event` work rows naming their delivery and the arrival
@@ -610,33 +610,6 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
             [install] => PushAuth::Authenticated(PushCaller { team_id: LOCAL_TENANT.into(), adapter_type: adapter_type.to_string(), subscription_id: install.to_string() }),
             _ => PushAuth::Ambiguous,
         })
-    }
-
-    async fn capture_pushed(&self, caller: &PushCaller, event: &Js) -> Result<Vec<Js>, String> {
-        Ok(vec![Js::Obj(obj! { "external" => Js::str(&caller.adapter_type), "event" => event.clone() })])
-    }
-
-    /// The batch as one delivery, kept with its receipt.
-    async fn enqueue_pushed(&self, caller: &PushCaller, captured: Vec<Js>, external_id: Option<&str>, request: &Js) -> Result<bool, String> {
-        if captured.is_empty() {
-            return Ok(true);
-        }
-        let receipt = NewDelivery {
-            id: uuid::Uuid::new_v4().to_string(),
-            external_id: external_id.map(str::to_string),
-            received_at: iso(0),
-            source: DeliverySource::Emit,
-            inline: false,
-            replay_of: None,
-            events: captured,
-            request: Some(request.clone()),
-        };
-        // An event fires nothing from 0.13: it is kept with its receipt, and said.
-        if self.store.keep_delivery(&caller.subscription_id, None, &receipt, &[], None, &[], &[]).map_err(|e| e.to_string())?.is_none() {
-            return Ok(false);
-        }
-        eprintln!("listen-fire: {}", crate::runs::retired_event_line(&caller.adapter_type));
-        Ok(true)
     }
 
     /// What landed for a listen is judged by a `fire_event` row of its own,
@@ -1571,6 +1544,27 @@ pub(crate) mod tests {
     async fn wake(doors: &LfDoors<'_, NoReader>, body: &str) -> Answer {
         let headers = vec![("authorization".to_string(), "Bearer t0k".to_string())];
         crate::inbound::answer_push(doors, crate::inbound::Push::Wake, "acme", &headers, body.as_bytes()).await
+    }
+
+    #[test]
+    fn the_emit_door_refuses_by_name_once_authenticated_and_keeps_nothing() {
+        let (dir, store) = state_file();
+        in_local(async {
+            let doors = push_doors(&store);
+            let emit = |token: &'static str| {
+                let headers = vec![("authorization".to_string(), format!("Bearer {token}"))];
+                let doors = &doors;
+                async move { crate::inbound::answer_push(doors, crate::inbound::Push::Emit, "acme", &headers, br#"{"events":[{"payload":{"n":1}}]}"#).await }
+            };
+            let refused = emit("t0k").await;
+            assert_eq!(refused.status, 410);
+            assert_eq!(refused.body.get("error").and_then(Js::as_str), Some("emit_retired"));
+            let message = refused.body.get("message").and_then(Js::as_str).unwrap_or_default().to_string();
+            assert!(message.contains("0.13") && message.contains("traversal") && message.contains("wake") && message.contains("adapter-protocol.md"), "{message}");
+            assert_eq!(emit("wrong").await.status, 401, "an unauthenticated caller is told nothing about the door");
+        });
+        assert_eq!(queued(&store), [], "a refused emit queues nothing");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

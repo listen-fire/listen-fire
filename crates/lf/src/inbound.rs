@@ -981,7 +981,7 @@ fn module_reply(answer: &Js) -> Answer {
 pub struct PushCaller {
     pub team_id: String,
     pub adapter_type: String,
-    /// The install's name: the subscription an emitted batch is kept under.
+    /// The install's name: the subscription a push is kept under.
     pub subscription_id: String,
 }
 
@@ -994,11 +994,6 @@ pub enum PushAuth {
 
 pub trait PushStore {
     async fn authenticate(&self, adapter_type: &str, headers: &[(String, String)]) -> Result<PushAuth, String>;
-    /// The receipts one event earns.
-    async fn capture_pushed(&self, caller: &PushCaller, event: &Js) -> Result<Vec<Js>, String>;
-    /// The batch's receipts kept and queued as one delivery. False, and
-    /// nothing queued, for a duplicate: its external id was kept before.
-    async fn enqueue_pushed(&self, caller: &PushCaller, captured: Vec<Js>, external_id: Option<&str>, request: &Js) -> Result<bool, String>;
     /// The arrivals that name their record logged, and a wake queued per wait
     /// parked on their records; those that landed judged against the
     /// listens on their edges, for the connection that pushed them.
@@ -1036,10 +1031,7 @@ pub async fn answer_push<S: PushStore>(store: &S, push: Push, adapter_type: &str
         Ok(PushAuth::Authenticated(caller)) => caller,
     };
     let answered = match push {
-        Push::Emit => match emit_body(body.as_ref()) {
-            Err(issue) => return bad_request(issue),
-            Ok((events, delivery_id)) => emit(store, &caller, events, delivery_id.as_deref(), &captured_push(raw_body)).await,
-        },
+        Push::Emit => return emit_retired(),
         Push::Wake => match wake_body(body.as_ref()) {
             Err(issue) => return bad_request(issue),
             Ok(woken) => wake(store, &caller, &woken, &captured_push(raw_body)).await,
@@ -1051,23 +1043,12 @@ pub async fn answer_push<S: PushStore>(store: &S, push: Push, adapter_type: &str
     })
 }
 
-/// `{ events, deliveryId? }`: 1 to 1,000 events, each read as the
-/// protocol's event (its declared keys, in order), and the external's id for
-/// the batch, when it names one.
-fn emit_body(body: Option<&Js>) -> Result<(Vec<Js>, Option<String>), (String, String)> {
-    let events = body.and_then(|b| b.get("events")).and_then(Js::as_array).ok_or(("events".to_string(), "expected an array".to_string()))?;
-    if events.is_empty() || events.len() > DOOR_MAX_BATCH {
-        return Err(("events".into(), format!("expected between 1 and {DOOR_MAX_BATCH} events")));
-    }
-    // The events as the protocol's `preprocessInbound` result reads them.
-    let read = module_wire::results::check("preprocessInbound", "emit", &Js::Obj(obj! { "events" => Js::Arr(events.to_vec()) }))
-        .map_err(|issue| ("events".to_string(), issue))?;
-    let delivery_id = match body.and_then(|b| b.get("deliveryId")) {
-        None => None,
-        Some(Js::Str(id)) if !id.is_empty() => Some(id.clone()),
-        Some(_) => return Err(("deliveryId".into(), "expected a non-empty string".into())),
-    };
-    Ok((read.get("events").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default(), delivery_id))
+/// What the emit door says to every authenticated push: from 0.13 an event
+/// fires no listen, so a door that kept it would accept and do nothing.
+const EMIT_RETIRED: &str = "`emit` is retired in listen-fire 0.13: a listen is a traversal, fired by the arrivals on its edge, so an event fires no listen; send what happened to `wake` as `arrivals` (docs/contracts/adapter-protocol.md, Reporting arrivals)";
+
+fn emit_retired() -> Answer {
+    Answer::of(410, Js::Obj(obj! { "error" => Js::str("emit_retired"), "message" => Js::str(EMIT_RETIRED) }))
 }
 
 /// What one push to the wake door wakes.
@@ -1101,39 +1082,6 @@ fn bad_request((path, message): (String, String)) -> Answer {
             "issues" => Js::Arr(vec![Js::Obj(obj! { "path" => Js::Str(path), "message" => Js::Str(message) })]),
         }),
     )
-}
-
-/// `emitEvents`: receipt each event and queue a run per receipt, the batch
-/// one delivery. A capture that throws fails the call (500) after the
-/// receipts already made are queued, since a receipt without its row would
-/// never run. A batch under an id kept before queues nothing.
-async fn emit<S: PushStore>(store: &S, caller: &PushCaller, events: Vec<Js>, delivery_id: Option<&str>, request: &Js) -> Result<Answer, String> {
-    let mut captured = Vec::new();
-    let mut failed = 0u64;
-    for event in &events {
-        match store.capture_pushed(caller, event).await {
-            Ok(receipts) => captured.extend(receipts),
-            Err(error) => {
-                failed += 1;
-                eprintln!("[AdapterDoors] emit capture failed for {}: {error}", caller.adapter_type);
-            }
-        }
-    }
-    let accepted = captured.len() as u64;
-    let any = !captured.is_empty();
-    // A batch with a failed capture is the caller's to send again: kept
-    // without its id, so the retry is kept rather than a duplicate.
-    let external_id = delivery_id.filter(|_| failed == 0);
-    if !store.enqueue_pushed(caller, captured, external_id, request).await? {
-        return Ok(Answer::of(202, Js::Obj(obj! { "accepted" => Js::Num(0.into()), "duplicate" => Js::Bool(true) })));
-    }
-    if any {
-        store.notify_pushed();
-    }
-    if failed > 0 {
-        return Ok(Answer::of(500, Js::Obj(obj! { "error" => Js::str("capture_failed"), "accepted" => Js::Num(accepted.into()), "failed" => Js::Num(failed.into()) })));
-    }
-    Ok(Answer::of(202, Js::Obj(obj! { "accepted" => Js::Num(accepted.into()) })))
 }
 
 /// Arrivals are logged, each waking the waits parked on its record; one no

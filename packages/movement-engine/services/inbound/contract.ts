@@ -409,15 +409,21 @@ export const INBOUND_CONTRACT_CASES: InboundContractCase[] = [
     },
   },
   {
-    name: 'emit with the install credential receipts the events: 202 accepted',
+    name: 'emit with the install credential is refused 410 by name, and keeps nothing',
     async run(backend) {
       await arrangeAnd(backend);
-      const answer = await post(backend, `/api/public/adapter/${CONTRACT_PUSH_TYPE}/emit`, json({ events: [{ payload: { n: 1 } }] }), () => ({
-        authorization: 'Bearer push-credential',
-      }));
-      assert.deepEqual([answer.status, answer.body], [202, { accepted: 1 }]);
+      for (const body of [{ events: [{ payload: { n: 1 } }] }, { events: [] }, { nonsense: true }]) {
+        const answer = await post(backend, `/api/public/adapter/${CONTRACT_PUSH_TYPE}/emit`, json(body), () => ({
+          authorization: 'Bearer push-credential',
+        }));
+        assert.equal(answer.status, 410);
+        const refusal = answer.body as { error?: unknown; message?: unknown };
+        assert.equal(refusal.error, 'emit_retired');
+        assert.match(String(refusal.message), /0\.13.*traversal.*wake/);
+      }
       const seen = await backend.observed();
-      assert.deepEqual([seen.enqueued, seen.notified], [1, 1]);
+      assert.deepEqual([seen.enqueued, seen.notified], [0, 0]);
+      assert.deepEqual(seen.arrivals, []);
     },
   },
   {
@@ -446,17 +452,6 @@ export const INBOUND_CONTRACT_CASES: InboundContractCase[] = [
       }));
       assert.equal(answer.status, 409);
       assert.equal((answer.body as { error?: unknown }).error, 'ambiguous_credential');
-    },
-  },
-  {
-    name: 'a malformed emit body is judged only after authentication: 400',
-    async run(backend) {
-      await arrangeAnd(backend);
-      const answer = await post(backend, `/api/public/adapter/${CONTRACT_PUSH_TYPE}/emit`, json({ events: [] }), () => ({
-        authorization: 'Bearer push-credential',
-      }));
-      assert.equal(answer.status, 400);
-      assert.equal((answer.body as { error?: unknown }).error, 'bad_request');
     },
   },
   {
@@ -513,8 +508,6 @@ export interface DeliveryReceiptContractCase {
 const CRM_WITH_IDS: ContractProvider = { ...CRM, deliveryId: { header: 'x-crm-delivery' } };
 const withIds = (overrides: Partial<ContractWorld> = {}): Partial<ContractWorld> => ({ providers: [CRM_WITH_IDS, SLACK], ...overrides });
 const crmSignedAs = (id: string) => (body: Buffer) => ({ ...crmSigned(body), 'x-crm-delivery': id });
-const EMIT_DOOR = `/api/public/adapter/${CONTRACT_PUSH_TYPE}/emit`;
-const pushCredential = () => ({ authorization: 'Bearer push-credential' });
 
 export const DELIVERY_RECEIPT_CONTRACT_CASES: DeliveryReceiptContractCase[] = [
   {
@@ -578,32 +571,6 @@ export const DELIVERY_RECEIPT_CONTRACT_CASES: DeliveryReceiptContractCase[] = [
       );
     },
   },
-  {
-    name: "emit's deliveryId keeps the batch out the second time",
-    async run(backend) {
-      await arrangeAnd(backend);
-      const batch = json({ events: [{ payload: { n: 1 } }], deliveryId: 'b-1' });
-      const first = await post(backend, EMIT_DOOR, batch, pushCredential);
-      assert.deepEqual([first.status, first.body], [202, { accepted: 1 }]);
-      const again = await post(backend, EMIT_DOOR, batch, pushCredential);
-      assert.deepEqual([again.status, again.body], [202, { accepted: 0, duplicate: true }]);
-      const seen = await backend.observed();
-      assert.deepEqual([seen.enqueued, seen.notified], [1, 1]);
-      assert.deepEqual(await backend.deliveries(), [{ externalId: 'b-1', source: 'emit', eventCount: 1 }]);
-    },
-  },
-  {
-    name: "an emit's deliveryId that is not a non-empty string is a 400",
-    async run(backend) {
-      await arrangeAnd(backend);
-      for (const deliveryId of ['', 7, null]) {
-        const answer = await post(backend, EMIT_DOOR, json({ events: [{ payload: { n: 1 } }], deliveryId }), pushCredential);
-        assert.equal(answer.status, 400);
-        assert.deepEqual((answer.body as { issues?: { path?: unknown }[] }).issues?.[0]?.path, 'deliveryId');
-      }
-      assert.deepEqual(await backend.deliveries(), []);
-    },
-  },
 ];
 
 // ── A reference backend's stores, in memory ───────────────────────────────
@@ -614,7 +581,7 @@ export const DELIVERY_RECEIPT_CONTRACT_CASES: DeliveryReceiptContractCase[] = [
 export function memoryInboundStores(arranged: ContractWorld): {
   store: InboundStore<DiscriminableEvent>;
   host: DeliveryHost<DiscriminableEvent>;
-  push: PushStore<DiscriminableEvent>;
+  push: PushStore;
   observed(): ContractObservations;
 } {
   const seen: ContractObservations = { captured: 0, enqueued: 0, arrivals: [], checkpoints: [], notified: 0 };
@@ -700,7 +667,7 @@ export function memoryInboundStores(arranged: ContractWorld): {
     },
   };
 
-  const push: PushStore<DiscriminableEvent> = {
+  const push: PushStore = {
     async authenticate({ adapterType, headers }) {
       const presented = firstPresentHeader(headers, ['authorization']);
       const team = firstPresentHeader(headers, ['x-listen-fire-team']);
@@ -714,14 +681,6 @@ export function memoryInboundStores(arranged: ContractWorld): {
       if (!only) return { kind: 'unauthorized' };
       if (others.length > 0) return { kind: 'ambiguous' };
       return { kind: 'authenticated', caller: { teamId: only.teamId, adapterType, credentialsId: only.credential } };
-    },
-    eventTypes: async () => [],
-    async capture({ event }) {
-      seen.captured += 1;
-      return [event];
-    },
-    async enqueue(captured) {
-      seen.enqueued += captured.length;
     },
     keepArrivals,
     notify: () => {

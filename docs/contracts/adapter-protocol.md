@@ -164,7 +164,7 @@ Listen-Fire sends your secret on every call. Your manifest picks how:
   from it which one. It is not a credential: authenticate by the secret.
 - When your server calls Listen-Fire (the push doors), it sends the same secret.
   The team header is optional there; send it only to disambiguate a secret
-  shared across teams. See [the doors](#the-two-doors-you-call).
+  shared across teams. See [the door](#the-door-you-call).
 
 ## The manifest and installing
 
@@ -849,7 +849,7 @@ Report them in one of three places:
   the [host door](#inbound-through-the-host-door);
 - `arrivals` on an `accepted` answer of [`checkInbound`](#a-module-that-checks-its-own-inbound)
   (`accepted(events, { arrivals })` in the module kit);
-- pushed to the `wake` door: `{ "arrivals": [ … ] }` ([the doors](#the-two-doors-you-call)).
+- pushed to the `wake` door: `{ "arrivals": [ … ] }` ([the door](#the-door-you-call)).
 
 What Listen-Fire does with them:
 
@@ -917,12 +917,13 @@ There are two ways in. Use whichever fits your system:
 
 Either way what you report is arrivals ([Reporting arrivals](#reporting-arrivals)).
 
-### The two doors you call
+### The door you call
 
 ```
-POST {listen-fire}/api/public/adapter/{adapterType}/emit   { "events": [ … ] }
 POST {listen-fire}/api/public/adapter/{adapterType}/wake   { "arrivals": [ … ] }
 ```
+
+The `emit` door of earlier releases is retired ([below](#emit-retired-in-013)).
 
 Authentication:
 
@@ -940,28 +941,25 @@ Answers:
 |---|---|---|
 | 202 | `{ "accepted": n }` | queued |
 | 400 | `{ "error": "bad_request", "issues": [{ "path", "message" }] }` | malformed body |
+| 410 | `{ "error": "emit_retired", "message" }` | any body sent to `emit`, once authenticated |
 | 401 | `{ "error": "unauthorized" }` | the secret matches no install of this type, the type is not installed, the named team has no matching install, or the type is a name a built-in adapter answers to |
 | 409 | `{ "error": "ambiguous_credential", "message" }` | the secret matches installs on several teams and no `x-listen-fire-team` was sent |
 | 413 | | the body is over 1 MB |
-| 500 | `{ "error": "capture_failed", "accepted", "failed" }` | some events could not be receipted (see below) |
 | 500 | `{ "error": "internal" }` | retry later |
 
 - Authentication is checked before the body, so an unauthenticated caller
   learns nothing about the body's shape.
 - 401 is the only refusal for anything unauthenticated: never 404.
-- A body carries 1 to 1,000 events or arrivals, in at most 1 MB of JSON
+- A body carries 1 to 1,000 arrivals, in at most 1 MB of JSON
   (`content-type: application/json`).
 - Delivery is at least once. Retry on 5xx or a network failure.
-- A `capture_failed` 500 on `emit` is partial: the events counted in
-  `accepted` were receipted and queued before the 500. Since `emit` is not
-  idempotent, resending the whole batch runs those again. Resend only the
-  events that failed, or accept the duplicate runs.
-
 #### emit: retired in 0.13
 
 From 0.13.0 an event fires no listen: a listen is a traversal, fired by the
-arrivals on its edge. `emit` still answers as above and keeps what it is
-sent, and runs nothing. Report what happened on `wake`.
+arrivals on its edge. So `emit` refuses by name rather than accept what could
+run nothing: once the caller is authenticated (401 and 409 are as for `wake`),
+whatever the body, it answers 410 `{ "error": "emit_retired", "message" }` and
+keeps nothing. Report what happened on `wake`.
 
 #### wake: what arrived
 
@@ -1604,7 +1602,7 @@ page = web.fetchUrl(u)
   ```json
   { "ok": false, "error": { "code": "rate_limited", "message": "429", "retryable": true }, "retryAfter": 30 }
   ```
-- **Event idempotency.** An event (`emit`, `poll`, `preprocessInbound`) may
+- **Event idempotency.** An event (`preprocessInbound`) may
   carry `idempotencyKey`, the provider's own id for the occurrence; a host
   that sees one key twice runs it once. A file ref's `size` (bytes) is kept
   wherever the ref travels.
@@ -1711,8 +1709,8 @@ A core slot may let listen-fire hear of a change instead of asking on a timer. T
 
 ## Limits and timeouts
 
-- **Push doors** (`emit`, `wake`): a JSON body of at most 1 MB, carrying 1 to
-  1,000 events or keys. A larger body is answered 413 before anything is
+- **The `wake` door**: a JSON body of at most 1 MB, carrying 1 to
+  1,000 arrivals. A larger body is answered 413 before anything is
   read.
 - **Host webhook door**: the raw body is read for
   `content-type: application/json` and
@@ -1889,7 +1887,7 @@ from `apps/cli`.
 
 ## Changes
 
-- **The settings poll and the events subscription leave the protocol** (adapter protocol 2.6, within version 2; 2026-11-01; listen-fire 0.13.0; breaking for a module that still answers them). `poll` is asked only as `{ edge, filter?, scope?, cursor? }` and answers `{ arrivals, cursor? }`; a 0.12 `{ events, checkpoint }` answer is refused, naming `arrivals`. `ensureEventSubscription` is asked only for an edge; `removeEventSubscription` keeps the 0.12 form only to remove a webhook a 0.12 listen registered, and a host removes such a webhook rather than refreshing it. `emit`'s events fire no listen. Why: a 0.13 listen is a traversal, and nothing a settings poll or an events webhook brings can fire one.
+- **The settings poll and the events subscription leave the protocol** (adapter protocol 2.6, within version 2; 2026-11-01; listen-fire 0.13.0; breaking for a module that still answers them). `poll` is asked only as `{ edge, filter?, scope?, cursor? }` and answers `{ arrivals, cursor? }`; a 0.12 `{ events, checkpoint }` answer is refused, naming `arrivals`. `ensureEventSubscription` is asked only for an edge; `removeEventSubscription` keeps the 0.12 form only to remove a webhook a 0.12 listen registered, and a host removes such a webhook rather than refreshing it. `emit` is refused 410 (`emit_retired`), naming `wake`; it kept events that fired no listen. Why: a 0.13 listen is a traversal, and nothing a settings poll or an events webhook brings can fire one.
 - **`inbound.redactFields`** (adapter protocol 2.6, within version 2; 2026-11-01; listen-fire 0.13.0; additive). A module names the body and query fields that may carry a credential, and a kept request drops them ([Declared inbound signatures](#declared-inbound-signatures)); a header whose name holds `token`, `key`, `auth`, `hmac` or `password`, or `set-cookie`, is never kept either. A module that names one states `protocolMinor: 6`. Why: Slack sends its legacy verification `token` in the body, and a kept request is stored for days. `@lf/slack` names `token`.
 - **`membersChange`** (within version 2, no bump; 2026-11-01; listen-fire 0.13.0). One member, `"pushed"` or `{ relistEverySeconds }`, says how a listen learns a hop's members changed, where this release's earlier builds read three (`cheapToList`, `parentChanges`, `relistEverySeconds`) ([Declaring a listenable edge](#declaring-a-listenable-edge)). Why: the three described one choice, and two of them together meant nothing.
 - **`owned.format`** (within version 2, no bump; 2026-11-01; listen-fire 0.13.0; additive). An owned scalar may say its values are a `cron` schedule or a `timeZone`, and the checker validates a literal by that format alone, never by the scalar's name ([describe](#describe)). Why: a scalar named `Zone` by another module was checked as a time zone by accident of its name.

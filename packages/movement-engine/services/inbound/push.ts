@@ -1,8 +1,8 @@
 // The two push doors a module calls when it owns its own inbound URL:
 //
-//   POST …/<adapterType>/emit  { events }    new data, receipted against the
-//                                            caller's triggers as a webhook
-//                                            delivery's events are
+//   POST …/<adapterType>/emit                retired in 0.13: refused 410 once
+//                                            authenticated (an event fires no
+//                                            listen)
 //   POST …/<adapterType>/wake  { arrivals }  what landed on listenable edges
 //                                            (adapter protocol 2.5), kept as
 //                                            a delivery is: logged, waking the
@@ -10,8 +10,8 @@
 //                                            the runs it starts
 //
 // The caller presents the credential its install holds and the install whose
-// secret matches is the team (the store decides). Both answer 202
-// `{ accepted }` once the rows are queued or the arrivals logged; a wake that
+// secret matches is the team (the store decides). A wake answers 202
+// `{ accepted }` once the arrivals are logged; an emit answers 410; a wake that
 // names `keys` (before 2.5) is a 400 naming `arrivals`; 401 with no detail when the
 // credential matches no install, so the door says nothing about who installed
 // what; 409 when it matches installs on several teams and none is named; 400
@@ -26,10 +26,9 @@
 // answer's `cost` rides back on the response of the call whose work asked,
 // so the run that made that call is charged.
 
-import { AdapterEmitBody, AdapterWakeBody, HostModelRequest, type Arrival, type HostModelAnswerShape, type HostModelRequestShape } from 'engine-contracts';
+import { AdapterWakeBody, HostModelRequest, type Arrival, type HostModelAnswerShape, type HostModelRequestShape } from 'engine-contracts';
 import type { z } from 'zod';
 
-import type { DiscriminableEvent, EventType } from '../translation_graph/adapter';
 import type { InboundAnswer } from './deliver';
 import type { InboundHeaders } from './verify';
 
@@ -49,13 +48,8 @@ export type PushAuth =
   | { kind: 'unauthorized' }
   | { kind: 'ambiguous' };
 
-export interface PushStore<Captured> {
+export interface PushStore {
   authenticate(input: { adapterType: string; headers: InboundHeaders }): Promise<PushAuth>;
-  /** The adapter's event-type union, best effort ([] when unreadable). */
-  eventTypes(caller: PushCaller): Promise<readonly EventType[]>;
-  /** The receipts one event earns (one per matching trigger). */
-  capture(input: { caller: PushCaller; event: DiscriminableEvent; eventTypes: readonly EventType[] }): Promise<Captured[]>;
-  enqueue(captured: readonly Captured[]): Promise<void>;
   /** Keep what arrived on the caller's listenable edges in one write, as
    *  `InboundStore.keepDelivery` keeps a delivery's arrivals: logged, waking
    *  the waits parked on each record, with each run an arrival starts
@@ -64,6 +58,9 @@ export interface PushStore<Captured> {
   notify(): void;
 }
 
+const EMIT_RETIRED =
+  '`emit` is retired in listen-fire 0.13: a listen is a traversal, fired by the arrivals on its edge, so an event fires no listen; send what happened to `wake` as `arrivals` (docs/contracts/adapter-protocol.md, Reporting arrivals)';
+
 export interface PushRequest {
   adapterType: string;
   headers: InboundHeaders;
@@ -71,7 +68,7 @@ export interface PushRequest {
   body: unknown;
 }
 
-async function callerOf<C>(store: PushStore<C>, request: PushRequest): Promise<PushCaller | InboundAnswer> {
+async function callerOf(store: PushStore, request: PushRequest): Promise<PushCaller | InboundAnswer> {
   const auth = await store.authenticate({ adapterType: request.adapterType, headers: request.headers });
   switch (auth.kind) {
     case 'authenticated':
@@ -101,40 +98,10 @@ function badRequest(error: z.ZodError): InboundAnswer {
   };
 }
 
-/**
- * Receipt each event against the caller's triggers and queue a run per
- * receipt. A capture that throws fails the call (500) AFTER the receipts
- * already made are queued, since a receipt without its row would never run.
- */
-export async function emitEvents<C>(
-  store: PushStore<C>,
-  input: { caller: PushCaller; events: readonly DiscriminableEvent[] },
-): Promise<{ accepted: number; failed: number }> {
-  const { caller } = input;
-  const eventTypes = input.events.length > 0 ? await store.eventTypes(caller) : [];
-  const captured: C[] = [];
-  let failed = 0;
-  for (const event of input.events) {
-    try {
-      captured.push(...(await store.capture({ caller, event, eventTypes })));
-    } catch (err) {
-      failed += 1;
-      logger.error('[AdapterDoors] emit capture failed', {
-        adapterType: caller.adapterType,
-        teamId: caller.teamId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-  await store.enqueue(captured);
-  if (captured.length > 0) store.notify();
-  return { accepted: captured.length, failed };
-}
-
 /** Keep what arrived. An arrival no live wait reads stays logged until a
  *  sweep passes it (`sweepArrivals`); `accepted` counts them. */
-export async function keepArrivals<C>(
-  store: PushStore<C>,
+export async function keepArrivals(
+  store: PushStore,
   input: { caller: PushCaller; arrivals: readonly Arrival[] },
 ): Promise<{ accepted: number }> {
   await store.keepArrivals({ adapterType: input.caller.adapterType, teamId: input.caller.teamId, arrivals: input.arrivals });
@@ -142,24 +109,20 @@ export async function keepArrivals<C>(
   return { accepted: input.arrivals.length };
 }
 
-export async function answerEmit<C>(store: PushStore<C>, request: PushRequest): Promise<InboundAnswer> {
+/** Authenticated like every push, then refused by name: from 0.13 an event
+ *  fires no listen, so a door that kept it would accept and do nothing. */
+export async function answerEmit(store: PushStore, request: PushRequest): Promise<InboundAnswer> {
   try {
-    const body = AdapterEmitBody.safeParse(request.body);
-    // Authenticate before judging the body, so an unauthenticated caller learns
-    // nothing about the shape the door wants.
     const caller = await callerOf(store, request);
     if ('status' in caller) return caller;
-    if (!body.success) return badRequest(body.error);
-    const { accepted, failed } = await emitEvents(store, { caller, events: body.data.events });
-    if (failed > 0) return { status: 500, body: { error: 'capture_failed', accepted, failed } };
-    return { status: 202, body: { accepted } };
+    return { status: 410, body: { error: 'emit_retired', message: EMIT_RETIRED } };
   } catch (err) {
     logger.error('[AdapterDoors] emit failed', { err });
     return { status: 500, body: { error: 'internal' } };
   }
 }
 
-export async function answerWake<C>(store: PushStore<C>, request: PushRequest): Promise<InboundAnswer> {
+export async function answerWake(store: PushStore, request: PushRequest): Promise<InboundAnswer> {
   try {
     const body = AdapterWakeBody.safeParse(request.body);
     const caller = await callerOf(store, request);
@@ -184,7 +147,7 @@ export class HostModelRefused extends Error {
   }
 }
 
-export async function answerModels<C>(store: PushStore<C>, request: PushRequest, models: HostModelCall): Promise<InboundAnswer> {
+export async function answerModels(store: PushStore, request: PushRequest, models: HostModelCall): Promise<InboundAnswer> {
   try {
     const body = HostModelRequest.safeParse(request.body);
     const caller = await callerOf(store, request);
