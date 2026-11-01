@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use std::rc::Rc;
 
-use movement_engine::listen_judge::{PlanArrival, Verdict, judge_arrival};
+use movement_engine::listen_judge::{ArrivedRecord, PlanArrival, Verdict, judge_arrival};
 use movement_engine::listen_landing::{DeclaredPayload, FileScope};
 use movement_parser::ast::{NamedArg, RValue, Statement};
 use movement_parser::catalog::types::CatalogSnapshot;
@@ -128,18 +128,18 @@ impl Listen {
         if !self.hears(credential) || arrival.not_for.as_deref().is_some_and(|not_for| not_for == self.pipeline()) {
             return None;
         }
-        let Some(landing) = arrival.landing.as_ref().and_then(|landing| landing.get("fields")) else {
-            return Some(Verdict::Skips { hop: plan.hops.len().saturating_sub(1) });
+        let arrived = |record: &Js| {
+            let fields = record.get("fields")?;
+            Some(ArrivedRecord { record_type: record.get("recordType").and_then(Js::as_str).map(str::to_string), fields: json_of(fields) })
         };
-        let fields_of = |record: &Js| match record.get("fields") {
-            Some(fields) => json_of(fields),
-            None => Json::Null,
+        let Some(landing) = arrival.landing.as_ref().and_then(arrived) else {
+            return Some(Verdict::Skips { hop: plan.hops.len().saturating_sub(1) });
         };
         let planned = PlanArrival {
             edge: arrival.edge.clone(),
             key: arrival.key.clone(),
-            landing: json_of(landing),
-            parents: arrival.parents.iter().map(fields_of).collect(),
+            landing,
+            parents: arrival.parents.iter().map(arrived).collect(),
             taken_applied: arrival.taken_applied,
         };
         Some(judge_arrival(plan, &planned, now_ms))
@@ -681,7 +681,12 @@ mod tests {
 
     /// An arrival of a company on the CRM's root edge, its fields as given.
     fn company(fields: &str) -> ArrivalIn {
-        let text = format!(r#"{{"arrivals":[{{"edge":"Company","identity":"company-1","landing":{{"recordId":"company-1","fields":{fields}}}}}]}}"#);
+        landed_as("Company", fields)
+    }
+
+    /// An arrival on the CRM's root edge whose landing says it is a `record_type`.
+    fn landed_as(record_type: &str, fields: &str) -> ArrivalIn {
+        let text = format!(r#"{{"arrivals":[{{"edge":"Company","identity":"company-1","landing":{{"recordId":"company-1","recordType":"{record_type}","fields":{fields}}}}}]}}"#);
         crate::arrivals::arrivals_of(&js(&text)).unwrap().remove(0)
     }
 
@@ -771,6 +776,18 @@ mod tests {
     }
 
     #[test]
+    fn an_arrival_on_the_listened_edge_name_fires_only_when_it_landed_on_the_record_type_the_listen_lands_on() {
+        let welcome = &crm_listens()[1];
+        let osprey = r#"{"id":"company-1","Name":"Osprey"}"#;
+        assert_eq!(welcome.fires(&landed_as("Comment", osprey), Some("acme"), 0.0), Some(Verdict::Skips { hop: 0 }), "another record type's edge of the same name");
+        let untyped = crate::arrivals::arrivals_of(&js(&format!(r#"{{"arrivals":[{{"edge":"Company","identity":"company-1","landing":{{"fields":{osprey}}}}}]}}"#))).unwrap().remove(0);
+        assert_eq!(
+            welcome.fires(&untyped, Some("acme"), 0.0),
+            Some(Verdict::Undecided { reason: "the arrival acme_crm reported on Company does not say its record type, so it cannot be told from another record type's Company (this listen's lands on Company)".into() })
+        );
+    }
+
+    #[test]
     fn an_arrival_marked_not_for_a_listen_runs_every_other_listen_on_its_edge_and_not_that_one() {
         let listens = crm_listens();
         let mut arrival = company(r#"{"id":"company-1","Name":"Osprey"}"#);
@@ -785,7 +802,7 @@ mod tests {
         let arrival = company(r#"{"id":"company-1","Name":"Osprey"}"#);
         assert_eq!(
             arrival_trigger_of("listen:crm:welcome", "acme_crm", &arrival, "2026-10-31T00:00:00.000Z").to_json(),
-            r#"{"pipelineInputId":"listen:crm:welcome","adapterType":"acme_crm","triggerType":"arrival","arrival":{"adapterType":"acme_crm","edge":"Company","landing":{"recordId":"company-1","fields":{"id":"company-1","Name":"Osprey"}}},"occurredAt":"2026-10-31T00:00:00.000Z"}"#
+            r#"{"pipelineInputId":"listen:crm:welcome","adapterType":"acme_crm","triggerType":"arrival","arrival":{"adapterType":"acme_crm","edge":"Company","landing":{"recordId":"company-1","recordType":"Company","fields":{"id":"company-1","Name":"Osprey"}}},"occurredAt":"2026-10-31T00:00:00.000Z"}"#
         );
     }
 

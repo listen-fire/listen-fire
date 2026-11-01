@@ -1,5 +1,5 @@
 {
-  "about": "Whether an arrival fires a listen, by its plan's filters. Each plan is the checker's answer for its listen's source against `catalog` (both runners check that it still is). Only hops judged on arrival are judged, each against the record the arrival carries for it: `landing` for the last hop, `parents` (aligned to the plan's `carries`) for earlier ones. A hop's checked part is always evaluated; its taken part too, unless `takenApplied` says the module applied it. `now` is the instant WITHIN measures from. The verdict is `{fires: true}`, `{skips: n}` (the hop whose filter fails, outermost 0), or `{undecided: reason}` (the host logs it and runs nothing). Held by listen-fire's Rust (crates/movement-engine/src/listen_judge.rs, judge_arrival), the engine's TypeScript (judgeArrival, through the wasm) and the hosted product.",
+  "about": "Whether an arrival fires a listen, by its plan's filters. Each plan is the checker's answer for its listen's source against `catalog` (both runners check that it still is). Only hops judged on arrival are judged, each against the record the arrival carries for it: `landing` for the last hop, `parents` (aligned to the plan's `carries`) for earlier ones. Each record states its `recordType`, which must be the record type its hop lands on (`to`): one edge name may hang off several record types (`pay`'s Customer and Invoice each have `Changes`), and a record of another type skips at its hop, the landing judged first; a record that states none is undecided. A hop's checked part is always evaluated; its taken part too, unless `takenApplied` says the module applied it. `now` is the instant WITHIN measures from. The verdict is `{fires: true}`, `{skips: n}` (the hop whose filter fails, outermost 0), or `{undecided: reason}` (the host logs it and runs nothing). Held by listen-fire's Rust (crates/movement-engine/src/listen_judge.rs, judge_arrival), the engine's TypeScript (judgeArrival, through the wasm) and the hosted product.",
   "catalog": {
     "adapters": {
       "chat": {
@@ -310,6 +310,91 @@
             "collections": {
               "Folders": {
                 "target": "Folder",
+                "capability": {
+                  "filter": "native",
+                  "supportsLimit": false
+                }
+              }
+            },
+            "writableRoots": {}
+          }
+        }
+      },
+      "pay": {
+        "canFire": false,
+        "constructionArgs": [],
+        "schemas": {
+          "": {
+            "positions": {
+              "Customer": {
+                "properties": {
+                  "Id": "text",
+                  "Name": "text"
+                },
+                "edges": {
+                  "Changes": {
+                    "target": "CustomerChange",
+                    "readable": false,
+                    "listenable": true,
+                    "identity": "Id",
+                    "delivery": "connection",
+                    "carries": [
+                      "Customers"
+                    ]
+                  }
+                },
+                "propertyCapabilities": {
+                  "Name": {
+                    "filterOperators": [
+                      "eq"
+                    ]
+                  }
+                }
+              },
+              "Invoice": {
+                "properties": {
+                  "Id": "text",
+                  "Number": "text"
+                },
+                "edges": {
+                  "Changes": {
+                    "target": "InvoiceChange",
+                    "readable": false,
+                    "listenable": true,
+                    "identity": "Id",
+                    "delivery": "connection",
+                    "carries": [
+                      "Invoices"
+                    ]
+                  }
+                },
+                "propertyCapabilities": {}
+              },
+              "CustomerChange": {
+                "properties": {
+                  "Id": "text",
+                  "Kind": "text"
+                },
+                "edges": {}
+              },
+              "InvoiceChange": {
+                "properties": {
+                  "Id": "text",
+                  "Kind": "text"
+                },
+                "edges": {}
+              }
+            },
+            "collections": {
+              "Customers": {
+                "target": "Customer",
+                "capability": {
+                  "filter": "native",
+                  "supportsLimit": false
+                }
+              },
+              "Invoices": {
+                "target": "Invoice",
                 "capability": {
                   "filter": "native",
                   "supportsLimit": false
@@ -796,41 +881,101 @@
         ],
         "movement": "filed"
       }
+    },
+    "customers": {
+      "source": "import { pay as pay_module } from adapters; pay = connect pay_module\nfunction welcomed(c: <pay-[:CustomerChange]->>) { return c.Kind }\nlisten to pay-[u:Customers WHERE u.Name == \"Acme\"]->-[c:Changes WHERE c.Kind == \"created\"]-> fire welcomed\n",
+      "plan": {
+        "adapter": "pay",
+        "carries": [
+          "Customers"
+        ],
+        "connection": "pay",
+        "hops": [
+          {
+            "alias": "u",
+            "edge": "Customers",
+            "from": "",
+            "judged": "arrival",
+            "taken": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Name",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "Acme"
+              },
+              "type": "compare"
+            },
+            "to": "Customer"
+          },
+          {
+            "alias": "c",
+            "checked": {
+              "left": {
+                "fieldOnly": true,
+                "propertyTypeId": "Kind",
+                "type": "edge_property"
+              },
+              "op": "eq",
+              "right": {
+                "type": "static",
+                "value": "created"
+              },
+              "type": "compare"
+            },
+            "edge": "Changes",
+            "from": "Customer",
+            "judged": "arrival",
+            "to": "CustomerChange"
+          }
+        ],
+        "movement": "welcomed"
+      }
     }
   },
   "cases": [
-    {"case": "a press on a lunch poll fires", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "office"}, {"Topic": "lunch-poll", "Posted At": "2026-10-30T10:00:00Z"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
-    {"case": "a press on a poll older than 3d skips at Messages", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "office"}, {"Topic": "lunch-poll", "Posted At": "2026-10-27T09:00:00Z"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
-    {"case": "a change of another kind skips at Changes", "plan": "changes", "arrival": {"edge": "Changes", "key": "c2", "landing": {"Id": "c2", "Kind": "updated"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 2}},
-    {"case": "a press carrying no message is undecided", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "office"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival carries no Messages record, which this listen's filter on it reads"}},
-    {"case": "a press carrying null for its message is undecided", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "office"}, null]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival carries no Messages record, which this listen's filter on it reads"}},
-    {"case": "a pushed press its module did not filter, in another channel, skips at Channels", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "random"}, {"Topic": "lunch-poll", "Posted At": "2026-10-30T10:00:00Z"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
-    {"case": "the same press fires when its module applied the taken parts", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "random"}, {"Topic": "lunch-poll", "Posted At": "2026-10-30T10:00:00Z"}], "takenApplied": true}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
-    {"case": "a press on another topic its module did not filter skips at Messages", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "office"}, {"Topic": "standup", "Posted At": "2026-10-30T10:00:00Z"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
-    {"case": "a press its module filtered is still checked: an old poll skips at Messages", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "random"}, {"Topic": "lunch-poll", "Posted At": "2026-10-27T09:00:00Z"}], "takenApplied": true}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
-    {"case": "a later hop that fails decides over a parent the arrival lacks", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1", "Value": "skip"}, "parents": [{"Name": "office"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 2}},
-    {"case": "an arrival on another edge skips at the last hop", "plan": "lunch", "arrival": {"edge": "Reactions", "landing": {"Id": "r1"}, "parents": [{"Name": "office"}, {"Topic": "lunch-poll", "Posted At": "2026-10-30T10:00:00Z"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 2}},
-    {"case": "a created change fires: the hops the host resolves are not judged here", "plan": "changes", "arrival": {"edge": "Changes", "key": "c1", "landing": {"Id": "c1", "Kind": "created"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
-    {"case": "a press whose value is its message's topic fires", "plan": "echo", "arrival": {"edge": "Interactions", "landing": {"Id": "t1", "Value": "lunch-poll"}, "parents": [{"Name": "office"}, {"Topic": "lunch-poll"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
-    {"case": "a press whose value is not its message's topic skips at Interactions", "plan": "echo", "arrival": {"edge": "Interactions", "landing": {"Id": "t1", "Value": "standup"}, "parents": [{"Name": "office"}, {"Topic": "lunch-poll"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 2}},
-    {"case": "a press whose filter reads a message it does not carry is undecided", "plan": "echo", "arrival": {"edge": "Interactions", "landing": {"Id": "t1", "Value": "lunch-poll"}, "parents": [{"Name": "office"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival carries no Messages record, which this listen's filter on it reads"}},
-    {"case": "an unfiltered mail whose taken part reads an owned field is undecided", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"Id": "m1", "Subject": "invoice 42"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "gmail did not apply this listen's filter on Messages to the arrival, and only gmail can evaluate Query"}},
-    {"case": "an unfiltered arrival that carries the owned field is judged by the value it carries as text, and fires", "plan": "keyed", "arrival": {"edge": "Emails", "landing": {"Id": "m3", "Subject": "q3 pipeline", "Key": "deals"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
-    {"case": "an unfiltered arrival that carries another value of the owned field skips", "plan": "keyed", "arrival": {"edge": "Emails", "landing": {"Id": "m4", "Subject": "q3 pipeline", "Key": "intros"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
-    {"case": "an unfiltered arrival that carries the empty value of the owned field carries it, and skips a listen naming another", "plan": "keyed", "arrival": {"edge": "Emails", "landing": {"Id": "m5", "Subject": "to the box", "Key": ""}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
-    {"case": "a mail its module filtered on the owned field fires on the checked part", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"Id": "m1", "Subject": "invoice 42"}, "takenApplied": true}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
-    {"case": "an unfiltered mail that fails the checked part skips, though the owned part is undecided", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"Id": "m2", "Subject": "lunch"}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
-    {"case": "a press scoring 5 fires: its negation is below 1", "plan": "negated", "arrival": {"edge": "Interactions", "landing": {"Id": "t1", "Score": 5}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
-    {"case": "a press scoring -2 skips at Interactions: its negation is not below 1", "plan": "negated", "arrival": {"edge": "Interactions", "landing": {"Id": "t1", "Score": -2}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 2}},
-    {"case": "a folder in a folder, each read from its own record, fires", "plan": "nested", "arrival": {"edge": "Files", "key": "f1", "landing": {"Id": "f1"}, "parents": [{"Name": "root"}, {"Name": "docs"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
-    {"case": "a folder in another folder skips at the inner Folders hop, not the first", "plan": "nested", "arrival": {"edge": "Files", "key": "f1", "landing": {"Id": "f1"}, "parents": [{"Name": "root"}, {"Name": "other"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
-    {"case": "the same two folders in the opposite order skip at the outer Folders hop", "plan": "nested", "arrival": {"edge": "Files", "key": "f1", "landing": {"Id": "f1"}, "parents": [{"Name": "docs"}, {"Name": "root"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
-    {"case": "a star whose carries are not in hop order, one a hop it does not take, fires", "plan": "stars", "arrival": {"edge": "Stars", "landing": {"Id": "s1", "Value": "yes"}, "parents": [{"Topic": "lunch-poll"}, {"Pinned": true}, {"Name": "office"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
-    {"case": "a star in another channel skips at Channels, read from the third carried record", "plan": "stars", "arrival": {"edge": "Stars", "landing": {"Id": "s1", "Value": "yes"}, "parents": [{"Topic": "lunch-poll"}, {"Pinned": true}, {"Name": "random"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
-    {"case": "a star on another topic skips at Messages, read from the first carried record", "plan": "stars", "arrival": {"edge": "Stars", "landing": {"Id": "s1", "Value": "yes"}, "parents": [{"Topic": "standup"}, {"Pinned": true}, {"Name": "office"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
-    {"case": "a null in the slot of a carried edge that is no hop changes nothing", "plan": "stars", "arrival": {"edge": "Stars", "landing": {"Id": "s1", "Value": "yes"}, "parents": [{"Topic": "lunch-poll"}, null, {"Name": "office"}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
-    {"case": "a star that stops short of the channel record is undecided on Channels", "plan": "stars", "arrival": {"edge": "Stars", "landing": {"Id": "s1", "Value": "yes"}, "parents": [{"Topic": "lunch-poll"}, {"Pinned": true}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival carries no Channels record, which this listen's filter on it reads"}},
-    {"case": "a poll posted a day before an instant in 2020 is within 3d of it", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "office"}, {"Topic": "lunch-poll", "Posted At": "2020-01-01T10:00:00Z"}]}, "now": "2020-01-02T10:00:00Z", "verdict": {"fires": true}},
-    {"case": "a poll posted a week before an instant in 2020 is not, and skips at Messages", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"Id": "t1"}, "parents": [{"Name": "office"}, {"Topic": "lunch-poll", "Posted At": "2019-12-26T10:00:00Z"}]}, "now": "2020-01-02T10:00:00Z", "verdict": {"skips": 1}}
+    {"case": "a press on a lunch poll fires", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1"}}, "parents": [{"recordType": "Channel", "fields": {"Name": "office"}}, {"recordType": "Message", "fields": {"Topic": "lunch-poll", "Posted At": "2026-10-30T10:00:00Z"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a press on a poll older than 3d skips at Messages", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1"}}, "parents": [{"recordType": "Channel", "fields": {"Name": "office"}}, {"recordType": "Message", "fields": {"Topic": "lunch-poll", "Posted At": "2026-10-27T09:00:00Z"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a change of another kind skips at Changes", "plan": "changes", "arrival": {"edge": "Changes", "key": "c2", "landing": {"recordType": "Change", "fields": {"Id": "c2", "Kind": "updated"}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 2}},
+    {"case": "a press carrying no message is undecided", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1"}}, "parents": [{"recordType": "Channel", "fields": {"Name": "office"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival carries no Messages record, which this listen's filter on it reads"}},
+    {"case": "a press carrying null for its message is undecided", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1"}}, "parents": [{"recordType": "Channel", "fields": {"Name": "office"}}, null]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival carries no Messages record, which this listen's filter on it reads"}},
+    {"case": "a pushed press its module did not filter, in another channel, skips at Channels", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1"}}, "parents": [{"recordType": "Channel", "fields": {"Name": "random"}}, {"recordType": "Message", "fields": {"Topic": "lunch-poll", "Posted At": "2026-10-30T10:00:00Z"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "the same press fires when its module applied the taken parts", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1"}}, "parents": [{"recordType": "Channel", "fields": {"Name": "random"}}, {"recordType": "Message", "fields": {"Topic": "lunch-poll", "Posted At": "2026-10-30T10:00:00Z"}}], "takenApplied": true}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a press on another topic its module did not filter skips at Messages", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1"}}, "parents": [{"recordType": "Channel", "fields": {"Name": "office"}}, {"recordType": "Message", "fields": {"Topic": "standup", "Posted At": "2026-10-30T10:00:00Z"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a press its module filtered is still checked: an old poll skips at Messages", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1"}}, "parents": [{"recordType": "Channel", "fields": {"Name": "random"}}, {"recordType": "Message", "fields": {"Topic": "lunch-poll", "Posted At": "2026-10-27T09:00:00Z"}}], "takenApplied": true}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a later hop that fails decides over a parent the arrival lacks", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1", "Value": "skip"}}, "parents": [{"recordType": "Channel", "fields": {"Name": "office"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 2}},
+    {"case": "an arrival on another edge skips at the last hop", "plan": "lunch", "arrival": {"edge": "Reactions", "landing": {"recordType": "Interaction", "fields": {"Id": "r1"}}, "parents": [{"recordType": "Channel", "fields": {"Name": "office"}}, {"recordType": "Message", "fields": {"Topic": "lunch-poll", "Posted At": "2026-10-30T10:00:00Z"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 2}},
+    {"case": "a created change fires: the hops the host resolves are not judged here", "plan": "changes", "arrival": {"edge": "Changes", "key": "c1", "landing": {"recordType": "Change", "fields": {"Id": "c1", "Kind": "created"}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a press whose value is its message's topic fires", "plan": "echo", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1", "Value": "lunch-poll"}}, "parents": [{"recordType": "Channel", "fields": {"Name": "office"}}, {"recordType": "Message", "fields": {"Topic": "lunch-poll"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a press whose value is not its message's topic skips at Interactions", "plan": "echo", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1", "Value": "standup"}}, "parents": [{"recordType": "Channel", "fields": {"Name": "office"}}, {"recordType": "Message", "fields": {"Topic": "lunch-poll"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 2}},
+    {"case": "a press whose filter reads a message it does not carry is undecided", "plan": "echo", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1", "Value": "lunch-poll"}}, "parents": [{"recordType": "Channel", "fields": {"Name": "office"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival carries no Messages record, which this listen's filter on it reads"}},
+    {"case": "an unfiltered mail whose taken part reads an owned field is undecided", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"recordType": "Message", "fields": {"Id": "m1", "Subject": "invoice 42"}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "gmail did not apply this listen's filter on Messages to the arrival, and only gmail can evaluate Query"}},
+    {"case": "an unfiltered arrival that carries the owned field is judged by the value it carries as text, and fires", "plan": "keyed", "arrival": {"edge": "Emails", "landing": {"recordType": "Email", "fields": {"Id": "m3", "Subject": "q3 pipeline", "Key": "deals"}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "an unfiltered arrival that carries another value of the owned field skips", "plan": "keyed", "arrival": {"edge": "Emails", "landing": {"recordType": "Email", "fields": {"Id": "m4", "Subject": "q3 pipeline", "Key": "intros"}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "an unfiltered arrival that carries the empty value of the owned field carries it, and skips a listen naming another", "plan": "keyed", "arrival": {"edge": "Emails", "landing": {"recordType": "Email", "fields": {"Id": "m5", "Subject": "to the box", "Key": ""}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "a mail its module filtered on the owned field fires on the checked part", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"recordType": "Message", "fields": {"Id": "m1", "Subject": "invoice 42"}}, "takenApplied": true}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "an unfiltered mail that fails the checked part skips, though the owned part is undecided", "plan": "invoices", "arrival": {"edge": "Messages", "landing": {"recordType": "Message", "fields": {"Id": "m2", "Subject": "lunch"}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "a press scoring 5 fires: its negation is below 1", "plan": "negated", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1", "Score": 5}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a press scoring -2 skips at Interactions: its negation is not below 1", "plan": "negated", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1", "Score": -2}}}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 2}},
+    {"case": "a folder in a folder, each read from its own record, fires", "plan": "nested", "arrival": {"edge": "Files", "key": "f1", "landing": {"recordType": "File", "fields": {"Id": "f1"}}, "parents": [{"recordType": "Folder", "fields": {"Name": "root"}}, {"recordType": "Folder", "fields": {"Name": "docs"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a folder in another folder skips at the inner Folders hop, not the first", "plan": "nested", "arrival": {"edge": "Files", "key": "f1", "landing": {"recordType": "File", "fields": {"Id": "f1"}}, "parents": [{"recordType": "Folder", "fields": {"Name": "root"}}, {"recordType": "Folder", "fields": {"Name": "other"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "the same two folders in the opposite order skip at the outer Folders hop", "plan": "nested", "arrival": {"edge": "Files", "key": "f1", "landing": {"recordType": "File", "fields": {"Id": "f1"}}, "parents": [{"recordType": "Folder", "fields": {"Name": "docs"}}, {"recordType": "Folder", "fields": {"Name": "root"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "a star whose carries are not in hop order, one a hop it does not take, fires", "plan": "stars", "arrival": {"edge": "Stars", "landing": {"recordType": "Star", "fields": {"Id": "s1", "Value": "yes"}}, "parents": [{"recordType": "Message", "fields": {"Topic": "lunch-poll"}}, {"recordType": "Pin", "fields": {"Pinned": true}}, {"recordType": "Channel", "fields": {"Name": "office"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a star in another channel skips at Channels, read from the third carried record", "plan": "stars", "arrival": {"edge": "Stars", "landing": {"recordType": "Star", "fields": {"Id": "s1", "Value": "yes"}}, "parents": [{"recordType": "Message", "fields": {"Topic": "lunch-poll"}}, {"recordType": "Pin", "fields": {"Pinned": true}}, {"recordType": "Channel", "fields": {"Name": "random"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "a star on another topic skips at Messages, read from the first carried record", "plan": "stars", "arrival": {"edge": "Stars", "landing": {"recordType": "Star", "fields": {"Id": "s1", "Value": "yes"}}, "parents": [{"recordType": "Message", "fields": {"Topic": "standup"}}, {"recordType": "Pin", "fields": {"Pinned": true}}, {"recordType": "Channel", "fields": {"Name": "office"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a null in the slot of a carried edge that is no hop changes nothing", "plan": "stars", "arrival": {"edge": "Stars", "landing": {"recordType": "Star", "fields": {"Id": "s1", "Value": "yes"}}, "parents": [{"recordType": "Message", "fields": {"Topic": "lunch-poll"}}, null, {"recordType": "Channel", "fields": {"Name": "office"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a star that stops short of the channel record is undecided on Channels", "plan": "stars", "arrival": {"edge": "Stars", "landing": {"recordType": "Star", "fields": {"Id": "s1", "Value": "yes"}}, "parents": [{"recordType": "Message", "fields": {"Topic": "lunch-poll"}}, {"recordType": "Pin", "fields": {"Pinned": true}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival carries no Channels record, which this listen's filter on it reads"}},
+    {"case": "a poll posted a day before an instant in 2020 is within 3d of it", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1"}}, "parents": [{"recordType": "Channel", "fields": {"Name": "office"}}, {"recordType": "Message", "fields": {"Topic": "lunch-poll", "Posted At": "2020-01-01T10:00:00Z"}}]}, "now": "2020-01-02T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "a poll posted a week before an instant in 2020 is not, and skips at Messages", "plan": "lunch", "arrival": {"edge": "Interactions", "landing": {"recordType": "Interaction", "fields": {"Id": "t1"}}, "parents": [{"recordType": "Channel", "fields": {"Name": "office"}}, {"recordType": "Message", "fields": {"Topic": "lunch-poll", "Posted At": "2019-12-26T10:00:00Z"}}]}, "now": "2020-01-02T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a customer's created change fires the listen on a customer's Changes", "plan": "customers", "arrival": {"edge": "Changes", "key": "cus_1", "landing": {"recordType": "CustomerChange", "fields": {"Id": "evt_1", "Kind": "created"}}, "parents": [{"recordType": "Customer", "fields": {"Id": "cus_1", "Name": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"fires": true}},
+    {"case": "an invoice's created change, on an edge of the same name, skips at the customer's Changes", "plan": "customers", "arrival": {"edge": "Changes", "key": "cus_1", "landing": {"recordType": "InvoiceChange", "fields": {"Id": "evt_1", "Kind": "created"}}, "parents": [{"recordType": "Invoice", "fields": {"Id": "in_1", "Number": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a customer's change carrying a parent of another record type skips at Customers", "plan": "customers", "arrival": {"edge": "Changes", "key": "cus_1", "landing": {"recordType": "CustomerChange", "fields": {"Id": "evt_1", "Kind": "created"}}, "parents": [{"recordType": "Invoice", "fields": {"Id": "in_1", "Name": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 0}},
+    {"case": "a landing of another record type skips although its fields pass every WHERE", "plan": "customers", "arrival": {"edge": "Changes", "key": "cus_1", "landing": {"recordType": "InvoiceChange", "fields": {"Id": "evt_1", "Kind": "created"}}, "parents": [{"recordType": "Customer", "fields": {"Id": "cus_1", "Name": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}},
+    {"case": "a change that does not say its record type is undecided", "plan": "customers", "arrival": {"edge": "Changes", "key": "cus_1", "landing": {"fields": {"Id": "evt_1", "Kind": "created"}}, "parents": [{"recordType": "Customer", "fields": {"Id": "cus_1", "Name": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival pay reported on Changes does not say its record type, so it cannot be told from another record type's Changes (this listen's lands on CustomerChange)"}},
+    {"case": "a change whose carried customer does not say its record type is undecided", "plan": "customers", "arrival": {"edge": "Changes", "key": "cus_1", "landing": {"recordType": "CustomerChange", "fields": {"Id": "evt_1", "Kind": "created"}}, "parents": [{"fields": {"Id": "cus_1", "Name": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"undecided": "the arrival pay reported on Changes carries a Customers record that does not say its record type (this listen's Customers lands on Customer)"}},
+    {"case": "an untyped change that fails a WHERE still skips", "plan": "customers", "arrival": {"edge": "Changes", "key": "cus_1", "landing": {"fields": {"Id": "evt_1", "Kind": "deleted"}}, "parents": [{"recordType": "Customer", "fields": {"Id": "cus_1", "Name": "Acme"}}]}, "now": "2026-10-31T10:00:00Z", "verdict": {"skips": 1}}
   ]
 }

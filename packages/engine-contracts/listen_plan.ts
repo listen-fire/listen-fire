@@ -83,23 +83,35 @@ export interface PlanArrival {
   edge: string;
   /** Its identity on that edge; absent on a root edge's arrival. */
   key?: string;
-  /** The record that landed, its fields. */
-  landing: Record<string, unknown>;
-  /** The records it carries from earlier hops, their fields, aligned to the
-   *  plan's `carries` (the k-th hop on an edge name reads the k-th carried
-   *  record of it); null for one it does not carry. */
-  parents?: Array<Record<string, unknown> | null>;
+  /** The record that landed. */
+  landing: ArrivedRecord;
+  /** The records it carries from earlier hops, aligned to the plan's
+   *  `carries` (the k-th hop on an edge name reads the k-th carried record
+   *  of it); null for one it does not carry. */
+  parents?: Array<ArrivedRecord | null>;
   /** Its module applied the plan's taken parts (a filtered poll or
    *  subscription). Absent or false, the judge evaluates them too. */
   takenApplied?: boolean;
 }
 
+/** A record an arrival carries, its landing or a parent: the record type its
+ *  module says it is, as the catalog names it, and its fields. One edge name
+ *  may hang off several record types (every object's `Changes`); the record
+ *  type is what tells their arrivals apart. A record of another type than
+ *  its hop lands on skips; one that states none leaves the arrival undecided. */
+export interface ArrivedRecord {
+  recordType?: string;
+  fields: Record<string, unknown>;
+}
+
+const arrivedRecordSchema: z.ZodType<ArrivedRecord> = z.object({ recordType: z.string().optional(), fields: z.record(z.string(), z.unknown()) }).strict();
+
 export const planArrivalSchema: z.ZodType<PlanArrival> = z
   .object({
     edge: z.string(),
     key: z.string().optional(),
-    landing: z.record(z.string(), z.unknown()),
-    parents: z.array(z.record(z.string(), z.unknown()).nullable()).optional(),
+    landing: arrivedRecordSchema,
+    parents: z.array(arrivedRecordSchema.nullable()).optional(),
     takenApplied: z.boolean().optional(),
   })
   .strict();

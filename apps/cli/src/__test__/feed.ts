@@ -66,7 +66,10 @@ export interface Board {
  *  A note's `Comments` are listenable: a page that lists a note carries its
  *  comments as arrivals keyed `comments:<note id>` (`awaitKeys`). With
  *  `siblings` present a note's own `Notes` are listenable too: the notes on
- *  its board, waited on under the board's id, as a board's `Notes` arrive. */
+ *  its board, waited on under the board's id, as a board's `Notes` arrive.
+ *  They land on a `Sibling`, a record type of their own: one edge name
+ *  landing on one record type from two record types is refused, as their
+ *  arrivals could not be told apart. */
 const FEED_MODULE = `const { readFileSync, appendFileSync, existsSync } = require('node:fs');
 const { join } = require('node:path');
 const { defineModule } = require(${JSON.stringify(join(MODULE_KIT, 'define.ts'))});
@@ -85,10 +88,11 @@ const note = {
   references: [
     { fieldId: 'comments', name: 'Comments', targetTypeId: 'comment', cardinality: 'many', direction: 'outgoing', readable: false, writable: false, listenable: true, identity: 'Id' },
     ...(siblings
-      ? [{ fieldId: 'notes', name: 'Notes', targetTypeId: 'note', cardinality: 'many', direction: 'outgoing', readable: false, writable: false, listenable: true, identity: 'Id', version: 'Edited' }]
+      ? [{ fieldId: 'notes', name: 'Notes', targetTypeId: 'sibling', cardinality: 'many', direction: 'outgoing', readable: false, writable: false, listenable: true, identity: 'Id', version: 'Edited' }]
       : []),
   ],
 };
+const sibling = { ...note, typeId: 'sibling', displayName: 'Sibling', references: [] };
 const comment = {
   typeId: 'comment',
   displayName: 'Comment',
@@ -202,9 +206,10 @@ module.exports = defineModule({
       },
       // Reached only along a note's \`Comments\`; published so it is named.
       { typeId: 'comment', displayName: 'Comment', readable: false, writable: false },
+      ...(siblings ? [{ typeId: 'sibling', displayName: 'Sibling', readable: false, writable: false }] : []),
     ],
     describe: async (typeId) =>
-      typeId === 'note' || typeId === 'Note' ? note : typeId === 'board' || typeId === 'Board' ? board : typeId === 'comment' || typeId === 'Comment' ? comment : null,
+      typeId === 'note' || typeId === 'Note' ? note : typeId === 'board' || typeId === 'Board' ? board : typeId === 'comment' || typeId === 'Comment' ? comment : siblings && (typeId === 'sibling' || typeId === 'Sibling') ? sibling : null,
     resolveEntity: async () => ({ candidates: [] }),
     // A polled event's payload holds its fields by id; a landing's, by name.
     getFieldValue: async ({ position, fieldId }) => {

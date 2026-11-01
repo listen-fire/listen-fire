@@ -92,10 +92,18 @@ describe('what the listen judge reads and answers', () => {
     expect(listenPlanSchema.parse(plan)).toEqual(plan);
   });
 
-  it('reads an arrival, its parents null where it carries none, and refuses a member it does not know', () => {
-    const arrival = { edge: 'Interactions', key: 't1', landing: { Id: 't1' }, parents: [{ Name: 'office' }, null], takenApplied: true };
+  it('reads an arrival, each record with the record type it states, its parents null where it carries none, and refuses a member it does not know', () => {
+    const arrival = {
+      edge: 'Interactions',
+      key: 't1',
+      landing: { recordType: 'Interaction', fields: { Id: 't1' } },
+      parents: [{ recordType: 'Channel', fields: { Name: 'office' } }, null, { fields: { Topic: 'lunch-poll' } }],
+      takenApplied: true,
+    };
     expect(planArrivalSchema.parse(arrival)).toEqual(arrival);
     expect(planArrivalSchema.safeParse({ ...arrival, filtered: true }).success).toBe(false);
+    expect(planArrivalSchema.safeParse({ ...arrival, landing: { Id: 't1' } }).success).toBe(false);
+    expect(planArrivalSchema.safeParse({ ...arrival, landing: { ...arrival.landing, recordId: 't1' } }).success).toBe(false);
   });
 
   it('answers exactly one of fires, skips and undecided', () => {

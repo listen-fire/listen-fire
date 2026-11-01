@@ -4,7 +4,7 @@
 // external the same two questions (crates/lf check.rs); an embedder asks
 // them of the adapter it loaded in process.
 
-import { undeclaredArrivalField, unreadableAnswerShapeFrom, unreadableListening, unreadableLiteralsFrom, unreadableOwnedField, unreadableSettingsBecome } from 'engine-contracts/catalog';
+import { ambiguousArrivals, undeclaredArrivalField, unreadableAnswerShapeFrom, unreadableListening, unreadableLiteralsFrom, unreadableOwnedField, unreadableSettingsBecome } from 'engine-contracts/catalog';
 import type { InstanceSchema } from 'movement-lang';
 
 import type { Adapter, AdapterManifest } from '../translation_graph/adapter';
@@ -37,6 +37,8 @@ export async function introspectAdapter(
     const refusal = unreadableListening({ entry }, entries, descriptors);
     if (refusal !== undefined) throw new Error(`${manifest.adapterType} lists '${entry.typeId}': ${refusal}`);
   }
+  const ambiguous = ambiguousArrivals(entries, descriptors);
+  if (ambiguous !== undefined) throw new Error(`${manifest.adapterType} declares ${ambiguous}`);
   if (manifest.listenSettingsBecome !== undefined) {
     const refusal = unreadableSettingsBecome(manifest.listenSettingsBecome, entries, descriptors);
     if (refusal !== undefined) throw new Error(`${manifest.adapterType} declares ${refusal}`);

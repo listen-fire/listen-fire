@@ -573,7 +573,7 @@ mod tests {
             "hops": [{ "edge": "Messages", "from": "", "to": "Message", "judged": "arrival",
                 "checked": { "type": "compare", "op": "eq", "left": { "type": "edge_property", "propertyTypeId": "Topic", "fieldOnly": true }, "right": { "type": "static", "value": "lunch" } } }]
         });
-        let judging = |topic: &str| json!({ "plan": plan, "arrival": { "edge": "Messages", "landing": { "Topic": topic } }, "nowMs": 0 }).to_string();
+        let judging = |topic: &str| json!({ "plan": plan, "arrival": { "edge": "Messages", "landing": { "recordType": "Message", "fields": { "Topic": topic } } }, "nowMs": 0 }).to_string();
         assert_eq!(judge(&judging("lunch")), (OK, json!({ "fires": true })));
         assert_eq!(judge(&judging("standup")), (OK, json!({ "skips": 0 })));
         let (status, answer) = judge(r#"{"plan":{},"arrival":{},"nowMs":0}"#);

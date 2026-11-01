@@ -1,6 +1,7 @@
 // A reference's edge capabilities: what 0.13 declares, and the three keys it
 // retired, refused rather than stripped.
 import {
+  ambiguousArrivals,
   parseWritePath,
   schemaEntryPointSchema,
   schemaFieldDescriptorSchema,
@@ -360,6 +361,43 @@ describe('a listening declaration', () => {
         "'Interactions' says its arrivals carry earlier hops, but 'carries' names 'Nope', and 'Messages' is a root collection: nothing comes before it",
       );
     });
+  });
+});
+
+// The same cases as listen-fire's `ambiguous_arrivals` test, with the same words.
+describe('a listenable edge name off several record types', () => {
+  const entry = (typeId: string, displayName: string, collectionName: string, more: object = {}) =>
+    schemaEntryPointSchema.parse({ typeId, displayName, collectionName, writable: false, readable: true, ...more });
+  const entries = [entry('invoice', 'Invoice', 'Invoices'), entry('customer', 'Customer', 'Customers')];
+  const described = (typeId: string, displayName: string, references: object[]) =>
+    [typeId, schemaTypeDescriptorSchema.parse({ typeId, displayName, fields: [], references })] as const;
+  const changes = (targetTypeId: string, listenable: boolean) => ({ fieldId: 'changes', name: 'Changes', targetTypeId, cardinality: 'many', direction: 'outgoing', listenable });
+  const module = (invoice: object[], customer: object[]) =>
+    new Map([
+      described('invoice', 'Invoice', invoice),
+      described('customer', 'Customer', customer),
+      described('change', 'Change', []),
+      described('invoice_change', 'InvoiceChange', []),
+      described('customer_change', 'CustomerChange', []),
+    ]);
+
+  it('lands on a record type of its own from each', () => {
+    expect(ambiguousArrivals(entries, module([changes('invoice_change', true)], [changes('customer_change', true)]))).toBeUndefined();
+  });
+
+  it('is refused landing on one record type from two of them', () => {
+    expect(ambiguousArrivals(entries, module([changes('change', true)], [changes('change', true)]))).toBe(
+      "'Changes' off 'Invoice' and 'Customer', each landing on 'Change': an arrival names its edge and the record type it landed on, so arrivals on these could not be told apart; land each on its own record type",
+    );
+  });
+
+  it('is not refused beside a root collection of the same name: its arrivals name no key', () => {
+    const rooted = [entries[0], entry('change', 'Change', 'Changes', { listenable: true })];
+    expect(ambiguousArrivals(rooted, module([changes('change', true)], []))).toBeUndefined();
+  });
+
+  it('is not refused where nothing arrives: an edge no listen can take', () => {
+    expect(ambiguousArrivals(entries, module([changes('change', true)], [changes('change', false)]))).toBeUndefined();
   });
 });
 

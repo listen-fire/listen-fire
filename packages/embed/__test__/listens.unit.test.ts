@@ -211,7 +211,7 @@ describe("the embedded host's listens", () => {
       saved: true,
       listens: 1,
     });
-    const person = (name: string, parents?: Array<{ fields: Record<string, unknown> } | null>): Arrival => ({
+    const person = (name: string, parents?: Array<{ recordType?: string; fields: Record<string, unknown> } | null>): Arrival => ({
       edge: 'People',
       key: 'company:acme',
       identity: `person-${name}`,
@@ -224,8 +224,9 @@ describe("the embedded host's listens", () => {
     expect(warned).toEqual(['people:f: an arrival on People cannot be judged (the arrival carries no Companies record, which this listen\'s filter on it reads): it runs nothing']);
     expect(written).toEqual([]);
 
-    // One that carries its company is judged by it.
-    const fired = await host.dispatch('acme', { adapterType: 'crm', arrivals: [person('Cy', [{ fields: { Name: 'Acme' } }]), person('Di', [{ fields: { Name: 'Globex' } }])] });
+    // One that carries its company is judged by it; one whose carried record is no company is not this listen's.
+    const company = (name: string, recordType = 'Company') => ({ recordType, fields: { Name: name } });
+    const fired = await host.dispatch('acme', { adapterType: 'crm', arrivals: [person('Cy', [company('Acme')]), person('Di', [company('Globex')]), person('Ed', [company('Acme', 'Person')])] });
     expect(fired).toHaveLength(1);
     expect(written).toEqual(['acme: Cy']);
   });

@@ -321,6 +321,42 @@ test('a run waiting on an invoice’s Changes is answered by the invoice’s nex
   }
 });
 
+// Every Stripe object's change edge is named Changes. An arrival names the
+// record type it landed on, and the host fires a listen only on its own: an
+// invoice's created change is not a customer's.
+const WELCOME = `import { stripe } from adapters
+import { stripe_account } from credentials
+
+pay = connect stripe using stripe_account
+
+function welcome(c: <pay-[:CustomerChange]->>) {
+  return c.Type
+}
+
+listen to pay-[:Customers]->-[c:Changes WHERE c.Kind == "created"]-> fire welcome
+`;
+
+test('a listen on a customer’s created Changes does not fire on an invoice’s created change, and does on a customer’s', async () => {
+  const world = await paymentsWorld();
+  writeFileSync(join(world.dir, 'movements/welcome.mvt'), WELCOME);
+  const serving = await served(world.dir);
+  const ran = (body: string) => (JSON.parse(body) as { runs: Array<{ movement: string; status: string }> }).runs.map((r) => `${r.movement} ${r.status}`);
+  try {
+    const url = (await serving.waitFor(/^stripe stripe_account: /)).replace(/^stripe stripe_account: /, '');
+    const invoiceCreated = await deliver(url, stripeEvent('invoice.created', stripeInvoice({ id: 'in_new', number: 'LL-new' }), { id: 'evt_invoice_created' }));
+    assert.ok(invoiceCreated.status >= 200 && invoiceCreated.status < 300, invoiceCreated.body);
+    assert.doesNotMatch(invoiceCreated.body, /"runs":\s*\[\s*\{/, invoiceCreated.body);
+    const customerCreated = await deliver(url, stripeEvent('customer.created', stripeCustomer({ id: 'cus_new' }), { id: 'evt_customer_created' }));
+    assert.equal(customerCreated.status, 202, customerCreated.body);
+    assert.deepEqual(ran(customerCreated.body), ['welcome completed']);
+    const runs = await run(world.dir, 'runs');
+    assert.equal(runs.out.trim().split('\n').filter((l) => l.includes('welcome')).length, 1, runs.out);
+  } finally {
+    await serving.stop();
+    await world.close();
+  }
+});
+
 test('upgrade rewrites `listen to pay { events: ["invoice.payment_failed"] }`', async () => {
   const world = await paymentsWorld();
   try {

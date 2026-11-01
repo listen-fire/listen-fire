@@ -983,6 +983,39 @@ fn unreadable_mapping(become_: &SettingsBecome, entries: &[Js], descriptors: &In
     None
 }
 
+/// The refusal of a listenable edge name that lands on one record type from
+/// more than one record type (engine-contracts `ambiguousArrivals` says the
+/// same). An arrival names its edge and the record type it landed on, and the
+/// host tells the arrivals on one edge name apart by that record type alone
+/// (every Stripe object's `Changes` lands on its own change type), so two of
+/// them landing on one record type could not be told apart. A root collection
+/// of the same name is not one of them: its arrivals name no key.
+pub fn ambiguous_arrivals(entries: &[Js], descriptors: &IndexMap<String, Js>) -> Option<String> {
+    let display = |type_id: &str| {
+        descriptors.get(type_id).or_else(|| entries.iter().find(|e| key(e.get("typeId")) == type_id)).map_or_else(|| type_id.to_string(), |d| key(d.get("displayName")))
+    };
+    // Each listenable edge name's landings: the record type, and where each edge to it hangs off.
+    let mut landings: IndexMap<String, IndexMap<String, Vec<String>>> = IndexMap::new();
+    let mut add = |edge: String, from: String, targets: Vec<String>| {
+        let by_target = landings.entry(edge).or_default();
+        for target in targets {
+            by_target.entry(target).or_default().push(from.clone());
+        }
+    };
+    for (owner, descriptor) in descriptors {
+        for reference in items(descriptor.get("references")).iter().filter(|r| Js::is_true(r.get("listenable"))) {
+            add(key(nullish_or(reference.get("name"), reference.get("fieldId"))), format!("'{}'", display(owner)), reference_target_type_ids(reference));
+        }
+    }
+    let (edge, target, froms) = landings.iter().flat_map(|(edge, by_target)| by_target.iter().map(move |(target, froms)| (edge, target, froms))).find(|(_, _, froms)| froms.len() > 1)?;
+    let (last, rest) = froms.split_last()?;
+    Some(format!(
+        "'{edge}' off {} and {last}, each landing on '{}': an arrival names its edge and the record type it landed on, so arrivals on these could not be told apart; land each on its own record type",
+        rest.join(", "),
+        display(target)
+    ))
+}
+
 /// `carries` names the hops before the declarant, outermost first: read
 /// from the innermost, each must be an edge into the type the one after it
 /// hangs off.
@@ -1589,5 +1622,28 @@ mod tests {
             changes(r#"["Nope","Bases","Tables"]"#).unwrap(),
             "'Changes' says its arrivals carry earlier hops, but 'carries' names 'Nope', and 'Bases' is a root collection: nothing comes before it"
         );
+    }
+
+    /// The same cases as engine-contracts' `ambiguousArrivals` tests, with the same words.
+    #[test]
+    fn a_listenable_edge_name_off_several_record_types_must_land_on_a_record_type_of_its_own_from_each() {
+        let entry = |id: &str, name: &str, collection: &str, more: &str| js(&format!(r#"{{"typeId":"{id}","displayName":"{name}","collectionName":"{collection}","writable":false,"readable":true{more}}}"#));
+        let entries = [entry("invoice", "Invoice", "Invoices", ""), entry("customer", "Customer", "Customers", "")];
+        let described = |id: &str, name: &str, references: &str| (id.to_string(), js(&format!(r#"{{"typeId":"{id}","displayName":"{name}","fields":[],"references":[{references}]}}"#)));
+        let changes = |target: &str, listenable: bool| format!(r#"{{"fieldId":"changes","name":"Changes","targetTypeId":"{target}","cardinality":"many","direction":"outgoing","listenable":{listenable}}}"#);
+        let module = |invoice: &str, customer: &str| -> IndexMap<String, Js> {
+            [described("invoice", "Invoice", invoice), described("customer", "Customer", customer), described("change", "Change", ""), described("invoice_change", "InvoiceChange", ""), described("customer_change", "CustomerChange", "")].into_iter().collect()
+        };
+        let own = module(&changes("invoice_change", true), &changes("customer_change", true));
+        assert_eq!(ambiguous_arrivals(&entries, &own), None, "each lands on its own record type");
+        let shared = module(&changes("change", true), &changes("change", true));
+        assert_eq!(
+            ambiguous_arrivals(&entries, &shared).unwrap(),
+            "'Changes' off 'Invoice' and 'Customer', each landing on 'Change': an arrival names its edge and the record type it landed on, so arrivals on these could not be told apart; land each on its own record type"
+        );
+        let unlistened = module(&changes("change", true), &changes("change", false));
+        assert_eq!(ambiguous_arrivals(&entries, &unlistened), None, "nothing arrives on an edge no listen can take");
+        let rooted = [entries[0].clone(), entry("change", "Change", "Changes", r#","listenable":true"#)];
+        assert_eq!(ambiguous_arrivals(&rooted, &module(&changes("change", true), "")), None, "a root collection's arrivals name no key");
     }
 }

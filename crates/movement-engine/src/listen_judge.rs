@@ -11,6 +11,12 @@
 //! it applied it: the host re-checks every conjunct the module did not
 //! confirm it took.
 //!
+//! Each record the arrival carries, its landing and its parents, must be of
+//! the record type its hop lands on: one edge name may hang off several
+//! record types (every Stripe object's `Changes`), and the record type is
+//! what tells their arrivals apart. A record of another type skips; one that
+//! states no type cannot be told apart, so the arrival is undecided.
+//!
 //! The hops are an AND, so a hop that fails decides the verdict even when an
 //! earlier one could not be judged; only an arrival no hop fails can be
 //! undecided. An undecided arrival runs nothing, and the host logs why.
@@ -38,17 +44,29 @@ pub struct PlanArrival {
     /// Its identity on that edge; absent on a root edge's arrival.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
-    /// The record that landed, its fields.
-    pub landing: Json,
-    /// The records it carries from earlier hops, their fields, aligned to
-    /// the plan's `carries` (the k-th hop on an edge name reads the k-th
-    /// carried record of it); null for one it does not carry.
+    /// The record that landed.
+    pub landing: ArrivedRecord,
+    /// The records it carries from earlier hops, aligned to the plan's
+    /// `carries` (the k-th hop on an edge name reads the k-th carried record
+    /// of it); null for one it does not carry.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub parents: Vec<Json>,
+    pub parents: Vec<Option<ArrivedRecord>>,
     /// Its module applied the plan's taken parts (a filtered poll or
     /// subscription); absent, it did not, and the judge evaluates them.
     #[serde(default)]
     pub taken_applied: bool,
+}
+
+/// A record an arrival carries, its landing or a parent: the record type its
+/// module says it is, as the catalog names it, and its fields. One edge name
+/// may hang off several record types (every object's `Changes`); the record
+/// type is what tells their arrivals apart.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArrivedRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_type: Option<String>,
+    pub fields: Json,
 }
 
 /// Whether an arrival fires a listen. On the wire `{"fires":true}`,
@@ -82,23 +100,35 @@ pub fn judge_arrival(plan: &ListenPlan, arrival: &PlanArrival, now_ms: f64) -> V
     if arrival.edge != plan.hops[last].edge {
         return Verdict::Skips { hop: last };
     }
-    let records: Vec<Option<Js>> = plan
+    let carried: Vec<Option<&ArrivedRecord>> = plan
         .hops
         .iter()
         .enumerate()
         .map(|(i, hop)| {
             if i == last {
-                return Some(js_of_json(&arrival.landing));
+                return Some(&arrival.landing);
             }
             // An edge crossed twice (a folder in a folder) is carried twice:
             // the k-th hop on a name reads the k-th carried record of it.
             let nth = plan.hops[..i].iter().filter(|earlier| earlier.edge == hop.edge).count();
             let at = plan.carries.iter().enumerate().filter(|(_, edge)| **edge == hop.edge).nth(nth)?.0;
-            arrival.parents.get(at).filter(|parent| !parent.is_null()).map(js_of_json)
+            arrival.parents.get(at)?.as_ref()
         })
         .collect();
-    let judge = Judge { plan, records: &records, now_ms };
     let mut undecided = None;
+    // The landing first: an arrival on another record type's edge of the
+    // same name is not this listen's, whatever it carries.
+    for (i, record) in std::iter::once(last).chain(0..last).filter_map(|i| Some((i, carried[i]?))) {
+        match &record.record_type {
+            Some(stated) if *stated == plan.hops[i].to => {}
+            Some(_) => return Verdict::Skips { hop: i },
+            None => {
+                undecided.get_or_insert_with(|| untyped(plan, &arrival.edge, i));
+            }
+        }
+    }
+    let records: Vec<Option<Js>> = carried.iter().map(|record| record.map(|record| js_of_json(&record.fields))).collect();
+    let judge = Judge { plan, records: &records, now_ms };
     for (i, hop) in plan.hops.iter().enumerate().filter(|(_, hop)| hop.judged == HopJudged::Arrival) {
         match judge.hop(i, hop, arrival.taken_applied) {
             Judged::Holds => {}
@@ -109,6 +139,18 @@ pub fn judge_arrival(plan: &ListenPlan, arrival: &PlanArrival, now_ms: f64) -> V
         }
     }
     undecided.map_or(Verdict::Fires, |reason| Verdict::Undecided { reason })
+}
+
+/// Why an arrival whose hop-`i` record states no record type cannot be
+/// judged: it cannot be told from an arrival on another record type's edge
+/// of the same name.
+fn untyped(plan: &ListenPlan, edge: &str, i: usize) -> String {
+    let (module, hop) = (&plan.adapter, &plan.hops[i]);
+    if i + 1 == plan.hops.len() {
+        format!("the arrival {module} reported on {edge} does not say its record type, so it cannot be told from another record type's {edge} (this listen's lands on {})", hop.to)
+    } else {
+        format!("the arrival {module} reported on {edge} carries a {} record that does not say its record type (this listen's {} lands on {})", hop.edge, hop.edge, hop.to)
+    }
 }
 
 enum Judged {

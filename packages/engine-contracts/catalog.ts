@@ -1865,6 +1865,38 @@ function unreadableCarries(
   return undefined;
 }
 
+/**
+ * The refusal of a listenable edge name that lands on one record type from
+ * more than one record type (listen-fire's describe says the same). An
+ * arrival names its edge and the record type it landed on, and the host
+ * tells the arrivals on one edge name apart by that record type alone (every
+ * Stripe object's `Changes` lands on its own change type), so two of them
+ * landing on one record type could not be told apart. A root collection of
+ * the same name is not one of them: its arrivals name no key.
+ */
+export function ambiguousArrivals(entries: readonly SchemaEntryPoint[], descriptors: ReadonlyMap<string, SchemaTypeDescriptor>): string | undefined {
+  const display = (typeId: string) => descriptors.get(typeId)?.displayName ?? entries.find((e) => e.typeId === typeId)?.displayName ?? typeId;
+  // Each listenable edge name's landings: the record type, and where each edge to it hangs off.
+  const landings = new Map<string, Map<string, string[]>>();
+  const add = (edge: string, from: string, targets: readonly string[]) => {
+    const byTarget = landings.get(edge) ?? new Map<string, string[]>();
+    for (const target of targets) byTarget.set(target, [...(byTarget.get(target) ?? []), from]);
+    landings.set(edge, byTarget);
+  };
+  for (const [owner, descriptor] of descriptors) {
+    for (const reference of descriptor.references) {
+      if (reference.listenable === true) add(reference.name ?? reference.fieldId, `'${display(owner)}'`, referenceTargetTypeIds(reference));
+    }
+  }
+  for (const [edge, byTarget] of landings) {
+    for (const [target, froms] of byTarget) {
+      if (froms.length < 2) continue;
+      return `'${edge}' off ${froms.slice(0, -1).join(', ')} and ${froms[froms.length - 1]}, each landing on '${display(target)}': an arrival names its edge and the record type it landed on, so arrivals on these could not be told apart; land each on its own record type`;
+    }
+  }
+  return undefined;
+}
+
 /** Why a key's `absent` cannot be compared as its key compares a value:
  *  on a `type` key, a list on an `eq` key that is not one value, or a value
  *  its `values` do not spell. */

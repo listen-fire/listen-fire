@@ -14,7 +14,7 @@ import { listenPlanSchema, verdictSchema } from 'engine-contracts';
 import { callJudgeArrival, callLandingMisfits, callLandingNode, callListenIdentity } from 'movement-lang';
 import { z } from 'zod';
 
-import type { Arrival, ListenPlan, PlanArrival, TriggerEvent, Verdict } from 'engine-contracts';
+import type { ArrivedRecord, Arrival, AwaitLanding, ListenPlan, PlanArrival, TriggerEvent, Verdict } from 'engine-contracts';
 import type { CheckAnswer, Program } from 'movement-lang';
 
 import { listenConstructionsOf } from '../movement/file_listeners';
@@ -134,12 +134,19 @@ export function listenFires(listen: PlannedListen, arrival: Arrival, delivery: {
     {
       edge: arrival.edge,
       ...(arrival.key !== undefined ? { key: arrival.key } : {}),
-      landing: arrival.landing.fields,
-      ...(arrival.parents !== undefined ? { parents: arrival.parents.map((parent) => parent?.fields ?? null) } : {}),
+      landing: arrivedRecord(arrival.landing),
+      ...(arrival.parents !== undefined ? { parents: arrival.parents.map((parent) => (parent === null ? null : arrivedRecord(parent))) } : {}),
       ...(arrival.takenApplied === true ? { takenApplied: true } : {}),
     },
     nowMs,
   );
+}
+
+/** What the judge reads of a record an arrival carries: its record type,
+ *  which tells it from another record type's edge of the same name, and its
+ *  fields. */
+function arrivedRecord(landing: AwaitLanding): ArrivedRecord {
+  return { ...(landing.recordType !== undefined ? { recordType: landing.recordType } : {}), fields: landing.fields };
 }
 
 /** The edges the check stamps as opening waits on the parameter of the

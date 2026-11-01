@@ -692,8 +692,11 @@ polled), `bounded: false` without `boundedBy` (or `boundedBy` on a bounded
 edge), a `boundedBy` field the landing does not declare, a `carries` hop that
 is no edge into the type the next one hangs off, `cheapToList` with neither
 `parentChanges` nor `relistEverySeconds` (or both, or either without
-`cheapToList`), `parentChanges: "pushed"` on an edge that is not `listenable`, a number that is not a positive whole number of seconds, or a
-field of kind `owned` that names no scalar.
+`cheapToList`), `parentChanges: "pushed"` on an edge that is not `listenable`, a number that is not a positive whole number of seconds, a
+field of kind `owned` that names no scalar, or one listenable edge name that
+lands on the same record type from two record types: an arrival says only
+its edge and the record type it landed on, so give each its own record type
+to land on.
 
 A reference that still declares `awaitable` or `watchable` (retired in 0.13)
 is refused when `listen-fire` describes your adapter, naming `listenable`.
@@ -741,6 +744,15 @@ From adapter protocol 2.6 an arrival may say more, for the listens on its edge
   edges (an entry point declaring `listenable`) lands on no record's edge, so
   it names no key. No wait reads it; the listens on that edge do. A gone
   arrival always names its key.
+- **`recordType` on the landing and on each parent**: the record type it is,
+  as you describe it (its `displayName`). One edge name may hang off several
+  of your record types (every object's `Changes`), and the host tells their
+  arrivals apart by the record type alone: a listen on
+  `pay-[:Customers]->-[c:Changes]->` fires only on a landing that says it is
+  the record type a customer's `Changes` lands on, carried with a parent
+  that says it is a `Customer`. An arrival whose landing or parent states
+  another record type is not that listen's; one that states none runs no
+  listen, and the host says why.
 - **`parents`**: the records of the earlier hops the edge declares it
   `carries`, outermost first, each a landing or `null` for one it cannot
   carry. A listen's filter on an earlier hop is judged against them.
