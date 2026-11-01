@@ -75,6 +75,9 @@ export const telegramModule = defineModule({
     scheme: 'telegram_secret_token',
     signatureHeaders: ['x-telegram-bot-api-secret-token'],
   },
+  // Adapter protocol 2.6: a message arrives on the root `Messages` edge,
+  // which names no record it hangs off (`key`).
+  protocolMinor: 6,
   create: (ctx) => new TelegramAdapter(telegramSourcesFrom(ctx)),
 });
 

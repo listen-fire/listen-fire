@@ -17,7 +17,7 @@ export const TELEGRAM_HANDBOOK_SECTION: HandbookSection = {
   title: 'Telegram — bot chats, keyboards, and acting in the chat',
   content: `## Telegram — bot chats, keyboards, and acting in the chat
 
-A Telegram message is always written along an edge: \`-[:Messages]->\` off a linked person, which sends into their private chat with the bot, or \`-[:Replies]->\` off a message that arrived, which threads under it. The chat is never a field — it comes from whatever the write hangs off. Three things about Telegram are worth settling before you build one: what a send can carry, how little the bot can see, and how a keyboard turns a message into something a person can act on with one tap.
+A Telegram message is always written along an edge: \`-[:Messages]->\` off a linked person, which sends into their private chat with the bot, or \`-[:Replies]->\` off a message that arrived, which threads under it. The chat is never a field — it comes from whatever the write hangs off. Four things about Telegram are worth settling before you build one: what a send can carry, how little the bot can see, what runs when a message arrives, and how a keyboard turns a message into something a person can act on with one tap.
 
 ### what-a-send-carries
 
@@ -36,6 +36,18 @@ The write above starts a conversation from nothing: nobody has to message the bo
 Far less than "a chat app" suggests. In a one-to-one chat with the bot it sees every message sent to it. In a group it sees only direct replies to it and messages that @-mention it. It has no access to a person's other conversations at all — Telegram at large is never read.
 
 So the natural framing is the bot chat as a deliberate capture channel: someone messages the bot, or forwards something to it, and that is the trigger surface. Never promise "everything posted in a group": that needs the bot's owner to turn privacy mode off, which the shared built-in bot cannot do — only somebody running their own bot can. And on the shared bot a person must complete the one-time linking step before anything they send reaches a run at all; their own bot has no such gate. Both facts change what is possible, so say them out loud while someone is describing what they want.
+
+### running-when-a-message-arrives
+
+\`\`\`
+listen to tg-[m:Messages WHERE m.\`Chat Id\` == "42"]-> fire log_it
+
+function log_it(m: <tg-[:Messages]->>) {
+  write m-[:Replies]-> { Text: "Got it: \${m.Text}" }
+}
+\`\`\`
+
+A listen on \`Messages\` runs once for each message the bot receives, the message itself as the parameter: read its \`Text\`, \`Sender Username\` and the rest straight off it, and reply under it. Telegram cannot list chats, so a listen narrows to one by the message's own \`Chat Id\` (a private chat's is the person's user id, shown on their \`Linked Users\` row), or takes every chat the bot is in by leaving the WHERE out. Only plain messages arrive: an edited message, a channel post and a button tap run nothing.
 
 ### keyboards-are-verbatim
 
@@ -106,7 +118,7 @@ node Decision {
   Send: <boolean>
 }
 
-function confirm_send(msg: <tg-[:Message]->>) {
+function confirm_send(msg: <tg-[:Messages]->>) {
   form = write forms-[:Forms]-> { Title: "Send the update?", Fields: Decision }
 
   write msg-[:Replies]-> {
@@ -128,7 +140,7 @@ function confirm_send(msg: <tg-[:Message]->>) {
   }
 }
 
-listen to tg {} fire confirm_send
+listen to tg-[:Messages]-> fire confirm_send
 `,
     },
   ],

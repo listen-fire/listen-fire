@@ -94,7 +94,8 @@ async function runOne(mode: Mode): Promise<Record<string, number>> {
     const adapter = adapterFor(`token-${round}`);
     await adapter.describe('Message');
     const inbound = await adapter.preprocessInbound?.({ raw: UPDATE });
-    const message = { adapterType: 'telegram', recordType: 'Message', identity: { kind: 'stable' as const, recordId: '42', data: inbound?.events[0]?.payload } };
+    const arrival = inbound?.arrivals?.[0];
+    const message = { adapterType: 'telegram', recordType: 'Message', identity: { kind: 'stable' as const, recordId: '42', data: arrival !== undefined && 'landing' in arrival ? arrival.landing.fields : undefined } };
     await adapter.getFieldValue({ position: message, fieldId: 'Text' });
     await adapter.getRelated({ position: message, fieldId: 'Attachments', direction: 'outgoing' });
     await adapterFor(`token-${round}-w`).createRecord({ mutationContext, recordType: 'Message', fields: { Text: 'hi' }, parentLinks: [parent] } as never);

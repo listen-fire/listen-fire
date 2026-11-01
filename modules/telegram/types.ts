@@ -20,6 +20,9 @@ export const TELEGRAM_ATTACHMENT_TYPE_ID = 'telegram:attachment';
  *  noun Telegram has; their user id IS the private chat id a send targets. */
 export const TELEGRAM_LINKED_USER_TYPE_ID = 'telegram:linked_user';
 
+/** The natural name of the record a listen on `Messages` delivers. */
+export const TELEGRAM_MESSAGE_DISPLAY_NAME = 'Message';
+
 /** Natural type name for an attachment — the pretty name positions carry.
  *  No system prefix (rule 5, adapters/CLAUDE.md): the instance already says
  *  which system you're in. */

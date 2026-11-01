@@ -5,7 +5,7 @@
 import type { AdapterManifest } from 'movement-engine/public/adapter';
 
 import { TELEGRAM_HANDBOOK_SECTION } from './handbook_section';
-import { TELEGRAM_ADAPTER_TYPE } from './types';
+import { TELEGRAM_ADAPTER_TYPE, TELEGRAM_EDGE_NAMES, TELEGRAM_MESSAGE_DISPLAY_NAME } from './types';
 
 /**
  * Static manifest — the construction-free declaration the registry exposes via
@@ -22,7 +22,12 @@ export const TELEGRAM_MANIFEST: AdapterManifest = {
     'Telegram. Run movements on messages your bot receives, reply in-thread, ' +
     'and DM people who have linked Telegram — every send anchors on a message ' +
     'or a linked user.',
+  authoringHints:
+    'Listen on Messages, narrowed to one chat by the message\'s Chat Id: ' +
+    'tg-[m:Messages WHERE m.`Chat Id` == "42"]->. A message is the whole ' +
+    'record: read m.Text, reply along m-[:Replies]->.',
   triggerExpectation:
+    'A listen on Messages runs once per message the bot receives. ' +
     'Telegram delivers a message to the bot only when the bot is in the chat ' +
     'AND the message reaches it: in a private one-to-one chat the bot sees ' +
     'every message sent to it; in a group it sees only direct replies to it ' +
@@ -43,13 +48,23 @@ export const TELEGRAM_MANIFEST: AdapterManifest = {
   // User's `Messages`) or a threaded reply (a message's `Replies`) — a real
   // write (so Telegram is writable). `updateRecord` / `deleteRecord` are NOT
   // listed: the overrides throw (v1 only sends), so they aren't genuine
-  // implementations. `listEventTypes` tags the inbound message so the engine
-  // seeds a STABLE position (what lets a reply write anchor off the inbound).
+  // implementations. `preprocessInbound` reports the inbound message as an
+  // arrival on `Messages`, landing a STABLE position (what lets a reply write
+  // anchor off the listen's parameter).
   methods: [
     'listEntryPoints', 'describe', 'getFieldValue', 'getRelated',
     'preprocessInbound', 'getActorCandidates', 'extractActor', 'resolveFileRef',
-    'createRecord', 'listEventTypes',
+    'createRecord',
   ],
+  // A 0.12 `listen to tg {} fire f` took every message the bot received: it
+  // is `listen to tg-[:Messages]-> fire f` (`listen-fire upgrade`). It had no
+  // settings, so no key maps.
+  listenSettingsBecome: {
+    path: [TELEGRAM_EDGE_NAMES.messages],
+    aliases: ['m'],
+    paramFrom: TELEGRAM_MESSAGE_DISPLAY_NAME,
+    keys: {},
+  },
   requiredCredentialType: 'TELEGRAM',
   triggerKinds: ['TELEGRAM'],
   handbookSection: TELEGRAM_HANDBOOK_SECTION,

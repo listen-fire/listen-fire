@@ -1,15 +1,16 @@
 // Telegram's inbound: one `Update` per webhook delivery, normalised into the
 // flat message payload the schema advertises (so `getFieldValue` reads it off
-// `data`), and turned into the one event kind, `message`. Pure: both of the
-// platform's doors (a team's own bot, the shared bot) and every other host
-// parse a delivery here.
+// `data`), and reported as the one arrival Telegram has, a message on the
+// root `Messages` edge. Pure: both of the platform's doors (a team's own bot,
+// the shared bot) and every other host parse a delivery here.
 
 import { z } from 'zod';
 
-import type { DiscriminableEvent } from 'movement-engine/public/adapter';
+import type { Arrival } from 'engine-contracts';
 
 import {
-  TELEGRAM_MESSAGE_TYPE_ID,
+  TELEGRAM_EDGE_NAMES,
+  TELEGRAM_MESSAGE_DISPLAY_NAME,
   type TelegramAttachment,
   type TelegramMessage,
   type TelegramMessagePayload,
@@ -91,24 +92,43 @@ export function parseTelegramMessage(body: unknown): TelegramMessagePayload | nu
 }
 
 /**
- * The events one delivery fires: none, or one `message` keyed by its
- * message_id. Tagged rather than discriminated by a literal (the payload
- * carries none), and a `create`, so the engine seeds a STABLE message
- * position a reply can anchor on.
+ * What a delivery reports: none, or the message as an arrival on `Messages`.
+ * Telegram numbers a message within its chat, so an arrival is named by the
+ * chat and the message id: a redelivery of one message is the same arrival,
+ * and another chat's message with the same id is not. The landing keeps the
+ * message id as its record id, which a reply is addressed by. The fields are
+ * held under both names, the payload's own (what a read finds) and the
+ * schema's (what a listen's WHERE compares).
  */
-export function telegramInboundEvents(body: unknown): DiscriminableEvent[] {
+export function telegramInboundArrivals(body: unknown): Arrival[] {
   const payload = parseTelegramMessage(body);
   if (payload === null) return [];
+  const id = `${payload.chat_id}:${payload.message_id}`;
   return [
     {
-      payload,
-      externalId: payload.message_id,
-      recordType: TELEGRAM_MESSAGE_TYPE_ID,
-      eventType: 'message',
-      tag: 'message',
-      changeType: 'create',
+      edge: TELEGRAM_EDGE_NAMES.messages,
+      identity: id,
+      landing: { recordId: payload.message_id, recordType: TELEGRAM_MESSAGE_DISPLAY_NAME, fields: { ...payload, id, ...messageFields(payload, id) } },
+      ...(payload.date !== undefined ? { occurredAt: payload.date } : {}),
     },
   ];
+}
+
+/** A message's fields under the names the schema gives them. */
+function messageFields(payload: TelegramMessagePayload, id: string): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries({
+      Id: id,
+      'Message Id': payload.message_id,
+      Text: payload.text,
+      'Chat Id': payload.chat_id,
+      'Chat Type': payload.chat_type,
+      'Sender Id': payload.sender_id,
+      'Sender Username': payload.sender_username,
+      'Sender First Name': payload.sender_first_name,
+      Date: payload.date,
+    }).filter(([, value]) => value !== undefined),
+  );
 }
 
 export function normalizeMessage(message: TelegramMessage): TelegramMessagePayload {

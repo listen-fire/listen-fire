@@ -1,7 +1,8 @@
 // Telegram adapter — ONE `telegram:message` type, readable AND writable
 // (message-write-unification chunk 3). Inbound Telegram updates arrive as
-// webhook POSTs (`preprocessInbound`, tagged so `listEventTypes` can seed a
-// STABLE position). Outbound is the SAME type, created only along an edge:
+// webhook POSTs (`preprocessInbound`), each message an arrival on the root
+// `Messages` edge that a listen starts at. Outbound is the SAME type, created
+// only along an edge:
 //
 //   Linked User -[:Messages]-> Telegram Message  — a proactive DM (chat id =
 //                                                   the linked user's own id)
@@ -23,9 +24,7 @@ import type {
   Adapter,
   DeleteInput,
   DeleteResult,
-  DiscriminableEvent,
   EdgesFromResult,
-  EventType,
   FileRef,
   GetFieldValueInput,
   GetRelatedInput,
@@ -38,6 +37,7 @@ import type {
   WriteResult,
 } from 'movement-engine/public/adapter';
 import type { SchemaEntryPoint, SchemaTypeDescriptor, SourcePosition } from 'movement-engine/public/catalog';
+import type { Arrival } from 'engine-contracts';
 import type { TriggerEvent } from 'movement-engine/public/inbound';
 import type { LinkedIdentity, ModuleIdentities, ModuleLog } from 'module-kit';
 
@@ -47,7 +47,7 @@ import { uniformWalk } from 'module-kit/adapter/hop';
 import { BaseAdapter } from 'module-kit/adapter/base';
 import { naturalName } from 'module-kit/adapter/name_resolution';
 import { TelegramClient, sendUnifiedTelegramMessage, type TelegramWriteAnchor } from './write';
-import { telegramInboundEvents } from './inbound';
+import { telegramInboundArrivals } from './inbound';
 import { TELEGRAM_MANIFEST } from './manifest';
 import {
   TELEGRAM_ADAPTER_TYPE,
@@ -56,6 +56,7 @@ import {
   TELEGRAM_ATTACHMENT_DISPLAY_NAME,
   TELEGRAM_EDGE_NAMES,
   TELEGRAM_LINKED_USER_TYPE_ID,
+  TELEGRAM_MESSAGE_DISPLAY_NAME,
   TELEGRAM_MESSAGE_SENDER_EDGE,
   TELEGRAM_MESSAGE_TYPE_ID,
   type TelegramAttachment,
@@ -97,21 +98,22 @@ export class TelegramAdapter extends BaseAdapter implements Adapter {
 
   async listEntryPoints(): Promise<SchemaEntryPoint[]> {
     return [
-      // The EVENT edge lands STRAIGHT on the message: `tg -[:Telegram
-      // Message]-> <the message>`. A separate `Message Received` node carried
-      // no facts of its own — pure indirection — so rule 1
-      // (adapters/CLAUDE.md) collapses it: a listen delivers the message
-      // itself, whole (seeded stable on its message_id). `readable: false`
-      // stays the honest statement — the Bot API cannot enumerate the updates
-      // the bot was sent; a fires edge is reachability, never a root read.
-      // Telegram has no change-kind axis (no `events:` vocabulary), so no
-      // `action` field and no `firesOn`.
+      // `Messages` is a root edge that lands STRAIGHT on the message, as an
+      // inbox's does: `tg-[m:Messages WHERE m.`Chat Id` == "42"]->`. The Bot
+      // API cannot list the updates the bot was sent (and has no call that
+      // lists chats), so it is announced and never read (`readable: false`),
+      // and a listen filters by chat on the message's own `Chat Id`. Telegram
+      // pushes every update for the bot to one webhook, whatever the listens:
+      // `connection` delivery, with nothing for the module to take of a filter.
       {
         typeId: TELEGRAM_MESSAGE_TYPE_ID,
-        displayName: 'Message',
+        displayName: TELEGRAM_MESSAGE_DISPLAY_NAME,
+        collectionName: TELEGRAM_EDGE_NAMES.messages,
         writable: false,
         readable: false,
-        fires: true,
+        listenable: true,
+        delivery: 'connection',
+        identity: 'Id',
       },
       {
         typeId: TELEGRAM_ATTACHMENT_TYPE_ID,
@@ -136,7 +138,8 @@ export class TelegramAdapter extends BaseAdapter implements Adapter {
   }
 
   /**
-   * Telegram has one thing you can list and one thing that happens to you.
+   * Telegram has one thing you can list and one thing that happens to you:
+   * a message arriving on `Messages`.
    *
    * `Attachment` is absent on purpose — it hangs off a Message, so the walk
    * reaches it a hop in rather than the root claiming a read of every file
@@ -147,18 +150,18 @@ export class TelegramAdapter extends BaseAdapter implements Adapter {
     displayName: 'Telegram',
     description:
       'A Telegram connection. The people who have linked their account can be ' +
-      'listed; conversations cannot — a message has to arrive.',
+      'listed; conversations cannot — a message has to arrive, on `Messages`.',
     fields: [],
     references: [
       {
         fieldId: TELEGRAM_MESSAGE_TYPE_ID,
         targetTypeId: TELEGRAM_MESSAGE_TYPE_ID,
-        cardinality: 'one',
+        cardinality: 'many',
         direction: 'outgoing',
-        name: 'Message',
-        fires: true,
+        name: TELEGRAM_EDGE_NAMES.messages,
+        listenable: true,
         readable: false,
-        description: 'Somebody messaging the bot — what a listen delivers.',
+        description: 'Each message somebody sends the bot, whole — what a listen delivers.',
       },
       {
         fieldId: TELEGRAM_LINKED_USER_TYPE_ID,
@@ -190,15 +193,16 @@ export class TelegramAdapter extends BaseAdapter implements Adapter {
     if (typeId === TELEGRAM_MESSAGE_TYPE_ID) {
       return {
         typeId: TELEGRAM_MESSAGE_TYPE_ID,
-        displayName: 'Message',
+        displayName: TELEGRAM_MESSAGE_DISPLAY_NAME,
         description:
-          'A Telegram message — what a listen delivers, whole: read ' +
-          '`e.`Text`` straight off the event, reply along its `Replies` edge. ' +
+          'A Telegram message — what a listen on `Messages` delivers, whole: read ' +
+          '`e.`Text`` straight off the arrival, reply along its `Replies` edge. ' +
           'Created only along an edge: DM a linked user via their `Messages` ' +
           'edge, reply via a message\'s `Replies` edge — the chat and the ' +
           'reply target come from the parent, never from fields.',
         fields: [
-          { fieldId: 'message_id', displayName: 'Message Id', kind: 'string', writable: false, required: true, description: 'The Telegram message id.' },
+          { fieldId: 'id', displayName: 'Id', kind: 'string', writable: false, required: false, description: 'Names an arriving message across chats: `<Chat Id>:<Message Id>`, since Telegram numbers a message within its chat. The same on every redelivery.' },
+          { fieldId: 'message_id', displayName: 'Message Id', kind: 'string', writable: false, required: true, description: 'The Telegram message id, within its chat.' },
           {
             fieldId: 'text',
             displayName: 'Text',
@@ -239,7 +243,7 @@ export class TelegramAdapter extends BaseAdapter implements Adapter {
               '  [ { text: "Answer", url: "${form.Url}" } ],\n' +
               '] }',
           },
-          { fieldId: 'chat_id', displayName: 'Chat Id', kind: 'string', writable: false, required: true, description: 'The id of the chat the message belongs to — the value to send a reply back to.' },
+          { fieldId: 'chat_id', displayName: 'Chat Id', kind: 'string', writable: false, required: true, description: 'The id of the chat the message belongs to — the value to send a reply back to, and what a listen narrows to one chat by (`m.`Chat Id` == "42"`).' },
           { fieldId: 'chat_type', displayName: 'Chat Type', kind: 'string', writable: false, required: false, description: 'private / group / supergroup / channel.' },
           { fieldId: 'sender_id', displayName: 'Sender Id', kind: 'string', writable: false, required: false, description: 'The numeric id of the user who sent the message.' },
           { fieldId: 'sender_username', displayName: 'Sender Username', kind: 'string', writable: false, required: false, description: 'The @username of the sender, when set.' },
@@ -432,35 +436,24 @@ export class TelegramAdapter extends BaseAdapter implements Adapter {
   }
 
   // ── 5. Inbound (webhook) ──────────────────────────────────────────────
-  // Telegram POSTs one `Update` per delivery. We normalise the message into a
-  // single `telegram:message` event (tagged so the engine doesn't re-match)
-  // and skip any update that carries no message (edited messages, channel
-  // posts, callback queries, …) — v1 fires on plain messages only.
+  // Telegram POSTs one `Update` per delivery. A plain message is the arrival
+  // on `Messages`; any update that carries no message (edited messages,
+  // channel posts, callback queries, …) is none — v1 reports plain messages
+  // only.
 
   /**
-   * THE raw→events seam for the BYO door (`/api/public/webhook-sync/telegram/
-   * <subId>`): the same pure `parseTelegramEvents` + legacy conversion the
-   * shared-bot classifier uses, so both doors emit byte-identical events.
-   * (Replaces an earlier divergent implementation that never ran — the
-   * handler used the provider's `parseEvents` until that seam was retired.)
+   * THE raw→arrivals seam for the BYO door (`/api/public/webhook-sync/telegram/
+   * <subId>`): the same pure parse the shared-bot classifier uses, so both
+   * doors report byte-identical arrivals. A message lands as a STABLE
+   * `Message` position keyed by its message id, which is what lets a reply
+   * write anchor off the listen's parameter (`write m-[:Replies]->` needs a
+   * durable parent id). No filter is taken: the host judges each listen's.
    */
   async preprocessInbound(input: {
     raw: unknown;
     checkpoint?: unknown;
-  }): Promise<{ events: DiscriminableEvent[] }> {
-    return { events: telegramInboundEvents(input.raw) };
-  }
-
-  /**
-   * Every dispatched Telegram delivery is a message — a concrete record keyed
-   * by its message_id. Declaring the event type lets the engine seed a STABLE
-   * `Telegram Message` position, which is what lets a reply write anchor off
-   * the inbound event (`write m-[:Replies]->` needs a durable parent id — the
-   * chunk-1 ff2bc7432 wall, pre-empted here). Tag-only: the normalized payload
-   * carries no literal discriminator, so the parse classifies and tags.
-   */
-  async listEventTypes(): Promise<EventType[]> {
-    return [{ tag: 'message', positionType: TELEGRAM_MESSAGE_TYPE_ID }];
+  }): Promise<{ events: []; arrivals: Arrival[] }> {
+    return { events: [], arrivals: telegramInboundArrivals(input.raw) };
   }
 
   // ── 6. Actor candidate parsing (acting-user split) ────────────────────

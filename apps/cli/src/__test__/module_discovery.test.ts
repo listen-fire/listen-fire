@@ -136,7 +136,7 @@ test('listen-fire modules show says what a module writes, and that a module with
 // `takenApplied`) states minor 6, so a host that speaks less refuses it by
 // name rather than judging its listens without them. Slack's arrivals are
 // keyed and carry none of them.
-const SPEAKS_2_6 = ['affinity', 'attio', 'dealroom', 'email', 'evertrace', 'github', 'gmail', 'granola', 'stripe', 'system', 'webhook'];
+const SPEAKS_2_6 = ['affinity', 'attio', 'dealroom', 'email', 'evertrace', 'github', 'gmail', 'granola', 'stripe', 'system', 'telegram', 'webhook'];
 
 test('listen-fire modules show --json states the protocol minor each bundled module needs: 6 where its arrivals carry what 2.6 added', () => {
   const dir = freshProject();
