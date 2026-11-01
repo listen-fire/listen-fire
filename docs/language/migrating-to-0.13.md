@@ -75,7 +75,7 @@ function `Who Takes It`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire `Who Takes It`
+listen to runs-[:Invocations]-> fire `Who Takes It`
 ```
 
 ## 3. `callback(…)` is retired
@@ -127,7 +127,7 @@ function `Approve Or Reject`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire `Approve Or Reject`
+listen to runs-[:Invocations]-> fire `Approve Or Reject`
 ```
 
 Slack carries buttons from this release. Telegram and WhatsApp do not report taps as `Interactions` yet: send a form's link there instead (next).
@@ -174,7 +174,7 @@ function `Book A Day`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire `Book A Day`
+listen to runs-[:Invocations]-> fire `Book A Day`
 ```
 
 - `listen-fire serve` serves the form at the project's public address (`publicUrl` in `lf.yaml`). It takes no credential.

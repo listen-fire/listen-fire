@@ -425,7 +425,7 @@ function \`Intake Documents\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Intake Documents\`
+listen to runs-[:Invocations]-> fire \`Intake Documents\`
 `,
     },
     {

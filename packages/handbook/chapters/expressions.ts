@@ -380,7 +380,7 @@ function \`Roster\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Roster\`
+listen to runs-[:Invocations]-> fire \`Roster\`
 `,
     },
     {

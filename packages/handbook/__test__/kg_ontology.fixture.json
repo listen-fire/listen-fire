@@ -1,24 +1,6 @@
 {
   "constructionArgs": [],
   "canFire": true,
-  "triggerConfig": [
-    "type",
-    "events",
-    "fields"
-  ],
-  "triggerConfigRequired": [
-    "type"
-  ],
-  "triggerConfigOptions": {
-    "events": [
-      "record.created",
-      "record.updated",
-      "record.deleted"
-    ]
-  },
-  "triggerConfigFormats": {
-    "fields": "fields"
-  },
   "schema": {
     "positions": {
       "Node Type": {
@@ -280,24 +262,6 @@
         "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Support Ticket\"]]]",
         "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Support Ticket\"]]]"
       ]
-    },
-    "eventPosition": "Record Change",
-    "eventPositions": [
-      {
-        "position": "Record Change"
-      }
-    ],
-    "eventNarrowingKeys": [
-      "type"
-    ],
-    "eventNarrowingValues": {
-      "[]": {
-        "type": [
-          "Company",
-          "Person",
-          "Support Ticket"
-        ]
-      }
     },
     "collections": {
       "Company": {

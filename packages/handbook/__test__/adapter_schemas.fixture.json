@@ -23,6 +23,10 @@
       "attio": {
         "capturedAt": "2026-11-01",
         "via": "lf catalog over a project connecting the real @lf/attio module against fake-channels (0.13: each object's records list Changes, landing on its own change type, CompanyChange, PersonChange, DealChange and FundChange; the Webhook Event, its variants and the events settings are gone); the rest of the attio entry is the platform capture"
+      },
+      "slack, telegram, whatsapp, system, github (0.13)": {
+        "capturedAt": "2026-11-01",
+        "via": "the members 0.13 retired (an adapter's triggerConfig, triggerConfigOptions and defaultEvents; a schema's eventPosition and eventPositions) removed from the capture; nothing else changed"
       }
     }
   },
@@ -67,18 +71,7 @@
           "required": true
         }
       ],
-      "canFire": true,
-      "triggerConfig": [
-        "events",
-        "channels"
-      ],
-      "triggerConfigOptions": {
-        "events": [
-          "app_mention",
-          "message",
-          "reaction_added"
-        ]
-      }
+      "canFire": true
     },
     "manual": {
       "constructionArgs": [],
@@ -134,39 +127,11 @@
     },
     "whatsapp": {
       "constructionArgs": [],
-      "canFire": true,
-      "triggerConfig": [
-        "events"
-      ],
-      "triggerConfigOptions": {
-        "events": [
-          "message",
-          "reaction",
-          "location"
-        ]
-      },
-      "defaultEvents": [
-        "message"
-      ]
+      "canFire": true
     },
     "system": {
       "constructionArgs": [],
-      "canFire": true,
-      "triggerConfig": [
-        "events",
-        "pollIntervalSeconds"
-      ],
-      "triggerConfigOptions": {
-        "events": [
-          "Run Failed",
-          "Validation Issue",
-          "Deprecated Version",
-          "Release Applied"
-        ]
-      },
-      "defaultEvents": [
-        "Run Failed"
-      ]
+      "canFire": true
     },
     "github": {
       "constructionArgs": [
@@ -176,32 +141,7 @@
           "required": true
         }
       ],
-      "canFire": true,
-      "triggerConfig": [
-        "events",
-        "participating",
-        "pollIntervalSeconds"
-      ],
-      "triggerConfigOptions": {
-        "events": [
-          "agent_session_finished",
-          "approval_requested",
-          "assign",
-          "author",
-          "ci_activity",
-          "comment",
-          "invitation",
-          "manual",
-          "member_feature_requested",
-          "mention",
-          "review_requested",
-          "security_advisory_credit",
-          "security_alert",
-          "state_change",
-          "subscribed",
-          "team_mention"
-        ]
-      }
+      "canFire": true
     },
     "forms": {
       "constructionArgs": [],
@@ -1491,23 +1431,7 @@
             ]
           }
         }
-      },
-      "eventPosition": "Message",
-      "eventPositions": [
-        {
-          "position": "Message",
-          "on": [
-            "message",
-            "app_mention"
-          ]
-        },
-        {
-          "position": "Reaction",
-          "on": [
-            "reaction_added"
-          ]
-        }
-      ]
+      }
     },
     "manual": {
       "positions": {
@@ -2439,13 +2363,7 @@
             "Reply Markup": "Telegram's `reply_markup`, exactly as the Bot API spells it — passed through verbatim (no wrapping, no typed shape here; a malformed keyboard surfaces as a loud Telegram error at run time). Usually an inline keyboard: rows of buttons, each `{ text, url }` (opens a link) or `{ text, callback_data }` (a tap this bot handles, capped by Telegram at 64 BYTES). To make a tap DO something, mint a callback (`c = callback({ … })`) and put `\"${c.id}\"` in `callback_data` — it fits the 64-byte cap comfortably — one callback per button, since its body is what that button means. Telegram captures nothing at tap time, so a callback fired from a keyboard takes no values; anything a person has to fill in needs a `url` button instead. Buttons compose with everything else on the send. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). Example:\n{ inline_keyboard: [\n  [ { text: \"Approve\", callback_data: \"${approve.id}\" },\n    { text: \"Decline\", callback_data: \"${decline.id}\" } ],\n] }"
           }
         }
-      },
-      "eventPosition": "Message",
-      "eventPositions": [
-        {
-          "position": "Message"
-        }
-      ]
+      }
     },
     "whatsapp": {
       "positions": {
@@ -2590,28 +2508,7 @@
             "Emoji": "The reaction emoji. Inbound: empty when the reaction was removed. On a write along msg-[:Reactions]->: the single emoji to react with — required."
           }
         }
-      },
-      "eventPosition": "Message",
-      "eventPositions": [
-        {
-          "position": "Message",
-          "on": [
-            "message"
-          ]
-        },
-        {
-          "position": "Reaction",
-          "on": [
-            "reaction"
-          ]
-        },
-        {
-          "position": "Location",
-          "on": [
-            "location"
-          ]
-        }
-      ]
+      }
     },
     "system": {
       "positions": {
@@ -2644,34 +2541,7 @@
         }
       },
       "collections": {},
-      "writableRoots": {},
-      "eventPosition": "Run Failed",
-      "eventPositions": [
-        {
-          "position": "Run Failed",
-          "on": [
-            "Run Failed"
-          ]
-        },
-        {
-          "position": "Validation Issue",
-          "on": [
-            "Validation Issue"
-          ]
-        },
-        {
-          "position": "Deprecated Version",
-          "on": [
-            "Deprecated Version"
-          ]
-        },
-        {
-          "position": "Release Applied",
-          "on": [
-            "Release Applied"
-          ]
-        }
-      ]
+      "writableRoots": {}
     },
     "github": {
       "positions": {
@@ -3077,13 +2947,7 @@
           "uniquenessAuthorable": false
         }
       },
-      "supportsInPlaceUpdate": true,
-      "eventPosition": "Notification",
-      "eventPositions": [
-        {
-          "position": "Notification"
-        }
-      ]
+      "supportsInPlaceUpdate": true
     },
     "forms": {
       "positions": {

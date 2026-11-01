@@ -18,7 +18,7 @@ listen as "Deal intake" to inbox-[e:Emails WHERE e.Key == "deals"]-> fire \`Inta
 - You listen to a traversal from the instance (\`inbox\`), never the adapter, ending on the edge its events arrive on (\`-[e:Emails]->\`).
 - \`as "…"\` names the listener in run history and lists. Two listeners firing the same automation need distinct names.
 - A hop's \`WHERE\` says which arrivals are passed through. An edge every team's events arrive on (an inbox's \`Emails\`, a schedule's \`Ticks\`) needs one: the system's chapter says which field narrows it.
-- A system that is polled rather than pushed (Granola, Gmail) checks on its own interval; \`every: 5m\` in the block sets how often this listener looks (\`listen to notes { every: 5m } fire summarise\`).
+- A system that is polled rather than pushed (Granola, Gmail) checks on its own interval, and the listens on one edge with the same \`WHERE\` share one poll. A deployment can set a connection's interval; a listen does not.
 - \`fire\` names the automation that runs; its parameter is the event, typed to the same instance (\`function intake(m: <inbox-[:Emails]->>)\`).
 
 Saving the file registers its listeners; if one can't go live, the save says so. Schedules come from the \`cron\` system, and ad-hoc runs — "Run now", pasted text, uploaded files — from \`manual\`; each has its own chapter.

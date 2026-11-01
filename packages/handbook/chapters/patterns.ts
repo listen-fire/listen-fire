@@ -225,7 +225,7 @@ function \`Intake\`(go: <runs-[:Invocation]->>) {
   })
 }
 
-listen to runs {} fire \`Intake\`
+listen to runs-[:Invocations]-> fire \`Intake\`
 `,
     },
     {
@@ -256,7 +256,7 @@ function \`Thesis Recap\`(go: <runs-[:Invocation]->>) {
   write ops-[:Messages]-> { Message: Text.join(sections, "\\n") }
 }
 
-listen to runs {} fire \`Thesis Recap\`
+listen to runs-[:Invocations]-> fire \`Thesis Recap\`
 `,
     },
     {
@@ -403,7 +403,7 @@ function \`Review And Import\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Review And Import\`
+listen to runs-[:Invocations]-> fire \`Review And Import\`
 `,
     },
     {

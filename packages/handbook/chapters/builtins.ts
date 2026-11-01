@@ -145,7 +145,7 @@ function \`Roster\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Roster\`
+listen to runs-[:Invocations]-> fire \`Roster\`
 `,
     },
     {
@@ -173,7 +173,7 @@ function \`Recap\`(go: <runs-[:Invocation]->>) {
   write ops-[:Messages]-> { Message: "\${Text.join(theses, ", ")} / \${line} / \${delta}" }
 }
 
-listen to runs {} fire \`Recap\`
+listen to runs-[:Invocations]-> fire \`Recap\`
 `,
     },
     {
@@ -206,7 +206,7 @@ function \`Cut A Document\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Cut A Document\`
+listen to runs-[:Invocations]-> fire \`Cut A Document\`
 `,
     },
     {

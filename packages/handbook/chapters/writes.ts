@@ -409,7 +409,7 @@ function \`Reactivate\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Reactivate\`
+listen to runs-[:Invocations]-> fire \`Reactivate\`
 `,
     },
     {
@@ -428,7 +428,7 @@ function \`Enrich\`(go: <runs-[:Invocation]->>) {
   write company-[:Notes]-> { Title: "Enriched", Content: "found \${company.Name}" }
 }
 
-listen to runs {} fire \`Enrich\`
+listen to runs-[:Invocations]-> fire \`Enrich\`
 `,
     },
     {
@@ -498,7 +498,7 @@ function m(go: <runs-[:Invocation]->>) {
   }
   write co-[:Notes]-> { Title: "Team", Content: "\${co-[:Team]->.Name}" }
 }
-listen to runs {} fire m
+listen to runs-[:Invocations]-> fire m
 `,
     },
   ],

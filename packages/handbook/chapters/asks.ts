@@ -408,7 +408,7 @@ function \`First Approval Wins\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`First Approval Wins\`
+listen to runs-[:Invocations]-> fire \`First Approval Wins\`
 `,
     },
     {
@@ -450,7 +450,7 @@ function \`Pursue Or Pass\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Pursue Or Pass\`
+listen to runs-[:Invocations]-> fire \`Pursue Or Pass\`
 `,
     },
     {
@@ -481,7 +481,7 @@ function \`Who Takes It\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Who Takes It\`
+listen to runs-[:Invocations]-> fire \`Who Takes It\`
 `,
     },
     {
@@ -514,7 +514,7 @@ function \`Chase The Author\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Chase The Author\`
+listen to runs-[:Invocations]-> fire \`Chase The Author\`
 `,
     },
     {
@@ -564,7 +564,7 @@ function \`Which Place Answered\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Which Place Answered\`
+listen to runs-[:Invocations]-> fire \`Which Place Answered\`
 `,
     },
     {
@@ -612,7 +612,7 @@ function \`Both Must Agree\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Both Must Agree\`
+listen to runs-[:Invocations]-> fire \`Both Must Agree\`
 `,
     },
     {
@@ -642,7 +642,7 @@ function \`Wait For The Name\`(go: <runs-[:Invocation]->>) {
   write dealflow-[:Messages]-> { Message: "Renamed at last." }
 }
 
-listen to runs {} fire \`Wait For The Name\`
+listen to runs-[:Invocations]-> fire \`Wait For The Name\`
 `,
     },
     {
@@ -674,7 +674,7 @@ function \`Record Headcount\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Record Headcount\`
+listen to runs-[:Invocations]-> fire \`Record Headcount\`
 `,
     },
     {
@@ -707,7 +707,7 @@ function \`Decide Next Step\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Decide Next Step\`
+listen to runs-[:Invocations]-> fire \`Decide Next Step\`
 `,
     },
     {
@@ -734,7 +734,7 @@ function \`Pick Channels\`(go: <runs-[:Invocation]->>) {
   write dealflow-[:Messages]-> { Message ?: "Telling: \${Text.join(a.Answer, ", ")}" }
 }
 
-listen to runs {} fire \`Pick Channels\`
+listen to runs-[:Invocations]-> fire \`Pick Channels\`
 `,
     },
     {
@@ -765,7 +765,7 @@ function \`Acknowledge First\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Acknowledge First\`
+listen to runs-[:Invocations]-> fire \`Acknowledge First\`
 `,
     },
     {
@@ -792,7 +792,7 @@ function \`Draft The Reply\`(go: <runs-[:Invocation]->>) {
   write dealflow-[:Messages]-> { Message: "The draft is in." }
 }
 
-listen to runs {} fire \`Draft The Reply\`
+listen to runs-[:Invocations]-> fire \`Draft The Reply\`
 `,
     },
     {
@@ -822,7 +822,7 @@ function \`Fix The Rows\`(go: <runs-[:Invocation]->>) {
   write dealflow-[:Messages]-> { Message: "Corrections in." }
 }
 
-listen to runs {} fire \`Fix The Rows\`
+listen to runs-[:Invocations]-> fire \`Fix The Rows\`
 `,
     },
     {
@@ -849,7 +849,7 @@ function \`Collect The Details\`(go: <runs-[:Invocation]->>) {
   write dealflow-[:Messages]-> { Message: "Details in — budget \${a.Budget}." }
 }
 
-listen to runs {} fire \`Collect The Details\`
+listen to runs-[:Invocations]-> fire \`Collect The Details\`
 `,
     },
     {
@@ -895,7 +895,7 @@ function \`Pick The Company\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Pick The Company\`
+listen to runs-[:Invocations]-> fire \`Pick The Company\`
 `,
     },
     {
@@ -934,7 +934,7 @@ function \`Decide By Link\`(go: <runs-[:Invocation]->>) {
   if (r[0] == null) { fail("nobody answered the form in two days") }
 }
 
-listen to runs {} fire \`Decide By Link\`
+listen to runs-[:Invocations]-> fire \`Decide By Link\`
 `,
     },
     {
@@ -971,7 +971,7 @@ function \`Book The Follow Up\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Book The Follow Up\`
+listen to runs-[:Invocations]-> fire \`Book The Follow Up\`
 `,
     },
     {
@@ -1001,7 +1001,7 @@ function \`Offer\`(go: <runs-[:Invocation]->>) {
   \`Book\`(company, booking.Day)
 }
 
-listen to runs {} fire \`Offer\`
+listen to runs-[:Invocations]-> fire \`Offer\`
 `,
     },
   ],

@@ -149,7 +149,7 @@ function \`Top Ten\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Top Ten\`
+listen to runs-[:Invocations]-> fire \`Top Ten\`
 `,
     },
     {
@@ -171,7 +171,7 @@ function \`By Company\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`By Company\`
+listen to runs-[:Invocations]-> fire \`By Company\`
 `,
     },
     {
@@ -195,7 +195,7 @@ function \`Recent\`(go: <runs-[:Invocation]->>) {
   }
 }
 
-listen to runs {} fire \`Recent\`
+listen to runs-[:Invocations]-> fire \`Recent\`
 `,
     },
     {

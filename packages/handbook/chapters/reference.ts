@@ -173,7 +173,7 @@ listen to inbox-[e:Emails WHERE e.Key == "intake"]-> fire intake
 listen as "Nightly digest" to timer { schedule: "0 9 * * 1" } fire \`Weekly Digest\`   # 5-field cron, UTC
 listen to crm-[:Companies]->-[c:Changes WHERE c.Kind == "created"]-> fire \`On New\`
 listen to crm-[:Companies]->-[c:Changes WHERE c.Kind IN ["created", "updated"]]-> fire mirror
-listen to go {} fire \`On Run\`                      # manual / on-demand (go = connect manual)
+listen to go-[:Invocations]-> fire \`On Run\`          # manual / on-demand (go = connect manual)
 \`\`\`
 
 Connect the instance first, then listen to *it*. The \`as\` alias goes right after \`listen\`, before \`to\`. A manual run *is* the submit-text/files channel: read \`go.Text\` and traverse \`go-[:Files]->.File\` (both optional). Pausing = commenting the \`listen\` line out. There is no \`run\` statement.
