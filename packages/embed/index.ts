@@ -64,7 +64,9 @@ import {
   RUN_LEASE_TTL_MS,
   SETTLE_RACE_WORK_KIND,
   WAKE_AWAIT_WORK_KIND,
+  abandonRun,
   armTimerWake,
+  clearIfQuiescent,
   drainDueTimers,
   heldMarks,
   drainOwedRaces,
@@ -649,6 +651,12 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
     await store.runs.put(run);
     // A run that parked was marked so by its park's write.
     if (!parked) await settleRun(run, settled(outcome.outcome.ok ? 'completed' : 'failed', outcome.outcome));
+    // Its live state after the segment, as listen-fire leaves it: a failed
+    // run's torn down, and a quiescent one's (the waits its delivery opened
+    // on a branch it never took) gone, or they would keep every later
+    // arrival on those records from the sweep while the run is kept.
+    if (outcome.outcome.ok) await clearIfQuiescent(store.runHost, { runId: run.runId });
+    else await abandonRun(runHost, { runId: run.runId });
     return outcome;
   };
 

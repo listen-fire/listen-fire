@@ -271,6 +271,38 @@ describe('a record the trigger’s arrival carries', () => {
   });
 });
 
+/** A program whose run waits for a reply only when the message says so. */
+const WAITS_SOMETIMES = `import { chat } from adapters
+import { team } from credentials
+
+room = connect chat using team
+
+function answer(m: <room-[:Messages]->>) {
+  if (m.Text == "wait") {
+    next = await new m-[:Replies]->
+    write room-[:Messages]-> { Text: "Re \${next.Text}" }
+  }
+}
+
+listen to room-[:Messages]-> fire answer
+`;
+
+describe('a run that ends in its first segment', () => {
+  it('leaves no wait behind, so a tick forgets what arrives later on the records it was handed', async () => {
+    const { host, store } = await setup();
+    expect(await host.save('acme', { name: 'sometimes', source: WAITS_SOMETIMES })).toEqual({ saved: true, listens: 1 });
+    const [ran] = await host.dispatch('acme', { adapterType: 'chat', arrivals: [message('m1', 'skip')] });
+    expect(ran.outcome).toMatchObject({ ok: true, parked: false });
+
+    for (const i of [1, 2, 3]) await host.dispatch('acme', { adapterType: 'chat', arrivals: [reply(`r${i}`, 'm1', `x${i}`)] });
+    await host.tick(new Date(Date.now() + 10 * 3_600_000));
+
+    // A wait opened afresh on the thread finds none of the replies still logged.
+    const { waitId } = await store.runHost.waits.open({ runId: 'later', teamId: 'acme', adapterType: 'chat', edge: 'Replies', key: 'thread:m1', since: 0 });
+    expect((await store.runHost.waits.arrivals({ waitId })).arrivals).toEqual([]);
+  });
+});
+
 describe('a delivery', () => {
   it("is kept in one write: a later item of the same delivery answers the run an earlier one started", async () => {
     const { host, posted } = await setup();
