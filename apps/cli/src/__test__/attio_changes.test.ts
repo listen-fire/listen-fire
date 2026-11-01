@@ -3,6 +3,8 @@
 // `listen-fire serve` registers for the connection. A Deals listen narrowed to
 // Stage changes runs on each Stage change and on nothing else, a company's
 // change included; `listen-fire check` refuses an attribute deals do not have.
+// A wait on a record a run walks to answers from the walk on: a change of that
+// record delivered before the walk does not answer it, one delivered after does.
 
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
@@ -34,6 +36,22 @@ function moved(c: <crm-[:DealChange]->>) {
 }
 
 listen to crm-[:Deals]->-[c:Changes WHERE c.Field == "Stage"]-> fire moved
+`;
+
+// A Stage change waits for its deal's next change, and notes both.
+const CHASE = `${HEAD}
+function chase(c: <crm-[:DealChange]->>) {
+  c-[d:Deal]-> {
+    next = await new d-[:Changes]->
+    write crm-[:Companies]-> {
+      unique by (Name)
+      Name: d.Name
+      Description: "after \${c.Field}, \${next.Field}"
+    }
+  }
+}
+
+listen to crm-[:Deals]->-[c:Changes WHERE c.Field == "Stage"]-> fire chase
 `;
 
 const stageOf = (deal: { id: { record_id: string } }) => ({ event_type: 'record.updated', id: { object_id: 'deals', record_id: deal.id.record_id, attribute_id: 'stage' } });
@@ -85,6 +103,38 @@ test('a Deals listen on Stage runs on each Stage change naming the new stage, an
       assert.equal(await description(fake, 'Osprey'), 'Osprey is now Passed (updated Stage)');
       await new Promise((done) => setTimeout(done, 500));
       assert.equal(runs(), 2, serving.lines.join('\n'));
+    } finally {
+      await serving.stop();
+    }
+  } finally {
+    await fake.stop();
+  }
+});
+
+test('a change delivered with the Stage change does not answer the wait on the deal the run walks to; one delivered after the run walked there does', async () => {
+  const fake = await fakeChannels();
+  try {
+    const { dir, port } = await attioProject(fake, 'attio-chase');
+    writeFileSync(join(dir, 'movements/chase.mvt'), CHASE);
+    const checked = lfSync(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+
+    const serving = await served(dir, ['--port', String(port)]);
+    try {
+      await serving.waitFor(/^attio \(Changes, edge-[0-9a-f]+\): registered webhook fake-webhook-\d+ for the arrivals on Changes at /);
+      const runs = (state: string) => serving.lines.filter((l) => new RegExp(`^(run|resumed) \\S+ chase:chase ${state}$`).test(l)).length;
+
+      const kestrel = await createRecord(fake, 'deals', { name: 'Kestrel', stage: 'Sourced' });
+      await updateRecord(fake, 'deals', kestrel.id.record_id, { stage: 'Diligence', value: 100 });
+      const change = (attribute: string) => ({ event_type: 'record.updated', id: { object_id: 'deals', record_id: kestrel.id.record_id, attribute_id: attribute } });
+
+      assert.deepEqual((await deliver(fake, change('stage'), change('value'))).map((d) => d.status), [200]);
+      await until(() => runs('parked') === 1, serving.lines);
+      assert.equal(runs('completed'), 0, serving.lines.join('\n'));
+
+      assert.deepEqual((await deliver(fake, change('name'))).map((d) => d.status), [200]);
+      await until(() => runs('completed') === 1, serving.lines);
+      assert.equal(await description(fake, 'Kestrel'), 'after Stage, Name');
     } finally {
       await serving.stop();
     }
