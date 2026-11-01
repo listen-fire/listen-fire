@@ -2,8 +2,8 @@
 // trackable way), the saved searches that filter them, and the lists that
 // curate them.
 //
-// Evertrace is a POLLED source: event production is the module's `poll`
-// (poll.ts), driven by the host. This is the read and write half. The type
+// Evertrace is a POLLED source: a signal's or a list entry's arrival is the
+// module's `poll` (poll.ts), driven by the host. This is the read and write half. The type
 // graph itself is `schema.ts`; the WHERE pushdown is `filter.ts`; the write
 // bodies are `write.ts`.
 
@@ -12,7 +12,6 @@ import type {
   DeleteInput,
   DeleteResult,
   EdgesFromResult,
-  EventType,
   GetFieldValueInput,
   GetRelatedInput,
   ReadInput,
@@ -81,8 +80,6 @@ import {
   EVERTRACE_LIST_DISPLAY_NAME,
   EVERTRACE_LIST_ENTRIES_EDGE,
   EVERTRACE_LIST_ENTRY_DISPLAY_NAME,
-  EVERTRACE_LIST_ENTRY_EVENT,
-  EVERTRACE_LIST_ENTRY_EVENT_TAG,
   EVERTRACE_LIST_ENTRY_TYPE_ID,
   EVERTRACE_LIST_TYPE_ID,
   EVERTRACE_SCHOOLS_COLLECTION,
@@ -94,10 +91,7 @@ import {
   EVERTRACE_SEARCH_TYPE_ID,
   EVERTRACE_SIGNALS_COLLECTION,
   EVERTRACE_SIGNAL_DISPLAY_NAME,
-  EVERTRACE_SIGNAL_EVENT,
-  EVERTRACE_SIGNAL_EVENT_TAG,
   EVERTRACE_SIGNAL_LIST_ENTRIES_EDGE,
-  EVERTRACE_SUBSCRIBABLE_EVENTS,
   EVERTRACE_SIGNAL_TYPE_ID,
   EVERTRACE_WORKSPACE_TYPE_ID,
   decodeListEntryId,
@@ -111,8 +105,6 @@ export {
   EVERTRACE_ADAPTER_TYPE,
   EVERTRACE_SIGNAL_TYPE_ID,
   EVERTRACE_SIGNAL_DISPLAY_NAME,
-  EVERTRACE_SIGNAL_EVENT_TAG,
-  EVERTRACE_LIST_ENTRY_EVENT_TAG,
   EVERTRACE_SIGNALS_COLLECTION,
   EVERTRACE_SEARCH_TYPE_ID,
   EVERTRACE_LIST_TYPE_ID,
@@ -169,6 +161,23 @@ function computedSignalField(fieldId: string, signal: EvertraceSignal): unknown 
     default:
       return undefined;
   }
+}
+
+/** A record's fields by the names a program reads them by and by the ids a
+ *  filter may name, as an arrival's landing carries them for the host to judge
+ *  a listen's WHERE. `record` may carry what only the poll knows (the search or
+ *  the list name it was found under). */
+export function landingFields(typeId: string, record: object): Record<string, unknown> {
+  const data: Record<string, unknown> = { ...record };
+  const fields = describeEvertraceType(typeId)?.fields ?? [];
+  return Object.fromEntries(
+    fields.flatMap((field) => {
+      const computed = typeId === EVERTRACE_SIGNAL_TYPE_ID ? computedSignalField(field.fieldId, data as unknown as EvertraceSignal) : undefined;
+      const epoch = EPOCH_MS_FIELDS[typeId]?.has(field.fieldId) ? isoOf(data[field.fieldId]) : undefined;
+      const value = computed ?? epoch ?? data[field.fieldId] ?? null;
+      return [[field.displayName, value], [field.fieldId, value]];
+    }),
+  );
 }
 
 export class EvertraceAdapter extends BaseAdapter implements Adapter {
@@ -460,26 +469,6 @@ export class EvertraceAdapter extends BaseAdapter implements Adapter {
       if (error instanceof EvertraceApiError && error.status === 404) return null;
       throw error;
     }
-  }
-
-  // ── 6. Event typing ────────────────────────────────────────────────────
-
-  async listEventTypes(): Promise<EventType[]> {
-    // The PollSource tags every event it produces, so discrimination is by tag
-    // alone — a signal and a list addition are told apart by which edge the
-    // listen is on, never by sniffing the payload.
-    return [
-      {
-        tag: EVERTRACE_SIGNAL_EVENT_TAG,
-        positionType: EVERTRACE_SIGNAL_TYPE_ID,
-        match: { path: 'id', equals: [] },
-      },
-      {
-        tag: EVERTRACE_LIST_ENTRY_EVENT_TAG,
-        positionType: EVERTRACE_LIST_ENTRY_TYPE_ID,
-        match: { path: 'id', equals: [] },
-      },
-    ];
   }
 }
 

@@ -102,40 +102,39 @@ export const EVERTRACE_TAG_VALUES: readonly string[] = [
   ...EVERTRACE_PROFILE_TAGS,
 ];
 
-/** The discriminator a polled signal event carries. */
-export const EVERTRACE_SIGNAL_EVENT_TAG = 'evertrace:signal';
+// ── Listening ───────────────────────────────────────────────────────────────
+// Evertrace polls two different things, each its own listenable edge: a signal
+// Evertrace has just found (`Signals`) and a signal somebody has just filed
+// onto a list (`List Entries`, which lands a `List Entry`). Creation is the
+// only "changed since" Evertrace offers on either.
 
-/** The discriminator a polled list-addition event carries. */
-export const EVERTRACE_LIST_ENTRY_EVENT_TAG = 'evertrace:list_entry';
+/** How often the host polls either edge unless lf.yaml's `pollEvery` says
+ *  otherwise. */
+export const EVERTRACE_POLL_EVERY_SECONDS = 300;
 
-// ── The `events:` vocabulary ────────────────────────────────────────────────
-// Evertrace polls two different things — a signal Evertrace has just found, and
-// a signal somebody has just filed onto a list — and one poll source serves
-// both. A listen says WHICH with the ordinary `events:` selection, and each
-// event edge declares (`firesOn`) the value that lands on it, so the checker
-// types the listened parameter from the same fact the poll reads to decide what
-// to fetch. No selection is the signal alone (`defaultSubscribedEvents`), which
-// is what a listen written before lists existed still means.
+/** The root edge a signal added to a list arrives on. It lists nothing: past
+ *  entries are walked from their list or their signal. */
+export const EVERTRACE_LIST_ENTRIES_COLLECTION = 'List Entries';
 
-export const EVERTRACE_SIGNAL_EVENT = 'signal';
-export const EVERTRACE_LIST_ENTRY_EVENT = 'list_entry';
+/** The saved search a listen on `Signals` names, by its title or its id. */
+export const EVERTRACE_SAVED_SEARCH_FIELD = 'Saved Search';
+export const EVERTRACE_SAVED_SEARCH_FIELD_ID = 'savedSearch';
 
-export const EVERTRACE_SUBSCRIBABLE_EVENTS = [
-  EVERTRACE_SIGNAL_EVENT,
-  EVERTRACE_LIST_ENTRY_EVENT,
-] as const;
+/** The list a listen on `List Entries` names (`List Name`, by its name or its
+ *  id) and the list an entry is on (`List Id`). */
+export const EVERTRACE_LIST_NAME_FIELD = 'List Name';
+export const EVERTRACE_LIST_NAME_FIELD_ID = 'listName';
+export const EVERTRACE_LIST_ID_FIELD = 'List Id';
+export const EVERTRACE_LIST_ID_FIELD_ID = 'listId';
 
 /**
- * The opaque checkpoint the PollSource persists. Creation is the one
- * "changed since" mark Evertrace offers, so each kind carries its own
- * high-water `createdAt` in epoch milliseconds — a listen selecting both keeps
- * both, and a mark that is absent is a kind this trigger has never pulled.
+ * The opaque cursor a poll hands back. Creation is the one "changed since"
+ * mark Evertrace offers, so each edge's cursor is the newest `createdAt`
+ * already delivered, in epoch milliseconds. Absent is an edge this listen has
+ * never polled: the first poll sets it and delivers nothing.
  */
 export interface EvertraceCheckpoint {
-  /** Signals: the newest `createdAt` already delivered. */
   createdAfter?: number;
-  /** List entries: the newest entry `createdAt` already delivered. */
-  entriesCreatedAfter?: number;
 }
 
 /**

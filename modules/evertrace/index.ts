@@ -4,12 +4,13 @@
 // read by the next one. `ctx.config.baseUrlOverride` (the dev loop's fake)
 // wins over the credential's own base URL.
 
-import { defineModule, type CredentialFields, type ModuleContext } from 'module-kit';
+import { defineModule, type CredentialFields, type ModuleContext, type PollEdgeInput, type PollInput } from 'module-kit';
 
 import { EvertraceApiClient, evertraceCredsParser } from './api_client';
 import { EvertraceAdapter, type EvertraceClientSource } from './adapter';
 import { EVERTRACE_MANIFEST } from './manifest';
-import { EVERTRACE_POLL_INTERVAL_SECONDS, pollEvertrace } from './poll';
+import { pollEvertrace } from './poll';
+import { EVERTRACE_POLL_EVERY_SECONDS } from './types';
 
 /** The client the context's credential reaches Evertrace with. */
 export function evertraceClientFrom(ctx: ModuleContext): EvertraceClientSource {
@@ -50,11 +51,18 @@ export const evertraceModule = defineModule({
       ],
     },
   ],
-  poll: { intervalSeconds: EVERTRACE_POLL_INTERVAL_SECONDS },
+  // Adapter protocol 2.6: `Signals` and `List Entries` are listenable edges, polled.
+  protocolMinor: 6,
+  poll: { intervalSeconds: EVERTRACE_POLL_EVERY_SECONDS },
   create: (ctx) => {
     const client = evertraceClientFrom(ctx);
     return Object.assign(new EvertraceAdapter(client), {
-      poll: async (input: Parameters<typeof pollEvertrace>[1]) => pollEvertrace(await client(), input, { log: ctx.log }),
+      poll: async (input: PollInput | PollEdgeInput) => {
+        if (!('edge' in input)) {
+          throw new Error('@lf/evertrace is listened to on its Signals and List Entries edges: `listen to evertrace-[s:Signals]-> fire f` (`listen-fire upgrade` rewrites a 0.12 listen)');
+        }
+        return pollEvertrace(await client(), input, { log: ctx.log });
+      },
     });
   },
 });

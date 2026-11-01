@@ -6,9 +6,12 @@ import type { AdapterManifest } from 'movement-engine/public/adapter';
 
 import {
   EVERTRACE_ADAPTER_TYPE,
-  EVERTRACE_LIST_ENTRY_EVENT,
-  EVERTRACE_SIGNAL_EVENT,
-  EVERTRACE_SUBSCRIBABLE_EVENTS,
+  EVERTRACE_LIST_ENTRIES_COLLECTION,
+  EVERTRACE_LIST_ENTRY_DISPLAY_NAME,
+  EVERTRACE_LIST_NAME_FIELD,
+  EVERTRACE_SAVED_SEARCH_FIELD,
+  EVERTRACE_SIGNALS_COLLECTION,
+  EVERTRACE_SIGNAL_DISPLAY_NAME,
 } from './types';
 
 const EVERTRACE_HANDBOOK_CONTENT = `Evertrace watches public profiles and raises a **signal** when someone has just changed in a way worth knowing about — a new company, a stealth position, a departure, a new patent, grant or paper. Three surfaces: pull signals it has already found, react to new ones, and keep the saved searches and curated lists the workspace works from.
@@ -29,18 +32,18 @@ Below a signal, \`Experiences\` and \`Educations\` are the rows of the person's 
 ### listening — being told about new ones
 
 \`\`\`
-listen to evertrace { search: "Stealth in Europe", every: 10m } fire triage
+listen to evertrace-[s:Signals WHERE s.\`Saved Search\` == "Stealth in Europe" AND s.Score >= 8]-> fire triage
 \`\`\`
 
-A listener fires once per signal created since the last look. The FIRST look sets the mark and delivers nothing, so going live never replays the back catalogue — walk \`Signals\` when you want history. \`search\` names a saved search by its title or its id and narrows delivery to what that search matches; a date bound inside that search does not apply — the mark is what bounds delivery. \`every\` (for example \`every: 10m\`) overrides the five-minute default. A change to a signal that already exists does not fire — only a new one does. This is what a listener with no \`events\` delivers.
+A listen on \`Signals\` fires once per signal created since the last look, five minutes or so behind (\`pollEvery\` in lf.yaml changes the five minutes for the connection). The FIRST look sets the mark and delivers nothing, so going live never replays the back catalogue — walk \`Signals\` when you want history. \`Saved Search\` names a saved search by its title or its id and narrows delivery to what that search matches; a date bound inside that search does not apply — the mark is what bounds delivery. Any other field of the signal narrows too, once the signal arrives. Listens on one connection with the same WHERE share one poll. A change to a signal that already exists does not fire — only a new one does.
 
 ### listening — a signal added to a list
 
 \`\`\`
-listen to evertrace { events: ["list_entry"], list: "Pipeline" } fire file_it
+listen to evertrace-[e:\`List Entries\` WHERE e.\`List Name\` == "Pipeline"]-> fire file_it
 \`\`\`
 
-What arrives is the entry rather than the signal: \`Signal\` is the person, \`List\` is the list they went onto, and \`Added At\` is when. \`list\` names one list by its name or its id; leave it out and every list in the workspace delivers. The first look sets the mark and delivers nothing here too. Removing an entry and putting it back delivers again — that is a new entry.
+What arrives is the entry rather than the signal: \`Signal\` is the person, \`List\` is the list they went onto, and \`Added At\` is when. \`List Name\` names one list by its name or its id; leave it out and every list in the workspace delivers. The first look sets the mark and delivers nothing here too. Removing an entry and putting it back delivers again — that is a new entry.
 
 ### lists — filing a signal
 
@@ -86,12 +89,18 @@ Evertrace has no un-view, so \`Viewed: false\` is refused; \`Screened: false\` d
 
 CSV exports, duplicating a saved search, screening and view counts, every signal sharing one LinkedIn profile, and the city lookup are each one endpoint away and not surfaced — say so rather than working around them.`;
 
+const SIGNALS_BECOME = {
+  path: [EVERTRACE_SIGNALS_COLLECTION],
+  aliases: ['s'],
+  paramFrom: EVERTRACE_SIGNAL_DISPLAY_NAME,
+  keys: { search: { hop: 0, field: EVERTRACE_SAVED_SEARCH_FIELD, op: 'eq' as const } },
+};
+
 /**
  * Static manifest. Polled source plus a real create/update/delete surface over
  * searches, lists and list memberships — so Evertrace is both a source and a
- * target. Nothing here is SUBSCRIBED to (there is no webhook): the event
- * vocabulary is the choice between the two things the poll can fetch, and the
- * `listen` options narrow each of them.
+ * target. Nothing here is SUBSCRIBED to (there is no webhook): the host
+ * polls each of the two listenable edges.
  */
 export const EVERTRACE_MANIFEST: AdapterManifest = {
   adapterType: EVERTRACE_ADAPTER_TYPE,
@@ -109,39 +118,45 @@ export const EVERTRACE_MANIFEST: AdapterManifest = {
     'needs both its list and its signal, so write it along both edges at once. ' +
     'Screened and Viewed are fields on a signal, not separate records, and there ' +
     'is no un-view. A list’s Entries come back oldest first and take a WHERE, an ' +
-    'ORDER BY and a LIMIT. A listener delivers new signals unless it says ' +
-    'events: ["list_entry"], which delivers each signal added to a list.',
+    'ORDER BY and a LIMIT. A listen on Signals delivers new signals, narrowed by ' +
+    'Saved Search; a listen on List Entries delivers each signal added to a ' +
+    'list, narrowed by List Name.',
   handbookSection: {
     title: 'Evertrace — signals, saved searches and lists',
     content: EVERTRACE_HANDBOOK_CONTENT,
   },
   triggerExpectation:
-    'Two kinds, selected with `events`. `signal` (the default) fires once per ' +
-    'signal Evertrace created since the last poll, narrowed by the `search` ' +
-    'listen option (a saved search, by title or id). `list_entry` fires once ' +
-    'per signal added to a list since the last poll, narrowed by the `list` ' +
-    'listen option (by name or id; absent means every list in the workspace). ' +
-    'Each kind keeps its own checkpoint, and the first poll of a kind sets it ' +
-    'and emits nothing, so going live never replays the back catalogue. ' +
-    'Updates to an existing signal do NOT fire — Evertrace offers no ' +
-    'changed-since mark other than creation.',
+    'Two edges. A listen on `Signals` fires once per signal Evertrace created ' +
+    'since the last poll, narrowed by Saved Search (a saved search, by title or ' +
+    'id). A listen on `List Entries` fires once per signal added to a list ' +
+    'since the last poll, narrowed by List Name (by name or id; absent means ' +
+    'every list in the workspace). Each edge is polled every five minutes ' +
+    '(lf.yaml `pollEvery` changes it) and keeps its own cursor, and the first ' +
+    'poll sets it and delivers nothing, so going live never replays the back ' +
+    'catalogue. Updates to an existing signal do NOT fire — Evertrace offers ' +
+    'no changed-since mark other than creation.',
   supportedTriggers: ['poll'],
   methods: [
     'listEntryPoints', 'describe', 'edgesFrom', 'getFieldValue', 'getRelated',
     'readRecord', 'createRecord', 'updateRecord', 'deleteRecord',
   ],
   requiredCredentialType: 'EVERTRACE',
-  // `events` is projected from `subscribableEvents` — Evertrace has no webhook
-  // to subscribe to, but the selection is what tells the one poll source which
-  // of its two event edges a listen is on, and what types the listened
-  // parameter. No selection is the signal alone.
-  subscribableEvents: [...EVERTRACE_SUBSCRIBABLE_EVENTS],
-  defaultSubscribedEvents: [EVERTRACE_SIGNAL_EVENT],
-  listenConfig: [
-    { key: 'search', required: false },
-    { key: 'list', required: false },
-    { key: 'pollIntervalSeconds', required: false },
-  ],
+  // A 0.12 `listen to evertrace { search }` is a listen on `Signals` with
+  // that WHERE, and `{ events: ["list_entry"], list }` one on `List Entries`
+  // (`listen-fire upgrade`). A listen naming both events has no rewrite: write
+  // one listen for each edge.
+  listenSettingsBecome: {
+    ...SIGNALS_BECOME,
+    byEvent: {
+      signal: SIGNALS_BECOME,
+      list_entry: {
+        path: [EVERTRACE_LIST_ENTRIES_COLLECTION],
+        aliases: ['e'],
+        paramFrom: EVERTRACE_LIST_ENTRY_DISPLAY_NAME,
+        keys: { list: { hop: 0, field: EVERTRACE_LIST_NAME_FIELD, op: 'eq' } },
+      },
+    },
+  },
   triggerKinds: ['EVERTRACE'],
   vocabulary: {
     // Evertrace's mark: the four leaves of its logo, as one filled path.
@@ -151,10 +166,6 @@ export const EVERTRACE_MANIFEST: AdapterManifest = {
       viewBox: '-0.6 -0.6 25.64 25.64',
     },
     eventPhrase: {
-      [EVERTRACE_LIST_ENTRY_EVENT]: [
-        { template: 'When a signal is added to the list `{list}`' },
-        { template: 'When a signal is added to a list' },
-      ],
       default: [{ template: 'When Evertrace finds a new signal' }],
     },
   },

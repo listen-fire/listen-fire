@@ -69,7 +69,7 @@ async function runOne(mode: Mode): Promise<Record<string, number>> {
       const client = new evertrace.EvertraceApiClient({ apiKey, baseUrl: fake.url, fetch, log: quiet });
       return {
         adapter: new evertrace.EvertraceAdapter(async () => client),
-        poll: (input: { config: unknown; checkpoint?: unknown }) => evertrace.pollEvertrace(client, input, { log: quiet }),
+        poll: (input: { edge: string; cursor?: unknown }) => evertrace.pollEvertrace(client, input, { log: quiet }),
       };
     }
     // As the platform's secrets family answers: the same fields until they change.
@@ -82,7 +82,7 @@ async function runOne(mode: Mode): Promise<Record<string, number>> {
       kv: kit.refusingKv('none'),
       validateResults: mode === 'validated',
     });
-    return { adapter: loaded.adapter, poll: (input: { config: unknown; checkpoint?: unknown }) => loaded.poll!(input) };
+    return { adapter: loaded.adapter, poll: (input: { edge: string; cursor?: unknown }) => loaded.poll!(input) };
   };
   // Boot: the code loaded and the first adapter constructed.
   subjectFor('boot');
@@ -100,7 +100,7 @@ async function runOne(mode: Mode): Promise<Record<string, number>> {
     await adapter.getFieldValue({ position: signal, fieldId: 'Name' });
     await adapter.getRelated({ position: meta, fieldId: 'Signals', direction: 'outgoing', limit: 20 });
     await adapter.readRecord?.({ recordType: 'Signal', externalId: 'sig_1' });
-    await poll({ config: {}, checkpoint: { createdAfter: 1 } });
+    await poll({ edge: 'Signals', cursor: { createdAfter: 1 } });
     if (round >= WARMUP) {
       samples.push(Number(process.hrtime.bigint() - start) / 1e6);
       const cpu = process.cpuUsage(cpuStart);

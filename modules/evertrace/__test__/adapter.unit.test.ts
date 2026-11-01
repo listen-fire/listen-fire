@@ -203,44 +203,60 @@ describe('EvertraceAdapter entry surface', () => {
         typeId: e.typeId,
         readable: e.readable,
         writable: e.writable,
-        fires: e.fires ?? false,
+        listenable: e.listenable ?? false,
         collection: e.collectionName ?? null,
       })),
     ).toEqual([
-      { typeId: EVERTRACE_SIGNAL_TYPE_ID, readable: true, writable: true, fires: false, collection: 'Signals' },
-      { typeId: EVERTRACE_SIGNAL_TYPE_ID, readable: false, writable: false, fires: true, collection: null },
-      { typeId: EVERTRACE_SEARCH_TYPE_ID, readable: true, writable: true, fires: false, collection: 'Searches' },
-      { typeId: EVERTRACE_LIST_TYPE_ID, readable: true, writable: true, fires: false, collection: 'Lists' },
-      { typeId: EVERTRACE_COMPANY_TYPE_ID, readable: true, writable: false, fires: false, collection: 'Companies' },
-      { typeId: EVERTRACE_SCHOOL_TYPE_ID, readable: true, writable: false, fires: false, collection: 'Schools' },
-      { typeId: EVERTRACE_EXPERIENCE_TYPE_ID, readable: false, writable: false, fires: false, collection: null },
-      { typeId: EVERTRACE_EDUCATION_TYPE_ID, readable: false, writable: false, fires: false, collection: null },
-      { typeId: EVERTRACE_LIST_ENTRY_TYPE_ID, readable: false, writable: false, fires: false, collection: null },
-      { typeId: EVERTRACE_LIST_ENTRY_TYPE_ID, readable: false, writable: false, fires: true, collection: null },
+      { typeId: EVERTRACE_SIGNAL_TYPE_ID, readable: true, writable: true, listenable: true, collection: 'Signals' },
+      { typeId: EVERTRACE_SEARCH_TYPE_ID, readable: true, writable: true, listenable: false, collection: 'Searches' },
+      { typeId: EVERTRACE_LIST_TYPE_ID, readable: true, writable: true, listenable: false, collection: 'Lists' },
+      { typeId: EVERTRACE_COMPANY_TYPE_ID, readable: true, writable: false, listenable: false, collection: 'Companies' },
+      { typeId: EVERTRACE_SCHOOL_TYPE_ID, readable: true, writable: false, listenable: false, collection: 'Schools' },
+      { typeId: EVERTRACE_EXPERIENCE_TYPE_ID, readable: false, writable: false, listenable: false, collection: null },
+      { typeId: EVERTRACE_EDUCATION_TYPE_ID, readable: false, writable: false, listenable: false, collection: null },
+      { typeId: EVERTRACE_LIST_ENTRY_TYPE_ID, readable: false, writable: false, listenable: true, collection: 'List Entries' },
     ]);
   });
 
-  it('gives each event edge the events value that lands on it, so a listen selects one', async () => {
+  it('declares Signals and List Entries as polled, cursored edges and nothing else as listenable', async () => {
     const entries = await adapter.listEntryPoints();
-    expect(entries.filter((e) => e.fires).map((e) => [e.typeId, e.firesOn])).toEqual([
-      [EVERTRACE_SIGNAL_TYPE_ID, ['signal']],
-      [EVERTRACE_LIST_ENTRY_TYPE_ID, ['list_entry']],
+    expect(entries.filter((e) => e.listenable).map((e) => ({
+      collection: e.collectionName,
+      delivery: e.delivery,
+      pollEverySeconds: e.pollEverySeconds,
+      cursor: e.cursor,
+      filter: e.capability?.filter,
+    }))).toEqual([
+      { collection: 'Signals', delivery: 'polled', pollEverySeconds: 300, cursor: true, filter: 'native' },
+      { collection: 'List Entries', delivery: 'polled', pollEverySeconds: 300, cursor: true, filter: 'native' },
     ]);
   });
 
-  it('declares the poll trigger, the Evertrace credential, the two event kinds and the listen options', () => {
+  it('declares the poll trigger, the Evertrace credential and how a 0.12 listen becomes a traversal on the edge its event arrives on', () => {
     expect(EVERTRACE_MANIFEST.supportedTriggers).toEqual(['poll']);
     expect(EVERTRACE_MANIFEST.requiredCredentialType).toBe('EVERTRACE');
     expect(EVERTRACE_MANIFEST.triggerKinds).toEqual(['EVERTRACE']);
-    expect(EVERTRACE_MANIFEST.subscribableEvents).toEqual(['signal', 'list_entry']);
-    // No selection is the signal alone — what every listen written before lists
-    // existed still means.
-    expect(EVERTRACE_MANIFEST.defaultSubscribedEvents).toEqual(['signal']);
-    expect(EVERTRACE_MANIFEST.listenConfig?.map((k) => k.key)).toEqual([
-      'search',
-      'list',
-      'pollIntervalSeconds',
-    ]);
+    expect(EVERTRACE_MANIFEST.subscribableEvents).toBeUndefined();
+    expect(EVERTRACE_MANIFEST.defaultSubscribedEvents).toBeUndefined();
+    expect(EVERTRACE_MANIFEST.listenConfig).toBeUndefined();
+    const signals = {
+      path: ['Signals'],
+      aliases: ['s'],
+      paramFrom: 'Signal',
+      keys: { search: { hop: 0, field: 'Saved Search', op: 'eq' } },
+    };
+    expect(EVERTRACE_MANIFEST.listenSettingsBecome).toEqual({
+      ...signals,
+      byEvent: {
+        signal: signals,
+        list_entry: {
+          path: ['List Entries'],
+          aliases: ['e'],
+          paramFrom: 'List Entry',
+          keys: { list: { hop: 0, field: 'List Name', op: 'eq' } },
+        },
+      },
+    });
   });
 });
 
@@ -249,16 +265,16 @@ describe('EvertraceAdapter entry surface', () => {
 describe('EvertraceAdapter.describe', () => {
   const adapter = withoutClient();
 
-  it('describes the workspace meta node with the five root collections plus the two event edges', async () => {
+  it('describes the workspace meta node with its root collections, Signals and List Entries listenable', async () => {
     for (const ref of [ADAPTER_META_TYPE_ID, EVERTRACE_WORKSPACE_TYPE_ID]) {
       const d = await adapter.describe(ref);
       expect(d?.typeId).toBe(EVERTRACE_WORKSPACE_TYPE_ID);
       expect(d?.references.map((r) => r.name)).toEqual([
-        'Signals', 'Signal', 'Searches', 'Lists', 'List Entry', 'Companies', 'Schools',
+        'Signals', 'Searches', 'Lists', 'List Entries', 'Companies', 'Schools',
       ]);
-      // Only the event edges fire; only searches and lists are creatable there.
-      expect(d?.references.filter((r) => r.fires).map((r) => r.name)).toEqual([
-        'Signal', 'List Entry',
+      // Only these two edges are listened to; only searches and lists are creatable there.
+      expect(d?.references.filter((r) => r.listenable).map((r) => r.name)).toEqual([
+        'Signals', 'List Entries',
       ]);
       expect(d?.references.filter((r) => r.writable).map((r) => r.name)).toEqual([
         'Searches', 'Lists',
@@ -790,6 +806,10 @@ describe('EvertraceAdapter — what an author may filter and order', () => {
     expect(schema.collections.Signals).toEqual({
       target: 'Signal',
       capability: { filter: 'native', order: 'bounded', supportsLimit: true },
+      listenable: true,
+      delivery: 'polled',
+      pollEverySeconds: 300,
+      cursor: true,
     });
     expect(schema.collections.Lists).toEqual({
       target: 'List',
@@ -1312,47 +1332,46 @@ describe('EvertraceAdapter.readRecord', () => {
   });
 });
 
-// ── event typing ────────────────────────────────────────────────────────────
-
-describe('EvertraceAdapter.listEventTypes', () => {
-  it('types a polled event by its tag — a signal or a list addition', async () => {
-    const adapter = withoutClient();
-    expect(await adapter.listEventTypes()).toEqual([
-      { tag: 'evertrace:signal', positionType: EVERTRACE_SIGNAL_TYPE_ID, match: { path: 'id', equals: [] } },
-      { tag: 'evertrace:list_entry', positionType: EVERTRACE_LIST_ENTRY_TYPE_ID, match: { path: 'id', equals: [] } },
-    ]);
-  });
-});
-
 // ── poll ─────────────────────────────────────────────────────────────
 
-describe('pollEvertrace', () => {
-  const source = (client: EvertraceApiClient) => ({
-    getEvents: (input: { config: unknown; checkpoint?: unknown }) => pollEvertrace(client, input, { log }),
-  });
+const taking = (field: string, op: string, right: unknown) => ({
+  type: 'compare',
+  op,
+  left: { type: 'property', propertyTypeId: field, fieldOnly: true },
+  right: { type: 'static', value: right },
+});
+const conjunction = (...operands: unknown[]) => ({ type: 'logical', op: 'and', operands });
+const ids = (answer: Awaited<ReturnType<typeof pollEvertrace>>) => answer.arrivals.map((a) => ('identity' in a ? a.identity : ''));
 
-  it('first poll sets the mark and emits nothing (no backfill)', async () => {
+describe('pollEvertrace — Signals', () => {
+  const poll = (client: EvertraceApiClient, input: { filter?: unknown; cursor?: unknown }) =>
+    pollEvertrace(client, { edge: 'Signals', ...input }, { log });
+
+  it('first poll sets the cursor and delivers nothing (no backfill)', async () => {
     const listSignals = jest.fn(async () => ({ data: [signal()], meta: { page: 1, limit: 100 } }));
-    const { events, checkpoint } = await source(fakeClient({ listSignals })).getEvents({ config: {} });
-    expect(events).toEqual([]);
-    expect((checkpoint as { createdAfter: number }).createdAfter).toBeGreaterThan(0);
+    const { arrivals, cursor } = await poll(fakeClient({ listSignals }), {});
+    expect(arrivals).toEqual([]);
+    expect((cursor as { createdAfter: number }).createdAfter).toBeGreaterThan(0);
     expect(listSignals).not.toHaveBeenCalled();
   });
 
-  it('a subsequent poll emits one tagged event per signal, oldest first, and advances the mark', async () => {
+  it('a later poll delivers each signal on Signals, oldest first, and advances the cursor', async () => {
     const older = signal({ id: 'a', createdAt: CREATED_AT });
     const newer = signal({ id: 'b', createdAt: CREATED_AT + 60_000 });
     const listSignals = jest.fn(async () => ({ data: [newer, older], meta: { page: 1, limit: 100 } }));
-    const { events, checkpoint } = await source(fakeClient({ listSignals })).getEvents({
-      config: {},
-      checkpoint: { createdAfter: CREATED_AT - 1 },
+    const answer = await poll(fakeClient({ listSignals }), { cursor: { createdAfter: CREATED_AT - 1 } });
+    expect(ids(answer)).toEqual(['a', 'b']);
+    expect(answer.arrivals[0]).toMatchObject({
+      edge: 'Signals',
+      occurredAt: new Date(CREATED_AT).toISOString(),
+      takenApplied: true,
+      landing: {
+        recordId: 'a',
+        recordType: 'Signal',
+        fields: expect.objectContaining({ Name: 'Ada Byron', Score: 8, 'Created At': new Date(CREATED_AT).toISOString() }),
+      },
     });
-    expect(events.map((e) => e.externalId)).toEqual(['a', 'b']);
-    expect(events.every((e) => e.tag === 'evertrace:signal')).toBe(true);
-    expect(events[0].occurredAt).toBe(new Date(CREATED_AT).toISOString());
-    // The full signal object crosses as the payload.
-    expect((events[0].payload as EvertraceSignal).linkedinIdStr).toBe('ada-byron');
-    expect((checkpoint as { createdAfter: number }).createdAfter).toBe(CREATED_AT + 60_000);
+    expect((answer.cursor as { createdAfter: number }).createdAfter).toBe(CREATED_AT + 60_000);
     expect(listSignals).toHaveBeenCalledWith({
       filter: { created_after: String(CREATED_AT - 1) },
       page: 1,
@@ -1364,7 +1383,7 @@ describe('pollEvertrace', () => {
     const fresh = signal({ id: 'b', createdAt: CREATED_AT + 60_000 });
     const listSignals = jest.fn(async () => ({ data: [fresh], meta: { page: 1, limit: 100 } }));
     const listSearchSignals = jest.fn();
-    const { events } = await source(
+    const answer = await poll(
       fakeClient({
         listSignals,
         listSearchSignals,
@@ -1379,11 +1398,11 @@ describe('pollEvertrace', () => {
           }),
         ],
       }),
-    ).getEvents({
-      config: { search: 'Stealth in Europe' },
-      checkpoint: { createdAfter: CREATED_AT },
-    });
-    expect(events.map((e) => e.externalId)).toEqual(['b']);
+      { filter: taking('Saved Search', 'eq', 'Stealth in Europe'), cursor: { createdAfter: CREATED_AT } },
+    );
+    expect(ids(answer)).toEqual(['b']);
+    // The arrival carries the search it came through.
+    expect(answer.arrivals[0]).toMatchObject({ landing: { fields: expect.objectContaining({ 'Saved Search': 'Stealth in Europe' }) } });
     expect(listSignals).toHaveBeenCalledWith({
       filter: {
         type: ['Stealth Position'],
@@ -1398,21 +1417,50 @@ describe('pollEvertrace', () => {
     expect(listSearchSignals).not.toHaveBeenCalled();
   });
 
+  it('reads each saved search a listen names once over, and a signal two of them match arrives once', async () => {
+    const both = signal({ id: 'both', createdAt: CREATED_AT + 1 });
+    const listSignals = jest.fn(async () => ({ data: [both], meta: { page: 1, limit: 100 } }));
+    const answer = await poll(
+      fakeClient({ listSignals, listSearches: async () => [search(), search({ id: 'sea-2', title: 'Other' })] }),
+      { filter: taking('Saved Search', 'in', ['Stealth in Europe', 'Other']), cursor: { createdAfter: CREATED_AT } },
+    );
+    expect(listSignals).toHaveBeenCalledTimes(2);
+    expect(ids(answer)).toEqual(['both']);
+  });
+
+  it('judges the rest of the taken filter over the signal, and moves the cursor past one that did not match', async () => {
+    const strong = signal({ id: 'a', score: 9, createdAt: CREATED_AT + 1 });
+    const weak = signal({ id: 'b', score: 3, createdAt: CREATED_AT + 2 });
+    const listSignals = jest.fn(async () => ({ data: [strong, weak], meta: { page: 1, limit: 100 } }));
+    const answer = await poll(fakeClient({ listSignals }), {
+      filter: taking('Score', 'gte', 8),
+      cursor: { createdAfter: CREATED_AT },
+    });
+    expect(ids(answer)).toEqual(['a']);
+    expect((answer.cursor as { createdAfter: number }).createdAfter).toBe(CREATED_AT + 2);
+  });
+
+  it('leaves a filter it cannot read to the host: nothing claimed applied', async () => {
+    const unreadable = { type: 'compare', op: 'eq', left: { type: 'property', propertyTypeId: 'Score' }, right: { type: 'property', propertyTypeId: 'Age' } };
+    const listSignals = jest.fn(async () => ({ data: [signal({ createdAt: CREATED_AT + 1 })], meta: { page: 1, limit: 100 } }));
+    const answer = await poll(fakeClient({ listSignals }), { filter: unreadable, cursor: { createdAfter: CREATED_AT } });
+    expect(answer.arrivals).toHaveLength(1);
+    expect(answer.arrivals[0]).not.toHaveProperty('takenApplied');
+  });
+
   it('fetches the search when the listing answers without its rows', async () => {
     const listSignals = jest.fn(async () => ({ data: [], meta: { page: 1, limit: 100 } }));
     const getSearch = jest.fn(async () =>
       search({ id: 'sea-fetch', filters: [filterRow({ key: 'city', operator: 'in', value: 'Paris' })] }),
     );
-    await source(
+    await poll(
       fakeClient({
         listSignals,
         getSearch,
         listSearches: async () => [searchWithoutRows()],
       }),
-    ).getEvents({
-      config: { search: 'sea-fetch' },
-      checkpoint: { createdAfter: CREATED_AT },
-    });
+      { filter: taking('Saved Search', 'eq', 'sea-fetch'), cursor: { createdAfter: CREATED_AT } },
+    );
     expect(getSearch).toHaveBeenCalledWith('sea-fetch');
     expect(listSignals).toHaveBeenCalledWith({
       filter: { city: ['Paris'], created_after: String(CREATED_AT) },
@@ -1427,6 +1475,7 @@ describe('pollEvertrace', () => {
       listSearches: async () => [
         search({
           id: 'sea-logged',
+          title: 'Logged',
           filters: [
             filterRow({ key: 'status', operator: 'in', value: '["Stealth Position"]' }),
             filterRow({ key: 'gender', operator: 'not_in', value: 'man' }),
@@ -1434,12 +1483,8 @@ describe('pollEvertrace', () => {
         }),
       ],
     });
-    const poll = () =>
-      source(client).getEvents({
-        config: { search: 'sea-logged' },
-        checkpoint: { createdAfter: CREATED_AT },
-      });
-    await poll();
+    const again = () => poll(client, { filter: taking('Saved Search', 'eq', 'sea-logged'), cursor: { createdAfter: CREATED_AT } });
+    await again();
     const said = log.info.mock.calls.map((c) => String(c[0]));
     expect(said.some((line) => line.includes('"key":"status"'))).toBe(true);
     // The row it could not express is named too — that is how the real
@@ -1447,26 +1492,25 @@ describe('pollEvertrace', () => {
     expect(said.some((line) => line.includes('this key has no exclude form'))).toBe(true);
 
     log.info.mockClear();
-    await poll();
+    await again();
     expect(log.info).not.toHaveBeenCalled();
   });
 
   it('polls on the mark alone, and warns, when nothing in the search can be expressed', async () => {
     const listSignals = jest.fn(async () => ({ data: [], meta: { page: 1, limit: 100 } }));
-    await source(
+    await poll(
       fakeClient({
         listSignals,
         listSearches: async () => [
           search({
             id: 'sea-unreadable',
+            title: 'Unreadable',
             filters: [filterRow({ key: 'country', operator: 'between', value: 'France' })],
           }),
         ],
       }),
-    ).getEvents({
-      config: { search: 'sea-unreadable' },
-      checkpoint: { createdAfter: CREATED_AT },
-    });
+      { filter: taking('Saved Search', 'eq', 'sea-unreadable'), cursor: { createdAfter: CREATED_AT } },
+    );
     expect(listSignals).toHaveBeenCalledWith({
       filter: { created_after: String(CREATED_AT) },
       page: 1,
@@ -1479,38 +1523,32 @@ describe('pollEvertrace', () => {
 
   it('names the searches it can see when the listen names one it cannot', async () => {
     await expect(
-      source(fakeClient()).getEvents({
-        config: { search: 'Nope' },
-        checkpoint: { createdAfter: CREATED_AT },
-      }),
+      poll(fakeClient(), { filter: taking('Saved Search', 'eq', 'Nope'), cursor: { createdAfter: CREATED_AT } }),
     ).rejects.toThrow(/no saved search called "Nope"/);
   });
 
+  it('refuses an edge it does not have, by name', async () => {
+    await expect(pollEvertrace(fakeClient(), { edge: 'Searches', cursor: { createdAfter: CREATED_AT } }, { log })).rejects.toThrow(
+      '@lf/evertrace: no edge Searches to poll (its listenable edges are Signals and List Entries)',
+    );
+  });
 });
 
 // ── poll: list additions ─────────────────────────────────────────────
-//
-// The SAME source, told which kind to fetch by the listen's own `events`
-// selection. What each of these really asserts is that a trigger listening on
-// one edge never sees the other edge's events.
 
-describe('pollEvertrace — list additions', () => {
-  const source = (client: EvertraceApiClient) => ({
-    getEvents: (input: { config: unknown; checkpoint?: unknown }) => pollEvertrace(client, input, { log }),
-  });
-  const ENTRIES = { events: ['list_entry'] };
+describe('pollEvertrace — List Entries', () => {
+  const poll = (client: EvertraceApiClient, input: { filter?: unknown; cursor?: unknown }) =>
+    pollEvertrace(client, { edge: 'List Entries', ...input }, { log });
 
-  it('first poll sets the entries mark and emits nothing (no backfill)', async () => {
+  it('first poll sets the cursor and delivers nothing (no backfill)', async () => {
     const listListEntries = jest.fn(async () => ({ data: [listEntry()], meta: { page: 1, limit: 100 } }));
-    const { events, checkpoint } = await source(fakeClient({ listListEntries })).getEvents({
-      config: ENTRIES,
-    });
-    expect(events).toEqual([]);
-    expect((checkpoint as { entriesCreatedAfter: number }).entriesCreatedAfter).toBeGreaterThan(0);
+    const { arrivals, cursor } = await poll(fakeClient({ listListEntries }), {});
+    expect(arrivals).toEqual([]);
+    expect((cursor as { createdAfter: number }).createdAfter).toBeGreaterThan(0);
     expect(listListEntries).not.toHaveBeenCalled();
   });
 
-  it('emits one tagged event per new entry, oldest first, keyed by (list, entry)', async () => {
+  it('delivers each new entry, oldest first, keyed by (list, entry) and about its signal', async () => {
     const older = listEntry({ id: 'ent-a', createdAt: CREATED_AT + 1_000 });
     const newer = listEntry({ id: 'ent-b', createdAt: CREATED_AT + 60_000 });
     const seen = listEntry({ id: 'ent-old', createdAt: CREATED_AT - 60_000 });
@@ -1518,17 +1556,19 @@ describe('pollEvertrace — list additions', () => {
       data: [newer, older, seen],
       meta: { page: 1, limit: 100 },
     }));
-    const { events, checkpoint } = await source(fakeClient({ listListEntries })).getEvents({
-      config: ENTRIES,
-      checkpoint: { entriesCreatedAfter: CREATED_AT },
+    const answer = await poll(fakeClient({ listListEntries }), { cursor: { createdAfter: CREATED_AT } });
+    expect(ids(answer)).toEqual(['lst-1:ent-a', 'lst-1:ent-b']);
+    expect(answer.arrivals[0]).toMatchObject({
+      edge: 'List Entries',
+      occurredAt: new Date(CREATED_AT + 1_000).toISOString(),
+      about: { recordType: 'Signal', externalId: 'sig-1' },
+      takenApplied: true,
+      landing: {
+        recordType: 'List Entry',
+        fields: expect.objectContaining({ 'Added At': new Date(CREATED_AT + 1_000).toISOString(), 'List Id': 'lst-1', 'List Name': 'Watchlist' }),
+      },
     });
-    expect(events.map((e) => e.externalId)).toEqual(['lst-1:ent-a', 'lst-1:ent-b']);
-    expect(events.every((e) => e.tag === 'evertrace:list_entry')).toBe(true);
-    expect(events[0].occurredAt).toBe(new Date(CREATED_AT + 1_000).toISOString());
-    expect((events[0].payload as EvertraceListEntry).signalId).toBe('sig-1');
-    expect((checkpoint as { entriesCreatedAfter: number }).entriesCreatedAfter).toBe(
-      CREATED_AT + 60_000,
-    );
+    expect((answer.cursor as { createdAfter: number }).createdAfter).toBe(CREATED_AT + 60_000);
     // Newest first, so the walk can stop at the mark.
     expect(listListEntries).toHaveBeenCalledWith('lst-1', {
       page: 1,
@@ -1550,13 +1590,10 @@ describe('pollEvertrace — list additions', () => {
       data: opts.page === 1 ? page1 : page2,
       meta: { page: opts.page ?? 1, limit: 100 },
     }));
-    const { events } = await source(fakeClient({ listListEntries })).getEvents({
-      config: ENTRIES,
-      checkpoint: { entriesCreatedAfter: CREATED_AT },
-    });
+    const answer = await poll(fakeClient({ listListEntries }), { cursor: { createdAfter: CREATED_AT } });
     expect(listListEntries).toHaveBeenCalledTimes(2);
-    expect(events).toHaveLength(101);
-    expect(events.some((e) => e.externalId === 'lst-1:p2-seen')).toBe(false);
+    expect(answer.arrivals).toHaveLength(101);
+    expect(ids(answer).includes('lst-1:p2-seen')).toBe(false);
   });
 
   it('covers every list in the workspace when the listen names none', async () => {
@@ -1565,14 +1602,11 @@ describe('pollEvertrace — list additions', () => {
       data: [listEntry({ id: `ent-${listId}`, listId, createdAt: CREATED_AT + 1 })],
       meta: { page: 1, limit: 100 },
     }));
-    const { events } = await source(fakeClient({ listLists, listListEntries })).getEvents({
-      config: ENTRIES,
-      checkpoint: { entriesCreatedAfter: CREATED_AT },
-    });
-    expect(events.map((e) => e.externalId)).toEqual(['lst-1:ent-lst-1', 'lst-2:ent-lst-2']);
+    const answer = await poll(fakeClient({ listLists, listListEntries }), { cursor: { createdAfter: CREATED_AT } });
+    expect(ids(answer)).toEqual(['lst-1:ent-lst-1', 'lst-2:ent-lst-2']);
   });
 
-  it('narrows to one list, named by its name or by its id', async () => {
+  it('narrows to the lists a listen names, by name or by id, each read once', async () => {
     // The default fixture list is 'Watchlist' (lst-1); 'Pipeline' is the other.
     const listLists = async () => [list(), list({ id: 'lst-2', name: 'Pipeline' })];
     for (const named of ['Pipeline', 'pipeline', 'lst-2']) {
@@ -1581,26 +1615,39 @@ describe('pollEvertrace — list additions', () => {
         asked.push(listId);
         return { data: [], meta: { page: 1, limit: 100 } };
       };
-      await source(fakeClient({ listLists, listListEntries })).getEvents({
-        config: { ...ENTRIES, list: named },
-        checkpoint: { entriesCreatedAfter: CREATED_AT },
-      });
+      await poll(fakeClient({ listLists, listListEntries }), { filter: taking('List Name', 'eq', named), cursor: { createdAfter: CREATED_AT } });
       expect(asked).toEqual(['lst-2']);
     }
+    const asked: string[] = [];
+    await poll(
+      fakeClient({ listLists, listListEntries: async (listId: string) => (asked.push(listId), { data: [], meta: { page: 1, limit: 100 } }) }),
+      { filter: taking('List Name', 'in', ['Pipeline', 'Watchlist']), cursor: { createdAfter: CREATED_AT } },
+    );
+    expect(asked).toEqual(['lst-2', 'lst-1']);
+  });
+
+  it('judges a List Id it takes over the entry', async () => {
+    const listLists = async () => [list(), list({ id: 'lst-2', name: 'Pipeline' })];
+    const listListEntries = async (listId: string) => ({
+      data: [listEntry({ id: `ent-${listId}`, listId, createdAt: CREATED_AT + 1 })],
+      meta: { page: 1, limit: 100 },
+    });
+    const answer = await poll(fakeClient({ listLists, listListEntries }), {
+      filter: conjunction(taking('List Id', 'eq', 'lst-2')),
+      cursor: { createdAfter: CREATED_AT },
+    });
+    expect(ids(answer)).toEqual(['lst-2:ent-lst-2']);
   });
 
   it('names the lists it can see when the listen names one it cannot', async () => {
     await expect(
-      source(fakeClient()).getEvents({
-        config: { ...ENTRIES, list: 'Nope' },
-        checkpoint: { entriesCreatedAfter: CREATED_AT },
-      }),
+      poll(fakeClient(), { filter: taking('List Name', 'eq', 'Nope'), cursor: { createdAfter: CREATED_AT } }),
     ).rejects.toThrow(/no list called "Nope"/);
   });
 
-  it('a signal listener never pulls entries, and an entry listener never pulls signals', async () => {
+  it('a Signals poll never pulls entries, and a List Entries poll never pulls signals', async () => {
     const fakes = () => ({
-      listSignals: jest.fn(async () => ({ data: [signal()], meta: { page: 1, limit: 100 } })),
+      listSignals: jest.fn(async () => ({ data: [signal({ createdAt: CREATED_AT + 1 })], meta: { page: 1, limit: 100 } })),
       listListEntries: jest.fn(async () => ({
         data: [listEntry({ createdAt: CREATED_AT + 1 })],
         meta: { page: 1, limit: 100 },
@@ -1608,42 +1655,11 @@ describe('pollEvertrace — list additions', () => {
     });
 
     const forEntries = fakes();
-    const entriesOnly = await source(fakeClient(forEntries)).getEvents({
-      config: ENTRIES,
-      checkpoint: { entriesCreatedAfter: CREATED_AT },
-    });
-    expect(entriesOnly.events.map((e) => e.tag)).toEqual(['evertrace:list_entry']);
+    await poll(fakeClient(forEntries), { cursor: { createdAfter: CREATED_AT } });
     expect(forEntries.listSignals).not.toHaveBeenCalled();
 
     const forSignals = fakes();
-    const signalsOnly = await source(fakeClient(forSignals)).getEvents({
-      config: {},
-      checkpoint: { createdAfter: CREATED_AT - 1 },
-    });
-    expect(signalsOnly.events.map((e) => e.tag)).toEqual(['evertrace:signal']);
+    await pollEvertrace(fakeClient(forSignals), { edge: 'Signals', cursor: { createdAfter: CREATED_AT } }, { log });
     expect(forSignals.listListEntries).not.toHaveBeenCalled();
-  });
-
-  it('a listen selecting both kinds keeps a mark for each', async () => {
-    const listListEntries = jest.fn(async () => ({
-      data: [listEntry({ createdAt: CREATED_AT + 10 })],
-      meta: { page: 1, limit: 100 },
-    }));
-    const listSignals = jest.fn(async () => ({
-      data: [signal({ createdAt: CREATED_AT + 20 })],
-      meta: { page: 1, limit: 100 },
-    }));
-    const { events, checkpoint } = await source(
-      fakeClient({ listSignals, listListEntries }),
-    ).getEvents({
-      config: { events: ['signal', 'list_entry'] },
-      checkpoint: { createdAfter: CREATED_AT, entriesCreatedAfter: CREATED_AT },
-    });
-    expect(events.map((e) => e.tag)).toEqual(['evertrace:list_entry', 'evertrace:signal']);
-    expect(events.map((e) => e.eventType)).toEqual(['list_entry', 'signal']);
-    expect(checkpoint).toEqual({
-      createdAfter: CREATED_AT + 20,
-      entriesCreatedAfter: CREATED_AT + 10,
-    });
   });
 });

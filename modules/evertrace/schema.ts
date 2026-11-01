@@ -34,11 +34,18 @@ import {
   EVERTRACE_EXPERIENCE_DISPLAY_NAME,
   EVERTRACE_EXPERIENCE_TYPE_ID,
   EVERTRACE_LISTS_COLLECTION,
+  EVERTRACE_LIST_ENTRIES_COLLECTION,
+  EVERTRACE_LIST_ID_FIELD,
+  EVERTRACE_LIST_ID_FIELD_ID,
+  EVERTRACE_LIST_NAME_FIELD,
+  EVERTRACE_LIST_NAME_FIELD_ID,
+  EVERTRACE_POLL_EVERY_SECONDS,
+  EVERTRACE_SAVED_SEARCH_FIELD,
+  EVERTRACE_SAVED_SEARCH_FIELD_ID,
   EVERTRACE_LIST_DISPLAY_NAME,
   EVERTRACE_LIST_ENTRIES_EDGE,
   EVERTRACE_LIST_ENTRIES_EDGE_NAME,
   EVERTRACE_LIST_ENTRY_DISPLAY_NAME,
-  EVERTRACE_LIST_ENTRY_EVENT,
   EVERTRACE_LIST_ENTRY_TYPE_ID,
   EVERTRACE_LIST_TYPE_ID,
   EVERTRACE_SCHOOLS_COLLECTION,
@@ -51,7 +58,6 @@ import {
   EVERTRACE_SEARCH_TYPE_ID,
   EVERTRACE_SIGNALS_COLLECTION,
   EVERTRACE_SIGNAL_DISPLAY_NAME,
-  EVERTRACE_SIGNAL_EVENT,
   EVERTRACE_TAG_VALUES,
   EVERTRACE_SIGNAL_LIST_ENTRIES_EDGE,
   EVERTRACE_SIGNAL_LIST_ENTRIES_EDGE_NAME,
@@ -59,6 +65,12 @@ import {
   EVERTRACE_WORKSPACE_DISPLAY_NAME,
   EVERTRACE_WORKSPACE_TYPE_ID,
 } from './types';
+
+const LIST_ENTRIES_DESCRIPTION =
+  'A signal just added to a list, as a `List Entry`: walk `Signal` for the ' +
+  'person and `List` for the list it was filed on. Listen only; past entries ' +
+  'are walked from their list (`Entries`) or their signal (`List Entries`). ' +
+  '`List Name` narrows a listen to one list, by its name or its id.';
 
 const SIGNALS_DESCRIPTION =
   'People whose profile has just triggered a trackable event. An unbounded ' +
@@ -79,6 +91,9 @@ const SIGNALS_DESCRIPTION =
  *
  */
 const ROOT_QUERY = { filter: 'native', order: 'bounded', supportsLimit: true } as const;
+
+/** A listen on `List Entries` reaches the poll: the list it names is the read. */
+const LIST_ENTRIES_TAKEN = { filter: 'native', supportsLimit: false } as const;
 
 /** An UNPAGED root collection: the whole set arrives in one call, so any WHERE
  *  and any ORDER BY are satisfied over what came back. */
@@ -119,19 +134,13 @@ export function evertraceEntryPoints(): SchemaEntryPoint[] {
       readable: true,
       collectionName: EVERTRACE_SIGNALS_COLLECTION,
       description: SIGNALS_DESCRIPTION,
-    },
-    // The EVENT edge onto the same node the readable collection lands on
-    // (adapters/CLAUDE.md rule 9 — two edges, two promises, one node).
-    {
-      typeId: EVERTRACE_SIGNAL_TYPE_ID,
-      displayName: EVERTRACE_SIGNAL_DISPLAY_NAME,
-      writable: false,
-      readable: false,
-      fires: true,
-      firesOn: [EVERTRACE_SIGNAL_EVENT],
-      description:
-        'Delivered when Evertrace discovers a new signal since the last poll. ' +
-        'The signal itself — read its profile, experiences and educations.',
+      // One edge, two promises: past signals can be walked, and each signal
+      // Evertrace creates after the listen began arrives on it.
+      listenable: true,
+      capability: ROOT_QUERY,
+      delivery: 'polled',
+      pollEverySeconds: EVERTRACE_POLL_EVERY_SECONDS,
+      cursor: true,
     },
     {
       typeId: EVERTRACE_SEARCH_TYPE_ID,
@@ -179,27 +188,22 @@ export function evertraceEntryPoints(): SchemaEntryPoint[] {
       writable: false,
       readable: false,
     },
-    {
-      typeId: EVERTRACE_LIST_ENTRY_TYPE_ID,
-      displayName: EVERTRACE_LIST_ENTRY_DISPLAY_NAME,
-      // Reached through its list or its signal, never enumerated from the root;
-      // created and removed along those same edges.
-      writable: false,
-      readable: false,
-    },
-    // The EVENT edge onto that same node (rule 9 again): a membership arrives
-    // as well as being walked to, and the arriving entry carries both ends, so
-    // a run reads the person and the list off what it was handed.
+    // Reached through its list or its signal, never enumerated from the root;
+    // created and removed along those same edges. It also arrives: a signal
+    // added to a list lands here, about the signal, so a run reads the person
+    // and the list off what it was handed.
     {
       typeId: EVERTRACE_LIST_ENTRY_TYPE_ID,
       displayName: EVERTRACE_LIST_ENTRY_DISPLAY_NAME,
       writable: false,
       readable: false,
-      fires: true,
-      firesOn: [EVERTRACE_LIST_ENTRY_EVENT],
-      description:
-        'Delivered when a signal is added to a list. Walk `Signal` for the ' +
-        'person and `List` for the list it was filed on.',
+      collectionName: EVERTRACE_LIST_ENTRIES_COLLECTION,
+      description: LIST_ENTRIES_DESCRIPTION,
+      listenable: true,
+      capability: LIST_ENTRIES_TAKEN,
+      delivery: 'polled',
+      pollEverySeconds: EVERTRACE_POLL_EVERY_SECONDS,
+      cursor: true,
     },
   ];
 }
@@ -211,9 +215,9 @@ export const EVERTRACE_ROOT: SchemaTypeDescriptor = {
   displayName: EVERTRACE_WORKSPACE_DISPLAY_NAME,
   description:
     'The Evertrace workspace. Walk `Signals` to pull founders Evertrace has ' +
-    'already found; listen on `Signal` to be told about new ones, or on ' +
-    '`List Entry` to be told when one is added to a list; `Searches` and ' +
-    '`Lists` are the saved filters and curated lists you can read and edit.',
+    'already found, or listen on it to be told about new ones; listen on ' +
+    '`List Entries` to be told when a signal is added to a list; `Searches` ' +
+    'and `Lists` are the saved filters and curated lists you can read and edit.',
   fields: [],
   references: [
     {
@@ -224,17 +228,7 @@ export const EVERTRACE_ROOT: SchemaTypeDescriptor = {
       name: EVERTRACE_SIGNALS_COLLECTION,
       description: SIGNALS_DESCRIPTION,
       capability: ROOT_QUERY,
-    },
-    {
-      fieldId: `fires:${EVERTRACE_SIGNAL_TYPE_ID}`,
-      targetTypeId: EVERTRACE_SIGNAL_TYPE_ID,
-      cardinality: 'one',
-      direction: 'outgoing',
-      name: EVERTRACE_SIGNAL_DISPLAY_NAME,
-      fires: true,
-      firesOn: [EVERTRACE_SIGNAL_EVENT],
-      readable: false,
-      description: 'A newly discovered signal — what a listen delivers.',
+      listenable: true,
     },
     {
       fieldId: EVERTRACE_SEARCHES_COLLECTION,
@@ -263,15 +257,17 @@ export const EVERTRACE_ROOT: SchemaTypeDescriptor = {
       capability: ROOT_WHOLE_SET,
     },
     {
-      fieldId: `fires:${EVERTRACE_LIST_ENTRY_TYPE_ID}`,
+      fieldId: EVERTRACE_LIST_ENTRIES_COLLECTION,
       targetTypeId: EVERTRACE_LIST_ENTRY_TYPE_ID,
-      cardinality: 'one',
+      cardinality: 'many',
       direction: 'outgoing',
-      name: EVERTRACE_LIST_ENTRY_DISPLAY_NAME,
-      fires: true,
-      firesOn: [EVERTRACE_LIST_ENTRY_EVENT],
+      name: EVERTRACE_LIST_ENTRIES_COLLECTION,
+      description: LIST_ENTRIES_DESCRIPTION,
       readable: false,
-      description: 'A signal just added to a list — what a listen delivers.',
+      writable: false,
+      linkable: false,
+      listenable: true,
+      capability: LIST_ENTRIES_TAKEN,
     },
     {
       fieldId: EVERTRACE_COMPANIES_COLLECTION,
@@ -327,6 +323,7 @@ const SIGNAL_DESCRIPTOR: SchemaTypeDescriptor = {
     { fieldId: 'discoveredAt', displayName: 'Discovered At', kind: 'date', writable: false, required: true, description: 'When Evertrace saw the triggering event. Lower and upper bounds are pushed as a date range.', capability: { filterOperators: ['gt', 'gte', 'lt', 'lte'] } },
     { fieldId: 'createdAt', displayName: 'Created At', kind: 'date', writable: false, required: true, description: 'When the signal row was created — what a listener’s "new since last poll" is measured on.', capability: { filterOperators: ['gt', 'gte'] } },
     { fieldId: 'tags', displayName: 'Tags', kind: 'string', cardinality: 'many', writable: false, required: false, knownValues: [...EVERTRACE_TAG_VALUES], description: 'What the person is ("Serial Founder", "YC Alumni") and what just happened to them ("New Company", "New Patent"). Both reach Evertrace from a WHERE, through different filters.', capability: { filterOperators: ['eq', 'in', 'contains'] } },
+    { fieldId: EVERTRACE_SAVED_SEARCH_FIELD_ID, displayName: EVERTRACE_SAVED_SEARCH_FIELD, kind: 'string', writable: false, required: false, description: 'A saved search, by its title or its id (`s.`Saved Search` == "Stealth in Europe"`): a listen on `Signals` hears what the search matches. Read, it is the search a signal arrived through, and nothing on a signal found otherwise — to read what a search matches, walk its `Signals`.', capability: { filterOperators: ['eq'] } },
     { fieldId: 'listPresence', displayName: 'In A List', kind: 'boolean', writable: false, required: false, description: 'Whether this signal is already on any list in the workspace.' },
     { fieldId: 'screened', displayName: 'Screened', kind: 'boolean', writable: true, required: false, description: 'Set true to mark the signal screened, false to un-screen it.' },
     { fieldId: 'viewed', displayName: 'Viewed', kind: 'boolean', writable: true, required: false, description: 'Set true to mark the signal viewed. Evertrace has no un-view, so false is refused.' },
@@ -545,6 +542,8 @@ const LIST_ENTRY_DESCRIPTOR: SchemaTypeDescriptor = {
     '`write (list-[:Entries]->, signal-[:List Entries]->) { }`.',
   fields: [
     { fieldId: 'createdAt', displayName: 'Added At', kind: 'date', writable: false, required: true, description: 'When the signal went onto the list. Evertrace sorts the list’s entries by it, so an ORDER BY on it reaches the source.', capability: { orderable: true } },
+    { fieldId: EVERTRACE_LIST_ID_FIELD_ID, displayName: EVERTRACE_LIST_ID_FIELD, kind: 'string', writable: false, required: false, description: 'The id of the list it is on.', capability: { filterOperators: ['eq', 'in'] } },
+    { fieldId: EVERTRACE_LIST_NAME_FIELD_ID, displayName: EVERTRACE_LIST_NAME_FIELD, kind: 'string', writable: false, required: false, description: 'The list it is on, by its name (`e.`List Name` == "Pipeline"`): a listen on `List Entries` hears one list, named by its name or its id. Read, it is the name of the list an entry arrived on, and nothing on an entry found otherwise — `List Id` is on every entry.', capability: { filterOperators: ['eq', 'in'] } },
   ],
   references: [
     {

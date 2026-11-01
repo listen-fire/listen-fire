@@ -1,11 +1,11 @@
 // The module's seams with its host: how the context's credential becomes a
 // client, and what the module declares.
 
-import { emptyOcrSlot, type CredentialFields, type ModuleContext } from 'module-kit';
+import { emptyOcrSlot, refusingRecords, type CredentialFields, type ModuleContext } from 'module-kit';
 import { emptyBrowserSlot } from 'movement-engine/public/browser';
 
 import { EVERTRACE_API_VERSION } from '../api_client';
-import { evertraceClientFrom, evertraceModule, EVERTRACE_POLL_INTERVAL_SECONDS } from '../index';
+import { evertraceClientFrom, evertraceModule, EVERTRACE_POLL_EVERY_SECONDS } from '../index';
 
 interface Seen {
   url: string;
@@ -31,6 +31,7 @@ function contextOver(fields: () => CredentialFields, config: { baseUrlOverride?:
     identities: { list: refuse, find: refuse },
     browser: emptyBrowserSlot('none'),
     ocr: emptyOcrSlot('none'),
+    records: refusingRecords('none'),
     config: { tenant: 'team-1', constructionArgs: {}, ...config },
   };
   return { ctx, seen };
@@ -74,8 +75,8 @@ describe('evertraceClientFrom', () => {
 describe('evertraceModule', () => {
   it('declares an API key credential and a five-minute poll', () => {
     expect(evertraceModule.credentials[0]?.fields.map((f) => f.name)).toEqual(['apiKey', 'baseUrl']);
-    expect(evertraceModule.poll).toEqual({ intervalSeconds: EVERTRACE_POLL_INTERVAL_SECONDS });
-    expect(EVERTRACE_POLL_INTERVAL_SECONDS).toBe(300);
+    expect(evertraceModule.poll).toEqual({ intervalSeconds: EVERTRACE_POLL_EVERY_SECONDS });
+    expect(EVERTRACE_POLL_EVERY_SECONDS).toBe(300);
   });
 
   it('is a polled source with no inbound, and a write surface', () => {
