@@ -111,13 +111,13 @@ pub fn position_from_address(instance: &InstanceRef, hops_raw: &str) -> Option<P
     Some(match resolved {
         Position::Position(mut p) => {
             if narrowed {
-                p.narrows_event = Some(address.event);
+                p.narrows = Some(address.event);
             }
             Position::Position(p)
         }
         Position::Union(mut u) => {
             if narrowed {
-                u.narrows_event = Some(address.event.clone());
+                u.narrows = Some(address.event.clone());
             }
             u.address = Some(address);
             Position::Union(u)

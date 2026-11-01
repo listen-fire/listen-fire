@@ -304,7 +304,11 @@ pub struct LocalNode {
 pub struct RecordPosition {
     pub instance: InstanceRef,
     pub position: String,
-    pub narrows_event: Option<String>,
+    /// The un-narrowed position this one narrows, which a parameter of
+    /// that type accepts it as: an event address's event, the type a
+    /// hop's WHERE selected a member of, or what the un-narrowed edge
+    /// lands on where an edge off a narrowed record lands elsewhere.
+    pub narrows: Option<String>,
     pub display: Option<String>,
     /// Fields a guard in scope has proven present.
     pub present: BTreeSet<String>,
@@ -331,7 +335,7 @@ pub struct UnionPosition {
     pub instance: InstanceRef,
     pub union: String,
     pub variants: Vec<String>,
-    pub narrows_event: Option<String>,
+    pub narrows: Option<String>,
     pub display: Option<String>,
     /// The event address a parameter type named it by (`positionFromAddress`).
     pub address: Option<super::event_address::EventAddress>,
@@ -407,7 +411,7 @@ impl Position {
         Position::Position(RecordPosition {
             instance,
             position: position.into(),
-            narrows_event: None,
+            narrows: None,
             display: None,
             present: BTreeSet::new(),
             run_built: false,
@@ -428,7 +432,7 @@ pub fn position_ref_in(instance: &InstanceRef, name: &str) -> Option<Position> {
             instance: instance.clone(),
             union: name.to_string(),
             variants: variants.clone(),
-            narrows_event: None,
+            narrows: None,
             display: None,
             address: None,
             parameter: None,
@@ -543,13 +547,13 @@ pub fn positions_match(arg: &Position, param: &Position) -> Option<bool> {
                 if !same_instance(&arg.instance, &param.instance) {
                     return Some(false);
                 }
-                Some(arg.position == param.position || accepts_any_narrowing(&param.position, &param.narrows_event, &arg.narrows_event))
+                Some(arg.position == param.position || accepts_any_narrowing(&param.position, &param.narrows, &arg.narrows))
             }
             Position::Union(arg) => {
                 if !same_instance(&arg.instance, &param.instance) {
                     return Some(false);
                 }
-                Some(accepts_any_narrowing(&param.position, &param.narrows_event, &arg.narrows_event))
+                Some(accepts_any_narrowing(&param.position, &param.narrows, &arg.narrows))
             }
             Position::Handle(arg) => {
                 if !same_instance(&arg.instance, &param.instance) {
@@ -564,13 +568,13 @@ pub fn positions_match(arg: &Position, param: &Position) -> Option<bool> {
                 if !same_instance(&arg.instance, &param.instance) {
                     return Some(false);
                 }
-                Some(arg.union == param.union || accepts_any_narrowing(&param.union, &param.narrows_event, &arg.narrows_event))
+                Some(arg.union == param.union || accepts_any_narrowing(&param.union, &param.narrows, &arg.narrows))
             }
             Position::Position(arg) => {
                 if !same_instance(&arg.instance, &param.instance) {
                     return Some(false);
                 }
-                Some(param.variants.contains(&arg.position) || accepts_any_narrowing(&param.union, &param.narrows_event, &arg.narrows_event))
+                Some(param.variants.contains(&arg.position) || accepts_any_narrowing(&param.union, &param.narrows, &arg.narrows))
             }
             Position::Handle(arg) => {
                 if !same_instance(&arg.instance, &param.instance) {
@@ -985,7 +989,7 @@ fn landing_of(from: &Position, edge: &str) -> EdgeLanding {
             }
             let target = generic.unwrap_or_else(|| edge_schema.target.clone());
             match position_ref_in(instance, &target) {
-                Some(landing) => EdgeLanding::Landed { landing, edge: Some(edge_schema.clone()) },
+                Some(landing) => EdgeLanding::Landed { landing: narrowing_landing(from, edge, landing), edge: Some(edge_schema.clone()) },
                 None => EdgeLanding::Untyped { edge: Some(edge_schema.clone()) },
             }
         }
@@ -1053,6 +1057,27 @@ fn landing_of(from: &Position, edge: &str) -> EdgeLanding {
                 None => EdgeLanding::Untyped { edge: None },
             }
         }
+    }
+}
+
+/// An edge off a narrowed record lands on what narrows the landing of the
+/// same edge off the type it narrows, where the two differ: the changes of
+/// one table narrow every table's changes, so a parameter typed by the
+/// un-narrowed landing accepts them.
+fn narrowing_landing(from: &Position, edge: &str, landing: Position) -> Position {
+    let Position::Position(narrowed) = from else { return landing };
+    let Some(unnarrowed) = narrowed.narrows.as_ref().and_then(|of| narrowed.instance.schema.positions.get(of)) else { return landing };
+    let Some(target) = unnarrowed.edges.get(edge).map(|e| e.target.clone()) else { return landing };
+    match landing {
+        Position::Position(mut p) if p.narrows.is_none() && p.position != target => {
+            p.narrows = Some(target);
+            Position::Position(p)
+        }
+        Position::Union(mut u) if u.narrows.is_none() && u.union != target => {
+            u.narrows = Some(target);
+            Position::Union(u)
+        }
+        other => other,
     }
 }
 

@@ -145,3 +145,34 @@ fn a_listen_on_the_unnarrowed_table_reads_the_generic_row() {
     let found = errors_of("function f(c: <at-[:Change]->>) {\n  return c.Kind\n}\nlisten to at-[:Tables]->-[c:Changes WHERE c.Current.Stage == \"Interview\"]-> fire f\n");
     assert_eq!(codes(&found), ["MOV_UNKNOWN_PROPERTY"], "{found:#?}");
 }
+
+/// A narrowed type is assignable to the type it narrows, as TypeScript's
+/// structural assignability has it: the changes of one table are changes.
+/// Never the other way (a change of any table is not one of Candidates'),
+/// and never across unrelated types.
+#[test]
+fn a_narrowed_landing_is_accepted_where_its_unnarrowed_type_is_asked_for() {
+    let listen = |param: &str| {
+        errors_of(&format!("function f(c: <{param}>) {{\n  return \"seen\"\n}}\nlisten to at{NARROWED}-[c:Changes WHERE c.Kind == \"created\"]-> fire f\n"))
+    };
+    assert_eq!(listen("at-[:Change]->"), Vec::<(String, String)>::new());
+    assert_eq!(listen("at-[:`Candidates Change`]->"), Vec::<(String, String)>::new());
+    assert_eq!(codes(&listen("at-[:Table]->")), ["MOV_LISTEN_PARAM_MISMATCH"]);
+
+    let unnarrowed = errors_of(
+        "function f(c: <at-[:`Candidates Change`]->>) {\n  return c.Kind\n}\nlisten to at-[:Tables]->-[c:Changes WHERE c.Kind == \"created\"]-> fire f\n",
+    );
+    assert_eq!(codes(&unnarrowed), ["MOV_LISTEN_PARAM_MISMATCH"], "{unnarrowed:#?}");
+}
+
+#[test]
+fn a_selected_member_passes_to_a_function_of_its_type() {
+    let call = |param: &str| {
+        errors_of(&format!(
+            "function k(x: <{param}>) {{\n  return x.Name\n}}\nfunction f() {{\n  at{NARROWED} {{\n    k(t)\n  }}\n}}\n"
+        ))
+    };
+    assert_eq!(call("at-[:Table]->"), Vec::<(String, String)>::new());
+    assert_eq!(call("at-[:`Table \"Candidates\"`]->"), Vec::<(String, String)>::new());
+    assert_eq!(codes(&call("at-[:Candidates]->")), ["MOV_CALL_ARG_TYPE"]);
+}

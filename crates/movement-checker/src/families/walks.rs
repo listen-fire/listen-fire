@@ -1337,7 +1337,7 @@ fn residual_union(union: &crate::types::position::UnionPosition, remaining: &[St
         instance: union.instance.clone(),
         union: key,
         variants,
-        narrows_event: None,
+        narrows: None,
         display: Some(display),
         address: None,
         parameter: union.parameter.clone(),
@@ -1495,13 +1495,13 @@ impl crate::checker::Checker<'_> {
         let resolved = match crate::types::position::position_ref_in(&instance, &crate::types::event_address::event_address_key(&address)) {
             Some(Position::Position(mut p)) => {
                 if narrowed {
-                    p.narrows_event = Some(address.event.clone());
+                    p.narrows = Some(address.event.clone());
                 }
                 Position::Position(p)
             }
             Some(Position::Union(mut u)) => {
                 if narrowed {
-                    u.narrows_event = Some(address.event.clone());
+                    u.narrows = Some(address.event.clone());
                 }
                 u.address = Some(address);
                 Position::Union(u)

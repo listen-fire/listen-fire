@@ -257,11 +257,19 @@ impl<'a> Typing<'a> {
     /// registered one, else the member the WHERE pins by a literal.
     fn selected_member(&self, target: Position, filter: Option<&Expression>) -> Position {
         let Some(filter) = filter else { return target };
-        if let Some(refined) = refine_selected(&target, filter) {
-            return refined;
+        let selected = refine_selected(&target, filter).or_else(|| {
+            let Position::Position(p) = &target else { return None };
+            pinned_member(&p.instance.schema, &p.position, filter).and_then(|member| position_ref_in(&p.instance, &member))
+        });
+        match (selected, &target) {
+            // The member is still one of the type: a parameter of the type accepts it.
+            (Some(Position::Position(mut member)), Position::Position(of)) if member.position != of.position => {
+                member.narrows = member.narrows.or_else(|| Some(of.position.clone()));
+                Position::Position(member)
+            }
+            (Some(member), _) => member,
+            (None, _) => target,
         }
-        let Position::Position(p) = &target else { return target };
-        pinned_member(&p.instance.schema, &p.position, filter).and_then(|member| position_ref_in(&p.instance, &member)).unwrap_or(target)
     }
 
     /// `stepEveryMember`: `who-[:edge]->` off one of several records — every
