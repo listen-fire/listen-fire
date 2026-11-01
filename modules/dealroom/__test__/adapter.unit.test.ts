@@ -306,9 +306,9 @@ describe('DealroomAdapter entry surface', () => {
     expect(DEALROOM_MANIFEST.supportedTriggers).toEqual(['poll']);
     expect(DEALROOM_MANIFEST.requiredCredentialType).toBe('DEALROOM');
     expect(DEALROOM_MANIFEST.triggerKinds).toEqual(['DEALROOM']);
-    expect(DEALROOM_MANIFEST.subscribableEvents).toBeUndefined();
-    expect(DEALROOM_MANIFEST.defaultSubscribedEvents).toBeUndefined();
-    expect(DEALROOM_MANIFEST.listenConfig).toBeUndefined();
+    expect(DEALROOM_MANIFEST).not.toHaveProperty('subscribableEvents');
+    expect(DEALROOM_MANIFEST).not.toHaveProperty('defaultSubscribedEvents');
+    expect(DEALROOM_MANIFEST).not.toHaveProperty('listenConfig');
     const rounds = {
       path: ['Funding Rounds'],
       aliases: ['r'],

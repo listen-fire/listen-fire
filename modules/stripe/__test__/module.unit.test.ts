@@ -94,7 +94,7 @@ describe('stripeModule', () => {
   it('is a webhook source whose events arrive on each object’s Changes, re-sent for three days, and writes nothing', () => {
     expect(stripeModule.manifest.supportedTriggers).toEqual(['webhook']);
     expect(stripeModule.manifest.resendWindowSeconds).toBe(259_200);
-    expect(stripeModule.manifest.subscribableEvents).toBeUndefined();
+    expect(stripeModule.manifest).not.toHaveProperty('subscribableEvents');
     expect(stripeModule.manifest.methods).toEqual(expect.arrayContaining(['checkInbound', 'getRelated', 'awaitKeys']));
     expect(stripeModule.protocolMinor).toBe(6);
     expect(stripeModule.manifest.methods).not.toContain('listEventTypes');

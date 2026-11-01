@@ -35,8 +35,8 @@ pub struct AdapterManifest {
     /// The optional methods it implements, answered by [`Adapter::optional`].
     pub optional_methods: Vec<String>,
     /// Every other declaration, written into the manifest as given:
-    /// `subscribableEvents`, `credentials`, `inbound`, `poll`, `settings`,
-    /// `limits`, `listenConfig`, `runtimeCapabilities`, `resendWindowSeconds`, …
+    /// `credentials`, `inbound`, `poll`, `settings`, `limits`,
+    /// `listenSettingsBecome`, `runtimeCapabilities`, `resendWindowSeconds`, …
     pub declarations: Obj,
 }
 

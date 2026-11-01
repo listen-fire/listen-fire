@@ -308,8 +308,8 @@ export interface PluginSpec {
    */
   argTypes?: Record<string, SchemaFieldType>;
   /**
-   * Arguments (⊆ `args`) a call MUST supply — the `triggerConfigRequired`
-   * shape, one door over: a call missing one is MOV_THROUGH_ARG_MISSING.
+   * Arguments (⊆ `args`) a call MUST supply: a call missing one is
+   * MOV_THROUGH_ARG_MISSING.
    *
    * This is an AUTHORING gate, not a runtime one, and the two stay
    * deliberately different: the engine's skip-on-absent sentinel covers a

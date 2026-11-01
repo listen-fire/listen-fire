@@ -158,8 +158,8 @@ describe('@lf/whatsapp', () => {
     });
 
     it('keeps no 0.12 event vocabulary, and states protocol 2.6', () => {
-      expect(whatsappModule.manifest.subscribableEvents).toBeUndefined();
-      expect(whatsappModule.manifest.defaultSubscribedEvents).toBeUndefined();
+      expect(whatsappModule.manifest).not.toHaveProperty('subscribableEvents');
+      expect(whatsappModule.manifest).not.toHaveProperty('defaultSubscribedEvents');
       expect(whatsappModule.manifest.methods).not.toContain('listEventTypes');
       expect(whatsappModule.protocolMinor).toBe(6);
     });

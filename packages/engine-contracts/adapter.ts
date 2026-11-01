@@ -364,8 +364,8 @@ export interface EventPhraseTemplate {
 
 /**
  * The adapter's event-phrasing vocabulary — "When an email arrives at …",
- * "When a record changes in Attio". Keyed by the adapter's own
- * `subscribableEvents` names where it has discrete events (Attio's
+ * "When a record changes in Attio". Keyed by the adapter's own event
+ * names where it has discrete events (Attio's
  * `record.created`, the KG's `create`); `default` is rendered when the
  * config's selected events don't match a more specific key, or the adapter
  * has no discrete event vocabulary at all (email, Slack — one implicit

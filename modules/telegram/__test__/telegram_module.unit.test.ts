@@ -147,8 +147,8 @@ describe('@lf/telegram', () => {
 
   it('declares no event vocabulary of the 0.12 form, and states protocol 2.6', () => {
     const { manifest } = load({ credential: credential({}) });
-    expect(manifest.subscribableEvents).toBeUndefined();
-    expect(manifest.defaultSubscribedEvents).toBeUndefined();
+    expect(manifest).not.toHaveProperty('subscribableEvents');
+    expect(manifest).not.toHaveProperty('defaultSubscribedEvents');
     expect(manifest.methods).not.toContain('listEventTypes');
     expect(telegramModule.protocolMinor).toBe(6);
   });

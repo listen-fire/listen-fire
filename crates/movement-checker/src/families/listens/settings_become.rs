@@ -701,8 +701,8 @@ fn compare_on(key: &KeyBecomes, op: FilterOperator, right: Expression) -> Expres
 
 /// The leading hops the connection's construction already stands on: each
 /// one a key of the mapping names that the connection is positioned by
-/// (`connect airtable … { base: "Hiring" }`), as `eventNarrowingKeys` drops
-/// them.
+/// (`connect airtable … { base: "Hiring" }`): the rewrite leaves them
+/// out.
 fn consumed_hops(become_: &SettingsBecome, positioned: &dyn Fn(&str) -> bool) -> usize {
     (0..become_.path.len()).take_while(|hop| become_.keys.iter().any(|(key, b)| b.hop == *hop && positioned(key))).count()
 }

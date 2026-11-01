@@ -236,9 +236,9 @@ describe('EvertraceAdapter entry surface', () => {
     expect(EVERTRACE_MANIFEST.supportedTriggers).toEqual(['poll']);
     expect(EVERTRACE_MANIFEST.requiredCredentialType).toBe('EVERTRACE');
     expect(EVERTRACE_MANIFEST.triggerKinds).toEqual(['EVERTRACE']);
-    expect(EVERTRACE_MANIFEST.subscribableEvents).toBeUndefined();
-    expect(EVERTRACE_MANIFEST.defaultSubscribedEvents).toBeUndefined();
-    expect(EVERTRACE_MANIFEST.listenConfig).toBeUndefined();
+    expect(EVERTRACE_MANIFEST).not.toHaveProperty('subscribableEvents');
+    expect(EVERTRACE_MANIFEST).not.toHaveProperty('defaultSubscribedEvents');
+    expect(EVERTRACE_MANIFEST).not.toHaveProperty('listenConfig');
     const signals = {
       path: ['Signals'],
       aliases: ['s'],

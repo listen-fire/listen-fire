@@ -97,8 +97,8 @@ describe('githubModule', () => {
     expect(githubModule.manifest.supportedTriggers).toEqual(['poll']);
     expect('inbound' in githubModule).toBe(false);
     expect(githubModule.protocolMinor).toBe(6);
-    expect(githubModule.manifest.subscribableEvents).toBeUndefined();
-    expect(githubModule.manifest.listenConfig).toBeUndefined();
+    expect(githubModule.manifest).not.toHaveProperty('subscribableEvents');
+    expect(githubModule.manifest).not.toHaveProperty('listenConfig');
     expect(githubModule.manifest.listenSettingsBecome).toEqual({
       path: ['Notifications'],
       aliases: ['n'],
