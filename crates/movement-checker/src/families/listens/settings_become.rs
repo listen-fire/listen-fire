@@ -180,8 +180,11 @@ enum NoRewrite {
 }
 
 /// The mapping a listen takes: the one its `events` choose (`byEvent`),
-/// with `events` spent choosing it, else the module's own. A listen that
-/// leaves `events` out chooses by the module's default events.
+/// with `events` spent choosing it unless that mapping compares them too
+/// (Stripe's `invoice.paid` chooses an invoice's `Changes` and is its
+/// `Kind`), else the module's own. A listen that leaves `events` out chooses
+/// by the module's default events, else by what the module's own `events`
+/// key says leaving them out heard (Stripe's: every event, on every edge).
 fn chosen<'b>(statement: &ListenDeclaration, become_: &'b SettingsBecome, default_events: Option<&[String]>) -> Result<(&'b SettingsBecome, bool), NoRewrite> {
     let Some(by_event) = become_.by_event.as_ref().filter(|b| !b.is_empty()) else { return Ok((become_, false)) };
     let named: Vec<String> = match statement.config.iter().find(|a| a.name == EVENTS_KEY) {
@@ -196,7 +199,10 @@ fn chosen<'b>(statement: &ListenDeclaration, become_: &'b SettingsBecome, defaul
                 .collect::<Result<_, _>>()?,
             _ => return Err(NoRewrite::Unmapped),
         },
-        None => default_events.unwrap_or_default().to_vec(),
+        None => match default_events.filter(|d| !d.is_empty()) {
+            Some(defaults) => defaults.to_vec(),
+            None => become_.keys.get(EVENTS_KEY).and_then(|k| k.absent.as_ref()).map(|heard| heard.texts().to_vec()).unwrap_or_default(),
+        },
     };
     let ways: Vec<Option<&SettingsBecome>> = named.iter().map(|event| by_event.get(event)).collect();
     if ways.iter().all(Option::is_none) {
@@ -204,23 +210,34 @@ fn chosen<'b>(statement: &ListenDeclaration, become_: &'b SettingsBecome, defaul
     }
     // An event the mapping does not name lands where a listen leaving
     // `events` out does, so it is one more edge only where that is another.
-    let mut edges: Vec<&str> = Vec::new();
+    let mut edges: Vec<String> = Vec::new();
     for way in &ways {
-        let edge = way.unwrap_or(become_).path.last().map_or("", String::as_str);
+        let edge = edge_named(&way.unwrap_or(become_).path);
         if !edges.contains(&edge) {
             edges.push(edge);
         }
     }
     if edges.len() > 1 {
-        return Err(NoRewrite::SeveralEdges(edges.into_iter().map(str::to_string).collect()));
+        return Err(NoRewrite::SeveralEdges(edges));
     }
     let unnamed: Vec<String> = named.iter().zip(&ways).filter(|(_, w)| w.is_none()).map(|(event, _)| event.clone()).collect();
     if !unnamed.is_empty() {
         return Err(NoRewrite::UnmappedEvents { unnamed, events: by_event.keys().cloned().collect() });
     }
     match ways.as_slice() {
-        [Some(first), rest @ ..] if rest.iter().all(|w| w.is_some_and(|w| w == *first)) => Ok((*first, true)),
+        [Some(first), rest @ ..] if rest.iter().all(|w| w.is_some_and(|w| w == *first)) => Ok((*first, !first.keys.contains_key(EVENTS_KEY))),
         _ => Err(NoRewrite::Unmapped),
+    }
+}
+
+/// The edge a mapping's path ends on, as a message names it: by its name
+/// alone when the path is one hop (`Messages`), else by the whole path, since
+/// two paths may end on edges of one name (an invoice's `Changes` and a
+/// charge's: `-[:Invoices]->-[:Changes]->`).
+fn edge_named(path: &[String]) -> String {
+    match path {
+        [edge] => edge.clone(),
+        _ => path.iter().map(|edge| format!("-[:{}]->", spell_name(edge))).collect(),
     }
 }
 

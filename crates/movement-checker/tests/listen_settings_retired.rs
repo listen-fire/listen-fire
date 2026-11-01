@@ -120,6 +120,24 @@ const CATALOG: &str = r#"{"adapters":{
         "Labelings":{"target":"Labeling","listenable":true,"readable":false,"identity":"Id","delivery":"polled","pollEverySeconds":60,"cursor":true,
         "capability":{"filter":"native","supportsLimit":false}}},
       "writableRoots":{},"eventPosition":"Message","eventPositions":[{"position":"Message"}]}}},
+  "pay":{"canFire":true,"constructionArgs":[],"triggerConfig":["events"],
+    "listenSettingsBecome":{"path":["Invoices","Changes"],"aliases":["i","c"],"paramFrom":"Event",
+      "keys":{"events":{"hop":1,"field":"Kind","op":"in","values":{"invoice.paid":"paid","invoice.payment_failed":"payment_failed"},
+        "absent":["invoice.paid","invoice.payment_failed","charge.failed"]}},
+      "byEvent":{
+        "invoice.paid":{"path":["Invoices","Changes"],"aliases":["i","c"],"paramFrom":"Event",
+          "keys":{"events":{"hop":1,"field":"Kind","op":"in","values":{"invoice.paid":"paid","invoice.payment_failed":"payment_failed"}}}},
+        "invoice.payment_failed":{"path":["Invoices","Changes"],"aliases":["i","c"],"paramFrom":"Event",
+          "keys":{"events":{"hop":1,"field":"Kind","op":"in","values":{"invoice.paid":"paid","invoice.payment_failed":"payment_failed"}}}},
+        "charge.failed":{"path":["Charges","Changes"],"aliases":["ch","c"],"paramFrom":"Event",
+          "keys":{"events":{"hop":1,"field":"Kind","op":"in","values":{"charge.failed":"failed"}}}}}},
+    "schemas":{"":{"positions":{
+        "Invoice":{"properties":{"Id":"text"},"edges":{"Changes":{"target":"Change","readable":false,"listenable":true,"identity":"Id","delivery":"connection","carries":["Invoices"],"attributes":true}}},
+        "Charge":{"properties":{"Id":"text"},"edges":{"Changes":{"target":"Change","readable":false,"listenable":true,"identity":"Id","delivery":"connection","carries":["Charges"],"attributes":true}}},
+        "Change":{"properties":{"Id":"text","Kind":{"kind":"enum","options":["paid","payment_failed","failed"]}},"edges":{}},
+        "Event":{"properties":{"Id":"text"},"edges":{}}},
+      "collections":{"Invoices":{"target":"Invoice"},"Charges":{"target":"Charge"}},
+      "writableRoots":{},"eventPosition":"Event","eventPositions":[{"position":"Event"}]}}},
   "feed":{"canFire":true,"constructionArgs":[],"triggerConfig":["topic"],
     "schemas":{"":{"positions":{"Item":{"properties":{"Topic":"text"},"edges":{}}},
       "collections":{"Items":{"target":"Item","listenable":true,"identity":"Id","delivery":"connection"}},
@@ -138,6 +156,7 @@ const INBOX: &str = "import { inbox as inbox_module } from adapters\ninbox = con
 const MBOX: &str = "import { mbox as mbox_module } from adapters\nmbox = connect mbox_module\n";
 const GHX: &str = "import { ghx as ghx_module } from adapters\nghx = connect ghx_module\n";
 const MAIL: &str = "import { mail as mail_module } from adapters\nmail = connect mail_module\n";
+const PAY: &str = "import { pay as pay_module } from adapters\npay = connect pay_module\n";
 const BELL: &str = "import { bell as bell_module } from adapters\nbell = connect bell_module\n";
 
 fn checked(source: &str, pin: Option<&str>) -> Vec<Diagnostic> {
@@ -544,4 +563,26 @@ fn a_listen_naming_events_that_arrive_on_two_edges_has_no_fix_and_is_told_to_wri
         "{}",
         retired(&d).message
     );
+}
+
+#[test]
+fn an_event_that_chooses_its_edge_is_still_compared_when_its_mapping_compares_it() {
+    let failed = format!("{PAY}function f(e: <pay-[:Event]->>) {{ return 1 }}\nlisten to pay {{ events: [\"invoice.payment_failed\", \"invoice.paid\"] }} fire f\n");
+    let text = fixed(&failed, &diagnostics(&failed));
+    assert!(text.contains("listen to pay-[:Invoices]->-[c:Changes WHERE c.Kind IN [\"payment_failed\", \"paid\"]]-> fire f"), "{text}");
+    assert!(text.contains("function f(e: <pay-[:Change]->>)"), "{text}");
+    assert_rechecks_clean(&text);
+
+    let charge = format!("{PAY}function f(e: <pay-[:Event]->>) {{ return 1 }}\nlisten to pay {{ events: \"charge.failed\" }} fire f\n");
+    let text = fixed(&charge, &diagnostics(&charge));
+    assert!(text.contains("listen to pay-[:Charges]->-[c:Changes WHERE c.Kind == \"failed\"]-> fire f"), "{text}");
+    assert_rechecks_clean(&text);
+}
+
+#[test]
+fn a_listen_that_names_no_events_where_leaving_them_out_heard_every_edge_is_told_to_write_one_per_edge() {
+    let everything = format!("{PAY}function f(e: <pay-[:Event]->>) {{ return 1 }}\nlisten to pay {{ }} fire f\n");
+    let d = diagnostics(&everything);
+    assert!(retired(&d).fix.is_none(), "{:?}", retired(&d).fix);
+    assert!(retired(&d).message.ends_with("(there is no rewrite: its events arrive on `-[:Invoices]->-[:Changes]->` and `-[:Charges]->-[:Changes]->`, so write one listen for each)"), "{}", retired(&d).message);
 }
