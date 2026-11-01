@@ -205,7 +205,7 @@ const NOTIFICATION_DESCRIPTOR: SchemaTypeDescriptor = {
   fields: [
     field('id', 'Id', 'string', { required: true, description: 'The thread id.' }),
     field('reason', 'Reason', 'enum', { required: true, enumValues: [...GITHUB_NOTIFICATION_REASONS], capability: { filterOperators: ['eq', 'in'] }, description: 'Why you got it (`review_requested`, `mention`, `assign`, …). A thread’s reason can change as it moves.' }),
-    field(GITHUB_PARTICIPATING_FIELD_ID, GITHUB_PARTICIPATING_FIELD, 'boolean', { capability: { filterOperators: ['eq'] }, description: 'Whether you take part in the thread or are mentioned in it: GitHub tells only by its `participating` filter, so a walk that compares it asks GitHub, and a listen hears every thread with it set (one extra call per poll that has news).' }),
+    field(GITHUB_PARTICIPATING_FIELD_ID, GITHUB_PARTICIPATING_FIELD, 'boolean', { capability: { filterOperators: ['eq'] }, description: 'Whether you take part in the thread or are mentioned in it: GitHub tells only by its `participating` filter, so every thread, walked or heard, is stamped with it from one extra call (made only when there are threads).' }),
     field('unread', 'Unread', 'boolean', { required: true }),
     field('updated_at', 'Updated At', 'date', { required: true, capability: { filterOperators: ['gt', 'gte', 'lt', 'lte'] } }),
     field('last_read_at', 'Last Read At', 'date'),

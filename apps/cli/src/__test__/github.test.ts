@@ -185,3 +185,35 @@ test('a listen that reads Participating beside another field hears a participati
     await channels.stop();
   }
 });
+
+test('a walk that reads Participating inside an OR sees every thread carrying it', async () => {
+  const github = await startFakeGithub({ token: TOKEN });
+  const channels = await fakeChannels();
+  try {
+    github.repo({ owner: 'acme', name: 'api' });
+    github.notify({ id: 't-mine', reason: 'author', repo: 'acme/api', type: 'Issue', number: 8, title: 'Mine', updated_at: '2026-10-28T09:02:00Z', participating: true });
+    github.notify({ id: 't-watch', reason: 'subscribed', repo: 'acme/api', type: 'Issue', number: 9, title: 'Only watched', updated_at: '2026-10-28T09:03:00Z' });
+    const dir = await triageProject(github, channels);
+    writeFileSync(join(dir, 'movements/peek.mvt'), `import { \`@lf/github\` as github } from adapters
+import { henry_github } from credentials
+
+gh = connect github using henry_github
+
+function peek(run: <manual-[:Invocations]->>) {
+  n = only(gh-[n:Notifications WHERE n.Reason == "mention" OR n.Participating == true]->)
+  if (n == null) { fail("no participating thread") }
+  return "\${n.Id} \${n.Reason} \${n.Participating}"
+}
+
+listen to manual-[:Invocations]-> fire peek
+`);
+    const checked = await run(dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+    const walked = await run(dir, 'run', 'peek');
+    assert.equal(walked.code, 0, walked.out);
+    assert.match(walked.out, /returned "t-mine author true"/, walked.out);
+  } finally {
+    await github.close();
+    await channels.stop();
+  }
+});

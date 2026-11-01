@@ -143,6 +143,20 @@ describe('GithubAdapter walks', () => {
     expect(await read(watching[0]!, 'Participating')).toBe(false);
   });
 
+  it('stamps Participating on every walked thread, also when the WHERE only compares it inside an OR', async () => {
+    fake.notify({ id: 'mine', reason: 'author', repo: 'acme/api', type: 'Issue', number: 7, title: 'Mine', updated_at: '2026-10-28T09:02:00Z', participating: true });
+    fake.notify({ id: 'watched', reason: 'subscribed', repo: 'acme/web', type: 'Release', title: 'v2', updated_at: '2026-10-28T09:03:00Z', participating: false });
+    const prop = (name: string, value: unknown): Expression => ({ type: 'compare', op: 'eq', left: { type: 'edge_property', propertyTypeId: name }, right: { type: 'static', value } }) as Expression;
+    const either = { type: 'logical', op: 'or', operands: [prop('Reason', 'mention'), prop('Participating', true)] } as Expression;
+
+    const found = (await walk(meta(), 'Notifications', { where: either })).map((r) => r.position);
+    const stamped = await Promise.all(found.map(async (p) => [await read(p, 'Id'), await read(p, 'Participating')]));
+    expect(stamped.sort()).toEqual([['mine', true], ['watched', false]]);
+
+    const bare = (await walk(meta(), 'Notifications')).map((r) => r.position);
+    expect(await Promise.all(bare.map((p) => read(p, 'Participating')))).toEqual(expect.arrayContaining([true, false]));
+  });
+
   it('reads a notification’s repository off the thread, with no call', async () => {
     fake.notify({ id: 't1', reason: 'mention', repo: 'acme/web', type: 'Release', title: 'v2', updated_at: '2026-10-28T09:02:00Z' });
     const [thread] = (await walk(meta(), 'Notifications')).map((r) => r.position);

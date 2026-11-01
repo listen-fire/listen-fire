@@ -39,6 +39,7 @@ import {
   type GithubClient,
   type GithubIssue,
   type GithubPullRequest,
+  type GithubThread,
 } from './api_client';
 import { issueQueryFromWhere, pinnedRepository, pullQueryFromWhere, updatedWindowFromWhere, participatingFromWhere } from './filter';
 import { GITHUB_MANIFEST } from './manifest';
@@ -216,22 +217,24 @@ export class GithubAdapter extends BaseAdapter implements Adapter {
       case GITHUB_NOTIFICATIONS_COLLECTION: {
         const window = updatedWindowFromWhere(input.where);
         // GitHub tells participation only by its `participating` filter:
-        // `== true` asks it, `== false` is the threads that filter leaves
-        // out. Either way each thread carries what it was found by, so the
-        // engine's own check agrees.
+        // `== true` asks it. Otherwise one more call for the same window names
+        // the threads you take part in, so every thread carries a truthful
+        // `Participating` and the engine's own check of any comparison on it
+        // (inside an OR, or `!=`) agrees; `== false` keeps those it leaves out.
         const participating = participatingFromWhere(input.where);
         const answer = await client.listNotifications({ ...window, ...(participating === true ? { participating } : {}), ...limitOf(input, input.where === undefined, 'Updated At', 'desc') });
-        if (!answer.modified) return [];
-        const theirs = participating === false ? await client.listNotifications({ ...window, participating: true }) : undefined;
-        const excluded = new Set(theirs?.modified ? theirs.threads.map((t) => t.id) : []);
+        if (!answer.modified || answer.threads.length === 0) return [];
+        const theirs = participating === true ? undefined : await client.listNotifications({ ...window, participating: true });
+        const taking = new Set(theirs?.modified ? theirs.threads.map((t) => t.id) : []);
+        const takesPart = (thread: GithubThread): boolean => participating === true || taking.has(thread.id);
         return answer.threads
-          .filter((thread) => !excluded.has(thread.id))
+          .filter((thread) => participating !== false || !takesPart(thread))
           .map((thread) => ({
             position: makeStablePosition({
               adapterType: GITHUB_ADAPTER_TYPE,
               recordType: GITHUB_NOTIFICATION_DISPLAY_NAME,
               recordId: thread.id,
-              data: normalizeNotification(thread, participating !== undefined ? { participating } : {}),
+              data: normalizeNotification(thread, { participating: takesPart(thread) }),
             }),
           }));
       }

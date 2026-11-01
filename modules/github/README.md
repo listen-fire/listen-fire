@@ -42,7 +42,7 @@ listen to gh-[n:Notifications WHERE n.Reason IN ["review_requested", "mention", 
 
 - The listen fires once per notification thread that is new or has changed since the last poll. A new comment on a thread already delivered fires it again.
 - `Reason` selects GitHub's reasons. `listen-fire check` refuses a reason GitHub does not send. Leave it out for every reason.
-- `n.Participating == true` keeps only threads you take part in or are mentioned in. A listen's arrivals always carry it (a second call per poll with news), so it can sit in an OR or a `!=`.
+- `n.Participating == true` keeps only threads you take part in or are mentioned in. A walk's threads and a listen's arrivals always carry it (a second call when there are threads), so it can sit in an OR or a `!=`.
 - Listens on one connection with the same WHERE share one poll.
 - The first poll sets the mark and delivers nothing, so going live never replays your inbox. Walk `Notifications` for what is unread now.
 - Polls are conditional: an unchanged feed costs GitHub a 304 and no quota. GitHub sets how often the feed may be polled (`X-Poll-Interval`, usually a minute). The connection is polled every minute; `pollEvery` in lf.yaml changes it, and a shorter one polls no faster.
