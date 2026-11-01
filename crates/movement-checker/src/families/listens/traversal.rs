@@ -162,10 +162,7 @@ impl Checker<'_> {
                 adapter_type: instance.as_ref().and_then(|i| i.adapter.clone()),
                 fires: statement.movement.clone(),
                 fires_movement,
-                events: None,
-                narrowing: Vec::new(),
-                event_types: Vec::new(),
-                path: Some(spell_path_head(path)),
+                path: spell_path_head(path),
             };
             self.record_node(statement.span, scope, what);
         }

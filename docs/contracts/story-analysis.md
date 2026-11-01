@@ -92,8 +92,7 @@ Every node carries `span` and `scope`, and one of 14 kinds:
 ```ts
 type StoryNode = { span: Span; scope: number } & (
   | { kind: 'instance'; name: string; adapterType?: string }
-  | { kind: 'listen'; instance: string; adapterType?: string; fires: string; firesMovement: boolean; events?: string[];
-      narrowing: Record<string, string>; eventTypes: Array<{ key: string; display?: string }>; path?: string }
+  | { kind: 'listen'; instance: string; adapterType?: string; fires: string; firesMovement: boolean; path?: string }
   | { kind: 'link'; from: string; edge: string; to: { kind: 'handle'; name: string } | { kind: 'match'; span: Span } }
   | { kind: 'unlink'; from: string; edge: string; to: { kind: 'handle'; name: string } }
   | { kind: 'await'; binding?: string; source: StoryAwaitedSource }
@@ -176,3 +175,4 @@ The check takes no pin; the pin rule is the caller's. A caller handed a pin this
 - **Version 1.** The first version: the scopes, symbols, writes, 14 node kinds, bodies and shapes, with `effects` on a movement's symbol.
 - **Version 1, additive: `fieldType` on an extraction field (0.12.4).** Optional and nullable, so a consumer that does not read it is unaffected; the version stays 1.
 - **Version 2, in 0.13.0: an awaited traversal says `listenable`, and a listen its `path`.** An awaited traversal's `awaitable` is renamed `listenable`, the catalog's word for an edge that announces arrivals; a renamed member bumps the version. A `listen to <traversal>` node carries `path`, the traversal as written; a settings listen has none. Version 1 is still read, and deprecated.
+  - Still version 2, as 2 is unreleased: a listen node loses `events`, `narrowing` and `eventTypes`, which only a settings listen filled. Every listen is a traversal from 0.13, so a node a version 2 story carries always has `path`; a version 1 story's listen node is read without the three.

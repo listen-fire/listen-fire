@@ -208,16 +208,20 @@ pub fn check(source: &str, catalog: &Catalog, language_version: &str) -> Vec<Pro
     }
 }
 
-/// Every `listen to <instance> { events: […] } fire <function>` in `source`:
-/// which function an event fires. Routing is the host's: a host matches its
-/// event to a listen and runs that function.
+/// Every `listen to <traversal> fire <function>` in `source`: which function
+/// an arrival on which edge fires. Routing is the host's: a host matches an
+/// arrival to the listens on its edge and runs each one's function. A listen
+/// in the settings form (`listen to x { … }`), retired in 0.13, routes
+/// nothing and is left out; the check refuses it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Listen {
     /// The adapter the listened instance connects (its import alias resolved).
     pub adapter: String,
     pub function: String,
-    /// The event types the listen chooses; empty, every event.
-    pub events: Vec<String>,
+    /// The traversal as written, from its instance (`world-[m:Monsters WHERE m.Level > 3]->`).
+    pub path: String,
+    /// The edge the traversal ends on: what an arrival lands on to reach this listen.
+    pub edge: String,
 }
 
 pub fn listens(source: &str, language_version: &str) -> Result<Vec<Listen>, String> {
@@ -244,14 +248,11 @@ pub fn listens(source: &str, language_version: &str) -> Result<Vec<Listen>, Stri
                 }
             }
             Statement::Listen(listen) => {
-                let Some(adapter) = instances.get(&listen.instance) else { continue };
-                let events = listen
-                    .config
-                    .iter()
-                    .filter(|arg| arg.name == "events")
-                    .flat_map(|arg| string_literals(&movement_parser::util::form::external_text(&arg.value.raw)))
-                    .collect();
-                out.push(Listen { adapter: adapter.clone(), function: listen.movement.clone(), events });
+                let (Some(adapter), Some(head)) = (instances.get(&listen.instance), &listen.path) else { continue };
+                let spelled = crate::traverse::spell_path_head(head);
+                let edge = last_edge(&spelled)?;
+                let path = movement_parser::util::form::external_text(&spelled).into_owned();
+                out.push(Listen { adapter: adapter.clone(), function: listen.movement.clone(), path, edge });
             }
             _ => {}
         }
@@ -259,9 +260,22 @@ pub fn listens(source: &str, language_version: &str) -> Result<Vec<Listen>, Stri
     Ok(out)
 }
 
-/// The quoted texts in a config value (`["a", "b"]` or `"a"`).
-fn string_literals(raw: &str) -> Vec<String> {
-    raw.split('"').skip(1).step_by(2).map(str::to_string).collect()
+/// The edge a listen's traversal ends on.
+fn last_edge(path: &str) -> Result<String, String> {
+    use movement_parser::lowering::expression::{Expression, TraversalStep};
+    // A traversal is an expression once something is read off its end.
+    let probe = format!("{path}.`__embed_probe__`");
+    let tree = movement_parser::expr::parse_expression(&probe).map_err(|e| format!("{path}: {e:?}"))?;
+    let lowered = movement_parser::lowering::lower_expression(&tree, &probe).map_err(|e| format!("{path}: {e:?}"))?;
+    let Expression::Traverse { steps, .. } = lowered else { return Err(format!("{path}: not a traversal")) };
+    steps
+        .iter()
+        .rev()
+        .find_map(|step| match step {
+            TraversalStep::Edge(step) => Some(step.edge_type_id.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| format!("{path}: no edge"))
 }
 
 /// The event a run is fired by: what an adapter would deliver for it.
@@ -638,12 +652,23 @@ mod tests {
         RunInput::new(SOURCE, event, "2026-03-12T12:00:00.000Z").function("m").catalog(Catalog::from_json(CATALOG).unwrap())
     }
 
+    /// A listen names the traversal it is on, as written, and the edge it
+    /// ends on; one in the settings form routes nothing.
+    #[test]
+    fn a_listen_names_its_traversal_and_the_edge_it_ends_on() {
+        let source = "import { email } from adapters\ninbox = connect email\nfunction m(msg: <inbox-[:message]->>) {\n  return 1\n}\nlisten to inbox-[t:threads WHERE t.`subject` == \"Hi\"]->-[:message]-> fire m\nlisten to inbox { events: [\"x\"] } fire m\n";
+        assert_eq!(
+            listens(source, LANGUAGE_VERSION).unwrap(),
+            vec![Listen { adapter: "email".into(), function: "m".into(), path: "inbox-[t:threads WHERE t.`subject` == \"Hi\"]->-[:message]->".into(), edge: "message".into() }]
+        );
+    }
+
     /// A host with no store cannot park: the run fails naming what it
     /// needed, never quietly skips the `sleep`.
     #[test]
     fn a_run_that_parks_on_a_host_with_no_store_fails_naming_the_park() {
         assert!(check(SOURCE, &Catalog::from_json(CATALOG).unwrap(), LANGUAGE_VERSION).iter().all(|p| p.severity != Severity::Error));
-        assert_eq!(listens(SOURCE, LANGUAGE_VERSION).unwrap(), vec![Listen { adapter: "email".into(), function: "m".into(), events: Vec::new() }]);
+        assert_eq!(listens(SOURCE, LANGUAGE_VERSION).unwrap(), vec![Listen { adapter: "email".into(), function: "m".into(), path: "inbox-[:message]->".into(), edge: "message".into() }]);
         let mut inbox = Inbox;
         let outcome = block_on(run(&mut Hosts::new().adapters(&mut inbox), &input())).unwrap();
         let Outcome::Failed(failure) = outcome else { panic!("{outcome:?}") };

@@ -214,14 +214,15 @@ impl Game {
         Ok(Game { world: World::default(), parks: Parks::default(), clock: GameClock::default(), log: Log::default(), script: script.to_string(), catalog, listens, parked: Vec::new(), failures: Vec::new() })
     }
 
-    /// An in-game event: every listen that chooses it fires.
+    /// An in-game event: a monster slain lands on `Slain`, and every listen
+    /// on that edge fires.
     pub fn fire(&mut self, event: GameEvent) {
         let GameEvent::MonsterSlain { monster, by } = event;
         let event = Event::new("world", Data::map([("Name", Data::text(&monster)), ("Slayer", Data::text(by))])).of_type("monster.slain").about("Monster", monster);
         let functions: Vec<String> = self
             .listens
             .iter()
-            .filter(|l| l.adapter == "world" && (l.events.is_empty() || l.events.iter().any(|e| Some(e) == event.event_type.as_ref())))
+            .filter(|l| l.adapter == "world" && l.edge == "Slain")
             .map(|l| l.function.clone())
             .collect();
         for function in functions {

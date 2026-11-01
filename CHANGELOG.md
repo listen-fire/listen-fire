@@ -323,6 +323,9 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
 #### Removed
 
 - `cron`, `manual`, `@lf/email`, `@lf/webhook`, `@lf/github`, `@lf/gmail`, `@lf/granola`, `@lf/dealroom`, `@lf/evertrace`, `@lf/stripe`, `@lf/attio`, `@lf/affinity`, `@lf/airtable`, `@lf/telegram`, `@lf/whatsapp` and `@lf/slack` declare no `listenConfig`, `subscribableEvents`, `fires` or event types: each listens on its edge.
+- Embedders: the Rust embed's `Listen` (`embed::listens`) loses `events` for `path` and `edge`: the traversal as written (`world-[m:Monsters WHERE m.Level > 3]->`) and the edge it ends on, which an embedder routes an arrival by. A listen in the settings form is left out. `events` was read from a settings listen's `events:`, so it was always empty for a program that checks under 0.13.
+- `module-kit`'s `EntryPoint` loses `fires`: a root a listen starts on declares `listenable` in its `rest`. A module still declaring `fires` or `firesOn` on an entry point or a reference, or `subscribableEvents`, `defaultSubscribedEvents`, `listenConfig` or `subscriptionScopeKeys` in its manifest, is refused at describe by name (`'{name}' declares '{key}', retired in 0.13: declare a listenable edge …`), by listen-fire and by the engine-contracts schemas.
+- A story analysis's listen node loses `events`, `narrowing` and `eventTypes`, which only a settings listen filled; `path` says what it listens to. The story contract stays version 2, which is unreleased. A version 1 story's listen node is read without them. For `lf-platform`: read `path`.
 - `callback(…)` is retired.
   - Each one is refused where it is written (`MOV_CALLBACK_RETIRED`, an error), naming what replaces it.
     - For a form a person opens: a form from `@lf/forms` (`form = write forms-[:Forms]-> { Title: …, Fields: … }`), its `form.Url` sent, then `await form-[:Submissions]->`.
@@ -403,7 +406,7 @@ A new compatibility key: waiting becomes a traversal, and callbacks retire.
   - `listen-fire upgrade` from a 0.12 pin applies it. With `suppress_self: true` or `every` the rewrite changes meaning, so it is listed and applied only by `upgrade --all`: a two-way sync's own echo now runs once more and finds nothing to change, and the module sets the poll interval (set `pollEvery` for the connection in lf.yaml).
   - A key the listen leaves out is compared with what leaving it out meant, where the module says so (`absent`; an inbox listen with no key heard the box's own mail, `e.Key == ""`). A module may also say its 0.12 keys were compared lowercased (`lowercase`), and the rewrite writes them so.
   - A key the module does not map, a value that is not a literal, a listen whose settings name nothing that bounds an unbounded edge, or a literal the field's owned scalar refuses has no rewrite and holds the pin until the listen is rewritten by hand; the message says which, and names the field that bounds the edge (`e.Key == "…"`).
-  - On a `0.13` pin it is a warning while the modules move their listens onto edges; it becomes a refusal before 0.13.0 is released.
+  - It is an error under every pin. A file pinned to `0.13` that still holds one is rewritten by `listen-fire upgrade` as one pinned to `0.12` is.
 - A `race` or `all` slot holds the record its arm returns, typed as that record: a read of a field it lacks is refused (`MOV_UNKNOWN_PROPERTY`), and a comparison is held to the field's type. The slot was untyped, so `r[0].Missing` and `r[0].Note == 1` checked clean, and failed or misread at run.
 
 #### Fixed

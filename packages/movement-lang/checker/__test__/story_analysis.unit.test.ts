@@ -188,4 +188,19 @@ describe('the story analysis over the wasm', () => {
       asked.mockRestore();
     }
   });
+
+  it("a version 1 analysis's settings listen is read without its settings", () => {
+    const span = { start: { line: 1, col: 1 }, end: { line: 1, col: 2 } };
+    const listen = { kind: 'listen', span, scope: 0, instance: 'gh', fires: 'triage', firesMovement: false };
+    const settings = { events: ['mention'], narrowing: {}, eventTypes: [{ key: 'mention' }] };
+    const asked = jest.spyOn(loader, 'callStoryAnalysis').mockReturnValue({
+      ok: true,
+      json: { storyAnalysisVersion: 1, diagnostics: [], scopes: [], symbols: [], writes: [], nodes: [{ ...listen, ...settings }], bodies: [], shapes: [] },
+    });
+    try {
+      expect(storyAnalysisInRust('x = 1\n', SNAPSHOT, OPTIONS).nodes).toEqual([listen]);
+    } finally {
+      asked.mockRestore();
+    }
+  });
 });

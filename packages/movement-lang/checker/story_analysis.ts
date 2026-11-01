@@ -112,10 +112,8 @@ export type StoryNode = { span: Span; scope: number } & (
       adapterType?: string;
       fires: string;
       firesMovement: boolean;
-      events?: string[];
-      narrowing: Record<string, string>;
-      eventTypes: Array<{ key: string; display?: string }>;
-      /** `listen to <traversal>`: the traversal as written. */
+      /** The traversal as written (`listen to <traversal>`); absent only on
+       *  a settings listen a version 1 story recorded. */
       path?: string;
     }
   | { kind: 'link'; from: string; edge: string; to: { kind: 'handle'; name: string } | { kind: 'match'; span: Span } }
@@ -322,8 +320,14 @@ function isWrite(value: unknown): value is StoryWrite {
   );
 }
 
-/** Version 1 said an awaited traversal's `listenable` as `awaitable`. */
+/** Version 1 said an awaited traversal's `listenable` as `awaitable`, and a
+ *  listen's settings (`events`, `narrowing`, `eventTypes`), which no listen
+ *  has from 0.13. */
 function nodeOfVersion1(node: unknown): unknown {
+  if (isRecord(node) && node.kind === 'listen') {
+    const { events: _events, narrowing: _narrowing, eventTypes: _eventTypes, ...listen } = node;
+    return listen;
+  }
   if (!isRecord(node) || !isRecord(node.source) || node.source.kind !== 'traversal' || !('awaitable' in node.source)) return node;
   const { awaitable, ...source } = node.source;
   return { ...node, source: { ...source, listenable: awaitable } };

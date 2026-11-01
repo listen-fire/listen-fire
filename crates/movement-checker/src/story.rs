@@ -71,11 +71,8 @@ pub(crate) enum What {
         adapter_type: Option<String>,
         fires: String,
         fires_movement: bool,
-        events: Option<Vec<String>>,
-        narrowing: Vec<(String, String)>,
-        event_types: Vec<(String, Option<String>)>,
-        /// `listen to <traversal>`: the traversal as written.
-        path: Option<String>,
+        /// The traversal as written (`listen to <traversal>`).
+        path: String,
     },
     Link { from: String, edge: String, to: LinkTo, touches: Option<String> },
     Unlink { from: String, edge: String, to: String, touches: Option<String> },
@@ -749,22 +746,14 @@ impl<'w, 'c> Writer<'w, 'c> {
     fn node_json(&mut self, node: &RecordedNode) -> Json {
         let mut entry = match &node.what {
             What::Instance { name, adapter_type } => json!({ "kind": "instance", "name": name, "adapterType": adapter_type }),
-            What::Listen { instance, adapter_type, fires, fires_movement, events, narrowing, event_types, path } => {
-                let mut listen = json!({
-                    "kind": "listen",
-                    "instance": instance,
-                    "adapterType": adapter_type,
-                    "fires": fires,
-                    "firesMovement": fires_movement,
-                    "events": events,
-                    "narrowing": narrowing.iter().map(|(key, value)| (key.clone(), json!(value))).collect::<serde_json::Map<String, Json>>(),
-                    "eventTypes": event_types.iter().map(|(key, display)| json!({ "key": key, "display": display })).collect::<Vec<_>>(),
-                });
-                if let Some(path) = path {
-                    listen["path"] = json!(path);
-                }
-                listen
-            }
+            What::Listen { instance, adapter_type, fires, fires_movement, path } => json!({
+                "kind": "listen",
+                "instance": instance,
+                "adapterType": adapter_type,
+                "fires": fires,
+                "firesMovement": fires_movement,
+                "path": path,
+            }),
             What::Link { from, edge, to, .. } => json!({
                 "kind": "link",
                 "from": from,
@@ -835,11 +824,6 @@ impl<'w, 'c> Writer<'w, 'c> {
             object.retain(|_, value| !value.is_null());
             if let Some(Json::Object(source)) = object.get_mut("source") {
                 source.retain(|_, value| !value.is_null());
-            }
-            if let Some(Json::Array(types)) = object.get_mut("eventTypes") {
-                for each in types.iter_mut().filter_map(Json::as_object_mut) {
-                    each.retain(|_, value| !value.is_null());
-                }
             }
         }
         entry["span"] = json!(node.span);
