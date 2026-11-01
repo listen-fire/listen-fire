@@ -14,8 +14,8 @@ import type { Expression } from 'engine-contracts/expression/expression';
 
 import { StripeAdapter } from '../adapter';
 import { StripeClient, STRIPE_API_VERSION } from '../api_client';
-import { eventOf } from '../inbound';
-import { STRIPE_EVENT_DISPLAY_NAME, STRIPE_EVENT_TYPES } from '../types';
+import { changeArrival, eventOf } from '../inbound';
+import { STRIPE_CHANGE_DISPLAY_NAME, STRIPE_CHANGE_KINDS, STRIPE_EVENT_TYPES } from '../types';
 import { startFakeStripe, type FakeStripe } from './fake_stripe';
 import { stripeCharge, stripeCustomer, stripeEvent, stripeFailedCharge, stripeInvoice, stripeInvoicePayment, stripeSubscription, type Json } from './fixtures';
 
@@ -55,18 +55,20 @@ async function read(position: SourcePosition | undefined, field: string): Promis
 const eq = (field: string, value: string): Expression => ({ type: 'compare', op: 'eq', left: { type: 'edge_property', propertyTypeId: field }, right: { type: 'static', value } }) as Expression;
 const or = (...operands: Expression[]): Expression => ({ type: 'logical', op: 'or', operands }) as Expression;
 
-/** The Event position a delivery of `body` seeds a run with. */
+/** The Change position a delivery of `body` seeds a run with: its arrival's landing. */
 function delivered(body: Json): SourcePosition {
   const event = eventOf(body);
   if (!event.ok) throw new Error(event.message);
-  return makeStablePosition({ adapterType: 'stripe', recordType: STRIPE_EVENT_DISPLAY_NAME, recordId: event.payload.id, data: event.payload });
+  const arrival = changeArrival(event.payload);
+  if ('gone' in arrival) throw new Error('a delivery is never a gone arrival');
+  return makeStablePosition({ adapterType: 'stripe', recordType: STRIPE_CHANGE_DISPLAY_NAME, recordId: arrival.identity, data: arrival.landing.fields });
 }
 
 const idOf = (position: SourcePosition): string | undefined => (position.identity.kind === 'stable' ? position.identity.recordId : undefined);
 const listings = () => fake.requests.map((r) => r.path);
 
 describe('StripeAdapter surface', () => {
-  it('projects to a checker schema with the four collections, the event and every type', async () => {
+  it('projects to a checker schema with the four collections, a change and every type', async () => {
     const entries = await adapter.listEntryPoints();
     const descriptors = new Map(
       (await Promise.all(entries.map(async (e) => [e.typeId, await adapter.describe(e.typeId)] as const))).flatMap(([id, d]) => (d ? [[id, d] as const] : [])),
@@ -80,14 +82,19 @@ describe('StripeAdapter surface', () => {
       supportsInPlaceUpdate: false,
     });
     expect(Object.keys(schema.collections).sort()).toEqual(['Charges', 'Customers', 'Invoices', 'Subscriptions']);
-    expect(Object.keys(schema.positions).sort()).toEqual(expect.arrayContaining(['Charge', 'Customer', 'Event', 'Invoice', 'Subscription']));
+    expect(Object.keys(schema.positions).sort()).toEqual(expect.arrayContaining(['Change', 'Charge', 'Customer', 'Invoice', 'Subscription']));
+    for (const [type, carried] of [['Invoice', 'Invoices'], ['Customer', 'Customers'], ['Subscription', 'Subscriptions'], ['Charge', 'Charges']]) {
+      expect(schema.positions[type ?? '']?.edges['Changes']).toMatchObject({ target: 'Change', readable: false, listenable: true, delivery: 'connection', identity: 'Id', attributes: true, carries: [carried] });
+    }
     expect(schema.positions['Customer']?.propertyCapabilities?.['Email']).toEqual({ filterOperators: ['eq'] });
     expect(notes.filter((n) => n.includes('root descriptor'))).toEqual([]);
   });
 
-  it('types an event’s Type as Stripe’s event types, and its object as four edges', async () => {
-    const event = await adapter.describe(STRIPE_EVENT_DISPLAY_NAME);
+  it('types a change’s Kind and Type as Stripe’s event types, and its object as four edges', async () => {
+    const event = await adapter.describe(STRIPE_CHANGE_DISPLAY_NAME);
     expect(event?.fields.find((f) => f.displayName === 'Type')).toMatchObject({ kind: 'enum', enumValues: [...STRIPE_EVENT_TYPES] });
+    expect(event?.fields.find((f) => f.displayName === 'Kind')).toMatchObject({ kind: 'enum', enumValues: STRIPE_CHANGE_KINDS });
+    expect(STRIPE_CHANGE_KINDS).toEqual(expect.arrayContaining(['payment_failed', 'paid', 'created', 'deleted', 'trial_will_end', 'failed', 'refunded']));
     expect(event?.references.map((r) => [r.name, r.targetTypeId, r.cardinality])).toEqual([
       ['Invoice', 'stripe:invoice', 'one'],
       ['Subscription', 'stripe:subscription', 'one'],
@@ -97,7 +104,7 @@ describe('StripeAdapter surface', () => {
   });
 
   it('writes nothing: no field or edge is writable', async () => {
-    for (const type of ['Customer', 'Invoice', 'Subscription', 'Charge', 'Event']) {
+    for (const type of ['Customer', 'Invoice', 'Subscription', 'Charge', 'Change']) {
       const descriptor = await adapter.describe(type);
       expect(descriptor?.fields.filter((f) => f.writable)).toEqual([]);
       expect(descriptor?.references.filter((r) => r.writable === true)).toEqual([]);

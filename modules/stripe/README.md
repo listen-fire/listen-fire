@@ -29,7 +29,7 @@ cr = connect mcp using crm
 mail = connect gmail using billing_mail
 chat = connect slack using team_slack
 
-function `Payment Failed`(e: <pay-[:Event]->>) {
+function `Payment Failed`(e: <pay-[:Change]->>) {
   inv = only(e-[:Invoice]->)
   if (inv == null) { fail("${e.Type} is not about an invoice") }
   c = only(cr-[x:find_customer_by_email WHERE x.email == inv.`Customer Email`]->)
@@ -55,13 +55,14 @@ function `Payment Failed`(e: <pay-[:Event]->>) {
   }
 }
 
-listen to pay { events: ["invoice.payment_failed"] } fire `Payment Failed`
+listen to pay-[:Invoices]->-[c:Changes WHERE c.Kind == "payment_failed"]-> fire `Payment Failed`
 ```
 
-- A listen fires once per Stripe event delivered to the connection's URL.
-- `events` selects Stripe's event types. `listen-fire check` refuses a type Stripe does not send, naming the ones it does. Leave it out for every type below.
-- An event's `Type` says which it is. Its `Invoice`, `Subscription`, `Customer` or `Charge` edge is the object it is about, as it was when the event happened; the others are empty.
-- The event carries its object, so walking to it reads nothing from Stripe. Walking on from it (an invoice's `Customer`) does.
+- A listen fires once per Stripe event delivered to the connection's URL, on the `Changes` of the object the event is about: an invoice's, a subscription's, a customer's or a charge's.
+- `Kind` is the event type without its object's prefix (`payment_failed` for `invoice.payment_failed`, `deleted` for `customer.subscription.deleted`). `listen-fire check` refuses a kind Stripe does not send, naming the ones it does. `Type` is the whole event type.
+- A change's `Invoice`, `Subscription`, `Customer` or `Charge` edge is the object it is about, as it was when the event happened; the others are empty.
+- The event carries its object, so walking to it reads nothing from Stripe, and a WHERE on the object's hop (`pay-[i:Invoices WHERE i.Currency == "usd"]->-[c:Changes WHERE c.Kind == "paid"]->`) is judged on the event. Walking on from it (an invoice's `Customer`) does read.
+- Stripe re-sends an event it could not deliver for up to three days; the same event runs once.
 
 The event types:
 
@@ -97,7 +98,8 @@ reason = coalesce(last.`Failure Message`, last.`Outcome Seller Message`)
 | the account | `Invoices` | Invoice | newest first; `Status ==` and `Collection Method ==` reach Stripe |
 | the account | `Subscriptions` | Subscription | every status, canceled included; `Status ==` and `Collection Method ==` reach Stripe |
 | the account | `Charges` | Charge | newest first, failed attempts included; `Created` bounds (`>=`, `<`, `WITHIN 7d`) reach Stripe; `Status` does not |
-| Event | `Invoice`, `Subscription`, `Customer`, `Charge` | the object | the one the event is about; nothing along the others |
+| Customer, Invoice, Subscription, Charge | `Changes` | Change | listened to, not listed: the events Stripe delivers about it |
+| Change | `Invoice`, `Subscription`, `Customer`, `Charge` | the object | the one the event is about; nothing along the others |
 | Invoice | `Customer` | Customer | |
 | Invoice | `Subscription` | Subscription | nothing for a one-off invoice |
 | Subscription | `Customer` | Customer | |

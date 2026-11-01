@@ -1,0 +1,5 @@
+---
+"@listen-fire/stripe": minor
+---
+
+Each Stripe event arrives on the `Changes` of the object it is about, pushed to the connection's door: an invoice's, a subscription's, a customer's or a charge's (`listen to pay-[:Invoices]->-[c:Changes WHERE c.Kind == "payment_failed"]-> fire f`, `function f(c: <pay-[:Change]->>)`). A `Change` is the event: `Kind` is Stripe's event type without the object's prefix (`payment_failed`, `deleted`), `Type` the whole of it, and its `Invoice`, `Subscription`, `Customer` or `Charge` edge the object as the event had it. Each arrival carries that object, so a WHERE on the hop it is listed by (`pay-[i:Invoices WHERE i.Currency == "usd"]->`) is judged on the arrival with no read; it is named by the event id and is `about` the object, with `occurredAt` Stripe's `created`. The `Event` type, its `fires` edge, `subscribableEvents` and event types are gone. It declares how a 0.12 `listen to pay { events: [...] }` becomes it (`listenSettingsBecome`): the events choose the object, and are compared as `Kind`; a listen naming the events of two objects, or none, has no rewrite and is told to write one listen per edge. Adapter protocol 2.6.

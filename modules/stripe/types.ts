@@ -11,8 +11,9 @@ export const STRIPE_ADAPTER_TYPE = 'stripe';
 export const STRIPE_ACCOUNT_TYPE_ID = 'stripe:account';
 export const STRIPE_ACCOUNT_DISPLAY_NAME = 'Stripe';
 
-export const STRIPE_EVENT_TYPE_ID = 'stripe:event';
-export const STRIPE_EVENT_DISPLAY_NAME = 'Event';
+/** One Stripe event, as a change to the object it is about. */
+export const STRIPE_CHANGE_TYPE_ID = 'stripe:change';
+export const STRIPE_CHANGE_DISPLAY_NAME = 'Change';
 
 export const STRIPE_CUSTOMER_TYPE_ID = 'stripe:customer';
 export const STRIPE_CUSTOMER_DISPLAY_NAME = 'Customer';
@@ -49,6 +50,10 @@ export const STRIPE_LATEST_INVOICE_EDGE_NAME = 'Latest Invoice';
 /** An event's charge (a `charge.*` event is about one). */
 export const STRIPE_CHARGE_EDGE = 'charge_edge';
 export const STRIPE_CHARGE_EDGE_NAME = 'Charge';
+/** A customer's, an invoice's, a subscription's or a charge's changes: the
+ *  events Stripe sends about it, pushed to the connection's door. */
+export const STRIPE_CHANGES_EDGE = 'changes_edge';
+export const STRIPE_CHANGES_EDGE_NAME = 'Changes';
 /** Many records: a customer's or a subscription's invoices, a customer's
  *  subscriptions, a customer's or an invoice's charges. */
 export const STRIPE_INVOICES_EDGE = 'invoices_edge';
@@ -109,14 +114,42 @@ export const STRIPE_CHARGE_EVENTS = [
   'charge.updated',
 ] as const;
 
-/** Every event a listen can select (`events: [...]`), and the closed set an
- *  Event's `Type` is. */
+/** Every event this module types: the closed set a Change's `Type` is. */
 export const STRIPE_EVENT_TYPES = [...STRIPE_CUSTOMER_EVENTS, ...STRIPE_SUBSCRIPTION_EVENTS, ...STRIPE_INVOICE_EVENTS, ...STRIPE_CHARGE_EVENTS] as const;
 export type StripeEventType = (typeof STRIPE_EVENT_TYPES)[number];
 
 export function isStripeEventType(value: unknown): value is StripeEventType {
   return typeof value === 'string' && (STRIPE_EVENT_TYPES as readonly string[]).includes(value);
 }
+
+/** The objects an event is about, each with the prefix its events' types
+ *  carry and the collection that lists them: an event's `Kind` is its type
+ *  without the prefix (`invoice.payment_failed` is an invoice's
+ *  `payment_failed`). */
+export const STRIPE_INVOICE_OBJECT = { kind: 'invoice', typeId: STRIPE_INVOICE_TYPE_ID, prefix: 'invoice.', displayName: STRIPE_INVOICE_DISPLAY_NAME, collection: STRIPE_INVOICES_COLLECTION, events: STRIPE_INVOICE_EVENTS } as const;
+export const STRIPE_CHANGED_OBJECTS = [
+  { kind: 'customer', typeId: STRIPE_CUSTOMER_TYPE_ID, prefix: 'customer.', displayName: STRIPE_CUSTOMER_DISPLAY_NAME, collection: STRIPE_CUSTOMERS_COLLECTION, events: STRIPE_CUSTOMER_EVENTS },
+  { kind: 'subscription', typeId: STRIPE_SUBSCRIPTION_TYPE_ID, prefix: 'customer.subscription.', displayName: STRIPE_SUBSCRIPTION_DISPLAY_NAME, collection: STRIPE_SUBSCRIPTIONS_COLLECTION, events: STRIPE_SUBSCRIPTION_EVENTS },
+  STRIPE_INVOICE_OBJECT,
+  { kind: 'charge', typeId: STRIPE_CHARGE_TYPE_ID, prefix: 'charge.', displayName: STRIPE_CHARGE_DISPLAY_NAME, collection: STRIPE_CHARGES_COLLECTION, events: STRIPE_CHARGE_EVENTS },
+] as const;
+export type StripeChangedObject = (typeof STRIPE_CHANGED_OBJECTS)[number];
+
+/** The object an event of `type` is about: the one whose events list it (not
+ *  by prefix: `customer.subscription.created` starts with `customer.` too). */
+export function changedObjectOf(type: StripeEventType): StripeChangedObject {
+  const found = STRIPE_CHANGED_OBJECTS.find((object) => (object.events as readonly string[]).includes(type));
+  if (found === undefined) throw new Error(`${type} is typed but names no object`);
+  return found;
+}
+
+/** An event type's `Kind`: what happened to its object. */
+export function kindOf(type: StripeEventType): string {
+  return type.slice(changedObjectOf(type).prefix.length);
+}
+
+/** Every `Kind` a change can be, each once. */
+export const STRIPE_CHANGE_KINDS: string[] = [...new Set(STRIPE_EVENT_TYPES.map(kindOf))];
 
 /** An invoice's `status`. */
 export const STRIPE_INVOICE_STATUSES = ['draft', 'open', 'paid', 'uncollectible', 'void'] as const;
@@ -142,9 +175,6 @@ export const STRIPE_BILLING_REASONS = [
   'subscription_update',
   'upcoming',
 ] as const;
-
-/** The discriminator every event the door accepts carries. */
-export const STRIPE_EVENT_TAG = 'stripe:event';
 
 // ── Payloads: the flat field bags positions carry, keyed by field id ─────────
 // Field ids are Stripe's own names. Amounts are in MAJOR units of `currency`
@@ -265,6 +295,8 @@ export interface StripeChargePayload {
 export interface StripeEventPayload {
   id: string;
   type: StripeEventType;
+  /** The type without its object's prefix (`payment_failed`). */
+  kind: string;
   created: string | null;
   livemode: boolean;
   api_version: string | null;

@@ -12,7 +12,7 @@
 // invoices through the module's graph.
 
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 
@@ -39,7 +39,7 @@ cr = connect mcp using crm
 mail = connect gmail using billing_mail
 chat = connect slack using team_slack
 
-function \`Payment Failed\`(e: <pay-[:Event]->>) {
+function \`Payment Failed\`(e: <pay-[:Change]->>) {
   inv = only(e-[:Invoice]->)
   if (inv == null) { fail("\${e.Type} is not about an invoice") }
   c = only(cr-[x:find_customer_by_email WHERE x.email == inv.\`Customer Email\`]->)
@@ -65,7 +65,7 @@ function \`Payment Failed\`(e: <pay-[:Event]->>) {
   }
 }
 
-listen to pay { events: ["invoice.payment_failed"] } fire \`Payment Failed\`
+listen to pay-[:Invoices]->-[c:Changes WHERE c.Kind == "payment_failed"]-> fire \`Payment Failed\`
 `;
 
 // A workspace-built listen-fire finds its bundled modules beside its own (canonical)
@@ -164,10 +164,10 @@ test('listen-fire check types the program against Stripe: a field an invoice lac
     assert.match(wrongField.out, /MOV_UNKNOWN_PROPERTY .*amount_due/);
     assert.match(wrongField.out, /Amount Due/, 'the diagnostic names the field Stripe has');
 
-    const wrongType = await checkWith(world.dir, '"invoice.payment_failed"', '"invoice.payment_faild"');
+    const wrongType = await checkWith(world.dir, '"payment_failed"', '"payment_faild"');
     assert.notEqual(wrongType.code, 0, wrongType.out);
-    assert.match(wrongType.out, /invoice\.payment_faild/);
-    assert.match(wrongType.out, /invoice\.payment_failed/, 'the diagnostic names the type Stripe sends');
+    assert.match(wrongType.out, /payment_faild/);
+    assert.match(wrongType.out, /payment_failed/, 'the diagnostic names the kind Stripe sends');
     console.log([wrongField, wrongType].map((c) => c.out.trim()).join('\n---\n'));
     assert.deepEqual(world.stripe.requests, [], 'checking reads nothing from Stripe');
   } finally {
@@ -226,6 +226,76 @@ test('listen-fire serve runs a signed failed payment once: the monthly customer 
     console.log(runs.out.trim());
   } finally {
     await serving.stop();
+    await world.close();
+  }
+});
+
+test('a Stripe payment_failed change fires its listen once, and a re-send two days later runs nothing', async () => {
+  const world = await paymentsWorld();
+  const twoDays = String(2 * 24 * 60 * 60 * 1000);
+  try {
+    const first = await served(world.dir);
+    try {
+      const url = (await first.waitFor(/^stripe stripe_account: /)).replace(/^stripe stripe_account: /, '');
+      const delivered = await deliver(url, paymentFailed('r1', 'diego@alvareztiles.es', 'Diego Alvarez', 4900));
+      assert.equal(delivered.status, 202, delivered.body);
+      assert.equal((JSON.parse(delivered.body) as { runs: unknown[] }).runs.length, 1, delivered.body);
+    } finally {
+      await first.stop();
+    }
+    // Stripe re-sends an event it holds undelivered for three days: the
+    // module declares that window, so a re-send inside it is the same arrival.
+    const later = await served(world.dir, [], { LF_CLOCK_AHEAD_MS: twoDays });
+    try {
+      const url = (await later.waitFor(/^stripe stripe_account: /)).replace(/^stripe stripe_account: /, '');
+      const resent = await deliver(url, paymentFailed('r1', 'diego@alvareztiles.es', 'Diego Alvarez', 4900));
+      assert.ok(resent.status >= 200 && resent.status < 300, resent.body);
+      assert.doesNotMatch(resent.body, /"runs":\s*\[\s*\{/, resent.body);
+    } finally {
+      await later.stop();
+    }
+    assert.deepEqual((await outbox(world.channels)).map((m) => m.to), ['diego@alvareztiles.es'], 'one email for one failed payment');
+    const runs = await run(world.dir, 'runs');
+    assert.equal(runs.out.trim().split('\n').filter((l) => l.includes('Payment Failed')).length, 1, runs.out);
+  } finally {
+    await world.close();
+  }
+});
+
+test('upgrade rewrites `listen to pay { events: ["invoice.payment_failed"] }`', async () => {
+  const world = await paymentsWorld();
+  try {
+    const file = join(world.dir, 'movements/hello.mvt');
+    const lfYaml = join(world.dir, 'lf.yaml');
+    const pinned = () => writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
+    const old = PAYMENTS.replace('<pay-[:Change]->>', '<pay-[:Event]->>').replace(
+      'listen to pay-[:Invoices]->-[c:Changes WHERE c.Kind == "payment_failed"]-> fire \`Payment Failed\`',
+      'listen to pay { events: ["invoice.payment_failed"] } fire \`Payment Failed\`',
+    );
+    assert.notEqual(old, PAYMENTS);
+    writeFileSync(file, old);
+    pinned();
+    const upgraded = await run(world.dir, 'upgrade');
+    assert.equal(upgraded.code, 0, upgraded.out);
+    assert.equal(
+      readFileSync(file, 'utf8'),
+      old
+        .replace('<pay-[:Event]->>', '<pay-[:Change]->>')
+        .replace('listen to pay { events: ["invoice.payment_failed"] }', 'listen to pay-[:Invoices]->-[c:Changes WHERE c.Kind IN ["payment_failed"]]->'),
+    );
+    const checked = await run(world.dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+    assert.doesNotMatch(checked.out, /MOV_LISTEN_SETTINGS_RETIRED/);
+
+    // Events about two objects arrive on two edges: no rewrite, the pin holds.
+    const both = old.replace('events: ["invoice.payment_failed"]', 'events: ["invoice.payment_failed", "charge.failed"]');
+    writeFileSync(file, both);
+    pinned();
+    const held = await run(world.dir, 'upgrade');
+    assert.equal(held.code, 1, held.out);
+    assert.match(held.out, /its events arrive on `-\[:Invoices\]->-\[:Changes\]->` and `-\[:Charges\]->-\[:Changes\]->`, so write one listen for each/);
+    assert.equal(readFileSync(file, 'utf8'), both);
+  } finally {
     await world.close();
   }
 });

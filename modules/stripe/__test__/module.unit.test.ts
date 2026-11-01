@@ -1,7 +1,7 @@
 // The module's seams with its host: how the context's credential becomes a
 // client and the door's secret, and what the module declares.
 
-import { emptyOcrSlot, type CredentialFields, type ModuleContext } from 'module-kit';
+import { emptyOcrSlot, refusingRecords, type CredentialFields, type ModuleContext } from 'module-kit';
 import { emptyBrowserSlot } from 'movement-engine/public/browser';
 
 import { STRIPE_API_VERSION } from '../api_client';
@@ -32,6 +32,7 @@ function contextOver(fields: () => CredentialFields, config: { baseUrlOverride?:
     identities: { list: refuse, find: refuse },
     browser: emptyBrowserSlot('none'),
     ocr: emptyOcrSlot('none'),
+    records: refusingRecords('none'),
     config: { tenant: 'team-1', constructionArgs: {}, ...config },
   };
   return { ctx, seen };
@@ -90,11 +91,28 @@ describe('stripeModule', () => {
     expect(stripeModule.inbound).toEqual({ providerKey: 'stripe', scheme: 'module', secretIssuedBy: 'provider' });
   });
 
-  it('is a webhook source whose events are Stripe’s event types, and writes nothing', () => {
+  it('is a webhook source whose events arrive on each object’s Changes, re-sent for three days, and writes nothing', () => {
     expect(stripeModule.manifest.supportedTriggers).toEqual(['webhook']);
-    expect(stripeModule.manifest.subscribableEvents).toEqual([...STRIPE_EVENT_TYPES]);
-    expect(STRIPE_EVENT_TYPES).toEqual(expect.arrayContaining(['invoice.payment_failed', 'customer.subscription.deleted', 'customer.created', 'charge.failed', 'charge.succeeded', 'charge.refunded']));
-    expect(stripeModule.manifest.methods).toEqual(expect.arrayContaining(['checkInbound', 'listEventTypes', 'getRelated']));
+    expect(stripeModule.manifest.resendWindowSeconds).toBe(259_200);
+    expect(stripeModule.manifest.subscribableEvents).toBeUndefined();
+    expect(stripeModule.manifest.methods).toEqual(expect.arrayContaining(['checkInbound', 'getRelated']));
+    expect(stripeModule.manifest.methods).not.toContain('listEventTypes');
     for (const write of ['createRecord', 'updateRecord', 'deleteRecord']) expect(stripeModule.manifest.methods).not.toContain(write);
+  });
+
+  it('maps a 0.12 listen’s events onto the Changes of the object they are about, compared as Kind', () => {
+    const become = stripeModule.manifest.listenSettingsBecome;
+    expect(become?.byEvent?.['invoice.payment_failed']).toEqual({
+      path: ['Invoices', 'Changes'],
+      aliases: ['i', 'c'],
+      paramFrom: 'Event',
+      keys: { events: { hop: 1, field: 'Kind', op: 'in', values: expect.objectContaining({ 'invoice.payment_failed': 'payment_failed', 'invoice.paid': 'paid' }) } },
+    });
+    expect(become?.byEvent?.['customer.subscription.deleted']?.path).toEqual(['Subscriptions', 'Changes']);
+    expect(become?.byEvent?.['customer.subscription.deleted']?.keys['events']?.values?.['customer.subscription.deleted']).toBe('deleted');
+    expect(become?.byEvent?.['customer.created']?.path).toEqual(['Customers', 'Changes']);
+    expect(become?.byEvent?.['charge.failed']?.path).toEqual(['Charges', 'Changes']);
+    expect(Object.keys(become?.byEvent ?? {}).sort()).toEqual([...STRIPE_EVENT_TYPES].sort());
+    expect(become?.keys['events']?.absent).toEqual([...STRIPE_EVENT_TYPES]);
   });
 });

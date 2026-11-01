@@ -5,7 +5,7 @@
 // is `inbound.ts`; the API and the normalisation of Stripe's objects are
 // `api_client.ts`. Nothing is written to Stripe.
 
-import type { Adapter, EdgesFromResult, EventType, GetFieldValueInput, GetRelatedInput, InboundCheck, InboundCheckInput, RelatedResult } from 'movement-engine/public/adapter';
+import type { Adapter, EdgesFromResult, GetFieldValueInput, GetRelatedInput, InboundCheck, InboundCheckInput, RelatedResult } from 'movement-engine/public/adapter';
 import type { SchemaEntryPoint, SchemaTypeDescriptor, SourcePosition } from 'movement-engine/public/catalog';
 
 import { ADAPTER_META_TYPE_ID, META_RECORD_TYPE, makeStablePosition, positionData } from 'movement-engine/public/catalog';
@@ -40,9 +40,7 @@ import {
   STRIPE_CUSTOMERS_COLLECTION,
   STRIPE_CUSTOMER_DISPLAY_NAME,
   STRIPE_CUSTOMER_EDGE,
-  STRIPE_EVENT_DISPLAY_NAME,
-  STRIPE_EVENT_TAG,
-  STRIPE_EVENT_TYPE_ID,
+  STRIPE_CHANGE_DISPLAY_NAME,
   STRIPE_INVOICES_COLLECTION,
   STRIPE_INVOICES_EDGE,
   STRIPE_INVOICE_DISPLAY_NAME,
@@ -120,7 +118,7 @@ export class StripeAdapter extends BaseAdapter implements Adapter {
     const edgeId = await this.resolveEdgeReadId(input.position.recordType, input.fieldId);
     const held = positionData(input.position);
     const data: StripeObject = isObject(held) ? held : {};
-    if (input.position.recordType === STRIPE_EVENT_DISPLAY_NAME) return eventObject(data, edgeId);
+    if (input.position.recordType === STRIPE_CHANGE_DISPLAY_NAME) return changedObject(data, edgeId);
 
     const id = typeof data['id'] === 'string' ? data['id'] : '';
     if (input.position.recordType === STRIPE_CHARGE_DISPLAY_NAME && edgeId === STRIPE_INVOICE_EDGE) return this.chargeInvoice(data);
@@ -239,12 +237,7 @@ export class StripeAdapter extends BaseAdapter implements Adapter {
     }
   }
 
-  // ── 4. Events ──────────────────────────────────────────────────────────
-
-  async listEventTypes(): Promise<EventType[]> {
-    // The door tags every event it accepts, so discrimination is by tag.
-    return [{ tag: STRIPE_EVENT_TAG, positionType: STRIPE_EVENT_TYPE_ID }];
-  }
+  // ── 4. The door ────────────────────────────────────────────────────────
 
   async checkInbound(input: InboundCheckInput): Promise<InboundCheck> {
     return checkStripeDelivery(input, this.door);
@@ -276,9 +269,9 @@ function subscriptionPosition(o: StripeObject): RelatedResult {
   return { position: makeStablePosition({ adapterType: STRIPE_ADAPTER_TYPE, recordType: STRIPE_SUBSCRIPTION_DISPLAY_NAME, recordId: data.id, data }) };
 }
 
-/** An event's object along the edge that names its kind; none along another.
+/** A change's object along the edge that names its kind; none along another.
  *  The object is the snapshot the event carried, so this reads no API. */
-function eventObject(event: StripeObject, edgeId: string): RelatedResult[] {
+function changedObject(event: StripeObject, edgeId: string): RelatedResult[] {
   const object = event['object'];
   if (!isObject(object)) return [];
   const kind = objectKind(object);

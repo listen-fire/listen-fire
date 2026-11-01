@@ -38,9 +38,12 @@ import {
   STRIPE_CUSTOMER_EDGE,
   STRIPE_CUSTOMER_EDGE_NAME,
   STRIPE_CUSTOMER_TYPE_ID,
-  STRIPE_EVENT_DISPLAY_NAME,
+  STRIPE_CHANGES_EDGE,
+  STRIPE_CHANGES_EDGE_NAME,
+  STRIPE_CHANGE_DISPLAY_NAME,
+  STRIPE_CHANGE_KINDS,
+  STRIPE_CHANGE_TYPE_ID,
   STRIPE_EVENT_TYPES,
-  STRIPE_EVENT_TYPE_ID,
   STRIPE_INVOICES_COLLECTION,
   STRIPE_INVOICES_EDGE,
   STRIPE_INVOICES_EDGE_NAME,
@@ -110,17 +113,8 @@ export function stripeEntryPoints(): SchemaEntryPoint[] {
     { typeId: STRIPE_INVOICE_TYPE_ID, displayName: STRIPE_INVOICE_DISPLAY_NAME, writable: false, readable: true, collectionName: STRIPE_INVOICES_COLLECTION, description: INVOICES_DESCRIPTION },
     { typeId: STRIPE_SUBSCRIPTION_TYPE_ID, displayName: STRIPE_SUBSCRIPTION_DISPLAY_NAME, writable: false, readable: true, collectionName: STRIPE_SUBSCRIPTIONS_COLLECTION, description: SUBSCRIPTIONS_DESCRIPTION },
     { typeId: STRIPE_CHARGE_TYPE_ID, displayName: STRIPE_CHARGE_DISPLAY_NAME, writable: false, readable: true, collectionName: STRIPE_CHARGES_COLLECTION, description: CHARGES_DESCRIPTION },
-    // The EVENT edge: what a delivery to the connection's URL is.
-    {
-      typeId: STRIPE_EVENT_TYPE_ID,
-      displayName: STRIPE_EVENT_DISPLAY_NAME,
-      writable: false,
-      readable: false,
-      fires: true,
-      description:
-        'Delivered once per Stripe event sent to the connection’s URL. `events` selects ' +
-        'Stripe’s event types (["invoice.payment_failed"]).',
-    },
+    // Reached only along a record's `Changes`; published so it is named.
+    { typeId: STRIPE_CHANGE_TYPE_ID, displayName: STRIPE_CHANGE_DISPLAY_NAME, writable: false, readable: false },
   ];
 }
 
@@ -130,25 +124,40 @@ export const STRIPE_ROOT: SchemaTypeDescriptor = {
   displayName: STRIPE_ACCOUNT_DISPLAY_NAME,
   description:
     'The Stripe account the API key belongs to. Walk `Customers`, `Invoices`, `Subscriptions` or ' +
-    '`Charges`; listen on `Event` to be told about Stripe’s events.',
+    '`Charges`; listen on a record’s `Changes` to be told about Stripe’s events ' +
+    '(`pay-[:Invoices]->-[c:Changes WHERE c.Kind == "payment_failed"]->`).',
   fields: [],
   references: [
     { fieldId: STRIPE_CUSTOMERS_COLLECTION, targetTypeId: STRIPE_CUSTOMER_TYPE_ID, cardinality: 'many', direction: 'outgoing', name: STRIPE_CUSTOMERS_COLLECTION, description: CUSTOMERS_DESCRIPTION, capability: NEWEST_FIRST },
     { fieldId: STRIPE_INVOICES_COLLECTION, targetTypeId: STRIPE_INVOICE_TYPE_ID, cardinality: 'many', direction: 'outgoing', name: STRIPE_INVOICES_COLLECTION, description: INVOICES_DESCRIPTION, capability: NEWEST_FIRST },
     { fieldId: STRIPE_SUBSCRIPTIONS_COLLECTION, targetTypeId: STRIPE_SUBSCRIPTION_TYPE_ID, cardinality: 'many', direction: 'outgoing', name: STRIPE_SUBSCRIPTIONS_COLLECTION, description: SUBSCRIPTIONS_DESCRIPTION, capability: NEWEST_FIRST },
     { fieldId: STRIPE_CHARGES_COLLECTION, targetTypeId: STRIPE_CHARGE_TYPE_ID, cardinality: 'many', direction: 'outgoing', name: STRIPE_CHARGES_COLLECTION, description: CHARGES_DESCRIPTION, capability: NEWEST_FIRST },
-    {
-      fieldId: `fires:${STRIPE_EVENT_TYPE_ID}`,
-      targetTypeId: STRIPE_EVENT_TYPE_ID,
-      cardinality: 'one',
-      direction: 'outgoing',
-      name: STRIPE_EVENT_DISPLAY_NAME,
-      fires: true,
-      readable: false,
-      description: 'A Stripe event, signed by the endpoint’s secret — what a listen delivers.',
-    },
   ],
 };
+
+/**
+ * A record's `Changes`: the events Stripe sends about it, pushed to the
+ * connection's door (Stripe's endpoint is the connection's, so one endpoint
+ * serves every listen). `carried` is the collection the record is listed by:
+ * each arrival carries the record as its event had it, so a WHERE on that hop
+ * is judged on the arrival, with no read.
+ */
+function changesEdge(carried: string, what: string): SchemaReferenceDescriptor {
+  return {
+    fieldId: STRIPE_CHANGES_EDGE,
+    targetTypeId: STRIPE_CHANGE_TYPE_ID,
+    cardinality: 'many',
+    direction: 'outgoing',
+    name: STRIPE_CHANGES_EDGE_NAME,
+    readable: false,
+    listenable: true,
+    delivery: 'connection',
+    identity: 'Id',
+    attributes: true,
+    carries: [carried],
+    description: `The events Stripe sends about ${what}, each once, as the endpoint delivers them (\`Kind\` is what happened).`,
+  };
+}
 
 const CUSTOMER_EDGE: SchemaReferenceDescriptor = {
   fieldId: STRIPE_CUSTOMER_EDGE,
@@ -182,14 +191,19 @@ const CHARGES_EDGE: SchemaReferenceDescriptor = {
   capability: NEWEST_FIRST,
 };
 
-const EVENT_DESCRIPTOR: SchemaTypeDescriptor = {
-  typeId: STRIPE_EVENT_TYPE_ID,
-  displayName: STRIPE_EVENT_DISPLAY_NAME,
+const CHANGE_DESCRIPTOR: SchemaTypeDescriptor = {
+  typeId: STRIPE_CHANGE_TYPE_ID,
+  displayName: STRIPE_CHANGE_DISPLAY_NAME,
   description:
-    'A Stripe event: what happened (`Type`) and when. Walk `Invoice`, `Subscription`, `Customer` or ' +
-    '`Charge` for the object it is about, as it was when the event happened.',
+    'A Stripe event, as a change to the object it is about: what happened (`Kind`, `Type`) and when. Walk ' +
+    '`Invoice`, `Subscription`, `Customer` or `Charge` for the object, as it was when the event happened.',
   fields: [
     field('id', 'Id', 'string', { required: true, description: 'The event id (`evt_…`), the same on every retry of the delivery.' }),
+    field('kind', 'Kind', 'enum', {
+      required: true,
+      enumValues: STRIPE_CHANGE_KINDS,
+      description: 'What happened to the object: its event type without the object’s prefix (`payment_failed` for `invoice.payment_failed`, `deleted` for `customer.subscription.deleted`).',
+    }),
     field('type', 'Type', 'enum', { required: true, enumValues: [...STRIPE_EVENT_TYPES], description: 'What happened: `invoice.payment_failed`, `customer.subscription.deleted`, `customer.created`, …' }),
     field('created', 'Created', 'date', { required: true }),
     field('livemode', 'Livemode', 'boolean', { required: true, description: 'True for live mode, false for test mode.' }),
@@ -251,6 +265,7 @@ const CUSTOMER_DESCRIPTOR: SchemaTypeDescriptor = {
     field('deleted', 'Deleted', 'boolean', { description: 'True on the customer a `customer.deleted` event carries.' }),
   ],
   references: [
+    changesEdge(STRIPE_CUSTOMERS_COLLECTION, 'a customer (`customer.created`, `.updated`, `.deleted`)'),
     { ...INVOICES_EDGE, description: `Its invoices. ${INVOICES_DESCRIPTION}` },
     {
       fieldId: STRIPE_SUBSCRIPTIONS_EDGE,
@@ -298,6 +313,7 @@ const INVOICE_DESCRIPTOR: SchemaTypeDescriptor = {
     field('metadata', 'Metadata', 'json', { description: 'Your own key-value pairs.' }),
   ],
   references: [
+    changesEdge(STRIPE_INVOICES_COLLECTION, 'an invoice (`invoice.payment_failed`, `invoice.paid`, …)'),
     CUSTOMER_EDGE,
     {
       fieldId: STRIPE_SUBSCRIPTION_EDGE,
@@ -342,6 +358,7 @@ const SUBSCRIPTION_DESCRIPTOR: SchemaTypeDescriptor = {
     field('metadata', 'Metadata', 'json', { description: 'Your own key-value pairs (`s.Metadata.crm_id`).' }),
   ],
   references: [
+    changesEdge(STRIPE_SUBSCRIPTIONS_COLLECTION, 'a subscription (`customer.subscription.created`, `.deleted`, …)'),
     CUSTOMER_EDGE,
     { ...INVOICES_EDGE, description: `The invoices it made. ${INVOICES_DESCRIPTION}` },
     {
@@ -395,6 +412,7 @@ const CHARGE_DESCRIPTOR: SchemaTypeDescriptor = {
     field('metadata', 'Metadata', 'json', { description: 'Your own key-value pairs.' }),
   ],
   references: [
+    changesEdge(STRIPE_CHARGES_COLLECTION, 'a charge (`charge.failed`, `charge.succeeded`, `charge.refunded`, …)'),
     {
       ...CUSTOMER_EDGE,
       required: false,
@@ -414,7 +432,7 @@ const CHARGE_DESCRIPTOR: SchemaTypeDescriptor = {
 };
 
 const DESCRIPTORS: Record<string, SchemaTypeDescriptor> = {
-  [STRIPE_EVENT_TYPE_ID]: EVENT_DESCRIPTOR,
+  [STRIPE_CHANGE_TYPE_ID]: CHANGE_DESCRIPTOR,
   [STRIPE_CUSTOMER_TYPE_ID]: CUSTOMER_DESCRIPTOR,
   [STRIPE_INVOICE_TYPE_ID]: INVOICE_DESCRIPTOR,
   [STRIPE_SUBSCRIPTION_TYPE_ID]: SUBSCRIPTION_DESCRIPTOR,

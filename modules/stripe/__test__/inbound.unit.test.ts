@@ -38,17 +38,25 @@ const FAILED = JSON.stringify(stripeEvent('invoice.payment_failed', stripeInvoic
 describe('a Stripe delivery', () => {
   const stripe = load({ apiKey: 'rk_test_x', webhookSecret: SECRET });
 
-  it('is one Event, labelled with its type and named by its event id', async () => {
+  it('is one arrival on the Changes of the invoice it is about, carrying the invoice, named by its event id', async () => {
     const answer = await stripe.checkInbound!(signed(FAILED));
     expect(answer).toMatchObject({
       outcome: 'accepted',
       deliveryId: 'evt_failed_1',
-      events: [
+      events: [],
+      arrivals: [
         {
-          tag: 'stripe:event',
-          eventType: 'invoice.payment_failed',
+          edge: 'Changes',
+          key: 'in_1MtHbELkdIwHu7ixl4OzzPMv',
+          identity: 'evt_failed_1',
           occurredAt: '2023-06-06T22:19:30.000Z',
-          payload: { id: 'evt_failed_1', type: 'invoice.payment_failed', created: '2023-06-06T22:19:30.000Z', livemode: false, api_version: '2025-03-31.basil', object: { id: 'in_1MtHbELkdIwHu7ixl4OzzPMv', object: 'invoice' } },
+          about: { recordType: 'Invoice', externalId: 'in_1MtHbELkdIwHu7ixl4OzzPMv' },
+          landing: {
+            recordId: 'evt_failed_1',
+            recordType: 'Change',
+            fields: { Id: 'evt_failed_1', Kind: 'payment_failed', Type: 'invoice.payment_failed', id: 'evt_failed_1', kind: 'payment_failed', object: { id: 'in_1MtHbELkdIwHu7ixl4OzzPMv', object: 'invoice' } },
+          },
+          parents: [{ recordId: 'in_1MtHbELkdIwHu7ixl4OzzPMv', recordType: 'Invoice', fields: { id: 'in_1MtHbELkdIwHu7ixl4OzzPMv', Id: 'in_1MtHbELkdIwHu7ixl4OzzPMv', Status: 'open' } }],
         },
       ],
     });
@@ -87,20 +95,22 @@ describe('a Stripe delivery', () => {
   it('carries the previous attributes of an update', async () => {
     const updated = stripeEvent('customer.subscription.updated', stripeSubscription(), { data: { object: stripeSubscription(), previous_attributes: { status: 'active' } } });
     const answer = await stripe.checkInbound!(signed(JSON.stringify(updated)));
-    expect(answer).toMatchObject({ outcome: 'accepted', events: [{ eventType: 'customer.subscription.updated', payload: { previous_attributes: { status: 'active' } } }] });
+    expect(answer).toMatchObject({ outcome: 'accepted', arrivals: [{ about: { recordType: 'Subscription' }, landing: { fields: { Kind: 'updated', 'Previous Attributes': { status: 'active' } } } }] });
   });
 
-  it('is one Event for a charge event too, carrying the charge', async () => {
+  it('is one arrival on a charge’s Changes for a charge event, carrying the charge', async () => {
     const failed = JSON.stringify(stripeEvent('charge.failed', stripeFailedCharge(), { id: 'evt_charge_1' }));
     expect(await stripe.checkInbound!(signed(failed))).toMatchObject({
       outcome: 'accepted',
       deliveryId: 'evt_charge_1',
-      events: [{ tag: 'stripe:event', eventType: 'charge.failed', payload: { type: 'charge.failed', object: { object: 'charge', failure_code: 'expired_card' } } }],
+      arrivals: [{ edge: 'Changes', identity: 'evt_charge_1', landing: { fields: { Kind: 'failed', object: { object: 'charge', failure_code: 'expired_card' } } }, parents: [{ recordType: 'Charge', fields: { 'Failure Code': 'expired_card' } }] }],
     });
   });
 
-  it('types every customer, subscription and invoice event', async () => {
+  it('lands a customer event on the customer’s Changes, and a subscription event on the subscription’s, though both start customer.', async () => {
     const created = await stripe.checkInbound!(signed(JSON.stringify(stripeEvent('customer.created', stripeCustomer()))));
-    expect(created).toMatchObject({ outcome: 'accepted', events: [{ eventType: 'customer.created' }] });
+    expect(created).toMatchObject({ outcome: 'accepted', arrivals: [{ about: { recordType: 'Customer' }, landing: { fields: { Kind: 'created' } } }] });
+    const subscribed = await stripe.checkInbound!(signed(JSON.stringify(stripeEvent('customer.subscription.created', stripeSubscription()))));
+    expect(subscribed).toMatchObject({ outcome: 'accepted', arrivals: [{ about: { recordType: 'Subscription' }, landing: { fields: { Kind: 'created' } } }] });
   });
 });

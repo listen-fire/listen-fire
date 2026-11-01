@@ -1,17 +1,33 @@
 // The connection's door: a Stripe webhook delivery, checked against the
 // endpoint's signing secret (module-kit's Stripe check, the one `@lf/webhook`
-// uses), becomes one Event. Stripe retries a delivery until it is answered
-// 2xx, so the event id names the delivery and a retry runs nothing.
+// uses), becomes one arrival on the `Changes` of the object the event is
+// about (an invoice's, a subscription's, a customer's or a charge's), carrying
+// that object as the event had it. Stripe retries a delivery until it is
+// answered 2xx, and re-sends an event for up to three days: the event id names
+// the delivery and the arrival, so a retry runs nothing.
 //
 // An event of a type this module does not type (a payout, a dispute, …) is
 // answered 200 and runs nothing: the endpoint may be subscribed to more than
 // the program listens for, and a non-2xx answer would only make Stripe retry.
 
+import type { Arrival, AwaitLanding } from 'engine-contracts';
 import type { InboundCheck, InboundCheckInput } from 'movement-engine/public/adapter';
+import type { SchemaTypeDescriptor } from 'movement-engine/public/catalog';
 import { accepted, inboundRequest, refused, reply, verifyStripeSignature } from 'module-kit';
 
-import { isObject } from './api_client';
-import { STRIPE_EVENT_TAG, STRIPE_EVENT_TYPES, isStripeEventType, type StripeEventPayload } from './types';
+import { isObject, normalizeCharge, normalizeCustomer, normalizeInvoice, normalizeSubscription, type StripeObject } from './api_client';
+import { describeStripeType } from './schema';
+import {
+  STRIPE_CHANGES_EDGE_NAME,
+  STRIPE_CHANGE_DISPLAY_NAME,
+  STRIPE_CHANGE_TYPE_ID,
+  STRIPE_EVENT_TYPES,
+  changedObjectOf,
+  isStripeEventType,
+  kindOf,
+  type StripeChangedObject,
+  type StripeEventPayload,
+} from './types';
 
 export interface StripeDoorSources {
   /** The endpoint's signing secret (`whsec_…`), read off the credential per
@@ -41,6 +57,7 @@ export function eventOf(body: unknown): { ok: true; payload: StripeEventPayload 
     payload: {
       id: body['id'],
       type,
+      kind: kindOf(type),
       created: typeof created === 'number' ? new Date(created * 1000).toISOString() : null,
       livemode: body['livemode'] === true,
       api_version: typeof body['api_version'] === 'string' ? body['api_version'] : null,
@@ -69,9 +86,46 @@ export async function checkStripeDelivery(input: InboundCheckInput, sources: Str
       ? reply(200, { json: { received: true, ignored: event.message } })
       : reply(400, { json: { error: 'not_a_stripe_event', message: event.message } });
   }
-  const { payload } = event;
-  return accepted(
-    [{ payload, tag: STRIPE_EVENT_TAG, eventType: payload.type, ...(payload.created !== null ? { occurredAt: payload.created } : {}) }],
-    { deliveryId: payload.id },
-  );
+  return accepted([], { deliveryId: event.payload.id, arrivals: [changeArrival(event.payload)] });
+}
+
+/** Each object's fields as Stripe's normalised record (by field id). */
+const NORMALIZED: Record<StripeChangedObject['kind'], (o: StripeObject) => { id: string }> = {
+  customer: normalizeCustomer,
+  subscription: normalizeSubscription,
+  invoice: normalizeInvoice,
+  charge: normalizeCharge,
+};
+
+/**
+ * An event as the arrival on its object's `Changes`: keyed by the object's id
+ * (what a wait on that object's changes names), named by the event's id, about
+ * the object, and carrying it, as the event had it, for the hop it is listed
+ * by. An upcoming invoice has no id yet: the event's id stands in for it.
+ */
+export function changeArrival(payload: StripeEventPayload): Arrival {
+  const changed = changedObjectOf(payload.type);
+  const data = NORMALIZED[changed.kind](payload.object);
+  const recordId = data.id !== '' ? data.id : `${payload.id}:${changed.kind}`;
+  const object: AwaitLanding = { recordId, recordType: changed.displayName, fields: named(changed.typeId, { ...data }) };
+  return {
+    edge: STRIPE_CHANGES_EDGE_NAME,
+    key: recordId,
+    identity: payload.id,
+    landing: { recordId: payload.id, recordType: STRIPE_CHANGE_DISPLAY_NAME, fields: named(STRIPE_CHANGE_TYPE_ID, { ...payload }) },
+    parents: [object],
+    about: { recordType: changed.displayName, externalId: recordId },
+    ...(payload.created !== null ? { occurredAt: payload.created } : {}),
+  };
+}
+
+/** A record's fields by id (what the adapter reads it by) and by display name
+ *  too (what a listen's WHERE is judged by). */
+function named(typeId: string, data: Record<string, unknown>): Record<string, unknown> {
+  const descriptor: SchemaTypeDescriptor | null = describeStripeType(typeId);
+  const fields: Record<string, unknown> = { ...data };
+  for (const field of descriptor?.fields ?? []) {
+    if (field.fieldId in data) fields[field.displayName] = data[field.fieldId];
+  }
+  return fields;
 }

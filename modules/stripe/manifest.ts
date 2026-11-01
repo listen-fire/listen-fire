@@ -4,26 +4,25 @@
 
 import type { AdapterManifest } from 'movement-engine/public/adapter';
 
-import { STRIPE_ADAPTER_TYPE, STRIPE_EVENT_TYPES } from './types';
+import { STRIPE_ADAPTER_TYPE, STRIPE_CHANGES_EDGE_NAME, STRIPE_CHANGED_OBJECTS, STRIPE_EVENT_TYPES, STRIPE_INVOICE_OBJECT, kindOf, type StripeChangedObject } from './types';
 
 const STRIPE_HANDBOOK_CONTENT = `Stripe as a graph: its events, your customers, invoices, subscriptions and charges. Read-only. The credential holds an API key (a restricted key with Read on Customers, Invoices, Subscriptions and Charges is enough) and the webhook endpoint's signing secret; a program never holds either.
 
 ### listening — Stripe's events
 
 \`\`\`
-function \`Payment Failed\`(e: <pay-[:Event]->>) {
-  invoice = only(e-[:Invoice]->)
-  if (invoice == null) { fail("not an invoice event") }
+function \`Payment Failed\`(c: <pay-[:Change]->>) {
+  invoice = only(c-[:Invoice]->)
   owed = Currency.formatFigure(invoice.\`Amount Due\`, invoice.Currency)
   …
 }
 
-listen to pay { events: ["invoice.payment_failed"] } fire \`Payment Failed\`
+listen to pay-[:Invoices]->-[c:Changes WHERE c.Kind == "payment_failed"]-> fire \`Payment Failed\`
 \`\`\`
 
-\`listen-fire serve\` prints the connection's URL (\`/hooks/stripe/<credential>\`): add it as the endpoint in Stripe's dashboard, with the events you listen for. A delivery is checked against the endpoint's signing secret; an unsigned, mis-signed or stale one (older than five minutes) runs nothing. Stripe retries a delivery, and the same event runs once.
+\`listen-fire serve\` prints the connection's URL (\`/hooks/stripe/<credential>\`): add it as the endpoint in Stripe's dashboard, with the events you listen for. A delivery is checked against the endpoint's signing secret; an unsigned, mis-signed or stale one (older than five minutes) runs nothing. Stripe retries a delivery and re-sends an event for up to three days; the same event runs once.
 
-\`events\` selects Stripe's event types: the invoice events (\`invoice.payment_failed\`, \`invoice.paid\`, \`invoice.upcoming\`, …), the subscription events (\`customer.subscription.created\`, \`.updated\`, \`.deleted\`, \`.trial_will_end\`, …), \`customer.created\`, \`.updated\`, \`.deleted\`, and the charge events (\`charge.succeeded\`, \`charge.failed\`, \`charge.refunded\`, …). \`listen-fire check\` refuses a type Stripe never sends. An event's \`Type\` says which it is. Walk \`Invoice\`, \`Subscription\`, \`Customer\` or \`Charge\` for the object it is about, as it was when the event happened (nothing along the others).
+Each event arrives on the \`Changes\` of the object it is about: an invoice's (\`Kind\` \`payment_failed\`, \`paid\`, \`upcoming\`, …), a subscription's (\`created\`, \`updated\`, \`deleted\`, \`trial_will_end\`, …), a customer's (\`created\`, \`updated\`, \`deleted\`) or a charge's (\`succeeded\`, \`failed\`, \`refunded\`, …). \`Kind\` is Stripe's event type without the object's prefix; \`Type\` is the whole of it. A WHERE on the object's hop is judged on the object as the event had it (\`pay-[i:Invoices WHERE i.Currency == "usd"]->-[c:Changes WHERE c.Kind == "paid"]->\`). Walk \`Invoice\`, \`Subscription\`, \`Customer\` or \`Charge\` from a change for its object, as it was when the event happened.
 
 ### reading — customers, invoices, subscriptions, charges
 
@@ -48,12 +47,27 @@ Field names are Stripe's: \`Amount Due\`, \`Customer Email\`, \`Hosted Invoice U
 
 Every amount (\`Amount Due\`, \`Total\`, a charge's \`Amount\`, a customer's \`Balance\`) is in major units of the record's \`Currency\`: 19.99 for a usd invoice of 1999 cents, 500 for ¥500. Never divide by 100. \`Currency\` is Stripe's lowercase ISO code, which \`Currency.formatFigure\` reads.`;
 
+/** What a 0.12 listen naming `object`'s events becomes: a listen on that
+ *  object's `Changes`, its events compared as `Kind`. */
+function changesOf(object: StripeChangedObject) {
+  return {
+    path: [object.collection, STRIPE_CHANGES_EDGE_NAME],
+    aliases: [object.kind.charAt(0), 'c'],
+    // The 0.12 event position a fired parameter was typed as.
+    paramFrom: 'Event',
+    keys: {
+      events: { hop: 1, field: 'Kind', op: 'in' as const, values: Object.fromEntries(object.events.map((type) => [type, kindOf(type)])) },
+    },
+  };
+}
+
+const INVOICE_CHANGES = changesOf(STRIPE_INVOICE_OBJECT);
+
 /**
  * Static manifest. A webhook source (Stripe's deliveries, checked at the door
  * against the endpoint's signing secret) and a read-only graph. Nothing is
- * SUBSCRIBED to: `subscribableEvents` is Stripe's event types this module
- * types, which the door labels each event with, so a listen's `events`
- * narrows by type and `listen-fire check` refuses one Stripe never sends.
+ * SUBSCRIBED to: Stripe's endpoint is set in its dashboard, and each event it
+ * delivers arrives on the `Changes` of the object it is about.
  */
 export const STRIPE_MANIFEST: AdapterManifest = {
   adapterType: STRIPE_ADAPTER_TYPE,
@@ -63,9 +77,10 @@ export const STRIPE_MANIFEST: AdapterManifest = {
     'Stripe customers, invoices, subscriptions and charges. Run a movement on a failed payment, a new ' +
     'subscription or a cancellation, and read customers, invoices, subscriptions and charges. Read-only.',
   authoringHints:
-    'Listen on Event with events naming Stripe event types (invoice.payment_failed, charge.failed, ' +
-    'customer.subscription.deleted, …). Walk the event’s Invoice, Subscription, Customer or Charge edge ' +
-    'for its object — no data.object to dig into. Why a payment failed: an invoice’s Charges (newest first) ' +
+    'Listen on a record’s Changes, narrowed by Kind (Stripe’s event type without its object’s prefix): ' +
+    'pay-[:Invoices]->-[c:Changes WHERE c.Kind == "payment_failed"]->, pay-[:Charges]->-[c:Changes WHERE ' +
+    'c.Kind == "failed"]->, pay-[:Subscriptions]->-[c:Changes WHERE c.Kind == "deleted"]->. Walk the change’s ' +
+    'Invoice, Subscription, Customer or Charge edge for its object — no data.object to dig into. Why a payment failed: an invoice’s Charges (newest first) ' +
     'carry Failure Message, Failure Code and Outcome Seller Message. Sales over a period: the account’s ' +
     'Charges bounded by Created (WITHIN 7d), then Status == "succeeded". Amounts are already in major ' +
     'units of Currency: never divide by 100. Nothing is writable.',
@@ -75,15 +90,24 @@ export const STRIPE_MANIFEST: AdapterManifest = {
   },
   triggerExpectation:
     'Fires once per Stripe event delivered to the connection’s URL and signed by the endpoint’s ' +
-    'secret, labelled with its type, so `events` narrows by type. Stripe sends only the events ' +
-    'its endpoint is subscribed to; a retry of the same event runs nothing. An event of a type ' +
-    'this module does not type is answered 200 and runs nothing.',
+    'secret, on the Changes of the object it is about, its Kind the event type without the ' +
+    'object’s prefix. Stripe sends only the events its endpoint is subscribed to; a retry or ' +
+    're-send of the same event within three days runs nothing. An event of a type this module ' +
+    'does not type is answered 200 and runs nothing.',
   supportedTriggers: ['webhook'],
-  // Stripe re-sends an undelivered event for up to three days.
+  // Stripe re-sends an undelivered event for up to three days: a default,
+  // lf.yaml's `resendWindow` overrides it.
   resendWindowSeconds: 259_200,
-  methods: ['listEntryPoints', 'describe', 'edgesFrom', 'getFieldValue', 'getRelated', 'listEventTypes', 'checkInbound'],
+  methods: ['listEntryPoints', 'describe', 'edgesFrom', 'getFieldValue', 'getRelated', 'checkInbound'],
   requiredCredentialType: 'STRIPE',
-  subscribableEvents: [...STRIPE_EVENT_TYPES],
+  // Every 0.12 listen names its events and is rewritten by them (`byEvent`).
+  // One naming none heard every event, on every object's `Changes`, so it
+  // has no one rewrite (`absent`).
+  listenSettingsBecome: {
+    ...INVOICE_CHANGES,
+    keys: { events: { ...INVOICE_CHANGES.keys.events, values: Object.fromEntries(STRIPE_EVENT_TYPES.map((type) => [type, kindOf(type)])), absent: [...STRIPE_EVENT_TYPES] } },
+    byEvent: Object.fromEntries(STRIPE_CHANGED_OBJECTS.flatMap((object) => object.events.map((type) => [type, changesOf(object)]))),
+  },
   triggerKinds: ['STRIPE'],
   vocabulary: {
     // Stripe's mark (the S), one filled path.
@@ -93,14 +117,7 @@ export const STRIPE_MANIFEST: AdapterManifest = {
       viewBox: '0 0 24 24',
     },
     eventPhrase: {
-      'invoice.payment_failed': [{ template: 'When a Stripe payment fails' }],
-      'invoice.paid': [{ template: 'When a Stripe invoice is paid' }],
-      'charge.failed': [{ template: 'When a Stripe charge fails' }],
-      'charge.succeeded': [{ template: 'When a Stripe charge succeeds' }],
-      'charge.refunded': [{ template: 'When a Stripe charge is refunded' }],
-      'customer.subscription.created': [{ template: 'When a Stripe subscription starts' }],
-      'customer.subscription.deleted': [{ template: 'When a Stripe subscription is canceled' }],
-      default: [{ template: 'When a Stripe event arrives' }],
+      default: [{ template: 'When something changes in Stripe' }],
     },
   },
 };

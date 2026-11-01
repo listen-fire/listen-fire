@@ -18,7 +18,7 @@ chat = connect slack using team_slack
 `;
 
 export const FAILED_PAYMENT = `${HEADER}
-function \`Payment Failed\`(e: <pay-[:Event]->>) {
+function \`Payment Failed\`(e: <pay-[:Change]->>) {
   inv = only(e-[:Invoice]->)
   if (inv == null) { fail("\${e.Type} is not about an invoice") }
   customer = only(inv-[:Customer]->)
@@ -33,7 +33,7 @@ function \`Payment Failed\`(e: <pay-[:Event]->>) {
   }
 }
 
-listen to pay { events: ["invoice.payment_failed"] } fire \`Payment Failed\`
+listen to pay-[:Invoices]->-[c:Changes WHERE c.Kind == "payment_failed"]-> fire \`Payment Failed\`
 `;
 
 /** The currencies the weekly report has a line for. The language has no
