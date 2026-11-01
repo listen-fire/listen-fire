@@ -133,9 +133,6 @@ pub struct EntryPoint {
     pub writable: bool,
     /// Movements may enumerate it from the root.
     pub readable: bool,
-    /// A listen is delivered records of this type.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fires: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// `collectionName`, and, for a root edge a listen starts at,

@@ -72,14 +72,16 @@ mod tests {
 
     #[test]
     fn a_file_whose_text_is_unchanged_keeps_its_parse() {
-        let hello = "import { bell } from adapters\nb = connect bell\nfunction hello() {\n  return \"v1\"\n}\nlisten to b fire hello\n";
+        let hello = "import { bell } from adapters\nb = connect bell\nfunction hello() {\n  return \"v1\"\n}\nlisten to b-[:Rings]-> fire hello\n";
+        // With no catalog each listen is read, and named as planned for nothing.
+        let read = |parsed: &[Rc<Parsed>]| crate::routing::listens_across(parsed, &crate::json::Js::Null).unwatched;
         let held = Parsed::each(&[file("hello", hello), file("other", hello.replace("hello", "other").as_str())], &[]);
-        assert_eq!(crate::routing::listens_across(&held, &crate::json::Js::Null).listens.len(), 2, "each file's listen is read");
+        assert_eq!(read(&held).len(), 2, "each file's listen is read");
         let again = Parsed::each(&[file("hello", hello), file("other", "function other(")], &held);
         assert!(Rc::ptr_eq(&again[0], &held[0]), "the unchanged file is not parsed again");
         assert!(!Rc::ptr_eq(&again[1], &held[1]), "the changed one is");
-        assert!(again[1].program.is_err() && crate::routing::listens_across(&again, &crate::json::Js::Null).listens.len() == 1, "a file that does not parse routes nothing");
+        assert!(again[1].program.is_err() && read(&again).len() == 1, "a file that does not parse routes nothing");
         let moved = Parsed::each(&[file("renamed", hello)], &held);
-        assert!(!Rc::ptr_eq(&moved[0], &held[0]) && crate::routing::listens_across(&moved, &crate::json::Js::Null).listens[0].file == "renamed", "a parse is kept by its file and its text");
+        assert!(!Rc::ptr_eq(&moved[0], &held[0]) && read(&moved)[0].starts_with("renamed.mvt:"), "a parse is kept by its file and its text");
     }
 }

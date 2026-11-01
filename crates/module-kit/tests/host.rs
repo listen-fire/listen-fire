@@ -20,7 +20,7 @@ impl Adapter for Tiny {
 
     async fn list_entry_points(&self, ctx: &Ctx) -> Answer<Vec<EntryPoint>> {
         ctx.spent("lookup", 1500.0);
-        Ok(vec![EntryPoint { type_id: "Thing".into(), display_name: "Thing".into(), writable: false, readable: true, fires: None, description: None, rest: Obj::new() }])
+        Ok(vec![EntryPoint { type_id: "Thing".into(), display_name: "Thing".into(), writable: false, readable: true, description: None, rest: Obj::new() }])
     }
 
     async fn describe(&self, _: &Ctx, _: Describe) -> Answer<Option<TypeDescriptor>> {

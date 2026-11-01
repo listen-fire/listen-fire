@@ -1,7 +1,7 @@
 //! Crate modules served by a module host (crates/module-kit), driven by the
 //! real `listen-fire` as externals reached by url: one host, an adapter at `/notes`
 //! and a plugin package at `/shout`. listen-fire checks a movement against them and
-//! runs it on an event: the plugin's answer is written through the adapter.
+//! runs it on an arrival: the plugin's answer is written through the adapter.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -42,14 +42,14 @@ impl Project {
             root.join("movements/reply.mvt"),
             "import { notes } from adapters\nimport { `@acme/shout` as shout } from plugins\n\nn = connect notes\n\n\
              function reply(note: <n-[:Note]->>) {\n  write n-[:Note]-> { Title: shout.shoutOut(note.Title) }\n}\n\n\
-             listen to n { events: [\"note.created\"] } fire reply\n",
+             listen to n-[:Note]-> fire reply\n",
         )
         .unwrap();
         std::fs::create_dir_all(root.join("events")).unwrap();
         std::fs::write(
             root.join("events/note.json"),
-            r#"{ "external": "notes", "event": { "payload": { "id": "n-1", "Title": "hello" }, "externalId": "n-1",
-                 "eventType": "note.created", "changeType": "create", "recordType": "Note" } }"#,
+            r#"{ "external": "notes", "event": { "arrivals": [{ "edge": "Note", "identity": "n-1",
+                 "landing": { "recordId": "n-1", "recordType": "Note", "fields": { "Title": "hello" } } }] } }"#,
         )
         .unwrap();
         Project(root)

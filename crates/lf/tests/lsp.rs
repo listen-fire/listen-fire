@@ -153,7 +153,7 @@ function title(note: <n-[:Note]->>) {
   return note.Title
 }
 
-listen to n { events: [\"note.created\"] } fire title
+listen to n-[:Note]-> fire title
 ";
 
 #[test]

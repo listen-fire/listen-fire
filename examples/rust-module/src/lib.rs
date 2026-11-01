@@ -1,15 +1,14 @@
 //! Two crate modules one host serves: `notes`, an adapter keeping notes in
 //! memory, and `shout`, a plugin package (`@acme/shout`) with one plugin.
 //!
-//! One record type, `Note { Title, Body }`, and one event a listen may
-//! choose, `note.created`.
+//! One record type, `Note { Title, Body }`, under a listenable root
+//! `Note`: a listen on it is delivered each note that lands there.
 
 use std::sync::{Arc, Mutex};
 
 use module_kit::*;
 
 const NOTE: &str = "Note";
-const NOTE_CREATED: &str = "note.created";
 
 /// The notes adapter. Clones share their notes, so whoever made it can see
 /// what a movement wrote.
@@ -31,10 +30,7 @@ impl Notes {
 
 impl Adapter for Notes {
     fn manifest(&self) -> AdapterManifest {
-        AdapterManifest::new("notes")
-            .triggers(["webhook"])
-            .optional(["listEventTypes"])
-            .declare("subscribableEvents", Js::strings([NOTE_CREATED]))
+        AdapterManifest::new("notes").triggers(["webhook"])
     }
 
     async fn list_entry_points(&self, _: &Ctx) -> Answer<Vec<EntryPoint>> {
@@ -43,9 +39,8 @@ impl Adapter for Notes {
             display_name: NOTE.into(),
             writable: true,
             readable: false,
-            fires: Some(true),
-            description: Some("A note. A listen is delivered each one somebody writes.".into()),
-            rest: Obj::new(),
+            description: Some("A note. A listen on `Note` is delivered each one that lands there.".into()),
+            rest: obj! { "listenable" => Js::Bool(true), "delivery" => Js::str("connection") },
         }])
     }
 
@@ -77,12 +72,6 @@ impl Adapter for Notes {
         Ok(Some(Updated { written: Notes::written(request.external_id, fields.clone()), association: Some("none".into()) }))
     }
 
-    async fn optional(&self, _: &Ctx, method: &str, _: Js) -> Answer<Js> {
-        match method {
-            "listEventTypes" => Ok(Js::Arr(vec![Js::Obj(obj! { "tag" => Js::str(NOTE_CREATED), "positionType" => Js::str(NOTE) })])),
-            other => Err(ModuleError::not_implemented(other)),
-        }
-    }
 }
 
 /// `@acme/shout`: `shout.shoutOut(text)` is the text in capitals.

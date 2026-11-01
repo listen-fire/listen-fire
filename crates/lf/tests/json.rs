@@ -127,7 +127,7 @@ fn a_run_is_driven_listed_shown_resumed_and_cancelled() {
 fn event_and_poll_runs_report_their_outcomes_or_an_error() {
     let project = Project::new("event");
     let event: &Path = &project.0.join("event.json");
-    std::fs::write(event, r#"{"external":"manual","event":{"payload":{}}}"#).unwrap();
+    std::fs::write(event, r#"{"external":"manual","event":{"arrivals":[]}}"#).unwrap();
     let (fired, _) = project.lf(&["run", "--event", event.to_str().unwrap()]);
     has(&fired, &["ok", "runs", "redelivered"]);
     let (polled, code) = project.lf(&["run", "--poll", "hello"]);

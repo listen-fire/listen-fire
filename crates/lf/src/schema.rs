@@ -712,7 +712,7 @@ fn edge_schema(reference: &Js, target: Option<&str>, polymorphic: bool, field_id
 /// replaces it (engine-contracts `retiredReferenceKey` says the same).
 pub fn retired_reference_key(reference: &Js) -> Option<String> {
     let retired = ["awaitable", "watchable", "resolvesEmpty"].into_iter().find(|retired| reference.get(retired).is_some())?;
-    let name = key(nullish_or(reference.get("name"), reference.get("fieldId")));
+    let name = reference_name(reference);
     let instead = if retired == "resolvesEmpty" {
         "a deleted record leaves the wait waiting on every edge, so there is nothing to declare: drop it"
     } else {
@@ -764,7 +764,8 @@ pub fn undeclared_arrival_field(reference: &Js, descriptors: &IndexMap<String, J
     arrival_field_refusal(&reference_name(reference), reference, &reference_target_type_ids(reference), descriptors)
 }
 
-fn reference_name(reference: &Js) -> String {
+/// How a refusal names a reference: its name, else its field id.
+pub fn reference_name(reference: &Js) -> String {
     key(nullish_or(reference.get("name"), reference.get("fieldId")))
 }
 
@@ -1417,8 +1418,13 @@ mod tests {
     fn a_reference_declaring_fires_is_refused_naming_listenable() {
         let cases = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/engine-contracts/__test__/retired_entry_key.cases.json")).unwrap();
         for case in Js::parse(&cases).unwrap().as_array().unwrap() {
-            let keys: &[&str] = if case.get("on").and_then(Js::as_str) == Some("entry") { &RETIRED_ENTRY_KEYS } else { &RETIRED_MANIFEST_KEYS };
-            let refusal = retired_entry_key(case.get("name").and_then(Js::as_str).unwrap(), case.get("declared").unwrap(), keys);
+            let declared = case.get("declared").unwrap();
+            let refusal = match case.get("on").and_then(Js::as_str) {
+                Some("entry") => retired_entry_key(case.get("name").and_then(Js::as_str).unwrap(), declared, &RETIRED_ENTRY_KEYS),
+                // A reference is named as its other refusals name it.
+                Some("reference") => retired_entry_key(&reference_name(declared), declared, &RETIRED_ENTRY_KEYS),
+                _ => retired_entry_key(case.get("name").and_then(Js::as_str).unwrap(), declared, &RETIRED_MANIFEST_KEYS),
+            };
             assert_eq!(refusal.as_deref(), case.get("refusal").and_then(Js::as_str), "{:?}", case.get("case"));
         }
     }

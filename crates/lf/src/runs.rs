@@ -2901,7 +2901,7 @@ mod tests {
     }
 
     fn acme_movement(name: &str) -> String {
-        format!("import {{ {name} }} from adapters\nimport {{ {name} as cred }} from credentials\n\ncrm = connect {name} using cred\n\nfunction welcome(company: <crm-[:Company]->>) {{\n  write crm-[:Company]-> {{ Name: \"Welcome ${{company.Name}}\" }}\n}}\n\nlisten to crm {{ events: [\"company.created\"] }} fire welcome\n")
+        format!("import {{ {name} }} from adapters\nimport {{ {name} as cred }} from credentials\n\ncrm = connect {name} using cred\n\nfunction welcome(company: <crm-[:Company]->>) {{\n  write crm-[:Company]-> {{ Name: \"Welcome ${{company.Name}}\" }}\n}}\n\nlisten to crm-[:Company]-> fire welcome\n")
     }
 
     /// `body` on a session over `root` opened as `role`.
@@ -3038,7 +3038,7 @@ mod tests {
             assert_eq!(lines.last(), Some(&RUN_CHECK), "{log}");
             let kept = session.file_set();
             let served: Vec<&str> = kept.listens.iter().map(|l| l.file.as_str()).collect();
-            assert_eq!(served, ["hello"], "the running set's listens are still served");
+            assert_eq!(served, ["acme_i", "hello"], "the running set's listens are still served");
         });
     }
 

@@ -1043,19 +1043,4 @@ mod tests {
             }
         }
     }
-
-    #[test]
-    fn a_field_value_key_needs_exactly_one_field_key() {
-        let paired = Js::parse(br#"{ "listenConfig": [{ "key": "field", "format": "field" }, { "key": "becomes", "format": "field-value" }] }"#).unwrap();
-        assert!(listen_declarations(&paired).is_ok());
-        let alone = Js::parse(br#"{ "listenConfig": [{ "key": "becomes", "format": "field-value" }] }"#).unwrap();
-        assert!(listen_declarations(&alone).unwrap_err().contains("exactly one 'field' key"));
-    }
-
-    #[test]
-    fn a_format_this_lf_does_not_know_is_kept_for_the_checker() {
-        let raw = Js::parse(br#"{ "listenConfig": [{ "key": "within", "format": "duration-window" }] }"#).unwrap();
-        let listen = listen_declarations(&raw).unwrap();
-        assert_eq!(Js::Obj(listen).to_json(), r#"{"listenConfig":[{"key":"within","format":"duration-window"}]}"#);
-    }
 }

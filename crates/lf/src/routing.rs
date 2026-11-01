@@ -376,8 +376,9 @@ mod tests {
     use crate::sources::{MovementFile, Parsed};
     use std::path::PathBuf;
 
-    /// A module `inbox` whose `Notes` its connection pushes, made with a credential or none.
-    const NOTES_CATALOG: &str = r#"{"adapters":{"inbox":{"constructionArgs":[{"kind":"credential","name":"credentials","required":false}],"canFire":true,"schemas":{"":{"positions":{"Note":{"properties":{},"edges":{}}},"collections":{"Notes":{"target":"Note","readable":false,"listenable":true,"delivery":"connection"}},"writableRoots":{}}}}},"credentials":{"inbox_main":{"adapters":["inbox"]},"Inbox B":{"adapters":["inbox"]}},"plugins":{}}"#;
+    /// A module `inbox` whose `Notes` its connection pushes, made with a
+    /// credential or none: a schema for each.
+    const NOTES_CATALOG: &str = r#"{"adapters":{"inbox":{"constructionArgs":[{"kind":"credential","name":"credentials","required":false}],"canFire":true,"schemas":{"":{"positions":{"Note":{"properties":{},"edges":{}}},"collections":{"Notes":{"target":"Note","readable":false,"listenable":true,"delivery":"connection"}},"writableRoots":{}},"inbox_main":{"positions":{"Note":{"properties":{},"edges":{}}},"collections":{"Notes":{"target":"Note","readable":false,"listenable":true,"delivery":"connection"}},"writableRoots":{}},"Inbox B":{"positions":{"Note":{"properties":{},"edges":{}}},"collections":{"Notes":{"target":"Note","readable":false,"listenable":true,"delivery":"connection"}},"writableRoots":{}}}}},"credentials":{"inbox_main":{"adapters":["inbox"]},"Inbox B":{"adapters":["inbox"]}},"plugins":{}}"#;
 
     /// Every listen across the files, against `NOTES_CATALOG`.
     fn collect_listens(files: &[MovementFile]) -> Vec<Listen> {
@@ -492,17 +493,15 @@ mod tests {
 
     #[test]
     fn a_listen_on_a_traversal_fires_on_an_arrival_its_where_takes_and_skips_one_it_does_not() {
-        let listens = crm_listens();
-        let welcome = &listens[1];
+        let welcome = &crm_listens()[0];
         assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Osprey"}"#), Some("acme"), 0.0), Some(Verdict::Fires));
         assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Ignored"}"#), Some("acme"), 0.0), Some(Verdict::Skips { hop: 0, reason: None }));
         assert_eq!(welcome.fires(&company(r#"{"id":"company-1","Name":"Osprey"}"#), Some("another"), 0.0), None, "another connection's");
-        assert_eq!(listens[0].fires(&company(r#"{"Name":"Osprey"}"#), Some("acme"), 0.0), None, "a settings listen takes events, never arrivals");
     }
 
     #[test]
     fn an_arrival_on_the_listened_edge_name_fires_only_when_it_landed_on_the_record_type_the_listen_lands_on() {
-        let welcome = &crm_listens()[1];
+        let welcome = &crm_listens()[0];
         let osprey = r#"{"id":"company-1","Name":"Osprey"}"#;
         assert_eq!(welcome.fires(&landed_as("Comment", osprey), Some("acme"), 0.0), Some(Verdict::Skips { hop: 0, reason: Some("it has record type Comment, not Company, which this listen's Company lands on".into()) }), "another record type's edge of the same name");
         let untyped = crate::arrivals::arrivals_of(&js(&format!(r#"{{"arrivals":[{{"edge":"Company","identity":"company-1","landing":{{"fields":{osprey}}}}}]}}"#))).unwrap().remove(0);
@@ -519,18 +518,18 @@ mod tests {
             crate::arrivals::arrivals_of(&js(&format!(r#"{{"arrivals":[{{"edge":"Company","identity":"company-1","landing":{{"recordType":"Company","fields":{{"id":"company-1","Name":null}},"unknown":["{unknown}"]}}}}]}}"#))).unwrap().remove(0)
         };
         assert_eq!(
-            listens[1].fires(&unread("Name"), Some("acme"), 0.0),
+            listens[0].fires(&unread("Name"), Some("acme"), 0.0),
             Some(Verdict::Undecided { reason: "acme_crm could not read Name of the arrival on Company, which this listen's filter reads".into() }),
             "never read as absent, which would skip it"
         );
-        assert_eq!(listens[2].fires(&unread("Name"), Some("acme"), 0.0), Some(Verdict::Fires), "a listen reading no unknown field is judged as usual");
+        assert_eq!(listens[1].fires(&unread("Name"), Some("acme"), 0.0), Some(Verdict::Fires), "a listen reading no unknown field is judged as usual");
     }
 
     #[test]
     fn an_arrival_marked_not_for_a_listen_runs_every_other_listen_on_its_edge_and_not_that_one() {
         let listens = crm_listens();
         let mut arrival = company(r#"{"id":"company-1","Name":"Osprey"}"#);
-        arrival.not_for = Some(listens[2].pipeline());
+        arrival.not_for = Some(listens[1].pipeline());
         let on_edge: Vec<(&str, Option<Verdict>)> =
             listens.iter().filter(|l| l.is_on("acme_crm", "Company")).map(|l| (l.movement_name.as_str(), l.fires(&arrival, Some("acme"), 0.0))).collect();
         assert_eq!(on_edge, [("welcome", Some(Verdict::Fires)), ("note", None)], "the listen it is not for is not judged, so nothing is said of it");

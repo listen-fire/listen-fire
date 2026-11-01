@@ -1099,13 +1099,15 @@ pub(crate) mod tests {
 
     const SECRET: &str = "s3cret";
 
-    /// An adapter whose deliveries are lists of notes, each a `note.created`
-    /// event, served by a module host on a thread of the test. While `down`
-    /// is set its event types fail, and so does every event fired to it.
-    /// It registers webhooks, each call noted in `registrations` with the
-    /// token of the credential it was made as. A note's comments are a
-    /// listenable edge (`Comments`, keyed `thread:<note>`): a delivery's
-    /// `comments` are its arrivals.
+    /// An adapter whose notes are a listenable root `Notes` pushed to the
+    /// connection (adapter protocol 2.6), taking `Title ==`, served by a
+    /// module host on a thread of the test. A delivery's `notes` land on
+    /// `Notes`, its `arrivals` are passed on as they are, and its
+    /// `comments` land on a note's `Comments` (listenable, keyed
+    /// `thread:<note>`). A webhook asked for with an `edge` is noted in
+    /// `registrations` with the token of the credential it was made as, its
+    /// edge and filter, and its secret is `secret-<its id>`. While `down` is
+    /// set its `awaitKeys` and its refreshes fail.
     pub(crate) mod inbox {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::{Arc, Mutex};
@@ -1118,11 +1120,6 @@ pub(crate) mod tests {
         pub struct Inbox {
             pub down: Arc<AtomicBool>,
             pub registrations: Arc<Mutex<Vec<Js>>>,
-            /// Polled too: each poll noted in `registrations`, and one note returned.
-            pub polled: bool,
-            /// A webhook per shelf (`subscriptionScopeKeys: [shelf]`), each
-            /// with a secret of its own, `secret-<shelf>`.
-            pub scoped: bool,
             /// Its webhooks lapse this long after they are registered or
             /// refreshed (`expiresAt`, `refreshEventSubscription`); each
             /// refresh noted in `registrations`, and refused while `down`.
@@ -1130,50 +1127,21 @@ pub(crate) mod tests {
             /// Run once, as the next `awaitKeys` is asked: what lands while a
             /// run's wait opens.
             pub on_await_keys: OnAwaitKeys,
-            /// Its notes are a listenable root `Notes` pushed to the
-            /// connection (adapter protocol 2.6), taking `Title ==`: a webhook
-            /// asked for with an `edge` is noted with its edge and filter,
-            /// and its secret is `secret-<its id>`; a delivery's `arrivals`
-            /// are passed on as they are.
-            pub pushed: bool,
         }
 
         impl Adapter for Inbox {
             fn manifest(&self) -> AdapterManifest {
                 let credential = Js::parse(br#"[{"name":"inbox","kind":"static","fields":[{"name":"token","optional":true}]}]"#).unwrap();
-                let mut methods = vec!["listEventTypes", "preprocessInbound", "ensureEventSubscription", "removeEventSubscription", "awaitKeys"];
-                methods.extend(self.polled.then_some("poll"));
+                let mut methods = vec!["preprocessInbound", "ensureEventSubscription", "removeEventSubscription", "awaitKeys"];
                 methods.extend(self.expiring.is_some().then_some("refreshEventSubscription"));
-                let manifest = AdapterManifest::new("inbox")
-                    .triggers(["webhook"])
-                    .optional(methods)
-                    .declare("subscribableEvents", Js::strings(["note.created"]))
-                    .declare("credentials", credential);
-                let manifest = match self.scoped {
-                    true => manifest
-                        .declare("subscriptionScopeKeys", Js::strings(["shelf"]))
-                        .declare("listenConfig", Js::parse(br#"[{"key":"shelf"}]"#).unwrap()),
-                    false => manifest,
-                };
-                let manifest = match self.pushed {
-                    true => manifest.declare("protocolMinor", Js::Num(6.into())),
-                    false => manifest,
-                };
-                match self.polled {
-                    true => manifest.declare("poll", Js::parse(br#"{"intervalSeconds":60}"#).unwrap()),
-                    false => manifest,
-                }
+                AdapterManifest::new("inbox").triggers(["webhook"]).optional(methods).declare("credentials", credential).declare("protocolMinor", Js::Num(6.into()))
             }
 
             async fn list_entry_points(&self, _: &Ctx) -> Answer<Vec<EntryPoint>> {
-                let listenable = match self.pushed {
-                    true => Js::parse(br#"{"collectionName":"Notes","listenable":true,"delivery":"connection","identity":"Id","capability":{"filter":"native","supportsLimit":false}}"#).unwrap(),
-                    false => Js::Obj(Obj::new()),
-                };
-                let Js::Obj(listenable) = listenable else { unreachable!("an object") };
+                let Js::Obj(listenable) = Js::parse(br#"{"collectionName":"Notes","listenable":true,"delivery":"connection","identity":"Id","capability":{"filter":"native","supportsLimit":false}}"#).unwrap() else { unreachable!("an object") };
                 Ok(vec![
-                    EntryPoint { type_id: "Note".into(), display_name: "Note".into(), writable: false, readable: false, fires: Some(true), description: None, rest: listenable },
-                    EntryPoint { type_id: "Comment".into(), display_name: "Comment".into(), writable: false, readable: false, fires: None, description: None, rest: Obj::new() },
+                    EntryPoint { type_id: "Note".into(), display_name: "Note".into(), writable: false, readable: false, description: None, rest: listenable },
+                    EntryPoint { type_id: "Comment".into(), display_name: "Comment".into(), writable: false, readable: false, description: None, rest: Obj::new() },
                 ])
             }
 
@@ -1188,12 +1156,9 @@ pub(crate) mod tests {
                     rest: obj! { "listenable" => Js::Bool(true), "readable" => Js::Bool(false), "identity" => Js::str("Id") },
                 };
                 let mut title = Field::new("Title", "string", true, true);
-                if self.pushed {
-                    title.rest.insert("capability".into(), Js::parse(br#"{"filterOperators":["eq"]}"#).unwrap());
-                }
+                title.rest.insert("capability".into(), Js::parse(br#"{"filterOperators":["eq"]}"#).unwrap());
                 let (fields, references) = match request.type_id.as_str() {
-                    "Note" if self.pushed => (vec![Field::new("Id", "string", false, false), title], vec![comments]),
-                    "Note" => (vec![title], vec![comments]),
+                    "Note" => (vec![Field::new("Id", "string", false, false), title], vec![comments]),
                     "Comment" => (vec![Field::new("Id", "string", false, false), Field::new("Text", "string", false, false)], vec![]),
                     _ => return Ok(None),
                 };
@@ -1211,7 +1176,7 @@ pub(crate) mod tests {
             async fn optional(&self, ctx: &Ctx, method: &str, params: Js) -> Answer<Js> {
                 let token = ctx.credential.as_ref().and_then(|c| c.get("fields")).and_then(|f| f.get("token")).cloned().unwrap_or(Js::Null);
                 match method {
-                    "ensureEventSubscription" if params.get("edge").is_some() => {
+                    "ensureEventSubscription" => {
                         // Held already: left as it is.
                         if params.get("current").is_some() {
                             return Ok(Js::Null);
@@ -1231,26 +1196,6 @@ pub(crate) mod tests {
                         }
                         Ok(Js::Obj(answer))
                     }
-                    "ensureEventSubscription" => {
-                        // As registered: the webhook is left as it is.
-                        if params.get("current").and_then(|c| c.get("events")).is_some_and(|e| Some(e) == params.get("events")) {
-                            return Ok(Js::Null);
-                        }
-                        let mut registrations = self.registrations.lock().unwrap();
-                        let id = format!("wh-{}", registrations.len() + 1);
-                        let mut made = obj! { "token" => token, "callbackUrl" => params.get("callbackUrl").cloned().unwrap_or(Js::Null), "events" => params.get("events").cloned().unwrap_or(Js::Null) };
-                        let mut answer = obj! { "externalId" => Js::str(&id) };
-                        if let Some(scope) = params.get("scope") {
-                            made.insert("scope".into(), scope.clone());
-                            let shelf = scope.get("shelf").and_then(Js::as_str).unwrap_or_default();
-                            answer.insert("secret".into(), Js::str(format!("secret-{shelf}")));
-                        }
-                        registrations.push(Js::Obj(made));
-                        if let Some(lifetime) = self.expiring {
-                            answer.insert("expiresAt".into(), Js::str(crate::store::iso(lifetime)));
-                        }
-                        Ok(Js::Obj(answer))
-                    }
                     "refreshEventSubscription" if self.down.load(Ordering::SeqCst) => Err(ModuleError::bad_request("the inbox is down")),
                     "refreshEventSubscription" => {
                         let mut refreshed = obj! { "token" => token, "refreshed" => params.get("externalId").cloned().unwrap_or(Js::Null) };
@@ -1259,11 +1204,6 @@ pub(crate) mod tests {
                         }
                         self.registrations.lock().unwrap().push(Js::Obj(refreshed));
                         Ok(Js::Obj(obj! { "expiresAt" => Js::str(crate::store::iso(self.expiring.unwrap_or_default())) }))
-                    }
-                    "poll" => {
-                        self.registrations.lock().unwrap().push(Js::Obj(obj! { "token" => token, "polled" => Js::Bool(true) }));
-                        let note = Js::parse(br#"{"payload":{"id":"p-1"},"externalId":"p-1","eventType":"note.created","recordType":"Note"}"#).unwrap();
-                        Ok(Js::Obj(obj! { "events" => Js::Arr(vec![note]) }))
                     }
                     "removeEventSubscription" => {
                         let mut removed = obj! { "token" => token, "removed" => params.get("externalId").cloned().unwrap_or(Js::Null) };
@@ -1275,6 +1215,7 @@ pub(crate) mod tests {
                         self.registrations.lock().unwrap().push(Js::Obj(removed));
                         Ok(Js::Null)
                     }
+                    "awaitKeys" if self.down.load(Ordering::SeqCst) => Err(ModuleError::bad_request("the inbox is down")),
                     "awaitKeys" => {
                         // Taken first: what lands may set the next one.
                         let landing = self.on_await_keys.lock().unwrap().take();
@@ -1289,41 +1230,31 @@ pub(crate) mod tests {
                         });
                         Ok(Js::Arr(keys.collect()))
                     }
-                    "listEventTypes" if self.down.load(Ordering::SeqCst) => Err(ModuleError::bad_request("the inbox is down")),
-                    "listEventTypes" => Ok(Js::Arr(vec![Js::Obj(obj! { "tag" => Js::str("note.created"), "positionType" => Js::str("Note") })])),
                     "preprocessInbound" => {
-                        let notes = params.get("raw").and_then(|raw| raw.get("notes")).and_then(Js::as_array).unwrap_or(&[]).to_vec();
-                        let events = notes
-                            .iter()
-                            .map(|note| {
-                                let id = note.get("id").and_then(Js::as_str).unwrap_or_default();
-                                Js::Obj(obj! {
-                                    "payload" => note.clone(),
-                                    "externalId" => Js::str(id),
-                                    "tag" => Js::str("note.created"),
-                                    "eventType" => Js::str("note.created"),
-                                    "changeType" => Js::str("create"),
-                                    "recordType" => Js::str("Note"),
-                                })
+                        let raw = |key: &str| params.get("raw").and_then(|raw| raw.get(key)).and_then(Js::as_array).unwrap_or(&[]).to_vec();
+                        // A note lands on `Notes`.
+                        let notes = raw("notes").into_iter().map(|note| {
+                            let id = note.get("id").and_then(Js::as_str).unwrap_or_default();
+                            let title = note.get("Title").cloned().unwrap_or(Js::Null);
+                            Js::Obj(obj! {
+                                "edge" => Js::str("Notes"),
+                                "identity" => Js::str(id),
+                                "landing" => Js::Obj(obj! { "recordId" => Js::str(id), "recordType" => Js::str("Note"), "fields" => Js::Obj(obj! { "Id" => Js::str(id), "Title" => title }) }),
                             })
-                            .collect();
+                        });
                         // A comment on a note is an arrival on its `Comments`.
-                        let comments = params.get("raw").and_then(|raw| raw.get("comments")).and_then(Js::as_array).unwrap_or(&[]).to_vec();
-                        let passed = params.get("raw").and_then(|raw| raw.get("arrivals")).and_then(Js::as_array).unwrap_or(&[]).to_vec();
-                        let arrivals = passed.into_iter().chain(comments
-                            .iter()
-                            .map(|comment| {
-                                let text = |key: &str| comment.get(key).cloned().unwrap_or(Js::Null);
-                                let note = comment.get("note").and_then(Js::as_str).unwrap_or_default();
-                                Js::Obj(obj! {
-                                    "edge" => Js::str("Comments"),
-                                    "key" => Js::str(format!("thread:{note}")),
-                                    "identity" => text("id"),
-                                    "landing" => Js::Obj(obj! { "recordType" => Js::str("Comment"), "fields" => Js::Obj(obj! { "Text" => text("Text") }) }),
-                                })
-                            }))
-                            .collect();
-                        Ok(Js::Obj(obj! { "events" => Js::Arr(events), "arrivals" => Js::Arr(arrivals) }))
+                        let comments = raw("comments").into_iter().map(|comment| {
+                            let text = |key: &str| comment.get(key).cloned().unwrap_or(Js::Null);
+                            let note = comment.get("note").and_then(Js::as_str).unwrap_or_default();
+                            Js::Obj(obj! {
+                                "edge" => Js::str("Comments"),
+                                "key" => Js::str(format!("thread:{note}")),
+                                "identity" => text("id"),
+                                "landing" => Js::Obj(obj! { "recordType" => Js::str("Comment"), "fields" => Js::Obj(obj! { "Text" => text("Text") }) }),
+                            })
+                        });
+                        let arrivals = raw("arrivals").into_iter().chain(notes).chain(comments).collect();
+                        Ok(Js::Obj(obj! { "events" => Js::Arr(Vec::new()), "arrivals" => Js::Arr(arrivals) }))
                     }
                     other => Err(ModuleError::not_implemented(other)),
                 }
@@ -1356,78 +1287,38 @@ pub(crate) mod tests {
         pub on_await_keys: inbox::OnAwaitKeys,
     }
 
+    /// One connection of the inbox and a movement on its notes.
+    pub(crate) const NOTED: &str = "import { inbox } from adapters\n\ni = connect inbox\n\nfunction noted(note: <i-[:Note]->>) {\n  return \"seen\"\n}\n\nlisten to i-[:Notes]-> fire noted\n";
+
     /// Two connections of the inbox, each under a credential of its own, and
-    /// a movement on each; the install `inbox` serves both.
-    pub(crate) const TWO_CONNECTIONS: &str = "import { inbox } from adapters\nimport { inbox_a, inbox_b } from credentials\n\na = connect inbox using inbox_a\nb = connect inbox using inbox_b\n\nfunction noted_a(note: <a-[:Note]->>) {\n  return \"a\"\n}\n\nfunction noted_b(note: <b-[:Note]->>) {\n  return \"b\"\n}\n\nlisten to a { events: [\"note.created\"] } fire noted_a\nlisten to b { events: [\"note.created\", \"note.updated\"] } fire noted_b\n";
+    /// a movement on the notes of each; the install `inbox` serves both.
+    pub(crate) const TWO_CONNECTIONS: &str = "import { inbox } from adapters\nimport { inbox_a, inbox_b } from credentials\n\na = connect inbox using inbox_a\nb = connect inbox using inbox_b\n\nfunction noted_a(note: <a-[:Note]->>) {\n  return \"a\"\n}\n\nfunction noted_b(note: <b-[:Note]->>) {\n  return \"b\"\n}\n\nlisten to a-[:Notes]-> fire noted_a\nlisten to b-[:Notes]-> fire noted_b\n";
 
     /// Their secrets: each connection's own webhook secret and token, and the install's.
     pub(crate) const TWO_CREDENTIALS: &str = "inbox:\n  module: inbox\n  webhook_secret: shared\ninbox_a:\n  external: inbox\n  webhook_secret: secret-a\n  token: a\ninbox_b:\n  external: inbox\n  webhook_secret: secret-b\n  token: b\n";
 
-    /// Which inbox a project's external is.
-    #[derive(Default)]
-    struct Flavour {
-        polled: bool,
-        scoped: bool,
-        expiring: Option<i64>,
-        pushed: bool,
-    }
-
     impl InboxProject {
         fn new() -> InboxProject {
-            InboxProject::with(
-                "import { inbox } from adapters\n\ni = connect inbox\n\nfunction noted(note: <i-[:Note]->>) {\n  return \"seen\"\n}\n\nlisten to i { events: [\"note.created\"] } fire noted\n",
-                &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"),
-                "",
-            )
+            InboxProject::with(NOTED, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "")
         }
 
         /// The project with `movement` as its one movement file, `secrets`
         /// its secrets and `lf_yaml` appended to its lf.yaml.
         pub(crate) fn with(movement: &str, secrets: &str, lf_yaml: &str) -> InboxProject {
-            InboxProject::made(movement, secrets, lf_yaml, Flavour::default())
+            InboxProject::made(movement, secrets, lf_yaml, None)
         }
 
-        /// As `with`, the inbox polled as well.
-        pub(crate) fn polled(movement: &str, secrets: &str) -> InboxProject {
-            InboxProject::made(movement, secrets, "", Flavour { polled: true, ..Flavour::default() })
-        }
-
-        /// As `with`, the inbox's webhooks scoped by shelf.
-        pub(crate) fn scoped(movement: &str, secrets: &str, lf_yaml: &str) -> InboxProject {
-            InboxProject::made(movement, secrets, lf_yaml, Flavour { scoped: true, ..Flavour::default() })
-        }
-
-        /// As `with`, its notes a listenable root `Notes` pushed to the
-        /// connection, each listen on it subscribed for by the key it shares.
-        pub(crate) fn pushed(movement: &str, secrets: &str, lf_yaml: &str) -> InboxProject {
-            InboxProject::made(movement, secrets, lf_yaml, Flavour { pushed: true, ..Flavour::default() })
-        }
-
-        /// As `pushed`, its webhooks lapsing `lifetime_ms` after each
-        /// registration or refresh.
-        pub(crate) fn pushed_expiring(movement: &str, secrets: &str, lf_yaml: &str, lifetime_ms: i64) -> InboxProject {
-            InboxProject::made(movement, secrets, lf_yaml, Flavour { pushed: true, expiring: Some(lifetime_ms), ..Flavour::default() })
-        }
-
-        /// As `scoped`, its webhooks lapsing `lifetime_ms` after each
+        /// As `with`, its webhooks lapsing `lifetime_ms` after each
         /// registration or refresh.
         pub(crate) fn expiring(movement: &str, secrets: &str, lf_yaml: &str, lifetime_ms: i64) -> InboxProject {
-            InboxProject::made(movement, secrets, lf_yaml, Flavour { scoped: true, expiring: Some(lifetime_ms), ..Flavour::default() })
+            InboxProject::made(movement, secrets, lf_yaml, Some(lifetime_ms))
         }
 
-        fn made(movement: &str, secrets: &str, lf_yaml: &str, flavour: Flavour) -> InboxProject {
+        fn made(movement: &str, secrets: &str, lf_yaml: &str, expiring: Option<i64>) -> InboxProject {
             let down = Arc::new(AtomicBool::new(false));
             let registrations = Arc::new(std::sync::Mutex::new(Vec::new()));
             let on_await_keys = Arc::new(std::sync::Mutex::new(None));
-            let port = inbox::serve(inbox::Inbox {
-                down: down.clone(),
-                registrations: registrations.clone(),
-                polled: flavour.polled,
-                scoped: flavour.scoped,
-                expiring: flavour.expiring,
-                on_await_keys: on_await_keys.clone(),
-                pushed: flavour.pushed,
-            });
+            let port = inbox::serve(inbox::Inbox { down: down.clone(), registrations: registrations.clone(), expiring, on_await_keys: on_await_keys.clone() });
             let root = std::env::temp_dir().join(format!("lf-doors-inline-{}", uuid::Uuid::new_v4()));
             crate::init::run(&root, &mut Vec::new()).unwrap();
             std::fs::create_dir_all(root.join("externals/inbox")).unwrap();
@@ -1489,25 +1380,6 @@ pub(crate) mod tests {
 
     const NOTE: &[u8] = br#"{"notes":[{"id":"n-1","Title":"hello"}]}"#;
 
-    #[test]
-    fn an_inline_delivery_keeps_its_receipt_before_it_runs() {
-        let project = InboxProject::new();
-        in_local(async {
-            let session = project.session().await;
-            project.down.store(true, Ordering::SeqCst);
-            let (answer, fired) = hook(&session, NOTE, "d-1").await;
-            assert_eq!((answer.status, answer.body.to_json()), (500, r#"{"error":"internal"}"#.to_string()));
-            assert!(fired.outcomes.is_empty());
-            let kept = kept(&session);
-            assert_eq!(kept.len(), 1, "the receipt was kept before its event ran");
-            let receipt = &kept[0];
-            assert_eq!((receipt.inline, receipt.source, receipt.event_count, receipt.runs.len()), (true, DeliverySource::Hook, 1, 0));
-            let events = session.store.delivery(&receipt.id).unwrap().unwrap().events.unwrap();
-            assert_eq!(events[0].get("external"), Some(&Js::str("inbox")), "a kept event names its external, for a replay");
-            assert_eq!(events[0].get("event").and_then(|e| e.get("externalId")), Some(&Js::str("n-1")));
-        });
-    }
-
     /// The request is kept with its delivery as received, for a replay: its
     /// body and the headers its module reads, never its signature.
     #[test]
@@ -1529,21 +1401,26 @@ pub(crate) mod tests {
         });
     }
 
+    /// A delivery whose run's wait the module cannot key fails before
+    /// anything of it is kept: the sender's retry, under the same id, is a
+    /// delivery of its own and runs.
     #[test]
     fn a_failed_inline_delivery_lets_the_retry_in() {
-        let project = InboxProject::new();
+        let project = InboxProject::with(AWAITS_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
         in_local(async {
             let session = project.session().await;
             project.down.store(true, Ordering::SeqCst);
-            assert_eq!(hook(&session, NOTE, "d-1").await.0.status, 500);
-            assert_eq!(kept(&session)[0].external_id, None, "the failed delivery's id is forgotten");
+            let (answer, fired) = hook(&session, NOTE, "d-1").await;
+            assert_eq!((answer.status, answer.body.to_json()), (500, r#"{"error":"internal"}"#.to_string()));
+            assert!(fired.outcomes.is_empty());
+            assert!(kept(&session).is_empty(), "nothing of the failed delivery was kept, its id with it");
 
-            // The sender's retry, under the same id, is a delivery of its own and runs.
             project.down.store(false, Ordering::SeqCst);
             let (answer, fired) = hook(&session, NOTE, "d-1").await;
-            assert_eq!((answer.status, answer.body.to_json()), (200, r#"{"ok":true,"eventsProcessed":1}"#.to_string()));
+            assert_eq!((answer.status, answer.body.to_json()), (200, r#"{"ok":true,"eventsProcessed":0}"#.to_string()));
             assert_eq!(fired.outcomes.len(), 1);
-            let retry = kept(&session).into_iter().find(|d| d.external_id.is_some()).unwrap();
+            let [retry] = kept(&session).try_into().unwrap();
+            assert_eq!((retry.inline, retry.source, retry.external_id.as_deref()), (true, DeliverySource::Hook, Some("d-1")));
             assert_eq!(retry.runs.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), [fired.outcomes[0].run_id.as_str()]);
             let run = session.store.run(&fired.outcomes[0].run_id).unwrap().unwrap();
             assert_eq!(run.delivery_id.as_deref(), Some(retry.id.as_str()), "the run names its delivery");
@@ -1553,15 +1430,16 @@ pub(crate) mod tests {
             assert_eq!((answer.status, answer.body.to_json()), (200, r#"{"ok":true,"duplicate":true,"eventsProcessed":0}"#.to_string()));
             assert!(fired.outcomes.is_empty());
             assert_eq!(fired.redelivered, ["delivery d-1 was kept before: it runs nothing"]);
-            assert_eq!(kept(&session).len(), 2);
+            assert_eq!(kept(&session).len(), 1);
         });
     }
 
-    /// One delivery of `body` to `subscription`'s door, signed with
-    /// `secret`, its events run inside the request: the movements it ran.
+    /// One delivery of a note of its own to `subscription`'s door, signed
+    /// with `secret`, its arrivals run inside the request: the movements it ran.
     async fn movements_run_by(session: &Session, subscription: &str, secret: &str, id: &str) -> Vec<String> {
-        let headers = signed_with(secret, NOTE, id);
-        let delivery = Delivery { provider: "inbox", subscription_id: subscription, raw_body: NOTE, headers: &headers, method: "POST", path: "", query: "", source: DeliverySource::Hook };
+        let body = format!(r#"{{"notes":[{{"id":"n-{id}","Title":"hello"}}]}}"#);
+        let headers = signed_with(secret, body.as_bytes(), id);
+        let delivery = Delivery { provider: "inbox", subscription_id: subscription, raw_body: body.as_bytes(), headers: &headers, method: "POST", path: "", query: "", source: DeliverySource::Hook };
         let (answer, fired) = deliver_inline(session, delivery, &|| {}).await;
         assert_eq!(answer.status, 200, "{}", answer.body.to_json());
         let mut movements: Vec<String> = fired.outcomes.into_iter().map(|o| o.movement).collect();
@@ -1579,11 +1457,6 @@ pub(crate) mod tests {
             // The install serves every connection: its door's delivery names
             // none, and reaches each (the platform's shared bot).
             assert_eq!(movements_run_by(&session, "inbox", "shared", "d-3").await, ["noted_a", "noted_b"]);
-
-            let receipts = kept(&session);
-            let of = |id: &str| receipts.iter().find(|r| r.external_id.as_deref() == Some(id)).map(|r| session.store.delivery(&r.id).unwrap().unwrap().events.unwrap()).unwrap();
-            assert_eq!(of("d-2")[0].get("credential"), Some(&Js::str("inbox_b")), "a kept event names the connection it came for, for a replay");
-            assert_eq!(of("d-3")[0].get("credential"), None);
         });
     }
 
@@ -1609,8 +1482,10 @@ pub(crate) mod tests {
         });
     }
 
+    /// A queued delivery runs its connection's listens. A row queued before
+    /// 0.13 with an event runs nothing: an event fires no listen any more.
     #[test]
-    fn a_queued_delivery_runs_its_connections_listens_and_an_older_row_every_listen() {
+    fn a_queued_delivery_runs_its_connections_listens_and_an_older_event_row_runs_nothing() {
         let project = InboxProject::with(TWO_CONNECTIONS, TWO_CREDENTIALS, "");
         in_local(async {
             let session = project.session().await;
@@ -1627,25 +1502,13 @@ pub(crate) mod tests {
             };
             assert_eq!(drained().await, ["noted_b"]);
 
-            // A row queued before rows named their connection reaches every listen, as it did.
             let event = Js::parse(br#"{"payload":{"id":"n-2"},"externalId":"n-2","eventType":"note.created","recordType":"Note"}"#).unwrap();
             let older = Js::Obj(obj! { "external" => Js::str("inbox"), "event" => event });
             session.store.enqueue("fire_event", "fire_event:older", &older, None, None).unwrap();
-            assert_eq!(drained().await, ["noted_a", "noted_b", "noted_b"]);
-        });
-    }
-
-    #[test]
-    fn a_polled_listen_polls_as_its_own_connection() {
-        let project = InboxProject::polled(TWO_CONNECTIONS, TWO_CREDENTIALS);
-        in_local(async {
-            let session = project.session().await;
-            for movement in ["noted_b", "noted_a"] {
-                let fired = session.run_poll(movement).await.unwrap();
-                assert_eq!(fired.outcomes.iter().map(|o| o.movement.as_str()).collect::<Vec<_>>(), [movement]);
-            }
-            let polled: Vec<String> = project.registrations.lock().unwrap().iter().map(Js::to_json).collect();
-            assert_eq!(polled, [r#"{"token":"b","polled":true}"#, r#"{"token":"a","polled":true}"#]);
+            assert_eq!(drained().await, ["noted_b"]);
+            let far = iso(30 * 86_400_000);
+            let due = crate::store::ClaimDue { limit: 10, lease_ms: 60_000, due_by: Some(&far), kinds: None };
+            assert!(session.store.claim_due(&due).unwrap().is_empty(), "the older row is completed");
         });
     }
 
@@ -1875,28 +1738,22 @@ pub(crate) mod tests {
     }
 
     /// A note's movement that waits for the next comment on it.
-    const AWAITS_A_COMMENT: &str = "import { inbox } from adapters\n\ni = connect inbox\n\nfunction noted(note: <i-[:Note]->>) {\n  c = await new note-[:Comments]->\n  return c.Text\n}\n\nlisten to i { events: [\"note.created\"] } fire noted\n";
+    const AWAITS_A_COMMENT: &str = "import { inbox } from adapters\n\ni = connect inbox\n\nfunction noted(note: <i-[:Note]->>) {\n  c = await new note-[:Comments]->\n  return c.Text\n}\n\nlisten to i-[:Notes]-> fire noted\n";
 
     /// An inline delivery's runs read their trigger's waits from the mark
     /// taken before its arrivals are kept: the delivery's comment on n-1, an
-    /// item of the same batch and not n-1's run's trigger, answers it; and a
-    /// comment on n-2 that lands while n-1's run is going answers n-2's,
-    /// though n-2's run starts after it.
+    /// item of the same batch and not n-1's run's trigger, answers it; n-2's
+    /// run, whose note no comment came for, parks.
     #[test]
     fn an_inline_delivery_s_runs_wait_from_the_mark_taken_before_its_own_arrivals() {
         let project = InboxProject::with(AWAITS_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
-        let state = project.root.join(".lf/state.db");
-        *project.on_await_keys.lock().unwrap() = Some(Box::new(move || {
-            let landed = NewArrival { edge: "Comments".into(), key: "thread:n-2".into(), identity: Some("k2".into()), version: None, landing: Some(Js::parse(br#"{"fields":{"Text":"meanwhile"}}"#).unwrap()), gone: false };
-            Store::open(&state).unwrap().log_now(LOCAL_TENANT, "inbox", &[landed]).unwrap();
-        }));
         in_local(async {
             let session = project.session().await;
             let body = br#"{"notes":[{"id":"n-1","Title":"one"},{"id":"n-2","Title":"two"}],"comments":[{"note":"n-1","id":"k1","Text":"own"}]}"#;
             let (answer, fired) = hook(&session, body, "d-1").await;
             assert_eq!(answer.status, 200, "{}", answer.body.to_json());
             let statuses: Vec<&str> = fired.outcomes.iter().map(|o| o.status.as_str()).collect();
-            assert_eq!(statuses, ["completed", "completed"], "{:?}", fired.outcomes.iter().map(|o| &o.error).collect::<Vec<_>>());
+            assert_eq!(statuses, ["completed", "parked"], "{:?}", fired.outcomes.iter().map(|o| &o.error).collect::<Vec<_>>());
         });
     }
 
@@ -1966,7 +1823,7 @@ pub(crate) mod tests {
 
     /// A note's run races a comment on the note against an hour's sleep,
     /// and returns what each arm settled with.
-    const RACES_A_COMMENT: &str = "import { inbox } from adapters\n\ni = connect inbox\n\nfunction noted(note: <i-[:Note]->>) {\n  r = race(\n    () => {\n      c = await new note-[:Comments]->\n      return c.Text\n    },\n    () => {\n      await sleep(1h)\n      return \"slept\"\n    },\n  )\n  return \"${coalesce(r[0], \"-\")}/${coalesce(r[1], \"-\")}\"\n}\n\nlisten to i { events: [\"note.created\"] } fire noted\n";
+    const RACES_A_COMMENT: &str = "import { inbox } from adapters\n\ni = connect inbox\n\nfunction noted(note: <i-[:Note]->>) {\n  r = race(\n    () => {\n      c = await new note-[:Comments]->\n      return c.Text\n    },\n    () => {\n      await sleep(1h)\n      return \"slept\"\n    },\n  )\n  return \"${coalesce(r[0], \"-\")}/${coalesce(r[1], \"-\")}\"\n}\n\nlisten to i-[:Notes]-> fire noted\n";
 
     /// The one run's id, and its leaves as `(address, reason, status)`.
     fn the_run(session: &Session) -> (String, Vec<(String, String, String)>) {
@@ -2012,7 +1869,7 @@ pub(crate) mod tests {
     /// it.
     #[test]
     fn a_retried_arrivals_row_leaves_the_run_its_earlier_attempt_started_to_its_wait() {
-        let project = InboxProject::pushed(NOTES_AWAIT_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        let project = InboxProject::with(NOTES_AWAIT_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
         in_local(async {
             let session = project.session().await;
             assert_eq!(queue_delivery(&session, landed_note("n-1").as_bytes(), "d-1").await.status, 200);
@@ -2058,7 +1915,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_delivery_asks_await_keys_once_per_edge_for_every_run_it_mints() {
-        let project = InboxProject::pushed(NOTES_AWAIT_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        let project = InboxProject::with(NOTES_AWAIT_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
         let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         count_await_keys(project.on_await_keys.clone(), asked.clone());
         in_local(async {
@@ -2095,7 +1952,7 @@ pub(crate) mod tests {
     /// completes the row.
     #[test]
     fn an_inline_delivery_s_waits_are_live_while_its_runs_start_and_its_row_is_completed() {
-        let project = InboxProject::pushed(NOTES_AWAIT_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
+        let project = InboxProject::with(NOTES_AWAIT_A_COMMENT, &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"), "");
         // The delivery mints its runs in one ask; the sweep lands as the first run opens its wait.
         sweep_at_await_keys(project.on_await_keys.clone(), 2, project.root.join(".lf/state.db"));
         in_local(async {

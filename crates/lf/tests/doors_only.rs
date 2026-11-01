@@ -4,7 +4,7 @@
 //! listed), and the wake module is told the work is ready now; its
 //! redelivery, under the same delivery id, is a duplicate that queues
 //! nothing; nothing drains in serve; a worker (`listen-fire drain --until-idle`) runs
-//! the event once, the run naming its delivery, and its movement parks on a
+//! the arrival once, the run naming its delivery, and its movement parks on a
 //! timer, and the wake module is told the timer's work is ready an hour later.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -18,16 +18,17 @@ use module_kit::core::{WakeAt, WakeNow};
 
 const SECRET: &str = "s3cret";
 
-/// An adapter whose deliveries are lists of notes: each one a `note.created` event.
+/// An adapter whose deliveries are lists of notes: each one lands on its listenable root `Notes`.
 struct Inbox;
 
 impl Adapter for Inbox {
     fn manifest(&self) -> AdapterManifest {
-        AdapterManifest::new("inbox").triggers(["webhook"]).optional(["listEventTypes", "preprocessInbound"]).declare("subscribableEvents", Js::strings(["note.created"]))
+        AdapterManifest::new("inbox").triggers(["webhook"]).optional(["preprocessInbound"])
     }
 
     async fn list_entry_points(&self, _: &Ctx) -> Answer<Vec<EntryPoint>> {
-        Ok(vec![EntryPoint { type_id: "Note".into(), display_name: "Note".into(), writable: false, readable: false, fires: Some(true), description: None, rest: Obj::new() }])
+        let listenable = obj! { "collectionName" => Js::str("Notes"), "listenable" => Js::Bool(true), "delivery" => Js::str("connection") };
+        Ok(vec![EntryPoint { type_id: "Note".into(), display_name: "Note".into(), writable: false, readable: false, description: None, rest: listenable }])
     }
 
     async fn describe(&self, _: &Ctx, request: Describe) -> Answer<Option<TypeDescriptor>> {
@@ -51,24 +52,21 @@ impl Adapter for Inbox {
 
     async fn optional(&self, _: &Ctx, method: &str, params: Js) -> Answer<Js> {
         match method {
-            "listEventTypes" => Ok(Js::Arr(vec![Js::Obj(obj! { "tag" => Js::str("note.created"), "positionType" => Js::str("Note") })])),
             "preprocessInbound" => {
                 let notes = params.get("raw").and_then(|raw| raw.get("notes")).and_then(Js::as_array).unwrap_or(&[]).to_vec();
-                let events = notes
+                let arrivals = notes
                     .iter()
                     .map(|note| {
                         let id = note.get("id").and_then(Js::as_str).unwrap_or_default();
+                        let title = note.get("Title").cloned().unwrap_or(Js::Null);
                         Js::Obj(obj! {
-                            "payload" => note.clone(),
-                            "externalId" => Js::str(id),
-                            "idempotencyKey" => Js::str(id),
-                            "eventType" => Js::str("note.created"),
-                            "changeType" => Js::str("create"),
-                            "recordType" => Js::str("Note"),
+                            "edge" => Js::str("Notes"),
+                            "identity" => Js::str(id),
+                            "landing" => Js::Obj(obj! { "recordId" => Js::str(id), "recordType" => Js::str("Note"), "fields" => Js::Obj(obj! { "Title" => title }) }),
                         })
                     })
                     .collect();
-                Ok(Js::Obj(obj! { "events" => Js::Arr(events) }))
+                Ok(Js::Obj(obj! { "events" => Js::Arr(Vec::new()), "arrivals" => Js::Arr(arrivals) }))
             }
             other => Err(ModuleError::not_implemented(other)),
         }
@@ -132,7 +130,7 @@ impl Project {
             root.join("movements/later.mvt"),
             "import { inbox } from adapters\n\ni = connect inbox\n\n\
              function later(note: <i-[:Note]->>) {\n  await sleep(1h)\n}\n\n\
-             listen to i { events: [\"note.created\"] } fire later\n",
+             listen to i-[:Notes]-> fire later\n",
         )
         .unwrap();
         Project(root)
@@ -244,7 +242,7 @@ fn serve_doors_only_queues_a_delivery_and_the_wake_module_hears_of_each_queued_r
 
     let (code, out) = project.lf(&["drain", "--until-idle"]);
     assert_eq!(code, 0, "listen-fire drain: {out}");
-    assert!(out.contains("parked"), "the worker ran the event to its timer: {out}");
+    assert!(out.contains("parked"), "the worker ran the arrival to its timer: {out}");
     let (code, out) = project.lf(&["runs", "--json"]);
     assert_eq!(code, 0, "listen-fire runs: {out}");
     let runs: serde_json::Value = serde_json::from_str(&out).unwrap();

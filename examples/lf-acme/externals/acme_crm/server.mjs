@@ -4,14 +4,11 @@
 // program that answers the protocol over HTTP.
 //
 // Two record types, `Company { id, Name, Description }` and `Note { Id, Text,
-// Company }` (a note about a company, by its id), and two events a
-// listen may choose, `company.created` and `company.updated`; a webhook
-// delivers created companies as `{ companies: [{ id, Name }] }`. Companies are
-// a listenable root too (adapter protocol 2.6): each one created is reported
-// as an arrival on `Company`, named by its id, beside its `company.created`
-// event, so `listen to crm-[c:Company WHERE …]-> fire f` hears it. (The event
-// goes when the settings form of listen does.) Notes are a listenable root as
-// well, each arrival naming the company it is `about` (`attributes`). The CRM
+// Company }` (a note about a company, by its id). A webhook delivers created
+// companies as `{ companies: [{ id, Name }] }`. Companies are a listenable
+// root (adapter protocol 2.6): each one created is reported as an arrival on
+// `Company`, named by its id, so `listen to crm-[c:Company WHERE …]-> fire f`
+// hears it. Notes are a listenable root as well, each arrival naming the company it is `about` (`attributes`). The CRM
 // reads a record back (`readRecord`), so a write that would change nothing is
 // never sent. Once `/dev/echo-writes` turns it on, the CRM reports each
 // write it takes as an arrival, as a hosted CRM's webhook would: a company
@@ -34,7 +31,7 @@
 //
 // The CRM also owns an inbound side of its own, the way a hosted system
 // would: the `/dev/…` routes change its state and push the change to the
-// host's doors (`emit`, `wake` under LF_HOST_URL, which `listen-fire serve`
+// host's doors (`wake` under LF_HOST_URL, which `listen-fire serve`
 // hands the externals it starts), presenting the credential the host calls it
 // with.
 
@@ -53,8 +50,6 @@ const COMMENT = 'Comment';
 const COMMENTS_EDGE = 'Comments';
 const APPROVAL = 'Approval';
 const APPROVALS_EDGE = 'Approvals';
-const COMPANY_CREATED = 'company.created';
-const COMPANY_UPDATED = 'company.updated';
 
 function readState() {
   const state = statePath && existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : {};
@@ -194,17 +189,6 @@ const COMMENT_DESCRIPTOR = {
   references: [],
 };
 
-function companyCreatedEvent(company) {
-  return {
-    payload: company,
-    externalId: company.id,
-    tag: COMPANY_CREATED,
-    eventType: COMPANY_CREATED,
-    changeType: 'create',
-    recordType: COMPANY,
-  };
-}
-
 const METHODS = {
   manifest: () => ({
     protocolVersion: 2,
@@ -212,8 +196,6 @@ const METHODS = {
     protocolMinor: 6,
     adapterType: 'acme_crm',
     supportedTriggers: ['webhook'],
-    // What a listen on this CRM may say: `events: [...]` from this list.
-    subscribableEvents: [COMPANY_CREATED, COMPANY_UPDATED],
     runtimeCapabilities: { traversal: { incoming: false, edgeProperties: false }, resources: false },
     methods: Object.keys(METHODS).filter((m) => m !== 'manifest'),
   }),
@@ -229,8 +211,7 @@ const METHODS = {
       identity: 'id',
       version: 'Version',
       delivery: 'connection',
-      fires: true,
-      description: 'A company. A listen is delivered each one somebody creates in the CRM.',
+      description: 'A company. A listen on `Company` is delivered each one somebody creates in the CRM.',
     },
     {
       typeId: NOTE,
@@ -309,20 +290,15 @@ const METHODS = {
     const company = state.companies.find((c) => c.externalId === externalId && !c.deleted);
     return company ? { id: company.externalId, ...company.fields } : null;
   },
-  // A delivery's companies are its events, and arrivals on `Company`; its
-  // comments, arrivals on their threads: only those it carries, each named by
-  // its own id.
+  // A delivery's companies are arrivals on `Company`; its comments, arrivals
+  // on their threads: only those it carries, each named by its own id.
   preprocessInbound: ({ raw }) => ({
-    events: (raw?.companies ?? []).map(companyCreatedEvent),
+    events: [],
     arrivals: [
       ...(raw?.companies ?? []).map(companyArrival),
       ...(raw?.comments ?? []).map(({ id, thread, text }) => commentArrival({ id, thread, Text: text })),
     ],
   }),
-  listEventTypes: () => [
-    { tag: COMPANY_CREATED, positionType: COMPANY },
-    { tag: COMPANY_UPDATED, positionType: COMPANY },
-  ],
   // The key each company's edge is waited on under; a company the CRM no
   // longer holds is gone, and nothing more arrives on it.
   awaitKeys: ({ edge, heads }) => {
@@ -392,9 +368,8 @@ const DEV_ROUTES = {
     state.companies.push({ externalId, fields: { Name: body.Name } });
     writeState(state);
     const company = { id: externalId, Name: body.Name };
-    const pushed = await push('emit', { events: [companyCreatedEvent(company)] });
     const arrived = await push('wake', { arrivals: [companyArrival(company)] });
-    return [200, { id: externalId, pushed, arrived }];
+    return [200, { id: externalId, arrived }];
   },
   '/dev/comments': async (body) => {
     if (typeof body?.company !== 'string' || typeof body?.text !== 'string') return [400, { error: 'expected { company, text }' }];

@@ -436,12 +436,12 @@ mod tests {
     }
 
     const GH: &str = r#"{"adapters":{
-      "gh":{"canFire":true,"constructionArgs":[],"triggerConfig":["events","participating"],
+      "gh":{"canFire":true,"constructionArgs":[],
         "listenSettingsBecome":{"path":["Notifications"],"aliases":["n"],"paramFrom":"Notification",
           "keys":{"events":{"hop":0,"field":"Reason","op":"in"}}},
         "schemas":{"":{"positions":{"Notification":{"properties":{"Reason":"text"},"edges":{}}},
           "collections":{"Notifications":{"target":"Notification","listenable":true,"identity":"Id","delivery":"polled","pollEverySeconds":60}},
-          "writableRoots":{},"eventPosition":"Notification","eventPositions":[{"position":"Notification"}]}}}
+          "writableRoots":{}}}}
     },"credentials":{},"plugins":{}}"#;
 
     const SETTINGS: &str = "import { gh as gh_module } from adapters\ngh = connect gh_module\nfunction triage(n: <gh-[:Notification]->>) {\n  return n.Reason\n}\n\n# Mentions and assignments.\nlisten to gh { events: [\"mention\", \"assign\"] } fire triage\n";
@@ -457,6 +457,19 @@ mod tests {
             SETTINGS.replace("<gh-[:Notification]->>", "<gh-[:Notifications]->>").replace("listen to gh { events: [\"mention\", \"assign\"] } fire triage", traversal)
         );
         assert_eq!(upgrade_source(&upgraded.source, &catalog, false, "0.12.13").source, upgraded.source);
+    }
+
+    /// A file pinned to this release that still holds a settings listen
+    /// (written by hand, or pinned by an edit): its refusal is an error, and
+    /// the error's rewrite is applied as it is from an older pin.
+    #[test]
+    fn a_settings_listen_under_this_releases_pin_is_rewritten() {
+        let catalog = CatalogSnapshot::load(GH).unwrap();
+        let held = check_text(SETTINGS, &catalog, Some(LANGUAGE_VERSION));
+        assert!(held.iter().any(|d| d.code == "MOV_LISTEN_SETTINGS_RETIRED" && d.is_error()), "{held:?}");
+        let upgraded = upgrade_source(SETTINGS, &catalog, false, LANGUAGE_VERSION);
+        assert!(upgraded.remaining.is_empty(), "{:?}", upgraded.remaining);
+        assert!(upgraded.source.contains("listen to gh-[n:Notifications WHERE n.Reason IN [\"mention\", \"assign\"]]-> fire triage\n"), "{}", upgraded.source);
     }
 
     #[test]

@@ -894,70 +894,58 @@ async fn replace(credential: &Credential, next: &dyn Fn(Vec<(String, String)>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::doors::tests::{InboxProject, TWO_CONNECTIONS, TWO_CREDENTIALS, in_local};
+    use crate::doors::tests::{InboxProject, NOTED, TWO_CONNECTIONS, TWO_CREDENTIALS, in_local};
+
+    /// The webhook each connection's credential holds for the arrivals on
+    /// `Notes`: its key, and the token it was registered as.
+    fn notes_webhooks(project: &InboxProject) -> Vec<(String, String)> {
+        let made = project.registrations.lock().unwrap();
+        let mut webhooks: Vec<(String, String)> = made
+            .iter()
+            .filter_map(|r| Some((r.get("callbackUrl")?.as_str()?.rsplit('/').next()?.to_string(), r.get("token")?.as_str()?.to_string())))
+            .collect();
+        webhooks.sort_by(|a, b| a.1.cmp(&b.1));
+        webhooks
+    }
 
     #[test]
-    fn each_connection_registers_its_own_webhook_for_its_own_events_as_itself() {
+    fn each_connection_registers_its_own_webhook_for_its_edge_as_itself() {
         let project = InboxProject::with(TWO_CONNECTIONS, TWO_CREDENTIALS, "publicUrl: https://lf.example\n");
         in_local(async {
             let session = project.session().await;
             let mut lines = reconcile(&session).await;
             lines.sort();
+            let webhooks = notes_webhooks(&project);
+            let tokens: Vec<&str> = webhooks.iter().map(|(_, token)| token.as_str()).collect();
+            assert_eq!(tokens, ["a", "b"], "each webhook is registered as its own connection");
+            let [(a, _), (b, _)] = &webhooks[..] else { unreachable!("two") };
+            let id = |key: &str| project.registrations.lock().unwrap().iter().position(|r| r.get("callbackUrl").and_then(Js::as_str).is_some_and(|url| url.ends_with(key))).map(|i| i + 1).unwrap();
             assert_eq!(
                 lines,
                 [
-                    "inbox as inbox_a: registered webhook wh-1 for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a",
-                    "inbox as inbox_b: registered webhook wh-2 for note.created,note.updated at https://lf.example/api/public/webhook-sync/inbox/inbox_b",
+                    format!("inbox as inbox_a (Notes, {a}): registered webhook wh-{} for the arrivals on Notes at https://lf.example/api/public/webhook-sync/inbox/inbox_a/{a}", id(a)),
+                    format!("inbox as inbox_b (Notes, {b}): registered webhook wh-{} for the arrivals on Notes at https://lf.example/api/public/webhook-sync/inbox/inbox_b/{b}", id(b)),
                 ]
-            );
-            let made: Vec<String> = project.registrations.lock().unwrap().iter().map(Js::to_json).collect();
-            assert_eq!(
-                made,
-                [
-                    r#"{"token":"a","callbackUrl":"https://lf.example/api/public/webhook-sync/inbox/inbox_a","events":["note.created"]}"#,
-                    r#"{"token":"b","callbackUrl":"https://lf.example/api/public/webhook-sync/inbox/inbox_b","events":["note.created","note.updated"]}"#,
-                ],
-                "each webhook is registered as its own connection"
             );
         });
         // b's listen gone: its webhook is removed, as b; a's is left as it is.
+        let (b, b_id) = {
+            let webhooks = notes_webhooks(&project);
+            let b = webhooks[1].0.clone();
+            let id = project.registrations.lock().unwrap().iter().position(|r| r.get("token") == Some(&Js::str("b"))).unwrap() + 1;
+            (b, format!("wh-{id}"))
+        };
         let movement = project.root.join("movements/noted.mvt");
-        let only_a = TWO_CONNECTIONS.replace("listen to b { events: [\"note.created\", \"note.updated\"] } fire noted_b\n", "");
-        std::fs::write(&movement, only_a).unwrap();
+        std::fs::write(&movement, TWO_CONNECTIONS.replace("listen to b-[:Notes]-> fire noted_b\n", "")).unwrap();
         in_local(async {
             let session = project.session().await;
-            let mut lines = reconcile(&session).await;
-            lines.sort();
-            assert_eq!(
-                lines,
-                [
-                    "inbox as inbox_a: webhook wh-1 is registered for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a",
-                    "inbox as inbox_b: no listen needs its webhook any more; removed webhook wh-2",
-                ]
-            );
+            let lines = reconcile(&session).await;
+            assert_eq!(lines.len(), 2, "{lines:?}");
+            assert!(lines.iter().any(|l| l.starts_with("inbox as inbox_a (Notes, ") && l.contains(": webhook wh-") && l.contains(" is registered for the arrivals on Notes at ")), "{lines:?}");
+            assert!(lines.contains(&format!("inbox as inbox_b (Notes, {b}): no listen needs its webhook any more; removed webhook {b_id}")), "{lines:?}");
             let made = project.registrations.lock().unwrap();
-            assert_eq!(made.last().map(Js::to_json).as_deref(), Some(r#"{"token":"b","removed":"wh-2"}"#));
+            assert_eq!(made.last().map(Js::to_json), Some(format!(r#"{{"token":"b","removed":"{b_id}","edge":"Notes"}}"#)));
         });
-    }
-
-    #[test]
-    fn a_single_connection_registers_as_it_always_has() {
-        let movement = "import { inbox } from adapters\n\ni = connect inbox\n\nfunction noted(note: <i-[:Note]->>) {\n  return \"seen\"\n}\n\nlisten to i { events: [\"note.created\"] } fire noted\n";
-        let project = InboxProject::with(movement, "inbox:\n  external: inbox\n  webhook_secret: s\n  token: t\n", "publicUrl: https://lf.example\n");
-        in_local(async {
-            let session = project.session().await;
-            assert_eq!(reconcile(&session).await, ["inbox: registered webhook wh-1 for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox"]);
-            assert_eq!(reconcile(&session).await, ["inbox: webhook wh-1 is registered for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox"]);
-        });
-    }
-
-    /// One connection of the scoped inbox, its listens on the shelves named.
-    fn on_shelves(shelves: &[&str]) -> String {
-        let mut movement = "import { inbox } from adapters\nimport { inbox_a } from credentials\n\ni = connect inbox using inbox_a\n".to_string();
-        for shelf in shelves {
-            movement.push_str(&format!("\nfunction noted_{shelf}(note: <i-[:Note]->>) {{\n  return \"{shelf}\"\n}}\n\nlisten to i {{ shelf: \"{shelf}\" }} fire noted_{shelf}\n"));
-        }
-        movement
     }
 
     const SCOPED_SECRETS: &str = "inbox_a:\n  external: inbox\n  webhook_secret: secret-a\n  token: a\n";
@@ -977,128 +965,40 @@ mod tests {
         (answer.status, movements)
     }
 
+    /// The webhook a listen in the settings form registered before 0.13,
+    /// kept in its credential's own fields, is removed as listen-fire
+    /// starts: no listen hears its events any more.
     #[test]
-    fn each_scope_of_one_connection_has_its_own_webhook_door_and_secret() {
-        // A webhook the credential held before its module scoped them: no
-        // listen is unscoped now, so it is removed.
-        let held = format!("{SCOPED_SECRETS}  webhook_id: wh-0\n  webhook_events: note.created\n  webhook_url: https://lf.example/api/public/webhook-sync/inbox/inbox_a\n");
-        let project = InboxProject::scoped(&on_shelves(&["red", "blue"]), &held, "publicUrl: https://lf.example\n");
-        in_local(async {
-            let session = project.session().await;
-            let mut lines = reconcile(&session).await;
-            lines.sort();
-            assert_eq!(
-                lines,
-                [
-                    "inbox (shelf blue): registered webhook wh-2 for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a/blue",
-                    "inbox (shelf red): registered webhook wh-3 for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a/red",
-                    "inbox: no listen needs its webhook any more; removed webhook wh-0",
-                ]
-            );
-            let made: Vec<String> = project.registrations.lock().unwrap().iter().map(Js::to_json).collect();
-            assert_eq!(
-                made,
-                [
-                    r#"{"token":"a","removed":"wh-0"}"#,
-                    r#"{"token":"a","callbackUrl":"https://lf.example/api/public/webhook-sync/inbox/inbox_a/blue","events":["note.created"],"scope":{"shelf":"blue"}}"#,
-                    r#"{"token":"a","callbackUrl":"https://lf.example/api/public/webhook-sync/inbox/inbox_a/red","events":["note.created"],"scope":{"shelf":"red"}}"#,
-                ],
-                "each scope's webhook is registered with its scope, at a door of its own"
-            );
-
-            // Each door takes its own secret, and runs its own shelf's listen.
-            assert_eq!(delivered(&session, "inbox_a/red", "secret-red", "d-1").await, (200, vec!["noted_red".to_string()]));
-            assert_eq!(delivered(&session, "inbox_a/blue", "secret-blue", "d-2").await, (200, vec!["noted_blue".to_string()]));
-            assert_eq!(delivered(&session, "inbox_a/red", "secret-blue", "d-3").await.0, 401, "another scope's secret");
-            assert_eq!(delivered(&session, "inbox_a/green", "secret-a", "d-4").await.0, 404, "a scope with no webhook has no door");
-            // The credential's own door went with its unscoped webhook, and its secret with it.
-            assert_eq!(delivered(&session, "inbox_a", "secret-a", "d-5").await.0, 401);
-            let receipts = session.store.deliveries(&crate::store::DeliveryQuery { subscription_id: None, since: None, limit: 10 }).unwrap();
-            let red = receipts.iter().find(|r| r.external_id.as_deref() == Some("d-1")).unwrap();
-            assert_eq!(red.subscription_id, "inbox_a/red");
-            let events = session.store.delivery(&red.id).unwrap().unwrap().events.unwrap();
-            assert_eq!(events[0].get("subscription"), Some(&Js::str("red")), "a kept event names its subscription, for a replay");
-        });
-
-        // The red listen gone: only its webhook is removed, as red.
-        std::fs::write(project.root.join("movements/noted.mvt"), on_shelves(&["blue"])).unwrap();
-        in_local(async {
-            let session = project.session().await;
-            let mut lines = reconcile(&session).await;
-            lines.sort();
-            assert_eq!(
-                lines,
-                [
-                    "inbox (shelf blue): webhook wh-2 is registered for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a/blue",
-                    "inbox (shelf red): no listen needs its webhook any more; removed webhook wh-3",
-                ]
-            );
-            assert_eq!(project.registrations.lock().unwrap().last().map(Js::to_json).as_deref(), Some(r#"{"token":"a","removed":"wh-3","scope":{"shelf":"red"}}"#));
-            assert_eq!(delivered(&session, "inbox_a/red", "secret-red", "d-6").await.0, 404, "its door is gone with it");
-            assert_eq!(delivered(&session, "inbox_a/blue", "secret-blue", "d-7").await, (200, vec!["noted_blue".to_string()]));
-        });
-    }
-
-    #[test]
-    fn a_refresh_registers_or_removes_only_the_scope_it_changed() {
-        let project = InboxProject::scoped(&on_shelves(&["red"]), SCOPED_SECRETS, "publicUrl: https://lf.example\n");
-        let movement = project.root.join("movements/noted.mvt");
-        in_local(async {
-            let session = project.session().await;
-            assert_eq!(reconcile(&session).await, ["inbox (shelf red): registered webhook wh-1 for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a/red"]);
-            let before = session.file_set();
-            std::fs::write(&movement, on_shelves(&["red", "blue"])).unwrap();
-            let refreshed = project.session().await;
-            assert_eq!(
-                follow_refresh(&refreshed, &before, &refreshed.file_set()).await,
-                ["inbox (shelf blue): registered webhook wh-2 for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a/blue"]
-            );
-            let before = refreshed.file_set();
-            std::fs::write(&movement, on_shelves(&["blue"])).unwrap();
-            let refreshed = project.session().await;
-            assert_eq!(follow_refresh(&refreshed, &before, &refreshed.file_set()).await, ["inbox (shelf red): no listen needs its webhook any more; removed webhook wh-1"]);
-            assert_eq!(project.registrations.lock().unwrap().len(), 3, "the blue webhook was left as it is");
-        });
-    }
-
-    #[test]
-    fn a_webhook_replaced_for_other_events_reads_its_feed_from_the_start() {
-        let held = format!("{SCOPED_SECRETS}  webhook_subscriptions: '{{\"red\":{{\"scope\":{{\"shelf\":\"red\"}},\"id\":\"wh-0\",\"events\":[\"note.updated\"],\"url\":\"https://lf.example/api/public/webhook-sync/inbox/inbox_a/red\",\"secret\":\"secret-red\"}}}}'\n");
-        let project = InboxProject::scoped(&on_shelves(&["red"]), &held, "publicUrl: https://lf.example\n");
-        in_local(async {
-            let session = project.session().await;
-            let cursor = Js::parse(br#"{"cursor":7}"#).unwrap();
-            session.store.save_inbound_checkpoint("inbox_a/red", &cursor).unwrap();
-            assert_eq!(reconcile(&session).await, ["inbox (shelf red): registered webhook wh-1 for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a/red"]);
-            assert_eq!(session.store.inbound_checkpoint("inbox_a/red").unwrap(), None, "the new webhook's feed is read from its start");
-            // The same webhook left as it is keeps its cursor.
-            session.store.save_inbound_checkpoint("inbox_a/red", &cursor).unwrap();
-            assert_eq!(reconcile(&session).await, ["inbox (shelf red): webhook wh-1 is registered for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a/red"]);
-            assert_eq!(session.store.inbound_checkpoint("inbox_a/red").unwrap(), Some(cursor));
-        });
-    }
-
-    #[test]
-    fn a_listen_that_names_no_scope_has_no_webhook_and_a_line_saying_so() {
-        let movement = on_shelves(&["red"]).replace("{ shelf: \"red\" }", "{ events: [\"note.created\"] }");
-        let project = InboxProject::scoped(&movement, SCOPED_SECRETS, "publicUrl: https://lf.example\n");
-        in_local(async {
-            let session = project.session().await;
-            assert_eq!(reconcile(&session).await, ["inbox: listen:noted:noted_red names no 'shelf' for its webhook, so none is registered for it"]);
-            assert!(project.registrations.lock().unwrap().is_empty());
-        });
-    }
-
-    #[test]
-    fn a_webhook_registered_before_scopes_is_kept_at_its_door() {
-        let movement = "import { inbox } from adapters\n\ni = connect inbox\n\nfunction noted(note: <i-[:Note]->>) {\n  return \"seen\"\n}\n\nlisten to i { events: [\"note.created\"] } fire noted\n";
+    fn a_webhook_a_settings_listen_registered_is_removed() {
         let held = "inbox:\n  external: inbox\n  webhook_secret: s\n  token: t\n  webhook_id: wh-0\n  webhook_events: note.created\n  webhook_url: https://lf.example/api/public/webhook-sync/inbox/inbox\n";
-        let project = InboxProject::with(movement, held, "publicUrl: https://lf.example\n");
+        let project = InboxProject::with(NOTED, held, "publicUrl: https://lf.example\n");
         in_local(async {
             let session = project.session().await;
-            assert_eq!(reconcile(&session).await, ["inbox: webhook wh-0 is registered for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox"]);
-            assert!(project.registrations.lock().unwrap().is_empty(), "nothing registered anew");
-            assert_eq!(delivered(&session, "inbox", "s", "d-1").await, (200, vec!["noted".to_string()]));
+            let lines = reconcile(&session).await;
+            assert!(lines.contains(&"inbox: no listen needs its webhook any more; removed webhook wh-0".to_string()), "{lines:?}");
+            assert_eq!(project.registrations.lock().unwrap().iter().filter(|r| r.get("removed").is_some()).map(Js::to_json).collect::<Vec<_>>(), [r#"{"token":"t","removed":"wh-0"}"#]);
+            let session = project.session().await;
+            let credential = session.secrets().credentials().iter().find(|c| c.name == "inbox").cloned().unwrap();
+            assert_eq!(Registered::of(&credential, "", "webhook_secret").id, None, "its registration is forgotten");
+            assert!(reconcile(&session).await.iter().all(|line| !line.contains("wh-0")), "and not removed again");
+            assert_eq!(delivered(&session, "inbox", "s", "d-1").await.0, 401, "the secret it was issued went with it");
+        });
+    }
+
+    /// As above, for a webhook kept under a scope (a module that declared
+    /// `subscriptionScopeKeys`): removed naming its scope, and its door goes.
+    #[test]
+    fn a_scoped_webhook_a_settings_listen_registered_is_removed_naming_its_scope() {
+        let held = format!("{SCOPED_SECRETS}  webhook_subscriptions: '{{\"red\":{{\"scope\":{{\"shelf\":\"red\"}},\"id\":\"wh-0\",\"events\":[\"note.created\"],\"url\":\"https://lf.example/api/public/webhook-sync/inbox/inbox_a/red\",\"secret\":\"secret-red\"}}}}'\n");
+        let project = InboxProject::with(&on_notes(&[("a", "x")]), &held, "publicUrl: https://lf.example\n");
+        in_local(async {
+            let session = project.session().await;
+            assert_eq!(delivered(&session, "inbox_a/red", "secret-red", "d-1").await.0, 200, "its door, while it is held");
+            let lines = reconcile(&session).await;
+            assert!(lines.contains(&"inbox (shelf red): no listen needs its webhook any more; removed webhook wh-0".to_string()), "{lines:?}");
+            assert_eq!(project.registrations.lock().unwrap().iter().filter(|r| r.get("removed").is_some()).map(Js::to_json).collect::<Vec<_>>(), [r#"{"token":"a","removed":"wh-0","scope":{"shelf":"red"}}"#]);
+            let session = project.session().await;
+            assert_eq!(delivered(&session, "inbox_a/red", "secret-red", "d-2").await.0, 404, "its door is gone with it");
         });
     }
 
@@ -1147,7 +1047,7 @@ mod tests {
 
     #[test]
     fn listens_on_one_pushed_edge_share_a_webhook_per_taken_filter_and_each_door_fires_only_its_own() {
-        let project = InboxProject::pushed(&on_notes(&[("a", "x"), ("b", "x"), ("c", "y")]), SCOPED_SECRETS, "publicUrl: https://lf.example\n");
+        let project = InboxProject::with(&on_notes(&[("a", "x"), ("b", "x"), ("c", "y")]), SCOPED_SECRETS, "publicUrl: https://lf.example\n");
         in_local(async {
             let session = project.session().await;
             let lines = reconcile(&session).await;
@@ -1206,30 +1106,6 @@ mod tests {
     }
 
     #[test]
-    fn a_listen_in_the_settings_form_keeps_its_webhook_beside_an_edges() {
-        let mut movement = on_notes(&[("a", "x")]);
-        movement.push_str("\nfunction noted(note: <i-[:Note]->>) {\n  return \"seen\"\n}\n\nlisten to i { events: [\"note.created\"] } fire noted\n");
-        let project = InboxProject::pushed(&movement, SCOPED_SECRETS, "publicUrl: https://lf.example\n");
-        in_local(async {
-            let session = project.session().await;
-            let mut lines = reconcile(&session).await;
-            lines.sort();
-            let (x, _) = edge_webhook_of(&project, "x");
-            assert_eq!(lines.len(), 2, "{lines:?}");
-            assert_eq!(lines[0], format!("inbox (Notes, {x}): registered webhook wh-2 for the arrivals on Notes at https://lf.example/api/public/webhook-sync/inbox/inbox_a/{x}"));
-            assert_eq!(lines[1], "inbox: registered webhook wh-1 for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a");
-            let session = project.session().await;
-            let credential = session.secrets().credentials().iter().find(|c| c.name == "inbox_a").cloned().unwrap();
-            assert!(is_edge_webhook(session.secrets().credentials(), "inbox", &x) && !is_edge_webhook(session.secrets().credentials(), "inbox", ""));
-            assert_eq!(Registered::of(&credential, "", "webhook_secret").id.as_deref(), Some("wh-1"), "the settings form's webhook is kept where it always was");
-            // An event through the edge's door reaches no listen in the
-            // settings form; through the credential's own door it does.
-            assert_eq!(delivered(&session, &format!("inbox_a/{x}"), "secret-wh-2", "d-1").await, (200, Vec::new()));
-            assert_eq!(delivered(&session, "inbox_a", "secret-a", "d-2").await, (200, vec!["noted".to_string()]));
-        });
-    }
-
-    #[test]
     fn a_failure_is_said_once_per_message_and_again_after_a_success() {
         let registrations = Registrations::default();
         assert_eq!(registrations.failure("attio", "down".into()).as_deref(), Some("down"));
@@ -1267,69 +1143,8 @@ mod tests {
     }
 
     #[test]
-    fn a_webhook_that_lapses_is_refreshed_before_it_does_and_registered_anew_once_it_has() {
-        let project = InboxProject::expiring(&on_shelves(&["red"]), SCOPED_SECRETS, "publicUrl: https://lf.example\n", 7 * DAY_MS);
-        let calls = || project.registrations.lock().unwrap().iter().map(Js::to_json).collect::<Vec<_>>();
-        in_local(async {
-            let session = project.session().await;
-            assert_eq!(reconcile(&session).await, ["inbox (shelf red): registered webhook wh-1 for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a/red"]);
-            // Kept with when it lapses, and its refresh queued a day before.
-            let kept = |session: &Session| {
-                let credential = session.secrets().credentials().iter().find(|c| c.name == "inbox_a").cloned().unwrap();
-                Registered::of(&credential, "red", "webhook_secret")
-            };
-            let expires = ms_of(&kept(&session).expires.expect("its expiry is kept")).unwrap();
-            assert!((expires - crate::limiter::now_ms() - 7 * DAY_MS).abs() < 60_000);
-            assert_eq!(refresh_rows_due_by(&session, 6 * DAY_MS - 60_000), Vec::<String>::new());
-            assert_eq!(refresh_rows_due_by(&session, 6 * DAY_MS + 60_000), ["refresh_subscription:inbox:inbox_a/red"]);
-
-            let webhook = Refreshing { credential: "inbox_a", key: "red" };
-            // A row that comes early waits for its time, asking nothing.
-            let early = expires - 3 * DAY_MS;
-            assert_eq!(refresh_one(&session, "inbox", &webhook, early).await, (None, Some(expires - DAY_MS)));
-            assert_eq!(calls().len(), 1);
-
-            // Within a day: refreshed, its new expiry kept, the next refresh a day before it.
-            let now = expires - DAY_MS / 2;
-            let (line, next) = refresh_one(&session, "inbox", &webhook, now).await;
-            let refreshed = kept(&session).expires.unwrap();
-            assert_eq!(line, Some(format!("inbox (shelf red): refreshed webhook wh-1; it expires at {refreshed}")));
-            assert_eq!(next, Some(refresh_due_ms(now, ms_of(&refreshed).unwrap())));
-            assert_eq!(calls().last().map(String::as_str), Some(r#"{"token":"a","refreshed":"wh-1"}"#));
-
-            // A failing refresh is said once, and tried again in 15 minutes.
-            project.down.store(true, std::sync::atomic::Ordering::SeqCst);
-            let (said, again) = refresh_one(&session, "inbox", &webhook, now).await;
-            assert!(said.is_some_and(|l| l.starts_with("inbox (shelf red): refreshing webhook wh-1 failed — ") && l.ends_with("; trying again in 15 minutes")));
-            assert_eq!(again, Some(now + REFRESH_RETRY_MS));
-            assert_eq!(refresh_one(&session, "inbox", &webhook, now).await, (None, Some(now + REFRESH_RETRY_MS)), "the same failure is not said again");
-            project.down.store(false, std::sync::atomic::Ordering::SeqCst);
-
-            // Lapsed: removed and registered anew (the inbox numbers a webhook by its calls so far), its secret and expiry kept.
-            let lapsed = ms_of(&refreshed).unwrap() + 60_000;
-            let (line, _) = refresh_one(&session, "inbox", &webhook, lapsed).await;
-            assert_eq!(
-                line,
-                Some(format!("inbox (shelf red): webhook wh-1 lapsed at {}; registered webhook wh-4 for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a/red", iso_of(ms_of(&refreshed).unwrap())))
-            );
-            let now_kept = kept(&session);
-            assert_eq!((now_kept.id.as_deref(), now_kept.secret.as_deref()), (Some("wh-4"), Some("secret-red")));
-            assert!(now_kept.expires.is_some());
-            assert_eq!(
-                calls()[calls().len() - 2..],
-                [
-                    r#"{"token":"a","removed":"wh-1","scope":{"shelf":"red"}}"#.to_string(),
-                    r#"{"token":"a","callbackUrl":"https://lf.example/api/public/webhook-sync/inbox/inbox_a/red","events":["note.created"],"scope":{"shelf":"red"}}"#.to_string(),
-                ]
-            );
-            // The new webhook's door takes its deliveries.
-            assert_eq!(delivered(&session, "inbox_a/red", "secret-red", "d-1").await, (200, vec!["noted_red".to_string()]));
-        });
-    }
-
-    #[test]
     fn an_edges_webhook_is_refreshed_and_registered_anew_naming_its_edge() {
-        let project = InboxProject::pushed_expiring(&on_notes(&[("a", "x")]), SCOPED_SECRETS, "publicUrl: https://lf.example\n", 7 * DAY_MS);
+        let project = InboxProject::expiring(&on_notes(&[("a", "x")]), SCOPED_SECRETS, "publicUrl: https://lf.example\n", 7 * DAY_MS);
         in_local(async {
             let session = project.session().await;
             assert_eq!(reconcile(&session).await.len(), 1);
@@ -1345,6 +1160,15 @@ mod tests {
             let (line, _) = refresh_one(&session, "inbox", &webhook, expires - DAY_MS / 2).await;
             assert!(line.is_some_and(|l| l.starts_with(&format!("inbox (Notes, {x}): refreshed webhook wh-1"))));
             assert_eq!(project.registrations.lock().unwrap().last().map(Js::to_json).as_deref(), Some(r#"{"token":"a","refreshed":"wh-1","edge":"Notes"}"#));
+
+            // A failing refresh is said once, and tried again in 15 minutes.
+            let now = expires - DAY_MS / 2;
+            project.down.store(true, std::sync::atomic::Ordering::SeqCst);
+            let (said, again) = refresh_one(&session, "inbox", &webhook, now).await;
+            assert!(said.is_some_and(|l| l.starts_with(&format!("inbox (Notes, {x}): refreshing webhook wh-1 failed — ")) && l.ends_with("; trying again in 15 minutes")));
+            assert_eq!(again, Some(now + REFRESH_RETRY_MS));
+            assert_eq!(refresh_one(&session, "inbox", &webhook, now).await, (None, Some(now + REFRESH_RETRY_MS)), "the same failure is not said again");
+            project.down.store(false, std::sync::atomic::Ordering::SeqCst);
             // Lapsed: registered anew for its edge and filter, no events.
             let lapsed = ms_of(&kept(&session).expires.unwrap()).unwrap() + 60_000;
             let (line, _) = refresh_one(&session, "inbox", &webhook, lapsed).await;
@@ -1357,17 +1181,6 @@ mod tests {
             drop(made);
             let now_kept = kept(&session);
             assert_eq!((now_kept.id.as_deref(), now_kept.secret.as_deref()), (Some("wh-4"), Some("secret-wh-4")));
-        });
-    }
-
-    #[test]
-    fn a_webhook_kept_with_no_expiry_is_refreshed_at_once_to_learn_it() {
-        let held = format!("{SCOPED_SECRETS}  webhook_subscriptions: '{{\"red\":{{\"scope\":{{\"shelf\":\"red\"}},\"id\":\"wh-0\",\"events\":[\"note.created\"],\"url\":\"https://lf.example/api/public/webhook-sync/inbox/inbox_a/red\",\"secret\":\"secret-red\"}}}}'\n");
-        let project = InboxProject::expiring(&on_shelves(&["red"]), &held, "publicUrl: https://lf.example\n", 7 * DAY_MS);
-        in_local(async {
-            let session = project.session().await;
-            assert_eq!(reconcile(&session).await, ["inbox (shelf red): webhook wh-0 is registered for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a/red"]);
-            assert_eq!(refresh_rows_due_by(&session, 1_000), ["refresh_subscription:inbox:inbox_a/red"], "due now");
         });
     }
 }

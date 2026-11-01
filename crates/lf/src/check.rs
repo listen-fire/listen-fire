@@ -25,7 +25,7 @@ use crate::json::Js;
 use crate::project::Project;
 use crate::refinements::{InstanceChain, Refining, refine_instance_schema};
 use crate::protocol::shape_error;
-use crate::schema::{Declarant, RETIRED_ENTRY_KEYS, RETIRED_MANIFEST_KEYS, ambiguous_arrivals, describe_external_schema, retired_entry_key, retired_reference_key, undeclared_arrival_field, unreadable_answer_shape_from, unreadable_listening, unreadable_literals_from, unreadable_owned_field, unreadable_record_field, unreadable_settings_become};
+use crate::schema::{Declarant, RETIRED_ENTRY_KEYS, RETIRED_MANIFEST_KEYS, ambiguous_arrivals, describe_external_schema, reference_name, retired_entry_key, retired_reference_key, undeclared_arrival_field, unreadable_answer_shape_from, unreadable_listening, unreadable_literals_from, unreadable_owned_field, unreadable_record_field, unreadable_settings_become};
 use crate::secrets::{Construction, Credential, Credentials, Imported, MissingCredential, Secrets, imported_credentials, missing_credentials};
 use crate::sources::{MovementFile, Parsed, scan_movements};
 
@@ -320,7 +320,7 @@ pub(crate) async fn describe_as(running: &RunningExternal, credentials: &Credent
     let name = &running.external.manifest.name;
     let rpc = |method: &'static str, params: serde_json::Value| rpc_in(running, credentials, credential, LOCAL_TENANT, method, params, settings.clone());
     if let Some(refusal) = retired_entry_key(name, &running.manifest_answer, &RETIRED_MANIFEST_KEYS) {
-        return Err(format!("Remote adapter \"{name}\" declares {refusal}"));
+        return Err(format!("Remote adapter \"{name}\": {refusal}"));
     }
     let entries = rpc("listEntryPoints", json!({})).await?;
     let entry_list = entries
@@ -331,7 +331,7 @@ pub(crate) async fn describe_as(running: &RunningExternal, credentials: &Credent
     for entry in &entry_list {
         let type_id = entry.get("typeId").and_then(Js::as_str).unwrap_or_default();
         if let Some(refusal) = retired_entry_key(type_id, entry, &RETIRED_ENTRY_KEYS) {
-            return Err(format!("Remote adapter \"{name}\" lists {refusal}"));
+            return Err(format!("Remote adapter \"{name}\": {refusal}"));
         }
     }
     let mut descriptors = IndexMap::new();
@@ -353,6 +353,7 @@ pub(crate) async fn describe_as(running: &RunningExternal, credentials: &Credent
         let mut references = descriptor.get("references").and_then(Js::as_array).into_iter().flatten();
         if let Some(refusal) = references.find_map(|r| {
             retired_reference_key(r)
+                .or_else(|| retired_entry_key(&reference_name(r), r, &RETIRED_ENTRY_KEYS))
                 .or_else(|| undeclared_arrival_field(r, &descriptors))
                 .or_else(|| unreadable_literals_from(r, &descriptors))
                 .or_else(|| unreadable_answer_shape_from(r, descriptor, &descriptors))
