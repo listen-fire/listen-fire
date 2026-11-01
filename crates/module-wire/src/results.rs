@@ -206,7 +206,7 @@ fn actor_identity() -> S {
 }
 
 fn await_landing() -> S {
-    obj(vec![opt("recordId", S::Str), opt("recordType", S::Str), req("fields", record(S::Unknown))])
+    obj(vec![opt("recordId", S::Str), opt("recordType", S::Str), req("fields", record(S::Unknown)), opt("unknown", arr(S::NonEmptyStr))])
 }
 
 /// `WireArrival`: an arrival names its identity; a gone one names none. From
@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn a_2_6_arrival_on_a_root_edge_names_no_key_and_may_carry_its_parents_and_its_listen() {
-        let root = r#"{"edge":"Company","identity":"company-1","landing":{"recordId":"company-1","fields":{"id":"company-1","Name":"Osprey"}},"parents":[{"fields":{"Name":"Base"}},null],"about":{"recordType":"Company","externalId":"company-1"},"notFor":"listen:watch:on_failure","takenApplied":true,"occurredAt":"2026-10-31T10:00:00Z"}"#;
+        let root = r#"{"edge":"Company","identity":"company-1","landing":{"recordId":"company-1","fields":{"id":"company-1","Name":"Osprey"}},"parents":[{"fields":{"Name":null},"unknown":["Name"]},null],"about":{"recordType":"Company","externalId":"company-1"},"notFor":"listen:watch:on_failure","takenApplied":true,"occurredAt":"2026-10-31T10:00:00Z"}"#;
         let read = check("preprocessInbound", "acme", &js(&format!(r#"{{"events":[],"arrivals":[{root}]}}"#))).unwrap();
         assert_eq!(read.get("arrivals").map(Js::to_json), Some(format!("[{root}]")));
         for wrong in [r#""notFor":"""#, r#""takenApplied":"yes""#, r#""about":{"recordType":"Company"}"#, r#""parents":[1]"#, r#""occurredAt":"""#] {

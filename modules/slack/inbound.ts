@@ -218,11 +218,15 @@ export function slackMentionsApp(message: { type?: unknown; text?: unknown }, bo
 
 /** A Slack message as a landing or a carried parent: its payload as Slack
  *  sent it (what a read of the record finds), with its channel, and its
- *  fields by the names a listen's WHERE compares. */
+ *  fields by the names a listen's WHERE compares. `Mentions App` is null and
+ *  named `unknown` when the bot user could not be read, so a listen whose
+ *  filter reads it is not judged on a guess: the host reports it, and judges
+ *  every other listen as usual. */
 export function slackMessageRecord(input: { channel: string; message: Record<string, unknown>; botUserId: string | null }): AwaitLanding & { recordId: string } {
   const { channel, message, botUserId } = input;
   const ts = typeof message.ts === 'string' ? message.ts : '';
   const recordId = slackMessageKey(channel, ts);
+  const mentionsApp = slackMentionsApp(message, botUserId);
   return {
     recordId,
     recordType: SLACK_MESSAGE_TYPE_NAME,
@@ -235,17 +239,18 @@ export function slackMessageRecord(input: { channel: string; message: Record<str
       Channel: channel,
       Timestamp: isoInstantFromSlackTs(ts),
       Topic: slackTopicOfBlocks(message.blocks),
-      'Mentions App': slackMentionsApp(message, botUserId),
+      'Mentions App': mentionsApp,
     },
+    ...(mentionsApp === null ? { unknown: ['Mentions App'] } : {}),
   };
 }
 
-/** A channel as a carried parent, named from the module's channel read;
- *  null when the name could not be read, so a filter on it is not judged
- *  on a guess (the host's verdict is undecided). */
-function slackChannelRecord(id: string, name: string | null): AwaitLanding | null {
-  if (name === null) return null;
-  return { recordId: id, recordType: SLACK_CHANNEL_TYPE_NAME, fields: { id, name, Id: id, Name: name } };
+/** A channel as a carried parent, named from the module's channel read.
+ *  When the name could not be read, `Name` is null and named `unknown`, so
+ *  a filter on it is not judged on a guess (the host reports it, and judges
+ *  every other listen as usual). */
+function slackChannelRecord(id: string, name: string | null): AwaitLanding {
+  return { recordId: id, recordType: SLACK_CHANNEL_TYPE_NAME, fields: { id, name, Id: id, Name: name }, ...(name === null ? { unknown: ['Name'] } : {}) };
 }
 
 /** What an arrival needs that the delivery does not hold: a channel's name

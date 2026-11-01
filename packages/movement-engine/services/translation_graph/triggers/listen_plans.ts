@@ -143,10 +143,14 @@ export function listenFires(listen: PlannedListen, arrival: Arrival, delivery: {
 }
 
 /** What the judge reads of a record an arrival carries: its record type,
- *  which tells it from another record type's edge of the same name, and its
- *  fields. */
+ *  which tells it from another record type's edge of the same name, its
+ *  fields, and those its module could not read. */
 function arrivedRecord(landing: AwaitLanding): ArrivedRecord {
-  return { ...(landing.recordType !== undefined ? { recordType: landing.recordType } : {}), fields: landing.fields };
+  return {
+    ...(landing.recordType !== undefined ? { recordType: landing.recordType } : {}),
+    fields: landing.fields,
+    ...(landing.unknown !== undefined && landing.unknown.length > 0 ? { unknown: landing.unknown } : {}),
+  };
 }
 
 /** The edges a fired function waits on off the records its run is handed at

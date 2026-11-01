@@ -116,6 +116,13 @@ describe('which listens an arrival is judged against', () => {
     });
   });
 
+  it('cannot judge a listen whose WHERE reads a field the module could not read, and judges the arrival as usual where none does', () => {
+    const unread = note('keep', { landing: { recordId: 'n1', recordType: 'Note', fields: { Title: null }, unknown: ['Title'] } });
+    expect(listenFires(listen, unread, delivered, 0)).toEqual({ undecided: "notes could not read Title of the arrival on Notes, which this listen's filter reads" });
+    const elsewhere = note('keep', { landing: { recordId: 'n1', recordType: 'Note', fields: { Title: 'keep' }, unknown: ['Body'] } });
+    expect(listenFires(listen, elsewhere, delivered, 0)).toEqual({ fires: true });
+  });
+
   it("judges an arrival addressed to the module's install against every connection's listen, and one for another connection against none of this one's", () => {
     expect(listenFires(listen, note('keep'), { adapterType: 'notes' }, 0)).toEqual({ fires: true });
     expect(listenFires(listen, note('keep'), { adapterType: 'notes', credentialName: 'south' }, 0)).toBeNull();

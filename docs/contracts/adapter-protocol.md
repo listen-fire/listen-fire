@@ -803,6 +803,16 @@ From adapter protocol 2.6 an arrival may say more, for the listens on its edge
 - **`parents`**: the records of the earlier hops the edge declares it
   `carries`, outermost first, each a landing or `null` for one it cannot
   carry. A listen's filter on an earlier hop is judged against them.
+- **`unknown` on the landing and on each parent**: the fields you could not
+  read for it, by name (`"unknown": ["Mentions App"]`), when a lookup your
+  provider did not answer stands between the delivery and a field's value.
+  Report the arrival anyway, and acknowledge the delivery: never rely on the
+  provider sending it again. A listen whose filter reads one of those fields
+  is not judged on a guess: it runs nothing for this arrival, and the host
+  reports it (on listen-fire an `Arrival Not Judged` system event,
+  [system-events.md](system-events.md)). Every other listen on the edge is
+  judged as usual. What `fields` holds for an unknown field (null, or
+  nothing) is never read by the judge.
 - **`about`**: `{ "recordType", "externalId" }`, the record the arrival is
   about when that is not its landing (a change to a row names the row).
 - **`notFor`**: the listen it must not run, by its pipeline: a listen's own
@@ -1904,6 +1914,7 @@ from `apps/cli`.
 
 ## Changes
 
+- **`unknown` fields on an arrival** (within version 2, no bump; 2026-11-01; listen-fire 0.13.0; additive). An arrival's landing and each parent may name the fields the module could not read (`unknown`); a listen whose filter reads one is undecided, runs nothing, and the host reports it; every other listen is judged as usual ([Reporting arrivals](#reporting-arrivals)). Why: a field read as absent compared false and skipped the arrival silently, and a provider's retry cannot be relied on to bring it again. A host before it ignores the member, as before.
 - **What a module declares about listening** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0; additive). A listenable reference or entry point may declare `delivery`, `pollEverySeconds`, `bounded`, `boundedBy`, `carries`, `scopedBy` (a reference delivered per scope, subscribed per record an earlier hop landed on), `attributes`, `cheapToList`, `parentChanges` and `relistEverySeconds` ([Declaring a listenable edge](#declaring-a-listenable-edge)); an entry point may declare `listenable`, `cursor`, `identity` and `version`, and is then an edge a listen starts at; a field may be of kind `owned`; the manifest may declare `resendWindowSeconds`, and `listenSettingsBecome`, how its 0.12 settings listens become traversals for `listen-fire upgrade`. Each is refused by name when it cannot mean what it says, a field of kind `owned` that names no scalar included. Why: a standing listen becomes a traversal over the edges a module declares listenable, and the host needs to know how each one's arrivals reach it, what bounds it, and how often to poll or re-list, from the module, since it has no numbers of its own. listen-fire reads them into the catalog; the checker and the hosts act on them in later 0.13 work. An older host ignores them.
 - **`resolvesEmpty` retired** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0). A reference that declares it is refused when listen-fire describes the module, naming it: a record that goes leaves the wait waiting on every edge, so there is nothing to declare.
 - **The key form retired** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0). listen-fire no longer calls `resolveAwait` or `wakeKeys`, and ignores a `checkInbound` acceptance's `wakeKeys`: a run waits on the arrivals a module reports (2.5). A module may still implement them; nothing calls them.

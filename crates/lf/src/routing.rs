@@ -150,7 +150,8 @@ impl Listen {
         }
         let arrived = |record: &Js| {
             let fields = record.get("fields")?;
-            Some(ArrivedRecord { record_type: record.get("recordType").and_then(Js::as_str).map(str::to_string), fields: json_of(fields) })
+            let unknown = record.get("unknown").and_then(Js::as_array).map(|names| names.iter().filter_map(Js::as_str).map(str::to_string).collect()).unwrap_or_default();
+            Some(ArrivedRecord { record_type: record.get("recordType").and_then(Js::as_str).map(str::to_string), fields: json_of(fields), unknown })
         };
         let Some(landing) = arrival.landing.as_ref().and_then(arrived) else {
             return Some(Verdict::Skips { hop: plan.hops.len().saturating_sub(1), reason: None });
@@ -815,6 +816,20 @@ mod tests {
             welcome.fires(&untyped, Some("acme"), 0.0),
             Some(Verdict::Undecided { reason: "the arrival acme_crm reported on Company does not say its record type, so it cannot be told from another record type's Company (this listen's lands on Company)".into() })
         );
+    }
+
+    #[test]
+    fn a_field_its_module_could_not_read_leaves_a_listen_reading_it_undecided_and_the_rest_judged() {
+        let listens = crm_listens();
+        let unread = |unknown: &str| {
+            crate::arrivals::arrivals_of(&js(&format!(r#"{{"arrivals":[{{"edge":"Company","identity":"company-1","landing":{{"recordType":"Company","fields":{{"id":"company-1","Name":null}},"unknown":["{unknown}"]}}}}]}}"#))).unwrap().remove(0)
+        };
+        assert_eq!(
+            listens[1].fires(&unread("Name"), Some("acme"), 0.0),
+            Some(Verdict::Undecided { reason: "acme_crm could not read Name of the arrival on Company, which this listen's filter reads".into() }),
+            "never read as absent, which would skip it"
+        );
+        assert_eq!(listens[2].fires(&unread("Name"), Some("acme"), 0.0), Some(Verdict::Fires), "a listen reading no unknown field is judged as usual");
     }
 
     #[test]

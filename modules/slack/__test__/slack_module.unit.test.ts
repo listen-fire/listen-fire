@@ -85,6 +85,11 @@ async function slackApi(
   };
 }
 
+/** A channel carried with the name Slack could not give: its `Name` unknown, never guessed. */
+function unnamedChannel(id: string) {
+  return { recordId: id, recordType: 'Channel', fields: { id, name: null, Id: id, Name: null }, unknown: ['Name'] };
+}
+
 function load(input: { credential: ModuleCredential; hosted?: SlackHosted; files?: ModuleFiles; fetch?: typeof fetch }) {
   const definition = input.hosted === undefined ? slackModule : slackModuleWith(input.hosted);
   return adapterInProcess(definition, {
@@ -210,9 +215,9 @@ describe('@lf/slack', () => {
       expect(plain?.arrivals?.map((a) => ('landing' in a ? a.landing.fields['Mentions App'] : undefined))).toEqual([false]);
       const mention = await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: { ...event, type: 'app_mention', text: 'hi' } } });
       expect(mention?.arrivals?.map((a) => ('landing' in a ? a.landing.fields['Mentions App'] : undefined))).toEqual([true]);
-      // A channel whose name cannot be read is carried as unknown, never guessed.
+      // A channel whose name cannot be read is carried with its Name unknown, never guessed.
       const elsewhere = await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: { ...event, channel: 'C9' } } });
-      expect(elsewhere?.arrivals?.map((a) => ('parents' in a ? a.parents : undefined))).toEqual([[null]]);
+      expect(elsewhere?.arrivals?.map((a) => ('parents' in a ? a.parents : undefined))).toEqual([[unnamedChannel('C9')]]);
       // No event, no arrival.
       await expect(adapter.preprocessInbound?.({ raw: { type: 'url_verification', challenge: 'c' } })).resolves.toEqual({ events: [] });
       // The channel and the bot user were read once each, from the client's cache after.
@@ -240,10 +245,10 @@ describe('@lf/slack', () => {
       const started = Date.now();
       const [first, second] = await Promise.all([deliver(), deliver()]);
       expect(Date.now() - started).toBeLessThan(1000);
-      expect([parents(first), parents(second)]).toEqual([[[null]], [[null]]]);
+      expect([parents(first), parents(second)]).toEqual([[[unnamedChannel('C1')]], [[unnamedChannel('C1')]]]);
       expect(api.methods.filter((m) => m === 'conversations.info')).toHaveLength(1);
       // Within the failure's short keep, Slack is not asked again.
-      expect(parents(await deliver())).toEqual([[null]]);
+      expect(parents(await deliver())).toEqual([[unnamedChannel('C1')]]);
       expect(api.methods.filter((m) => m === 'conversations.info')).toHaveLength(1);
 
       // Recovered, and past the keep: the channel is named.
@@ -254,18 +259,35 @@ describe('@lf/slack', () => {
       // A rate-limited call fails at once, never waiting out Slack's retry-after.
       faults.set('conversations.info', 'limited');
       const limited = Date.now();
-      expect(parents(await deliver({ ...event, channel: 'C2' }))).toEqual([[null]]);
+      expect(parents(await deliver({ ...event, channel: 'C2' }))).toEqual([[unnamedChannel('C2')]]);
       expect(Date.now() - limited).toBeLessThan(1000);
       // A call Slack never answers times out.
       faults.set('conversations.info', 'hangs');
       const hung = Date.now();
-      expect(parents(await deliver({ ...event, channel: 'C3' }))).toEqual([[null]]);
+      expect(parents(await deliver({ ...event, channel: 'C3' }))).toEqual([[unnamedChannel('C3')]]);
       expect(Date.now() - hung).toBeLessThan(1500);
     } finally {
       process.env = before;
       await api.close();
     }
 
+  });
+
+  it('when Slack cannot say who the app\'s bot user is, a message\'s Mentions App is unknown, never false', async () => {
+    const api = await slackApi({ C1: 'deals' }, new Map([['auth.test', 'down']]));
+    try {
+      const { adapter } = load({ credential: credential({ accessToken: 'xoxb-no-bot', baseUrl: api.baseUrl }) });
+      const event = { type: 'message', channel: 'C1', user: 'U1', text: 'hi <@UBOT>', ts: '1700000000.000100' };
+      const read = await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event } });
+      const landing = read?.arrivals?.map((a) => ('landing' in a ? a.landing : undefined))[0];
+      expect(landing?.fields['Mentions App']).toBeNull();
+      expect(landing?.unknown).toEqual(['Mentions App']);
+      // Slack's own `app_mention` says so whoever the bot user is.
+      const mention = await adapter.preprocessInbound?.({ raw: { type: 'event_callback', event: { ...event, type: 'app_mention' } } });
+      expect(mention?.arrivals?.map((a) => ('landing' in a ? [a.landing.fields['Mentions App'], a.landing.unknown] : undefined))).toEqual([[true, undefined]]);
+    } finally {
+      await api.close();
+    }
   });
 
   it('a delivery\'s lookups are bounded by the operator\'s settings, each a default where unset or out of range', async () => {

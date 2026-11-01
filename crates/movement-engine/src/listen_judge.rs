@@ -17,6 +17,10 @@
 //! what tells their arrivals apart. A record of another type skips; one that
 //! states no type cannot be told apart, so the arrival is undecided.
 //!
+//! A record may name the fields its module could not read (`unknown`: a
+//! lookup the provider did not answer): a conjunct reading one cannot be
+//! judged, never read as absent, which would skip the arrival silently.
+//!
 //! The hops are an AND, so a hop that fails decides the verdict even when an
 //! earlier one could not be judged; only an arrival no hop fails can be
 //! undecided. An undecided arrival runs nothing, and the host logs why.
@@ -68,6 +72,10 @@ pub struct ArrivedRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record_type: Option<String>,
     pub fields: Json,
+    /// The fields its module could not read: a filter reading one is
+    /// undecided, whatever `fields` holds for it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unknown: Vec<String>,
 }
 
 /// Whether an arrival fires a listen. On the wire `{"fires":true}`,
@@ -132,7 +140,8 @@ pub fn judge_arrival(plan: &ListenPlan, arrival: &PlanArrival, now_ms: f64) -> V
         }
     }
     let records: Vec<Option<Js>> = carried.iter().map(|record| record.map(|record| js_of_json(&record.fields))).collect();
-    let judge = Judge { plan, records: &records, now_ms };
+    let unknown: Vec<&[String]> = carried.iter().map(|record| record.map_or(&[][..], |record| record.unknown.as_slice())).collect();
+    let judge = Judge { plan, records: &records, unknown: &unknown, now_ms };
     for (i, hop) in plan.hops.iter().enumerate().filter(|(_, hop)| hop.judged == HopJudged::Arrival) {
         match judge.hop(i, hop, arrival.taken_applied) {
             Judged::Holds => {}
@@ -179,6 +188,8 @@ struct Judge<'a> {
     plan: &'a ListenPlan,
     /// Each hop's record, where the arrival carries it.
     records: &'a [Option<Js>],
+    /// Each hop's record's fields its module could not read.
+    unknown: &'a [&'a [String]],
     now_ms: f64,
 }
 
@@ -215,6 +226,9 @@ impl Judge<'_> {
 
     /// Whether the arrival carries a value for hop `i`'s record's `field`.
     fn carries(&self, i: usize, field: &str) -> bool {
+        if self.unknown[i].iter().any(|name| name == field) {
+            return false;
+        }
         match &self.records[i] {
             Some(Js::Object(fields)) => !matches!(object_property(fields, field), Js::Undefined | Js::Null),
             _ => false,
@@ -225,6 +239,7 @@ impl Judge<'_> {
     /// records the arrival carries.
     fn conjunct(&self, i: usize, conjunct: &Expression) -> Judged {
         let missing: Cell<Option<usize>> = Cell::new(None);
+        let unread: Cell<Option<(usize, &str)>> = Cell::new(None);
         let record = |j: usize| match &self.records[j] {
             Some(record) => Some(record),
             None => {
@@ -232,9 +247,15 @@ impl Judge<'_> {
                 None
             }
         };
-        let field = |j: usize, name: &str| match record(j) {
-            Some(Js::Object(fields)) => object_property(fields, name),
-            _ => Js::Undefined,
+        let field = |j: usize, name: &str| {
+            if let Some(known) = self.unknown[j].iter().find(|known| *known == name) {
+                unread.set(unread.get().or(Some((j, known.as_str()))));
+                return Js::Undefined;
+            }
+            match record(j) {
+                Some(Js::Object(fields)) => object_property(fields, name),
+                _ => Js::Undefined,
+            }
         };
         let alias = |name: &str| self.plan.hops.iter().position(|hop| hop.alias.as_deref() == Some(name));
         let read_field = |name: &str| field(i, name);
@@ -276,10 +297,26 @@ impl Judge<'_> {
         if let Some(j) = missing.get() {
             return Judged::Unknown(format!("the arrival carries no {} record, which this listen's filter on it reads", self.plan.hops[j].edge));
         }
+        if let Some((j, name)) = unread.get() {
+            return Judged::Unknown(self.unread(j, name));
+        }
         match result {
             Ok(value) if value.truthy() => Judged::Holds,
             Ok(_) => Judged::Fails,
             Err(error) => Judged::Unknown(format!("this listen's filter on {} could not be judged: {}", self.plan.hops[i].edge, described(&error))),
+        }
+    }
+}
+
+impl Judge<'_> {
+    /// Why a filter reading `name` off hop `j`'s record cannot be judged:
+    /// its module could not read it.
+    fn unread(&self, j: usize, name: &str) -> String {
+        let (module, hop) = (&self.plan.adapter, &self.plan.hops[j]);
+        if j + 1 == self.plan.hops.len() {
+            format!("{module} could not read {name} of the arrival on {}, which this listen's filter reads", hop.edge)
+        } else {
+            format!("{module} could not read {name} of the {} record the arrival carries, which this listen's filter reads", hop.edge)
         }
     }
 }

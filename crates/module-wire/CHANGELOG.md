@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The results check takes an arrival's landing and parents naming `unknown`, the fields the module could not read (adapter protocol 2.6, additive).
 - The results check takes `poll`'s 2.6 answer for a listenable edge, `{ arrivals, cursor? }`, beside a listen's `{ events, checkpoint? }`.
 - `PROTOCOL_MINOR` is 6: adapter protocol 2.6, arrivals for listens. An arrival in the results check may name no `key` (one on a root edge), and may carry `parents` (landings or `null`), `about` (`{ recordType, externalId }`), `notFor` and `takenApplied`. 2.6 names no method, so `PROTOCOL_MINORS` gains no row.
 - `PROTOCOL_MINOR` is 5: adapter protocol 2.5, arrivals. `PROTOCOL_MINORS` gains its row (`awaitKeys`). The results check takes `awaitKeys`' answer (`[{ key }` or `{ gone: true }]`) and the `arrivals` a module reports beside `preprocessInbound`'s events and on `checkInbound`'s `accepted`; an arrival names its identity, a gone one does not.

@@ -1236,11 +1236,13 @@ export const AdapterEmitBody = z.object({
 // ── Arrivals (adapter protocol 2.5 and 2.6; `arrivals.ts`) ──────────────────────
 
 /** One landing along a listenable edge: its fields, read back through the
- *  module's own `getFieldValue` for `recordType`. */
+ *  module's own `getFieldValue` for `recordType`, and the fields it could
+ *  not read (2.6 `unknown`). */
 export const WireAwaitLanding = z.object({
   recordId: z.string().optional(),
   recordType: z.string().optional(),
   fields: z.record(z.string(), z.unknown()),
+  unknown: z.array(z.string().min(1)).optional(),
 });
 
 export const WireAwaitHead = z.object({

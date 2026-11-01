@@ -27,6 +27,11 @@ export interface AwaitLanding {
   recordId?: string;
   recordType?: string;
   fields: Record<string, unknown>;
+  /** The fields the module could not read for it (a lookup its provider did
+   *  not answer: Slack's channel `Name`, a message's `Mentions App`): a
+   *  listen whose filter reads one cannot be judged, and the host reports it
+   *  (2.6). Whatever `fields` holds for one is not read by the judge. */
+  unknown?: string[];
 }
 
 /** One arrival on the edge of the record `key` names. `identity` is the

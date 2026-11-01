@@ -9,7 +9,8 @@
 //! root edge names no key, and one may carry the records of earlier hops it
 //! declares (`parents`), the record it is `about`, the listen it is `notFor`,
 //! whether it applied the listen's filter (`takenApplied`) and when it
-//! happened at its provider (`occurredAt`); a module
+//! happened at its provider (`occurredAt`), and its landing and parents may
+//! name the fields it could not read (`unknown`); a module
 //! that reports one states `protocolMinor: 6`.
 
 use std::future::Future;

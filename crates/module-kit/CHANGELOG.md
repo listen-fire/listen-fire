@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- An arrival's landing and parents may name `unknown`, the fields the module could not read: a listen whose filter reads one runs nothing for it and the host reports it (adapter protocol 2.6, additive).
 - `ListenResolution` gains `parents` (by edge, the ids of the records each resolved hop reported per record hangs off; serialised only when there are some, read as none when absent): a store keeps it with the heads (docs/contracts/store-slot.md).
 - The `Store` trait gains what the records door reads (docs/contracts/system-events.md): `runs.failed` (`RunsFailed { after, until, limit }`), `releases.note` (`ReleasesNote { version, at }`) and `releases.list` (`ReleasesList { after, limit }`); listen-fire reads none from a store that answers `method_not_implemented`. `waits.open` takes `record_id`, and `Stranded` carries it.
 - Breaking (listen-fire 0.13): the `Store` trait gains `listens.hold` (`ListensHold { pipeline }`), which adds one to a paused listen's `held` count, and `ListenState` gains `held` (`u64`): a pause (`listens.setPaused`) keeps it, a resume (`None`) clears it, a resolve keeps it.

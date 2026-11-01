@@ -102,9 +102,14 @@ export interface PlanArrival {
 export interface ArrivedRecord {
   recordType?: string;
   fields: Record<string, unknown>;
+  /** The fields its module could not read (a lookup the provider did not
+   *  answer): a filter reading one is undecided, never read as absent. */
+  unknown?: string[];
 }
 
-const arrivedRecordSchema: z.ZodType<ArrivedRecord> = z.object({ recordType: z.string().optional(), fields: z.record(z.string(), z.unknown()) }).strict();
+const arrivedRecordSchema: z.ZodType<ArrivedRecord> = z
+  .object({ recordType: z.string().optional(), fields: z.record(z.string(), z.unknown()), unknown: z.array(z.string().min(1)).optional() })
+  .strict();
 
 export const planArrivalSchema: z.ZodType<PlanArrival> = z
   .object({
