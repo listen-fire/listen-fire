@@ -201,6 +201,7 @@ describe('@lf/slack', () => {
                 User: 'U1',
                 Channel: 'C1',
                 Timestamp: '2023-11-14T22:13:20.000Z',
+                timestamp: '2023-11-14T22:13:20.000Z',
                 Topic: null,
                 'Mentions App': true,
               },
@@ -486,7 +487,7 @@ describe('@lf/slack', () => {
             edge: 'Interactions',
             key: 'C1:1700000000.000100',
             identity: '13345224609.738474920.8088930838d88f008e0',
-            landing: { recordType: 'Interaction', fields: { ...press, Id: press.id, At: '2023-11-14T22:14:20.000Z' } },
+            landing: { recordType: 'Interaction', fields: { ...press, Id: press.id, At: '2023-11-14T22:14:20.000Z', pressed_at: '2023-11-14T22:14:20.000Z' } },
             parents: [
               { recordId: 'C1', recordType: 'Channel', fields: { id: 'C1', name: 'office', Id: 'C1', Name: 'office' } },
               {
@@ -500,6 +501,7 @@ describe('@lf/slack', () => {
                   User: 'UBOT',
                   Channel: 'C1',
                   Timestamp: '2023-11-14T22:13:20.000Z',
+                  timestamp: '2023-11-14T22:13:20.000Z',
                   Topic: 'lunch-poll',
                   'Mentions App': false,
                 },

@@ -466,7 +466,7 @@ describe('AffinityAdapter.edgesFrom', () => {
     // neither read nor write directly, because their promises live on the
     // members they narrow to. Dropping them would delete the narrowing surface,
     // so they are asserted present explicitly rather than left to the filter.
-    const backed = entries.filter((e) => e.readable || e.writable || e.fires === true);
+    const backed = entries.filter((e) => e.readable || e.writable || e.listenable === true);
     const collections = ['Organization List Entry', 'Person List Entry', 'Opportunity List Entry'];
     expect(hop!.descriptor.references.map((r) => r.name).sort()).toEqual(
       [...backed.map((e) => e.displayName), ...collections].sort(),

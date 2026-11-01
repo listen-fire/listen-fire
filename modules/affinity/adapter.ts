@@ -545,7 +545,7 @@ export class AffinityAdapter extends BaseAdapter {
       (entry) =>
         entry.readable ||
         entry.writable ||
-        entry.fires === true ||
+        entry.listenable === true ||
         decodedFixedType(entry.typeId)?.listsFor !== undefined,
     );
 

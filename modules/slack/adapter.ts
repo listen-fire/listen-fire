@@ -71,6 +71,8 @@ import {
   SLACK_INTERACTIONS_EDGE_NAME,
   SLACK_INTERACTION_TYPE_NAME,
   SLACK_MESSAGES_EDGE_NAME,
+  SLACK_MESSAGE_TIMESTAMP_ID,
+  SLACK_PRESSED_AT_ID,
   SLACK_REACTIONS_EDGE_NAME,
   SLACK_REPLIES_EDGE_NAME,
   isoInstantFromSlackTs,
@@ -220,7 +222,7 @@ export const SLACK_MESSAGE_FIELDS = {
   file: 'file',
   user: 'user',
   channel: 'channel',
-  ts: 'ts',
+  timestamp: SLACK_MESSAGE_TIMESTAMP_ID,
   blocks: 'blocks',
   buttons: 'buttons',
   topic: 'topic',
@@ -234,7 +236,7 @@ export const SLACK_MESSAGE_FIELDS = {
  * member who pressed.
  */
 export const SLACK_INTERACTION_TYPE_ID = 'slack:interaction';
-export const SLACK_INTERACTION_FIELDS = { id: 'id', at: 'at' } as const;
+export const SLACK_INTERACTION_FIELDS = { id: 'id', at: SLACK_PRESSED_AT_ID } as const;
 export const SLACK_INTERACTION_EDGES = { actions: 'actions', by: 'by', message: 'message' } as const;
 export const SLACK_INTERACTION_EDGE_NAMES = { actions: 'Actions', by: 'By', message: 'Message' } as const;
 
@@ -578,7 +580,7 @@ export class SlackAdapter extends BaseAdapter {
             description: 'The C… channel id (read-only — a post is written along a Channel\'s `Messages` edge).',
           },
           {
-            fieldId: SLACK_MESSAGE_FIELDS.ts,
+            fieldId: SLACK_MESSAGE_FIELDS.timestamp,
             displayName: SLACK_MESSAGE_TIMESTAMP_NAME,
             // A real instant, not the raw `ts` string — so a movement can
             // compare it to `@current_date` or ask for `WITHIN 7d` and have
@@ -1130,7 +1132,7 @@ export class SlackAdapter extends BaseAdapter {
         return data.user ?? null;
       case SLACK_MESSAGE_FIELDS.channel:
         return data.channel ?? null;
-      case SLACK_MESSAGE_FIELDS.ts:
+      case SLACK_MESSAGE_FIELDS.timestamp:
         return isoInstantFromSlackTs(data.ts);
       default:
         return null;
@@ -1531,7 +1533,7 @@ export class SlackAdapter extends BaseAdapter {
     const naturalMessage = resolver.naturalTypeName(SLACK_MESSAGE_TYPE_ID);
     const isTimestampRead = (name: string) =>
       resolver.tryFieldId(naturalName(naturalMessage), naturalName(name))
-        === SLACK_MESSAGE_FIELDS.ts;
+        === SLACK_MESSAGE_FIELDS.timestamp;
     const window = historyWindowFromWhere({ where: input.where, isTimestampRead });
     // `conversations.history` answers newest-first and takes no sort order, so
     // a LIMIT is only ours to apply when the hop wants that same order —

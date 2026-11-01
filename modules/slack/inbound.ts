@@ -165,6 +165,13 @@ export const SLACK_INTERACTIONS_EDGE_NAME = 'Interactions';
 export const SLACK_REPLIES_EDGE_NAME = 'Replies';
 export const SLACK_REACTIONS_EDGE_NAME = 'Reactions';
 
+/** The ids of the fields a landing derives from a raw Slack value (`ts`, a
+ *  press's `action_ts`): each its own, carrying the derived value, since a
+ *  host reads a landing's fields by id before judging it and the raw key
+ *  holds the raw value. */
+export const SLACK_MESSAGE_TIMESTAMP_ID = 'timestamp';
+export const SLACK_PRESSED_AT_ID = 'pressed_at';
+
 /**
  * The `Timestamp` field's value: Slack's `ts` (epoch seconds,
  * microseconds after the point) read as the instant it denotes. The raw `ts`
@@ -238,6 +245,7 @@ export function slackMessageRecord(input: { channel: string; message: Record<str
       User: typeof message.user === 'string' ? message.user : null,
       Channel: channel,
       Timestamp: isoInstantFromSlackTs(ts),
+      [SLACK_MESSAGE_TIMESTAMP_ID]: isoInstantFromSlackTs(ts),
       Topic: slackTopicOfBlocks(message.blocks),
       'Mentions App': mentionsApp,
     },
@@ -385,7 +393,7 @@ async function interactionArrival(press: z.infer<typeof slackBlockActionsSchema>
     edge: SLACK_INTERACTIONS_EDGE_NAME,
     key,
     identity: press.trigger_id,
-    landing: { recordType: SLACK_INTERACTION_TYPE_NAME, fields: { ...fields, Id: press.trigger_id, At: occurredAt } },
+    landing: { recordType: SLACK_INTERACTION_TYPE_NAME, fields: { ...fields, Id: press.trigger_id, At: occurredAt, [SLACK_PRESSED_AT_ID]: occurredAt } },
     parents: [slackChannelRecord(channel, await lookups.channelName(channel)), message],
     about: { recordType: SLACK_MESSAGE_TYPE_NAME, externalId: key },
     ...(occurredAt !== null ? { occurredAt } : {}),

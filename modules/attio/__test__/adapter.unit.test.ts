@@ -2009,10 +2009,7 @@ describe('AttioAdapter listEntryPoints — readable means readable', () => {
     const meta = await adapter.describe('__adapter_meta__');
     const metaEdgeNames = new Set(meta!.references.map((r) => r.name ?? r.fieldId));
     for (const entry of entries) {
-      if (entry.fires === true) {
-        // An event edge must not mint a collection (8_event_edges.md).
-        expect(metaEdgeNames.has(entry.displayName)).toBe(false);
-      } else if (entry.readable || entry.writable) {
+      if (entry.readable || entry.writable) {
         expect(metaEdgeNames.has(entry.collectionName ?? entry.displayName)).toBe(true);
         // ...and make the same write promise on it.
         const edge = meta!.references.find((r) => (r.name ?? r.fieldId) === (entry.collectionName ?? entry.displayName));
