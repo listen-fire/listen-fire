@@ -134,3 +134,39 @@ listen to mail { events: ["label_added"] } fire filed`));
     await fake.stop();
   }
 });
+
+test('an upgraded listen on two user labels, written by name, hears mail carrying either', async () => {
+  const fake = await fakeChannels();
+  try {
+    const { dir } = await gmailProject(fake, 'gmail');
+    const deals = await fake.makeLabel('Deals');
+    const hiring = await fake.makeLabel('Hiring');
+    const file = join(dir, 'movements/hello.mvt');
+    writeFileSync(file, program(`function triage(m: <mail-[:Message]->>) {
+  fail("triage heard \${m.Subject}")
+}
+
+listen to mail { labels: ["Deals", "Hiring"] } fire triage`));
+    const lfYaml = join(dir, 'lf.yaml');
+    writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
+
+    // Gmail takes the labels together, by name: the fix is safe.
+    const upgraded = lf(dir, 'upgrade');
+    assert.equal(upgraded.code, 0, upgraded.out);
+    assert.match(readFileSync(file, 'utf8'), /listen to mail-\[m:Messages WHERE m\.Labels CONTAINS "Deals" OR m\.Labels CONTAINS "Hiring"\]-> fire triage/);
+    assert.equal(lf(dir, 'check').code, 0);
+
+    const armed = lf(dir, 'run', '--poll', 'triage');
+    assert.match(armed.out, /^gmail: hello:triage armed; it fires on changes from now$/m, armed.out);
+
+    await fake.message({ id: 'm-hiring', subject: 'A candidate', labelIds: ['INBOX', hiring] });
+    await fake.message({ id: 'm-deals', subject: 'A term sheet', labelIds: [deals] });
+    await fake.message({ id: 'm-plain', subject: 'A newsletter', labelIds: ['INBOX'] });
+    const fired = lf(dir, 'run', '--poll', 'triage');
+    assert.match(fired.out, /MOVENG_ERROR: triage heard A candidate/, fired.out);
+    assert.match(fired.out, /MOVENG_ERROR: triage heard A term sheet/, fired.out);
+    assert.doesNotMatch(fired.out, /heard A newsletter/, fired.out);
+  } finally {
+    await fake.stop();
+  }
+});

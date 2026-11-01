@@ -154,6 +154,8 @@ interface Watch {
   edge: ListenedEdge;
   query?: string;
   labels?: string[];
+  /** A message's ORs of `Labels CONTAINS` (`containsAny`): one of each held. */
+  anyLabels?: string[][];
   rest: TakenComparison[];
   /** False when the filter has a part this cannot read: the host judges it all. */
   applied: boolean;
@@ -165,6 +167,7 @@ export function watchOf(edge: string, filter: unknown): Watch {
   if (taken === undefined) return { edge: listened, rest: [], applied: false };
   const queries: string[] = [];
   const labels: string[] = [];
+  const anyLabels: string[][] = [];
   let labelling: string[] | undefined;
   const rest: TakenComparison[] = [];
   for (const comparison of taken) {
@@ -173,6 +176,8 @@ export function watchOf(edge: string, filter: unknown): Watch {
       queries.push(value.trim());
     } else if (listened === GMAIL_MESSAGES_COLLECTION && field === LABELS_FIELD && op === 'contains' && typeof value === 'string') {
       labels.push(value.trim());
+    } else if (listened === GMAIL_MESSAGES_COLLECTION && field === LABELS_FIELD && op === 'containsAny' && Array.isArray(value)) {
+      anyLabels.push([...new Set(value.map((label) => String(label).trim()))]);
     } else if (listened === GMAIL_LABELINGS_COLLECTION && field === LABEL_FIELD && labelling === undefined && (op === 'eq' || op === 'in')) {
       labelling = (Array.isArray(value) ? value : [value]).map(String);
     } else {
@@ -185,16 +190,18 @@ export function watchOf(edge: string, filter: unknown): Watch {
     edge: listened,
     ...(query !== undefined ? { query } : {}),
     ...(named !== undefined && named.length > 0 ? { labels: [...new Set(named)] } : {}),
+    ...(anyLabels.length > 0 ? { anyLabels } : {}),
     rest,
     applied: true,
   };
 }
 
 /**
- * What one poll reads of history. A message listen naming labels reads the
- * history of the first (every arrival must carry them all); one naming none
- * reads the whole mailbox. A labeling listen reads each label it names, or
- * the whole mailbox for any label.
+ * What one poll reads of history. A message listen naming labels it must
+ * hold reads the history of the first (every arrival must carry them all);
+ * one naming none, or only labels of which it must hold one, reads the whole
+ * mailbox. A labeling listen reads each label it names, or the whole mailbox
+ * for any label.
  */
 interface WatchPlan {
   reads: { labelId?: string; types: GmailHistoryType[] }[];
@@ -205,9 +212,11 @@ interface WatchPlan {
   includeSpamTrash: boolean;
 }
 
-function watchPlan(edge: ListenedEdge, named: GmailLabel[] | undefined): WatchPlan {
-  const terms = (named ?? []).map((label) => `label:${/[\s():]/.test(label.name) ? `"${label.name}"` : label.name}`);
-  const spamOrTrash = named === undefined || named.some((label) => SPAM_AND_TRASH.has(label.id));
+function watchPlan(edge: ListenedEdge, named: GmailLabel[] | undefined, anyOf: GmailLabel[][] = []): WatchPlan {
+  const term = (label: GmailLabel) => `label:${/[\s():]/.test(label.name) ? `"${label.name}"` : label.name}`;
+  // Gmail's braces are an OR of the terms inside them.
+  const terms = [...(named ?? []).map(term), ...anyOf.map((group) => (group.length === 1 ? term(group[0]) : `{${group.map(term).join(' ')}}`))];
+  const spamOrTrash = (named === undefined && anyOf.length === 0) || [...(named ?? []), ...anyOf.flat()].some((label) => SPAM_AND_TRASH.has(label.id));
   if (edge === GMAIL_MESSAGES_COLLECTION) {
     const first = named?.[0];
     return {
@@ -253,7 +262,9 @@ export class GmailPollSource {
     const watch = watchOf(input.edge, input.filter);
     const client = await this.client();
     const named = watch.labels === undefined ? undefined : await resolveLabels(client, watch.labels);
-    const plan = watchPlan(watch.edge, named);
+    const anyOf: GmailLabel[][] = [];
+    for (const group of watch.anyLabels ?? []) anyOf.push(await resolveLabels(client, group));
+    const plan = watchPlan(watch.edge, named, anyOf);
 
     const now = Date.now();
     const mark = checkpointOf(input.cursor);
@@ -287,6 +298,7 @@ export class GmailPollSource {
       const held = new Set((named ?? []).map((label) => label.id));
       arrivals = fetched
         .filter((message) => [...held].every((id) => message.labels.includes(id)))
+        .filter((message) => anyOf.every((group) => group.some((label) => message.labels.includes(label.id))))
         // Oldest first — a run handles the mail in the order it arrived.
         .sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''))
         .map((message) => messageArrival(message, watch))

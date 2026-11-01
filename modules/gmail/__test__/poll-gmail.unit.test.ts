@@ -196,6 +196,21 @@ describe('a listen on Messages', () => {
     expect(ids(answer)).toEqual(['both']);
   });
 
+  it('hears mail carrying any label of an OR of CONTAINS, each user label by its name', async () => {
+    const { source, calls } = pollWith({
+      messages: [wireMessage('deals', ['INBOX', 'Label_deals']), wireMessage('other', ['Label_other']), wireMessage('plain', ['INBOX'])],
+      history: { '*': [{ added: [added('deals', '4001'), added('other', '4002'), added('plain', '4003')], historyId: '5000' }] },
+      search: [{ id: 'deals' }, { id: 'other' }, { id: 'plain' }],
+    });
+    const either = or(cmp('Labels', 'contains', 'Deals'), cmp('Labels', 'contains', 'Other'));
+    const answer = await source.poll({ edge: 'Messages', filter: and(either, cmp('Query', 'eq', 'from:acme')), cursor: MARK });
+
+    expect(calls.history[0]).not.toHaveProperty('labelId');
+    expect(calls.list[0]).toEqual({ query: '{label:Deals label:Other} from:acme', maxResults: 100 });
+    expect(ids(answer)).toEqual(['deals', 'other']);
+    expect(answer.arrivals.every((a) => 'takenApplied' in a && a.takenApplied === true)).toBe(true);
+  });
+
   it('applies the rest of the filter over the message it fetched', async () => {
     const { source } = pollWith({
       messages: [wireMessage('invoice'), wireMessage('hello')],
@@ -210,7 +225,7 @@ describe('a listen on Messages', () => {
       messages: [wireMessage('m1')],
       history: { '*': [{ added: [added('m1', '4001')], historyId: '5000' }] },
     });
-    const answer = await source.poll({ edge: 'Messages', filter: or(INBOX, cmp('Labels', 'contains', 'SPAM')), cursor: MARK });
+    const answer = await source.poll({ edge: 'Messages', filter: or(INBOX, cmp('Subject', 'contains', 'SPAM')), cursor: MARK });
     expect(ids(answer)).toEqual(['m1']);
     expect(answer.arrivals[0]).not.toHaveProperty('takenApplied');
   });
