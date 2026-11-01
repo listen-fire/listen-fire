@@ -143,7 +143,7 @@ test('a polled delivery is replayed through one listen from the page the poll ke
   const polled = edgePolls(dir).length;
 
   const db = new DatabaseSync(join(dir, '.lf', 'state.db'));
-  const facts = () => db.prepare('select attempt, delivery_id as deliveryId from arrival_unjudged order by attempt').all().map((row) => ({ ...row }));
+  const facts = () => db.prepare('select pipeline, arrival, attempt, delivery_id as deliveryId from arrival_unjudged order by attempt').all().map((row) => ({ ...row }));
   try {
     const [first] = facts();
     assert.ok(first, 'the listen that could not judge the arrival is noted');
@@ -169,6 +169,10 @@ test('a polled delivery is replayed through one listen from the page the poll ke
       join(dir, 'movements/notes.mvt'),
       `import { feed } from adapters\n\nf = connect feed\n\nfunction a(n: <f-[:Notes]->>) {\n  fail("a saw \${n.Title}")\n}\n\nfunction b(n: <f-[:Notes]->>) {\n  fail("b saw \${n.Title}")\n}\n\nlisten to f-[n:Notes WHERE n.Id == "n3"]-> fire a\n${B_IS_N3}\n`,
     );
+    // The event names the listen as it was: it points at the delivery, which is put through `a` as written now.
+    const stale = lfAt(dir, ['listens', 'replay', 'notes:a', '--event', `arrival_not_judged:${String(first.pipeline)}:${String(first.arrival)}:0`]);
+    assert.equal(stale.code, 1, stale.out);
+    assert.match(stale.out, new RegExp(`is of an earlier version of notes:a, which has been edited since: \`--delivery ${deliveryId}\` puts its delivery through notes:a as it is written now`));
     const replayed = lfAt(dir, ['listens', 'replay', 'notes:a', '--delivery', deliveryId]);
     assert.deepEqual(saw(replayed.out, 'a'), ['a'], replayed.out);
     assert.deepEqual([runsOf(dir, 'a'), runsOf(dir, 'b')], [1, 1]);

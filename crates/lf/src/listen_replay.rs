@@ -99,22 +99,33 @@ pub async fn command(session: &Session, asked: &Asked<'_>, out: &mut impl Write)
 
 /// The fact an `Arrival Not Judged` event reports, as its `Event Id` names
 /// it: one of `listens`'.
+/// A listen edited since keeps its facts under the pipeline it had: one of
+/// those is refused by name, pointing at its delivery.
 fn reported(session: &Session, listens: &[&Listen], event: &str) -> Result<UnjudgedArrival, String> {
+    let named = format!("{}:{}", listens[0].file, listens[0].movement_name);
     for listen in listens {
-        if let Some(fact) = facts_of(session, &listen.pipeline())?.into_iter().find(|fact| fact.event_id() == event) {
+        if let Some(fact) = facts_of(session, Some(&listen.pipeline()))?.into_iter().find(|fact| fact.event_id() == event) {
             return Ok(fact);
         }
     }
-    Err(format!("no Arrival Not Judged {event} of {}:{} is kept: facts are kept {} days (deliveries.retainDays)", listens[0].file, listens[0].movement_name, session.project.delivery_retain_days))
+    let file = session.file_set().file(&listens[0].file).name.clone();
+    if let Some(earlier) = facts_of(session, None)?.into_iter().find(|fact| fact.event_id() == event && fact.file == file && fact.movement == listens[0].movement_name) {
+        return Err(match earlier.delivery_id {
+            Some(delivery) => format!("{event} is of an earlier version of {named}, which has been edited since: `--delivery {delivery}` puts its delivery through {named} as it is written now"),
+            None => format!("{event} is of an earlier version of {named}, which has been edited since, and names no kept delivery: there is nothing to replay"),
+        });
+    }
+    Err(format!("no Arrival Not Judged {event} of {named} is kept: facts are kept {} days (deliveries.retainDays)", session.project.delivery_retain_days))
 }
 
-/// Every unjudged arrival kept for the listen `pipeline`, oldest first.
-fn facts_of(session: &Session, pipeline: &str) -> Result<Vec<UnjudgedArrival>, String> {
+/// Every unjudged arrival kept, for the listen `pipeline` when it names one,
+/// oldest first.
+fn facts_of(session: &Session, pipeline: Option<&str>) -> Result<Vec<UnjudgedArrival>, String> {
     const PAGE: i64 = 500;
     let mut facts: Vec<UnjudgedArrival> = Vec::new();
     loop {
         let after = facts.last().map(|last| UnjudgedAfter { at: &last.at, pipeline: &last.pipeline, arrival: &last.arrival, attempt: last.attempt });
-        let page = session.store.unjudged_arrivals(&UnjudgedPage { after, pipeline: Some(pipeline), limit: PAGE }).map_err(|e| e.to_string())?;
+        let page = session.store.unjudged_arrivals(&UnjudgedPage { after, pipeline, limit: PAGE }).map_err(|e| e.to_string())?;
         let done = page.len() < usize::try_from(PAGE).unwrap_or(usize::MAX);
         facts.extend(page);
         if done {
@@ -234,7 +245,7 @@ async fn replay_through(session: &Session, set: &FileSet, listen: &Listen, row: 
 /// own judging is 0).
 fn next_attempt(session: &Session, listen: &Listen, landed: &[ArrivalIn]) -> Result<u32, String> {
     let receipts: Vec<String> = landed.iter().map(|a| arrival_receipt_key(&a.edge, a.key.as_deref(), a.identity.as_deref().unwrap_or_default(), a.version.as_deref())).collect();
-    let latest = facts_of(session, &listen.pipeline())?.into_iter().filter(|fact| receipts.contains(&fact.arrival)).map(|fact| fact.attempt).max();
+    let latest = facts_of(session, Some(&listen.pipeline()))?.into_iter().filter(|fact| receipts.contains(&fact.arrival)).map(|fact| fact.attempt).max();
     Ok(latest.map_or(1, |attempt| attempt.saturating_add(1).max(1)))
 }
 

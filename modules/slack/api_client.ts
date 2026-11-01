@@ -5,9 +5,10 @@
 //
 // A delivery's lookups (a channel's name, the app's bot user) go through a
 // second, bounded client: Slack wants an answer to a delivery within three
-// seconds and redelivers one refused, so a lookup that cannot answer quickly
-// fails the delivery rather than holding it for the default client's half
-// hour of retries.
+// seconds, so a lookup that cannot answer quickly gives up rather than holding
+// the delivery for the default client's half hour of retries. The delivery is
+// still taken: the field the lookup would have read is named unknown on the
+// arrival, and a listen whose filter reads it is reported undecided.
 //
 // The platform's installer and its v3 output agent use the same client
 // (lf-platform's apps/api adapters/slack/webApi re-exports it).
