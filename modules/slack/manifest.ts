@@ -5,7 +5,7 @@
 import type { AdapterManifest } from 'movement-engine/public/adapter';
 
 import { SLACK_HANDBOOK_SECTION } from './handbook_section';
-import { SLACK_MESSAGES_EDGE_NAME, SLACK_MESSAGE_TYPE_NAME, SLACK_REACTIONS_EDGE_NAME, SLACK_REACTION_TYPE_NAME } from './inbound';
+import { SLACK_MESSAGES_EDGE_NAME, SLACK_MESSAGE_TYPE_NAME, SLACK_REACTIONS_EDGE_NAME, SLACK_REACTION_TYPE_NAME, SLACK_REPLIES_EDGE_NAME } from './inbound';
 import { SLACK_CHANNELS_COLLECTION } from './read_graph';
 import { SLACK_ADAPTER_TYPE } from './types';
 
@@ -27,6 +27,10 @@ const MESSAGES_BECOME = {
   paramFrom: SLACK_MESSAGE_TYPE_NAME,
   keys: { channels: CHANNEL_NAMES },
 };
+
+/** A 0.12 `message` or `app_mention` listen heard thread replies too, which
+ *  arrive on their root message's `Replies`: two edges, so no one rewrite. */
+const REPLIES_TOO = { alsoArrivesOn: [[SLACK_CHANNELS_COLLECTION, SLACK_MESSAGES_EDGE_NAME, SLACK_REPLIES_EDGE_NAME]] };
 
 /**
  * Static manifest — the construction-free declaration the registry exposes via
@@ -72,18 +76,17 @@ export const SLACK_MANIFEST: AdapterManifest = {
   inboundRequiresRegisteredActor: true,
   handbookSection: SLACK_HANDBOOK_SECTION,
   supportedTriggers: ['webhook'],
-  // A 0.12 `listen to chat { channels, events }` heard messages and mentions
-  // on a channel's `Messages` and reactions on a message's `Reactions`. A
-  // mention is a message that names the app (`Mentions App`), so `message`
-  // with `app_mention` is every message. One naming no events heard both
-  // edges, as does one naming a message's and a reaction's events: no
-  // rewrite, one listen for each.
+  // A 0.12 `listen to chat { channels, events }` heard messages and mentions,
+  // thread replies among them, and reactions. A message now arrives on its
+  // channel's `Messages`, a reply on its root's `Replies` and a reaction on
+  // its message's `Reactions`, so only a `reaction_added` listen has one
+  // rewrite: any other is told to write one listen for each edge.
   listenSettingsBecome: {
     ...MESSAGES_BECOME,
     keys: { ...MESSAGES_BECOME.keys, events: EVENTS },
     byEvent: {
-      message: MESSAGES_BECOME,
-      app_mention: { ...MESSAGES_BECOME, keys: { ...MESSAGES_BECOME.keys, events: MENTIONS } },
+      message: { ...MESSAGES_BECOME, ...REPLIES_TOO },
+      app_mention: { ...MESSAGES_BECOME, ...REPLIES_TOO, keys: { ...MESSAGES_BECOME.keys, events: MENTIONS } },
       reaction_added: {
         path: [SLACK_CHANNELS_COLLECTION, SLACK_MESSAGES_EDGE_NAME, SLACK_REACTIONS_EDGE_NAME],
         aliases: ['ch', 'm', 'r'],

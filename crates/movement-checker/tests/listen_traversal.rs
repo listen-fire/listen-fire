@@ -36,8 +36,8 @@ const CATALOG: &str = r#"{"adapters":{
     "writableRoots":{}}}},
   "at":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
     "Base":{"properties":{"Name":"text"},
-      "edges":{"Tables":{"target":"Table","cheapToList":true,"parentChanges":"pushed","capability":{"filter":"native","supportsLimit":false}},
-        "Views":{"target":"Table","cheapToList":true,"parentChanges":"pushed","listenable":true,"delivery":"scope","capability":{"filter":"native","supportsLimit":false}}},
+      "edges":{"Tables":{"target":"Table","membersChange":"pushed","capability":{"filter":"native","supportsLimit":false}},
+        "Views":{"target":"Table","membersChange":"pushed","listenable":true,"delivery":"scope","capability":{"filter":"native","supportsLimit":false}}},
       "propertyCapabilities":{"Name":{"filterOperators":["eq"]}}},
     "Table":{"properties":{"Name":"text","Created":"datetime"},
       "edges":{
@@ -53,7 +53,7 @@ const CATALOG: &str = r#"{"adapters":{
         "Notes":{"target":"Comment","readable":false,"listenable":true,"delivery":"scope"}},
       "propertyCapabilities":{"Stage":{"filterOperators":["eq"]}}},
     "Comment":{"properties":{"Text":"text"},"edges":{}}},
-    "collections":{"Bases":{"target":"Base","cheapToList":true,"relistEverySeconds":300,"capability":{"filter":"native","supportsLimit":false}}},
+    "collections":{"Bases":{"target":"Base","membersChange":{"relistEverySeconds":300},"capability":{"filter":"native","supportsLimit":false}}},
     "writableRoots":{}}}},
   "crm":{"canFire":true,"constructionArgs":[],"schemas":{"":{"positions":{
     "Company":{"properties":{"Name":"text"},"edges":{}}},
@@ -410,9 +410,9 @@ const UNIONS: &str = r#"{"adapters":{"crm":{"canFire":false,"constructionArgs":[
     "Company":{"properties":{"Name":"text"},"edges":{"Notes":{"target":"Note","listenable":true,"delivery":"connection","carries":["Subjects"]}}},
     "Note":{"properties":{"Text":"text"},"edges":{}}},
     "unions":{"Subject":["Person","Company"]},
-    "collections":{"Subjects":{"target":"Subject","cheapToList":true,"capability":{"filter":"native","supportsLimit":false}},
+    "collections":{"Subjects":{"target":"Subject","membersChange":{"relistEverySeconds":300},"capability":{"filter":"native","supportsLimit":false}},
                    "Things":{"target":"Subject","listenable":true,"delivery":"connection"},
-                   "People":{"target":"Person","cheapToList":true,"listenable":true,"delivery":"connection"}},
+                   "People":{"target":"Person","membersChange":{"relistEverySeconds":300},"listenable":true,"delivery":"connection"}},
     "writableRoots":{}}}}},"credentials":{},"plugins":{}}"#;
 
 fn check_unions(source: &str) -> (usize, Vec<String>) {

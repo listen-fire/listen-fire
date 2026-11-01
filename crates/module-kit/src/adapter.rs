@@ -162,7 +162,7 @@ pub struct Field {
     pub display_name: String,
     /// `string`, `number`, `boolean`, `date`, `file`, `json`, `enum`, or
     /// `owned` (a scalar the module parses, named in `rest`'s `owned: { name,
-    /// allowPattern? }`).
+    /// allowPattern?, format? }`).
     pub kind: String,
     pub writable: bool,
     pub required: bool,
@@ -225,8 +225,8 @@ pub struct Reference {
     pub writable: bool,
     /// `readable`; `listenable`, `cursor`, `identity`, `version`; and how a
     /// listen reads it: `delivery`, `pollEverySeconds`, `bounded`,
-    /// `boundedBy`, `carries`, `scopedBy`, `attributes`, `addressed`, `cheapToList`, `parentChanges`,
-    /// `relistEverySeconds` (docs/contracts/adapter-protocol.md, "Declaring a
+    /// `boundedBy`, `carries`, `scopedBy`, `attributes`, `addressed`,
+    /// `membersChange` (docs/contracts/adapter-protocol.md, "Declaring a
     /// listenable edge").
     #[serde(flatten)]
     pub rest: Obj,

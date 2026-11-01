@@ -426,7 +426,7 @@ listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == "lunch-poll"]->-[:Reac
   }
 });
 
-test('upgrade rewrites a 0.12 Slack listen onto the edge its events name; one naming none heard two edges and holds the pin', async () => {
+test('upgrade rewrites a 0.12 Slack reaction listen onto Reactions; a message or mention listen heard thread replies too, two edges, and holds the pin', async () => {
   const old = (settings: string, param = 'Message') => `${HEADER}
 function heard(m: <chat-[:${param}]->>) {
   return "heard"
@@ -440,33 +440,34 @@ listen to chat ${settings} fire heard
     const lfYaml = join(world.dir, 'lf.yaml');
     const pinned = () => writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
 
-    for (const [settings, param, listen] of [
-      ['{ events: ["message"], channels: ["deals"] }', 'Message', 'chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[:Messages]->'],
-      // A mention is a message, so both are every message.
-      ['{ events: ["message", "app_mention"], channels: ["deals"] }', 'Message', 'chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[:Messages]->'],
-      ['{ events: ["app_mention"], channels: ["deals"] }', 'Message', 'chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[m:Messages WHERE m.`Mentions App` == true]->'],
-      ['{ events: ["reaction_added"] }', 'Reaction', 'chat-[:Channels]->-[:Messages]->-[:Reactions]->'],
-    ] as const) {
-      writeFileSync(file, old(settings, param));
-      pinned();
-      const upgraded = lfSync(world.dir, 'upgrade');
-      assert.equal(upgraded.code, 0, upgraded.out);
-      assert.equal(readFileSync(file, 'utf8'), old(settings, param).replace(`listen to chat ${settings} fire heard`, `listen to ${listen} fire heard`));
-      const checked = lfSync(world.dir, 'check');
-      assert.equal(checked.code, 0, checked.out);
-      assert.doesNotMatch(checked.out, /MOV_LISTEN_SETTINGS_RETIRED/);
-    }
+    const reactions = old('{ events: ["reaction_added"] }', 'Reaction');
+    writeFileSync(file, reactions);
+    pinned();
+    const upgraded = lfSync(world.dir, 'upgrade');
+    assert.equal(upgraded.code, 0, upgraded.out);
+    assert.equal(readFileSync(file, 'utf8'), reactions.replace('listen to chat { events: ["reaction_added"] } fire heard', 'listen to chat-[:Channels]->-[:Messages]->-[:Reactions]-> fire heard'));
+    const checked = lfSync(world.dir, 'check');
+    assert.equal(checked.code, 0, checked.out);
+    assert.doesNotMatch(checked.out, /MOV_LISTEN_SETTINGS_RETIRED/);
 
-    // A message and a reaction arrive on two edges: no one listen to rewrite
-    // it to. Naming no events, a 0.12 listen heard both.
-    for (const settings of ['{ events: ["message", "reaction_added"] }', '{ channels: ["deals"] }']) {
-      const both = old(settings);
-      writeFileSync(file, both);
+    // 0.12 heard a thread reply as a message (and a mention in a thread as a
+    // mention); a reply now arrives on its root's Replies: no one listen.
+    const replies = '`-[:Channels]->-[:Messages]->` and `-[:Channels]->-[:Messages]->-[:Replies]->`';
+    for (const [settings, said] of [
+      ['{ events: ["message"], channels: ["deals"] }', replies],
+      ['{ events: ["app_mention"], channels: ["deals"] }', replies],
+      ['{ events: ["message", "app_mention"], channels: ["deals"] }', replies],
+      // A message and a reaction, as a listen naming no events heard.
+      ['{ events: ["message", "reaction_added"] }', `${replies} and \`-[:Channels]->-[:Messages]->-[:Reactions]->\``],
+      ['{ channels: ["deals"] }', `${replies} and \`-[:Channels]->-[:Messages]->-[:Reactions]->\``],
+    ] as const) {
+      const held = old(settings);
+      writeFileSync(file, held);
       pinned();
-      const held = lfSync(world.dir, 'upgrade');
-      assert.equal(held.code, 1, held.out);
-      assert.match(held.out, /its events arrive on `-\[:Channels\]->-\[:Messages\]->` and `-\[:Channels\]->-\[:Messages\]->-\[:Reactions\]->`, so write one listen for each/);
-      assert.equal(readFileSync(file, 'utf8'), both);
+      const told = lfSync(world.dir, 'upgrade');
+      assert.equal(told.code, 1, told.out);
+      assert.ok(told.out.includes(`its events arrive on ${said}, so write one listen for each`), told.out);
+      assert.equal(readFileSync(file, 'utf8'), held);
     }
   } finally {
     await world.close();

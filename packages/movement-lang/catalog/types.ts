@@ -149,6 +149,16 @@ export interface SettingsBecome {
   /** How the `field` and `becomes` keys of a module whose records hold their
    *  row before and after compare those rows. */
   fieldChange?: FieldChange;
+  /** Where the traversal hears otherwise than the settings listen did
+   *  (gmail's `label_added`: a label removed and added again fires again): a
+   *  listen taking this mapping is told the note and rewritten never safely,
+   *  so `listen-fire upgrade` holds the pin until `--all`. */
+  changed?: string;
+  /** The other paths these events arrive on (Slack's messages: a thread
+   *  reply arrives on its root message's `Replies`): a listen taking this
+   *  mapping heard more than one edge, so it has no rewrite, one listen per
+   *  edge. */
+  alsoArrivesOn?: string[][];
 }
 
 /** Two settings keys that compare a record's row before and after on one
@@ -181,9 +191,11 @@ export interface KeyBecomes {
   field?: string;
   op: KeyOp;
   /** A settings value's spelling as a field value (`"record.created"` →
-   *  `"created"`, or Slack's `"app_mention"` → `true` on a flag); absent, a
-   *  value is the field's as written. */
-  values?: Record<string, string | boolean>;
+   *  `"created"`, or Slack's `"app_mention"` → `true` on a flag), by its text
+   *  (`true` and `false` by theirs); `null`, a value that narrowed nothing
+   *  (GitHub's `participating: false`: every thread), so the key compares
+   *  nothing. Absent, a value is the field's as written. */
+  values?: Record<string, string | boolean | null>;
   /** What a 0.12 listen meant by leaving the key out, as a settings value
    *  (`""`: mail sent to the box itself; a list: the events it heard). The
    *  rewrite of a listen that omits the key compares it, so the traversal
@@ -493,17 +505,14 @@ export interface EdgeListening {
    *  says so at its default level; on any other edge that is said only under
    *  `LF_LOG=debug`. */
   addressed?: boolean;
-  /** Listing it is cheap enough to re-list on a schedule (a base's tables;
-   *  never every message in a workspace), so a filter on it as an earlier
-   *  hop can be re-resolved. */
-  cheapToList?: boolean;
-  /** The module reports when one of its members is created, renamed or
-   *  removed, so a listen re-resolves on the report and never on a clock. */
-  parentChanges?: 'pushed';
-  /** How often, in seconds, its members are re-listed by default when the
-   *  module does not report their changes (lf.yaml's `resolveEvery`
-   *  overrides it). */
-  relistEverySeconds?: number;
+  /** How a listen learns its members changed, so a filter on it as an
+   *  earlier hop is re-resolved: declared only where listing it is cheap (a
+   *  base's tables; never every message in a workspace). `"pushed"`: the
+   *  module reports each member created, renamed or removed, so a listen
+   *  re-resolves on the report and never on a clock. `{ relistEverySeconds }`:
+   *  its members are re-listed this often by default (lf.yaml's
+   *  `resolveEvery` overrides it). */
+  membersChange?: 'pushed' | { relistEverySeconds: number };
 }
 
 /** A reference (edge) declared by a position type. */
@@ -847,6 +856,10 @@ export interface PositionSchema {
    *  the two differ: a host reads an arrival's fields by name before judging
    *  it, as a run reads them. */
   fieldIds?: Record<string, string>;
+  /** The fields whose meaning its module changed in a release, by name: a
+   *  check for an upgrade from before that release warns where a program
+   *  reads one (gmail's `Labels`, ids before 0.13 and names since). */
+  changedFields?: Record<string, { release: string; note: string }>;
 }
 
 
@@ -1467,8 +1480,8 @@ export type SchemaFieldType =
   | { kind: 'enum'; options: string[]; open?: { allowPattern?: string } }
   /** A named scalar its owner (the module that declared it) parses: a cron
    *  schedule, a mailbox key. `allowPattern` is the least an owner says of
-   *  its values. */
-  | { kind: 'owned'; name: string; owner: string; allowPattern?: string }
+   *  its values; `format`, a format the checker validates a literal by. */
+  | { kind: 'owned'; name: string; owner: string; allowPattern?: string; format?: 'cron' | 'timeZone' }
   | { kind: 'maybeAbsent'; of: SchemaFieldType }
   /** A record's fields held as the field's value (`c.Current`): typed as a
    *  plain object of that position's fields, never as the record. It has no

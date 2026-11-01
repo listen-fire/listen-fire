@@ -164,6 +164,10 @@ pub const AWAIT_NEEDS_CADENCE: &str = "MOV_AWAIT_NEEDS_CADENCE";
 pub const UNTIL_EDGE_WATCHABLE: &str = "MOV_UNTIL_EDGE_WATCHABLE";
 pub const AWAIT_BARE_WALK: &str = "MOV_AWAIT_BARE_WALK";
 pub const AWAIT_UNORDERED: &str = "MOV_AWAIT_UNORDERED";
+/// A warning raised only by a check for an upgrade from before the release
+/// a module says changed a field's meaning (`changedIn`), where a program
+/// reads the field: nothing to rewrite, the author checks each read.
+pub const FIELD_MEANING_CHANGED: &str = "MOV_FIELD_MEANING_CHANGED";
 /// A warning raised only by a check for an upgrade from before 0.13, with
 /// nothing to rewrite: a wait's WHERE reads a run record's field once.
 pub const AWAIT_VALUE_CAPTURED: &str = "MOV_AWAIT_VALUE_CAPTURED";

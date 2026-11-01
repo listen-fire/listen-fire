@@ -4,15 +4,21 @@
 
 import type { AdapterManifest } from 'movement-engine/public/adapter';
 
-import { AFFINITY_CHANGE_KINDS, AFFINITY_CHANGED_ENTITIES, AFFINITY_CHANGES_EDGE, type AffinityChangedEntity } from './changes';
+import { AFFINITY_CHANGE_KINDS, AFFINITY_CHANGED_ENTITIES, AFFINITY_CHANGES_EDGE, type AffinityChangeKind, type AffinityChangedEntity } from './changes';
 import { AFFINITY_HANDBOOK_SECTION } from './handbook_section';
 import { AFFINITY_ADAPTER_TYPE, ENTITY_DISPLAY_NAMES } from './types';
 
 /** What a 0.12 listen naming `entity`'s own events becomes: a listen on that
- *  entity's `Changes`, its events compared as `Kind`. */
-function changesOf(entity: AffinityChangedEntity) {
+ *  entity's `Changes`, its events compared as `Kind`. An `updated` change is
+ *  also a field value set or cleared on the entity, which 0.12 heard only as a
+ *  `field_value` event, so a listen naming `<entity>.updated` hears more: its
+ *  rewrite says so and is never applied safely. */
+function changesOf(entity: AffinityChangedEntity, kind: AffinityChangeKind) {
   const recordType = ENTITY_DISPLAY_NAMES[entity];
   return {
+    ...(kind === 'updated'
+      ? { changed: `\`Kind == "updated"\` also hears each field value set or cleared on the ${recordType.toLowerCase()}, which 0.12 heard only as field_value events: add \`AND c.Field == null\` to hear the ${recordType.toLowerCase()}'s own updates alone` }
+      : {}),
     path: [recordType, AFFINITY_CHANGES_EDGE],
     aliases: [entity.charAt(0), 'c'],
     // The 0.12 record a fired parameter was typed as.
@@ -23,7 +29,7 @@ function changesOf(entity: AffinityChangedEntity) {
   };
 }
 
-const ORGANIZATION_CHANGES = changesOf('organization');
+const ORGANIZATION_CHANGES = changesOf('organization', 'created');
 
 /** The events of the entities whose changes a mapping can state. */
 const ENTITY_EVENTS = AFFINITY_CHANGED_ENTITIES.flatMap((entity) => AFFINITY_CHANGE_KINDS.map((kind) => [`${entity}.${kind}`, kind] as const));
@@ -70,7 +76,7 @@ export const AFFINITY_MANIFEST: AdapterManifest = {
   listenSettingsBecome: {
     ...ORGANIZATION_CHANGES,
     keys: { events: { ...ORGANIZATION_CHANGES.keys.events, values: Object.fromEntries(ENTITY_EVENTS), absent: ENTITY_EVENTS.map(([event]) => event) } },
-    byEvent: Object.fromEntries(AFFINITY_CHANGED_ENTITIES.flatMap((entity) => AFFINITY_CHANGE_KINDS.map((kind) => [`${entity}.${kind}`, changesOf(entity)]))),
+    byEvent: Object.fromEntries(AFFINITY_CHANGED_ENTITIES.flatMap((entity) => AFFINITY_CHANGE_KINDS.map((kind) => [`${entity}.${kind}`, changesOf(entity, kind)]))),
   },
   triggerExpectation:
     'Listen-Fire registers one Affinity webhook for a connection when a listen on a record’s Changes ' +

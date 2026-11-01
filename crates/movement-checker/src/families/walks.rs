@@ -508,7 +508,25 @@ pub fn observe_read(typing: &mut Typing, position: Option<&Position>, property: 
     {
         report_read(typing, position, property);
         crate::families::writes::report_write_only_property(typing, Some(position), property, ty);
+        report_meaning_changed(typing, position, property);
     }
+}
+
+/// MOV_FIELD_MEANING_CHANGED: on a check for an upgrade from before the
+/// release its module says changed what the field holds (`changedFields`),
+/// a read of it. A warning with nothing to rewrite: the pin still moves.
+pub(crate) fn report_meaning_changed(typing: &mut Typing, position: &Position, property: &str) {
+    let Some(pin) = typing.env.upgrading_from().map(str::to_string) else { return };
+    let Some(schema) = position_schema_of_ref(position) else { return };
+    let Some(changed) = schema.changed_fields.as_ref().and_then(|fields| fields.get(property)) else { return };
+    if movement_parser::version::standing(&pin, &changed.release) != movement_parser::version::Standing::OlderKey {
+        return;
+    }
+    let message = format!("'{property}' changed meaning in {}: {}. Under {pin} it held what it held then: check this read before moving the pin", changed.release, changed.note);
+    let mut note = crate::diagnostic::Diagnostic::error(codes::FIELD_MEANING_CHANGED, message, typing.span);
+    note.severity = Some(Severity::Warning);
+    note.upgrade = Some(true);
+    typing.diagnostics.push(note);
 }
 
 /// `refuseUnsentFile`: a write handle's file field the write did not send

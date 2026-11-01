@@ -440,7 +440,7 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
     const bases = entries.filter((e) => e.collectionName === 'Bases');
     expect(bases.every((e) => e.readable && !e.writable)).toBe(true);
     // Listed again on a clock: Airtable reports no base made or renamed.
-    expect(bases[0]).toMatchObject({ cheapToList: true, relistEverySeconds: 3600 });
+    expect(bases[0]).toMatchObject({ membersChange: { relistEverySeconds: 3600 } });
   });
 
   // A table's changes are announced, never listed: a webhook per table
@@ -451,7 +451,7 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
     const { adapter } = makeMultiBaseAdapter({ teamId: 'team-air-ev', bases: [crm(), ops()] });
     const base = await adapter.describe('Base');
     expect(base?.references.find((r) => r.name === 'Tables')).toMatchObject({
-      targetTypeId: 'Table', readable: true, cheapToList: true, parentChanges: 'pushed', listenable: true, delivery: 'scope', identity: 'Id',
+      targetTypeId: 'Table', readable: true, membersChange: 'pushed', listenable: true, delivery: 'scope', identity: 'Id',
     });
     const table = await adapter.describe('Table');
     expect(table?.fields.map((f) => f.fieldId)).toEqual(['Name', 'Id']);
@@ -475,7 +475,7 @@ describe('AirtableAdapter entry-position (base) scoping', () => {
     const entries = await adapter.listEntryPoints();
     // The base's own `Tables`, reported to the connection, beside its tables.
     expect(entries.map((e) => e.collectionName ?? e.displayName)).toEqual(['Tables', 'Change', 'Row', 'Tasks']);
-    expect(entries[0]).toMatchObject({ readable: true, listenable: true, parentChanges: 'pushed', delivery: 'connection' });
+    expect(entries[0]).toMatchObject({ readable: true, listenable: true, membersChange: 'pushed', delivery: 'connection' });
     expect(entries[3].externalId).toBe('tblTASKS01');
     // The other base's tables were never enumerated — this is the timeout fix.
     expect(listedTableBaseIds).toEqual(['appOPS01']);

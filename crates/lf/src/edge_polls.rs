@@ -18,7 +18,7 @@
 //! connection (its arrivals name the head they are under).
 //!
 //! A resolved hop whose module reports its records' changes
-//! (`parentChanges: pushed`) is watched for the listen too: listen-fire
+//! (`membersChange: "pushed"`) is watched for the listen too: listen-fire
 //! polls or subscribes to that hop's edge itself, sharing the key of any
 //! listen on it, and what arrives there fires nothing of the listen's own:
 //! it lists the listen's heads again (crate::resolve). One its module

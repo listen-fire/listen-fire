@@ -2,8 +2,8 @@
 // (`listen to f-[b:Boards WHERE b.Name == "Ops"]->-[n:Notes]-> fire a`) is
 // watched on the boards that match: listen-fire lists them through the engine,
 // polls each one's notes, and lists them again as the module declares — every
-// `relistEverySeconds`, or on each arrival on `Boards` when it declares
-// `parentChanges: pushed` (listen-fire polls `Boards` itself for it) — and as
+// `membersChange: { relistEverySeconds }`, or on each arrival on `Boards` when it declares
+// `membersChange: "pushed"` (listen-fire polls `Boards` itself for it) — and as
 // it opens when the filter was edited. Over lf.yaml's `listenScopeLimit` the
 // listen is suspended, by name. The store keeps the boards, and every process
 // watches what it keeps. `listen-fire listens` says where each listen stands.
@@ -214,7 +214,7 @@ test('a listen whose boards declare no cadence and report nothing is resolved at
   const check = lf(dir, 'check');
   assert.equal(check.code, 0, check.out);
   const opened = lfAt(dir, ['drain', '--until-idle']);
-  const said = "listen-fire: notes:a is resolved at open only: no hop it resolves declares relistEverySeconds or parentChanges: pushed, so the Boards it watches are listed again only when listen-fire opens; lf.yaml's `resolveEvery: { feed: <duration> }` lists them on a clock";
+  const said = "listen-fire: notes:a is resolved at open only: no hop it resolves declares membersChange, so the Boards it watches are listed again only when listen-fire opens; lf.yaml's `resolveEvery: { feed: <duration> }` lists them on a clock";
   assert.equal(opened.out.split(said).length - 1, 1, opened.out);
   assert.match(listensLine(dir), / — watching 1 Board, resolved at open only \(\d+s ago\) — ok;/);
   appendFileSync(join(dir, 'lf.yaml'), 'resolveEvery:\n  feed: 5m\n');

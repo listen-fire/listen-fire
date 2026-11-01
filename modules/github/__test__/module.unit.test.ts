@@ -103,7 +103,7 @@ describe('githubModule', () => {
       path: ['Notifications'],
       aliases: ['n'],
       paramFrom: 'Notification',
-      keys: { events: { hop: 0, field: 'Reason', op: 'in' }, participating: { hop: 0, field: 'Participating', op: 'eq' } },
+      keys: { events: { hop: 0, field: 'Reason', op: 'in' }, participating: { hop: 0, field: 'Participating', op: 'eq', values: { true: true, false: null } } },
     });
     expect(githubModule.manifest.methods).toEqual(expect.arrayContaining(['createRecord']));
     expect(githubModule.manifest.methods).not.toEqual(expect.arrayContaining(['updateRecord']));

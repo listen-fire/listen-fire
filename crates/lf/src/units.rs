@@ -90,15 +90,15 @@ pub fn describe(unit: &str, type_ref: &str) -> Option<Js> {
 pub fn descriptors(unit: &str) -> Vec<Js> {
     let field = |id: &str, name: &str, kind: &str, required: bool| json!({ "fieldId": id, "displayName": name, "kind": kind, "writable": false, "required": required });
     // A scalar only the cron unit reads, compared by `==` or `IN`.
-    let owned = |id: &str, name: &str, scalar: &str| {
-        json!({ "fieldId": id, "displayName": name, "kind": "owned", "owned": { "name": scalar }, "writable": false, "required": true, "capability": { "filterOperators": ["eq", "in"] } })
+    let owned = |id: &str, name: &str, scalar: &str, format: &str| {
+        json!({ "fieldId": id, "displayName": name, "kind": "owned", "owned": { "name": scalar, "format": format }, "writable": false, "required": true, "capability": { "filterOperators": ["eq", "in"] } })
     };
     let list = match unit {
         CRON => vec![json!({
             "typeId": "tick",
             "displayName": "Tick",
             "description": "One scheduled firing: when it was due, on which schedule, in which zone.",
-            "fields": [field("firedAt", "Fired at", "date", true), owned("schedule", "Schedule", "Cron"), owned("zone", "Zone", "Zone")],
+            "fields": [field("firedAt", "Fired at", "date", true), owned("schedule", "Schedule", "Cron", "cron"), owned("zone", "Zone", "Zone", "timeZone")],
             "references": [],
         })],
         _ => vec![

@@ -72,10 +72,12 @@ impl Declared<'_> {
         }
     }
 
-    fn cheap_to_list(&self) -> bool {
+    /// Whether a listen learns its members changed (`membersChange`): a
+    /// filter on it as an earlier hop is then re-resolved.
+    fn members_change_learnt(&self) -> bool {
         match self {
-            Declared::Collection(c) => c.cheap_to_list == Some(true),
-            Declared::Edge(e) => e.cheap_to_list == Some(true),
+            Declared::Collection(c) => c.members_change.is_some(),
+            Declared::Edge(e) => e.members_change.is_some(),
         }
     }
 
@@ -560,7 +562,7 @@ fn judging(hops: &[Hop], i: usize) -> Judging {
         Judging::None
     } else if last.edge.carries().iter().any(|c| *c == hop.step.edge_type_id) {
         Judging::Arrival
-    } else if hops[..=i].iter().all(|h| h.edge.cheap_to_list()) {
+    } else if hops[..=i].iter().all(|h| h.edge.members_change_learnt()) {
         Judging::Resolved
     } else {
         Judging::Unwatchable

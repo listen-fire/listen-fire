@@ -77,14 +77,15 @@ export const GITHUB_MANIFEST: AdapterManifest = {
   requiredCredentialType: 'GITHUB',
   // A 0.12 `listen to gh { events: [...], participating: true }` is
   // `listen to gh-[n:Notifications WHERE n.Reason IN [...] AND n.Participating == true]->`
-  // (`listen-fire upgrade`).
+  // (`listen-fire upgrade`). `participating: false` narrowed nothing in 0.12
+  // (every thread), so it compares nothing.
   listenSettingsBecome: {
     path: [GITHUB_NOTIFICATIONS_COLLECTION],
     aliases: ['n'],
     paramFrom: GITHUB_NOTIFICATION_DISPLAY_NAME,
     keys: {
       events: { hop: 0, field: 'Reason', op: 'in' },
-      participating: { hop: 0, field: GITHUB_PARTICIPATING_FIELD, op: 'eq' },
+      participating: { hop: 0, field: GITHUB_PARTICIPATING_FIELD, op: 'eq', values: { true: true, false: null } },
     },
   },
   triggerKinds: ['GITHUB'],

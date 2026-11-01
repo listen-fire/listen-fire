@@ -43,6 +43,15 @@ const CATALOG: &str = r#"{"adapters":{
       "Notification":{"properties":{"Reason":"text","Title":"text"},"edges":{}}},
       "collections":{"Notifications":{"target":"Notification","listenable":true,"identity":"Id","delivery":"polled","pollEverySeconds":60}},
       "writableRoots":{}}}},
+  "ghm":{"canFire":true,"constructionArgs":[],
+    "listenSettingsBecome":{"path":["Notifications"],"aliases":["n"],"paramFrom":"Notification",
+      "keys":{"events":{"hop":0,"field":"Reason","op":"in"},"participating":{"hop":0,"field":"Participating","op":"eq","values":{"true":true,"false":null}}},
+      "byEvent":{"mention":{"path":["Notifications"],"aliases":["n"],"paramFrom":"Notification","keys":{"events":{"hop":0,"field":"Reason","op":"in"},"participating":{"hop":0,"field":"Participating","op":"eq","values":{"true":true,"false":null}}}},"assign":{"path":["Notifications"],"aliases":["n"],"paramFrom":"Notification","keys":{"events":{"hop":0,"field":"Reason","op":"in"},"participating":{"hop":0,"field":"Participating","op":"eq","values":{"true":true,"false":null}}},"changed":"an assignment now also hears a review request"},"comment":{"path":["Notifications"],"aliases":["n"],"paramFrom":"Notification","keys":{"events":{"hop":0,"field":"Reason","op":"in"},"participating":{"hop":0,"field":"Participating","op":"eq","values":{"true":true,"false":null}}},"alsoArrivesOn":[["Threads"]]}}},
+    "schemas":{"":{"positions":{
+      "Notification":{"properties":{"Reason":"text","Participating":"boolean"},"edges":{}}},
+      "collections":{"Notifications":{"target":"Notification","listenable":true,"identity":"Id","delivery":"polled","pollEverySeconds":60},
+        "Threads":{"target":"Notification","listenable":true,"identity":"Id","delivery":"polled","pollEverySeconds":60}},
+      "writableRoots":{}}}},
   "ghk":{"canFire":true,"constructionArgs":[],
     "listenSettingsBecome":{"path":["Notifications"],"aliases":["n"],
       "keys":{"kind":{"hop":0,"field":"Subject","op":"eq","values":{"pr":"PullRequest"}}}},
@@ -58,12 +67,12 @@ const CATALOG: &str = r#"{"adapters":{
       "fieldChange":{"hop":2,"field":"field","becomes":"becomes","current":"Current","previous":"Previous"}},
     "schemas":{
       "":{"positions":{
-        "Base":{"properties":{"Id":"text","Name":"text"},"edges":{"Tables":{"target":"Table","cheapToList":true,"parentChanges":"pushed"}}},
+        "Base":{"properties":{"Id":"text","Name":"text"},"edges":{"Tables":{"target":"Table","membersChange":"pushed"}}},
         "Table":{"properties":{"Id":"text","Name":"text"},"edges":{"Changes":{"target":"Change","readable":false,"listenable":true,"identity":"Id","delivery":"scope"}}},
         "Change":{"properties":{"Id":"text","Kind":"text","Current":__HELD_ROW__,"Previous":__HELD_ROW__},"edges":{}},
         "Row":{"properties":{"Id":"text"},"edges":{}},
         "Record Change":{"properties":{"Field":"text"},"edges":{}}},
-        "collections":{"Bases":{"target":"Base","cheapToList":true,"relistEverySeconds":300}},
+        "collections":{"Bases":{"target":"Base","membersChange":{"relistEverySeconds":300}}},
         "writableRoots":{}},
       "::[[\"base\",\"Hiring\"]]":{"positions":{
         "Table":{"properties":{"Id":"text","Name":"text"},"edges":{"Changes":{"target":"Change","readable":false,"listenable":true,"identity":"Id","delivery":"scope"}}},
@@ -73,7 +82,7 @@ const CATALOG: &str = r#"{"adapters":{
         "Row":{"properties":{"Id":"text"},"edges":{}},
         "Candidates":{"properties":{"Id":"text","Stage":"text","Files":{"kind":"list","of":"file"}},"edges":{}},
         "Record Change":{"properties":{"Field":"text"},"edges":{}}},
-        "collections":{"Tables":{"target":"Table","cheapToList":true,"parentChanges":"pushed"}},
+        "collections":{"Tables":{"target":"Table","membersChange":"pushed"}},
         "refinements":{"__CANDIDATES_KEY__":"Table \"Candidates\""},
         "writableRoots":{}}}},
   "hook":{"canFire":true,"constructionArgs":[],
@@ -171,6 +180,7 @@ const CATALOG: &str = r#"{"adapters":{
 const GH: &str = "import { gh as gh_module } from adapters\ngh = connect gh_module\n";
 const GHD: &str = "import { ghd as ghd_module } from adapters\nghd = connect ghd_module\n";
 const GHV: &str = "import { ghv as ghv_module } from adapters\nghv = connect ghv_module\n";
+const GHM: &str = "import { ghm as ghm_module } from adapters\nghm = connect ghm_module\n";
 const GHK: &str = "import { ghk as ghk_module } from adapters\nghk = connect ghk_module\n";
 const HIRING: &str = "import { at as at_module } from adapters\nhiring = connect at_module { base: \"Hiring\" }\n";
 const AT: &str = "import { at as at_module } from adapters\nat = connect at_module\n";
@@ -795,4 +805,42 @@ fn a_listen_on_a_channel_s_messages_and_their_reactions_takes_the_edge_its_event
         "{}",
         retired(&d).message
     );
+}
+
+#[test]
+fn a_value_that_narrowed_nothing_compares_nothing_and_its_opposite_compares_as_spelled() {
+    let listen = |settings: &str| format!("{GHM}function triage(n: <ghm-[:Notification]->>) {{ return 1 }}\nlisten to ghm {{ {settings} }} fire triage\n");
+    let every = listen("participating: false");
+    let d = diagnostics(&every);
+    assert_eq!(retired(&d).fix.as_ref().unwrap()["safe"], true, "{d:?}");
+    let text = fixed(&every, &d);
+    assert!(text.ends_with("listen to ghm-[:Notifications]-> fire triage\n"), "{text}");
+    assert_rechecks_clean(&text);
+    let mine = listen("participating: true");
+    let text = fixed(&mine, &diagnostics(&mine));
+    assert!(text.ends_with("listen to ghm-[n:Notifications WHERE n.Participating == true]-> fire triage\n"), "{text}");
+    assert_rechecks_clean(&text);
+}
+
+#[test]
+fn a_mapping_that_hears_otherwise_is_rewritten_unsafely_with_its_note_whichever_mapping_is_taken() {
+    let source = format!("{GHM}function triage(n: <ghm-[:Notification]->>) {{ return 1 }}\nlisten to ghm {{ events: [\"mention\", \"assign\"] }} fire triage\n");
+    let d = diagnostics(&source);
+    let told = retired(&d);
+    assert!(
+        told.message.ends_with("Write `listen to ghm-[n:Notifications WHERE n.Reason IN [\"mention\", \"assign\"]]-> fire triage` (an assignment now also hears a review request)"),
+        "{}",
+        told.message
+    );
+    assert_eq!(told.fix.as_ref().unwrap().get("safe"), None, "the meaning changes: --all applies it");
+    assert_rechecks_clean(&fixed(&source, &d));
+}
+
+#[test]
+fn events_that_also_arrive_on_another_edge_have_no_fix_and_are_told_to_write_one_listen_per_edge() {
+    let source = format!("{GHM}function triage(n: <ghm-[:Notification]->>) {{ return 1 }}\nlisten to ghm {{ events: [\"comment\"] }} fire triage\n");
+    let d = diagnostics(&source);
+    let told = retired(&d);
+    assert!(told.message.ends_with("(there is no rewrite: its events arrive on `Notifications` and `Threads`, so write one listen for each)"), "{}", told.message);
+    assert_eq!(told.fix, None);
 }

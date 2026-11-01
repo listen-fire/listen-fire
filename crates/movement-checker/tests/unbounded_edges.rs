@@ -25,8 +25,8 @@ use movement_parser::lowering::expression::{Expression, TraversalStep};
 const CATALOG: &str = r#"{"adapters":{
   "cron":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
     "Tick":{"properties":{
-        "Schedule":{"kind":"owned","name":"Cron","owner":"cron"},
-        "Zone":{"kind":"owned","name":"Zone","owner":"cron"},
+        "Schedule":{"kind":"owned","name":"Cron","owner":"cron","format":"cron"},
+        "Zone":{"kind":"owned","name":"Zone","owner":"cron","format":"timeZone"},
         "Name":"text"},
       "edges":{},
       "propertyCapabilities":{"Schedule":{"filterOperators":["eq","in"]},"Zone":{"filterOperators":["eq"]},"Name":{"filterOperators":["eq"]}}}},
@@ -52,11 +52,11 @@ const CATALOG: &str = r#"{"adapters":{
       "edges":{},
       "propertyCapabilities":{"Query":{"filterOperators":["eq"]},"Subject":{},
         "Tags":{"filterOperators":["contains","containsAny"]},"Topics":{"filterOperators":["contains"]},"Regions":{"filterOperators":["contains"]}}},
-    "Draft":{"properties":{"Body":"text","SendIn":{"kind":"owned","name":"Zone","owner":"gmail"}},"edges":{}}},
+    "Draft":{"properties":{"Body":"text","SendIn":{"kind":"owned","name":"Zone","owner":"gmail","format":"timeZone"}},"edges":{}}},
     "collections":{
       "Messages":{"target":"Message","capability":{"filter":"native","supportsLimit":false}},
       "Drafts":{"target":"Draft","readable":false}},
-    "writableRoots":{"Draft":{"fields":{"Body":"text","SendIn":{"kind":"owned","name":"Zone","owner":"gmail"}},"resultShape":{"externalId":"text"}}}}}},
+    "writableRoots":{"Draft":{"fields":{"Body":"text","SendIn":{"kind":"owned","name":"Zone","owner":"gmail","format":"timeZone"}},"resultShape":{"externalId":"text"}}}}}},
   "crm":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
     "Person":{"properties":{"Name":"text"},"edges":{}},
     "Org":{"properties":{"Name":"text"},"edges":{}}},

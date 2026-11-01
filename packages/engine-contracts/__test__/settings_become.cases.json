@@ -134,6 +134,16 @@
       "name": "absent values a neq key cannot compare",
       "become": { "path": ["Notifications"], "aliases": ["n"], "keys": { "events": { "hop": 0, "field": "Reason", "op": "neq", "absent": ["mention", "assign"] } } },
       "refusal": "'listenSettingsBecome' gives 'events' 2 absent values, but a 'neq' key compares one"
+    },
+    {
+      "name": "another path the events arrive on, read as the path is",
+      "become": { "path": ["Bases", "Tables", "Changes"], "aliases": ["b", "t", "c"], "keys": {}, "alsoArrivesOn": [["Bases", "Tables"]] },
+      "refusal": null
+    },
+    {
+      "name": "another path the events arrive on naming an edge its type does not have",
+      "become": { "path": ["Bases", "Tables", "Changes"], "aliases": ["b", "t", "c"], "keys": {}, "alsoArrivesOn": [["Bases", "Sheets"]] },
+      "refusal": "'listenSettingsBecome' names 'Sheets' after 'Bases', which is no edge off 'Base' (its edges: Tables)"
     }
   ],
   "manifestReads": {
@@ -195,7 +205,7 @@
       {
         "name": "a value spelled as a number",
         "raw": { "path": ["Messages"], "aliases": ["m"], "keys": { "events": { "hop": 0, "field": "Count", "op": "eq", "values": { "one": 1 } } } },
-        "refusal": "listenSettingsBecome.keys.values: expected each value spelled as a text or true or false"
+        "refusal": "listenSettingsBecome.keys.values: expected each value spelled as a text, true, false or null"
       },
       {
         "name": "an event's own mapping is kept, read as the module's is; its own byEvent is stripped",
@@ -223,6 +233,22 @@
         "name": "a field change naming an empty field",
         "raw": { "path": ["Changes"], "aliases": ["c"], "keys": {}, "fieldChange": { "hop": 0, "field": "field", "becomes": "becomes", "current": "", "previous": "Previous" } },
         "refusal": "listenSettingsBecome.fieldChange.current: expected a non-empty string"
+      },
+      {
+        "name": "a value that narrowed nothing, a changed meaning and another path are kept",
+        "raw": { "path": ["Notifications"], "aliases": ["n"], "keys": { "participating": { "hop": 0, "field": "Participating", "op": "eq", "values": { "true": true, "false": null } } }, "changed": "it hears more", "alsoArrivesOn": [["Replies"]] },
+        "read": { "path": ["Notifications"], "aliases": ["n"], "keys": { "participating": { "hop": 0, "field": "Participating", "op": "eq", "values": { "true": true, "false": null } } }, "changed": "it hears more", "alsoArrivesOn": [["Replies"]] },
+        "refusal": null
+      },
+      {
+        "name": "a changed meaning that says nothing",
+        "raw": { "path": ["Notifications"], "aliases": ["n"], "keys": {}, "changed": "" },
+        "refusal": "listenSettingsBecome.changed: expected a non-empty string"
+      },
+      {
+        "name": "another path that names no edge",
+        "raw": { "path": ["Notifications"], "aliases": ["n"], "keys": {}, "alsoArrivesOn": [[]] },
+        "refusal": "listenSettingsBecome.alsoArrivesOn: expected paths of non-empty edge names, each at least one edge"
       }
     ]
   }

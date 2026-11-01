@@ -267,32 +267,20 @@ describe('a listening declaration', () => {
   });
 
   it('refuses a hop whose changes are pushed that announces nothing', () => {
-    expect(ticks({ listenable: false, cheapToList: true, parentChanges: 'pushed' })).toBe(
-      "'Ticks' declares 'parentChanges: pushed' but not 'listenable: true': the module reports its members' changes as arrivals on 'Ticks' itself, so it must announce them",
+    expect(ticks({ listenable: false, membersChange: 'pushed' })).toBe(
+      "'Ticks' declares 'membersChange: pushed' but not 'listenable: true': the module reports its members' changes as arrivals on 'Ticks' itself, so it must announce them",
     );
-    expect(ticks({ listenable: false, cheapToList: true, relistEverySeconds: 300 })).toBeUndefined();
-    expect(ticks({ cheapToList: true, parentChanges: 'pushed' })).toBeUndefined();
+    expect(ticks({ listenable: false, membersChange: { relistEverySeconds: 300 } })).toBeUndefined();
+    expect(ticks({ membersChange: 'pushed' })).toBeUndefined();
   });
 
-  it('refuses a hop cheap to list that says nothing of how its members change', () => {
-    expect(ticks({ cheapToList: true })).toBe(
-      "'Ticks' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEverySeconds': say how a listen learns its members changed",
-    );
-    expect(ticks({ cheapToList: true, relistEverySeconds: 300 })).toBeUndefined();
-    expect(ticks({ cheapToList: true, parentChanges: 'pushed' })).toBeUndefined();
-    expect(ticks({ cheapToList: true, parentChanges: 'pushed', relistEverySeconds: 300 })).toBe(
-      "'Ticks' declares both 'parentChanges: pushed' and 'relistEverySeconds': a module that reports its members' changes is not re-listed on a clock; declare one",
-    );
-    expect(ticks({ relistEverySeconds: 300 })).toBe("'Ticks' declares 'relistEverySeconds' but not 'cheapToList: true': only a hop cheap to list is re-listed");
-  });
-
-  it('refuses a delivery that is none of the three, and a parentChanges that is not pushed', () => {
+  it('refuses a delivery that is none of the three, and a members change that is neither pushed nor relisted', () => {
     expect(ticksAsWritten({ delivery: 'pushed' })).toBe(`'Ticks' declares delivery "pushed", which is none of 'connection', 'scope' or 'polled'`);
-    expect(ticksAsWritten({ cheapToList: true, parentChanges: 'polled' })).toBe(`'Ticks' declares parentChanges "polled": the one value is 'pushed'`);
-  });
-
-  it('refuses parentChanges on a hop that is not cheap to list', () => {
-    expect(ticks({ parentChanges: 'pushed' })).toBe("'Ticks' declares 'parentChanges' but not 'cheapToList: true': only a hop cheap to list is re-listed");
+    for (const declared of ['polled', { relistEverySeconds: 300, pushed: true }, {}, true]) {
+      expect(ticksAsWritten({ membersChange: declared })).toBe(
+        `'Ticks' declares membersChange ${JSON.stringify(declared)}: expected 'pushed' or { relistEverySeconds: <seconds> }`,
+      );
+    }
   });
 
   it('refuses a number of seconds that is not a positive whole number', () => {
@@ -302,8 +290,8 @@ describe('a listening declaration', () => {
       [1.5, '1.5'],
       ['300', '"300"'],
     ] as const) {
-      expect(ticksAsWritten({ cheapToList: true, relistEverySeconds: declared })).toBe(
-        `'Ticks' declares 'relistEverySeconds: ${shown}': expected a positive whole number of seconds`,
+      expect(ticksAsWritten({ membersChange: { relistEverySeconds: declared } })).toBe(
+        `'Ticks' declares 'membersChange: { relistEverySeconds: ${shown} }': expected a positive whole number of seconds`,
       );
     }
   });

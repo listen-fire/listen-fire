@@ -108,7 +108,7 @@ test('listen-fire check and catalog: what a module declares about listening reac
     ["identity: 'id',\n      version: 'Version',\n      delivery: 'connection',", "identity: 'Name',\n      version: 'Version',\n      delivery: 'polled', pollEverySeconds: 60,"],
     [
       "{ fieldId: 'Report', displayName: 'Report', kind: 'file', writable: true, required: false },",
-      "{ fieldId: 'Report', displayName: 'Report', kind: 'file', writable: true, required: false }, { fieldId: 'Schedule', displayName: 'Schedule', kind: 'owned', owned: { name: 'Cron' }, writable: false, required: false },",
+      "{ fieldId: 'Report', displayName: 'Report', kind: 'file', writable: true, required: false }, { fieldId: 'Schedule', displayName: 'Schedule', kind: 'owned', owned: { name: 'Cron', format: 'cron' }, writable: false, required: false },",
     ],
     ["adapterType: 'acme_crm',", "adapterType: 'acme_crm', resendWindowSeconds: 259200,"],
   );
@@ -130,7 +130,7 @@ test('listen-fire check and catalog: what a module declares about listening reac
   assert.deepEqual(schema.collections.Company, { target: 'Company', readable: false, listenable: true, identity: 'Name', version: 'Version', delivery: 'polled', pollEverySeconds: 60 });
   const company = JSON.stringify(schema.positions.Company);
   assert.ok(company.includes('"delivery":"connection","carries":["Company"],"attributes":true'), company);
-  assert.ok(company.includes('"Schedule":{"kind":"owned","name":"Cron","owner":"acme_crm"}'), company);
+  assert.ok(company.includes('"Schedule":{"kind":"owned","name":"Cron","owner":"acme_crm","format":"cron"}'), company);
 });
 
 const LISTENING_REFUSED: Array<{ name: string; change: [string, string]; refused: RegExp }> = [
@@ -155,19 +155,14 @@ const LISTENING_REFUSED: Array<{ name: string; change: [string, string]; refused
     refused: /'Comments' says its arrivals carry earlier hops, but 'carries' names 'Nope', which is no edge into 'Company' or a record before it \(the edges into them: Company\)/,
   },
   {
-    name: 'a root collection cheap to list that says nothing of how its members change',
-    change: ["description: 'A company.", "cheapToList: true, description: 'A company."],
-    refused: /lists 'Company': 'Company' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEverySeconds': say how a listen learns its members changed/,
-  },
-  {
-    name: 'a root collection that is pushed but not cheap to list',
-    change: ["description: 'A company.", "parentChanges: 'pushed', description: 'A company."],
-    refused: /lists 'Company': 'Company' declares 'parentChanges' but not 'cheapToList: true': only a hop cheap to list is re-listed/,
+    name: 'a members change that is neither pushed nor relisted',
+    change: ["description: 'A company.", "membersChange: 'polled', description: 'A company."],
+    refused: /lists 'Company': 'Company' declares membersChange "polled": expected 'pushed' or \{ relistEverySeconds: <seconds> \}/,
   },
   {
     name: 'a relist interval that is not a whole number of seconds',
-    change: ["description: 'A company.", "cheapToList: true, relistEverySeconds: 1.5, description: 'A company."],
-    refused: /'Company' declares 'relistEverySeconds: 1\.5': expected a positive whole number of seconds/,
+    change: ["description: 'A company.", "membersChange: { relistEverySeconds: 1.5 }, description: 'A company."],
+    refused: /'Company' declares 'membersChange: \{ relistEverySeconds: 1\.5 \}': expected a positive whole number of seconds/,
   },
   {
     name: 'a root collection that carries earlier hops',
@@ -323,7 +318,7 @@ const INTROSPECTIONS: Record<string, unknown> = {
         // No root descriptor here: the entry says what its collection takes.
         capability: { filter: 'native', supportsLimit: false },
       }),
-      entry('base', 'Base', { collectionName: 'Bases', writable: false, cheapToList: true, parentChanges: 'pushed' }),
+      entry('base', 'Base', { collectionName: 'Bases', writable: false, membersChange: 'pushed' }),
       entry('tbl', 'Table', { readable: false, writable: false }),
       entry('chg', 'Change', { readable: false, writable: false }),
       entry('log', 'Log', { readable: false }),
@@ -336,13 +331,13 @@ const INTROSPECTIONS: Record<string, unknown> = {
           displayName: 'Tick',
           fields: [
             field('fired', 'date', { displayName: 'Fired At' }),
-            field('schedule', 'owned', { displayName: 'Schedule', owned: { name: 'Cron' } }),
+            field('schedule', 'owned', { displayName: 'Schedule', owned: { name: 'Cron', format: 'cron' } }),
             field('keys', 'owned', { displayName: 'Keys', cardinality: 'many', owned: { name: 'Key', allowPattern: '^[a-z]+$' } }),
           ],
           references: [],
         },
       ],
-      ['base', { typeId: 'base', displayName: 'Base', fields: [], references: [{ fieldId: 'tables', name: 'Tables', targetTypeId: 'tbl', cardinality: 'many', direction: 'outgoing', cheapToList: true, relistEverySeconds: 300 }] }],
+      ['base', { typeId: 'base', displayName: 'Base', fields: [], references: [{ fieldId: 'tables', name: 'Tables', targetTypeId: 'tbl', cardinality: 'many', direction: 'outgoing', membersChange: { relistEverySeconds: 300 } }] }],
       [
         'tbl',
         {
@@ -369,7 +364,7 @@ const EXERCISES: Record<string, { members: string[]; notes: number }> = {
   },
   'a walked instance: a root descriptor, reached types, a scoped describe': { members: ['capability', 'edgesCarryProperties', 'undescribed'], notes: 1 },
   'a listening adapter: a listenable root, what edges say of their arrivals, owned scalars': {
-    members: ['readable', 'listenable', 'capability', 'identity', 'cursor', 'bounded', 'boundedBy', 'delivery', 'pollEverySeconds', 'carries', 'attributes', 'addressed', 'cheapToList', 'parentChanges', 'relistEverySeconds', 'owner', 'allowPattern'],
+    members: ['readable', 'listenable', 'capability', 'identity', 'cursor', 'bounded', 'boundedBy', 'delivery', 'pollEverySeconds', 'carries', 'attributes', 'addressed', 'membersChange', 'owner', 'allowPattern', 'format'],
     notes: 0,
   },
 };

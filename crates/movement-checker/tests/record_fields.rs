@@ -54,7 +54,7 @@ fn catalog() -> CatalogSnapshot {
                 "edges": { "Role": { "target": "Row" } }
             }
         },
-        "collections": { "Tables": { "target": "Table", "cheapToList": true } },
+        "collections": { "Tables": { "target": "Table", "membersChange": { "relistEverySeconds": 300 } } },
         "writableRoots": { "Candidates": { "fields": { "Name": "text" }, "resultShape": { "Id": "text" } } },
         "supportsInPlaceUpdate": true,
         "refinements": { key_of(NARROWED): "Table \"Candidates\"" },

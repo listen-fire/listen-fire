@@ -6,11 +6,11 @@
 //! run's walk reads them, with no run row; and lists them again when they may
 //! have changed:
 //!
-//! - every `relistEverySeconds` a resolved hop's module declares (the
+//! - every `membersChange`'s `relistEverySeconds` a resolved hop's module declares (the
 //!   shortest), unless lf.yaml's `resolveEvery` names another for the
 //!   connection: a `resolve_listen` work row;
 //! - on any arrival on a resolved hop's own edge, when its module declares
-//!   `parentChanges: pushed`: listen-fire polls or subscribes to that edge
+//!   `membersChange: "pushed"`: listen-fire polls or subscribes to that edge
 //!   for the listen itself (crate::edge_polls), and no row is armed for it;
 //! - as a routing process opens, for a listen never resolved (an edited
 //!   listen among them, or one whose connection is constructed otherwise:
@@ -89,7 +89,7 @@ pub struct Resolution {
     pub failure: Option<String>,
     /// By edge, the ids of the records that edge is watched under for the
     /// listen when they are not its heads: for each resolved hop whose module
-    /// reports its changes per record it hangs off (`parentChanges: pushed`
+    /// reports its changes per record it hangs off (`membersChange: "pushed"`
     /// with `delivery: scope`, Airtable's `Tables` per base), those records;
     /// for a last edge scoped by an earlier hop (`scopedBy`, Airtable's
     /// `Changes` by `Bases`), the records that hop landed on. Kept with the
@@ -250,7 +250,7 @@ fn distinct_heads(positions: &[Js]) -> Result<Vec<Head>, ResolveFailure> {
 }
 
 /// The indexes of the listen's resolved hops whose module reports their
-/// changes per record they hang off (`parentChanges: pushed` with
+/// changes per record they hang off (`membersChange: "pushed"` with
 /// `delivery: scope`): each is watched once per such record.
 pub fn reported_per_record(set: &FileSet, listen: &Listen) -> Vec<usize> {
     let hops = listen.plan.hops.as_slice();
@@ -259,7 +259,7 @@ pub fn reported_per_record(set: &FileSet, listen: &Listen) -> Vec<usize> {
         .filter(|(index, hop)| *index > 0 && hop.judged == HopJudged::Resolved)
         .filter(|(_, hop)| {
             crate::edge_polls::hop_schema(set, listen, hop).is_some_and(|declared| {
-                declared.get("parentChanges").and_then(Js::as_str) == Some("pushed") && declared.get("delivery").and_then(Js::as_str) == Some("scope")
+                pushed(&declared) && declared.get("delivery").and_then(Js::as_str) == Some("scope")
             })
         })
         .map(|(index, _)| index)
@@ -361,8 +361,8 @@ pub fn watch_kept(session: &Session, set: &FileSet) -> Result<Kept, String> {
 }
 
 /// The line said of a listen resolved only as listen-fire opens: none of
-/// its resolved hops declares a cadence (`relistEverySeconds`) or reports
-/// its changes (`parentChanges: pushed`), and lf.yaml names no
+/// its resolved hops declares a cadence (`membersChange: { relistEverySeconds }`) or reports
+/// its changes (`membersChange: "pushed"`), and lf.yaml names no
 /// `resolveEvery` for its connection. None for any other.
 pub fn at_open_only(session: &Session, set: &FileSet, listen: &Listen) -> Option<String> {
     if !resolved_at_open_only(session, set, listen) {
@@ -370,7 +370,7 @@ pub fn at_open_only(session: &Session, set: &FileSet, listen: &Listen) -> Option
     }
     let connection = listen.credential.as_deref().unwrap_or(&listen.adapter);
     Some(format!(
-        "{}:{} is resolved at open only: no hop it resolves declares relistEverySeconds or parentChanges: pushed, so the {}s it watches are listed again only when listen-fire opens; lf.yaml's `resolveEvery: {{ {connection}: <duration> }}` lists them on a clock",
+        "{}:{} is resolved at open only: no hop it resolves declares membersChange, so the {}s it watches are listed again only when listen-fire opens; lf.yaml's `resolveEvery: {{ {connection}: <duration> }}` lists them on a clock",
         listen.file,
         listen.movement_name,
         position_of(listen)
@@ -453,9 +453,9 @@ pub fn counted(n: usize, position: &str) -> String {
 
 /// How often the listen is resolved again on a clock, in milliseconds: the
 /// operator's `resolveEvery` for its connection (the credential it names,
-/// else its module), else the shortest `relistEverySeconds` its resolved
+/// else its module), else the shortest `membersChange`'s `relistEverySeconds` its resolved
 /// hops declare. None: no hop declares one (its module reports its parents'
-/// changes, `parentChanges: pushed`), and the operator names none.
+/// changes, `membersChange: "pushed"`), and the operator names none.
 pub fn every_ms(set: &FileSet, listen: &Listen, resolve_every: &std::collections::BTreeMap<String, i64>) -> Option<i64> {
     if !crate::edge_polls::resolves(listen) {
         return None;
@@ -465,7 +465,7 @@ pub fn every_ms(set: &FileSet, listen: &Listen, resolve_every: &std::collections
     }
     resolved_hops(set, listen)
         .into_iter()
-        .filter_map(|(_, declared)| match declared.get("relistEverySeconds") {
+        .filter_map(|(_, declared)| match declared.get("membersChange").and_then(|change| change.get("relistEverySeconds")) {
             Some(Js::Num(seconds)) => seconds.as_u64(),
             _ => None,
         })
@@ -473,7 +473,7 @@ pub fn every_ms(set: &FileSet, listen: &Listen, resolve_every: &std::collections
 }
 
 /// The edges of the listen's resolved hops whose module reports their
-/// members' changes (`parentChanges: pushed`): an arrival on one resolves
+/// members' changes (`membersChange: "pushed"`): an arrival on one resolves
 /// the listen again.
 pub fn pushed_parents(set: &FileSet, listen: &Listen) -> Vec<String> {
     pushed_parent_hops(set, listen).into_iter().map(|hop| hop.edge.clone()).collect()
@@ -481,7 +481,13 @@ pub fn pushed_parents(set: &FileSet, listen: &Listen) -> Vec<String> {
 
 /// The listen's resolved hops whose module reports their changes.
 pub fn pushed_parent_hops<'a>(set: &FileSet, listen: &'a Listen) -> Vec<&'a PlanHop> {
-    resolved_hops(set, listen).into_iter().filter(|(_, declared)| declared.get("parentChanges").and_then(Js::as_str) == Some("pushed")).map(|(hop, _)| hop).collect()
+    resolved_hops(set, listen).into_iter().filter(|(_, declared)| pushed(declared)).map(|(hop, _)| hop).collect()
+}
+
+/// Whether a hop's module reports its members' changes (`membersChange:
+/// "pushed"`).
+fn pushed(declared: &Js) -> bool {
+    declared.get("membersChange").and_then(Js::as_str) == Some("pushed")
 }
 
 /// The listen's resolved hops, each with what its module declares of it.

@@ -240,9 +240,7 @@ function listeningOf(declared: Pick<SchemaReferenceDescriptor, 'cursor' | 'ident
     ...(declared.scopedBy !== undefined ? { scopedBy: declared.scopedBy } : {}),
     ...(declared.attributes !== undefined ? { attributes: declared.attributes } : {}),
     ...(declared.addressed !== undefined ? { addressed: declared.addressed } : {}),
-    ...(declared.cheapToList !== undefined ? { cheapToList: declared.cheapToList } : {}),
-    ...(declared.parentChanges !== undefined ? { parentChanges: declared.parentChanges } : {}),
-    ...(declared.relistEverySeconds !== undefined ? { relistEverySeconds: declared.relistEverySeconds } : {}),
+    ...(declared.membersChange !== undefined ? { membersChange: declared.membersChange } : {}),
   };
 }
 
@@ -318,6 +316,7 @@ export function fieldTypeFromDescriptor(
               name: field.owned.name,
               owner,
               ...(field.owned.allowPattern !== undefined ? { allowPattern: field.owned.allowPattern } : {}),
+              ...(field.owned.format !== undefined ? { format: field.owned.format } : {}),
             };
       case 'record':
         return field.record === undefined
@@ -582,6 +581,7 @@ export function instanceSchemaFromDescriptors(input: {
     /** Every described field's words, readable or write-only: the position's. */
     const positionFieldDocs: Record<string, string> = {};
     const fieldIds: Record<string, string> = {};
+    const changedFields: Record<string, { release: string; note: string }> = {};
     /** Writable field id → the surface name it projected to — what an
      *  UNTAGGED write union's variants (declared in field ids) map through. */
     const writeFieldNameById = new Map<string, string>();
@@ -630,6 +630,7 @@ export function instanceSchemaFromDescriptors(input: {
         // for a `native` edge into this position.
         if (field.capability !== undefined) propertyCapabilities[fieldName] = field.capability;
         if (field.fieldId !== fieldName) fieldIds[fieldName] = field.fieldId;
+        if (field.changedIn !== undefined) changedFields[fieldName] = field.changedIn;
       }
       if (field.writable) {
         writableFields[fieldName] = type;
@@ -808,6 +809,9 @@ export function instanceSchemaFromDescriptors(input: {
         // Where a module keys its records otherwise: a host reads an arrival's
         // fields by these names before judging it (namedLanding).
         ...(Object.keys(fieldIds).length > 0 ? { fieldIds } : {}),
+        // Fields whose meaning their module changed in a release: a check for
+        // an upgrade from before it warns where a program reads one.
+        ...(Object.keys(changedFields).length > 0 ? { changedFields } : {}),
       };
     }
     // A purely read-only type (no writable field) needs no write shape at

@@ -51,7 +51,7 @@ export interface Board {
  *  (`landing.unknown`), so a listen whose WHERE reads it cannot be judged.
  *  Its root `Boards` (`boards.json`) is cheap to list, re-listed every 300
  *  seconds; with `pushedboards` present it is listenable and polled instead,
- *  and declares `parentChanges: pushed`; with `staticboards` present it is
+ *  and declares `membersChange: "pushed"`; with `staticboards` present it is
  *  not cheap to list and declares neither, and a board's `Notes` are pushed
  *  per board (`delivery: scope`). A board's `Notes` are polled per board, its id the
  *  poll's `scope`: the notes pinned to it (`board`), each arrival naming
@@ -193,10 +193,10 @@ module.exports = defineModule({
         readable: true,
         writable: false,
         ...(pushedBoards
-          ? { cheapToList: true, parentChanges: 'pushed', listenable: true, delivery: 'polled', pollEverySeconds: every, cursor: true, identity: 'Id' }
+          ? { membersChange: 'pushed', listenable: true, delivery: 'polled', pollEverySeconds: every, cursor: true, identity: 'Id' }
           : staticBoards
             ? {}
-            : { cheapToList: true, relistEverySeconds: 300 }),
+            : { membersChange: { relistEverySeconds: 300 } }),
       },
       // Reached only along a note's \`Comments\`; published so it is named.
       { typeId: 'comment', displayName: 'Comment', readable: false, writable: false },

@@ -381,8 +381,7 @@ export function basesEntryPoint(): SchemaEntryPoint {
     // You traverse a base; you never create one from a movement.
     writable: false,
     readable: true,
-    cheapToList: true,
-    relistEverySeconds: AIRTABLE_BASES_RELIST_SECONDS,
+    membersChange: { relistEverySeconds: AIRTABLE_BASES_RELIST_SECONDS },
   };
 }
 
@@ -420,8 +419,7 @@ export function listenedEntryPoints(input: { positioned: boolean }): SchemaEntry
  *  Airtable's schema webhook, so a listen narrowed by its tables is listed
  *  again on each, never on a clock. */
 const TABLES_LISTENING = {
-  cheapToList: true,
-  parentChanges: 'pushed',
+  membersChange: 'pushed',
   listenable: true,
   identity: 'Id',
 } as const;

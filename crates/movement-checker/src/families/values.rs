@@ -31,6 +31,7 @@
 //! named ones it calls mid-node); the statement rules (a write's absent
 //! field, a collection operation's order) are the walk's, in `checker.rs`.
 
+use movement_parser::catalog::types::OwnedFormat;
 use movement_parser::lowering::expression::{AggregationFunction, ArithmeticOp, Expression, FilterOperator, ListElement, LogicalOp, StaticValue};
 
 use crate::codes;
@@ -581,10 +582,10 @@ pub fn owned_value_error(literal: &str, owned: &crate::types::field::OwnedScalar
             self.0
         }
     }
-    let reason = match owned.name.as_str() {
-        "Cron" => crate::cron::cron_schedule_error(literal),
-        "Zone" => is_zone(literal).and_then(|known| crate::host::time_zone_error(&Known(known), literal)),
-        _ => owned.allow_pattern.as_deref().filter(|pattern| pattern_matches(pattern, literal) == Some(false)).map(|pattern| format!("it does not match {pattern}")),
+    let reason = match owned.format {
+        Some(OwnedFormat::Cron) => crate::cron::cron_schedule_error(literal),
+        Some(OwnedFormat::TimeZone) => is_zone(literal).and_then(|known| crate::host::time_zone_error(&Known(known), literal)),
+        None => owned.allow_pattern.as_deref().filter(|pattern| pattern_matches(pattern, literal) == Some(false)).map(|pattern| format!("it does not match {pattern}")),
     }?;
     Some(format!("\"{literal}\" is not {}: {reason}", with_article(&owned.name)))
 }

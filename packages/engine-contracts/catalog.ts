@@ -864,14 +864,21 @@ export const schemaFieldDescriptorSchema = z.object({
   capability: fieldCapabilitySchema.optional(),
   /**
    * With `kind: 'owned'`: the scalar's name (`Cron`), and the least the
-   * module says of its values, a pattern every one matches.
+   * module says of its values, a pattern every one matches. `format`: a
+   * format the checker knows its values are written in (`cron`, a five-field
+   * schedule; `timeZone`, an IANA zone), so a literal is validated as the
+   * module would, whatever the scalar is named.
    */
-  owned: z.object({ name: z.string().min(1), allowPattern: z.string().optional() }).optional(),
+  owned: z.object({ name: z.string().min(1), allowPattern: z.string().optional(), format: z.enum(['cron', 'timeZone']).optional() }).optional(),
   /** With `kind: 'record'`: the type of the record it holds, by its type id. */
   record: z.object({ typeId: z.string().min(1) }).optional(),
   /** A record may not hold the field at all (a change's row before, when
    *  the row was created): a read of it may be absent. Absent ⇒ false. */
   mayBeAbsent: z.boolean().optional(),
+  /** The release that changed what the field holds, and how, as a check for
+   *  an upgrade from before it warns where a program reads it (gmail's
+   *  `Labels`: label ids before 0.13, names since). */
+  changedIn: z.object({ release: z.string().min(1), note: z.string().min(1) }).optional(),
 }).superRefine((field, ctx) => {
   if ((field.kind === 'owned') !== (field.owned !== undefined)) {
     ctx.addIssue({
@@ -946,15 +953,13 @@ const listeningDeclarationShape = {
    *  plus-suffix): one no listen's WHERE takes is told at the default log
    *  level, on any other edge only under `LF_LOG=debug`. */
   addressed: z.boolean().optional(),
-  /** Listing it is cheap enough to re-list on a schedule (a base's tables;
-   *  never every message in a workspace). Such a hop declares how a listen
-   *  learns its members changed: `parentChanges` or `relistEverySeconds`. */
-  cheapToList: z.boolean().optional(),
-  /** The module reports when a member is created, renamed or removed, so a
-   *  listen re-resolves on the report and never on a clock. */
-  parentChanges: z.literal('pushed').optional(),
-  /** How often, in seconds, its members are re-listed. */
-  relistEverySeconds: z.number().optional(),
+  /** How a listen learns its members changed, so a filter on it as an
+   *  earlier hop is re-resolved: declared only where listing it is cheap (a
+   *  base's tables; never every message in a workspace). `"pushed"`: the
+   *  module reports each member created, renamed or removed, so a listen
+   *  re-resolves on the report and never on a clock. `{ relistEverySeconds }`:
+   *  its members are re-listed this often. */
+  membersChange: z.union([z.literal('pushed'), z.object({ relistEverySeconds: z.number() })]).optional(),
 };
 
 /** Why a reference that declares a key 0.13 retired is refused (listen-fire's
@@ -1755,8 +1760,8 @@ interface EdgeInto {
  * The refusal of what a reference or entry point declares about listening to
  * it that cannot mean what it says (listen-fire's describe says the same): an
  * unknown delivery, a polled edge with no interval, an unbounded one with
- * nothing to narrow it by, a field or hop named that is not there, a hop
- * cheap to list that says nothing of how its members' changes are learnt.
+ * nothing to narrow it by, a field or hop named that is not there, a
+ * `membersChange` that is neither pushed nor relisted on a clock.
  * Every number declared is a default lf.yaml overrides, so the module must
  * state it. A landing nobody described is not judged.
  */
@@ -1779,11 +1784,9 @@ export function unreadableListening(
   if ('entry' in declarant && delivery === 'scope') {
     return `'${name}' declares 'delivery: scope', and '${name}' is a root collection: nothing comes before it to scope a subscription by`;
   }
-  for (const seconds of ['pollEverySeconds', 'relistEverySeconds'] as const) {
-    const value: unknown = declared[seconds];
-    if (value !== undefined && !(typeof value === 'number' && Number.isInteger(value) && value > 0)) {
-      return `'${name}' declares '${seconds}: ${JSON.stringify(value)}': expected a positive whole number of seconds`;
-    }
+  const pollEvery: unknown = declared.pollEverySeconds;
+  if (pollEvery !== undefined && !wholeSeconds(pollEvery)) {
+    return `'${name}' declares 'pollEverySeconds: ${JSON.stringify(pollEvery)}': expected a positive whole number of seconds`;
   }
   const polled = delivery === 'polled';
   if (polled && declared.pollEverySeconds === undefined) {
@@ -1809,27 +1812,26 @@ export function unreadableListening(
   if (carried !== undefined) return carried;
   const scoped = unreadableScopedBy(name, declarant, entries, descriptors);
   if (scoped !== undefined) return scoped;
-  const parentChanges: unknown = declared.parentChanges;
-  if (parentChanges !== undefined && parentChanges !== 'pushed') {
-    return `'${name}' declares parentChanges ${JSON.stringify(parentChanges)}: the one value is 'pushed'`;
+  return membersChangeRefusal(name, declared);
+}
+
+function wholeSeconds(value: unknown): boolean {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+/** Why a hop's `membersChange` cannot say how a listen learns its members
+ *  changed (listen-fire's describe says the same). */
+function membersChangeRefusal(name: string, declared: { membersChange?: unknown; listenable?: boolean }): string | undefined {
+  const change = declared.membersChange;
+  if (change === undefined) return undefined;
+  if (change === 'pushed') {
+    return declared.listenable === true
+      ? undefined
+      : `'${name}' declares 'membersChange: pushed' but not 'listenable: true': the module reports its members' changes as arrivals on '${name}' itself, so it must announce them`;
   }
-  const pushed = parentChanges !== undefined;
-  const relisted = declared.relistEverySeconds !== undefined;
-  if (pushed && relisted) {
-    return `'${name}' declares both 'parentChanges: pushed' and 'relistEverySeconds': a module that reports its members' changes is not re-listed on a clock; declare one`;
-  }
-  if (declared.cheapToList === true) {
-    if (!pushed && !relisted) {
-      return `'${name}' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEverySeconds': say how a listen learns its members changed`;
-    }
-    return pushed && declared.listenable !== true
-      ? `'${name}' declares 'parentChanges: pushed' but not 'listenable: true': the module reports its members' changes as arrivals on '${name}' itself, so it must announce them`
-      : undefined;
-  }
-  if (pushed || relisted) {
-    return `'${name}' declares '${pushed ? 'parentChanges' : 'relistEverySeconds'}' but not 'cheapToList: true': only a hop cheap to list is re-listed`;
-  }
-  return undefined;
+  const relisted = typeof change === 'object' && change !== null && !Array.isArray(change) && Object.keys(change).length === 1 ? Reflect.get(change, 'relistEverySeconds') : undefined;
+  if (relisted === undefined) return `'${name}' declares membersChange ${JSON.stringify(change)}: expected 'pushed' or { relistEverySeconds: <seconds> }`;
+  return wholeSeconds(relisted) ? undefined : `'${name}' declares 'membersChange: { relistEverySeconds: ${JSON.stringify(relisted)} }': expected a positive whole number of seconds`;
 }
 
 function collectionNameOf(entry: SchemaEntryPoint): string {
@@ -2055,6 +2057,16 @@ function unreadableMapping(
     const twice = [change.field, change.becomes].find((key) => Object.hasOwn(become.keys, key));
     if (twice !== undefined) return `'listenSettingsBecome' maps '${twice}' as a key and in 'fieldChange': name it in one`;
   }
+  for (const each of [path, ...(become.alsoArrivesOn ?? [])]) {
+    const refusal = unreadablePath(each, entries, descriptors);
+    if (refusal !== undefined) return refusal;
+  }
+  return undefined;
+}
+
+/** A path that starts at no root collection, or names an edge its type
+ *  before it does not have. */
+function unreadablePath(path: readonly string[], entries: readonly SchemaEntryPoint[], descriptors: ReadonlyMap<string, SchemaTypeDescriptor>): string | undefined {
   const roots = entries.filter((e) => e.readable || e.writable || e.listenable === true);
   const start = path.findIndex((edge) => roots.some((e) => collectionNameOf(e) === edge));
   if (start < 0) {

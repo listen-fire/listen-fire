@@ -395,7 +395,7 @@ A listen sets no numbers. Each comes from the module's declaration, and `lf.yaml
 | Key | What it sets | Default |
 | --- | --- | --- |
 | `pollEvery: { <credential>: 5m }` | how often a connection's polled edges are polled (a connection with no credential is named by its module) | the edge's `pollEverySeconds` |
-| `resolveEvery: { <credential>: 1h }` | how often a listen's filtered earlier hops are listed again | the hop's `relistEverySeconds` |
+| `resolveEvery: { <credential>: 1h }` | how often a listen's filtered earlier hops are listed again | the hop's `membersChange: { relistEverySeconds }` |
 | `resendWindow: { <module>: 3d }` | how long a provider's re-send of an arrival is the same arrival | the module's (Stripe: 3 days) |
 | `loopWindow: 20s` | how soon after a run's write an arrival on that record continues its chain | `20s` |
 | `loopDepth: 10` | how many runs one chain may be before its listen is paused | `10` |

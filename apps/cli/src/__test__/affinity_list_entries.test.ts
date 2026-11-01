@@ -261,21 +261,41 @@ function welcomed(o: <crm-[:Organization]->>) {
 
 listen to crm { events: ${events} } fire welcomed
 `;
-    const dir = project(fake, '', old('["organization.created", "organization.updated"]'));
+    const dir = project(fake, '', old('["organization.created", "organization.deleted"]'));
     const file = join(dir, 'movements/deal_date.mvt');
     const lfYaml = join(dir, 'lf.yaml');
     const pinned = () => writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
+    const rewritten = (kinds: string) =>
+      old('')
+        .replace('<crm-[:Organization]->>', '<crm-[:OrganizationChange]->>')
+        .replace('listen to crm { events:  }', `listen to crm-[:Organization]->-[c:Changes WHERE c.Kind IN ${kinds}]->`);
     pinned();
     const upgraded = lf(dir, 'upgrade');
     assert.equal(upgraded.code, 0, upgraded.out);
-    assert.equal(
-      readFileSync(file, 'utf8'),
-      old('')
-        .replace('<crm-[:Organization]->>', '<crm-[:OrganizationChange]->>')
-        .replace('listen to crm { events:  }', 'listen to crm-[:Organization]->-[c:Changes WHERE c.Kind IN ["created", "updated"]]->'),
-    );
+    assert.equal(readFileSync(file, 'utf8'), rewritten('["created", "deleted"]'));
     const checked = lf(dir, 'check');
     assert.equal(checked.code, 0, checked.out);
+
+    // An organization's `updated` change is also each field value set or
+    // cleared on it, which 0.12 heard only as field_value events: the
+    // rewrite hears more, says so, and only --all applies it.
+    const updated = old('["organization.created", "organization.updated"]');
+    writeFileSync(file, updated);
+    pinned();
+    const told = lf(dir, 'upgrade');
+    assert.equal(told.code, 1, told.out);
+    assert.ok(
+      told.out.includes('(`Kind == "updated"` also hears each field value set or cleared on the organization, which 0.12 heard only as field_value events: add `AND c.Field == null` to hear the organization\'s own updates alone)'),
+      told.out,
+    );
+    assert.equal(readFileSync(file, 'utf8'), updated);
+    const applied = lf(dir, 'upgrade', '--all');
+    assert.equal(applied.code, 0, applied.out);
+    assert.equal(readFileSync(file, 'utf8'), rewritten('["created", "updated"]'));
+    // The note's remedy checks.
+    writeFileSync(file, rewritten('["created", "updated"]').replace('c.Kind IN ["created", "updated"]', 'c.Kind IN ["created", "updated"] AND c.Field == null'));
+    const narrowed = lf(dir, 'check');
+    assert.equal(narrowed.code, 0, narrowed.out);
 
     // A field value's event names no one record type; an organization's and
     // a person's arrive on two edges, as every event a listen naming none

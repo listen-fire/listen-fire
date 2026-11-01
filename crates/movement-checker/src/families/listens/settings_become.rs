@@ -57,6 +57,9 @@ struct Rewrite {
     host_judged: Vec<String>,
     /// The note for a compared field a listen compares by identity.
     uncompared: Option<String>,
+    /// What the module says its traversal hears otherwise than the
+    /// settings listen did (`changed`), once each.
+    changed: Vec<String>,
 }
 
 impl Checker<'_> {
@@ -120,6 +123,9 @@ impl Checker<'_> {
         if let Some(note) = rewrite.as_ref().and_then(|r| r.uncompared.as_deref()) {
             notes.push_str(note);
         }
+        for note in rewrite.as_ref().map_or(&[][..], |r| r.changed.as_slice()) {
+            notes.push_str(&format!(" ({note})"));
+        }
         let message = format!(
             "`listen to {instance_name} {{ … }}` is retired in 0.13: a listen is a traversal ending on the edge its events arrive on. Write `listen to {path} fire {movement}`{notes}{why_no_fix}"
         );
@@ -130,7 +136,7 @@ impl Checker<'_> {
             if let Some(span) = rewrite.param_from.as_deref().and_then(|from| self.param_from_span(statement, from, scope)) {
                 edits.push(json!({ "span": span, "text": rewrite.param_type }));
             }
-            let safe = !suppresses_self && !every && rewrite.host_judged.is_empty() && rewrite.uncompared.is_none();
+            let safe = !suppresses_self && !every && rewrite.host_judged.is_empty() && rewrite.uncompared.is_none() && rewrite.changed.is_empty();
             diagnostic.fix = Some(if safe { json!({ "edits": edits, "safe": true }) } else { json!({ "edits": edits }) });
         }
         self.push(diagnostic);
@@ -198,21 +204,30 @@ enum NoRewrite {
 /// (Stripe's `invoice.paid` chooses an invoice's `Changes` and is its
 /// `Kind`), else the module's own. A listen that leaves `events` out chooses
 /// by what the module's own `events` key says leaving them out heard
-/// (Stripe's: every event, on every edge).
-fn chosen<'b>(statement: &ListenDeclaration, become_: &'b SettingsBecome) -> Result<(&'b SettingsBecome, bool), NoRewrite> {
-    let Some(by_event) = become_.by_event.as_ref().filter(|b| !b.is_empty()) else { return Ok((become_, false)) };
+/// (Stripe's: every event, on every edge). Its events heard on more than one
+/// edge (a mapping's `alsoArrivesOn`) have no rewrite. With it, what each
+/// mapping its events chose says the traversal hears otherwise (`changed`).
+fn chosen<'b>(statement: &ListenDeclaration, become_: &'b SettingsBecome) -> Result<Chosen<'b>, NoRewrite> {
+    let own = || -> Result<Chosen<'b>, NoRewrite> {
+        match edges_of(become_) {
+            edges if edges.len() > 1 => Err(NoRewrite::SeveralEdges(edges)),
+            _ => Ok(Chosen { mapping: become_, events_spent: false, changed: become_.changed.iter().cloned().collect() }),
+        }
+    };
+    let Some(by_event) = become_.by_event.as_ref().filter(|b| !b.is_empty()) else { return own() };
     let named = heard_events(statement, become_)?.unwrap_or_default();
     let ways: Vec<Option<&SettingsBecome>> = named.iter().map(|event| by_event.get(event)).collect();
     if ways.iter().all(Option::is_none) {
-        return Ok((become_, false));
+        return own();
     }
     // An event the mapping does not name lands where a listen leaving
     // `events` out does, so it is one more edge only where that is another.
     let mut edges: Vec<String> = Vec::new();
     for way in &ways {
-        let edge = edge_named(&way.unwrap_or(become_).path);
-        if !edges.contains(&edge) {
-            edges.push(edge);
+        for edge in edges_of(way.unwrap_or(become_)) {
+            if !edges.contains(&edge) {
+                edges.push(edge);
+            }
         }
     }
     if edges.len() > 1 {
@@ -227,10 +242,30 @@ fn chosen<'b>(statement: &ListenDeclaration, become_: &'b SettingsBecome) -> Res
     // that names the app) were heard together as the mapping that narrows
     // least.
     let ways: Vec<&SettingsBecome> = ways.into_iter().flatten().collect();
+    let mut changed: Vec<String> = Vec::new();
+    for note in ways.iter().filter_map(|way| way.changed.as_ref()) {
+        if !changed.contains(note) {
+            changed.push(note.clone());
+        }
+    }
     match ways.iter().find(|least| ways.iter().all(|way| narrows_no_more(least, way))) {
-        Some(least) => Ok((*least, !least.keys.contains_key(EVENTS_KEY))),
+        Some(least) => Ok(Chosen { mapping: least, events_spent: !least.keys.contains_key(EVENTS_KEY), changed }),
         None => Err(NoRewrite::Unmapped),
     }
+}
+
+/// The mapping a listen takes (`chosen`).
+struct Chosen<'b> {
+    mapping: &'b SettingsBecome,
+    /// Its `events` were spent choosing the mapping, so compare nothing.
+    events_spent: bool,
+    /// What the chosen mappings say the traversal hears otherwise.
+    changed: Vec<String>,
+}
+
+/// Each edge a mapping's events arrive on, as a message names it.
+fn edges_of(way: &SettingsBecome) -> Vec<String> {
+    std::iter::once(&way.path).chain(way.also_arrives_on.iter().flatten()).map(|path| edge_named(path)).collect()
 }
 
 /// Whether a listen taking `least` hears at least what one taking `way`
@@ -279,7 +314,7 @@ fn edge_named(path: &[String]) -> String {
 /// (`-[:Requests]-><T>`). A key the listen leaves out is compared with what
 /// leaving it out meant (`absent`), or the rewrite would widen the listen.
 fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Narrowing) -> Result<Rewrite, NoRewrite> {
-    let (become_, events_spent) = chosen(statement, become_)?;
+    let Chosen { mapping: become_, events_spent, changed } = chosen(statement, become_)?;
     let schema = from.schema;
     let consumed = consumed_hops(become_, from.positioned);
     let mut conjuncts: Vec<Vec<Expression>> = vec![Vec::new(); become_.path.len()];
@@ -308,6 +343,9 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
             _ if key.field.is_none() || arg.is_type == Some(true) => return Err(NoRewrite::Unmapped),
             _ => {
                 let written = written_values(key, &expression_of_slot(&arg.value).map_err(|_| NoRewrite::Unmapped)?)?;
+                if matches!(written, Written::Nothing) {
+                    continue;
+                }
                 for (field, op) in compared(key) {
                     conjuncts[key.hop].push(comparison(key, field, op, &written).ok_or(NoRewrite::Unmapped)?);
                 }
@@ -379,7 +417,7 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
         (_, Some(landing)) => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(&landing)),
         _ => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(landing_of(schema, kept).ok_or(NoRewrite::Unmapped)?)),
     };
-    Ok(Rewrite { path, param_type, param_from: become_.param_from.clone(), host_judged, uncompared })
+    Ok(Rewrite { path, param_type, param_from: become_.param_from.clone(), host_judged, uncompared, changed })
 }
 
 /// What a listen's `field` and `becomes` compare (`fieldChange`), on the
@@ -496,24 +534,28 @@ fn held_position(field: &FieldType) -> Option<&str> {
 }
 
 /// A key's value as written: one literal, or a list of them, each spelled
-/// as its field holds it.
+/// as its field holds it; or nothing to compare, where a value narrowed
+/// nothing (a list holding one hears everything too).
 enum Written {
     One(StaticValue),
     Many(Vec<StaticValue>),
+    Nothing,
 }
 
 fn written_values(key: &KeyBecomes, value: &Expression) -> Result<Written, NoRewrite> {
     let spelled = |raw: &StaticValue| mapped(key, raw).ok_or(NoRewrite::Unmapped);
     match value {
-        Expression::Static { value: raw } => Ok(Written::One(spelled(raw)?)),
-        Expression::List { elements } => elements
-            .iter()
-            .map(|e| match e {
-                ListElement::Expression(Expression::Static { value: raw }) => spelled(raw),
-                _ => Err(NoRewrite::Unmapped),
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(Written::Many),
+        Expression::Static { value: raw } => Ok(spelled(raw)?.map_or(Written::Nothing, Written::One)),
+        Expression::List { elements } => {
+            let spelled = elements
+                .iter()
+                .map(|e| match e {
+                    ListElement::Expression(Expression::Static { value: raw }) => spelled(raw),
+                    _ => Err(NoRewrite::Unmapped),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(spelled.into_iter().collect::<Option<Vec<_>>>().map_or(Written::Nothing, Written::Many))
+        }
         _ => Err(NoRewrite::Unmapped),
     }
 }
@@ -541,7 +583,7 @@ fn comparison(key: &KeyBecomes, field: &str, op: KeyOp, written: &Written) -> Op
         }
         (KeyOp::Contains, Written::One(value)) => any_contains(&on, vec![value.clone()]),
         (KeyOp::Contains, Written::Many(values)) => any_contains(&on, values.clone()),
-        (KeyOp::Eq | KeyOp::Neq | KeyOp::Type, _) => None,
+        (KeyOp::Eq | KeyOp::Neq | KeyOp::Type, _) | (_, Written::Nothing) => None,
     }
 }
 
@@ -551,7 +593,7 @@ fn absent_comparison(key: &KeyBecomes, meant: &SettingsValue) -> Option<Expressi
     let on = KeyBecomes { field: key.absent_field.clone().or_else(|| key.field.clone()), ..key.clone() };
     let key = &on;
     key.field.as_ref()?;
-    let items = meant.texts().iter().map(|t| mapped(key, &StaticValue::String(t.clone()))).collect::<Option<Vec<_>>>()?;
+    let items = meant.texts().iter().map(|t| mapped(key, &StaticValue::String(t.clone())).flatten()).collect::<Option<Vec<_>>>()?;
     match (key.op, meant, items.as_slice()) {
         (KeyOp::Eq | KeyOp::In, SettingsValue::One(_), [only]) | (KeyOp::Eq, SettingsValue::Many(_), [only]) => {
             Some(compare_on(key, FilterOperator::Eq, Expression::Static { value: only.clone() }))
@@ -666,20 +708,26 @@ fn unbounded_hops(schema: &InstanceSchema, path: &[String], consumed: usize, con
     unbounded
 }
 
-/// A settings value as the field holds it: through the key's `values` map
-/// when it has one (a value the map lacks has no spelling).
-fn mapped(key: &KeyBecomes, raw: &StaticValue) -> Option<StaticValue> {
-    let spelled = match (raw, &key.values) {
-        (StaticValue::String(s), Some(values)) => values.get(s).map(|v| match v {
-            SpelledValue::Text(text) => StaticValue::String(text.clone()),
-            SpelledValue::Flag(flag) => StaticValue::Bool(*flag),
-        }),
-        (StaticValue::Null, _) => None,
-        (raw, _) => Some(raw.clone()),
-    }?;
+/// A settings value as its key's field holds it: spelled by its `values`
+/// (a text by its text, `true` and `false` by theirs), lowercased where 0.12
+/// compared it so. `Some(None)`: a value that narrowed nothing. None: one
+/// its values do not spell, or `null`.
+fn mapped(key: &KeyBecomes, raw: &StaticValue) -> Option<Option<StaticValue>> {
+    let looked_up = |text: &str| key.values.as_ref().map(|values| values.get(text));
+    let spelled = match raw {
+        StaticValue::Null => return None,
+        StaticValue::String(text) => match looked_up(text) {
+            Some(spelled) => spelled?.clone(),
+            None => SpelledValue::Text(text.clone()),
+        },
+        StaticValue::Bool(flag) => looked_up(&flag.to_string()).flatten().cloned().unwrap_or(SpelledValue::Flag(*flag)),
+        other => return Some(Some(other.clone())),
+    };
     Some(match spelled {
-        StaticValue::String(s) if key.lowercase == Some(true) => StaticValue::String(s.to_lowercase()),
-        other => other,
+        SpelledValue::Text(text) if key.lowercase == Some(true) => Some(StaticValue::String(text.to_lowercase())),
+        SpelledValue::Text(text) => Some(StaticValue::String(text)),
+        SpelledValue::Flag(flag) => Some(StaticValue::Bool(flag)),
+        SpelledValue::Nothing => None,
     })
 }
 

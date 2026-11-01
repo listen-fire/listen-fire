@@ -129,8 +129,10 @@ pub fn field_type_from_descriptor(field: &Js, at: &Projecting) -> Option<Js> {
         Some("owned") => {
             let owned = field.get("owned")?;
             let mut type_ = obj! { "kind" => Js::str("owned"), "name" => Js::str(owned.get("name").and_then(Js::as_str)?), "owner" => Js::str(owner) };
-            if let Some(pattern) = owned.get("allowPattern") {
-                type_.insert("allowPattern".into(), pattern.clone());
+            for passed in ["allowPattern", "format"] {
+                if let Some(value) = owned.get(passed) {
+                    type_.insert(passed.into(), value.clone());
+                }
             }
             Js::from(type_)
         }
@@ -278,7 +280,7 @@ const EDGE_TRUE_FLAGS: &[&str] = &["ephemeral"];
 
 /// What a reference or a listenable entry says of its arrivals and of being
 /// listed under a listen, passed through as declared, in this order.
-const LISTENING: [&str; 14] = [
+const LISTENING: [&str; 12] = [
     "cursor",
     "identity",
     "version",
@@ -290,9 +292,7 @@ const LISTENING: [&str; 14] = [
     "scopedBy",
     "attributes",
     "addressed",
-    "cheapToList",
-    "parentChanges",
-    "relistEverySeconds",
+    "membersChange",
 ];
 
 fn pass_listening(declared: &Js, onto: &mut Obj) {
@@ -404,6 +404,7 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
         let mut field_docs = Obj::new();
         let mut position_field_docs = Obj::new();
         let mut field_ids = Obj::new();
+        let mut changed_fields = Obj::new();
         let mut write_field_name_by_id: HashMap<String, String> = HashMap::new();
         let mut dropped_field = false;
         let fields = items(descriptor.get("fields"));
@@ -440,6 +441,9 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
                 let field_id = key(field.get("fieldId"));
                 if field_id != field_name {
                     field_ids.insert(field_name.clone(), Js::str(field_id));
+                }
+                if let Some(changed) = field.get("changedIn") {
+                    changed_fields.insert(field_name.clone(), changed.clone());
                 }
             }
             if truthy(field.get("writable")) {
@@ -525,6 +529,9 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
             }
             if !field_ids.is_empty() {
                 position.insert("fieldIds".into(), Js::from(field_ids));
+            }
+            if !changed_fields.is_empty() {
+                position.insert("changedFields".into(), Js::from(changed_fields));
             }
             positions.insert(name.clone(), Js::from(position));
         }
@@ -850,8 +857,8 @@ fn is_collection(entry: &Js) -> bool {
 /// to it that cannot mean what it says (engine-contracts `unreadableListening`
 /// says the same): an unknown delivery, a polled edge with no interval, an
 /// unbounded one with nothing to narrow it by, a field or hop named that is
-/// not there, a hop cheap to list that says nothing of how its members'
-/// changes are learnt. Every number declared is a default lf.yaml overrides,
+/// not there, a `membersChange` that is neither pushed nor relisted on a
+/// clock. Every number declared is a default lf.yaml overrides,
 /// so the module must state it. A landing nobody described is not judged.
 pub fn unreadable_listening(declarant: Declarant, entries: &[Js], descriptors: &IndexMap<String, Js>) -> Option<String> {
     let declared = declarant.declared();
@@ -873,12 +880,10 @@ pub fn unreadable_listening(declarant: Declarant, entries: &[Js], descriptors: &
     {
         return Some(format!("'{name}' declares 'delivery: scope', and '{name}' is a root collection: nothing comes before it to scope a subscription by"));
     }
-    for seconds in ["pollEverySeconds", "relistEverySeconds"] {
-        if let Some(value) = declared.get(seconds)
-            && !matches!(value, Js::Num(n) if n.as_u64().is_some_and(|s| s > 0))
-        {
-            return Some(format!("'{name}' declares '{seconds}: {}': expected a positive whole number of seconds", value.to_json()));
-        }
+    if let Some(value) = declared.get("pollEverySeconds")
+        && !whole_seconds(value)
+    {
+        return Some(format!("'{name}' declares 'pollEverySeconds: {}': expected a positive whole number of seconds", value.to_json()));
     }
     let polled = delivery.and_then(Js::as_str) == Some("polled");
     if polled && !has("pollEverySeconds") {
@@ -909,27 +914,31 @@ pub fn unreadable_listening(declarant: Declarant, entries: &[Js], descriptors: &
     if let Some(refusal) = unreadable_scoped_by(&declarant, entries, descriptors) {
         return Some(refusal);
     }
-    let parent_changes = declared.get("parentChanges");
-    if let Some(value) = parent_changes
-        && value.as_str() != Some("pushed")
-    {
-        return Some(format!("'{name}' declares parentChanges {}: the one value is 'pushed'", value.to_json()));
+    members_change_refusal(&name, declared)
+}
+
+/// A positive whole number of seconds.
+fn whole_seconds(value: &Js) -> bool {
+    matches!(value, Js::Num(n) if n.as_u64().is_some_and(|s| s > 0))
+}
+
+/// Why a hop's `membersChange` cannot say how a listen learns its members
+/// changed (engine-contracts `membersChangeRefusal` says the same).
+fn members_change_refusal(name: &str, declared: &Js) -> Option<String> {
+    let change = declared.get("membersChange")?;
+    if change.as_str() == Some("pushed") {
+        return (!Js::is_true(declared.get("listenable"))).then(|| {
+            format!("'{name}' declares 'membersChange: pushed' but not 'listenable: true': the module reports its members' changes as arrivals on '{name}' itself, so it must announce them")
+        });
     }
-    match (parent_changes.is_some(), has("relistEverySeconds"), Js::is_true(declared.get("cheapToList"))) {
-        (true, true, _) => Some(format!(
-            "'{name}' declares both 'parentChanges: pushed' and 'relistEverySeconds': a module that reports its members' changes is not re-listed on a clock; declare one"
-        )),
-        (false, false, true) => Some(format!(
-            "'{name}' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEverySeconds': say how a listen learns its members changed"
-        )),
-        (pushed, relisted, false) if pushed || relisted => Some(format!(
-            "'{name}' declares '{}' but not 'cheapToList: true': only a hop cheap to list is re-listed",
-            if pushed { "parentChanges" } else { "relistEverySeconds" }
-        )),
-        (true, false, true) if !Js::is_true(declared.get("listenable")) => Some(format!(
-            "'{name}' declares 'parentChanges: pushed' but not 'listenable: true': the module reports its members' changes as arrivals on '{name}' itself, so it must announce them"
-        )),
+    let relisted = match change {
+        Js::Obj(members) if members.len() == 1 => members.get("relistEverySeconds"),
         _ => None,
+    };
+    match relisted {
+        Some(seconds) if whole_seconds(seconds) => None,
+        Some(seconds) => Some(format!("'{name}' declares 'membersChange: {{ relistEverySeconds: {} }}': expected a positive whole number of seconds", seconds.to_json())),
+        None => Some(format!("'{name}' declares membersChange {}: expected 'pushed' or {{ relistEverySeconds: <seconds> }}", change.to_json())),
     }
 }
 
@@ -1010,6 +1019,12 @@ fn unreadable_mapping(become_: &SettingsBecome, chooses: &[&str], entries: &[Js]
             return Some(format!("'listenSettingsBecome' maps '{key}' as a key and in 'fieldChange': name it in one"));
         }
     }
+    std::iter::once(path).chain(become_.also_arrives_on.iter().flatten()).find_map(|path| unreadable_path(path, entries, descriptors))
+}
+
+/// A path that starts at no root collection, or names an edge its type
+/// before it does not have.
+fn unreadable_path(path: &[String], entries: &[Js], descriptors: &IndexMap<String, Js>) -> Option<String> {
     let roots: Vec<&Js> = entries.iter().filter(|e| is_collection(e)).collect();
     let Some(start) = path.iter().position(|edge| roots.iter().any(|e| collection_name_of(e) == *edge)) else {
         let named: Vec<String> = roots.iter().map(|e| collection_name_of(e)).collect();
@@ -1572,8 +1587,8 @@ mod tests {
             Js::from(edge).to_json(),
             r#"{"target":"Change","listenable":true,"identity":"Id","bounded":true,"delivery":"scope","carries":["Bases","Tables"],"scopedBy":"Bases","attributes":true}"#
         );
-        let tables = edge_schema(&js(r#"{"name":"Tables","cheapToList":true,"parentChanges":"pushed"}"#), Some("Table"), false, "tables");
-        assert_eq!(Js::from(tables).to_json(), r#"{"target":"Table","cheapToList":true,"parentChanges":"pushed"}"#);
+        let tables = edge_schema(&js(r#"{"name":"Tables","membersChange":"pushed"}"#), Some("Table"), false, "tables");
+        assert_eq!(Js::from(tables).to_json(), r#"{"target":"Table","membersChange":"pushed"}"#);
     }
 
     fn owned_by(owner: &str) -> Projecting<'_> {
@@ -1606,7 +1621,8 @@ mod tests {
             movement_parser::catalog::types::FieldType::Composite(movement_parser::catalog::types::Composite::Owned {
                 name: "Cron".into(),
                 owner: "cron".into(),
-                allow_pattern: None
+                allow_pattern: None,
+                format: None
             })
         );
     }
@@ -1674,44 +1690,37 @@ mod tests {
     }
 
     #[test]
-    fn a_hop_cheap_to_list_says_how_its_members_changes_are_learnt() {
-        assert_eq!(
-            ticks_refusal(r#","cheapToList":true"#).unwrap(),
-            "'Ticks' declares 'cheapToList: true' but neither 'parentChanges: pushed' nor 'relistEverySeconds': say how a listen learns its members changed"
-        );
-        assert_eq!(ticks_refusal(r#","cheapToList":true,"relistEverySeconds":300"#), None);
-        assert_eq!(ticks_refusal(r#","cheapToList":true,"parentChanges":"pushed""#), None);
-        assert_eq!(
-            ticks_refusal(r#","cheapToList":true,"parentChanges":"pushed","relistEverySeconds":300"#).unwrap(),
-            "'Ticks' declares both 'parentChanges: pushed' and 'relistEverySeconds': a module that reports its members' changes is not re-listed on a clock; declare one"
-        );
-        assert_eq!(
-            ticks_refusal(r#","relistEverySeconds":300"#).unwrap(),
-            "'Ticks' declares 'relistEverySeconds' but not 'cheapToList: true': only a hop cheap to list is re-listed"
-        );
-        assert_eq!(ticks_refusal(r#","cheapToList":true,"parentChanges":"polled""#).unwrap(), r#"'Ticks' declares parentChanges "polled": the one value is 'pushed'"#);
+    fn a_hop_says_how_its_members_changes_are_learnt_in_one_member() {
+        assert_eq!(ticks_refusal(r#","membersChange":{"relistEverySeconds":300}"#), None);
+        assert_eq!(ticks_refusal(r#","membersChange":"pushed""#), None);
+        for declared in [r#""polled""#, r#"{"relistEverySeconds":300,"pushed":true}"#, r#"{}"#, "true"] {
+            assert_eq!(
+                ticks_refusal(&format!(r#","membersChange":{declared}"#)).unwrap(),
+                format!("'Ticks' declares membersChange {declared}: expected 'pushed' or {{ relistEverySeconds: <seconds> }}")
+            );
+        }
     }
 
     #[test]
     fn a_number_of_seconds_is_a_positive_whole_number() {
         for (declared, shown) in [("0", "0"), ("-5", "-5"), ("1.5", "1.5"), (r#""300""#, r#""300""#)] {
             assert_eq!(
-                ticks_refusal(&format!(r#","cheapToList":true,"relistEverySeconds":{declared}"#)).unwrap(),
-                format!("'Ticks' declares 'relistEverySeconds: {shown}': expected a positive whole number of seconds")
+                ticks_refusal(&format!(r#","membersChange":{{"relistEverySeconds":{declared}}}"#)).unwrap(),
+                format!("'Ticks' declares 'membersChange: {{ relistEverySeconds: {shown} }}': expected a positive whole number of seconds")
             );
         }
     }
 
     #[test]
     fn a_hop_whose_changes_are_pushed_announces_them() {
-        let entry = js(r#"{"typeId":"board","displayName":"Board","collectionName":"Boards","writable":false,"cheapToList":true,"parentChanges":"pushed"}"#);
+        let entry = js(r#"{"typeId":"board","displayName":"Board","collectionName":"Boards","writable":false,"membersChange":"pushed"}"#);
         let board = js(r#"{ "typeId": "board", "displayName": "Board", "fields": [], "references": [] }"#);
         let descriptors: IndexMap<String, Js> = [("board".to_string(), board)].into_iter().collect();
         assert_eq!(
             unreadable_listening(Declarant::Entry(&entry), std::slice::from_ref(&entry), &descriptors).unwrap(),
-            "'Boards' declares 'parentChanges: pushed' but not 'listenable: true': the module reports its members' changes as arrivals on 'Boards' itself, so it must announce them"
+            "'Boards' declares 'membersChange: pushed' but not 'listenable: true': the module reports its members' changes as arrivals on 'Boards' itself, so it must announce them"
         );
-        assert_eq!(ticks_refusal(r#","cheapToList":true,"parentChanges":"pushed""#), None, "a listenable root may");
+        assert_eq!(ticks_refusal(r#","membersChange":"pushed""#), None, "a listenable root may");
     }
 
     #[test]
@@ -1748,14 +1757,6 @@ mod tests {
             let expected = case.get("refusal").and_then(Js::as_str).map(str::to_string);
             assert_eq!(unreadable_listening(declarant, entries, &descriptors), expected, "{}", key(case.get("name")));
         }
-    }
-
-    #[test]
-    fn a_hop_that_is_pushed_is_still_cheap_to_list() {
-        assert_eq!(
-            ticks_refusal(r#","parentChanges":"pushed""#).unwrap(),
-            "'Ticks' declares 'parentChanges' but not 'cheapToList: true': only a hop cheap to list is re-listed"
-        );
     }
 
     #[test]

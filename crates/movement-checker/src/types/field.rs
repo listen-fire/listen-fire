@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use movement_parser::catalog::types::{Composite, FieldType as SchemaFieldType, JsMap, Scalar};
+use movement_parser::catalog::types::{Composite, FieldType as SchemaFieldType, JsMap, OwnedFormat, Scalar};
 
 use super::unions::{joined_under, one_record_of};
 use super::position::{ClosureType, PlaneType, Position, describe_position, positions_match, record_field_types, same_starting_point};
@@ -71,6 +71,7 @@ pub struct OwnedScalar {
     pub name: String,
     pub owner: String,
     pub allow_pattern: Option<String>,
+    pub format: Option<OwnedFormat>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -135,8 +136,8 @@ impl Ty {
                     Some(fields) => Ty::HeldRecord(Rc::new(fields)),
                     None => Ty::Json,
                 },
-                Composite::Owned { name, owner, allow_pattern } => {
-                    Ty::Owned(Rc::new(OwnedScalar { name: name.clone(), owner: owner.clone(), allow_pattern: allow_pattern.clone() }))
+                Composite::Owned { name, owner, allow_pattern, format } => {
+                    Ty::Owned(Rc::new(OwnedScalar { name: name.clone(), owner: owner.clone(), allow_pattern: allow_pattern.clone(), format: *format }))
                 }
             },
         }
@@ -173,7 +174,7 @@ impl Ty {
                 open: open.as_ref().map(|o| movement_parser::catalog::types::OpenEnum { allow_pattern: o.allow_pattern.clone() }),
             },
             Ty::Owned(owned) => {
-                Composite::Owned { name: owned.name.clone(), owner: owned.owner.clone(), allow_pattern: owned.allow_pattern.clone() }
+                Composite::Owned { name: owned.name.clone(), owner: owned.owner.clone(), allow_pattern: owned.allow_pattern.clone(), format: owned.format }
             }
             Ty::MaybeAbsent(of) => Composite::MaybeAbsent { of: Box::new(of.to_schema()) },
             Ty::Union(of) => Composite::Union { of: of.iter().map(Ty::to_schema).collect() },

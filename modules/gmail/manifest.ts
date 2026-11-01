@@ -184,6 +184,7 @@ export const GMAIL_MANIFEST: AdapterManifest = {
           query: { hop: 0, field: GMAIL_QUERY_FIELD, op: 'eq' },
           labels: { hop: 0, field: 'Label', op: 'in', absent: 'user', absentField: 'Label Type' },
         },
+        changed: 'a label removed from a message and added again now runs the listen again, where 0.12 ran it once per message and label',
       },
     },
   },

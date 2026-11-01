@@ -273,7 +273,17 @@ The manifest file registers your server with a team:
   besides take the mapping that compares least (Slack's `message` with
   `app_mention`: a mention is a message). Several values of a `contains` key become an OR of `CONTAINS`: the
   rewrite is safe only when the field declares `containsAny`. A rewrite is offered only when every literal it writes is one the field's
-  owned scalar takes. A connection positioned at a member (an Airtable `base`)
+  owned scalar takes. A `values` entry of `null` says that value narrowed
+  nothing, so the key compares nothing (GitHub's
+  `"participating": { …, "values": { "true": true, "false": null } }`: `false`
+  heard every thread); `true` and `false` are looked up by their text. Where a
+  mapping hears otherwise than the settings listen did, say so in `changed`
+  (gmail's `label_added`: a label removed and added again now runs the listen
+  again): a listen taking it is told the note and rewritten only under
+  `listen-fire upgrade --all`. Where its events also arrive on other edges,
+  name each path in `alsoArrivesOn` (Slack's `message`: a thread reply arrives
+  on `["Channels", "Messages", "Replies"]`): a listen taking it has no
+  rewrite and is told to write one listen for each edge. A connection positioned at a member (an Airtable `base`)
   stands on the hops its position keys map to. A path naming an edge you do
   not describe, a key mapped past the path, an `eq`/`in` key with no `field`,
   `lowercase: true` on a `type` key, an `absent` the key cannot compare (on a
@@ -393,9 +403,18 @@ reads every declaration from it, the listen declarations included.
   before, on a created row): it reaches the catalog as
   `{ "kind": "maybeAbsent", "of": … }`, and a read of it may be absent. `owned` is a named scalar your module
   owns and parses, a cron schedule or a mailbox key:
-  `"owned": { "name": "Cron", "allowPattern": "^…$" }`, `allowPattern` being
-  optional, the least you say of its values. It reaches the catalog as
-  `{ "kind": "owned", "name": "Cron", "owner": "<your adapterType>" }`. A
+  `"owned": { "name": "Cron", "allowPattern": "^…$", "format": "cron" }`,
+  `allowPattern` being optional, the least you say of its values. `format`,
+  also optional, says your values are written in a format the checker knows,
+  so it refuses a literal as you would: `"cron"` (a five-field schedule) or
+  `"timeZone"` (an IANA zone). The checker chooses that check by `format`
+  alone, never by the scalar's name. It reaches the catalog as
+  `{ "kind": "owned", "name": "Cron", "owner": "<your adapterType>", "format": "cron" }`. `changedIn`
+  (`{ "release": "0.13.0", "note": "…" }`) says a release of yours changed
+  what the field holds (gmail's `Labels`: label names where they were ids): a
+  check for an upgrade from before that release warns
+  (`MOV_FIELD_MEANING_CHANGED`) wherever a program reads it, and the pin still
+  moves. A
   field of kind `owned` that names no scalar is refused, naming the field. A field with any other `kind` is silently dropped, and the
   type's position is then left open: automations may read any field name
   off it unchecked. Add `"cardinality": "many"` for a list.
@@ -692,11 +711,11 @@ overrides; you state it because Listen-Fire has none of its own.
   (an inbox's plus-suffix). An arrival that no listen's `WHERE` takes is then
   a misdirected message, and the host says so at its default log level; on an
   edge that does not declare it, that line is said only under `LF_LOG=debug`.
-- `cheapToList` — `true` if listing the edge's members is cheap enough to do
-  on a schedule (a base's tables; never every message in a workspace), so a
-  filter on it as an earlier hop can be re-resolved. Such an edge says how a
-  listen learns its members changed, with one of:
-  - `parentChanges: "pushed"` — you report when a member is created, renamed
+- `membersChange` — how a listen learns the edge's members changed, so a
+  filter on it as an earlier hop can be re-resolved. Declare it only where
+  listing the members is cheap (a base's tables; never every message in a
+  workspace). One of:
+  - `"pushed"` — you report when a member is created, renamed
     or removed, as an arrival on this edge itself (so it must be
     `listenable`), and a listen re-resolves on each such arrival listen-fire
     receives, never on a clock. listen-fire subscribes to (or polls) the edge
@@ -704,8 +723,8 @@ overrides; you state it because Listen-Fire has none of its own.
     record is subscribed to once per record it hangs off (Airtable's
     `Tables`: `ensureEventSubscription({ edge: "Tables", scope: <base id> })`,
     one schema webhook per base);
-  - `relistEverySeconds` — how often, in seconds, its members should be re-listed.
-    `lf.yaml`'s `resolveEvery` overrides it.
+  - `{ "relistEverySeconds": n }` — how often, in seconds, its members should
+    be re-listed. `lf.yaml`'s `resolveEvery` overrides it.
 
 Each is refused, by name, when `listen-fire` describes your adapter if it
 cannot mean what it says: a `delivery` that is none of the three, a polled
@@ -714,9 +733,8 @@ polled), `bounded: false` without `boundedBy` (or `boundedBy` on a bounded
 edge), a `boundedBy` field the landing does not declare, a `carries` hop that
 is no edge into the type the next one hangs off or a type before it, a `scopedBy` on an edge not
 delivered per scope or on a root collection, or naming a hop some path to the
-edge does not come through, `cheapToList` with neither
-`parentChanges` nor `relistEverySeconds` (or both, or either without
-`cheapToList`), `parentChanges: "pushed"` on an edge that is not `listenable`, a number that is not a positive whole number of seconds, a
+edge does not come through, a `membersChange` that is neither `"pushed"` nor
+`{ relistEverySeconds }`, `membersChange: "pushed"` on an edge that is not `listenable`, a number that is not a positive whole number of seconds, a
 field of kind `owned` that names no scalar, or one listenable edge name that
 lands on the same record type from two record types: an arrival says only
 its edge and the record type it landed on, so give each its own record type
@@ -1929,7 +1947,7 @@ from `apps/cli`.
 ## Changes
 
 - **`unknown` fields on an arrival** (within version 2, no bump; 2026-11-01; listen-fire 0.13.0; additive). An arrival's landing and each parent may name the fields the module could not read (`unknown`); a listen whose filter reads one is undecided, runs nothing, and the host reports it; every other listen is judged as usual ([Reporting arrivals](#reporting-arrivals)). Why: a field read as absent compared false and skipped the arrival silently, and a provider's retry cannot be relied on to bring it again. A host before it ignores the member, as before.
-- **What a module declares about listening** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0; additive). A listenable reference or entry point may declare `delivery`, `pollEverySeconds`, `bounded`, `boundedBy`, `carries`, `scopedBy` (a reference delivered per scope, subscribed per record an earlier hop landed on), `attributes`, `cheapToList`, `parentChanges` and `relistEverySeconds` ([Declaring a listenable edge](#declaring-a-listenable-edge)); an entry point may declare `listenable`, `cursor`, `identity` and `version`, and is then an edge a listen starts at; a field may be of kind `owned`; the manifest may declare `resendWindowSeconds`, and `listenSettingsBecome`, how its 0.12 settings listens become traversals for `listen-fire upgrade`. Each is refused by name when it cannot mean what it says, a field of kind `owned` that names no scalar included. Why: a standing listen becomes a traversal over the edges a module declares listenable, and the host needs to know how each one's arrivals reach it, what bounds it, and how often to poll or re-list, from the module, since it has no numbers of its own. listen-fire reads them into the catalog; the checker and the hosts act on them in later 0.13 work. An older host ignores them.
+- **What a module declares about listening** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0; additive). A listenable reference or entry point may declare `delivery`, `pollEverySeconds`, `bounded`, `boundedBy`, `carries`, `scopedBy` (a reference delivered per scope, subscribed per record an earlier hop landed on), `attributes` and `membersChange` ([Declaring a listenable edge](#declaring-a-listenable-edge)); an entry point may declare `listenable`, `cursor`, `identity` and `version`, and is then an edge a listen starts at; a field may be of kind `owned`; the manifest may declare `resendWindowSeconds`, and `listenSettingsBecome`, how its 0.12 settings listens become traversals for `listen-fire upgrade`. Each is refused by name when it cannot mean what it says, a field of kind `owned` that names no scalar included. Why: a standing listen becomes a traversal over the edges a module declares listenable, and the host needs to know how each one's arrivals reach it, what bounds it, and how often to poll or re-list, from the module, since it has no numbers of its own. listen-fire reads them into the catalog; the checker and the hosts act on them in later 0.13 work. An older host ignores them.
 - **`resolvesEmpty` retired** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0). A reference that declares it is refused when listen-fire describes the module, naming it: a record that goes leaves the wait waiting on every edge, so there is nothing to declare.
 - **The key form retired** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0). listen-fire no longer calls `resolveAwait` or `wakeKeys`, and ignores a `checkInbound` acceptance's `wakeKeys`: a run waits on the arrivals a module reports (2.5). A module may still implement them; nothing calls them.
 - **Pages, replies on acceptance, the inbound URL and `answerShapeFrom`** (within version 2, no bump; 2026-10-31; listen-fire 0.13.0; additive). A module that checks its own inbound may `reply` with `html` (sent as `text/html`), and its `accepted` answer may carry `reply`, what the door answers once it has kept the request in place of its own acknowledgement ([A module that checks its own inbound](#a-module-that-checks-its-own-inbound)). A request may carry `inbound: { url }`, where the install's inbound requests reach the module ([The envelope](#the-envelope)). A reference may declare `answerShapeFrom`, the write field naming the node that types its landing. Why: `@lf/forms` serves a form at its own door, hands out its link, thanks the person who answered, and types the answer by the node the program wrote. An older host sends no `inbound`, refuses an answer carrying `html` or an acceptance's `reply` as outside `checkInbound`'s shape, and reads no `answerShapeFrom`.

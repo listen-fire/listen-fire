@@ -116,8 +116,7 @@
                 "edges": {
                   "Tables": {
                     "target": "Table",
-                    "cheapToList": true,
-                    "parentChanges": "pushed",
+                    "membersChange": "pushed",
                     "capability": {
                       "filter": "native",
                       "supportsLimit": false
@@ -164,8 +163,7 @@
             "collections": {
               "Bases": {
                 "target": "Base",
-                "cheapToList": true,
-                "relistEverySeconds": 300,
+                "membersChange": { "relistEverySeconds": 300 },
                 "capability": {
                   "filter": "native",
                   "supportsLimit": false
@@ -549,7 +547,7 @@
             "collections": {
               "Tables": {
                 "target": "Table",
-                "cheapToList": true,
+                "membersChange": { "relistEverySeconds": 300 },
                 "capability": {
                   "filter": "native",
                   "supportsLimit": false

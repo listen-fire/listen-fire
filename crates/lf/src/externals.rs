@@ -705,7 +705,7 @@ pub fn settings_become(value: &Js) -> Result<movement_parser::catalog::types::Se
 /// too), the empty names refused in the same words.
 fn normalised_mapping(raw: &mut serde_json::Value, top: bool) -> Result<(), String> {
     let Some(object) = raw.as_object_mut() else { return Err("listenSettingsBecome: expected an object".into()) };
-    object.retain(|k, _| ["path", "aliases", "paramFrom", "keys", "fieldChange"].contains(&k.as_str()) || (top && k == "byEvent"));
+    object.retain(|k, _| ["path", "aliases", "paramFrom", "keys", "fieldChange", "changed", "alsoArrivesOn"].contains(&k.as_str()) || (top && k == "byEvent"));
     let empties = |value: Option<&serde_json::Value>| value.and_then(serde_json::Value::as_array).map(|items| items.iter().map(|i| i.as_str().is_some_and(str::is_empty)).collect::<Vec<_>>());
     if empties(object.get("path")).is_some_and(|empties| empties.is_empty()) {
         return Err("listenSettingsBecome.path: expected at least one edge".into());
@@ -718,6 +718,13 @@ fn normalised_mapping(raw: &mut serde_json::Value, top: bool) -> Result<(), Stri
     }
     if object.get("paramFrom").and_then(serde_json::Value::as_str).is_some_and(str::is_empty) {
         return Err("listenSettingsBecome.paramFrom: expected a non-empty string".into());
+    }
+    if object.get("changed").is_some_and(|v| v.as_str().is_none_or(str::is_empty)) {
+        return Err("listenSettingsBecome.changed: expected a non-empty string".into());
+    }
+    let edges = |path: &serde_json::Value| path.as_array().is_some_and(|edges| !edges.is_empty() && edges.iter().all(|e| e.as_str().is_some_and(|e| !e.is_empty())));
+    if object.get("alsoArrivesOn").is_some_and(|v| !v.as_array().is_some_and(|paths| paths.iter().all(edges))) {
+        return Err("listenSettingsBecome.alsoArrivesOn: expected paths of non-empty edge names, each at least one edge".into());
     }
     if let Some(keys) = object.get_mut("keys").and_then(serde_json::Value::as_object_mut) {
         for key in keys.values_mut() {
@@ -733,9 +740,9 @@ fn normalised_mapping(raw: &mut serde_json::Value, top: bool) -> Result<(), Stri
             if key.get("absent").is_some_and(|v| !texts(v)) {
                 return Err("listenSettingsBecome.keys.absent: expected a text or a list of texts".into());
             }
-            let spelled = |v: &serde_json::Value| v.as_object().is_some_and(|values| values.values().all(|v| v.is_string() || v.is_boolean()));
+            let spelled = |v: &serde_json::Value| v.as_object().is_some_and(|values| values.values().all(|v| v.is_string() || v.is_boolean() || v.is_null()));
             if key.get("values").is_some_and(|v| !spelled(v)) {
-                return Err("listenSettingsBecome.keys.values: expected each value spelled as a text or true or false".into());
+                return Err("listenSettingsBecome.keys.values: expected each value spelled as a text, true, false or null".into());
             }
             if key.get("lowercase").is_some_and(|v| !v.is_boolean()) {
                 return Err("listenSettingsBecome.keys.lowercase: expected true or false".into());

@@ -9,7 +9,7 @@
 // shows each run.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -94,6 +94,37 @@ test('listen-fire check types the triage against GitHub: a field GitHub lacks, a
     assert.match(wrongEdge.out, /Subject/);
     console.log([wrongField, wrongReason, wrongEdge].map((c) => c.out.trim()).join('\n---\n'));
     assert.deepEqual(github.requests.filter((r) => r.path.startsWith('/notifications')), [], 'checking polls nothing');
+  } finally {
+    await github.close();
+    await channels.stop();
+  }
+});
+
+test('upgrade rewrites participating: true as a comparison, and participating: false, which heard every thread, as none', async () => {
+  const github = await startFakeGithub({ token: TOKEN });
+  const channels = await fakeChannels();
+  try {
+    const dir = await triageProject(github, channels);
+    const file = join(dir, 'movements/triage.mvt');
+    const lfYaml = join(dir, 'lf.yaml');
+    const old = (settings: string) =>
+      `import { \`@lf/github\` as github } from adapters\nimport { henry_github } from credentials\n\ngh = connect github using henry_github\n\nfunction triage(n: <gh-[:Notification]->>) {\n  return n.Title\n}\n\nlisten to gh ${settings} fire triage\n`;
+    for (const [participating, where] of [
+      ['false', 'n.Reason IN ["mention"]'],
+      ['true', 'n.Reason IN ["mention"] AND n.Participating == true'],
+    ] as const) {
+      const settings = `{ events: ["mention"], participating: ${participating} }`;
+      writeFileSync(file, old(settings));
+      writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
+      const upgraded = await run(dir, 'upgrade');
+      assert.equal(upgraded.code, 0, upgraded.out);
+      assert.equal(
+        readFileSync(file, 'utf8'),
+        old(settings).replace('<gh-[:Notification]->>', '<gh-[:Notifications]->>').replace(`listen to gh ${settings} fire triage`, `listen to gh-[n:Notifications WHERE ${where}]-> fire triage`),
+      );
+      const checked = await run(dir, 'check');
+      assert.equal(checked.code, 0, checked.out);
+    }
   } finally {
     await github.close();
     await channels.stop();

@@ -158,12 +158,15 @@ pub enum Composite {
     },
     /// A named scalar its owner (the module that declared it) parses: a
     /// cron schedule, a mailbox key. `allow_pattern` is the least an owner
-    /// says of its values.
+    /// says of its values; `format`, a format the checker knows that its
+    /// values are written in, so it validates a literal as the owner would.
     Owned {
         name: String,
         owner: String,
         #[serde(rename = "allowPattern", default, skip_serializing_if = "Option::is_none")]
         allow_pattern: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<OwnedFormat>,
     },
     /// A record held as the field's value, read on with `.`
     /// (`c.Current.Stage`) and never fetched: a reference to a record is an
@@ -173,6 +176,17 @@ pub enum Composite {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         position: Option<PositionRef>,
     },
+}
+
+/// A format an owned scalar's values are written in that the checker
+/// validates a literal by, whatever the scalar is named.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OwnedFormat {
+    /// A five-field cron schedule (`0 9 * * 1-5`).
+    Cron,
+    /// An IANA time zone (`Europe/London`).
+    TimeZone,
 }
 
 /// Which record a `record` field holds: the typing layer's
@@ -407,20 +421,11 @@ pub struct EdgeSchema {
     /// that is said only under `LF_LOG=debug`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub addressed: Option<bool>,
-    /// Listing it is cheap enough to re-list on a schedule (a base's
-    /// tables; never every message in a workspace), so a filter on it as an
-    /// earlier hop can be re-resolved.
+    /// How a listen learns its members changed, so a filter on it as an
+    /// earlier hop is re-resolved: declared only where listing it is cheap
+    /// (a base's tables; never every message in a workspace).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cheap_to_list: Option<bool>,
-    /// The module reports when one of its members is created, renamed or
-    /// removed, so a listen re-resolves on the report and never on a clock.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_changes: Option<ParentChanges>,
-    /// How often, in seconds, its members are re-listed by default when the
-    /// module does not report their changes: lf.yaml's `resolveEvery`
-    /// overrides it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relist_every_seconds: Option<u64>,
+    pub members_change: Option<MembersChange>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generic_over: Option<GenericOver>,
     /// Fields of what lands here that take the literals the write this edge
@@ -485,6 +490,21 @@ pub struct PositionSchema {
     /// judging it, as a run reads them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field_ids: Option<JsMap<String>>,
+    /// The fields whose meaning its module changed in a release, by name: a
+    /// check for an upgrade from before that release warns where a program
+    /// reads one (gmail's `Labels`, ids before 0.13 and names since).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_fields: Option<JsMap<ChangedField>>,
+}
+
+/// How a field's meaning changed (`PositionSchema.changed_fields`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChangedField {
+    /// The release that changed it (`0.13.0`).
+    pub release: String,
+    /// What changed, as the warning says it.
+    pub note: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -563,11 +583,24 @@ pub enum Delivery {
     Polled,
 }
 
-/// How a listen learns that a hop's members changed.
+/// How a listen learns that a hop's members changed (`membersChange`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MembersChange {
+    /// `"pushed"`: the module reports each member created, renamed or
+    /// removed, so a listen re-resolves on the report and never on a clock.
+    Pushed(Pushed),
+    /// `{ relistEverySeconds }`: its members are re-listed this often by
+    /// default; lf.yaml's `resolveEvery` overrides it.
+    Relisted {
+        #[serde(rename = "relistEverySeconds")]
+        relist_every_seconds: u64,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ParentChanges {
-    /// The module reports each change.
+pub enum Pushed {
     Pushed,
 }
 
@@ -627,20 +660,11 @@ pub struct CollectionSchema {
     /// that is said only under `LF_LOG=debug`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub addressed: Option<bool>,
-    /// Listing it is cheap enough to re-list on a schedule (a base's
-    /// tables; never every message in a workspace), so a filter on it as an
-    /// earlier hop can be re-resolved.
+    /// How a listen learns its members changed, so a filter on it as an
+    /// earlier hop is re-resolved: declared only where listing it is cheap
+    /// (a base's tables; never every message in a workspace).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cheap_to_list: Option<bool>,
-    /// The module reports when one of its members is created, renamed or
-    /// removed, so a listen re-resolves on the report and never on a clock.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_changes: Option<ParentChanges>,
-    /// How often, in seconds, its members are re-listed by default when the
-    /// module does not report their changes: lf.yaml's `resolveEvery`
-    /// overrides it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relist_every_seconds: Option<u64>,
+    pub members_change: Option<MembersChange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -781,6 +805,18 @@ pub struct SettingsBecome {
     /// their row before and after (`fieldChange`) compare those rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field_change: Option<FieldChange>,
+    /// Where the traversal hears otherwise than the settings listen did
+    /// (gmail's `label_added`: a label removed and added again fires again):
+    /// a listen taking this mapping is told the note and rewritten never
+    /// safely, so `listen-fire upgrade` holds the pin until `--all`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed: Option<String>,
+    /// The other paths these events arrive on (Slack's messages: a thread
+    /// reply arrives on its root message's `Replies`): a listen taking this
+    /// mapping heard more than one edge, so it has no rewrite, one listen
+    /// per edge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub also_arrives_on: Option<Vec<Vec<String>>>,
 }
 
 /// Two settings keys that compare a record's row before and after on one
@@ -817,8 +853,10 @@ pub struct KeyBecomes {
     pub field: Option<String>,
     pub op: KeyOp,
     /// A settings value's spelling as a field value (`"record.created"` →
-    /// `"created"`, or Slack's `"app_mention"` → `true` on a flag); absent,
-    /// a value is the field's as written.
+    /// `"created"`, or Slack's `"app_mention"` → `true` on a flag), by its
+    /// text (`true` and `false` by theirs); `null`, a value that narrowed
+    /// nothing (GitHub's `participating: false`: every thread), so the key
+    /// compares nothing. Absent, a value is the field's as written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values: Option<JsMap<SpelledValue>>,
     /// What a 0.12 listen meant by leaving the key out, as a settings value
@@ -840,12 +878,14 @@ pub struct KeyBecomes {
 }
 
 /// What a settings value is spelled as on the field a key compares: a text,
-/// or a flag (a boolean field).
+/// a flag (a boolean field), or nothing (`null`: the value narrowed
+/// nothing).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SpelledValue {
     Text(String),
     Flag(bool),
+    Nothing,
 }
 
 /// A settings value as a 0.12 listen wrote it: one text, or a list of them.

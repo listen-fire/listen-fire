@@ -759,6 +759,7 @@ export const WireInvokeFieldFunctionInput = z.object({
 // The refusal texts are word for word those of `lf`'s manifest reader
 // (settings_become.cases.json).
 const KEY_OPS = ['eq', 'neq', 'in', 'contains', 'type'] as const;
+const ALSO_ARRIVES_ON = 'listenSettingsBecome.alsoArrivesOn: expected paths of non-empty edge names, each at least one edge';
 
 const settingsMapping = z.object({
   path: z.array(z.string().min(1, 'listenSettingsBecome.path: expected non-empty edge names')).min(1, 'listenSettingsBecome.path: expected at least one edge'),
@@ -770,7 +771,7 @@ const settingsMapping = z.object({
       hop: z.number().int().nonnegative(),
       field: z.string().min(1, 'listenSettingsBecome.keys.field: expected a non-empty string').optional(),
       op: z.enum(KEY_OPS),
-      values: z.record(z.string(), z.union([z.string(), z.boolean()], { error: 'listenSettingsBecome.keys.values: expected each value spelled as a text or true or false' })).optional(),
+      values: z.record(z.string(), z.union([z.string(), z.boolean(), z.null()], { error: 'listenSettingsBecome.keys.values: expected each value spelled as a text, true, false or null' })).optional(),
       absent: z.union([z.string(), z.array(z.string())], { error: 'listenSettingsBecome.keys.absent: expected a text or a list of texts' }).optional(),
       absentField: z.string().min(1, 'listenSettingsBecome.keys.absentField: expected a non-empty string').optional(),
       lowercase: z.boolean({ error: 'listenSettingsBecome.keys.lowercase: expected true or false' }).optional(),
@@ -785,6 +786,8 @@ const settingsMapping = z.object({
       previous: z.string().min(1, 'listenSettingsBecome.fieldChange.previous: expected a non-empty string'),
     })
     .optional(),
+  changed: z.string({ error: 'listenSettingsBecome.changed: expected a non-empty string' }).min(1, 'listenSettingsBecome.changed: expected a non-empty string').optional(),
+  alsoArrivesOn: z.array(z.array(z.string().min(1, ALSO_ARRIVES_ON), { error: ALSO_ARRIVES_ON }).min(1, ALSO_ARRIVES_ON), { error: ALSO_ARRIVES_ON }).optional(),
 });
 
 export const WireListenDeclarations = z.object({

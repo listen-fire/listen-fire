@@ -34,7 +34,7 @@ function crmModule(written: string[], options: { carried: boolean; keyed?: boole
         writable: true,
         listenable: true,
         delivery: 'connection',
-        ...(options.carried ? {} : { cheapToList: true, relistEverySeconds: 3600 }),
+        ...(options.carried ? {} : { membersChange: { relistEverySeconds: 3600 } }),
       },
       { typeId: 'Person', displayName: 'Person', readable: false, writable: false },
     ],

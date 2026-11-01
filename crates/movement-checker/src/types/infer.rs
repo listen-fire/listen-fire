@@ -1276,6 +1276,9 @@ impl<'a> Typing<'a> {
                     return (None, Vec::new());
                 }
                 if let Some(declared) = lookup_property_type(position, name) {
+                    if let Some(position) = position {
+                        crate::families::walks::report_meaning_changed(self, position, name);
+                    }
                     return (Some(declared), Vec::new());
                 }
                 if in_scope || carries {
