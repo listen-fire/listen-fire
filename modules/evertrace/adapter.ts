@@ -166,16 +166,16 @@ function computedSignalField(fieldId: string, signal: EvertraceSignal): unknown 
   }
 }
 
-/** A record's fields by the names a program reads them by and by the ids a
- *  filter may name, as an arrival's landing carries them for the host to judge
- *  a listen's WHERE. `record` may carry what only the poll knows (the search or
- *  the list name it was found under). */
 /** A list entry's identity, as its record id spells it. */
 function entryKey(data: Record<string, unknown>): string | null {
   const { listId, id } = data;
   return typeof listId === 'string' && typeof id === 'string' ? encodeListEntryId({ listId, entryId: id }) : null;
 }
 
+/** A record's fields by the names a program reads them by and by the ids a
+ *  filter may name, as an arrival's landing carries them for the host to judge
+ *  a listen's WHERE. `record` may carry what only the poll knows (the search or
+ *  the list name it was found under). */
 export function landingFields(typeId: string, record: object): Record<string, unknown> {
   const data: Record<string, unknown> = { ...record };
   const fields = describeEvertraceType(typeId)?.fields ?? [];
