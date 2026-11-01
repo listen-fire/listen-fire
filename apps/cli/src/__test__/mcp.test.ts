@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { companies, project, served } from './example';
-import { lf, ok } from './interactive';
+import { freePort, lf, ok } from './interactive';
 import { startFakeMcpServer, type FakeMcpServer } from '../../../../modules/mcp/__test__/fake_server';
 
 const TRIAGE = `import { acme_crm, mcp } from adapters
@@ -304,11 +304,11 @@ test('OAuth: listen-fire connect with the provider’s endpoints, a headless sig
     );
     const F = provider.url;
     const connected = await ok(
-      lf(dir, ['connect', '@lf/mcp', '--yes', '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`, '--client-id', 'lf-mcp-app', '--client-secret', 'lf-mcp-secret', '--redirect-port', '8977']),
+      lf(dir, ['connect', '@lf/mcp', '--yes', '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`, '--client-id', 'lf-mcp-app', '--client-secret', 'lf-mcp-secret', '--redirect-port', '0']),
     );
     assert.match(connected, /installed @lf\/mcp as externals\/mcp/);
 
-    const adding = lf(dir, ['credential', 'add', '--module', '@lf/mcp', 'linear', '--credential', 'mcp', '--headless'], { answers: [server.url] });
+    const adding = lf(dir, ['credential', 'add', '--module', '@lf/mcp', 'linear', '--credential', 'mcp', '--headless', '--redirect-port', String(await freePort())], { answers: [server.url] });
     const authorize = (await adding.line(/^\s+http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/)).trim();
     assert.equal(new URL(authorize).searchParams.get('code_challenge_method'), 'S256');
     const consent = await fetch(authorize, { redirect: 'manual' });

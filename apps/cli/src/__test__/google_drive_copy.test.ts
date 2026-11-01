@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { lf as lfSync } from './example';
-import { lf, ok } from './interactive';
+import { freePort, lf, ok } from './interactive';
 
 async function fakeChannels(): Promise<{ url: string; seed(entities: unknown[]): Promise<void>; stop(): Promise<void> }> {
   const cwd = mkdtempSync(join(tmpdir(), 'lf-drive-fake-'));
@@ -56,10 +56,10 @@ async function driveProject(fake: Awaited<ReturnType<typeof fakeChannels>>): Pro
   const dir = join(mkdtempSync(join(tmpdir(), 'lf-drive-')), 'drive-copy');
   assert.equal(lfSync(join(dir, '..'), 'init', 'drive-copy').code, 0);
   const connected = await ok(
-    lf(dir, ['connect', '@lf/google-drive', '--yes', '--base-url', F, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`, '--client-id', 'lf-drive-app', '--client-secret', 'lf-drive-secret', '--redirect-port', '8977']),
+    lf(dir, ['connect', '@lf/google-drive', '--yes', '--base-url', F, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`, '--client-id', 'lf-drive-app', '--client-secret', 'lf-drive-secret', '--redirect-port', '0']),
   );
   assert.match(connected, /installed @lf\/google-drive as externals\/google_drive/);
-  const adding = lf(dir, ['credential', 'add', '--module', '@lf/google-drive', 'henry_drive', '--credential', 'google', '--headless'], { answers: ['', ''] });
+  const adding = lf(dir, ['credential', 'add', '--module', '@lf/google-drive', 'henry_drive', '--credential', 'google', '--headless', '--redirect-port', String(await freePort())], { answers: ['', ''] });
   const authorize = (await adding.line(/^\s+http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/)).trim();
   const location = (await fetch(authorize, { redirect: 'manual' })).headers.get('location');
   assert.ok(location !== null, 'the fake provider redirects back with a code');

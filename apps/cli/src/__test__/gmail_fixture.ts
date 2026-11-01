@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { lf as lfSync } from './example';
-import { lf, ok } from './interactive';
+import { freePort, lf, ok } from './interactive';
 
 export const MAILBOX = 'dev-loop@listen-fire.local';
 export const COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
@@ -64,12 +64,12 @@ export async function gmailProject(fake: Fake, credential: 'gmail' | 'gmail_draf
   const dir = join(mkdtempSync(join(tmpdir(), 'lf-gmail-')), 'gmail-project');
   assert.equal(lfSync(join(dir, '..'), 'init', 'gmail-project').code, 0);
   const connected = await ok(
-    lf(dir, ['connect', '@lf/gmail', '--yes', '--base-url', F, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`, '--client-id', 'lf-gmail-app', '--client-secret', 'lf-gmail-secret', '--redirect-port', '8979']),
+    lf(dir, ['connect', '@lf/gmail', '--yes', '--base-url', F, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`, '--client-id', 'lf-gmail-app', '--client-secret', 'lf-gmail-secret', '--redirect-port', '0']),
   );
   assert.match(connected, /connected gmail/);
   // The mailbox, then the optional fields a host fills for a delegated mailbox.
   const optional = credential === 'gmail' ? 4 : 6;
-  const adding = lf(dir, ['credential', 'add', '--module', 'gmail', name, '--credential', credential, '--headless'], {
+  const adding = lf(dir, ['credential', 'add', '--module', 'gmail', name, '--credential', credential, '--headless', '--redirect-port', String(await freePort())], {
     answers: [MAILBOX, ...Array<string>(optional).fill('')],
   });
   const authorize = (await adding.line(/^\s+http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/)).trim();

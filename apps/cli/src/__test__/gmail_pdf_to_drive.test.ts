@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { lf as lfSync } from './example';
-import { lf, ok } from './interactive';
+import { freePort, lf, ok } from './interactive';
 
 const FOLDER = 'application/vnd.google-apps.folder';
 
@@ -41,7 +41,7 @@ async function fakeChannels(): Promise<{ url: string; post(path: string, body: u
 
 /** Sign `name` in to the module installed against the fake, as a person types it. */
 async function signIn(dir: string, module: string, name: string, credential: string, answers: string[]): Promise<void> {
-  const adding = lf(dir, ['credential', 'add', '--module', module, name, '--credential', credential, '--headless'], { answers });
+  const adding = lf(dir, ['credential', 'add', '--module', module, name, '--credential', credential, '--headless', '--redirect-port', String(await freePort())], { answers });
   const authorize = (await adding.line(/^\s+http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/)).trim();
   const location = (await fetch(authorize, { redirect: 'manual' })).headers.get('location');
   assert.ok(location !== null, 'the fake provider redirects back with a code');
@@ -88,8 +88,8 @@ test('a PDF attached to a Gmail message is filed in Drive as application/pdf, by
     const dir = join(mkdtempSync(join(tmpdir(), 'lf-pdf-')), 'invoices');
     assert.equal(lfSync(join(dir, '..'), 'init', 'invoices').code, 0);
     const oauth = ['--yes', '--base-url', F, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`];
-    await ok(lf(dir, ['connect', '@lf/gmail', ...oauth, '--client-id', 'lf-gmail-app', '--client-secret', 'lf-gmail-secret', '--redirect-port', '8979']));
-    await ok(lf(dir, ['connect', '@lf/google-drive', ...oauth, '--client-id', 'lf-drive-app', '--client-secret', 'lf-drive-secret', '--redirect-port', '8977']));
+    await ok(lf(dir, ['connect', '@lf/gmail', ...oauth, '--client-id', 'lf-gmail-app', '--client-secret', 'lf-gmail-secret', '--redirect-port', '0']));
+    await ok(lf(dir, ['connect', '@lf/google-drive', ...oauth, '--client-id', 'lf-drive-app', '--client-secret', 'lf-drive-secret', '--redirect-port', '0']));
     await signIn(dir, 'gmail', 'henry_mail', 'gmail', ['dev-loop@listen-fire.local', '', '', '', '']);
     await signIn(dir, '@lf/google-drive', 'henry_drive', 'google', ['', '']);
     // The Drive picker's grant of the Invoices folder (the module's kv).

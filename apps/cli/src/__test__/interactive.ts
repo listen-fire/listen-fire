@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
 import { lfCommand } from './example';
 
 export interface Running {
@@ -49,3 +50,13 @@ export async function ok(running: Running): Promise<string> {
   return out;
 }
 
+
+/** A port that was free a moment ago: what a sign-in's `--headless --redirect-port` takes, so test files running side by side never contend for one. */
+export async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+  const address = server.address();
+  assert.ok(address !== null && typeof address === 'object');
+  await new Promise<void>((done) => server.close(() => done()));
+  return address.port;
+}

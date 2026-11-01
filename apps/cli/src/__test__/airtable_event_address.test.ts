@@ -12,7 +12,7 @@ import { createInterface } from 'node:readline';
 import { test } from 'node:test';
 
 import { lf as lfSync } from './example';
-import { lf, ok } from './interactive';
+import { freePort, lf, ok } from './interactive';
 
 async function fakeChannels(): Promise<{ url: string; stop(): Promise<void> }> {
   const cwd = mkdtempSync(join(tmpdir(), 'lf-airtable-fake-'));
@@ -36,9 +36,9 @@ async function connected(url: string): Promise<string> {
   const dir = join(mkdtempSync(join(tmpdir(), 'lf-airtable-')), 'airtable-address');
   assert.equal(lfSync(join(dir, '..'), 'init', 'airtable-address').code, 0);
   await ok(
-    lf(dir, ['connect', '@lf/airtable', '--yes', '--base-url', `${url}/airtable`, '--oauth-authorize-url', `${url}/oauth/authorize`, '--oauth-token-url', `${url}/oauth/token`, '--client-id', 'lf-airtable-app', '--client-secret', 'lf-airtable-secret', '--redirect-port', '8978']),
+    lf(dir, ['connect', '@lf/airtable', '--yes', '--base-url', `${url}/airtable`, '--oauth-authorize-url', `${url}/oauth/authorize`, '--oauth-token-url', `${url}/oauth/token`, '--client-id', 'lf-airtable-app', '--client-secret', 'lf-airtable-secret', '--redirect-port', '0']),
   );
-  const adding = lf(dir, ['credential', 'add', '--module', '@lf/airtable', 'my_airtable', '--credential', 'airtable', '--headless'], { answers: ['', ''] });
+  const adding = lf(dir, ['credential', 'add', '--module', '@lf/airtable', 'my_airtable', '--credential', 'airtable', '--headless', '--redirect-port', String(await freePort())], { answers: ['', ''] });
   const authorize = (await adding.line(/^\s+http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/)).trim();
   const location = (await fetch(authorize, { redirect: 'manual' })).headers.get('location');
   assert.ok(location !== null);

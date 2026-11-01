@@ -16,7 +16,7 @@ import { test } from 'node:test';
 
 import { until } from './attio_fixture';
 import { lf as lfSync, served, type Served } from './example';
-import { lf, ok } from './interactive';
+import { freePort, lf, ok } from './interactive';
 import { HEADER, botMessages, deliver, eventCallback, forgetSlackCalls, pressOn, seedSlack, slackCalls, slackWorld, type World } from './slack_world';
 
 const LUNCH_POLL = readFileSync(join(__dirname, 'movements/lunch_poll/lunch_poll.mvt'), 'utf8');
@@ -86,8 +86,8 @@ async function lunchWorld(): Promise<LunchWorld> {
       }),
     });
     assert.equal(seeded.status, 200, await seeded.text());
-    await ok(lf(world.dir, ['connect', '@lf/airtable', '--yes', '--base-url', `${url}/airtable`, '--oauth-authorize-url', `${url}/oauth/authorize`, '--oauth-token-url', `${url}/oauth/token`, '--client-id', 'lf-airtable-app', '--client-secret', 'lf-airtable-secret', '--redirect-port', '8984']));
-    const adding = lf(world.dir, ['credential', 'add', '--module', '@lf/airtable', 'team_airtable', '--credential', 'airtable', '--headless'], { answers: ['', ''] });
+    await ok(lf(world.dir, ['connect', '@lf/airtable', '--yes', '--base-url', `${url}/airtable`, '--oauth-authorize-url', `${url}/oauth/authorize`, '--oauth-token-url', `${url}/oauth/token`, '--client-id', 'lf-airtable-app', '--client-secret', 'lf-airtable-secret', '--redirect-port', '0']));
+    const adding = lf(world.dir, ['credential', 'add', '--module', '@lf/airtable', 'team_airtable', '--credential', 'airtable', '--headless', '--redirect-port', String(await freePort())], { answers: ['', ''] });
     const authorize = (await adding.line(/^\s+http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/)).trim();
     const location = (await fetch(authorize, { redirect: 'manual' })).headers.get('location');
     assert.ok(location !== null);

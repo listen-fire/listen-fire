@@ -11,7 +11,7 @@ import { join, resolve } from 'node:path';
 import { fakeAffinity } from './affinity_fixture';
 import { lf, project } from './example';
 import { fakeChannels, gmailProject } from './gmail_fixture';
-import { lf as lfAsked, ok } from './interactive';
+import { freePort, lf as lfAsked, ok } from './interactive';
 
 const OLD = `import { acme_crm } from adapters
 import { acme } from credentials
@@ -659,9 +659,9 @@ async function listensProject(fake: { url: string }, affinity: { url: string }):
   await ok(lfAsked(dir, ['connect', '@lf/attio', '--yes']));
   await ok(lfAsked(dir, ['credential', 'add', '--module', '@lf/attio', 'crm_attio', '--credential', 'attio_token'], { answers: ['attio-test-token', `${F}/attio`] }));
   await ok(
-    lfAsked(dir, ['connect', '@lf/airtable', '--yes', '--base-url', `${F}/airtable`, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`, '--client-id', 'lf-airtable-app', '--client-secret', 'lf-airtable-secret', '--redirect-port', '8993']),
+    lfAsked(dir, ['connect', '@lf/airtable', '--yes', '--base-url', `${F}/airtable`, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`, '--client-id', 'lf-airtable-app', '--client-secret', 'lf-airtable-secret', '--redirect-port', '0']),
   );
-  const adding = lfAsked(dir, ['credential', 'add', '--module', '@lf/airtable', 'team_airtable', '--credential', 'airtable', '--headless'], { answers: ['', ''] });
+  const adding = lfAsked(dir, ['credential', 'add', '--module', '@lf/airtable', 'team_airtable', '--credential', 'airtable', '--headless', '--redirect-port', String(await freePort())], { answers: ['', ''] });
   const authorize = (await adding.line(/^\s+http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/)).trim();
   const location = (await fetch(authorize, { redirect: 'manual' })).headers.get('location');
   assert.ok(location !== null);

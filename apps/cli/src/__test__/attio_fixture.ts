@@ -5,13 +5,12 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { appendFileSync, mkdtempSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 import { lf as lfSync } from './example';
-import { lf, ok } from './interactive';
+import { freePort, lf, ok } from './interactive';
 
 export interface Fake {
   url: string;
@@ -94,14 +93,7 @@ export function valueOf(record: AttioRecord | undefined, slug: string): unknown 
   return record?.values[slug]?.[0]?.['value'];
 }
 
-export async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
-  const address = server.address();
-  assert.ok(address !== null && typeof address === 'object');
-  await new Promise<void>((done) => server.close(() => done()));
-  return address.port;
-}
+export { freePort };
 
 /** Wait, up to 20s, for `holds` to hold over the server's output. */
 export async function until(holds: () => boolean, lines: string[]): Promise<void> {

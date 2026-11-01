@@ -43,16 +43,17 @@ test('the Attio walkthrough, end to end against the fake Attio', async () => {
     // 2. The module, pointed at the fake. Attio issues each webhook's secret
     //    when listen-fire serve registers it, so none is asked for here.
     const connected = await ok(
-      lf(dir, ['connect', '@lf/attio', '--yes', '--base-url', `${F}/attio`, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`, '--client-id', 'lf-attio-app', '--client-secret', 'lf-attio-secret', '--redirect-port', '8976']),
+      lf(dir, ['connect', '@lf/attio', '--yes', '--base-url', `${F}/attio`, '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`, '--client-id', 'lf-attio-app', '--client-secret', 'lf-attio-secret', '--redirect-port', '0']),
     );
     assert.match(connected, /installed @lf\/attio as externals\/attio/);
-    assert.match(connected, /http:\/\/127\.0\.0\.1:8976\/callback/);
+    assert.match(connected, /http:\/\/127\.0\.0\.1:<any port>\/callback/);
     assert.doesNotMatch(connected, /webhooks are signed with/);
 
     // 3. Henry signs in, headless: the browser's redirect pasted back.
-    const adding = lf(dir, ['credential', 'add', '--module', '@lf/attio', 'henry_attio', '--credential', 'attio', '--headless'], { answers: ['', ''] });
+    const signInPort = await freePort();
+    const adding = lf(dir, ['credential', 'add', '--module', '@lf/attio', 'henry_attio', '--credential', 'attio', '--headless', '--redirect-port', String(signInPort)], { answers: ['', ''] });
     const authorize = (await adding.line(/^\s+http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/)).trim();
-    assert.equal(new URL(authorize).searchParams.get('redirect_uri'), 'http://127.0.0.1:8976/callback');
+    assert.equal(new URL(authorize).searchParams.get('redirect_uri'), `http://127.0.0.1:${signInPort}/callback`);
     const consent = await fetch(authorize, { redirect: 'manual' });
     const location = consent.headers.get('location');
     assert.ok(location !== null, 'the fake provider redirects back with a code');
