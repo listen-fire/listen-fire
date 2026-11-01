@@ -125,6 +125,10 @@ pub struct Declaration {
     /// what the host reads itself. Never one that carries a credential
     /// (`credential_header`).
     pub capture_headers: Vec<String>,
+    /// The fields of the body and the query string that may carry a
+    /// credential (`redactFields`; Slack's legacy verification `token`):
+    /// dropped before a request is kept.
+    pub redact_fields: Vec<String>,
 }
 
 impl Declaration {
@@ -185,19 +189,62 @@ impl Declaration {
             }
             capture_headers.push(name.to_string());
         }
-        Ok(Declaration { provider_key: provider_key.to_string(), scheme, signature_headers, intercepts, secret_from_provider, delivery_id_header, capture_headers })
+        let redact_fields = match value.get("redactFields") {
+            None => Vec::new(),
+            Some(list) => list
+                .as_array()
+                .ok_or("redactFields: expected an array")?
+                .iter()
+                .map(|f| f.as_str().filter(|f| !f.is_empty()).map(str::to_string).ok_or_else(|| "redactFields: a field to drop is a non-empty name".to_string()))
+                .collect::<Result<_, _>>()?,
+        };
+        Ok(Declaration { provider_key: provider_key.to_string(), scheme, signature_headers, intercepts, secret_from_provider, delivery_id_header, capture_headers, redact_fields })
     }
 }
 
+/// What a header's name says may carry a credential (`CREDENTIAL_HEADER_WORDS`).
+const CREDENTIAL_HEADER_WORDS: [&str; 7] = ["signature", "secret", "token", "key", "auth", "hmac", "password"];
+
 /// Whether a header may carry a credential, so no kept request holds it
-/// (`isCredentialHeader`): every scheme's signature header, any header naming
-/// a signature or a secret, and the request's own authorization and cookies.
+/// (`isCredentialHeader`): every scheme's signature header, any header whose
+/// name says it holds a signature, a secret, a token, a key, an
+/// authorization, an HMAC or a password, and the request's cookies.
 pub fn credential_header(name: &str) -> bool {
     const SCHEMES: [Scheme; 7] = [Scheme::HmacSha256Hex, Scheme::Attio, Scheme::AirtableMac, Scheme::AffinityHexOrB64, Scheme::SlackV0, Scheme::TelegramSecretToken, Scheme::Remote];
-    matches!(name, "authorization" | "proxy-authorization" | "cookie")
-        || name.contains("signature")
-        || name.contains("secret")
-        || SCHEMES.iter().any(|scheme| scheme.default_headers().contains(&name))
+    matches!(name, "cookie" | "set-cookie") || CREDENTIAL_HEADER_WORDS.iter().any(|word| name.contains(word)) || SCHEMES.iter().any(|scheme| scheme.default_headers().contains(&name))
+}
+
+/// `pairs` (a query string, or a form body) without those `fields` names;
+/// None when it names none of them. In a form, a field holding a JSON object
+/// (Slack's `payload`) loses those members too.
+fn without_fields(pairs: &[u8], fields: &[String]) -> Option<String> {
+    let mut dropped = false;
+    let mut kept = url::form_urlencoded::Serializer::new(String::new());
+    for (name, value) in url::form_urlencoded::parse(pairs) {
+        if fields.iter().any(|f| *f == name) {
+            dropped = true;
+            continue;
+        }
+        match without_members(value.as_bytes(), fields) {
+            Some(json) => {
+                dropped = true;
+                kept.append_pair(&name, &json);
+            }
+            None => {
+                kept.append_pair(&name, &value);
+            }
+        }
+    }
+    dropped.then(|| kept.finish())
+}
+
+/// A JSON object without its members `fields` names; None when it is no
+/// object or names none of them.
+fn without_members(json: &[u8], fields: &[String]) -> Option<String> {
+    let Ok(Js::Obj(mut members)) = Js::parse(json) else { return None };
+    let before = members.len();
+    members.retain(|name, _| !fields.contains(name));
+    (members.len() < before).then(|| Js::Obj(members).to_json())
 }
 
 /// A lower-case header name, as the wire's `HEADER_NAME` reads one.
@@ -479,7 +526,15 @@ impl RawRequest<'_> {
     fn captured(&self, declaration: &Declaration, checkpoint: Option<&Js>) -> Js {
         let host_reads = |name: &str| declaration.scheme != Scheme::Module && (name == "content-type" || declaration.delivery_id_header.as_deref() == Some(name));
         let read = |name: &str| host_reads(name) || declaration.capture_headers.iter().any(|h| h == name);
-        let mut kept = self.wire_with(read);
+        let fields = &declaration.redact_fields;
+        let query = without_fields(self.query.as_bytes(), fields);
+        let form = header(self.headers, "content-type").and_then(|t| t.split(';').next()).is_some_and(|t| t.trim().eq_ignore_ascii_case("application/x-www-form-urlencoded"));
+        let body = match form {
+            true => without_fields(self.body, fields),
+            false => without_members(self.body, fields),
+        };
+        let redacted = RawRequest { query: query.as_deref().unwrap_or(self.query), body: body.as_ref().map_or(self.body, |b| b.as_bytes()), ..*self };
+        let mut kept = redacted.wire_with(read);
         if let (Js::Obj(fields), Some(checkpoint)) = (&mut kept, checkpoint) {
             fields.insert("checkpoint".into(), checkpoint.clone());
         }
@@ -1154,6 +1209,7 @@ mod tests {
             secret_from_provider: false,
             delivery_id_header: None,
             capture_headers: Vec::new(),
+            redact_fields: Vec::new(),
         };
         let unsigned_key = to_hex(&hmac_sha256(b"", BODY));
         assert!(verify_with_scheme(Scheme::Attio, BODY, &headers(&[("x-sig", &unsigned_key)]), "", &declared.signature_headers), "attio is lenient alone");
@@ -1379,13 +1435,32 @@ mod tests {
         let github = r#"{"providerKey":"gh","scheme":"hmac_sha256_hex","signatureHeaders":["x-hub-signature-256"],"deliveryId":{"header":"x-gh-delivery"}"#;
         assert_eq!(kept(&format!("{github}}}"), &sent), r#"{"content-type":"application/json","x-gh-delivery":"d-1"}"#);
         assert_eq!(kept(&format!(r#"{github},"captureHeaders":["x-thing"]}}"#), &sent), r#"{"content-type":"application/json","x-thing":"1","x-gh-delivery":"d-1"}"#);
-        for credential in ["authorization", "cookie", "stripe-signature", "svix-signature", "x-hub-signature-256", "x-slack-signature", "x-telegram-bot-api-secret-token", "x-airtable-content-mac", "x-client-secret"] {
+        for credential in ["authorization", "cookie", "stripe-signature", "svix-signature", "x-hub-signature-256", "x-slack-signature", "x-telegram-bot-api-secret-token", "x-airtable-content-mac", "x-client-secret", "x-goog-channel-token", "x-gitlab-token", "x-api-key", "x-auth-token", "x-hmac-sha256", "x-password"] {
             let refused = read(&format!(r#"{{"providerKey":"m","scheme":"module","captureHeaders":["{credential}"]}}"#)).err().unwrap();
             assert_eq!(refused, format!("captureHeaders: {credential} carries a credential, and a kept request never holds one"));
         }
         // A declared signature header of its own, whatever its name.
         assert!(read(r#"{"providerKey":"m","scheme":"remote","signatureHeaders":["x-check"],"captureHeaders":["x-check"]}"#).is_err());
         assert!(read(r#"{"providerKey":"m","scheme":"module","captureHeaders":["X-Upper"]}"#).is_err());
+    }
+
+    #[test]
+    fn a_declaration_names_the_body_and_query_fields_dropped_before_its_requests_are_kept() {
+        let declared = Declaration::read(&Js::parse(br#"{"providerKey":"slack","scheme":"slack_v0","signatureHeaders":["x-slack-signature"],"redactFields":["token"]}"#).unwrap()).unwrap();
+        let kept = |content_type: &str, query: &str, body: &[u8]| {
+            let sent = headers(&[("content-type", content_type)]);
+            let wire = RawRequest { method: "POST", path: "/p", query, headers: &sent, body, replayed: false }.captured(&declared, None);
+            let body = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, wire.get("body").and_then(Js::as_str).unwrap()).unwrap();
+            (wire.get("query").and_then(Js::as_str).unwrap().to_string(), String::from_utf8(body).unwrap())
+        };
+        let (query, body) = kept("application/json", "token=t-1&team=T1", br#"{"token":"t-1","event":{"type":"message","token":"inner"}}"#);
+        assert_eq!(query, "team=T1");
+        assert_eq!(body, r#"{"event":{"type":"message","token":"inner"}}"#, "a JSON body's own member, not one nested deeper");
+        let (_, body) = kept("application/x-www-form-urlencoded", "", b"payload=%7B%22token%22%3A%22t-1%22%2C%22type%22%3A%22block_actions%22%7D&token=t-2");
+        assert_eq!(body, "payload=%7B%22type%22%3A%22block_actions%22%7D", "a form's field, and a member of a JSON object a field holds");
+        let untouched = br#"{ "event": 1 }"#;
+        assert_eq!(kept("application/json", "team=T1", untouched), ("team=T1".to_string(), r#"{ "event": 1 }"#.to_string()), "one naming none is kept byte for byte");
+        assert!(Declaration::read(&Js::parse(br#"{"providerKey":"m","scheme":"module","redactFields":[""]}"#).unwrap()).is_err());
     }
 
     #[test]

@@ -113,12 +113,14 @@ export function slackModuleWith(hosted: SlackHosted): AdapterModuleDefinition {
     // Slack signs every delivery with the app's signing secret (`v0`), and
     // its door answers the one-time `url_verification` challenge unsigned.
     // The same scheme and header the door has always read, so every
-    // subscription's URL and Slack's signatures keep working.
+    // subscription's URL and Slack's signatures keep working. Its bodies
+    // carry the app's legacy verification `token`, never kept with a request.
     inbound: {
       providerKey: 'slack',
       scheme: 'slack_v0',
       signatureHeaders: ['x-slack-signature'],
       intercepts: ['slack_url_verification'],
+      redactFields: ['token'],
     },
     create: (ctx) => new SlackAdapter(slackSourcesFrom(ctx, hosted)),
   });

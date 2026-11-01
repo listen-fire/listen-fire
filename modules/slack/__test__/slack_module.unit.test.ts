@@ -104,13 +104,14 @@ function load(input: { credential: ModuleCredential; hosted?: SlackHosted; files
 }
 
 describe('@lf/slack', () => {
-  it('declares the signed inbound the platform door has always verified, and its credential', () => {
+  it('declares the signed inbound the platform door has always verified, the legacy token it never keeps, and its credential', () => {
     const { manifest } = load({ credential: credential({ accessToken: 'xoxb-1' }) });
     expect(manifest.inbound).toEqual({
       providerKey: 'slack',
       scheme: 'slack_v0',
       signatureHeaders: ['x-slack-signature'],
       intercepts: ['slack_url_verification'],
+      redactFields: ['token'],
     });
     expect(manifest.credentials?.[0]).toMatchObject({ name: 'slack', kind: 'static' });
   });

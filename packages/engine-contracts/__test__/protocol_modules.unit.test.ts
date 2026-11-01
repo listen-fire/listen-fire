@@ -139,14 +139,20 @@ describe('a module manifest', () => {
     const checked = { ...MODULE_MANIFEST, methods: [...MODULE_MANIFEST.methods, 'checkInbound'] };
     const keeping = { ...checked, inbound: { providerKey: 'mail', scheme: 'module', captureHeaders: ['content-type', 'svix-id'] } };
     expect(WireManifestResult.parse(keeping)).toEqual(keeping);
-    for (const header of ['authorization', 'cookie', 'stripe-signature', 'svix-signature', 'x-hub-signature-256', 'x-telegram-bot-api-secret-token', 'x-airtable-content-mac']) {
+    for (const header of ['authorization', 'cookie', 'stripe-signature', 'svix-signature', 'x-hub-signature-256', 'x-telegram-bot-api-secret-token', 'x-airtable-content-mac', 'x-goog-channel-token', 'x-gitlab-token', 'x-api-key', 'x-auth-token', 'x-hmac-sha256', 'x-password']) {
       expect(refusal({ ...checked, inbound: { providerKey: 'mail', scheme: 'module', captureHeaders: [header] } })).toEqual([
-        'inbound.captureHeaders.0: a header that may carry a credential (a signature, a secret, authorization or a cookie) is never kept',
+        'inbound.captureHeaders.0: a header that may carry a credential (a signature, a secret, a token, a key, authorization, an HMAC, a password or a cookie) is never kept',
       ]);
     }
     const signed = { ...MODULE_MANIFEST.inbound, signatureHeaders: ['x-check'] };
     expect(WireManifestResult.parse({ ...MODULE_MANIFEST, inbound: { ...signed, captureHeaders: ['x-thing'] } }).inbound).toEqual({ ...signed, captureHeaders: ['x-thing'] });
     expect(refusal({ ...MODULE_MANIFEST, inbound: { ...signed, captureHeaders: ['x-check'] } })).toEqual(['inbound.captureHeaders: a header to keep is never one of its signature headers']);
+  });
+
+  it('takes the body and query fields dropped before a request is kept, each a non-empty name', () => {
+    const redacting = { ...MODULE_MANIFEST, inbound: { ...MODULE_MANIFEST.inbound, redactFields: ['token'] } };
+    expect(WireManifestResult.parse(redacting)).toEqual(redacting);
+    expect(refusal({ ...MODULE_MANIFEST, inbound: { ...MODULE_MANIFEST.inbound, redactFields: [''] } })).toEqual(['inbound.redactFields.0: a field to drop is a non-empty name']);
   });
 
   it('takes the header a delivery id is read from, a lower-case header name', () => {

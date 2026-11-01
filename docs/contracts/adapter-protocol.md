@@ -1277,10 +1277,17 @@ host verifies each delivery before `preprocessInbound` sees it:
   only these, beside the two the host reads itself under a declared scheme:
   `content-type`, which it decodes the body by, and the `deliveryId` header.
   None by default. A header that may carry a credential is refused when the
-  module is described: `authorization`, `proxy-authorization`, `cookie`, any
-  scheme's signature header, any of the declaration's `signatureHeaders`, and
-  any name holding `signature` or `secret`. A kept request never holds a
-  signature, a token or a secret: a replay is not verified again.
+  module is described: `cookie`, any scheme's signature header, any of the
+  declaration's `signatureHeaders`, and any name holding `signature`,
+  `secret`, `token`, `key`, `auth`, `hmac` or `password`. A replay is not
+  verified again.
+- `redactFields` (optional; adapter protocol 2.6) names the fields of the
+  body and the query string that may carry a credential, dropped before a
+  request is kept: a JSON body's own members, a form's fields and the
+  members of a JSON object a form field holds (Slack's `payload`), and the
+  query's parameters. `@lf/slack` names `token`, its legacy verification
+  token. Anything else in the body is kept as the provider sent it, so a
+  kept request may hold what the provider puts there.
 - One host rule for every scheme: a delivery is refused when the key it
   should be signed with is missing, blank or still the placeholder a
   subscription holds before its registration returns a secret, and when its

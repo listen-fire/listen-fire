@@ -882,25 +882,35 @@ const SCHEME_SIGNATURE_HEADERS = [
   'x-listen-fire-signature',
 ];
 
+/** What a header's name says may carry a credential. */
+const CREDENTIAL_HEADER_WORDS = ['signature', 'secret', 'token', 'key', 'auth', 'hmac', 'password'];
+
 /** Whether a header may carry a credential, so no kept request holds it:
- *  every scheme's signature header, any header naming a signature or a
- *  secret, and the request's own authorization and cookies. */
+ *  every scheme's signature header, any header whose name says it holds a
+ *  signature, a secret, a token, a key, an authorization, an HMAC or a
+ *  password, and the request's cookies. */
 export function isCredentialHeader(name: string): boolean {
-  return ['authorization', 'proxy-authorization', 'cookie'].includes(name) || name.includes('signature') || name.includes('secret') || SCHEME_SIGNATURE_HEADERS.includes(name);
+  return ['cookie', 'set-cookie'].includes(name) || CREDENTIAL_HEADER_WORDS.some((word) => name.includes(word)) || SCHEME_SIGNATURE_HEADERS.includes(name);
 }
+
+/** The fields of a request's body and query string that may carry a
+ *  credential (Slack's legacy verification `token`), dropped before the
+ *  request is kept: a JSON body's own members, a form's fields and the
+ *  members of a JSON object a form field holds, and the query's
+ *  parameters. None by default. */
+const WireRedactFields = z.array(z.string().min(1, 'a field to drop is a non-empty name')).optional();
 
 /** The headers the module's inbound handling reads besides the body, lower
  *  case: the only ones a delivery's kept request holds (for a replay), beside
  *  what the host reads itself under a declared scheme (the content type and
  *  the delivery id header). None by default. A header that may carry a
- *  credential (`isCredentialHeader`) is refused: a kept request never holds
- *  a signature, a token or a secret. */
+ *  credential (`isCredentialHeader`) is refused. */
 const WireCaptureHeaders = z
   .array(
     z
       .string()
       .regex(HEADER_NAME, 'a header to keep is a lower-case header name')
-      .refine((name) => !isCredentialHeader(name), 'a header that may carry a credential (a signature, a secret, authorization or a cookie) is never kept'),
+      .refine((name) => !isCredentialHeader(name), 'a header that may carry a credential (a signature, a secret, a token, a key, authorization, an HMAC, a password or a cookie) is never kept'),
   )
   .optional();
 
@@ -936,6 +946,7 @@ export const WireSignedInboundDeclaration = z.object({
    *  a redelivery under an id the host kept before is acked and runs nothing. */
   deliveryId: z.object({ header: z.string().regex(HEADER_NAME, 'a delivery id header is a lower-case header name') }).optional(),
   captureHeaders: WireCaptureHeaders,
+  redactFields: WireRedactFields,
 }).refine((declared) => !(declared.captureHeaders ?? []).some((name) => declared.signatureHeaders.includes(name)), {
   message: 'a header to keep is never one of its signature headers',
   path: ['captureHeaders'],
@@ -952,6 +963,7 @@ export const WireModuleCheckedInboundDeclaration = z.object({
   scheme: z.literal('module'),
   secretIssuedBy: WireSecretIssuedBy.optional(),
   captureHeaders: WireCaptureHeaders,
+  redactFields: WireRedactFields,
 });
 
 export const WireInboundDeclaration = z.discriminatedUnion('scheme', [WireSignedInboundDeclaration, WireModuleCheckedInboundDeclaration]);
