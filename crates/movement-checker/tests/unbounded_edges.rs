@@ -6,8 +6,10 @@
 //! - `inbox`: `Emails` is unbounded, narrowed only by `Key` (an `InboxKey`
 //!   with an allow pattern).
 //! - `gmail`: `Messages` is bounded; `Query` (a `GmailQuery`) is taken with
-//!   `==` only, and `Subject` is taken with nothing. `Drafts` is written to
-//!   and never read.
+//!   `==` only, and `Subject` is taken with nothing. `Tags` takes several
+//!   `CONTAINS` together (`containsAny`), `Topics` one at a time, and
+//!   `Regions` (a list of an owned `Region`) one at a time. `Drafts` is
+//!   written to and never read.
 //! - `mail`: an unbounded edge off a record. An `Account` has `Boxes`; a
 //!   `Box`, and a `Box2` reached from the root, each have `Emails`, narrowed
 //!   only by `Key`.
@@ -43,9 +45,13 @@ const CATALOG: &str = r#"{"adapters":{
   "gmail":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
     "Message":{"properties":{
         "Query":{"kind":"owned","name":"GmailQuery","owner":"gmail"},
-        "Subject":"text"},
+        "Subject":"text",
+        "Tags":{"kind":"list","of":"text"},
+        "Topics":{"kind":"list","of":"text"},
+        "Regions":{"kind":"list","of":{"kind":"owned","name":"Region","owner":"gmail"}}},
       "edges":{},
-      "propertyCapabilities":{"Query":{"filterOperators":["eq"]},"Subject":{}}},
+      "propertyCapabilities":{"Query":{"filterOperators":["eq"]},"Subject":{},
+        "Tags":{"filterOperators":["contains","containsAny"]},"Topics":{"filterOperators":["contains"]},"Regions":{"filterOperators":["contains"]}}},
     "Draft":{"properties":{"Body":"text","SendIn":{"kind":"owned","name":"Zone","owner":"gmail"}},"edges":{}}},
     "collections":{
       "Messages":{"target":"Message","capability":{"filter":"native","supportsLimit":false}},
@@ -362,4 +368,22 @@ fn a_bounding_field_compared_with_what_is_not_a_literal_does_not_bound() {
 #[test]
 fn an_owned_type_starting_with_a_vowel_takes_an() {
     assert_eq!(check_listen("inbox-[e:Emails WHERE e.Key == \"sales\" AND e.Key CONTAINS \"x\"]->"), vec![r#"MOV_FILTER_NOT_TAKEN 2:13-2:77 `e.Key CONTAINS "x"` reads 'Key', an InboxKey only inbox can evaluate, and it can't take it here — write it as `e.Key == "…"` joined to the rest with AND"#]);
+}
+
+#[test]
+fn an_or_of_contains_on_one_field_is_taken_when_the_field_takes_any_of_them() {
+    let split = split_of(r#"m.Tags CONTAINS "a" OR m.Tags CONTAINS "b""#);
+    assert_eq!((spelled(&split.taken), spelled(&split.checked)), (vec![r#"m.Tags CONTAINS "a" OR m.Tags CONTAINS "b""#.to_string()], vec![]));
+    // One value at a time only: the host checks the OR.
+    let split = split_of(r#"m.Topics CONTAINS "a" OR m.Topics CONTAINS "b""#);
+    assert_eq!((spelled(&split.taken), spelled(&split.checked)), (vec![], vec![r#"m.Topics CONTAINS "a" OR m.Topics CONTAINS "b""#.to_string()]));
+    // Across two fields, or two operators, it is no one field's comparison.
+    for filter in [r#"m.Tags CONTAINS "a" OR m.Topics CONTAINS "b""#, r#"m.Tags CONTAINS "a" OR m.Tags == ["b"]"#] {
+        let split = split_of(filter);
+        assert_eq!((split.taken.len(), split.checked.len()), (0, 1), "{filter}");
+    }
+    // An owned field's OR the module does not take is refused where it is written.
+    let found = check("  xs = gmail-[m:Messages WHERE m.Regions CONTAINS \"eu\" OR m.Regions CONTAINS \"us\"]->\n");
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].starts_with("MOV_FILTER_NOT_TAKEN"), "{found:?}");
 }

@@ -227,7 +227,7 @@ interface NaturalOrder {
 }
 
 interface FieldCapability {
-  filterOperators?: Array<'eq' | 'neq' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte' | 'exists' | 'in' | 'within'>;
+  filterOperators?: Array<'eq' | 'neq' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte' | 'exists' | 'in' | 'within' | 'containsAny'>;
   orderable?: boolean;
 }
 ```

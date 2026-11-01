@@ -252,6 +252,10 @@ pub enum FilterOperator {
     Exists,
     In,
     Within,
+    /// An OR of `CONTAINS` on the field, taken together: a record that
+    /// contains any of the values.
+    #[serde(rename = "containsAny")]
+    ContainsAny,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

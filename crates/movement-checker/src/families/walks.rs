@@ -948,6 +948,7 @@ fn filter_op_name(op: &movement_parser::catalog::types::FilterOperator) -> &'sta
         Op::Exists => "exists",
         Op::In => "in",
         Op::Within => "within",
+        Op::ContainsAny => "containsAny",
     }
 }
 

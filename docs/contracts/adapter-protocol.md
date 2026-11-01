@@ -252,8 +252,12 @@ The manifest file registers your server with a team:
   When your events arrive on more than one edge, `byEvent` maps an event to the
   mapping a listen naming it becomes instead (`{ "label_added": { "path":
   ["Labelings"], … } }`), with `events` spent choosing it; a listen that leaves
-  `events` out takes the top mapping, and one naming events of two mappings has
-  no rewrite (its author writes one listen per edge). A rewrite is offered only when every literal it writes is one the field's
+  `events` out chooses by your module's default events, and takes the top
+  mapping when you declare none (or none of them is mapped). One naming
+  events of two mappings has no rewrite (its author writes one listen per
+  edge), and nor has one naming an event `byEvent` does not beside one it
+  does. Several values of a `contains` key become an OR of `CONTAINS`: the
+  rewrite is safe only when the field declares `containsAny`. A rewrite is offered only when every literal it writes is one the field's
   owned scalar takes. A connection positioned at a member (an Airtable `base`)
   stands on the hops its position keys map to. A path naming an edge you do
   not describe, a key mapped past the path, an `eq`/`in` key with no `field`,
@@ -1308,7 +1312,11 @@ polled with its own shape, once for every listen on it
   `edge` is the edge's name. `filter` is the part of the listens' `WHERE` on
   the edge that you take (an expression, as a hop's `where` hint is: a field
   your declaration gives `filterOperators`, on an edge whose `capability` says
-  `filter: "native"`); absent when you take none of it. `scope` is the id of
+  `filter: "native"`); absent when you take none of it. An OR of `==` on one
+  field reaches you when the field declares `in`, and an OR of `CONTAINS` on
+  one field (a record containing any of the values) when it declares
+  `containsAny`; module-kit's `takenComparisons` reads them as `in` and
+  `containsAny`. `scope` is the id of
   the record the edge hangs off, when the listens watch it under one. `cursor`
   is what your previous poll answered, absent the first time. Each arrival has
   the shape of [Reporting arrivals](#reporting-arrivals).

@@ -26,6 +26,15 @@ describe('takenComparisons', () => {
     ]);
   });
 
+  it('reads an OR of CONTAINS on one field as containsAny, and an OR mixing operators as nothing it can read', () => {
+    const contains = (name: string, value: string) => ({ type: 'compare', op: 'contains', left: field(name), right: text(value) });
+    expect(takenComparisons({ type: 'logical', op: 'or', operands: [contains('Labels', 'Deals'), contains('Labels', 'Hiring')] })).toEqual([
+      { field: 'Labels', op: 'containsAny', value: ['Deals', 'Hiring'] },
+    ]);
+    expect(takenComparisons({ type: 'logical', op: 'or', operands: [contains('Labels', 'Deals'), { type: 'compare', op: 'eq', left: field('Labels'), right: text('x') }] })).toBeUndefined();
+    expect(takenComparisons({ type: 'logical', op: 'or', operands: [contains('Labels', 'Deals'), contains('Tags', 'x')] })).toBeUndefined();
+  });
+
   it('is none for no filter, and undefined for a part it cannot read', () => {
     expect(takenComparisons(undefined)).toEqual([]);
     expect(takenComparisons({ type: 'compare', op: 'eq', left: field('A'), right: field('B') })).toBeUndefined();
@@ -42,6 +51,9 @@ describe('holds and narrowedTo', () => {
     expect(holds(['mention'], { field: 'Reason', op: 'in', value: ['mention'] })).toBe(false);
     expect(holds('2026-02-01T00:00:00Z', { field: 'At', op: 'gte', value: '2026-01-01' })).toBe(true);
     expect(holds(undefined, { field: 'X', op: 'eq', value: 'a' })).toBe(false);
+    expect(holds(['INBOX', 'Label_1'], { field: 'Labels', op: 'containsAny', value: ['Label_9', 'Label_1'] })).toBe(true);
+    expect(holds(['INBOX'], { field: 'Labels', op: 'containsAny', value: ['Label_9', 'Label_1'] })).toBe(false);
+    expect(holds('Invoice 12', { field: 'Subject', op: 'containsAny', value: ['Receipt', 'Invoice'] })).toBe(true);
   });
 
   it('names the texts an == or an IN narrows to', () => {

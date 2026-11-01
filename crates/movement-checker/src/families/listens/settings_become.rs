@@ -17,7 +17,7 @@ use serde_json::json;
 use crate::checker::Checker;
 use crate::codes;
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::families::filter_split::spell;
+use crate::families::filter_split::{EdgeView, spell, split_where};
 use crate::families::names::spell_name;
 use crate::families::values::owned_value_error;
 use crate::types::field::{OwnedScalar, Ty, strip_absent};
@@ -37,6 +37,10 @@ const EVENTS_KEY: &str = "events";
 const SUPPRESS_SELF_NOTE: &str = " (`suppress_self` is gone: a two-way sync's own echo now runs once more and finds nothing to change)";
 const EVERY_NOTE: &str = " (`every` is gone: the module sets the interval; set `pollEvery` for this connection in lf.yaml)";
 
+fn host_judged_note(fields: &[String]) -> String {
+    format!(" (the module can't take several values of {} together, so this listen compares each exactly as the field holds it, where 0.12 handed them all to the module: check they still match)", quoted(fields))
+}
+
 /// The traversal a settings listen becomes, spelled.
 struct Rewrite {
     /// `gh-[n:Notifications WHERE …]->`.
@@ -45,6 +49,10 @@ struct Rewrite {
     param_type: String,
     /// The 0.12 event position the mapping it came from retypes.
     param_from: Option<String>,
+    /// The fields a key's several values compare by an OR the module does
+    /// not take together, so the host compares each value exactly where
+    /// 0.12 handed them all to the module.
+    host_judged: Vec<String>,
 }
 
 impl Checker<'_> {
@@ -90,12 +98,17 @@ impl Checker<'_> {
         let why_no_fix = match &rewrite {
             Some(Err(NoRewrite::Unbounded)) => " (its settings name no value that bounds the edge, so there is no rewrite: name the one it listens for)".to_string(),
             Some(Err(NoRewrite::Refused(reason))) => format!(" (there is no rewrite: {reason})"),
-            Some(Err(NoRewrite::SeveralEdges(edges))) => {
-                format!(" (there is no rewrite: its events arrive on {}, so write one listen for each)", edges.iter().map(|e| format!("`{}`", spell_name(e))).collect::<Vec<_>>().join(" and "))
+            Some(Err(NoRewrite::SeveralEdges(edges))) => format!(" (there is no rewrite: its events arrive on {}, so write one listen for each)", quoted(edges)),
+            Some(Err(NoRewrite::UnmappedEvents { unnamed, events })) => {
+                format!(" (there is no rewrite: {instance_name} has no event {}; its events are {})", quoted(unnamed), quoted(events))
             }
             _ => String::new(),
         };
         let rewrite = rewrite.and_then(Result::ok);
+        let host_judged = rewrite.as_ref().map_or(&[][..], |r| r.host_judged.as_slice());
+        if !host_judged.is_empty() {
+            notes.push_str(&host_judged_note(host_judged));
+        }
         let message = format!(
             "`listen to {instance_name} {{ … }}` is retired in 0.13: a listen is a traversal ending on the edge its events arrive on. Write `listen to {path} fire {movement}`{notes}{why_no_fix}"
         );
@@ -110,7 +123,7 @@ impl Checker<'_> {
             if let Some(span) = rewrite.param_from.as_deref().and_then(|from| self.param_from_span(statement, from, scope)) {
                 edits.push(json!({ "span": span, "text": rewrite.param_type }));
             }
-            let safe = !suppresses_self && !every;
+            let safe = !suppresses_self && !every && rewrite.host_judged.is_empty();
             diagnostic.fix = Some(if safe { json!({ "edits": edits, "safe": true }) } else { json!({ "edits": edits }) });
         }
         self.push(diagnostic);
@@ -129,6 +142,11 @@ impl Checker<'_> {
         let Some(ParamTypeRef::Name(declared)) = &param.type_ else { return None };
         (declared.graph == statement.instance && declared.position.as_deref() == Some(from)).then_some(declared.span)
     }
+}
+
+/// Names in backticks, joined by "and".
+fn quoted(names: &[String]) -> String {
+    names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(" and ")
 }
 
 /// What a rewrite reads besides the listen and its module's mapping.
@@ -156,6 +174,9 @@ enum NoRewrite {
     /// Its `events` name events of more than one mapping (`byEvent`): the
     /// edges they arrive on.
     SeveralEdges(Vec<String>),
+    /// Its `events` name events the mapping (`byEvent`) does not, beside ones
+    /// it does: those, and the events it names.
+    UnmappedEvents { unnamed: Vec<String>, events: Vec<String> },
 }
 
 /// The mapping a listen takes: the one its `events` choose (`byEvent`),
@@ -178,15 +199,28 @@ fn chosen<'b>(statement: &ListenDeclaration, become_: &'b SettingsBecome, defaul
         None => default_events.unwrap_or_default().to_vec(),
     };
     let ways: Vec<Option<&SettingsBecome>> = named.iter().map(|event| by_event.get(event)).collect();
-    match ways.as_slice() {
-        [] => Ok((become_, false)),
-        _ if ways.iter().all(Option::is_none) => Ok((become_, false)),
-        [Some(first), rest @ ..] if rest.iter().all(|w| w.is_some_and(|w| std::ptr::eq(w, *first))) => Ok((*first, true)),
-        _ => {
-            let mut edges: Vec<String> = ways.iter().map(|w| w.unwrap_or(become_).path.last().cloned().unwrap_or_default()).collect();
-            edges.dedup();
-            Err(NoRewrite::SeveralEdges(edges))
+    if ways.iter().all(Option::is_none) {
+        return Ok((become_, false));
+    }
+    // An event the mapping does not name lands where a listen leaving
+    // `events` out does, so it is one more edge only where that is another.
+    let mut edges: Vec<&str> = Vec::new();
+    for way in &ways {
+        let edge = way.unwrap_or(become_).path.last().map_or("", String::as_str);
+        if !edges.contains(&edge) {
+            edges.push(edge);
         }
+    }
+    if edges.len() > 1 {
+        return Err(NoRewrite::SeveralEdges(edges.into_iter().map(str::to_string).collect()));
+    }
+    let unnamed: Vec<String> = named.iter().zip(&ways).filter(|(_, w)| w.is_none()).map(|(event, _)| event.clone()).collect();
+    if !unnamed.is_empty() {
+        return Err(NoRewrite::UnmappedEvents { unnamed, events: by_event.keys().cloned().collect() });
+    }
+    match ways.as_slice() {
+        [Some(first), rest @ ..] if rest.iter().all(|w| w.is_some_and(|w| w == *first)) => Ok((*first, true)),
+        _ => Err(NoRewrite::Unmapped),
     }
 }
 
@@ -280,6 +314,7 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
     if let Some(reason) = refused_literal(schema, &become_.path, &conjuncts, from.refusal) {
         return Err(NoRewrite::Refused(reason));
     }
+    let host_judged = untaken_ors(schema, &become_.path, &conjuncts);
     let mut path = spell_name(&statement.instance);
     for (offset, edge) in kept.iter().enumerate() {
         let hop = consumed + offset;
@@ -299,7 +334,7 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
         [edge] => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(edge)),
         _ => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(landing_of(schema, kept).ok_or(NoRewrite::Unmapped)?)),
     };
-    Ok(Rewrite { path, param_type, param_from: become_.param_from.clone() })
+    Ok(Rewrite { path, param_type, param_from: become_.param_from.clone(), host_judged })
 }
 
 /// The comparison what omitting `key` meant is: one value by `==`, a list
@@ -364,6 +399,39 @@ fn refused_literal(schema: &InstanceSchema, path: &[String], conjuncts: &[Vec<Ex
             literals.into_iter().find_map(|literal| refusal(owned, literal))
         })
     })
+}
+
+/// The fields whose rewritten OR (a key's several values) the hop's module
+/// does not take, by the checker's own split.
+fn untaken_ors(schema: &InstanceSchema, path: &[String], conjuncts: &[Vec<Expression>]) -> Vec<String> {
+    let mut from: Option<&str> = None;
+    let mut fields: Vec<String> = Vec::new();
+    for (hop, edge) in path.iter().enumerate() {
+        let view = match from {
+            None => schema.collections.get(edge).map(|c| (EdgeView::of_collection(edge, "", c), c.target.as_str())),
+            Some(position) => schema.positions.get(position).and_then(|p| p.edges.get(edge)).map(|e| (EdgeView::of_edge(edge, "", e), e.target.as_str())),
+        };
+        let Some((view, target)) = view else { break };
+        let Some(position) = schema.positions.get(target) else { break };
+        for or in conjuncts[hop].iter().filter(|c| matches!(c, Expression::Logical { op: LogicalOp::Or, .. })) {
+            let taken = split_where(or, None, &view, position).is_ok_and(|split| split.checked.is_empty());
+            let field = match or {
+                Expression::Logical { operands, .. } => operands.first().and_then(|o| match o {
+                    Expression::Compare { left, .. } => match &**left {
+                        Expression::Property { property_type_id, .. } => Some(property_type_id.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                }),
+                _ => None,
+            };
+            if let Some(field) = field.filter(|f| !taken && !fields.contains(f)) {
+                fields.push(field);
+            }
+        }
+        from = Some(target);
+    }
+    fields
 }
 
 /// The kept hops that would range over an edge their module declares

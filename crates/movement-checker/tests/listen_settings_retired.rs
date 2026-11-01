@@ -103,16 +103,16 @@ const CATALOG: &str = r#"{"adapters":{
     "schemas":{"":{"positions":{"Ring":{"properties":{"At":"datetime"},"edges":{}}},
       "collections":{"Rings":{"target":"Ring","readable":false,"listenable":true,"delivery":"connection"}},
       "writableRoots":{},"eventPosition":"Ring","eventPositions":[{"position":"Ring"}]}}},
-  "mail":{"canFire":true,"constructionArgs":[],"triggerConfig":["query","labels","events","every"],
+  "mail":{"canFire":true,"constructionArgs":[],"triggerConfig":["query","labels","subjects","events","every"],
     "listenSettingsBecome":{"path":["Messages"],"aliases":["m"],"paramFrom":"Message",
-      "keys":{"query":{"hop":0,"field":"Query","op":"eq"},"labels":{"hop":0,"field":"Labels","op":"contains","absent":"INBOX"}},
+      "keys":{"query":{"hop":0,"field":"Query","op":"eq"},"labels":{"hop":0,"field":"Labels","op":"contains","absent":"INBOX"},"subjects":{"hop":0,"field":"Subject","op":"contains"}},
       "byEvent":{
         "message_received":{"path":["Messages"],"aliases":["m"],"paramFrom":"Message",
           "keys":{"query":{"hop":0,"field":"Query","op":"eq"},"labels":{"hop":0,"field":"Labels","op":"contains","absent":"INBOX"}}},
         "label_added":{"path":["Labelings"],"aliases":["l"],"paramFrom":"Message",
           "keys":{"query":{"hop":0,"field":"Query","op":"eq"},"labels":{"hop":0,"field":"Label","op":"in","absent":"user","absentField":"Label Type"}}}}},
     "schemas":{"":{"positions":{"Message":{"properties":{"Query":{"kind":"owned","name":"GmailQuery","owner":"mail"},"Labels":{"kind":"list","of":"text"},"Subject":"text"},"edges":{},
-        "propertyCapabilities":{"Query":{"filterOperators":["eq"]},"Labels":{"filterOperators":["eq","in","contains"]},"Subject":{"filterOperators":["eq","contains"]}}},
+        "propertyCapabilities":{"Query":{"filterOperators":["eq"]},"Labels":{"filterOperators":["eq","in","contains","containsAny"]},"Subject":{"filterOperators":["eq","contains"]}}},
         "Labeling":{"properties":{"Query":{"kind":"owned","name":"GmailQuery","owner":"mail"},"Label":"text","Label Type":{"kind":"enum","options":["system","user"]},"Subject":"text"},"edges":{},
         "propertyCapabilities":{"Query":{"filterOperators":["eq"]},"Label":{"filterOperators":["eq","in"]},"Label Type":{"filterOperators":["eq"]}}}},
       "collections":{"Messages":{"target":"Message","listenable":true,"identity":"Message Id","delivery":"polled","pollEverySeconds":60,"cursor":true,
@@ -474,10 +474,24 @@ fn a_list_key_mapped_by_contains_is_one_contains_or_an_or_of_them_and_leaving_it
     assert!(text.contains("listen to mail-[m:Messages WHERE m.Query == \"from:acme\" AND m.Labels CONTAINS \"Deals\"]-> fire f"), "{text}");
     assert_rechecks_clean(&text);
 
+    // Labels takes several values together (`containsAny`): the OR is the
+    // module's, so the fix is safe.
     let two = format!("{MAIL}function f(m: <mail-[:Message]->>) {{ return 1 }}\nlisten to mail {{ labels: [\"INBOX\", \"SPAM\"] }} fire f\n");
-    let text = fixed(&two, &diagnostics(&two));
+    let d = diagnostics(&two);
+    assert_eq!(retired(&d).fix.as_ref().unwrap().get("safe"), Some(&Value::Bool(true)), "{:?}", retired(&d));
+    let text = fixed(&two, &d);
     assert!(text.contains("listen to mail-[m:Messages WHERE m.Labels CONTAINS \"INBOX\" OR m.Labels CONTAINS \"SPAM\"]-> fire f"), "{text}");
     assert_rechecks_clean(&text);
+
+    // Subject takes one value at a time: the host would compare each, so the
+    // fix is offered unsafe, saying so.
+    let subjects = format!("{MAIL}function f(m: <mail-[:Message]->>) {{ return 1 }}\nlisten to mail {{ subjects: [\"invoice\", \"receipt\"] }} fire f\n");
+    let d = diagnostics(&subjects);
+    assert_eq!(retired(&d).fix.as_ref().unwrap().get("safe"), None, "an unsafe fix");
+    assert!(retired(&d).message.contains("(the module can't take several values of `Subject` together"), "{}", retired(&d).message);
+    let one_subject = format!("{MAIL}function f(m: <mail-[:Message]->>) {{ return 1 }}\nlisten to mail {{ subjects: [\"invoice\"] }} fire f\n");
+    let d = diagnostics(&one_subject);
+    assert_eq!(retired(&d).fix.as_ref().unwrap().get("safe"), Some(&Value::Bool(true)), "{:?}", retired(&d));
 
     let left_out = format!("{MAIL}function f(m: <mail-[:Message]->>) {{ return 1 }}\nlisten to mail {{ query: \"from:acme\", every: 5m }} fire f\n");
     let d = diagnostics(&left_out);
@@ -514,4 +528,20 @@ fn a_listen_naming_events_that_arrive_on_two_edges_has_no_fix_and_is_told_to_wri
     let d = diagnostics(&both);
     assert!(retired(&d).fix.is_none(), "{:?}", retired(&d).fix);
     assert!(retired(&d).message.ends_with("(there is no rewrite: its events arrive on `Messages` and `Labelings`, so write one listen for each)"), "{}", retired(&d).message);
+
+    // An edge named twice, apart, is named once.
+    let repeated = format!("{MAIL}function f(m: <mail-[:Message]->>) {{ return 1 }}\nlisten to mail {{ events: [\"message_received\", \"label_added\", \"message_received\"] }} fire f\n");
+    let d = diagnostics(&repeated);
+    assert!(retired(&d).message.ends_with("(there is no rewrite: its events arrive on `Messages` and `Labelings`, so write one listen for each)"), "{}", retired(&d).message);
+
+    // An event the mapping does not name, beside one landing where it would,
+    // is no second edge: the event is what has no rewrite.
+    let unknown = format!("{MAIL}function f(m: <mail-[:Message]->>) {{ return 1 }}\nlisten to mail {{ events: [\"message_received\", \"x\"] }} fire f\n");
+    let d = diagnostics(&unknown);
+    assert!(retired(&d).fix.is_none(), "{:?}", retired(&d).fix);
+    assert!(
+        retired(&d).message.ends_with("(there is no rewrite: mail has no event `x`; its events are `message_received` and `label_added`)"),
+        "{}",
+        retired(&d).message
+    );
 }

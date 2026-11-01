@@ -710,10 +710,13 @@ const fieldFunctionDescriptorSchema = z.object({
 });
 export type FieldFunctionDescriptor = z.infer<typeof fieldFunctionDescriptorSchema>;
 
-/** The FilterOperator universe, incl. WITHIN (recency). Mirrors
- *  `movement-lang/expression/types`' `FilterOperator` at the runtime boundary. */
+/** What a field's source filters by: the FilterOperator universe, incl.
+ *  WITHIN (recency), and `containsAny`. Mirrors `movement-lang/expression/types`'
+ *  `CapabilityOperator` at the runtime boundary. */
 const filterOperatorSchema = z.enum([
   'eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte', 'exists', 'in', 'within',
+  // An OR of CONTAINS on the field, taken together.
+  'containsAny',
 ]);
 
 /**

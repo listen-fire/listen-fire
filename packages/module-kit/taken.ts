@@ -1,20 +1,23 @@
 // The part of a listen's WHERE a module takes (adapter protocol 2.6's
 // `filter`), read as comparisons. The checker hands a module only conjuncts
 // it can take: each compares one landing field with literals (`==`, `IN`, an
-// OR of `==` on one field, or an operator the field declares), joined by AND.
+// OR of `==` or of `CONTAINS` on one field, or an operator the field
+// declares), joined by AND.
 // A module reads them here, applies what its provider can upstream, and
 // applies the rest itself with `holds`, so it can say `takenApplied: true`.
 
-/** One taken conjunct: `field op value`, an OR of `==` read as `in`. */
+/** One taken conjunct: `field op value`, an OR of `==` read as `in` and an
+ *  OR of `CONTAINS` as `containsAny` (the field contains any of the values). */
 export interface TakenComparison {
   field: string;
-  op: 'eq' | 'neq' | 'in' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte';
-  /** A scalar, or the list an `in` compares with. */
+  op: 'eq' | 'neq' | 'in' | 'contains' | 'containsAny' | 'gt' | 'gte' | 'lt' | 'lte';
+  /** A scalar, or the list an `in` or a `containsAny` compares with. */
   value: Scalar | Scalar[];
 }
 
 type Scalar = string | number | boolean | null;
 
+/** The operators a `compare` node carries; `containsAny` is only ever an OR. */
 const OPS: readonly TakenComparison['op'][] = ['eq', 'neq', 'in', 'contains', 'gt', 'gte', 'lt', 'lte'];
 
 function isOp(op: string): op is TakenComparison['op'] {
@@ -59,15 +62,16 @@ function comparison(expr: unknown): TakenComparison | undefined {
   if (type === 'logical' && Reflect.get(expr, 'op') === 'or') {
     const operands: unknown = Reflect.get(expr, 'operands');
     if (!Array.isArray(operands)) return undefined;
-    let name: string | undefined;
+    let first: TakenComparison | undefined;
     const values: Scalar[] = [];
     for (const operand of operands) {
       const one = comparison(operand);
-      if (one === undefined || one.op !== 'eq' || Array.isArray(one.value) || (name !== undefined && one.field !== name)) return undefined;
-      name = one.field;
+      if (one === undefined || (one.op !== 'eq' && one.op !== 'contains') || Array.isArray(one.value)) return undefined;
+      if (first !== undefined && (one.field !== first.field || one.op !== first.op)) return undefined;
+      first ??= one;
       values.push(one.value);
     }
-    return name === undefined ? undefined : { field: name, op: 'in', value: values };
+    return first === undefined ? undefined : { field: first.field, op: first.op === 'eq' ? 'in' : 'containsAny', value: values };
   }
   if (type !== 'compare') return undefined;
   const op: unknown = Reflect.get(expr, 'op');
@@ -142,6 +146,8 @@ export function holds(value: unknown, comparison: TakenComparison): boolean {
     case 'contains':
       if (typeof value === 'string' && typeof right === 'string') return value.includes(right);
       return Array.isArray(value) && value.some((v) => same(v, right));
+    case 'containsAny':
+      return Array.isArray(right) && right.some((r) => holds(value, { field: comparison.field, op: 'contains', value: r }));
     case 'gt':
       return (order(value, right) ?? NaN) > 0;
     case 'gte':

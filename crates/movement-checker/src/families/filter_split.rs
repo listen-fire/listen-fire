@@ -163,7 +163,8 @@ fn suggested_alias(edge: &str) -> String {
 /// - A conjunct is taken when it is pure and compares one field of the
 ///   landing with literals, by an operator that field takes, on an edge
 ///   whose module filters it (`native`). An `OR` of `==` on one field, or an
-///   `IN`, is taken when the field takes `in`. A conjunct that compares
+///   `IN`, is taken when the field takes `in`; an `OR` of `CONTAINS` on one
+///   field when it takes `containsAny`. A conjunct that compares
 ///   with a value read off another record or a name the run holds is
 ///   checked on the host: what is taken is the same on every run.
 /// - A conjunct reading an owned field must be taken, and two `==` giving
@@ -246,10 +247,21 @@ fn filtered(conjunct: &Expression, edge: &EdgeView, target: &PositionSchema) -> 
     };
     match conjunct {
         Expression::Logical { op: LogicalOp::Or, operands } => {
-            let equalities: Vec<(String, &Expression)> = operands.iter().map(|o| field_equality(o, target)).collect::<Option<_>>()?;
-            let field = &equalities.first()?.0;
-            (equalities.iter().all(|(f, _)| f == field) && takes(field, "in"))
-                .then(|| Filtered { field: field.clone(), narrows: true, literal: equalities.iter().all(|(_, v)| is_literal(v)), equality: None })
+            let each: Vec<(String, FilterOperator, &Expression)> = operands.iter().map(|o| field_comparison(o, target)).collect::<Option<_>>()?;
+            let (field, op, _) = each.first()?;
+            // The OR is the field's comparison with any of the values: an
+            // `IN` for `==`, a `containsAny` for `CONTAINS`.
+            let any = match op {
+                FilterOperator::Eq => "in",
+                FilterOperator::Contains => "containsAny",
+                _ => return None,
+            };
+            (each.iter().all(|(f, o, _)| f == field && o == op) && takes(field, any)).then(|| Filtered {
+                field: field.clone(),
+                narrows: *op == FilterOperator::Eq,
+                literal: each.iter().all(|(_, _, v)| is_literal(v)),
+                equality: None,
+            })
         }
         Expression::Compare { op, left, right } => {
             let (field, value) = match (landing_field(left, target), landing_field(right, target)) {
@@ -272,15 +284,16 @@ fn filtered(conjunct: &Expression, edge: &EdgeView, target: &PositionSchema) -> 
     }
 }
 
-/// `field == value` (either way round), the field one of the landing's.
-fn field_equality<'e>(expr: &'e Expression, target: &PositionSchema) -> Option<(String, &'e Expression)> {
-    let Expression::Compare { op: FilterOperator::Eq, left, right } = expr else { return None };
+/// `field == value` (either way round) or `field CONTAINS value`, the field
+/// one of the landing's.
+fn field_comparison<'e>(expr: &'e Expression, target: &PositionSchema) -> Option<(String, FilterOperator, &'e Expression)> {
+    let Expression::Compare { op: op @ (FilterOperator::Eq | FilterOperator::Contains), left, right } = expr else { return None };
     let (field, value) = match (landing_field(left, target), landing_field(right, target)) {
         (Some(field), None) => (field, &**right),
-        (None, Some(field)) => (field, &**left),
+        (None, Some(field)) if *op == FilterOperator::Eq => (field, &**left),
         _ => return None,
     };
-    reads_fields(value, target).is_empty().then(|| (field.to_string(), value))
+    reads_fields(value, target).is_empty().then(|| (field.to_string(), *op, value))
 }
 
 /// A read of one of the landing's fields: an alias's (`t.Schedule`), or a
@@ -361,6 +374,7 @@ fn operator_name(op: movement_parser::catalog::types::FilterOperator) -> &'stati
         Op::Exists => "exists",
         Op::In => "in",
         Op::Within => "within",
+        Op::ContainsAny => "containsAny",
     }
 }
 

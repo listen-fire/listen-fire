@@ -59,11 +59,16 @@ export type FilterOperator =
 export type EdgePushMode = 'bounded' | 'native';
 
 /** A field's own filter/order capability in the source system. */
+/** What a field's source can filter it by: an operator, or `containsAny`,
+ *  an OR of `CONTAINS` on the field taken together (a record containing any
+ *  of the values). */
+export type CapabilityOperator = FilterOperator | 'containsAny';
+
 export interface FieldCapability {
   /** Operators the source can filter this field by server-side. Absent or
    *  empty ⇒ not server-side filterable (still filterable across a `bounded`
    *  edge, via the shared unit). */
-  filterOperators?: FilterOperator[];
+  filterOperators?: CapabilityOperator[];
   /** Whether the source can order by this field server-side. */
   orderable?: boolean;
 }
