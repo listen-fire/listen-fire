@@ -352,9 +352,15 @@ pub trait RunHostStore {
     /// wait they answer, once (crate::waits::delivery_rows). The answer holds
     /// those wake rows and the mark.
     ///
+    /// `unjudged` are the listens that could not judge its arrivals, each
+    /// kept as `note_unjudged` keeps one, in the same write: a crash never
+    /// leaves a cursor moved past an arrival no listen judged and no fact
+    /// says so.
+    ///
     /// None, and nothing written, for a duplicate: a delivery whose external
     /// id was kept at its subscription before (a redelivery, even one whose
     /// first's work is still queued).
+    #[allow(clippy::too_many_arguments)]
     fn keep_delivery(
         &self,
         subscription_id: &str,
@@ -363,6 +369,7 @@ pub trait RunHostStore {
         work: &[NewWork],
         arrivals: Option<&DeliveryArrivals<'_>>,
         waits: &[DeliveryWait],
+        unjudged: &[UnjudgedArrival],
     ) -> Result<Option<KeptDelivery>>;
     /// Why a delivery's arrivals cannot be kept with it in this store (its
     /// module serves no `waits.log`); None when they can. Asked before a
@@ -621,8 +628,9 @@ impl RunHostStore for Store {
         work: &[NewWork],
         arrivals: Option<&DeliveryArrivals<'_>>,
         waits: &[DeliveryWait],
+        unjudged: &[UnjudgedArrival],
     ) -> Result<Option<KeptDelivery>> {
-        Store::keep_delivery(self, subscription_id, checkpoint, delivery, work, arrivals, waits)
+        Store::keep_delivery(self, subscription_id, checkpoint, delivery, work, arrivals, waits, unjudged)
     }
     fn forget_delivery_id(&self, id: &str) -> Result<()> {
         Store::forget_delivery_id(self, id)

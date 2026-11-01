@@ -518,10 +518,14 @@ impl RunHostStore for ProcessStore {
         work: &[NewWork],
         arrivals: Option<&DeliveryArrivals<'_>>,
         waits: &[DeliveryWait],
+        unjudged: &[crate::records_door::UnjudgedArrival],
     ) -> Result<Option<KeptDelivery>> {
         let mut params = obj! { "subscriptionId" => s(subscription_id), "delivery" => Js::from(delivery_params(delivery)), "work" => to_rows(work) };
         if !waits.is_empty() {
             params.insert("waits".into(), to_rows(waits));
+        }
+        if !unjudged.is_empty() {
+            params.insert("unjudged".into(), Js::Arr(unjudged.iter().map(crate::records_door::UnjudgedArrival::to_js).collect()));
         }
         // Absent, not null: a null cursor is one to keep.
         if let Some(checkpoint) = checkpoint {

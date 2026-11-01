@@ -123,10 +123,11 @@ test('a note edited so that it newly matches fires once; the same version seen t
   feed(dir, [{ id: 'n1', title: 'Ready', at: 2, edited: 1 }]);
   const edited = lfAt(dir, ['drain', '--until-idle'], 61_000);
   assert.deepEqual(saw(edited.out, 'a'), ['Ready']);
-  // Handed the same version again: a repeat, and nothing runs.
+  // Handed the same version again: a repeat, and nothing runs. A poll lists
+  // again what an earlier one did, so that is said only under LF_LOG=debug.
   writeFileSync(join(dir, 'externals/feed/replay'), '');
   const again = lfAt(dir, ['drain', '--until-idle'], 122_000);
-  assert.match(again.out, /notes:a has run the arrival n1 on Notes before/);
+  assert.doesNotMatch(again.out, /has run the arrival/);
   assert.deepEqual(saw(again.out, 'a'), []);
   assert.equal(runsOf(dir, 'a'), 1);
   assert.equal(edgePolls(dir).length, 3);

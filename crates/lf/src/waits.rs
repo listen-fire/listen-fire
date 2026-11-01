@@ -960,7 +960,7 @@ mod tests {
                     };
                     let now = iso(0);
                     let log = DeliveryArrivals { team_id: &team, adapter_type: adapter, arrivals: &arrivals, at: &now, resend_window_ms: resend_window_of(step) };
-                    let kept = store.keep_delivery(&names.id("subscription"), None, &receipt, std::slice::from_ref(&fire), Some(&log), &waits).unwrap().expect("kept");
+                    let kept = store.keep_delivery(&names.id("subscription"), None, &receipt, std::slice::from_ref(&fire), Some(&log), &waits, &[]).unwrap().expect("kept");
                     assert_eq!(kept.arrival_mark, names.marks[text(step, "arrivalMark")], "{at}: the mark before its arrivals");
                     for (wait, want) in waits.iter().zip(list(step, "waits")) {
                         let opened = OpenWait { run_id: &wait.run_id, team_id: &team, adapter_type: adapter, edge: &wait.edge, key: wait.key.as_deref(), record_id: None, since: 0 };
@@ -1154,7 +1154,7 @@ mod tests {
         let arrival = NewArrival { edge: "Comments".into(), key: key.clone(), identity: Some("k1".into()), version: None, landing: Some(Js::Null), gone: false };
         let (now, before) = (iso(0), store.arrival_mark().unwrap());
         let logged = DeliveryArrivals { team_id: &team, adapter_type: "acme", arrivals: std::slice::from_ref(&arrival), at: &now, resend_window_ms: crate::externals::DEFAULT_RESEND_WINDOW_MS };
-        let kept = store.keep_delivery(&subscription, None, &receipt(), std::slice::from_ref(&fire), Some(&logged), &[]).unwrap().expect("kept");
+        let kept = store.keep_delivery(&subscription, None, &receipt(), std::slice::from_ref(&fire), Some(&logged), &[], &[]).unwrap().expect("kept");
         let (wakes, mark) = (kept.wakes, store.arrival_mark().unwrap());
         assert_eq!(kept.arrival_mark, before, "the mark before the delivery's own arrival");
         assert_eq!(wakes.iter().map(|w| (w.kind.as_str(), w.payload.to_json())).collect::<Vec<_>>(), [("wake_await", format!(r#"{{"waitId":"{wait}","runId":"{run}","address":"s1"}}"#))]);
@@ -1165,7 +1165,7 @@ mod tests {
         assert_eq!(fired.payload.get("arrivalMark"), Some(&Js::Num(before.into())), "the mark before the delivery's own arrival");
         assert!(rows.iter().any(|r| r.kind == "wake_await" && r.payload.get("waitId") == Some(&Js::str(&wait))));
 
-        assert!(store.keep_delivery(&subscription, None, &receipt(), &[], Some(&logged), &[]).unwrap().is_none(), "a duplicate");
+        assert!(store.keep_delivery(&subscription, None, &receipt(), &[], Some(&logged), &[], &[]).unwrap().is_none(), "a duplicate");
         assert_eq!(store.arrival_mark().unwrap(), mark, "a duplicate logs nothing");
     }
 

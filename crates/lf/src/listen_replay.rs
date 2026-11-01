@@ -298,7 +298,7 @@ async fn fire_replay(session: &Session, doors: &LfDoors<'_, SessionReader<'_>>, 
     }
     let written = session
         .store
-        .keep_delivery(&row.subscription_id, None, &receipt, &rows, logged, &waits)
+        .keep_delivery(&row.subscription_id, None, &receipt, &rows, logged, &waits, &[])
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("the replay of delivery {} was not kept: the store took it for a duplicate", row.id))?;
     crate::wake::queued_rows(&rows);

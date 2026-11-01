@@ -316,6 +316,18 @@ impl PgStore {
         outcome.map(|()| applied_now)
     }
 
+    /// Keep one unjudged arrival in the open write, unless it was kept
+    /// before: whether it is new.
+    fn insert_unjudged(&self, fact: &UnjudgedArrival) -> Result<bool> {
+        let kept = self.execute(
+            "insert into lf.arrival_unjudged (team_id, pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at, attempt)
+             values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text, $10::text, date_trunc('milliseconds', $11::text::timestamptz), $12::int4)
+             on conflict do nothing",
+            &[&self.tenant, &fact.pipeline, &fact.arrival, &fact.file, &fact.movement, &fact.delivery_id, &fact.edge, &fact.record_id, &fact.reason, &fact.cause, &fact.at, &i32::try_from(fact.attempt).unwrap_or(i32::MAX)],
+        )?;
+        Ok(kept == 1)
+    }
+
     fn query(&self, sql: &str, params: &Params<'_>) -> Result<Vec<Row>> {
         block_on(self.client.query(sql, params)).map_err(failed)
     }
@@ -1597,13 +1609,7 @@ impl RunHostStore for PgStore {
     fn note_unjudged(&self, fact: &UnjudgedArrival, forget_before: &str) -> Result<bool> {
         self.transaction(|| {
             self.execute("delete from lf.arrival_unjudged where team_id = $1::text::uuid and noted_at < $2::text::timestamptz", &[&self.tenant, &forget_before])?;
-            let kept = self.execute(
-                "insert into lf.arrival_unjudged (team_id, pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at, attempt)
-                 values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text, $10::text, date_trunc('milliseconds', $11::text::timestamptz), $12::int4)
-                 on conflict do nothing",
-                &[&self.tenant, &fact.pipeline, &fact.arrival, &fact.file, &fact.movement, &fact.delivery_id, &fact.edge, &fact.record_id, &fact.reason, &fact.cause, &fact.at, &i32::try_from(fact.attempt).unwrap_or(i32::MAX)],
-            )?;
-            Ok(kept == 1)
+            self.insert_unjudged(fact)
         })
     }
 
@@ -1650,6 +1656,7 @@ impl RunHostStore for PgStore {
         work: &[NewWork],
         arrivals: Option<&DeliveryArrivals<'_>>,
         waits: &[DeliveryWait],
+        unjudged: &[UnjudgedArrival],
     ) -> Result<Option<KeptDelivery>> {
         crate::waits::refuse_waits_without_arrivals(arrivals, waits)?;
         let events = Js::Arr(delivery.events.clone()).to_json();
@@ -1691,6 +1698,9 @@ impl RunHostStore for PgStore {
             };
             for row in work.iter().chain(&wakes) {
                 self.enqueue_row(&row.kind, &row.key, &row.payload, row.due_at.as_deref(), row.team_id.as_deref().unwrap_or(&self.tenant))?;
+            }
+            for fact in unjudged {
+                self.insert_unjudged(fact)?;
             }
             Ok(Some(KeptDelivery { wakes, arrival_mark: mark }))
         })

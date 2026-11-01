@@ -1059,8 +1059,16 @@ impl Session {
     /// arrival's other listens are judged as usual. Kept as long as a
     /// delivery is (`deliveries.retainDays`).
     pub(crate) fn note_unjudged(&self, set: &FileSet, adapter: &str, listen: &Listen, arrival: &ArrivalIn, delivered: &Delivered<'_>, reason: &str) -> Result<(), String> {
+        let fact = self.unjudged_fact(set, adapter, listen, arrival, delivered, reason)?;
+        let retain_ms = i64::from(self.project.delivery_retain_days) * 86_400_000;
+        self.store.note_unjudged(&fact, &iso(-retain_ms)).map_err(|e| format!("keeping that {}:{} could not judge an arrival on {}: {e}", fact.file, fact.movement, fact.edge))?;
+        Ok(())
+    }
+
+    /// The fact that `listen` could not judge `arrival`, as `note_unjudged` keeps it.
+    fn unjudged_fact(&self, set: &FileSet, adapter: &str, listen: &Listen, arrival: &ArrivalIn, delivered: &Delivered<'_>, reason: &str) -> Result<crate::records_door::UnjudgedArrival, String> {
         let identity = arrival.identity.as_deref().unwrap_or_default();
-        let fact = crate::records_door::UnjudgedArrival {
+        Ok(crate::records_door::UnjudgedArrival {
             pipeline: listen.pipeline(),
             arrival: arrival_receipt_key(&arrival.edge, arrival.key.as_deref(), identity, arrival.version.as_deref()),
             file: set.file(&listen.file).name.clone(),
@@ -1072,10 +1080,7 @@ impl Session {
             cause: self.chain_before(adapter, listen, arrival)?.pop(),
             at: iso(0),
             attempt: delivered.attempt(),
-        };
-        let retain_ms = i64::from(self.project.delivery_retain_days) * 86_400_000;
-        self.store.note_unjudged(&fact, &iso(-retain_ms)).map_err(|e| format!("keeping that {}:{} could not judge an arrival on {}: {e}", fact.file, fact.movement, fact.edge))?;
-        Ok(())
+        })
     }
 
     /// The runs whose writes caused `arrival`, oldest first, as the write
@@ -1264,10 +1269,10 @@ impl Session {
     /// mark before its arrivals, live while the row is queued, so another
     /// arrival of the same page answers a run it starts and only the run's
     /// own trigger does not) and its new cursor. The row runs those runs
-    /// (`fire_polled`): a drain, or the caller (`row_runs`). A poll that
-    /// fires nothing logs its arrivals, judges them (a listen sharing the
-    /// key may resolve again), then keeps its cursor, so a failed poll is
-    /// polled again from where the last good one ended.
+    /// (`fire_polled`): a drain, or the caller (`row_runs`); the listens
+    /// that could not judge an arrival are kept in that write too. A poll
+    /// that fires nothing logs its arrivals and keeps its cursor, then
+    /// judges them (a listen sharing the key may resolve again).
     async fn poll_edge_once(&self, set: &FileSet, key: &crate::edge_polls::PollKey, shared: &crate::edge_polls::Shared, row_runs: PolledRow) -> Result<EdgePolled, String> {
         let subscription = crate::edge_polls::poll_subscription(key);
         let subscription = subscription.as_str();
@@ -1376,14 +1381,14 @@ impl Session {
                     row.due_at = Some(iso(crate::run_host::RUN_LEASE_TTL_MS));
                 }
                 crate::doors::queued_by(&mut waits, &row.key);
+                let delivered = Delivered { id: Some(&receipt.id), ..Delivered::default() };
+                let facts = unjudged.iter().map(|one| self.unjudged_fact(set, &key.adapter, &doors.listens[one.listen], &landed[one.arrival], &delivered, &one.reason)).collect::<Result<Vec<_>, _>>()?;
+                // The page, its runs, what no listen could judge and the cursor: one write.
                 let kept = self
                     .store
-                    .keep_delivery(subscription, Some(&checkpoint), &receipt, std::slice::from_ref(&row), Some(&log), &waits)
+                    .keep_delivery(subscription, Some(&checkpoint), &receipt, std::slice::from_ref(&row), Some(&log), &waits, &facts)
                     .map_err(|e| e.to_string())?
                     .ok_or("a poll's delivery was taken for a duplicate")?;
-                for one in &unjudged {
-                    self.note_unjudged(set, &key.adapter, &doors.listens[one.listen], &landed[one.arrival], &Delivered { id: Some(&receipt.id), ..Delivered::default() }, &one.reason)?;
-                }
                 crate::wake::queued_rows(std::slice::from_ref(&row));
                 crate::wake::queued_rows(&kept.wakes);
                 // As the store keeps it, for a caller that runs it.
@@ -1392,11 +1397,17 @@ impl Session {
                 }
                 return Ok(EdgePolled { fired, polled_as, row: Some(row) });
             }
+            // Logged, then the cursor kept, before any listen resolves again
+            // (a call to the module that may outlast the row's lease): a
+            // crash between the two polls the page again, and its arrivals,
+            // logged within the module's re-send window, are not logged twice.
             let mark = self.store.arrival_mark().map_err(|e| e.to_string())?;
             crate::arrivals::log_and_wake(&*self.store, &log)?;
+            self.store.save_inbound_checkpoint(subscription, &checkpoint).map_err(|e| e.to_string())?;
             let judged = self.fire_arrivals_to(set, &key.adapter, arrivals, Delivered { arrival_mark: Some(mark), ..came_for }, JudgedBy::Sharing(shared)).await?;
             fired.outcomes.extend(judged.outcomes);
             fired.redelivered.extend(judged.redelivered);
+            return Ok(EdgePolled { fired, polled_as, row: None });
         }
         self.store.save_inbound_checkpoint(subscription, &checkpoint).map_err(|e| e.to_string())?;
         Ok(EdgePolled { fired, polled_as, row: None })

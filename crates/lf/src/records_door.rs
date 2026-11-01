@@ -406,15 +406,21 @@ impl Store {
     /// it was kept before (whether it is new), and forget what was kept
     /// before `forget_before`, as one write.
     pub fn note_unjudged(&self, fact: &UnjudgedArrival, forget_before: &str) -> Result<bool> {
-        let at = crate::store::canonical_iso(&fact.at)?;
         let forget_before = crate::store::canonical_iso(forget_before)?;
         self.transaction(|db| {
             db.execute("delete from arrival_unjudged where noted_at < ?", rusqlite::params![forget_before])?;
-            Ok(db.execute(
-                "insert into arrival_unjudged (pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at, attempt) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
-                rusqlite::params![fact.pipeline, fact.arrival, fact.file, fact.movement, fact.delivery_id, fact.edge, fact.record_id, fact.reason, fact.cause, at, fact.attempt],
-            )? == 1)
+            Store::insert_unjudged_in(db, fact)
         })
+    }
+
+    /// Keep one unjudged arrival in `db`'s write, unless it was kept before:
+    /// whether it is new.
+    pub(crate) fn insert_unjudged_in(db: &rusqlite::Connection, fact: &UnjudgedArrival) -> Result<bool> {
+        let at = crate::store::canonical_iso(&fact.at)?;
+        Ok(db.execute(
+            "insert into arrival_unjudged (pipeline, arrival, file, movement, delivery_id, edge, record_id, reason, cause, noted_at, attempt) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
+            rusqlite::params![fact.pipeline, fact.arrival, fact.file, fact.movement, fact.delivery_id, fact.edge, fact.record_id, fact.reason, fact.cause, at, fact.attempt],
+        )? == 1)
     }
 
     /// The unjudged arrivals of `page`, oldest first (ties by listen, then
@@ -631,6 +637,43 @@ mod tests {
         // Kept as long as a delivery is: a later note forgets an older one.
         assert!(store.note_unjudged(&unjudged(&format!("listen:chat:late:{t0}"), "x", t0 + 20, None), &iso_at(t0 + 15)).unwrap());
         assert_eq!(read(Js::Null).iter().filter_map(|r| r.get("pipeline").and_then(Js::as_str)).collect::<Vec<_>>(), [format!("listen:chat:late:{t0}")]);
+    }
+
+    /// A delivery keeps the arrivals no listen could judge in its own write:
+    /// a duplicate, which writes nothing, keeps none.
+    fn a_delivery_keeps_what_no_listen_could_judge_in_its_write(store: Rc<dyn RunHostStore>) {
+        let t0 = t0();
+        let (subscription, external) = (format!("edge-poll:{t0}"), format!("page-{t0}"));
+        let delivery = crate::store::NewDelivery {
+            id: uuid::Uuid::new_v4().to_string(),
+            external_id: Some(external),
+            received_at: iso_at(t0),
+            source: crate::store::DeliverySource::Poll,
+            inline: false,
+            replay_of: None,
+            events: Vec::new(),
+            request: None,
+        };
+        let fact = UnjudgedArrival { delivery_id: Some(delivery.id.clone()), ..unjudged(&format!("listen:chat:kept:{t0}"), "Messages:C1:C1:1700.2:", t0, None) };
+        assert!(store.keep_delivery(&subscription, Some(&Js::Null), &delivery, &[], None, &[], std::slice::from_ref(&fact)).unwrap().is_some());
+        let of = |pipeline: &str| store.unjudged_arrivals(&UnjudgedPage { after: None, pipeline: Some(pipeline), limit: 10 }).unwrap();
+        assert_eq!(of(&fact.pipeline), [fact.clone()]);
+        let again = crate::store::NewDelivery { id: uuid::Uuid::new_v4().to_string(), ..delivery };
+        let other = UnjudgedArrival { pipeline: format!("listen:chat:again:{t0}"), ..fact };
+        assert!(store.keep_delivery(&subscription, None, &again, &[], None, &[], std::slice::from_ref(&other)).unwrap().is_none());
+        assert_eq!(of(&other.pipeline), [], "a duplicate keeps none");
+    }
+
+    #[test]
+    fn a_delivery_keeps_its_unjudged_arrivals_in_the_state_file() {
+        a_delivery_keeps_what_no_listen_could_judge_in_its_write(state_file());
+    }
+
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn a_delivery_keeps_its_unjudged_arrivals_over_postgres() {
+        let Some(store) = postgres() else { return };
+        a_delivery_keeps_what_no_listen_could_judge_in_its_write(store);
     }
 
     #[test]

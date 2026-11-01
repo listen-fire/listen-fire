@@ -447,7 +447,15 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
                 None => Vec::new(),
                 Some(given) => rows(given).ok_or_else(|| Failure::Params("waits: expected a list of { runId, edge, key, fireKey, preNoted? }".into()))?,
             };
-            let Some(kept) = store.keep_delivery(p.str("subscriptionId")?, p.0.get("checkpoint"), &delivery, &work, logged.as_ref(), &waits)? else {
+            let unjudged: Vec<crate::records_door::UnjudgedArrival> = match p.0.get("unjudged").map(Js::as_array) {
+                None => Vec::new(),
+                Some(Some(facts)) => facts
+                    .iter()
+                    .map(|fact| crate::records_door::UnjudgedArrival::from_js(fact).ok_or_else(|| Failure::Params("unjudged: expected a list of unjudged.note's facts, without forgetBefore".into())))
+                    .collect::<Result<_, _>>()?,
+                Some(None) => return Err(Failure::Params("unjudged: expected a list".into())),
+            };
+            let Some(kept) = store.keep_delivery(p.str("subscriptionId")?, p.0.get("checkpoint"), &delivery, &work, logged.as_ref(), &waits, &unjudged)? else {
                 return Ok(Js::from(obj! { "kept" => Js::Bool(false) }));
             };
             let mut answer = obj! { "kept" => Js::Bool(true), "arrivalMark" => Js::Num(kept.arrival_mark.into()) };

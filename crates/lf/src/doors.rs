@@ -547,7 +547,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
             }
             (arrivals, _) => Some(DeliveryArrivals { team_id: kept.team_id, adapter_type, arrivals, at: &logged_at, resend_window_ms: self.resend_window_ms(adapter_type) }),
         };
-        let Some(written) = self.store.keep_delivery(kept.subscription_id, kept.checkpoint, &receipt, &work, arrivals.as_ref(), &waits).map_err(|e| e.to_string())? else {
+        let Some(written) = self.store.keep_delivery(kept.subscription_id, kept.checkpoint, &receipt, &work, arrivals.as_ref(), &waits, &[]).map_err(|e| e.to_string())? else {
             if let EventSink::Inline { fired, .. } = &self.sink {
                 fired.borrow_mut().redelivered.push(format!("delivery {} was kept before: it runs nothing", kept.external_id.unwrap_or_default()));
             }
@@ -631,7 +631,7 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
             request: Some(request.clone()),
         };
         // An event fires nothing from 0.13: it is kept with its receipt, and said.
-        if self.store.keep_delivery(&caller.subscription_id, None, &receipt, &[], None, &[]).map_err(|e| e.to_string())?.is_none() {
+        if self.store.keep_delivery(&caller.subscription_id, None, &receipt, &[], None, &[], &[]).map_err(|e| e.to_string())?.is_none() {
             return Ok(false);
         }
         eprintln!("listen-fire: {}", crate::runs::retired_event_line(&caller.adapter_type));
@@ -671,7 +671,7 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
         if logged.is_none() {
             self.mark_fire_rows(&mut rows)?;
         }
-        let written = self.store.keep_delivery(&caller.subscription_id, None, &receipt, &rows, logged, &waits).map_err(|e| e.to_string())?.ok_or("a push without an id was taken for a duplicate")?;
+        let written = self.store.keep_delivery(&caller.subscription_id, None, &receipt, &rows, logged, &waits, &[]).map_err(|e| e.to_string())?.ok_or("a push without an id was taken for a duplicate")?;
         rows.extend(written.wakes);
         crate::wake::queued_rows(&rows);
         self.list(&rows);
@@ -964,6 +964,7 @@ impl Store {
     /// crate::backend::RunHostStore::keep_delivery: one transaction, the
     /// receipt first. A duplicate writes nothing: no cursor, no arrivals, no
     /// rows.
+    #[allow(clippy::too_many_arguments)]
     pub fn keep_delivery(
         &self,
         subscription_id: &str,
@@ -972,6 +973,7 @@ impl Store {
         work: &[NewWork],
         arrivals: Option<&DeliveryArrivals<'_>>,
         waits: &[DeliveryWait],
+        unjudged: &[crate::records_door::UnjudgedArrival],
     ) -> Result<Option<KeptDelivery>, StoreError> {
         crate::waits::refuse_waits_without_arrivals(arrivals, waits)?;
         self.transaction(|db| {
@@ -992,6 +994,9 @@ impl Store {
             };
             for row in work.iter().chain(&wakes) {
                 Store::enqueue_in(db, &row.kind, &row.key, &row.payload, row.due_at.as_deref())?;
+            }
+            for fact in unjudged {
+                Store::insert_unjudged_in(db, fact)?;
             }
             Ok(Some(KeptDelivery { wakes, arrival_mark: mark }))
         })

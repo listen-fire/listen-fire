@@ -354,19 +354,23 @@ pub struct UnjudgedAfter {
 /// kept delivery it came in, its edge and record, why, the run whose write
 /// caused it, when, and which attempt at judging it (0 as delivered, one
 /// more per replay).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnjudgedArrival {
     pub pipeline: String,
     pub arrival: String,
     pub file: String,
     pub movement: String,
+    #[serde(default)]
     pub delivery_id: Option<String>,
     pub edge: String,
+    #[serde(default)]
     pub record_id: Option<String>,
     pub reason: String,
+    #[serde(default)]
     pub cause: Option<String>,
     pub at: String,
+    #[serde(default)]
     pub attempt: u32,
 }
 
@@ -828,7 +832,9 @@ slot! {
         /// that is buried (`work.bury`) takes with it the waits it opened
         /// for runs that never started. A `keep_delivery` that logs through the
         /// store's own `log_arrivals` has queued them already: it must not
-        /// queue them a second time, or each wait wakes twice.
+        /// queue them a second time, or each wait wakes twice. Each of
+        /// `unjudged` is kept as `unjudged.note` keeps one, in the same
+        /// write (a store that keeps none ignores them).
         "inbound.keepDelivery" => fn keep_delivery(InboundKeepDelivery {
             subscription_id: String,
             #[serde(default, deserialize_with = "present")]
@@ -839,6 +845,8 @@ slot! {
             arrivals: Option<DeliveryArrivals>,
             #[serde(default)]
             waits: Vec<DeliveryWait>,
+            #[serde(default)]
+            unjudged: Vec<UnjudgedArrival>,
         }) -> Kept;
         /// Clear a kept delivery's `external_id`, its receipt kept: its
         /// events failed inside the request, so the sender's retry under
