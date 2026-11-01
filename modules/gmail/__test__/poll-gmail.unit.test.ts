@@ -438,10 +438,46 @@ describe('a listen on Labelings', () => {
         takenApplied: true,
         landing: expect.objectContaining({
           recordType: 'Labeling',
-          fields: expect.objectContaining({ Id: 'm1:Label_deals:4001', Label: 'Label_deals', 'Label Type': 'user', Subject: 'About m1', 'Message Id': 'm1' }),
+          fields: expect.objectContaining({ Id: 'm1:Label_deals:4001', Label: 'Deals', 'Label Type': 'user', Subject: 'About m1', 'Message Id': 'm1' }),
         }),
       }),
     ]);
+  });
+
+  it('carries the label by name, a system label as Gmail names it, whichever way the listen wrote the label', async () => {
+    const { source } = pollWith({
+      messages: [wireMessage('m1', ['INBOX', 'Label_deals', 'STARRED'])],
+      history: { '*': [{ added: [], labelled: [labelling('m1', 'STARRED', '4001'), labelling('m1', 'Label_deals', '4002')], historyId: '5000' }] },
+    });
+    const answer = await source.poll({ edge: 'Labelings', cursor: MARK });
+    expect(landed(answer).map((a) => [a.identity, a.landing.fields['Label']])).toEqual([
+      ['m1:STARRED:4001', 'STARRED'],
+      ['m1:Label_deals:4002', 'Deals'],
+    ]);
+
+    const byId = pollWith({
+      messages: [wireMessage('m1', ['Label_deals'])],
+      history: { Label_deals: [{ added: [], labelled: [labelling('m1', 'Label_deals', '4002')], historyId: '5000' }] },
+    });
+    const named = await byId.source.poll({ edge: 'Labelings', filter: cmp('Label', 'eq', 'Label_deals'), cursor: MARK });
+    expect(landed(named).map((a) => a.landing.fields['Label'])).toEqual(['Deals']);
+  });
+
+  it('resolves a label named in the filter to its id upstream: history is read by the id, and a second comparison on Label is judged by name', async () => {
+    const { source, calls } = pollWith({
+      messages: [wireMessage('m1', ['Label_deals', 'Label_other'])],
+      history: {
+        Label_deals: [{ added: [], labelled: [labelling('m1', 'Label_deals', '4001')], historyId: '5000' }],
+        Label_other: [{ added: [], labelled: [labelling('m1', 'Label_other', '4002')], historyId: '5000' }],
+      },
+    });
+    const answer = await source.poll({
+      edge: 'Labelings',
+      filter: and(cmp('Label', 'in', ['Deals', 'Other']), cmp('Label', 'eq', 'Other')),
+      cursor: MARK,
+    });
+    expect(calls.history.map((h) => h.labelId)).toEqual(['Label_deals', 'Label_other']);
+    expect(ids(answer)).toEqual(['m1:Label_other:4002']);
   });
 
   it('counts only the labels the listen names: another label added to the same message is not one', async () => {

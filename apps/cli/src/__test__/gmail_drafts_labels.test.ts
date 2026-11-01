@@ -113,7 +113,7 @@ test('labelling an existing message fires a listen on that label, named as a per
     await fake.label('m-old', [deals]);
     await fake.label('m-other', [newsletters]);
     const fired = lfSync(dir, 'run', '--poll', 'tagged');
-    assert.match(fired.out, new RegExp(`MOVENG_ERROR: tagged Acme intro with ${deals}`), fired.out);
+    assert.match(fired.out, /MOVENG_ERROR: tagged Acme intro with Deals\b/, fired.out);
     assert.doesNotMatch(fired.out, /tagged Newsletter/, fired.out);
     assert.equal(fired.out.split('MOVENG_ERROR: tagged').length - 1, 1, fired.out);
 
@@ -146,7 +146,7 @@ test('a label listen on the mailbox’s own labels fires for user labels only, n
 
     await fake.label('m-old', [deals]);
     const user = lfSync(dir, 'run', '--poll', 'tagged');
-    assert.match(user.out, new RegExp(`MOVENG_ERROR: tagged Acme intro with ${deals}`), user.out);
+    assert.match(user.out, /MOVENG_ERROR: tagged Acme intro with Deals\b/, user.out);
   } finally {
     await fake.stop();
   }

@@ -366,21 +366,24 @@ export class GmailPollSource {
     const { watch } = input;
     // What the addition alone says is judged before a message is fetched.
     const own = new Set([LABEL_FIELD, LABEL_TYPE_FIELD]);
-    const additions = input.labelled.filter((change) =>
-      holdsAll({ [LABEL_FIELD]: change.label, [LABEL_TYPE_FIELD]: labelTypeOf(change.label) }, watch.rest.filter((c) => own.has(c.field))),
-    );
+    const additions: NamedAddition[] = [];
+    for (const change of input.labelled) {
+      const label = await input.names.nameOf(change.label);
+      if (holdsAll({ [LABEL_FIELD]: label, [LABEL_TYPE_FIELD]: labelTypeOf(change.label) }, watch.rest.filter((c) => own.has(c.field)))) additions.push({ change, label });
+    }
     if (additions.length === 0) return [];
     const plan: WatchPlan = { reads: [], counts: () => true, labelTerms: [], includeSpamTrash: true };
-    const allowed = await this.narrow({ client: input.client, refs: additions, plan, query: watch.query });
+    const allowed = await this.narrow({ client: input.client, refs: additions.map(({ change }) => change), plan, query: watch.query });
     const fetched = new Map<string, GmailMessageRecord | null>();
     const arrivals: Arrival[] = [];
-    for (const change of additions) {
+    for (const addition of additions) {
+      const { change } = addition;
       if (!allowed.has(change.id)) continue;
       if (!fetched.has(change.id)) fetched.set(change.id, await messageOrGone(input.client, change.id));
       const message = fetched.get(change.id);
       if (message === undefined || message === null) continue;
       const [named] = await input.names.named([message]);
-      const arrival = labelingArrival(named ?? message, change, watch);
+      const arrival = labelingArrival(named ?? message, addition, watch);
       if (holdsAll(arrival.landing.fields, watch.rest)) arrivals.push(arrival);
     }
     return arrivals;
@@ -455,15 +458,24 @@ function messageArrival(message: GmailMessageRecord, watch: Watch): Arrival {
   };
 }
 
+/** A label addition from history (which names the label by id), with the
+ *  label's name. */
+interface NamedAddition {
+  change: GmailLabelAddition;
+  label: string;
+}
+
 /** A label added to a message, as it lands on `Labelings`: its own, keyed by
- *  where in the mailbox's history it happened, so a label removed and added
- *  again is a second one; about its message. */
-function labelingArrival(message: GmailMessageRecord, change: GmailLabelAddition, watch: Watch): Arrival {
+ *  where in the mailbox's history it happened (by the label's id, which
+ *  outlives a rename), so a label removed and added again is a second one;
+ *  about its message. It carries the label by name. */
+function labelingArrival(message: GmailMessageRecord, added: NamedAddition, watch: Watch): Arrival {
+  const { change, label } = added;
   const id = `${message.id}:${change.label}:${change.historyId ?? ''}`;
   const record = {
     ...message,
     labelingId: id,
-    label: change.label,
+    label,
     labelType: labelTypeOf(change.label),
     ...(watch.query !== undefined ? { query: watch.query } : {}),
   };

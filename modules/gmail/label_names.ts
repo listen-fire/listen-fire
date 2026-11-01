@@ -1,8 +1,9 @@
-// A message's `Labels` hold label NAMES on every path, a walk and an arrival
-// alike: Gmail's search takes a label by name, and so does the program that
-// writes `m.Labels CONTAINS "Deals"`. Gmail's own message carries ids, so a
-// record is renamed when it is built. System labels are their own name
-// (INBOX, SENT); an id the mailbox no longer lists stays as it is.
+// A label is its NAME on every path: a message's `Labels` on a walk and an
+// arrival, and a labeling's `Label`. Gmail's search takes a label by name, and
+// so does the program that writes `m.Labels CONTAINS "Deals"` or
+// `l.Label == "Deals"`. Gmail's own records carry ids, so a record is renamed
+// when it is built. System labels are their own name (INBOX, SENT); an id the
+// mailbox no longer lists stays as it is.
 
 import type { GmailApiClient, GmailLabel } from './api_client';
 import type { GmailMessageRecord } from './mime';
@@ -24,6 +25,12 @@ export class LabelNames {
   list(): Promise<GmailLabel[]> {
     this.known ??= this.client.listLabels();
     return this.known;
+  }
+
+  /** One label's name, from the id Gmail's history gives it. */
+  async nameOf(id: string): Promise<string> {
+    if (isSystemLabel(id)) return id;
+    return (await this.list()).find((label) => label.id === id)?.name ?? id;
   }
 
   async named(records: readonly GmailMessageRecord[]): Promise<GmailMessageRecord[]> {

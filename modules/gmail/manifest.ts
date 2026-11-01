@@ -34,7 +34,7 @@ function file_deal(l: <gmail-[:Labelings]->>) {
 }
 \`\`\`
 
-A listen on \`Labelings\` fires once each time a label is added to a message already in the mailbox — a person filing mail, or a filter doing it later. A labeling carries the label added (\`Label\`, its id) and the message's fields; walk \`Message\` for its attachments or to reply. Name a user label as you see it in Gmail (\`"Deals"\`) or by its id; a label the mailbox does not have fails the listen, naming the ones it has. \`\`l.\`Label Type\` == "user"\`\` takes any of the mailbox's own labels and none of Gmail's (inbox, unread, starred, important, sent, draft, spam, trash, chat, the category tabs), which change as mail is read and filed. \`Query\` narrows these too. A message ARRIVING with the label is on \`Messages\`, not this. A label removed and added again fires again. After a long quiet spell (Gmail forgets the mark after about a week) the labels added in the gap are skipped, never delivered late as new.
+A listen on \`Labelings\` fires once each time a label is added to a message already in the mailbox — a person filing mail, or a filter doing it later. A labeling carries the label added (\`Label\`, its name) and the message's fields; walk \`Message\` for its attachments or to reply. Name a user label as you see it in Gmail (\`"Deals"\`); a label the mailbox does not have fails the listen, naming the ones it has. \`\`l.\`Label Type\` == "user"\`\` takes any of the mailbox's own labels and none of Gmail's (inbox, unread, starred, important, sent, draft, spam, trash, chat, the category tabs), which change as mail is read and filed. \`Query\` narrows these too. A message ARRIVING with the label is on \`Messages\`, not this. A label removed and added again fires again. After a long quiet spell (Gmail forgets the mark after about a week) the labels added in the gap are skipped, never delivered late as new.
 
 ### reading the message
 
@@ -143,7 +143,7 @@ export const GMAIL_MANIFEST: AdapterManifest = {
     '`OR m.Labels CONTAINS "SPAM"` when mail that must not be missed can land ' +
     'in Spam) and by `m.Query == "…"`, a Gmail search string written exactly as ' +
     'in Gmail’s search box. Listen on `Labelings` when a label is added to a ' +
-    'message already there: `l.Label == "Deals"` (a label by name or id) or ' +
+    'message already there: `l.Label == "Deals"` (a label by name) or ' +
     '``l.`Label Type` == "user"`` for any of the mailbox’s own; walk its ' +
     '`Message` for attachments. The first poll delivers nothing.',
   handbookSection: {

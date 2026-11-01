@@ -90,7 +90,7 @@ const MESSAGES_DESCRIPTION =
 const LABELINGS_DESCRIPTION =
   'Each label added to a message already in the mailbox — a person filing ' +
   'mail, or a filter doing it later: what a listen hears, never a list to read. ' +
-  'Narrow it by `Label` (a label by its name or id) or `Label Type` ' +
+  'Narrow it by `Label` (a label by its name) or `Label Type` ' +
   '(`"user"` for the mailbox’s own labels), and by `Query`.';
 
 /**
@@ -339,7 +339,7 @@ const LABELING_DESCRIPTOR: SchemaTypeDescriptor = {
   description: LABELINGS_DESCRIPTION,
   fields: [
     { fieldId: 'labelingId', displayName: 'Id', kind: 'string', writable: false, required: true, description: 'This addition: the message, the label and the moment in the mailbox’s history it was added.' },
-    { fieldId: 'label', displayName: 'Label', kind: 'string', writable: false, required: true, capability: { filterOperators: ['eq', 'in'] }, description: 'The label id that was added (INBOX, STARRED… in capitals, a user label by its id, Label_12). A listen names a user label by its name as you see it in Gmail (`l.Label == "Deals"`) or by its id; a label the mailbox does not have fails the listen, naming the ones it has.' },
+    { fieldId: 'label', displayName: 'Label', kind: 'string', writable: false, required: true, capability: { filterOperators: ['eq', 'in'] }, description: 'The label that was added, by name: a user label as the mailbox calls it (Deals), Gmail’s own in capitals (INBOX, STARRED), as `Labels` on a message. A listen names it the same way (`l.Label == "Deals"`); a label the mailbox does not have fails the listen, naming the ones it has.' },
     { fieldId: 'labelType', displayName: 'Label Type', kind: 'enum', enumValues: ['system', 'user'], writable: false, required: true, capability: { filterOperators: ['eq', 'in'] }, description: '`user` for the mailbox’s own labels, `system` for Gmail’s (inbox, unread, starred, important, sent, draft, spam, trash, chat, the category tabs), which change as mail is read and filed.' },
     QUERY_FIELD,
     ...MESSAGE_DESCRIPTOR.fields

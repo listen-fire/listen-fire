@@ -135,6 +135,36 @@ listen to mail { events: ["label_added"] } fire filed`));
   }
 });
 
+test('an upgraded label_added listen on a label by name hears that label added, which arrives by its name', async () => {
+  const fake = await fakeChannels();
+  try {
+    const { dir } = await gmailProject(fake, 'gmail');
+    const deals = await fake.makeLabel('Deals');
+    await fake.makeLabel('Hiring');
+    await fake.message({ id: 'm-old', subject: 'Acme intro' });
+    const file = join(dir, 'movements/hello.mvt');
+    writeFileSync(file, program(`function filed(m: <mail-[:Message]->>) {
+  fail("filed \${m.Subject} with \${m.Label}")
+}
+
+listen to mail { events: ["label_added"], labels: ["Deals"] } fire filed`));
+    const lfYaml = join(dir, 'lf.yaml');
+    writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
+    const upgraded = lf(dir, 'upgrade');
+    assert.equal(upgraded.code, 0, upgraded.out);
+    assert.match(readFileSync(file, 'utf8'), /listen to mail-\[l:Labelings WHERE l\.Label IN \["Deals"\]\]-> fire filed/);
+    assert.equal(lf(dir, 'check').code, 0);
+
+    const armed = lf(dir, 'run', '--poll', 'filed');
+    assert.match(armed.out, /^gmail: hello:filed armed; it fires on changes from now$/m, armed.out);
+    await fake.label('m-old', [deals]);
+    const fired = lf(dir, 'run', '--poll', 'filed');
+    assert.match(fired.out, /MOVENG_ERROR: filed Acme intro with Deals\b/, fired.out);
+  } finally {
+    await fake.stop();
+  }
+});
+
 test('an upgraded listen on two user labels, written by name, hears mail carrying either', async () => {
   const fake = await fakeChannels();
   try {
