@@ -12,6 +12,7 @@
 // invoices through the module's graph.
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -240,38 +241,6 @@ test('listen-fire serve runs a signed failed payment once: the monthly customer 
   }
 });
 
-test('a Stripe payment_failed change fires its listen once, and a re-send two days later runs nothing', async () => {
-  const world = await paymentsWorld();
-  const twoDays = String(2 * 24 * 60 * 60 * 1000);
-  try {
-    const first = await served(world.dir);
-    try {
-      const url = (await first.waitFor(/^stripe stripe_account: /)).replace(/^stripe stripe_account: /, '');
-      const delivered = await deliver(url, paymentFailed('r1', 'diego@alvareztiles.es', 'Diego Alvarez', 4900));
-      assert.equal(delivered.status, 202, delivered.body);
-      assert.equal((JSON.parse(delivered.body) as { runs: unknown[] }).runs.length, 1, delivered.body);
-    } finally {
-      await first.stop();
-    }
-    // Stripe re-sends an event it holds undelivered for three days: the
-    // module declares that window, so a re-send inside it is the same arrival.
-    const later = await served(world.dir, [], { LF_CLOCK_AHEAD_MS: twoDays });
-    try {
-      const url = (await later.waitFor(/^stripe stripe_account: /)).replace(/^stripe stripe_account: /, '');
-      const resent = await deliver(url, paymentFailed('r1', 'diego@alvareztiles.es', 'Diego Alvarez', 4900));
-      assert.ok(resent.status >= 200 && resent.status < 300, resent.body);
-      assert.doesNotMatch(resent.body, /"runs":\s*\[\s*\{/, resent.body);
-    } finally {
-      await later.stop();
-    }
-    assert.deepEqual((await outbox(world.channels)).map((m) => m.to), ['diego@alvareztiles.es'], 'one email for one failed payment');
-    const runs = await run(world.dir, 'runs');
-    assert.equal(runs.out.trim().split('\n').filter((l) => l.includes('Payment Failed')).length, 1, runs.out);
-  } finally {
-    await world.close();
-  }
-});
-
 // A run waits on the invoice its trigger was about: Stripe answers which key
 // an invoice's Changes are waited on under (its id, the key each arrival on
 // them names), so the wait registers and the invoice's next change answers it.
@@ -321,6 +290,60 @@ test('a run waiting on an invoice’s Changes is answered by the invoice’s nex
   }
 });
 
+// Stripe re-sends an event it holds undelivered for up to three days, under
+// the same event id. The module declares that window, so the host keeps each
+// arrival's identity three days, not its default hour: a re-send inside it is
+// the arrival already logged, and answers no wait opened since. The delivery
+// receipt would refuse a re-send by its id too, so the test forgets each
+// receipt's id, and it ages the identities in the state file (LF_CLOCK_AHEAD_MS
+// does not move the clock they are judged by). The listen's own receipt of
+// the arrival is kept for good, so the trigger never runs twice.
+test('a Stripe re-send two days later, its delivery receipt forgotten, does not answer the wait its own event opened; one past three days does', async () => {
+  const world = await paymentsWorld();
+  writeFileSync(join(world.dir, 'movements/chase.mvt'), CHASE);
+  const state = (statement: string) => {
+    const done = spawnSync('sqlite3', [join(world.dir, '.lf/state.db'), statement], { encoding: 'utf8' });
+    assert.equal(done.status, 0, done.stderr);
+  };
+  const resent = () => {
+    state('update delivery set external_id = null');
+    return deliver(url, stripeEvent('invoice.finalized', stripeInvoice({ id: 'in_chase', number: 'LL-chase', customer_email: 'diego@alvareztiles.es', status: 'open' }), { id: 'evt_finalized' }));
+  };
+  const ageIdentities = (by: string) => state(`update arrival_identity set kept_until = strftime('%Y-%m-%dT%H:%M:%fZ', kept_until, '${by}')`);
+  const serving = await served(world.dir);
+  let url = '';
+  try {
+    url = (await serving.waitFor(/^stripe stripe_account: /)).replace(/^stripe stripe_account: /, '');
+    const runs = (status: string) => serving.lines.filter((l) => new RegExp(`^(run|resumed) \\S+ chase:chase ${status}$`).test(l)).length;
+    const finalized = await resent();
+    assert.equal(finalized.status, 202, finalized.body);
+    await serving.waitFor(/run .* chase:chase parked/);
+
+    ageIdentities('-2 days');
+    const inside = await resent();
+    assert.ok(inside.status >= 200 && inside.status < 300, inside.body);
+    assert.doesNotMatch(inside.body, /"runs":\s*\[\s*\{/, inside.body);
+    await new Promise((done) => setTimeout(done, 1000));
+    assert.equal(runs('completed'), 0, serving.lines.join('\n'));
+    assert.deepEqual(await outbox(world.channels), [], 'inside three days the re-send is the arrival already logged');
+
+    ageIdentities('-1 days');
+    ageIdentities('-1 minutes');
+    const past = await resent();
+    assert.ok(past.status >= 200 && past.status < 300, past.body);
+    await serving.waitFor(/resumed .* chase:chase completed/);
+    assert.equal(runs('parked'), 1, 'the listen ran its trigger once');
+    assert.deepEqual(
+      (await outbox(world.channels)).map((m) => [m.to, m.subject]),
+      [['diego@alvareztiles.es', 'LL-chase is finalized']],
+      'past three days the same event is taken for a new arrival on the invoice',
+    );
+  } finally {
+    await serving.stop();
+    await world.close();
+  }
+});
+
 // Every Stripe object's change edge is named Changes. An arrival names the
 // record type it landed on, and the host fires a listen only on its own: an
 // invoice's created change is not a customer's.
@@ -351,6 +374,40 @@ test('a listen on a customer’s created Changes does not fire on an invoice’s
     assert.deepEqual(ran(customerCreated.body), ['welcome completed']);
     const runs = await run(world.dir, 'runs');
     assert.equal(runs.out.trim().split('\n').filter((l) => l.includes('welcome')).length, 1, runs.out);
+  } finally {
+    await serving.stop();
+    await world.close();
+  }
+});
+
+// A listen's WHERE on the object a Stripe change carries is judged on
+// arrival, against the object as the event had it, by its fields' names.
+const USD = `import { stripe } from adapters
+import { stripe_account } from credentials
+
+pay = connect stripe using stripe_account
+
+function priced(c: <pay-[:InvoiceChange]->>) {
+  return c.Type
+}
+
+listen to pay-[i:Invoices WHERE i.Currency == "usd"]->-[c:Changes WHERE c.Kind == "finalized"]-> fire priced
+`;
+
+test('a WHERE on the invoice a Stripe change carries skips a euro invoice’s change, and fires on a dollar one’s', async () => {
+  const world = await paymentsWorld();
+  writeFileSync(join(world.dir, 'movements/priced.mvt'), USD);
+  const serving = await served(world.dir);
+  const ran = (body: string) => (JSON.parse(body) as { runs: Array<{ movement: string; status: string }> }).runs.map((r) => `${r.movement} ${r.status}`);
+  try {
+    const url = (await serving.waitFor(/^stripe stripe_account: /)).replace(/^stripe stripe_account: /, '');
+    const finalized = (id: string, currency: string) => stripeEvent('invoice.finalized', stripeInvoice({ id: `in_${id}`, number: `LL-${id}`, currency }), { id: `evt_${id}` });
+    const euro = await deliver(url, finalized('eur', 'eur'));
+    assert.ok(euro.status >= 200 && euro.status < 300, euro.body);
+    assert.doesNotMatch(euro.body, /"runs":\s*\[\s*\{/, euro.body);
+    const dollar = await deliver(url, finalized('usd', 'usd'));
+    assert.equal(dollar.status, 202, dollar.body);
+    assert.deepEqual(ran(dollar.body), ['priced completed']);
   } finally {
     await serving.stop();
     await world.close();

@@ -3,6 +3,8 @@
 // `listen-fire serve` registers for the connection. A Deals listen narrowed to
 // Stage changes runs on each Stage change and on nothing else, a company's
 // change included; `listen-fire check` refuses an attribute deals do not have.
+// A Deals listen on Name changes is not fired by a company's Name change,
+// which passes its WHERE but lands on another record type.
 // A wait on a record a run walks to answers from the walk on: a change of that
 // record delivered before the walk does not answer it, one delivered after does.
 
@@ -54,6 +56,15 @@ function chase(c: <crm-[:DealChange]->>) {
 listen to crm-[:Deals]->-[c:Changes WHERE c.Field == "Stage"]-> fire chase
 `;
 
+// Each Name change of a deal is noted by name.
+const NAMED = `${HEAD}
+function named(c: <crm-[:DealChange]->>) {
+  return c.Field
+}
+
+listen to crm-[:Deals]->-[c:Changes WHERE c.Field == "Name"]-> fire named
+`;
+
 const stageOf = (deal: { id: { record_id: string } }) => ({ event_type: 'record.updated', id: { object_id: 'deals', record_id: deal.id.record_id, attribute_id: 'stage' } });
 const valueChangeOf = (deal: { id: { record_id: string } }) => ({ event_type: 'record.updated', id: { object_id: 'deals', record_id: deal.id.record_id, attribute_id: 'value' } });
 const description = async (fake: Fake, name: string) => valueOf((await records(fake, 'companies')).find((c) => valueOf(c, 'name') === name), 'description');
@@ -72,6 +83,8 @@ test('a Deals listen on Stage runs on each Stage change naming the new stage, an
     assert.notEqual(refused.code, 0, refused.out);
     assert.match(refused.out, /MOV_ENUM_UNKNOWN_VALUE[\s\S]*"Stag"/);
     writeFileSync(join(dir, 'movements/typo.mvt'), '');
+    writeFileSync(join(dir, 'movements/named.mvt'), NAMED);
+    assert.equal(lfSync(dir, 'check').code, 0);
 
     const serving = await served(dir, ['--port', String(port)]);
     try {
@@ -79,6 +92,7 @@ test('a Deals listen on Stage runs on each Stage change naming the new stage, an
       const [webhook] = await webhooks(fake);
       assert.deepEqual(webhook?.subscriptions.map((s) => s.event_type), ['record.created', 'record.updated', 'record.deleted']);
       const runs = () => serving.lines.filter((l) => /^run \S+ stages:moved completed$/.test(l)).length;
+      const named = () => serving.lines.filter((l) => /^run \S+ named:named completed$/.test(l)).length;
 
       const osprey = await createRecord(fake, 'deals', { name: 'Osprey', stage: 'Sourced' });
       const acme = await createRecord(fake, 'companies', { name: 'Acme' });
@@ -103,6 +117,12 @@ test('a Deals listen on Stage runs on each Stage change naming the new stage, an
       assert.equal(await description(fake, 'Osprey'), 'Osprey is now Passed (updated Stage)');
       await new Promise((done) => setTimeout(done, 500));
       assert.equal(runs(), 2, serving.lines.join('\n'));
+      // The company's Name change above passed the Name listen's WHERE, and
+      // ran nothing: it is a company's change, not a deal's.
+      assert.equal(named(), 0, serving.lines.join('\n'));
+      await updateRecord(fake, 'deals', osprey.id.record_id, { name: 'Osprey Labs' });
+      await deliver(fake, { event_type: 'record.updated', id: { object_id: 'deals', record_id: osprey.id.record_id, attribute_id: 'name' } });
+      await until(() => named() === 1, serving.lines);
     } finally {
       await serving.stop();
     }
