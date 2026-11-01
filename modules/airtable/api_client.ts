@@ -174,7 +174,7 @@ export function asksForWebhookIncludes(specification: unknown): boolean {
 }
 
 const listWebhooksResponseParser = z
-  .object({ webhooks: z.array(z.object({ id: z.string(), specification: z.unknown().optional() }).passthrough()) })
+  .object({ webhooks: z.array(z.object({ id: z.string(), notificationUrl: z.string().nullable().optional(), specification: z.unknown().optional() }).passthrough()) })
   .passthrough();
 
 const refreshWebhookResponseParser = z
@@ -553,8 +553,8 @@ class AirtableAPIClient {
     };
   }
 
-  /** The base's webhooks, each with the specification it was created with. */
-  async listWebhooks({ baseId }: { baseId: string }): Promise<Array<{ id: string; specification?: unknown }>> {
+  /** The base's webhooks, each with the door it notifies and the specification it was created with. */
+  async listWebhooks({ baseId }: { baseId: string }): Promise<Array<{ id: string; notificationUrl?: string | null; specification?: unknown }>> {
     const result = await this.fetch({
       route: `/v0/bases/${baseId}/webhooks`,
       method: 'GET',

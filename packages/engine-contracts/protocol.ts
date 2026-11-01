@@ -785,20 +785,16 @@ const settingsMapping = z.object({
       absent: z.union([z.string(), z.array(z.string())], { error: 'listenSettingsBecome.keys.absent: expected a text or a list of texts' }).optional(),
       absentField: z.string().min(1, 'listenSettingsBecome.keys.absentField: expected a non-empty string').optional(),
       lowercase: z.boolean({ error: 'listenSettingsBecome.keys.lowercase: expected true or false' }).optional(),
-      also: z
-        .array(z.object({ field: z.string().min(1, 'listenSettingsBecome.keys.also.field: expected a non-empty string'), op: z.enum(KEY_OPS) }))
-        .optional(),
     }),
   ),
-  changed: z
-    .array(
-      z.object({
-        note: z.string().min(1, 'listenSettingsBecome.changed.note: expected a non-empty string'),
-        written: z.array(z.string()).optional(),
-        unwritten: z.array(z.string()).optional(),
-        hearing: z.array(z.string()).optional(),
-      }),
-    )
+  fieldChange: z
+    .object({
+      hop: z.number().int().nonnegative(),
+      field: z.string().min(1, 'listenSettingsBecome.fieldChange.field: expected a non-empty string'),
+      becomes: z.string().min(1, 'listenSettingsBecome.fieldChange.becomes: expected a non-empty string'),
+      current: z.string().min(1, 'listenSettingsBecome.fieldChange.current: expected a non-empty string'),
+      previous: z.string().min(1, 'listenSettingsBecome.fieldChange.previous: expected a non-empty string'),
+    })
     .optional(),
 });
 

@@ -337,10 +337,24 @@ const RESERVED_TABLE_NAMES: readonly string[] = [BASE_META_TYPE, TABLE_META_TYPE
  *  edges. */
 function refuseReservedTableNames(baseName: string, tables: readonly AirtableTableMeta[]): void {
   const clash = tables.find((table) => RESERVED_TABLE_NAMES.includes(table.name));
-  if (clash === undefined) return;
-  throw new Error(
-    `airtable: base "${baseName}" has a table named "${clash.name}", a name the Airtable module gives its own (${RESERVED_TABLE_NAMES.join(', ')}), so a program could not tell which it meant: rename the table in Airtable to reach this base`,
-  );
+  if (clash !== undefined) {
+    throw new Error(
+      `airtable: base "${baseName}" has a table named "${clash.name}", a name the Airtable module gives its own (${RESERVED_TABLE_NAMES.join(', ')}), so a program could not tell which it meant: rename the table in Airtable to reach this base`,
+    );
+  }
+  // A table's changes are named for it (`Candidates Change`): a table of that
+  // name would be two types under one name.
+  const changes = tables.find((table) => tables.some((other) => table.name === tableChangeType(other.name)));
+  if (changes !== undefined) {
+    throw new Error(
+      `airtable: base "${baseName}" has a table named "${changes.name}", the name the Airtable module gives another table's changes, so a program could not tell which it meant: rename the table in Airtable to reach this base`,
+    );
+  }
+}
+
+/** The type a table's changes land on, named for the table. */
+export function tableChangeType(tableName: string): string {
+  return `${tableName} ${AIRTABLE_CHANGE_TYPE}`;
 }
 
 /** Refuse a table, reached as one of a base's `Tables`, whose link field is
@@ -483,11 +497,11 @@ export function describeTableMeta(at: { positioned: boolean }): SchemaTypeDescri
  * once for the connection. Each change names its table, and a listen keeps
  * only its own tables' changes.
  */
-export function changesReference(at: { positioned: boolean }): SchemaReferenceDescriptor {
+export function changesReference(at: { positioned: boolean; target?: string }): SchemaReferenceDescriptor {
   return {
     fieldId: AIRTABLE_CHANGES_EDGE,
     name: AIRTABLE_CHANGES_EDGE,
-    targetTypeId: AIRTABLE_CHANGE_TYPE,
+    targetTypeId: at.target ?? AIRTABLE_CHANGE_TYPE,
     cardinality: 'many',
     direction: 'outgoing',
     // You are told of a change; you cannot list the ones that happened.
@@ -497,36 +511,57 @@ export function changesReference(at: { positioned: boolean }): SchemaReferenceDe
     ...(at.positioned ? { delivery: 'connection' as const } : { delivery: 'scope' as const, scopedBy: AIRTABLE_BASES_EDGE }),
     identity: 'Id',
     attributes: true,
-    description: "What happens to the table's rows, each change once: created, a field updated (`Field` names it), deleted.",
+    description: "What happens to the table's rows: one change per row an edit touched (created, updated or deleted), with the row before and after it (`Previous`, `Current`).",
   };
 }
 
-/** A change to a table's row: what happened (`Kind`), on an update which
- *  field (`Field`) and what it held before and after (`Old`, `New`), and the
- *  row as the change left it (`Record`). */
+/** A change to a table's row, one per row an edit touched: what happened
+ *  (`Kind`), the row before and after the edit (`Previous`, `Current`: values,
+ *  read through with `.`), and the row as it is now (`Record`, an edge: a
+ *  read). Every table's changes hold a `Row`; one table's (`tableChange`)
+ *  hold that table's rows. */
 export function describeChange(): SchemaTypeDescriptor {
-  const value = (fieldId: string, description: string): SchemaFieldDescriptor => ({ fieldId, displayName: fieldId, kind: 'string', writable: false, required: false, description });
+  return changeDescriptor({ typeId: AIRTABLE_CHANGE_TYPE, row: AIRTABLE_ROW_TYPE });
+}
+
+/** The changes of one table: `Previous` and `Current` are its rows, typed by
+ *  its fields, and `Record` is one of them. */
+export function describeTableChange(tableName: string): SchemaTypeDescriptor {
+  return changeDescriptor({ typeId: tableChangeType(tableName), row: tableName });
+}
+
+function changeDescriptor(input: { typeId: string; row: string }): SchemaTypeDescriptor {
+  const held = (fieldId: string, description: string): SchemaFieldDescriptor => ({
+    fieldId,
+    displayName: fieldId,
+    kind: 'record',
+    record: { typeId: input.row },
+    mayBeAbsent: true,
+    writable: false,
+    required: false,
+    description,
+  });
   return {
-    typeId: AIRTABLE_CHANGE_TYPE,
-    displayName: AIRTABLE_CHANGE_TYPE,
-    description: "A change to a row of an Airtable table: what happened (`Kind`) and, on an update, which field (`Field`). Walk `Record` for the row as the change left it.",
+    typeId: input.typeId,
+    displayName: input.typeId,
+    description:
+      'A change to a row of an Airtable table, one per row an edit touched: what happened (`Kind`), the row as the edit left it (`Current`) and as it was before (`Previous`). Compare them in a listen (`c.Current.Stage == "Interview" AND c.Previous.Stage != "Interview"`); walk `Record` for the row as it is now.',
     fields: [
       { ...metaField('Id', 'Names the change: the same each time Airtable reports it.'), required: true },
       { fieldId: 'Kind', displayName: 'Kind', kind: 'enum', enumValues: [...AIRTABLE_CHANGE_KINDS], writable: false, required: true, description: 'What happened to the row.' },
-      metaField('Field', 'On an update, the field that changed, by its name (`Stage`). An update of two fields is two changes.'),
-      value('Old', 'On an update, what the field held before, as text (a select by its choice, a number as written).'),
-      value('New', 'On an update, what the field holds now, as text (a select by its choice, a number as written).'),
+      held('Current', 'The row as the edit left it, every field by name. Absent when the row was deleted.'),
+      held('Previous', 'The row as it was before the edit, every field by name. Absent when the row was created, and when it was deleted (Airtable sends no cells then).'),
     ],
     references: [
       {
         fieldId: AIRTABLE_CHANGE_RECORD_EDGE,
         name: AIRTABLE_CHANGE_RECORD_EDGE,
-        targetTypeId: AIRTABLE_ROW_TYPE,
+        targetTypeId: input.row,
         cardinality: 'one',
         direction: 'outgoing',
-        // The row rides the change: following the edge reads nothing.
+        readable: true,
         writable: false,
-        description: 'The row as the change left it: every field, by name.',
+        description: 'The row as it is now, read from Airtable: none once it is deleted.',
       },
     ],
   };
@@ -796,7 +831,18 @@ export async function describeTableAt(input: {
   // Reached as one of a base's `Tables`, it is still a `Table`: a listen
   // narrowed to it goes on to its `Changes`.
   refuseReservedReferenceNames(descriptor.displayName, descriptor.references);
-  return { ...descriptor, references: [...descriptor.references, changesReference({ positioned: input.positioned })] };
+  return {
+    ...descriptor,
+    references: [...descriptor.references, changesReference({ positioned: input.positioned, target: tableChangeType(descriptor.displayName) })],
+  };
+}
+
+/** A table's changes, reached BY PATH from the table (`edgesFrom`): its rows
+ *  before and after, by the table's own fields. */
+export async function describeTableChangeAt(input: { client: AirtableAPIClient; teamId: string; baseId: string; tableId: string }): Promise<SchemaTypeDescriptor | null> {
+  const tables = await cachedTables({ client: input.client, teamId: input.teamId, baseId: input.baseId });
+  const table = tables.find((t) => t.id === input.tableId);
+  return table === undefined ? null : describeTableChange(table.name);
 }
 
 /** Drop a base's cached tables — used after lf-platform's dev-loop seeds new tables,

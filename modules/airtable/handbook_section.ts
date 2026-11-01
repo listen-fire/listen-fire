@@ -23,13 +23,19 @@ A listen on Airtable walks from the connection to a base, from the base to one o
 listen to at-[b:Bases WHERE b.Name == "Finance"]->-[t:Tables WHERE t.Name == "Expenses"]->-[c:Changes WHERE c.Kind == "created"]-> fire review
 \`\`\`
 
-A change says what happened to a row: \`Kind\` is \`created\`, \`updated\` or \`deleted\`. An update names the field it touched in \`Field\`, with what it held before in \`Old\` and what it holds now in \`New\`; an update of two fields is two changes. \`c-[:Record]->\` is the row as the change left it, every field by name.
+A change is one per row an edit touched, and says what happened to it: \`Kind\` is \`created\`, \`updated\` or \`deleted\`. \`c.Current\` is the row as the edit left it and \`c.Previous\` as it was before, every field by name; a created row has no \`Previous\`, and a deleted one neither. A listen compares them, and each field is checked against the table's own: \`c.Current.Stge\` is refused where it is written. \`c-[:Record]->\` is the row as it is now, read from Airtable when the function walks it; a listen's WHERE cannot walk it.
 
 ### when-a-field-becomes-a-value
 
 \`\`\`
-listen to hiring-[t:Tables WHERE t.Name == "Candidates"]->-[c:Changes WHERE c.Field == "Stage" AND c.New == "Interview"]-> fire schedule
+function schedule(c: <hiring-[:\`Candidates Change\`]->>) {
+  return c.Current.Stage
+}
+
+listen to hiring-[t:Tables WHERE t.Name == "Candidates"]->-[c:Changes WHERE c.Current.Stage == "Interview" AND c.Previous.Stage != "Interview"]-> fire schedule
 \`\`\`
+
+It fires when Stage comes to be Interview, by an edit or on a row created at it, and never while it stays there. A listen narrowed to one table fires that table's changes (\`Candidates Change\`), whose rows are typed by the table's fields; a function over every table's changes (\`<hiring-[:Change]->>\`) takes them too, reading only what every row has.
 
 A connection started at its base (\`connect airtable using … { base: "Hiring" }\`) begins at that base's tables, so its listens start at \`Tables\`.
 

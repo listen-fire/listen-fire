@@ -219,23 +219,28 @@ export interface SettingsBecome {
    *  spent choosing it. A listen naming events of two mappings has no
    *  rewrite: one listen per edge. One level deep. */
   byEvent?: Record<string, Omit<SettingsBecome, 'byEvent'>>;
-  /** Where the traversal does not do what the settings listen did: a listen
-   *  one applies to is rewritten with its note, and never safely, so
-   *  `listen-fire upgrade` holds the pin until `--all`. */
-  changed?: ChangedMeaning[];
+  /** How the `field` and `becomes` keys of a module whose records hold their
+   *  row before and after compare those rows. */
+  fieldChange?: FieldChange;
 }
 
-/** A difference between a settings listen and its rewrite, and the listens
- *  it applies to: those that write every key of `written`, none of
- *  `unwritten`, and hear one of `hearing` (the events their `events` names,
- *  or, left out, what leaving it out heard: every event when the module says
- *  nothing of it). */
-export interface ChangedMeaning {
-  /** What differs, as the upgrade says it. */
-  note: string;
-  written?: string[];
-  unwritten?: string[];
-  hearing?: string[];
+/** Two settings keys that compare a record's row before and after on one
+ *  hop (Airtable's `{ field: "Stage", becomes: "Interview" }`): the field
+ *  alone changed (`c.Current.Stage != c.Previous.Stage`); with a value, it
+ *  came to hold it (`c.Current.Stage == "Interview" AND c.Previous.Stage !=
+ *  "Interview"`). A value with no field compares nothing. The field is the
+ *  row's own, by name. */
+export interface FieldChange {
+  /** The index into `path` of the hop whose records hold the rows. */
+  hop: number;
+  /** The settings key naming the field. */
+  field: string;
+  /** The settings key naming the value the field came to hold. */
+  becomes: string;
+  /** The record's field holding the row as the change left it. */
+  current: string;
+  /** The record's field holding the row as it was before. */
+  previous: string;
 }
 
 /** What one settings key becomes: a comparison on a hop's field (`eq`, `neq`,
@@ -262,22 +267,9 @@ export interface KeyBecomes {
   /** 0.12 compared this key's values lowercased: the rewrite writes them
    *  lowercased, so `{ key: "Deals" }` still hears what it heard. */
   lowercase?: boolean;
-  /** Comparisons the key makes beside its own, on the same hop and with the
-   *  same value, spelled as its own is (Airtable's `becomes: v` is
-   *  `New == v` and also `Old != v`: 0.12 fired only when the field came to
-   *  hold the value). Never with `absent`. */
-  also?: AlsoCompared[];
 }
 
 export type KeyOp = 'eq' | 'neq' | 'in' | 'contains' | 'type';
-
-/** One more comparison a settings key makes (`KeyBecomes.also`). */
-export interface AlsoCompared {
-  /** The field it compares. */
-  field: string;
-  op: KeyOp;
-}
-
 
 /**
  * The credential arg in a construction signature, if the adapter needs one.

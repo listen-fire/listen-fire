@@ -59,12 +59,11 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
   positionArgs: [{ name: 'base', optionsFrom: BASE_META_TYPE, label: 'Base' }],
   // A 0.12 listen (`{ base, table, events, field, becomes }`) is a listen on
   // the table's `Changes`: the base and table narrow their hops by `Id`, the
-  // events by `Kind`, the field by `Field`, and the value it becomes by `New`
-  // and an `Old` that was not it (0.12 fired only when the field came to hold
-  // it). A connection positioned at the base drops the `Bases` hop. A change
-  // is one per field an update touched, and a created row one change with no
-  // field: where that runs a listen otherwise than 0.12 did, the upgrade says
-  // so and holds the pin until `--all`.
+  // events by `Kind`, and `field` and `becomes` compare the row before and
+  // after the change (`fieldChange`): the field changed, or came to hold the
+  // value. A change is one per row an edit touched, as 0.12 ran once per
+  // update, so each rewrite keeps the meaning. A connection positioned at the
+  // base drops the `Bases` hop.
   listenSettingsBecome: {
     path: [AIRTABLE_BASES_EDGE, AIRTABLE_TABLES_EDGE, AIRTABLE_CHANGES_EDGE],
     aliases: ['b', 't', 'c'],
@@ -74,21 +73,8 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
       base: { hop: 0, field: 'Id', op: 'eq' },
       table: { hop: 1, field: 'Id', op: 'eq' },
       events: { hop: 2, field: 'Kind', op: 'in', values: Object.fromEntries(AIRTABLE_CHANGE_KINDS.map((kind) => [`record.${kind}`, kind])) },
-      field: { hop: 2, field: 'Field', op: 'eq' },
-      becomes: { hop: 2, field: 'New', op: 'eq', also: [{ field: 'Old', op: 'neq' }] },
     },
-    changed: [
-      {
-        note: 'a listen hearing updates with no `field` now runs once for each field an update touched, where 0.12 ran it once per update',
-        unwritten: ['field'],
-        hearing: ['record.updated'],
-      },
-      {
-        note: 'a `field` or `becomes` listen no longer runs on a newly created row, where 0.12 counted every field of a created row as changed',
-        written: ['field'],
-        hearing: ['record.created'],
-      },
-    ],
+    fieldChange: { hop: 2, field: 'field', becomes: 'becomes', current: 'Current', previous: 'Previous' },
   },
   triggerExpectation:
     'Listen-Fire registers one Airtable webhook on the rows of each base whose tables a listen on their ' +
@@ -96,9 +82,9 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
     'WHERE (Airtable\'s schema webhook): two per base, the most Airtable lets one connected app make. ' +
     'A change in a table of the base the listen does not watch runs nothing. Airtable notifies ' +
     'that something changed and Listen-Fire pulls the changes, usually within seconds but coalesced by ' +
-    'Airtable (rapid edits can land as one batch). A change arrives on its table\'s `Changes`: a row ' +
-    'created, a field of it updated (one change per field: `Field` names it, `Old` and `New` what it held) ' +
-    'or deleted; its `Record` is the row as the change left it. A table renamed into or out of a listen\'s ' +
+    'Airtable (rapid edits can land as one batch). A change arrives on its table\'s `Changes`, one per row ' +
+    'an edit touched: created, updated or deleted, with the row as it was (`Previous`) and as the edit left it ' +
+    '(`Current`); its `Record` is the row as it is now, read from Airtable. A table renamed into or out of a listen\'s ' +
     'WHERE is watched, or no longer, from the moment Airtable reports the rename; changes it had before ' +
     'are not replayed.',
 };

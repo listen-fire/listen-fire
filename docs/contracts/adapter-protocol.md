@@ -241,17 +241,16 @@ The manifest file registers your server with a team:
   of them, `labels: ["INBOX", "SPAM"]` becoming
   `m.Labels CONTAINS "INBOX" OR m.Labels CONTAINS "SPAM"`) or `type`. The upgrade turns
   that listen into `listen to gh-[n:Notifications WHERE n.Reason IN ["mention"]]->`.
-  A key that compares more than its own field says `also`: further fields
-  compared with the same value on the same hop (Airtable's
-  `"becomes": { "hop": 2, "field": "New", "op": "eq", "also": [{ "field": "Old", "op": "neq" }] }`
-  becomes `c.New == "Interview" AND c.Old != "Interview"`). A mapping says
-  `changed` where its rewrite does otherwise than the settings listen did:
-  each `{ note, written?, unwritten?, hearing? }` applies to a listen that
-  writes every key of `written`, none of `unwritten`, and hears one of the
-  events `hearing` names (every event, when it leaves `events` out and you
-  say nothing of what that heard). Such a listen is told the note and
-  rewritten only by `listen-fire upgrade --all`: a changed meaning is
-  announced, never applied silently.
+  A module whose records hold their row before and after a change says
+  `fieldChange`: the hop, the two settings keys that name a field and the value
+  it came to hold, and the record's fields holding the row as the change left
+  it and as it was (Airtable's
+  `"fieldChange": { "hop": 2, "field": "field", "becomes": "becomes", "current": "Current", "previous": "Previous" }`).
+  A field alone becomes `c.Current.Stage != c.Previous.Stage`; with a value,
+  `c.Current.Stage == "Interview" AND c.Previous.Stage != "Interview"`; a value
+  with no field narrows nothing. Where the host narrowed the path's hops by
+  their WHEREs, the field is checked against the narrowed row and the fired
+  parameter is retyped to the narrowed landing.
   A key may also say `absent`, what a listen that left it out meant, as a
   settings value (`"absent": ""` for an inbox's own mail, a list for the
   events a listen with none heard): the rewrite of such a listen compares it,
@@ -274,9 +273,8 @@ The manifest file registers your server with a team:
   not describe, a key mapped past the path, an `eq`/`in` key with no `field`,
   `lowercase: true` on a `type` key, an `absent` the key cannot compare (on a
   `type` key, several values on an `eq` or `neq` key, a value its `values` do not spell,
-  an `absentField` with no `absent`), an `also` on a `type` key, beside an
-  `absent` or by `type`, or a `changed` naming a key the mapping does not
-  map, in the mapping or any `byEvent` one, is refused when the module is described. A listen with a key you do not map is left for its author.
+  an `absentField` with no `absent`), or a `fieldChange` past the path or on a
+  key the mapping also maps, in the mapping or any `byEvent` one, is refused when the module is described. A listen with a key you do not map is left for its author.
 - Optional fields: `handbookSection` (`{ title, content }`, prose the authoring
   handbook shows about your system), `vocabulary` (an icon and event phrasing),
   `webhookEventTypeId`.

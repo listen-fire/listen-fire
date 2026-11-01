@@ -753,7 +753,7 @@ pub fn settings_become(value: &Js) -> Result<movement_parser::catalog::types::Se
 /// too), the empty names refused in the same words.
 fn normalised_mapping(raw: &mut serde_json::Value, top: bool) -> Result<(), String> {
     let Some(object) = raw.as_object_mut() else { return Err("listenSettingsBecome: expected an object".into()) };
-    object.retain(|k, _| ["path", "aliases", "paramFrom", "keys", "changed"].contains(&k.as_str()) || (top && k == "byEvent"));
+    object.retain(|k, _| ["path", "aliases", "paramFrom", "keys", "fieldChange"].contains(&k.as_str()) || (top && k == "byEvent"));
     let empties = |value: Option<&serde_json::Value>| value.and_then(serde_json::Value::as_array).map(|items| items.iter().map(|i| i.as_str().is_some_and(str::is_empty)).collect::<Vec<_>>());
     if empties(object.get("path")).is_some_and(|empties| empties.is_empty()) {
         return Err("listenSettingsBecome.path: expected at least one edge".into());
@@ -770,7 +770,7 @@ fn normalised_mapping(raw: &mut serde_json::Value, top: bool) -> Result<(), Stri
     if let Some(keys) = object.get_mut("keys").and_then(serde_json::Value::as_object_mut) {
         for key in keys.values_mut() {
             let Some(key) = key.as_object_mut() else { continue };
-            key.retain(|k, _| ["hop", "field", "op", "values", "absent", "absentField", "lowercase", "also"].contains(&k.as_str()));
+            key.retain(|k, _| ["hop", "field", "op", "values", "absent", "absentField", "lowercase"].contains(&k.as_str()));
             if key.get("field").and_then(serde_json::Value::as_str).is_some_and(str::is_empty) {
                 return Err("listenSettingsBecome.keys.field: expected a non-empty string".into());
             }
@@ -784,20 +784,14 @@ fn normalised_mapping(raw: &mut serde_json::Value, top: bool) -> Result<(), Stri
             if key.get("lowercase").is_some_and(|v| !v.is_boolean()) {
                 return Err("listenSettingsBecome.keys.lowercase: expected true or false".into());
             }
-            for also in key.get_mut("also").and_then(serde_json::Value::as_array_mut).into_iter().flatten() {
-                let Some(also) = also.as_object_mut() else { continue };
-                also.retain(|k, _| ["field", "op"].contains(&k.as_str()));
-                if also.get("field").and_then(serde_json::Value::as_str).is_some_and(str::is_empty) {
-                    return Err("listenSettingsBecome.keys.also.field: expected a non-empty string".into());
-                }
-            }
         }
     }
-    for changed in object.get_mut("changed").and_then(serde_json::Value::as_array_mut).into_iter().flatten() {
-        let Some(changed) = changed.as_object_mut() else { continue };
-        changed.retain(|k, _| ["note", "written", "unwritten", "hearing"].contains(&k.as_str()));
-        if changed.get("note").and_then(serde_json::Value::as_str).is_some_and(str::is_empty) {
-            return Err("listenSettingsBecome.changed.note: expected a non-empty string".into());
+    if let Some(change) = object.get_mut("fieldChange").and_then(serde_json::Value::as_object_mut) {
+        change.retain(|k, _| ["hop", "field", "becomes", "current", "previous"].contains(&k.as_str()));
+        for name in ["field", "becomes", "current", "previous"] {
+            if change.get(name).and_then(serde_json::Value::as_str).is_some_and(str::is_empty) {
+                return Err(format!("listenSettingsBecome.fieldChange.{name}: expected a non-empty string"));
+            }
         }
     }
     if let Some(ways) = object.get_mut("byEvent").and_then(serde_json::Value::as_object_mut) {

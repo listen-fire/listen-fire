@@ -9,8 +9,8 @@
 //! rewritten.
 
 use movement_parser::ast::{ListenDeclaration, ParamTypeRef, Span};
-use movement_parser::catalog::types::{ArgKind, InstanceSchema, KeyBecomes, KeyOp, SettingsBecome, SettingsValue};
-use movement_parser::lowering::expression::{Expression, FilterOperator, ListElement, LogicalOp, StaticValue};
+use movement_parser::catalog::types::{ArgKind, Composite, FieldChange, FieldType, InstanceSchema, KeyBecomes, KeyOp, PositionRef, SettingsBecome, SettingsValue};
+use movement_parser::lowering::expression::{Expression, FilterOperator, ListElement, LogicalOp, StaticValue, TraversalStep};
 use movement_parser::version::{Standing, standing};
 use serde_json::json;
 
@@ -53,9 +53,6 @@ struct Rewrite {
     /// not take together, so the host compares each value exactly where
     /// 0.12 handed them all to the module.
     host_judged: Vec<String>,
-    /// What the traversal does otherwise than the listen did, by its
-    /// mapping (`changed`): each said, and the rewrite never safe.
-    changed: Vec<String>,
 }
 
 impl Checker<'_> {
@@ -112,9 +109,6 @@ impl Checker<'_> {
         if !host_judged.is_empty() {
             notes.push_str(&host_judged_note(host_judged));
         }
-        for note in rewrite.as_ref().map_or(&[][..], |r| r.changed.as_slice()) {
-            notes.push_str(&format!(" ({note})"));
-        }
         let message = format!(
             "`listen to {instance_name} {{ … }}` is retired in 0.13: a listen is a traversal ending on the edge its events arrive on. Write `listen to {path} fire {movement}`{notes}{why_no_fix}"
         );
@@ -129,7 +123,7 @@ impl Checker<'_> {
             if let Some(span) = rewrite.param_from.as_deref().and_then(|from| self.param_from_span(statement, from, scope)) {
                 edits.push(json!({ "span": span, "text": rewrite.param_type }));
             }
-            let safe = !suppresses_self && !every && rewrite.host_judged.is_empty() && rewrite.changed.is_empty();
+            let safe = !suppresses_self && !every && rewrite.host_judged.is_empty();
             diagnostic.fix = Some(if safe { json!({ "edits": edits, "safe": true }) } else { json!({ "edits": edits }) });
         }
         self.push(diagnostic);
@@ -248,25 +242,6 @@ fn heard_events(statement: &ListenDeclaration, become_: &SettingsBecome, default
     })
 }
 
-/// The notes of the mapping's `changed` that apply to the listen: it
-/// writes every key of `written`, none of `unwritten`, and hears one of
-/// `hearing`.
-fn changed_meanings(statement: &ListenDeclaration, become_: &SettingsBecome, heard: Option<&[String]>) -> Vec<String> {
-    let written = |key: &String| statement.config.iter().any(|a| a.name == *key);
-    become_
-        .changed
-        .iter()
-        .flatten()
-        .filter(|changed| changed.written.iter().flatten().all(written))
-        .filter(|changed| !changed.unwritten.iter().flatten().any(written))
-        .filter(|changed| match (&changed.hearing, heard) {
-            (Some(hearing), Some(heard)) => hearing.iter().any(|event| heard.contains(event)),
-            _ => true,
-        })
-        .map(|changed| changed.note.clone())
-        .collect()
-}
-
 /// The edge a mapping's path ends on, as a message names it: by its name
 /// alone when the path is one hop (`Messages`), else by the whole path, since
 /// two paths may end on edges of one name (an invoice's `Changes` and a
@@ -285,13 +260,15 @@ fn edge_named(path: &[String]) -> String {
 /// events), or the rewrite would widen the listen.
 fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Narrowing) -> Result<Rewrite, NoRewrite> {
     let (become_, events_spent) = chosen(statement, become_, from.default_events)?;
-    let changed = changed_meanings(statement, become_, heard_events(statement, become_, from.default_events)?.as_deref());
     let schema = from.schema;
     let consumed = consumed_hops(become_, from.positioned);
     let mut conjuncts: Vec<Vec<Expression>> = vec![Vec::new(); become_.path.len()];
     let mut landing = None;
     for arg in &statement.config {
         if [SUPPRESS_SELF_KEY, EVERY_KEY, POLL_INTERVAL_KEY].contains(&arg.name.as_str()) || (events_spent && arg.name == EVENTS_KEY) {
+            continue;
+        }
+        if become_.field_change.as_ref().is_some_and(|change| [&change.field, &change.becomes].contains(&&arg.name)) {
             continue;
         }
         let key = become_.keys.get(&arg.name).ok_or(NoRewrite::Unmapped)?;
@@ -331,6 +308,13 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
         let comparison = absent_comparison(key, &meant).ok_or(NoRewrite::Unmapped)?;
         conjuncts.get_mut(key.hop).ok_or(NoRewrite::Unmapped)?.push(comparison);
     }
+    let changed_field = match &become_.field_change {
+        Some(change) => field_change(statement, change, become_.aliases.get(change.hop).ok_or(NoRewrite::Unmapped)?)?,
+        None => None,
+    };
+    if let (Some(change), Some((_, comparisons))) = (&become_.field_change, &changed_field) {
+        conjuncts.get_mut(change.hop).ok_or(NoRewrite::Unmapped)?.extend(comparisons.iter().cloned());
+    }
     let kept = &become_.path[consumed.min(become_.path.len())..];
     if kept.is_empty() {
         return Err(NoRewrite::Unmapped);
@@ -355,13 +339,104 @@ fn rewrite_of(statement: &ListenDeclaration, become_: &SettingsBecome, from: &Na
         path.push_str(&hop_text);
     }
     path.push_str(landing.as_deref().unwrap_or_default());
+    // Where the host narrowed the path's hops by their WHEREs, the landing
+    // is the narrowed type (one table's changes), whose rows hold the
+    // compared field or the rewrite would not check.
+    let narrowed = narrowed_landing(schema, &path);
+    if let (Some(change), Some((field, _)), Some(landing)) = (&become_.field_change, &changed_field, narrowed.as_deref()) {
+        if let Some(reason) = unheld_field(schema, landing, &change.current, field) {
+            return Err(NoRewrite::Refused(reason));
+        }
+    }
     // One hop off the connection is the edge's own address; a longer path
     // is typed by the record it lands on (a path is not a type's address).
-    let param_type = match kept {
-        [edge] => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(edge)),
+    let param_type = match (kept, narrowed) {
+        ([edge], _) => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(edge)),
+        (_, Some(landing)) => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(&landing)),
         _ => format!("<{}-[:{}]->>", spell_name(&statement.instance), spell_name(landing_of(schema, kept).ok_or(NoRewrite::Unmapped)?)),
     };
-    Ok(Rewrite { path, param_type, param_from: become_.param_from.clone(), host_judged, changed })
+    Ok(Rewrite { path, param_type, param_from: become_.param_from.clone(), host_judged })
+}
+
+/// What a listen's `field` and `becomes` compare (`fieldChange`), on the
+/// hop's alias: the field alone changed, or came to hold the value. A value
+/// with no field compares nothing, as 0.12's did not. The field as written.
+fn field_change(statement: &ListenDeclaration, change: &FieldChange, alias: &str) -> Result<Option<(String, Vec<Expression>)>, NoRewrite> {
+    let literal = |key: &str| -> Result<Option<StaticValue>, NoRewrite> {
+        let Some(arg) = statement.config.iter().find(|a| a.name == key) else { return Ok(None) };
+        match expression_of_slot(&arg.value).map_err(|_| NoRewrite::Unmapped)? {
+            Expression::Static { value: StaticValue::Null } => Err(NoRewrite::Unmapped),
+            Expression::Static { value } if arg.is_type != Some(true) => Ok(Some(value)),
+            _ => Err(NoRewrite::Unmapped),
+        }
+    };
+    let Some(field) = literal(&change.field)? else { return Ok(None) };
+    let StaticValue::String(field) = field else { return Err(NoRewrite::Unmapped) };
+    let read = |row: &str| Expression::Traverse {
+        alias_root: Some(alias.to_string()),
+        steps: Vec::new(),
+        expression: Box::new(Expression::Traverse {
+            alias_root: Some(row.to_string()),
+            steps: Vec::new(),
+            expression: Box::new(Expression::Property { property_type_id: field.clone(), field_only: true }),
+        }),
+    };
+    let compare = |op, left, right| Expression::Compare { op, left: Box::new(left), right: Box::new(right) };
+    let comparisons = match literal(&change.becomes)? {
+        None => vec![compare(FilterOperator::Neq, read(&change.current), read(&change.previous))],
+        Some(value) => vec![
+            compare(FilterOperator::Eq, read(&change.current), Expression::Static { value: value.clone() }),
+            compare(FilterOperator::Neq, read(&change.previous), Expression::Static { value }),
+        ],
+    };
+    Ok(Some((field, comparisons)))
+}
+
+/// The record type a rewritten traversal lands on where the host narrowed
+/// its hops by their WHEREs (`refinements`): read off the traversal as it is
+/// spelled, so each hop's WHERE is keyed as a check of the rewrite keys it.
+/// None where no hop of it was narrowed.
+fn narrowed_landing(schema: &InstanceSchema, path: &str) -> Option<String> {
+    let refinements = schema.refinements.as_ref()?;
+    let Expression::Traverse { steps, .. } = crate::slots::expression_of_text(&format!("{path}.`__probe__`")).ok()? else { return None };
+    let mut at: Option<String> = None;
+    let mut narrowed = false;
+    for step in &steps {
+        let TraversalStep::Edge(edge) = step else { return None };
+        let target = match &at {
+            None => schema.collections.get(&edge.edge_type_id)?.target.clone(),
+            Some(position) => schema.positions.get(position)?.edges.get(&edge.edge_type_id)?.target.clone(),
+        };
+        let refined = edge.expression_filter.as_deref().and_then(|filter| {
+            let key = movement_parser::catalog::helpers::refinement_key(&target, &serde_json::to_value(filter).ok()?);
+            refinements.get(&key).cloned()
+        });
+        narrowed |= refined.is_some();
+        at = Some(refined.unwrap_or(target));
+    }
+    at.filter(|_| narrowed)
+}
+
+/// Why a narrowed landing's row cannot hold `field`: the row its `current`
+/// field holds has no such field, by the names it has.
+fn unheld_field(schema: &InstanceSchema, landing: &str, current: &str, field: &str) -> Option<String> {
+    let held = schema.positions.get(landing)?.properties.get(current)?;
+    let row = held_position(held)?;
+    let fields = &schema.positions.get(row)?.properties;
+    if fields.contains_key(field) {
+        return None;
+    }
+    let names: Vec<String> = fields.keys().map(|name| format!("`{name}`")).collect();
+    Some(format!("{row} has no field `{field}` (its fields: {})", names.join(", ")))
+}
+
+/// The position a `record` field holds, through a maybe-absent one.
+fn held_position(field: &FieldType) -> Option<&str> {
+    match field {
+        FieldType::Composite(Composite::MaybeAbsent { of }) => held_position(of),
+        FieldType::Composite(Composite::Record { position: Some(PositionRef::Position { position }) }) => Some(position),
+        _ => None,
+    }
 }
 
 /// A key's value as written: one literal, or a list of them, each spelled
@@ -387,10 +462,9 @@ fn written_values(key: &KeyBecomes, value: &Expression) -> Result<Written, NoRew
     }
 }
 
-/// Each field the key compares, and how: its own, then its `also`.
+/// The field the key compares, and how.
 fn compared(key: &KeyBecomes) -> Vec<(&str, KeyOp)> {
-    let own = key.field.as_deref().map(|field| (field, key.op));
-    own.into_iter().chain(key.also.iter().flatten().map(|also| (also.field.as_str(), also.op))).collect()
+    key.field.as_deref().map(|field| (field, key.op)).into_iter().collect()
 }
 
 /// `field` compared with the written value by `op`: `==` and `!=` take

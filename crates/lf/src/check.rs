@@ -110,6 +110,10 @@ pub struct Checking {
     /// The externals the catalog was read from (their processes stay up
     /// until idle: crate::module_hosts).
     pub _running: Vec<Rc<RunningExternal>>,
+    secrets: Secrets,
+    /// Each external's connections as described, by its name: what
+    /// `catalog_with` narrows further.
+    schemas: IndexMap<String, ConnectionSchemas>,
 }
 
 pub enum Opened {
@@ -140,7 +144,23 @@ pub async fn open_checking(project: &Project) -> Result<Opened, String> {
     // Scanned again after the externals start: one may have written a movement file.
     let files = scan_movements(project)?;
     let catalog = catalog_of(&running, &schemas, credentials, &files);
-    Ok(Opened::Ready(Checking { files, catalog, _running: running }))
+    Ok(Opened::Ready(Checking { files, catalog, _running: running, secrets, schemas }))
+}
+
+/// The catalog the files check against, each connection narrowed by the
+/// hops `walked` walk as well as by the files' own: what a text the files
+/// will become (an upgrade's rewrite) needs to check as it will.
+pub async fn catalog_with(checking: &mut Checking, walked: &[MovementFile]) -> Result<Js, String> {
+    let sources: Vec<MovementFile> = checking.files.iter().chain(walked).cloned().collect();
+    let imported = imported_credentials(&Parsed::each(&sources, &[]));
+    let credentials = checking.secrets.credentials();
+    for running in checking._running.iter().filter(|r| !r.is_plugin()) {
+        let name = running.external.manifest.name.clone();
+        let known = checking.schemas.shift_remove(&name).unwrap_or_else(ConnectionSchemas::new);
+        let described = describe_external(running, credentials, &imported, known).await?;
+        checking.schemas.insert(name, described);
+    }
+    Ok(catalog_of(&checking._running, &checking.schemas, credentials, &checking.files))
 }
 
 /// Each connection's schema (crate::catalog::connections_of) the files can

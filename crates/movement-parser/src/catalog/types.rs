@@ -822,30 +822,31 @@ pub struct SettingsBecome {
     /// rewrite: one listen per edge. One level deep: a mapping here has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_event: Option<JsMap<SettingsBecome>>,
-    /// Where the traversal does not do what the settings listen did: a
-    /// listen one applies to is rewritten with its note, and never safely,
-    /// so `listen-fire upgrade` holds the pin until `--all` (a changed
-    /// meaning is announced, never applied silently).
+    /// How the `field` and `becomes` keys of a module whose records hold
+    /// their row before and after (`fieldChange`) compare those rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub changed: Option<Vec<ChangedMeaning>>,
+    pub field_change: Option<FieldChange>,
 }
 
-/// A difference between a settings listen and its rewrite
-/// (`SettingsBecome.changed`), and the listens it applies to: those that
-/// write every key of `written`, none of `unwritten`, and hear one of
-/// `hearing` (the events their `events` names, or, left out, what leaving
-/// it out heard: every event when the module says nothing of it).
+/// Two settings keys that compare a record's row before and after on one
+/// hop (Airtable's `{ field: "Stage", becomes: "Interview" }`): the field
+/// alone changed (`c.Current.Stage != c.Previous.Stage`); with a value, it
+/// came to hold it (`c.Current.Stage == "Interview" AND c.Previous.Stage !=
+/// "Interview"`). A value with no field compares nothing. The field is the
+/// row's own, by name.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChangedMeaning {
-    /// What differs, as the upgrade says it.
-    pub note: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub written: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unwritten: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hearing: Option<Vec<String>>,
+pub struct FieldChange {
+    /// The index into `path` of the hop whose records hold the rows.
+    pub hop: usize,
+    /// The settings key naming the field.
+    pub field: String,
+    /// The settings key naming the value the field came to hold.
+    pub becomes: String,
+    /// The record's field holding the row as the change left it.
+    pub current: String,
+    /// The record's field holding the row as it was before.
+    pub previous: String,
 }
 
 /// What one settings key becomes: a comparison on a hop's field, or the
@@ -879,21 +880,6 @@ pub struct KeyBecomes {
     /// lowercased, so `{ key: "Deals" }` still hears what it heard.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lowercase: Option<bool>,
-    /// Comparisons the key makes beside its own, on the same hop and with
-    /// the same value, spelled as its own is (Airtable's `becomes: v` is
-    /// `New == v` and also `Old != v`: 0.12 fired only when the field came
-    /// to hold the value). Never with `absent`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub also: Option<Vec<AlsoCompared>>,
-}
-
-/// One more comparison a settings key makes (`KeyBecomes.also`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AlsoCompared {
-    /// The field it compares.
-    pub field: String,
-    pub op: KeyOp,
 }
 
 /// A settings value as a 0.12 listen wrote it: one text, or a list of them.

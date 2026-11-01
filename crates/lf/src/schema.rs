@@ -962,27 +962,12 @@ fn op_name(op: KeyOp) -> &'static str {
     }
 }
 
-/// Why a key's `also` comparisons cannot be made beside its own: on a
-/// `type` key, beside an `absent` (what leaving the key out meant is
-/// compared on one field), or by `type` (engine-contracts `alsoRefusal`
-/// says the same).
-fn also_refusal(name: &str, key: &movement_parser::catalog::types::KeyBecomes) -> Option<String> {
-    let also = key.also.as_ref()?;
-    if key.op == KeyOp::Type {
-        return Some(format!("'listenSettingsBecome' gives '{name}' 'also' comparisons, but a 'type' key compares no field"));
-    }
-    if key.absent.is_some() {
-        return Some(format!("'listenSettingsBecome' gives '{name}' 'also' comparisons and an absent value, which is compared on one field"));
-    }
-    also.iter().any(|a| a.op == KeyOp::Type).then(|| format!("'listenSettingsBecome' gives '{name}' an 'also' comparison by 'type', which compares no field"))
-}
-
 /// The refusal of a module's `listenSettingsBecome` that cannot be the
 /// traversal it says (engine-contracts `unreadableSettingsBecome` says the
 /// same): an alias count that is not one per edge, a key mapped past the path
 /// or compared on no field, a `lowercase` on a key that compares no text, an
-/// `absent` its key cannot compare, an `also` it cannot make, a key named
-/// in `changed` it does not map, a path that starts at no root collection, or an
+/// `absent` its key cannot compare, a `fieldChange` past the path or on keys
+/// it also maps, a path that starts at no root collection, or an
 /// edge its type before it does not have; each `byEvent` mapping is judged
 /// the same. A connection positioned at a member
 /// stands on the path's first hops, so the path is read from its first edge
@@ -1007,13 +992,17 @@ fn unreadable_mapping(become_: &SettingsBecome, entries: &[Js], descriptors: &In
         if key.lowercase == Some(true) && key.op == KeyOp::Type {
             return Some(format!("'listenSettingsBecome' gives '{name}' 'lowercase: true', but a 'type' key compares no text"));
         }
-        if let Some(refusal) = absent_refusal(name, key).or_else(|| also_refusal(name, key)) {
+        if let Some(refusal) = absent_refusal(name, key) {
             return Some(refusal);
         }
     }
-    let unmapped = become_.changed.iter().flatten().flat_map(|changed| changed.written.iter().chain(&changed.unwritten).flatten()).find(|key| !become_.keys.contains_key(key.as_str()));
-    if let Some(key) = unmapped {
-        return Some(format!("'listenSettingsBecome' names '{key}' in 'changed', but maps no key '{key}'"));
+    if let Some(change) = &become_.field_change {
+        if change.hop >= path.len() {
+            return Some(format!("'listenSettingsBecome' compares 'fieldChange' on hop {}, past the last of its {} edges", change.hop, path.len()));
+        }
+        if let Some(key) = [&change.field, &change.becomes].into_iter().find(|key| become_.keys.contains_key(key.as_str())) {
+            return Some(format!("'listenSettingsBecome' maps '{key}' as a key and in 'fieldChange': name it in one"));
+        }
     }
     let roots: Vec<&Js> = entries.iter().filter(|e| is_collection(e)).collect();
     let Some(start) = path.iter().position(|edge| roots.iter().any(|e| collection_name_of(e) == *edge)) else {

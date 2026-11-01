@@ -150,9 +150,11 @@ export function makeMultiBaseAdapter(input: {
   teamId: string;
   bases: Array<{ id: string; name: string; tables: ReturnType<typeof dealsTable>[] }>;
   base?: string;
-  /** Rows the collection read lists back. */
+  /** Rows the collection read lists back, and a read of one by id answers. */
   records?: FakeRecord[];
-}): { adapter: AirtableAdapter; listedTableBaseIds: string[]; webhooks: unknown[] } {
+  /** Webhooks already on the bases, by the door each notifies. */
+  heldWebhooks?: Array<{ id: string; notificationUrl: string }>;
+}): { adapter: AirtableAdapter; listedTableBaseIds: string[]; webhooks: unknown[]; deletedWebhooks: string[] } {
   const adapter = new AirtableAdapter({
     tenant: input.teamId,
     client: noClient,
@@ -167,13 +169,23 @@ export function makeMultiBaseAdapter(input: {
       return input.bases.find((b) => b.id === baseId)?.tables ?? [];
     },
     listRecords: async () => input.records ?? [],
+    getRecord: async ({ recordId }: { recordId: string }) => {
+      const record = (input.records ?? []).find((r) => r.id === recordId);
+      if (record === undefined) throw new Error(`Airtable API error: 404 NOT_FOUND (${recordId})`);
+      return record;
+    },
     createWebhook: async (spec: unknown) => {
       webhooks.push(spec);
       return { webhookId: `ach${webhooks.length}`, macSecretBase64: 'c2VjcmV0' };
     },
+    listWebhooks: async () => (input.heldWebhooks ?? []).filter((w) => !deletedWebhooks.includes(w.id)),
+    deleteWebhook: async ({ webhookId }: { webhookId: string }) => {
+      deletedWebhooks.push(webhookId);
+    },
   };
   const webhooks: unknown[] = [];
+  const deletedWebhooks: string[] = [];
   (adapter as unknown as { getApiClient: () => Promise<typeof fakeClient> }).getApiClient = async () =>
     fakeClient;
-  return { adapter, listedTableBaseIds, webhooks };
+  return { adapter, listedTableBaseIds, webhooks, deletedWebhooks };
 }

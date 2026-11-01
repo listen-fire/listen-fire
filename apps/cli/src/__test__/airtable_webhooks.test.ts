@@ -200,6 +200,16 @@ test('a listen on Expenses changes registers one data webhook on its base and fi
   const fake = await fakeChannels();
   try {
     const dir = await hiringProject(fake);
+    // Walked to from the workspace, the table's changes are typed by its own
+    // fields too: one it has reads, one it lacks is refused where it is written.
+    const reading = (field: string) => EXPENSES.replace('c.Kind == "created"]->', `c.Kind == "created" AND c.Current.${field} != "skip"]->`);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), reading('Itm'));
+    const misspelled = lfSync(dir, 'check');
+    assert.equal(misspelled.code, 1, misspelled.out);
+    assert.match(misspelled.out, /error MOV_UNKNOWN_PROPERTY .*Itm/);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), reading('Item'));
+    const typed = lfSync(dir, 'check');
+    assert.equal(typed.code, 0, typed.out);
     writeFileSync(join(dir, 'movements/hiring.mvt'), EXPENSES);
     const checked = lfSync(dir, 'check');
     assert.equal(checked.code, 0, checked.out);
@@ -419,52 +429,71 @@ test('the bases a listen\'s tables hang off count against listenScopeLimit, said
   }
 });
 
-/** The candidates' Stage listen at a connection positioned at Hiring. */
+/** The candidates' Stage listen at a connection positioned at Hiring: the
+ *  change compares the row before and after, and `Record` reads the row now. */
 const STAGE = `import { \`@lf/airtable\` as airtable } from adapters
 import { henry_airtable } from credentials
 
 hiring = connect airtable using henry_airtable { base: "Hiring" }
 
-function schedule_interview(c: <hiring-[:Change]->>) {
+function schedule_interview(c: <hiring-[:\`Candidates Change\`]->>) {
   write hiring-[:Interviews]-> {
-    Candidate: coalesce(only(c-[:Record]->).Id, "unknown")
-    From: coalesce(c.Old, "nothing")
-    Changed: coalesce(c.Field, "nothing")
+    Candidate: coalesce(only(c-[:Record]->).Name, "gone")
+    From: coalesce(c.Previous.Stage, "nothing")
+    Changed: coalesce(c.Current.Name, "nothing")
   }
 }
 
-listen to hiring-[t:Tables WHERE t.Name == "Candidates"]->-[c:Changes WHERE c.Field == "Stage" AND c.New == "Interview"]-> fire schedule_interview
+listen to hiring-[t:Tables WHERE t.Name == "Candidates"]->-[c:Changes WHERE c.Current.Stage == "Interview" AND c.Previous.Stage != "Interview"]-> fire schedule_interview
 `;
 
-test('Stage becoming Interview fires; Stage becoming Rejected does not', async () => {
+test('Stage coming to be Interview fires once per edit, on an update or a row created at it; staying Interview or becoming Rejected does not', async () => {
   const fake = await fakeChannels();
   try {
     const dir = await hiringProject(fake);
     writeFileSync(join(dir, 'movements/hiring.mvt'), STAGE);
     const checked = lfSync(dir, 'check');
     assert.equal(checked.code, 0, checked.out);
+    const misspelled = STAGE.replace('c.Current.Stage == "Interview"', 'c.Current.Stge == "Interview"');
+    writeFileSync(join(dir, 'movements/hiring.mvt'), misspelled);
+    const refused = lfSync(dir, 'check');
+    assert.equal(refused.code, 1, refused.out);
+    assert.match(refused.out, /error MOV_UNKNOWN_PROPERTY .*Stge/);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), STAGE);
     const server = await serving(dir);
     try {
       await until(() => server.lines.filter((l) => /registered webhook ach\d+/.test(l)).length >= 2, server.lines);
       const registered = await webhooksOf(fake);
       assert.deepEqual([registered.data, registered.schemas], [['appHIRE01'], ['appHIRE01']], 'positioned at Hiring: one webhook on its rows, one on its schema');
       const interviews = () => server.lines.filter((l) => /^run \S+ hiring:schedule_interview completed$/.test(l)).length;
+      const written = async () => JSON.stringify(await fake.json('/airtable/v0/appHIRE01/tblINTV01'));
 
-      // One update of Name and Stage is two changes: only Stage's runs it.
-      await deliver(fake, { changeType: 'update', tableId: 'tblCAND01', recordId: 'recADA', fields: { Name: 'Ada', Stage: 'Interview' }, previous: { Name: 'Ada Lovelace', Stage: 'Applied' } });
+      // The row as it is now differs from what the edit left: `Record` reads it from Airtable.
+      const renamed = await fetch(`${fake.url}/airtable/v0/appHIRE01/tblCAND01/recADA`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fields: { Name: 'Ada King' } }) });
+      assert.equal(renamed.status, 200);
+      // One edit of Name, Email and Stage is one change: it runs once.
+      await deliver(fake, {
+        changeType: 'update', tableId: 'tblCAND01', recordId: 'recADA',
+        fields: { Name: 'Ada', Email: 'ada@new.example', Stage: 'Interview' },
+        previous: { Name: 'Ada Lovelace', Email: 'ada@example.com', Stage: 'Applied' },
+      });
       await until(() => interviews() === 1, server.lines);
-      const written = JSON.stringify(await fake.json('/airtable/v0/appHIRE01/tblINTV01'));
       // The fake keeps a written row's cells by field id.
-      assert.match(written, /"fldICand":"recADA"/, 'it read the row\'s id off the change\'s Record');
-      assert.match(written, /"fldIFrom":"Applied"/, 'it read the Stage it was');
-      assert.match(written, /"fldIChanged":"Stage"/, 'it read the field the change touched');
+      assert.match(await written(), /"fldICand":"Ada King"/, 'it read the row as it is now off the change\'s Record');
+      assert.match(await written(), /"fldIFrom":"Applied"/, 'it read the Stage the row had before the edit');
+      assert.match(await written(), /"fldIChanged":"Ada"/, 'it read the Name the edit left');
 
-      // Stage becomes Rejected: the webhook is pinged, and nothing runs.
+      // Interview to Interview, and Applied to Rejected: the webhook is pinged, and nothing runs.
+      const stayed = await deliver(fake, { changeType: 'update', tableId: 'tblCAND01', recordId: 'recADA', fields: { Email: 'ada@x.example' }, previous: { Email: 'ada@new.example' } });
+      assert.deepEqual(stayed.deliveries.map((d) => d.status), [200]);
       const rejected = await deliver(fake, { changeType: 'update', tableId: 'tblCAND01', recordId: 'recBOB', fields: { Stage: 'Rejected' }, previous: { Stage: 'Applied' } });
       assert.deepEqual(rejected.deliveries.map((d) => d.status), [200]);
-      await deliver(fake, { changeType: 'update', tableId: 'tblCAND01', recordId: 'recCY', fields: { Stage: 'Interview' }, previous: { Stage: 'Rejected' } });
+      // A row created at Interview came to be at it: no row before.
+      await deliver(fake, { changeType: 'add', tableId: 'tblCAND01', recordId: 'recCY', fields: { Name: 'Cy', Stage: 'Interview' } });
       await until(() => interviews() === 2, server.lines);
-      assert.equal(interviews(), 2, 'Rejected ran nothing');
+      assert.match(await written(), /"fldIFrom":"nothing"/, 'a created row has no row before');
+      assert.match(await written(), /"fldICand":"gone"/, 'a row the fake does not hold reads as none');
+      assert.equal(interviews(), 2, 'staying at Interview and becoming Rejected ran nothing');
     } finally {
       await server.stop();
     }
@@ -497,10 +526,10 @@ listen to hiring { base: "appHIRE01", table: "tblCAND01", events: ["record.updat
     assert.equal(
       readFileSync(file, 'utf8'),
       old
-        .replace('<hiring-[:`Record Change` WHERE `table` == "tblCAND01"]->>', '<hiring-[:Change]->>')
+        .replace('<hiring-[:`Record Change` WHERE `table` == "tblCAND01"]->>', '<hiring-[:`Candidates Change`]->>')
         .replace(
           'listen to hiring { base: "appHIRE01", table: "tblCAND01", events: ["record.updated"], field: "Stage", becomes: "Interview" }',
-          'listen to hiring-[t:Tables WHERE t.Id == "tblCAND01"]->-[c:Changes WHERE c.Kind IN ["updated"] AND c.Field == "Stage" AND c.New == "Interview" AND c.Old != "Interview"]->',
+          'listen to hiring-[t:Tables WHERE t.Id == "tblCAND01"]->-[c:Changes WHERE c.Kind IN ["updated"] AND c.Current.Stage == "Interview" AND c.Previous.Stage != "Interview"]->',
         ),
     );
     const checked = lfSync(dir, 'check');
@@ -510,7 +539,7 @@ listen to hiring { base: "appHIRE01", table: "tblCAND01", events: ["record.updat
   }
 });
 
-test('upgrade holds the pin on an Airtable listen whose meaning changed, says how, and rewrites it with --all', async () => {
+test('upgrade rewrites every 0.12 Airtable listen keeping its meaning, its field the table\'s own', async () => {
   const fake = await fakeChannels();
   try {
     const dir = await hiringProject(fake);
@@ -528,26 +557,34 @@ function staged(change: <hiring-[:\`Record Change\`]->>) {
   return "staged"
 }
 
+function moved(change: <hiring-[:\`Record Change\`]->>) {
+  return "moved"
+}
+
 listen to hiring { base: "appHIRE01", table: "tblCAND01" } fire any_change
 listen to hiring { base: "appHIRE01", table: "tblCAND01", field: "Stage", becomes: "Interview" } fire staged
+listen to hiring { base: "appHIRE01", table: "tblCAND01", field: "Stage" } fire moved
 `;
     writeFileSync(file, old);
     const lfYaml = join(dir, 'lf.yaml');
     writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
 
-    const held = lfSync(dir, 'upgrade');
-    assert.equal(held.code, 1, held.out);
-    assert.match(held.out, /fire any_change` \(a listen hearing updates with no `field` now runs once for each field an update touched, where 0\.12 ran it once per update\)/, held.out);
-    assert.match(held.out, /fire staged` \(a `field` or `becomes` listen no longer runs on a newly created row, where 0\.12 counted every field of a created row as changed\)/, held.out);
-    assert.equal(readFileSync(file, 'utf8'), old, 'nothing is rewritten while a meaning changed is unannounced');
-
-    const upgraded = lfSync(dir, 'upgrade', '--all');
+    const upgraded = lfSync(dir, 'upgrade');
     assert.equal(upgraded.code, 0, upgraded.out);
     const rewritten = readFileSync(file, 'utf8');
+    assert.equal(rewritten.match(/<hiring-\[:`Candidates Change`\]->>/g)?.length, 3, rewritten);
     assert.match(rewritten, /listen to hiring-\[t:Tables WHERE t\.Id == "tblCAND01"\]->-\[:Changes\]-> fire any_change/);
-    assert.match(rewritten, /listen to hiring-\[t:Tables WHERE t\.Id == "tblCAND01"\]->-\[c:Changes WHERE c\.Field == "Stage" AND c\.New == "Interview" AND c\.Old != "Interview"\]-> fire staged/);
+    assert.match(rewritten, /listen to hiring-\[t:Tables WHERE t\.Id == "tblCAND01"\]->-\[c:Changes WHERE c\.Current\.Stage == "Interview" AND c\.Previous\.Stage != "Interview"\]-> fire staged/);
+    assert.match(rewritten, /listen to hiring-\[t:Tables WHERE t\.Id == "tblCAND01"\]->-\[c:Changes WHERE c\.Current\.Stage != c\.Previous\.Stage\]-> fire moved/);
     const checked = lfSync(dir, 'check');
     assert.equal(checked.code, 0, checked.out);
+
+    // A field the table does not have has no rewrite: the pin holds, and the listen is told why.
+    writeFileSync(file, old.replace('field: "Stage" } fire moved', 'field: "Stge" } fire moved'));
+    writeFileSync(lfYaml, readFileSync(lfYaml, 'utf8').replace(/^engine: .*$/m, 'engine: 0.12.13'));
+    const held = lfSync(dir, 'upgrade');
+    assert.equal(held.code, 1, held.out);
+    assert.match(held.out, /there is no rewrite: Candidates has no field `Stge`/);
   } finally {
     await fake.stop();
   }
@@ -593,6 +630,8 @@ test('a quiet webhook is refreshed a day before it lapses, and one that lapsed i
       await server.waitFor(new RegExp(`webhook ${registered.id} lapsed at .*; registered webhook ach\\d+`));
       const now = await tableHook();
       assert.notEqual(now?.id, registered.id);
+      // Airtable keeps a lapsed webhook 7 days: the one at this door is removed, not left to count against the base.
+      assert.ok(!(await webhooksOf(fake)).all.some((w) => w.id === registered.id), 'the lapsed webhook is deleted');
       const delivered = await deliver(fake, { changeType: 'update', tableId: 'tblCAND01', recordId: 'recADA', fields: { Stage: 'Interview' }, previous: { Stage: 'Applied' } });
       assert.deepEqual(delivered.deliveries.map((d) => [d.webhookId, d.status]), [[now?.id, 200]]);
       await server.waitFor(/^run \S+ hiring:schedule_interview completed$/);

@@ -4,9 +4,9 @@
 // webhook, and the changes are read from that webhook's payload feed from
 // the cursor the host keeps for it. Two kinds of webhook feed listens:
 //
-// - one per base, for its tables' `Changes` (`tableData`, every table): each
-//   record created, each field of a record updated (one change per field,
-//   `Field` naming it), each record deleted, keyed by its table;
+// - one per base, for its tables' `Changes` (`tableData`, every table): one
+//   change per row an edit touched (created, updated or deleted), carrying the
+//   row before and after (`Previous`, `Current`), keyed by its table;
 // - one per base, for its `Tables` (Airtable's `tableMetadata` data type): a
 //   table created, renamed or removed. A listen whose tables are narrowed by a
 //   WHERE is listed again on each, so a table renamed into its filter is
@@ -46,35 +46,33 @@ export type AirtableChangeKind = (typeof AIRTABLE_CHANGE_KINDS)[number];
  *  gone (a deleted row's change is one). */
 export type AirtableArrival = Exclude<Arrival, { gone: true }>;
 
-/** A change's position data: what a listen's WHERE reads (`Kind`, `Field`,
- *  `Old`, `New`), and the row it is about, as the change left it, which the
- *  `Record` edge mints without a read. */
+/** A change's position data: what a listen's WHERE reads (`Kind`, the row
+ *  before and after as `Previous` and `Current`, each by field name), and the
+ *  row it is about, by the ids the `Record` edge reads it again by. */
 export interface ChangeData {
   Id: string;
   Kind: AirtableChangeKind;
-  Field?: string;
-  Old?: string | null;
-  New?: string | null;
+  Current?: Record<string, unknown>;
+  Previous?: Record<string, unknown>;
   row: ChangedRow;
 }
 
 export interface ChangedRow {
   /** The row's Airtable id (`rec…`). */
   id: string;
-  /** Its table's name: the record type its position is stamped with. */
+  /** Its base and table: the route a read of it takes. */
+  baseId: string;
+  tableId: string;
+  /** Its table's name: the record type the row is read as. */
   table: string;
-  /** Its cells as the change left them, by field name: every field, as the
-   *  webhook asks Airtable for them all. Empty for a deleted row. */
-  cells: Record<string, unknown>;
 }
 
 const changeDataSchema = z.object({
   Id: z.string(),
   Kind: z.enum(AIRTABLE_CHANGE_KINDS),
-  Field: z.string().optional(),
-  Old: z.string().nullable().optional(),
-  New: z.string().nullable().optional(),
-  row: z.object({ id: z.string(), table: z.string(), cells: z.record(z.string(), z.unknown()) }),
+  Current: z.record(z.string(), z.unknown()).optional(),
+  Previous: z.record(z.string(), z.unknown()).optional(),
+  row: z.object({ id: z.string(), baseId: z.string(), tableId: z.string(), table: z.string() }),
 });
 
 /** A change's data back off its position, or null when it is not one. */
@@ -92,7 +90,7 @@ export type FieldsByTable = Map<string, Map<string, { name: string; type?: strin
  * A cell as a movement reads it. A webhook payload carries select cells in
  * Airtable's cell format V2 — `{ id, name, color }` per choice — where a read
  * of the row returns the plain name. The name is the value: it is what the
- * field's enum holds and what a listen's `c.New == "Interview"` names.
+ * field's enum holds and what a listen's `c.Current.Stage == "Interview"` names.
  */
 function readCell(value: unknown, type: string | undefined): unknown {
   const nameOf = (cell: unknown): unknown =>
@@ -100,15 +98,6 @@ function readCell(value: unknown, type: string | undefined): unknown {
   if (type === 'singleSelect') return nameOf(value);
   if (type === 'multipleSelects' && Array.isArray(value)) return value.map(nameOf);
   return value;
-}
-
-/** A cell as `Old` and `New` hold it: as text (a select by its choice's
- *  name, a number as written, a list or a link as its JSON), null when empty. */
-function asText(cell: unknown): string | null {
-  if (cell === undefined || cell === null) return null;
-  if (typeof cell === 'string') return cell;
-  if (typeof cell === 'number' || typeof cell === 'boolean') return String(cell);
-  return JSON.stringify(cell);
 }
 
 /** What turning a payload into arrivals reads besides the payload. */
@@ -123,11 +112,11 @@ export interface PayloadContext {
 }
 
 /**
- * One payload as its arrivals: each record change on its table's `Changes`
- * (an update one per field it touched), and each table created, renamed or
- * removed on its base's `Tables`. A change is named by the base's transaction
- * that made it and what it touched, so a payload pulled again names the same
- * changes and runs nothing.
+ * One payload as its arrivals: each row an edit touched, once, on its table's
+ * `Changes` (created, updated or deleted, with the row before and after), and
+ * each table created, renamed or removed on its base's `Tables`. A change is
+ * named by the base's transaction that made it and the row, so a payload
+ * pulled again names the same changes and runs nothing.
  */
 export function arrivalsFromPayload(payload: AirtableWebhookPayload, context: PayloadContext): AirtableArrival[] {
   const occurredAt = payload.timestamp;
@@ -144,13 +133,9 @@ export function arrivalsFromPayload(payload: AirtableWebhookPayload, context: Pa
       }
       return data;
     };
-    const change = (recordId: string, id: string, kind: AirtableChangeKind, cells: Record<string, unknown>, field?: { name: string; old: string | null; now: string | null }): AirtableArrival => {
-      const data: ChangeData = {
-        Id: id,
-        Kind: kind,
-        ...(field !== undefined ? { Field: field.name, Old: field.old, New: field.now } : {}),
-        row: { id: recordId, table, cells },
-      };
+    const change = (recordId: string, kind: AirtableChangeKind, rows: { Current?: Record<string, unknown>; Previous?: Record<string, unknown> }): AirtableArrival => {
+      const id = `${transaction}:${recordId}`;
+      const data: ChangeData = { Id: id, Kind: kind, ...rows, row: { id: recordId, baseId: context.baseId, tableId, table } };
       return {
         edge: AIRTABLE_CHANGES_EDGE,
         key: tableId,
@@ -161,26 +146,24 @@ export function arrivalsFromPayload(payload: AirtableWebhookPayload, context: Pa
       };
     };
     for (const [recordId, created] of Object.entries(changes.createdRecordsById ?? {})) {
-      arrivals.push(change(recordId, `${transaction}:${recordId}:created`, 'created', named(created.cellValuesByFieldId)));
+      arrivals.push(change(recordId, 'created', { Current: named(created.cellValuesByFieldId) }));
     }
     for (const [recordId, updated] of Object.entries(changes.changedRecordsById ?? {})) {
-      // `current` holds the changed cells; `unchanged` every other one. A cell
-      // emptied by the update may be left out of `current` (Airtable types a
-      // cell as "Cell value V2 or null", and says no more of an empty one),
-      // so a field `previous` holds that `unchanged` does not changed too,
-      // to nothing: its `New` is null.
-      const current = updated.current?.cellValuesByFieldId ?? {};
-      const unchanged = updated.unchanged?.cellValuesByFieldId ?? {};
-      const previous = named(updated.previous?.cellValuesByFieldId);
-      const cells = { ...named(unchanged), ...named(current) };
-      const emptied = Object.keys(updated.previous?.cellValuesByFieldId ?? {}).filter((fieldId) => !Object.hasOwn(current, fieldId) && !Object.hasOwn(unchanged, fieldId));
-      for (const fieldId of [...Object.keys(current), ...emptied]) {
-        const name = tableFields?.get(fieldId)?.name ?? fieldId;
-        arrivals.push(change(recordId, `${transaction}:${recordId}:${fieldId}`, 'updated', cells, { name, old: asText(previous[name]), now: asText(cells[name]) }));
-      }
+      // `current` holds the changed cells as the edit left them, `previous`
+      // as they were, `unchanged` every other cell. A cell emptied by the
+      // edit may be left out of `current` (Airtable types a cell as "Cell
+      // value V2 or null", and says no more of an empty one): the row as the
+      // edit left it then does not hold it.
+      const unchanged = named(updated.unchanged?.cellValuesByFieldId);
+      arrivals.push(
+        change(recordId, 'updated', {
+          Current: { ...unchanged, ...named(updated.current?.cellValuesByFieldId) },
+          Previous: { ...unchanged, ...named(updated.previous?.cellValuesByFieldId) },
+        }),
+      );
     }
     for (const recordId of changes.destroyedRecordIds ?? []) {
-      arrivals.push(change(recordId, `${transaction}:${recordId}:deleted`, 'deleted', {}));
+      arrivals.push(change(recordId, 'deleted', {}));
     }
     // A table renamed (or redescribed): its schema changed.
     if (changes.changedMetadata !== undefined) {

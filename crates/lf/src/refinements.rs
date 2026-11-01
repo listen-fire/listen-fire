@@ -650,17 +650,23 @@ impl<W: Walk> Grafting<'_, '_, '_, W> {
     }
 
     /// The nodes the member's edges land on that the schema has no position
-    /// for, each walked to along the path the member's own hop handed over,
-    /// by the name its edge targets.
+    /// for, each walked to along the path the hop before it handed over, by
+    /// the name its edge targets; and on from each landing the same way, so
+    /// a landing's own edges land too (a table's changes, and the row each
+    /// change holds).
     async fn landings_of(&self, member: &str, descriptor: &Js) -> Result<Vec<(String, Js)>, String> {
         let mut landings: Vec<(String, Js)> = Vec::new();
-        for reference in descriptor.get("references").and_then(Js::as_array).unwrap_or_default() {
-            let Some(target) = reference.get("targetTypeId").and_then(Js::as_str) else { continue };
-            if self.position(target).is_some() || landings.iter().any(|(t, _)| t == target) {
-                continue;
-            }
-            if let Some(landing) = self.input.walker.describe_member_landing(member, target).await? {
-                landings.push((target.to_string(), landing));
+        let mut to_walk: Vec<(String, Js)> = vec![(member.to_string(), descriptor.clone())];
+        while let Some((from, descriptor)) = to_walk.pop() {
+            for reference in descriptor.get("references").and_then(Js::as_array).unwrap_or_default() {
+                let Some(target) = reference.get("targetTypeId").and_then(Js::as_str) else { continue };
+                if self.position(target).is_some() || landings.iter().any(|(t, _)| t == target) {
+                    continue;
+                }
+                if let Some(landing) = self.input.walker.describe_member_landing(&from, target).await? {
+                    landings.push((target.to_string(), landing.clone()));
+                    to_walk.push((target.to_string(), landing));
+                }
             }
         }
         Ok(landings)
@@ -842,7 +848,16 @@ mod tests {
                     "descriptor" => descriptor("Sheet — Other Sheet", vec![], vec![table_edge("tblD", "Deals")]),
                     "targetPositions" => Js::Obj(obj! { "tblD" => member("Table", "tblD", Js::Obj(obj! { "Name" => Js::str("Deals") })) }),
                 }),
-                ("Table", "tblC") => Js::Obj(obj! { "descriptor" => descriptor("Companies", vec![text_field("Name"), text_field("Stage")], vec![]) }),
+                // A company's notes, each by its author: two levels on from the table.
+                ("Table", "tblC") => Js::Obj(obj! {
+                    "descriptor" => descriptor("Companies", vec![text_field("Name"), text_field("Stage")], vec![table_edge("Notes", "Company Note")]),
+                    "targetPositions" => Js::Obj(obj! { "Notes" => member("Note", "tblC", Js::Obj(Obj::new())) }),
+                }),
+                ("Note", "tblC") => Js::Obj(obj! {
+                    "descriptor" => descriptor("Company Note", vec![text_field("Text")], vec![table_edge("Author", "Person")]),
+                    "targetPositions" => Js::Obj(obj! { "Author" => member("Person", "p1", Js::Obj(Obj::new())) }),
+                }),
+                ("Person", "p1") => Js::Obj(obj! { "descriptor" => descriptor("Person", vec![text_field("Email")], vec![]) }),
                 ("Table", "tblD") => Js::Obj(obj! { "descriptor" => descriptor("Deals", vec![text_field("Amount")], vec![]) }),
                 _ => Js::Null,
             })
@@ -915,7 +930,7 @@ mod tests {
         assert_eq!(map(&schema, "selectedMembers").iter().map(|(_, v)| v.as_str()).collect::<Vec<_>>(), ["Sheet — Pipeline Sheet"], "the TYPE the member lands, not its addressing name");
         assert_eq!(schema.get("narrowBy").map(Js::to_json).as_deref(), Some(r#"{"Spreadsheet":["Title","Owner"]}"#));
         // The root, the selected sheet, its one table: never the sheet it did not select.
-        assert_eq!(asked, ["meta:", "Spreadsheet:sh1", "Table:tblC"]);
+        assert_eq!(asked, ["meta:", "Spreadsheet:sh1", "Table:tblC", "Note:tblC", "Person:p1"]);
         assert_eq!(checked(&schema, &source), Vec::<(String, String)>::new());
 
         let misspelled = program(&format!("{SELECT}\n  write sheet-[:Companies]-> {{ Nmae: \"Acme\" }}"));
@@ -924,6 +939,17 @@ mod tests {
         let elsewhere = program(&format!("{SELECT}\n  write sheet-[:Deals]-> {{ Amount: \"1\" }}"));
         let found = checked(&refined(&elsewhere).0, &elsewhere);
         assert_eq!(found.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>(), ["MOV_LINKED_UNKNOWN_EDGE"], "the other sheet's table: {found:?}");
+    }
+
+    #[test]
+    fn a_landing_s_own_edges_land_too() {
+        let source = program(&format!("{SELECT}\n  write sheet-[:Companies]-> {{ Name: \"Acme\" }}"));
+        let (schema, _) = refined(&source);
+        let target = |position: &str, edge: &str| schema.get("positions").and_then(|p| p.get(position)).and_then(|p| p.get("edges")).and_then(|e| e.get(edge)).and_then(|e| e.get("target")).map(Js::to_json);
+        assert_eq!(target("Companies", "Company Note").as_deref(), Some(r#""Company Note""#), "{}", schema.to_json());
+        assert_eq!(target("Company Note", "Person").as_deref(), Some(r#""Person""#));
+        let email = schema.get("positions").and_then(|p| p.get("Person")).and_then(|p| p.get("properties")).and_then(|p| p.get("Email"));
+        assert!(email.is_some(), "the second level's fields: {}", schema.to_json());
     }
 
     /// The stamps the check hands the run for `source` against the schema.

@@ -43,6 +43,7 @@ import {
 } from 'movement-engine/public/catalog';
 import { BaseAdapter } from 'module-kit/adapter/base';
 import { hydrateTargets, targetStubs } from 'module-kit/adapter/hop';
+import { isHttp404 } from 'module-kit/adapter/not_found';
 import { stubTargetOf } from 'movement-engine/public/adapter';
 import { memoizedResolver, naturalName, type ScopedResolver } from 'module-kit/adapter/name_resolution';
 import {
@@ -67,6 +68,7 @@ import {
   describe as catalogDescribe,
   describeBase,
   describeTableAt,
+  describeTableChangeAt,
   cachedTables,
   freshTables,
   invalidateTableCache,
@@ -313,15 +315,42 @@ export class AirtableAdapter extends BaseAdapter {
         tableId: position.identity.recordId,
         positioned: (await this.entryBaseId()) !== undefined,
       });
-      // A table is a leaf of the META-graph: its link edges lead to other
-      // TYPES, but reaching those is `describe`/traversal's business, not a
-      // deeper container hop — so no paths on from here. The link targets are
-      // STUBBED: naming one means a `getTableColumns` against Airtable, and a
-      // wide table links to many.
-      return descriptor ? { descriptor, ...targetStubs(descriptor) } : null;
+      // A table's link edges lead to other TYPES, but reaching those is
+      // `describe`/traversal's business, not a deeper container hop — so no
+      // paths on along them. The link targets are STUBBED: naming one means a
+      // `getTableColumns` against Airtable, and a wide table links to many.
+      // Its `Changes` is the one path on: to the table's own change type.
+      if (descriptor === null) return null;
+      return {
+        descriptor,
+        ...targetStubs(descriptor),
+        targetPositions: { [AIRTABLE_CHANGES_EDGE]: this.tableChangesAt({ baseId, tableId: position.identity.recordId }) },
+      };
+    }
+
+    // A table's changes: its rows before and after, and the path on to the
+    // table, whose rows `Record` lands on.
+    if (position.recordType === AIRTABLE_CHANGE_TYPE && position.identity.kind === 'stable') {
+      const baseId = (position.identity.data as { baseId?: string } | undefined)?.baseId;
+      if (baseId === undefined) return null;
+      const tableId = position.identity.recordId;
+      const descriptor = await describeTableChangeAt({ client, teamId: this.teamId, baseId, tableId });
+      if (descriptor === null) return null;
+      const tableName = descriptor.references.find((reference) => reference.fieldId === AIRTABLE_CHANGE_RECORD_EDGE)?.targetTypeId ?? tableId;
+      return {
+        descriptor,
+        targetPositions: {
+          [AIRTABLE_CHANGE_RECORD_EDGE]: makeStablePosition({ adapterType: this.adapterType, recordType: TABLE_META_TYPE, recordId: tableId, data: { baseId, Id: tableId, Name: tableName } }),
+        },
+      };
     }
 
     return null;
+  }
+
+  /** The path to a table's changes: the table's id, and its base, the route on. */
+  private tableChangesAt(at: { baseId: string; tableId: string }): SourcePosition {
+    return makeStablePosition({ adapterType: this.adapterType, recordType: AIRTABLE_CHANGE_TYPE, recordId: at.tableId, data: { baseId: at.baseId } });
   }
 
   /** The root's edges: the ONE `Bases` edge, its members riding
@@ -477,14 +506,20 @@ export class AirtableAdapter extends BaseAdapter {
   }
 
   async getRelated(input: GetRelatedInput): Promise<RelatedResult[]> {
-    // A change's `Record` edge: the row it changed, as the change left it. The
-    // change carries the row's id, its table's name and its cells, so
-    // following it is a mint, never a read.
+    // A change's `Record` edge: the row it changed, as it is NOW — read from
+    // Airtable by the ids the change carries (what the edit left is the
+    // change's own `Current`). A row deleted since is none.
     const outgoing = input.direction === 'outgoing';
     if (outgoing && input.fieldId === AIRTABLE_CHANGE_RECORD_EDGE) {
       const change = changeDataOf(positionData(input.position));
       if (change !== null) {
-        return [{ position: makeStablePosition({ adapterType: this.adapterType, recordType: change.row.table, recordId: change.row.id, data: change.row.cells }) }];
+        const client = await this.getApiClient();
+        const row = await client.getRecord({ baseId: change.row.baseId, tableId: change.row.tableId, recordId: change.row.id }).catch((err: unknown) => {
+          if (isHttp404(err)) return null;
+          throw err;
+        });
+        if (row === null) return [];
+        return [{ position: makeStablePosition({ adapterType: this.adapterType, recordType: change.row.table, recordId: row.id, data: row.fields ?? {} }) }];
       }
     }
 
@@ -752,6 +787,8 @@ export class AirtableAdapter extends BaseAdapter {
           error: err instanceof Error ? err.message : String(err),
         });
       });
+    } else {
+      await this.removeUnheldWebhooks(client, at.baseId, input.callbackUrl);
     }
     const created = await client.createWebhook({
       baseId: at.baseId,
@@ -767,6 +804,24 @@ export class AirtableAdapter extends BaseAdapter {
       secret: created.macSecretBase64,
       ...(created.expirationTime !== undefined ? { expiresAt: created.expirationTime } : {}),
     };
+  }
+
+  /**
+   * Delete the webhooks at this door that the host holds none of: one that
+   * lapsed (Airtable keeps an expired webhook, disabled, for 7 days more) or
+   * whose registration was lost. Its secret is gone with it, so nothing it
+   * sends is accepted, and left in place it could hold one of the 2 webhooks
+   * per base Airtable allows. Best-effort: a failure here leaves the
+   * registration to Airtable's answer.
+   */
+  private async removeUnheldWebhooks(client: AirtableAPIClient, baseId: string, callbackUrl: string): Promise<void> {
+    try {
+      for (const webhook of await client.listWebhooks({ baseId })) {
+        if (webhook.notificationUrl === callbackUrl) await client.deleteWebhook({ baseId, webhookId: webhook.id });
+      }
+    } catch (err) {
+      logger.warn('[AirtableAdapter] could not remove a webhook left at this door', { error: err instanceof Error ? err.message : String(err) });
+    }
   }
 
   /** Whether the held webhook was created asking for what a webhook asks for

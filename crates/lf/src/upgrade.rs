@@ -15,9 +15,10 @@ use movement_parser::util::form::{external_text, read_json_text};
 use serde_json::Value;
 
 use crate::check::{Opened, open_checking, parse};
+use crate::json::Js;
 use crate::movements_slot::{self, WriteError, Written};
 use crate::project::{PROJECT_FILE, Project};
-use crate::sources::MOVEMENT_EXTENSION;
+use crate::sources::{MOVEMENT_EXTENSION, MovementFile};
 use movement_parser::version::LANGUAGE_VERSION;
 
 /// One pass per level of fix nesting; a well-behaved upgrade settles in a few.
@@ -281,7 +282,7 @@ fn pin_step(lf_yaml: &str, remaining: usize) -> Result<PinStep, String> {
 
 pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Write) -> Result<i32, String> {
     let io = |e: std::io::Error| e.to_string();
-    let checking = match open_checking(project).await? {
+    let mut checking = match open_checking(project).await? {
         Opened::MissingCredentials(missing) => {
             for m in &missing {
                 writeln!(out, "{}", crate::check::missing_line(m)).map_err(io)?;
@@ -291,11 +292,29 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
         }
         Opened::Ready(checking) => checking,
     };
-    let catalog = CatalogSnapshot::load(&read_json_text(&checking.catalog.to_json())).map_err(|e| format!("the catalog does not load: {e}"))?;
+    let load = |catalog: &Js| CatalogSnapshot::load(&read_json_text(&catalog.to_json())).map_err(|e| format!("the catalog does not load: {e}"));
+    let mut held = checking.catalog.to_json();
+    let mut catalog = load(&checking.catalog)?;
     let store = movements_slot::of_project(project, &std::env::vars().collect::<Vec<_>>())?;
     let (mut changed, mut left) = (0usize, 0usize);
-    for file in &checking.files {
-        let result = upgrade_source(&file.source, &catalog, options.all, &project.engine);
+    for file in &checking.files.clone() {
+        let mut result = upgrade_source(&file.source, &catalog, options.all, &project.engine);
+        // A rewrite walks hops the files did not (a listen's table, narrowed by
+        // its WHERE): the catalog is narrowed by them too, and the file upgraded
+        // again against it, until the narrowing settles.
+        for _ in 0..MAX_PASSES {
+            if result.source == file.source {
+                break;
+            }
+            let rewritten = MovementFile { source: result.source.clone(), version: None, ..file.clone() };
+            let narrowed = crate::check::catalog_with(&mut checking, &[rewritten]).await?;
+            if narrowed.to_json() == held {
+                break;
+            }
+            held = narrowed.to_json();
+            catalog = load(&narrowed)?;
+            result = upgrade_source(&file.source, &catalog, options.all, &project.engine);
+        }
         let shown = relative(&project.root, &file.path);
         if result.source != file.source {
             if options.check_only {

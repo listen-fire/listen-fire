@@ -61,14 +61,15 @@ interface SettingsBecome {
   paramFrom?: string;                             // the 0.12 event position a fired parameter was typed as; one naming it is retyped by the landing
   keys: Record<string, KeyBecomes>;               // each settings key, by name
   byEvent?: Record<string, SettingsBecome>;       // the mapping a listen naming one of these events becomes instead (its events arrive on another edge); one level deep
-  changed?: ChangedMeaning[];                     // where the rewrite does otherwise than the settings listen did: said, and applied only by `upgrade --all`
+  fieldChange?: FieldChange;                      // how `field` and `becomes` compare the row a hop's records hold before and after
 }
 
-interface ChangedMeaning {
-  note: string;                                   // what differs, as the upgrade says it
-  written?: string[];                             // it applies to a listen writing every one of these keys,
-  unwritten?: string[];                           // none of these,
-  hearing?: string[];                             // and hearing one of these events (left out: every event, unless the module says what omitting `events` heard)
+interface FieldChange {
+  hop: number;                                    // the index into `path` of the hop whose records hold the rows
+  field: string;                                  // the settings key naming the field: alone, `c.Current.F != c.Previous.F`
+  becomes: string;                                // the settings key naming the value it came to hold: `c.Current.F == v AND c.Previous.F != v`; alone, nothing
+  current: string;                                // the record's field holding the row as the change left it
+  previous: string;                               // the record's field holding the row as it was before
 }
 
 interface KeyBecomes {
@@ -79,7 +80,6 @@ interface KeyBecomes {
   absent?: string | string[];                     // what a listen that left the key out meant (`""`: the box itself); its rewrite compares it
   absentField?: string;                           // the field `absent` is compared on, when not the key's own (gmail's `labels` left out of a label listen: `Label Type == "user"`)
   lowercase?: boolean;                            // 0.12 compared the key's values lowercased: the rewrite writes them so
-  also?: { field: string; op: KeyBecomes['op'] }[]; // more fields compared with the same value on the same hop (Airtable's `becomes`: `New ==` and `Old !=`); never with `absent`
 }
 
 interface ConstructionArg {
@@ -255,7 +255,7 @@ interface FieldCapability {
   - A member was removed, so the version moves to 2. Version 1 is still read, and deprecated: a version 1 snapshot that carries neither retired member means what it meant.
   - A snapshot of either version that still carries `awaitable` or `watchable` is refused by both readers, rather than read as an edge nothing can listen to.
   - `listen-fire` refuses a module that declares either on a reference, naming `listenable`.
-  - An `AdapterSpec` gains `listenSettingsBecome?`: how a module's 0.12 settings listens (`listen to x { … }`) become traversals. It is optional and additive, and both readers carry it. The checker reads it to write the rewrite `MOV_LISTEN_SETTINGS_RETIRED` carries. Each of its keys may say `absent?`, what a listen that left the key out meant (compared on `absentField?` when that is another field than the key's own), and `lowercase?`, that 0.12 compared the key's values lowercased. A mapping may say `byEvent?`: the mapping a listen naming one of those events becomes instead, when a module's events arrive on more than one edge; a listen naming events of two such mappings has no rewrite. A key's `op` may be `neq`, and a key may say `also?`, more fields it compares with the same value; a mapping may say `changed?`, where its rewrite does otherwise than the settings listen did, which the checker says and makes unsafe.
+  - An `AdapterSpec` gains `listenSettingsBecome?`: how a module's 0.12 settings listens (`listen to x { … }`) become traversals. It is optional and additive, and both readers carry it. The checker reads it to write the rewrite `MOV_LISTEN_SETTINGS_RETIRED` carries. Each of its keys may say `absent?`, what a listen that left the key out meant (compared on `absentField?` when that is another field than the key's own), and `lowercase?`, that 0.12 compared the key's values lowercased. A mapping may say `byEvent?`: the mapping a listen naming one of those events becomes instead, when a module's events arrive on more than one edge; a listen naming events of two such mappings has no rewrite. A key's `op` may be `neq`. A mapping may say `fieldChange?`: two settings keys (Airtable's `field` and `becomes`) that compare the row a hop's records hold before and after the change.
   - An `EdgeSchema` also gains `literalsFrom?`: fields of the landing typed by the text literals the write wrote at a path. It is optional and additive, and both readers carry it.
   - An `EdgeSchema` also gains `answerShapeFrom?`: the write's field that names a node declared in the program, whose fields the landing then has. It is optional and additive, and both readers carry it.
   - An `EdgeSchema` and a `CollectionSchema` gain what a module declares about listening (`EdgeListening`): `bounded?`, `boundedBy?`, `delivery?`, `pollEverySeconds?`, `carries?`, `scopedBy?`, `attributes?`, `addressed?`, `cheapToList?`, `parentChanges?` and `relistEverySeconds?`. A `CollectionSchema` also gains `readable?`, `listenable?`, `cursor?`, `identity?` and `version?`, and an entry point declaring `listenable` publishes a collection whether or not it can be listed: a listen can start at the instance. A collection that cannot be listed now says `readable: false`, where it said nothing. A `SchemaFieldType` gains `owned`, a named scalar its adapter parses, and an `AdapterSpec` gains `resendWindowSeconds?`. All are optional and additive and both readers carry them, so the version stays 2; a Rust reader built before them refuses a snapshot that carries them. The checker reads `bounded`, `boundedBy`, a collection's `readable` and `owned` fields: it refuses a traversal over an unbounded edge without a filter the module takes on a bounding field, a read along a collection that cannot be listed, and a literal its owned scalar's module would refuse. An owned field's `allowPattern` is spelled so on the wire, in both readers.
