@@ -33,15 +33,14 @@ import type { EngineHost } from 'movement-engine/public/host';
 import {
   arrivalReceiptKey,
   arrivalTriggerOf,
-  collectFileListeners,
   landingMisfits,
   landingNode,
+  listenConstructionsOf,
   listenFires,
   listenPlansOf,
   plannedListensOf,
   triggerAwaitsOf,
   type DeclaredNode,
-  type FileListener,
   type PlannedListen,
 } from 'movement-engine/public/inbound';
 import type { Adapter } from 'movement-engine/public/adapter';
@@ -238,9 +237,8 @@ export interface EmbeddedHost {
   /** What the tenant's programs are checked and run against. */
   catalog(tenant: string): Promise<CatalogSnapshot>;
   /** Check a program against the tenant's catalog; save it if clean. A
-   *  listen this host would not fire as written is refused by name: one in
-   *  the retired settings form, one whose earlier hop only listen-fire
-   *  lists. */
+   *  listen this host would not fire as written is refused by name: one whose
+   *  earlier hop only listen-fire lists. */
   save(tenant: string, program: { name: string; source: string }): Promise<SaveAnswer>;
   /** One delivery, kept in one write as listen-fire keeps it: its arrivals
    *  logged for the runs awaiting them, and the waits opened for each run it
@@ -1011,10 +1009,7 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
         throw error;
       }
       const listens = listenPlansOf(answer);
-      const problems = [
-        ...answer.diagnostics.filter((d) => d.code === SETTINGS_RETIRED).map((d) => `line ${d.span.start.line}: ${d.message}: this host fires only a listen on a traversal`),
-        ...listens.flatMap(unfiredHere),
-      ];
+      const problems = listens.flatMap(unfiredHere);
       if (problems.length > 0) return { saved: false, problems };
       await store.programs.put(tenant, { name, source, languageVersion: ENGINE_VERSION, listens });
       return { saved: true, listens: listens.length };
@@ -1037,10 +1032,6 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
   };
 }
 
-/** The diagnostic a listen in the 0.12 settings form draws under 0.13: a
- *  warning until the form is gone, but this host never fires one. */
-const SETTINGS_RETIRED = 'MOV_LISTEN_SETTINGS_RETIRED';
-
 type Stamps = ReturnType<typeof checkAnswerInRust>['stamps'];
 
 /** A saved listen as a delivery routes it: why this host would not fire it
@@ -1059,7 +1050,15 @@ interface ReadableProgram {
   readable: true;
   program: Program;
   listens: ReadListen[];
-  settings: FileListener[];
+  settings: SettingsListen[];
+}
+
+/** A listen in the retired settings form (`listen to x { … }`): the module of
+ *  the connection it names, and what it would fire. */
+interface SettingsListen {
+  adapter: string;
+  instance: string;
+  movement: string;
 }
 
 type Program = ReturnType<typeof parsePinned>;
@@ -1107,7 +1106,7 @@ function readProgram(saved: SavedProgram): ReadProgram {
         ...(landing !== undefined ? { landing: declaredLanding(saved.source, landing) } : {}),
       };
     });
-    return { readable: true, program, listens, settings: collectFileListeners(program) };
+    return { readable: true, program, listens, settings: settingsListensOf(program) };
   } catch (error) {
     return { readable: false, why: `${saved.name}: ${messageOf(error)}: ${remedy}` };
   }
@@ -1124,9 +1123,21 @@ function declaredLanding(source: string, node: string): DeclaredNode | { unread:
   }
 }
 
+/** The program's listens in the retired settings form, each with the module
+ *  of the connection it names (one naming no connection is the checker's to
+ *  refuse). */
+function settingsListensOf(program: Program): SettingsListen[] {
+  const constructionOf = listenConstructionsOf(program);
+  return program.statements.flatMap((statement) => {
+    if (statement.kind !== 'listen' || statement.path !== undefined) return [];
+    const construction = constructionOf(statement.instance);
+    return construction === undefined ? [] : [{ adapter: construction.adapter, instance: statement.instance, movement: statement.movement }];
+  });
+}
+
 /** What is said of a listen in the retired settings form when its module delivers. */
-function settingsLine(program: string, listener: FileListener): string {
-  return `${program}:${listener.movementName}: \`listen to ${listener.instanceName} { … }\` is in the retired settings form, which this host fires only as a listen on a traversal: write it as one and save it again; until then it runs nothing`;
+function settingsLine(program: string, listener: SettingsListen): string {
+  return `${program}:${listener.movement}: \`listen to ${listener.instance} { … }\` is in the retired settings form, which this host fires only as a listen on a traversal: write it as one and save it again; until then it runs nothing`;
 }
 
 /** A record handed to a run at delivery (a trigger's landing, or a record

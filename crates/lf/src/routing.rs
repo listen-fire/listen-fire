@@ -570,7 +570,7 @@ mod tests {
     }
 
     /// The table of cases the engine's TypeScript is held to as well
-    /// (`listenHearsCredential`, `listenerHearsDelivery`).
+    /// (`listenHearsCredential`).
     #[test]
     fn hears_matches_the_shared_table_of_cases() {
         let table: Json = serde_json::from_str(include_str!("../../../packages/engine-contracts/conformance/listen-hears.json")).unwrap();

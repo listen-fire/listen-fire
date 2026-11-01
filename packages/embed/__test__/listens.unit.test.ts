@@ -306,7 +306,9 @@ listen to stripe-[:Requests]-><Refund> fire refunded
       await store.programs.put('acme', { name, source, languageVersion: ENGINE_VERSION, listens: listenPlansOf(answer) });
     };
     await storedAsChecked('people', program('listen to app-[c:Companies WHERE c.Name == "Acme"]->-[p:People]-> fire f', 'p.Name', '<app-[:Person]->>').replace('f(company:', 'f(p:'));
-    await storedAsChecked('settings', program('listen to app fire f'));
+    // The settings form is refused at every check, so only a store written
+    // without one holds it.
+    await store.programs.put('acme', { name: 'settings', source: program('listen to app fire f'), languageVersion: ENGINE_VERSION, listens: [] });
     const person: Arrival = { edge: 'People', key: 'company:acme', identity: 'person-ann', landing: { recordId: 'person-ann', recordType: 'Person', fields: { Name: 'Ann' } } };
 
     expect(await host.dispatch('acme', { adapterType: 'crm', arrivals: [person, { ...person, identity: 'person-bob' }] })).toEqual([]);
@@ -353,7 +355,7 @@ listen to stripe-[:Requests]-><Refund> fire refunded
       ],
     });
     const settings = await host.save('acme', { name: 'settings', source: program('listen to app fire f') });
-    expect(settings).toMatchObject({ saved: false, problems: [expect.stringMatching(/^line 10: `listen to app \{ … \}` is retired in 0\.13: .*: this host fires only a listen on a traversal$/)] });
+    expect(settings).toMatchObject({ saved: false, problems: [expect.stringMatching(/MOV_LISTEN_SETTINGS_RETIRED \(line 10\): `listen to app \{ … \}` is retired in 0\.13: /)] });
     expect(await store.programs.list('acme')).toEqual([]);
   });
 });

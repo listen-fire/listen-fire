@@ -11,14 +11,69 @@
 import { createHash } from 'node:crypto';
 
 import { listenPlanSchema, verdictSchema } from 'engine-contracts';
-import { callJudgeArrival, callLandingMisfits, callLandingNode, callListenIdentity } from 'movement-lang';
+import { RUN_HOST_UNITS, callJudgeArrival, callLandingMisfits, callLandingNode, callListenIdentity, unwrapCredentialArg } from 'movement-lang';
 import { z } from 'zod';
 
 import type { ArrivedRecord, Arrival, AwaitLanding, ListenPlan, PlanArrival, TriggerEvent, Verdict } from 'engine-contracts';
-import type { CheckAnswer, Program } from 'movement-lang';
+import type { CheckAnswer, ImportStatement, Program } from 'movement-lang';
 
-import { listenConstructionsOf } from '../movement/file_listeners';
 import { listenHearsCredential } from './listen_config';
+
+/** The connection a listen's instance is: its module, the credential its
+ *  construction names (by its imported name) and its other arguments. */
+export interface ListenConstruction {
+  adapter: string;
+  credentialName?: string;
+  constructionArgs?: Record<string, string>;
+}
+
+/**
+ * Each connection `program` makes, by the instance's name, as a listen on it
+ * is routed: the adapter (import alias resolved), the credential and the
+ * other arguments, raw. A run host unit (`manual`) the file does not bind
+ * itself is the host's own, credential-free and argument-free. Undefined for
+ * a name that is neither: the checker refuses a listen on one.
+ */
+export function listenConstructionsOf(program: Program): (instance: string) => ListenConstruction | undefined {
+  const importOriginals = new Map<string, string>();
+  const imported = new Set<string>();
+  const constructions = new Map<string, ListenConstruction>();
+
+  const recordImports = (statement: ImportStatement): void => {
+    for (const { name, alias } of statement.names) {
+      if (alias !== undefined) importOriginals.set(alias, name);
+      imported.add(alias ?? name);
+    }
+  };
+  const original = (local: string): string => importOriginals.get(local) ?? local;
+
+  // Every import first, wherever it is written, as listen-fire reads them
+  // (crates/lf/src/routing.rs `import_originals`): the credential a
+  // construction names is part of its listens' pipeline names.
+  for (const statement of program.statements) {
+    if (statement.kind === 'import') recordImports(statement);
+  }
+  for (const statement of program.statements) {
+    if (statement.kind === 'assign' && statement.value.kind === 'construct') {
+      const construct = statement.value.construct;
+      const credentialRaw = construct.args.find((a) => a.name === 'credentials')?.value.raw.trim();
+      const credentialName = credentialRaw !== undefined ? unwrapCredentialArg(credentialRaw) : null;
+      // The non-credential args, raw — the entry position a listen's address
+      // is relative to.
+      const constructionArgs: Record<string, string> = {};
+      for (const arg of construct.args) {
+        if (arg.name === 'credentials') continue;
+        constructionArgs[arg.name] = arg.value.raw;
+      }
+      constructions.set(statement.name, {
+        adapter: original(construct.callee),
+        ...(credentialName !== null ? { credentialName: original(credentialName) } : {}),
+        ...(Object.keys(constructionArgs).length > 0 ? { constructionArgs } : {}),
+      });
+    }
+  }
+  return (instance) => constructions.get(instance) ?? (RUN_HOST_UNITS.includes(instance) && !imported.has(instance) ? { adapter: instance } : undefined);
+}
 
 /** The plans a check answer carries (`listens`); none when it carries none. */
 export function listenPlansOf(answer: unknown): ListenPlan[] {

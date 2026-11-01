@@ -31,7 +31,7 @@ The public entries of `@listen-fire/engine` you will use:
 
 | entry | for |
 |---|---|
-| `public/embed` | `inProcessHost`, `introspectAdapter`, `collectFileListeners`, `pricedModels`, `MovementEngineError` |
+| `public/embed` | `inProcessHost`, `introspectAdapter`, `pricedModels`, `MovementEngineError` |
 | `public/catalog` | `buildCatalogSnapshot`: what a customer's movements are checked and run against |
 | `public/movement-engine` | `runMovement`, `resumeMovement`, `checkPinnedInRust`, `parsePinned` |
 | `public/inbound` | `listenPlansOf`, `plannedListensOf`, `listenFires`, `listenPipeline`, `arrivalReceiptKey`, `triggerAwaitsOf`, `landingNode`, `landingMisfits`, `arrivalTriggerOf`: from what arrived to a run |

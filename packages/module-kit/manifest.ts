@@ -39,21 +39,8 @@ function adapterManifest(definition: AdapterModuleDefinition, instance: AdapterM
     methods,
     ...(instance.webhookEventTypeId !== undefined ? { webhookEventTypeId: instance.webhookEventTypeId } : {}),
     ...(manifest.description !== undefined ? { description: manifest.description } : {}),
-    ...(manifest.subscribableEvents !== undefined ? { subscribableEvents: [...manifest.subscribableEvents] } : {}),
-    ...(manifest.defaultSubscribedEvents !== undefined ? { defaultSubscribedEvents: [...manifest.defaultSubscribedEvents] } : {}),
-    ...(manifest.listenConfig !== undefined
-      ? {
-          listenConfig: manifest.listenConfig.map((entry) => ({
-            key: entry.key,
-            ...(entry.required !== undefined ? { required: entry.required } : {}),
-            ...(entry.format !== undefined ? { format: entry.format } : {}),
-            ...(entry.narrows !== undefined ? { narrows: { collection: entry.narrows.collection, matchField: entry.narrows.matchField } } : {}),
-          })),
-        }
-      : {}),
     ...(manifest.listenSettingsBecome !== undefined ? { listenSettingsBecome: manifest.listenSettingsBecome } : {}),
     ...(manifest.positionArgs !== undefined && manifest.positionArgs.length > 0 ? { positionArgs: manifest.positionArgs.map((arg) => ({ ...arg })) } : {}),
-    ...(manifest.subscriptionScopeKeys !== undefined && manifest.subscriptionScopeKeys.length > 0 ? { subscriptionScopeKeys: [...manifest.subscriptionScopeKeys] } : {}),
     ...(manifest.introspectedSchema === true ? { introspectedSchema: true } : {}),
     ...(manifest.resendWindowSeconds !== undefined ? { resendWindowSeconds: manifest.resendWindowSeconds } : {}),
     ...(definition.credentials.length > 0 ? { credentials: [...definition.credentials] } : {}),

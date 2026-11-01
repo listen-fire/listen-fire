@@ -88,7 +88,7 @@ test('an agent builds, fixes and runs a movement over MCP', async () => {
 
   // The customer's own fields, its select with its own options.
   const started = await call(agent, 'getStarted');
-  assert.match(started, /- Company \[rw fires\]: Name text!, Stage enum\(Lead\|Customer\)/);
+  assert.match(started, /- Company \[rw listenable\]: Name text!, Stage enum\(Lead\|Customer\)/);
   assert.match(started, /### manual — `listen to manual-\[:…\]->`/);
 
   // The save is the check: a value the select does not have saves nothing.

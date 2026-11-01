@@ -10,7 +10,7 @@ import type { MutationContext } from './mutation_context';
 import type { Arrival, ArrivalsCapability } from './arrivals';
 import type { Actor } from './mutation_context';
 import type { UniquenessConstraints } from './uniqueness';
-import type { ConfigBlock } from './trigger_config';
+import type { ConfigBlock } from './config_blocks';
 import type { HandbookSection } from './handbook_section';
 import type { WireCheckInboundInputShape } from './protocol';
 import type {
@@ -22,7 +22,7 @@ import type {
 import type { Expression } from 'movement-lang/expression/types';
 import type { SettingsBecome } from 'movement-lang';
 
-export type { ConfigBlock, TriggerConfigField } from './trigger_config';
+export type { ConfigBlock } from './config_blocks';
 
 // A file's descriptor and the records a run carries (a resource, an external
 // record, a value's evidence) are the contract's (`engine-contracts`).
@@ -244,29 +244,6 @@ export interface AdapterManifest {
    */
   configurationGap?: string;
   /**
-   * Config BLOCKS rendered for this adapter's TRIGGER role — the per-trigger
-   * config on the automation detail page. An ordered {@link ConfigBlock} list:
-   * value blocks (input/slug/select) collect values that persist to
-   * `automations.trigger.config`; presentation blocks (section) frame them; an
-   * action block (rare here) dispatches to an app handler. Carried on the
-   * manifest so construction-free readers (the movement catalog's listen
-   * vocabulary, provisioning, the adapters/trigger views) can see it without
-   * building the adapter. The adapter instance's `triggerConfig` references it.
-   *
-   * This is the widened successor to the former `triggerConfigSchema`
-   * (`TriggerConfigField[]`) — value blocks ARE that union; section/action are
-   * the new arms. It is also where an adapter declares its INBOUND ROUTING KEY
-   * (a value block marked `routingKey`) — the de-named successor to the former
-   * `inboundChannel: 'forwarding-address'` flag. An adapter whose events arrive
-   * addressed by a key (email's plus-suffix `key`) declares that block here,
-   * and the framework routes generically off the declaration; there is no named
-   * "forwarding address" concept in the engine.
-   *
-   * Omitted ⇒ the adapter's trigger role needs no user-editable config.
-   *
-   */
-  triggerConfig?: readonly ConfigBlock[];
-  /**
    * Config BLOCKS rendered for this adapter's CONSTRUCTION role — shown at an
    * adapter-instance slot in the movement editor (and the chat equivalent).
    * Value blocks bind construction args; ACTION blocks are the connect
@@ -276,53 +253,6 @@ export interface AdapterManifest {
    *
    */
   construction?: readonly ConfigBlock[];
-  /**
-   * The adapter's subscribable-event vocabulary — the named events external
-   * subscriptions can be registered for (attio: `record.created` /
-   * `record.updated` / `record.deleted`; the KG: its mutation change kinds
-   * `create` / `update` / `delete`). One declaration drives:
-   *   - listen-config validation: a `listen to <instance> { events: […] }`
-   *     value outside this set is rejected at check time (the movement
-   *     catalog projects it as the `events` key's value vocabulary);
-   *   - subscription provisioning: `ensureEventSubscription` receives the
-   *     union of the events the team's listens actually want.
-   * Omitted ⇒ the adapter declares no subscribable events (its channel is
-   * push-free or interpreted elsewhere — inbound email routed by its
-   * `key`, the web Send box).
-   */
-  subscribableEvents?: readonly string[];
-  /**
-   * The `events:` selection a listen WITHOUT one is subscribed to — the
-   * adapter's own dispatch default, declared so the checker derives the same
-   * event type the runtime will deliver. WhatsApp is the motivating case: a
-   * config-less listen receives MESSAGES ONLY (`triggerAcceptsWhatsappKind`),
-   * so reactions/locations never fire a movement that didn't opt in — and the
-   * checker must not type a config-less listen as delivering them. Absent ⇒
-   * every subscribable event (the attio/airtable registration default).
-   */
-  defaultSubscribedEvents?: readonly string[];
-  /**
-   * Listen-config keys whose VALUES jointly scope an external subscription
-   * channel, beyond the (adapter, credential) pair. Airtable's `['base',
-   * 'table']` is the motivating case: webhooks are per-(base, table), so two
-   * listens on different tables need distinct registrations. The listen
-   * reconciler folds these config values into the channel key (one
-   * `webhook_subscription` row + external webhook per distinct scope) and passes
-   * them as `EnsureEventSubscriptionInput.scope`. Omitted ⇒ one channel per
-   * (adapter, credential) — the Attio default.
-   *
-   */
-  subscriptionScopeKeys?: readonly string[];
-  /**
-   * Additional listen routing-config keys this adapter declares, beyond
-   * the derived ones (the inbound routing `key` from `triggerConfigSchema`,
-   * the subscribable `events`). Each entry names the key, whether a listen MUST carry it,
-   * and an optional value format the checker validates statically
-   * (`'cron'` — a five-field cron expression, see movement-lang/cron).
-   * The cron adapter's `schedule` is the motivating case:
-   * `listen to timer { schedule: "0 9 * * 1" } fire digest`.
-   */
-  listenConfig?: readonly ListenConfigKey[];
   /**
    * What a 0.12 settings listen on this module becomes as a traversal in 0.13
    * (`listen to x { events: [...] }` → `listen to x-[n:Notifications WHERE
@@ -474,60 +404,6 @@ interface PositionArg {
 // `ConnectActionContext`, and `SuggestedAction.connectAction` are untouched —
 // action blocks are a new PLACEMENT, not a new dispatch.
 
-/** One adapter-declared listen routing-config key (see
- *  `AdapterManifest.listenConfig`). */
-export interface ListenConfigKey {
-  key: string;
-  /** A listen on this adapter must carry the key. */
-  required?: boolean;
-  /** Static value validation the movement checker applies. `'cron'` = a
-   *  five-field cron expression; `'timezone'` = an IANA time-zone id;
-   *  `'fields'` = a list of BARE property names, validated against the position
-   *  the listen's address lands on (the changed-attribute filter — any adapter
-   *  with a "only fire when one of these changed" surface declares it);
-   *  `'strings'` = a non-empty list of non-empty quoted strings (Gmail's
-   *  `labels`); `'type'` = a node the program declares (`payload: <Payment>`),
-   *  which the listen's events are typed as; `'field'` = one quoted field name
-   *  of the record the listen's address lands on; `'field-value'` = a literal
-   *  value of the field the `'field'`-format key names, held to that field's
-   *  type (an adapter declaring it declares exactly one `'field'` key). */
-  format?: 'cron' | 'timezone' | 'fields' | 'strings' | 'type' | 'field' | 'field-value';
-  /**
-   * This key is one HOP of the address that narrows the event's record edge.
-   *
-   * A listen is shorthand for a WHERE. `listen to at { base: "appDevLoop",
-   * table: "tblDeals" }` says which table the event's `record` edge lands on,
-   * so the author must not have to restate it in the movement — the config IS
-   * the address.
-   *
-   * The keys that declare `narrows` form a PATH, in declaration order, each hop
-   * selecting a member of `collection` whose published data has `matchField`
-   * equal to the config value:
-   *
-   *   -[:Base WHERE `Id` == "appDevLoop"]->-[:Table WHERE `Id` == "tblDeals"]->
-   *
-   * A path, NOT one hop with a compound WHERE — that is the whole cost
-   * argument. Read as one hop, "narrowed by (base, table)" must know the valid
-   * (base, table) pairs, which is a `listTables` per base: the 1+N this plan
-   * exists to kill. As a path the base resolves first (1 call) and only THAT
-   * base's tables are walked (1 call).
-   *
-   * The final hop's `collection` is the type the record edge narrows FROM —
-   * an event edge targeting it is retargeted at whatever the walk landed on.
-   *
-   */
-  narrows?: {
-    /** The meta-graph collection whose members this hop selects from
-     *  (Airtable's `Base`, then `Table`). */
-    collection: string;
-    /** The field of a member's PUBLISHED DATA the config value is matched
-     *  against. A listen names things by ID while type-space addresses by NAME,
-     *  so this is normally the id field — and the adapter must publish it on
-     *  the member's position or nothing can narrow. */
-    matchField: string;
-  };
-}
-
 // ── Event subscriptions (the listen-reconciliation seam) ──────────────────
 //
 // Movement `listen` statements are reconciled into trigger rows on save;
@@ -554,8 +430,7 @@ export interface EnsureEventSubscriptionInput {
    *  diff-sync input. `events` is what the source is registered for now. */
   current?: { externalId?: string; events: string[] };
   /**
-   * The channel's adapter-declared scope (the `subscriptionScopeKeys` config
-   * values) — e.g. Airtable's `{ base, table }`. Empty/absent for adapters
+   * The channel's scope, e.g. Airtable's `{ base, table }`. Empty/absent for adapters
    * whose channel is just (adapter, credential). The adapter reads what it
    * declared; the reconciler passes it through opaquely.
    */
@@ -753,19 +628,6 @@ export interface Adapter {
    * position-type resolution need it (Listen-Fire Valuations); pure config.
    */
   readonly metaRecordType?: string;
-
-  /**
-   * Config blocks this adapter exposes for its trigger role — the
-   * {@link ConfigBlock} list a user's automation-detail form renders for a
-   * `automations.trigger` whose `kind` resolves to this adapter (e.g. the
-   * inbound-email forwarding-address framing + slug). One declaration drives
-   * the form, the write-path validation (`updateTriggerConfig`), and the
-   * runtime config-validity check. Pure config; omitted by adapters whose
-   * trigger role needs no user-editable settings. Mirrors the manifest's
-   * `triggerConfig`.
-   *
-   */
-  readonly triggerConfig?: readonly ConfigBlock[];
 
   /**
    * Ensure the source system delivers the named events to `callbackUrl` —

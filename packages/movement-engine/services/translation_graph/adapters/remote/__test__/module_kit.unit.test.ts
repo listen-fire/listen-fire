@@ -116,8 +116,6 @@ describe('defining a module', () => {
       credentials: notes.credentials,
       poll: { intervalSeconds: 60 },
       periodic: [{ name: 'rotate_key', intervalSeconds: 3600 }],
-      subscribableEvents: ['note_created'],
-      listenConfig: [{ key: 'folder', required: false }],
     });
     expect(loaded.manifest.methods).toEqual(expect.arrayContaining(['manifest', 'listEntryPoints', 'getRelated', 'poll', 'runPeriodic']));
   });

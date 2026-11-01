@@ -17,8 +17,6 @@ export const NOTES_MANIFEST = {
   description: 'A notes service.',
   supportedTriggers: ['poll'] as const,
   methods: ['listEntryPoints', 'describe', 'getRelated', 'getFieldValue'],
-  subscribableEvents: ['note_created'],
-  listenConfig: [{ key: 'folder', required: false }],
 };
 
 async function provider(ctx: ModuleContext, path: string): Promise<unknown> {

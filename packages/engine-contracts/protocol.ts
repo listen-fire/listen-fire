@@ -19,6 +19,8 @@
 
 import { z } from 'zod';
 
+import { RETIRED_MANIFEST_KEYS, retiredEntryKey } from './catalog';
+
 // ── Envelope ───────────────────────────────────────────────────────────────
 
 export const PROTOCOL_VERSION = '2';
@@ -752,19 +754,6 @@ export const WireInvokeFieldFunctionInput = z.object({
   }),
 });
 
-/**
- * What a listen on this adapter may say — declared, so the checker can refuse a
- * listen config the adapter would never route, and type a config-less listen.
- * The same three declarations a built-in adapter's manifest makes:
- *   - `subscribableEvents`: the values of a listen's `events: [...]` (an event's
- *     `eventType` is matched against them when routing);
- *   - `defaultSubscribedEvents`: what a listen with no `events` receives
- *     (absent ⇒ every subscribable event);
- *   - `listenConfig`: further keys, whether a listen must carry each, a
- *     static value format the checker validates, and whether the key is one
- *     hop of the address the event is narrowed by (`narrows`).
- * All optional: an adapter declaring none leaves its listen config unchecked.
- */
 // One mapping of a 0.12 settings listen to a traversal (`SettingsBecome`):
 // whether its path names edges the module describes is judged at describe.
 // The refusal texts are word for word those of `lf`'s manifest reader
@@ -799,32 +788,6 @@ const settingsMapping = z.object({
 });
 
 export const WireListenDeclarations = z.object({
-  subscribableEvents: z.array(z.string().min(1)).optional(),
-  defaultSubscribedEvents: z.array(z.string().min(1)).optional(),
-  listenConfig: z
-    .array(
-      z.object({
-        key: z.string().min(1),
-        required: z.boolean().optional(),
-        // Open: a format this release does not know is a newer module's, and
-        // its key's value goes unchecked rather than refusing the manifest.
-        format: z
-          .union([z.enum(['cron', 'timezone', 'fields', 'strings', 'type', 'field', 'field-value']), z.string().min(1)])
-          .optional(),
-        // One hop of the address the listen's event is narrowed by
-        // (`ListenConfigKey.narrows`): the collection walked and the member
-        // field its value is matched on.
-        narrows: z.object({ collection: z.string().min(1), matchField: z.string().min(1) }).optional(),
-      }),
-    )
-    // A `field-value` key is a value of the field the `field` key names:
-    // paired by format, so there must be exactly one to pair with.
-    .refine(
-      (entries) =>
-        !entries.some((e) => e.format === 'field-value') || entries.filter((e) => e.format === 'field').length === 1,
-      { message: "a 'field-value' listen key needs exactly one 'field' key to be a value of" },
-    )
-    .optional(),
   // A `byEvent` mapping is one more of the same, one level deep.
   listenSettingsBecome: settingsMapping
     .extend({ byEvent: z.record(z.string(), settingsMapping).optional() })
@@ -1187,7 +1150,19 @@ export function refuseUnpairedDeclarations(
  *  not a positive whole number (crates/lf `WireManifest::read`), word for word. */
 const RESEND_WINDOW_REFUSAL = 'expected a positive whole number';
 
-export const WireManifestResult = z.object({
+/** A manifest still declaring a key 0.13 retired is refused by name, as
+ *  listen-fire's describe refuses it, rather than stripped: the module would
+ *  otherwise lose what it declared without a word. */
+function refuseRetiredManifestKeys(input: unknown, ctx: z.RefinementCtx): unknown {
+  if (typeof input !== 'object' || input === null) return input;
+  const named = 'adapterType' in input && typeof input.adapterType === 'string' ? input.adapterType : 'the module';
+  const refusal = retiredEntryKey(named, input, RETIRED_MANIFEST_KEYS);
+  const key = RETIRED_MANIFEST_KEYS.find((retired) => retired in input);
+  if (refusal !== undefined && key !== undefined) ctx.addIssue({ code: 'custom', path: [key], message: refusal });
+  return input;
+}
+
+const WireManifestFields = z.object({
   ...WireListenDeclarations.shape,
   ...WireModuleDeclarations.shape,
   protocolVersion: WireManifestProtocolVersion,
@@ -1220,11 +1195,6 @@ export const WireManifestResult = z.object({
   positionArgs: z
     .array(z.object({ name: z.string().min(1), optionsFrom: z.string().min(1), label: z.string().optional() }))
     .optional(),
-  /** The listen config keys whose values scope an event subscription (an
-   *  Airtable webhook watches one `base` and `table`): a host keeps one
-   *  subscription per credential and scope, and sends the scope as
-   *  `ensureEventSubscription`'s and `removeEventSubscription`'s `scope`. */
-  subscriptionScopeKeys: z.array(z.string().min(1)).optional(),
   /** The schema comes from the connected account (Airtable's tables, a
    *  spreadsheet's tabs), so describing it needs a credential and costs
    *  upstream calls. Absent: the schema is the module's own and describing is
@@ -1235,6 +1205,7 @@ export const WireManifestResult = z.object({
    *  overrides per connection. */
   resendWindowSeconds: z.number(RESEND_WINDOW_REFUSAL).int(RESEND_WINDOW_REFUSAL).positive(RESEND_WINDOW_REFUSAL).optional(),
 }).superRefine(refuseUnpairedDeclarations);
+export const WireManifestResult = z.preprocess(refuseRetiredManifestKeys, WireManifestFields);
 export type WireManifestResultShape = z.infer<typeof WireManifestResult>;
 
 // ── Streaming page shapes ────────────────────────────────────────────────────

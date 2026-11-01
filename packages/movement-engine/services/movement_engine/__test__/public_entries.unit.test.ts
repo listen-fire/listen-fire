@@ -61,7 +61,7 @@ describe('public entries', () => {
     expect(typeof bootChecks.assertSegmentLimitsConfigured).toBe('function');
     expect(typeof trace.isWriteEffect).toBe('function');
     expect(typeof host.segmentScopedCalls.around).toBe('function');
-    expect(typeof inbound.collectFileListeners).toBe('function');
+    expect(typeof inbound.listenConstructionsOf).toBe('function');
     expect(typeof inbound.answerModels).toBe('function');
     expect(Object.keys(models.embeddingDestinations).length).toBeGreaterThan(0);
     expect(typeof embed.memoryRunHostStore).toBe('function');

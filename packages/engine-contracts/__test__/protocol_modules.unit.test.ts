@@ -9,6 +9,8 @@ import {
   RpcRequest,
   RpcResponse,
   WireManifestResult,
+  RETIRED_MANIFEST_KEYS,
+  retiredEntryKey,
 } from '../index';
 
 const OLD_MANIFEST = {
@@ -70,21 +72,12 @@ describe('a module manifest', () => {
     expect(WireManifestResult.parse(JSON.parse(JSON.stringify(parsed)))).toEqual(MODULE_MANIFEST);
   });
 
-  it('keeps a listen config format this release does not know: a newer module declares it, and its value goes unchecked', () => {
-    const manifest = { ...OLD_MANIFEST, listenConfig: [{ key: 'within', format: 'duration-window' }] };
-    expect(WireManifestResult.parse(manifest)).toEqual(manifest);
-  });
-
-  it('keeps the hop of the event address a listen config key narrows', () => {
-    const manifest = { ...OLD_MANIFEST, listenConfig: [{ key: 'table', required: true, narrows: { collection: 'Table', matchField: 'Id' } }] };
-    expect(WireManifestResult.parse(manifest)).toEqual(manifest);
-    const half = { ...OLD_MANIFEST, listenConfig: [{ key: 'table', narrows: { collection: 'Table' } }] };
-    expect(WireManifestResult.safeParse(half).success).toBe(false);
-  });
-
-  it('keeps the listen config keys that scope an event subscription', () => {
-    const manifest = { ...OLD_MANIFEST, subscriptionScopeKeys: ['base', 'table'] };
-    expect(WireManifestResult.parse(manifest)).toEqual(manifest);
+  it('refuses each key 0.13 retired, by name, as listen-fire describe does', () => {
+    for (const key of RETIRED_MANIFEST_KEYS) {
+      const result = WireManifestResult.safeParse({ ...OLD_MANIFEST, [key]: [] });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues.map((issue) => issue.message)).toContain(retiredEntryKey(OLD_MANIFEST.adapterType, { [key]: [] }, RETIRED_MANIFEST_KEYS));
+    }
   });
 
   it('keeps a declared live schema', () => {

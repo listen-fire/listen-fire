@@ -37,7 +37,7 @@ export * from './provenance';
 export * from './records';
 export * from './run_input';
 export * from './tenant';
-export * from './trigger_config';
+export * from './config_blocks';
 export * from './uniqueness';
 export * from './versions';
 export * from './write_record';

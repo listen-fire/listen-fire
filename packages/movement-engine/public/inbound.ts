@@ -1,7 +1,8 @@
-// Inbound events: the trigger event a run starts from, the listeners a
-// program declares, the plans its check answers for its listens and the judge
-// of whether an arrival fires one, the trigger scope rules, discrimination,
-// the remote delivery signature, and the doors a module pushes through.
+// Inbound events: the trigger event a run starts from, the connection each
+// listen is on, the plans its check answers for its listens and the judge of
+// whether an arrival fires one, which connection's deliveries a listen hears,
+// discrimination, the remote delivery signature, and the doors a module
+// pushes through.
 
 export * from '../services/translation_graph/triggers/types';
 export * from '../services/translation_graph/triggers/trigger_event';
@@ -14,4 +15,3 @@ export * from '../services/inbound/deliver';
 export * from '../services/inbound/push';
 export * from '../services/inbound/shared';
 export * from '../services/inbound/contract';
-export * from '../services/translation_graph/movement/file_listeners';
