@@ -7,7 +7,7 @@
     "node": ">=22.23.4 <23"
   },
   "scripts": {
-    "code:type-check": "tsc --pretty --noEmit",
+    "code:type-check": "tsc --pretty --noEmit && tsc --pretty --noEmit -p __test__",
     "test": "jest --config jest.config.cjs",
     "prepack": "node ../../scripts/build-packages.cjs .",
     "postpack": "node ../../scripts/build-packages.cjs --restore ."

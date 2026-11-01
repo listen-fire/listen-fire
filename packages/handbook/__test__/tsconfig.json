@@ -1,0 +1,11 @@
+// The tests compile the bundled modules' manifests, and through them
+// module-kit and module-runtime, whose browser driver is typed by the DOM
+// lib; the handbook's own sources are not, so only this scope adds it.
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["es2022", "DOM"]
+  },
+  "include": ["./**/*.ts"],
+  "exclude": []
+}

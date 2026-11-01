@@ -15,12 +15,11 @@
 // untrue. Captured schemas make "passes the test" and "true about the adapter"
 // the same statement.
 //
-// `github` is the one entry not from that capture: it comes from the real
-// `@lf/github` module's own schema (`lf catalog` over `examples/github-triage`,
-// recorded in the fixture's `capturedFrom.supplements`), because the module is
-// built in this repository and the README's lead program is checked against
-// it. Slack's message buttons, presses and replies come the same way (its
-// supplement says which). The next full platform capture replaces both.
+// The modules built in this repository are captured from themselves instead:
+// `lf catalog` over a project connecting the real module, against its fake
+// where it has one (github, slack, telegram, whatsapp, system, forms, email,
+// cron, manual, and attio's changes). The fixture's `capturedFrom.supplements`
+// records each, and what of the platform capture an entry keeps.
 //
 // The capture is driven FROM the handbook's probes (`--handbook`), through the
 // very catalog build a save performs, so what gets described is what the

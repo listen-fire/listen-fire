@@ -2966,15 +2966,128 @@
           "required": true
         }
       ],
+      "listenSettingsBecome": {
+        "path": [
+          "Channels",
+          "Messages"
+        ],
+        "aliases": [
+          "ch",
+          "m"
+        ],
+        "paramFrom": "Message",
+        "keys": {
+          "channels": {
+            "hop": 0,
+            "field": "Name",
+            "op": "in"
+          },
+          "events": {
+            "hop": 1,
+            "field": "Mentions App",
+            "op": "eq",
+            "values": {
+              "app_mention": true
+            },
+            "absent": [
+              "message",
+              "reaction_added"
+            ]
+          }
+        },
+        "byEvent": {
+          "app_mention": {
+            "path": [
+              "Channels",
+              "Messages"
+            ],
+            "aliases": [
+              "ch",
+              "m"
+            ],
+            "paramFrom": "Message",
+            "keys": {
+              "channels": {
+                "hop": 0,
+                "field": "Name",
+                "op": "in"
+              },
+              "events": {
+                "hop": 1,
+                "field": "Mentions App",
+                "op": "eq",
+                "values": {
+                  "app_mention": true
+                }
+              }
+            },
+            "alsoArrivesOn": [
+              [
+                "Channels",
+                "Messages",
+                "Replies"
+              ]
+            ]
+          },
+          "message": {
+            "path": [
+              "Channels",
+              "Messages"
+            ],
+            "aliases": [
+              "ch",
+              "m"
+            ],
+            "paramFrom": "Message",
+            "keys": {
+              "channels": {
+                "hop": 0,
+                "field": "Name",
+                "op": "in"
+              }
+            },
+            "alsoArrivesOn": [
+              [
+                "Channels",
+                "Messages",
+                "Replies"
+              ]
+            ]
+          },
+          "reaction_added": {
+            "path": [
+              "Channels",
+              "Messages",
+              "Reactions"
+            ],
+            "aliases": [
+              "ch",
+              "m",
+              "r"
+            ],
+            "paramFrom": "Reaction",
+            "keys": {
+              "channels": {
+                "hop": 0,
+                "field": "Name",
+                "op": "in"
+              }
+            }
+          }
+        }
+      },
       "schemas": {
         "acme_slack": {
           "positions": {
             "Message": {
               "properties": {
+                "Id": "text",
                 "Message": "text",
                 "User": "text",
                 "Channel": "text",
-                "Timestamp": "date"
+                "Timestamp": "date",
+                "Topic": "text",
+                "Mentions App": "boolean"
               },
               "edges": {
                 "Files": {
@@ -2994,6 +3107,11 @@
                   "listenable": true,
                   "cursor": false,
                   "identity": "Id",
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels",
+                    "Messages"
+                  ],
                   "literalsFrom": [
                     {
                       "at": [
@@ -3003,7 +3121,20 @@
                       "from": "Buttons[].Value"
                     }
                   ],
-                  "description": "A press on one of this message's Buttons (or a control in its Blocks): `await msg-[:Interactions]->` waits for the next one."
+                  "description": "A press on one of this message's Buttons (or a control in its Blocks): `await msg-[:Interactions]->` waits for the next one, and `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->` runs once per press on any message written with that Topic."
+                },
+                "Reactions": {
+                  "target": "Reaction",
+                  "readable": false,
+                  "writable": true,
+                  "listenable": true,
+                  "cursor": false,
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels"
+                  ],
+                  "attributes": true,
+                  "description": "React to this message with an emoji, or hear a reaction added: `listen to chat-[ch:Channels WHERE ch.Name == \"deals\"]->-[:Messages]->-[:Reactions]->`. A reaction arrives with its channel, not its message, so a listen narrows it by channel; reading a message's reactions back is not offered (a call per message)."
                 },
                 "Author": {
                   "target": "User"
@@ -3028,12 +3159,47 @@
                 "File",
                 "Blocks",
                 "Buttons"
-              ]
+              ],
+              "description": "A Slack message — what a listen on a channel's `Messages` delivers, whole: read `m.Message` straight off it, reply along its `Replies` edge, react to it along its `Reactions` edge. Created only along an edge: post via a Channel's `Messages` edge, reply via a message's `Replies` edge — the channel and thread come from the parent, never from fields.",
+              "fieldDocs": {
+                "Id": "Names this message in its workspace: its channel's id and its Slack timestamp (`C…:1700000000.000100`).",
+                "Message": "The message body. Required unless a File is attached or Blocks are set (at least one of Message / File / Blocks). Use Slack-native formatting (*bold*, _italic_, <url|text>).",
+                "File": "Optional file to upload with the message — the Message text rides as the file caption, one visible Slack message. Send-side only: a received message's files are on its Files edge — read `msg-[:Files]->.File`. A message is one of File, Blocks or Buttons.",
+                "Blocks": "Slack Block Kit blocks, exactly as in Slack's docs — assembled verbatim and passed through (no wrapping, no typed shape here; a malformed block surfaces as a loud Slack error at run time). For plain buttons write Buttons instead. A press on any control in the blocks arrives on the message's Interactions, its value in the Action's Value: a button's or option's `value`, a picker's pick. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). A message is one of File, Blocks or Buttons.",
+                "Buttons": "Buttons under the Message text, each `{ Text: \"Approve\", Value: \"approve\" }`: Text is the label, Value what a press answers with. Wait for a press with `await msg-[:Interactions]->`; `only(press-[:Actions]->).Value` is one of the Values written. Needs Message text; never with File or Blocks.",
+                "Channel": "The C… channel id (read-only — a post is written along a Channel's `Messages` edge).",
+                "Timestamp": "When the message was posted.",
+                "Topic": "A marker of your own for a message with Buttons (`Topic: \"lunch-poll\"`), so a listen can tell its presses from other messages' presses: `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->`. Only a message with Buttons takes one: Slack keeps no other data on a message that comes back with a press, so the Topic is stored as the id of the block its buttons sit in (`lf:<topic>`), and read back from there — on the pressed message and on a listed one alike. It is written only with Buttons, and block ids starting `lf:` are reserved for it: a message whose own Blocks use one is refused.",
+                "Mentions App": "Whether the message @-mentions the connected app: `listen to chat-[:Channels]->-[m:Messages WHERE m.`Mentions App` == true]->` runs when somebody asks it something."
+              },
+              "fieldIds": {
+                "Id": "id",
+                "Message": "text",
+                "User": "user",
+                "Channel": "channel",
+                "Timestamp": "timestamp",
+                "Topic": "topic",
+                "Mentions App": "mentions_app"
+              }
             },
             "File": {
-              "properties": {},
+              "properties": {
+                "File Id": "text",
+                "Name": "text",
+                "Content Type": "text",
+                "URL": "text",
+                "Size": "number",
+                "File": "file"
+              },
               "edges": {},
-              "undescribed": true
+              "fieldIds": {
+                "File Id": "id",
+                "Name": "name",
+                "Content Type": "contentType",
+                "URL": "url",
+                "Size": "size",
+                "File": "data"
+              }
             },
             "Interaction": {
               "properties": {
@@ -3049,12 +3215,20 @@
                 "By": {
                   "target": "User",
                   "description": "The member who pressed."
+                },
+                "Message": {
+                  "target": "Message",
+                  "description": "The message pressed, as Slack sent it with the press: its text, its `Timestamp`, its `Topic`."
                 }
               },
-              "description": "Someone pressing a button (or using another control) on a message — what `await msg-[:Interactions]->` binds. `Actions` are the controls used, `By` the member who pressed.",
+              "description": "Someone pressing a button (or using another control) on a message — what `await msg-[:Interactions]->` binds, and what a listen on a message's `Interactions` runs on. `Actions` are the controls used, `By` the member who pressed, `Message` the message pressed.",
               "fieldDocs": {
                 "Id": "Names this press (Slack's trigger id).",
                 "At": "When the press was made."
+              },
+              "fieldIds": {
+                "Id": "id",
+                "At": "pressed_at"
               }
             },
             "Action": {
@@ -3067,6 +3241,10 @@
               "fieldDocs": {
                 "Value": "What the control answered: a button's Value (one of the Buttons written), a select's chosen option value, a picker's date or time.",
                 "Text": "The label of the button, or of the option chosen."
+              },
+              "fieldIds": {
+                "Value": "value",
+                "Text": "text"
               }
             },
             "Reaction": {
@@ -3085,6 +3263,17 @@
                 "Reactor": {
                   "target": "User"
                 }
+              },
+              "description": "An emoji reaction added to a message: what a listen on a message's `Reactions` runs on. Walk `Message` to the message it's on, `Channel` to the channel, `Reactor` to the user. Also the reaction WRITE: created along a message's `Reactions` edge, which is how a movement reacts to the message it was handed.",
+              "fieldDocs": {
+                "Emoji": "The reaction emoji name (e.g. \"thumbsup\"), without colons. On a write along `msg-[:Reactions]->`: the single emoji to react with — required.",
+                "Channel": "The C… channel id the reaction is in (read-only — walk the `Channel` edge for the Channel node).",
+                "Reactor": "The U… id of the user who added the reaction (read-only — walk the `Reactor` edge for the User node)."
+              },
+              "fieldIds": {
+                "Emoji": "emoji",
+                "Channel": "channel",
+                "Reactor": "reactor"
               }
             },
             "Channel": {
@@ -3108,20 +3297,51 @@
                   "capability": {
                     "filter": "bounded",
                     "order": "bounded",
-                    "supportsLimit": true
+                    "supportsLimit": true,
+                    "naturalOrder": {
+                      "field": "Timestamp",
+                      "direction": "desc"
+                    }
                   },
                   "sequenced": "chronological",
-                  "writable": true
+                  "writable": true,
+                  "listenable": true,
+                  "cursor": false,
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels"
+                  ]
                 },
                 "Members": {
                   "target": "User"
                 }
+              },
+              "description": "A Slack channel the connected bot can see. Select one with WHERE on `Name`, then walk its `Messages` (history the bot can read) or `Members`. A WHERE on a message's `Timestamp` narrows the history at Slack rather than after the fetch. Listen on its `Messages` for each new message (`listen to chat-[ch:Channels WHERE ch.Name == \"deals\"]->-[:Messages]->`): each arrives with its channel, so the channel's `Name` is judged on the message itself.",
+              "fieldDocs": {
+                "Name": "This workspace has 3 channels — every one of them is offered as a value for this field, so use the field's own values rather than guessing or assuming a channel is missing."
+              },
+              "fieldIds": {
+                "Id": "id",
+                "Name": "name",
+                "Topic": "topic",
+                "Is Private": "is_private"
               }
             },
             "User": {
-              "properties": {},
+              "properties": {
+                "Id": "text",
+                "Name": "text",
+                "Real Name": "text",
+                "Email": "text"
+              },
               "edges": {},
-              "undescribed": true
+              "description": "A Slack workspace member.",
+              "fieldIds": {
+                "Id": "id",
+                "Name": "name",
+                "Real Name": "real_name",
+                "Email": "email"
+              }
             }
           },
           "collections": {
@@ -3145,15 +3365,19 @@
                 "Buttons": {
                   "kind": "list",
                   "of": "json"
-                }
+                },
+                "Topic": "text"
               },
               "resultShape": {
                 "externalId": "text",
                 "url": "text",
+                "Id": "text",
                 "Message": "text",
                 "User": "text",
                 "Channel": "text",
                 "Timestamp": "date",
+                "Topic": "text",
+                "Mentions App": "boolean",
                 "File": "file",
                 "Blocks": {
                   "kind": "list",
@@ -3182,6 +3406,11 @@
                   "listenable": true,
                   "cursor": false,
                   "identity": "Id",
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels",
+                    "Messages"
+                  ],
                   "literalsFrom": [
                     {
                       "at": [
@@ -3191,7 +3420,20 @@
                       "from": "Buttons[].Value"
                     }
                   ],
-                  "description": "A press on one of this message's Buttons (or a control in its Blocks): `await msg-[:Interactions]->` waits for the next one."
+                  "description": "A press on one of this message's Buttons (or a control in its Blocks): `await msg-[:Interactions]->` waits for the next one, and `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->` runs once per press on any message written with that Topic."
+                },
+                "Reactions": {
+                  "target": "Reaction",
+                  "readable": false,
+                  "writable": true,
+                  "listenable": true,
+                  "cursor": false,
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels"
+                  ],
+                  "attributes": true,
+                  "description": "React to this message with an emoji, or hear a reaction added: `listen to chat-[ch:Channels WHERE ch.Name == \"deals\"]->-[:Messages]->-[:Reactions]->`. A reaction arrives with its channel, not its message, so a listen narrows it by channel; reading a message's reactions back is not offered (a call per message)."
                 },
                 "Author": {
                   "target": "User"
@@ -3202,9 +3444,10 @@
               },
               "fieldDocs": {
                 "Message": "The message body. Required unless a File is attached or Blocks are set (at least one of Message / File / Blocks). Use Slack-native formatting (*bold*, _italic_, <url|text>).",
-                "File": "Optional file to upload with the message — the Message text rides as the file caption, one visible Slack message. Send-side only: a received message's files are on its Files edge — read `msg-[:Files]->.File`. A message is either a File or Blocks, never both.",
+                "File": "Optional file to upload with the message — the Message text rides as the file caption, one visible Slack message. Send-side only: a received message's files are on its Files edge — read `msg-[:Files]->.File`. A message is one of File, Blocks or Buttons.",
                 "Blocks": "Slack Block Kit blocks, exactly as in Slack's docs — assembled verbatim and passed through (no wrapping, no typed shape here; a malformed block surfaces as a loud Slack error at run time). For plain buttons write Buttons instead. A press on any control in the blocks arrives on the message's Interactions, its value in the Action's Value: a button's or option's `value`, a picker's pick. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). A message is one of File, Blocks or Buttons.",
-                "Buttons": "Buttons under the Message text, each `{ Text: \"Approve\", Value: \"approve\" }`: Text is the label, Value what a press answers with. Wait for a press with `await msg-[:Interactions]->`; `only(press-[:Actions]->).Value` is one of the Values written. Needs Message text; never with File or Blocks."
+                "Buttons": "Buttons under the Message text, each `{ Text: \"Approve\", Value: \"approve\" }`: Text is the label, Value what a press answers with. Wait for a press with `await msg-[:Interactions]->`; `only(press-[:Actions]->).Value` is one of the Values written. Needs Message text; never with File or Blocks.",
+                "Topic": "A marker of your own for a message with Buttons (`Topic: \"lunch-poll\"`), so a listen can tell its presses from other messages' presses: `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->`. Only a message with Buttons takes one: Slack keeps no other data on a message that comes back with a press, so the Topic is stored as the id of the block its buttons sit in (`lf:<topic>`), and read back from there — on the pressed message and on a listed one alike. It is written only with Buttons, and block ids starting `lf:` are reserved for it: a message whose own Blocks use one is refused."
               },
               "writeUnion": {
                 "variants": [
@@ -3226,22 +3469,56 @@
                     "name": "a post with buttons",
                     "fields": [
                       "Message",
-                      "Buttons"
+                      "Buttons",
+                      "Topic"
                     ]
                   }
                 ]
               }
+            },
+            "Reaction": {
+              "fields": {
+                "Emoji": "text"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Emoji": "text",
+                "Channel": "text",
+                "Reactor": "text"
+              },
+              "edges": {
+                "Message": {
+                  "target": "Message"
+                },
+                "Channel": {
+                  "target": "Channel"
+                },
+                "Reactor": {
+                  "target": "User"
+                }
+              },
+              "requiredFields": [
+                "Emoji"
+              ],
+              "fieldDocs": {
+                "Emoji": "The reaction emoji name (e.g. \"thumbsup\"), without colons. On a write along `msg-[:Reactions]->`: the single emoji to react with — required."
+              }
             }
-          }
+          },
+          "supportsInPlaceUpdate": true
         },
         "team_chat": {
           "positions": {
             "Message": {
               "properties": {
+                "Id": "text",
                 "Message": "text",
                 "User": "text",
                 "Channel": "text",
-                "Timestamp": "date"
+                "Timestamp": "date",
+                "Topic": "text",
+                "Mentions App": "boolean"
               },
               "edges": {
                 "Files": {
@@ -3261,6 +3538,11 @@
                   "listenable": true,
                   "cursor": false,
                   "identity": "Id",
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels",
+                    "Messages"
+                  ],
                   "literalsFrom": [
                     {
                       "at": [
@@ -3270,7 +3552,20 @@
                       "from": "Buttons[].Value"
                     }
                   ],
-                  "description": "A press on one of this message's Buttons (or a control in its Blocks): `await msg-[:Interactions]->` waits for the next one."
+                  "description": "A press on one of this message's Buttons (or a control in its Blocks): `await msg-[:Interactions]->` waits for the next one, and `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->` runs once per press on any message written with that Topic."
+                },
+                "Reactions": {
+                  "target": "Reaction",
+                  "readable": false,
+                  "writable": true,
+                  "listenable": true,
+                  "cursor": false,
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels"
+                  ],
+                  "attributes": true,
+                  "description": "React to this message with an emoji, or hear a reaction added: `listen to chat-[ch:Channels WHERE ch.Name == \"deals\"]->-[:Messages]->-[:Reactions]->`. A reaction arrives with its channel, not its message, so a listen narrows it by channel; reading a message's reactions back is not offered (a call per message)."
                 },
                 "Author": {
                   "target": "User"
@@ -3295,12 +3590,47 @@
                 "File",
                 "Blocks",
                 "Buttons"
-              ]
+              ],
+              "description": "A Slack message — what a listen on a channel's `Messages` delivers, whole: read `m.Message` straight off it, reply along its `Replies` edge, react to it along its `Reactions` edge. Created only along an edge: post via a Channel's `Messages` edge, reply via a message's `Replies` edge — the channel and thread come from the parent, never from fields.",
+              "fieldDocs": {
+                "Id": "Names this message in its workspace: its channel's id and its Slack timestamp (`C…:1700000000.000100`).",
+                "Message": "The message body. Required unless a File is attached or Blocks are set (at least one of Message / File / Blocks). Use Slack-native formatting (*bold*, _italic_, <url|text>).",
+                "File": "Optional file to upload with the message — the Message text rides as the file caption, one visible Slack message. Send-side only: a received message's files are on its Files edge — read `msg-[:Files]->.File`. A message is one of File, Blocks or Buttons.",
+                "Blocks": "Slack Block Kit blocks, exactly as in Slack's docs — assembled verbatim and passed through (no wrapping, no typed shape here; a malformed block surfaces as a loud Slack error at run time). For plain buttons write Buttons instead. A press on any control in the blocks arrives on the message's Interactions, its value in the Action's Value: a button's or option's `value`, a picker's pick. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). A message is one of File, Blocks or Buttons.",
+                "Buttons": "Buttons under the Message text, each `{ Text: \"Approve\", Value: \"approve\" }`: Text is the label, Value what a press answers with. Wait for a press with `await msg-[:Interactions]->`; `only(press-[:Actions]->).Value` is one of the Values written. Needs Message text; never with File or Blocks.",
+                "Channel": "The C… channel id (read-only — a post is written along a Channel's `Messages` edge).",
+                "Timestamp": "When the message was posted.",
+                "Topic": "A marker of your own for a message with Buttons (`Topic: \"lunch-poll\"`), so a listen can tell its presses from other messages' presses: `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->`. Only a message with Buttons takes one: Slack keeps no other data on a message that comes back with a press, so the Topic is stored as the id of the block its buttons sit in (`lf:<topic>`), and read back from there — on the pressed message and on a listed one alike. It is written only with Buttons, and block ids starting `lf:` are reserved for it: a message whose own Blocks use one is refused.",
+                "Mentions App": "Whether the message @-mentions the connected app: `listen to chat-[:Channels]->-[m:Messages WHERE m.`Mentions App` == true]->` runs when somebody asks it something."
+              },
+              "fieldIds": {
+                "Id": "id",
+                "Message": "text",
+                "User": "user",
+                "Channel": "channel",
+                "Timestamp": "timestamp",
+                "Topic": "topic",
+                "Mentions App": "mentions_app"
+              }
             },
             "File": {
-              "properties": {},
+              "properties": {
+                "File Id": "text",
+                "Name": "text",
+                "Content Type": "text",
+                "URL": "text",
+                "Size": "number",
+                "File": "file"
+              },
               "edges": {},
-              "undescribed": true
+              "fieldIds": {
+                "File Id": "id",
+                "Name": "name",
+                "Content Type": "contentType",
+                "URL": "url",
+                "Size": "size",
+                "File": "data"
+              }
             },
             "Interaction": {
               "properties": {
@@ -3316,12 +3646,20 @@
                 "By": {
                   "target": "User",
                   "description": "The member who pressed."
+                },
+                "Message": {
+                  "target": "Message",
+                  "description": "The message pressed, as Slack sent it with the press: its text, its `Timestamp`, its `Topic`."
                 }
               },
-              "description": "Someone pressing a button (or using another control) on a message — what `await msg-[:Interactions]->` binds. `Actions` are the controls used, `By` the member who pressed.",
+              "description": "Someone pressing a button (or using another control) on a message — what `await msg-[:Interactions]->` binds, and what a listen on a message's `Interactions` runs on. `Actions` are the controls used, `By` the member who pressed, `Message` the message pressed.",
               "fieldDocs": {
                 "Id": "Names this press (Slack's trigger id).",
                 "At": "When the press was made."
+              },
+              "fieldIds": {
+                "Id": "id",
+                "At": "pressed_at"
               }
             },
             "Action": {
@@ -3334,6 +3672,10 @@
               "fieldDocs": {
                 "Value": "What the control answered: a button's Value (one of the Buttons written), a select's chosen option value, a picker's date or time.",
                 "Text": "The label of the button, or of the option chosen."
+              },
+              "fieldIds": {
+                "Value": "value",
+                "Text": "text"
               }
             },
             "Reaction": {
@@ -3352,6 +3694,17 @@
                 "Reactor": {
                   "target": "User"
                 }
+              },
+              "description": "An emoji reaction added to a message: what a listen on a message's `Reactions` runs on. Walk `Message` to the message it's on, `Channel` to the channel, `Reactor` to the user. Also the reaction WRITE: created along a message's `Reactions` edge, which is how a movement reacts to the message it was handed.",
+              "fieldDocs": {
+                "Emoji": "The reaction emoji name (e.g. \"thumbsup\"), without colons. On a write along `msg-[:Reactions]->`: the single emoji to react with — required.",
+                "Channel": "The C… channel id the reaction is in (read-only — walk the `Channel` edge for the Channel node).",
+                "Reactor": "The U… id of the user who added the reaction (read-only — walk the `Reactor` edge for the User node)."
+              },
+              "fieldIds": {
+                "Emoji": "emoji",
+                "Channel": "channel",
+                "Reactor": "reactor"
               }
             },
             "Channel": {
@@ -3375,20 +3728,51 @@
                   "capability": {
                     "filter": "bounded",
                     "order": "bounded",
-                    "supportsLimit": true
+                    "supportsLimit": true,
+                    "naturalOrder": {
+                      "field": "Timestamp",
+                      "direction": "desc"
+                    }
                   },
                   "sequenced": "chronological",
-                  "writable": true
+                  "writable": true,
+                  "listenable": true,
+                  "cursor": false,
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels"
+                  ]
                 },
                 "Members": {
                   "target": "User"
                 }
+              },
+              "description": "A Slack channel the connected bot can see. Select one with WHERE on `Name`, then walk its `Messages` (history the bot can read) or `Members`. A WHERE on a message's `Timestamp` narrows the history at Slack rather than after the fetch. Listen on its `Messages` for each new message (`listen to chat-[ch:Channels WHERE ch.Name == \"deals\"]->-[:Messages]->`): each arrives with its channel, so the channel's `Name` is judged on the message itself.",
+              "fieldDocs": {
+                "Name": "This workspace has 3 channels — every one of them is offered as a value for this field, so use the field's own values rather than guessing or assuming a channel is missing."
+              },
+              "fieldIds": {
+                "Id": "id",
+                "Name": "name",
+                "Topic": "topic",
+                "Is Private": "is_private"
               }
             },
             "User": {
-              "properties": {},
+              "properties": {
+                "Id": "text",
+                "Name": "text",
+                "Real Name": "text",
+                "Email": "text"
+              },
               "edges": {},
-              "undescribed": true
+              "description": "A Slack workspace member.",
+              "fieldIds": {
+                "Id": "id",
+                "Name": "name",
+                "Real Name": "real_name",
+                "Email": "email"
+              }
             }
           },
           "collections": {
@@ -3412,15 +3796,19 @@
                 "Buttons": {
                   "kind": "list",
                   "of": "json"
-                }
+                },
+                "Topic": "text"
               },
               "resultShape": {
                 "externalId": "text",
                 "url": "text",
+                "Id": "text",
                 "Message": "text",
                 "User": "text",
                 "Channel": "text",
                 "Timestamp": "date",
+                "Topic": "text",
+                "Mentions App": "boolean",
                 "File": "file",
                 "Blocks": {
                   "kind": "list",
@@ -3449,6 +3837,11 @@
                   "listenable": true,
                   "cursor": false,
                   "identity": "Id",
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels",
+                    "Messages"
+                  ],
                   "literalsFrom": [
                     {
                       "at": [
@@ -3458,7 +3851,20 @@
                       "from": "Buttons[].Value"
                     }
                   ],
-                  "description": "A press on one of this message's Buttons (or a control in its Blocks): `await msg-[:Interactions]->` waits for the next one."
+                  "description": "A press on one of this message's Buttons (or a control in its Blocks): `await msg-[:Interactions]->` waits for the next one, and `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->` runs once per press on any message written with that Topic."
+                },
+                "Reactions": {
+                  "target": "Reaction",
+                  "readable": false,
+                  "writable": true,
+                  "listenable": true,
+                  "cursor": false,
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels"
+                  ],
+                  "attributes": true,
+                  "description": "React to this message with an emoji, or hear a reaction added: `listen to chat-[ch:Channels WHERE ch.Name == \"deals\"]->-[:Messages]->-[:Reactions]->`. A reaction arrives with its channel, not its message, so a listen narrows it by channel; reading a message's reactions back is not offered (a call per message)."
                 },
                 "Author": {
                   "target": "User"
@@ -3469,9 +3875,10 @@
               },
               "fieldDocs": {
                 "Message": "The message body. Required unless a File is attached or Blocks are set (at least one of Message / File / Blocks). Use Slack-native formatting (*bold*, _italic_, <url|text>).",
-                "File": "Optional file to upload with the message — the Message text rides as the file caption, one visible Slack message. Send-side only: a received message's files are on its Files edge — read `msg-[:Files]->.File`. A message is either a File or Blocks, never both.",
+                "File": "Optional file to upload with the message — the Message text rides as the file caption, one visible Slack message. Send-side only: a received message's files are on its Files edge — read `msg-[:Files]->.File`. A message is one of File, Blocks or Buttons.",
                 "Blocks": "Slack Block Kit blocks, exactly as in Slack's docs — assembled verbatim and passed through (no wrapping, no typed shape here; a malformed block surfaces as a loud Slack error at run time). For plain buttons write Buttons instead. A press on any control in the blocks arrives on the message's Interactions, its value in the Action's Value: a button's or option's `value`, a picker's pick. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). A message is one of File, Blocks or Buttons.",
-                "Buttons": "Buttons under the Message text, each `{ Text: \"Approve\", Value: \"approve\" }`: Text is the label, Value what a press answers with. Wait for a press with `await msg-[:Interactions]->`; `only(press-[:Actions]->).Value` is one of the Values written. Needs Message text; never with File or Blocks."
+                "Buttons": "Buttons under the Message text, each `{ Text: \"Approve\", Value: \"approve\" }`: Text is the label, Value what a press answers with. Wait for a press with `await msg-[:Interactions]->`; `only(press-[:Actions]->).Value` is one of the Values written. Needs Message text; never with File or Blocks.",
+                "Topic": "A marker of your own for a message with Buttons (`Topic: \"lunch-poll\"`), so a listen can tell its presses from other messages' presses: `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->`. Only a message with Buttons takes one: Slack keeps no other data on a message that comes back with a press, so the Topic is stored as the id of the block its buttons sit in (`lf:<topic>`), and read back from there — on the pressed message and on a listed one alike. It is written only with Buttons, and block ids starting `lf:` are reserved for it: a message whose own Blocks use one is refused."
               },
               "writeUnion": {
                 "variants": [
@@ -3493,22 +3900,56 @@
                     "name": "a post with buttons",
                     "fields": [
                       "Message",
-                      "Buttons"
+                      "Buttons",
+                      "Topic"
                     ]
                   }
                 ]
               }
+            },
+            "Reaction": {
+              "fields": {
+                "Emoji": "text"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Emoji": "text",
+                "Channel": "text",
+                "Reactor": "text"
+              },
+              "edges": {
+                "Message": {
+                  "target": "Message"
+                },
+                "Channel": {
+                  "target": "Channel"
+                },
+                "Reactor": {
+                  "target": "User"
+                }
+              },
+              "requiredFields": [
+                "Emoji"
+              ],
+              "fieldDocs": {
+                "Emoji": "The reaction emoji name (e.g. \"thumbsup\"), without colons. On a write along `msg-[:Reactions]->`: the single emoji to react with — required."
+              }
             }
-          }
+          },
+          "supportsInPlaceUpdate": true
         },
         "team_workspace": {
           "positions": {
             "Message": {
               "properties": {
+                "Id": "text",
                 "Message": "text",
                 "User": "text",
                 "Channel": "text",
-                "Timestamp": "date"
+                "Timestamp": "date",
+                "Topic": "text",
+                "Mentions App": "boolean"
               },
               "edges": {
                 "Files": {
@@ -3528,6 +3969,11 @@
                   "listenable": true,
                   "cursor": false,
                   "identity": "Id",
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels",
+                    "Messages"
+                  ],
                   "literalsFrom": [
                     {
                       "at": [
@@ -3537,7 +3983,20 @@
                       "from": "Buttons[].Value"
                     }
                   ],
-                  "description": "A press on one of this message's Buttons (or a control in its Blocks): `await msg-[:Interactions]->` waits for the next one."
+                  "description": "A press on one of this message's Buttons (or a control in its Blocks): `await msg-[:Interactions]->` waits for the next one, and `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->` runs once per press on any message written with that Topic."
+                },
+                "Reactions": {
+                  "target": "Reaction",
+                  "readable": false,
+                  "writable": true,
+                  "listenable": true,
+                  "cursor": false,
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels"
+                  ],
+                  "attributes": true,
+                  "description": "React to this message with an emoji, or hear a reaction added: `listen to chat-[ch:Channels WHERE ch.Name == \"deals\"]->-[:Messages]->-[:Reactions]->`. A reaction arrives with its channel, not its message, so a listen narrows it by channel; reading a message's reactions back is not offered (a call per message)."
                 },
                 "Author": {
                   "target": "User"
@@ -3562,12 +4021,47 @@
                 "File",
                 "Blocks",
                 "Buttons"
-              ]
+              ],
+              "description": "A Slack message — what a listen on a channel's `Messages` delivers, whole: read `m.Message` straight off it, reply along its `Replies` edge, react to it along its `Reactions` edge. Created only along an edge: post via a Channel's `Messages` edge, reply via a message's `Replies` edge — the channel and thread come from the parent, never from fields.",
+              "fieldDocs": {
+                "Id": "Names this message in its workspace: its channel's id and its Slack timestamp (`C…:1700000000.000100`).",
+                "Message": "The message body. Required unless a File is attached or Blocks are set (at least one of Message / File / Blocks). Use Slack-native formatting (*bold*, _italic_, <url|text>).",
+                "File": "Optional file to upload with the message — the Message text rides as the file caption, one visible Slack message. Send-side only: a received message's files are on its Files edge — read `msg-[:Files]->.File`. A message is one of File, Blocks or Buttons.",
+                "Blocks": "Slack Block Kit blocks, exactly as in Slack's docs — assembled verbatim and passed through (no wrapping, no typed shape here; a malformed block surfaces as a loud Slack error at run time). For plain buttons write Buttons instead. A press on any control in the blocks arrives on the message's Interactions, its value in the Action's Value: a button's or option's `value`, a picker's pick. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). A message is one of File, Blocks or Buttons.",
+                "Buttons": "Buttons under the Message text, each `{ Text: \"Approve\", Value: \"approve\" }`: Text is the label, Value what a press answers with. Wait for a press with `await msg-[:Interactions]->`; `only(press-[:Actions]->).Value` is one of the Values written. Needs Message text; never with File or Blocks.",
+                "Channel": "The C… channel id (read-only — a post is written along a Channel's `Messages` edge).",
+                "Timestamp": "When the message was posted.",
+                "Topic": "A marker of your own for a message with Buttons (`Topic: \"lunch-poll\"`), so a listen can tell its presses from other messages' presses: `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->`. Only a message with Buttons takes one: Slack keeps no other data on a message that comes back with a press, so the Topic is stored as the id of the block its buttons sit in (`lf:<topic>`), and read back from there — on the pressed message and on a listed one alike. It is written only with Buttons, and block ids starting `lf:` are reserved for it: a message whose own Blocks use one is refused.",
+                "Mentions App": "Whether the message @-mentions the connected app: `listen to chat-[:Channels]->-[m:Messages WHERE m.`Mentions App` == true]->` runs when somebody asks it something."
+              },
+              "fieldIds": {
+                "Id": "id",
+                "Message": "text",
+                "User": "user",
+                "Channel": "channel",
+                "Timestamp": "timestamp",
+                "Topic": "topic",
+                "Mentions App": "mentions_app"
+              }
             },
             "File": {
-              "properties": {},
+              "properties": {
+                "File Id": "text",
+                "Name": "text",
+                "Content Type": "text",
+                "URL": "text",
+                "Size": "number",
+                "File": "file"
+              },
               "edges": {},
-              "undescribed": true
+              "fieldIds": {
+                "File Id": "id",
+                "Name": "name",
+                "Content Type": "contentType",
+                "URL": "url",
+                "Size": "size",
+                "File": "data"
+              }
             },
             "Interaction": {
               "properties": {
@@ -3583,12 +4077,20 @@
                 "By": {
                   "target": "User",
                   "description": "The member who pressed."
+                },
+                "Message": {
+                  "target": "Message",
+                  "description": "The message pressed, as Slack sent it with the press: its text, its `Timestamp`, its `Topic`."
                 }
               },
-              "description": "Someone pressing a button (or using another control) on a message — what `await msg-[:Interactions]->` binds. `Actions` are the controls used, `By` the member who pressed.",
+              "description": "Someone pressing a button (or using another control) on a message — what `await msg-[:Interactions]->` binds, and what a listen on a message's `Interactions` runs on. `Actions` are the controls used, `By` the member who pressed, `Message` the message pressed.",
               "fieldDocs": {
                 "Id": "Names this press (Slack's trigger id).",
                 "At": "When the press was made."
+              },
+              "fieldIds": {
+                "Id": "id",
+                "At": "pressed_at"
               }
             },
             "Action": {
@@ -3601,6 +4103,10 @@
               "fieldDocs": {
                 "Value": "What the control answered: a button's Value (one of the Buttons written), a select's chosen option value, a picker's date or time.",
                 "Text": "The label of the button, or of the option chosen."
+              },
+              "fieldIds": {
+                "Value": "value",
+                "Text": "text"
               }
             },
             "Reaction": {
@@ -3619,6 +4125,17 @@
                 "Reactor": {
                   "target": "User"
                 }
+              },
+              "description": "An emoji reaction added to a message: what a listen on a message's `Reactions` runs on. Walk `Message` to the message it's on, `Channel` to the channel, `Reactor` to the user. Also the reaction WRITE: created along a message's `Reactions` edge, which is how a movement reacts to the message it was handed.",
+              "fieldDocs": {
+                "Emoji": "The reaction emoji name (e.g. \"thumbsup\"), without colons. On a write along `msg-[:Reactions]->`: the single emoji to react with — required.",
+                "Channel": "The C… channel id the reaction is in (read-only — walk the `Channel` edge for the Channel node).",
+                "Reactor": "The U… id of the user who added the reaction (read-only — walk the `Reactor` edge for the User node)."
+              },
+              "fieldIds": {
+                "Emoji": "emoji",
+                "Channel": "channel",
+                "Reactor": "reactor"
               }
             },
             "Channel": {
@@ -3642,20 +4159,51 @@
                   "capability": {
                     "filter": "bounded",
                     "order": "bounded",
-                    "supportsLimit": true
+                    "supportsLimit": true,
+                    "naturalOrder": {
+                      "field": "Timestamp",
+                      "direction": "desc"
+                    }
                   },
                   "sequenced": "chronological",
-                  "writable": true
+                  "writable": true,
+                  "listenable": true,
+                  "cursor": false,
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels"
+                  ]
                 },
                 "Members": {
                   "target": "User"
                 }
+              },
+              "description": "A Slack channel the connected bot can see. Select one with WHERE on `Name`, then walk its `Messages` (history the bot can read) or `Members`. A WHERE on a message's `Timestamp` narrows the history at Slack rather than after the fetch. Listen on its `Messages` for each new message (`listen to chat-[ch:Channels WHERE ch.Name == \"deals\"]->-[:Messages]->`): each arrives with its channel, so the channel's `Name` is judged on the message itself.",
+              "fieldDocs": {
+                "Name": "This workspace has 3 channels — every one of them is offered as a value for this field, so use the field's own values rather than guessing or assuming a channel is missing."
+              },
+              "fieldIds": {
+                "Id": "id",
+                "Name": "name",
+                "Topic": "topic",
+                "Is Private": "is_private"
               }
             },
             "User": {
-              "properties": {},
+              "properties": {
+                "Id": "text",
+                "Name": "text",
+                "Real Name": "text",
+                "Email": "text"
+              },
               "edges": {},
-              "undescribed": true
+              "description": "A Slack workspace member.",
+              "fieldIds": {
+                "Id": "id",
+                "Name": "name",
+                "Real Name": "real_name",
+                "Email": "email"
+              }
             }
           },
           "collections": {
@@ -3679,15 +4227,19 @@
                 "Buttons": {
                   "kind": "list",
                   "of": "json"
-                }
+                },
+                "Topic": "text"
               },
               "resultShape": {
                 "externalId": "text",
                 "url": "text",
+                "Id": "text",
                 "Message": "text",
                 "User": "text",
                 "Channel": "text",
                 "Timestamp": "date",
+                "Topic": "text",
+                "Mentions App": "boolean",
                 "File": "file",
                 "Blocks": {
                   "kind": "list",
@@ -3716,6 +4268,11 @@
                   "listenable": true,
                   "cursor": false,
                   "identity": "Id",
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels",
+                    "Messages"
+                  ],
                   "literalsFrom": [
                     {
                       "at": [
@@ -3725,7 +4282,20 @@
                       "from": "Buttons[].Value"
                     }
                   ],
-                  "description": "A press on one of this message's Buttons (or a control in its Blocks): `await msg-[:Interactions]->` waits for the next one."
+                  "description": "A press on one of this message's Buttons (or a control in its Blocks): `await msg-[:Interactions]->` waits for the next one, and `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->` runs once per press on any message written with that Topic."
+                },
+                "Reactions": {
+                  "target": "Reaction",
+                  "readable": false,
+                  "writable": true,
+                  "listenable": true,
+                  "cursor": false,
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels"
+                  ],
+                  "attributes": true,
+                  "description": "React to this message with an emoji, or hear a reaction added: `listen to chat-[ch:Channels WHERE ch.Name == \"deals\"]->-[:Messages]->-[:Reactions]->`. A reaction arrives with its channel, not its message, so a listen narrows it by channel; reading a message's reactions back is not offered (a call per message)."
                 },
                 "Author": {
                   "target": "User"
@@ -3736,9 +4306,10 @@
               },
               "fieldDocs": {
                 "Message": "The message body. Required unless a File is attached or Blocks are set (at least one of Message / File / Blocks). Use Slack-native formatting (*bold*, _italic_, <url|text>).",
-                "File": "Optional file to upload with the message — the Message text rides as the file caption, one visible Slack message. Send-side only: a received message's files are on its Files edge — read `msg-[:Files]->.File`. A message is either a File or Blocks, never both.",
+                "File": "Optional file to upload with the message — the Message text rides as the file caption, one visible Slack message. Send-side only: a received message's files are on its Files edge — read `msg-[:Files]->.File`. A message is one of File, Blocks or Buttons.",
                 "Blocks": "Slack Block Kit blocks, exactly as in Slack's docs — assembled verbatim and passed through (no wrapping, no typed shape here; a malformed block surfaces as a loud Slack error at run time). For plain buttons write Buttons instead. A press on any control in the blocks arrives on the message's Interactions, its value in the Action's Value: a button's or option's `value`, a picker's pick. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). A message is one of File, Blocks or Buttons.",
-                "Buttons": "Buttons under the Message text, each `{ Text: \"Approve\", Value: \"approve\" }`: Text is the label, Value what a press answers with. Wait for a press with `await msg-[:Interactions]->`; `only(press-[:Actions]->).Value` is one of the Values written. Needs Message text; never with File or Blocks."
+                "Buttons": "Buttons under the Message text, each `{ Text: \"Approve\", Value: \"approve\" }`: Text is the label, Value what a press answers with. Wait for a press with `await msg-[:Interactions]->`; `only(press-[:Actions]->).Value` is one of the Values written. Needs Message text; never with File or Blocks.",
+                "Topic": "A marker of your own for a message with Buttons (`Topic: \"lunch-poll\"`), so a listen can tell its presses from other messages' presses: `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->`. Only a message with Buttons takes one: Slack keeps no other data on a message that comes back with a press, so the Topic is stored as the id of the block its buttons sit in (`lf:<topic>`), and read back from there — on the pressed message and on a listed one alike. It is written only with Buttons, and block ids starting `lf:` are reserved for it: a message whose own Blocks use one is refused."
               },
               "writeUnion": {
                 "variants": [
@@ -3760,22 +4331,56 @@
                     "name": "a post with buttons",
                     "fields": [
                       "Message",
-                      "Buttons"
+                      "Buttons",
+                      "Topic"
                     ]
                   }
                 ]
               }
+            },
+            "Reaction": {
+              "fields": {
+                "Emoji": "text"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Emoji": "text",
+                "Channel": "text",
+                "Reactor": "text"
+              },
+              "edges": {
+                "Message": {
+                  "target": "Message"
+                },
+                "Channel": {
+                  "target": "Channel"
+                },
+                "Reactor": {
+                  "target": "User"
+                }
+              },
+              "requiredFields": [
+                "Emoji"
+              ],
+              "fieldDocs": {
+                "Emoji": "The reaction emoji name (e.g. \"thumbsup\"), without colons. On a write along `msg-[:Reactions]->`: the single emoji to react with — required."
+              }
             }
-          }
+          },
+          "supportsInPlaceUpdate": true
         },
         "my_slack": {
           "positions": {
             "Message": {
               "properties": {
+                "Id": "text",
                 "Message": "text",
                 "User": "text",
                 "Channel": "text",
-                "Timestamp": "date"
+                "Timestamp": "date",
+                "Topic": "text",
+                "Mentions App": "boolean"
               },
               "edges": {
                 "Files": {
@@ -3795,6 +4400,11 @@
                   "listenable": true,
                   "cursor": false,
                   "identity": "Id",
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels",
+                    "Messages"
+                  ],
                   "literalsFrom": [
                     {
                       "at": [
@@ -3804,7 +4414,20 @@
                       "from": "Buttons[].Value"
                     }
                   ],
-                  "description": "A press on one of this message's Buttons (or a control in its Blocks): `await msg-[:Interactions]->` waits for the next one."
+                  "description": "A press on one of this message's Buttons (or a control in its Blocks): `await msg-[:Interactions]->` waits for the next one, and `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->` runs once per press on any message written with that Topic."
+                },
+                "Reactions": {
+                  "target": "Reaction",
+                  "readable": false,
+                  "writable": true,
+                  "listenable": true,
+                  "cursor": false,
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels"
+                  ],
+                  "attributes": true,
+                  "description": "React to this message with an emoji, or hear a reaction added: `listen to chat-[ch:Channels WHERE ch.Name == \"deals\"]->-[:Messages]->-[:Reactions]->`. A reaction arrives with its channel, not its message, so a listen narrows it by channel; reading a message's reactions back is not offered (a call per message)."
                 },
                 "Author": {
                   "target": "User"
@@ -3829,12 +4452,47 @@
                 "File",
                 "Blocks",
                 "Buttons"
-              ]
+              ],
+              "description": "A Slack message — what a listen on a channel's `Messages` delivers, whole: read `m.Message` straight off it, reply along its `Replies` edge, react to it along its `Reactions` edge. Created only along an edge: post via a Channel's `Messages` edge, reply via a message's `Replies` edge — the channel and thread come from the parent, never from fields.",
+              "fieldDocs": {
+                "Id": "Names this message in its workspace: its channel's id and its Slack timestamp (`C…:1700000000.000100`).",
+                "Message": "The message body. Required unless a File is attached or Blocks are set (at least one of Message / File / Blocks). Use Slack-native formatting (*bold*, _italic_, <url|text>).",
+                "File": "Optional file to upload with the message — the Message text rides as the file caption, one visible Slack message. Send-side only: a received message's files are on its Files edge — read `msg-[:Files]->.File`. A message is one of File, Blocks or Buttons.",
+                "Blocks": "Slack Block Kit blocks, exactly as in Slack's docs — assembled verbatim and passed through (no wrapping, no typed shape here; a malformed block surfaces as a loud Slack error at run time). For plain buttons write Buttons instead. A press on any control in the blocks arrives on the message's Interactions, its value in the Action's Value: a button's or option's `value`, a picker's pick. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). A message is one of File, Blocks or Buttons.",
+                "Buttons": "Buttons under the Message text, each `{ Text: \"Approve\", Value: \"approve\" }`: Text is the label, Value what a press answers with. Wait for a press with `await msg-[:Interactions]->`; `only(press-[:Actions]->).Value` is one of the Values written. Needs Message text; never with File or Blocks.",
+                "Channel": "The C… channel id (read-only — a post is written along a Channel's `Messages` edge).",
+                "Timestamp": "When the message was posted.",
+                "Topic": "A marker of your own for a message with Buttons (`Topic: \"lunch-poll\"`), so a listen can tell its presses from other messages' presses: `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->`. Only a message with Buttons takes one: Slack keeps no other data on a message that comes back with a press, so the Topic is stored as the id of the block its buttons sit in (`lf:<topic>`), and read back from there — on the pressed message and on a listed one alike. It is written only with Buttons, and block ids starting `lf:` are reserved for it: a message whose own Blocks use one is refused.",
+                "Mentions App": "Whether the message @-mentions the connected app: `listen to chat-[:Channels]->-[m:Messages WHERE m.`Mentions App` == true]->` runs when somebody asks it something."
+              },
+              "fieldIds": {
+                "Id": "id",
+                "Message": "text",
+                "User": "user",
+                "Channel": "channel",
+                "Timestamp": "timestamp",
+                "Topic": "topic",
+                "Mentions App": "mentions_app"
+              }
             },
             "File": {
-              "properties": {},
+              "properties": {
+                "File Id": "text",
+                "Name": "text",
+                "Content Type": "text",
+                "URL": "text",
+                "Size": "number",
+                "File": "file"
+              },
               "edges": {},
-              "undescribed": true
+              "fieldIds": {
+                "File Id": "id",
+                "Name": "name",
+                "Content Type": "contentType",
+                "URL": "url",
+                "Size": "size",
+                "File": "data"
+              }
             },
             "Interaction": {
               "properties": {
@@ -3850,12 +4508,20 @@
                 "By": {
                   "target": "User",
                   "description": "The member who pressed."
+                },
+                "Message": {
+                  "target": "Message",
+                  "description": "The message pressed, as Slack sent it with the press: its text, its `Timestamp`, its `Topic`."
                 }
               },
-              "description": "Someone pressing a button (or using another control) on a message — what `await msg-[:Interactions]->` binds. `Actions` are the controls used, `By` the member who pressed.",
+              "description": "Someone pressing a button (or using another control) on a message — what `await msg-[:Interactions]->` binds, and what a listen on a message's `Interactions` runs on. `Actions` are the controls used, `By` the member who pressed, `Message` the message pressed.",
               "fieldDocs": {
                 "Id": "Names this press (Slack's trigger id).",
                 "At": "When the press was made."
+              },
+              "fieldIds": {
+                "Id": "id",
+                "At": "pressed_at"
               }
             },
             "Action": {
@@ -3868,6 +4534,10 @@
               "fieldDocs": {
                 "Value": "What the control answered: a button's Value (one of the Buttons written), a select's chosen option value, a picker's date or time.",
                 "Text": "The label of the button, or of the option chosen."
+              },
+              "fieldIds": {
+                "Value": "value",
+                "Text": "text"
               }
             },
             "Reaction": {
@@ -3886,6 +4556,17 @@
                 "Reactor": {
                   "target": "User"
                 }
+              },
+              "description": "An emoji reaction added to a message: what a listen on a message's `Reactions` runs on. Walk `Message` to the message it's on, `Channel` to the channel, `Reactor` to the user. Also the reaction WRITE: created along a message's `Reactions` edge, which is how a movement reacts to the message it was handed.",
+              "fieldDocs": {
+                "Emoji": "The reaction emoji name (e.g. \"thumbsup\"), without colons. On a write along `msg-[:Reactions]->`: the single emoji to react with — required.",
+                "Channel": "The C… channel id the reaction is in (read-only — walk the `Channel` edge for the Channel node).",
+                "Reactor": "The U… id of the user who added the reaction (read-only — walk the `Reactor` edge for the User node)."
+              },
+              "fieldIds": {
+                "Emoji": "emoji",
+                "Channel": "channel",
+                "Reactor": "reactor"
               }
             },
             "Channel": {
@@ -3909,20 +4590,51 @@
                   "capability": {
                     "filter": "bounded",
                     "order": "bounded",
-                    "supportsLimit": true
+                    "supportsLimit": true,
+                    "naturalOrder": {
+                      "field": "Timestamp",
+                      "direction": "desc"
+                    }
                   },
                   "sequenced": "chronological",
-                  "writable": true
+                  "writable": true,
+                  "listenable": true,
+                  "cursor": false,
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels"
+                  ]
                 },
                 "Members": {
                   "target": "User"
                 }
+              },
+              "description": "A Slack channel the connected bot can see. Select one with WHERE on `Name`, then walk its `Messages` (history the bot can read) or `Members`. A WHERE on a message's `Timestamp` narrows the history at Slack rather than after the fetch. Listen on its `Messages` for each new message (`listen to chat-[ch:Channels WHERE ch.Name == \"deals\"]->-[:Messages]->`): each arrives with its channel, so the channel's `Name` is judged on the message itself.",
+              "fieldDocs": {
+                "Name": "This workspace has 3 channels — every one of them is offered as a value for this field, so use the field's own values rather than guessing or assuming a channel is missing."
+              },
+              "fieldIds": {
+                "Id": "id",
+                "Name": "name",
+                "Topic": "topic",
+                "Is Private": "is_private"
               }
             },
             "User": {
-              "properties": {},
+              "properties": {
+                "Id": "text",
+                "Name": "text",
+                "Real Name": "text",
+                "Email": "text"
+              },
               "edges": {},
-              "undescribed": true
+              "description": "A Slack workspace member.",
+              "fieldIds": {
+                "Id": "id",
+                "Name": "name",
+                "Real Name": "real_name",
+                "Email": "email"
+              }
             }
           },
           "collections": {
@@ -3946,15 +4658,19 @@
                 "Buttons": {
                   "kind": "list",
                   "of": "json"
-                }
+                },
+                "Topic": "text"
               },
               "resultShape": {
                 "externalId": "text",
                 "url": "text",
+                "Id": "text",
                 "Message": "text",
                 "User": "text",
                 "Channel": "text",
                 "Timestamp": "date",
+                "Topic": "text",
+                "Mentions App": "boolean",
                 "File": "file",
                 "Blocks": {
                   "kind": "list",
@@ -3983,6 +4699,11 @@
                   "listenable": true,
                   "cursor": false,
                   "identity": "Id",
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels",
+                    "Messages"
+                  ],
                   "literalsFrom": [
                     {
                       "at": [
@@ -3992,7 +4713,20 @@
                       "from": "Buttons[].Value"
                     }
                   ],
-                  "description": "A press on one of this message's Buttons (or a control in its Blocks): `await msg-[:Interactions]->` waits for the next one."
+                  "description": "A press on one of this message's Buttons (or a control in its Blocks): `await msg-[:Interactions]->` waits for the next one, and `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->` runs once per press on any message written with that Topic."
+                },
+                "Reactions": {
+                  "target": "Reaction",
+                  "readable": false,
+                  "writable": true,
+                  "listenable": true,
+                  "cursor": false,
+                  "delivery": "connection",
+                  "carries": [
+                    "Channels"
+                  ],
+                  "attributes": true,
+                  "description": "React to this message with an emoji, or hear a reaction added: `listen to chat-[ch:Channels WHERE ch.Name == \"deals\"]->-[:Messages]->-[:Reactions]->`. A reaction arrives with its channel, not its message, so a listen narrows it by channel; reading a message's reactions back is not offered (a call per message)."
                 },
                 "Author": {
                   "target": "User"
@@ -4003,9 +4737,10 @@
               },
               "fieldDocs": {
                 "Message": "The message body. Required unless a File is attached or Blocks are set (at least one of Message / File / Blocks). Use Slack-native formatting (*bold*, _italic_, <url|text>).",
-                "File": "Optional file to upload with the message — the Message text rides as the file caption, one visible Slack message. Send-side only: a received message's files are on its Files edge — read `msg-[:Files]->.File`. A message is either a File or Blocks, never both.",
+                "File": "Optional file to upload with the message — the Message text rides as the file caption, one visible Slack message. Send-side only: a received message's files are on its Files edge — read `msg-[:Files]->.File`. A message is one of File, Blocks or Buttons.",
                 "Blocks": "Slack Block Kit blocks, exactly as in Slack's docs — assembled verbatim and passed through (no wrapping, no typed shape here; a malformed block surfaces as a loud Slack error at run time). For plain buttons write Buttons instead. A press on any control in the blocks arrives on the message's Interactions, its value in the Action's Value: a button's or option's `value`, a picker's pick. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). A message is one of File, Blocks or Buttons.",
-                "Buttons": "Buttons under the Message text, each `{ Text: \"Approve\", Value: \"approve\" }`: Text is the label, Value what a press answers with. Wait for a press with `await msg-[:Interactions]->`; `only(press-[:Actions]->).Value` is one of the Values written. Needs Message text; never with File or Blocks."
+                "Buttons": "Buttons under the Message text, each `{ Text: \"Approve\", Value: \"approve\" }`: Text is the label, Value what a press answers with. Wait for a press with `await msg-[:Interactions]->`; `only(press-[:Actions]->).Value` is one of the Values written. Needs Message text; never with File or Blocks.",
+                "Topic": "A marker of your own for a message with Buttons (`Topic: \"lunch-poll\"`), so a listen can tell its presses from other messages' presses: `listen to chat-[:Channels]->-[m:Messages WHERE m.Topic == \"lunch-poll\"]->-[:Interactions]->`. Only a message with Buttons takes one: Slack keeps no other data on a message that comes back with a press, so the Topic is stored as the id of the block its buttons sit in (`lf:<topic>`), and read back from there — on the pressed message and on a listed one alike. It is written only with Buttons, and block ids starting `lf:` are reserved for it: a message whose own Blocks use one is refused."
               },
               "writeUnion": {
                 "variants": [
@@ -4027,13 +4762,44 @@
                     "name": "a post with buttons",
                     "fields": [
                       "Message",
-                      "Buttons"
+                      "Buttons",
+                      "Topic"
                     ]
                   }
                 ]
               }
+            },
+            "Reaction": {
+              "fields": {
+                "Emoji": "text"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Emoji": "text",
+                "Channel": "text",
+                "Reactor": "text"
+              },
+              "edges": {
+                "Message": {
+                  "target": "Message"
+                },
+                "Channel": {
+                  "target": "Channel"
+                },
+                "Reactor": {
+                  "target": "User"
+                }
+              },
+              "requiredFields": [
+                "Emoji"
+              ],
+              "fieldDocs": {
+                "Emoji": "The reaction emoji name (e.g. \"thumbsup\"), without colons. On a write along `msg-[:Reactions]->`: the single emoji to react with — required."
+              }
             }
-          }
+          },
+          "supportsInPlaceUpdate": true
         }
       }
     },
@@ -4935,14 +5701,25 @@
         {
           "name": "credentials",
           "kind": "credential",
-          "required": true
+          "required": false
         }
       ],
+      "listenSettingsBecome": {
+        "path": [
+          "Messages"
+        ],
+        "aliases": [
+          "m"
+        ],
+        "paramFrom": "Message",
+        "keys": {}
+      },
       "schemas": {
         "team_telegram": {
           "positions": {
             "Message": {
               "properties": {
+                "Id": "text",
                 "Message Id": "text",
                 "Text": "text",
                 "Chat Id": "text",
@@ -4954,33 +5731,103 @@
               },
               "edges": {
                 "Attachments": {
-                  "target": "Attachment"
+                  "target": "Attachment",
+                  "description": "Files attached to the message — documents, photos, voice notes, audio (zero or more)."
                 },
                 "Replies": {
                   "target": "Message",
                   "readable": false,
-                  "writable": true
+                  "writable": true,
+                  "description": "Send a reply threaded under this message (write-only — the Bot API cannot list replies). The chat and the reply target come from this message."
                 },
                 "Sender": {
-                  "target": "Linked User"
+                  "target": "Linked User",
+                  "description": "The linked user who sent this message — resolves only for a sender who completed the connect handshake (private chats); a group chat or an unlinked sender resolves to nothing."
                 }
               },
               "writeOnlyProperties": [
                 "Reply Markup"
-              ]
+              ],
+              "description": "A Telegram message — what a listen on `Messages` delivers, whole: read `e.`Text`` straight off the arrival, reply along its `Replies` edge. Created only along an edge: DM a linked user via their `Messages` edge, reply via a message's `Replies` edge — the chat and the reply target come from the parent, never from fields.",
+              "fieldDocs": {
+                "Id": "Names an arriving message across chats: `<Chat Id>:<Message Id>`, since Telegram numbers a message within its chat. The same on every redelivery.",
+                "Message Id": "The Telegram message id, within its chat.",
+                "Text": "The message text. On an inbound message: the received text (or the media caption; empty for caption-less media). On a send: the message body — required.",
+                "Reply Markup": "Telegram's `reply_markup`, exactly as the Bot API spells it — passed through verbatim (no wrapping, no typed shape here; a malformed keyboard surfaces as a loud Telegram error at run time). Usually an inline keyboard: rows of buttons, each `{ text, url }` (opens a link). To make a tap DO something, write a form from the `@lf/forms` adapter (`form = write forms-[:Forms]-> { Title: …, Fields: … }`), put its `form.Url` on a `url` button, and `await form-[:Submissions]->`: the form also asks for anything a person has to fill in, which Telegram does not capture at tap time. A `{ text, callback_data }` button reaches no run. Buttons compose with everything else on the send. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). Example:\n{ inline_keyboard: [\n  [ { text: \"Answer\", url: \"${form.Url}\" } ],\n] }",
+                "Chat Id": "The id of the chat the message belongs to — the value to send a reply back to, and what a listen narrows to one chat by (`m.`Chat Id` == \"42\"`).",
+                "Chat Type": "private / group / supergroup / channel.",
+                "Sender Id": "The numeric id of the user who sent the message.",
+                "Sender Username": "The @username of the sender, when set.",
+                "Sender First Name": "The sender's first name.",
+                "Date": "When the message was sent (ISO-8601)."
+              },
+              "fieldIds": {
+                "Id": "id",
+                "Message Id": "message_id",
+                "Text": "text",
+                "Chat Id": "chat_id",
+                "Chat Type": "chat_type",
+                "Sender Id": "sender_id",
+                "Sender Username": "sender_username",
+                "Sender First Name": "sender_first_name",
+                "Date": "date"
+              }
             },
             "Attachment": {
-              "properties": {},
+              "properties": {
+                "File Id": "text",
+                "Name": "text",
+                "Content Type": "text",
+                "Size": "number",
+                "File": "file"
+              },
               "edges": {},
-              "undescribed": true
+              "fieldDocs": {
+                "File Id": "The Bot API file id — resolves to the file bytes."
+              },
+              "fieldIds": {
+                "File Id": "file_id",
+                "Name": "name",
+                "Content Type": "contentType",
+                "Size": "size",
+                "File": "data"
+              }
             },
             "Linked User": {
-              "properties": {},
-              "edges": {},
-              "undescribed": true
+              "properties": {
+                "Chat Id": "text",
+                "Email": "text",
+                "Linked At": "text"
+              },
+              "edges": {
+                "Messages": {
+                  "target": "Message",
+                  "readable": false,
+                  "writable": true,
+                  "description": "Send a message into this person's private bot chat (write-only — the Bot API cannot list a chat's history). The chat id is the linked user's own id."
+                }
+              },
+              "description": "A person who linked Telegram via the connect handshake. Their `Chat Id` is the value a send targets (private chat id = user id).",
+              "fieldDocs": {
+                "Chat Id": "The private chat id a send targets (= the Telegram user id).",
+                "Email": "The Listen-Fire account email this Telegram user linked as.",
+                "Linked At": "When the link handshake completed (ISO-8601)."
+              },
+              "fieldIds": {
+                "Chat Id": "chat_id",
+                "Email": "email",
+                "Linked At": "linked_at"
+              }
             }
           },
           "collections": {
+            "Messages": {
+              "target": "Message",
+              "readable": false,
+              "listenable": true,
+              "identity": "Id",
+              "delivery": "connection"
+            },
             "Linked Users": {
               "target": "Linked User"
             }
@@ -4995,6 +5842,7 @@
               "resultShape": {
                 "externalId": "text",
                 "url": "text",
+                "Id": "text",
                 "Message Id": "text",
                 "Text": "text",
                 "Chat Id": "text",
@@ -5007,15 +5855,18 @@
               },
               "edges": {
                 "Attachments": {
-                  "target": "Attachment"
+                  "target": "Attachment",
+                  "description": "Files attached to the message — documents, photos, voice notes, audio (zero or more)."
                 },
                 "Replies": {
                   "target": "Message",
                   "readable": false,
-                  "writable": true
+                  "writable": true,
+                  "description": "Send a reply threaded under this message (write-only — the Bot API cannot list replies). The chat and the reply target come from this message."
                 },
                 "Sender": {
-                  "target": "Linked User"
+                  "target": "Linked User",
+                  "description": "The linked user who sent this message — resolves only for a sender who completed the connect handshake (private chats); a group chat or an unlinked sender resolves to nothing."
                 }
               },
               "requiredFields": [
@@ -5023,200 +5874,168 @@
               ],
               "fieldDocs": {
                 "Text": "The message text. On an inbound message: the received text (or the media caption; empty for caption-less media). On a send: the message body — required.",
-                "Reply Markup": "Telegram's `reply_markup`, exactly as the Bot API spells it — passed through verbatim (no wrapping, no typed shape here; a malformed keyboard surfaces as a loud Telegram error at run time). Usually an inline keyboard: rows of buttons, each `{ text, url }` (opens a link) or `{ text, callback_data }` (a tap this bot handles, capped by Telegram at 64 BYTES). To make a tap DO something, mint a callback (`c = callback({ … })`) and put `\"${c.id}\"` in `callback_data` — it fits the 64-byte cap comfortably — one callback per button, since its body is what that button means. Telegram captures nothing at tap time, so a callback fired from a keyboard takes no values; anything a person has to fill in needs a `url` button instead. Buttons compose with everything else on the send. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). Example:\n{ inline_keyboard: [\n  [ { text: \"Approve\", callback_data: \"${approve.id}\" },\n    { text: \"Decline\", callback_data: \"${decline.id}\" } ],\n] }"
+                "Reply Markup": "Telegram's `reply_markup`, exactly as the Bot API spells it — passed through verbatim (no wrapping, no typed shape here; a malformed keyboard surfaces as a loud Telegram error at run time). Usually an inline keyboard: rows of buttons, each `{ text, url }` (opens a link). To make a tap DO something, write a form from the `@lf/forms` adapter (`form = write forms-[:Forms]-> { Title: …, Fields: … }`), put its `form.Url` on a `url` button, and `await form-[:Submissions]->`: the form also asks for anything a person has to fill in, which Telegram does not capture at tap time. A `{ text, callback_data }` button reaches no run. Buttons compose with everything else on the send. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). Example:\n{ inline_keyboard: [\n  [ { text: \"Answer\", url: \"${form.Url}\" } ],\n] }"
               }
             }
-          }
+          },
+          "supportsInPlaceUpdate": true
         }
       }
     },
     "whatsapp": {
       "canFire": true,
-      "constructionArgs": [],
-      "schemas": {
-        "": {
-          "positions": {
-            "Message": {
-              "properties": {
-                "Message Id": "text",
-                "From": "text",
-                "To": "text",
-                "Body": "text",
-                "WhatsApp Id": "text",
-                "Profile Name": "text",
-                "Timestamp": "text"
-              },
-              "edges": {
-                "Attachments": {
-                  "target": "Attachment"
-                },
-                "Replies": {
-                  "target": "Message",
-                  "readable": false,
-                  "writable": true
-                },
-                "Reactions": {
-                  "target": "Reaction",
-                  "readable": false,
-                  "writable": true
-                },
-                "Typing": {
-                  "target": "Typing",
-                  "ephemeral": true,
-                  "readable": false,
-                  "writable": true
-                }
-              },
-              "writeOnlyProperties": [
-                "File",
-                "Interactive"
-              ]
-            },
-            "Attachment": {
-              "properties": {},
-              "edges": {},
-              "undescribed": true
-            },
-            "Reaction": {
-              "properties": {
-                "Emoji": "text",
-                "Reacted Message Id": "text",
-                "Message Id": "text",
-                "From": "text",
-                "Profile Name": "text",
-                "Timestamp": "text"
-              },
-              "edges": {}
-            },
-            "Location": {
-              "properties": {
-                "Latitude": "number",
-                "Longitude": "number",
-                "Name": "text",
-                "Address": "text",
-                "Message Id": "text",
-                "From": "text",
-                "Profile Name": "text",
-                "Timestamp": "text"
-              },
-              "edges": {}
-            },
-            "Typing": {
-              "properties": {},
-              "edges": {},
-              "undescribed": true
-            }
+      "constructionArgs": [
+        {
+          "name": "credentials",
+          "kind": "credential",
+          "required": true
+        }
+      ],
+      "listenSettingsBecome": {
+        "path": [
+          "Messages"
+        ],
+        "aliases": [
+          "m"
+        ],
+        "paramFrom": "Message",
+        "keys": {},
+        "byEvent": {
+          "location": {
+            "path": [
+              "Locations"
+            ],
+            "aliases": [
+              "l"
+            ],
+            "paramFrom": "Location",
+            "keys": {}
           },
-          "collections": {},
-          "writableRoots": {},
-          "createShapes": {
-            "Message": {
-              "fields": {
-                "Body": "text",
-                "File": "file",
-                "Interactive": "json"
-              },
-              "resultShape": {
-                "externalId": "text",
-                "url": "text",
-                "Message Id": "text",
-                "From": "text",
-                "To": "text",
-                "Body": "text",
-                "WhatsApp Id": "text",
-                "Profile Name": "text",
-                "Timestamp": "text",
-                "File": "file",
-                "Interactive": "json"
-              },
-              "edges": {
-                "Attachments": {
-                  "target": "Attachment"
-                },
-                "Replies": {
-                  "target": "Message",
-                  "readable": false,
-                  "writable": true
-                },
-                "Reactions": {
-                  "target": "Reaction",
-                  "readable": false,
-                  "writable": true
-                },
-                "Typing": {
-                  "target": "Typing",
-                  "ephemeral": true,
-                  "readable": false,
-                  "writable": true
-                }
-              },
-              "fieldDocs": {
-                "Body": "The message text. Empty for media-only messages. At least one of Body / File on a send (the Body captions the file).",
-                "File": "A file to send (image / PDF / audio / video, routed by content type). At least one of Body / File. Send-side only: a received message's media is on its Attachments edge — read `msg-[:Attachments]->.File`.",
-                "Interactive": "WhatsApp's `interactive` object, exactly as the Cloud API spells it — passed through verbatim (no wrapping, no typed shape here; a malformed object surfaces as a loud WhatsApp error at run time, not at save time). Sending this REPLACES a plain-text send: the interactive type carries its own `body.text`, so the message's words go inside `interactive.body.text`, never in `Body` on the same send. Usually reply buttons: up to 3, each `{ type: \"reply\", reply: { id, title } }` (`title` capped at 20 characters). To make a tap DO something, mint a callback (`c = callback({ … })`) and put `\"${c.id}\"` in `reply.id` — WhatsApp allows up to 256 characters there, roomy for it — one callback per button, since its body is what that button means. WhatsApp captures nothing at tap time, so a callback fired from a button takes no values; anything a person has to fill in needs a plain-text reply instead. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). Example:\n{ type: \"button\",\n  body: { text: \"Ship the release?\" },\n  action: { buttons: [\n    { type: \"reply\", reply: { id: \"${approve.id}\", title: \"Approve\" } },\n    { type: \"reply\", reply: { id: \"${reject.id}\", title: \"Reject\" } } ] } }"
-              }
-            },
-            "Reaction": {
-              "fields": {
-                "Emoji": "text"
-              },
-              "resultShape": {
-                "externalId": "text",
-                "url": "text",
-                "Emoji": "text",
-                "Reacted Message Id": "text",
-                "Message Id": "text",
-                "From": "text",
-                "Profile Name": "text",
-                "Timestamp": "text"
-              },
-              "requiredFields": [
-                "Emoji"
-              ],
-              "fieldDocs": {
-                "Emoji": "The reaction emoji. Inbound: empty when the reaction was removed. On a write along msg-[:Reactions]->: the single emoji to react with — required."
-              }
-            }
+          "message": {
+            "path": [
+              "Messages"
+            ],
+            "aliases": [
+              "m"
+            ],
+            "paramFrom": "Message",
+            "keys": {}
+          },
+          "reaction": {
+            "path": [
+              "Reactions"
+            ],
+            "aliases": [
+              "r"
+            ],
+            "paramFrom": "Reaction",
+            "keys": {}
           }
         }
-      }
+      },
+      "schemas": {}
     },
     "system": {
       "canFire": true,
       "constructionArgs": [],
+      "listenSettingsBecome": {
+        "path": [
+          "Events"
+        ],
+        "aliases": [
+          "e"
+        ],
+        "paramFrom": "Run Failed",
+        "keys": {
+          "events": {
+            "hop": 0,
+            "field": "Kind",
+            "op": "in",
+            "absent": "Run Failed"
+          }
+        }
+      },
       "schemas": {
         "": {
           "positions": {
-            "Run Failed": {
+            "Event": {
               "properties": {
+                "Event Id": "text",
+                "Kind": {
+                  "kind": "enum",
+                  "options": [
+                    "Run Failed",
+                    "Run Paused",
+                    "Validation Issue",
+                    "Deprecated Version",
+                    "Release Applied",
+                    "Wait Lost Its Record",
+                    "Arrival Not Judged"
+                  ]
+                },
                 "Automation": "text",
                 "Automation Id": "text",
                 "Run Id": "text",
                 "Version": "text",
                 "Reason": "text",
                 "Url": "text",
-                "At": "date"
+                "At": "date",
+                "Adapter": "text",
+                "Edge": "text",
+                "Record Id": "text",
+                "Listen": "text",
+                "Delivery Id": "text",
+                "Arrival Id": "text",
+                "Attempt": "number"
               },
-              "edges": {}
-            },
-            "Validation Issue": {
-              "properties": {},
               "edges": {},
-              "undescribed": true
-            },
-            "Deprecated Version": {
-              "properties": {},
-              "edges": {},
-              "undescribed": true
-            },
-            "Release Applied": {
-              "properties": {},
-              "edges": {},
-              "undescribed": true
+              "propertyCapabilities": {
+                "Kind": {
+                  "filterOperators": [
+                    "eq",
+                    "in"
+                  ]
+                }
+              },
+              "description": "Something that happened to the host’s runs, waits or releases. `Kind` says which.",
+              "fieldDocs": {
+                "Event Id": "Names the event: the same on every poll that finds it.",
+                "Kind": "Which thing happened. A listen names the kinds it wants: `e.Kind == \"Run Failed\"`, or `e.Kind IN [...]`.",
+                "Automation": "The program the event is about (its movement); empty when it concerns none.",
+                "Automation Id": "That program’s id (on listen-fire, `<file>:<movement>`).",
+                "Run Id": "The run the event is about; empty when it concerns none.",
+                "Version": "The release involved; empty when none is.",
+                "Reason": "What happened, in words: for a failed run, why it failed.",
+                "Url": "A link to where a person sees it; empty where the host has no such page.",
+                "At": "When it happened (UTC).",
+                "Adapter": "For a wait that lost its record: the module its record is in. Empty on every other kind.",
+                "Edge": "For a wait that lost its record: the edge it waits on. For an arrival not judged: the edge it arrived on. Empty on every other kind.",
+                "Record Id": "For a wait that lost its record: the deleted record’s id. For an arrival not judged: the record that arrived. Empty on every other kind.",
+                "Listen": "For an arrival not judged: the listen that could not judge it, as the host names it. Empty on every other kind.",
+                "Delivery Id": "For an arrival not judged: the delivery it came in, which the host keeps for a while (on listen-fire `deliveries.retainDays`, 14 days by default); empty when the host kept none. Empty on every other kind.",
+                "Arrival Id": "For an arrival not judged: the arrival, as the listen names it (its edge, record, identity and version). Empty on every other kind.",
+                "Attempt": "For an arrival not judged: 0 when it was delivered, one more for each replay (`listen-fire listens replay`) that still could not judge it. 0 on every other kind."
+              }
             }
           },
-          "collections": {},
-          "writableRoots": {}
+          "collections": {
+            "Events": {
+              "target": "Event",
+              "capability": {
+                "filter": "native",
+                "supportsLimit": false
+              },
+              "readable": false,
+              "listenable": true,
+              "cursor": true,
+              "identity": "Event Id",
+              "delivery": "polled",
+              "pollEverySeconds": 60,
+              "attributes": true
+            }
+          },
+          "writableRoots": {},
+          "supportsInPlaceUpdate": true
         }
       }
     },
@@ -5229,6 +6048,31 @@
           "required": true
         }
       ],
+      "listenSettingsBecome": {
+        "path": [
+          "Notifications"
+        ],
+        "aliases": [
+          "n"
+        ],
+        "paramFrom": "Notification",
+        "keys": {
+          "events": {
+            "hop": 0,
+            "field": "Reason",
+            "op": "in"
+          },
+          "participating": {
+            "hop": 0,
+            "field": "Participating",
+            "op": "eq",
+            "values": {
+              "false": null,
+              "true": true
+            }
+          }
+        }
+      },
       "schemas": {
         "my_github": {
           "positions": {
@@ -5289,6 +6133,21 @@
               "fieldDocs": {
                 "Full Name": "`owner/name`. An `==` in a `Repositories` WHERE fetches that repository directly.",
                 "Owner": "The owner’s login (`owner.login`)."
+              },
+              "fieldIds": {
+                "Name": "name",
+                "Full Name": "full_name",
+                "Owner": "owner",
+                "Description": "description",
+                "Private": "private",
+                "Fork": "fork",
+                "Archived": "archived",
+                "Default Branch": "default_branch",
+                "HTML URL": "html_url",
+                "Id": "id",
+                "Created At": "created_at",
+                "Updated At": "updated_at",
+                "Pushed At": "pushed_at"
               }
             },
             "Notification": {
@@ -5315,6 +6174,7 @@
                     "team_mention"
                   ]
                 },
+                "Participating": "boolean",
                 "Unread": "boolean",
                 "Updated At": "date",
                 "Last Read At": "date",
@@ -5350,6 +6210,17 @@
                 }
               },
               "propertyCapabilities": {
+                "Reason": {
+                  "filterOperators": [
+                    "eq",
+                    "in"
+                  ]
+                },
+                "Participating": {
+                  "filterOperators": [
+                    "eq"
+                  ]
+                },
                 "Updated At": {
                   "filterOperators": [
                     "gt",
@@ -5363,8 +6234,19 @@
               "fieldDocs": {
                 "Id": "The thread id.",
                 "Reason": "Why you got it (`review_requested`, `mention`, `assign`, …). A thread’s reason can change as it moves.",
+                "Participating": "Whether you take part in the thread or are mentioned in it: GitHub tells only by its `participating` filter, so every thread, walked or heard, is stamped with it from one extra call (made only when there are threads).",
                 "Title": "The subject’s title (`subject.title`).",
                 "Subject Type": "What it is about (`subject.type`): `PullRequest`, `Issue`, `Release`, `Discussion`, `Commit`, `CheckSuite`, …"
+              },
+              "fieldIds": {
+                "Id": "id",
+                "Reason": "reason",
+                "Participating": "participating",
+                "Unread": "unread",
+                "Updated At": "updated_at",
+                "Last Read At": "last_read_at",
+                "Title": "title",
+                "Subject Type": "subject_type"
               }
             },
             "Pull Request": {
@@ -5451,6 +6333,26 @@
                 "Requested Reviewers": "The logins asked to review it.",
                 "Head Ref": "The branch it merges from (`head.ref`).",
                 "Base Ref": "The branch it merges into (`base.ref`)."
+              },
+              "fieldIds": {
+                "Number": "number",
+                "Title": "title",
+                "Body": "body",
+                "State": "state",
+                "Author": "author",
+                "HTML URL": "html_url",
+                "Created At": "created_at",
+                "Updated At": "updated_at",
+                "Closed At": "closed_at",
+                "Assignees": "assignees",
+                "Label Names": "label_names",
+                "Id": "id",
+                "Draft": "draft",
+                "Merged": "merged",
+                "Merged At": "merged_at",
+                "Requested Reviewers": "requested_reviewers",
+                "Head Ref": "head_ref",
+                "Base Ref": "base_ref"
               }
             },
             "Issue": {
@@ -5549,6 +6451,22 @@
                 "Label Names": "The names of its labels; `Labels` are the labels themselves.",
                 "State Reason": "Why it was closed (`completed`, `not_planned`, …), or reopened.",
                 "Comment Count": "How many comments it has (`comments`)."
+              },
+              "fieldIds": {
+                "Number": "number",
+                "Title": "title",
+                "Body": "body",
+                "State": "state",
+                "Author": "author",
+                "HTML URL": "html_url",
+                "Created At": "created_at",
+                "Updated At": "updated_at",
+                "Closed At": "closed_at",
+                "Assignees": "assignees",
+                "Label Names": "label_names",
+                "Id": "id",
+                "State Reason": "state_reason",
+                "Comment Count": "comments"
               }
             },
             "Comment": {
@@ -5567,6 +6485,15 @@
                 "Body": "The comment, in GitHub Markdown.",
                 "Author": "The commenter’s login (`user.login`).",
                 "Author Association": "`OWNER`, `MEMBER`, `CONTRIBUTOR`, `NONE`, …"
+              },
+              "fieldIds": {
+                "Body": "body",
+                "Author": "author",
+                "Author Association": "author_association",
+                "HTML URL": "html_url",
+                "Created At": "created_at",
+                "Updated At": "updated_at",
+                "Id": "id"
               }
             },
             "Label": {
@@ -5580,6 +6507,12 @@
               "description": "A label on a pull request or an issue.",
               "fieldDocs": {
                 "Color": "Hex, without the `#`."
+              },
+              "fieldIds": {
+                "Name": "name",
+                "Color": "color",
+                "Description": "description",
+                "Id": "id"
               }
             }
           },
@@ -5588,7 +6521,13 @@
               "target": "Repository"
             },
             "Notifications": {
-              "target": "Notification"
+              "target": "Notification",
+              "listenable": true,
+              "cursor": true,
+              "identity": "Id",
+              "version": "Updated At",
+              "delivery": "polled",
+              "pollEverySeconds": 60
             }
           },
           "writableRoots": {},
