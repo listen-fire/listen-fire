@@ -137,7 +137,7 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
 | 2.4 | `refreshEventSubscription` ([Event subscriptions that expire](#event-subscriptions-that-expire)) | listen-fire 0.12.10 |
 | 2.5 | `awaitKeys`, arrivals on a delivery's reading, the `wake` door's arrivals, the store slot's `waits.*` (`waits.log` names it) ([Waiting on your system](#waiting-on-your-system-awaits)) | listen-fire 0.13.0 |
 | 2.6 | arrivals for listens ([Reporting arrivals](#reporting-arrivals)): one on a root edge names no `key`; one may carry `parents`, `about`, `notFor`, `takenApplied`, `occurredAt` and, on its landing and each parent, `unknown`; the landing and each parent state their `recordType`, and an arrival that states none runs no listen. A host fires the listens on the edge it landed on. A polled listenable edge is polled as `poll({ edge, filter?, scope?, cursor? })`, once per connection, edge, taken filter and scope ([Polled sources](#polled-sources-and-periodic-tasks)); a pushed one is subscribed for as `ensureEventSubscription({ edge, filter?, scope?, callbackUrl, current? })`, once per the same ([Subscribing for an edge's arrivals](#subscribing-for-an-edges-arrivals)). Each head `awaitKeys` is asked about names its `recordType` where the host knows it. `checkInbound` may be handed `replayed: true`, when the host runs a request it kept itself again ([A module that checks its own inbound](#a-module-that-checks-its-own-inbound)); `inbound.captureHeaders` names the headers a kept request holds and `inbound.redactFields` the body and query fields it drops ([Declared inbound signatures](#declared-inbound-signatures)). **A module that uses any of these states `protocolMinor: 6`**: an older host would refuse a root arrival, judge without `unknown` or `recordType`, or keep a request whole | listen-fire 0.13.0 |
-| 2.7 | a host behaviour: a poll's answer may say when the edge is next worth polling (`pollAgainAt`), and a host polls it then when that is sooner than its interval ([Polled sources](#polled-sources-and-periodic-tasks)). An older host ignores the member and polls on its interval, so no module needs to state 2.7 | listen-fire 0.13.1 |
+| 2.7 | host behaviours, additive: a poll's answer may say when the edge is next worth polling (`pollAgainAt`), and a host polls it then when that is sooner than its interval ([Polled sources](#polled-sources-and-periodic-tasks)); an arrival may say who acted (`actor`, as `extractActor` answers), and a run an arrival fires is handed its `about` and `actor` and stamped with its `occurredAt` ([Reporting arrivals](#reporting-arrivals)). An older host ignores both members (it polls on its interval and asks `extractActor`), so no module needs to state 2.7 | listen-fire 0.13.1 |
 
 A module offering one of these methods states no minor for it. Until 0.12.9 the kits stamped a module with the minor of the methods it offered; from 0.12.10 they stamp only what its author declares.
 
@@ -595,8 +595,8 @@ an automation cannot delete any other.
 | `resolveFileRef` | `{ ref }` | `{ url, contentType? }` ([Files](#files)) |
 | `translateFilter` | `{ expression, entityType }` | `{ native, residual }` |
 | `getDedupRules` | `{ typeRef }` | `{ constraints }` or `null` |
-| `getActorCandidates` | `{ event }` | `[{ identity, source }]` |
-| `extractActor` | `{ event }` | an actor identity, or `null` |
+| `getActorCandidates` | `{ event }`: the run's trigger, whose `arrival` holds the landing, its `parents`, `about` and `actor` ([Who acted](#who-acted)) | `[{ identity, source }]` |
+| `extractActor` | `{ event }`, as above; asked only when the arrival names no `actor` | an actor identity, or `null` |
 | `describeOpaqueId` | `{ fieldPath, value }` | a label, or `null` |
 | `invokeFieldFunction` | `{ recordType, fieldId, functionName, args: { instructions, data } }` | the composed value |
 | `edgesFrom` | `{ position, cursor? }` | see [describe](#describe) |
@@ -839,7 +839,44 @@ From adapter protocol 2.6 an arrival may say more, for the listens on its edge
   run's write caused the arrival (the loop breaker, below), however late a
   poll finds it. Send it wherever your system gives a time; an arrival
   without it is measured to when Listen-Fire takes it. One that is not an
-  instant is refused, naming its place and edge.
+  instant is refused, naming its place and edge. From 2.7 the run the
+  arrival fires is stamped with it, so its writes say when the change they
+  follow happened, not when the host took it.
+- **`actor`** (adapter protocol 2.7): who acted, where your provider says,
+  as `extractActor` answers: `{ "identifier", "scheme", "email"?, "name"?,
+  "label"? }` ([Who acted](#who-acted)).
+
+A run an arrival fires is handed the arrival's landing, its `parents`, its
+`about` and its `actor` (2.7), and nothing else: there is no raw event
+after the door. Put on the landing every field its record type's edges
+read (the record as your provider sent it, with your named fields over it),
+so an edge walked from the fired record reads what it would read from a
+listed one.
+
+#### Who acted
+
+Set `actor` where you build the arrival: the member who posted, the sender
+of a mail, the owner of a meeting.
+
+```json
+{ "edge": "Messages", "key": "C0DEALS", "identity": "C0DEALS:1730541600.000100",
+  "landing": { "recordId": "C0DEALS:1730541600.000100", "recordType": "Message", "fields": { "user": "U001", "text": "Acme wants a term sheet" } },
+  "actor": { "identifier": "U001", "scheme": "opaque", "label": "U001" } }
+```
+
+- `identifier` is your system's id for them; `scheme` says how a host
+  resolves them to one of its users: `email` (the address is `email`, or
+  the identifier), `phone`, or `opaque` (a provider id that resolves to no
+  user). `name`, else `label`, is what `@actor_name` reads.
+- The run's `@actor_*` read it; your `extractActor` is asked only for an
+  arrival that names none.
+- A host resolves `@user_*` from it: it asks your `getActorCandidates`
+  when you offer it (a lookup by API, a mail's forwarding relays), else
+  takes the actor as the one originator candidate.
+- Both methods are handed the run's trigger as `event`. Its `arrival` holds
+  what you put on the arrival: read who acted from `event.arrival.actor` and
+  the record's fields from `event.arrival.landing.fields`. A run fired by an
+  arrival has no `payload`.
 
 ```json
 { "edge": "Company", "identity": "company-1",
@@ -1898,7 +1935,7 @@ from `apps/cli`.
 
 ## Changes
 
-- **Adapter protocol 2.7: a poll may say when to poll again** (within version 2; 2026-11-02; listen-fire 0.13.1; additive). `poll` may answer `pollAgainAt`, an ISO instant: the host polls that edge next at the earlier of it and its interval, never sooner than a second on ([Polled sources](#polled-sources-and-periodic-tasks)). The cron unit answers its next tick. Why: a schedule is cron's polled `Ticks` edge, and a tick seen only on the next poll fired up to an interval (60 seconds) late. It is a host behaviour, as 2.3 was: an older host ignores the member and polls on its interval, so a module that answers it states no minor for it.
+- **Adapter protocol 2.7: a poll may say when to poll again, and who acted rides on the arrival** (within version 2; 2026-11-02; listen-fire 0.13.1; additive). `poll` may answer `pollAgainAt`, an ISO instant: the host polls that edge next at the earlier of it and its interval, never sooner than a second on ([Polled sources](#polled-sources-and-periodic-tasks)). The cron unit answers its next tick. An arrival may carry `actor`, as `extractActor` answers; the run it fires reads `@actor_*` from it and a host resolves `@user_*` from it ([Who acted](#who-acted)). The run's trigger keeps the arrival's `about` and `actor`, and is stamped with its `occurredAt` (when the host took it, for one that names none), so a run's writes say when the change they follow happened. Why: a schedule is cron's polled `Ticks` edge, and a tick seen only on the next poll fired up to an interval (60 seconds) late; and a run is handed the arrival and never the raw event, so whatever a run or a host feature needs travels on the arrival, set at the door. Both are host behaviours, as 2.3 was: an older host ignores `pollAgainAt` and polls on its interval, and drops `actor` and asks `extractActor`, so a module that answers either states no minor for it.
 - **The settings poll and the events subscription leave the protocol** (adapter protocol 2.6, within version 2; 2026-11-01; listen-fire 0.13.0; breaking for a module that still answers them). `poll` is asked only as `{ edge, filter?, scope?, cursor? }` and answers `{ arrivals, cursor? }`; a 0.12 `{ events, checkpoint }` answer is refused, naming `arrivals`. `ensureEventSubscription` is asked only for an edge; `removeEventSubscription` keeps the 0.12 form only to remove a webhook a 0.12 listen registered, and a host removes such a webhook rather than refreshing it. `emit` is refused 410 (`emit_retired`), naming `wake`; it kept events that fired no listen. Why: a 0.13 listen is a traversal, and nothing a settings poll or an events webhook brings can fire one.
 - **`inbound.redactFields`** (adapter protocol 2.6, within version 2; 2026-11-01; listen-fire 0.13.0; additive). A module names the body and query fields that may carry a credential, and a kept request drops them ([Declared inbound signatures](#declared-inbound-signatures)); a header whose name holds `token`, `key`, `auth`, `hmac` or `password`, or `set-cookie`, is never kept either. A module that names one states `protocolMinor: 6`. Why: Slack sends its legacy verification `token` in the body, and a kept request is stored for days. `@lf/slack` names `token`.
 - **`membersChange`** (within version 2, no bump; 2026-11-01; listen-fire 0.13.0). One member, `"pushed"` or `{ relistEverySeconds }`, says how a listen learns a hop's members changed, where this release's earlier builds read three (`cheapToList`, `parentChanges`, `relistEverySeconds`) ([Declaring a listenable edge](#declaring-a-listenable-edge)). Why: the three described one choice, and two of them together meant nothing.

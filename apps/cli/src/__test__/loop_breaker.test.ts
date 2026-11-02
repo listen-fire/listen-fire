@@ -243,3 +243,22 @@ test('a store that cannot keep a write fails the run that made it', async () => 
     await serving.stop();
   }
 });
+
+test("a run's writes are stamped with when its arrival happened at the CRM, not when listen-fire heard it", async () => {
+  const dir = project('arrival_time');
+  const serving = await served(dir);
+  try {
+    const happened = '2026-10-01T09:00:00.000Z';
+    await wake(serving, {
+      edge: 'Company',
+      identity: 'company-7',
+      landing: { recordId: 'company-7', recordType: 'Company', fields: { id: 'company-7', Name: 'Osprey' } },
+      occurredAt: '2026-10-01T10:00:00+01:00',
+    });
+    await until(() => runsOf(dir).length === 1 && settled(runsOf(dir)), 'one run settled');
+    const stamps = (JSON.parse(readFileSync(join(dir, '.lf/externals/acme_crm/state.json'), 'utf8')) as { stamps: unknown[] }).stamps;
+    assert.deepEqual(stamps, [{ externalId: 'note-1', occurredAt: happened }], serving.lines.join('\n'));
+  } finally {
+    await serving.stop();
+  }
+});

@@ -25,7 +25,7 @@
 //!         ready(Ok(AdapterInstance { id: "inbox".into(), methods: vec![] }))
 //!     }
 //!     fn call(&mut self, call: AdapterCall) -> HostFuture<AdapterReply> {
-//!         // The event's record answers the fields the movement reads.
+//!         // The arrival's record answers the fields the movement reads.
 //!         ready(Ok(match call.method.as_str() {
 //!             "getFieldValue" => AdapterReply::ok(Data::text("Hello")),
 //!             _ => AdapterReply::nothing(),
@@ -42,8 +42,10 @@
 //!               listen to inbox-[:message]-> fire seen\n";
 //! assert!(embed::check(source, &catalog, embed::LANGUAGE_VERSION).iter().all(|p| p.severity != Severity::Error));
 //!
-//! let event = Event::new("email", Data::map([("subject", Data::text("Hello"))]));
-//! let input = RunInput::new(source, event, "2026-10-17T12:00:00.000Z").function("seen").catalog(catalog);
+//! // What arrived on the listen's edge, and who sent it.
+//! let landing = Landing::new("message", Data::map([("subject", Data::text("Hello"))])).id("m1");
+//! let arrival = Arrival::new("email", "message", landing).by(Actor::new("ada@acme.example", ActorScheme::Email));
+//! let input = RunInput::new(source, arrival, "2026-10-17T12:00:00.000Z").function("seen").catalog(catalog);
 //! let mut inbox = Inbox;
 //! let mut hosts = Hosts::new().adapters(&mut inbox);
 //! let run = std::pin::pin!(embed::run(&mut hosts, &input));

@@ -212,13 +212,13 @@ test('a press on a message without the topic, or on a poll older than 3d, runs n
 
 const DEALS = `${HEADER}
 function heard(m: <chat-[:Message]->>) {
-  return "heard \${m.Message} in \${m.Channel}"
+  return "heard \${m.Message} in \${m.Channel} from \${@actor_id}"
 }
 
 listen to chat-[ch:Channels WHERE ch.Name IN ["deals"]]->-[:Messages]-> fire heard
 `;
 
-test('a message in #deals fires a channel-filtered listen; one in #random does not', async () => {
+test('a message in #deals fires a channel-filtered listen, attributed to its sender; one in #random does not', async () => {
   const world = await slackWorld(DEALS);
   try {
     await seedSlack(world.channels, [
@@ -251,7 +251,7 @@ test('a message in #deals fires a channel-filtered listen; one in #random does n
     }
     const listed = JSON.parse(lfSync(world.dir, 'runs', '--json').out) as { runs: Array<{ runId: string }> };
     const returned = listed.runs.map((r) => lfSync(world.dir, 'runs', 'show', r.runId).out).join('\n');
-    assert.match(returned, /heard Acme wants a term sheet in C0DEALS/);
+    assert.match(returned, /heard Acme wants a term sheet in C0DEALS from U001/);
     assert.doesNotMatch(returned, /lunch\?|in the thread/);
   } finally {
     await world.close();

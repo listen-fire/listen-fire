@@ -53,7 +53,7 @@ const APPROVALS_EDGE = 'Approvals';
 
 function readState() {
   const state = statePath && existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : {};
-  return { companies: state.companies ?? [], comments: state.comments ?? [], approvals: state.approvals ?? [], notes: state.notes ?? [], writes: state.writes ?? [] };
+  return { companies: state.companies ?? [], comments: state.comments ?? [], approvals: state.approvals ?? [], notes: state.notes ?? [], writes: state.writes ?? [], stamps: state.stamps ?? [] };
 }
 
 const threadKey = (company) => `thread:${company}`;
@@ -244,13 +244,15 @@ const METHODS = {
       .comments.filter((c) => c.thread === company)
       .map((c) => ({ position: { adapterType: 'acme_crm', recordType: COMMENT, identity: { kind: 'stable', recordId: c.id, data: { Id: c.id, Text: c.Text } } } }));
   },
-  createRecord: async ({ recordType, fields: written }) => {
+  createRecord: async ({ recordType, fields: written, mutationContext }) => {
     const fields = await withFileContents(written);
     const state = readState();
     if (recordType === NOTE) {
       const note = { id: `note-${state.notes.length + 1}`, Text: fields.Text, Company: fields.Company };
       state.notes.push(note);
       state.writes.push({ method: 'createRecord', recordType, externalId: note.id });
+      // When the change the write follows happened, as the host stamped it.
+      state.stamps.push({ externalId: note.id, occurredAt: mutationContext?.occurredAt });
       writeState(state);
       echo(() => noteArrival(note, new Date().toISOString()));
       return { adapterType: 'acme_crm', externalId: note.id, recordType, data: { Id: note.id, Text: note.Text, Company: note.Company } };

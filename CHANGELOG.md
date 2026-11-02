@@ -69,6 +69,10 @@ named in [`RELEASING.md`](RELEASING.md).
 - **A record held as a value can be spread into a map.** `{ ...c.Current }`, or `r = c.Current` then `{ ...r }`, copies the row's fields into the map, each with its declared type, as spreading a map with known keys does. Later members override, a misspelled key is refused as for any map, and a row that may be absent gives fields that may be absent. 0.13.0 refused it (`MOV_MAP_SPREAD_NOT_KEYED`).
   - Why: TypeScript allows `{ ...obj }` of a plain object, and a held record is a plain object type. Nothing else about it changes: it still has no edges and no identity, so no walk, write or record parameter takes it.
 
+- **Who acted rides on the arrival (adapter protocol 2.7).** A module may say who acted where it builds an arrival (`actor`, as `extractActor` answers). The run it fires reads `@actor_*` from it, asking `extractActor` only for an arrival that names none, and a host resolves `@user_*` from it: the module's `getActorCandidates` where it offers one, else the actor as the one originator. The bundled modules that name a sender (Slack, Granola, email, Telegram, WhatsApp, Attio) set it at the door. An older host drops the member, so a module that sets it states no minor. `module-kit` gains `firedActor(event)`.
+- **A run keeps what its arrival says.** The event a run is handed carries the arrival's `about` and `actor` beside its landing, and is stamped with the arrival's own `occurredAt`, so the run's writes say when the change they follow happened, not when `listen-fire` heard it (now, for an arrival that names no time). Both hosts build it alike, held to one table (`engine-contracts/conformance/arrival-triggers.json`).
+- **The Rust embedding API builds a run from an arrival.** `RunInput::new` takes an `Arrival` (`Landing`, `Actor`, `about`, `occurred_at`) as well as the 0.12 `Event`, so an embedder's run reads `@actor_*` and is stamped with the arrival's time.
+
 ### Deprecated
 
 - **The loop guard slot is retired.** A project whose `lf.yaml` names one (`core: { loopGuard: … }`) runs as before, but listen-fire starts no guard: it prints one notice naming it as it starts, and never calls `guard.open` or `guard.recordWrite`. It also no longer reads each record back after a write to hand it to the guard, which saves one `readRecord` call per write. listen-fire's loop breaker (`loopWindow`, `loopDepth`) already caps every chain of writes and arrivals, and nothing read what a guard remembered. Remove `core.loopGuard` from `lf.yaml`; 0.14.0 refuses it ([loop-guard-slot.md](docs/contracts/loop-guard-slot.md)).
@@ -76,6 +80,8 @@ named in [`RELEASING.md`](RELEASING.md).
 ### Removed
 
 - **The loop guard slot's `guard.isEcho` is retired** (within adapter protocol 2; no version moves). listen-fire stopped calling it in 0.13, when the loop breaker replaced echo suppression. Now listen-fire's built-in guard, `@lf/fingerprint-guard`, no longer answers it (`listen-fire --contract-guard` refuses it as `method_not_implemented`), and the slot's contract suite holds a guard to `guard.recordWrite` alone. A guard module that still offers `guard.isEcho` loads as before and is never asked ([loop-guard-slot.md](docs/contracts/loop-guard-slot.md)).
+
+- **`triggerEventOf`** leaves the engine package's `public/inbound`. It built the 0.12 trigger, which no 0.13 host makes; build a run's event with `arrivalTriggerOf`.
 
 ### Fixed
 
@@ -86,6 +92,8 @@ named in [`RELEASING.md`](RELEASING.md).
 - `movement-lang`'s shared comparison unit, which modules filter with, reads a date as the engine does: only an ISO 8601 text is a date, and one with no offset is UTC. Before, it read a text with no offset in the machine's own time zone, and read texts such as `Mar 5, 2024` as dates where the engine orders them as text, so a module could keep or drop a record the engine would have judged the other way. It is now held to the same comparison table as the engine (`engine-contracts/conformance/taken-comparisons.json`).
 
 - **An email's record no longer carries Mailgun's signing fields.** `@lf/email` merged the whole inbound form into the email's fields, so Mailgun's `token`, `timestamp` and `signature` reached every run, every write made from the record, and the delivery's kept arrivals. The record now holds only the email's own fields, the module declares them in `inbound.redactFields` so a kept request drops them from its body too, and the other modules with inbound webhooks were checked for the same pattern (none copies signing material into a record).
+
+- **The edges off a fired Dealroom or Evertrace record answer again.** A run fired by a Dealroom round read nothing through its `Company` or `Investors`, and one fired by an Evertrace list entry or signal nothing through `Signal`, `Experiences` or `Educations`: the polled record's landing held only its named fields, and those edges read the record as the provider sent it. The landing now carries both.
 
 - **A run a listen fires reads who caused it as its actor again.** In 0.13.0, `@actor_email`, `@actor_name` and `@actor_id` were empty, and no acting user was resolved from the sender, for every run fired by a Granola meeting, an email, a Slack message, reaction or button press, a Telegram or WhatsApp message, or an Attio change. The modules read the actor from the 0.12 event's payload, which a 0.13 run is never handed; they read it from the record that arrived now. `module-kit`'s `firedRecordFields(event)` reads that record's fields for any module. An Attio change keeps Attio's `actor` beside its named fields for this.
 

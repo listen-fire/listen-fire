@@ -1,0 +1,12 @@
+import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+# Each company the CRM reports gets a note: written as of when the company
+# was made at the CRM, however late it is heard.
+function note_it(c: <crm-[:Company]->>) {
+  write crm-[:Note]-> { Text: "about ${c.Name}", Company: c.id }
+}
+
+listen to crm-[c:Company]-> fire note_it
