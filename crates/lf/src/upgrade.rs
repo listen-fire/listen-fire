@@ -455,7 +455,7 @@ mod tests {
         // Two notes, neither with a rewrite: the WHERE's captured value, and
         // the wait no `sleep` races.
         assert_eq!(notes.len(), 2, "{notes:?}");
-        assert!(notes.iter().any(|n| n.starts_with("go.mvt:7:13 warning MOV_AWAIT_VALUE_CAPTURED 'founder.Email' in this wait's WHERE is read once")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.starts_with("go.mvt:7:13 warning MOV_AWAIT_VALUE_CAPTURED 'founder?.Email' in this wait's WHERE is read once")), "{notes:?}");
         assert!(notes.iter().any(|n| n.starts_with("go.mvt:7:7 warning MOV_AWAIT_MAY_HANG 'await m-[x:Replies WHERE x.From == founder?.Email]->' is not in a `race` with a `sleep`")), "{notes:?}");
         assert!(matches!(pin_step("engine: 0.12.13\n", upgraded.remaining.len(), upgraded.notes.len()).unwrap(), PinStep::Held { remaining: 0, unchecked: 2 }));
         assert!(matches!(pin_step("engine: 0.12.13\n", upgraded.remaining.len(), 0).unwrap(), PinStep::Set(_)));

@@ -564,13 +564,14 @@ fn joined(items: impl Iterator<Item = String>) -> String {
     }
 }
 
-/// A member read off a root as written (`founder.Email`, `a.b.c`); none
-/// for a walk.
+/// A member read off a root as written (`founder.Email`, `founder?.Email`,
+/// `a.b.c`); none for a walk.
 fn spell_read(read: &Expression) -> Option<String> {
     match read {
         Expression::Property { property_type_id, .. } | Expression::EdgeProperty { property_type_id, .. } => Some(spell_name(property_type_id)),
-        Expression::Traverse { alias_root: Some(root), steps, expression, .. } if steps.is_empty() => {
-            Some(format!("{}.{}", spell_name(root), spell_read(expression)?))
+        Expression::Traverse { alias_root: Some(root), steps, expression, optional } if steps.is_empty() => {
+            let dot = if *optional { "?." } else { "." };
+            Some(format!("{}{dot}{}", spell_name(root), spell_read(expression)?))
         }
         _ => None,
     }
