@@ -41,6 +41,15 @@ named in [`RELEASING.md`](RELEASING.md).
   - The fix, by hand: narrow the record you walk from, then walk from it. `crm-[s:Subjects]-> { if (s is <crm-[:Person]->>) { s-[n:Notes]-> { … n.Mood … } } }` reads a Memo's `Mood`. Or read a field every member's landing has. `listen-fire upgrade` has no rewrite for it: the narrowed program walks differently, and only its author knows what a Company's notes should give.
   - An edge whose members land on one record type is unchanged.
 
+- **`lazy` is retired for a closure.** `people = () => crm-[:People]->`, read as `people()`, walks again at every call, as `people = lazy crm-[:People]->` walked again at every read. `x = lazy …`, `return lazy …` and a node entry `files: lazy …` are each refused where they are written (`MOV_LAZY_RETIRED`). Introduced by 0.14.0, a new compatibility key, since 0.13 accepts them.
+  - Why: a closure already says "run this when it is read", and its call says where. `lazy` was a second spelling of it, with rules of its own about where it could be read.
+  - `listen-fire upgrade` rewrites `x = lazy W` to `x = () => W` and each read of `x` to `x()`, wherever the call reads the same: in an expression and at a walk's root. A mapped walk (`lazy W node { … }`) becomes a closure whose block returns the walk's block. `return lazy W` becomes `return W`: a returned walk already ran where it was returned.
+  - Rewritten only under `--all`, because the meaning changes:
+    - `y = x`: after the rewrite `y` holds what the walk landed on when `y` was bound, where before each read of `y` walked again.
+    - A node entry `files: lazy W` becomes `files: W`: the walk runs once, when the node is built, where before it ran at every read of `files`. No node entry walks at each read now; to keep that, bind a closure beside the node.
+  - No rewrite where `x` is passed to a function (`f(x)`): the function's parameter held the kept walk as its record, and a parameter takes no list a call returns. Walk inside the function instead.
+  - The upgrade checks each rewrite again before writing it, and writes none that would leave an error the file did not have.
+
 ## [0.13.1] - 2026-11-02
 
 A patch release of the 0.13 line: it reads the same pins as 0.13.0 (every `0.13.x`) and changes the meaning of no program that checks under 0.13.0. It mainly fixes what 0.13.0 stopped passing from a module to a run: who acted (Slack, email, Telegram, WhatsApp, Granola and Attio reported nobody, so a host that runs only registered senders dropped their runs), the record a fired record links to (Dealroom, Evertrace), Affinity's changed values and Airtable's ids. It also makes schedules fire on time, lets `connect` name a module without importing it, and stops `listen-fire upgrade` moving a pin past a rewrite that may change behaviour. Adapter protocol 2.7 adds `pollAgainAt` and an arrival's `actor`; a host that ignores them behaves as 0.13.0.

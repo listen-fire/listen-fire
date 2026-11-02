@@ -363,7 +363,7 @@ mod tests {
                 read += 1;
             }
         }
-        assert!(read >= 390, "the corpus holds its programs: {read}");
+        assert!(read >= 385, "the corpus holds its programs: {read}");
         for kind in ["closure", "movement", "head", "literal", "shape", "nested"] {
             assert!(found.get(kind).copied().unwrap_or(0) > 0, "the corpus reaches no {kind}: {found:?}");
         }

@@ -155,12 +155,15 @@ struct Upgraded {
     /// behave otherwise, and holds the pin until checked.
     notes: Vec<Diagnostic>,
     settled: bool,
+    /// The errors the rewrite would have left that the text did not have:
+    /// when any, nothing is rewritten.
+    withheld: Vec<Diagnostic>,
 }
 
 impl Upgraded {
     fn of(source: String, diagnostics: Vec<Diagnostic>, settled: bool) -> Self {
         let (remaining, rest): (Vec<_>, Vec<_>) = diagnostics.into_iter().partition(stands);
-        Upgraded { source, remaining, notes: rest.into_iter().filter(is_note).collect(), settled }
+        Upgraded { source, remaining, notes: rest.into_iter().filter(is_note).collect(), settled, withheld: Vec::new() }
     }
 }
 
@@ -178,6 +181,41 @@ fn upgrade_source(source: &str, catalog: &CatalogSnapshot, all: bool, from_pin: 
     }
     let diagnostics = check_text(&text, catalog, Some(from_pin));
     Upgraded::of(text, diagnostics, false)
+}
+
+/// The rewrite checked once more before it is kept: one that leaves an
+/// error the text did not have is not written, and the text's own
+/// diagnostics stand.
+fn kept_only_if_no_worse(source: &str, upgraded: Upgraded, catalog: &CatalogSnapshot, from_pin: &str) -> Upgraded {
+    if upgraded.source == source {
+        return upgraded;
+    }
+    let before = check_text(source, catalog, Some(from_pin));
+    let withheld = introduced_errors(&before, &upgraded.remaining);
+    if withheld.is_empty() {
+        return upgraded;
+    }
+    Upgraded { withheld, ..Upgraded::of(source.to_string(), before, upgraded.settled) }
+}
+
+/// The errors in `after` beyond what `before` had of each code.
+fn introduced_errors(before: &[Diagnostic], after: &[Diagnostic]) -> Vec<Diagnostic> {
+    let mut had: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for d in before.iter().filter(|d| d.is_error()) {
+        *had.entry(d.code.as_str()).or_default() += 1;
+    }
+    after
+        .iter()
+        .filter(|d| d.is_error())
+        .filter(|d| match had.get_mut(d.code.as_str()) {
+            Some(left) if *left > 0 => {
+                *left -= 1;
+                false
+            }
+            _ => true,
+        })
+        .cloned()
+        .collect()
 }
 
 /// A unified diff of two texts, by line; empty when they are the same.
@@ -326,7 +364,11 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
             catalog = load(&narrowed)?;
             result = upgrade_source(&file.source, &catalog, options.all, &project.engine);
         }
+        let result = kept_only_if_no_worse(&file.source, result, &catalog, &project.engine);
         let shown = relative(&project.root, &file.path);
+        for d in &result.withheld {
+            writeln!(out, "{shown}: not rewritten, because the rewrite would leave {}", listed(&shown, d)).map_err(io)?;
+        }
         if result.source != file.source {
             if options.check_only {
                 changed += 1;
@@ -551,5 +593,65 @@ mod tests {
         let fix = |l, c0, c1, t: &str| Fix { edits: vec![Edit { start: (l, c0), end: (l, c1), text: t.into() }], safe: true, key: Value::Null };
         // "é😀" is 3 UTF-16 units; the edit after it starts at column 4.
         assert_eq!(apply("é😀xy\nz", &[fix(1, 4, 5, "X"), fix(2, 1, 1, ">")]), "é😀Xy\n>z");
+    }
+
+    const STORE: &str = r#"{"adapters":{
+      "store":{"canFire":false,"constructionArgs":[],"schemas":{"":{"positions":{
+        "Table":{"properties":{"Name":"text"},"edges":{"History":{"target":"Change"}}},
+        "Change":{"properties":{"Id":"text","Kind":"text"},"edges":{}}},
+        "collections":{"Tables":{"target":"Table"}},"writableRoots":{}}}}
+    },"credentials":{},"plugins":{}}"#;
+
+    const LAZY: &str = "import { store } from adapters\ns = connect store\n\nfunction kept() {\n  return lazy s-[t:Tables]->\n}\n\nfunction lz() {\n  tables = lazy s-[t:Tables]->\n  labelled = lazy s-[t:Tables]-> node { label: t.Name }\n  past = tables-[c:History WHERE c.Id == \"A\"]-> {\n    return c.Kind\n  }\n  return { n: count(tables), names: tables.Name, labels: labelled.label, past: past, kept: kept().Name }\n}\n";
+
+    const CLOSURES: &str = "import { store } from adapters\ns = connect store\n\nfunction kept() {\n  return s-[t:Tables]->\n}\n\nfunction lz() {\n  tables = () => s-[t:Tables]->\n  labelled = () => {\n    return s-[t:Tables]-> {\n      return node { label: t.Name }\n    }\n  }\n  past = tables()-[c:History WHERE c.Id == \"A\"]-> {\n    return c.Kind\n  }\n  return { n: count(tables()), names: tables().Name, labels: labelled().label, past: past, kept: kept().Name }\n}\n";
+
+    #[test]
+    fn lazy_is_rewritten_to_closures_that_check_clean_and_the_pin_moves() {
+        let catalog = CatalogSnapshot::load(STORE).unwrap();
+        let held = check_text(LAZY, &catalog, Some("0.13.0"));
+        assert_eq!(held.iter().filter(|d| d.code == "MOV_LAZY_RETIRED" && d.is_error()).count(), 3, "{held:?}");
+        let upgraded = kept_only_if_no_worse(LAZY, upgrade_source(LAZY, &catalog, false, "0.13.0"), &catalog, "0.13.0");
+        assert!(upgraded.withheld.is_empty() && upgraded.remaining.is_empty(), "{:?} {:?}", upgraded.withheld, upgraded.remaining);
+        assert_eq!(upgraded.source, CLOSURES);
+        assert!(check_text(&upgraded.source, &catalog, Some(LANGUAGE_VERSION)).iter().all(|d| !d.is_error()));
+        assert!(matches!(pin_step("engine: 0.13.0\n", upgraded.remaining.len()).unwrap(), PinStep::Set(_) | PinStep::Current));
+        assert_eq!(upgrade_source(&upgraded.source, &catalog, false, "0.13.0").source, upgraded.source);
+    }
+
+    #[test]
+    fn a_lazy_node_entry_holds_the_pin_until_all_drops_lazy() {
+        let catalog = CatalogSnapshot::load(STORE).unwrap();
+        let source = "import { store } from adapters\ns = connect store\n\nfunction lz() {\n  g = node { tabs: lazy s-[t:Tables]-> }\n  return count(g-[:tabs]->)\n}\n";
+        let held = upgrade_source(source, &catalog, false, "0.13.0");
+        assert_eq!(held.source, source);
+        assert_eq!(held.remaining.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["MOV_LAZY_RETIRED"]);
+        let all = kept_only_if_no_worse(source, upgrade_source(source, &catalog, true, "0.13.0"), &catalog, "0.13.0");
+        assert!(all.remaining.is_empty() && all.withheld.is_empty(), "{:?}", all.remaining);
+        assert_eq!(all.source, source.replace("lazy ", ""));
+    }
+
+    #[test]
+    fn a_lazy_binding_passed_to_a_function_is_left_for_the_author() {
+        let catalog = CatalogSnapshot::load(STORE).unwrap();
+        let source = "import { store } from adapters\ns = connect store\n\nfunction named(t: <s-[:Tables]->>) {\n  return t.Name\n}\n\nfunction lz() {\n  tables = lazy s-[t:Tables]->\n  return named(tables)\n}\n";
+        let upgraded = upgrade_source(source, &catalog, true, "0.13.0");
+        assert_eq!(upgraded.source, source);
+        assert_eq!(upgraded.remaining.len(), 1, "{:?}", upgraded.remaining);
+        assert!(upgraded.remaining[0].fix.is_none());
+    }
+
+    /// A rewrite that leaves an error its text did not have is not kept:
+    /// the text stands as it was, with its own diagnostics.
+    #[test]
+    fn a_rewrite_that_leaves_a_new_error_is_not_kept() {
+        let catalog = CatalogSnapshot::load(STORE).unwrap();
+        let source = "import { store } from adapters\ns = connect store\n\nfunction lz() {\n  return count(s-[:Tables]->)\n}\n";
+        let worse = source.replace("count(s-[:Tables]->)", "count(nowhere)");
+        let attempted = Upgraded::of(worse.clone(), check_text(&worse, &catalog, Some("0.13.0")), true);
+        let kept = kept_only_if_no_worse(source, attempted, &catalog, "0.13.0");
+        assert_eq!(kept.source, source);
+        assert_eq!(kept.withheld.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["MOV_NAME_UNRESOLVED"]);
+        assert!(kept.remaining.is_empty(), "{:?}", kept.remaining);
     }
 }

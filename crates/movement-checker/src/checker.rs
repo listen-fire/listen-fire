@@ -322,6 +322,7 @@ impl<'c> Checker<'c> {
         self.declare_units(file);
         self.enter_file_facts(statements);
         self.check_statement_list(statements, file);
+        self.report_lazy_retired(statements);
         self.report_missing_listens();
         self.report_waits_that_may_hang();
         self.report_carried_waits_counted_from_the_walk();

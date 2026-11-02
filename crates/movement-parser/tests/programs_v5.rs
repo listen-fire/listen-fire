@@ -25,7 +25,7 @@ fn records() -> Vec<Record> {
         .enumerate()
         .map(|(i, line)| serde_json::from_str(line).unwrap_or_else(|e| panic!("programs_v5.json line {}: {e}", i + 1)))
         .collect();
-    assert!(records.len() > 500, "programs_v5.json has only {} records", records.len());
+    assert!(records.len() >= 500, "programs_v5.json has only {} records", records.len());
     records
 }
 

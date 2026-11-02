@@ -251,6 +251,9 @@ pub const UNKNOWN_PROPERTY: &str = "MOV_UNKNOWN_PROPERTY";
 /// where a Person's `Notes` land on a Memo and a Company's on a Remark).
 /// 0.13 typed nothing there and checked it clean.
 pub const UNION_MEMBER_ONLY: &str = "MOV_UNION_MEMBER_ONLY";
+/// From 0.14: `lazy` (`x = lazy W`, `return lazy W`, a node entry
+/// `k: lazy W`), retired for a closure (`x = () => W`, read as `x()`).
+pub const LAZY_RETIRED: &str = "MOV_LAZY_RETIRED";
 pub const READ_THROUGH_FIELD: &str = "MOV_READ_THROUGH_FIELD";
 pub const WALK_OFF_HELD_RECORD: &str = "MOV_WALK_OFF_HELD_RECORD";
 pub const WALK_ROOT_NOT_RECORD: &str = "MOV_WALK_ROOT_NOT_RECORD";
