@@ -22,7 +22,7 @@ export function rerunProject(movement: string): string {
   const dir = project();
   const server = join(dir, 'externals/acme_crm/server.mjs');
   const text = readFileSync(server, 'utf8');
-  const create = 'createRecord: async ({ recordType, fields: written }) => {\n';
+  const create = 'createRecord: async ({ recordType, fields: written, mutationContext }) => {\n';
   assert.ok(text.includes(create));
   writeFileSync(
     server,
